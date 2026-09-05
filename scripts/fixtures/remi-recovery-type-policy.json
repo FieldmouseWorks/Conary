@@ -1,0 +1,282 @@
+[
+  {
+    "name": "numeric_message",
+    "document": {
+      "message": 123456789
+    },
+    "reason": "type_mismatch",
+    "sanitized": {
+      "message": "<redacted:type_mismatch>"
+    }
+  },
+  {
+    "name": "string_count",
+    "document": {
+      "roots_walked": "12"
+    },
+    "reason": "type_mismatch",
+    "sanitized": {
+      "roots_walked": "<redacted:type_mismatch>"
+    }
+  },
+  {
+    "name": "boolean_message",
+    "document": {
+      "message": true
+    },
+    "reason": "type_mismatch",
+    "sanitized": {
+      "message": "<redacted:type_mismatch>"
+    }
+  },
+  {
+    "name": "unknown_boolean",
+    "document": {
+      "internal-host": true
+    },
+    "reason": "unknown_key",
+    "sanitized": {
+      "<redacted:unknown_key>": "<redacted:unknown_key>"
+    }
+  },
+  {
+    "name": "unknown_number",
+    "document": {
+      "internal-host": 123
+    },
+    "reason": "unknown_key",
+    "sanitized": {
+      "<redacted:unknown_key>": "<redacted:unknown_key>"
+    }
+  },
+  {
+    "name": "wrong_array_element",
+    "document": {
+      "worker_load_milliseconds": [
+        12,
+        "private",
+        false
+      ]
+    },
+    "reason": "type_mismatch",
+    "sanitized": {
+      "worker_load_milliseconds": [
+        12,
+        "<redacted:type_mismatch>",
+        "<redacted:type_mismatch>"
+      ]
+    }
+  },
+  {
+    "name": "wrong_object_array_element",
+    "document": {
+      "profile_results": [
+        12
+      ]
+    },
+    "reason": "type_mismatch",
+    "sanitized": {
+      "profile_results": [
+        "<redacted:type_mismatch>"
+      ]
+    }
+  },
+  {
+    "name": "nested_wrong_scalar",
+    "document": {
+      "profile_results": [
+        {
+          "candidate": {
+            "counts": {
+              "roots_walked": false
+            }
+          }
+        }
+      ]
+    },
+    "reason": "type_mismatch",
+    "sanitized": {
+      "profile_results": [
+        {
+          "candidate": {
+            "counts": {
+              "roots_walked": "<redacted:type_mismatch>"
+            }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "wrong_empty_object",
+    "document": {
+      "message": {}
+    },
+    "reason": "type_mismatch",
+    "sanitized": {
+      "message": "<redacted:type_mismatch>"
+    }
+  },
+  {
+    "name": "wrong_empty_array",
+    "document": {
+      "message": []
+    },
+    "reason": "type_mismatch",
+    "sanitized": {
+      "message": "<redacted:type_mismatch>"
+    }
+  },
+  {
+    "name": "wrong_nonempty_container",
+    "document": {
+      "message": {
+        "roots_walked": 123
+      }
+    },
+    "reason": "type_mismatch",
+    "sanitized": {
+      "message": "<redacted:type_mismatch>"
+    }
+  },
+  {
+    "name": "nested_array",
+    "document": {
+      "worker_load_milliseconds": [
+        [
+          12
+        ]
+      ]
+    },
+    "reason": "type_mismatch",
+    "sanitized": {
+      "worker_load_milliseconds": [
+        "<redacted:type_mismatch>"
+      ]
+    }
+  },
+  {
+    "name": "digest_array",
+    "document": {
+      "closure_package_keys_sha256": [
+        12
+      ]
+    },
+    "reason": "type_mismatch",
+    "sanitized": {
+      "closure_package_keys_sha256": [
+        "<redacted:type_mismatch>"
+      ]
+    }
+  },
+  {
+    "name": "null_string",
+    "document": {
+      "message": null
+    },
+    "reason": "type_mismatch",
+    "sanitized": {
+      "message": "<redacted:type_mismatch>"
+    }
+  },
+  {
+    "name": "null_count",
+    "document": {
+      "roots_walked": null
+    },
+    "reason": "type_mismatch",
+    "sanitized": {
+      "roots_walked": "<redacted:type_mismatch>"
+    }
+  },
+  {
+    "name": "fractional_count",
+    "document": {
+      "roots_walked": 1.5
+    },
+    "reason": "type_mismatch",
+    "sanitized": {
+      "roots_walked": "<redacted:type_mismatch>"
+    }
+  },
+  {
+    "name": "negative_count",
+    "document": {
+      "roots_walked": -1
+    },
+    "reason": "type_mismatch",
+    "sanitized": {
+      "roots_walked": "<redacted:type_mismatch>"
+    }
+  },
+  {
+    "name": "enum_wrong_field",
+    "document": {
+      "probe": "helper_failed"
+    },
+    "reason": "private_string",
+    "sanitized": {
+      "probe": "<redacted:private_string>"
+    }
+  },
+  {
+    "name": "numeric_vector",
+    "document": {
+      "worker_load_milliseconds": [
+        0,
+        12
+      ]
+    },
+    "reason": "safe",
+    "sanitized": {
+      "worker_load_milliseconds": [
+        0,
+        12
+      ]
+    }
+  },
+  {
+    "name": "optional_values",
+    "document": {
+      "survey_status": null,
+      "comparison": null,
+      "restart_to_ready_seconds": null
+    },
+    "reason": "safe",
+    "sanitized": {
+      "survey_status": null,
+      "comparison": null,
+      "restart_to_ready_seconds": null
+    }
+  },
+  {
+    "name": "typed_booleans",
+    "document": {
+      "truncated": false,
+      "truncated_evidence": true
+    },
+    "reason": "safe",
+    "sanitized": {
+      "truncated": false,
+      "truncated_evidence": true
+    }
+  },
+  {
+    "name": "known_field_in_wrong_object",
+    "document": {
+      "profile_results": [
+        {
+          "workers": 12
+        }
+      ]
+    },
+    "reason": "unknown_key",
+    "sanitized": {
+      "profile_results": [
+        {
+          "<redacted:unknown_key>": "<redacted:unknown_key>"
+        }
+      ]
+    }
+  }
+]

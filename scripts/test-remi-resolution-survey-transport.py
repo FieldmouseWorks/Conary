@@ -5,7 +5,9 @@
 
 from __future__ import annotations
 
+import argparse
 import hashlib
+import io
 import importlib.util
 import json
 from pathlib import Path
@@ -14,6 +16,7 @@ import sys
 import tarfile
 import tempfile
 import unittest
+from unittest.mock import patch
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -476,6 +479,186 @@ def candidate_survey(profile: str, revision: str, package_manifest: str) -> dict
 
 
 class ResolutionSurveyTransportTests(unittest.TestCase):
+    def test_recovery_enforces_every_scalar_and_container_type(self) -> None:
+        cases = json.loads((REPO_ROOT / "scripts/fixtures/remi-recovery-type-policy.json").read_text())
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "diagnostic.json"
+            for case in cases:
+                with self.subTest(case=case["name"]):
+                    path.write_text(json.dumps(case["document"]))
+                    if case["reason"] == "safe":
+                        TRANSPORT_TOOL.forbid_recovery_host_paths(path)
+                    else:
+                        with self.assertRaisesRegex(TRANSPORT_TOOL.ValidationError, "outside the safe grammar"):
+                            TRANSPORT_TOOL.forbid_recovery_host_paths(path)
+                    process = subprocess.run(
+                        ["bash", "-c", 'source "$1"; survey_sanitize_json', "sanitize-types",
+                         str(REPO_ROOT / "deploy/remi-deploy-helper.sh")],
+                        input=path.read_text(), capture_output=True, text=True, check=True,
+                    )
+                    self.assertEqual(json.loads(process.stdout), case["sanitized"])
+                    path.write_text(process.stdout)
+                    TRANSPORT_TOOL.forbid_recovery_host_paths(path)
+
+    def test_full_candidate_retains_public_types_and_redacts_private_values(self) -> None:
+        candidate = candidate_survey("fedora-44", "a" * 64, "b" * 64)
+        candidate["failures"][0]["error_message"] = "journal: //private.internal/share"
+        expected = json.loads(canonical(candidate))
+        expected["implementation"]["version"] = "<redacted:private_string>"
+        for entry in expected["outcomes"] + expected["failures"]:
+            for key in ("name", "version", "release"):
+                entry[key] = "<redacted:private_string>"
+        expected["failures"][0]["error_message"] = "<redacted:private_string>"
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "candidate.json"
+            path.write_bytes(canonical(candidate))
+            process = subprocess.run(
+                ["bash", "-c", 'source "$1"; survey_sanitize_json_stream "$2"', "sanitize-candidate",
+                 str(REPO_ROOT / "deploy/remi-deploy-helper.sh"), str(path)],
+                capture_output=True, text=True, check=True,
+            )
+            self.assertEqual(json.loads(process.stdout), expected)
+            path.write_text(process.stdout)
+            TRANSPORT_TOOL.forbid_recovery_host_paths(path)
+
+    def test_recovery_uses_the_helpers_path_uri_policy(self) -> None:
+        cases = json.loads((REPO_ROOT / "scripts/fixtures/remi-recovery-path-policy.json").read_text())
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "diagnostic.json"
+            for case in cases:
+                with self.subTest(case=case):
+                    path.write_text(json.dumps({case.get("key", "message"): case["value"]}))
+                    if case["reason"] == "safe":
+                        TRANSPORT_TOOL.forbid_recovery_host_paths(path)
+                    else:
+                        message = {"private_host_path": "private host path", "redaction_unproven": "redaction_unproven"}.get(case["reason"], "outside the safe grammar")
+                        with self.assertRaisesRegex(TRANSPORT_TOOL.ValidationError, message):
+                            TRANSPORT_TOOL.forbid_recovery_host_paths(path)
+
+    def test_recovery_rejects_unknown_keys_even_with_safe_values(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "diagnostic.json"
+            path.write_text('{"internal-host":"ready"}')
+            with self.assertRaisesRegex(TRANSPORT_TOOL.ValidationError, "outside the safe grammar"):
+                TRANSPORT_TOOL.forbid_recovery_host_paths(path)
+
+    def test_real_outcome_preserves_only_safe_strings(self) -> None:
+        outcome = json.loads((REPO_ROOT / "apps/remi/tests/fixtures/resolution-survey-outcome/mixed.json").read_text())
+        outcome["output_dir"] = "journal: //private.internal/share"
+        expected = {**outcome, "output_dir": "<redacted:private_string>"}
+        process = subprocess.run(
+            ["bash", "-c", 'source "$1"; survey_sanitize_json', "sanitize-outcome", str(REPO_ROOT / "deploy/remi-deploy-helper.sh")],
+            input=json.dumps(outcome), text=True, capture_output=True, check=True,
+        )
+        self.assertEqual(json.loads(process.stdout), expected)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "outcome.json"
+            path.write_text(process.stdout)
+            TRANSPORT_TOOL.forbid_recovery_host_paths(path)
+
+    def test_helper_generated_recovery_envelope_vocabulary(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(
+                ["bash", "scripts/test-remi-deploy-helper.sh", "--recovery-envelope-fixtures", str(root)],
+                cwd=REPO_ROOT, capture_output=True, text=True, check=True,
+            )
+            documents = sorted(root.glob("*.json"))
+            self.assertEqual(len(documents), 15)
+            outcomes = set()
+            for document in documents:
+                with self.subTest(document=document.name):
+                    original = json.loads(document.read_text())
+                    if document.name.endswith(".restore.json"):
+                        outcomes.add(original["restore"]["outcome"])
+                    if "output_dir" in original:
+                        original["output_dir"] = "<redacted:private_host_path>"
+                    process = subprocess.run(
+                        ["bash", "-c", 'source "$1"; survey_sanitize_outcome "$2"', "sanitize-envelope",
+                         str(REPO_ROOT / "deploy/remi-deploy-helper.sh"), str(document)],
+                        capture_output=True, text=True, check=True,
+                    )
+                    self.assertEqual(json.loads(process.stdout), original)
+                    document.write_text(process.stdout)
+                    TRANSPORT_TOOL.forbid_recovery_host_paths(document)
+            self.assertEqual(outcomes, {"restored", "restore_failed"})
+            details = sorted((root / "details").glob("*.json"))
+            self.assertEqual(len(details), 12)
+            for document in details:
+                with self.subTest(document=document.name):
+                    process = subprocess.run(
+                        ["bash", "-c", 'source "$1"; survey_sanitize_json_stream "$2"', "sanitize-details",
+                         str(REPO_ROOT / "deploy/remi-deploy-helper.sh"), str(document)],
+                        capture_output=True, text=True, check=True,
+                    )
+                    original = json.loads(document.read_text())
+                    sanitized = json.loads(process.stdout)
+                    self.assertEqual(sanitized.keys(), original.keys())
+                    if "counts" in original:
+                        self.assertEqual(sanitized["counts"], original["counts"])
+                    document.write_text(process.stdout)
+                    TRANSPORT_TOOL.forbid_recovery_host_paths(document)
+
+    def test_recovery_binds_input_before_its_shared_typed_validator(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fixture = TransportFixture(root)
+            subprocess.run(fixture.command(), capture_output=True, text=True, check=True)
+            with tarfile.open(fixture.transport) as transport:
+                original = transport.extractfile("manifest.json").read()
+            value = json.loads(original)
+            self.assertEqual(value["schema_version"], 2)
+            self.assertTrue({"deployment", "files", "workflow_runs"} <= value.keys())
+            bad_schema = {**value, "workflow_runs": {**value["workflow_runs"], "oracle": 0}}
+            cases = [
+                ("valid", original, digest(original), None),
+                ("digest", b"invalid JSON", digest(original), "input_manifest.digest_mismatch"),
+                ("digest_bytes", b"invalid JSON", digest(original), "input_manifest.digest_mismatch"),
+                ("schema", canonical(bad_schema), digest(canonical(bad_schema)), "input_manifest.exact_schema"),
+                ("syntax", b"invalid JSON", digest(b"invalid JSON"), "input_manifest.json_syntax"),
+            ]
+            evidence = json.loads(fixture.evidence.read_bytes())
+            for name, data, authenticated_digest, reason in cases:
+                with self.subTest(case=name):
+                    write_json(fixture.evidence, {**evidence, "manifest_sha256": authenticated_digest})
+                    files = {"input-manifest.json": data, "helper.json": b'{"outcome":"helper_failed"}'}
+                    manifest = {
+                        "schema_version": 1, "kind": "resolution_survey_recovery", "authority": "diagnostic_only",
+                        "survey_id": fixture.survey_id, "export_id": EXPORT_ID, "availability": "retained",
+                        "input_manifest_sha256": digest(data), "withheld": [],
+                        "files": [{"path": path, "sha256": digest(content), "size": len(content)}
+                                  for path, content in files.items()],
+                    }
+                    if name == "digest_bytes":
+                        manifest["input_manifest_sha256"] = authenticated_digest
+                        manifest["files"][0]["sha256"] = authenticated_digest
+                    archive = root / f"recovery-{name}.tar"
+                    with tarfile.open(archive, "w") as stream:
+                        for path, content in {"recovery.json": canonical(manifest), **files}.items():
+                            member = tarfile.TarInfo(path)
+                            member.size = len(content)
+                            stream.addfile(member, io.BytesIO(content))
+                    output = root / f"recovered-{name}"
+                    args = argparse.Namespace(survey_id=fixture.survey_id, export_id=EXPORT_ID,
+                                              input_evidence=fixture.evidence, transport=archive, output=output)
+                    with patch.object(TRANSPORT_TOOL, "forbid_recovery_host_paths",
+                                      wraps=TRANSPORT_TOOL.forbid_recovery_host_paths) as diagnostics:
+                        if reason is not None:
+                            with self.assertRaisesRegex(TRANSPORT_TOOL.ValidationError, reason):
+                                TRANSPORT_TOOL.verify_recovery(args)
+                            self.assertFalse(output.exists())
+                            diagnostics.assert_not_called()
+                        else:
+                            TRANSPORT_TOOL.verify_recovery(args)
+                            self.assertEqual((output / "input-manifest.json").read_bytes(), original)
+                            self.assertEqual(json.loads((output / "recovery-verification.json").read_bytes())["input_binding"], "verified")
+                            self.assertEqual([call.args[0].name for call in diagnostics.call_args_list], ["helper.json"])
+
+    def test_missing_shared_policy_fails_closed(self) -> None:
+        with patch.object(TRANSPORT_TOOL.subprocess, "run", side_effect=OSError("private diagnostic")):
+            with self.assertRaisesRegex(TRANSPORT_TOOL.ValidationError, "redaction_unproven"):
+                TRANSPORT_TOOL.forbid_recovery_host_paths(Path("unused.json"))
+
     def test_conflicting_closure_is_a_canonical_not_installable_reason(self) -> None:
         root = "1" * 64
         conflicting = {"status": "not_installable", "reason": "conflicting_closure"}
@@ -583,6 +766,23 @@ class ResolutionSurveyTransportTests(unittest.TestCase):
         TRANSPORT_TOOL.validate_comparison_survey(
             comparison, profile, "comparison.json", candidate, candidate_manifest
         )
+
+        # Reuse the complete, validated mismatch fixture for recovery, including
+        # nested outcome arrays and enum-valued histogram pairs.
+        expected_recovery = json.loads(canonical(comparison))
+        for key in ("name", "version", "release"):
+            expected_recovery["mismatches"][0]["root"][key] = "<redacted:private_string>"
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "comparison.json"
+            path.write_bytes(canonical(comparison))
+            process = subprocess.run(
+                ["bash", "-c", 'source "$1"; survey_sanitize_json_stream "$2"', "sanitize-comparison",
+                 str(REPO_ROOT / "deploy/remi-deploy-helper.sh"), str(path)],
+                capture_output=True, text=True, check=True,
+            )
+            self.assertEqual(json.loads(process.stdout), expected_recovery)
+            path.write_text(process.stdout)
+            TRANSPORT_TOOL.forbid_recovery_host_paths(path)
 
         malformed = json.loads(canonical(comparison))
         malformed["schema_version"] = 1

@@ -35,7 +35,10 @@ native_oracle_lane_assembler="scripts/assemble-native-oracle-lanes.py"
 native_oracle_lane_selector="scripts/native-oracle-lane-selection.py"
 native_oracle_producer_verifier="scripts/verify-native-oracle-producer.py"
 resolution_survey_transport="scripts/remi-resolution-survey-transport.py"
+resolution_survey_ssh_diagnostic="scripts/remi-survey-ssh-diagnostic.py"
 remi_deploy_helper="deploy/remi-deploy-helper.sh"
+remi_deploy_helper_tests="scripts/test-remi-deploy-helper.sh"
+infrastructure_doc="docs/operations/infrastructure.md"
 remi_resolution_survey="apps/remi/src/server/resolution_survey.rs"
 candidate_predeployment_filter="deploy/remi-predeployment-inspection.jq"
 candidate_postdeployment_filter="deploy/remi-postdeployment-fencing.jq"
@@ -278,8 +281,11 @@ required_files=(
     "$native_oracle_transport_verifier"
     "$native_oracle_common"
     "$resolution_survey_transport"
+    "$resolution_survey_ssh_diagnostic"
     "$remi_resolution_survey"
     "$remi_deploy_helper"
+    "$remi_deploy_helper_tests"
+    "$infrastructure_doc"
     "$candidate_predeployment_filter"
     "$candidate_postdeployment_filter"
     "$candidate_artifact_script"
@@ -743,6 +749,50 @@ require_match "$remi_deploy_helper" 'retained="\$\{survey_staging_root\}/complet
 require_match "$remi_deploy_helper" 'basis=3540[\s\S]*last_ready_duration_seconds[\s\S]*basis="\$previous"[\s\S]*basis > 0 \? basis : 1\) \* 2[\s\S]*budget <= 7200[\s\S]*timeout "\$budget"[\s\S]*remaining=\$\(\(budget - elapsed\)\)[\s\S]*"\$HEALTH_URL"[\s\S]*restart_to_ready_seconds:\$ready' 'Remi restore budget derives from recorded startup evidence with a hard ceiling'
 require_match "$remi_deploy_helper" 'readiness_failure_diagnostic\(\)[\s\S]*"\$READINESS_FAILURE"[\s\S]*"\$READINESS_JOURNAL" -u remi -n 30 --no-pager' 'Remi restore diagnostics include causal status elapsed budget and journal tail'
 require_match "$remi_deploy_helper" 'inspect_remi\(\)[\s\S]*restart_readiness:\$readiness' 'Remi sanitized inspection retains restart timing evidence'
+require_match "$remi_deploy_helper" 'survey_validate_outcome\(\)[\s\S]*clause\("outcome.document_count"; length == 1\)[\s\S]*clause\("outcome.profiles"; \.profiles == 3\)[\s\S]*clause\("comparison.null_or_object"[\s\S]*survey_validate_outcome "\$outcome" "\$output"[\s\S]*sanitized outcome: \$\(survey_sanitize_outcome' 'resolution survey validates named clauses against one outcome document and reports sanitized evidence'
+require_match 'apps/remi/src/server/resolution_survey.rs' 'resolution_survey_outcome_serialization_contract[\s\S]*RemiResolutionSurveyOutcome \{[\s\S]*serde_json::to_string_pretty\(&outcome\)[\s\S]*fs::write\(generated.path\(\)[\s\S]*scripts/test-remi-deploy-helper.sh[\s\S]*--outcome-fixtures' 'resolution survey Rust serialization writes fixtures consumed by the exact helper predicate'
+require_match "$remi_deploy_helper" 'survey_record_failure\(\)[\s\S]*outcome:"helper_failed"[\s\S]*export_resolution_survey_evidence\(\)[\s\S]*authority:"diagnostic_only"[\s\S]*survey_record_failure "\$status"[\s\S]*survey_retain_diagnostics[\s\S]*survey_validate_outcome "\$outcome"' 'resolution survey retains outcome status and diagnostics before rejecting command output'
+require_job_match "$resolution_survey_workflow" survey 'record_helper_evidence\(\)[\s\S]*then "helper_failed" else "helper_succeeded"[\s\S]*status:\$status[\s\S]*message:[\s\S]*recover_helper_failure\(\)[\s\S]*conary-remi-deploy export-resolution-survey-evidence[\s\S]*verify-recovery[\s\S]*record_helper_evidence "\$observed_status" "\$workflow_status" "\$recovery_state"[\s\S]*recover_helper_failure "\$status"[\s\S]*rm -f -- "\$key"[\s\S]*helper_status=0' 'resolution survey recovers any helper failure before SSH cleanup independently of its report'
+require_job_match "$resolution_survey_workflow" survey 'sanitize_helper_stderr\(\)[\s\S]*python3 scripts/remi-survey-ssh-diagnostic\.py \\\n[ \t]*--stderr "\$helper_stderr" --ssh-config "\$REMI_SSH_CONFIG" \\\n[ \t]*--known-hosts "\$known_hosts"[\s\S]*sanitizer_failed[\s\S]*--argjson stderr "\$\(sanitize_helper_stderr\)"[\s\S]*stderr:\(if \$stderr.outcome == "empty" then "empty" else \$stderr end\)' 'resolution survey sanitizes connection identifiers before constructing failure artifacts'
+require_job_match "$resolution_survey_workflow" survey 'sanitize_helper_stderr\(\)[\s\S]*if \[\[ ! -s "\$helper_stderr" \]\]; then[\s\S]*"outcome":"empty"[\s\S]*if \$stderr \| has\("message"\) then \{message:\$stderr.message\} else \{\} end[\s\S]*if \(\( observed_status != 0 \)\) \|\| \[\[ -s "\$helper_stderr" \]\]; then[\s\S]*jq -r .\.message // empty.[\s\S]*helper_evidence_reason=missing_survey_evidence[\s\S]*helper_evidence_reason=malformed_survey_evidence' 'resolution survey separates empty stderr from report evidence failures'
+forbid_match "$resolution_survey_workflow" 'cat "\$helper_stderr"|--rawfile stderr "\$helper_stderr"' 'resolution survey raw SSH diagnostics in public logs or artifacts'
+require_match "$resolution_survey_ssh_diagnostic" 'def public_diagnostic[\s\S]*if remaining_identifier\(message, identifiers\):[\s\S]*withheld\("connection_identifier_remaining"\)[\s\S]*def sanitize[\s\S]*IP_LITERAL.finditer[\s\S]*return public_diagnostic\(message, identifiers\)' 'resolution survey withholds residual connection identifiers after redaction'
+require_job_match "$resolution_survey_workflow" survey 'local recovery_stderr="\$RUNNER_TEMP/resolution-survey-recovery\.stderr"\n[ \t]*: >"\$recovery_stderr"\n[ \t]*chmod 0600 "\$recovery_stderr"[\s\S]*conary-remi-deploy export-resolution-survey-evidence[^\n]*\n[ \t]*>"\$recovery_archive" 2>"\$recovery_stderr"; then[\s\S]*echo .resolution survey recovery: fetch_failed \(retained evidence export failed\).[\s\S]*rm -f -- "\$recovery_archive" "\$recovery_stderr"' 'resolution survey recovery export confines stderr privately and reports a sanitized failure'
+require_job_match "$resolution_survey_workflow" survey 'Upload retained survey failure evidence[\s\S]*if: \$\{\{ always\(\) && steps.survey.outputs.helper_outcome == .helper_failed. \}\}[\s\S]*actions/upload-artifact@[\s\S]*resolution-survey-helper.json[\s\S]*resolution-survey-recovery/' 'resolution survey uploads typed helper failures and retained output on failure'
+require_match "$resolution_survey_transport" 'def verify_recovery[\s\S]*validate_input_evidence[\s\S]*authority[\s\S]*diagnostic_only[\s\S]*input_sha256[\s\S]*sha256_bytes\(input_bytes\)[\s\S]*copy_tar_member[\s\S]*forbid_recovery_host_paths' 'resolution survey recovery checks exact identities digests and input binding without survey authority'
+require_match "$remi_deploy_helper" 'export_resolution_survey_evidence\(\)[\s\S]*size == 0[\s\S]*reason:"empty"[\s\S]*continue[\s\S]*path_reason="\$\(survey_recovery_path_reason "\$file"\)"[\s\S]*--arg reason "\$path_reason"[\s\S]*members\+=' 'resolution survey recovery withholds empty and unsafe JSON before archiving'
+require_match "$resolution_survey_transport" 'def verify_recovery[\s\S]*exact_positive_int\(item\["size"\], "survey recovery file size"\)[\s\S]*"private_host_path", "private_string", "unknown_key", "empty", "type_mismatch", "redaction_unproven"' 'resolution survey recovery requires positive included sizes and typed withheld reasons'
+require_match "$remi_deploy_helper" 'survey_recovery_path_policy\(\)[\s\S]*percent_decode\(8\)[\s\S]*\(file\|ssh\|scp\|sftp\):"; "i"[\s\S]*survey_recovery_path_reason\(\)[\s\S]*\$\(survey_recovery_path_policy\)[\s\S]*survey_sanitize_json\(\)[\s\S]*\$\(survey_recovery_path_policy\)' 'resolution survey shared path policy decodes escaped case-insensitive private URIs'
+require_match "$resolution_survey_transport" 'def forbid_recovery_host_paths[\s\S]*deploy/remi-deploy-helper.sh[\s\S]*source "\$1"; survey_recovery_path_reason "\$2"[\s\S]*redaction_unproven' 'resolution survey verifier calls the helper-owned path policy'
+require_match "$remi_deploy_helper" 'def recovery_known_key:[\s\S]*def recovery_safe_value\(\$contract\):[\s\S]*def recovery_string_reason\(\$contract; \$is_key\):[\s\S]*if \$safe and \$defense == null then null[\s\S]*first\(inputs \| recovery_event_reasons[\s\S]*recovery_sanitize\(\[\]\)[\s\S]*any\(recovery_document_reasons\(\[\]\); \. != null\)' 'resolution survey recovery gates strings and keys on one typed allowlist'
+require_match "$remi_deploy_helper" '"candidate_manifest_sha256", "source_sha256", "sha256"[\s\S]*strings\("sha256"\)[\s\S]*\["timestamp", "started_at", "completed_at"\][\s\S]*strings\("timestamp"\)[\s\S]*run_id:strings\("decimal"\)' 'resolution survey safe scalar strings require their owning fields'
+require_match "$remi_deploy_helper" 'retained:object_of\(\["kind", "id"\]\), transport:object_of\(\["sha256", "size"\]\)[\s\S]*kind:\(enumeration\(\["completed_resolution_survey"' 'resolution survey recovery admits the completed restore envelope vocabulary'
+require_match "$remi_deploy_helper_tests" 'test_recovery_envelope_vocabulary\(\)[\s\S]*all\(\.\. \| objects \| keys\[\]; recovery_known_key\)[\s\S]*cmp "\$expected" "\$actual"[\s\S]*cp "\$retained/restore.json" "\$recovery_fixture_dir/\$name.restore.json"[\s\S]*test_recovery_envelope_vocabulary "\$document"[\s\S]*test_recovery_envelope_vocabulary "\$fixture"' 'resolution survey recovery policy conforms to helper and Rust producer envelopes'
+require_match "$remi_deploy_helper" 'def recovery_contract\(\$path\):[\s\S]*if \.types \| index\("array"\) then \.items else null end[\s\S]*def recovery_value_reason\(\$contract\):[\s\S]*if \$contract == null then "unknown_key"[\s\S]*if \(\$contract.types \| index\(\$type\)\) == null then "type_mismatch"[\s\S]*range\(0; \$path \| length\) as \$index[\s\S]*recovery_value_reason\(\$contract\)' 'resolution survey recovery validates scalar and container types from one schema'
+require_match "$remi_deploy_helper" '"workers", "memory_budget_bytes", "measured_worker_rss_bytes"[\s\S]*worker_load_milliseconds:array_of\(uint\)[\s\S]*survey_sanitize_json_stream\(\)[\s\S]*jq -nrj --stream[\s\S]*if survey_sanitize_json_stream "\$file"[\s\S]*path_reason="\$\(survey_recovery_path_reason "\$sanitized"\)"[\s\S]*archive_members\+=\(-C "\$archive_root" "\$path"\)' 'resolution survey recovery streams typed survey diagnostics into sanitized archive members'
+# Derive the documented recovery contract from the helper's usage authority.
+python3 - "$remi_deploy_helper" "$infrastructure_doc" <<'PY_RECOVERY_USAGE' ||
+import pathlib
+import re
+import sys
+
+helper, document = (pathlib.Path(path).read_text() for path in sys.argv[1:])
+usage = helper.split("<<'USAGE'", 1)[1].split("\nUSAGE\n", 1)[0]
+expected = re.findall(
+    r"^  (conary-remi-deploy export-resolution-survey-evidence [^\n]+)$",
+    usage, re.MULTILINE,
+)
+documented = re.findall(r"`([^`]*\bexport-resolution-survey-evidence\b[^`]*)`", document)
+if len(expected) != 1 or not documented or any(
+    " ".join(command.split()) != expected[0] for command in documented
+):
+    sys.exit(1)
+PY_RECOVERY_USAGE
+    fail 'resolution survey recovery documentation matches the helper usage contract'
+require_job_match "$resolution_survey_workflow" survey 'expected_input_sha256="\$\(jq -er .\.manifest_sha256[\s\S]*resolution-survey-input-verification.json[\s\S]*export-resolution-survey-evidence .\$SURVEY_ID. .\$EXPORT_ID. .\$expected_input_sha256.' 'resolution survey recovery export receives the authenticated input digest'
+require_match "$remi_deploy_helper" 'if \[\[ "\$path" == input-manifest.json \]\]; then[\s\S]*survey_bind_recovery_input_manifest[\s\S]*"\$survey_id" "\$export_id" "\$file" "\$expected_input_sha256"[\s\S]*else[\s\S]*survey_recovery_path_reason[\s\S]*survey_bind_recovery_input_manifest\(\)[\s\S]*sha256sum "\$manifest"[\s\S]*\[\[ "\$observed_sha256" == "\$expected_sha256" \]\][\s\S]*input_manifest.digest_mismatch[\s\S]*survey_validate_input_manifest "\$survey_id" "\$export_id" "\$manifest"' 'resolution survey recovery binds input bytes before the shared typed validator and diagnostic policy'
+require_match "$resolution_survey_transport" 'def validate_recovery_input_manifest[\s\S]*source "\$1"; survey_bind_recovery_input_manifest[\s\S]*def verify_recovery[\s\S]*if item\["sha256"\] != input_sha256:[\s\S]*input_manifest.digest_mismatch[\s\S]*validate_recovery_input_manifest\(destination, survey_id, export_id, input_sha256\)[\s\S]*if item\["path"\] == "input-manifest.json":[\s\S]*continue[\s\S]*forbid_recovery_host_paths\(destination\)' 'resolution survey runner verifies typed input before generic recovery diagnostics'
+require_job_match "$resolution_survey_workflow" survey 'verify-recovery \\\n[ \t]*--survey-id "\$SURVEY_ID" --export-id "\$EXPORT_ID" \\\n[ \t]*--input-evidence resolution-survey-input-verification\.json \\\n[ \t]*--transport "\$recovery_archive" --output resolution-survey-recovery' 'resolution survey recovery invocation preserves authenticated input binding'
 require_literal_count "$resolution_survey_workflow" 'echo "- oracle run: \`$ORACLE_RUN_ID\`"' 1 'resolution survey escaped oracle run summary binding'
 require_literal_count "$resolution_survey_workflow" 'echo "- GitHub artifact: \`$ARTIFACT_ID\`"' 1 'resolution survey escaped artifact summary binding'
 require_literal_count "$resolution_survey_workflow" 'echo "- GitHub artifact digest: \`$ARTIFACT_DIGEST\`"' 1 'resolution survey escaped artifact-digest summary binding'
@@ -754,7 +804,7 @@ require_match "$resolution_survey_transport" 'reject_duplicate_key[\s\S]*tarfile
 require_match "$resolution_survey_transport" 'INPUT_MANIFEST_SCHEMA = 2\nINPUT_EVIDENCE_SCHEMA = 2\nOUTPUT_MANIFEST_SCHEMA = 3\nOUTPUT_EVIDENCE_SCHEMA = 3' 'resolution survey hard-cut envelope schemas'
 require_match "$resolution_survey_transport" 'class SchemaRebuildRequired[\s\S]*schema_rebuild_required[\s\S]*require_envelope_schema\(value, INPUT_EVIDENCE_SCHEMA, "survey input verification"\)[\s\S]*require_envelope_schema\(input_manifest, INPUT_MANIFEST_SCHEMA, "survey input manifest"\)[\s\S]*except SchemaRebuildRequired' 'resolution survey obsolete input envelope classification'
 require_job_match "$resolution_survey_workflow" survey 'schema_rebuild_required: obsolete survey input verification; rebuild as schema 2[\s\S]*else \.schema_version == 2 end[\s\S]*schema_rebuild_required: obsolete survey output verification; rebuild as schema 3[\s\S]*else \.schema_version == 3 end' 'resolution survey verification evidence envelope fences'
-require_match "$remi_deploy_helper" 'survey_validate_oracle_transport\(\)[\s\S]*schema_rebuild_required[\s\S]*and \.schema_version == 2' 'resolution survey helper input envelope fence'
+require_match "$remi_deploy_helper" 'survey_validate_input_manifest\(\)[\s\S]*schema_rebuild_required[\s\S]*and \.schema_version == 2[\s\S]*survey_validate_oracle_transport\(\)[\s\S]*survey_validate_input_manifest "\$survey_id" "\$export_id" "\$manifest"' 'resolution survey helper input envelope fence'
 require_match "$resolution_survey_transport" 'copy_tar_member\([\s\S]*member\.size != expected_size[\s\S]*while chunk := stream\.read\(1024 \* 1024\)[\s\S]*copied > expected_size[\s\S]*digest\.hexdigest\(\) != expected_sha256' 'resolution survey file admission is chunked and confined to each declared authenticated extent'
 require_match "$resolution_survey_transport" 'class StreamingJsonArray[\s\S]*class StreamingJsonObject[\s\S]*NATIVE_OUTCOME_STREAM_SPEC = \{[\s\S]*"closure_package_keys_sha256": "array"[\s\S]*"dependencies": "array"[\s\S]*CANDIDATE_ROOT_STREAM_SPEC = \{"outcome": NATIVE_OUTCOME_STREAM_SPEC\}[\s\S]*COMPARISON_MISMATCH_STREAM_SPEC[\s\S]*update_native_outcome_digest[\s\S]*StreamingJsonDocument\([\s\S]*\{"outcomes", "failures"\}[\s\S]*\{"mismatches"\}' 'resolution survey verifier streams canonical root records and nested outcomes without whole-document buffering'
 forbid_match "$resolution_survey_transport" 'file_bytes|read_bytes\(\).*candidate|read_bytes\(\).*comparison' 'resolution survey whole-document output buffering'
