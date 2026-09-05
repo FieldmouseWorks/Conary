@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-05
-revision: 36
+revision: 37
 summary: Recover the existing UTC-date nightly before selecting a newer green commit
 ---
 
@@ -110,9 +110,17 @@ verifies that signature before parsing any selection field and verifies the
 selected artifact before a native package transaction. Exact-tag release-build
 and released-artifact proof both completed the clean three-host bootstrap path.
 
-Workspace version `0.16.1` and the published release are synchronized.
+The workspace is prepared for the `v0.17.1` suite release: version
+authority `0.17.1` is staged for the reviewed release commit while `0.16.1`
+remains the published release until the `v0.17.1` tag's release-build and
+artifact proof complete.
 Protected tag `v0.16.0` remains reserved evidence for a failed
 version-validation run and has no GitHub release; it was not moved or reused.
+Protected tag `v0.17.0` remains reserved evidence for a failed
+packaged-license proof run (release-build 33989192427 stopped at `build-ccs`
+because the proof passed `--policy` to `conary ccs inspect`) and has no GitHub
+release; it was not moved or reused, and v0.17.1 carries the same content plus
+the proof fix.
 
 ## Nightly Pre-Release Channel
 

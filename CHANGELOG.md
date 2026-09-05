@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [v0.17.0] - 2026-09-05
+## [v0.17.1] - 2026-09-05
 
 ### Added
 - expose resolution worker evidence
@@ -480,6 +480,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - bound signed universe index replay
 
 ### Other
+- legal: inspect the CCS package without a policy argument in the contents proof
 - legal: package license texts only for trees that carry them
 - legal: run the packaged-license proofs only when the selected tree carries them
 - legal: prove CCS license texts by signed digest and license the Tier 2 recipe
