@@ -38,6 +38,7 @@ resolution_survey_transport="scripts/remi-resolution-survey-transport.py"
 resolution_survey_ssh_diagnostic="scripts/remi-survey-ssh-diagnostic.py"
 remi_deploy_helper="deploy/remi-deploy-helper.sh"
 remi_deploy_helper_tests="scripts/test-remi-deploy-helper.sh"
+infrastructure_doc="docs/operations/infrastructure.md"
 remi_resolution_survey="apps/remi/src/server/resolution_survey.rs"
 candidate_predeployment_filter="deploy/remi-predeployment-inspection.jq"
 candidate_postdeployment_filter="deploy/remi-postdeployment-fencing.jq"
@@ -284,6 +285,7 @@ required_files=(
     "$remi_resolution_survey"
     "$remi_deploy_helper"
     "$remi_deploy_helper_tests"
+    "$infrastructure_doc"
     "$candidate_predeployment_filter"
     "$candidate_postdeployment_filter"
     "$candidate_artifact_script"
@@ -766,6 +768,25 @@ require_match "$remi_deploy_helper" 'def recovery_known_key:[\s\S]*def recovery_
 require_match "$remi_deploy_helper" 'or \(\(\$key \| IN\("candidate_manifest_sha256", "source_sha256", "sha256"\)\) and test[\s\S]*or \(\$key == "run_id" and test[\s\S]*or \(\(\$key \| IN\("timestamp", "started_at", "completed_at"\)\) and test' 'resolution survey safe scalar strings require their owning fields'
 require_match "$remi_deploy_helper" '"retained", "transport", "restore", "id", "sha256", "size"[\s\S]*or \(\$key == "kind" and \. == "completed_resolution_survey"\)' 'resolution survey recovery admits the completed restore envelope vocabulary'
 require_match "$remi_deploy_helper_tests" 'test_recovery_envelope_vocabulary\(\)[\s\S]*all\(\.\. \| objects \| keys\[\]; recovery_known_key\)[\s\S]*cmp "\$expected" "\$actual"[\s\S]*cp "\$retained/restore.json" "\$recovery_fixture_dir/\$name.restore.json"[\s\S]*test_recovery_envelope_vocabulary "\$document"[\s\S]*test_recovery_envelope_vocabulary "\$fixture"' 'resolution survey recovery policy conforms to helper and Rust producer envelopes'
+# Derive the documented recovery contract from the helper's usage authority.
+python3 - "$remi_deploy_helper" "$infrastructure_doc" <<'PY_RECOVERY_USAGE' ||
+import pathlib
+import re
+import sys
+
+helper, document = (pathlib.Path(path).read_text() for path in sys.argv[1:])
+usage = helper.split("<<'USAGE'", 1)[1].split("\nUSAGE\n", 1)[0]
+expected = re.findall(
+    r"^  (conary-remi-deploy export-resolution-survey-evidence [^\n]+)$",
+    usage, re.MULTILINE,
+)
+documented = re.findall(r"`([^`]*\bexport-resolution-survey-evidence\b[^`]*)`", document)
+if len(expected) != 1 or not documented or any(
+    " ".join(command.split()) != expected[0] for command in documented
+):
+    sys.exit(1)
+PY_RECOVERY_USAGE
+    fail 'resolution survey recovery documentation matches the helper usage contract'
 require_job_match "$resolution_survey_workflow" survey 'expected_input_sha256="\$\(jq -er .\.manifest_sha256[\s\S]*resolution-survey-input-verification.json[\s\S]*export-resolution-survey-evidence .\$SURVEY_ID. .\$EXPORT_ID. .\$expected_input_sha256.' 'resolution survey recovery export receives the authenticated input digest'
 require_match "$remi_deploy_helper" 'if \[\[ "\$path" == input-manifest.json \]\]; then[\s\S]*survey_bind_recovery_input_manifest[\s\S]*"\$survey_id" "\$export_id" "\$file" "\$expected_input_sha256"[\s\S]*else[\s\S]*survey_recovery_path_reason[\s\S]*survey_bind_recovery_input_manifest\(\)[\s\S]*sha256sum "\$manifest"[\s\S]*\[\[ "\$observed_sha256" == "\$expected_sha256" \]\][\s\S]*input_manifest.digest_mismatch[\s\S]*survey_validate_input_manifest "\$survey_id" "\$export_id" "\$manifest"' 'resolution survey recovery binds input bytes before the shared typed validator and diagnostic policy'
 require_match "$resolution_survey_transport" 'def validate_recovery_input_manifest[\s\S]*source "\$1"; survey_bind_recovery_input_manifest[\s\S]*def verify_recovery[\s\S]*if item\["sha256"\] != input_sha256:[\s\S]*input_manifest.digest_mismatch[\s\S]*validate_recovery_input_manifest\(destination, survey_id, export_id, input_sha256\)[\s\S]*if item\["path"\] == "input-manifest.json":[\s\S]*continue[\s\S]*forbid_recovery_host_paths\(destination\)' 'resolution survey runner verifies typed input before generic recovery diagnostics'

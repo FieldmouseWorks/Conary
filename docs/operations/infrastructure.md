@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-09-05
-revision: 96
+last_updated: 2026-09-06
+revision: 97
 summary: Document non-secret CI, release, deployment, hosting, and production evidence workflows, including survey outcome contracts and failure recovery; host-local access belongs in ignored LOCAL_ACCESS.md.
 ---
 
@@ -384,9 +384,16 @@ workflow.
   Remi's top-level status `101` is a successful operator result only when the
   typed outcome records findings.
   On any helper failure, including an absent or malformed report line, the
-  workflow attempts the fixed `export-resolution-survey-evidence <survey-id>
-  <export-id>` action before removing SSH credentials. It uploads a typed
-  `helper_failed` record with status and sanitized message plus the recovered
+  workflow attempts the fixed
+  `conary-remi-deploy export-resolution-survey-evidence <survey-id> <export-id> <input-manifest-sha256>`
+  action before removing SSH credentials. The third argument is the authenticated
+  input transport's manifest digest, recorded as `manifest_sha256` in
+  `resolution-survey-input-verification.json`. It binds the retained
+  `input-manifest.json` bytes to that authenticated input before the shared
+  schema-2 validator runs; a digest mismatch rejects recovery. Obtain the digest
+  from that verification record, never from the retained file being checked.
+  The workflow uploads a typed `helper_failed` record with status and sanitized
+  message plus the recovered
   output, outcome, and restore documents. The schema-1 recovery manifest binds
   each allowlisted file by digest/size and, when retained, the exact authenticated
   input manifest. `verify-recovery` checks those bindings and privacy before
