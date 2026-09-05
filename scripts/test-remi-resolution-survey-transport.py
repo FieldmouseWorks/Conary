@@ -5,7 +5,9 @@
 
 from __future__ import annotations
 
+import argparse
 import hashlib
+import io
 import importlib.util
 import json
 from pathlib import Path
@@ -538,6 +540,61 @@ class ResolutionSurveyTransportTests(unittest.TestCase):
                     document.write_text(process.stdout)
                     TRANSPORT_TOOL.forbid_recovery_host_paths(document)
             self.assertEqual(outcomes, {"restored", "restore_failed"})
+
+    def test_recovery_binds_input_before_its_shared_typed_validator(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fixture = TransportFixture(root)
+            subprocess.run(fixture.command(), capture_output=True, text=True, check=True)
+            with tarfile.open(fixture.transport) as transport:
+                original = transport.extractfile("manifest.json").read()
+            value = json.loads(original)
+            self.assertEqual(value["schema_version"], 2)
+            self.assertTrue({"deployment", "files", "workflow_runs"} <= value.keys())
+            bad_schema = {**value, "workflow_runs": {**value["workflow_runs"], "oracle": 0}}
+            cases = [
+                ("valid", original, digest(original), None),
+                ("digest", b"invalid JSON", digest(original), "input_manifest.digest_mismatch"),
+                ("digest_bytes", b"invalid JSON", digest(original), "input_manifest.digest_mismatch"),
+                ("schema", canonical(bad_schema), digest(canonical(bad_schema)), "input_manifest.exact_schema"),
+                ("syntax", b"invalid JSON", digest(b"invalid JSON"), "input_manifest.json_syntax"),
+            ]
+            evidence = json.loads(fixture.evidence.read_bytes())
+            for name, data, authenticated_digest, reason in cases:
+                with self.subTest(case=name):
+                    write_json(fixture.evidence, {**evidence, "manifest_sha256": authenticated_digest})
+                    files = {"input-manifest.json": data, "helper.json": b'{"outcome":"helper_failed"}'}
+                    manifest = {
+                        "schema_version": 1, "kind": "resolution_survey_recovery", "authority": "diagnostic_only",
+                        "survey_id": fixture.survey_id, "export_id": EXPORT_ID, "availability": "retained",
+                        "input_manifest_sha256": digest(data), "withheld": [],
+                        "files": [{"path": path, "sha256": digest(content), "size": len(content)}
+                                  for path, content in files.items()],
+                    }
+                    if name == "digest_bytes":
+                        manifest["input_manifest_sha256"] = authenticated_digest
+                        manifest["files"][0]["sha256"] = authenticated_digest
+                    archive = root / f"recovery-{name}.tar"
+                    with tarfile.open(archive, "w") as stream:
+                        for path, content in {"recovery.json": canonical(manifest), **files}.items():
+                            member = tarfile.TarInfo(path)
+                            member.size = len(content)
+                            stream.addfile(member, io.BytesIO(content))
+                    output = root / f"recovered-{name}"
+                    args = argparse.Namespace(survey_id=fixture.survey_id, export_id=EXPORT_ID,
+                                              input_evidence=fixture.evidence, transport=archive, output=output)
+                    with patch.object(TRANSPORT_TOOL, "forbid_recovery_host_paths",
+                                      wraps=TRANSPORT_TOOL.forbid_recovery_host_paths) as diagnostics:
+                        if reason is not None:
+                            with self.assertRaisesRegex(TRANSPORT_TOOL.ValidationError, reason):
+                                TRANSPORT_TOOL.verify_recovery(args)
+                            self.assertFalse(output.exists())
+                            diagnostics.assert_not_called()
+                        else:
+                            TRANSPORT_TOOL.verify_recovery(args)
+                            self.assertEqual((output / "input-manifest.json").read_bytes(), original)
+                            self.assertEqual(json.loads((output / "recovery-verification.json").read_bytes())["input_binding"], "verified")
+                            self.assertEqual([call.args[0].name for call in diagnostics.call_args_list], ["helper.json"])
 
     def test_missing_shared_policy_fails_closed(self) -> None:
         with patch.object(TRANSPORT_TOOL.subprocess, "run", side_effect=OSError("private diagnostic")):

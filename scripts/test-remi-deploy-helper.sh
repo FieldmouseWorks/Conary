@@ -1585,10 +1585,10 @@ ssh() {
         cat "$source_report"
         return "$source_status"
     fi
-    [[ "$*" == "fixture sudo -n /usr/local/sbin/conary-remi-deploy export-resolution-survey-evidence '$SURVEY_ID' '$EXPORT_ID'" ]] || return 98
+    [[ "$*" == "fixture sudo -n /usr/local/sbin/conary-remi-deploy export-resolution-survey-evidence '$SURVEY_ID' '$EXPORT_ID' '$expected_input_sha256'" ]] || return 98
     echo recovery_reconnected >>events
     CONARY_REMI_DEPLOY_ROOT="$fixture_root" bash "$helper_source" \
-        export-resolution-survey-evidence "$SURVEY_ID" "$EXPORT_ID"
+        export-resolution-survey-evidence "$SURVEY_ID" "$EXPORT_ID" "$expected_input_sha256"
 }
 scp() {
     if [[ "$failed_copy" == restore && "$2" == resolution-survey-restore.json \
@@ -1631,6 +1631,9 @@ PY
             .outcome == "helper_failed" and .status == $status and .workflow_status == 255
             and .recovery == "retrieved" and .stderr == "empty"
         ' "$runner/resolution-survey-helper.json" >/dev/null
+        jq -e '.input_binding == "verified"' "$runner/resolution-survey-recovery/recovery-verification.json" >/dev/null
+        cmp "$runner/resolution-survey-recovery/input-manifest.json" \
+            "$fake_root/conary/evidence/.remi-operator-staging/completed-resolution-survey-${survey_id}/input-manifest.json"
         cmp "$runner/resolution-survey-recovery/restore.json" \
             "$fake_root/conary/evidence/.remi-operator-staging/completed-resolution-survey-${survey_id}/restore.json"
         jq -e --arg outcome "$restore_outcome" '.restore.outcome == $outcome' \
@@ -1822,7 +1825,7 @@ test_resolution_survey_recovers_surviving_production_evidence() {
     # that survived; never manufacture a production outcome document.
     jq -e '.outcome_document == "not_retained"
         and [.recovery.files[].path] == ["restore.json"]' "$fixture" >/dev/null
-    run_helper "$fake_root" export-resolution-survey-evidence "$survey_id" "$export_id" >"$archive"
+    run_helper "$fake_root" export-resolution-survey-evidence "$survey_id" "$export_id" "$(printf '0%.0s' {1..64})" >"$archive"
     tar -xOf "$archive" recovery.json | jq -e --slurpfile incident "$fixture" '. == $incident[0].recovery' >/dev/null
     [[ "$(tar -tf "$archive")" == $'recovery.json\nrestore.json' ]] ||
         fail "production recovery invented a missing outcome or discarded surviving evidence"
@@ -1858,7 +1861,7 @@ ssh() {
         return "$fixture_status"
     fi
     [[ -f "$key" && -f "$known_hosts" ]] || return 99
-    [[ "$*" == "fixture sudo -n /usr/local/sbin/conary-remi-deploy export-resolution-survey-evidence '$SURVEY_ID' '$EXPORT_ID'" ]] || return 98
+    [[ "$*" == "fixture sudo -n /usr/local/sbin/conary-remi-deploy export-resolution-survey-evidence '$SURVEY_ID' '$EXPORT_ID' '$expected_input_sha256'" ]] || return 98
     if (( export_status != 0 )); then return "$export_status"; fi
     cat "$source_recovery"
 }
@@ -1950,6 +1953,37 @@ PY
     done
 }
 
+test_recovery_input_manifest_failures() {
+    local fake_root="$1" survey_id="$2" export_id="$3"
+    local manifest="$fake_root/conary/evidence/.remi-operator-staging/completed-resolution-survey-${survey_id}/input-manifest.json"
+    local saved="$tmpdir/recovery-input-saved.json" expected_digest mutation reason output="$tmpdir/recovery-input-rejected"
+    cp "$manifest" "$saved"
+    for mutation in digest schema syntax; do
+        case "$mutation" in
+            digest)
+                # Both bytes and schema are bad: digest binding must fail first.
+                printf 'invalid JSON' >"$manifest"
+                expected_digest="$(jq -r .manifest_sha256 "$fake_root/survey-input-verification.json")"
+                reason=input_manifest.digest_mismatch ;;
+            schema)
+                jq -cS '.workflow_runs.oracle = 0' "$saved" >"$manifest"
+                expected_digest="$(sha256sum "$manifest" | cut -d ' ' -f 1)"
+                reason=input_manifest.exact_schema ;;
+            syntax)
+                printf 'invalid JSON' >"$manifest"
+                expected_digest="$(sha256sum "$manifest" | cut -d ' ' -f 1)"
+                reason=input_manifest.json_syntax ;;
+        esac
+        if run_helper "$fake_root" export-resolution-survey-evidence "$survey_id" "$export_id" \
+            "$expected_digest" >"$output" 2>"$output.stderr"; then
+            fail "recovery admitted $mutation input manifest"
+        fi
+        grep -F "$reason" "$output.stderr" >/dev/null || fail "recovery lost validator reason $reason"
+        [[ ! -s "$output" ]] || fail "recovery published before binding and validating its input"
+    done
+    install -m 0600 "$saved" "$manifest"
+}
+
 test_resolution_survey_any_failure_retains_recoverable_diagnostics() {
     local row name early bad survey_id export_id fake_root status stderr_file stdout_file
     local retained recovery unpacked
@@ -1994,7 +2028,8 @@ test_resolution_survey_any_failure_retains_recoverable_diagnostics() {
         printf '%s\n' '{"message":"journal: \u002fvar/lib/remi/private"}' \
             >"$retained/survey-output/arch.comparison-resolution-implementation.json"
         chmod 0600 "$retained/survey-output/arch.comparison-resolution-implementation.json"
-        run_helper "$fake_root" export-resolution-survey-evidence "$survey_id" "$export_id" >"$recovery"
+        run_helper "$fake_root" export-resolution-survey-evidence "$survey_id" "$export_id" \
+            "$(jq -r .manifest_sha256 "$fake_root/survey-input-verification.json")" >"$recovery"
         python3 scripts/remi-resolution-survey-transport.py verify-recovery \
             --survey-id "$survey_id" --export-id "$export_id" \
             --input-evidence "$fake_root/survey-input-verification.json" \
@@ -2011,10 +2046,15 @@ test_resolution_survey_any_failure_retains_recoverable_diagnostics() {
         [[ ! -e "$unpacked/manifest.json" && ! -e "$unpacked/survey-output/arch.comparison-resolution-implementation.json" ]]
         [[ ! -e "$unpacked/diagnostic.log" && ! -e "$unpacked/outcome.raw.json" ]]
         [[ -f "$retained/outcome.raw.json" && "$(stat -c '%a' "$retained/outcome.raw.json")" == 600 ]]
-        jq -e '.authority == "diagnostic_only" and .input_binding == "not_retained"' \
+        jq -e '.authority == "diagnostic_only" and .input_binding == "verified"' \
             "$unpacked/recovery-verification.json" >/dev/null
-        jq -e '.input_manifest_sha256 == null
-            and any(.withheld[]; .path == "input-manifest.json")' "$unpacked/recovery.json" >/dev/null
+        cmp "$retained/input-manifest.json" "$unpacked/input-manifest.json"
+        test_recovery_input_manifest_failures "$fake_root" "$survey_id" "$export_id"
+        jq -e --arg digest "$(jq -r .manifest_sha256 "$fake_root/survey-input-verification.json")" '
+            .input_manifest_sha256 == $digest and any(.files[]; .path == "input-manifest.json")
+            and all(.withheld[]; .path != "input-manifest.json")' "$unpacked/recovery.json" >/dev/null
+        jq -e '.schema_version == 2 and has("deployment") and has("files") and has("workflow_runs")' \
+            "$unpacked/input-manifest.json" >/dev/null
         if [[ "$name" == predicate ]]; then
             jq -e 'any(.withheld[]; .path == "survey-output/fedora-44.candidate-resolution-survey.json")' \
                 "$unpacked/recovery.json" >/dev/null
@@ -2801,7 +2841,7 @@ test_recovery_path_uri_policy() (
                 | jq -e 'to_entries | all(.[]; (.key | startswith("<redacted:")) and .value == "ready")' >/dev/null
         fi
         install -m 0600 "$member" "$retained/manifest.json"
-        run_helper "$fake_root" export-resolution-survey-evidence uri-policy export-policy >"$archive"
+        run_helper "$fake_root" export-resolution-survey-evidence uri-policy export-policy "$(printf '0%.0s' {1..64})" >"$archive"
         tar -xOf "$archive" recovery.json | jq -e --arg reason "$reason" '
             if $reason == "safe" then any(.files[]; .path == "manifest.json")
             else (.withheld | index({path:"manifest.json",reason:$reason})) != null

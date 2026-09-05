@@ -796,6 +796,9 @@ release_matrix_mutation_cases() {
 import sys
 
 cases = (
+    ('test_check_release_matrix_rejects_unbound_recovery_export_input', 'replace', '.github/workflows/survey-remi-resolution.yml', "export-resolution-survey-evidence '$SURVEY_ID' '$EXPORT_ID' '$expected_input_sha256'", "export-resolution-survey-evidence '$SURVEY_ID' '$EXPORT_ID'", 'resolution survey recovery export receives the authenticated input digest'),
+    ('test_check_release_matrix_rejects_unbound_retained_manifest', 'replace', 'deploy/remi-deploy-helper.sh', '[[ "$observed_sha256" == "$expected_sha256" ]]', '[[ -n "$observed_sha256" ]]', 'resolution survey recovery binds input bytes before the shared typed validator and diagnostic policy'),
+    ('test_check_release_matrix_rejects_generic_recovery_input_validation', 'replace', 'scripts/remi-resolution-survey-transport.py', 'validate_recovery_input_manifest(destination, survey_id, export_id, input_sha256)', 'forbid_recovery_host_paths(destination)', 'resolution survey runner verifies typed input before generic recovery diagnostics'),
     ('test_check_release_matrix_rejects_missing_completed_restore_key', 'replace', 'deploy/remi-deploy-helper.sh', '"retained", "transport", "restore", "id", "sha256", "size"', '"transport", "restore", "id", "sha256", "size"', 'resolution survey recovery admits the completed restore envelope vocabulary'),
     ('test_check_release_matrix_rejects_missing_completed_restore_kind', 'replace', 'deploy/remi-deploy-helper.sh', '$key == "kind" and . == "completed_resolution_survey"', '$key == "kind" and . == "obsolete"', 'resolution survey recovery admits the completed restore envelope vocabulary'),
     ('test_check_release_matrix_rejects_unchecked_helper_envelope_vocabulary', 'replace', 'scripts/test-remi-deploy-helper.sh', 'test_recovery_envelope_vocabulary "$document"', 'true # producer conformance removed', 'resolution survey recovery policy conforms to helper and Rust producer envelopes'),

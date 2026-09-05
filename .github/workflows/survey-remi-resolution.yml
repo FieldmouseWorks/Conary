@@ -351,6 +351,8 @@ jobs:
           known_hosts="$REMI_SSH_KNOWN_HOSTS_PATH"
           remote_possible=0
           helper_invoked=0
+          expected_input_sha256="$(jq -er '.manifest_sha256 | select(type == "string" and test("^[0-9a-f]{64}$"))' \
+            resolution-survey-input-verification.json)"
           helper_stderr="$RUNNER_TEMP/resolution-survey-helper.stderr"
           : >"$helper_stderr"
           chmod 0600 "$helper_stderr"
@@ -399,7 +401,7 @@ jobs:
             # same typed identities. It does not depend on the failed report.
             # shellcheck disable=SC2029
             if ssh "${ssh_opts[@]}" "$target" \
-              "sudo -n /usr/local/sbin/conary-remi-deploy export-resolution-survey-evidence '$SURVEY_ID' '$EXPORT_ID'" \
+              "sudo -n /usr/local/sbin/conary-remi-deploy export-resolution-survey-evidence '$SURVEY_ID' '$EXPORT_ID' '$expected_input_sha256'" \
               >"$recovery_archive" 2>"$recovery_stderr"; then
               recovery_state=validation_failed
               if python3 scripts/remi-resolution-survey-transport.py verify-recovery \

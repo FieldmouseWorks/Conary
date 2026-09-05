@@ -2998,6 +2998,25 @@ def forbid_recovery_host_paths(path: Path) -> None:
     fail("survey recovery member redaction_unproven")
 
 
+def validate_recovery_input_manifest(path: Path, survey_id: str, export_id: str, expected_sha256: str) -> None:
+    # Use the same digest-first binding and schema owner as normal host admission.
+    helper = Path(__file__).resolve().parents[1] / "deploy/remi-deploy-helper.sh"
+    try:
+        result = subprocess.run(
+            ["bash", "-c", 'source "$1"; survey_bind_recovery_input_manifest "$2" "$3" "$4" "$5"',
+             "remi-recovery-input-check", str(helper), survey_id, export_id, str(path), expected_sha256],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False,
+        )
+    except OSError:
+        fail("input_manifest.validator_unavailable")
+    if result.returncode == 0 and not result.stdout:
+        return
+    reason = result.stdout.decode("ascii", errors="replace").strip()
+    if result.returncode != 0 and re.fullmatch(r"input_manifest\.[a-z_]{1,64}", reason):
+        fail(reason)
+    fail("input_manifest.validator_unavailable")
+
+
 def verify_recovery(args: argparse.Namespace) -> None:
     """Admit digest-bound diagnostic bytes without granting survey authority."""
     survey_id = require_identity(args.survey_id, "survey id")
@@ -3041,7 +3060,7 @@ def verify_recovery(args: argparse.Namespace) -> None:
             fail("survey recovery request/schema binding drifted")
         bound_input = manifest["input_manifest_sha256"]
         if bound_input is not None and bound_input != input_sha256:
-            fail("survey recovery differs from authenticated input manifest")
+            fail("input_manifest.digest_mismatch")
         included: set[str] = set()
         withheld: set[str] = set()
         entries = []
@@ -3074,13 +3093,30 @@ def verify_recovery(args: argparse.Namespace) -> None:
             fail("survey recovery destination already exists")
         with tempfile.TemporaryDirectory(prefix="remi-survey-recovery-", dir=args.output.parent) as directory:
             staging = Path(directory)
+            # Reopen and bind the input before any generic diagnostic inspection.
+            input_entry = next(((member, item) for member, item in zip(members[1:], entries)
+                                if item["path"] == "input-manifest.json"), None)
+            if input_entry is not None:
+                member, item = input_entry
+                destination = staging / "input-manifest.json"
+                if item["sha256"] != input_sha256:
+                    fail("input_manifest.digest_mismatch")
+                if item["size"] > MAX_MANIFEST_BYTES:
+                    fail("input_manifest.size")
+                input_bytes = read_tar_member(archive, member, MAX_MANIFEST_BYTES)
+                if sha256_bytes(input_bytes) != input_sha256:
+                    fail("input_manifest.digest_mismatch")
+                if len(input_bytes) != item["size"]:
+                    fail("input_manifest.size")
+                write_new(destination, input_bytes)
+                validate_recovery_input_manifest(destination, survey_id, export_id, input_sha256)
             for member, item in zip(members[1:], entries):
+                if item["path"] == "input-manifest.json":
+                    continue
                 destination = staging / item["path"]
                 destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
                 copy_tar_member(archive, member, destination, item["size"], item["sha256"])
                 forbid_recovery_host_paths(destination)
-                if item["path"] == "input-manifest.json" and item["sha256"] != input_sha256:
-                    fail("retained recovery input bytes differ from authenticated input")
             write_new(staging / "recovery.json", canonical_json(manifest))
             evidence = {
                 "schema_version": 1, "kind": "resolution_survey_recovery_verification",

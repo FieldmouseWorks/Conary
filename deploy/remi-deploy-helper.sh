@@ -30,7 +30,7 @@ usage:
   conary-remi-deploy inspect-remi-storage
   conary-remi-deploy export-native-oracle-inputs <export-id> <fedora-sha256> <ubuntu-sha256> <arch-sha256>
   conary-remi-deploy survey-resolution <survey-id> <export-id> <oracle-transport-path>
-  conary-remi-deploy export-resolution-survey-evidence <survey-id> <export-id>
+  conary-remi-deploy export-resolution-survey-evidence <survey-id> <export-id> <input-manifest-sha256>
   conary-remi-deploy benchmark-remi-conversion <run-id> <installed-binary-sha256> <profile> <revision-sha256> <package-key-sha256> <source-sha256> <source-size>
   conary-remi-deploy verify-ingress
   conary-remi-deploy verify-access
@@ -1145,7 +1145,8 @@ survey_record_failure() {
 # A fixed, read-only export of retained diagnostics. These bytes do not confer
 # survey authority: only verify-output may verify the existing survey transport.
 export_resolution_survey_evidence() {
-    local survey_id="$1" export_id="$2"
+    local survey_id="$1" export_id="$2" expected_input_sha256="$3"
+    validate_sha256 "$expected_input_sha256"
     validate_identity resolution-survey "$survey_id"
     validate_identity native-oracle-export "$export_id"
     [[ -n "$ROOT" || "$(id -u)" == 0 ]] || die "helper must run as root"
@@ -1162,7 +1163,7 @@ export_resolution_survey_evidence() {
         [[ -d "$retained" && ! -L "$retained" && "$(stat -c '%a:%u' "$retained")" == "700:$(id -u)" ]] ||
             die "survey recovery root is not a private control-owned directory"
         availability=retained
-        for path in outcome.json restore.json helper.json input-manifest.json manifest.json \
+        for path in input-manifest.json outcome.json restore.json helper.json manifest.json \
             survey-output/{fedora-44,ubuntu-26.04,arch}.{candidate-resolution-survey,candidate-resolution-implementation,native-resolution-comparison-survey,comparison-resolution-implementation}.json; do
             file="${retained}/${path}"
             [[ -e "$file" || -L "$file" ]] || continue
@@ -1174,22 +1175,27 @@ export_resolution_survey_evidence() {
                     die "survey recovery output is not a private control-owned directory"
             fi
             size="$(stat -c '%s' "$file")"
-            if (( size == 0 )); then
-                jq -cn --arg path "$path" '{path:$path,reason:"empty"}' >>"$skipped"
-                continue
-            fi
-            path_reason="$(survey_recovery_path_reason "$file")"
-            if [[ "$path_reason" != safe ]]; then
-                jq -cn --arg path "$path" --arg reason "$path_reason" \
-                    '{path:$path,reason:$reason}' >>"$skipped"
-                continue
-            fi
-            sha256="$(sha256sum "$file" | cut -d ' ' -f 1)"
             if [[ "$path" == input-manifest.json ]]; then
-                jq -e --arg survey "$survey_id" --arg export "$export_id" '
-                    .schema_version == 2 and .survey_id == $survey and .export_id == $export
-                ' "$file" >/dev/null || die "survey recovery input binding disagrees"
+                # Bind to the authenticated transport digest before any parsing.
+                # Input authority has its own validator, never the diagnostic gate.
+                if ! path_reason="$(survey_bind_recovery_input_manifest \
+                    "$survey_id" "$export_id" "$file" "$expected_input_sha256")"; then
+                    die "$path_reason"
+                fi
+                sha256="$expected_input_sha256"
                 input_sha256="\"$sha256\""
+            else
+                if (( size == 0 )); then
+                    jq -cn --arg path "$path" '{path:$path,reason:"empty"}' >>"$skipped"
+                    continue
+                fi
+                path_reason="$(survey_recovery_path_reason "$file")"
+                if [[ "$path_reason" != safe ]]; then
+                    jq -cn --arg path "$path" --arg reason "$path_reason" \
+                        '{path:$path,reason:$reason}' >>"$skipped"
+                    continue
+                fi
+                sha256="$(sha256sum "$file" | cut -d ' ' -f 1)"
             fi
             jq -cn --arg path "$path" --arg sha256 "$sha256" --argjson size "$size" \
                 '{path:$path,sha256:$sha256,size:$size}' >>"$rows"
@@ -1294,46 +1300,22 @@ survey_validate_outcome() {
     printf '%s\n' "$result"
 }
 
-survey_validate_oracle_transport() {
-    local survey_id="$1"
-    local export_id="$2"
-    local transport="$3"
-    local manifest="$4"
+# Own the schema checks for both the oracle transport and retained input bytes.
+# Failure output is a typed reason only, never jq or host-path diagnostics.
+survey_validate_input_manifest() {
+    local survey_id="$1" export_id="$2" manifest="$3"
+    [[ -s "$manifest" && "$(stat -c '%s' "$manifest" 2>/dev/null)" -le 1048576 ]] ||
+        { printf '%s\n' input_manifest.size; return 1; }
+    jq -e -cS . "$manifest" >/dev/null 2>&1 ||
+        { printf '%s\n' input_manifest.json_syntax; return 1; }
+    jq -es 'length == 1' "$manifest" >/dev/null 2>&1 ||
+        { printf '%s\n' input_manifest.document_count; return 1; }
+    [[ "$(jq -cS . "$manifest" 2>/dev/null)" == "$(cat "$manifest" 2>/dev/null)" ]] ||
+        { printf '%s\n' input_manifest.canonical_json; return 1; }
 
-    local listing="${manifest}.listing"
-    if ! tar -tf "$transport" >"$listing"; then
-        die "resolution-survey oracle transport is not an uncompressed tar archive"
-    fi
-    [[ "$(head -n 1 "$listing")" == "manifest.json" ]] ||
-        die "resolution-survey oracle transport must begin with manifest.json"
-    [[ -z "$(sort "$listing" | uniq -d)" ]] ||
-        die "resolution-survey oracle transport repeats a member"
-    if grep -Ev '^(manifest\.json|(fedora-44|ubuntu-26\.04|arch)/(package-oracle|native-resolution)/(manifest\.json|packages\.jsonl|roots\.jsonl))$' \
-        "$listing" | grep -q .; then
-        die "resolution-survey oracle transport contains an unsafe member"
-    fi
-    local verbose_listing="${manifest}.verbose"
-    if ! tar -tvf "$transport" >"$verbose_listing"; then
-        die "could not inspect resolution-survey oracle member types"
-    fi
-    if awk 'substr($1, 1, 1) != "-" { exit 1 }' "$verbose_listing"; then
-        :
-    else
-        die "resolution-survey oracle transport contains a non-plain member"
-    fi
-    [[ "$(grep -c '^manifest\.json$' "$listing")" == "1" ]] ||
-        die "resolution-survey oracle transport has no unique manifest"
-    tar -xOf "$transport" -- manifest.json >"$manifest" ||
-        die "could not read resolution-survey oracle manifest"
-    [[ -s "$manifest" && "$(stat -c '%s' "$manifest")" -le 1048576 ]] ||
-        die "resolution-survey oracle manifest size is outside its bounded contract"
-    jq -e -cS . "$manifest" >/dev/null ||
-        die "resolution-survey oracle manifest is not valid JSON"
-    [[ "$(jq -cS . "$manifest")" == "$(cat "$manifest")" ]] ||
-        die "resolution-survey oracle manifest is not canonical JSON"
-
-    if jq -e '.schema_version == 1' "$manifest" >/dev/null; then
-        die '{"status":"obsolete","reason":"schema_rebuild_required","envelope":"survey input manifest","found_schema":1,"current_schema":2,"message":"rebuild retained survey input as schema 2"}'
+    if jq -e '.schema_version == 1' "$manifest" >/dev/null 2>&1; then
+        printf '%s\n' input_manifest.schema_rebuild_required
+        return 1
     fi
     jq -e \
         --arg survey_id "$survey_id" \
@@ -1389,8 +1371,59 @@ survey_validate_oracle_transport() {
           exact_keys(["path", "sha256", "size"])
           and (.sha256 | sha256)
           and (.size | uint))
-        ' "$manifest" >/dev/null ||
-        die "resolution-survey oracle manifest violates its exact schema"
+        ' "$manifest" >/dev/null 2>&1 ||
+        { printf '%s\n' input_manifest.exact_schema; return 1; }
+}
+
+survey_bind_recovery_input_manifest() {
+    local survey_id="$1" export_id="$2" manifest="$3" expected_sha256="$4" observed_sha256
+    [[ "$expected_sha256" =~ ^[0-9a-f]{64}$ ]] ||
+        { printf '%s\n' input_manifest.digest_invalid; return 1; }
+    observed_sha256="$(sha256sum "$manifest" 2>/dev/null | cut -d ' ' -f 1)" ||
+        { printf '%s\n' input_manifest.unreadable; return 1; }
+    [[ "$observed_sha256" == "$expected_sha256" ]] ||
+        { printf '%s\n' input_manifest.digest_mismatch; return 1; }
+    survey_validate_input_manifest "$survey_id" "$export_id" "$manifest"
+}
+
+survey_validate_oracle_transport() {
+    local survey_id="$1"
+    local export_id="$2"
+    local transport="$3"
+    local manifest="$4"
+
+    local listing="${manifest}.listing"
+    if ! tar -tf "$transport" >"$listing"; then
+        die "resolution-survey oracle transport is not an uncompressed tar archive"
+    fi
+    [[ "$(head -n 1 "$listing")" == "manifest.json" ]] ||
+        die "resolution-survey oracle transport must begin with manifest.json"
+    [[ -z "$(sort "$listing" | uniq -d)" ]] ||
+        die "resolution-survey oracle transport repeats a member"
+    if grep -Ev '^(manifest\.json|(fedora-44|ubuntu-26\.04|arch)/(package-oracle|native-resolution)/(manifest\.json|packages\.jsonl|roots\.jsonl))$' \
+        "$listing" | grep -q .; then
+        die "resolution-survey oracle transport contains an unsafe member"
+    fi
+    local verbose_listing="${manifest}.verbose"
+    if ! tar -tvf "$transport" >"$verbose_listing"; then
+        die "could not inspect resolution-survey oracle member types"
+    fi
+    if awk 'substr($1, 1, 1) != "-" { exit 1 }' "$verbose_listing"; then
+        :
+    else
+        die "resolution-survey oracle transport contains a non-plain member"
+    fi
+    [[ "$(grep -c '^manifest\.json$' "$listing")" == "1" ]] ||
+        die "resolution-survey oracle transport has no unique manifest"
+    tar -xOf "$transport" -- manifest.json >"$manifest" ||
+        die "could not read resolution-survey oracle manifest"
+    local manifest_reason
+    if ! manifest_reason="$(survey_validate_input_manifest "$survey_id" "$export_id" "$manifest")"; then
+        if [[ "$manifest_reason" == input_manifest.schema_rebuild_required ]]; then
+            die '{"status":"obsolete","reason":"schema_rebuild_required","envelope":"survey input manifest","found_schema":1,"current_schema":2,"message":"rebuild retained survey input as schema 2"}'
+        fi
+        die "$manifest_reason"
+    fi
 
     local expected_members="${manifest}.expected"
     {
@@ -2412,8 +2445,8 @@ case "${1:-}" in
         survey_resolution "$@"
         ;;
     export-resolution-survey-evidence)
-        [[ $# -eq 3 ]] || usage
-        export_resolution_survey_evidence "$2" "$3"
+        [[ $# -eq 4 ]] || usage
+        export_resolution_survey_evidence "$2" "$3" "$4"
         ;;
     benchmark-remi-conversion)
         shift

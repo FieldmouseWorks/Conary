@@ -2,7 +2,7 @@
 title: Remi native full-catalog parity oracle
 summary: Define single-walk producer-bound strict native parity lanes with live progress and independent diagnostic retention, bounded native ALPM provider probing, selective same-export assembly, and deterministic bounded-parallel private collect-all resolution surveys for one complete immutable profile candidate
 last_updated: 2026-09-05
-revision: 77
+revision: 78
 status: active
 ---
 
@@ -761,7 +761,18 @@ and verification evidence schema 3 bind every candidate/comparison survey to
 its implementation file; the independent reader validates the worker count,
 per-worker load-time vector, effective memory budget, and retained worker RSS
 allowance. The input transport manifest and input verification evidence both
-use schema 2. These are #814 hard cuts: input envelopes move from 1 to 2 and
+use schema 2. Recovery exports take the survey ID, export ID, and authenticated
+input-manifest SHA-256. Retained input-manifest bytes must match that digest
+before the helper's shared input validator checks schema 2, canonical JSON,
+identities, profiles, deployment, workflow runs, and declared members. The
+runner repeats the same digest-first validation before publishing recovery
+as `input_binding: verified`; mismatched bytes fail as
+`input_manifest.digest_mismatch`, and schema failures retain the shared
+validator's typed reason. The input manifest bypasses the generic diagnostic
+string allowlist. Missing retained input remains `not_retained`; an included
+manifest cannot claim binding through a withheld entry.
+
+These are #814 hard cuts: input envelopes move from 1 to 2 and
 output envelopes from 2 to 3. Readers classify retired envelopes before nested
 validation as typed `obsolete` / `schema_rebuild_required` non-authority with
 the found/current schemas and a rebuild message (the Python CLI exits 3).
