@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-09-04
-revision: 37
-summary: Track Conary's signed-universe launch gate, daily-driver floor, synchronized preview release, and external tester milestone
+last_updated: 2026-09-06
+revision: 38
+summary: Track published v0.17.1 artifact proof alongside the signed-universe, daily-driver, and external tester gates
 proof_baseline: "W7/#110 closed through PR #487; immutable v0.16.1 remains historical release evidence rather than tester authority; #598 owns first complete signed public universe; external tester result remains 0/10"
 current_milestone: first external tester loop
 active_workstream: W7.5 Signed Universe And Launch Gate
@@ -104,7 +104,7 @@ the stated scope, not whether a workstream happens to be active.
 | CLI and core package operations | solid | Scope is the limited preview; external use and fresh combined proof matter more than new surface area. |
 | Adoption, unadoption, and native handoff | solid | Proof covers the current three-distro scope; the released Arch package initializes only its exact native profile and synchronizes Remi. |
 | Database, CAS, native parsing, and resolution | solid | Some advanced repository-policy abstractions and integration edges remain incomplete. |
-| Packaging, static repositories, trust, and self-update | solid | Immutable synchronized `v0.16.1` has an exact annotated tag, 15 checksum/digest-verified assets across four products, GitHub release attestation, detached CCS and bootstrap-manifest signatures, deployments, and native RPM/DEB/Arch lifecycle proof. No current artifact publishes an SBOM or additional provenance sidecar. |
+| Packaging, static repositories, trust, and self-update | solid | Immutable synchronized `v0.17.1` has an exact annotated tag, 18 checksum/digest-verified assets across four products, GitHub release attestation, detached CCS and bootstrap-manifest signatures, and native RPM/DEB/Arch artifact proof. Deployment routing passed; terminal live deployment proof remains pending. No current artifact publishes an SBOM or additional provenance sidecar. |
 | CCS conversion and native lifecycle authority | active hard switch | The exact RPM, Debian, and ALPM lifecycle contract is released and deployed; current source-backed format defects are explicit work in #98, #99, and #102 through #105 rather than manual-review authority. These share one root cause: the shared package model normalizes source facts at parse time instead of at each consumer's boundary. W5 owns the structural correction. |
 | Generation build and export | limited | Bootable-image export (raw/qcow2/ISO plus a UEFI QEMU boot proof) is retained and proven from a supported-host fixture rather than from bootstrap. Proven paths are x86_64; non-x86 assets, signed boot authority, and persistent-effect rollback remain later work. |
 | Model, source selection, and replatforming | limited | Some resolution deltas and builder inputs are not wired end to end. |
@@ -567,12 +567,13 @@ installed-binary self-update, compatible prewarmed Remi, rollback, and
 clean-host proof. W3's release proof gate was reopened for the supported `htop`
 SONAME repair and again for issue #41's path-safety and support-bundle defects,
 then superseded by the post-hard-cut package authority suite. The latest exact
-immutable release evidence is synchronized `v0.16.1` at
-`0fb961bacc6360107506371b16b7f0345ba6f927`. It remains historical release
-authority, not current production or tester authority: the signed-universe
-architecture advanced to schema 55 after that tag. #639 will establish the
-next exact release/deployment proof. The tester pin remains unassigned and the
-external milestone remains 0/10.
+immutable release evidence is synchronized `v0.17.1` at
+`83376626f8f238e4763389ce2084d655fc4d6cf3`, with 18 verified assets and
+three-host artifact proof recorded in the
+[release matrix](../operations/release-artifact-matrix.md). Terminal live
+deployment proof remains pending. #639 still owns the post-universe
+release/deployment gate; this publication does not assign tester authority.
+The tester pin remains unassigned and the external milestone remains 0/10.
 
 W3 was subsequently split. Its release gate is complete, and its external
 tester outreach moved to W8 behind an engineering gate. W4 through W7 are now
