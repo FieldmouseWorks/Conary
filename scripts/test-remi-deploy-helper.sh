@@ -4,9 +4,15 @@ set -euo pipefail
 
 outcome_fixture_dir="apps/remi/tests/fixtures/resolution-survey-outcome"
 only_outcome_fixtures=0
+only_recovery_fixtures=0
+recovery_fixture_dir=""
 if [[ "${1:-}" == --outcome-fixtures ]]; then
     outcome_fixture_dir="$2"
     only_outcome_fixtures=1
+    shift 2
+elif [[ "${1:-}" == --recovery-envelope-fixtures ]]; then
+    recovery_fixture_dir="$2"
+    only_recovery_fixtures=1
     shift 2
 fi
 
@@ -18,6 +24,8 @@ test -f "$helper" || {
 
 tmpdir="$(mktemp -d /tmp/remi-deploy-helper-test.XXXXXX)"
 benchmark_tmp_paths=()
+recovery_fixture_dir="${recovery_fixture_dir:-$tmpdir/recovery-envelope-fixtures}"
+mkdir -p "$recovery_fixture_dir"
 cleanup() {
     local path
     for path in "${benchmark_tmp_paths[@]}"; do
@@ -1530,9 +1538,112 @@ test_resolution_survey_findings_restart_and_succeed() {
     ' "$verification" >/dev/null
 }
 
+# Test the closed policy against producer bytes, not a copied list of schema
+# keys. Unknown keys must fail before sanitization can hide a schema change.
+test_recovery_envelope_vocabulary() (
+    source "$helper"
+    local document="$1" expected="$tmpdir/envelope-expected.json" actual="$tmpdir/envelope-actual.json"
+    jq -e "$(survey_recovery_path_policy)"'
+        all(.. | objects | keys[]; recovery_known_key)
+    ' "$document" >/dev/null || fail "helper envelope vocabulary escaped the recovery policy"
+    jq -cS 'if has("output_dir") then .output_dir = "<redacted:private_host_path>" else . end' \
+        "$document" >"$expected"
+    survey_sanitize_outcome "$document" >"$actual"
+    cmp "$expected" "$actual" || fail "recovery changed a public helper envelope value"
+    [[ "$(survey_recovery_path_reason "$actual")" == safe ]] || fail "sanitized envelope is not recoverable"
+)
+
+test_resolution_survey_recovers_after_transport_failure() {
+    local survey_id="$1" export_id="$2" fake_root="$3" report="$4" helper_status="$5" restore_outcome="$6"
+    local script="$tmpdir/post-helper-recovery.sh" runner failed_copy status helper_source
+    helper_source="$(realpath "$helper")"
+    cat >"$script" <<'SCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+SURVEY_ID="$1" EXPORT_ID="$2" fixture_root="$3" source_report="$4" source_status="$5" failed_copy="$6"
+helper_source="$7"
+RUNNER_TEMP="$PWD" GITHUB_OUTPUT="$PWD/outputs"
+key="$PWD/key" known_hosts="$PWD/known-hosts"
+helper="$PWD/helper" current_helper="$PWD/current-helper"
+REMI_SSH_CONFIG="$PWD/config"
+export REMI_SSH_TARGET=surveyoperator@fixture
+printf 'Host fixture\n HostName fixture\n' >"$REMI_SSH_CONFIG"
+printf 'fixture ssh-ed25519 synthetic-key\n' >"$known_hosts"
+touch "$key" "$helper" "$current_helper"
+cp "$fixture_root/survey-input-verification.json" resolution-survey-input-verification.json
+target=fixture
+ssh_opts=()
+remote_possible=0
+remote_input="/tmp/remi-resolution-survey-oracles-${SURVEY_ID}.tar"
+remote_output="/tmp/remi-resolution-survey-${SURVEY_ID}.tar"
+remote_restore="/tmp/remi-resolution-survey-${SURVEY_ID}.restore.json"
+local_output="$PWD/survey.tar"
+ssh() {
+    [[ -f "$key" && -f "$known_hosts" ]] || return 99
+    if [[ "$*" == "fixture sudo -n /usr/local/sbin/conary-remi-deploy survey-resolution '$SURVEY_ID' '$EXPORT_ID' '$remote_input'" ]]; then
+        echo helper_completed >>events
+        cat "$source_report"
+        return "$source_status"
+    fi
+    [[ "$*" == "fixture sudo -n /usr/local/sbin/conary-remi-deploy export-resolution-survey-evidence '$SURVEY_ID' '$EXPORT_ID'" ]] || return 98
+    echo recovery_reconnected >>events
+    CONARY_REMI_DEPLOY_ROOT="$fixture_root" bash "$helper_source" \
+        export-resolution-survey-evidence "$SURVEY_ID" "$EXPORT_ID"
+}
+scp() {
+    if [[ "$failed_copy" == restore && "$2" == resolution-survey-restore.json \
+        || "$failed_copy" == survey && "$2" == "$local_output" ]]; then
+        echo "${failed_copy}_copy_failed" >>events
+        return 255
+    fi
+    cp "${1#*:}" "$2"
+}
+SCRIPT
+    python3 - "$script" <<'PY'
+from pathlib import Path
+import sys
+workflow = Path('.github/workflows/survey-remi-resolution.yml').read_text()
+start = workflow.index('          helper_invoked=0\n')
+end = workflow.index('          trap cleanup EXIT\n', start) + len('          trap cleanup EXIT\n')
+invoke = workflow.index('          helper_status=0\n', end)
+copy = '          scp "${ssh_opts[@]}" "${target}:${remote_output}" "$local_output"\n'
+copy_end = workflow.index(copy, invoke) + len(copy)
+with Path(sys.argv[1]).open('a') as output:
+    output.write('\n'.join(line[10:] for line in workflow[start:end].splitlines()) + '\n')
+    output.write('helper_invoked=1\n')
+    output.write('\n'.join(line[10:] for line in workflow[invoke:copy_end].splitlines()) + '\n')
+PY
+    for failed_copy in restore survey; do
+        runner="$tmpdir/runner-post-helper-${survey_id}-${failed_copy}"
+        mkdir "$runner"
+        ln -s "$PWD/scripts" "$runner/scripts"
+        status=0
+        (cd "$runner" && bash "$script" "$survey_id" "$export_id" "$fake_root" "$report" \
+            "$helper_status" "$failed_copy" "$helper_source") \
+            >"$runner/workflow.stdout" 2>"$runner/workflow.stderr" || status=$?
+        [[ "$status" == 255 ]] || fail "post-helper copy failure lost its original exit status"
+        [[ "$(cat "$runner/events")" == "$(printf 'helper_completed\n%s_copy_failed\nrecovery_reconnected' "$failed_copy")" ]] ||
+            fail "recovery did not reconnect after the completed helper's copy failure"
+        if [[ "$failed_copy" == restore ]]; then
+            [[ ! -e "$runner/resolution-survey-restore.json" ]] || fail "failed copy invented local restore evidence"
+        fi
+        jq -e --argjson status "$helper_status" '
+            .outcome == "helper_failed" and .status == $status and .workflow_status == 255
+            and .recovery == "retrieved" and .stderr == "empty"
+        ' "$runner/resolution-survey-helper.json" >/dev/null
+        cmp "$runner/resolution-survey-recovery/restore.json" \
+            "$fake_root/conary/evidence/.remi-operator-staging/completed-resolution-survey-${survey_id}/restore.json"
+        jq -e --arg outcome "$restore_outcome" '.restore.outcome == $outcome' \
+            "$runner/resolution-survey-recovery/restore.json" >/dev/null
+        jq -e 'all(.withheld[]; .path != "restore.json")' \
+            "$runner/resolution-survey-recovery/recovery.json" >/dev/null
+        grep -Fx 'helper_outcome=helper_failed' "$runner/outputs" >/dev/null
+    done
+}
+
 test_resolution_survey_restore_outcomes_and_measured_budgets() {
     local row name prior ready_after tick expected_status expected_outcome budget elapsed reason
-    local survey_id export_id fake_root stdout_file stderr_file status retained transport restore
+    local survey_id export_id fake_root stdout_file stderr_file status retained transport restore document
     local runner_script="${tmpdir}/survey-runner-handoff.sh"
     cat >"$runner_script" <<'EOF'
 #!/usr/bin/env bash
@@ -1606,6 +1717,18 @@ PYCODE
         [[ "$(stat -c '%a' "$retained")" == 700 ]]
         [[ "$(stat -c '%a' "$restore")" == 600 ]]
         cmp "$restore" "$retained/restore.json"
+        # Capture the actual completed wrapper, raw readiness inspection, and
+        # command outcome for both shell and Python policy conformance tests.
+        cp "$retained/restore.json" "$recovery_fixture_dir/$name.restore.json"
+        cp "$fake_root/var/lib/conary-remi-deploy/readiness.json" "$recovery_fixture_dir/$name.readiness.json"
+        cp "$retained/outcome.raw.json" "$recovery_fixture_dir/$name.outcome.json"
+        for document in "$recovery_fixture_dir/$name."*.json; do
+            test_recovery_envelope_vocabulary "$document"
+        done
+        if [[ "$name" == within-budget || "$name" == ceiling ]]; then
+            test_resolution_survey_recovers_after_transport_failure \
+                "$survey_id" "$export_id" "$fake_root" "$stdout_file" "$status" "$expected_outcome"
+        fi
         mkdir "${tmpdir}/runner-${survey_id}"
         bash "$runner_script" "$survey_id" "$export_id" "$stdout_file" "$status" \
             "${tmpdir}/runner-${survey_id}" 2>"${tmpdir}/runner-${survey_id}.stderr" || fail "$name failed the real workflow handoff"
@@ -2696,6 +2819,7 @@ test_rust_resolution_survey_outcome_fixtures() (
     for fixture in "$outcome_fixture_dir"/{clean,mixed,failed}.json; do
         survey_validate_outcome "$fixture" '<survey-output>' >/dev/null ||
             fail "Rust-serialized outcome was rejected: $fixture"
+        test_recovery_envelope_vocabulary "$fixture"
     done
     local row mutation clause
     local -a mutations=(
@@ -2751,6 +2875,10 @@ test_rust_resolution_survey_outcome_fixtures() (
 main() {
     test_rust_resolution_survey_outcome_fixtures
     if (( only_outcome_fixtures == 1 )); then
+        return
+    fi
+    if (( only_recovery_fixtures == 1 )); then
+        test_resolution_survey_restore_outcomes_and_measured_budgets
         return
     fi
     python3 scripts/test-remi-survey-ssh-diagnostic.py
