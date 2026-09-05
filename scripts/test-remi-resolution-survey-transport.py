@@ -479,6 +479,48 @@ def candidate_survey(profile: str, revision: str, package_manifest: str) -> dict
 
 
 class ResolutionSurveyTransportTests(unittest.TestCase):
+    def test_recovery_enforces_every_scalar_and_container_type(self) -> None:
+        cases = json.loads((REPO_ROOT / "scripts/fixtures/remi-recovery-type-policy.json").read_text())
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "diagnostic.json"
+            for case in cases:
+                with self.subTest(case=case["name"]):
+                    path.write_text(json.dumps(case["document"]))
+                    if case["reason"] == "safe":
+                        TRANSPORT_TOOL.forbid_recovery_host_paths(path)
+                    else:
+                        with self.assertRaisesRegex(TRANSPORT_TOOL.ValidationError, "outside the safe grammar"):
+                            TRANSPORT_TOOL.forbid_recovery_host_paths(path)
+                    process = subprocess.run(
+                        ["bash", "-c", 'source "$1"; survey_sanitize_json', "sanitize-types",
+                         str(REPO_ROOT / "deploy/remi-deploy-helper.sh")],
+                        input=path.read_text(), capture_output=True, text=True, check=True,
+                    )
+                    self.assertEqual(json.loads(process.stdout), case["sanitized"])
+                    path.write_text(process.stdout)
+                    TRANSPORT_TOOL.forbid_recovery_host_paths(path)
+
+    def test_full_candidate_retains_public_types_and_redacts_private_values(self) -> None:
+        candidate = candidate_survey("fedora-44", "a" * 64, "b" * 64)
+        candidate["failures"][0]["error_message"] = "journal: //private.internal/share"
+        expected = json.loads(canonical(candidate))
+        expected["implementation"]["version"] = "<redacted:private_string>"
+        for entry in expected["outcomes"] + expected["failures"]:
+            for key in ("name", "version", "release"):
+                entry[key] = "<redacted:private_string>"
+        expected["failures"][0]["error_message"] = "<redacted:private_string>"
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "candidate.json"
+            path.write_bytes(canonical(candidate))
+            process = subprocess.run(
+                ["bash", "-c", 'source "$1"; survey_sanitize_json_stream "$2"', "sanitize-candidate",
+                 str(REPO_ROOT / "deploy/remi-deploy-helper.sh"), str(path)],
+                capture_output=True, text=True, check=True,
+            )
+            self.assertEqual(json.loads(process.stdout), expected)
+            path.write_text(process.stdout)
+            TRANSPORT_TOOL.forbid_recovery_host_paths(path)
+
     def test_recovery_uses_the_helpers_path_uri_policy(self) -> None:
         cases = json.loads((REPO_ROOT / "scripts/fixtures/remi-recovery-path-policy.json").read_text())
         with tempfile.TemporaryDirectory() as directory:
@@ -540,6 +582,22 @@ class ResolutionSurveyTransportTests(unittest.TestCase):
                     document.write_text(process.stdout)
                     TRANSPORT_TOOL.forbid_recovery_host_paths(document)
             self.assertEqual(outcomes, {"restored", "restore_failed"})
+            details = sorted((root / "details").glob("*.json"))
+            self.assertEqual(len(details), 12)
+            for document in details:
+                with self.subTest(document=document.name):
+                    process = subprocess.run(
+                        ["bash", "-c", 'source "$1"; survey_sanitize_json_stream "$2"', "sanitize-details",
+                         str(REPO_ROOT / "deploy/remi-deploy-helper.sh"), str(document)],
+                        capture_output=True, text=True, check=True,
+                    )
+                    original = json.loads(document.read_text())
+                    sanitized = json.loads(process.stdout)
+                    self.assertEqual(sanitized.keys(), original.keys())
+                    if "counts" in original:
+                        self.assertEqual(sanitized["counts"], original["counts"])
+                    document.write_text(process.stdout)
+                    TRANSPORT_TOOL.forbid_recovery_host_paths(document)
 
     def test_recovery_binds_input_before_its_shared_typed_validator(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -708,6 +766,23 @@ class ResolutionSurveyTransportTests(unittest.TestCase):
         TRANSPORT_TOOL.validate_comparison_survey(
             comparison, profile, "comparison.json", candidate, candidate_manifest
         )
+
+        # Reuse the complete, validated mismatch fixture for recovery, including
+        # nested outcome arrays and enum-valued histogram pairs.
+        expected_recovery = json.loads(canonical(comparison))
+        for key in ("name", "version", "release"):
+            expected_recovery["mismatches"][0]["root"][key] = "<redacted:private_string>"
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "comparison.json"
+            path.write_bytes(canonical(comparison))
+            process = subprocess.run(
+                ["bash", "-c", 'source "$1"; survey_sanitize_json_stream "$2"', "sanitize-comparison",
+                 str(REPO_ROOT / "deploy/remi-deploy-helper.sh"), str(path)],
+                capture_output=True, text=True, check=True,
+            )
+            self.assertEqual(json.loads(process.stdout), expected_recovery)
+            path.write_text(process.stdout)
+            TRANSPORT_TOOL.forbid_recovery_host_paths(path)
 
         malformed = json.loads(canonical(comparison))
         malformed["schema_version"] = 1

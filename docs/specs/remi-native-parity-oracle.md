@@ -1,8 +1,8 @@
 ---
 title: Remi native full-catalog parity oracle
 summary: Define single-walk producer-bound strict native parity lanes with live progress and independent diagnostic retention, bounded native ALPM provider probing, selective same-export assembly, and deterministic bounded-parallel private collect-all resolution surveys for one complete immutable profile candidate
-last_updated: 2026-09-05
-revision: 78
+last_updated: 2026-09-06
+revision: 79
 status: active
 ---
 
@@ -768,8 +768,19 @@ identities, profiles, deployment, workflow runs, and declared members. The
 runner repeats the same digest-first validation before publishing recovery
 as `input_binding: verified`; mismatched bytes fail as
 `input_manifest.digest_mismatch`, and schema failures retain the shared
-validator's typed reason. The input manifest bypasses the generic diagnostic
-string allowlist. Missing retained input remains `not_retained`; an included
+validator's typed reason. The input manifest bypasses the diagnostic recovery
+schema. The helper owns one per-key recovery schema for envelope and detailed
+survey fields; the runner invokes it directly. It checks scalar types, enums,
+object fields, and array element types, including empty containers. Unknown
+fields and values outside their declared types are private; sanitization replaces
+them with typed redaction tokens, and raw recovery members with these defects are
+withheld with `unknown_key` or `type_mismatch`. Path and URI checks remain defense
+in depth. Detailed candidate/comparison diagnostics use streaming redaction of
+private package identities and error text, preserving public counts, digests,
+policy enums, and implementation measurements. The export hashes the sanitized
+bytes and rechecks them before archiving; frozen source bytes remain unchanged.
+Actual helper-produced survey documents and Rust outcome fixtures exercise this
+shared policy in both the shell and Python suites. Missing retained input remains `not_retained`; an included
 manifest cannot claim binding through a withheld entry.
 
 These are #814 hard cuts: input envelopes move from 1 to 2 and

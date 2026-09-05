@@ -994,40 +994,139 @@ SURVEY_TRANSPORT_NEXT=""
 SURVEY_RETAINED=""
 SURVEY_COMMAND_STATUS=null
 SURVEY_FAILURE_MESSAGE=""
-# The sole recovery safe-string grammar. Unknown keys and values are private;
+# The sole recovery per-key type grammar. Unknown keys and values are private;
 # path/URI detection is only defense in depth, never evidence that a value is safe.
 # The runner calls this helper in library mode instead of duplicating the gate.
 # test_recovery_envelope_vocabulary checks every emitted envelope key and value
 # against this policy, using actual helper output and Rust-serialized outcomes.
 survey_recovery_path_policy() {
     cat <<'JQ'
-        def redacted_token: IN("<redacted:private_string>", "<redacted:unknown_key>",
-            "<redacted:private_host_path>", "<redacted:redaction_unproven>");
-        def recovery_known_key:
-            redacted_token or IN("schema_version", "output_dir", "profiles", "profile_results", "profile",
-                "candidate", "comparison", "counts", "roots_walked", "resolved_roots", "unresolved_roots",
-                "not_installable_roots", "failed_roots", "error_kinds", "kind", "error_variant", "reason",
-                "count", "total_failures", "candidate_manifest_sha256", "matching_roots", "mismatched_roots",
-                "mismatch_kinds", "outcome_kind_pairs", "total_mismatches", "candidate_failures",
-                "comparison_mismatches", "comparison_profiles", "candidate_outcome", "native_outcome",
-                "outcome", "status", "survey_status", "message", "document_state", "source_bytes",
-                "source_sha256", "probe", "budget_source", "basis_seconds", "multiplier", "ceiling_seconds",
-                "budget_seconds", "elapsed_seconds", "restart_to_ready_seconds", "last_ready_duration_seconds",
-                "systemctl_status", "survey_id", "export_id", "run_id", "timestamp", "started_at", "completed_at",
-                "retained", "transport", "restore", "id", "sha256", "size");
-        def recovery_safe_value($key):
-            redacted_token
-            or (($key | IN("candidate_manifest_sha256", "source_sha256", "sha256")) and test("^[0-9a-f]{64}$"))
-            or ($key == "run_id" and test("^(0|[1-9][0-9]{0,19})$"))
-            or (($key | IN("timestamp", "started_at", "completed_at")) and test("^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\\.[0-9]{1,9})?(Z|[+-]([01][0-9]|2[0-3]):[0-5][0-9])$"))
-            or ($key == "kind" and . == "completed_resolution_survey")
-            or ($key == "profile" and IN("fedora-44", "ubuntu-26.04", "arch"))
-            or (($key | IN("survey_id", "export_id", "id")) and test("^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"))
-            or IN("helper_failed", "restored", "restore_failed", "measurement_required", "ready",
-                "readiness_timeout", "systemctl_failed", "deploy_health", "issue_913_startup_evidence",
-                "last_recorded_duration", "not_written", "empty", "invalid_json", "not_retained",
-                "private_host_path", "private_string", "unknown_key", "redaction_unproven",
-                "resolved", "unresolved", "not_installable", "failed", "config_error", "solver_failed");
+        # One field/type authority for envelopes and detailed survey diagnostics.
+        # A redaction token is the only alternate value admitted by every field.
+        def uint: {types:["number"], scalar:"uint"};
+        def object_value: {types:["object"]};
+        def object_of($fields): object_value + {fields:$fields};
+        def array_of($item): {types:["array"], items:$item};
+        def strings($grammar): {types:["string"], scalar:$grammar};
+        def enumeration($values): {types:["string"], values:$values};
+        def nullable: .types += ["null"];
+        def outcome_values: ["resolved", "unresolved", "not_installable", "failed"];
+        def recovery_schema:
+            (reduce ["schema_version", "profiles", "roots_walked", "resolved_roots", "unresolved_roots",
+                "not_installable_roots", "failed_roots", "count", "total_failures", "matching_roots",
+                "mismatched_roots", "total_mismatches", "candidate_failures", "comparison_mismatches",
+                "comparison_profiles", "source_bytes", "basis_seconds", "multiplier", "ceiling_seconds",
+                "budget_seconds", "elapsed_seconds", "systemctl_status", "size", "projection_schema",
+                "workers", "memory_budget_bytes", "measured_worker_rss_bytes", "failure_record_limit",
+                "retained_failures", "evidence_byte_limit", "retained_evidence_bytes", "retained_explanations",
+                "withheld_explanations", "mismatch_record_limit", "retained_mismatches"][] as $key
+                ({}; .[$key] = uint))
+            + (reduce ["candidate_manifest_sha256", "source_sha256", "sha256", "profile_revision_sha256",
+                "package_oracle_manifest_sha256", "oracle_manifest_sha256", "manifest_sha256",
+                "root_package_key_sha256", "requiring_package_key_sha256", "requirement_group_sha256"][] as $key
+                ({}; .[$key] = strings("sha256")))
+            + (reduce ["survey_id", "export_id", "id"][] as $key ({}; .[$key] = strings("identity")))
+            + (reduce ["timestamp", "started_at", "completed_at"][] as $key ({}; .[$key] = strings("timestamp")))
+            + {
+                counts:object_of(["roots_walked", "resolved_roots", "unresolved_roots", "not_installable_roots",
+                    "failed_roots", "error_kinds", "matching_roots", "mismatched_roots", "mismatch_kinds", "outcome_kind_pairs"]),
+                retained:object_of(["kind", "id"]), transport:object_of(["sha256", "size"]),
+                restore:object_of(["schema_version", "outcome", "reason", "probe", "budget_source", "basis_seconds",
+                    "multiplier", "ceiling_seconds", "budget_seconds", "elapsed_seconds", "restart_to_ready_seconds",
+                    "last_ready_duration_seconds", "systemctl_status"]),
+                implementation:object_of(["ecosystem", "name", "version", "projection_schema"]),
+                policy:object_of(["architecture", "architecture_admission", "installed_state", "roots",
+                    "positive_requirements", "provider_selection"]),
+                pair:object_of(["oracle", "candidate"]),
+                root:object_of(["package_key_sha256", "name", "version", "release", "architecture"]),
+                error_kind:object_of(["error_variant", "reason"]),
+                native_explanation:object_of(["source", "reason", "unresolved_edges", "conflict_edges", "excluded_nodes"]),
+                conflict:object_of(["kind", "version_set"]), version_set:object_of(["name", "constraint"]),
+                profile_results:array_of(object_of(["profile", "candidate", "comparison"])),
+                error_kinds:array_of(object_of(["kind", "count"])), mismatch_kinds:array_of(object_of(["kind", "count"])),
+                outcome_kind_pairs:array_of(object_of(["pair", "count"])),
+                outcomes:array_of(object_of(["root_package_key_sha256", "name", "version", "release", "architecture", "outcome"])),
+                failures:array_of(object_of(["root_package_key_sha256", "name", "version", "release", "architecture",
+                    "error_kind", "error_message", "native_explanation"])),
+                mismatches:array_of(object_of(["root", "kind", "oracle", "candidate"])),
+                dependencies:array_of(object_of(["requiring_package_key_sha256", "requirement_group_sha256"])),
+                unresolved_edges:array_of(object_of(["requiring", "requirement", "version_sets"])),
+                conflict_edges:array_of(object_of(["from", "to", "conflict"])),
+                excluded_nodes:array_of(object_of(["solvable", "reason", "message"])),
+                version_sets:array_of(object_of(["name", "constraint"])),
+                output_dir:strings("private"), message:strings("private"), error_message:strings("private"),
+                name:enumeration(["conary-sat"]), version:strings("private"), release:(strings("private") | nullable),
+                repository_name:strings("private"), source_profile:(strings("private") | nullable),
+                constraint:strings("private"), requirement:strings("private"),
+                profile:enumeration(["fedora-44", "ubuntu-26.04", "arch"]),
+                run_id:strings("decimal"),
+                comparison:(object_of(["counts", "candidate_manifest_sha256", "total_mismatches"]) | nullable),
+                candidate:(enumeration(outcome_values) | .types += ["object"]
+                    | .fields = ["counts", "total_failures", "manifest_sha256", "outcome"]),
+                oracle:(enumeration(outcome_values) | .types += ["object"] | .fields = ["manifest_sha256", "outcome"]),
+                outcome:(enumeration(["helper_failed", "restored", "restore_failed", "measurement_required"])
+                    | .types += ["object"] | .fields = ["status", "closure_package_keys_sha256", "dependencies", "reason"]),
+                status:(enumeration(outcome_values) | .types += ["number"] | .scalar = "uint"),
+                survey_status:(uint | nullable),
+                restart_to_ready_seconds:(uint | nullable), last_ready_duration_seconds:(uint | nullable),
+                kind:(enumeration(["completed_resolution_survey", "resolution_outcome", "dependency_closure",
+                    "unresolved_dependencies", "not_installable_reason", "locked", "forbid_multiple_instances",
+                    "constrains"]) | .types += ["object"] | .fields = ["error_variant", "reason"]),
+                reason:enumeration(["ready", "readiness_timeout", "systemctl_failed", "measurement_required",
+                    "private_host_path", "private_string", "unknown_key", "type_mismatch", "redaction_unproven",
+                    "exact_root_projection_failed", "architecture_admission_failed", "solver_failed",
+                    "resolved_closure_projection_failed", "resolved_closure_omitted_root", "unresolved_projection_failed",
+                    "architecture_excluded", "conflicting_closure", "evidence_budget_exhausted",
+                    "conflict_graph_unavailable", "missing_dependency_authority"]),
+                error_variant:strings("error_variant"),
+                candidate_outcome:enumeration(outcome_values), native_outcome:enumeration(outcome_values),
+                document_state:enumeration(["not_written", "empty", "invalid_json"]),
+                probe:enumeration(["deploy_health"]),
+                budget_source:enumeration(["issue_913_startup_evidence", "last_recorded_duration"]),
+                ecosystem:enumeration(["rpm", "debian", "alpm"]),
+                architecture:(enumeration(["x86_64", "amd64", "noarch", "all", "any"]) | nullable),
+                target_architecture:enumeration(["x86_64", "amd64"]),
+                architecture_admission:enumeration(["native_only"]), installed_state:enumeration(["empty"]),
+                roots:enumeration(["every_exact_package"]), positive_requirements:enumeration(["required_only"]),
+                provider_selection:enumeration(["native_precedence"]),
+                worker_load_milliseconds:array_of(uint), closure_package_keys_sha256:array_of(strings("sha256")),
+                package_key_sha256:(strings("sha256") | nullable),
+                truncated:{types:["boolean"]}, truncated_evidence:{types:["boolean"]},
+                source:enumeration(["withheld", "resolvo_conflict_graph"])
+            }
+            + (reduce ["requiring", "from", "to", "solvable"][] as $key ({}; .[$key] =
+                object_of(["package_key_sha256", "name", "version", "release", "architecture", "repository_name", "source_profile"])));
+        recovery_schema as $recovery_schema
+        | def redacted_token: type == "string" and IN("<redacted:private_string>", "<redacted:unknown_key>",
+            "<redacted:private_host_path>", "<redacted:type_mismatch>", "<redacted:redaction_unproven>");
+        def recovery_known_key: . as $key | redacted_token or ($recovery_schema | has($key));
+        def recovery_contract($path):
+            reduce $path[] as $part (object_value;
+                if . == null then null
+                elif ($part | type) == "number" then
+                    if .types | index("array") then .items else null end
+                elif .types | index("object") then
+                    if $part | redacted_token then {types:[], redacted:true}
+                    elif .fields != null and (.fields | index($part)) == null then null
+                    else $recovery_schema[$part] end
+                else null end);
+        def recovery_safe_value($contract):
+            . as $value
+            | if $contract.values != null then ($contract.values | index($value)) != null
+              elif $contract.scalar == "sha256" then test("^[0-9a-f]{64}$")
+              elif $contract.scalar == "decimal" then test("^(0|[1-9][0-9]{0,19})$")
+              elif $contract.scalar == "identity" then test("^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
+              elif $contract.scalar == "timestamp" then test("^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\\.[0-9]{1,9})?(Z|[+-]([01][0-9]|2[0-3]):[0-5][0-9])$")
+              elif $contract.scalar == "error_variant" then IN("database", "io", "io_error", "init_error",
+                "schema_rebuild_required", "missing_id", "version_parse", "version_comparison", "hash_error",
+                "config_error", "database_not_found", "download_error", "repository_response_body",
+                "durable_chunk_unavailable", "http_status", "conflict_error", "profile_architecture_mismatch",
+                "unknown_architecture_token", "unsupported_native_host_target", "ambiguous_package_selection",
+                "checksum_mismatch", "parse_error", "budget", "catalog_scratch_capacity", "delta_error",
+                "gpg_verification_failed", "scriptlet_execution", "trigger_error", "already_exists", "invalid_path",
+                "path_traversal", "not_found", "recovery_failed", "timeout_error", "resolution_error",
+                "not_implemented", "json", "capability", "federation", "cancelled", "internal_error", "trust_error", "pool_overflow")
+              else false end;
         def hex_digit: ascii_downcase | explode[0] | if . >= 97 then . - 87 else . - 48 end;
         def percent_decode($budget):
             if $budget == 0 then . else
@@ -1040,34 +1139,52 @@ survey_recovery_path_policy() {
             | if $decoded | contains("%") then "redaction_unproven"
               elif $decoded | test("(^|[^A-Za-z0-9_./-])/(?!/)|^/|(file|ssh|scp|sftp):"; "i")
               then "private_host_path" else null end;
-        def recovery_string_reason($key; $is_key):
-            (if $is_key then recovery_known_key else recovery_safe_value($key) end) as $safe
+        def recovery_string_reason($contract; $is_key):
+            (if $is_key then recovery_known_key else recovery_safe_value($contract) end) as $safe
             | recovery_path_reason as $defense
             | if $safe and $defense == null then null
               else $defense // (if $is_key then "unknown_key" else "private_string" end) end;
+        def recovery_value_reason($contract):
+            if $contract == null then "unknown_key"
+            elif redacted_token then null
+            elif $contract.redacted == true then "unknown_key"
+            else type as $type
+                | if ($contract.types | index($type)) == null then "type_mismatch"
+                  elif $type == "number" then
+                    if . >= 0 and . <= 18446744073709551615 and floor == . then null else "type_mismatch" end
+                  elif $type == "string" then recovery_string_reason($contract; false)
+                  else null end
+            end;
         def recovery_event_reasons:
-            . as $event
-            | ($event[0][] | select(type == "string") | recovery_string_reason(null; true)),
-              (if ($event | length) == 2 and ($event[1] | type) == "string" then
-                  ($event[0] | map(select(type == "string")) | last) as $key
-                  | $event[1] | recovery_string_reason($key; false)
-               else empty end);
-        def recovery_document_reasons($key):
-            if type == "object" then to_entries[] | . as $entry
+            . as $event | $event[0] as $path
+            | ($path[] | select(type == "string") | recovery_string_reason(null; true)),
+              # Streaming paths reveal every ancestor container, including arrays.
+              (range(0; $path | length) as $index
+                | recovery_contract($path[:$index]) as $contract
+                | (if ($path[$index] | type) == "number" then [] else {} end)
+                | recovery_value_reason($contract)),
+              (if ($event | length) == 2 then recovery_contract($path) as $contract
+                  | $event[1] | recovery_value_reason($contract) else empty end);
+        def recovery_document_reasons($path):
+            recovery_value_reason(recovery_contract($path)),
+            (if type == "object" then to_entries[] | . as $entry
                 | (.key | recovery_string_reason(null; true)),
-                  (.value | recovery_document_reasons($entry.key))
-            elif type == "array" then .[] | recovery_document_reasons($key)
-            elif type == "string" then recovery_string_reason($key; false)
-            else empty end;
-        def recovery_sanitize($key):
-            if type == "object" then to_entries | map(. as $entry
-                | .value |= recovery_sanitize($entry.key)
-                | .key |= (recovery_string_reason(null; true) as $reason
-                    | if $reason == null then . else "<redacted:" + $reason + ">" end)) | from_entries
-            elif type == "array" then map(recovery_sanitize($key))
-            elif type == "string" then recovery_string_reason($key; false) as $reason
-                | if $reason == null then . else "<redacted:" + $reason + ">" end
-            else . end;
+                  (.value | recovery_document_reasons($path + [$entry.key]))
+             elif type == "array" then to_entries[] | . as $entry
+                | .value | recovery_document_reasons($path + [$entry.key])
+             else empty end);
+        def recovery_sanitize($path):
+            recovery_value_reason(recovery_contract($path)) as $reason
+            | if $reason != null then "<redacted:" + $reason + ">"
+              elif type == "object" then to_entries | map(. as $entry
+                | ((.key | recovery_string_reason(null; true)) //
+                    (if recovery_contract($path + [$entry.key]) == null then "unknown_key" else null end)) as $key_reason
+                | if $key_reason != null then
+                    {key:("<redacted:" + $key_reason + ">"), value:"<redacted:unknown_key>"}
+                  else .value |= recovery_sanitize($path + [$entry.key]) end) | from_entries
+              elif type == "array" then to_entries | map(. as $entry | .value | recovery_sanitize($path + [$entry.key]))
+              else . end;
+
 JQ
 }
 
@@ -1080,17 +1197,47 @@ survey_recovery_path_reason() {
         reason=redaction_unproven
     fi
     case "$reason" in
-        safe|private_string|unknown_key|private_host_path|redaction_unproven) printf '%s\n' "$reason" ;;
+        safe|private_string|unknown_key|private_host_path|type_mismatch|redaction_unproven) printf '%s\n' "$reason" ;;
         *) printf '%s\n' redaction_unproven ;;
     esac
 }
 
 survey_sanitize_json() {
     jq -cS "$(survey_recovery_path_policy)"'
-        recovery_sanitize(null)
-        | if any(recovery_document_reasons(null); . != null)
+        recovery_sanitize([])
+        | if any(recovery_document_reasons([]); . != null)
           then error("redaction_unproven") else . end
     '
+}
+
+# Render sanitized streaming leaves directly; fromstream would buffer the entire
+# catalog. Container types are checked separately before these bytes can publish.
+survey_sanitize_json_stream() {
+    jq -nrj --stream "$(survey_recovery_path_policy)"'
+        def close_path($path; $start):
+            [range($path | length; $start; -1) as $index
+                | if ($path[$index - 1] | type) == "number" then "]" else "}" end] | join("");
+        foreach ((inputs | select(length == 2)), null) as $event
+            ({previous:null, text:""};
+             .previous as $previous
+             | if $event == null then .text = (if $previous == null then "" else close_path($previous; 0) end)
+               else $event[0] as $path
+                 | ([range(0; [($previous | length), ($path | length)] | min)
+                     | select($previous[.] != $path[.])] | first // ([($previous | length), ($path | length)] | min)) as $common
+                 | .text = (
+                     (if $previous == null then
+                         if ($path | length) == 0 then "" elif ($path[0] | type) == "number" then "[" else "{" end
+                      else close_path($previous; $common + 1) + "," end)
+                     + ([range($common; $path | length) as $index
+                         | (if ($path[$index] | type) == "string" then ($path[$index] | tojson) + ":" else "" end)
+                           + (if $index + 1 == ($path | length) then ""
+                              elif ($path[$index + 1] | type) == "number" then "[" else "{" end)] | join(""))
+                     + ($event[1] | recovery_value_reason(recovery_contract($path)) as $reason
+                         | if $reason == null then . else "<redacted:" + $reason + ">" end | tojson))
+                 | .previous = $path
+               end;
+             .text)
+    ' "$1"
 }
 
 survey_sanitize_outcome() {
@@ -1158,13 +1305,15 @@ export_resolution_survey_evidence() {
     : >"$rows"
     : >"$skipped"
     local -a members=()
-    local path file size sha256 path_reason
+    local -a archive_members=()
+    local path file size sha256 path_reason archive_root sanitized
     if [[ -e "$retained" || -L "$retained" ]]; then
         [[ -d "$retained" && ! -L "$retained" && "$(stat -c '%a:%u' "$retained")" == "700:$(id -u)" ]] ||
             die "survey recovery root is not a private control-owned directory"
         availability=retained
         for path in input-manifest.json outcome.json restore.json helper.json manifest.json \
             survey-output/{fedora-44,ubuntu-26.04,arch}.{candidate-resolution-survey,candidate-resolution-implementation,native-resolution-comparison-survey,comparison-resolution-implementation}.json; do
+            archive_root="$retained"
             file="${retained}/${path}"
             [[ -e "$file" || -L "$file" ]] || continue
             [[ -f "$file" && ! -L "$file" && "$(stat -c '%a:%u' "$file")" == "600:$(id -u)" ]] ||
@@ -1190,6 +1339,21 @@ export_resolution_survey_evidence() {
                     continue
                 fi
                 path_reason="$(survey_recovery_path_reason "$file")"
+                if [[ "$path" == survey-output/* && "$path_reason" == private_string ]]; then
+                    # Detailed diagnostics contain private package/error text.
+                    # Export a sanitized derivative, preserving the frozen source.
+                    mkdir -p -m 0700 "$staging/survey-output"
+                    sanitized="$staging/$path"
+                    if survey_sanitize_json_stream "$file" >"$sanitized" 2>/dev/null; then
+                        chmod 0600 "$sanitized"
+                        path_reason="$(survey_recovery_path_reason "$sanitized")"
+                        file="$sanitized"
+                        archive_root="$staging"
+                        size="$(stat -c '%s' "$file")"
+                    else
+                        path_reason=redaction_unproven
+                    fi
+                fi
                 if [[ "$path_reason" != safe ]]; then
                     jq -cn --arg path "$path" --arg reason "$path_reason" \
                         '{path:$path,reason:$reason}' >>"$skipped"
@@ -1200,6 +1364,7 @@ export_resolution_survey_evidence() {
             jq -cn --arg path "$path" --arg sha256 "$sha256" --argjson size "$size" \
                 '{path:$path,sha256:$sha256,size:$size}' >>"$rows"
             members+=("$path")
+            archive_members+=(-C "$archive_root" "$path")
         done
     fi
     jq -cnS --arg survey_id "$survey_id" --arg export_id "$export_id" \
@@ -1210,7 +1375,7 @@ export_resolution_survey_evidence() {
          input_manifest_sha256:$input_sha256,files:$files,withheld:$skipped}
     ' >"$staging/recovery.json"
     if (( ${#members[@]} > 0 )); then
-        tar -cf - -C "$staging" recovery.json -C "$retained" "${members[@]}"
+        tar -cf - -C "$staging" recovery.json "${archive_members[@]}"
     else
         tar -cf - -C "$staging" recovery.json
     fi

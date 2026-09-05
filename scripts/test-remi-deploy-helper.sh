@@ -1536,7 +1536,27 @@ test_resolution_survey_findings_restart_and_succeed() {
         and .counts.comparison_profiles == 0
         and all(.profiles[]; .comparison == null)
     ' "$verification" >/dev/null
+    local report="$tmpdir/findings-report"
+    printf '%s\n' "$output" >"$report"
+    test_resolution_survey_recovers_after_transport_failure "$survey_id" "$export_id" "$fake_root" "$report" 0 restored
 }
+
+# Compare recovered details with the shared sanitizer applied to actual producer
+# documents. No copied candidate/comparison vocabulary supplies this expectation.
+test_recovered_survey_documents() (
+    source "$helper"
+    local retained="$1" recovered="$2" document expected="$tmpdir/details-expected.json" streamed="$tmpdir/details-streamed.json"
+    for document in "$retained/survey-output/"*.json; do
+        jq -e "$(survey_recovery_path_policy)"'
+            all(recovery_document_reasons([]); . == null or . == "private_string")
+        ' "$document" >/dev/null || fail "producer survey types escaped the shared recovery schema"
+        survey_sanitize_json <"$document" >"$expected"
+        survey_sanitize_json_stream "$document" >"$streamed"
+        jq -e --slurpfile expected "$expected" '. == $expected[0]' "$streamed" >/dev/null || fail "streaming redaction differs from the shared sanitizer"
+        jq -e --slurpfile expected "$expected" '. == $expected[0]' \
+            "$recovered/survey-output/$(basename "$document")" >/dev/null || fail "recovery withheld or changed typed survey output"
+    done
+)
 
 # Test the closed policy against producer bytes, not a copied list of schema
 # keys. Unknown keys must fail before sanitization can hide a schema change.
@@ -1640,6 +1660,9 @@ PY
             "$runner/resolution-survey-recovery/restore.json" >/dev/null
         jq -e 'all(.withheld[]; .path != "restore.json")' \
             "$runner/resolution-survey-recovery/recovery.json" >/dev/null
+        test_recovered_survey_documents \
+            "$fake_root/conary/evidence/.remi-operator-staging/completed-resolution-survey-${survey_id}" \
+            "$runner/resolution-survey-recovery"
         grep -Fx 'helper_outcome=helper_failed' "$runner/outputs" >/dev/null
     done
 }
@@ -1725,6 +1748,10 @@ PYCODE
         cp "$retained/restore.json" "$recovery_fixture_dir/$name.restore.json"
         cp "$fake_root/var/lib/conary-remi-deploy/readiness.json" "$recovery_fixture_dir/$name.readiness.json"
         cp "$retained/outcome.raw.json" "$recovery_fixture_dir/$name.outcome.json"
+        if [[ "$name" == within-budget ]]; then
+            mkdir "$recovery_fixture_dir/details"
+            cp "$retained/survey-output/"*.json "$recovery_fixture_dir/details/"
+        fi
         for document in "$recovery_fixture_dir/$name."*.json; do
             test_recovery_envelope_vocabulary "$document"
         done
@@ -2056,10 +2083,11 @@ test_resolution_survey_any_failure_retains_recoverable_diagnostics() {
         jq -e '.schema_version == 2 and has("deployment") and has("files") and has("workflow_runs")' \
             "$unpacked/input-manifest.json" >/dev/null
         if [[ "$name" == predicate ]]; then
-            jq -e 'any(.withheld[]; .path == "survey-output/fedora-44.candidate-resolution-survey.json")' \
+            jq -e 'any(.files[]; .path == "survey-output/fedora-44.candidate-resolution-survey.json")' \
                 "$unpacked/recovery.json" >/dev/null
+        else
+            [[ ! -d "$unpacked/survey-output" ]]
         fi
-        [[ ! -d "$unpacked/survey-output" ]]
         local mutation broken
         for mutation in digest input_binding withheld_input included_empty private_path escaped_path private_key network_path unc_path unknown_string extra_member; do
             broken="${tmpdir}/${survey_id}-${mutation}.tar"
@@ -2838,7 +2866,7 @@ test_recovery_path_uri_policy() (
             survey_sanitize_json <"$member" | jq -e --arg key "$key" --arg reason "$reason" \
                 '.[$key] == ("<redacted:" + $reason + ">")' >/dev/null
             jq -cn --arg value "$value" '{($value):"ready"}' | survey_sanitize_json \
-                | jq -e 'to_entries | all(.[]; (.key | startswith("<redacted:")) and .value == "ready")' >/dev/null
+                | jq -e 'to_entries | all(.[]; (.key | startswith("<redacted:")) and .value == "<redacted:unknown_key>")' >/dev/null
         fi
         install -m 0600 "$member" "$retained/manifest.json"
         run_helper "$fake_root" export-resolution-survey-evidence uri-policy export-policy "$(printf '0%.0s' {1..64})" >"$archive"
@@ -2851,6 +2879,33 @@ test_recovery_path_uri_policy() (
             tar -xOf "$archive" "$name.json" | cmp - "$retained/$name.json"
         done
     done < <(jq -r '.[] | [.value,(.key // "message"),.reason] | @tsv' scripts/fixtures/remi-recovery-path-policy.json)
+)
+
+test_recovery_typed_policy() (
+    source "$helper"
+    local row name reason document="$tmpdir/type-policy.json" sanitized="$tmpdir/type-policy-sanitized.json"
+    local retained="$tmpdir/type-policy-root/conary/evidence/.remi-operator-staging/completed-resolution-survey-types"
+    local archive="$tmpdir/type-policy.tar"
+    mkdir -p "$retained"
+    chmod 0700 "$retained"
+    printf '{"outcome":"helper_failed"}' >"$retained/helper.json"
+    chmod 0600 "$retained/helper.json"
+    while IFS= read -r row; do
+        name="$(jq -r .name <<<"$row")"
+        reason="$(jq -r .reason <<<"$row")"
+        jq -c .document <<<"$row" >"$document"
+        [[ "$(survey_recovery_path_reason "$document")" == "$reason" ]] || fail "$name bypassed the typed gate"
+        survey_sanitize_json <"$document" >"$sanitized"
+        jq -e --slurpfile actual "$sanitized" '.sanitized == $actual[0]' <<<"$row" >/dev/null || fail "$name redaction drifted"
+        [[ "$(survey_recovery_path_reason "$sanitized")" == safe ]] || fail "$name sanitized value was rejected"
+        install -m 0600 "$document" "$retained/manifest.json"
+        run_helper "$tmpdir/type-policy-root" export-resolution-survey-evidence types export-types "$(printf '0%.0s' {1..64})" >"$archive"
+        tar -xOf "$archive" recovery.json | jq -e --arg reason "$reason" '
+            if $reason == "safe" then any(.files[]; .path == "manifest.json")
+            else any(.withheld[]; .path == "manifest.json" and .reason == $reason)
+                and all(.files[]; .path != "manifest.json") end' >/dev/null
+        tar -xOf "$archive" helper.json | cmp - "$retained/helper.json"
+    done < <(jq -c '.[]' scripts/fixtures/remi-recovery-type-policy.json)
 )
 
 test_rust_resolution_survey_outcome_fixtures() (
@@ -2906,7 +2961,7 @@ test_rust_resolution_survey_outcome_fixtures() (
         '/root-secret' 'journal: /var/lib/remi/private' 'file:///opt/remi/private'; do
         jq -cn --arg path "$host_path" '{message:$path,candidate:{($path):"ready"},output_dir:"https://example.invalid/evidence",reason:"survey-output/arch.json"}' \
             | survey_sanitize_json | jq -e '
-                .message == "<redacted:private_host_path>" and .candidate["<redacted:private_host_path>"] == "ready"
+                .message == "<redacted:private_host_path>" and .candidate["<redacted:private_host_path>"] == "<redacted:unknown_key>"
                 and .output_dir == "<redacted:private_string>" and .reason == "<redacted:private_string>"
             ' >/dev/null
     done
@@ -2923,6 +2978,7 @@ main() {
     fi
     python3 scripts/test-remi-survey-ssh-diagnostic.py
     test_recovery_path_uri_policy
+    test_recovery_typed_policy
     test_deploy_conary_accepts_verified_release
     test_deploy_conary_rejects_checksum_mismatch
     test_deploy_conary_requires_ccs_signature
