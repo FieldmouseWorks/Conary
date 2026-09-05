@@ -206,7 +206,10 @@ jobs:
           echo "asset=${asset}" >> "$GITHUB_OUTPUT"
       - uses: ./workflow-authority/.github/actions/build-static-conary
       - name: Build the lifecycle harness
-        run: cargo build -p conary -p conary-test
+        # The harness builds deterministic fixture packages with its sibling
+        # conary binary; that binary must carry the typed test-hooks feature or
+        # the fixture build's CONARY_TEST_* inputs are refused.
+        run: cargo build -p conary --features test-hooks -p conary-test
       - name: Prove the signed bootstrap in a clean supported host
         shell: bash
         env:
