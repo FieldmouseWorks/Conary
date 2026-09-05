@@ -37,6 +37,7 @@ native_oracle_producer_verifier="scripts/verify-native-oracle-producer.py"
 resolution_survey_transport="scripts/remi-resolution-survey-transport.py"
 resolution_survey_ssh_diagnostic="scripts/remi-survey-ssh-diagnostic.py"
 remi_deploy_helper="deploy/remi-deploy-helper.sh"
+remi_deploy_helper_tests="scripts/test-remi-deploy-helper.sh"
 remi_resolution_survey="apps/remi/src/server/resolution_survey.rs"
 candidate_predeployment_filter="deploy/remi-predeployment-inspection.jq"
 candidate_postdeployment_filter="deploy/remi-postdeployment-fencing.jq"
@@ -282,6 +283,7 @@ required_files=(
     "$resolution_survey_ssh_diagnostic"
     "$remi_resolution_survey"
     "$remi_deploy_helper"
+    "$remi_deploy_helper_tests"
     "$candidate_predeployment_filter"
     "$candidate_postdeployment_filter"
     "$candidate_artifact_script"
@@ -761,7 +763,9 @@ require_match "$resolution_survey_transport" 'def verify_recovery[\s\S]*exact_po
 require_match "$remi_deploy_helper" 'survey_recovery_path_policy\(\)[\s\S]*percent_decode\(8\)[\s\S]*\(file\|ssh\|scp\|sftp\):"; "i"[\s\S]*survey_recovery_path_reason\(\)[\s\S]*\$\(survey_recovery_path_policy\)[\s\S]*survey_sanitize_json\(\)[\s\S]*\$\(survey_recovery_path_policy\)' 'resolution survey shared path policy decodes escaped case-insensitive private URIs'
 require_match "$resolution_survey_transport" 'def forbid_recovery_host_paths[\s\S]*deploy/remi-deploy-helper.sh[\s\S]*source "\$1"; survey_recovery_path_reason "\$2"[\s\S]*redaction_unproven' 'resolution survey verifier calls the helper-owned path policy'
 require_match "$remi_deploy_helper" 'def recovery_known_key:[\s\S]*def recovery_safe_value\(\$key\):[\s\S]*def recovery_string_reason\(\$key; \$is_key\):[\s\S]*if \$safe and \$defense == null then null[\s\S]*first\(inputs \| recovery_event_reasons[\s\S]*recovery_sanitize\(null\)[\s\S]*any\(recovery_document_reasons\(null\); \. != null\)' 'resolution survey recovery gates strings and keys on one typed allowlist'
-require_match "$remi_deploy_helper" 'or \(\(\$key \| IN\("candidate_manifest_sha256", "source_sha256"\)\) and test[\s\S]*or \(\$key == "run_id" and test[\s\S]*or \(\(\$key \| IN\("timestamp", "started_at", "completed_at"\)\) and test' 'resolution survey safe scalar strings require their owning fields'
+require_match "$remi_deploy_helper" 'or \(\(\$key \| IN\("candidate_manifest_sha256", "source_sha256", "sha256"\)\) and test[\s\S]*or \(\$key == "run_id" and test[\s\S]*or \(\(\$key \| IN\("timestamp", "started_at", "completed_at"\)\) and test' 'resolution survey safe scalar strings require their owning fields'
+require_match "$remi_deploy_helper" '"retained", "transport", "restore", "id", "sha256", "size"[\s\S]*or \(\$key == "kind" and \. == "completed_resolution_survey"\)' 'resolution survey recovery admits the completed restore envelope vocabulary'
+require_match "$remi_deploy_helper_tests" 'test_recovery_envelope_vocabulary\(\)[\s\S]*all\(\.\. \| objects \| keys\[\]; recovery_known_key\)[\s\S]*cmp "\$expected" "\$actual"[\s\S]*cp "\$retained/restore.json" "\$recovery_fixture_dir/\$name.restore.json"[\s\S]*test_recovery_envelope_vocabulary "\$document"[\s\S]*test_recovery_envelope_vocabulary "\$fixture"' 'resolution survey recovery policy conforms to helper and Rust producer envelopes'
 require_job_match "$resolution_survey_workflow" survey 'verify-recovery \\\n[ \t]*--survey-id "\$SURVEY_ID" --export-id "\$EXPORT_ID" \\\n[ \t]*--input-evidence resolution-survey-input-verification\.json \\\n[ \t]*--transport "\$recovery_archive" --output resolution-survey-recovery' 'resolution survey recovery invocation preserves authenticated input binding'
 require_literal_count "$resolution_survey_workflow" 'echo "- oracle run: \`$ORACLE_RUN_ID\`"' 1 'resolution survey escaped oracle run summary binding'
 require_literal_count "$resolution_survey_workflow" 'echo "- GitHub artifact: \`$ARTIFACT_ID\`"' 1 'resolution survey escaped artifact summary binding'

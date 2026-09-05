@@ -796,7 +796,10 @@ release_matrix_mutation_cases() {
 import sys
 
 cases = (
-    ('test_check_release_matrix_rejects_unbound_recovery_digest', 'replace', 'deploy/remi-deploy-helper.sh', '($key | IN("candidate_manifest_sha256", "source_sha256")) and test', 'true and test', 'resolution survey safe scalar strings require their owning fields'),
+    ('test_check_release_matrix_rejects_missing_completed_restore_key', 'replace', 'deploy/remi-deploy-helper.sh', '"retained", "transport", "restore", "id", "sha256", "size"', '"transport", "restore", "id", "sha256", "size"', 'resolution survey recovery admits the completed restore envelope vocabulary'),
+    ('test_check_release_matrix_rejects_missing_completed_restore_kind', 'replace', 'deploy/remi-deploy-helper.sh', '$key == "kind" and . == "completed_resolution_survey"', '$key == "kind" and . == "obsolete"', 'resolution survey recovery admits the completed restore envelope vocabulary'),
+    ('test_check_release_matrix_rejects_unchecked_helper_envelope_vocabulary', 'replace', 'scripts/test-remi-deploy-helper.sh', 'test_recovery_envelope_vocabulary "$document"', 'true # producer conformance removed', 'resolution survey recovery policy conforms to helper and Rust producer envelopes'),
+    ('test_check_release_matrix_rejects_unbound_recovery_digest', 'replace', 'deploy/remi-deploy-helper.sh', '($key | IN("candidate_manifest_sha256", "source_sha256", "sha256")) and test', 'true and test', 'resolution survey safe scalar strings require their owning fields'),
     ('test_check_release_matrix_rejects_unbound_recovery_decimal', 'replace', 'deploy/remi-deploy-helper.sh', '$key == "run_id" and test', 'true and test', 'resolution survey safe scalar strings require their owning fields'),
     ('test_check_release_matrix_rejects_unbound_recovery_timestamp', 'replace', 'deploy/remi-deploy-helper.sh', '($key | IN("timestamp", "started_at", "completed_at")) and test', 'true and test', 'resolution survey safe scalar strings require their owning fields'),
     ('test_check_release_matrix_rejects_unconditional_survey_stderr', 'replace', '.github/workflows/survey-remi-resolution.yml', 'if (( observed_status != 0 )) || [[ -s "$helper_stderr" ]]; then', 'if true; then', 'resolution survey separates empty stderr from report evidence failures'),

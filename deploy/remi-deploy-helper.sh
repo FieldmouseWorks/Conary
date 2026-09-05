@@ -997,6 +997,8 @@ SURVEY_FAILURE_MESSAGE=""
 # The sole recovery safe-string grammar. Unknown keys and values are private;
 # path/URI detection is only defense in depth, never evidence that a value is safe.
 # The runner calls this helper in library mode instead of duplicating the gate.
+# test_recovery_envelope_vocabulary checks every emitted envelope key and value
+# against this policy, using actual helper output and Rust-serialized outcomes.
 survey_recovery_path_policy() {
     cat <<'JQ'
         def redacted_token: IN("<redacted:private_string>", "<redacted:unknown_key>",
@@ -1011,14 +1013,16 @@ survey_recovery_path_policy() {
                 "outcome", "status", "survey_status", "message", "document_state", "source_bytes",
                 "source_sha256", "probe", "budget_source", "basis_seconds", "multiplier", "ceiling_seconds",
                 "budget_seconds", "elapsed_seconds", "restart_to_ready_seconds", "last_ready_duration_seconds",
-                "systemctl_status", "survey_id", "export_id", "run_id", "timestamp", "started_at", "completed_at");
+                "systemctl_status", "survey_id", "export_id", "run_id", "timestamp", "started_at", "completed_at",
+                "retained", "transport", "restore", "id", "sha256", "size");
         def recovery_safe_value($key):
             redacted_token
-            or (($key | IN("candidate_manifest_sha256", "source_sha256")) and test("^[0-9a-f]{64}$"))
+            or (($key | IN("candidate_manifest_sha256", "source_sha256", "sha256")) and test("^[0-9a-f]{64}$"))
             or ($key == "run_id" and test("^(0|[1-9][0-9]{0,19})$"))
             or (($key | IN("timestamp", "started_at", "completed_at")) and test("^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\\.[0-9]{1,9})?(Z|[+-]([01][0-9]|2[0-3]):[0-5][0-9])$"))
+            or ($key == "kind" and . == "completed_resolution_survey")
             or ($key == "profile" and IN("fedora-44", "ubuntu-26.04", "arch"))
-            or (($key | IN("survey_id", "export_id")) and test("^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"))
+            or (($key | IN("survey_id", "export_id", "id")) and test("^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"))
             or IN("helper_failed", "restored", "restore_failed", "measurement_required", "ready",
                 "readiness_timeout", "systemctl_failed", "deploy_health", "issue_913_startup_evidence",
                 "last_recorded_duration", "not_written", "empty", "invalid_json", "not_retained",

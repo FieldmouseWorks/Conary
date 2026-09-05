@@ -160,5 +160,25 @@
     "value": "2026-09-05T19:41:33Z",
     "key": "run_id",
     "reason": "private_string"
+  },
+  {
+    "key": "sha256",
+    "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "reason": "safe"
+  },
+  {
+    "key": "id",
+    "value": "survey-300-400-1",
+    "reason": "safe"
+  },
+  {
+    "key": "kind",
+    "value": "completed_resolution_survey",
+    "reason": "safe"
+  },
+  {
+    "key": "message",
+    "value": "completed_resolution_survey",
+    "reason": "private_string"
   }
 ]

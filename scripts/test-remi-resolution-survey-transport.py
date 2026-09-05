@@ -512,6 +512,33 @@ class ResolutionSurveyTransportTests(unittest.TestCase):
             path.write_text(process.stdout)
             TRANSPORT_TOOL.forbid_recovery_host_paths(path)
 
+    def test_helper_generated_recovery_envelope_vocabulary(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(
+                ["bash", "scripts/test-remi-deploy-helper.sh", "--recovery-envelope-fixtures", str(root)],
+                cwd=REPO_ROOT, capture_output=True, text=True, check=True,
+            )
+            documents = sorted(root.glob("*.json"))
+            self.assertEqual(len(documents), 15)
+            outcomes = set()
+            for document in documents:
+                with self.subTest(document=document.name):
+                    original = json.loads(document.read_text())
+                    if document.name.endswith(".restore.json"):
+                        outcomes.add(original["restore"]["outcome"])
+                    if "output_dir" in original:
+                        original["output_dir"] = "<redacted:private_host_path>"
+                    process = subprocess.run(
+                        ["bash", "-c", 'source "$1"; survey_sanitize_outcome "$2"', "sanitize-envelope",
+                         str(REPO_ROOT / "deploy/remi-deploy-helper.sh"), str(document)],
+                        capture_output=True, text=True, check=True,
+                    )
+                    self.assertEqual(json.loads(process.stdout), original)
+                    document.write_text(process.stdout)
+                    TRANSPORT_TOOL.forbid_recovery_host_paths(document)
+            self.assertEqual(outcomes, {"restored", "restore_failed"})
+
     def test_missing_shared_policy_fails_closed(self) -> None:
         with patch.object(TRANSPORT_TOOL.subprocess, "run", side_effect=OSError("private diagnostic")):
             with self.assertRaisesRegex(TRANSPORT_TOOL.ValidationError, "redaction_unproven"):
