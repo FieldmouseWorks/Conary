@@ -692,6 +692,7 @@ fn insert_catalog_package(
     repository_id: i64,
     mut record: CatalogPackageRecordV1,
 ) -> Result<()> {
+    record.provides = super::rpm_provides::native_provides(record.version_scheme, record.provides)?;
     record.requirement_groups = super::rpm_requirements::native_requirement_groups(
         record.version_scheme,
         record.requirement_groups,

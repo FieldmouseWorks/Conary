@@ -21,6 +21,7 @@ mod candidate_resolution;
 mod resolution;
 mod resolution_producer;
 mod rpm_epochs;
+mod rpm_provides;
 mod rpm_requirements;
 
 struct CandidateFixture {

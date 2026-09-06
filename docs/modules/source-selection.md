@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-06
-revision: 66
+revision: 67
 summary: Describe package-variant selection, source identity, architecture and ABI admission, supported profiles, signed Remi universes, adoption, dependency acquisition, and lifecycle handoff.
 ---
 
@@ -530,6 +530,8 @@ ephemeral candidate resolver share that projection, including canonical rich
 dependency spelling from `repository/rpm_dependency/render.rs`. Its
 `rpm_requirements/epochs.rs` owner applies shared native EVR spelling to every
 operand and atom-index version while preserving positive epochs. The
+adjacent `rpm_provides.rs` projects the native ordered set of declared provider
+IDs and its indices while retaining original catalog provenance. The
 [native parity contract](../specs/remi-native-parity-oracle.md) owns the pinned
 rule and the requirement-hash binding; lifecycle consumers keep the original
 source records.

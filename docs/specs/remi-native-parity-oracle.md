@@ -2,7 +2,7 @@
 title: Remi native full-catalog parity oracle
 summary: Define single-walk producer-bound strict native parity lanes with live progress and independent diagnostic retention, bounded native ALPM provider probing, selective same-export assembly, and deterministic bounded-parallel private collect-all resolution surveys for one complete immutable profile candidate
 last_updated: 2026-09-06
-revision: 81
+revision: 82
 status: active
 ---
 
@@ -307,6 +307,14 @@ After agreement, explicit zero epochs are omitted from every projected operand
 and its atom index using the native producer's shared EVR spelling function.
 Positive epochs and source metadata remain unchanged, including inside
 conditional, alternative, and same-package expressions.
+
+`repository/catalog/parity/rpm_provides.rs` applies the same pinned
+`repo_addid_dep` ordered-set rule to source-declared RPM providers. It first
+requires unique contiguous source indices, retains the first declaration only
+when every fact except its index agrees, then assigns indices in the native
+dependency array. Exact-identity and file-derived providers stay distinct.
+Package comparison and the ephemeral resolver share this projection; the
+catalog retains every original declaration and its original source index.
 
 The same projection decodes unversioned atomic `packageand(...)` Supplements
 through pinned libsolv's

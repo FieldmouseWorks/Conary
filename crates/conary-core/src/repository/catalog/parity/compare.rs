@@ -120,6 +120,10 @@ pub fn compare_native_parity_oracle(
     let mut mismatch = None;
     let mut oracle_error = None;
     let candidate_result = candidate.for_each_package(|mut catalog_package| {
+        catalog_package.provides = super::rpm_provides::native_provides(
+            catalog_package.version_scheme,
+            catalog_package.provides,
+        )?;
         catalog_package.requirement_groups = super::rpm_requirements::native_requirement_groups(
             catalog_package.version_scheme,
             catalog_package.requirement_groups,

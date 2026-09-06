@@ -24,6 +24,7 @@ use crate::repository::{
 };
 
 mod prerequisites;
+mod provides;
 mod split_provides;
 
 #[derive(Clone)]
