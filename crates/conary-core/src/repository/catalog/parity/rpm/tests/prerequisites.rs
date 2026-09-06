@@ -3,6 +3,49 @@
 use super::*;
 
 #[test]
+fn source_supplement_projection_matches_pinned_packageand_grammar() {
+    for source_text in [
+        "packageand(prboom-plus:bash)".to_string(),
+        "packageand(openqa:postgresql-server)".to_string(),
+        "packageand(:alpha::pattern:beta:)".to_string(),
+        "packageand()".to_string(),
+        format!("packageand({}:b)", "a".repeat(1009)),
+        format!("packageand({}:b)", "a".repeat(1010)),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let checksum = digest('a');
+        let format =
+            format!("<rpm:supplements><rpm:entry name=\"{source_text}\"/></rpm:supplements>");
+        let mut package = PackageFixture::simple("supplement-projection", &checksum);
+        package.format = &format;
+        let metadata = vec![write_metadata(directory.path(), "fedora-core", &[package])];
+        let snapshots = vec![source_snapshot(
+            "fedora-core",
+            &metadata[0].0,
+            &metadata[0].1,
+        )];
+        let mut profile = profile(&snapshots);
+        profile.counts.packages = 1;
+        let output = directory.path().join("oracle");
+        produce_rpm_parity_oracle(&profile, &inputs(&snapshots, &metadata), &output).unwrap();
+        let reader = verify_native_parity_oracle_bundle(&output, &profile).unwrap();
+        reader.for_each_package(|row| {
+            assert_eq!(row.requirement_groups.len(), 1);
+            let mut source = row.requirement_groups[0].clone();
+            let expression = crate::repository::rpm_dependency::parse_source_rpm_dependency(RepositoryRequirementKind::Supplements, &source_text).unwrap();
+            source.expression_json = serde_json::to_string(&expression).unwrap();
+            source.native_text = Some(source_text.clone());
+            source.atoms.truncate(1);
+            source.atoms[0].capability = source_text.clone();
+            source.canonicalize()?;
+            let projected = crate::repository::catalog::parity::rpm_requirements::native_requirement_groups(VersionScheme::Rpm, vec![source])?;
+            assert_eq!(projected, row.requirement_groups, "{source_text}");
+            Ok(())
+        }).unwrap();
+    }
+}
+
+#[test]
 fn native_prerequisite_precedence_is_independent_of_source_order() {
     let cases = [
         (

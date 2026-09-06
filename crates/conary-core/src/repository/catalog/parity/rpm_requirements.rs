@@ -9,8 +9,12 @@ use crate::repository::catalog::CatalogRequirementGroupV1;
 use crate::repository::dependency_model::{
     RepositoryRequirementExpression, RepositoryRequirementKind,
 };
-use crate::repository::rpm_dependency::{canonical_rpm_dependency_text, parse_rpm_dependency};
+use crate::repository::rpm_dependency::{
+    canonical_rpm_dependency_text, parse_source_rpm_dependency,
+};
 use crate::repository::versioning::VersionScheme;
+
+mod packageand;
 
 pub(super) fn native_requirement_groups(
     scheme: VersionScheme,
@@ -23,15 +27,21 @@ pub(super) fn native_requirement_groups(
         if let Some(native_text) = &group.native_text {
             let kind = RepositoryRequirementKind::from_str_exact(&group.kind)
                 .ok_or_else(|| Error::ParseError("unknown RPM requirement kind".into()))?;
-            let expression: RepositoryRequirementExpression =
+            let mut expression: RepositoryRequirementExpression =
                 serde_json::from_str(&group.expression_json).map_err(|error| {
                     Error::ParseError(format!("decode RPM requirement expression: {error}"))
                 })?;
-            let parsed = parse_rpm_dependency(kind, native_text).map_err(Error::ParseError)?;
+            let parsed =
+                parse_source_rpm_dependency(kind, native_text).map_err(Error::ParseError)?;
             if parsed != expression {
                 return Err(Error::ConflictError(
                     "RPM requirement native text disagrees with its typed expression".into(),
                 ));
+            }
+            if packageand::project(kind, &mut expression, &mut group.atoms)? {
+                group.expression_json = serde_json::to_string(&expression)
+                    .map_err(|error| Error::ParseError(error.to_string()))?;
+                group.canonicalize()?;
             }
             group.native_text = Some(canonical_rpm_dependency_text(&expression));
         }

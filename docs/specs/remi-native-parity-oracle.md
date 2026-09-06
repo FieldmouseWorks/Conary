@@ -300,7 +300,18 @@ order. Different versions, expressions, atoms, or metadata remain distinct;
 Debian and ALPM groups retain exact comparison. Applying the same projection
 before candidate resolution binds missing-dependency evidence to the native
 prerequisite group hash. Persisted source catalogs and oracle schemas do not
-change; no source declarations are removed or rewritten.
+change; no source declarations are removed or rewritten. The agreement check
+uses the RPM source grammar for retained source text, so empty serialized epochs
+are decoded before comparison with the strict stored expression.
+
+The same projection decodes unversioned atomic `packageand(...)` Supplements
+through pinned libsolv's
+[`repo_fix_supplements`](https://github.com/openSUSE/libsolv/blob/0.7.36/src/suse.c#L177-L230)
+grammar. Colon-separated names form the ordered conjunction, empty fields are
+skipped, and `pattern:` qualifies the following field. The native 1,024-byte
+buffer boundary and no-operand case leave the literal atom unchanged, as do
+versioned atoms and other relation kinds. The source atom index must agree
+before its derived conjunction and atom index enter the native projection.
 Exact-identity duplicates obey profile
 precedence only when every projected fact agrees. A contradictory duplicate
 fails the complete crawl. The private SQLite spool, canonical bundle write,
