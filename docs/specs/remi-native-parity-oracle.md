@@ -2,7 +2,7 @@
 title: Remi native full-catalog parity oracle
 summary: Define single-walk producer-bound strict native parity lanes with live progress and independent diagnostic retention, bounded native ALPM provider probing, selective same-export assembly, and deterministic bounded-parallel private collect-all resolution surveys for one complete immutable profile candidate
 last_updated: 2026-09-06
-revision: 84
+revision: 85
 status: active
 ---
 
@@ -628,6 +628,16 @@ per root. apt-pkg configuration and system pointers are process-global, so the
 Debian lane uses child processes; each builds its own cache and solver from the
 same staged authenticated `Packages` inputs. No native handle crosses a thread
 or process boundary.
+
+Each Debian worker indexes authenticated source records and native cache
+versions once by exact name, version text, and architecture. Source lookup
+preserves the first record in authenticated member order; duplicate native
+identities retain an ambiguity marker that fails only when that exact root is
+requested. Ordered-map lookup uses logarithmic identity comparisons instead of
+scanning every source or native package for each root and closure member, with
+linear index storage per worker. Index ordering never selects a preferred
+version: apt-pkg policy and its solver retain that authority. These private
+indexes do not change native projection schemas or canonical oracle bytes.
 
 `--workers <positive-integer>` is a typed input on all three native resolution
 binaries and on `remi resolution-survey`. Omission selects the minimum of
