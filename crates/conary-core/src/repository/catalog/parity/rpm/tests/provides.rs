@@ -12,6 +12,7 @@ fn source_provider_duplicates_match_native_ordered_identity_set() {
         <rpm:entry name="alpha"/><rpm:entry name="alpha" flags="GE" ver="2"/>
         <rpm:entry name="alpha" flags="GE" ver="2"/>
         <rpm:entry name="beta"/><rpm:entry name="gamma"/>
+        <rpm:entry name="provider-overlap" flags="EQ" ver="1.0" rel="1.fc44"/>
     </rpm:provides>"#;
     let metadata = vec![write_metadata(directory.path(), "fedora-core", &[package])];
     let snapshots = vec![source_snapshot(
@@ -40,8 +41,8 @@ fn source_provider_duplicates_match_native_ordered_identity_set() {
                 }
             }
             declarations.sort_by_key(|(index, _)| *index);
-            assert_eq!(declarations.len(), 4);
-            for (source_index, native_index) in [0, 1, 0, 2, 2, 1, 3].into_iter().enumerate() {
+        assert_eq!(declarations.len(), 5);
+        for (source_index, native_index) in [0, 1, 0, 2, 2, 1, 3, 4].into_iter().enumerate() {
                 let mut provide = declarations[native_index].1.clone();
                 provide.provenance = CapabilityProvenance::SourceDeclared {
                     format: SourcePackageFormat::Rpm,
