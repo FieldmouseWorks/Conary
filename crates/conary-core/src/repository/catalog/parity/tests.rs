@@ -20,6 +20,7 @@ use crate::repository::versioning::VersionScheme;
 mod candidate_resolution;
 mod resolution;
 mod resolution_producer;
+mod rpm_requirements;
 
 struct CandidateFixture {
     _directory: tempfile::TempDir,
