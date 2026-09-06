@@ -11,7 +11,7 @@ use conary_core::db::models::{ConvertedPackage, MetadataTable, Repository, set_m
 use conary_core::repository::catalog::{
     NATIVE_PARITY_COMPARISON_SCHEMA_V1, NATIVE_RESOLUTION_COMPARISON_SCHEMA_V3,
     NativeParityComparisonV1, NativeParityCountsV1, NativeResolutionComparisonV1,
-    NativeResolutionCountsV1,
+    NativeResolutionCountsV1, SourceSnapshotV1,
 };
 
 use super::*;
