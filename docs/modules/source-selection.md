@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-09-05
-revision: 64
+last_updated: 2026-09-06
+revision: 65
 summary: Describe package-variant selection, source identity, architecture and ABI admission, supported profiles, signed Remi universes, adoption, dependency acquisition, and lifecycle handoff.
 ---
 
@@ -522,6 +522,15 @@ prerequisite. The Fedora parser preserves that marker as the typed
 `PreDepends` relation; it does not infer order from a capability or package
 name. Direct RPM parsing projects the corresponding header sense flags through
 the same relation kind.
+
+Native parity preserves those source declarations in the catalog while
+projecting libsolv's exact prerequisite precedence in
+`repository/catalog/parity/rpm_requirements.rs`. Package comparison and the
+ephemeral candidate resolver share that projection, including canonical rich
+dependency spelling from `repository/rpm_dependency/render.rs`. The
+[native parity contract](../specs/remi-native-parity-oracle.md) owns the pinned
+rule and the requirement-hash binding; lifecycle consumers keep the original
+source records.
 
 RPM file authority is derived from `createrepo_c`
 `5cf41fe5d703901d78078ed18c67ab667e446c1a`: its
