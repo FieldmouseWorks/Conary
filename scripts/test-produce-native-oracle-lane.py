@@ -320,6 +320,18 @@ class NativeOracleLaneTests(unittest.TestCase):
             },
         )
 
+    def test_every_retired_profile_envelope_precedes_body_and_lane_selection(self) -> None:
+        for ordinal in range(3):
+            original = self.manifest["profiles"][ordinal]["revision"]
+            for found in (1, 2, 3):
+                with self.subTest(ordinal=ordinal, found=found):
+                    self.manifest["profiles"][ordinal]["revision"] = {"schema_version": found, "retired_body": None}
+                    self.write_manifest()
+                    result = self.run_lane("fedora-44")
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("schema_rebuild_required", result.stderr)
+            self.manifest["profiles"][ordinal]["revision"] = original
+
     def test_all_lane_surveys_pass_exact_workflow_validation(self) -> None:
         for profile, architecture in (("fedora-44", "x86_64"), ("ubuntu-26.04", "amd64"), ("arch", "x86_64")):
             with self.subTest(profile=profile):
