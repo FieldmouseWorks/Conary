@@ -4,10 +4,10 @@ use super::*;
 use crate::repository::catalog::{
     CatalogArtifactV1, CatalogCandidateWriter, CatalogContentV1, CatalogPackageOriginV1,
     CatalogPackageRecordV1, CatalogScopeV1, CatalogSourceEvidenceV1, PROFILE_REVISION_SCHEMA_V4,
-    ProfileSourceMemberV2, SOURCE_SNAPSHOT_SCHEMA_V1, SourceEcosystemV1,
-    SourceMetadataObjectRoleV1, SourceMetadataObjectV1, SourceProvenanceV1, SourceStreamKindV1,
-    SourceStreamV1, logical_verification_passes_for_test, physical_verification_passes_for_test,
-    write_catalog_candidate,
+    ProfileSourceMemberV2, SOURCE_CATALOG_PROJECTION_VERSION_V3, SOURCE_SNAPSHOT_SCHEMA_V1,
+    SourceEcosystemV1, SourceMetadataObjectRoleV1, SourceMetadataObjectV1, SourceProvenanceV1,
+    SourceStreamKindV1, SourceStreamV1, logical_verification_passes_for_test,
+    physical_verification_passes_for_test, write_catalog_candidate,
 };
 use crate::repository::supported_profiles::ProfileSourceRole;
 use crate::repository::versioning::VersionScheme;
@@ -952,17 +952,18 @@ fn legacy_source_projection_cannot_claim_retained_metadata_authority() {
     let binding =
         write_catalog_candidate(candidate.join(CATALOG_FILE_NAME), &source_content()).unwrap();
     let mut manifest = source_manifest(&binding);
-    manifest.parser_projection_version = 1;
     retain_source_object(&candidate, &manifest.authenticated_objects[0]);
-
-    let error = write_source_catalog_manifest(&candidate, &manifest)
-        .err()
-        .expect("legacy projection must fail manifest finalization");
-    assert!(
-        error
-            .to_string()
-            .contains("projection version 1 is unsupported")
-    );
+    for found in 1..SOURCE_CATALOG_PROJECTION_VERSION_V3 {
+        manifest.parser_projection_version = found;
+        let error = write_source_catalog_manifest(&candidate, &manifest)
+            .err()
+            .expect("retired projection must require rebuild before manifest finalization");
+        assert!(
+            matches!(error, crate::Error::SourceProjectionRebuildRequired {
+            found: actual, current: 3,
+        } if actual == found)
+        );
+    }
 }
 
 #[test]
