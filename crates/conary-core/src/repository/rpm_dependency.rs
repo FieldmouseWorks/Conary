@@ -12,6 +12,9 @@ use super::dependency_model::{
     RepositoryRequirementKind,
 };
 
+mod render;
+pub(crate) use render::canonical_rpm_dependency_text;
+
 const CHECK_ACTIVE: u8 = 1 << 0;
 const CHECK_NO_WITH: u8 = 1 << 1;
 const CHECK_NO_AND: u8 = 1 << 2;

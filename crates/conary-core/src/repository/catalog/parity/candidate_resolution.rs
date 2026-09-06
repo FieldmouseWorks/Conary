@@ -690,8 +690,12 @@ fn root_failure(
 fn insert_catalog_package(
     connection: &Connection,
     repository_id: i64,
-    record: CatalogPackageRecordV1,
+    mut record: CatalogPackageRecordV1,
 ) -> Result<()> {
+    record.requirement_groups = super::rpm_requirements::native_requirement_groups(
+        record.version_scheme,
+        record.requirement_groups,
+    )?;
     let mut package = RepositoryPackage::new(
         repository_id,
         record.name,
