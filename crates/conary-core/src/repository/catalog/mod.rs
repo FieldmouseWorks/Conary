@@ -7,6 +7,7 @@ mod candidate;
 mod capacity;
 mod contract;
 mod manifest;
+pub(crate) use manifest::require_current_profile_schema;
 mod parity;
 mod portable_integrity;
 mod portable_vfs;

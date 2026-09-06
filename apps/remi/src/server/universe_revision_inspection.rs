@@ -69,9 +69,9 @@ pub(crate) fn inspect_stored_universe_manifest_v2(
                     "stored Remi universe profile {ordinal} revision schema_version must be an unsigned 32-bit integer"
                 )
             })?;
-        if schema > PROFILE_REVISION_SCHEMA_V4 {
+        if schema == 0 || schema > PROFILE_REVISION_SCHEMA_V4 {
             bail!(
-                "stored Remi universe profile {ordinal} revision schema {schema} is newer than required schema {PROFILE_REVISION_SCHEMA_V4}"
+                "stored Remi universe profile {ordinal} revision schema {schema} is unsupported; required schema {PROFILE_REVISION_SCHEMA_V4}"
             );
         }
         obsolete |= schema < PROFILE_REVISION_SCHEMA_V4;

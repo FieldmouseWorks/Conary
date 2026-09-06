@@ -23,7 +23,7 @@ pub(super) fn require_current_source_projection(found: u32) -> Result<()> {
     }
 }
 
-pub(super) fn require_current_profile_schema(found: u32) -> Result<()> {
+pub(crate) fn require_current_profile_schema(found: u32) -> Result<()> {
     match found {
         PROFILE_REVISION_SCHEMA_V4 => Ok(()),
         1..PROFILE_REVISION_SCHEMA_V4 => Err(Error::ProfileRevisionRebuildRequired {
