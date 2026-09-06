@@ -11,7 +11,7 @@ use conary_core::db::models::{
 use conary_core::repository::catalog::{
     CATALOG_CONTENT_SCHEMA_V1, CATALOG_FILE_NAME, CatalogArtifactV1, CatalogContentV1,
     CatalogPackageOriginV1, CatalogPackageRecordV1, CatalogScopeV1, CatalogSourceEvidenceV1,
-    PROFILE_REVISION_SCHEMA_V3, PortableManifestAttestationV1, ProfileRevisionV2,
+    PROFILE_REVISION_SCHEMA_V4, PortableManifestAttestationV1, ProfileRevisionV2,
     ProfileSourceMemberV2, SOURCE_METADATA_DIRECTORY_NAME, SOURCE_SNAPSHOT_SCHEMA_V1,
     SourceEcosystemV1, SourceMetadataObjectRoleV1, SourceMetadataObjectV1, SourceProvenanceV1,
     SourceSnapshotV1, SourceStreamKindV1, SourceStreamV1, portable_chunk_count_v1,
@@ -113,7 +113,7 @@ impl ActiveCatalogFixture {
         let object = manifest
             .as_object_mut()
             .expect("profile manifest is an object");
-        object.insert("schema_version".to_string(), serde_json::Value::from(2));
+        object.insert("schema_version".to_string(), serde_json::Value::from(3));
         object.remove("target_architecture");
         let manifest_json = String::from_utf8(
             conary_core::json::canonical_json(&manifest)
@@ -349,7 +349,7 @@ impl ActiveCatalogFixture {
             .map(|(ordinal, (_profile, revision_sha256, manifest_json))| {
                 let revision: serde_json::Value =
                     serde_json::from_str(manifest_json).expect("parse obsolete profile revision");
-                assert_eq!(revision["schema_version"], 2);
+                assert_eq!(revision["schema_version"], 3);
                 serde_json::json!({
                     "ordinal": u32::try_from(ordinal).expect("ordinal fits u32"),
                     "profile_revision_sha256": revision_sha256,
@@ -622,7 +622,7 @@ impl ActiveCatalogFixture {
                     format!("stream-binding-{profile}-{repository_identity}").as_bytes(),
                 ),
                 parser_projection_version:
-                    conary_core::repository::catalog::SOURCE_CATALOG_PROJECTION_VERSION_V2,
+                    conary_core::repository::catalog::SOURCE_CATALOG_PROJECTION_VERSION_V3,
                 provenance: SourceProvenanceV1 {
                     ecosystem,
                     metadata_url: format!(
@@ -723,7 +723,7 @@ impl ActiveCatalogFixture {
         let binding = write_catalog_candidate(candidate_dir.join(CATALOG_FILE_NAME), &content)
             .expect("write catalog candidate");
         let manifest = ProfileRevisionV2 {
-            schema_version: PROFILE_REVISION_SCHEMA_V3,
+            schema_version: PROFILE_REVISION_SCHEMA_V4,
             profile: profile.to_string(),
             target_architecture: conary_core::repository::supported_profiles::profile_by_id(
                 profile,

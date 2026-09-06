@@ -94,7 +94,7 @@ pub(super) fn candidate_fixture_with(
     let path = directory.path().join("catalog.sqlite");
     let binding = write_catalog_candidate(&path, &content).unwrap();
     let profile = ProfileRevisionV2 {
-        schema_version: PROFILE_REVISION_SCHEMA_V3,
+        schema_version: PROFILE_REVISION_SCHEMA_V4,
         profile: profile_name(ecosystem).to_string(),
         target_architecture: crate::repository::supported_profiles::profile_by_public_id(
             profile_name(ecosystem),

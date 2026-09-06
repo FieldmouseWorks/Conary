@@ -9,7 +9,7 @@ use conary_core::db::models::{
     RemiActiveProfileRevision, RemiCatalogPhysicalAttestation, RemiCatalogResource,
     RemiCatalogResourceKind,
 };
-use conary_core::repository::catalog::{PROFILE_REVISION_SCHEMA_V3, ProfileRevisionV2};
+use conary_core::repository::catalog::{PROFILE_REVISION_SCHEMA_V4, ProfileRevisionV2};
 use rusqlite::Connection;
 
 use super::{CatalogAuthority, ProfileRevisionSelection, inspect_resolved_profile_files};
@@ -310,23 +310,22 @@ fn deserialize_profile_revision(
         .and_then(serde_json::Value::as_u64)
         .and_then(|schema| u32::try_from(schema).ok())
         .context("profile revision schema_version must be an unsigned 32-bit integer")?;
-    if schema < PROFILE_REVISION_SCHEMA_V3 {
+    if (1..PROFILE_REVISION_SCHEMA_V4).contains(&schema) {
         return Ok(ProfileRevisionInspection::ObsoleteSchema {
             found: schema,
-            required: PROFILE_REVISION_SCHEMA_V3,
+            required: PROFILE_REVISION_SCHEMA_V4,
         });
     }
-    if schema > PROFILE_REVISION_SCHEMA_V3 {
+    if schema == 0 || schema > PROFILE_REVISION_SCHEMA_V4 {
         bail!(
             "profile revision schema {schema} is unsupported; expected {}",
-            PROFILE_REVISION_SCHEMA_V3
+            PROFILE_REVISION_SCHEMA_V4
         );
     }
-    let manifest: ProfileRevisionV2 =
-        serde_json::from_value(raw).context("parse current ProfileRevisionV2 manifest JSON")?;
-    manifest
-        .validate()
-        .context("validate ProfileRevisionV2 manifest")?;
+    let manifest = conary_core::repository::catalog::decode_profile_revision_manifest(
+        resource.manifest_json.as_bytes(),
+    )
+    .context("decode current ProfileRevisionV2 manifest JSON")?;
     let canonical = conary_core::json::canonical_json(&manifest)
         .map_err(anyhow::Error::msg)
         .context("canonicalize ProfileRevisionV2 manifest")?;

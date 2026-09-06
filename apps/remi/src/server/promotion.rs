@@ -13,7 +13,7 @@ use conary_core::db::models::{
     RemiProfileRevisionActivation, publish_profile_candidate_in_transaction,
 };
 use conary_core::repository::catalog::{
-    ProfileRevisionV2, SourceSnapshotV1, verify_registered_source_catalog_bundle_complete,
+    ProfileRevisionV2, verify_registered_source_catalog_bundle_complete,
 };
 use conary_core::repository::universe::RemiUniverseManifestV2;
 use conary_core::repository::{ProfileSyncCandidate, current_profile_sync_candidate};
@@ -331,8 +331,10 @@ fn reopen_source_catalogs(
             profile.profile,
             member.source_snapshot_sha256
         );
-        let manifest: SourceSnapshotV1 = serde_json::from_str(&resource.manifest_json)
-            .context("parse registered promotion source manifest")?;
+        let manifest = conary_core::repository::catalog::decode_source_snapshot_manifest(
+            resource.manifest_json.as_bytes(),
+        )
+        .context("classify registered promotion source manifest")?;
         ensure!(
             manifest.manifest_sha256()? == member.source_snapshot_sha256
                 && manifest.catalog.sha256 == resource.artifact_sha256

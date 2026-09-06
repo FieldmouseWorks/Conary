@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-09-05
-revision: 170
+last_updated: 2026-09-06
+revision: 171
 summary: Describe Remi repository ingestion, immutable catalog publication, conversion and benchmark boundaries, shared native parity producer ownership, typed conflicting-closure parity handoff, deployment, readiness, storage, and operator-facing serving contracts.
 ---
 
@@ -85,24 +85,24 @@ and a canonical `SourceSnapshotV1` manifest under
 `<storage.root>/catalogs/sources/<manifest-sha256>/`. The manifest binds exact
 source, repository, stream, parser-projection, authenticated root and child
 objects, catalog bytes, logical digest, and row counts. A strict
-profile-revision schema 3 `ProfileRevisionV2` then binds that typed target
+profile-revision schema 4 `ProfileRevisionV2` then binds that typed target
 architecture, each member's role, precedence, required state, ordered source
 identity, and one composed
 profile catalog under `catalogs/profiles/<manifest-sha256>/`. Core contract and
 bundle verification live in `crates/conary-core/src/repository/catalog/`.
-Profile catalog projection version 3 is the current hard cut. Upgrade-tolerant
-inspection classifies a stored schema-2 profile revision as
-`ObsoleteSchema { found: 2, required: 3 }`; refresh records that non-reuse
-decision and composes a schema-3 replacement. Deployment and readiness report
+Profile catalog projection version 4 is the current hard cut. Upgrade-tolerant
+inspection classifies a stored schema-3 profile revision as
+`ObsoleteSchema { found: 3, required: 4 }`; refresh records that non-reuse
+decision and composes a schema-4 replacement. Deployment and readiness report
 the obsolete active or candidate revision as unpopulated until that refresh
 finishes. Serving, catalog comparison, and promotion evidence remain strict:
-schema-2 profile revisions and projection-version-2 profile catalogs never
+schema-1 through schema-3 profile revisions and earlier profile catalogs never
 become readable authority, and no compatibility deserializer or migration
 adapter remains. Promotion activation may classify a canonical, digest-bound
-active universe containing an embedded schema-2 revision as
+active universe containing an embedded obsolete revision as
 `ObsoleteProfileSchema`. That typed state contributes only its immutable
 manifest identity and sequence to the activation fence; it is never serving,
-comparison, or replay authority. A proved schema-3 candidate may supersede it
+comparison, or replay authority. A proved schema-4 candidate may supersede it
 at the next sequence, while the obsolete universe row remains as fencing
 history.
 `apps/remi/src/server/catalog_authority/revision_inspection.rs` owns that
@@ -290,9 +290,12 @@ authority.
 Fedora metadata acquisition is owned by
 `crates/conary-core/src/repository/parsers/fedora/metadata.rs`; the parent
 parser owns normalized RPM record replay and joins. Source snapshot manifests
-remain `SourceSnapshotV1`, but parser projection version 2 and the retained
-metadata directory are a hard cut: projection-version-1 manifests and legacy
-two-entry source bundles are rejected and must be rebuilt by refresh. There is
+remain `SourceSnapshotV1`, with parser projection version 3. Versions 1 and 2
+are typed `SourceProjectionRebuildRequired` states before current manifest-body
+decoding and must be rebuilt from authenticated metadata. Profile schema 4
+fences earlier projections before source reuse; normalized cache keys include
+parser version 3. This rebuild restores Debian Recommends/Suggests/Enhances
+and ALPM desc Depends/OptDepends omitted by older ingestion. There is
 no compatibility reader, upstream refetch fallback, or parallel source
 authority.
 
@@ -1341,7 +1344,7 @@ Every public package-read route first loads one immutable snapshot of
 `remi_active_universe_revision` through the stored-universe inspection
 boundary. A canonical, digest-bound universe containing obsolete schema-2
 profile revisions is typed `ObsoleteProfileSchema` and returns HTTP 503 with
-`reason=obsolete_profile_schema` while refresh rebuilds schema 3; it is never
+`reason=obsolete_profile_schema` while refresh rebuilds schema 4; it is never
 parsed as current authority and never serves content. A current universe still
 validates its strict manifest and member rows before resolving the route slug
 through the exact profile revision named by that signed universe. Operational

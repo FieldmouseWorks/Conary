@@ -289,6 +289,17 @@ impl DebianParser {
                 self.parse_requirement_groups(pre_deps, RepositoryRequirementKind::PreDepends)?,
             );
         }
+        // APT 3.2.0 debListParser::NewVersion retains these dependency
+        // fields even when a resolver policy does not install weak relations.
+        for (field, kind) in [
+            (&entry.recommends, RepositoryRequirementKind::Recommends),
+            (&entry.suggests, RepositoryRequirementKind::Suggests),
+            (&entry.enhances, RepositoryRequirementKind::Enhances),
+        ] {
+            if let Some(field) = field {
+                requirements.extend(self.parse_requirement_groups(field, kind)?);
+            }
+        }
         if let Some(conflicts) = &entry.conflicts {
             requirements.extend(
                 self.parse_relation_groups(conflicts, RepositoryRequirementKind::Conflict)?,

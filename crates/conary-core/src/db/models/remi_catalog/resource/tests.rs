@@ -3,7 +3,7 @@
 use super::*;
 use crate::db::schema::ensure_current;
 use crate::repository::catalog::{
-    CatalogArtifactV1, CatalogCountsV1, PROFILE_REVISION_SCHEMA_V3, SOURCE_SNAPSHOT_SCHEMA_V1,
+    CatalogArtifactV1, CatalogCountsV1, PROFILE_REVISION_SCHEMA_V4, SOURCE_SNAPSHOT_SCHEMA_V1,
     SourceEcosystemV1, SourceMetadataObjectRoleV1, SourceMetadataObjectV1, SourceProvenanceV1,
     SourceStreamV1,
 };
@@ -53,7 +53,7 @@ fn source_manifest() -> SourceSnapshotV1 {
             identity: "44".to_string(),
         },
         stream_binding_sha256: digest('a'),
-        parser_projection_version: crate::repository::catalog::SOURCE_CATALOG_PROJECTION_VERSION_V2,
+        parser_projection_version: crate::repository::catalog::SOURCE_CATALOG_PROJECTION_VERSION_V3,
         provenance: SourceProvenanceV1 {
             ecosystem: SourceEcosystemV1::Rpm,
             metadata_url: "https://example.test/repository".to_string(),
@@ -91,7 +91,7 @@ fn source_manifest() -> SourceSnapshotV1 {
 
 fn profile_manifest(source: &SourceSnapshotV1) -> ProfileRevisionV2 {
     ProfileRevisionV2 {
-        schema_version: PROFILE_REVISION_SCHEMA_V3,
+        schema_version: PROFILE_REVISION_SCHEMA_V4,
         profile: "fedora-44".to_string(),
         target_architecture:
             crate::repository::supported_profiles::ProfileTargetArchitecture::X86_64,

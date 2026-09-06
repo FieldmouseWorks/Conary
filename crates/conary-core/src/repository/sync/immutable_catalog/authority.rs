@@ -9,7 +9,7 @@ use crate::error::{Error, Result};
 use crate::repository::catalog::source::SourceCatalogAuthorityV1;
 use crate::repository::catalog::{
     CatalogArtifactV1, CatalogContentV1, CatalogPackageOriginV1, CatalogPackageRecordV1,
-    CatalogScopeV1, CatalogSourceEvidenceV1, SOURCE_CATALOG_PROJECTION_VERSION_V2,
+    CatalogScopeV1, CatalogSourceEvidenceV1, SOURCE_CATALOG_PROJECTION_VERSION_V3,
     SOURCE_SNAPSHOT_SCHEMA_V1, SourceCatalogCandidateV1, SourceEcosystemV1, SourceMetadataObjectV1,
     SourceProvenanceV1, SourceSnapshotV1, SourceStreamKindV1, SourceStreamV1,
 };
@@ -26,7 +26,7 @@ pub(super) fn source_snapshot_matches_authority(
         && manifest.repository_identity == authority.repository_identity
         && manifest.stream == authority.stream
         && manifest.stream_binding_sha256 == authority.stream_binding_sha256
-        && manifest.parser_projection_version == SOURCE_CATALOG_PROJECTION_VERSION_V2
+        && manifest.parser_projection_version == SOURCE_CATALOG_PROJECTION_VERSION_V3
         && manifest.provenance == authority.provenance
         && manifest.authenticated_root == authority.authenticated_root
         && manifest.authenticated_objects == authority.authenticated_objects

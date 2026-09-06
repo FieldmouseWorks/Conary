@@ -27,6 +27,12 @@ pub(super) struct DebianPackageEntry {
     #[serde(rename = "Pre-Depends", default)]
     pub(super) pre_depends: Option<String>,
     #[serde(default)]
+    pub(super) recommends: Option<String>,
+    #[serde(default)]
+    pub(super) suggests: Option<String>,
+    #[serde(default)]
+    pub(super) enhances: Option<String>,
+    #[serde(default)]
     pub(super) conflicts: Option<String>,
     #[serde(default)]
     pub(super) breaks: Option<String>,

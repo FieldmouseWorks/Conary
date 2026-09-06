@@ -1,6 +1,24 @@
 // crates/conary-core/src/repository/parsers/arch/tests.rs
 
 use super::*;
+
+#[test]
+fn desc_record_retains_required_and_optional_dependencies() {
+    let parser = parser();
+    let desc = format!(
+        "%NAME%\ngo-task\n\n%VERSION%\n3.53.1-1\n\n%FILENAME%\ngo-task.pkg.tar.zst\n\n%SHA256SUM%\n{}\n\n%CSIZE%\n12\n\n%ARCH%\nx86_64\n\n%DEPENDS%\nglibc\nversioned>=2:1.0-1\n\n%OPTDEPENDS%\npython>=2:3.0-1: optional tools\n\n",
+        "a".repeat(64)
+    );
+    let fields = parser.parse_desc_file(&desc).unwrap();
+    let package = parser
+        .package_from_fields("https://example.test", &fields, None)
+        .unwrap();
+    assert_eq!(
+        package.requirements,
+        parser.parse_structured_depends(&desc).unwrap()
+    );
+    assert_eq!(package.requirements.len(), 3);
+}
 use crate::repository::dependency_model::RepositoryCapabilityKind;
 
 fn parser() -> ArchParser {

@@ -25,6 +25,25 @@ pub fn verify_remi_universe_manifest_target(
     manifest_bytes: &[u8],
     targets: &BTreeMap<String, TargetDescription>,
 ) -> Result<VerifiedRemiUniverseTargetSet> {
+    #[derive(serde::Deserialize)]
+    struct RevisionHeader {
+        schema_version: u32,
+    }
+    #[derive(serde::Deserialize)]
+    struct ProfileHeader {
+        revision: RevisionHeader,
+    }
+    #[derive(serde::Deserialize)]
+    struct UniverseHeader {
+        profiles: Vec<ProfileHeader>,
+    }
+    let header: UniverseHeader = serde_json::from_slice(manifest_bytes)
+        .map_err(|error| Error::ParseError(format!("invalid Remi universe envelope: {error}")))?;
+    for profile in header.profiles {
+        crate::repository::catalog::require_current_profile_schema(
+            profile.revision.schema_version,
+        )?;
+    }
     let manifest = serde_json::from_slice::<RemiUniverseManifestV2>(manifest_bytes)
         .map_err(|error| Error::ParseError(format!("invalid Remi universe manifest: {error}")))?;
     manifest.validate()?;
@@ -173,8 +192,22 @@ fn require_exact_sha256(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn obsolete_embedded_profile_body_is_classified_before_current_decoding() {
+        for found in 1..PROFILE_REVISION_SCHEMA_V4 {
+            let bytes = format!(
+                r#"{{"profiles":[{{"revision":{{"schema_version":{found},"retired_body":null}}}}]}}"#
+            );
+            assert!(
+                matches!(verify_remi_universe_manifest_target(bytes.as_bytes(), &BTreeMap::new()),
+                Err(Error::ProfileRevisionRebuildRequired { found: actual, current: 4 }) if actual == found)
+            );
+        }
+    }
+
     use crate::repository::catalog::{
-        CATALOG_CONTENT_SCHEMA_V1, CatalogArtifactV1, CatalogCountsV1, PROFILE_REVISION_SCHEMA_V3,
+        CATALOG_CONTENT_SCHEMA_V1, CatalogArtifactV1, CatalogCountsV1, PROFILE_REVISION_SCHEMA_V4,
         ProfileRevisionV2, ProfileSourceMemberV2, SourceStreamKindV1, SourceStreamV1,
     };
     use crate::repository::universe::{REMI_UNIVERSE_SCHEMA_V2, RemiUniverseProfileV2};
@@ -216,7 +249,7 @@ mod tests {
             .collect::<Vec<_>>();
         let source_evidence = members.len() as u64;
         let revision = ProfileRevisionV2 {
-            schema_version: PROFILE_REVISION_SCHEMA_V3,
+            schema_version: PROFILE_REVISION_SCHEMA_V4,
             profile: "fedora-44".to_string(),
             target_architecture:
                 crate::repository::supported_profiles::ProfileTargetArchitecture::X86_64,

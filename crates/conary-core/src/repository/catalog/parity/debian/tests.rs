@@ -12,7 +12,7 @@ use crate::repository::catalog::{
     NATIVE_RESOLUTION_ROOT_FILE_NAME, NativeResolutionNotInstallableReasonV1,
     NativeResolutionOutcomeV1, NativeResolutionSurveyDebianResultV1,
     NativeResolutionSurveyNativeExplanationV1, NativeUnresolvedDependencyV1,
-    PROFILE_REVISION_SCHEMA_V3, ProfileSourceMemberV2, SOURCE_SNAPSHOT_SCHEMA_V1,
+    PROFILE_REVISION_SCHEMA_V4, ProfileSourceMemberV2, SOURCE_SNAPSHOT_SCHEMA_V1,
     SourceProvenanceV1, SourceStreamKindV1, SourceStreamV1, native_requirement_group_sha256,
     verify_native_parity_oracle_bundle, verify_native_resolution_oracle_bundle,
 };
@@ -345,7 +345,7 @@ fn source_snapshot(repository: &str, packages: &Path) -> SourceSnapshotV1 {
             identity: "26.04".to_string(),
         },
         stream_binding_sha256: digest('1'),
-        parser_projection_version: crate::repository::catalog::SOURCE_CATALOG_PROJECTION_VERSION_V2,
+        parser_projection_version: crate::repository::catalog::SOURCE_CATALOG_PROJECTION_VERSION_V3,
         provenance: SourceProvenanceV1 {
             ecosystem: SourceEcosystemV1::Deb,
             metadata_url: "https://metadata.example.test/ubuntu".to_string(),
@@ -383,7 +383,7 @@ fn source_snapshot(repository: &str, packages: &Path) -> SourceSnapshotV1 {
 
 fn profile(snapshots: &[SourceSnapshotV1]) -> ProfileRevisionV2 {
     ProfileRevisionV2 {
-        schema_version: PROFILE_REVISION_SCHEMA_V3,
+        schema_version: PROFILE_REVISION_SCHEMA_V4,
         profile: "ubuntu-26.04".to_string(),
         target_architecture:
             crate::repository::supported_profiles::ProfileTargetArchitecture::Amd64,

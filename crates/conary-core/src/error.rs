@@ -85,6 +85,18 @@ pub enum Error {
     )]
     ResolutionBundleRebuildRequired { found: u32, current: u32 },
 
+    /// An incomplete retired native source projection is not catalog authority.
+    #[error(
+        "Source catalog projection rebuild required: found {found}, current {current}; reparse authenticated source metadata"
+    )]
+    SourceProjectionRebuildRequired { found: u32, current: u32 },
+
+    /// A profile built from retired source projections must be rebuilt.
+    #[error(
+        "Profile revision schema rebuild required: found {found}, current {current}; rebuild source catalogs and profile evidence"
+    )]
+    ProfileRevisionRebuildRequired { found: u32, current: u32 },
+
     /// Missing ID on model object (required for update/query operations)
     #[error("Missing ID: {0}")]
     MissingId(String),

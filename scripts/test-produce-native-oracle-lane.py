@@ -213,11 +213,11 @@ class NativeOracleLaneTests(unittest.TestCase):
                 (self.input / "objects" / object_digest).write_bytes(data)
                 objects[object_digest] = len(data)
                 authenticated.append({"role": role, "sha256": object_digest, "size": len(data)})
-            source = {"authenticated_objects": authenticated, "source_profile": profile}
+            source = {"schema_version": 1, "parser_projection_version": 3, "authenticated_objects": authenticated, "source_profile": profile}
             revision = {
                 "members": [{"ordinal": 0, "source_snapshot_sha256": digest(source)}],
                 "profile": profile,
-                "schema_version": 3,
+                "schema_version": 4,
                 "target_architecture": target_architecture,
             }
             profiles.append({"profile_revision_sha256": digest(revision), "revision": revision, "sources": [source]})
@@ -319,6 +319,41 @@ class NativeOracleLaneTests(unittest.TestCase):
                 "TRANSPORT_SHA256": "c" * 64,
             },
         )
+
+    def test_every_retired_profile_envelope_precedes_body_and_lane_selection(self) -> None:
+        for ordinal in range(3):
+            original = self.manifest["profiles"][ordinal]["revision"]
+            for found in (1, 2, 3):
+                with self.subTest(ordinal=ordinal, found=found):
+                    self.manifest["profiles"][ordinal]["revision"] = {"schema_version": found, "retired_body": None}
+                    self.write_manifest()
+                    result = self.run_lane("fedora-44")
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("schema_rebuild_required", result.stderr)
+            self.manifest["profiles"][ordinal]["revision"] = original
+
+    def test_every_retired_source_envelope_precedes_current_body_access(self) -> None:
+        for ordinal in range(3):
+            original = self.manifest["profiles"][ordinal]["sources"][0]
+            for found in (1, 2):
+                with self.subTest(ordinal=ordinal, found=found):
+                    self.manifest["profiles"][ordinal]["sources"][0] = {
+                        "schema_version": 1, "parser_projection_version": found, "retired_body": None,
+                    }
+                    self.write_manifest()
+                    result = self.run_lane("fedora-44")
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("schema_rebuild_required", result.stderr)
+            self.manifest["profiles"][ordinal]["sources"][0] = original
+
+    def test_invalid_profile_envelopes_do_not_acquire_rebuild_classification(self) -> None:
+        for found in (0, 5, -1, 3.5, 4.0, "3", None, True):
+            with self.subTest(found=found):
+                self.manifest["profiles"][0]["revision"] = {"schema_version": found}
+                self.write_manifest()
+                result = self.run_lane("fedora-44")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn("schema_rebuild_required", result.stderr)
 
     def test_all_lane_surveys_pass_exact_workflow_validation(self) -> None:
         for profile, architecture in (("fedora-44", "x86_64"), ("ubuntu-26.04", "amd64"), ("arch", "x86_64")):

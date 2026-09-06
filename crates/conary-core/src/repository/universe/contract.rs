@@ -12,7 +12,7 @@ use crate::error::{Error, Result};
 use crate::repository::catalog::{CATALOG_CONTENT_SCHEMA_V1, ProfileRevisionV2};
 use crate::repository::supported_profiles::profile_by_public_id;
 
-use super::super::catalog::PROFILE_REVISION_SCHEMA_V3;
+use super::super::catalog::PROFILE_REVISION_SCHEMA_V4;
 
 pub const REMI_UNIVERSE_SCHEMA_V2: u32 = 2;
 
@@ -94,10 +94,10 @@ pub struct RemiUniverseProfileV2 {
 impl RemiUniverseProfileV2 {
     fn validate(&self) -> Result<()> {
         self.revision.validate()?;
-        if self.revision.schema_version != PROFILE_REVISION_SCHEMA_V3 {
+        if self.revision.schema_version != PROFILE_REVISION_SCHEMA_V4 {
             return Err(Error::ConfigError(format!(
                 "universe profile revision schema {} is unsupported; expected {}",
-                self.revision.schema_version, PROFILE_REVISION_SCHEMA_V3
+                self.revision.schema_version, PROFILE_REVISION_SCHEMA_V4
             )));
         }
         if profile_by_public_id(&self.revision.profile).is_none() {
@@ -288,7 +288,7 @@ mod tests {
             .collect::<Vec<_>>();
         let source_evidence = members.len() as u64;
         let revision = ProfileRevisionV2 {
-            schema_version: PROFILE_REVISION_SCHEMA_V3,
+            schema_version: PROFILE_REVISION_SCHEMA_V4,
             profile: profile.to_string(),
             target_architecture: crate::repository::supported_profiles::profile_by_public_id(
                 profile,

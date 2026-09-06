@@ -4,6 +4,44 @@ use super::*;
 use crate::repository::RepositoryTrustPolicy;
 use crate::repository::dependency_model::RepositoryCapabilityKind;
 
+#[test]
+fn packages_stanza_retains_every_weak_dependency_field() {
+    let text = format!(
+        "Package: weak-fields\nVersion: 1.0-1\nArchitecture: amd64\nSHA256: {}\nSize: 12\nFilename: pool/w/weak-fields.deb\nDepends: mandatory\nRecommends: helper:any (>= 2) | fallback, another\nSuggests: documentation\nEnhances: editor\n",
+        "a".repeat(64)
+    );
+    let parser = parser();
+    let mut packages = Vec::new();
+    stanza::parse_packages(std::io::Cursor::new(text), |entry| {
+        packages.push(parser.package_from_entry("https://example.test", entry)?);
+        Ok(())
+    })
+    .unwrap();
+    let package = &packages[0];
+    for (kind, field) in [
+        (RepositoryRequirementKind::Depends, "mandatory"),
+        (
+            RepositoryRequirementKind::Recommends,
+            "helper:any (>= 2) | fallback, another",
+        ),
+        (RepositoryRequirementKind::Suggests, "documentation"),
+        (RepositoryRequirementKind::Enhances, "editor"),
+    ] {
+        let actual = package
+            .requirements
+            .iter()
+            .filter(|group| group.kind == kind)
+            .cloned()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            actual,
+            parser.parse_requirement_groups(field, kind).unwrap(),
+            "{kind:?}"
+        );
+    }
+    assert_eq!(package.requirements.len(), 5);
+}
+
 fn parser() -> DebianParser {
     let trust = PreparedOpenPgpTrust::for_test(RepositoryTrustPolicy::Debian {
         release_keys: vec![crate::repository::OpenPgpTrustRoot {
@@ -51,6 +89,9 @@ fn test_sync_metadata_persists_debian_provides_in_extra_metadata() {
         filename: "pool/main/m/mail-transport-agent.deb".to_string(),
         depends: None,
         pre_depends: None,
+        recommends: None,
+        suggests: None,
+        enhances: None,
         conflicts: None,
         breaks: None,
         replaces: None,
@@ -88,6 +129,9 @@ fn test_source_distro_and_version_scheme() {
         filename: "pool/main/t/test.deb".to_string(),
         depends: None,
         pre_depends: None,
+        recommends: None,
+        suggests: None,
+        enhances: None,
         conflicts: None,
         breaks: None,
         replaces: None,
@@ -118,6 +162,9 @@ fn repository_rejects_unknown_debian_multi_arch_value() {
         filename: "pool/main/t/test.deb".to_string(),
         depends: None,
         pre_depends: None,
+        recommends: None,
+        suggests: None,
+        enhances: None,
         conflicts: None,
         breaks: None,
         replaces: None,
@@ -145,6 +192,9 @@ fn test_structured_versioned_depends() {
         filename: "pool/main/c/curl.deb".to_string(),
         depends: Some("libc6 (>= 2.34), libssl3 (>= 3.0)".to_string()),
         pre_depends: None,
+        recommends: None,
+        suggests: None,
+        enhances: None,
         conflicts: None,
         breaks: None,
         replaces: None,
@@ -183,6 +233,9 @@ fn repository_metadata_preserves_debian_negative_relations() {
         filename: "pool/main/n/newpkg.deb".to_string(),
         depends: None,
         pre_depends: None,
+        recommends: None,
+        suggests: None,
+        enhances: None,
         conflicts: Some("old-conflict (<< 2)".to_string()),
         breaks: Some("old-breaks (<= 1)".to_string()),
         replaces: Some("old-owner (= 1)".to_string()),
@@ -236,6 +289,9 @@ fn repository_metadata_rejects_debian_negative_alternatives() {
         filename: "pool/main/n/newpkg.deb".to_string(),
         depends: None,
         pre_depends: None,
+        recommends: None,
+        suggests: None,
+        enhances: None,
         conflicts: Some("old-a | old-b".to_string()),
         breaks: None,
         replaces: None,
@@ -266,6 +322,9 @@ fn test_structured_or_deps() {
         filename: "pool/main/p/postfix.deb".to_string(),
         depends: Some("default-mta | mail-transport-agent, libc6".to_string()),
         pre_depends: None,
+        recommends: None,
+        suggests: None,
+        enhances: None,
         conflicts: None,
         breaks: None,
         replaces: None,
@@ -305,6 +364,9 @@ fn test_structured_versioned_and_unversioned_provides() {
         filename: "pool/main/e/exim4.deb".to_string(),
         depends: None,
         pre_depends: None,
+        recommends: None,
+        suggests: None,
+        enhances: None,
         conflicts: None,
         breaks: None,
         replaces: None,
@@ -424,6 +486,9 @@ fn test_structured_pre_depends() {
         filename: "pool/main/g/glibc.deb".to_string(),
         depends: Some("libgcc-s1".to_string()),
         pre_depends: Some("ld-linux-x86-64 (>= 2.39)".to_string()),
+        recommends: None,
+        suggests: None,
+        enhances: None,
         conflicts: None,
         breaks: None,
         replaces: None,

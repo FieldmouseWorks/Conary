@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import hashlib
+import runpy
 import io
 import json
 from pathlib import Path
@@ -98,7 +99,7 @@ def build_fixture() -> tuple[dict[str, object], dict[str, bytes], list[str]]:
             "repository_identity": repository_identity,
             "stream": stream,
             "stream_binding_sha256": digest_bytes(f"stream-{profile}".encode()),
-            "parser_projection_version": 2,
+            "parser_projection_version": 3,
             "provenance": {
                 "ecosystem": ecosystem,
                 "metadata_url": f"https://packages.example.test/{profile}/metadata",
@@ -123,7 +124,7 @@ def build_fixture() -> tuple[dict[str, object], dict[str, bytes], list[str]]:
         }
         source_digest = digest_json(source)
         revision = {
-            "schema_version": 3,
+            "schema_version": 4,
             "profile": profile,
             "target_architecture": target_architecture,
             "projection_version": 2,
@@ -244,6 +245,41 @@ class NativeOracleTransportTest(unittest.TestCase):
     def assert_rejected(self, result: subprocess.CompletedProcess[str], needle: str) -> None:
         self.assertNotEqual(result.returncode, 0, result.stdout)
         self.assertIn(needle, result.stderr)
+
+    def test_obsolete_envelopes_require_rebuild_before_body_validation(self) -> None:
+        verifier = runpy.run_path(str(VERIFIER))
+        for version in (1, 2, 3):
+            with self.subTest(profile_schema=version), self.assertRaisesRegex(
+                ValueError, "schema_rebuild_required"
+            ):
+                verifier["validate_revision"](
+                    {"schema_version": version, "retired_body": None}, "revision", "arch"
+                )
+        for version in (1, 2):
+            with self.subTest(source_projection=version), self.assertRaisesRegex(
+                ValueError, "schema_rebuild_required"
+            ):
+                verifier["validate_source"](
+                    {"schema_version": 1, "parser_projection_version": version, "retired_body": None},
+                    "source", "arch", {},
+                )
+
+    def test_all_envelopes_precede_current_transport_body_validation(self) -> None:
+        verifier = runpy.run_path(str(VERIFIER))
+        for retired in ("profile", "source"):
+            for ordinal in (1, 2):
+                with self.subTest(retired=retired, ordinal=ordinal):
+                    manifest, _, candidates = build_fixture()
+                    del manifest["profiles"][0]["revision"]["members"]
+                    if retired == "profile":
+                        manifest["profiles"][ordinal]["revision"] = {"schema_version": 3}
+                    else:
+                        manifest["profiles"][ordinal]["sources"][0] = {
+                            "schema_version": 1, "parser_projection_version": 2,
+                        }
+                    expected = [tuple(value.split("=", 1)) for value in candidates]
+                    with self.assertRaisesRegex(ValueError, "schema_rebuild_required"):
+                        verifier["validate_manifest"](manifest, expected)
 
     def test_reopens_exact_transport_and_emits_sanitized_evidence(self) -> None:
         transport = self.root / "input.tar"

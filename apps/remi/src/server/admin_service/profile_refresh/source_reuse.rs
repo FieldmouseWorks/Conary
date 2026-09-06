@@ -289,7 +289,7 @@ mod tests {
         NativeSourceEcosystem, NativeSourceStream, Repository, RepositoryPolicyScope,
         RepositorySourcePolicy, RepositoryUpdateMode,
     };
-    use conary_core::repository::catalog::PROFILE_REVISION_SCHEMA_V3;
+    use conary_core::repository::catalog::PROFILE_REVISION_SCHEMA_V4;
     use conary_core::repository::{
         OpenPgpTrustRoot, RepositoryParserConfig, RepositoryTrustPolicy, RpmMetadataAuthority,
     };
@@ -300,7 +300,7 @@ mod tests {
     };
 
     #[tokio::test]
-    async fn obsolete_revision_is_recorded_non_reusable_before_schema_three_rebuild() {
+    async fn obsolete_revision_is_recorded_non_reusable_before_schema_four_rebuild() {
         let fixture = ActiveCatalogFixture::new();
         let profile = "fedora-44";
         let current_revision = fixture.activate(profile, 1, Vec::new());
@@ -413,8 +413,8 @@ mod tests {
         assert_eq!(
             decision,
             ReuseDecision::ObsoleteSchema {
-                found: 2,
-                required: PROFILE_REVISION_SCHEMA_V3,
+                found: 3,
+                required: PROFILE_REVISION_SCHEMA_V4,
             }
         );
 
@@ -428,8 +428,8 @@ mod tests {
                 .inspect_selected_profile_for_upgrade(&obsolete_selection)
                 .expect("inspect obsolete revision"),
             ProfileRevisionInspection::ObsoleteSchema {
-                found: 2,
-                required: PROFILE_REVISION_SCHEMA_V3,
+                found: 3,
+                required: PROFILE_REVISION_SCHEMA_V4,
             }
         ));
         let candidate =
@@ -443,6 +443,6 @@ mod tests {
                 profile_revision_sha256: candidate.profile_revision_sha256,
             })
             .expect("inspect schema-three replacement");
-        assert_eq!(rebuilt.manifest.schema_version, PROFILE_REVISION_SCHEMA_V3);
+        assert_eq!(rebuilt.manifest.schema_version, PROFILE_REVISION_SCHEMA_V4);
     }
 }

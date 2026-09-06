@@ -11,7 +11,7 @@ use conary_core::db::models::{ConvertedPackage, MetadataTable, Repository, set_m
 use conary_core::repository::catalog::{
     NATIVE_PARITY_COMPARISON_SCHEMA_V1, NATIVE_RESOLUTION_COMPARISON_SCHEMA_V3,
     NativeParityComparisonV1, NativeParityCountsV1, NativeResolutionComparisonV1,
-    NativeResolutionCountsV1,
+    NativeResolutionCountsV1, SourceSnapshotV1,
 };
 
 use super::*;
@@ -703,7 +703,7 @@ async fn refresh_proof_and_activation_supersede_obsolete_active_universe() {
         let revision = pin.manifest().clone();
         assert_eq!(
             revision.schema_version,
-            conary_core::repository::catalog::PROFILE_REVISION_SCHEMA_V3
+            conary_core::repository::catalog::PROFILE_REVISION_SCHEMA_V4
         );
         let packages = pin.reader().packages().expect("read refreshed packages");
         assert_eq!(packages.len(), 1);

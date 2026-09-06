@@ -14,7 +14,7 @@ use crate::repository::catalog::parity::{
 use crate::repository::catalog::{
     CatalogArtifactV1, CatalogCountsV1, NativeResolutionNotInstallableReasonV1,
     NativeResolutionOutcomeV1, NativeResolutionSurveyNativeExplanationV1,
-    NativeResolutionSurveyRpmResultV1, NativeUnresolvedDependencyV1, PROFILE_REVISION_SCHEMA_V3,
+    NativeResolutionSurveyRpmResultV1, NativeUnresolvedDependencyV1, PROFILE_REVISION_SCHEMA_V4,
     ProfileSourceMemberV2, SOURCE_SNAPSHOT_SCHEMA_V1, SourceProvenanceV1, SourceStreamKindV1,
     SourceStreamV1, native_requirement_group_sha256, verify_native_resolution_oracle_bundle,
 };
@@ -196,7 +196,7 @@ fn source_snapshot(repository: &str, primary: &Path, filelists: &Path) -> Source
             identity: "44".to_string(),
         },
         stream_binding_sha256: digest('1'),
-        parser_projection_version: crate::repository::catalog::SOURCE_CATALOG_PROJECTION_VERSION_V2,
+        parser_projection_version: crate::repository::catalog::SOURCE_CATALOG_PROJECTION_VERSION_V3,
         provenance: SourceProvenanceV1 {
             ecosystem: SourceEcosystemV1::Rpm,
             metadata_url: "https://metadata.example.test/fedora".to_string(),
@@ -242,7 +242,7 @@ fn source_snapshot(repository: &str, primary: &Path, filelists: &Path) -> Source
 
 fn profile(snapshots: &[SourceSnapshotV1]) -> ProfileRevisionV2 {
     ProfileRevisionV2 {
-        schema_version: PROFILE_REVISION_SCHEMA_V3,
+        schema_version: PROFILE_REVISION_SCHEMA_V4,
         profile: "fedora-44".to_string(),
         target_architecture:
             crate::repository::supported_profiles::ProfileTargetArchitecture::X86_64,
