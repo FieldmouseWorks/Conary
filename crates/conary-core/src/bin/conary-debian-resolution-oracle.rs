@@ -14,7 +14,9 @@ use conary_core::repository::catalog::{
     produce_debian_resolution_walk_with_workers, run_debian_resolution_worker,
     write_resolution_walk_implementation_evidence,
 };
-use serde::de::DeserializeOwned;
+use conary_core::repository::catalog::{
+    decode_profile_revision_manifest, decode_source_snapshot_manifest,
+};
 
 const MAX_INPUT_MANIFEST_BYTES: u64 = 1024 * 1024;
 
@@ -108,11 +110,15 @@ fn run(arguments: Arguments) -> Result<()> {
             arguments.packages.len()
         );
     }
-    let profile: ProfileRevisionV2 = load_manifest(&arguments.profile_manifest, "profile")?;
+    let profile: ProfileRevisionV2 = load_manifest(
+        &arguments.profile_manifest,
+        "profile",
+        decode_profile_revision_manifest,
+    )?;
     let snapshots = arguments
         .source_snapshot
         .iter()
-        .map(|path| load_manifest(path, "source snapshot"))
+        .map(|path| load_manifest(path, "source snapshot", decode_source_snapshot_manifest))
         .collect::<Result<Vec<SourceSnapshotV1>>>()?;
     let inputs = snapshots
         .iter()
@@ -190,7 +196,11 @@ fn run(arguments: Arguments) -> Result<()> {
     Ok(())
 }
 
-fn load_manifest<T: DeserializeOwned>(path: &Path, label: &str) -> Result<T> {
+fn load_manifest<T>(
+    path: &Path,
+    label: &str,
+    decode: fn(&[u8]) -> conary_core::Result<T>,
+) -> Result<T> {
     let metadata = fs::symlink_metadata(path)
         .with_context(|| format!("inspect {label} manifest {}", path.display()))?;
     if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
@@ -208,6 +218,5 @@ fn load_manifest<T: DeserializeOwned>(path: &Path, label: &str) -> Result<T> {
     }
     let bytes =
         fs::read(path).with_context(|| format!("read {label} manifest {}", path.display()))?;
-    serde_json::from_slice(&bytes)
-        .with_context(|| format!("parse {label} manifest {}", path.display()))
+    decode(&bytes).with_context(|| format!("parse {label} manifest {}", path.display()))
 }

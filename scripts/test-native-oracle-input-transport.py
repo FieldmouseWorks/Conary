@@ -98,7 +98,7 @@ def build_fixture() -> tuple[dict[str, object], dict[str, bytes], list[str]]:
             "repository_identity": repository_identity,
             "stream": stream,
             "stream_binding_sha256": digest_bytes(f"stream-{profile}".encode()),
-            "parser_projection_version": 2,
+            "parser_projection_version": 3,
             "provenance": {
                 "ecosystem": ecosystem,
                 "metadata_url": f"https://packages.example.test/{profile}/metadata",
@@ -123,7 +123,7 @@ def build_fixture() -> tuple[dict[str, object], dict[str, bytes], list[str]]:
         }
         source_digest = digest_json(source)
         revision = {
-            "schema_version": 3,
+            "schema_version": 4,
             "profile": profile,
             "target_architecture": target_architecture,
             "projection_version": 2,

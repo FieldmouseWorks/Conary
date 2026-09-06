@@ -19,7 +19,7 @@ use crate::repository::dependency_model::{RepositoryCapabilityKind, RepositoryRe
 use crate::repository::dependency_model::{RepositoryProvide, RepositoryRequirementGroup};
 
 /// Normalized parser projection and sink schema version used in cache keys.
-pub const REPOSITORY_SNAPSHOT_PROJECTION_VERSION: u32 = 2;
+pub const REPOSITORY_SNAPSHOT_PROJECTION_VERSION: u32 = 3;
 
 /// Exact authenticated bytes and root-derived bounds that affect one native
 /// parser projection. Root fields that do not affect normalized output are not

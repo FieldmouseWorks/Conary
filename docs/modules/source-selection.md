@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-06
-revision: 67
+revision: 68
 summary: Describe package-variant selection, source identity, architecture and ABI admission, supported profiles, signed Remi universes, adoption, dependency acquisition, and lifecycle handoff.
 ---
 
@@ -356,6 +356,17 @@ source identity. Native enrollment therefore works for uncatalogued
 third-party repositories without adding a profile. The complete persisted,
 CLI, hard-cut, and recovery contract is
 [`docs/specs/native-source-identity-policy.md`](../specs/native-source-identity-policy.md).
+
+Native Debian ingestion retains Depends, Pre-Depends, Recommends, Suggests,
+and Enhances using the same typed relation grammar, matching
+[APT 3.2.0 NewVersion](https://salsa.debian.org/apt-team/apt/-/blob/3.2.0/apt-pkg/deb/deblistparser.cc).
+ALPM binary dependencies and optional dependencies are read from desc as well
+as a separate depends entry, matching the
+[pinned libalpm database reader](https://gitlab.archlinux.org/pacman/pacman/-/blob/54d94116164b0b2202c6061c4a59c6f3e70820d8/lib/libalpm/be_sync.c).
+Source parser projection 3 and profile schema 4 retire the incomplete earlier
+catalogs. Envelope readers classify obsolete versions as typed rebuild states
+before decoding their bodies; refresh skips obsolete profile reuse and reparses
+under the new normalized-cache key.
 
 ### Remi Native Catalog Projection
 

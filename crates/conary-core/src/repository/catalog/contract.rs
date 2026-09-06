@@ -11,8 +11,8 @@ use crate::repository::supported_profiles::{ProfileSourceRole, ProfileTargetArch
 use crate::repository::{RepositoryFormat, RepositoryParserConfig, RepositoryTrustPolicy};
 
 pub const SOURCE_SNAPSHOT_SCHEMA_V1: u32 = 1;
-pub const SOURCE_CATALOG_PROJECTION_VERSION_V2: u32 = 2;
-pub const PROFILE_REVISION_SCHEMA_V3: u32 = 3;
+pub const SOURCE_CATALOG_PROJECTION_VERSION_V3: u32 = 3;
+pub const PROFILE_REVISION_SCHEMA_V4: u32 = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -151,6 +151,7 @@ impl SourceSnapshotV1 {
                 self.schema_version, SOURCE_SNAPSHOT_SCHEMA_V1
             )));
         }
+        super::manifest::require_current_source_projection(self.parser_projection_version)?;
         validate_storage_component(&self.source_profile, "source snapshot profile")?;
         validate_identity(&self.source_identity, "source snapshot source identity")?;
         validate_identity(
@@ -162,12 +163,6 @@ impl SourceSnapshotV1 {
             "source snapshot stream binding",
         )?;
         validate_identity(&self.stream.identity, "source snapshot stream identity")?;
-        if self.parser_projection_version != SOURCE_CATALOG_PROJECTION_VERSION_V2 {
-            return Err(Error::ConfigError(format!(
-                "source snapshot parser projection version {} is unsupported; expected {}",
-                self.parser_projection_version, SOURCE_CATALOG_PROJECTION_VERSION_V2
-            )));
-        }
         validate_sha256(
             &self.provenance.parser_config_sha256,
             "source snapshot parser configuration digest",
@@ -218,12 +213,7 @@ impl SourceSnapshotV1 {
 
 impl ProfileRevisionV2 {
     pub fn validate(&self) -> Result<()> {
-        if self.schema_version != PROFILE_REVISION_SCHEMA_V3 {
-            return Err(Error::ConfigError(format!(
-                "profile revision schema {} is unsupported; expected {}",
-                self.schema_version, PROFILE_REVISION_SCHEMA_V3
-            )));
-        }
+        super::manifest::require_current_profile_schema(self.schema_version)?;
         validate_storage_component(&self.profile, "profile revision profile")?;
         let supported = crate::repository::supported_profiles::profile_by_id(&self.profile)
             .ok_or_else(|| {
@@ -521,7 +511,7 @@ mod tests {
                 identity: "44".to_string(),
             },
             stream_binding_sha256: digest('a'),
-            parser_projection_version: SOURCE_CATALOG_PROJECTION_VERSION_V2,
+            parser_projection_version: SOURCE_CATALOG_PROJECTION_VERSION_V3,
             provenance: SourceProvenanceV1 {
                 ecosystem: SourceEcosystemV1::Rpm,
                 metadata_url: "https://example.test/repository".to_string(),
@@ -595,7 +585,7 @@ mod tests {
     fn profile_revision_requires_declared_member_order_and_unique_identity() {
         let snapshot_id = source_snapshot().manifest_sha256().unwrap();
         let mut revision = ProfileRevisionV2 {
-            schema_version: PROFILE_REVISION_SCHEMA_V3,
+            schema_version: PROFILE_REVISION_SCHEMA_V4,
             profile: "arch".to_string(),
             target_architecture: ProfileTargetArchitecture::X86_64,
             projection_version: 1,

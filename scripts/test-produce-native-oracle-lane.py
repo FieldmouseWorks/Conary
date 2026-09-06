@@ -217,7 +217,7 @@ class NativeOracleLaneTests(unittest.TestCase):
             revision = {
                 "members": [{"ordinal": 0, "source_snapshot_sha256": digest(source)}],
                 "profile": profile,
-                "schema_version": 3,
+                "schema_version": 4,
                 "target_architecture": target_architecture,
             }
             profiles.append({"profile_revision_sha256": digest(revision), "revision": revision, "sources": [source]})

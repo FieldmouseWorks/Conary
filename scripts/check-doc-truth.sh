@@ -1137,16 +1137,16 @@ check_profile_architecture_authority() {
 
     require_match \
         "crates/conary-core/src/repository/catalog/contract.rs" \
-        'PROFILE_REVISION_SCHEMA_V3: u32 = 3' \
-        'profile revision schema 3 authority'
+        'PROFILE_REVISION_SCHEMA_V4: u32 = 4' \
+        'profile revision schema 4 authority'
     require_match \
         "apps/remi/src/server/catalog_refresh.rs" \
-        'PROFILE_CATALOG_PROJECTION_VERSION: u32 = 3' \
-        'profile catalog projection version 3 authority'
+        'PROFILE_CATALOG_PROJECTION_VERSION: u32 = 4' \
+        'profile catalog projection version 4 authority'
     require_match \
         "scripts/verify-native-oracle-input-transport.py" \
-        'value\["schema_version"\].*!= 3' \
-        'native-oracle transport profile revision schema 3'
+        'schema != 4' \
+        'native-oracle transport profile revision schema 4'
     require_match \
         "scripts/verify-native-oracle-input-transport.py" \
         'value\["target_architecture"\]' \

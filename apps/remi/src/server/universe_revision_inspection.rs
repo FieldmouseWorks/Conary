@@ -3,7 +3,7 @@
 //! Typed inspection of stored universe revisions across schema hard cuts.
 
 use anyhow::{Context, Result, bail};
-use conary_core::repository::catalog::PROFILE_REVISION_SCHEMA_V3;
+use conary_core::repository::catalog::PROFILE_REVISION_SCHEMA_V4;
 use conary_core::repository::universe::{REMI_UNIVERSE_SCHEMA_V2, RemiUniverseManifestV2};
 
 #[derive(Debug)]
@@ -69,12 +69,12 @@ pub(crate) fn inspect_stored_universe_manifest_v2(
                     "stored Remi universe profile {ordinal} revision schema_version must be an unsigned 32-bit integer"
                 )
             })?;
-        if schema > PROFILE_REVISION_SCHEMA_V3 {
+        if schema > PROFILE_REVISION_SCHEMA_V4 {
             bail!(
-                "stored Remi universe profile {ordinal} revision schema {schema} is newer than required schema {PROFILE_REVISION_SCHEMA_V3}"
+                "stored Remi universe profile {ordinal} revision schema {schema} is newer than required schema {PROFILE_REVISION_SCHEMA_V4}"
             );
         }
-        obsolete |= schema < PROFILE_REVISION_SCHEMA_V3;
+        obsolete |= schema < PROFILE_REVISION_SCHEMA_V4;
     }
     if obsolete {
         return Ok(StoredUniverseManifestV2::ObsoleteProfileSchema);

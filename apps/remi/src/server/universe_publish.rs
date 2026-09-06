@@ -433,8 +433,10 @@ fn load_inputs(db_path: &Path) -> Result<UniverseInputs> {
             resource.kind == RemiCatalogResourceKind::ProfileRevision && resource.durable,
             "active profile resource {resource_sha256} lacks durable profile authority"
         );
-        let revision = serde_json::from_str::<ProfileRevisionV2>(&resource.manifest_json)
-            .context("parse active profile revision")?;
+        let revision = conary_core::repository::catalog::decode_profile_revision_manifest(
+            resource.manifest_json.as_bytes(),
+        )
+        .context("parse active profile revision")?;
         revision.validate()?;
         anyhow::ensure!(
             revision.manifest_sha256()? == resource_sha256

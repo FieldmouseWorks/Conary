@@ -111,11 +111,11 @@ target_architecture = "amd64"
 EOF
 
     cat > "$root/crates/conary-core/src/repository/catalog/contract.rs" <<'EOF'
-pub const PROFILE_REVISION_SCHEMA_V3: u32 = 3;
+pub const PROFILE_REVISION_SCHEMA_V4: u32 = 4;
 EOF
 
     cat > "$root/apps/remi/src/server/catalog_refresh.rs" <<'EOF'
-const PROFILE_CATALOG_PROJECTION_VERSION: u32 = 3;
+const PROFILE_CATALOG_PROJECTION_VERSION: u32 = 4;
 EOF
 
     cat > "$root/scripts/verify-native-oracle-input-transport.py" <<'EOF'

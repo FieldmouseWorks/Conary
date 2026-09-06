@@ -252,7 +252,7 @@ mod tests {
     use conary_core::repository::catalog::{
         CatalogArtifactV1, CatalogContentV1, CatalogCountsV1, CatalogPackageOriginV1,
         CatalogProvideRecordV1, CatalogReader, CatalogRequirementAtomV1, CatalogScopeV1,
-        CatalogSourceEvidenceV1, PROFILE_REVISION_SCHEMA_V3, ProfileRevisionV2,
+        CatalogSourceEvidenceV1, PROFILE_REVISION_SCHEMA_V4, ProfileRevisionV2,
         ProfileSourceMemberV2, SourceStreamKindV1, SourceStreamV1, write_catalog_candidate,
     };
     use conary_core::repository::dependency_model::{
@@ -315,7 +315,7 @@ mod tests {
 
     fn profile_manifest() -> ProfileRevisionV2 {
         ProfileRevisionV2 {
-            schema_version: PROFILE_REVISION_SCHEMA_V3,
+            schema_version: PROFILE_REVISION_SCHEMA_V4,
             profile: "fedora-44".to_string(),
             target_architecture:
                 conary_core::repository::supported_profiles::ProfileTargetArchitecture::X86_64,

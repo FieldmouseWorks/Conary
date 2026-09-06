@@ -9,7 +9,7 @@ use conary_core::db::models::{
 };
 use conary_core::repository::catalog::{
     CATALOG_FILE_NAME, CATALOG_PORTABLE_MANIFEST_FILE_NAME, CatalogContentV1, CatalogScopeV1,
-    CatalogSourceEvidenceV1, PROFILE_REVISION_SCHEMA_V3, ProfileRevisionV2, ProfileSourceMemberV2,
+    CatalogSourceEvidenceV1, PROFILE_REVISION_SCHEMA_V4, ProfileRevisionV2, ProfileSourceMemberV2,
     SourceStreamKindV1, SourceStreamV1, publish_profile_catalog_bundle_verified,
     write_catalog_candidate, write_profile_catalog_manifest,
 };
@@ -110,7 +110,7 @@ fn add_revision(fixture: &Fixture, marker: char, fencing_epoch: i64) -> Revision
     let binding = write_catalog_candidate(candidate_dir.join(CATALOG_FILE_NAME), &content)
         .expect("write profile catalog artifact");
     let manifest = ProfileRevisionV2 {
-        schema_version: PROFILE_REVISION_SCHEMA_V3,
+        schema_version: PROFILE_REVISION_SCHEMA_V4,
         profile: PROFILE.to_string(),
         target_architecture:
             conary_core::repository::supported_profiles::ProfileTargetArchitecture::X86_64,

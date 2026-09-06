@@ -6,6 +6,7 @@ mod bundle;
 mod candidate;
 mod capacity;
 mod contract;
+mod manifest;
 mod parity;
 mod portable_integrity;
 mod portable_vfs;
@@ -40,11 +41,12 @@ pub use capacity::{
     CatalogScratchCapacityError, CatalogSourceCandidateScratchV1,
 };
 pub use contract::{
-    CatalogArtifactV1, CatalogCountsV1, PROFILE_REVISION_SCHEMA_V3, ProfileRevisionV2,
-    ProfileSourceMemberV2, SOURCE_CATALOG_PROJECTION_VERSION_V2, SOURCE_SNAPSHOT_SCHEMA_V1,
+    CatalogArtifactV1, CatalogCountsV1, PROFILE_REVISION_SCHEMA_V4, ProfileRevisionV2,
+    ProfileSourceMemberV2, SOURCE_CATALOG_PROJECTION_VERSION_V3, SOURCE_SNAPSHOT_SCHEMA_V1,
     SourceEcosystemV1, SourceMetadataObjectRoleV1, SourceMetadataObjectV1, SourceProvenanceV1,
     SourceSnapshotV1, SourceStreamKindV1, SourceStreamV1,
 };
+pub use manifest::{decode_profile_revision_manifest, decode_source_snapshot_manifest};
 #[cfg(feature = "native-alpm-oracle")]
 pub use parity::{
     ALPM_PARITY_PROJECTION_SCHEMA_V1, ALPM_RESOLUTION_PROJECTION_SCHEMA_V3, AlpmParityMemberInput,

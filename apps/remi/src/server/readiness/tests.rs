@@ -107,7 +107,7 @@ fn activate_profile_catalog(inputs: &ReadinessInputs, profile: &str, populated: 
     };
     use conary_core::repository::catalog::{
         CATALOG_FILE_NAME, CatalogContentV1, CatalogPackageOriginV1, CatalogPackageRecordV1,
-        CatalogScopeV1, CatalogSourceEvidenceV1, PROFILE_REVISION_SCHEMA_V3, ProfileRevisionV2,
+        CatalogScopeV1, CatalogSourceEvidenceV1, PROFILE_REVISION_SCHEMA_V4, ProfileRevisionV2,
         ProfileSourceMemberV2, SourceStreamKindV1, SourceStreamV1,
         publish_profile_catalog_bundle_verified, write_catalog_candidate,
         write_profile_catalog_manifest,
@@ -198,7 +198,7 @@ fn activate_profile_catalog(inputs: &ReadinessInputs, profile: &str, populated: 
     let binding = write_catalog_candidate(candidate_dir.join(CATALOG_FILE_NAME), &content)
         .expect("write readiness catalog candidate");
     let manifest = ProfileRevisionV2 {
-        schema_version: PROFILE_REVISION_SCHEMA_V3,
+        schema_version: PROFILE_REVISION_SCHEMA_V4,
         profile: profile.to_string(),
         target_architecture: conary_core::repository::supported_profiles::profile_by_id(profile)
             .expect("known readiness profile")

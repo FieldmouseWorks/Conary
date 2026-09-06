@@ -2,7 +2,7 @@
 title: Remi native full-catalog parity oracle
 summary: Define single-walk producer-bound strict native parity lanes with live progress and independent diagnostic retention, bounded native ALPM provider probing, selective same-export assembly, and deterministic bounded-parallel private collect-all resolution surveys for one complete immutable profile candidate
 last_updated: 2026-09-06
-revision: 82
+revision: 83
 status: active
 ---
 
@@ -18,11 +18,13 @@ to one immutable profile candidate.
 
 The supported-profile registry is the sole target-architecture authority.
 Its closed `ProfileTargetArchitecture` value declares Fedora 44 `x86_64`,
-Ubuntu 26.04 `amd64`, and Arch `x86_64`; profile-revision schema 3 carries that
+Ubuntu 26.04 `amd64`, and Arch `x86_64`; profile-revision schema 4 carries that
 typed value into every `ProfileRevisionV2`. Profile catalog projection version
-3 is the only current producer. Schema-2 profile revisions and
-projection-version-2 profile catalogs lack this binding, are invalid, and must
-be rebuilt from authenticated sources. There is no compatibility reader.
+4 is the only current producer. Earlier profile schemas are typed rebuild
+states before current-body decoding. Source parser projection 3 restores the
+Debian weak relations and ALPM desc dependencies omitted by older ingestion;
+projection versions 1 and 2 must be rebuilt from authenticated sources. There
+is no compatibility reader.
 
 ## Input handoff
 

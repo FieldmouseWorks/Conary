@@ -246,6 +246,15 @@ def validate_source(
     profile_name: str,
     member: dict[str, Any],
 ) -> list[tuple[str, int]]:
+    if not isinstance(value, dict):
+        fail(f"{label} must be an object")
+    if exact_int(value.get("schema_version"), f"{label}.schema_version") != 1:
+        fail(f"{label} uses an unsupported schema")
+    parser_version = exact_int(value.get("parser_projection_version"), f"{label}.parser_projection_version")
+    if 1 <= parser_version < 3:
+        fail(f"schema_rebuild_required: {label} source projection {parser_version}; rebuild as 3")
+    if parser_version != 3:
+        fail(f"{label} uses an unsupported parser projection")
     value = exact_keys(
         value,
         {
@@ -265,8 +274,6 @@ def validate_source(
         },
         label,
     )
-    if exact_int(value["schema_version"], f"{label}.schema_version") != 1:
-        fail(f"{label} uses an unsupported schema")
     if exact_string(value["source_profile"], f"{label}.source_profile") != profile_name:
         fail(f"{label} names the wrong public profile")
     source_identity = identity(value["source_identity"], f"{label}.source_identity")
@@ -275,10 +282,6 @@ def validate_source(
     )
     validate_stream(value["stream"], f"{label}.stream")
     require_sha256(value["stream_binding_sha256"], f"{label}.stream_binding_sha256")
-    if exact_int(
-        value["parser_projection_version"], f"{label}.parser_projection_version"
-    ) != 2:
-        fail(f"{label} uses an unsupported parser projection")
     validate_provenance(value["provenance"], f"{label}.provenance")
     validate_artifact(value["authenticated_root"], f"{label}.authenticated_root")
     validate_artifact(value["catalog"], f"{label}.catalog")
@@ -333,6 +336,13 @@ def validate_source(
 
 
 def validate_revision(value: Any, label: str, profile_name: str) -> list[dict[str, Any]]:
+    if not isinstance(value, dict):
+        fail(f"{label} must be an object")
+    schema = exact_int(value.get("schema_version"), f"{label}.schema_version")
+    if 1 <= schema < 4:
+        fail(f"schema_rebuild_required: {label} profile schema {schema}; rebuild as 4")
+    if schema != 4:
+        fail(f"{label} uses an unsupported schema")
     value = exact_keys(
         value,
         {
@@ -347,8 +357,6 @@ def validate_revision(value: Any, label: str, profile_name: str) -> list[dict[st
         },
         label,
     )
-    if exact_int(value["schema_version"], f"{label}.schema_version") != 3:
-        fail(f"{label} uses an unsupported schema")
     if exact_string(value["profile"], f"{label}.profile") != profile_name:
         fail(f"{label} names the wrong public profile")
     expected_architecture = {

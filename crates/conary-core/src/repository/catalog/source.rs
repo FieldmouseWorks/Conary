@@ -4,7 +4,7 @@
 
 use super::{
     CatalogArtifactV1, CatalogBindingV1, CatalogContentV1, CatalogScopeV1,
-    SOURCE_CATALOG_PROJECTION_VERSION_V2, SOURCE_SNAPSHOT_SCHEMA_V1, SourceMetadataObjectV1,
+    SOURCE_CATALOG_PROJECTION_VERSION_V3, SOURCE_SNAPSHOT_SCHEMA_V1, SourceMetadataObjectV1,
     SourceProvenanceV1, SourceSnapshotV1, SourceStreamV1,
 };
 use crate::error::{Error, Result};
@@ -169,7 +169,7 @@ pub(in crate::repository) fn bind_source_snapshot(
         repository_identity: authority.repository_identity,
         stream: authority.stream,
         stream_binding_sha256: authority.stream_binding_sha256,
-        parser_projection_version: SOURCE_CATALOG_PROJECTION_VERSION_V2,
+        parser_projection_version: SOURCE_CATALOG_PROJECTION_VERSION_V3,
         provenance: authority.provenance,
         authenticated_root: authority.authenticated_root,
         authenticated_objects: authority.authenticated_objects,

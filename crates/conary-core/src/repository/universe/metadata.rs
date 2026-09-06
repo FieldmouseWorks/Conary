@@ -174,7 +174,7 @@ fn require_exact_sha256(
 mod tests {
     use super::*;
     use crate::repository::catalog::{
-        CATALOG_CONTENT_SCHEMA_V1, CatalogArtifactV1, CatalogCountsV1, PROFILE_REVISION_SCHEMA_V3,
+        CATALOG_CONTENT_SCHEMA_V1, CatalogArtifactV1, CatalogCountsV1, PROFILE_REVISION_SCHEMA_V4,
         ProfileRevisionV2, ProfileSourceMemberV2, SourceStreamKindV1, SourceStreamV1,
     };
     use crate::repository::universe::{REMI_UNIVERSE_SCHEMA_V2, RemiUniverseProfileV2};
@@ -216,7 +216,7 @@ mod tests {
             .collect::<Vec<_>>();
         let source_evidence = members.len() as u64;
         let revision = ProfileRevisionV2 {
-            schema_version: PROFILE_REVISION_SCHEMA_V3,
+            schema_version: PROFILE_REVISION_SCHEMA_V4,
             profile: "fedora-44".to_string(),
             target_architecture:
                 crate::repository::supported_profiles::ProfileTargetArchitecture::X86_64,

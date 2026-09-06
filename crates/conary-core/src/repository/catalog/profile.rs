@@ -5,7 +5,7 @@
 use super::{
     CatalogBindingV1, CatalogCandidateWriter, CatalogContentV1, CatalogPackageOriginV1,
     CatalogPackageRecordV1, CatalogProfileCandidateScratchV1, CatalogProfileMemberScratchV1,
-    CatalogReader, CatalogScopeV1, CatalogSourceEvidenceV1, PROFILE_REVISION_SCHEMA_V3,
+    CatalogReader, CatalogScopeV1, CatalogSourceEvidenceV1, PROFILE_REVISION_SCHEMA_V4,
     ProfileRevisionV2, ProfileSourceMemberV2, SourceSnapshotV1,
 };
 use crate::error::{Error, Result};
@@ -332,7 +332,7 @@ fn bind_profile_revision(
             ))
         })?;
     let manifest = ProfileRevisionV2 {
-        schema_version: PROFILE_REVISION_SCHEMA_V3,
+        schema_version: PROFILE_REVISION_SCHEMA_V4,
         profile,
         target_architecture: supported.target_architecture(),
         projection_version,

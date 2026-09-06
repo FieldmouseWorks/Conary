@@ -163,8 +163,11 @@ def validate_input(root: Path, selected_profile: str) -> tuple[dict[str, Any], d
     revision = profile["revision"]
     if not isinstance(revision, dict):
         raise ValueError(f"{selected_profile} revision must be an object")
-    if revision.get("schema_version") != 3:
-        raise ValueError(f"{selected_profile} profile revision schema must be 3")
+    schema = revision.get("schema_version")
+    if isinstance(schema, int) and not isinstance(schema, bool) and 1 <= schema < 4:
+        raise ValueError(f"schema_rebuild_required: {selected_profile} profile revision; rebuild as schema 4")
+    if type(schema) is not int or schema != 4:
+        raise ValueError(f"{selected_profile} profile revision schema must be 4")
     target_architecture = revision.get("target_architecture")
     if (
         not isinstance(target_architecture, str)

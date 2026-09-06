@@ -447,11 +447,10 @@ impl CatalogAuthority {
 }
 
 fn deserialize_source_snapshot(resource: &RemiCatalogResource) -> Result<SourceSnapshotV1> {
-    let manifest: SourceSnapshotV1 = serde_json::from_str(&resource.manifest_json)
-        .context("parse SourceSnapshotV1 manifest JSON")?;
-    manifest
-        .validate()
-        .context("validate SourceSnapshotV1 manifest")?;
+    let manifest = conary_core::repository::catalog::decode_source_snapshot_manifest(
+        resource.manifest_json.as_bytes(),
+    )
+    .context("classify and decode current SourceSnapshotV1 manifest")?;
     let canonical = conary_core::json::canonical_json(&manifest)
         .map_err(anyhow::Error::msg)
         .context("canonicalize SourceSnapshotV1 manifest")?;

@@ -6,7 +6,7 @@ use crate::db::models::{Repository, RepositoryPackage, RepositoryProvide};
 use crate::repository::catalog::{
     CATALOG_CONTENT_SCHEMA_V1, CatalogContentV1, CatalogPackageOriginV1, CatalogPackageRecordV1,
     CatalogProvideRecordV1, CatalogRequirementAtomV1, CatalogRequirementGroupV1,
-    CatalogSourceEvidenceV1, PROFILE_REVISION_SCHEMA_V3, ProfileRevisionV2, ProfileSourceMemberV2,
+    CatalogSourceEvidenceV1, PROFILE_REVISION_SCHEMA_V4, ProfileRevisionV2, ProfileSourceMemberV2,
     SourceStreamKindV1, SourceStreamV1, write_catalog_candidate,
 };
 use crate::repository::dependency_model::{
@@ -173,7 +173,7 @@ fn build_index(
     .unwrap();
     let binding = write_catalog_candidate(&catalog_path, &content).unwrap();
     let revision = ProfileRevisionV2 {
-        schema_version: PROFILE_REVISION_SCHEMA_V3,
+        schema_version: PROFILE_REVISION_SCHEMA_V4,
         profile: PROFILE.to_string(),
         target_architecture:
             crate::repository::supported_profiles::ProfileTargetArchitecture::X86_64,
@@ -508,7 +508,7 @@ fn private_index_replay_has_fixed_peak_rss_across_independent_cardinality() {
     let evidence = profile_evidence();
     let binding = writer.finish(evidence).unwrap();
     let revision = ProfileRevisionV2 {
-        schema_version: PROFILE_REVISION_SCHEMA_V3,
+        schema_version: PROFILE_REVISION_SCHEMA_V4,
         profile: PROFILE.to_string(),
         target_architecture:
             crate::repository::supported_profiles::ProfileTargetArchitecture::X86_64,

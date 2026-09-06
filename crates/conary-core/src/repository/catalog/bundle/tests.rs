@@ -3,7 +3,7 @@
 use super::*;
 use crate::repository::catalog::{
     CatalogArtifactV1, CatalogCandidateWriter, CatalogContentV1, CatalogPackageOriginV1,
-    CatalogPackageRecordV1, CatalogScopeV1, CatalogSourceEvidenceV1, PROFILE_REVISION_SCHEMA_V3,
+    CatalogPackageRecordV1, CatalogScopeV1, CatalogSourceEvidenceV1, PROFILE_REVISION_SCHEMA_V4,
     ProfileSourceMemberV2, SOURCE_SNAPSHOT_SCHEMA_V1, SourceEcosystemV1,
     SourceMetadataObjectRoleV1, SourceMetadataObjectV1, SourceProvenanceV1, SourceStreamKindV1,
     SourceStreamV1, logical_verification_passes_for_test, physical_verification_passes_for_test,
@@ -126,7 +126,7 @@ fn source_manifest(binding: &CatalogBindingV1) -> SourceSnapshotV1 {
             identity: "44".to_string(),
         },
         stream_binding_sha256: digest('e'),
-        parser_projection_version: crate::repository::catalog::SOURCE_CATALOG_PROJECTION_VERSION_V2,
+        parser_projection_version: crate::repository::catalog::SOURCE_CATALOG_PROJECTION_VERSION_V3,
         provenance: SourceProvenanceV1 {
             ecosystem: SourceEcosystemV1::Rpm,
             metadata_url: "https://example.test/repository".to_string(),
@@ -182,7 +182,7 @@ fn profile_content(source_snapshot_sha256: &str) -> CatalogContentV1 {
 
 fn profile_manifest(binding: &CatalogBindingV1, source_snapshot_sha256: &str) -> ProfileRevisionV2 {
     ProfileRevisionV2 {
-        schema_version: PROFILE_REVISION_SCHEMA_V3,
+        schema_version: PROFILE_REVISION_SCHEMA_V4,
         profile: "fedora-44".to_string(),
         target_architecture:
             crate::repository::supported_profiles::ProfileTargetArchitecture::X86_64,
@@ -991,7 +991,7 @@ fn profile_bundle_rejects_mixed_member_evidence() {
     .unwrap();
     let binding = write_catalog_candidate(candidate.join(CATALOG_FILE_NAME), &content).unwrap();
     let manifest = ProfileRevisionV2 {
-        schema_version: PROFILE_REVISION_SCHEMA_V3,
+        schema_version: PROFILE_REVISION_SCHEMA_V4,
         profile: "fedora-44".to_string(),
         target_architecture:
             crate::repository::supported_profiles::ProfileTargetArchitecture::X86_64,

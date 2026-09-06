@@ -12,7 +12,7 @@ use crate::ccs::signing::SigningKeyPair;
 use crate::db::models::{Repository, RepositoryPackage};
 use crate::repository::catalog::{
     CATALOG_CONTENT_SCHEMA_V1, CatalogContentV1, CatalogPackageOriginV1, CatalogPackageRecordV1,
-    CatalogProvideRecordV1, CatalogScopeV1, CatalogSourceEvidenceV1, PROFILE_REVISION_SCHEMA_V3,
+    CatalogProvideRecordV1, CatalogScopeV1, CatalogSourceEvidenceV1, PROFILE_REVISION_SCHEMA_V4,
     ProfileRevisionV2, ProfileSourceMemberV2, SourceStreamKindV1, SourceStreamV1,
     write_catalog_candidate,
 };
@@ -166,7 +166,7 @@ fn publish_bundle(
     let binding = write_catalog_candidate(&catalog_path, &content).unwrap();
     let catalog_bytes = fs::read(&catalog_path).unwrap();
     let revision = ProfileRevisionV2 {
-        schema_version: PROFILE_REVISION_SCHEMA_V3,
+        schema_version: PROFILE_REVISION_SCHEMA_V4,
         profile: PROFILE.to_string(),
         target_architecture:
             crate::repository::supported_profiles::ProfileTargetArchitecture::X86_64,
