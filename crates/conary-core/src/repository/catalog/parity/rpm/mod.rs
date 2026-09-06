@@ -905,7 +905,5 @@ fn capability_kind(kind: RepositoryCapabilityKind) -> &'static str {
 }
 
 fn canonical_rpm_evr(value: &str) -> Result<&str> {
-    let value = crate::repository::rpm_dependency::canonicalize_source_rpm_evr(value)
-        .map_err(Error::ParseError)?;
-    Ok(value.strip_prefix("0:").unwrap_or(value))
+    crate::repository::rpm_dependency::canonicalize_native_rpm_evr(value).map_err(Error::ParseError)
 }

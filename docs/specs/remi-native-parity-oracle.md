@@ -2,7 +2,7 @@
 title: Remi native full-catalog parity oracle
 summary: Define single-walk producer-bound strict native parity lanes with live progress and independent diagnostic retention, bounded native ALPM provider probing, selective same-export assembly, and deterministic bounded-parallel private collect-all resolution surveys for one complete immutable profile candidate
 last_updated: 2026-09-06
-revision: 80
+revision: 81
 status: active
 ---
 
@@ -303,6 +303,10 @@ prerequisite group hash. Persisted source catalogs and oracle schemas do not
 change; no source declarations are removed or rewritten. The agreement check
 uses the RPM source grammar for retained source text, so empty serialized epochs
 are decoded before comparison with the strict stored expression.
+After agreement, explicit zero epochs are omitted from every projected operand
+and its atom index using the native producer's shared EVR spelling function.
+Positive epochs and source metadata remain unchanged, including inside
+conditional, alternative, and same-package expressions.
 
 The same projection decodes unversioned atomic `packageand(...)` Supplements
 through pinned libsolv's

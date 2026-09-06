@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-06
-revision: 65
+revision: 66
 summary: Describe package-variant selection, source identity, architecture and ABI admission, supported profiles, signed Remi universes, adoption, dependency acquisition, and lifecycle handoff.
 ---
 
@@ -527,7 +527,9 @@ Native parity preserves those source declarations in the catalog while
 projecting libsolv's exact prerequisite precedence in
 `repository/catalog/parity/rpm_requirements.rs`. Package comparison and the
 ephemeral candidate resolver share that projection, including canonical rich
-dependency spelling from `repository/rpm_dependency/render.rs`. The
+dependency spelling from `repository/rpm_dependency/render.rs`. Its
+`rpm_requirements/epochs.rs` owner applies shared native EVR spelling to every
+operand and atom-index version while preserving positive epochs. The
 [native parity contract](../specs/remi-native-parity-oracle.md) owns the pinned
 rule and the requirement-hash binding; lifecycle consumers keep the original
 source records.

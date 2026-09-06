@@ -3,6 +3,92 @@
 use super::*;
 
 #[test]
+fn source_zero_epoch_projection_matches_native_expression_and_atom_index() {
+    for (kind, tag, source_text) in [
+        (
+            RepositoryRequirementKind::Depends,
+            "requires",
+            "(library = 0:1.0 if enabled)",
+        ),
+        (
+            RepositoryRequirementKind::Depends,
+            "requires",
+            "(a >= 0:1 and b <= 0:2)",
+        ),
+        (
+            RepositoryRequirementKind::Depends,
+            "requires",
+            "(a > 0:1 or b < 0:2)",
+        ),
+        (
+            RepositoryRequirementKind::Depends,
+            "requires",
+            "(a = 0:1 if b = 0:2 else c = 0:3)",
+        ),
+        (
+            RepositoryRequirementKind::Conflicts,
+            "conflicts",
+            "(a = 0:1 unless b = 0:2 else c = 0:3)",
+        ),
+        (
+            RepositoryRequirementKind::Depends,
+            "requires",
+            "(a = 0:1 with b = 0:2)",
+        ),
+        (
+            RepositoryRequirementKind::Depends,
+            "requires",
+            "(a = 0:1 without b = 2:2)",
+        ),
+        (
+            RepositoryRequirementKind::Depends,
+            "requires",
+            "(a = 0:1 and a = 1)",
+        ),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let checksum = digest('a');
+        let escaped = source_text.replace('<', "&lt;").replace('>', "&gt;");
+        let format = format!("<rpm:{tag}><rpm:entry name=\"{escaped}\"/></rpm:{tag}>");
+        let mut package = PackageFixture::simple("zero-epoch-projection", &checksum);
+        package.format = &format;
+        let metadata = vec![write_metadata(directory.path(), "fedora-core", &[package])];
+        let snapshots = vec![source_snapshot(
+            "fedora-core",
+            &metadata[0].0,
+            &metadata[0].1,
+        )];
+        let mut profile = profile(&snapshots);
+        profile.counts.packages = 1;
+        let output = directory.path().join("oracle");
+        produce_rpm_parity_oracle(&profile, &inputs(&snapshots, &metadata), &output).unwrap();
+        let reader = verify_native_parity_oracle_bundle(&output, &profile).unwrap();
+        reader.for_each_package(|row| {
+            assert_eq!(row.requirement_groups.len(), 1);
+            let mut source = row.requirement_groups[0].clone();
+            let expression = crate::repository::rpm_dependency::parse_source_rpm_dependency(
+                RepositoryRequirementKind::Depends, source_text,
+            ).unwrap();
+            let template = source.atoms[0].clone();
+            source.atoms = expression.atoms().into_iter().map(|clause| {
+                let mut atom = template.clone();
+                atom.capability.clone_from(&clause.name);
+                atom.version_constraint.clone_from(&clause.version_constraint);
+                atom
+            }).collect();
+            source.expression_json = serde_json::to_string(&expression).unwrap();
+            source.native_text = Some(source_text.into());
+            source.canonicalize()?;
+            let projected = crate::repository::catalog::parity::rpm_requirements::native_requirement_groups(
+                VersionScheme::Rpm, vec![source],
+            )?;
+            assert_eq!(projected, row.requirement_groups, "{source_text}");
+            Ok(())
+        }).unwrap();
+    }
+}
+
+#[test]
 fn source_supplement_projection_matches_pinned_packageand_grammar() {
     for source_text in [
         "packageand(prboom-plus:bash)".to_string(),

@@ -14,6 +14,7 @@ use crate::repository::rpm_dependency::{
 };
 use crate::repository::versioning::VersionScheme;
 
+mod epochs;
 mod packageand;
 
 pub(super) fn native_requirement_groups(
@@ -38,7 +39,9 @@ pub(super) fn native_requirement_groups(
                     "RPM requirement native text disagrees with its typed expression".into(),
                 ));
             }
-            if packageand::project(kind, &mut expression, &mut group.atoms)? {
+            let mut changed = packageand::project(kind, &mut expression, &mut group.atoms)?;
+            changed |= epochs::project(&mut expression, &mut group.atoms)?;
+            if changed {
                 group.expression_json = serde_json::to_string(&expression)
                     .map_err(|error| Error::ParseError(error.to_string()))?;
                 group.canonicalize()?;

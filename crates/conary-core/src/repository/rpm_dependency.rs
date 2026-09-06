@@ -381,6 +381,12 @@ pub(crate) fn canonicalize_source_rpm_evr(version: &str) -> Result<&str, String>
     Ok(version)
 }
 
+/// Spell an EVR as the native RPM oracle does, with epoch zero omitted.
+pub(crate) fn canonicalize_native_rpm_evr(version: &str) -> Result<&str, String> {
+    let version = canonicalize_source_rpm_evr(version)?;
+    Ok(version.strip_prefix("0:").unwrap_or(version))
+}
+
 fn canonical_comparison(token: &str) -> Option<&'static str> {
     match token {
         "<=" | "=<" => Some("<="),
