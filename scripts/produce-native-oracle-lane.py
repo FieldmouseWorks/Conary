@@ -116,6 +116,15 @@ def producer_binary(path: Path, expected_name: str, label: str) -> dict[str, str
     return {"name": expected_name, "sha256": sha256_file(path)}
 
 
+def require_current_version(found: Any, current: int, label: str) -> None:
+    if type(found) is not int:
+        raise ValueError(f"{label} must be an integer")
+    if 1 <= found < current:
+        raise ValueError(f"schema_rebuild_required: {label} {found}; rebuild as {current}")
+    if found != current:
+        raise ValueError(f"{label} must be {current}")
+
+
 def validate_input(root: Path, selected_profile: str) -> tuple[dict[str, Any], dict[str, Any], str]:
     plain_directory(root, "native-oracle input root")
     names = sorted(entry.name for entry in root.iterdir())
@@ -132,8 +141,22 @@ def validate_input(root: Path, selected_profile: str) -> tuple[dict[str, Any], d
         not isinstance(profiles, list)
         or any(not isinstance(profile, dict) for profile in profiles)
         or any(not isinstance(profile.get("revision"), dict) for profile in profiles)
-        or [profile["revision"].get("profile") for profile in profiles] != list(PUBLIC_PROFILES)
     ):
+        raise ValueError("native-oracle input requires canonical Fedora, Ubuntu, and Arch order")
+    # Classify every envelope before profile ordering, selection, or current-body access.
+    for ordinal, profile in enumerate(profiles):
+        schema = profile["revision"].get("schema_version")
+        require_current_version(schema, 4, f"profile revision {ordinal} schema")
+    for ordinal, profile in enumerate(profiles):
+        sources = profile.get("sources")
+        if not isinstance(sources, list):
+            raise ValueError(f"profile {ordinal} sources must be an array")
+        for source_ordinal, source in enumerate(sources):
+            label = f"profile {ordinal} source {source_ordinal}"
+            if not isinstance(source, dict) or type(source.get("schema_version")) is not int or source["schema_version"] != 1:
+                raise ValueError(f"{label} snapshot schema must be 1")
+            require_current_version(source.get("parser_projection_version"), 3, f"{label} parser projection")
+    if [profile["revision"].get("profile") for profile in profiles] != list(PUBLIC_PROFILES):
         raise ValueError("native-oracle input requires canonical Fedora, Ubuntu, and Arch order")
 
     inventory: list[tuple[str, int]] = []
@@ -161,13 +184,6 @@ def validate_input(root: Path, selected_profile: str) -> tuple[dict[str, Any], d
     profile = next(profile for profile in profiles if profile["revision"]["profile"] == selected_profile)
     profile = require_keys(profile, {"profile_revision_sha256", "revision", "sources"}, f"{selected_profile} input")
     revision = profile["revision"]
-    if not isinstance(revision, dict):
-        raise ValueError(f"{selected_profile} revision must be an object")
-    schema = revision.get("schema_version")
-    if isinstance(schema, int) and not isinstance(schema, bool) and 1 <= schema < 4:
-        raise ValueError(f"schema_rebuild_required: {selected_profile} profile revision; rebuild as schema 4")
-    if type(schema) is not int or schema != 4:
-        raise ValueError(f"{selected_profile} profile revision schema must be 4")
     target_architecture = revision.get("target_architecture")
     if (
         not isinstance(target_architecture, str)
