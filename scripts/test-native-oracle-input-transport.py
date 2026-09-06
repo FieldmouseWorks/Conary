@@ -264,6 +264,23 @@ class NativeOracleTransportTest(unittest.TestCase):
                     "source", "arch", {},
                 )
 
+    def test_all_envelopes_precede_current_transport_body_validation(self) -> None:
+        verifier = runpy.run_path(str(VERIFIER))
+        for retired in ("profile", "source"):
+            for ordinal in (1, 2):
+                with self.subTest(retired=retired, ordinal=ordinal):
+                    manifest, _, candidates = build_fixture()
+                    del manifest["profiles"][0]["revision"]["members"]
+                    if retired == "profile":
+                        manifest["profiles"][ordinal]["revision"] = {"schema_version": 3}
+                    else:
+                        manifest["profiles"][ordinal]["sources"][0] = {
+                            "schema_version": 1, "parser_projection_version": 2,
+                        }
+                    expected = [tuple(value.split("=", 1)) for value in candidates]
+                    with self.assertRaisesRegex(ValueError, "schema_rebuild_required"):
+                        verifier["validate_manifest"](manifest, expected)
+
     def test_reopens_exact_transport_and_emits_sanitized_evidence(self) -> None:
         transport = self.root / "input.tar"
         write_transport(transport, self.export_id, self.manifest, self.objects)
