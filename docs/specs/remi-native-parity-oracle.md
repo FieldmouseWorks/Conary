@@ -2,7 +2,7 @@
 title: Remi native full-catalog parity oracle
 summary: Define single-walk producer-bound strict native parity lanes with live progress and independent diagnostic retention, bounded native ALPM provider probing, selective same-export assembly, and deterministic bounded-parallel private collect-all resolution surveys for one complete immutable profile candidate
 last_updated: 2026-09-06
-revision: 79
+revision: 80
 status: active
 ---
 
@@ -285,6 +285,22 @@ association. It reparses that lossless text through the canonical RPM grammar
 and requires typed agreement. The typed source projection canonicalizes
 RPM's empty serialized epoch and explicit epoch zero to omitted epoch zero,
 while retaining positive epochs and the strict persisted grammar.
+Source catalogs retain the original requirement declarations and text. Native
+package comparison and the ephemeral Conary resolver database share the RPM
+projection in `repository/catalog/parity/rpm_requirements.rs`: source text must
+parse to its stored typed expression before the shared
+`repository/rpm_dependency/render.rs` renderer supplies lossless canonical
+spelling. Exact duplicate native groups collapse. An ordinary requirement
+collapses into an identical prerequisite only when every other projected fact
+agrees. This follows pinned libsolv 0.7.36
+[`adddep`](https://github.com/openSUSE/libsolv/blob/0.7.36/ext/repo_rpmmd.c)
+and [`repo_addid_dep`](https://github.com/openSUSE/libsolv/blob/0.7.36/src/repo.c),
+which unify exact dependency IDs on the prerequisite side regardless of source
+order. Different versions, expressions, atoms, or metadata remain distinct;
+Debian and ALPM groups retain exact comparison. Applying the same projection
+before candidate resolution binds missing-dependency evidence to the native
+prerequisite group hash. Persisted source catalogs and oracle schemas do not
+change; no source declarations are removed or rewritten.
 Exact-identity duplicates obey profile
 precedence only when every projected fact agrees. A contradictory duplicate
 fails the complete crawl. The private SQLite spool, canonical bundle write,

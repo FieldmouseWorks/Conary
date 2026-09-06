@@ -66,6 +66,7 @@ pub(super) fn native_requirement_groups(
     }
     // Canonical spelling can change the canonical row ordering.
     projected.sort_by(|left, right| left.0.cmp(&right.0));
+    projected.dedup_by(|left, right| left.0 == right.0);
     Ok(projected.into_iter().map(|(_, group)| group).collect())
 }
 
