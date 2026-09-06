@@ -389,3 +389,21 @@ fn altered_durable_logical_attestation_is_discarded_before_reuse() {
     assert!(fixture.cache.lookup(&fixture.inputs).unwrap().is_none());
     assert!(!entry.exists());
 }
+
+#[test]
+fn retired_parser_projection_cannot_reuse_an_otherwise_identical_cache_entry() {
+    let fixture = fixture();
+    fixture
+        .cache
+        .publish(&fixture.inputs, &fixture.binding, &fixture.candidate)
+        .unwrap();
+    let current = fixture.cache.key(&fixture.inputs).unwrap();
+    assert_eq!(current.parser_projection_version, 3);
+    let current_path = fixture.cache.entry_path(&current).unwrap();
+    let mut retired = current;
+    retired.parser_projection_version = 2;
+    let retired_path = fixture.cache.entry_path(&retired).unwrap();
+    fs::rename(&current_path, &retired_path).unwrap();
+    assert!(fixture.cache.lookup(&fixture.inputs).unwrap().is_none());
+    assert!(retired_path.exists());
+}

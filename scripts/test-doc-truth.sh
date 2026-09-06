@@ -119,7 +119,7 @@ const PROFILE_CATALOG_PROJECTION_VERSION: u32 = 4;
 EOF
 
     cat > "$root/scripts/verify-native-oracle-input-transport.py" <<'EOF'
-if value["schema_version"] != 3:
+if schema != 4:
     raise ValueError("profile revision schema is obsolete")
 value["target_architecture"]
 EOF

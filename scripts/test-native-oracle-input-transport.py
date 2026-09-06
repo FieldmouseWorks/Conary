@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import hashlib
+import runpy
 import io
 import json
 from pathlib import Path
@@ -244,6 +245,24 @@ class NativeOracleTransportTest(unittest.TestCase):
     def assert_rejected(self, result: subprocess.CompletedProcess[str], needle: str) -> None:
         self.assertNotEqual(result.returncode, 0, result.stdout)
         self.assertIn(needle, result.stderr)
+
+    def test_obsolete_envelopes_require_rebuild_before_body_validation(self) -> None:
+        verifier = runpy.run_path(str(VERIFIER))
+        for version in (1, 2, 3):
+            with self.subTest(profile_schema=version), self.assertRaisesRegex(
+                ValueError, "schema_rebuild_required"
+            ):
+                verifier["validate_revision"](
+                    {"schema_version": version, "retired_body": None}, "revision", "arch"
+                )
+        for version in (1, 2):
+            with self.subTest(source_projection=version), self.assertRaisesRegex(
+                ValueError, "schema_rebuild_required"
+            ):
+                verifier["validate_source"](
+                    {"schema_version": 1, "parser_projection_version": version, "retired_body": None},
+                    "source", "arch", {},
+                )
 
     def test_reopens_exact_transport_and_emits_sanitized_evidence(self) -> None:
         transport = self.root / "input.tar"
