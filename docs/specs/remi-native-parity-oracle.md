@@ -2,7 +2,7 @@
 title: Remi native full-catalog parity oracle
 summary: Define single-walk producer-bound strict native parity lanes with live progress and independent diagnostic retention, bounded native ALPM provider probing, selective same-export assembly, and deterministic bounded-parallel private collect-all resolution surveys for one complete immutable profile candidate
 last_updated: 2026-09-06
-revision: 83
+revision: 84
 status: active
 ---
 
@@ -237,6 +237,14 @@ match the member binding. Separately, the database bytes must match the
 two digests describe different objects and are never substituted for one
 another. The snapshot's content URL, or metadata URL when no content URL is
 declared, owns package download authority.
+
+ALPM and Debian package producers populate their bounded private SQLite row
+spools in one transaction. Duplicate selection, contradiction checks, and
+complete native-row accounting finish before that transaction commits and the
+output directory is created. Final oracle bytes still use the synchronized
+streaming writer and complete independent bundle reopen. The temporary staging
+transaction changes no persisted schema, native projection version, or output
+identity.
 
 Build and invoke the host-linked helper explicitly:
 

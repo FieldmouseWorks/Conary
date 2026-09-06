@@ -488,6 +488,7 @@ fn producer_rejects_conflicting_exact_identity() {
 
     assert!(matches!(error, Error::ConflictError(_)));
     assert!(error.to_string().contains("contradictory package identity"));
+    assert!(!directory.path().join("oracle").exists());
 }
 
 #[test]

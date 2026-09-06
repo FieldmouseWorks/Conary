@@ -65,8 +65,11 @@ pub fn produce_alpm_parity_oracle(
 ) -> Result<NativeParityOracleV1> {
     let (staging, alpm) = open_alpm(profile, inputs, &[])?;
 
-    let spool = Connection::open(staging.path().join("oracle-rows.sqlite"))?;
+    let mut spool = Connection::open(staging.path().join("oracle-rows.sqlite"))?;
     spool.execute_batch(CREATE_SPOOL)?;
+    // The spool is private staging; commit the selected cohort once before
+    // publishing through the independently synchronized oracle writer.
+    let transaction = spool.transaction()?;
     let mut native_packages = 0_u64;
     let mut selected_packages = 0_u64;
     let mut exact_duplicates = 0_u64;
@@ -90,7 +93,7 @@ pub fn produce_alpm_parity_oracle(
             let bytes = crate::json::canonical_json(&row).map_err(|error| {
                 Error::ParseError(format!("serialize ALPM parity package row: {error}"))
             })?;
-            let existing: Option<Vec<u8>> = spool
+            let existing: Option<Vec<u8>> = transaction
                 .query_row(
                     "SELECT row_json FROM packages WHERE package_key_sha256 = ?1",
                     [&row.package_key_sha256],
@@ -117,7 +120,7 @@ pub fn produce_alpm_parity_oracle(
                 )?;
                 continue;
             }
-            spool.execute(
+            transaction.execute(
                 "INSERT INTO packages (package_key_sha256, row_json) VALUES (?1, ?2)",
                 params![row.package_key_sha256, bytes],
             )?;
@@ -139,6 +142,8 @@ pub fn produce_alpm_parity_oracle(
             "ALPM package accounting lost a native row".to_string(),
         ));
     }
+
+    transaction.commit()?;
 
     let implementation = NativeParityImplementationV1 {
         ecosystem: NativeParityEcosystemV1::Alpm,
