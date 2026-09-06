@@ -28,6 +28,8 @@ mod resolution_producer;
 pub use resolution_producer::{NativeResolutionStrictError, NativeResolutionStrictResult};
 mod resolution_root;
 mod resolution_survey;
+mod rpm_provides;
+mod rpm_requirements;
 mod support;
 mod survey_support;
 

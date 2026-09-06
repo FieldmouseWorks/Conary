@@ -12,6 +12,9 @@ use super::dependency_model::{
     RepositoryRequirementKind,
 };
 
+mod render;
+pub(crate) use render::canonical_rpm_dependency_text;
+
 const CHECK_ACTIVE: u8 = 1 << 0;
 const CHECK_NO_WITH: u8 = 1 << 1;
 const CHECK_NO_AND: u8 = 1 << 2;
@@ -376,6 +379,12 @@ pub(crate) fn canonicalize_source_rpm_evr(version: &str) -> Result<&str, String>
         return Err("multiple epoch separators are not allowed".to_string());
     }
     Ok(version)
+}
+
+/// Spell an EVR as the native RPM oracle does, with epoch zero omitted.
+pub(crate) fn canonicalize_native_rpm_evr(version: &str) -> Result<&str, String> {
+    let version = canonicalize_source_rpm_evr(version)?;
+    Ok(version.strip_prefix("0:").unwrap_or(version))
 }
 
 fn canonical_comparison(token: &str) -> Option<&'static str> {

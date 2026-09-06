@@ -23,6 +23,8 @@ use crate::repository::{
     OpenPgpTrustRoot, RepositoryParserConfig, RepositoryTrustPolicy, RpmMetadataAuthority,
 };
 
+mod prerequisites;
+mod provides;
 mod split_provides;
 
 #[derive(Clone)]
