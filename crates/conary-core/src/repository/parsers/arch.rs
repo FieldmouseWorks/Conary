@@ -151,6 +151,13 @@ impl ArchParser {
     /// Build structured requirement groups from a depends file.
     fn parse_structured_depends(&self, content: &str) -> Result<Vec<RepositoryRequirementGroup>> {
         let fields = self.parse_desc_file(content)?;
+        self.parse_dependency_fields(&fields)
+    }
+
+    fn parse_dependency_fields(
+        &self,
+        fields: &HashMap<String, Vec<String>>,
+    ) -> Result<Vec<RepositoryRequirementGroup>> {
         let mut groups = Vec::new();
 
         if let Some(deps) = fields.get("DEPENDS") {
@@ -369,16 +376,18 @@ impl ArchParser {
             serde_json::Value::String("arch".to_string()),
         );
 
-        let mut requirements = depends_content
-            .map(|content| self.parse_structured_depends(content))
-            .transpose()?
-            .unwrap_or_default();
         let depends_fields = depends_content
             .map(|content| self.parse_desc_file(content))
             .transpose()?;
         let relation_field_sets = depends_fields
             .as_ref()
             .map_or_else(|| vec![desc_fields], |fields| vec![desc_fields, fields]);
+        // Pinned libalpm sync_db_read reads dependency tags in both desc
+        // and depends fragments; fragment names do not select relation kinds.
+        let mut requirements = Vec::new();
+        for fields in &relation_field_sets {
+            requirements.extend(self.parse_dependency_fields(fields)?);
+        }
         requirements.extend(self.parse_relation_fields(&relation_field_sets)?);
 
         let structured_provides = self.build_structured_provides(&name, &version, desc_fields)?;
