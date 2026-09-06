@@ -179,10 +179,9 @@
 			<h2 class="section-heading">Working on the three supported hosts.</h2>
 			<p class="truth-note">
 				Proof runs in the integration harness, inside Fedora, Ubuntu, and Arch containers
-				against a harness-served fixture repository, on the current tree; the
-				ordinary-package gate passed after {previewRelease.tag} was cut. That release is immutable
-				install-and-bootstrap evidence; the behaviour below is not a claim about the
-				artifact itself.
+				against a harness-served fixture repository, on the current tree. The
+				<a href={previewRelease.matrixUrl}>release matrix</a> records the artifact proof
+				and its limits for {previewRelease.tag}.
 			</p>
 			<ul class="truth-list">
 				<li>Installing RPM, DEB, and Arch artifacts through typed lifecycle, dependency, payload, and configuration contracts, on any of the three hosts.</li>

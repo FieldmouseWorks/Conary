@@ -35,9 +35,9 @@
 				<h2 class="category-title">The cross-distro package loop</h2>
 				<p>
 					Exercised by the integration harness inside containers for all three supported
-					distributions, against a harness-served fixture repository; the ordinary-package
-					gate passed on the tree after {previewRelease.tag} was cut. That release is
-					immutable install-and-bootstrap evidence and predates this proof. Still
+					distributions, against a harness-served fixture repository. The
+					<a href={previewRelease.matrixUrl}>release matrix</a> records the artifact proof
+					and its limits for {previewRelease.tag}. Still
 					pre-alpha: proven means it ran, not that it is safe on a machine you rely on.
 				</p>
 			</div>

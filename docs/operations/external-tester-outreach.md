@@ -1,9 +1,9 @@
 ---
-last_updated: 2026-09-05
-revision: 13
+last_updated: 2026-09-06
+revision: 14
 status: postponed
 target_release: unassigned
-summary: Postponed multi-venue launch packet for the first cross-distro tester loop
+summary: Align the postponed launch packet with published v0.17.1 while tester authority remains unassigned
 ---
 
 # External Tester Launch Packet
@@ -11,14 +11,14 @@ summary: Postponed multi-venue launch packet for the first cross-distro tester l
 > **POSTPONED; NO NEW DATE IS ASSIGNED:** the current qualifying milestone is
 > 0/10. The two earlier supported-host reports remain useful adoption and
 > onboarding evidence, but neither installed a source package whose format
-> differed from the host's native format. Release `v0.16.1` is published and
+> differed from the host's native format. Release `v0.17.1` is published and
 > artifact-verified and W7's #110 ordinary-package gate passed. The canonical
 > [launch status](../roadmaps/launch-status.json) assigns no tester release
 > while its engineering gates remain open. Do not publish the copy below until
 > that status assigns an exact release and the external cached-history,
 > guided-pilot, and venue-eligibility gates are closed.
 
-The venue copy below references the current `v0.16.1` release as an
+The venue copy below references the current `v0.17.1` release as an
 unpublishable draft, not as assigned tester authority. The maintainer re-pins
 the exact current release if necessary and assigns fresh dates only after every
 remaining gate closes, then posts manually and remains available to answer
@@ -75,7 +75,7 @@ Agent-assisted walkthrough, including download and checksum verification:
 https://github.com/FieldmouseWorks/Conary/blob/main/docs/guides/agent-assisted-tester-loop.md
 
 Pinned release:
-https://github.com/FieldmouseWorks/Conary/releases/tag/v0.16.1
+https://github.com/FieldmouseWorks/Conary/releases/tag/v0.17.1
 
 Privacy-safe feedback form:
 https://github.com/FieldmouseWorks/Conary/issues/new?template=pre_alpha_feedback.md
@@ -121,7 +121,7 @@ Repository:
 https://github.com/FieldmouseWorks/Conary
 
 Pinned release:
-https://github.com/FieldmouseWorks/Conary/releases/tag/v0.16.1
+https://github.com/FieldmouseWorks/Conary/releases/tag/v0.17.1
 
 I'm interested both in product defects and in whether repo-owned instructions
 make Codex useful as a supervised systems-test operator. Exact failures,
@@ -158,7 +158,7 @@ https://github.com/FieldmouseWorks/Conary/blob/main/docs/guides/agent-assisted-t
 
 Repository and pinned release:
 https://github.com/FieldmouseWorks/Conary
-https://github.com/FieldmouseWorks/Conary/releases/tag/v0.16.1
+https://github.com/FieldmouseWorks/Conary/releases/tag/v0.17.1
 
 The useful feedback is where a source-native contract fails, whether Conary
 explains it precisely, whether install/update/remove behave consistently, and
@@ -189,16 +189,15 @@ failed attempts are useful evidence.
   reports as non-qualifying historical evidence.
 - [x] Rewrite the venue copy around the cross-distro package loop.
 - [x] Retire the passed 2026-07-20 through 2026-07-22 dates.
-- [x] Publish immutable `v0.16.1` with RPM, DEB, Arch, CCS, checksums, and the
+- [x] Publish immutable `v0.17.1` with RPM, DEB, Arch, CCS, checksums, and the
   required signature and installed-binary evidence.
-- [x] Record exact cross-distro install/query/update-preview/remove proof for
-  the released binary on supported hosts.
-- [x] Deploy the exact release sites and independently verify live status and
-  body claims.
-- [x] Update the release artifact matrix, roadmap W8, and launch status with
-  exact
-  release, deployment, and Remi population evidence.
-- [x] Publish and independently verify the synchronized `v0.16.1` suite that
+- [x] Record three-host artifact proof with published-binary hook rejection
+  and hook-free operations; mutations use the separate integration harness.
+- [ ] Bind real-mount mutation proof to the published artifact through #848.
+- [ ] Complete the exact release deployment and independently verify live
+  status, site body claims, and Remi population; retain the terminal evidence
+  in the release artifact matrix and roadmap.
+- [x] Publish and independently verify the synchronized `v0.17.1` suite that
   contains the supported-host fixes, then replace every release version and
   URL in this draft.
 - [x] Pass #110's ordinary-package corpus gate through PR #487 without treating

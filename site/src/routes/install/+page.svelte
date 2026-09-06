@@ -72,9 +72,8 @@
 					<h2 id="status-panel-title">Released, not yet open for external testing.</h2>
 					<p>
 						{previewRelease.tag} is a real, immutable, signed release whose packages
-						installed through the signed bootstrap protocol on all three hosts. It is
-						historical release evidence: the ordinary-package gate passed on the tree
-						after it was cut, and the suite predates the current signed-universe client.
+						installed through the signed bootstrap protocol on all three hosts, as recorded
+						in the <a href={previewRelease.matrixUrl}>release matrix</a>.
 						No release is assigned as tester authority while the remaining launch gates
 						are open. Inspecting it on a disposable host is fine; it is not a tester run
 						and does not count toward the milestone.
