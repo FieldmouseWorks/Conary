@@ -41,8 +41,8 @@ fn source_provider_duplicates_match_native_ordered_identity_set() {
                 }
             }
             declarations.sort_by_key(|(index, _)| *index);
-        assert_eq!(declarations.len(), 5);
-        for (source_index, native_index) in [0, 1, 0, 2, 2, 1, 3, 4].into_iter().enumerate() {
+            assert_eq!(declarations.len(), 5);
+            for (source_index, native_index) in [0, 1, 0, 2, 2, 1, 3, 4].into_iter().enumerate() {
                 let mut provide = declarations[native_index].1.clone();
                 provide.provenance = CapabilityProvenance::SourceDeclared {
                     format: SourcePackageFormat::Rpm,
