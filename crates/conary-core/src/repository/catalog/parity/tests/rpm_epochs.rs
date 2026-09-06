@@ -90,7 +90,7 @@ fn zero_epochs_project_every_operand_without_changing_positive_epochs_or_metadat
             "(a = 1 if b = 2 else c = 3)",
         ),
         (
-            RepositoryRequirementKind::Conflicts,
+            RepositoryRequirementKind::Conflict,
             "(a = 0:1 unless b = 0:2 else c = 0:3)",
             "(a = 1 unless b = 2 else c = 3)",
         ),

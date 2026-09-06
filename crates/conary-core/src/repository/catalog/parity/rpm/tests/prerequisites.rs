@@ -26,7 +26,7 @@ fn source_zero_epoch_projection_matches_native_expression_and_atom_index() {
             "(a = 0:1 if b = 0:2 else c = 0:3)",
         ),
         (
-            RepositoryRequirementKind::Conflicts,
+            RepositoryRequirementKind::Conflict,
             "conflicts",
             "(a = 0:1 unless b = 0:2 else c = 0:3)",
         ),
@@ -67,7 +67,7 @@ fn source_zero_epoch_projection_matches_native_expression_and_atom_index() {
             assert_eq!(row.requirement_groups.len(), 1);
             let mut source = row.requirement_groups[0].clone();
             let expression = crate::repository::rpm_dependency::parse_source_rpm_dependency(
-                RepositoryRequirementKind::Depends, source_text,
+                kind, source_text,
             ).unwrap();
             let template = source.atoms[0].clone();
             source.atoms = expression.atoms().into_iter().map(|clause| {
