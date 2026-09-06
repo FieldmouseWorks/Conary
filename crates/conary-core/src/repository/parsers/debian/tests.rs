@@ -4,6 +4,44 @@ use super::*;
 use crate::repository::RepositoryTrustPolicy;
 use crate::repository::dependency_model::RepositoryCapabilityKind;
 
+#[test]
+fn packages_stanza_retains_every_weak_dependency_field() {
+    let text = format!(
+        "Package: weak-fields\nVersion: 1.0-1\nArchitecture: amd64\nSHA256: {}\nSize: 12\nFilename: pool/w/weak-fields.deb\nDepends: mandatory\nRecommends: helper:any (>= 2) | fallback, another\nSuggests: documentation\nEnhances: editor\n",
+        "a".repeat(64)
+    );
+    let parser = parser();
+    let mut packages = Vec::new();
+    stanza::parse_packages(std::io::Cursor::new(text), |entry| {
+        packages.push(parser.package_from_entry("https://example.test", entry)?);
+        Ok(())
+    })
+    .unwrap();
+    let package = &packages[0];
+    for (kind, field) in [
+        (RepositoryRequirementKind::Depends, "mandatory"),
+        (
+            RepositoryRequirementKind::Recommends,
+            "helper:any (>= 2) | fallback, another",
+        ),
+        (RepositoryRequirementKind::Suggests, "documentation"),
+        (RepositoryRequirementKind::Enhances, "editor"),
+    ] {
+        let actual = package
+            .requirements
+            .iter()
+            .filter(|group| group.kind == kind)
+            .cloned()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            actual,
+            parser.parse_requirement_groups(field, kind).unwrap(),
+            "{kind:?}"
+        );
+    }
+    assert_eq!(package.requirements.len(), 5);
+}
+
 fn parser() -> DebianParser {
     let trust = PreparedOpenPgpTrust::for_test(RepositoryTrustPolicy::Debian {
         release_keys: vec![crate::repository::OpenPgpTrustRoot {
