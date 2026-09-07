@@ -406,17 +406,17 @@ fn candidate_crawl_rejects_native_closure_drift() {
 fn candidate_crawl_excludes_foreign_root_and_projects_its_provider_edge() {
     let ecosystem = NativeParityEcosystemV1::Rpm;
     let candidate = candidate_fixture_with(ecosystem, |members, packages| {
-        let mut provider = package(ecosystem, members, "cross-provider", "i686", 0, 'f');
+        let mut provider = package(ecosystem, members, "cross-provider-0", "i686", 0, 'f');
         provider.requirement_groups = vec![requirement("depends", "missing-beside-conflict")];
         let mut root = package(ecosystem, members, "cross-provider-root", "x86_64", 1, 'g');
-        root.requirement_groups = vec![requirement("depends", "virtual-cross-provider")];
+        root.requirement_groups = vec![requirement("depends", "virtual-cross-provider-0")];
         packages.extend([provider, root]);
     });
     let package_rows = rows(&candidate);
     let package_oracle = oracle(&candidate, ecosystem, package_rows.clone());
     let provider = package_rows
         .iter()
-        .find(|package| package.name == "cross-provider")
+        .find(|package| package.name == "cross-provider-0")
         .unwrap();
     let root = package_rows
         .iter()
