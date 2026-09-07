@@ -330,3 +330,6 @@ fn show_relation_removals(plan: &conary_core::transaction::PackageRelationPlan) 
 #[cfg(test)]
 #[path = "command_mutation_lock_tests.rs"]
 mod mutation_lock_tests;
+
+#[cfg(test)]
+mod tests;
