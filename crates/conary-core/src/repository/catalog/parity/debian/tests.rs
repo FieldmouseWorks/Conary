@@ -761,7 +761,19 @@ fn apt_pkg_resolves_shadowed_exact_roots_with_compatible_native_versions() {
         .collect::<Vec<_>>();
     let mut apt = AptResolution::open(&paths, "amd64").unwrap();
 
-    for root_version in [older, newer] {
+    for (name, version, architecture) in [
+        ("language-pack-hr-base-extra", older, "amd64"),
+        ("language-pack-hr-base", "1:26.04+20260417.1", "amd64"),
+        ("language-pack-hr-base", older, "all"),
+    ] {
+        assert!(matches!(
+            apt.resolve(name, version, architecture),
+            Err(Error::ConflictError(message))
+                if message == "Debian exact root is absent from the apt-pkg cache"
+        ));
+    }
+
+    for root_version in [older, newer, older] {
         let outcome = apt
             .resolve("language-pack-hr-base", root_version, "amd64")
             .unwrap();

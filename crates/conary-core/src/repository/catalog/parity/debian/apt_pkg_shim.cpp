@@ -30,6 +30,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -103,6 +104,12 @@ struct NativeIdentity {
     std::string name;
     std::string version;
     std::string architecture;
+
+    // This orders exact identity keys, never native version preference.
+    bool operator<(NativeIdentity const &other) const {
+        return std::tie(name, version, architecture) <
+               std::tie(other.name, other.version, other.architecture);
+    }
 };
 
 struct MissingRequirement {
@@ -194,11 +201,18 @@ class EvidenceDepCache final : public pkgDepCache {
     bool allow_root_ = false;
 };
 
+struct ExactNativeVersion {
+    pkgCache::VerIterator version;
+    bool ambiguous = false;
+};
+
 struct ResolutionHandle {
     std::unique_ptr<MMap> map;
     std::unique_ptr<pkgCache> cache;
     std::unique_ptr<ProfilePolicy> policy;
     std::vector<Package> packages;
+    std::map<NativeIdentity, std::size_t> source_packages;
+    std::map<NativeIdentity, ExactNativeVersion> exact_versions;
     std::string architecture;
     std::vector<NativeIdentity> closure;
     std::vector<MissingRequirement> missing;
@@ -471,14 +485,12 @@ Provide const *provide_at(Handle const *handle, std::size_t package_index,
 
 Package const *find_source_package(ResolutionHandle const &handle,
                                    pkgCache::VerIterator const &version) {
-    std::string const name = version.ParentPkg().Name();
-    for (Package const &package : handle.packages) {
-        if (package.name == name && package.version == version.VerStr() &&
-            package.architecture == version.Arch()) {
-            return &package;
-        }
+    auto const source = handle.source_packages.find(
+        {version.ParentPkg().Name(), version.VerStr(), version.Arch()});
+    if (source == handle.source_packages.end()) {
+        return nullptr;
     }
-    return nullptr;
+    return &handle.packages[source->second];
 }
 
 RelationGroup const *strong_group_at(Package const &package, int kind, std::size_t ordinal) {
@@ -511,6 +523,28 @@ bool configure_resolution(std::string const &architecture) {
     _config->Set("Dir::Cache::pkgcache", "/dev/null");
     _config->Set("Dir::Cache::srcpkgcache", "/dev/null");
     return pkgInitSystem(*_config, _system);
+}
+
+void index_resolution_identities(ResolutionHandle &handle) {
+    // Package storage is complete before indexing. Preserve the first source
+    // occurrence in authenticated member order, as the former linear lookup did.
+    for (std::size_t index = 0; index < handle.packages.size(); ++index) {
+        Package const &package = handle.packages[index];
+        handle.source_packages.emplace(
+            NativeIdentity{package.name, package.version, package.architecture}, index);
+    }
+    for (pkgCache::PkgIterator package = handle.cache->PkgBegin(); !package.end(); ++package) {
+        for (pkgCache::VerIterator version = package.VersionList(); !version.end(); ++version) {
+            auto const [entry, inserted] = handle.exact_versions.emplace(
+                NativeIdentity{package.Name(), version.VerStr(), version.Arch()},
+                ExactNativeVersion{version});
+            if (!inserted) {
+                // Only resolving this identity may report the ambiguity; an
+                // unrelated ambiguous cache entry must not reject worker loading.
+                entry->second.ambiguous = true;
+            }
+        }
+    }
 }
 
 bool load_resolution(ResolutionHandle &handle, char const *const *paths, std::size_t path_count) {
@@ -563,28 +597,22 @@ bool load_resolution(ResolutionHandle &handle, char const *const *paths, std::si
         return false;
     }
     handle.policy = std::make_unique<ProfilePolicy>(*handle.cache, std::move(priorities));
+    index_resolution_identities(handle);
     return true;
 }
 
-pkgCache::VerIterator find_exact_version(ResolutionHandle &handle, std::string const &name,
+pkgCache::VerIterator find_exact_version(ResolutionHandle const &handle, std::string const &name,
                                          std::string const &version,
                                          std::string const &architecture) {
-    pkgCache::VerIterator selected;
-    for (pkgCache::PkgIterator package = handle.cache->PkgBegin(); !package.end(); ++package) {
-        if (name != package.Name()) {
-            continue;
-        }
-        for (pkgCache::VerIterator candidate = package.VersionList(); !candidate.end(); ++candidate) {
-            if (version == candidate.VerStr() && architecture == candidate.Arch()) {
-                if (!selected.end()) {
-                    throw std::runtime_error("apt-pkg cache contains ambiguous exact Debian root " +
-                                             name + ":" + architecture + "=" + version);
-                }
-                selected = candidate;
-            }
-        }
+    auto const selected = handle.exact_versions.find({name, version, architecture});
+    if (selected == handle.exact_versions.end()) {
+        return {};
     }
-    return selected;
+    if (selected->second.ambiguous) {
+        throw std::runtime_error("apt-pkg cache contains ambiguous exact Debian root " +
+                                 name + ":" + architecture + "=" + version);
+    }
+    return selected->second.version;
 }
 
 bool collect_resolved_closure(ResolutionHandle &handle, EvidenceDepCache &dependency_cache,
