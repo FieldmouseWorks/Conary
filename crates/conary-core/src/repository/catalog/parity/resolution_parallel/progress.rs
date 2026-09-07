@@ -6,13 +6,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use super::super::contract::NativeParityOracleV1;
-
 pub(super) const REPORT_INTERVAL: Duration = Duration::from_secs(30);
 static NEXT_WALK: AtomicU64 = AtomicU64::new(1);
 
 pub(super) struct Progress<'a> {
-    manifest: &'a NativeParityOracleV1,
+    profile: &'a str,
+    revision: &'a str,
     walk_id: u64,
     workers: usize,
     started: Instant,
@@ -23,10 +22,11 @@ pub(super) struct Progress<'a> {
 }
 
 impl<'a> Progress<'a> {
-    pub(super) fn new(manifest: &'a NativeParityOracleV1, workers: usize) -> Self {
+    pub(super) fn new(profile: &'a str, revision: &'a str, workers: usize) -> Self {
         let now = Instant::now();
         Self {
-            manifest,
+            profile,
+            revision,
             walk_id: NEXT_WALK.fetch_add(1, Ordering::Relaxed),
             workers,
             started: now,
@@ -49,8 +49,8 @@ impl<'a> Progress<'a> {
             target: "conary_core::repository::catalog::parity::progress",
             schema_version = 1,
             walk_id = self.walk_id,
-            profile = %self.manifest.profile,
-            profile_revision_sha256 = %self.manifest.profile_revision_sha256,
+            profile = %self.profile,
+            profile_revision_sha256 = %self.revision,
             workers = self.workers,
             dispatched_roots = self.dispatched,
             completed_roots = self.completed.load(Ordering::Relaxed),

@@ -187,7 +187,11 @@ where
 {
     std::thread::scope(|scope| {
         let worker_count = workers.get();
-        let mut progress = Progress::new(package_oracle.manifest(), worker_count);
+        let mut progress = Progress::new(
+            &package_oracle.manifest().profile,
+            &package_oracle.manifest().profile_revision_sha256,
+            worker_count,
+        );
         let channel_capacity = worker_count;
         let max_in_flight = worker_count
             .checked_mul(2)
@@ -794,21 +798,49 @@ mod tests {
     }
 
     #[test]
+    fn progress_does_not_count_a_failed_sink_as_emitted() {
+        let mut pending = BTreeMap::from([(0, (root(), Ok(())))]);
+        let mut next_sequence = 0;
+        let limits =
+            AtomicResolutionExplanationLimits::new(ResolutionExplanationLimits::new(64, 128));
+        let mut progress = Progress::new("fixture", "fixture-revision", 1);
+        progress.dispatched = 1;
+        progress.completed.store(1, Ordering::Relaxed);
+        let result = emit_ready(
+            &mut pending,
+            &mut next_sequence,
+            &limits,
+            &mut |_, ()| Err(Error::InternalError("sink failed".to_string())),
+            &mut progress,
+        );
+        assert!(result.is_err());
+        assert_eq!(progress.dispatched, 1);
+        assert_eq!(progress.completed.load(Ordering::Relaxed), 1);
+        assert_eq!(progress.emitted, 0);
+        assert_eq!(next_sequence, 0);
+    }
+
+    #[test]
     fn ordered_emit_publishes_independent_explanation_limits_to_workers() {
         let mut pending = BTreeMap::from([(0, (root(), Ok(())))]);
         let mut next_sequence = 0;
         let explanation_limits =
             AtomicResolutionExplanationLimits::new(ResolutionExplanationLimits::new(64, 128));
 
+        let mut progress = Progress::new("fixture", "fixture-revision", 1);
+        progress.dispatched = 1;
+        progress.completed.store(1, Ordering::Relaxed);
         emit_ready(
             &mut pending,
             &mut next_sequence,
             &explanation_limits,
             &mut |_, ()| Ok(ResolutionExplanationLimits::new(0, 32)),
+            &mut progress,
         )
         .unwrap();
 
         assert_eq!(next_sequence, 1);
+        assert_eq!(progress.emitted, 1);
         assert_eq!(
             explanation_limits.load(),
             ResolutionExplanationLimits::new(0, 32)
