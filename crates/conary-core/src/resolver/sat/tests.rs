@@ -1,6 +1,8 @@
 // crates/conary-core/src/resolver/sat/tests.rs
 
 use super::*;
+#[path = "tests/discovery.rs"]
+mod discovery;
 #[path = "tests/hidden_conflict_budget.rs"]
 mod hidden_conflict_budget;
 use crate::db;

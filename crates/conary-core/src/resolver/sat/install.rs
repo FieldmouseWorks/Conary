@@ -10,7 +10,7 @@ use crate::repository::resolution_policy::ResolutionPolicy;
 use crate::version::VersionConstraint;
 
 use super::super::provider::{ConaryConstraint, ConaryProvider, SolverExpression};
-use super::{SatPackage, SatSource, check_transitive_loading_limits};
+use super::{SatPackage, SatSource, check_transitive_loading_limits, timing};
 
 pub(super) fn build_provider_for_install<'conn>(
     conn: &'conn Connection,
@@ -28,20 +28,30 @@ pub(super) fn build_provider_for_install_ignoring_groups<'conn>(
         Item = crate::resolver::provider::types::RepositoryRequirementGroupIdentity,
     >,
 ) -> Result<ConaryProvider<'conn>> {
+    let phase = timing::start(None, timing::Phase::Initialization);
     let mut provider = ConaryProvider::new_with_policy(conn, policy.clone())?;
+    drop(phase);
     #[cfg(test)]
     super::hidden_conflict::loaded_provider();
     provider.ignore_requirement_groups(ignored);
     provider.set_root_request_names(requests.iter().map(|(name, _)| name.clone()));
+    let phase = timing::start(None, timing::Phase::Installed);
     provider.load_installed_packages()?;
+    drop(phase);
+    let phase = timing::start(None, timing::Phase::Canonical);
     provider.build_provides_index()?;
     provider.load_canonical_index()?;
     provider.expand_root_request_names_with_canonical_equivalents();
+    drop(phase);
+    let phase = timing::start(None, timing::Phase::Transitive);
     load_transitive_repo_packages(
         &mut provider,
         requests.iter().map(|(name, _)| name.clone()).collect(),
     )?;
+    drop(phase);
+    let phase = timing::start(None, timing::Phase::Compilation);
     provider.intern_all_dependency_version_sets()?;
+    drop(phase);
     Ok(provider)
 }
 
@@ -50,14 +60,24 @@ pub(super) fn build_provider_for_requirement_expressions<'conn>(
     expressions: &[SolverExpression],
     policy: &ResolutionPolicy,
 ) -> Result<ConaryProvider<'conn>> {
+    let phase = timing::start(None, timing::Phase::Initialization);
     let mut provider = ConaryProvider::new_with_policy(conn, policy.clone())?;
+    drop(phase);
     provider.set_root_request_names(requirement_names(expressions));
+    let phase = timing::start(None, timing::Phase::Installed);
     provider.load_installed_packages()?;
+    drop(phase);
+    let phase = timing::start(None, timing::Phase::Canonical);
     provider.build_provides_index()?;
     provider.load_canonical_index()?;
     provider.expand_root_request_names_with_canonical_equivalents();
+    drop(phase);
+    let phase = timing::start(None, timing::Phase::Transitive);
     load_transitive_repo_packages(&mut provider, requirement_names(expressions))?;
+    drop(phase);
+    let phase = timing::start(None, timing::Phase::Compilation);
     provider.intern_all_dependency_version_sets()?;
+    drop(phase);
     Ok(provider)
 }
 
@@ -89,6 +109,12 @@ fn load_transitive_repo_packages(
         to_load = new_names;
     }
 
+    tracing::debug!(
+        target: "conary_core::resolver::timing",
+        loaded_names = loaded_names.len(),
+        admitted_candidates = provider.solvable_count(),
+        "Resolver candidate discovery completed"
+    );
     Ok(())
 }
 
@@ -96,7 +122,7 @@ fn requirement_names(expressions: &[SolverExpression]) -> HashSet<String> {
     let known = HashSet::new();
     let mut names = HashSet::new();
     for expression in expressions {
-        for atom in expression.atoms() {
+        for atom in expression.positive_atoms() {
             match &atom.constraint {
                 ConaryConstraint::ProviderExpression { expression } => {
                     expression.collect_names(&known, &mut names);

@@ -530,12 +530,13 @@ impl<'db> ConaryProvider<'db> {
         self.new_dependency_names(&HashSet::new())
     }
 
-    /// Collect dependency names not already in `known`, avoiding redundant allocations.
+    /// Collect positive dependency names not already in `known`.
+    /// Negated atoms constrain admitted candidates without expanding their dependencies.
     pub fn new_dependency_names(&self, known: &HashSet<String>) -> Vec<String> {
         let mut seen = HashSet::new();
         for dep_list in self.dependencies.values() {
             for dep in dep_list {
-                for atom in dep.expression.atoms() {
+                for atom in dep.expression.positive_atoms() {
                     match &atom.constraint {
                         ConaryConstraint::ProviderExpression { expression } => {
                             expression.collect_names(known, &mut seen);

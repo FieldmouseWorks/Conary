@@ -687,6 +687,19 @@ Exact-root parity's missing-first conflict probe is owned by
 SAT caches, with 64 re-solves and one monotonic 30-second deadline for the
 whole probe. Exhaustion is a typed producer failure before classification;
 it cannot become an unresolved or conflicting-closure outcome.
+Candidate discovery follows positive literals in the typed Boolean expression,
+including polarity flips through nested negation. Negative literals (such as
+conflicts and inactive conditional guards) constrain admitted candidates without
+expanding otherwise unrequested dependency trees. Every installed package and
+every candidate reached through a positive path still participates in those
+constraints; expression compilation and source-owned relation evaluation remain
+unchanged. The same discovery rule applies to incoming root expressions.
+
+Debug tracing at `conary_core::resolver::timing` reports exact-root preparation,
+solve, and classification durations, preparation subphases, and discovered-name
+and admitted-candidate counts. These are optional diagnostic observations, not
+resolution or publication authority.
+
 The policy-explicit SAT API rejects strict dependency solving when that
 identity has not been established; it never treats an absent identity as an
 empty candidate set and never derives
