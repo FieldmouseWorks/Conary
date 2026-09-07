@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-07
-revision: 69
+revision: 70
 summary: Describe package-variant selection, source identity, architecture and ABI admission, supported profiles, signed Remi universes, adoption, dependency acquisition, and lifecycle handoff.
 ---
 
@@ -698,6 +698,12 @@ Post-solve relation planning projects each selected or installed candidate into
 a borrowed capability view once. Candidate subsets then copy those views while
 using the same native evaluator and minimum-removal/addition algorithms; the
 provider continues to own package and capability strings.
+Transaction relation planning uses the same borrowed evaluator through
+`crates/conary-core/src/transaction/package_relations/facts.rs`. It projects
+installed and incoming capability views once per planning call and reuses them
+for negative-relation subsets and dependent deconfiguration. Installed rows
+and parsed incoming facts retain ownership of their strings; returned actions
+still own their exact identities, causes, and original incoming indices.
 
 Debug tracing at `conary_core::resolver::timing` reports exact-root preparation,
 solve, and classification durations, preparation subphases, and discovered-name
