@@ -1,0 +1,8 @@
+#!/bin/sh
+# Exercise formatter failure after the exact EFI FAT12 invocation.
+if [ "$#" -ne 3 ] || [ "$1" != '-F' ] || [ "$2" != '12' ] || [ ! -f "$3" ]; then
+    echo 'invalid formatter fixture invocation' >&2
+    exit 98
+fi
+echo 'deliberate formatter failure' >&2
+exit 23
