@@ -118,6 +118,7 @@ async fn cmd_install_with_intent(
         &package_name,
         version.as_deref(),
         architecture.as_deref(),
+        dry_run,
         selection_reason,
     )? {
         return Ok(());
