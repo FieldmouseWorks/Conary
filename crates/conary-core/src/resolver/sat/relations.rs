@@ -2,15 +2,15 @@
 
 //! Exact post-solve conflict and replacement planning.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use resolvo::SolvableId;
 
 use crate::error::{Error, Result};
 use crate::repository::package_relation::{
-    OwnedPackageRelationCandidate, OwnedPackageRelationProvide, PackageRelationCandidate,
-    PackageRelationProvide, expression_matches_candidate_set, minimum_conflict_removal_indices,
-    minimum_relation_addition_indices, relation_matches_candidate,
+    PackageRelationCandidate, PackageRelationProvide, expression_matches_candidate_set,
+    minimum_conflict_removal_indices, minimum_relation_addition_indices,
+    relation_matches_candidate,
 };
 use crate::resolver::identity::PackageIdentity;
 use crate::resolver::provider::{ConaryProvider, SolverRelation};
@@ -45,6 +45,42 @@ pub(super) fn plan_selected_relations(
         .iter()
         .copied()
         .collect::<std::collections::HashSet<_>>();
+    // Project each selected/installed package once. Relation subsets copy only
+    // borrowed views; the provider remains the owner of all capability strings.
+    let provides = selected
+        .iter()
+        .chain(&installed)
+        .map(|id| {
+            let package = provider.get_solvable(*id);
+            (
+                *id,
+                package
+                    .provided_capabilities
+                    .iter()
+                    .map(|provide| PackageRelationProvide {
+                        name: &provide.name,
+                        version: provide.version.as_deref(),
+                        version_scheme: provide.version_scheme,
+                    })
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect::<HashMap<_, _>>();
+    let candidates = provides
+        .iter()
+        .map(|(id, provides)| {
+            let package = provider.get_solvable(*id);
+            (
+                *id,
+                PackageRelationCandidate {
+                    name: &package.name,
+                    version: &package.version,
+                    version_scheme: package.version_scheme,
+                    provides,
+                },
+            )
+        })
+        .collect::<HashMap<_, _>>();
     let mut removals = BTreeMap::new();
 
     for selected_id in &selected_new {
@@ -57,7 +93,12 @@ pub(super) fn plan_selected_relations(
                     }
                     let candidate = provider.get_solvable(*candidate_id);
                     if candidate.name != replacement.name
-                        && relation_matches_package(relation, candidate)?
+                        && relation_matches_candidate(
+                            &relation.relation,
+                            relation.scheme,
+                            &candidates[candidate_id],
+                        )
+                        .map_err(Error::ResolutionError)?
                     {
                         return Ok(RelationPlan {
                             removals: Vec::new(),
@@ -69,7 +110,12 @@ pub(super) fn plan_selected_relations(
                     let existing = provider.get_solvable(*installed_id);
                     if replacement.name == existing.name
                         || selected_new_names.contains(existing.name.as_str())
-                        || !relation_matches_package(relation, existing)?
+                        || !relation_matches_candidate(
+                            &relation.relation,
+                            relation.scheme,
+                            &candidates[installed_id],
+                        )
+                        .map_err(Error::ResolutionError)?
                     {
                         continue;
                     }
@@ -103,11 +149,11 @@ pub(super) fn plan_selected_relations(
                 .collect::<Vec<_>>();
             let removable = removable_ids
                 .iter()
-                .map(|id| owned_candidate(provider.get_solvable(*id)))
+                .map(|id| candidates[id])
                 .collect::<Vec<_>>();
             let fixed = fixed_ids
                 .iter()
-                .map(|id| owned_candidate(provider.get_solvable(*id)))
+                .map(|id| candidates[id])
                 .collect::<Vec<_>>();
             let removal_indices = match minimum_conflict_removal_indices(
                 &relation.relation,
@@ -159,7 +205,7 @@ pub(super) fn plan_selected_relations(
                 .filter(|candidate_id| {
                     !selected_new_names.contains(provider.get_solvable(*candidate_id).name.as_str())
                 })
-                .map(|candidate_id| owned_candidate(provider.get_solvable(candidate_id)))
+                .map(|candidate_id| candidates[&candidate_id])
                 .collect::<Vec<_>>();
             let mut after = before.clone();
             after.extend(
@@ -169,7 +215,7 @@ pub(super) fn plan_selected_relations(
                     .filter(|candidate_id| {
                         provider.get_solvable(*candidate_id).name != existing.name
                     })
-                    .map(|candidate_id| owned_candidate(provider.get_solvable(candidate_id))),
+                    .map(|candidate_id| candidates[&candidate_id]),
             );
             let matched_before = expression_matches_candidate_set(
                 &relation.relation.expression,
@@ -193,7 +239,7 @@ pub(super) fn plan_selected_relations(
                 .collect::<Vec<_>>();
             let additions = addition_ids
                 .iter()
-                .map(|id| owned_candidate(provider.get_solvable(*id)))
+                .map(|id| candidates[id])
                 .collect::<Vec<_>>();
             let causal_indices = minimum_relation_addition_indices(
                 &relation.relation,
@@ -272,46 +318,6 @@ fn insert_removal(
             }
         })
         .or_insert(removal);
-}
-
-fn relation_matches_package(relation: &SolverRelation, package: &PackageIdentity) -> Result<bool> {
-    let provides = package
-        .provided_capabilities
-        .iter()
-        .map(|provide| PackageRelationProvide {
-            name: &provide.name,
-            version: provide.version.as_deref(),
-            version_scheme: provide.version_scheme,
-        })
-        .collect::<Vec<_>>();
-    relation_matches_candidate(
-        &relation.relation,
-        relation.scheme,
-        &PackageRelationCandidate {
-            name: &package.name,
-            version: &package.version,
-            version_scheme: package.version_scheme,
-            provides: &provides,
-        },
-    )
-    .map_err(Error::ResolutionError)
-}
-
-fn owned_candidate(package: &PackageIdentity) -> OwnedPackageRelationCandidate {
-    OwnedPackageRelationCandidate {
-        name: package.name.clone(),
-        version: package.version.clone(),
-        version_scheme: package.version_scheme,
-        provides: package
-            .provided_capabilities
-            .iter()
-            .map(|provide| OwnedPackageRelationProvide {
-                name: provide.name.clone(),
-                version: provide.version.clone(),
-                version_scheme: provide.version_scheme,
-            })
-            .collect(),
-    }
 }
 
 fn conflict_message(

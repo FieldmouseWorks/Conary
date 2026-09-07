@@ -9,6 +9,7 @@ mod hidden_conflict;
 mod install;
 mod relations;
 mod removal;
+mod timing;
 
 use resolvo::{Problem, Solver, UnsolvableOrCancelled};
 use rusqlite::Connection;
@@ -233,6 +234,7 @@ fn solve_exact_repository_package_with_policy_inner(
 ) -> Result<SatExactResolution> {
     #[cfg(test)]
     hidden_conflict::reset_counts();
+    let preparation = timing::start(repository_package_id, timing::Phase::Preparation);
     let root = crate::db::models::RepositoryPackage::find_by_id(conn, repository_package_id)?
         .ok_or_else(|| {
             Error::NotFound(format!(
@@ -250,7 +252,12 @@ fn solve_exact_repository_package_with_policy_inner(
     let problem = Problem::new().requirements(vec![exact.into()]);
     let mut solver = Solver::new(provider);
 
-    match solver.solve(problem) {
+    drop(preparation);
+    let solving = timing::start(repository_package_id, timing::Phase::Solve);
+    let result = solver.solve(problem);
+    drop(solving);
+    let _classification = timing::start(repository_package_id, timing::Phase::Classification);
+    match result {
         Ok(solvable_ids) => {
             let relation_plan =
                 relations::plan_selected_relations(solver.provider(), &solvable_ids)?;

@@ -59,19 +59,36 @@ impl SolverExpression {
 
     pub fn atoms(&self) -> Vec<&SolverAtom> {
         let mut atoms = Vec::new();
-        self.collect_atoms(&mut atoms);
+        self.collect_atoms(&mut atoms, false, false);
         atoms
     }
 
-    fn collect_atoms<'a>(&'a self, atoms: &mut Vec<&'a SolverAtom>) {
+    /// Atoms that can require a package to be selected. Negative literals
+    /// constrain the selected set but do not introduce installation candidates.
+    pub(crate) fn positive_atoms(&self) -> Vec<&SolverAtom> {
+        let mut atoms = Vec::new();
+        self.collect_atoms(&mut atoms, false, true);
+        atoms
+    }
+
+    fn collect_atoms<'a>(
+        &'a self,
+        atoms: &mut Vec<&'a SolverAtom>,
+        negated: bool,
+        only_positive: bool,
+    ) {
         match self {
-            Self::Atom(atom) => atoms.push(atom),
-            Self::And(operands) | Self::Or(operands) => {
-                for operand in operands {
-                    operand.collect_atoms(atoms);
+            Self::Atom(atom) => {
+                if !only_positive || !negated {
+                    atoms.push(atom);
                 }
             }
-            Self::Not(operand) => operand.collect_atoms(atoms),
+            Self::And(operands) | Self::Or(operands) => {
+                for operand in operands {
+                    operand.collect_atoms(atoms, negated, only_positive);
+                }
+            }
+            Self::Not(operand) => operand.collect_atoms(atoms, !negated, only_positive),
         }
     }
 }

@@ -347,7 +347,7 @@ impl RepositoryRequirementGroup {
         conn: &Connection,
         repository_package_id: i64,
     ) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
+        let mut stmt = conn.prepare_cached(
             "SELECT id, repository_package_id, kind, behavior, description, native_text, expression_json
              FROM resolved_repository_requirement_groups
              WHERE repository_package_id = ?1

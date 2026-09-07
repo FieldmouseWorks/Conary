@@ -745,7 +745,7 @@ impl Repository {
             Self::COLUMNS,
             Self::FROM
         );
-        let mut stmt = conn.prepare(&sql)?;
+        let mut stmt = conn.prepare_cached(&sql)?;
         let repo = stmt.query_row([id], Self::from_row).optional()?;
         Ok(repo)
     }

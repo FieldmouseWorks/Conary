@@ -150,7 +150,7 @@ impl RepositoryPackage {
             "SELECT {} FROM resolved_repository_packages WHERE id = ?1",
             Self::COLUMNS
         );
-        let mut stmt = conn.prepare(&sql)?;
+        let mut stmt = conn.prepare_cached(&sql)?;
         let pkg = stmt.query_row([id], Self::from_row).optional()?;
         Ok(pkg)
     }
@@ -161,7 +161,7 @@ impl RepositoryPackage {
             "SELECT {} FROM resolved_repository_packages WHERE name = ?1",
             Self::COLUMNS
         );
-        let mut stmt = conn.prepare(&sql)?;
+        let mut stmt = conn.prepare_cached(&sql)?;
         let packages = stmt
             .query_map([name], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;

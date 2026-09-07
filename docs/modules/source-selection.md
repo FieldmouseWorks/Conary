@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-09-06
-revision: 68
+last_updated: 2026-09-07
+revision: 69
 summary: Describe package-variant selection, source identity, architecture and ABI admission, supported profiles, signed Remi universes, adoption, dependency acquisition, and lifecycle handoff.
 ---
 
@@ -173,6 +173,14 @@ provider expansion, and the atoms used by same-provider expressions. Exact
 root interning only constrains the already-admitted row by persisted ID. After
 load, per-match architecture logic is limited to Debian dependency and provide
 qualifier/Multi-Arch semantics; it does not repeat candidate admission.
+
+Admitted solvables populate an exact capability-name index in the same owner,
+`resolver/provider/mod.rs::add_solvable`, after all validation succeeds.
+Repeated declarations contribute one candidate per capability name, and later
+additions retain insertion order. SAT candidate lookup copies only the matching
+IDs; it does not rescan every loaded package's complete provides list. The
+index is private to one provider and changes no persisted facts, matching
+rules, or candidate ranking.
 
 An accepted Remi conversion remains server-owned work until the typed job
 status reaches `ready` or `failed`. The client continues to observe `pending`
@@ -679,6 +687,32 @@ Exact-root parity's missing-first conflict probe is owned by
 SAT caches, with 64 re-solves and one monotonic 30-second deadline for the
 whole probe. Exhaustion is a typed producer failure before classification;
 it cannot become an unresolved or conflicting-closure outcome.
+Candidate discovery follows positive literals in the typed Boolean expression,
+including polarity flips through nested negation. Negative literals (such as
+conflicts and inactive conditional guards) constrain admitted candidates without
+expanding otherwise unrequested dependency trees. Every installed package and
+every candidate reached through a positive path still participates in those
+constraints; expression compilation and source-owned relation evaluation remain
+unchanged. The same discovery rule applies to incoming root expressions.
+Post-solve relation planning projects each selected or installed candidate into
+a borrowed capability view once. Candidate subsets then copy those views while
+using the same native evaluator and minimum-removal/addition algorithms; the
+provider continues to own package and capability strings.
+
+Debug tracing at `conary_core::resolver::timing` reports exact-root preparation,
+solve, and classification durations, preparation subphases, and discovered-name
+and admitted-candidate counts. These are optional diagnostic observations, not
+resolution or publication authority. Hot repository package, capability, and
+requirement reads reuse connection-bounded SQLite prepared statements; every
+invocation still binds its own parameters and reads current rows.
+
+Ordered native/candidate walks log progress at most once per 30 seconds plus a
+final stopped record, including while waiting on a slow worker. Diagnostic
+records bind the profile revision and a process-local walk ID, and distinguish
+dispatched roots, completed worker results (including failures), and results
+successfully emitted through the ordered sink. A stopped record is not proof
+of a complete survey; final bundle validation remains authoritative.
+
 The policy-explicit SAT API rejects strict dependency solving when that
 identity has not been established; it never treats an absent identity as an
 empty candidate set and never derives
