@@ -12,7 +12,20 @@ fn fixture() -> (tempfile::TempDir, Connection, i64) {
 }
 
 fn expression(conn: &Connection, package: i64, kind: RepositoryRequirementKind, text: &str) {
-    let requirement = parse_native_requirement(kind, VersionScheme::Rpm, text).unwrap();
+    let requirement = match kind {
+        RepositoryRequirementKind::Depends => {
+            parse_native_requirement(kind, VersionScheme::Rpm, text)
+        }
+        RepositoryRequirementKind::Conflict => {
+            crate::repository::package_relation::parse_native_relation(
+                kind,
+                VersionScheme::Rpm,
+                text,
+            )
+        }
+        _ => unreachable!("fixture uses dependencies and conflicts"),
+    }
+    .unwrap();
     insert_typed_repo_requirement_group(conn, package, &requirement);
 }
 
