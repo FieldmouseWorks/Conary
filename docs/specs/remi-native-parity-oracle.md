@@ -1,8 +1,8 @@
 ---
 title: Remi native full-catalog parity oracle
 summary: Define single-walk producer-bound strict native parity lanes with live progress and independent diagnostic retention, bounded native ALPM provider probing, selective same-export assembly, and deterministic bounded-parallel private collect-all resolution surveys for one complete immutable profile candidate
-last_updated: 2026-09-06
-revision: 85
+last_updated: 2026-09-07
+revision: 86
 status: active
 ---
 
@@ -777,6 +777,16 @@ skipped while later profiles are still surveyed. Complete candidates are
 materialized only below an automatically removed temporary directory. The
 command reports all written findings and returns Remi's top-level failure status
 `101` when any candidate failure or comparison mismatch exists.
+
+Survey root identities preserve the package oracle's complete native `version`
+and separate catalog `package_release` (rendered as `release` in survey JSON).
+RPM, Debian, and ALPM producers retain the native release/revision in `version`
+and emit an empty separate release. Candidate outcomes, retained failures,
+comparison mismatches, and the independent transport verifier accept that exact
+empty-string representation; present releases retain their existing printable
+ASCII, length, and whitespace bounds. No release is synthesized or split from
+`version`, and authenticated package-key and identity comparisons remain exact.
+The existing wire schemas and persisted representation are unchanged.
 
 Neither survey is evidence authority. Their JSON cannot be opened as a strict
 resolution bundle or `NativeResolutionComparisonV1`; promotion proof,

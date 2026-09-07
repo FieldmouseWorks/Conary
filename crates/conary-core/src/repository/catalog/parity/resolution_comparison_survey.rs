@@ -12,7 +12,7 @@ use super::io::NativeParityOracleReader;
 use super::resolution_compare::{NativeResolutionOutcomeKindV1, outcome_mismatch};
 use super::resolution_contract::{NativeResolutionOutcomeV1, NativeResolutionRootV1};
 use super::resolution_io::NativeResolutionOracleReader;
-use super::survey_support::write_private_canonical_json;
+use super::survey_support::{validate_survey_package_release, write_private_canonical_json};
 use crate::error::{Error, Result};
 use crate::repository::catalog::ProfileRevisionV2;
 use crate::repository::catalog::contract::{validate_identity, validate_sha256};
@@ -217,7 +217,10 @@ impl NativeResolutionComparisonSurveyMismatchV1 {
         validate_sha256(&self.root.package_key_sha256, "comparison survey root key")?;
         validate_identity(&self.root.name, "comparison survey root package name")?;
         validate_identity(&self.root.version, "comparison survey root package version")?;
-        validate_identity(&self.root.release, "comparison survey root package release")?;
+        validate_survey_package_release(
+            &self.root.release,
+            "comparison survey root package release",
+        )?;
         NativeResolutionRootV1 {
             root_package_key_sha256: self.root.package_key_sha256.clone(),
             outcome: self.oracle.outcome.clone(),
