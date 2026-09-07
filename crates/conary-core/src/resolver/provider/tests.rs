@@ -155,6 +155,51 @@ fn repo_identity(
 }
 
 #[test]
+fn capability_lookup_preserves_admission_order_and_duplicate_declarations() {
+    let (_dir, conn) = setup_test_db();
+    let mut provider = ConaryProvider::new(&conn).unwrap();
+    let capability = |name: &str| ProvidedCapability {
+        kind: crate::repository::dependency_model::RepositoryCapabilityKind::Generic,
+        name: name.to_string(),
+        version: None,
+        version_relation: None,
+        version_scheme: VersionScheme::Debian,
+        architecture_qualifier: ProvideArchitectureQualifier::Implicit,
+        provenance: crate::repository::dependency_model::CapabilityProvenance::SourceDeclared {
+            format: crate::repository::dependency_model::SourcePackageFormat::Debian,
+            record_index: 0,
+        },
+    };
+    assert!(provider.solvables_for_provide("shared").is_empty());
+    let mut first = repo_identity("first", "1", VersionScheme::Debian, Some(1));
+    first.provided_capabilities = vec![
+        capability("shared"),
+        capability("first-only"),
+        capability("shared"),
+    ];
+    let first_id = provider.add_solvable(first).unwrap();
+    assert_eq!(provider.solvables_for_provide("shared"), vec![first_id]);
+
+    let mut rejected = repo_identity("rejected", "1", VersionScheme::Debian, Some(2));
+    rejected.provided_capabilities = vec![capability("rejected-only"), capability("shared")];
+    rejected.provided_capabilities[1].version = Some(String::new());
+    assert!(provider.add_solvable(rejected).is_err());
+    assert!(provider.solvables_for_provide("rejected-only").is_empty());
+    assert_eq!(provider.solvables_for_provide("shared"), vec![first_id]);
+
+    let mut installed = installed_identity("second", "2", VersionScheme::Debian, Some(7));
+    installed.provided_capabilities = vec![capability("shared")];
+    let second_id = provider.add_solvable(installed).unwrap();
+    assert_eq!(
+        provider.solvables_for_provide("shared"),
+        vec![first_id, second_id]
+    );
+    assert_eq!(provider.solvables_for_provide("first-only"), vec![first_id]);
+    assert!(provider.solvables_for_provide("Shared").is_empty());
+    assert!(provider.solvables_for_provide("missing").is_empty());
+}
+
+#[test]
 fn resolver_uses_loaded_pin_authority_and_excludes_uncompiled_candidates() {
     let (_dir, conn) = setup_test_db();
     let mut provider = ConaryProvider::new(&conn).unwrap();

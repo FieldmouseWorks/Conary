@@ -65,6 +65,9 @@ pub struct ConaryProvider<'db> {
     /// Enables O(1) lookup instead of linear scan when finding solvables by name.
     name_to_solvable_ids: HashMap<String, Vec<SolvableId>>,
 
+    /// Exact declared capability name -> admitted candidates, in insertion order.
+    capability_to_solvable_ids: HashMap<String, Vec<SolvableId>>,
+
     /// Set of repo_package_ids already loaded as solvables.
     /// Enables O(1) duplicate check instead of linear scan.
     loaded_repo_package_ids: HashSet<i64>,
@@ -157,6 +160,7 @@ impl<'db> ConaryProvider<'db> {
             version_set_cache: HashMap::new(),
             version_set_unions: Vec::new(),
             name_to_solvable_ids: HashMap::new(),
+            capability_to_solvable_ids: HashMap::new(),
             loaded_repo_package_ids: HashSet::new(),
             union_id_index: HashMap::new(),
             strings: vec![
@@ -356,6 +360,17 @@ impl<'db> ConaryProvider<'db> {
         }
         let idx = self.solvables.len();
         let id = SolvableId::from_raw(Self::pool_u32(idx, "solvable")?);
+        // Publish index entries only after every admission/validation check.
+        // Repeated declarations still contribute exactly one candidate per name.
+        for capability in &pkg.provided_capabilities {
+            let candidates = self
+                .capability_to_solvable_ids
+                .entry(capability.name.clone())
+                .or_default();
+            if candidates.last() != Some(&id) {
+                candidates.push(id);
+            }
+        }
         // Update name-to-solvable index for O(1) lookup by name.
         self.name_to_solvable_ids
             .entry(pkg.name.clone())
@@ -671,17 +686,10 @@ impl<'db> ConaryProvider<'db> {
     }
 
     pub(super) fn solvables_for_provide(&self, capability: &str) -> Vec<SolvableId> {
-        self.solvables
-            .iter()
-            .zip(&self.solvable_ids)
-            .filter(|(solvable, _)| {
-                solvable
-                    .provided_capabilities
-                    .iter()
-                    .any(|provided| provided.name == capability)
-            })
-            .map(|(_, id)| *id)
-            .collect()
+        self.capability_to_solvable_ids
+            .get(capability)
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// Find the installed solvable for a name, if any.

@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-09-06
-revision: 68
+last_updated: 2026-09-07
+revision: 69
 summary: Describe package-variant selection, source identity, architecture and ABI admission, supported profiles, signed Remi universes, adoption, dependency acquisition, and lifecycle handoff.
 ---
 
@@ -173,6 +173,14 @@ provider expansion, and the atoms used by same-provider expressions. Exact
 root interning only constrains the already-admitted row by persisted ID. After
 load, per-match architecture logic is limited to Debian dependency and provide
 qualifier/Multi-Arch semantics; it does not repeat candidate admission.
+
+Admitted solvables populate an exact capability-name index in the same owner,
+`resolver/provider/mod.rs::add_solvable`, after all validation succeeds.
+Repeated declarations contribute one candidate per capability name, and later
+additions retain insertion order. SAT candidate lookup copies only the matching
+IDs; it does not rescan every loaded package's complete provides list. The
+index is private to one provider and changes no persisted facts, matching
+rules, or candidate ranking.
 
 An accepted Remi conversion remains server-owned work until the typed job
 status reaches `ready` or `failed`. The client continues to observe `pending`
