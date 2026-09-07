@@ -27,6 +27,7 @@ pub struct PackageRelationProvide<'a> {
     pub version_scheme: VersionScheme,
 }
 
+#[derive(Clone, Copy)]
 pub struct PackageRelationCandidate<'a> {
     pub name: &'a str,
     pub version: &'a str,
@@ -49,7 +50,27 @@ pub struct OwnedPackageRelationCandidate {
     pub provides: Vec<OwnedPackageRelationProvide>,
 }
 
-impl OwnedPackageRelationCandidate {
+/// Candidate facts consumed by the shared native relation evaluator.
+/// Borrowed views avoid copying capability payloads for each candidate set.
+pub trait PackageRelationCandidateFacts {
+    fn evaluate(
+        &self,
+        expression: &RepositoryRequirementExpression,
+        relation_scheme: VersionScheme,
+    ) -> Result<bool, String>;
+}
+
+impl PackageRelationCandidateFacts for PackageRelationCandidate<'_> {
+    fn evaluate(
+        &self,
+        expression: &RepositoryRequirementExpression,
+        relation_scheme: VersionScheme,
+    ) -> Result<bool, String> {
+        evaluate_expression(expression, relation_scheme, self)
+    }
+}
+
+impl PackageRelationCandidateFacts for OwnedPackageRelationCandidate {
     fn evaluate(
         &self,
         expression: &RepositoryRequirementExpression,
@@ -180,10 +201,10 @@ pub fn relation_matches_candidate(
 ///
 /// RPM `and`/`or`/conditionals combine matches across packages, while
 /// `with`/`without` deliberately evaluate against one provider at a time.
-pub fn expression_matches_candidate_set(
+pub fn expression_matches_candidate_set<C: PackageRelationCandidateFacts>(
     expression: &RepositoryRequirementExpression,
     relation_scheme: VersionScheme,
-    candidates: &[OwnedPackageRelationCandidate],
+    candidates: &[C],
 ) -> Result<bool, String> {
     evaluate_connectives(expression, &mut |leaf| {
         for candidate in candidates {
@@ -288,11 +309,11 @@ fn first_combination(
 /// Return the exact minimum-cardinality removable candidate set that makes a
 /// conflict expression false. `fixed` candidates represent co-selected
 /// packages and can never be silently removed.
-pub fn minimum_conflict_removal_indices(
+pub fn minimum_conflict_removal_indices<C: PackageRelationCandidateFacts + Clone>(
     relation: &RepositoryRequirementGroup,
     relation_scheme: VersionScheme,
-    removable: &[OwnedPackageRelationCandidate],
-    fixed: &[OwnedPackageRelationCandidate],
+    removable: &[C],
+    fixed: &[C],
 ) -> Result<Vec<usize>, String> {
     validate_native_relation(relation, relation_scheme)?;
     let mut all = removable.to_vec();
@@ -353,11 +374,11 @@ pub fn minimum_conflict_removal_indices(
 /// This identifies every package that jointly causes an installed rich
 /// Conflict or Breaks expression. It never attributes a multi-package
 /// expression to an arbitrary first candidate.
-pub fn minimum_relation_addition_indices(
+pub fn minimum_relation_addition_indices<C: PackageRelationCandidateFacts + Clone>(
     relation: &RepositoryRequirementGroup,
     relation_scheme: VersionScheme,
-    baseline: &[OwnedPackageRelationCandidate],
-    additions: &[OwnedPackageRelationCandidate],
+    baseline: &[C],
+    additions: &[C],
 ) -> Result<Vec<usize>, String> {
     validate_native_relation(relation, relation_scheme)?;
     if expression_matches_candidate_set(&relation.expression, relation_scheme, baseline)? {
