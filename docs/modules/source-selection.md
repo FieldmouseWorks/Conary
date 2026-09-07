@@ -694,11 +694,24 @@ expanding otherwise unrequested dependency trees. Every installed package and
 every candidate reached through a positive path still participates in those
 constraints; expression compilation and source-owned relation evaluation remain
 unchanged. The same discovery rule applies to incoming root expressions.
+Post-solve relation planning projects each selected or installed candidate into
+a borrowed capability view once. Candidate subsets then copy those views while
+using the same native evaluator and minimum-removal/addition algorithms; the
+provider continues to own package and capability strings.
 
 Debug tracing at `conary_core::resolver::timing` reports exact-root preparation,
 solve, and classification durations, preparation subphases, and discovered-name
 and admitted-candidate counts. These are optional diagnostic observations, not
-resolution or publication authority.
+resolution or publication authority. Hot repository package, capability, and
+requirement reads reuse connection-bounded SQLite prepared statements; every
+invocation still binds its own parameters and reads current rows.
+
+Ordered native/candidate walks log progress at most once per 30 seconds plus a
+final stopped record, including while waiting on a slow worker. Diagnostic
+records bind the profile revision and a process-local walk ID, and distinguish
+dispatched roots, completed worker results (including failures), and results
+successfully emitted through the ordered sink. A stopped record is not proof
+of a complete survey; final bundle validation remains authoritative.
 
 The policy-explicit SAT API rejects strict dependency solving when that
 identity has not been established; it never treats an absent identity as an

@@ -232,7 +232,7 @@ impl RepositoryProvide {
         conn: &Connection,
         repository_package_id: i64,
     ) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(SELECT_BY_PACKAGE_SQL)?;
+        let mut stmt = conn.prepare_cached(SELECT_BY_PACKAGE_SQL)?;
         let rows = stmt
             .query_map([repository_package_id], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -318,7 +318,7 @@ impl RepositoryProvide {
     }
 
     pub fn find_by_capability(conn: &Connection, capability: &str) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(SELECT_BY_CAPABILITY_SQL)?;
+        let mut stmt = conn.prepare_cached(SELECT_BY_CAPABILITY_SQL)?;
         let rows = stmt
             .query_map([capability], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;

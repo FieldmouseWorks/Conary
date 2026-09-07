@@ -280,7 +280,7 @@ impl ProvideEntry {
             "SELECT {} FROM provides WHERE capability = ?1",
             Self::COLUMNS
         );
-        let mut stmt = conn.prepare(&sql)?;
+        let mut stmt = conn.prepare_cached(&sql)?;
         let provides = stmt
             .query_map([capability], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;

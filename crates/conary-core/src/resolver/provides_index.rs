@@ -94,7 +94,7 @@ impl<'db> ProvidesIndex<'db> {
 
         // 3. AppStream cross-distro provides. This table has its own exact
         // capability index and is intentionally bounded by the same key.
-        let mut stmt = self.conn.prepare(
+        let mut stmt = self.conn.prepare_cached(
             "SELECT ap.capability, ap.canonical_id
              FROM appstream_provides ap
              WHERE ap.capability = ?1

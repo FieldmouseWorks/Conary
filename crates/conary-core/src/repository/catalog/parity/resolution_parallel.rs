@@ -10,7 +10,8 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
-use std::sync::mpsc::{self, Receiver, TryRecvError, TrySendError};
+use std::sync::atomic::Ordering;
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, TryRecvError, TrySendError};
 use std::time::Instant;
 
 use super::contract::NativeParityPackageV1;
@@ -18,6 +19,9 @@ use super::io::NativeParityOracleReader;
 use crate::error::{Error, Result};
 
 mod evidence;
+mod progress;
+
+use progress::Progress;
 
 use evidence::AtomicResolutionExplanationLimits;
 pub(crate) use evidence::ResolutionExplanationLimits;
@@ -183,6 +187,7 @@ where
 {
     std::thread::scope(|scope| {
         let worker_count = workers.get();
+        let mut progress = Progress::new(package_oracle.manifest(), worker_count);
         let channel_capacity = worker_count;
         let max_in_flight = worker_count
             .checked_mul(2)
@@ -202,6 +207,7 @@ where
             let initialize = &initialize;
             let resolve = &resolve;
             let explanation_limits = Arc::clone(&explanation_limits);
+            let completed = Arc::clone(&progress.completed);
             handles.push(scope.spawn(move || {
                 let started = Instant::now();
                 let mut state = match catch_worker_panic(worker, None, || initialize(worker)) {
@@ -244,6 +250,7 @@ where
                             }
                         }
                     };
+                    completed.fetch_add(1, Ordering::Relaxed);
                     if result_sender
                         .send(WorkerMessage::Root {
                             worker,
@@ -302,6 +309,7 @@ where
                     &mut next_sequence,
                     explanation_limits.as_ref(),
                     &mut emit,
+                    &mut progress,
                 )?;
             }
             while available_workers.is_empty() {
@@ -312,6 +320,7 @@ where
                     &mut next_sequence,
                     explanation_limits.as_ref(),
                     &mut emit,
+                    &mut progress,
                 )?;
             }
             let sequence = dispatched;
@@ -336,6 +345,7 @@ where
             dispatched = dispatched.checked_add(1).ok_or_else(|| {
                 Error::ConfigError("resolution root sequence exceeds u64".to_string())
             })?;
+            progress.dispatched = dispatched;
             drain_available(
                 &result_receiver,
                 &mut pending,
@@ -343,6 +353,7 @@ where
                 &mut next_sequence,
                 explanation_limits.as_ref(),
                 &mut emit,
+                &mut progress,
             )
         });
         drop(job_senders);
@@ -357,6 +368,7 @@ where
                         &mut next_sequence,
                         explanation_limits.as_ref(),
                         &mut emit,
+                        &mut progress,
                     )?;
                 }
                 Ok(())
@@ -393,12 +405,22 @@ fn receive_and_emit<R>(
     next_sequence: &mut u64,
     explanation_limits: &AtomicResolutionExplanationLimits,
     emit: &mut impl FnMut(&NativeParityPackageV1, R) -> Result<ResolutionExplanationLimits>,
+    progress: &mut Progress<'_>,
 ) -> Result<()> {
-    let message = receiver
-        .recv()
-        .map_err(|_| Error::InternalError("resolution worker result channel closed".to_string()))?;
+    let message = loop {
+        progress.report_if_due();
+        match receiver.recv_timeout(progress::REPORT_INTERVAL) {
+            Ok(message) => break message,
+            Err(RecvTimeoutError::Timeout) => continue,
+            Err(RecvTimeoutError::Disconnected) => {
+                return Err(Error::InternalError(
+                    "resolution worker result channel closed".to_string(),
+                ));
+            }
+        }
+    };
     retain_result(message, pending, available_workers)?;
-    emit_ready(pending, next_sequence, explanation_limits, emit)
+    emit_ready(pending, next_sequence, explanation_limits, emit, progress)
 }
 
 fn drain_available<R>(
@@ -408,6 +430,7 @@ fn drain_available<R>(
     next_sequence: &mut u64,
     explanation_limits: &AtomicResolutionExplanationLimits,
     emit: &mut impl FnMut(&NativeParityPackageV1, R) -> Result<ResolutionExplanationLimits>,
+    progress: &mut Progress<'_>,
 ) -> Result<()> {
     loop {
         match receiver.try_recv() {
@@ -416,7 +439,7 @@ fn drain_available<R>(
             Err(TryRecvError::Disconnected) => break,
         }
     }
-    emit_ready(pending, next_sequence, explanation_limits, emit)
+    emit_ready(pending, next_sequence, explanation_limits, emit, progress)
 }
 
 fn retain_result<R>(
@@ -449,13 +472,16 @@ fn emit_ready<R>(
     next_sequence: &mut u64,
     explanation_limits: &AtomicResolutionExplanationLimits,
     emit: &mut impl FnMut(&NativeParityPackageV1, R) -> Result<ResolutionExplanationLimits>,
+    progress: &mut Progress<'_>,
 ) -> Result<()> {
     while let Some((root, result)) = pending.remove(next_sequence) {
         explanation_limits.store(emit(&root, result?)?);
         *next_sequence = next_sequence.checked_add(1).ok_or_else(|| {
             Error::ConfigError("resolution root sequence exceeds u64".to_string())
         })?;
+        progress.emitted = *next_sequence;
     }
+    progress.report_if_due();
     Ok(())
 }
 
