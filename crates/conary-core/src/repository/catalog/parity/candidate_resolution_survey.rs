@@ -807,7 +807,7 @@ mod tests {
             "source_profile": "fedora-44",
             "name": format!("package-{index:05}"),
             "version": "1",
-            "package_release": "1",
+            "package_release": "",
             "architecture": "x86_64",
             "debian_multi_arch": null,
             "checksum": format!("sha256:{}", "d".repeat(64)),

@@ -136,7 +136,7 @@ fn package(
         source_profile: profile_name(ecosystem).to_string(),
         name: name.to_string(),
         version: "1.0-1".to_string(),
-        package_release: "1".to_string(),
+        package_release: String::new(),
         architecture: Some(architecture.to_string()),
         debian_multi_arch: (scheme == VersionScheme::Debian).then_some(DebianMultiArch::No),
         description: Some(format!("{name} presentation text excluded from parity")),

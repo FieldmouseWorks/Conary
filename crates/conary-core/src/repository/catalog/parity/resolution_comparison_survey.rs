@@ -493,7 +493,7 @@ mod tests {
                         package_key_sha256: key,
                         name: format!("package-{index:05}"),
                         version: "1".to_string(),
-                        release: "1".to_string(),
+                        release: String::new(),
                         architecture: Some("x86_64".to_string()),
                     },
                 )

@@ -711,7 +711,7 @@ class ResolutionSurveyTransportTests(unittest.TestCase):
                     "root_package_key_sha256": root_sha256,
                     "name": "example",
                     "version": "1:2.0~rc1",
-                    "release": "1.fc44",
+                    "release": "",
                     "architecture": "x86_64",
                     "outcome": unresolved,
                 }
@@ -748,7 +748,7 @@ class ResolutionSurveyTransportTests(unittest.TestCase):
                         "package_key_sha256": root_sha256,
                         "name": "example",
                         "version": "1:2.0~rc1",
-                        "release": "1.fc44",
+                        "release": "",
                         "architecture": "x86_64",
                     },
                     "kind": "resolution_outcome",
@@ -770,7 +770,7 @@ class ResolutionSurveyTransportTests(unittest.TestCase):
         # Reuse the complete, validated mismatch fixture for recovery, including
         # nested outcome arrays and enum-valued histogram pairs.
         expected_recovery = json.loads(canonical(comparison))
-        for key in ("name", "version", "release"):
+        for key in ("name", "version"):
             expected_recovery["mismatches"][0]["root"][key] = "<redacted:private_string>"
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "comparison.json"
@@ -992,6 +992,24 @@ class ResolutionSurveyTransportTests(unittest.TestCase):
             result = subprocess.run(fixture.command(), text=True, capture_output=True, check=False)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("repeats key", result.stderr)
+
+    def test_candidate_accepts_absent_release_without_relaxing_present_identity(self) -> None:
+        for name, architecture in ARCHITECTURES.items():
+            with self.subTest(profile=name):
+                profile = {"profile": name, "profile_revision_sha256": "a" * 64,
+                           "target_architecture": architecture,
+                           "package_oracle_manifest_sha256": "b" * 64}
+                candidate = candidate_survey(name, "a" * 64, "b" * 64)
+                for entry in candidate["outcomes"] + candidate["failures"]:
+                    entry["release"] = ""
+                TRANSPORT_TOOL.validate_candidate_survey(candidate, profile, "candidate.json")
+                for collection in ("outcomes", "failures"):
+                    for release in (None, 1, " ", " 1", "1\n", "1\x00", "é", "x" * 256):
+                        invalid = json.loads(canonical(candidate))
+                        invalid[collection][0]["release"] = release
+                        with self.subTest(collection=collection, release=release):
+                            with self.assertRaises(TRANSPORT_TOOL.ValidationError):
+                                TRANSPORT_TOOL.validate_candidate_survey(invalid, profile, "candidate.json")
 
     def test_candidate_roots_match_authenticated_package_rows(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
