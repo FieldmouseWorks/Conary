@@ -18,7 +18,9 @@ use super::resolution_survey::{
     NativeResolutionSurveyErrorVariantV1,
 };
 use super::support::{Counter, checked_increment};
-use super::survey_support::{canonical_value_size_with_limit, write_private_canonical_json};
+use super::survey_support::{
+    canonical_value_size_with_limit, validate_survey_package_release, write_private_canonical_json,
+};
 use crate::error::{Error, Result};
 use crate::repository::catalog::ProfileRevisionV2;
 use crate::repository::catalog::contract::{validate_identity, validate_sha256};
@@ -312,7 +314,7 @@ impl ConaryResolutionSurveyRootOutcomeV1 {
     fn validate(&self) -> Result<()> {
         validate_identity(&self.name, "Conary resolution survey package name")?;
         validate_identity(&self.version, "Conary resolution survey package version")?;
-        validate_identity(&self.release, "Conary resolution survey package release")?;
+        validate_survey_package_release(&self.release, "Conary resolution survey package release")?;
         super::resolution_contract::NativeResolutionRootV1 {
             root_package_key_sha256: self.root_package_key_sha256.clone(),
             outcome: self.outcome.clone(),
@@ -329,7 +331,7 @@ impl ConaryResolutionSurveyFailureV1 {
         )?;
         validate_identity(&self.name, "Conary resolution survey package name")?;
         validate_identity(&self.version, "Conary resolution survey package version")?;
-        validate_identity(&self.release, "Conary resolution survey package release")?;
+        validate_survey_package_release(&self.release, "Conary resolution survey package release")?;
         if self.error_message.is_empty() {
             return Err(Error::ConfigError(
                 "Conary resolution survey error message is empty".to_string(),
@@ -807,7 +809,7 @@ mod tests {
             "source_profile": "fedora-44",
             "name": format!("package-{index:05}"),
             "version": "1",
-            "package_release": "1",
+            "package_release": "",
             "architecture": "x86_64",
             "debian_multi_arch": null,
             "checksum": format!("sha256:{}", "d".repeat(64)),

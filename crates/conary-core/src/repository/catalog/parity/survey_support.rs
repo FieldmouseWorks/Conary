@@ -10,6 +10,16 @@ use serde::Serialize;
 
 use crate::error::{Error, Result};
 
+/// The separate catalog release is absent for native packages: their complete
+/// source version already includes the native release/revision. Preserve that
+/// empty-string representation; present values retain the identity bounds.
+pub(super) fn validate_survey_package_release(release: &str, label: &str) -> Result<()> {
+    if release.is_empty() {
+        return Ok(());
+    }
+    crate::repository::catalog::contract::validate_identity(release, label)
+}
+
 /// Incremental compact-JSON accounting for one retained evidence value.
 #[allow(dead_code)] // Item-wise builders are used by feature-gated native producers.
 pub(super) struct SurveyEvidenceBudget {
@@ -113,5 +123,20 @@ impl Write for CanonicalSizeCounter {
 
     fn flush(&mut self) -> io::Result<()> {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn absent_package_release_preserves_present_identity_bounds() {
+        for release in ["", "1", "1.fc44", &"x".repeat(255)] {
+            validate_survey_package_release(release, "release").unwrap();
+        }
+        for release in [" ", " 1", "1 ", "1\n", "1\0", "é", &"x".repeat(256)] {
+            assert!(validate_survey_package_release(release, "release").is_err());
+        }
     }
 }

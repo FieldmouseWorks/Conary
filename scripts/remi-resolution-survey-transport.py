@@ -188,6 +188,14 @@ def require_rust_identity(value: Any, label: str) -> str:
     return value
 
 
+def require_survey_package_release(value: Any, label: str) -> str:
+    # Native source versions already contain their release/revision; the
+    # separate catalog release is represented by the empty string when absent.
+    if value == "":
+        return value
+    return require_rust_identity(value, label)
+
+
 def load_json(path: Path, label: str, *, canonical: bool = False) -> tuple[Any, bytes]:
     metadata = plain_file(path, label, MAX_MANIFEST_BYTES)
     data = path.read_bytes()
@@ -1570,8 +1578,9 @@ def validate_candidate_survey(value: Any, profile: dict[str, Any], name: str) ->
         if root_sha256 <= previous_outcome_key:
             fail(f"{name} successful roots are noncanonical")
         previous_outcome_key = root_sha256
-        for key in ("name", "version", "release"):
+        for key in ("name", "version"):
             require_rust_identity(outcome[key], f"{name} outcome {index}.{key}")
+        require_survey_package_release(outcome["release"], f"{name} outcome {index}.release")
         require_optional_string(outcome["architecture"], f"{name} outcome {index}.architecture")
         kind = validate_native_outcome(outcome["outcome"], root_sha256, f"{name} outcome {index}.outcome")
         typed_counts[kind] += 1
@@ -1597,8 +1606,9 @@ def validate_candidate_survey(value: Any, profile: dict[str, Any], name: str) ->
             f"{name} failure {index}",
         )
         failure_keys.append(require_sha256(failure["root_package_key_sha256"], f"{name} failure {index} root"))
-        for key in ("name", "version", "release"):
+        for key in ("name", "version"):
             require_rust_identity(failure[key], f"{name} failure {index}.{key}")
+        require_survey_package_release(failure["release"], f"{name} failure {index}.release")
         require_optional_string(failure["architecture"], f"{name} failure {index}.architecture")
         validate_error_kind(failure["error_kind"], f"{name} failure {index}.error_kind")
         if not isinstance(failure["error_message"], str) or not failure["error_message"]:
@@ -1811,8 +1821,9 @@ def validate_comparison_survey(
         )
         root_sha256 = require_sha256(root["package_key_sha256"], f"{name} mismatch {index} root digest")
         retained_root_keys.append(root_sha256)
-        for key in ("name", "version", "release"):
+        for key in ("name", "version"):
             require_rust_identity(root[key], f"{name} mismatch {index} root.{key}")
+        require_survey_package_release(root["release"], f"{name} mismatch {index} root.release")
         require_optional_string(root["architecture"], f"{name} mismatch {index} root.architecture")
         typed: dict[str, tuple[str, dict[str, Any]]] = {}
         for side, manifest_key in (("oracle", "oracle_manifest_sha256"), ("candidate", "candidate_manifest_sha256")):

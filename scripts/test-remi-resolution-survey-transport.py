@@ -180,8 +180,8 @@ class TransportFixture:
             resolution_root.mkdir()
             package_rows = []
             for root_key, name, version, release in (
-                ("1" * 64, "example", "1:2.0~rc1", "1.fc44"),
-                ("2" * 64, "broken-example", "1", "1"),
+                ("1" * 64, "example", "1:2.0~rc1", ""),
+                ("2" * 64, "broken-example", "1", ""),
             ):
                 package_rows.append({
                     "package_key_sha256": root_key,
@@ -443,7 +443,7 @@ def candidate_survey(profile: str, revision: str, package_manifest: str) -> dict
                 "root_package_key_sha256": outcome_root,
                 "name": "example",
                 "version": "1:2.0~rc1",
-                "release": "1.fc44",
+                "release": "",
                 "architecture": architecture,
                 "outcome": {
                     "status": "resolved",
@@ -465,7 +465,7 @@ def candidate_survey(profile: str, revision: str, package_manifest: str) -> dict
                 "root_package_key_sha256": failure_root,
                 "name": "broken-example",
                 "version": "1",
-                "release": "1",
+                "release": "",
                 "architecture": architecture,
                 "error_kind": error_kind,
                 "error_message": "solver failed",
@@ -711,7 +711,7 @@ class ResolutionSurveyTransportTests(unittest.TestCase):
                     "root_package_key_sha256": root_sha256,
                     "name": "example",
                     "version": "1:2.0~rc1",
-                    "release": "1.fc44",
+                    "release": "",
                     "architecture": "x86_64",
                     "outcome": unresolved,
                 }
@@ -748,7 +748,7 @@ class ResolutionSurveyTransportTests(unittest.TestCase):
                         "package_key_sha256": root_sha256,
                         "name": "example",
                         "version": "1:2.0~rc1",
-                        "release": "1.fc44",
+                        "release": "",
                         "architecture": "x86_64",
                     },
                     "kind": "resolution_outcome",
@@ -766,6 +766,15 @@ class ResolutionSurveyTransportTests(unittest.TestCase):
         TRANSPORT_TOOL.validate_comparison_survey(
             comparison, profile, "comparison.json", candidate, candidate_manifest
         )
+
+        for release in (None, 1, " ", " 1", "1\n", "1\x00", "é", "x" * 256):
+            invalid = json.loads(canonical(comparison))
+            invalid["mismatches"][0]["root"]["release"] = release
+            with self.subTest(release=release):
+                with self.assertRaises(TRANSPORT_TOOL.ValidationError):
+                    TRANSPORT_TOOL.validate_comparison_survey(
+                        invalid, profile, "comparison.json", candidate, candidate_manifest
+                    )
 
         # Reuse the complete, validated mismatch fixture for recovery, including
         # nested outcome arrays and enum-valued histogram pairs.
@@ -993,6 +1002,24 @@ class ResolutionSurveyTransportTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("repeats key", result.stderr)
 
+    def test_candidate_accepts_absent_release_without_relaxing_present_identity(self) -> None:
+        for name, architecture in ARCHITECTURES.items():
+            with self.subTest(profile=name):
+                profile = {"profile": name, "profile_revision_sha256": "a" * 64,
+                           "target_architecture": architecture,
+                           "package_oracle_manifest_sha256": "b" * 64}
+                candidate = candidate_survey(name, "a" * 64, "b" * 64)
+                for entry in candidate["outcomes"] + candidate["failures"]:
+                    entry["release"] = ""
+                TRANSPORT_TOOL.validate_candidate_survey(candidate, profile, "candidate.json")
+                for collection in ("outcomes", "failures"):
+                    for release in (None, 1, " ", " 1", "1\n", "1\x00", "é", "x" * 256):
+                        invalid = json.loads(canonical(candidate))
+                        invalid[collection][0]["release"] = release
+                        with self.subTest(collection=collection, release=release):
+                            with self.assertRaises(TRANSPORT_TOOL.ValidationError):
+                                TRANSPORT_TOOL.validate_candidate_survey(invalid, profile, "candidate.json")
+
     def test_candidate_roots_match_authenticated_package_rows(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             fixture = TransportFixture(Path(temporary))
@@ -1057,7 +1084,7 @@ class ResolutionSurveyTransportTests(unittest.TestCase):
                     "root_package_key_sha256": "2" * 64,
                     "name": "broken-example",
                     "version": "1",
-                    "release": "1",
+                    "release": "",
                     "architecture": ARCHITECTURES[profile["profile"]],
                     "outcome": {
                         "status": "resolved",
