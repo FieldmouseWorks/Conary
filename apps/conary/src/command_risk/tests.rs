@@ -357,6 +357,15 @@ fn active_host_install_requires_apply_intent() {
 }
 
 #[test]
+fn install_dry_run_does_not_require_apply_intent() {
+    let policy = policy(&["conary", "install", "nginx", "--dry-run"]);
+    assert_eq!(policy.risk, CommandRisk::ActiveHostMutation);
+    assert!(policy.dry_run);
+    assert!(!policy.requires_apply_intent());
+    assert!(!policy.requires_ack());
+}
+
+#[test]
 fn classify_generation_pending_as_read_only() {
     let policy = policy(&["conary", "system", "generation", "pending"]);
     assert_eq!(policy.risk, CommandRisk::ReadOnly);

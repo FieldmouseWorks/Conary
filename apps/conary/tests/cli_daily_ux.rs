@@ -2,7 +2,9 @@
 
 pub mod common;
 
-use conary_core::db::models::{InstallSource, Repository, RepositoryPackage, Trove, TroveType};
+use conary_core::db::models::{
+    InstallReason, InstallSource, Repository, RepositoryPackage, Trove, TroveType,
+};
 use conary_core::packages::InstalledPackageIdentity;
 use std::process::{Command, Output};
 
@@ -280,6 +282,47 @@ fn already_installed_idempotence_uses_current_mutation_surface() {
     assert!(!stderr.contains("--allow-live-system-mutation"), "{stderr}");
     assert!(!stderr.contains("live-host acknowledgement"), "{stderr}");
     assert!(!stderr.contains("may change packages"), "{stderr}");
+}
+
+#[test]
+fn install_dry_run_reports_promotion_without_changing_dependency_state() {
+    let (_tmp, db_path, conn) = common::create_test_db();
+    let mut trove = Trove::new_with_source(
+        "promotion-fixture".to_string(),
+        "1.0-1".to_string(),
+        TroveType::Package,
+        InstallSource::Repository,
+        conary_core::repository::versioning::VersionScheme::Rpm,
+    );
+    trove.architecture = Some("x86_64".to_string());
+    trove.install_reason = InstallReason::Dependency;
+    trove.selection_reason = Some("Required by another package".to_string());
+    let id = trove.insert(&conn).unwrap();
+    let root = tempfile::tempdir().unwrap();
+
+    let output = run_conary(&[
+        "install",
+        "promotion-fixture",
+        "--dry-run",
+        "--db-path",
+        &db_path,
+        "--root",
+        root.path().to_str().unwrap(),
+    ]);
+
+    assert!(output.status.success(), "{}", output_text(&output));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Would promote promotion-fixture from dependency to explicit"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("Promoted"), "{stdout}");
+    let installed = Trove::find_by_id(&conn, id).unwrap().unwrap();
+    assert_eq!(installed.install_reason, InstallReason::Dependency);
+    assert_eq!(
+        installed.selection_reason.as_deref(),
+        Some("Required by another package")
+    );
 }
 
 #[test]
