@@ -180,8 +180,8 @@ class TransportFixture:
             resolution_root.mkdir()
             package_rows = []
             for root_key, name, version, release in (
-                ("1" * 64, "example", "1:2.0~rc1", "1.fc44"),
-                ("2" * 64, "broken-example", "1", "1"),
+                ("1" * 64, "example", "1:2.0~rc1", ""),
+                ("2" * 64, "broken-example", "1", ""),
             ):
                 package_rows.append({
                     "package_key_sha256": root_key,
@@ -443,7 +443,7 @@ def candidate_survey(profile: str, revision: str, package_manifest: str) -> dict
                 "root_package_key_sha256": outcome_root,
                 "name": "example",
                 "version": "1:2.0~rc1",
-                "release": "1.fc44",
+                "release": "",
                 "architecture": architecture,
                 "outcome": {
                     "status": "resolved",
@@ -465,7 +465,7 @@ def candidate_survey(profile: str, revision: str, package_manifest: str) -> dict
                 "root_package_key_sha256": failure_root,
                 "name": "broken-example",
                 "version": "1",
-                "release": "1",
+                "release": "",
                 "architecture": architecture,
                 "error_kind": error_kind,
                 "error_message": "solver failed",
@@ -767,10 +767,19 @@ class ResolutionSurveyTransportTests(unittest.TestCase):
             comparison, profile, "comparison.json", candidate, candidate_manifest
         )
 
+        for release in (None, 1, " ", " 1", "1\n", "1\x00", "é", "x" * 256):
+            invalid = json.loads(canonical(comparison))
+            invalid["mismatches"][0]["root"]["release"] = release
+            with self.subTest(release=release):
+                with self.assertRaises(TRANSPORT_TOOL.ValidationError):
+                    TRANSPORT_TOOL.validate_comparison_survey(
+                        invalid, profile, "comparison.json", candidate, candidate_manifest
+                    )
+
         # Reuse the complete, validated mismatch fixture for recovery, including
         # nested outcome arrays and enum-valued histogram pairs.
         expected_recovery = json.loads(canonical(comparison))
-        for key in ("name", "version"):
+        for key in ("name", "version", "release"):
             expected_recovery["mismatches"][0]["root"][key] = "<redacted:private_string>"
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "comparison.json"
@@ -1075,7 +1084,7 @@ class ResolutionSurveyTransportTests(unittest.TestCase):
                     "root_package_key_sha256": "2" * 64,
                     "name": "broken-example",
                     "version": "1",
-                    "release": "1",
+                    "release": "",
                     "architecture": ARCHITECTURES[profile["profile"]],
                     "outcome": {
                         "status": "resolved",
