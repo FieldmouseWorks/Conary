@@ -254,16 +254,19 @@ run_repo_matrix() {
 }
 
 create_release_policy_fixture() {
-    local repo
-    local input
+    local repo input_list
+    local -a inputs
 
-    repo="$(mktemp -d "${TEST_RUN_ROOT}/fixture.XXXXXX")"
+    repo="$(mktemp -d "${TEST_RUN_ROOT}/fixture.XXXXXX")" || return
 
-    while IFS= read -r input; do
-        mkdir -p "$repo/$(dirname "$input")"
-        cp "$REPO_ROOT/$input" "$repo/$input"
-    done < <(bash "$REPO_ROOT/scripts/check-release-matrix.sh" --list-inputs)
-    chmod +x "$repo/scripts/release-matrix.sh"
+    input_list="$(bash "$REPO_ROOT/scripts/check-release-matrix.sh" --list-inputs)" || return
+    mapfile -t inputs <<< "$input_list"
+    # Keep independent files per case without spawning three commands per input.
+    (
+        cd "$REPO_ROOT" || exit
+        cp --parents -- "${inputs[@]}" "$repo"
+    ) || return
+    chmod +x "$repo/scripts/release-matrix.sh" || return
     printf '%s\n' "$repo"
 }
 
