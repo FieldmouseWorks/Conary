@@ -14,16 +14,18 @@ use crate::repository::dependency_model::{
     PackageRelationRemovalMode, RepositoryRequirementGroup, RepositoryRequirementKind,
 };
 use crate::repository::package_relation::{
-    OwnedPackageRelationCandidate, OwnedPackageRelationProvide, PackageRelationCandidate,
-    PackageRelationProvide, expression_matches_candidate_set, minimum_conflict_removal_indices,
+    PackageRelationCandidate, expression_matches_candidate_set, minimum_conflict_removal_indices,
     minimum_relation_addition_indices, relation_matches_candidate,
 };
 use crate::repository::versioning::VersionScheme;
 
 #[path = "package_relations/deconfiguration.rs"]
 mod deconfiguration;
+#[path = "package_relations/facts.rs"]
+mod facts;
 
 use deconfiguration::plan_dependent_deconfigurations;
+use facts::RelationFacts;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PackageRelationRemoval {
@@ -152,11 +154,8 @@ pub fn plan_package_relation_batch_facts(
     conn: &Connection,
     incoming: &[IncomingPackageRelations<'_>],
 ) -> Result<PackageRelationPlan> {
-    let incoming_owned = incoming
-        .iter()
-        .map(owned_incoming_candidate)
-        .collect::<Vec<_>>();
     let installed = load_installed_candidates(conn)?;
+    let facts = RelationFacts::new(&installed, incoming);
     let mut removals = BTreeMap::new();
     let mut deconfigurations = BTreeMap::new();
 
@@ -164,11 +163,11 @@ pub fn plan_package_relation_batch_facts(
         for relation in package.relations {
             match relation.kind {
                 RepositoryRequirementKind::Conflict => {
-                    let fixed = incoming_owned
-                        .iter()
+                    let fixed = facts
+                        .incoming()
                         .enumerate()
                         .filter(|(candidate_index, _)| *candidate_index != incoming_index)
-                        .map(|(_, candidate)| candidate.clone())
+                        .map(|(_, candidate)| candidate)
                         .collect::<Vec<_>>();
                     for installed_package in conflict_removal_set(
                         relation,
@@ -176,6 +175,7 @@ pub fn plan_package_relation_batch_facts(
                         &installed,
                         incoming,
                         &fixed,
+                        &facts,
                     )? {
                         insert_removal(
                             &mut removals,
@@ -188,11 +188,11 @@ pub fn plan_package_relation_batch_facts(
                     }
                 }
                 RepositoryRequirementKind::Breaks => {
-                    let fixed = incoming_owned
-                        .iter()
+                    let fixed = facts
+                        .incoming()
                         .enumerate()
                         .filter(|(candidate_index, _)| *candidate_index != incoming_index)
-                        .map(|(_, candidate)| candidate.clone())
+                        .map(|(_, candidate)| candidate)
                         .collect::<Vec<_>>();
                     for installed_package in conflict_removal_set(
                         relation,
@@ -200,6 +200,7 @@ pub fn plan_package_relation_batch_facts(
                         &installed,
                         incoming,
                         &fixed,
+                        &facts,
                     )? {
                         insert_deconfiguration(
                             &mut deconfigurations,
@@ -213,30 +214,12 @@ pub fn plan_package_relation_batch_facts(
                     }
                 }
                 RepositoryRequirementKind::Replace | RepositoryRequirementKind::Obsolete => {
-                    for (candidate_index, candidate) in incoming_owned.iter().enumerate() {
+                    for (candidate_index, candidate) in facts.incoming().enumerate() {
                         if candidate_index == incoming_index {
                             continue;
                         }
-                        let provides = candidate
-                            .provides
-                            .iter()
-                            .map(|provide| PackageRelationProvide {
-                                name: &provide.name,
-                                version: provide.version.as_deref(),
-                                version_scheme: provide.version_scheme,
-                            })
-                            .collect::<Vec<_>>();
-                        if relation_matches_candidate(
-                            relation,
-                            package.version_scheme,
-                            &PackageRelationCandidate {
-                                name: &candidate.name,
-                                version: &candidate.version,
-                                version_scheme: candidate.version_scheme,
-                                provides: &provides,
-                            },
-                        )
-                        .map_err(Error::ResolutionError)?
+                        if relation_matches_candidate(relation, package.version_scheme, &candidate)
+                            .map_err(Error::ResolutionError)?
                         {
                             return Err(Error::ResolutionError(format!(
                                 "atomic install co-selects {} {} even though {} {} declares {} '{}'",
@@ -254,10 +237,10 @@ pub fn plan_package_relation_batch_facts(
                     }
                     for installed_package in &installed {
                         if incoming_replaces_installed(incoming, installed_package)
-                            || !relation_matches_installed(
+                            || !relation_matches_candidate(
                                 relation,
                                 package.version_scheme,
-                                installed_package,
+                                &facts.installed(installed_package),
                             )
                             .map_err(Error::ResolutionError)?
                         {
@@ -313,7 +296,7 @@ pub fn plan_package_relation_batch_facts(
                     candidate.trove.id != package.trove.id
                         && !incoming_replaces_installed(incoming, candidate)
                 })
-                .map(InstalledCandidate::to_owned_relation_candidate)
+                .map(|candidate| facts.installed(candidate))
                 .collect::<Vec<_>>();
             if expression_matches_candidate_set(
                 &relation.requirement.expression,
@@ -324,8 +307,8 @@ pub fn plan_package_relation_batch_facts(
             {
                 continue;
             }
-            let additions_with_indices = incoming_owned
-                .iter()
+            let additions_with_indices = facts
+                .incoming()
                 .enumerate()
                 .filter(|(index, _)| {
                     !same_package_instance(
@@ -334,11 +317,10 @@ pub fn plan_package_relation_batch_facts(
                         package.trove.architecture.as_deref(),
                     )
                 })
-                .map(|(index, candidate)| (index, candidate.clone()))
                 .collect::<Vec<_>>();
             let additions = additions_with_indices
                 .iter()
-                .map(|(_, candidate)| candidate.clone())
+                .map(|(_, candidate)| *candidate)
                 .collect::<Vec<_>>();
             let mut after = before.clone();
             after.extend_from_slice(&additions);
@@ -369,7 +351,7 @@ pub fn plan_package_relation_batch_facts(
                 })?;
             let incoming_packages = causal_indices
                 .into_iter()
-                .map(|index| additions_with_indices[index].1.name.clone())
+                .map(|index| additions_with_indices[index].1.name.to_string())
                 .collect::<Vec<_>>();
             match relation.kind {
                 RepositoryRequirementKind::Conflict => insert_removal(
@@ -398,7 +380,14 @@ pub fn plan_package_relation_batch_facts(
         deconfigurations.remove(trove_id);
     }
     let removals = removals.into_values().collect::<Vec<_>>();
-    plan_dependent_deconfigurations(conn, &installed, incoming, &removals, &mut deconfigurations)?;
+    plan_dependent_deconfigurations(
+        conn,
+        &installed,
+        incoming,
+        &removals,
+        &facts,
+        &mut deconfigurations,
+    )?;
     let mut deconfigurations = deconfigurations.into_values().collect::<Vec<_>>();
     deconfigurations.sort_by(|left, right| {
         left.triggering_incoming
@@ -412,25 +401,6 @@ pub fn plan_package_relation_batch_facts(
         removals,
         deconfigurations,
     })
-}
-
-fn owned_incoming_candidate(
-    incoming: &IncomingPackageRelations<'_>,
-) -> OwnedPackageRelationCandidate {
-    OwnedPackageRelationCandidate {
-        name: incoming.name.to_string(),
-        version: incoming.version.to_string(),
-        version_scheme: incoming.version_scheme,
-        provides: incoming
-            .provides
-            .iter()
-            .map(|provide| OwnedPackageRelationProvide {
-                name: provide.name.clone(),
-                version: provide.version.clone(),
-                version_scheme: provide.version_scheme,
-            })
-            .collect(),
-    }
 }
 
 fn incoming_identity(
@@ -824,68 +794,24 @@ struct OwnedProvide {
     version: Option<String>,
 }
 
-impl InstalledCandidate {
-    fn to_owned_relation_candidate(&self) -> OwnedPackageRelationCandidate {
-        OwnedPackageRelationCandidate {
-            name: self.trove.name.clone(),
-            version: self.trove.version.clone(),
-            version_scheme: self.version_scheme,
-            provides: self
-                .provides
-                .iter()
-                .map(|provide| OwnedPackageRelationProvide {
-                    name: provide.name.clone(),
-                    version: provide.version.clone(),
-                    version_scheme: self.version_scheme,
-                })
-                .collect(),
-        }
-    }
-}
-
-fn relation_matches_installed(
-    relation: &crate::repository::dependency_model::RepositoryRequirementGroup,
-    relation_scheme: VersionScheme,
-    package: &InstalledCandidate,
-) -> std::result::Result<bool, String> {
-    let provides = package
-        .provides
-        .iter()
-        .map(|provide| PackageRelationProvide {
-            name: &provide.name,
-            version: provide.version.as_deref(),
-            version_scheme: package.version_scheme,
-        })
-        .collect::<Vec<_>>();
-    relation_matches_candidate(
-        relation,
-        relation_scheme,
-        &PackageRelationCandidate {
-            name: &package.trove.name,
-            version: &package.trove.version,
-            version_scheme: package.version_scheme,
-            provides: &provides,
-        },
-    )
-}
-
 fn conflict_removal_set<'a>(
     relation: &RepositoryRequirementGroup,
     relation_scheme: VersionScheme,
     installed: &'a [InstalledCandidate],
     incoming: &[IncomingPackageRelations<'_>],
-    fixed: &[OwnedPackageRelationCandidate],
+    fixed: &[PackageRelationCandidate<'_>],
+    facts: &RelationFacts<'_>,
 ) -> Result<Vec<&'a InstalledCandidate>> {
     let candidates = installed
         .iter()
         .filter(|package| !incoming_replaces_installed(incoming, package))
         .collect::<Vec<_>>();
-    let owned = candidates
+    let borrowed = candidates
         .iter()
-        .map(|package| package.to_owned_relation_candidate())
+        .map(|package| facts.installed(package))
         .collect::<Vec<_>>();
     let removal_indices =
-        minimum_conflict_removal_indices(relation, relation_scheme, &owned, fixed)
+        minimum_conflict_removal_indices(relation, relation_scheme, &borrowed, fixed)
             .map_err(Error::ResolutionError)?;
     Ok(removal_indices
         .into_iter()

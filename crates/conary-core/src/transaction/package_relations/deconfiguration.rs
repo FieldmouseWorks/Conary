@@ -24,6 +24,7 @@ pub(super) fn plan_dependent_deconfigurations(
     installed: &[InstalledCandidate],
     incoming: &[IncomingPackageRelations<'_>],
     removals: &[PackageRelationRemoval],
+    facts: &RelationFacts<'_>,
     deconfigurations: &mut BTreeMap<i64, PackageRelationDeconfiguration>,
 ) -> Result<()> {
     let removed_ids = removals
@@ -41,7 +42,7 @@ pub(super) fn plan_dependent_deconfigurations(
         .collect::<BTreeMap<_, _>>();
     let baseline = installed
         .iter()
-        .map(InstalledCandidate::to_owned_relation_candidate)
+        .map(|candidate| facts.installed(candidate))
         .collect::<Vec<_>>();
 
     loop {
@@ -50,7 +51,8 @@ pub(super) fn plan_dependent_deconfigurations(
             .iter()
             .map(|transition| transition.package.trove_id)
             .collect::<BTreeSet<_>>();
-        let final_candidates = configured_candidate_set(installed, incoming, &final_excluded);
+        let final_candidates =
+            configured_candidate_set(installed, incoming, &final_excluded, facts);
         let mut planned = Vec::new();
 
         for package in installed {
@@ -84,12 +86,12 @@ pub(super) fn plan_dependent_deconfigurations(
             }
 
             let mut excluded = BTreeSet::new();
-            let mut candidates = configured_candidate_set(installed, incoming, &excluded);
+            let mut candidates = configured_candidate_set(installed, incoming, &excluded, facts);
             let mut cause = None;
             for transition in &transitions {
                 let before = candidates;
                 excluded.insert(transition.package.trove_id);
-                candidates = configured_candidate_set(installed, incoming, &excluded);
+                candidates = configured_candidate_set(installed, incoming, &excluded, facts);
                 let mut broken_requirement = None;
                 for requirement in &requirements {
                     if requirement_is_satisfied(requirement, &baseline)?
@@ -186,11 +188,12 @@ fn availability_transitions(
     transitions
 }
 
-fn configured_candidate_set(
+fn configured_candidate_set<'a>(
     installed: &[InstalledCandidate],
     incoming: &[IncomingPackageRelations<'_>],
     excluded_trove_ids: &BTreeSet<i64>,
-) -> Vec<OwnedPackageRelationCandidate> {
+    facts: &'a RelationFacts<'_>,
+) -> Vec<PackageRelationCandidate<'a>> {
     let mut candidates = installed
         .iter()
         .filter(|candidate| {
@@ -201,15 +204,15 @@ fn configured_candidate_set(
                     .expect("configured candidate is installed"),
             ) && !incoming_replaces_installed(incoming, candidate)
         })
-        .map(InstalledCandidate::to_owned_relation_candidate)
+        .map(|candidate| facts.installed(candidate))
         .collect::<Vec<_>>();
-    candidates.extend(incoming.iter().map(owned_incoming_candidate));
+    candidates.extend(facts.incoming());
     candidates
 }
 
 fn requirement_is_satisfied(
     requirement: &InstalledRequirementGroup,
-    candidates: &[OwnedPackageRelationCandidate],
+    candidates: &[PackageRelationCandidate<'_>],
 ) -> Result<bool> {
     expression_matches_candidate_set(
         &requirement.requirement.expression,
