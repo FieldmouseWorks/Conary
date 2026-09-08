@@ -10,7 +10,14 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-fn artifact(dir: &Path, name: &str, version: &str, ccs: bool, dependency: bool) -> PathBuf {
+fn artifact(
+    dir: &Path,
+    name: &str,
+    version: &str,
+    ccs: bool,
+    dependency: bool,
+    obsolete: bool,
+) -> PathBuf {
     if !ccs {
         let mut builder =
             rpm::PackageBuilder::new(name, version, "MIT", "x86_64", "summary fixture");
@@ -90,7 +97,14 @@ async fn install_summary_capture_child() {
     let preview = scenario.contains("preview");
     let failed = scenario.contains("failed");
     let canceled = scenario == "canceled_native";
-    let package = artifact(temp.path(), "summary-incoming", "2.0.0", ccs, canceled);
+    let package = artifact(
+        temp.path(),
+        "summary-incoming",
+        "2.0.0",
+        ccs,
+        canceled,
+        scenario.contains("relation"),
+    );
     if scenario.contains("relation") {
         let old_package = artifact(
             temp.path(),
@@ -350,7 +364,7 @@ fn install_summary_commands_in_terminal_pipe_and_no_color() {
             if scenario.contains("relation") {
                 assert!(frame.contains("summary-obsolete"), "{frame}");
                 assert!(frame.contains("Reason"), "{frame}");
-                assert!(frame.contains("obsoletes"), "{frame}");
+                assert!(frame.contains("obsolete"), "{frame}");
             }
             if scenario.starts_with("batch") {
                 assert!(frame.contains("summary-second"), "{frame}");

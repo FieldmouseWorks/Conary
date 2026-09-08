@@ -192,7 +192,7 @@ mod tests {
             },
             InstallChange::Remove(
                 before.clone(),
-                conary_core::repository::dependency_model::RepositoryRequirementKind::Obsoletes,
+                conary_core::repository::dependency_model::RepositoryRequirementKind::Obsolete,
             ),
             InstallChange::Deconfigure(before),
         ];
@@ -206,7 +206,7 @@ mod tests {
             "aarch64 -> x86_64",
             "Remove (1):",
             "Reason",
-            "obsoletes",
+            "obsolete",
             "Deconfigure (1):",
         ] {
             assert!(text.contains(expected), "{text}");
