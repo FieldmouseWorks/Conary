@@ -30,12 +30,17 @@ pub(crate) fn suspend<T>(write: impl FnOnce() -> T) -> T {
 /// Every row belongs to the same terminal coordinator. Future download workers can
 /// add bounded rows there without introducing another redraw owner.
 pub(crate) struct ProgressDisplay {
+    multi: MultiProgress,
     overall: ProgressBar,
     status: Option<ProgressBar>,
 }
 
 impl ProgressDisplay {
     pub(crate) fn new(total: u64, operation: &str) -> Self {
+        Self::with_terminal(terminal().clone(), total, operation)
+    }
+
+    fn with_terminal(multi: MultiProgress, total: u64, operation: &str) -> Self {
         let overall = if total > 1 {
             let bar = ProgressBar::new(total);
             bar.set_style(
@@ -49,22 +54,26 @@ impl ProgressDisplay {
             spinner()
         };
         overall.set_message(operation.to_owned());
-        let overall = terminal().add(overall);
+        let overall = multi.add(overall);
         // Adding a hidden ProgressBar to MultiProgress replaces its draw target
         // and exposes its default 0/0 bar. An absent row must remain absent.
-        let status = (total > 1).then(|| terminal().add(spinner()));
+        let status = (total > 1).then(|| multi.add(spinner()));
         let ticker = status.as_ref().unwrap_or(&overall);
-        if !terminal().is_hidden() {
+        if !multi.is_hidden() {
             ticker.enable_steady_tick(Duration::from_millis(100));
         }
-        Self { overall, status }
+        Self {
+            multi,
+            overall,
+            status,
+        }
     }
 
     pub(crate) fn set_status(&self, message: impl Into<String>) {
         self.status
             .as_ref()
             .unwrap_or(&self.overall)
-            .set_message(message);
+            .set_message(message.into());
     }
 
     pub(crate) fn set_position(&self, completed: u64) {
@@ -84,9 +93,9 @@ impl Drop for ProgressDisplay {
         // Includes early `?` returns: stop tickers and erase rows before errors print.
         self.clear();
         if let Some(status) = &self.status {
-            terminal().remove(status);
+            self.multi.remove(status);
         }
-        terminal().remove(&self.overall);
+        self.multi.remove(&self.overall);
     }
 }
 
@@ -99,3 +108,6 @@ fn spinner() -> ProgressBar {
     );
     spinner
 }
+
+#[cfg(test)]
+mod tests;

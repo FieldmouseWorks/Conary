@@ -118,6 +118,17 @@ pub fn field(label: &str, value: &str) {
     message(&field_line(label, value));
 }
 
+// Preserve formatting at legacy call sites while coordinating their terminal writes.
+macro_rules! println {
+    () => { $crate::ui::message("") };
+    ($($args:tt)*) => { $crate::ui::message(&format!($($args)*)) };
+}
+macro_rules! eprintln {
+    () => { $crate::ui::diagnostic("") };
+    ($($args:tt)*) => { $crate::ui::diagnostic(&format!($($args)*)) };
+}
+pub(crate) use {eprintln, println};
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -158,14 +169,3 @@ mod tests {
         assert_eq!(heading_line("Installed packages:"), "Installed packages:");
     }
 }
-
-// Preserve formatting at legacy call sites while coordinating their terminal writes.
-macro_rules! println {
-    () => { $crate::ui::message("") };
-    ($($args:tt)*) => { $crate::ui::message(&format!($($args)*)) };
-}
-macro_rules! eprintln {
-    () => { $crate::ui::diagnostic("") };
-    ($($args:tt)*) => { $crate::ui::diagnostic(&format!($($args)*)) };
-}
-pub(crate) use {eprintln, println};

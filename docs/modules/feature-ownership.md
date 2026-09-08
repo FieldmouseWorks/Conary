@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-09-04
-revision: 96
+last_updated: 2026-09-08
+revision: 97
 summary: Route each feature to its smallest start context, owned paths, focused proof, interaction gate, documentation owners, and safety constraints.
 ---
 
@@ -145,6 +145,42 @@ completion, UX, model, or live-mutation behavior.
 routing, preserve `require_live_mutation` labels/classes/dry-run arguments
 exactly, and do not add new command surfaces without matching CLI and dispatch
 proof.
+
+## CLI Output And Progress
+
+**Slug:** cli-ui
+
+**Capability:** render durable CLI messages and transient package progress through
+one terminal coordinator while preserving command-owned phases and results.
+
+**Start here:** `apps/conary/src/ui/mod.rs`;
+`apps/conary/src/ui/progress.rs`; `apps/conary/src/commands/progress.rs`;
+`docs/operations/daily-driver-ux-matrix.md`.
+
+**Neighbor systems:** install, update, remove, and adoption command output;
+command summaries; tracing diagnostics.
+
+**Paths:** `apps/conary/src/ui/*`; `apps/conary/src/commands/progress.rs`;
+`apps/conary/tests/cli_progress.rs`;
+`apps/conary/tests/cli_output_snapshots.rs`;
+`apps/conary/tests/output_vocabulary_guard.rs`.
+
+**Focused proof:** `cargo test -p conary --lib ui::`;
+`cargo test -p conary --test cli_progress`;
+`cargo test -p conary --test output_vocabulary_guard`;
+`cargo test -p conary --test cli_daily_ux`;
+`cargo test -p conary --test cli_output_snapshots`.
+
+**Interaction gate:** `cargo test -p conary` when package command adapters or
+output call sites change.
+
+**Docs to update:** `docs/operations/daily-driver-ux-matrix.md`;
+`docs/llms/subsystem-map.md`.
+
+**Safety notes:** rendering never establishes transaction success, package
+compatibility, or publication authority. Keep guarded status tags and output
+streams stable. Progress is transient; command results survive pipes and
+`NO_COLOR`. Terminal capture proof requires util-linux `script`.
 
 ## Native Package Install, Update, Remove, And Live-Root Mutation
 

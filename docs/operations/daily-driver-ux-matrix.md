@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-09-08
-revision: 4
-summary: Daily-driver CLI routes, read-only dependency promotion previews, presentation slices, shell completion checks, and focused tests
+revision: 5
+summary: Daily-driver CLI routes, coordinated transient package progress, presentation slices, and focused terminal and pipe proof
 ---
 
 # Daily-Driver UX Matrix
@@ -52,6 +52,30 @@ cargo run -p conary -- system completions zsh >/tmp/conary-completion.zsh
   generation activation, rollback, or export.
 - conaryd guidance is operator routing text for durable package jobs. It is not
   a new UI client and does not loosen the live-host mutation acknowledgement.
+
+## Package Progress Contract
+
+`apps/conary/src/commands/progress.rs` owns package phase wording;
+`apps/conary/src/ui/progress.rs` owns terminal rendering and row lifetime.
+Install, update, removal, and adoption share one terminal coordinator. Unknown
+or single-package totals render one cyan spinner; larger nonzero totals render
+an aggregate bar and one active status row. No placeholder bar is registered.
+
+Completion and early errors clear transient rows. Install, update, and removal
+leave durable result wording to their command summaries. Adoption emits its
+completion count as durable output, including in pipes. UI messages suspend
+redraw while writing, so nested package operations can retain their summaries.
+Live redraw requires both output streams to be terminals and a missing or empty
+`NO_COLOR`; pipes and nonempty `NO_COLOR` keep only durable messages.
+
+The focused proof includes `cargo test -p conary --test cli_progress`, which
+captures real terminals with `script -qec`, plus screen-state tests under
+`cargo test -p conary --lib ui::progress`. The audited single-package frame had
+an extra `░… 0/0` row and a completion spinner touching the following summary.
+The renderer now shows one phase row, erases it, and leaves the command summary
+on its own line. Tests assert row count, phase text, retained diagnostics,
+nested cleanup, and no redraw after return. Concurrent fetching remains #535;
+warning/error wording and tracing duplication remain the following #132 slice.
 
 ## Ranked UI Slices
 
