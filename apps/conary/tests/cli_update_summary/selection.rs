@@ -137,6 +137,10 @@ fn empty_selection_preserves_each_reason_in_all_output_modes() {
                 assert!(success, "{text}");
                 assert!(text.starts_with("Collection update selection\n"), "{text}");
                 assert!(text.contains(expected), "{text}");
+                if sql.is_none() {
+                    assert!(text.contains("external authority:"), "{text}");
+                    assert!(text.contains("conary system adopt --refresh"), "{text}");
+                }
                 assert!(text.contains("  Selected packages: 0\n"), "{text}");
                 assert!(!text.contains("up to date"), "{text}");
                 let closing = if empty {

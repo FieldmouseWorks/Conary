@@ -103,6 +103,29 @@ mod tests {
     use super::*;
 
     #[test]
+    fn external_guidance_survives_alongside_selected_updates() {
+        let entries = [
+            CollectionSelectionEntry {
+                target: "selected 1.0 [x86_64]".into(),
+                status: CollectionSelectionStatus::Selected,
+            },
+            CollectionSelectionEntry {
+                target: "external 1.0 [x86_64]".into(),
+                status: CollectionSelectionStatus::ExternallyManaged {
+                    guidance: "recorded owner command".into(),
+                },
+            },
+        ];
+        let text = selection_lines("base", 2, false, &entries).join("\n");
+        assert!(
+            text.contains("external authority: recorded owner command"),
+            "{text}"
+        );
+        assert!(text.contains("conary system adopt --refresh"), "{text}");
+        assert!(!text.contains("No eligible updates selected."), "{text}");
+    }
+
+    #[test]
     fn one_member_can_have_multiple_installed_variant_results() {
         console::set_colors_enabled(false);
         let entries = [
