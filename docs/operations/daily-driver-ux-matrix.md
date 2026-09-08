@@ -235,7 +235,7 @@ Applied package changes:
   Reversed changeset: 1
   Restored file records: 0
   Changeset: 2
-  Generation: 3 published
+  Generation: 1 published
 note: Inspect history: conary system history --db-path='<fixture>/conary.db'
 ```
 
