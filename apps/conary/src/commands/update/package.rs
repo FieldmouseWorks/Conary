@@ -145,59 +145,6 @@ fn update_required_failure_message(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn prepare_full_updates_before_changeset(
-    conn: &rusqlite::Connection,
-    full_updates: Vec<(Trove, RepositoryPackage, Repository)>,
-    db_path: &str,
-    temp_dir: &Path,
-    policy: &ResolutionPolicy,
-) -> Result<Vec<PreparedFullUpdate>> {
-    let mut prepared = Vec::with_capacity(full_updates.len());
-
-    for (trove, repo_pkg, repo) in full_updates {
-        let options = resolution_options_for_selected_update(
-            &repo_pkg,
-            &repo,
-            temp_dir,
-            &objects_dir(db_path),
-            policy,
-        )?;
-
-        let source = resolve_package(conn, &trove.name, &options)
-            .await
-            .with_context(|| {
-                format!(
-                    "failed to resolve selected update package {} {}",
-                    trove.name, repo_pkg.version
-                )
-            })?;
-        let pkg_path = source
-            .path()
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "selected update for {} resolved without a package payload",
-                    trove.name
-                )
-            })?
-            .to_path_buf();
-
-        preflight_prepared_full_update_native_lifecycle(
-            conn, &trove, &repo_pkg, &repo, &pkg_path, db_path,
-        )?;
-
-        prepared.push(PreparedFullUpdate {
-            trove,
-            repo_pkg,
-            repo,
-            pkg_path,
-            _source: source,
-        });
-    }
-
-    Ok(prepared)
-}
-
-#[allow(clippy::too_many_arguments)]
 fn preflight_prepared_full_update_native_lifecycle(
     conn: &rusqlite::Connection,
     trove: &Trove,
@@ -502,7 +449,7 @@ pub(super) async fn update_packages(
             }
         );
     }
-    let preview = preview::plan_selected_updates(
+    let mut preview = preview::plan_selected_updates(
         &conn,
         &updates_available,
         &policy,
@@ -517,7 +464,7 @@ pub(super) async fn update_packages(
         },
     )
     .await?;
-    crate::ui::transaction_summary::install_preview(&preview.planned);
+    crate::ui::transaction_summary::install_preview(&preview.report.planned);
     for (_, selected) in &updates_available {
         if selected.package.is_security_update {
             crate::ui::message(&crate::ui::note_line(&format!(
@@ -583,25 +530,12 @@ pub(super) async fn update_packages(
         return Ok(super::outcome::UpdateOutcome::NoChanges);
     }
 
-    let delta_admission_updates = delta_updates
+    // Preview already acquired and admitted these exact artifacts. Reuse them
+    // for execution so a full update performs one artifact download.
+    let prepared_full_updates = full_updates
         .iter()
-        .map(|(trove, repo_pkg, repo, _)| (trove.clone(), repo_pkg.clone(), repo.clone()))
-        .collect();
-    let prepared_delta_admissions = prepare_full_updates_before_changeset(
-        &conn,
-        delta_admission_updates,
-        db_path,
-        &temp_dir,
-        &policy,
-    )
-    .await?;
-    for prepared in prepared_delta_admissions {
-        let _ = std::fs::remove_file(&prepared.pkg_path);
-    }
-
-    let prepared_full_updates =
-        prepare_full_updates_before_changeset(&conn, full_updates, db_path, &temp_dir, &policy)
-            .await?;
+        .map(|(trove, _, _)| preview.take_package(trove))
+        .collect::<Result<Vec<_>>>()?;
     let mut full_updates: Vec<(Trove, RepositoryPackage, Repository)> = Vec::new();
 
     let changeset_id = conary_core::db::transaction(&mut conn, |tx| {
@@ -791,50 +725,8 @@ pub(super) async fn update_packages(
                 info!("Resolving {} from {}", trove.name, repo.name);
                 progress.set_phase(&trove.name, UpdatePhase::DownloadingFull);
 
-                let options = match resolution_options_for_selected_update(
-                    &repo_pkg,
-                    &repo,
-                    &temp_dir,
-                    &objects_dir,
-                    &policy,
-                ) {
-                    Ok(options) => options,
-                    Err(error) => {
-                        progress.fail_package(&trove.name, &error.to_string());
-                        required_failures.push(UpdatePackageFailure {
-                            package: trove.name.clone(),
-                            version: repo_pkg.version.clone(),
-                            reason: error.to_string(),
-                        });
-                        continue;
-                    }
-                };
-
-                // Use unified resolver - respects remi/binary/recipe strategies
-                let source = match resolve_package(&conn, &trove.name, &options).await {
-                    Ok(source) => source,
-                    Err(e) => {
-                        progress.fail_package(&trove.name, &e.to_string());
-                        warn!("Failed to resolve {}: {}", trove.name, e);
-                        required_failures.push(UpdatePackageFailure {
-                            package: trove.name.clone(),
-                            version: repo_pkg.version.clone(),
-                            reason: e.to_string(),
-                        });
-                        continue;
-                    }
-                };
-
-                // Get path from source
-                let pkg_path = match &source {
-                    PackageSource::Binary { path, .. } => path.clone(),
-                    PackageSource::Ccs { path, .. } => path.clone(),
-                    PackageSource::Installed { .. } => {
-                        info!("{} is already at the latest version (skipping)", trove.name);
-                        progress.complete_package(&trove.name);
-                        continue;
-                    }
-                };
+                let prepared = preview.take_package(&trove)?;
+                let pkg_path = &prepared.pkg_path;
 
                 progress.set_phase(&trove.name, UpdatePhase::Installing);
 

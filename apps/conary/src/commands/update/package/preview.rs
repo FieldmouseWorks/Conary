@@ -4,12 +4,35 @@
 
 use super::*;
 
+pub(super) struct PreparedUpdatePreview {
+    pub(super) report: InstallReport,
+    packages: std::collections::HashMap<i64, PreparedFullUpdate>,
+    _temporary: tempfile::TempDir,
+}
+
+impl PreparedUpdatePreview {
+    pub(super) fn take_package(&mut self, trove: &Trove) -> Result<PreparedFullUpdate> {
+        self.packages
+            .remove(
+                &trove
+                    .id
+                    .context("selected update has no installed identity")?,
+            )
+            .with_context(|| {
+                format!(
+                    "selected update artifact for {} was not retained",
+                    trove.name
+                )
+            })
+    }
+}
+
 pub(super) async fn plan_selected_updates(
     conn: &rusqlite::Connection,
     selected: &[(Trove, SelectedUpdateCandidate)],
     policy: &ResolutionPolicy,
     options: InstallOptions<'_>,
-) -> Result<InstallReport> {
+) -> Result<PreparedUpdatePreview> {
     // Resolution may hydrate a CCS artifact into CAS. A preview owns disposable
     // downloads and objects; it must not populate the installed runtime's CAS.
     let temporary = tempfile::tempdir()?;
@@ -21,6 +44,7 @@ pub(super) async fn plan_selected_updates(
         projection: Some(projection.clone()),
         ..Default::default()
     };
+    let mut packages = std::collections::HashMap::new();
     let mut ordered = selected
         .iter()
         .map(|entry| {
@@ -51,6 +75,15 @@ pub(super) async fn plan_selected_updates(
         let path = source.path().ok_or_else(|| {
             anyhow::anyhow!("selected update for {} has no preview artifact", trove.name)
         })?;
+        preflight_prepared_full_update_native_lifecycle(
+            conn,
+            trove,
+            &candidate.package,
+            &candidate.repository,
+            path,
+            options.db_path,
+        )?;
+        let pkg_path = path.to_path_buf();
         cmd_install_with_report(
             &path.to_string_lossy(),
             InstallOptions {
@@ -64,6 +97,28 @@ pub(super) async fn plan_selected_updates(
             &mut report,
         )
         .await?;
+        let id = trove
+            .id
+            .context("selected update has no installed identity")?;
+        if packages
+            .insert(
+                id,
+                PreparedFullUpdate {
+                    trove: trove.clone(),
+                    repo_pkg: candidate.package.clone(),
+                    repo: candidate.repository.clone(),
+                    pkg_path,
+                    _source: source,
+                },
+            )
+            .is_some()
+        {
+            anyhow::bail!("update selected installed identity {id} more than once");
+        }
     }
-    Ok(report)
+    Ok(PreparedUpdatePreview {
+        report,
+        packages,
+        _temporary: temporary,
+    })
 }
