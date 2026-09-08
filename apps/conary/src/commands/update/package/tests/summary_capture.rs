@@ -29,6 +29,7 @@ fn add_candidate(conn: &rusqlite::Connection, dir: &Path, name: &str, fail: bool
             TroveType::Package,
             VersionScheme::Debian,
         );
+        consumer.architecture = Some("amd64".into());
         consumer.debian_multi_arch =
             Some(conary_core::repository::dependency_model::DebianMultiArch::No);
         let consumer_id = consumer.insert(conn).unwrap();
@@ -48,8 +49,10 @@ fn add_candidate(conn: &rusqlite::Connection, dir: &Path, name: &str, fail: bool
         let mut consumer_bundle = rpm_upgrade_bundle("summary-consumer", "1");
         consumer_bundle.source_format = SourceFormat::Deb;
         consumer_bundle.source_family = "debian".into();
-        consumer_bundle.source_profile = Some("debian-13".into());
-        consumer_bundle.source_release = Some("13".into());
+        consumer_bundle.source_profile = Some("ubuntu-26.04".into());
+        consumer_bundle.source_release = Some("26.04".into());
+        consumer_bundle.source_arch = Some("amd64".into());
+        consumer_bundle.evidence_digest = None;
         consumer_bundle.version_scheme = conary_core::ccs::native_lifecycle::VersionScheme::Deb;
         consumer_bundle.entries.clear();
         conary_core::db::models::InstalledNativeLifecycleBundle::new(
