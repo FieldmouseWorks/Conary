@@ -159,7 +159,16 @@ async fn package_executor_refuses_live_mutation_without_ack() {
     .await
     .unwrap_err();
 
+    let refusal = err
+        .downcast_ref::<conary::live_host_safety::LiveMutationRefusal>()
+        .expect("daemon executor must preserve the typed refusal");
+    assert_eq!(refusal.command_label, "conaryd install");
+    assert_eq!(
+        refusal.class,
+        conary::live_host_safety::LiveMutationClass::CurrentlyLiveEvenWithRootArguments,
+    );
     let message = format!("{err:#}");
+    assert!(!message.contains('\x1b'), "{message}");
     assert!(message.contains("--dry-run"), "{message}");
     assert!(message.contains("--yes"), "{message}");
     assert!(

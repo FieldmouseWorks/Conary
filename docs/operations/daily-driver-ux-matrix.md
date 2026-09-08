@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-09-08
-revision: 5
-summary: Daily-driver CLI routes, coordinated transient package progress, presentation slices, and focused terminal and pipe proof
+revision: 6
+summary: Daily-driver CLI routes, coordinated progress, typed first-use diagnostics, and focused output proof
 ---
 
 # Daily-Driver UX Matrix
@@ -74,8 +74,43 @@ captures real terminals with `script -qec`, plus screen-state tests under
 an extra `░… 0/0` row and a completion spinner touching the following summary.
 The renderer now shows one phase row, erases it, and leaves the command summary
 on its own line. Tests assert row count, phase text, retained diagnostics,
-nested cleanup, and no redraw after return. Concurrent fetching remains #535;
-warning/error wording and tracing duplication remain the following #132 slice.
+nested cleanup, and no redraw after return. Concurrent fetching remains #535.
+First-use diagnostic rendering is covered below.
+
+## First-Use Diagnostic Contract
+
+`apps/conary/src/ui/diagnostics.rs` renders application failures as one `error:`
+line, indented facts, and separate `note:` actions. `LiveMutationRefusal` retains
+the exact command and mutation class through error context; the existing
+`--dry-run` and `--yes` gate remains its authority. A refusal renders, for example:
+
+```text
+error: Confirmation is required before applying changes.
+  Command: conary install
+  Impact: May change packages, files, scriptlets, ownership, or the live Conary database.
+  Root: Current --root or similar arguments are not sufficient isolation for this command yet.
+note: Use --dry-run when available to preview first.
+note: Rerun this command with --yes when you intend to apply it.
+```
+
+The previous frame joined these facts and actions into one paragraph. Custom
+missing-database errors now put the exact path in a `Database` field without
+Rust debug quotes and retain the custom-path initialization route. Unclassified
+application errors retain their cause chain as separate `Cause` fields. Rendering
+does not derive remedies by parsing error text; a generic conflict does not
+recommend removing a package or using an unverified `--force` flag.
+
+Pending publication prints one warning with its changeset, a retained failure
+reason when present, and the existing exact retry command as a note. Its internal
+tracing record is debug-level, so the default warning log no longer repeats the
+same user-visible warning. Publication outcomes and retry authority are unchanged.
+
+`cargo test -p conary --test cli_diagnostics` asserts exact terminal, pipe, and
+`NO_COLOR` frames and proves first-use refusals create no database or other files.
+`cargo test -p conary --lib ui::diagnostics` checks typed refusal downcasts,
+unclassified cause retention, publication facts, and one default warning/retry.
+Remaining #644 work includes typed signature/preflight presentation, strict
+machine rendering, consistent fields and empty states across other commands.
 
 ## Ranked UI Slices
 
