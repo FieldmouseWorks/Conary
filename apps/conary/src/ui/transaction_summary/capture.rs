@@ -171,7 +171,7 @@ fn command_results_in_terminal_pipe_and_no_color() {
                 ["summary-fixture", "2.0.0", "7", "x86_64"]
             );
             assert!(
-                frame.contains("Inspect history: conary system history --db-path '"),
+                frame.contains("Inspect history: conary system history --db-path='"),
                 "{frame}"
             );
             assert!(!frame.contains("Rollback complete"), "{frame}");
@@ -181,7 +181,7 @@ fn command_results_in_terminal_pipe_and_no_color() {
                 assert!(!frame.contains("Request rollback"), "{frame}");
             } else {
                 assert!(
-                    frame.contains("conary system state rollback 1 --yes --db-path '"),
+                    frame.contains("conary system state rollback 1 --yes --db-path='"),
                     "{frame}"
                 );
             }
@@ -200,7 +200,7 @@ fn command_results_in_terminal_pipe_and_no_color() {
                     "{diagnostic}"
                 );
                 assert!(
-                    diagnostic.contains("publish --yes --db-path '"),
+                    diagnostic.contains("publish --yes --db-path='"),
                     "{diagnostic}"
                 );
                 assert!(!frame.contains(" published"), "{frame}");

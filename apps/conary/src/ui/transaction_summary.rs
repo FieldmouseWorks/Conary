@@ -65,7 +65,7 @@ pub(crate) fn database_command(command: &str, db_path: &str) -> String {
     if db_path.chars().any(char::is_control) {
         return format!("{command} --db-path <PATH> (use the same database path)");
     }
-    format!("{command} --db-path '{}'", db_path.replace('\'', "'\"'\"'"))
+    format!("{command} --db-path='{}'", db_path.replace('\'', "'\"'\"'"))
 }
 
 fn change_lines(changes: &[PackageChange<'_>]) -> Vec<String> {

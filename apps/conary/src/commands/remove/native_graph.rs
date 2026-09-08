@@ -172,10 +172,12 @@ fn execute_selected_root_graph(
                 let plan = purge_plan
                     .take()
                     .context("Debian purge boundary has no captured conffile plan")?;
-                if output.is_none() {
-                    bail!("Debian purge ran before ordinary payload removal");
-                }
-                selected.apply_remove_paths(&plan.remove_paths)?;
+                let (_, stats) = output
+                    .as_mut()
+                    .context("Debian purge ran before ordinary payload removal")?;
+                let purge_stats = selected.apply_remove_paths(&plan.remove_paths)?;
+                stats.files_removed += purge_stats.files_removed;
+                stats.dirs_removed += purge_stats.dirs_removed;
                 plan.delete_rows(conn)?;
                 Ok(())
             }

@@ -71,7 +71,7 @@ fn closing_distinguishes_pending_published_and_missing_generation() {
         assert!(text.contains("Changeset: 42"), "{text}");
         assert!(text.contains(&format!("Generation: {expected}")), "{text}");
         assert!(
-            text.contains("conary system history --db-path '/tmp/fixture.db'"),
+            text.contains("conary system history --db-path='/tmp/fixture.db'"),
             "{text}"
         );
     }
@@ -102,8 +102,7 @@ fn recovery_command_preserves_shell_arguments_without_execution() {
         [
             b"system".as_slice(),
             b"history",
-            b"--db-path",
-            path.as_bytes(),
+            format!("--db-path={path}").as_bytes(),
             b""
         ]
     );

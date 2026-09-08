@@ -219,7 +219,7 @@ install/update tables and remaining generation/recovery surfaces remain #132.
 restores into one table. Each row preserves package name, version, separate CCS
 release, and architecture; absent optional identity fields use `-`. Displayed
 identity values escape control characters. Removal statistics describe selected-root
-file and directory changes, while rollback's restored file count describes database
+file and directory changes, including Debian’s separate conffile purge stage, while rollback's restored file count describes database
 records, not physical writes or recovered disk space.
 
 The old removal frame began `Removed package: ...`; rollback scattered removed
@@ -236,7 +236,7 @@ Applied package changes:
   Restored file records: 0
   Changeset: 2
   Generation: 3 published
-note: Inspect history: conary system history --db-path '<fixture>/conary.db'
+note: Inspect history: conary system history --db-path='<fixture>/conary.db'
 ```
 
 A pending outcome instead says `Generation: publication pending`, followed by the
