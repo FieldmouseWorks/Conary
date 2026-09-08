@@ -91,7 +91,7 @@ pub(super) async fn dispatch_command(command: Option<Commands>) -> Result<()> {
                     LiveMutationClass::CurrentlyLiveEvenWithRootArguments,
                     dry_run,
                 )?;
-                commands::cmd_install(
+                commands::cmd_install_cli(
                     &package,
                     commands::InstallOptions {
                         db_path: &common.db.db_path,

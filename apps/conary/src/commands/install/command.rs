@@ -29,11 +29,26 @@ use std::path::Path;
 /// Packages can be resolved from binary repos, on-demand converters, or recipes
 /// based on their routing table entries.
 pub async fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
+    install_command(package, opts, false).await
+}
+
+pub(crate) async fn cmd_install_cli(package: &str, opts: InstallOptions<'_>) -> Result<()> {
+    install_command(package, opts, true).await
+}
+
+async fn install_command(
+    package: &str,
+    opts: InstallOptions<'_>,
+    show_rollback: bool,
+) -> Result<()> {
     let mut report = super::report::InstallReport::default();
     let (db_path, dry_run) = (opts.db_path, opts.dry_run);
     let result = cmd_install_with_report(package, opts, &mut report).await;
     if result.is_ok() || !report.commits.is_empty() {
         report.render(db_path, dry_run);
+    }
+    if show_rollback && result.is_ok() && !dry_run {
+        crate::ui::transaction_summary::install_rollback_route(&report, db_path);
     }
     result
 }

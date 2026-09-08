@@ -287,6 +287,15 @@ impl<'a> BatchInstaller<'a> {
         Ok(())
     }
 
+    pub(super) fn preview_batch(
+        self,
+        mut packages: Vec<PreparedPackage>,
+    ) -> Result<Vec<super::report::InstallChange>> {
+        let conn = open_db(self.db_path)?;
+        self.validate_batch_transaction(&conn, &mut packages)?;
+        super::report::batch_changes(&conn, &packages)
+    }
+
     fn validate_batch_transaction(
         &self,
         conn: &Connection,

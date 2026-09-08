@@ -92,23 +92,36 @@ pub(crate) fn install_summary(report: &InstallReport, db_path: &str, dry_run: bo
             .sum::<usize>()
             .to_string(),
     ));
-    for commit in &report.commits {
-        match &commit.publication {
-            Some(publication) => lines.extend(
-                closing_lines(commit.changeset_id, publication, db_path)
-                    .into_iter()
-                    .take(2),
-            ),
-            None => {
-                lines.push(super::super::field_line(
-                    "Changeset",
-                    &commit.changeset_id.to_string(),
-                ));
-                lines.push(super::super::field_line(
-                    "Generation",
-                    "publication belongs to enclosing operation",
-                ));
-            }
+    let latest = report
+        .commits
+        .last()
+        .expect("nonempty commits checked above");
+    if report.commits.len() > 1 {
+        lines.push(super::super::field_line(
+            "Changesets",
+            &report
+                .commits
+                .iter()
+                .map(|commit| commit.changeset_id.to_string())
+                .collect::<Vec<_>>()
+                .join(", "),
+        ));
+    }
+    match &latest.publication {
+        Some(publication) => lines.extend(
+            closing_lines(latest.changeset_id, publication, db_path)
+                .into_iter()
+                .take(2),
+        ),
+        None => {
+            lines.push(super::super::field_line(
+                "Changeset",
+                &latest.changeset_id.to_string(),
+            ));
+            lines.push(super::super::field_line(
+                "Generation",
+                "publication belongs to enclosing operation",
+            ));
         }
     }
     lines.push(super::super::note_line(&format!(
@@ -116,12 +129,32 @@ pub(crate) fn install_summary(report: &InstallReport, db_path: &str, dry_run: bo
         database_command("conary system history", db_path)
     )));
     super::super::message(&lines.join("\n"));
-    for commit in &report.commits {
-        if let Some(publication) = &commit.publication {
-            crate::commands::generation::publication::warn_if_publication_pending(
-                commit.changeset_id,
-                publication,
-            );
-        }
+    if let Some(publication) = &latest.publication {
+        crate::commands::generation::publication::warn_if_publication_pending(
+            latest.changeset_id,
+            publication,
+        );
     }
+}
+
+/// Only an enclosing command may offer the latest mutation's rollback route.
+pub(crate) fn install_rollback_route(report: &InstallReport, db_path: &str) {
+    let Some(commit) = report.commits.last() else {
+        return;
+    };
+    let Some(publication) = &commit.publication else {
+        return;
+    };
+    let when = if publication.needs_publication {
+        "After publication, request rollback of latest changeset"
+    } else {
+        "Request rollback of latest changeset"
+    };
+    super::super::note(&format!(
+        "{when}: {}",
+        database_command(
+            &format!("conary system state rollback {} --yes", commit.changeset_id),
+            db_path
+        )
+    ));
 }

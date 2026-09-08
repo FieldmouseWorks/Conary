@@ -540,6 +540,7 @@ fn prepare_native_package_conversion_with_checksum(
 /// Install one verified CCS artifact.
 ///
 /// The artifact may be Conary-native or converted from another package format.
+#[cfg(test)]
 pub async fn install_ccs_artifact(opts: CcsArtifactInstallOptions<'_>) -> Result<Option<i64>> {
     let mut report = super::report::InstallReport::default();
     let (db_path, dry_run) = (opts.db_path, opts.dry_run);
@@ -673,28 +674,7 @@ async fn install_verified_ccs_artifact(
                 .collect();
     }
 
-    if selected_dependencies.is_empty() || dry_run {
-        if dry_run && !selected_dependencies.is_empty() {
-            let conn = open_db(db_path)?;
-            let dependencies =
-                dep_resolution::exact_repository_downloads(&conn, &selected_dependencies)
-                    .with_context(|| {
-                        format!(
-                            "SAT-selected dependency identity drifted before dry-run for '{}'",
-                            ccs_pkg.name()
-                        )
-                    })?;
-            for (_, dependency) in dependencies {
-                let before =
-                    conary_core::db::models::Trove::find_by_name(&conn, &dependency.package.name)?
-                        .into_iter()
-                        .find(|trove| trove.architecture == dependency.package.architecture);
-                report.planned.push(super::report::InstallChange::incoming(
-                    super::report::PackageIdentity::repository(&dependency.package),
-                    before.as_ref(),
-                ));
-            }
-        }
+    if selected_dependencies.is_empty() {
         crate::ui::println!("Installing CCS package...");
         let mut conn = open_db(db_path)?;
         let result = super::install_ccs_package_transactionally(
@@ -720,7 +700,7 @@ async fn install_verified_ccs_artifact(
         return Ok(result.trove_id);
     }
 
-    if !yes {
+    if !dry_run && !yes {
         crate::ui::println!();
         print!(
             "Proceed with {} dependency changes? [Y/n] ",
@@ -748,8 +728,16 @@ async fn install_verified_ccs_artifact(
             intent,
         })
         .collect();
-    let mut prepared =
-        prepare_repository_batch(db_path, selections, RepositoryBatchMode::Install).await?;
+    let mut prepared = prepare_repository_batch(
+        db_path,
+        selections,
+        if dry_run {
+            RepositoryBatchMode::Validate
+        } else {
+            RepositoryBatchMode::Install
+        },
+    )
+    .await?;
     prepared.push(prepare_ccs_package_for_batch(
         &ccs_pkg,
         db_path,
@@ -764,6 +752,12 @@ async fn install_verified_ccs_artifact(
     )?);
 
     crate::ui::println!("Installing CCS package...");
+    if dry_run {
+        report
+            .planned
+            .extend(prepared.preview(BatchInstaller::new(db_path, sandbox_mode))?);
+        return Ok(None);
+    }
     let result = prepared.install_with_result(BatchInstaller::new(db_path, sandbox_mode))?;
     let trove_id = result.exact_trove_id(&ccs_pkg)?;
     report.extend(result.report);

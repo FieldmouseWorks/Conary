@@ -106,6 +106,17 @@ fn change_lines_with_heading(changes: &[PackageChange<'_>], preview: bool) -> Ve
         if rows.is_empty() {
             continue;
         }
+        let label = if preview {
+            match change {
+                Change::Install => "Install",
+                Change::Update => "Update",
+                Change::Remove => "Remove",
+                Change::Deconfigure => "Deconfigure",
+                Change::Restore => "Restore",
+            }
+        } else {
+            label
+        };
         lines.push(super::heading_line(&format!("  {label} ({}):", rows.len())));
         let headings = ["Package", "Version", "CCS release", "Architecture"].map(String::from);
         let widths: [usize; 4] = std::array::from_fn(|column| {
@@ -232,7 +243,7 @@ pub(crate) fn rollback_summary(
 }
 
 mod install;
-pub(crate) use install::{install_preview, install_summary};
+pub(crate) use install::{install_preview, install_rollback_route, install_summary};
 
 #[cfg(test)]
 mod tests;

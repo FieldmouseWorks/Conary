@@ -54,6 +54,13 @@ impl PreparedRepositoryBatch {
         installer.validate_batch(self.packages)
     }
 
+    pub(super) fn preview(
+        self,
+        installer: BatchInstaller<'_>,
+    ) -> Result<Vec<super::report::InstallChange>> {
+        installer.preview_batch(self.packages)
+    }
+
     pub(super) fn install_with_result(
         self,
         installer: BatchInstaller<'_>,

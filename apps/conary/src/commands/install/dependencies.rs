@@ -163,20 +163,29 @@ async fn handle_dep_installs(
     }
 
     if ctx.dry_run {
-        crate::ui::println!(
-            "  Would install {} dependencies from Remi:",
-            dep_plan.to_install.len()
-        );
-        let to_download =
-            dep_resolution::exact_repository_downloads(ctx.conn, &dep_plan.to_install)?;
-        for (_, dependency) in &to_download {
-            report.planned.push(super::report::InstallChange::Install(
-                super::report::PackageIdentity::repository(&dependency.package),
-            ));
-        }
-        if to_download.is_empty() {
-            crate::ui::println!("  (all dependencies already available locally)");
-        }
+        let selections = dep_plan
+            .to_install
+            .iter()
+            .cloned()
+            .map(
+                |selected| super::repository_batch::RepositoryBatchSelection {
+                    selected,
+                    install_reason: conary_core::db::models::InstallReason::Dependency,
+                    selection_reason: format!("Required by {}", ctx.pkg.name()),
+                    allow_downgrade: ctx.allow_downgrade,
+                    intent: super::InstallIntent::PackageChange,
+                },
+            )
+            .collect();
+        let prepared = super::repository_batch::prepare_repository_batch(
+            ctx.db_path,
+            selections,
+            super::repository_batch::RepositoryBatchMode::Validate,
+        )
+        .await?;
+        report
+            .planned
+            .extend(prepared.preview(BatchInstaller::new(ctx.db_path, ctx.sandbox_mode))?);
         return Ok(());
     }
 
