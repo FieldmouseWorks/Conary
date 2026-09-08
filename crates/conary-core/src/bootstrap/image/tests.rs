@@ -354,16 +354,11 @@ fn iso_format_requires_mkfs_fat() {
 #[cfg(unix)]
 #[test]
 fn efi_image_reports_mkfs_failure_stderr() {
-    use std::os::unix::fs::PermissionsExt;
+    use crate::test_support::{HostToolFixture, link_host_tool};
 
     let tmp = tempfile::tempdir().unwrap();
     let mkfs_fat = tmp.path().join("mkfs.fat");
-    fs::write(
-        &mkfs_fat,
-        "#!/bin/sh\necho 'deliberate formatter failure' >&2\nexit 23\n",
-    )
-    .unwrap();
-    fs::set_permissions(&mkfs_fat, fs::Permissions::from_mode(0o755)).unwrap();
+    link_host_tool(&mkfs_fat, HostToolFixture::MkfsFatFailure);
     let builder = image_builder_with_tools(
         tmp.path(),
         ImageFormat::Iso,
@@ -373,7 +368,8 @@ fn efi_image_reports_mkfs_failure_stderr() {
 
     let err = builder.create_efi_image(&output).unwrap_err();
 
-    assert!(matches!(err, ImageError::CreationFailed(_)));
+    assert!(matches!(err, ImageError::CreationFailed(_)), "{err}");
+    assert!(err.to_string().contains("exit status: 23"), "{err}");
     assert!(
         err.to_string().contains("deliberate formatter failure"),
         "{err}"
