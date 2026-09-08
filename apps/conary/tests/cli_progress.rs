@@ -16,17 +16,20 @@ fn progress_capture_child() {
             progress.set_status("Extracting fixture");
             std::thread::sleep(Duration::from_millis(250));
             progress.clear();
+            conary::ui::message("Installed fixture");
         }
         "zero" => {
             let progress = UpdateProgress::new(0);
             progress.set_status("Checking fixture");
             std::thread::sleep(Duration::from_millis(250));
             progress.clear();
+            conary::ui::message("Updated fixture");
         }
         "remove_error" => {
             let progress = RemoveProgress::new("fixture");
             std::thread::sleep(Duration::from_millis(250));
             drop(progress);
+            conary::ui::error("Fixture refused");
         }
         "adopt" => {
             let progress = AdoptProgress::single("Adopting");
@@ -37,6 +40,21 @@ fn progress_capture_child() {
     }
     println!("CAPTURE_COMPLETE");
     std::thread::sleep(Duration::from_millis(250));
+}
+
+fn assert_one_result(scenario: &str, output: &str) {
+    let expected = match scenario {
+        "single" => "Installed fixture",
+        "zero" => "Updated fixture",
+        "remove_error" => "Fixture refused",
+        "adopt" => "Adopted fixture",
+        _ => panic!("unknown capture scenario"),
+    };
+    assert_eq!(
+        output.matches(expected).count(),
+        1,
+        "{scenario}: {output:?}"
+    );
 }
 
 fn capture(scenario: &str, tty: bool, no_color: bool) -> String {
@@ -81,10 +99,7 @@ fn terminal_progress_has_no_phantom_bars_or_duplicate_completion() {
             "no TTY rendering exercised: {output:?}"
         );
         assert!(!output.contains("0/0"), "{scenario}: {output:?}");
-        assert!(
-            !output.contains("duplicate completion"),
-            "{scenario}: {output:?}"
-        );
+        assert_one_result(scenario, &output);
         let (_, after) = output.split_once("CAPTURE_COMPLETE").unwrap();
         assert!(
             !after.contains('\x1b'),
@@ -100,10 +115,7 @@ fn pipes_and_no_color_terminals_have_no_live_redraw() {
             let output = capture(scenario, tty, no_color);
             assert!(!output.contains('\x1b'), "{scenario}: {output:?}");
             assert!(!output.contains("0/0"), "{scenario}: {output:?}");
-            assert!(
-                !output.contains("duplicate completion"),
-                "{scenario}: {output:?}"
-            );
+            assert_one_result(scenario, &output);
         }
     }
 }

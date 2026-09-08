@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-09-08
 revision: 97
-summary: Route each feature to its smallest start context, owned paths, focused proof, interaction gate, documentation owners, and safety constraints.
+summary: Route features and CLI output to their smallest start context, owned paths, focused proof, interaction gates, and safety constraints.
 ---
 
 # Feature Ownership And Interaction Gates
