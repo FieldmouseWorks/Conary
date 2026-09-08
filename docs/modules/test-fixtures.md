@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-09
-revision: 46
+revision: 47
 summary: Map fixture ownership, including command transaction captures, typed boot-tool interfaces, public and candidate profiles, and cross-source lifecycle proof
 ---
 
@@ -742,7 +742,11 @@ Each fixture family should record:
   `apps/conary/tests/common/update_ccs.rs` supplies signed RPM artifacts and
   repository keys to both collection unit tests and `cli_update_summary` captures;
   update relation captures use signed RPM CCS artifacts with an obsolete target
-  and a Debian dependent package that must be deconfigured.
+  and a Debian dependent package that must be deconfigured. Their shared builder
+  lives in `apps/conary/src/commands/update/package/tests/summary_capture/fixtures.rs`.
+  Ordered captures prove that a later selected package removed by an earlier
+  update is previewed and applied as a fresh install. `native_pm_live_root`
+  retains a one-shot artifact server to prove apply reuses preview's download.
 - **Assertions:** Grouped preview/apply rows, exact before/after identities,
   partial failure, publication state, database-scoped recovery, and cancellation.
   `commands::test_helpers::database_rows` compares all persisted tables around

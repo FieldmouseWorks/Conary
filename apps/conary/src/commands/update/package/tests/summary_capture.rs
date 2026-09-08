@@ -95,6 +95,11 @@ async fn update_summary_capture_child() {
             "2.0.0"
         );
     }
+    if scenario == "sequence_apply" {
+        let installed = Trove::find_by_name(&conn, "z-summary-update").unwrap();
+        assert_eq!(installed.len(), 1);
+        assert_eq!(installed[0].version, "2.0.0");
+    }
     if scenario == "mixed" {
         assert_eq!(
             Trove::find_by_name(&conn, "z-summary-failed").unwrap()[0].version,

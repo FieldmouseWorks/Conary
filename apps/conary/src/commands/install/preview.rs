@@ -57,13 +57,18 @@ impl PreviewDatabase {
         }
         for package in packages {
             for deconfiguration in &package.relation_deconfigurations {
-                if let Some(mut installed) = InstalledNativeLifecycleBundle::find_by_trove(
+                let mut installed = InstalledNativeLifecycleBundle::find_by_trove(
                     &tx,
                     deconfiguration.package.trove_id,
-                )? {
-                    installed.set_lifecycle_state(DebPackageState::Unpacked);
-                    installed.insert_or_replace(&tx)?;
-                }
+                )?
+                .context("planned deconfiguration has no installed native lifecycle contract")?;
+                let bundle = installed.bundle()?;
+                anyhow::ensure!(
+                    bundle.source_format == conary_core::ccs::native_lifecycle::SourceFormat::Deb,
+                    "planned deconfiguration requires Debian's native lifecycle contract"
+                );
+                installed.set_lifecycle_state(DebPackageState::Unpacked);
+                installed.insert_or_replace(&tx)?;
             }
             let mut trove = package.to_trove(changeset_id)?;
             let id = trove.insert(&tx)?;

@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-09
-revision: 15
+revision: 16
 summary: Daily-driver CLI routes, grouped install/update/removal/rollback results, planner-backed previews, scoped recovery, coordinated progress, typed diagnostics, and truthful collection outcomes
 ---
 
@@ -230,8 +230,17 @@ and dependencies; CCS releases come from verified artifacts even when repository
 metadata leaves the release unspecified. Downloads and CAS objects used for the
 preview live in a disposable directory. Unavailable or untrusted artifacts fail
 the preview before a planned table or database mutation. CLI diagnostic tracing
-uses color only on terminal stderr when `NO_COLOR` is absent. Apply resolves artifacts
-again through its existing admission and execution path.
+uses color only on terminal stderr when `NO_COLOR` is absent. Apply reuses the
+exact admitted artifacts from preview, retaining one full-artifact download.
+
+`apps/conary/src/commands/install/preview.rs` owns a private database snapshot
+that advances from prepared artifact identities, requirements, capabilities,
+lifecycle contracts, payload records, and typed relation effects. Each later
+update is planned against earlier successful effects, in the execution order
+of deltas followed by full updates. If an earlier update removes a later target,
+that later row is an install. Dependency batches advance the same snapshot.
+Lifecycle programs, selected-root mutation, and generation publication do not
+run in this projection; the installed database and permanent CAS stay unchanged.
 
 Previously, native/CCS install printed independent `Installed package` fields,
 batches printed a separate success list, and update ended with transfer counters.
@@ -287,7 +296,8 @@ captures native/CCS install, upgrade, preview, pending publication, duplicate
 refusal, batch results, and dependency cancellation in terminal, pipe, and
 `NO_COLOR` modes. `cargo test -p conary --features test-hooks --lib summary_capture`
 proves update preview, apply, relation removal and dependent deconfiguration,
-pending publication, mixed lifecycle failure, and pinned no-op output. Preview/refusal/cancellation captures compare every
+pending publication, ordered co-selected replacement, mixed lifecycle failure,
+and pinned no-op output. Preview/refusal/cancellation captures compare every
 persisted database table. The verified CCS dependency fixture additionally
 proves that its batch preview includes the same two package identities without
 changing database state. Cross-source lifecycle fixtures assert exact grouped
