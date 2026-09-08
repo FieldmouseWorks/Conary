@@ -2,7 +2,7 @@
 //! Collection update presentation, driven by explicit request outcomes.
 
 use super::{Status, field_line, heading_line, row_line};
-use crate::commands::update::outcome::{
+use crate::commands::update_outcome::{
     CollectionUpdateEntry, CollectionUpdateStatus, UpdateOutcome,
 };
 

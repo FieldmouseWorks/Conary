@@ -86,8 +86,8 @@ fn collection_preview_never_claims_applied_updates_and_preserves_database() {
         assert!(!text.contains("Collection update complete"), "{text}");
         assert!(text.contains("Collection update preview"), "{text}");
         assert!(text.contains("  Planned packages: 2\n"), "{text}");
-        for arch in ["x86_64", "aarch64"] {
-            assert!(text.contains(&format!("demo 1.0-1 [{arch}]")), "{text}");
+        for name in ["demo", "tools"] {
+            assert!(text.contains(&format!("{name} 1.0-1 [x86_64]")), "{text}");
         }
         assert!(
             text.ends_with("Dry run: no updates were applied.\n"),
