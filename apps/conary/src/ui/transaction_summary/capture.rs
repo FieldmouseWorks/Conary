@@ -53,6 +53,7 @@ fn command_capture_child() {
         )
         .unwrap();
     }
+    let before = database_rows(&conn);
     println!("FRAME_BEGIN");
     let result = if rollback {
         crate::commands::cmd_rollback(
@@ -68,6 +69,11 @@ fn command_capture_child() {
     };
     if scenario.starts_with("failed") {
         assert!(result.is_err());
+        assert_eq!(
+            database_rows(&conn),
+            before,
+            "refusal changed persisted state"
+        );
     } else {
         result.unwrap();
         let installed = Trove::find_by_name(&conn, "summary-fixture").unwrap();
@@ -207,4 +213,33 @@ fn command_results_in_terminal_pipe_and_no_color() {
             }
         }
     }
+}
+
+fn database_rows(conn: &rusqlite::Connection) -> Vec<(String, Vec<Vec<rusqlite::types::Value>>)> {
+    let tables = conn
+        .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' ORDER BY name")
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(0))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    tables
+        .into_iter()
+        .map(|table| {
+            let mut statement = conn
+                .prepare(&format!("SELECT * FROM \"{}\"", table.replace('"', "\"\"")))
+                .unwrap();
+            let columns = statement.column_count();
+            let rows = statement
+                .query_map([], |row| {
+                    (0..columns)
+                        .map(|column| row.get(column))
+                        .collect::<rusqlite::Result<Vec<_>>>()
+                })
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap();
+            (table, rows)
+        })
+        .collect()
 }

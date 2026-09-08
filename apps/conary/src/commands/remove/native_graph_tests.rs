@@ -124,6 +124,11 @@ fn removal_statistics_include_debian_config_purge() {
         conary_core::hash::sha256(b"configuration"),
     );
     config.source = ConfigSource::Deb;
+    config.original_md5 = crate::commands::install::config_files::debian_original_md5(
+        ConfigSource::Deb,
+        true,
+        b"configuration",
+    );
     config.insert(&conn).unwrap();
     let bundle = NativeLifecycleBundle {
         schema: NATIVE_LIFECYCLE_SCHEMA_V1.into(),
