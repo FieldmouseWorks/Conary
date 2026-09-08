@@ -3,6 +3,7 @@
 
 pub(crate) mod diagnostics;
 pub(crate) mod progress;
+pub(crate) mod update_summary;
 
 use console::style;
 use std::io::Write;

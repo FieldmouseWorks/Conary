@@ -7,7 +7,8 @@ use super::super::{SandboxMode, open_db};
 use super::adopted_authority::{
     AdoptedUpdateDecision, adopted_update_decision, native_manager_for_trove,
 };
-use super::cmd_update;
+use super::outcome::{CollectionUpdateEntry, CollectionUpdateStatus};
+use super::package::update_packages;
 use super::selection::{
     SecurityMetadataUnavailable, UpdateCandidateSelection, print_security_metadata_unavailable,
     security_metadata_unavailable_error, select_update_candidate,
@@ -188,7 +189,8 @@ pub async fn cmd_update_group(
     }
 
     println!(
-        "Updating {} package(s) from collection '{}':",
+        "{} {} package request(s) from collection '{}':",
+        if dry_run { "Previewing" } else { "Updating" },
         updates_to_apply.len(),
         name
     );
@@ -197,12 +199,16 @@ pub async fn cmd_update_group(
     }
 
     // Update each package
-    let mut updated_count = 0;
+    let mut outcomes = Vec::with_capacity(updates_to_apply.len());
     let mut failed_count = 0;
 
     for target in &updates_to_apply {
-        println!("\nUpdating {}...", target.display());
-        match cmd_update(
+        println!(
+            "\n{} {}...",
+            if dry_run { "Previewing" } else { "Updating" },
+            target.display()
+        );
+        let status = match update_packages(
             Some(target.name.clone()),
             db_path,
             root,
@@ -216,20 +222,23 @@ pub async fn cmd_update_group(
         )
         .await
         {
-            Ok(()) => updated_count += 1,
-            Err(e) => {
-                eprintln!("  Failed to update {}: {}", target.display(), e);
+            Ok(outcome) => CollectionUpdateStatus::Completed(outcome),
+            Err(error) => {
+                crate::ui::diagnostics::report_error(&error);
                 failed_count += 1;
+                CollectionUpdateStatus::Failed
             }
-        }
+        };
+        outcomes.push(CollectionUpdateEntry {
+            target: target.display(),
+            status,
+        });
     }
 
-    println!("\nCollection update complete:");
-    println!("  Updated: {} package(s)", updated_count);
+    crate::ui::update_summary::collection_update_summary(name, dry_run, &outcomes);
     if failed_count > 0 {
-        println!("  Failed: {} package(s)", failed_count);
         return Err(anyhow::anyhow!(
-            "{} of {} package(s) in collection '{}' failed to update",
+            "{} of {} update request(s) in collection '{}' failed",
             failed_count,
             updates_to_apply.len(),
             name
@@ -316,5 +325,42 @@ mod tests {
             "collection update should preserve member variant selectors: {:?}",
             result
         );
+
+        let planned = update_packages(
+            Some("demo".into()),
+            &db_path,
+            "/",
+            false,
+            true,
+            SandboxMode::Always,
+            None,
+            true,
+            Some("1.0-1".into()),
+            Some("x86_64".into()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            planned,
+            super::super::outcome::UpdateOutcome::Planned { packages: 1 }
+        );
+        let conn = conary_core::db::open(&db_path).unwrap();
+        conn.execute("DELETE FROM repository_packages", []).unwrap();
+        drop(conn);
+        let unchanged = update_packages(
+            Some("demo".into()),
+            &db_path,
+            "/",
+            false,
+            false,
+            SandboxMode::Always,
+            None,
+            true,
+            Some("1.0-1".into()),
+            Some("x86_64".into()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(unchanged, super::super::outcome::UpdateOutcome::NoChanges);
     }
 }
