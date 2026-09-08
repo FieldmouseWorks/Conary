@@ -13,10 +13,9 @@ pub(super) fn from_error(error: &anyhow::Error) -> Option<Diagnostic> {
         verification(error)
     } else if let Some(error) = error.downcast_ref::<V3ValidationError>() {
         authority(error)
-    } else if let Some(error) = error.downcast_ref::<HostCapabilityPreflightError>() {
-        return Some(preflight(error));
     } else {
-        return None;
+        let error = error.downcast_ref::<HostCapabilityPreflightError>()?;
+        return Some(preflight(error));
     };
     if let Some(subject) = error.downcast_ref::<VerificationSubject>() {
         diagnostic = diagnostic.fact("Package", subject.path.display().to_string());
