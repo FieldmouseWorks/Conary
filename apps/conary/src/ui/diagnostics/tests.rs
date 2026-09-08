@@ -131,6 +131,11 @@ fn publication_renderer_uses_exact_pending_and_retry_facts() {
         pending_publication(42, &outcome).unwrap().notes,
         ["Run: conary system generation publish --yes"]
     );
+    outcome.failure_reason = Some("typed publication failure".into());
+    assert_eq!(
+        pending_publication(42, &outcome).unwrap().facts[1],
+        ("Reason", "typed publication failure".to_owned())
+    );
     outcome.needs_publication = false;
     assert!(pending_publication(42, &outcome).is_none());
 }

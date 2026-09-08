@@ -105,7 +105,7 @@ fn mutation_refusal(refusal: &LiveMutationRefusal) -> Diagnostic {
             "May change generation state, boot selection, publication debt, or recovery state."
         }
     };
-    let mut diagnostic = Diagnostic::new("Explicit apply intent is required.")
+    let mut diagnostic = Diagnostic::new("Confirmation is required before applying changes.")
         .fact("Command", refusal.command_label.as_ref())
         .fact("Impact", impact);
     if refusal.class == LiveMutationClass::CurrentlyLiveEvenWithRootArguments {
@@ -131,11 +131,13 @@ pub(crate) fn pending_publication(
         .retry_command
         .as_deref()
         .unwrap_or(crate::commands::generation::publication::DEFAULT_PUBLICATION_RETRY_COMMAND);
-    Some(
+    let mut diagnostic =
         Diagnostic::new("Package mutation committed, but generation publication is pending.")
-            .fact("Changeset", changeset_id.to_string())
-            .note(format!("Run: {retry}")),
-    )
+            .fact("Changeset", changeset_id.to_string());
+    if let Some(reason) = &outcome.failure_reason {
+        diagnostic = diagnostic.fact("Reason", reason);
+    }
+    Some(diagnostic.note(format!("Run: {retry}")))
 }
 
 #[cfg(test)]

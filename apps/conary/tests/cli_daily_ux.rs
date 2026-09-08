@@ -282,7 +282,7 @@ fn already_installed_idempotence_uses_current_mutation_surface() {
     assert!(!stderr.contains("--allow-live-system-mutation"), "{stderr}");
     assert!(!stderr.contains("live-host acknowledgement"), "{stderr}");
     assert!(
-        !stderr.contains("Explicit apply intent is required"),
+        !stderr.contains("Confirmation is required before applying changes"),
         "{stderr}"
     );
 }

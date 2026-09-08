@@ -23,7 +23,7 @@ fn install_refusal_has_facts_and_next_steps_before_database_creation() {
     assert_eq!(
         stderr,
         concat!(
-            "error: Explicit apply intent is required.\n",
+            "error: Confirmation is required before applying changes.\n",
             "  Command: conary install\n",
             "  Impact: May change packages, files, scriptlets, ownership, or the live Conary database.\n",
             "  Root: Current --root or similar arguments are not sufficient isolation for this command yet.\n",
@@ -51,4 +51,44 @@ fn missing_custom_database_names_the_path_without_debug_quotes() {
     );
     assert!(!db.exists());
     assert_eq!(std::fs::read_dir(temp.path()).unwrap().count(), 0);
+}
+
+#[test]
+fn terminal_database_error_preserves_the_same_facts_with_and_without_color() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = temp.path().join("database with spaces.db");
+    for no_color in [false, true] {
+        let mut command = Command::new("script");
+        command
+            .args([
+                "-qec",
+                "exec \"$CONARY_DIAGNOSTIC_EXE\" list --db-path \"$CONARY_DIAGNOSTIC_DB\"",
+                "/dev/null",
+            ])
+            .env("CONARY_DIAGNOSTIC_EXE", env!("CARGO_BIN_EXE_conary"))
+            .env("CONARY_DIAGNOSTIC_DB", &db)
+            .env("TERM", "xterm")
+            .env_remove("RUST_LOG")
+            .env_remove("NO_COLOR")
+            .env_remove("CLICOLOR_FORCE");
+        if no_color {
+            command.env("NO_COLOR", "1");
+        }
+        let output = command
+            .output()
+            .expect("PTY capture requires util-linux script");
+        assert_eq!(output.status.code(), Some(1));
+        let text = String::from_utf8(output.stdout).unwrap();
+        assert_eq!(text.contains('\x1b'), !no_color, "{text:?}");
+        let plain = console::strip_ansi_codes(&text).replace("\r\n", "\n");
+        assert_eq!(
+            plain,
+            format!(
+                "error: Custom database not initialized.\n  Database: {}\nnote: Run 'conary system init --db-path <PATH>' with the same custom path.\n",
+                db.display()
+            )
+        );
+        assert!(output.stderr.is_empty());
+        assert_eq!(std::fs::read_dir(temp.path()).unwrap().count(), 0);
+    }
 }
