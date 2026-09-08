@@ -33,6 +33,10 @@ async fn verification_adapter_preserves_contract_schema_and_failure_status() {
         .await
         .unwrap();
     assert_eq!(output.is_error, Some(true));
+    assert_eq!(output.content.len(), 1);
+    let text = output.content[0].as_text().expect("JSON text fallback");
+    let fallback: CcsVerificationReport = serde_json::from_str(&text.text).unwrap();
+    assert_eq!(fallback, expected);
     let decoded: CcsVerificationReport =
         serde_json::from_value(output.structured_content.unwrap()).unwrap();
     assert_eq!(decoded, expected);
