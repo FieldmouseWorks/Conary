@@ -231,7 +231,7 @@ the compensating changeset and reports only the returned publication outcome:
 Applied package changes:
   Restored (1):
     Package          Version  CCS release  Architecture
-    summary-fixture  2.0      7            x86_64
+    summary-fixture  2.0.0    7            x86_64
   Reversed changeset: 1
   Restored file records: 0
   Changeset: 2
