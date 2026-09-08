@@ -2,14 +2,16 @@
 
 pub mod common;
 
+#[path = "cli_update_summary/selection.rs"]
+mod selection;
+
 use conary_core::db::models::{
     CollectionMember, InstallSource, Repository, RepositoryPackage, Trove, TroveType,
 };
 use std::process::Command;
 
-#[test]
-fn collection_preview_never_claims_applied_updates_and_preserves_database() {
-    let (_temp, db_path, conn) = common::create_test_db();
+fn fixture() -> (tempfile::TempDir, String) {
+    let (temp, db_path, conn) = common::create_test_db();
     let mut repo = Repository::new(
         "variant-repo".to_string(),
         "https://example.test/variant".to_string(),
@@ -55,6 +57,12 @@ fn collection_preview_never_claims_applied_updates_and_preserves_database() {
         candidate.insert(&conn).unwrap();
     }
     drop(conn);
+    (temp, db_path)
+}
+
+#[test]
+fn collection_preview_never_claims_applied_updates_and_preserves_database() {
+    let (_temp, db_path) = fixture();
     let before = common::database_snapshot(&db_path);
     for (tty, no_color) in [(false, false), (false, true), (true, false), (true, true)] {
         let mut command = if tty {
