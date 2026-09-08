@@ -98,7 +98,7 @@ fn pinned_members_are_not_reported_as_current() {
 fn empty_selection_preserves_each_reason_in_all_output_modes() {
     for (sql, expected, empty) in [
         (
-            "DELETE FROM troves WHERE trove_type = 'package'",
+            "DELETE FROM troves WHERE type = 'package'",
             "  Uninstalled members: 2\n",
             false,
         ),
@@ -109,7 +109,7 @@ fn empty_selection_preserves_each_reason_in_all_output_modes() {
         ),
         ("DELETE FROM collection_members", "  Members: 0\n", true),
         (
-            "UPDATE troves SET install_source = 'adopted-track' WHERE trove_type = 'package'",
+            "UPDATE troves SET install_source = 'adopted-track' WHERE type = 'package'",
             "  Externally managed packages: 2\n",
             false,
         ),
