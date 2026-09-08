@@ -37,22 +37,14 @@ impl PublicationOutcome {
 }
 
 pub(crate) fn warn_if_publication_pending(changeset_id: i64, outcome: &PublicationOutcome) {
-    if !outcome.needs_publication {
-        return;
+    if let Some(diagnostic) = crate::ui::diagnostics::pending_publication(changeset_id, outcome) {
+        tracing::debug!(
+            changeset_id,
+            retry = ?outcome.retry_command,
+            "Retained generation publication state"
+        );
+        diagnostic.warn();
     }
-    let retry = outcome
-        .retry_command
-        .as_deref()
-        .unwrap_or(DEFAULT_PUBLICATION_RETRY_COMMAND);
-    tracing::warn!(
-        changeset_id,
-        retry,
-        "Package mutation committed, but generation publication is pending"
-    );
-    crate::ui::warn(&format!(
-        "Package mutation committed, but generation publication is pending for changeset {changeset_id}."
-    ));
-    eprintln!("Run: {retry}");
 }
 
 /// Persist exact selected-root publication authority in the caller's

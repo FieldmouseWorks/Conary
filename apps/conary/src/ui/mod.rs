@@ -1,6 +1,7 @@
 // apps/conary/src/ui/mod.rs
 //! Single source of truth for user-facing CLI output styling.
 
+pub(crate) mod diagnostics;
 pub(crate) mod progress;
 
 use console::style;

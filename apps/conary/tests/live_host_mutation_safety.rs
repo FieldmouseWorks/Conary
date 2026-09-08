@@ -73,7 +73,7 @@ fn install_with_yes_needs_no_retired_live_mutation_flag() {
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!stderr.contains("--allow-live-system-mutation"));
-    assert!(!stderr.contains("may change packages"));
+    assert!(!stderr.contains("Explicit apply intent is required"));
 }
 
 #[test]
@@ -402,7 +402,7 @@ fn system_adopt_package_refuses_without_live_mutation_flag() {
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!stderr.contains("--allow-live-system-mutation"));
-    assert!(!stderr.contains("may update Conary DB"));
+    assert!(!stderr.contains("Explicit apply intent is required"));
 }
 
 #[test]
@@ -422,7 +422,7 @@ fn system_adopt_system_help_does_not_reference_live_mutation_flag() {
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!stderr.contains("--allow-live-system-mutation"));
-    assert!(!stderr.contains("may update Conary DB"));
+    assert!(!stderr.contains("Explicit apply intent is required"));
 }
 
 #[test]
@@ -433,7 +433,7 @@ fn system_adopt_refresh_refuses_without_live_mutation_flag() {
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!stderr.contains("--allow-live-system-mutation"));
-    assert!(!stderr.contains("may update Conary DB"));
+    assert!(!stderr.contains("Explicit apply intent is required"));
 }
 
 #[test]
