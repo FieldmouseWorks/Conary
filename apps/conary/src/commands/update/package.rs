@@ -528,7 +528,7 @@ pub(super) async fn update_packages(
         }
     }
     if dry_run {
-        crate::ui::note("Dry run: no updates were applied.");
+        crate::ui::message(&crate::ui::note_line("Dry run: no updates were applied."));
         return Ok(super::outcome::UpdateOutcome::Planned {
             packages: updates_available.len(),
         });
