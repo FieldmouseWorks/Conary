@@ -101,14 +101,17 @@ pub(super) async fn handle_dependencies(ctx: &DepAnalysisContext<'_>) -> Result<
     // Confirmation prompt for non-trivial dependency installs
     let total_changes = dep_plan.to_install.len();
     if total_changes > 0 && !ctx.dry_run && !ctx.yes {
-        progress.clear();
-        crate::ui::println!();
-        print!("Proceed with {} dependency changes? [Y/n] ", total_changes);
-        use std::io::Write;
-        std::io::stdout().flush()?;
-
-        let mut input = String::new();
-        std::io::stdin().read_line(&mut input)?;
+        let input = progress.suspend(|| -> Result<String> {
+            // The progress coordinator already owns the terminal here. Nested
+            // ui writes would try to acquire its lock again.
+            std::println!();
+            print!("Proceed with {} dependency changes? [Y/n] ", total_changes);
+            use std::io::Write;
+            std::io::stdout().flush()?;
+            let mut input = String::new();
+            std::io::stdin().read_line(&mut input)?;
+            Ok(input)
+        })?;
         let input = input.trim().to_lowercase();
         if input == "n" || input == "no" {
             crate::ui::println!("Cancelled.");

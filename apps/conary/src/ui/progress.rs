@@ -80,6 +80,11 @@ impl ProgressDisplay {
         self.overall.set_position(completed);
     }
 
+    /// Temporarily erase progress while reading input, then resume the same rows.
+    pub(crate) fn suspend<T>(&self, operation: impl FnOnce() -> T) -> T {
+        self.multi.suspend(operation)
+    }
+
     pub(crate) fn clear(&self) {
         if let Some(status) = &self.status {
             status.finish_and_clear();

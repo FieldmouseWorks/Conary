@@ -149,3 +149,19 @@ fn nested_child_cleanup_preserves_parent_and_summary() {
     drop(parent);
     assert_eq!(terminal.contents(), "Installed fixture");
 }
+
+#[test]
+fn confirmation_suspends_rows_without_finishing_them() {
+    let (terminal, display) = display(0);
+    display.overall.tick();
+    display.suspend(|| {
+        assert_eq!(terminal.contents(), "");
+        terminal.write_line("Confirmation accepted").unwrap();
+    });
+    display.set_status("Downloading dependencies");
+    display.overall.tick();
+    assert!(!display.overall.is_finished());
+    assert!(terminal.contents().contains("Downloading dependencies"));
+    drop(display);
+    assert_eq!(terminal.contents(), "Confirmation accepted");
+}

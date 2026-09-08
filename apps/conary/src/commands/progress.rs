@@ -68,6 +68,12 @@ impl InstallProgress {
         self.set_phase(package, InstallPhase::Failed(error.to_string()));
     }
 
+    /// Pause redraw for a prompt without finishing the operation.
+    /// The closure writes directly to stdio because the terminal is already suspended.
+    pub fn suspend<T>(&self, operation: impl FnOnce() -> T) -> T {
+        self.display.suspend(operation)
+    }
+
     /// Clear transient rows before the command renders its result.
     pub fn clear(&self) {
         self.display.clear();

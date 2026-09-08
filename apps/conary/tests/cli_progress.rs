@@ -18,6 +18,14 @@ fn progress_capture_child() {
             progress.clear();
             conary::ui::message("Installed fixture");
         }
+        "confirmed_dependencies" => {
+            let progress = InstallProgress::single("Resolving dependencies");
+            progress.suspend(|| println!("Dependency confirmation accepted"));
+            progress.set_status("DEPENDENCIES_RESUMED");
+            std::thread::sleep(Duration::from_millis(250));
+            progress.clear();
+            conary::ui::message("Installed dependencies");
+        }
         "zero" => {
             let progress = UpdateProgress::new(0);
             progress.set_status("Checking fixture");
@@ -46,6 +54,7 @@ fn assert_one_result(scenario: &str, output: &str) {
     let expected = match scenario {
         "single" => "Installed fixture",
         "zero" => "Updated fixture",
+        "confirmed_dependencies" => "Installed dependencies",
         "remove_error" => "Fixture refused",
         "adopt" => "Adopted fixture",
         _ => panic!("unknown capture scenario"),
@@ -92,7 +101,13 @@ fn capture(scenario: &str, tty: bool, no_color: bool) -> String {
 
 #[test]
 fn terminal_progress_has_no_phantom_bars_or_duplicate_completion() {
-    for scenario in ["single", "zero", "remove_error", "adopt"] {
+    for scenario in [
+        "single",
+        "zero",
+        "remove_error",
+        "adopt",
+        "confirmed_dependencies",
+    ] {
         let output = capture(scenario, true, false);
         assert!(
             output.contains('\x1b'),
@@ -100,6 +115,9 @@ fn terminal_progress_has_no_phantom_bars_or_duplicate_completion() {
         );
         assert!(!output.contains("0/0"), "{scenario}: {output:?}");
         assert_one_result(scenario, &output);
+        if scenario == "confirmed_dependencies" {
+            assert!(output.contains("DEPENDENCIES_RESUMED"), "{output:?}");
+        }
         let (_, after) = output.split_once("CAPTURE_COMPLETE").unwrap();
         assert!(
             !after.contains('\x1b'),
@@ -111,7 +129,13 @@ fn terminal_progress_has_no_phantom_bars_or_duplicate_completion() {
 #[test]
 fn pipes_and_no_color_terminals_have_no_live_redraw() {
     for (tty, no_color) in [(false, false), (false, true), (true, true)] {
-        for scenario in ["single", "zero", "remove_error", "adopt"] {
+        for scenario in [
+            "single",
+            "zero",
+            "remove_error",
+            "adopt",
+            "confirmed_dependencies",
+        ] {
             let output = capture(scenario, tty, no_color);
             assert!(!output.contains('\x1b'), "{scenario}: {output:?}");
             assert!(!output.contains("0/0"), "{scenario}: {output:?}");
