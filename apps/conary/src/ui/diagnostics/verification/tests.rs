@@ -97,7 +97,7 @@ fn policy_limits_and_unclassified_chains_are_not_inferred_from_text() {
 #[test]
 fn all_verification_variants_have_distinct_contract_causes() {
     let cases = [
-        (VerifyError::NotSigned, Cause::NotSigned),
+        (VerifyError::NotSigned, Cause::NotSigned {}),
         (
             VerifyError::InvalidSignatureFormat("bad".into()),
             Cause::InvalidSignatureFormat {
@@ -132,7 +132,7 @@ fn all_verification_variants_have_distinct_contract_causes() {
         ),
         (
             VerifyError::TrustViolation(TrustViolation::NoTrustedKeys),
-            Cause::NoTrustedKeys,
+            Cause::NoTrustedKeys {},
         ),
         (
             VerifyError::TrustViolation(TrustViolation::DuplicateTrustedKey {
@@ -144,7 +144,7 @@ fn all_verification_variants_have_distinct_contract_causes() {
         ),
         (
             VerifyError::TrustViolation(TrustViolation::MissingTimestamp),
-            Cause::MissingTimestamp,
+            Cause::MissingTimestamp {},
         ),
         (
             VerifyError::TrustViolation(TrustViolation::InvalidTimestamp {

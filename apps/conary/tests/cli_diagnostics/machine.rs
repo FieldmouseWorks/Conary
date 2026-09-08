@@ -121,7 +121,7 @@ fn json_setup_and_archive_failures_keep_nonzero_status_and_structured_details() 
     let CcsVerificationOutcome::Failed { failure } = report.outcome else {
         panic!("expected failure")
     };
-    assert_eq!(failure.cause, CcsVerificationCause::MissingPolicy);
+    assert_eq!(failure.cause, CcsVerificationCause::MissingPolicy {});
     assert!(!data_home.exists());
     std::fs::write(&policy, "trusted_keys = []\n").unwrap();
     let (code, report) = capture(&package, Some(&policy), &data_home, false, true);
@@ -129,7 +129,7 @@ fn json_setup_and_archive_failures_keep_nonzero_status_and_structured_details() 
     let CcsVerificationOutcome::Failed { failure } = report.outcome else {
         panic!("expected failure")
     };
-    assert_eq!(failure.cause, CcsVerificationCause::NoTrustedKeys);
+    assert_eq!(failure.cause, CcsVerificationCause::NoTrustedKeys {});
     assert_eq!(failure.policy_path.as_deref(), policy.to_str());
     std::fs::write(&policy, "not valid TOML !").unwrap();
     let (code, report) = capture(&package, Some(&policy), &data_home, false, true);

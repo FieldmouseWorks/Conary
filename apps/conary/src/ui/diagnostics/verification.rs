@@ -96,7 +96,7 @@ fn cause(error: &anyhow::Error) -> Cause {
             VerificationInputError::PackageNotFound { path } => {
                 Cause::PackageNotFound { path: path.clone() }
             }
-            VerificationInputError::MissingPolicy => Cause::MissingPolicy,
+            VerificationInputError::MissingPolicy => Cause::MissingPolicy {},
         };
     }
     Cause::Unclassified {
@@ -106,7 +106,7 @@ fn cause(error: &anyhow::Error) -> Cause {
 
 fn verification_cause(error: &VerifyError) -> Cause {
     match error {
-        VerifyError::NotSigned => Cause::NotSigned,
+        VerifyError::NotSigned => Cause::NotSigned {},
         VerifyError::InvalidSignatureFormat(detail) => Cause::InvalidSignatureFormat {
             detail: detail.clone(),
         },
@@ -123,7 +123,7 @@ fn verification_cause(error: &VerifyError) -> Cause {
             detail: detail.clone(),
         },
         VerifyError::TrustViolation(cause) => match cause {
-            TrustViolation::NoTrustedKeys => Cause::NoTrustedKeys,
+            TrustViolation::NoTrustedKeys => Cause::NoTrustedKeys {},
             TrustViolation::DuplicateTrustedKey { public_key } => Cause::DuplicateTrustedKey {
                 public_key: public_key.clone(),
             },
@@ -131,7 +131,7 @@ fn verification_cause(error: &VerifyError) -> Cause {
                 claimed_key_id: key_id.clone(),
                 public_key: public_key.clone(),
             },
-            TrustViolation::MissingTimestamp => Cause::MissingTimestamp,
+            TrustViolation::MissingTimestamp => Cause::MissingTimestamp {},
             TrustViolation::InvalidTimestamp { timestamp } => Cause::InvalidTimestamp {
                 timestamp: timestamp.clone(),
             },

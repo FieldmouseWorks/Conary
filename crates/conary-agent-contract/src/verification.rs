@@ -74,7 +74,7 @@ pub struct CcsVerificationFailure {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum CcsVerificationCause {
-    NotSigned,
+    NotSigned {},
     InvalidSignatureFormat {
         detail: String,
     },
@@ -84,7 +84,7 @@ pub enum CcsVerificationCause {
     SignatureInvalid {
         detail: String,
     },
-    NoTrustedKeys,
+    NoTrustedKeys {},
     DuplicateTrustedKey {
         public_key: String,
     },
@@ -92,7 +92,7 @@ pub enum CcsVerificationCause {
         claimed_key_id: Option<String>,
         public_key: String,
     },
-    MissingTimestamp,
+    MissingTimestamp {},
     InvalidTimestamp {
         timestamp: String,
     },
@@ -119,7 +119,7 @@ pub enum CcsVerificationCause {
         observed: u64,
         limit: u64,
     },
-    MissingPolicy,
+    MissingPolicy {},
     PackageNotFound {
         path: String,
     },
