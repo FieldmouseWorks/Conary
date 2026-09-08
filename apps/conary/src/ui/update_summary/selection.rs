@@ -97,3 +97,36 @@ pub(crate) fn collection_selection_summary(
 ) {
     crate::ui::message(&selection_lines(name, members, security, entries).join("\n"));
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn one_member_can_have_multiple_installed_variant_results() {
+        console::set_colors_enabled(false);
+        let entries = [
+            CollectionSelectionEntry {
+                target: "demo 1.0 [x86_64]".into(),
+                status: CollectionSelectionStatus::Selected,
+            },
+            CollectionSelectionEntry {
+                target: "demo 1.0 [aarch64]".into(),
+                status: CollectionSelectionStatus::Pinned,
+            },
+        ];
+        let text = selection_lines("base", 1, false, &entries).join("\n");
+        assert!(text.contains("  Members: 1\n"), "{text}");
+        assert!(text.contains("  Selected packages: 1\n"), "{text}");
+        assert!(text.contains("  Pinned packages: 1\n"), "{text}");
+        assert!(
+            text.contains("demo 1.0 [x86_64]  selected for update"),
+            "{text}"
+        );
+        assert!(
+            text.contains("demo 1.0 [aarch64]  pinned; not checked"),
+            "{text}"
+        );
+        assert!(!text.contains("No eligible updates selected."), "{text}");
+    }
+}
