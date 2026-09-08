@@ -520,11 +520,11 @@ pub(super) async fn update_packages(
     crate::ui::transaction_summary::install_preview(&preview.planned);
     for (_, selected) in &updates_available {
         if selected.package.is_security_update {
-            crate::ui::note(&format!(
+            crate::ui::message(&crate::ui::note_line(&format!(
                 "{}{}",
                 selected.package.name,
                 render_security_update_marker(&selected.package)
-            ));
+            )));
         }
     }
     if dry_run {
