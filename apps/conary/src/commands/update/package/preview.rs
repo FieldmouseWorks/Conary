@@ -59,7 +59,8 @@ pub(super) async fn plan_selected_updates(
         })
         .collect::<Result<Vec<_>>>()?;
     // Apply executes deltas before full downloads, retaining selection order
-    // within each group. Preview the same successful execution sequence.
+    // within each group. A failed delta uses its retained full artifact
+    // immediately, so fallback preserves this same package sequence.
     ordered.sort_by_key(|(full, _)| *full);
     for (_, (trove, candidate)) in ordered {
         let resolution = resolution_options_for_selected_update(

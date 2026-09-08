@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-09
-revision: 16
+revision: 17
 summary: Daily-driver CLI routes, grouped install/update/removal/rollback results, planner-backed previews, scoped recovery, coordinated progress, typed diagnostics, and truthful collection outcomes
 ---
 
@@ -237,7 +237,9 @@ exact admitted artifacts from preview, retaining one full-artifact download.
 that advances from prepared artifact identities, requirements, capabilities,
 lifecycle contracts, payload records, and typed relation effects. Each later
 update is planned against earlier successful effects, in the execution order
-of deltas followed by full updates. If an earlier update removes a later target,
+of deltas followed by full updates. Failed delta downloads, reconstruction, or
+installation use the admitted full artifact immediately in that same position;
+fallback does not reorder package effects. If an earlier update removes a later target,
 that later row is an install. Dependency batches advance the same snapshot.
 Lifecycle programs, selected-root mutation, and generation publication do not
 run in this projection; the installed database and permanent CAS stay unchanged.

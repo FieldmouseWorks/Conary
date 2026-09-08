@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-09
-revision: 47
+revision: 48
 summary: Map fixture ownership, including command transaction captures, typed boot-tool interfaces, public and candidate profiles, and cross-source lifecycle proof
 ---
 
@@ -747,6 +747,8 @@ Each fixture family should record:
   Ordered captures prove that a later selected package removed by an earlier
   update is previewed and applied as a fresh install. `native_pm_live_root`
   retains a one-shot artifact server to prove apply reuses preview's download.
+  Failed delta download and application captures verify that fallback keeps the
+  planned package order and does not reinstall a subsequently removed target.
 - **Assertions:** Grouped preview/apply rows, exact before/after identities,
   partial failure, publication state, database-scoped recovery, and cancellation.
   `commands::test_helpers::database_rows` compares all persisted tables around

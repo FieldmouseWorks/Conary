@@ -533,11 +533,9 @@ pub(super) async fn update_packages(
     // Preview already acquired and admitted these exact artifacts. Reuse them
     // for execution so a full update performs one artifact download.
     let prepared_full_updates = full_updates
-        .iter()
-        .map(|(trove, _, _)| preview.take_package(trove))
+        .into_iter()
+        .map(|(trove, _, _)| preview.take_package(&trove))
         .collect::<Result<Vec<_>>>()?;
-    let mut full_updates: Vec<(Trove, RepositoryPackage, Repository)> = Vec::new();
-
     let changeset_id = conary_core::db::transaction(&mut conn, |tx| {
         let mut changeset = conary_core::db::models::Changeset::new(format!(
             "Update {} package(s)",
@@ -550,6 +548,7 @@ pub(super) async fn update_packages(
         // Phase 2: Download and apply deltas (sequential - requires CAS access)
         for (trove, repo_pkg, repo, delta_info) in delta_updates {
             crate::ui::println!("\nUpdating {} (delta)...", trove.name);
+            let mut needs_full = false;
 
             match repository::download_delta(
                 &repository::DeltaInfo {
@@ -641,34 +640,82 @@ pub(super) async fn update_packages(
                                 deltas_applied += 1;
                                 total_bytes_saved += delta_saved;
                             } else {
-                                // Fall back to full download
+                                // Use the admitted full artifact in this same update slot
                                 delta_failures += 1;
-                                full_updates.push((trove, repo_pkg, repo));
+                                needs_full = true;
                             }
                         }
                         Err(e) => {
                             warn!(
-                                "  Delta application failed: {}, will download full package",
+                                "  Delta application failed: {}, using admitted full package",
                                 e
                             );
                             delta_failures += 1;
-                            full_updates.push((trove, repo_pkg, repo));
+                            needs_full = true;
                         }
                     }
                     let _ = std::fs::remove_file(&actual_delta_path);
                 }
                 Err(e) => {
-                    warn!("  Delta download failed: {}, will download full package", e);
+                    warn!(
+                        "  Delta download failed: {}, using admitted full package",
+                        e
+                    );
                     delta_failures += 1;
-                    full_updates.push((trove, repo_pkg, repo));
+                    needs_full = true;
                 }
+            }
+            if needs_full {
+                let mut progress = UpdateProgress::new(1);
+                info!(
+                    "Installing admitted full artifact for {} from {}",
+                    trove.name, repo.name
+                );
+
+                let prepared = preview.take_package(&trove)?;
+                let pkg_path = &prepared.pkg_path;
+
+                progress.set_phase(&trove.name, UpdatePhase::Installing);
+
+                let path_str = pkg_path.to_string_lossy().to_string();
+
+                if let Err(e) = cmd_install_with_report(
+                    &path_str,
+                    install_options_for_update(
+                        db_path,
+                        root,
+                        sandbox_mode,
+                        ownership,
+                        yes,
+                        &repo_pkg,
+                        &repo,
+                    )?,
+                    &mut report,
+                )
+                .await
+                {
+                    progress.fail_package(&trove.name, &e.to_string());
+                    warn!("  Package installation failed: {}", e);
+                    required_failures.push(UpdatePackageFailure {
+                        package: trove.name.clone(),
+                        version: repo_pkg.version.clone(),
+                        reason: e.to_string(),
+                    });
+                    let _ = std::fs::remove_file(pkg_path);
+                    continue;
+                }
+
+                full_downloads += 1;
+                progress.complete_package(&trove.name);
+                let _ = std::fs::remove_file(pkg_path);
+                progress.clear();
             }
         }
 
-        // Phase 3 & 4: Resolve and install full packages using unified resolution
+        // Phase 3 & 4: Install the remaining admitted full packages
         // This respects per-repo routing strategies (remi, binary, etc.)
-        if !prepared_full_updates.is_empty() || !full_updates.is_empty() {
-            let total_to_install = (prepared_full_updates.len() + full_updates.len()) as u64;
+        if !prepared_full_updates.is_empty() {
+            let total_to_install = prepared_full_updates.len() as u64;
             let mut progress = UpdateProgress::new(total_to_install);
 
             progress.set_status("Installing packages...");
@@ -718,49 +765,6 @@ pub(super) async fn update_packages(
                 full_downloads += 1;
                 progress.complete_package(&trove.name);
                 let _ = std::fs::remove_file(&pkg_path);
-            }
-
-            // Process packages sequentially (resolution requires DB access)
-            for (trove, repo_pkg, repo) in full_updates {
-                info!("Resolving {} from {}", trove.name, repo.name);
-                progress.set_phase(&trove.name, UpdatePhase::DownloadingFull);
-
-                let prepared = preview.take_package(&trove)?;
-                let pkg_path = &prepared.pkg_path;
-
-                progress.set_phase(&trove.name, UpdatePhase::Installing);
-
-                let path_str = pkg_path.to_string_lossy().to_string();
-
-                if let Err(e) = cmd_install_with_report(
-                    &path_str,
-                    install_options_for_update(
-                        db_path,
-                        root,
-                        sandbox_mode,
-                        ownership,
-                        yes,
-                        &repo_pkg,
-                        &repo,
-                    )?,
-                    &mut report,
-                )
-                .await
-                {
-                    progress.fail_package(&trove.name, &e.to_string());
-                    warn!("  Package installation failed: {}", e);
-                    required_failures.push(UpdatePackageFailure {
-                        package: trove.name.clone(),
-                        version: repo_pkg.version.clone(),
-                        reason: e.to_string(),
-                    });
-                    let _ = std::fs::remove_file(pkg_path);
-                    continue;
-                }
-
-                full_downloads += 1;
-                progress.complete_package(&trove.name);
-                let _ = std::fs::remove_file(pkg_path);
             }
 
             progress.clear();
