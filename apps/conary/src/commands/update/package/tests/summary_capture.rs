@@ -20,9 +20,12 @@ fn add_candidate(conn: &rusqlite::Connection, dir: &Path, name: &str, fail: bool
             "summary-obsolete".into(),
             "1".into(),
             TroveType::Package,
-            VersionScheme::Rpm,
+            VersionScheme::Debian,
         );
-        old.insert(conn).unwrap();
+        old.debian_multi_arch =
+            Some(conary_core::repository::dependency_model::DebianMultiArch::No);
+        old.architecture = Some("amd64".into());
+        let obsolete_id = old.insert(conn).unwrap();
         let mut consumer = Trove::new(
             "summary-consumer".into(),
             "1".into(),
@@ -55,6 +58,16 @@ fn add_candidate(conn: &rusqlite::Connection, dir: &Path, name: &str, fail: bool
         consumer_bundle.evidence_digest = None;
         consumer_bundle.version_scheme = conary_core::ccs::native_lifecycle::VersionScheme::Deb;
         consumer_bundle.entries.clear();
+        let mut obsolete_bundle = consumer_bundle.clone();
+        obsolete_bundle.source_package = "summary-obsolete".into();
+        conary_core::db::models::InstalledNativeLifecycleBundle::new(
+            obsolete_id,
+            None,
+            &obsolete_bundle,
+        )
+        .unwrap()
+        .insert_or_replace(conn)
+        .unwrap();
         conary_core::db::models::InstalledNativeLifecycleBundle::new(
             consumer_id,
             None,

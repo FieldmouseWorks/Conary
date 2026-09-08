@@ -121,7 +121,12 @@ fn empty_selection_preserves_each_reason_in_all_output_modes() {
         } else {
             for name in ["demo", "tools"] {
                 let identity = conary_core::packages::InstalledPackageIdentity::rpm(
-                    name, name, None, "1.0", "1", "x86_64",
+                    format!("{name}-1.0-1.x86_64"),
+                    name,
+                    None,
+                    "1.0",
+                    "1",
+                    "x86_64",
                 )
                 .unwrap();
                 conn.execute("UPDATE troves SET install_source = ?1, native_package_identity_json = ?2 WHERE name = ?3",
@@ -229,6 +234,8 @@ fn unavailable_or_untrusted_update_artifact_refuses_preview_without_mutation() {
     for unavailable in [true, false] {
         let (temp, db) = fixture();
         let conn = conary_core::db::open(&db).unwrap();
+        conn.execute("UPDATE troves SET pinned = 1 WHERE name = 'tools'", [])
+            .unwrap();
         if unavailable {
             std::fs::remove_file(temp.path().join("demo-x86_64.ccs")).unwrap();
         } else {

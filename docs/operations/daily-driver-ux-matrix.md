@@ -229,7 +229,8 @@ planner with dry-run options. This includes relation removals, deconfigurations,
 and dependencies; CCS releases come from verified artifacts even when repository
 metadata leaves the release unspecified. Downloads and CAS objects used for the
 preview live in a disposable directory. Unavailable or untrusted artifacts fail
-the preview before a planned table or database mutation. Apply resolves artifacts
+the preview before a planned table or database mutation. CLI diagnostic tracing
+uses color only on terminal stderr when `NO_COLOR` is absent. Apply resolves artifacts
 again through its existing admission and execution path.
 
 Previously, native/CCS install printed independent `Installed package` fields,
