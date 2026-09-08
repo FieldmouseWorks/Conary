@@ -164,7 +164,10 @@ fn publish_pending_debt_with_hook(
                 generation_number: None,
                 state_number: None,
                 needs_publication: true,
-                retry_command: Some(PublicationOutcome::default_retry_command()),
+                retry_command: Some(crate::ui::transaction_summary::database_command(
+                    DEFAULT_PUBLICATION_RETRY_COMMAND,
+                    db_path,
+                )),
                 failure_reason: Some(failure_reason),
                 completed_debts: 0,
             })

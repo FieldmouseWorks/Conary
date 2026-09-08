@@ -6,7 +6,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use tracing::info;
 
-use super::types::{RemoveInnerResult, RemoveLifecycleOptions};
+use super::types::RemoveLifecycleOptions;
 use crate::commands::progress::RemoveProgress;
 use crate::commands::{InstalledPackageSelector, SandboxMode, open_db, resolve_installed_package};
 
@@ -95,28 +95,18 @@ pub fn cmd_remove(
         &progress,
     )?;
     progress.clear();
-    print_remove_summary(&graph_result.removal, &graph_result.stats);
+    crate::ui::transaction_summary::removal_summary(
+        &graph_result.removal.trove,
+        &graph_result.stats,
+        graph_result.changeset_id,
+        &graph_result.publication,
+        db_path,
+    );
+    crate::commands::generation::publication::warn_if_publication_pending(
+        graph_result.changeset_id,
+        &graph_result.publication,
+    );
     Ok(())
-}
-
-fn print_remove_summary(remove_result: &RemoveInnerResult, stats: &crate::commands::LiveRootStats) {
-    crate::ui::println!(
-        "Removed package: {} version {}",
-        remove_result.trove.name,
-        remove_result.trove.version
-    );
-    crate::ui::println!(
-        "  Architecture: {}",
-        remove_result
-            .trove
-            .architecture
-            .as_deref()
-            .unwrap_or("none")
-    );
-    crate::ui::println!("  Files removed: {}", stats.files_removed);
-    if stats.dirs_removed > 0 {
-        crate::ui::println!("  Directories removed: {}", stats.dirs_removed);
-    }
 }
 
 #[cfg(test)]

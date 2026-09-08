@@ -17,6 +17,8 @@ use std::path::PathBuf;
 pub(crate) struct GraphRemoveResult {
     pub(crate) removal: RemoveInnerResult,
     pub(crate) stats: crate::commands::LiveRootStats,
+    pub(crate) changeset_id: i64,
+    pub(crate) publication: crate::commands::generation::publication::PublicationOutcome,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -232,12 +234,13 @@ fn execute_selected_root_graph(
                 "generation publication is pending".to_string(),
             ),
         )?;
-        crate::commands::generation::publication::warn_if_publication_pending(
-            changeset_id,
-            &outcome,
-        );
     }
-    Ok(GraphRemoveResult { removal, stats })
+    Ok(GraphRemoveResult {
+        removal,
+        stats,
+        changeset_id,
+        publication: outcome,
+    })
 }
 
 #[cfg(test)]
