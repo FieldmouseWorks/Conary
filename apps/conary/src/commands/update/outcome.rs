@@ -18,3 +18,17 @@ pub(crate) struct CollectionUpdateEntry {
     pub target: String,
     pub status: CollectionUpdateStatus,
 }
+
+/// Selection observations do not authorize mutation or assert global freshness.
+pub(crate) enum CollectionSelectionStatus {
+    Selected,
+    Pinned,
+    ExternallyManaged { guidance: String },
+    NotInstalled,
+    NoEligibleUpdate,
+}
+
+pub(crate) struct CollectionSelectionEntry {
+    pub target: String,
+    pub status: CollectionSelectionStatus,
+}

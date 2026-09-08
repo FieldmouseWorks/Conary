@@ -1,6 +1,9 @@
 // apps/conary/src/ui/update_summary.rs
 //! Collection update presentation, driven by explicit request outcomes.
 
+mod selection;
+pub(crate) use selection::collection_selection_summary;
+
 use super::{Status, field_line, heading_line, row_line};
 use crate::commands::update_outcome::{
     CollectionUpdateEntry, CollectionUpdateStatus, UpdateOutcome,

@@ -7,7 +7,10 @@ use super::super::{SandboxMode, open_db};
 use super::adopted_authority::{
     AdoptedUpdateDecision, adopted_update_decision, native_manager_for_trove,
 };
-use super::outcome::{CollectionUpdateEntry, CollectionUpdateStatus};
+use super::outcome::{
+    CollectionSelectionEntry, CollectionSelectionStatus, CollectionUpdateEntry,
+    CollectionUpdateStatus,
+};
 use super::package::update_packages;
 use super::selection::{
     SecurityMetadataUnavailable, UpdateCandidateSelection, print_security_metadata_unavailable,
@@ -79,14 +82,13 @@ pub async fn cmd_update_group(
     let members = CollectionMember::find_by_collection(&conn, collection_id)?;
 
     if members.is_empty() {
-        crate::ui::println!("Collection '{}' has no members.", name);
+        crate::ui::update_summary::collection_selection_summary(name, 0, security_only, &[]);
         return Ok(());
     }
 
     // Find installed members that need updates
     let mut updates_to_apply: Vec<CollectionUpdateTarget> = Vec::new();
-    let mut not_installed: Vec<String> = Vec::new();
-    let mut adopted_updates_skipped = false;
+    let mut selection = Vec::new();
     let mut security_metadata_unavailable: Vec<SecurityMetadataUnavailable> = Vec::new();
 
     for member in &members {
@@ -95,16 +97,19 @@ pub async fn cmd_update_group(
             .filter(|trove| trove.trove_type == TroveType::Package)
             .collect::<Vec<_>>();
         if installed.is_empty() {
-            not_installed.push(member.member_name.clone());
+            selection.push(CollectionSelectionEntry {
+                target: member.member_name.clone(),
+                status: CollectionSelectionStatus::NotInstalled,
+            });
             continue;
         }
 
         for trove in &installed {
             if trove.pinned {
-                crate::ui::println!(
-                    "  {} is pinned, skipping",
-                    CollectionUpdateTarget::from_trove(trove).display()
-                );
+                selection.push(CollectionSelectionEntry {
+                    target: CollectionUpdateTarget::from_trove(trove).display(),
+                    status: CollectionSelectionStatus::Pinned,
+                });
                 continue;
             }
 
@@ -126,12 +131,10 @@ pub async fn cmd_update_group(
                             || "the recorded external owner".to_string(),
                             |manager| manager.update_command(&trove.name),
                         );
-                        crate::ui::println!(
-                            "  {} is adopted; external authority owns updates: {}",
-                            CollectionUpdateTarget::from_trove(trove).display(),
-                            guidance
-                        );
-                        adopted_updates_skipped = true;
+                        selection.push(CollectionSelectionEntry {
+                            target: CollectionUpdateTarget::from_trove(trove).display(),
+                            status: CollectionSelectionStatus::ExternallyManaged { guidance },
+                        });
                         continue;
                     }
                 }
@@ -144,9 +147,19 @@ pub async fn cmd_update_group(
                 );
             match select_update_candidate(&conn, trove, enforce_security_metadata, &policy)? {
                 UpdateCandidateSelection::Selected(_) => {
-                    updates_to_apply.push(CollectionUpdateTarget::from_trove(trove));
+                    let target = CollectionUpdateTarget::from_trove(trove);
+                    selection.push(CollectionSelectionEntry {
+                        target: target.display(),
+                        status: CollectionSelectionStatus::Selected,
+                    });
+                    updates_to_apply.push(target);
                 }
-                UpdateCandidateSelection::NoEligibleUpdate => {}
+                UpdateCandidateSelection::NoEligibleUpdate => {
+                    selection.push(CollectionSelectionEntry {
+                        target: CollectionUpdateTarget::from_trove(trove).display(),
+                        status: CollectionSelectionStatus::NoEligibleUpdate,
+                    });
+                }
                 UpdateCandidateSelection::SecurityMetadataUnavailable(unavailable) => {
                     security_metadata_unavailable.push(unavailable);
                 }
@@ -163,28 +176,13 @@ pub async fn cmd_update_group(
         ));
     }
 
-    if !not_installed.is_empty() {
-        crate::ui::println!(
-            "Note: {} member(s) not installed: {}",
-            not_installed.len(),
-            not_installed.join(", ")
-        );
-    }
-
+    crate::ui::update_summary::collection_selection_summary(
+        name,
+        members.len(),
+        security_only,
+        &selection,
+    );
     if updates_to_apply.is_empty() {
-        if adopted_updates_skipped {
-            crate::ui::println!(
-                "No Conary-managed updates available for collection '{}'; adopted package updates remain under native package-manager authority",
-                name
-            );
-            crate::ui::println!(
-                "Run 'conary system adopt --refresh' after native package-manager changes before retrying Conary workflows."
-            );
-        } else if security_only {
-            crate::ui::println!("No security updates available for collection '{}'", name);
-        } else {
-            crate::ui::println!("All members of collection '{}' are up to date", name);
-        }
         return Ok(());
     }
 
@@ -194,10 +192,6 @@ pub async fn cmd_update_group(
         updates_to_apply.len(),
         name
     );
-    for target in &updates_to_apply {
-        crate::ui::println!("  {}", target.display());
-    }
-
     // Update each package
     let mut outcomes = Vec::with_capacity(updates_to_apply.len());
     let mut failed_count = 0;
