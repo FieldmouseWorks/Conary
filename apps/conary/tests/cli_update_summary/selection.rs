@@ -222,3 +222,42 @@ fn unavailable_security_metadata_is_an_error_without_an_empty_selection_claim() 
         assert_eq!(common::database_snapshot(&db), before);
     }
 }
+
+#[test]
+fn unavailable_or_untrusted_update_artifact_refuses_preview_without_mutation() {
+    use conary_core::db::models::{RepositoryPackageKey, RepositoryPackageKeyStatus};
+    for unavailable in [true, false] {
+        let (temp, db) = fixture();
+        let conn = conary_core::db::open(&db).unwrap();
+        if unavailable {
+            std::fs::remove_file(temp.path().join("demo-x86_64.ccs")).unwrap();
+        } else {
+            let repo = conary_core::db::models::Repository::find_by_name(&conn, "variant-repo")
+                .unwrap()
+                .unwrap();
+            let key = conary_core::ccs::SigningKeyPair::generate();
+            RepositoryPackageKey::replace_for_repository(
+                &conn,
+                repo.id.unwrap(),
+                &[RepositoryPackageKey {
+                    repository_id: repo.id.unwrap(),
+                    public_key: key.public_key_base64(),
+                    key_id: None,
+                    status: RepositoryPackageKeyStatus::Active,
+                    synced_at: None,
+                }],
+            )
+            .unwrap();
+        }
+        drop(conn);
+        let before = common::database_snapshot(&db);
+        for (tty, no_color) in [(false, false), (false, true), (true, false), (true, true)] {
+            let (success, text) = capture(&db, false, tty, no_color);
+            assert!(!success, "{text}");
+            assert!(!text.contains("Planned package changes:"), "{text}");
+            assert!(!text.contains("Applied package changes:"), "{text}");
+            assert_eq!(common::database_snapshot(&db), before);
+            assert!(!conary_core::db::paths::objects_dir(&db).exists());
+        }
+    }
+}

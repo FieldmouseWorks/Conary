@@ -29,6 +29,8 @@ fn add_candidate(conn: &rusqlite::Connection, dir: &Path, name: &str, fail: bool
             TroveType::Package,
             VersionScheme::Debian,
         );
+        consumer.debian_multi_arch =
+            Some(conary_core::repository::dependency_model::DebianMultiArch::No);
         let consumer_id = consumer.insert(conn).unwrap();
         let dependency = conary_core::repository::requirement::parse_native_requirement(
             RepositoryRequirementKind::Depends,

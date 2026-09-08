@@ -46,6 +46,8 @@ fn fixture() -> (tempfile::TempDir, String) {
 fn collection_preview_never_claims_applied_updates_and_preserves_database() {
     let (_temp, db_path) = fixture();
     let before = common::database_snapshot(&db_path);
+    let objects = conary_core::db::paths::objects_dir(&db_path);
+    assert!(!objects.exists());
     for (tty, no_color) in [(false, false), (false, true), (true, false), (true, true)] {
         let mut command = if tty {
             let mut command = Command::new("script");
@@ -88,5 +90,6 @@ fn collection_preview_never_claims_applied_updates_and_preserves_database() {
             "{text}"
         );
         assert_eq!(common::database_snapshot(&db_path), before);
+        assert!(!objects.exists(), "preview populated permanent CAS");
     }
 }
