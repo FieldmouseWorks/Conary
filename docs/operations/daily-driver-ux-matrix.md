@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-09-03
-revision: 3
-summary: Daily-driver CLI routes, presentation slices, shell completion checks, and focused tests
+last_updated: 2026-09-08
+revision: 4
+summary: Daily-driver CLI routes, read-only dependency promotion previews, presentation slices, shell completion checks, and focused tests
 ---
 
 # Daily-Driver UX Matrix
@@ -19,6 +19,7 @@ takeover, generation activation, or conaryd, the CLI should say that directly.
 | Command | Success Route | Refusal Or Unsupported Route | Operator Guidance Phrase | Focused Test Target |
 |---|---|---|---|---|
 | `install <pkg>` | Conary-owned package install or dry-run plan | Adopted package already belongs to native authority | `conary system adopt --refresh` before retry; `conary install <pkg> --ownership takeover --yes` for explicit package takeover; `conary system takeover --yes` for generation-level takeover | `cargo test -p conary --test cli_daily_ux adopted_install_refusal_routes_to_refresh_and_takeover` |
+| `install <pkg> --dry-run` | Reports a would-be dependency-to-explicit promotion without changing installed state, even with `--yes` | Ambiguous installed variants require exact selection | Use `--version` and `--arch` to select the intended installed variant | `cargo test -p conary --lib commands::install::command::tests` |
 | `remove <pkg>` | Conary-owned package removal; Debian residual conffiles are preserved | Adopted package removal without `--purge` | Use `--purge` to delete residual config state or externally owned adopted files; use `conary system unadopt <pkg> --yes` to stop adopted tracking without deleting files | `cargo test -p conary --test cli_daily_ux adopted_remove_refusal_routes_to_unadopt_or_purge` |
 | `update [pkg]` | Conary-owned update or security update from trusted advisory metadata | Adopted package update remains externally owned, unsupported advisory source fails before mutation | Refresh adoption after external changes; use `--ownership takeover` only for explicit Conary takeover | `cargo test -p conary --test cli_daily_ux adopted_update_routes_to_native_pm_and_refresh` |
 | `search <pattern>` | Repository search results from synced metadata | Empty or stale repository metadata | Run `conary repo sync` before assuming a package is unavailable | Existing query/search tests plus `cargo run -p conary -- search --help` |

@@ -118,6 +118,7 @@ async fn cmd_install_with_intent(
         &package_name,
         version.as_deref(),
         architecture.as_deref(),
+        dry_run,
         selection_reason,
     )? {
         return Ok(());
@@ -330,3 +331,6 @@ fn show_relation_removals(plan: &conary_core::transaction::PackageRelationPlan) 
 #[cfg(test)]
 #[path = "command_mutation_lock_tests.rs"]
 mod mutation_lock_tests;
+
+#[cfg(test)]
+mod tests;

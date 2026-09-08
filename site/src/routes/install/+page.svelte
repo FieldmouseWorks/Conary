@@ -38,7 +38,7 @@
 				<li>Use a VM, a snapshot, or a host you do not need.</li>
 				<li>Match Fedora 44, Ubuntu 26.04 LTS, or Arch Linux on x86_64.</li>
 				<li>Read every script and command before running it.</li>
-				<li>Use <code>--dry-run</code> wherever a command offers it; one known exception that still writes is listed with the confirmation rule.</li>
+				<li>Use <code>--dry-run</code> wherever a command offers it to preview the operation before applying it.</li>
 				<li>{commandRisk.rule} <a href="#confirmation">Which commands is which.</a></li>
 				<li>Expect failures, and report them.</li>
 				<li>Nothing here is a daily driver.</li>
@@ -129,10 +129,6 @@
 						<div>
 							<dt>Known misclassifications, examples only: classed read-only, but write the database</dt>
 							<dd><ul>{#each commandRisk.databaseWritingReadOnlyClassified as command}<li>{command}</li>{/each}</ul></dd>
-						</div>
-						<div>
-							<dt>Known dry-run defect, tracked in <a href={commandRisk.dryRunIssueUrl}>{commandRisk.dryRunIssue}</a>: writes despite <code>--dry-run</code></dt>
-							<dd><ul>{#each commandRisk.dryRunKnownMutations as command}<li>{command}</li>{/each}</ul></dd>
 						</div>
 						<div>
 							<dt>Boot continuation authorized by the generation artifact, not a flag</dt>
