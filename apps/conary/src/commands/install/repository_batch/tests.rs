@@ -55,9 +55,10 @@ async fn projected_native_dependency_uses_runtime_keyring_without_mutation() {
             )
             .unwrap(),
             "fedora-44".into(),
-            Some("fedora-44".into()),
+            None,
         )
         .unwrap();
+    repository.source_profile = Some("fedora-44".into());
     let repo_id = repository.insert(&conn).unwrap();
     PreparedOpenPgpTrust::prepare(
         &repository.name,

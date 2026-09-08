@@ -8,16 +8,15 @@ use conary_core::db::models::{
 use conary_core::repository::trust::openpgp::PreparedOpenPgpTrust;
 use conary_core::repository::versioning::VersionScheme;
 use conary_core::repository::{
-    ArchKeyringFormat, ArchKeyringTrust, ArchSigLevel, OpenPgpTrustRoot, RepositoryParserConfig,
+    ArchKeyringFormat, ArchKeyringTrust, ArchSigLevel, RepositoryParserConfig,
     RepositoryTrustPolicy, RpmMetadataAuthority,
 };
-use sequoia_openpgp as openpgp;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::commands::test_helpers::native_artifact::{
-    PgpAuthority, detached_signature, pgp_authority, signed_rpm_bytes,
+    PgpAuthority, pgp_authority, signed_rpm_bytes,
 };
 
 async fn serve_artifact(
