@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-09-08
-revision: 45
+last_updated: 2026-09-09
+revision: 46
 summary: Map fixture ownership, including command transaction captures, typed boot-tool interfaces, public and candidate profiles, and cross-source lifecycle proof
 ---
 
@@ -739,6 +739,10 @@ Each fixture family should record:
 - **Construction:** Disposable databases and selected roots with typed boot and
   account fixtures; child test processes run real commands under pipes, terminals,
   and `NO_COLOR`. Test hooks isolate mounting and force publication failure.
+  `apps/conary/tests/common/update_ccs.rs` supplies signed RPM artifacts and
+  repository keys to both collection unit tests and `cli_update_summary` captures;
+  update relation captures use signed RPM CCS artifacts with an obsolete target
+  and a Debian dependent package that must be deconfigured.
 - **Assertions:** Grouped preview/apply rows, exact before/after identities,
   partial failure, publication state, database-scoped recovery, and cancellation.
   `commands::test_helpers::database_rows` compares all persisted tables around

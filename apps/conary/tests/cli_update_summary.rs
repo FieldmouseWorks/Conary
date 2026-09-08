@@ -29,10 +29,10 @@ fn fixture() -> (tempfile::TempDir, String) {
             "1.0-1".to_string(),
             TroveType::Package,
             InstallSource::Repository,
-            conary_core::repository::versioning::VersionScheme::Eopkg,
+            conary_core::repository::versioning::VersionScheme::Rpm,
         );
         installed.architecture = Some(arch.to_string());
-        installed.source_profile = Some("solus".to_string());
+        installed.source_profile = Some("fedora-44".to_string());
         installed.installed_from_repository_id = Some(repo_id);
         installed.insert(&conn).unwrap();
 

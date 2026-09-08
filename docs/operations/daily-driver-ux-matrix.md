@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-09-08
-revision: 14
+last_updated: 2026-09-09
+revision: 15
 summary: Daily-driver CLI routes, grouped install/update/removal/rollback results, planner-backed previews, scoped recovery, coordinated progress, typed diagnostics, and truthful collection outcomes
 ---
 
@@ -223,8 +223,14 @@ A preview uses `Planned package changes` with `Install`, `Update`, `Remove`, and
 `Deconfigure` groups; committed results use `Applied package changes`. Update
 rows retain before/after versions and CCS releases, plus architecture transitions
 when those differ. Relation-driven removals retain their typed relation kind in
-a `Reason` column. An unspecified repository CCS release remains `-` in the
-selection preview; the applied row names the verified artifact's actual release.
+a `Reason` column. Update previews resolve and verify the exact selected artifacts
+through `apps/conary/src/commands/update/package/preview.rs`, then call the install
+planner with dry-run options. This includes relation removals, deconfigurations,
+and dependencies; CCS releases come from verified artifacts even when repository
+metadata leaves the release unspecified. Downloads and CAS objects used for the
+preview live in a disposable directory. Unavailable or untrusted artifacts fail
+the preview before a planned table or database mutation. Apply resolves artifacts
+again through its existing admission and execution path.
 
 Previously, native/CCS install printed independent `Installed package` fields,
 batches printed a separate success list, and update ended with transfer counters.
@@ -239,7 +245,7 @@ The update selection preview is:
 Planned package changes:
   Update (1):
     Package           Version         CCS release  Architecture
-    a-summary-update  1.0.0 -> 2.0.0  - -> -       x86_64
+    a-summary-update  1.0.0 -> 2.0.0  - -> 1       x86_64
 note: Dry run: no updates were applied.
 ```
 
@@ -279,8 +285,8 @@ reasons and security-metadata failure semantics remain intact.
 captures native/CCS install, upgrade, preview, pending publication, duplicate
 refusal, batch results, and dependency cancellation in terminal, pipe, and
 `NO_COLOR` modes. `cargo test -p conary --features test-hooks --lib summary_capture`
-proves update preview, apply, pending publication, mixed lifecycle failure, and
-pinned no-op output. Preview/refusal/cancellation captures compare every
+proves update preview, apply, relation removal and dependent deconfiguration,
+pending publication, mixed lifecycle failure, and pinned no-op output. Preview/refusal/cancellation captures compare every
 persisted database table. The verified CCS dependency fixture additionally
 proves that its batch preview includes the same two package identities without
 changing database state. Cross-source lifecycle fixtures assert exact grouped

@@ -27,21 +27,36 @@ fn add_candidate(conn: &rusqlite::Connection, dir: &Path, name: &str, fail: bool
             "summary-consumer".into(),
             "1".into(),
             TroveType::Package,
-            VersionScheme::Rpm,
+            VersionScheme::Debian,
         );
         let consumer_id = consumer.insert(conn).unwrap();
         let dependency = conary_core::repository::requirement::parse_native_requirement(
             RepositoryRequirementKind::Depends,
-            VersionScheme::Rpm,
+            VersionScheme::Debian,
             "summary-obsolete",
         )
         .unwrap();
         conary_core::db::models::InstalledRequirementGroup::insert_groups(
             conn,
             consumer_id,
-            VersionScheme::Rpm,
+            VersionScheme::Debian,
             &[dependency],
         )
+        .unwrap();
+        let mut consumer_bundle = rpm_upgrade_bundle("summary-consumer", "1");
+        consumer_bundle.source_format = SourceFormat::Deb;
+        consumer_bundle.source_family = "debian".into();
+        consumer_bundle.source_profile = Some("debian-13".into());
+        consumer_bundle.source_release = Some("13".into());
+        consumer_bundle.version_scheme = conary_core::ccs::native_lifecycle::VersionScheme::Deb;
+        consumer_bundle.entries.clear();
+        conary_core::db::models::InstalledNativeLifecycleBundle::new(
+            consumer_id,
+            None,
+            &consumer_bundle,
+        )
+        .unwrap()
+        .insert_or_replace(conn)
         .unwrap();
         vec![
             conary_core::repository::package_relation::parse_native_relation(

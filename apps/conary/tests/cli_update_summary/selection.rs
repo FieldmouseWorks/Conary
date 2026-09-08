@@ -120,8 +120,8 @@ fn empty_selection_preserves_each_reason_in_all_output_modes() {
             conn.execute(sql, []).unwrap();
         } else {
             for name in ["demo", "tools"] {
-                let identity = conary_core::packages::InstalledPackageIdentity::eopkg(
-                    name, name, "1.0", 1, "x86_64",
+                let identity = conary_core::packages::InstalledPackageIdentity::rpm(
+                    name, name, None, "1.0", "1", "x86_64",
                 )
                 .unwrap();
                 conn.execute("UPDATE troves SET install_source = ?1, native_package_identity_json = ?2 WHERE name = ?3",
