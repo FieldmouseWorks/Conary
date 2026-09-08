@@ -72,7 +72,7 @@ fn collection_preview_never_claims_applied_updates_and_preserves_database() {
             .env_remove("RUST_LOG")
             .env_remove("NO_COLOR")
             .env_remove("CLICOLOR_FORCE")
-            .env("TERM", "dumb");
+            .env("TERM", "xterm");
         if no_color {
             command.env("NO_COLOR", "1");
         }
@@ -82,6 +82,10 @@ fn collection_preview_never_claims_applied_updates_and_preserves_database() {
         let text = String::from_utf8(output.stdout)
             .unwrap()
             .replace("\r\n", "\n");
+        if no_color || !tty {
+            assert!(!text.contains('\u{1b}'), "{text}");
+        }
+        let text = console::strip_ansi_codes(&text);
         assert!(!text.contains("Updated:"), "{text}");
         assert!(!text.contains("Collection update complete"), "{text}");
         assert!(text.contains("Collection update preview"), "{text}");

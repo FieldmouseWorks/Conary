@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-09-08
-revision: 8
-summary: Daily-driver CLI routes, coordinated progress, typed first-use and CCS verification diagnostics, strict verification JSON, and focused output proof
+revision: 9
+summary: Daily-driver CLI routes, coordinated progress, typed first-use and CCS verification diagnostics, strict verification JSON, truthful collection update outcomes, and focused output proof
 ---
 
 # Daily-Driver UX Matrix
@@ -145,6 +145,42 @@ strict schema, explicit-policy MCP boundary, and authority contract.
 
 Remaining #644 work includes machine/refusal coverage on other command surfaces
 and consistent fields, headings, and empty states.
+
+## Collection Update Summary
+
+`apps/conary/src/commands/update/outcome.rs` retains no-change, planned, and
+applied outcomes from the existing update selection and execution counters.
+`apps/conary/src/ui/update_summary.rs` renders collection results from these
+observations. Successful return alone is never counted as an applied update.
+Package counts and request counts have distinct labels; rows retain the selected
+member's name, installed version, and architecture.
+
+A collection preview previously ended with `Collection update complete` and
+`Updated: 1 package(s)` immediately after saying no updates were applied. The
+summary now reads:
+
+```text
+Collection update preview
+  Collection: base
+  Planned packages: 1
+  Unchanged requests: 0
+  Failed requests: 0
+[pending]  demo 1.0-1 [x86_64]  1 planned
+Dry run: no updates were applied.
+```
+
+Apply uses `Collection update results` and `Applied packages`; a request that
+finds no eligible update on re-selection is shown as `[skip]` with `no changes`.
+Failed requests retain failure status and never imply that prior successful
+members were rolled back. The closing note directs the operator to inspect
+package state before retrying when a request failed during apply. Planning,
+source selection, lifecycle execution, and publication authority are unchanged.
+
+`cargo test -p conary --test cli_update_summary` captures terminal, pipe, and
+`NO_COLOR` previews and compares every database table before and after. Update
+unit tests prove no-change/preview/apply outcomes against real selection and
+execution; UI tests cover mixed results and partial-failure wording. Grouped
+install/remove/rollback tables and generation/recovery closing rows remain #132.
 
 ## Ranked UI Slices
 
