@@ -54,7 +54,7 @@ async fn projected_native_dependency_uses_runtime_keyring_without_mutation() {
                 RepositoryUpdateMode::Follow,
             )
             .unwrap(),
-            "fedora-44".into(),
+            "fedora-44",
             None,
         )
         .unwrap();
