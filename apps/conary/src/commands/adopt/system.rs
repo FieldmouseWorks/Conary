@@ -135,7 +135,7 @@ pub fn cmd_adopt_system(
         ));
     }
 
-    println!("Detected package manager: {:?}", pkg_mgr);
+    crate::ui::println!("Detected package manager: {:?}", pkg_mgr);
     let version_scheme = pkg_mgr.version_scheme().ok_or_else(|| {
         anyhow::anyhow!(
             "Detected package manager {} has no exact version scheme",
@@ -202,7 +202,7 @@ pub fn cmd_adopt_system(
         .collect::<Vec<_>>();
 
     if total < pre_filter_count {
-        println!("Filtered: {} -> {} packages", pre_filter_count, total);
+        crate::ui::println!("Filtered: {} -> {} packages", pre_filter_count, total);
     }
 
     if dry_run {
@@ -229,16 +229,16 @@ pub fn cmd_adopt_system(
             }
         }
 
-        println!("Dry run: would adopt {} packages\n", to_adopt);
-        println!("Summary:");
-        println!("  Would adopt: {} packages", to_adopt);
+        crate::ui::println!("Dry run: would adopt {} packages\n", to_adopt);
+        crate::ui::println!("Summary:");
+        crate::ui::println!("  Would adopt: {} packages", to_adopt);
         if full {
-            println!("  Would CAS-back: {} track-only packages", to_promote);
+            crate::ui::println!("  Would CAS-back: {} track-only packages", to_promote);
         }
-        println!("    Explicit: {}", explicit_count);
-        println!("    Dependency: {}", dep_count);
-        println!("  Already tracked: {} packages", already_tracked);
-        println!(
+        crate::ui::println!("    Explicit: {}", explicit_count);
+        crate::ui::println!("    Dependency: {}", dep_count);
+        crate::ui::println!("  Already tracked: {} packages", already_tracked);
+        crate::ui::println!(
             "  Mode: {}",
             if full {
                 "full (CAS storage)"
@@ -607,7 +607,7 @@ pub fn cmd_adopt_system(
         ));
     }
     if let Some(sync) = captured_root_sync {
-        println!(
+        crate::ui::println!(
             "  Captured root: {} unowned entries, {} package-owned entries{}",
             sync.captured_entries,
             sync.package_entries,

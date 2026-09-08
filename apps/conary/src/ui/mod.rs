@@ -1,7 +1,19 @@
 // apps/conary/src/ui/mod.rs
 //! Single source of truth for user-facing CLI output styling.
 
+pub(crate) mod progress;
+
 use console::style;
+
+/// Write durable text without colliding with active progress rows.
+pub fn message(message: &str) {
+    progress::suspend(|| std::println!("{message}"));
+}
+
+/// Write a diagnostic without colliding with active progress rows.
+pub fn diagnostic(message: &str) {
+    progress::suspend(|| std::eprintln!("{message}"));
+}
 
 /// Per-item indicator used by [`row`]/[`row_line`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -79,31 +91,31 @@ pub fn field_line(label: &str, value: &str) -> String {
 }
 
 pub fn error(msg: &str) {
-    eprintln!("{}", error_line(msg));
+    diagnostic(&error_line(msg));
 }
 
 pub fn warn(msg: &str) {
-    eprintln!("{}", warn_line(msg));
+    diagnostic(&warn_line(msg));
 }
 
 pub fn note(msg: &str) {
-    eprintln!("{}", note_line(msg));
+    diagnostic(&note_line(msg));
 }
 
 pub fn status(verb: &str, msg: &str) {
-    println!("{}", status_line(verb, msg));
+    message(&status_line(verb, msg));
 }
 
 pub fn row(status: Status, cells: &[&str]) {
-    println!("{}", row_line(status, cells));
+    message(&row_line(status, cells));
 }
 
 pub fn heading(text: &str) {
-    println!("{}", heading_line(text));
+    message(&heading_line(text));
 }
 
 pub fn field(label: &str, value: &str) {
-    println!("{}", field_line(label, value));
+    message(&field_line(label, value));
 }
 
 #[cfg(test)]
@@ -146,3 +158,14 @@ mod tests {
         assert_eq!(heading_line("Installed packages:"), "Installed packages:");
     }
 }
+
+// Preserve formatting at legacy call sites while coordinating their terminal writes.
+macro_rules! println {
+    () => { $crate::ui::message("") };
+    ($($args:tt)*) => { $crate::ui::message(&format!($($args)*)) };
+}
+macro_rules! eprintln {
+    () => { $crate::ui::diagnostic("") };
+    ($($args:tt)*) => { $crate::ui::diagnostic(&format!($($args)*)) };
+}
+pub(crate) use {eprintln, println};

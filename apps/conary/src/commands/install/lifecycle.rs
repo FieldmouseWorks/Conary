@@ -72,19 +72,19 @@ pub(super) fn show_dry_run_summary(
     require_lossless_native_component_selection(component_selection)?;
     let selected_file_count = pkg.files().len();
 
-    println!(
+    crate::ui::println!(
         "\nWould install package: {} version {}",
         pkg.name(),
         pkg.version()
     );
-    println!("  Architecture: {}", pkg.architecture().unwrap_or("none"));
-    println!(
+    crate::ui::println!("  Architecture: {}", pkg.architecture().unwrap_or("none"));
+    crate::ui::println!(
         "  Components to install: {} ({} files)",
         ComponentType::Runtime.as_str(),
         selected_file_count
     );
-    println!("  Dependencies: {}", runtime_requirement_count(pkg));
-    println!("\nDry run complete. No changes made.");
+    crate::ui::println!("  Dependencies: {}", runtime_requirement_count(pkg));
+    crate::ui::println!("\nDry run complete. No changes made.");
     Ok(())
 }
 
@@ -164,9 +164,7 @@ pub(super) fn finalize_install_without_snapshot(
         run_triggers(conn, Path::new(root), tx_result.changeset_id, &file_paths)?;
     }
 
-    output
-        .progress
-        .finish(&format!("Installed {} {}", pkg.name(), pkg.version()));
+    output.progress.clear();
 
     if !output.quiet {
         // Show what components were available vs installed
@@ -176,14 +174,14 @@ pub(super) fn finalize_install_without_snapshot(
             String::new()
         };
 
-        println!(
+        crate::ui::println!(
             "Installed package: {} version {}",
             pkg.name(),
             pkg.version()
         );
-        println!("  Architecture: {}", pkg.architecture().unwrap_or("none"));
-        println!("  Files installed: {}", extraction.extracted_files.len());
-        println!(
+        crate::ui::println!("  Architecture: {}", pkg.architecture().unwrap_or("none"));
+        crate::ui::println!("  Files installed: {}", extraction.extracted_files.len());
+        crate::ui::println!(
             "  Components: {}{}",
             extraction
                 .installed_component_types
@@ -193,9 +191,9 @@ pub(super) fn finalize_install_without_snapshot(
                 .join(", "),
             skipped_info
         );
-        println!("  Dependencies: {}", runtime_requirement_count(pkg));
+        crate::ui::println!("  Dependencies: {}", runtime_requirement_count(pkg));
         if !extraction.language_provides.is_empty() {
-            println!(
+            crate::ui::println!(
                 "  Provides: {} (language-specific capabilities)",
                 extraction.language_provides.len()
             );

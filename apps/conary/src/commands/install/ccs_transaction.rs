@@ -134,13 +134,13 @@ fn show_ccs_dry_run_summary(pkg: &conary_core::ccs::CcsPackage, extraction: &Ext
         .installed_component_names
         .as_deref()
         .unwrap_or_default();
-    println!(
+    crate::ui::println!(
         "\nWould install package: {} version {}",
         pkg.name(),
         pkg.version()
     );
-    println!("  Architecture: {}", pkg.architecture().unwrap_or("none"));
-    println!(
+    crate::ui::println!("  Architecture: {}", pkg.architecture().unwrap_or("none"));
+    crate::ui::println!(
         "  Components to install: {} ({} files)",
         if component_names.is_empty() {
             "(metadata-only)".to_string()
@@ -149,8 +149,8 @@ fn show_ccs_dry_run_summary(pkg: &conary_core::ccs::CcsPackage, extraction: &Ext
         },
         extraction.extracted_files.len()
     );
-    println!("  Dependencies: {}", runtime_requirement_count(pkg));
-    println!("\nDry run complete. No changes made.");
+    crate::ui::println!("  Dependencies: {}", runtime_requirement_count(pkg));
+    crate::ui::println!("\nDry run complete. No changes made.");
 }
 
 pub(crate) fn check_ccs_upgrade_status(
@@ -472,10 +472,11 @@ fn install_ccs_package_transactionally_inner(
     }
 
     if opts.dry_run {
+        progress.clear();
         show_ccs_lifecycle_dry_run(pkg.manifest());
         show_ccs_dry_run_summary(pkg, &extraction);
         for removal in &relation_plan.removals {
-            println!(
+            crate::ui::println!(
                 "  Would remove {} {} ({})",
                 removal.package_name,
                 removal.package_version,

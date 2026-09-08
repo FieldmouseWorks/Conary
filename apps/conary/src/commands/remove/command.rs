@@ -21,16 +21,13 @@ pub fn cmd_remove(
     purge: bool,
 ) -> Result<()> {
     info!("Removing package: {}", package_name);
-    println!("Removing package: {}", package_name);
+    crate::ui::println!("Removing package: {}", package_name);
     std::io::stdout().flush()?;
     if let Some(delay_ms) = crate::test_hooks::get().hold_during_remove_ms()
         && delay_ms > 0
     {
         std::thread::sleep(Duration::from_millis(delay_ms));
     }
-
-    // Create progress tracker for removal
-    let progress = RemoveProgress::new(package_name);
 
     let conn = open_db(db_path)?;
     let selector =
@@ -66,10 +63,10 @@ pub fn cmd_remove(
             "Removing '{package_name}' would break the following packages:"
         ));
         for pkg in &breaking {
-            println!("  {}", pkg);
+            crate::ui::println!("  {}", pkg);
         }
-        println!("\nRefusing to remove package with dependencies.");
-        println!(
+        crate::ui::println!("\nRefusing to remove package with dependencies.");
+        crate::ui::println!(
             "Use 'conary query whatbreaks {}' for more information.",
             package_name
         );
@@ -88,6 +85,7 @@ pub fn cmd_remove(
         ));
     }
 
+    let progress = RemoveProgress::new(package_name);
     let graph_result = super::native_graph::execute_installed_trove_remove_graph(
         &conn,
         &trove,
@@ -96,20 +94,18 @@ pub fn cmd_remove(
         lifecycle_options,
         &progress,
     )?;
-    progress.finish(&format!(
-        "Removed {} {}",
-        graph_result.removal.trove.name, graph_result.removal.trove.version
-    ));
+    progress.clear();
     print_remove_summary(&graph_result.removal, &graph_result.stats);
     Ok(())
 }
 
 fn print_remove_summary(remove_result: &RemoveInnerResult, stats: &crate::commands::LiveRootStats) {
-    println!(
+    crate::ui::println!(
         "Removed package: {} version {}",
-        remove_result.trove.name, remove_result.trove.version
+        remove_result.trove.name,
+        remove_result.trove.version
     );
-    println!(
+    crate::ui::println!(
         "  Architecture: {}",
         remove_result
             .trove
@@ -117,9 +113,9 @@ fn print_remove_summary(remove_result: &RemoveInnerResult, stats: &crate::comman
             .as_deref()
             .unwrap_or("none")
     );
-    println!("  Files removed: {}", stats.files_removed);
+    crate::ui::println!("  Files removed: {}", stats.files_removed);
     if stats.dirs_removed > 0 {
-        println!("  Directories removed: {}", stats.dirs_removed);
+        crate::ui::println!("  Directories removed: {}", stats.dirs_removed);
     }
 }
 

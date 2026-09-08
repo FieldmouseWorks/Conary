@@ -51,7 +51,7 @@ pub(super) async fn handle_dependencies(ctx: &DepAnalysisContext<'_>) -> Result<
 
     if ctx.no_deps && runtime_requirement_count != 0 {
         info!("Skipping dependency check (--no-deps specified)");
-        println!(
+        crate::ui::println!(
             "Skipping {} dependencies (--no-deps specified)",
             runtime_requirement_count
         );
@@ -68,7 +68,7 @@ pub(super) async fn handle_dependencies(ctx: &DepAnalysisContext<'_>) -> Result<
         "Resolving {} dependencies with SAT solver...",
         runtime_requirement_count
     );
-    println!("Checking dependencies for {}...", ctx.pkg.name());
+    crate::ui::println!("Checking dependencies for {}...", ctx.pkg.name());
 
     let sat_result = conary_core::resolver::solve_package_requirements_with_policy(
         ctx.conn, ctx.pkg, ctx.policy,
@@ -77,8 +77,8 @@ pub(super) async fn handle_dependencies(ctx: &DepAnalysisContext<'_>) -> Result<
 
     // If SAT reports a conflict, surface it
     if let Some(ref conflict_msg) = sat_result.conflict_message {
-        eprintln!("\nDependency conflicts detected:");
-        eprintln!("  {}", conflict_msg);
+        crate::ui::eprintln!("\nDependency conflicts detected:");
+        crate::ui::eprintln!("  {}", conflict_msg);
         return Err(anyhow::anyhow!(
             "Cannot install {}: dependency conflict(s) detected",
             ctx.pkg.name(),
@@ -88,7 +88,7 @@ pub(super) async fn handle_dependencies(ctx: &DepAnalysisContext<'_>) -> Result<
     let selected = resolved_repository_deps_from_sat_result(&sat_result, ctx.pkg.name());
 
     if selected.is_empty() {
-        println!("All dependencies already satisfied");
+        crate::ui::println!("All dependencies already satisfied");
         return Ok(());
     }
 
@@ -101,7 +101,8 @@ pub(super) async fn handle_dependencies(ctx: &DepAnalysisContext<'_>) -> Result<
     // Confirmation prompt for non-trivial dependency installs
     let total_changes = dep_plan.to_install.len();
     if total_changes > 0 && !ctx.dry_run && !ctx.yes {
-        println!();
+        progress.clear();
+        crate::ui::println!();
         print!("Proceed with {} dependency changes? [Y/n] ", total_changes);
         use std::io::Write;
         std::io::stdout().flush()?;
@@ -110,7 +111,7 @@ pub(super) async fn handle_dependencies(ctx: &DepAnalysisContext<'_>) -> Result<
         std::io::stdin().read_line(&mut input)?;
         let input = input.trim().to_lowercase();
         if input == "n" || input == "no" {
-            println!("Cancelled.");
+            crate::ui::println!("Cancelled.");
             return Ok(());
         }
     }
@@ -150,24 +151,24 @@ async fn handle_dep_installs(
     }
 
     if ctx.dry_run {
-        println!(
+        crate::ui::println!(
             "  Would install {} dependencies from Remi:",
             dep_plan.to_install.len()
         );
         let to_download =
             dep_resolution::exact_repository_downloads(ctx.conn, &dep_plan.to_install)?;
         for dependency in &dep_plan.to_install {
-            println!("    {}", dependency.package.name);
+            crate::ui::println!("    {}", dependency.package.name);
         }
         if to_download.is_empty() {
-            println!("  (all dependencies already available locally)");
+            crate::ui::println!("  (all dependencies already available locally)");
         }
         return Ok(());
     }
 
-    println!("  Installing {} dependencies:", dep_plan.to_install.len());
+    crate::ui::println!("  Installing {} dependencies:", dep_plan.to_install.len());
     for dependency in &dep_plan.to_install {
-        println!("    {}", dependency.package.name);
+        crate::ui::println!("    {}", dependency.package.name);
     }
 
     match dep_resolution::exact_repository_downloads(ctx.conn, &dep_plan.to_install) {
@@ -264,9 +265,9 @@ fn check_unresolvable_deps(
         return Ok(());
     }
 
-    eprintln!("\nUnresolvable dependencies:");
+    crate::ui::eprintln!("\nUnresolvable dependencies:");
     for dep in &dep_plan.unresolvable {
-        eprintln!(
+        crate::ui::eprintln!(
             "  {} {} (required by: {})",
             dep.name,
             dep.constraint,
@@ -276,9 +277,9 @@ fn check_unresolvable_deps(
     if let Ok(repos) = conary_core::db::models::Repository::list_all(ctx.conn) {
         let repo_names: Vec<&str> = repos.iter().map(|repo| repo.name.as_str()).collect();
         if repo_names.is_empty() {
-            eprintln!("No repositories configured (run 'conary repo add' first)");
+            crate::ui::eprintln!("No repositories configured (run 'conary repo add' first)");
         } else {
-            eprintln!("Repositories searched: {}", repo_names.join(", "));
+            crate::ui::eprintln!("Repositories searched: {}", repo_names.join(", "));
         }
     }
 

@@ -15,13 +15,13 @@ fn progress_capture_child() {
             let progress = InstallProgress::single("Installing");
             progress.set_status("Extracting fixture");
             std::thread::sleep(Duration::from_millis(250));
-            progress.finish("duplicate completion");
+            progress.clear();
         }
         "zero" => {
             let progress = UpdateProgress::new(0);
             progress.set_status("Checking fixture");
             std::thread::sleep(Duration::from_millis(250));
-            progress.finish("duplicate completion");
+            progress.clear();
         }
         "remove_error" => {
             let progress = RemoveProgress::new("fixture");
@@ -44,7 +44,11 @@ fn capture(scenario: &str, tty: bool, no_color: bool) -> String {
     let mut command = if tty {
         let mut command = Command::new("script");
         // The executable path is passed as a positional shell argument, never shell code.
-        command.args(["-qec", "exec \"$CONARY_PROGRESS_EXE\" --exact progress_capture_child --nocapture", "/dev/null"]);
+        command.args([
+            "-qec",
+            "exec \"$CONARY_PROGRESS_EXE\" --exact progress_capture_child --nocapture",
+            "/dev/null",
+        ]);
         command.env("CONARY_PROGRESS_EXE", &exe);
         command
     } else {
@@ -52,12 +56,16 @@ fn capture(scenario: &str, tty: bool, no_color: bool) -> String {
         command.args(["--exact", "progress_capture_child", "--nocapture"]);
         command
     };
-    command.env("CONARY_PROGRESS_CAPTURE", scenario).env("TERM", "xterm");
+    command
+        .env("CONARY_PROGRESS_CAPTURE", scenario)
+        .env("TERM", "xterm");
     command.env_remove("NO_COLOR").env_remove("CLICOLOR_FORCE");
     if no_color {
         command.env("NO_COLOR", "1");
     }
-    let output = command.output().expect("capture progress (requires util-linux script)");
+    let output = command
+        .output()
+        .expect("capture progress (requires util-linux script)");
     assert!(output.status.success(), "{output:?}");
     let mut text = String::from_utf8(output.stdout).unwrap();
     text.push_str(&String::from_utf8(output.stderr).unwrap());
@@ -68,11 +76,20 @@ fn capture(scenario: &str, tty: bool, no_color: bool) -> String {
 fn terminal_progress_has_no_phantom_bars_or_duplicate_completion() {
     for scenario in ["single", "zero", "remove_error", "adopt"] {
         let output = capture(scenario, true, false);
-        assert!(output.contains('\x1b'), "no TTY rendering exercised: {output:?}");
+        assert!(
+            output.contains('\x1b'),
+            "no TTY rendering exercised: {output:?}"
+        );
         assert!(!output.contains("0/0"), "{scenario}: {output:?}");
-        assert!(!output.contains("duplicate completion"), "{scenario}: {output:?}");
+        assert!(
+            !output.contains("duplicate completion"),
+            "{scenario}: {output:?}"
+        );
         let (_, after) = output.split_once("CAPTURE_COMPLETE").unwrap();
-        assert!(!after.contains('\x1b'), "redraw after completion: {output:?}");
+        assert!(
+            !after.contains('\x1b'),
+            "redraw after completion: {output:?}"
+        );
     }
 }
 
@@ -83,7 +100,10 @@ fn pipes_and_no_color_terminals_have_no_live_redraw() {
             let output = capture(scenario, tty, no_color);
             assert!(!output.contains('\x1b'), "{scenario}: {output:?}");
             assert!(!output.contains("0/0"), "{scenario}: {output:?}");
-            assert!(!output.contains("duplicate completion"), "{scenario}: {output:?}");
+            assert!(
+                !output.contains("duplicate completion"),
+                "{scenario}: {output:?}"
+            );
         }
     }
 }

@@ -433,7 +433,7 @@ pub fn try_convert_to_ccs(
                 "Package {} already converted, using regular install path",
                 pkg.name()
             );
-            println!(
+            crate::ui::println!(
                 "Note: {} was previously converted - using standard install",
                 pkg.name()
             );
@@ -669,7 +669,7 @@ async fn install_verified_ccs_artifact(
                     )
                 })?;
         }
-        println!("Installing CCS package...");
+        crate::ui::println!("Installing CCS package...");
         let mut conn = open_db(db_path)?;
         let result = super::install_ccs_package_transactionally(
             &mut conn,
@@ -694,7 +694,7 @@ async fn install_verified_ccs_artifact(
     }
 
     if !yes {
-        println!();
+        crate::ui::println!();
         print!(
             "Proceed with {} dependency changes? [Y/n] ",
             selected_dependencies.len()
@@ -706,7 +706,7 @@ async fn install_verified_ccs_artifact(
         std::io::stdin().read_line(&mut input)?;
         let input = input.trim().to_lowercase();
         if input == "n" || input == "no" {
-            println!("Cancelled.");
+            crate::ui::println!("Cancelled.");
             return Ok(None);
         }
     }
@@ -736,7 +736,7 @@ async fn install_verified_ccs_artifact(
         },
     )?);
 
-    println!("Installing CCS package...");
+    crate::ui::println!("Installing CCS package...");
     let result = prepared.install_with_result(BatchInstaller::new(db_path, sandbox_mode))?;
     Ok(Some(result.exact_trove_id(&ccs_pkg)?))
 }
