@@ -26,6 +26,7 @@ pub mod groups;
 pub(crate) mod hermetic_config;
 pub(crate) mod hermetic_state;
 mod install;
+pub(crate) use install::report as install_report;
 mod installed_authority_snapshot;
 mod label;
 mod live_root;

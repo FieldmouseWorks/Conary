@@ -541,6 +541,19 @@ fn prepare_native_package_conversion_with_checksum(
 ///
 /// The artifact may be Conary-native or converted from another package format.
 pub async fn install_ccs_artifact(opts: CcsArtifactInstallOptions<'_>) -> Result<Option<i64>> {
+    let mut report = super::report::InstallReport::default();
+    let (db_path, dry_run) = (opts.db_path, opts.dry_run);
+    let result = install_ccs_artifact_with_report(opts, &mut report).await;
+    if result.is_ok() || !report.commits.is_empty() {
+        report.render(db_path, dry_run);
+    }
+    result
+}
+
+pub(super) async fn install_ccs_artifact_with_report(
+    opts: CcsArtifactInstallOptions<'_>,
+    report: &mut super::report::InstallReport,
+) -> Result<Option<i64>> {
     let permanent_cas = (!opts.dry_run)
         .then(|| {
             let runtime_root =
@@ -564,7 +577,7 @@ pub async fn install_ccs_artifact(opts: CcsArtifactInstallOptions<'_>) -> Result
         )?,
     };
 
-    install_verified_ccs_artifact(opts, verified).await
+    install_verified_ccs_artifact(opts, verified, report).await
 }
 
 /// Finalize one freshly authored conversion at the normal install authority
@@ -572,6 +585,7 @@ pub async fn install_ccs_artifact(opts: CcsArtifactInstallOptions<'_>) -> Result
 pub(super) async fn install_pending_ccs_conversion(
     pending: PendingConversionResult,
     opts: CcsArtifactInstallOptions<'_>,
+    report: &mut super::report::InstallReport,
 ) -> Result<(Option<i64>, PendingInstalledConversion)> {
     anyhow::ensure!(
         pending.unverified_package_path() == Path::new(opts.ccs_path),
@@ -602,13 +616,14 @@ pub(super) async fn install_pending_ccs_conversion(
         opts.ccs_path
     );
     let pending_record = PendingInstalledConversion::from_verified_conversion(&conversion)?;
-    let installed_trove_id = install_verified_ccs_artifact(opts, verification).await?;
+    let installed_trove_id = install_verified_ccs_artifact(opts, verification, report).await?;
     Ok((installed_trove_id, pending_record))
 }
 
 async fn install_verified_ccs_artifact(
     opts: CcsArtifactInstallOptions<'_>,
     verified: conary_core::ccs::VerifiedCcsArchive,
+    report: &mut super::report::InstallReport,
 ) -> Result<Option<i64>> {
     let CcsArtifactInstallOptions {
         ccs_path,
@@ -661,13 +676,24 @@ async fn install_verified_ccs_artifact(
     if selected_dependencies.is_empty() || dry_run {
         if dry_run && !selected_dependencies.is_empty() {
             let conn = open_db(db_path)?;
-            dep_resolution::exact_repository_downloads(&conn, &selected_dependencies)
-                .with_context(|| {
-                    format!(
-                        "SAT-selected dependency identity drifted before dry-run for '{}'",
-                        ccs_pkg.name()
-                    )
-                })?;
+            let dependencies =
+                dep_resolution::exact_repository_downloads(&conn, &selected_dependencies)
+                    .with_context(|| {
+                        format!(
+                            "SAT-selected dependency identity drifted before dry-run for '{}'",
+                            ccs_pkg.name()
+                        )
+                    })?;
+            for (_, dependency) in dependencies {
+                let before =
+                    conary_core::db::models::Trove::find_by_name(&conn, &dependency.package.name)?
+                        .into_iter()
+                        .find(|trove| trove.architecture == dependency.package.architecture);
+                report.planned.push(super::report::InstallChange::incoming(
+                    super::report::PackageIdentity::repository(&dependency.package),
+                    before.as_ref(),
+                ));
+            }
         }
         crate::ui::println!("Installing CCS package...");
         let mut conn = open_db(db_path)?;
@@ -679,7 +705,7 @@ async fn install_verified_ccs_artifact(
                 root,
                 dry_run,
                 defer_generation: false,
-                quiet: false,
+                quiet: true,
                 sandbox_mode,
                 allow_downgrade,
                 intent,
@@ -690,6 +716,7 @@ async fn install_verified_ccs_artifact(
                 requested_source_identity,
             },
         )?;
+        report.extend(result.report);
         return Ok(result.trove_id);
     }
 
@@ -738,7 +765,9 @@ async fn install_verified_ccs_artifact(
 
     crate::ui::println!("Installing CCS package...");
     let result = prepared.install_with_result(BatchInstaller::new(db_path, sandbox_mode))?;
-    Ok(Some(result.exact_trove_id(&ccs_pkg)?))
+    let trove_id = result.exact_trove_id(&ccs_pkg)?;
+    report.extend(result.report);
+    Ok(Some(trove_id))
 }
 
 #[cfg(test)]

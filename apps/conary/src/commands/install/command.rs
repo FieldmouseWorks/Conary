@@ -29,17 +29,39 @@ use std::path::Path;
 /// Packages can be resolved from binary repos, on-demand converters, or recipes
 /// based on their routing table entries.
 pub async fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
-    cmd_install_with_intent(package, opts, InstallIntent::PackageChange).await
+    let mut report = super::report::InstallReport::default();
+    let (db_path, dry_run) = (opts.db_path, opts.dry_run);
+    let result = cmd_install_with_report(package, opts, &mut report).await;
+    if result.is_ok() || !report.commits.is_empty() {
+        report.render(db_path, dry_run);
+    }
+    result
 }
 
 pub(crate) async fn cmd_install_replatform(package: &str, opts: InstallOptions<'_>) -> Result<()> {
-    cmd_install_with_intent(package, opts, InstallIntent::Replatform).await
+    let mut report = super::report::InstallReport::default();
+    let (db_path, dry_run) = (opts.db_path, opts.dry_run);
+    let result =
+        cmd_install_with_intent(package, opts, InstallIntent::Replatform, &mut report).await;
+    if result.is_ok() || !report.commits.is_empty() {
+        report.render(db_path, dry_run);
+    }
+    result
+}
+
+pub(crate) async fn cmd_install_with_report(
+    package: &str,
+    opts: InstallOptions<'_>,
+    report: &mut super::report::InstallReport,
+) -> Result<()> {
+    cmd_install_with_intent(package, opts, InstallIntent::PackageChange, report).await
 }
 
 async fn cmd_install_with_intent(
     package: &str,
     opts: InstallOptions<'_>,
     intent: InstallIntent,
+    report: &mut super::report::InstallReport,
 ) -> Result<()> {
     let InstallOptions {
         db_path,
@@ -151,6 +173,7 @@ async fn cmd_install_with_intent(
         &policy,
         requested_source_profile,
         &ccs_install_opts,
+        report,
     )
     .await?
     else {
@@ -177,7 +200,7 @@ async fn cmd_install_with_intent(
         sandbox_mode,
         policy: &policy,
     };
-    handle_dependencies(&dep_ctx).await?;
+    handle_dependencies(&dep_ctx, report).await?;
 
     // Dry-run planning is read-only and does not participate in the runtime
     // mutation serialization boundary. A real install takes that boundary
@@ -192,22 +215,6 @@ async fn cmd_install_with_intent(
     validate_package_relation_plan(&conn, &relation_plan)
         .context("Package conflicts and replacements cannot be applied")?;
 
-    // --- Phase 6: Dry run summary ---
-    if dry_run {
-        show_dry_run_summary(pkg.as_ref(), &component_selection)?;
-        show_relation_removals(&relation_plan);
-        return Ok(());
-    }
-
-    // --- Phase 7: File extraction + lossless component assignment ---
-    let progress = InstallProgress::single("Installing");
-    let extraction = extract_and_classify_files(pkg.as_ref(), &component_selection, &progress)?;
-    preflight_extracted_file_ownership(&conn, pkg.as_ref(), &extraction, &relation_plan.removals)?;
-    let file_capabilities = conary_core::ccs::convert::file_capabilities_from_native_payload(
-        &extraction.extracted_files,
-    )?;
-
-    // --- Phase 8: Scriptlet execution (pre-install) ---
     let old_trove_to_upgrade =
         match check_upgrade_status(&conn, pkg.as_ref(), &semantics, allow_downgrade, intent)? {
             UpgradeCheck::FreshInstall => None,
@@ -223,6 +230,28 @@ async fn cmd_install_with_intent(
             | UpgradeCheck::Downgrade(trove)
             | UpgradeCheck::Replatform(trove) => Some(trove),
         };
+    let mut changes = vec![super::report::InstallChange::incoming(
+        super::report::PackageIdentity::package(pkg.as_ref()),
+        old_trove_to_upgrade.as_deref(),
+    )];
+    changes.extend(super::report::relation_changes(&conn, &relation_plan)?);
+
+    // --- Phase 6: Dry run summary ---
+    if dry_run {
+        show_dry_run_summary(pkg.as_ref(), &component_selection)?;
+        report.planned.extend(changes);
+        return Ok(());
+    }
+
+    // --- Phase 7: File extraction + lossless component assignment ---
+    let progress = InstallProgress::single("Installing");
+    let extraction = extract_and_classify_files(pkg.as_ref(), &component_selection, &progress)?;
+    preflight_extracted_file_ownership(&conn, pkg.as_ref(), &extraction, &relation_plan.removals)?;
+    let file_capabilities = conary_core::ccs::convert::file_capabilities_from_native_payload(
+        &extraction.extracted_files,
+    )?;
+
+    // --- Phase 8: Scriptlet execution (pre-install) ---
     let native_lifecycle_state =
         NativeLifecycleInstallState::from_native_package(pkg.as_ref(), format, source_profile)?;
     let repository_enrollments = if format == crate::commands::PackageFormatType::Rpm {
@@ -305,6 +334,13 @@ async fn cmd_install_with_intent(
         &native_execution_mode,
     )?;
 
+    report.commits.push(super::report::InstallCommit {
+        changes,
+        changeset_id: tx_result.changeset_id,
+        file_records: extraction.extracted_files.len(),
+        publication: tx_result.publication.clone(),
+    });
+
     // --- Phase 10: Post-install finalization ---
     finalize_install(
         &conn,
@@ -315,17 +351,6 @@ async fn cmd_install_with_intent(
         &progress,
     )?;
     Ok(())
-}
-
-fn show_relation_removals(plan: &conary_core::transaction::PackageRelationPlan) {
-    for removal in &plan.removals {
-        println!(
-            "  Would remove {} {} ({})",
-            removal.package_name,
-            removal.package_version,
-            removal.kind.as_str()
-        );
-    }
 }
 
 #[cfg(test)]

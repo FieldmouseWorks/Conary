@@ -960,6 +960,7 @@ fn finalize_restore_installs(
                 trove_id: *trove_id,
                 changeset_id,
                 triggers_executed: true,
+                publication: None,
             },
             FinalizeInstallOutput::new(&progress, false),
         )?;

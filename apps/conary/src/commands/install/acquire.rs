@@ -1,7 +1,7 @@
 // apps/conary/src/commands/install/acquire.rs
 
 use super::conversion::{
-    CcsArtifactInstallOptions, ConversionResult, install_ccs_artifact,
+    CcsArtifactInstallOptions, ConversionResult, install_ccs_artifact_with_report,
     install_pending_ccs_conversion, try_convert_to_ccs,
 };
 use super::prepare::parse_package;
@@ -55,6 +55,7 @@ pub(super) async fn resolve_and_parse_package(
     policy: &ResolutionPolicy,
     requested_source_profile: Option<&str>,
     ccs_opts: &CcsInstallParams<'_>,
+    report: &mut super::report::InstallReport,
 ) -> Result<
     Option<(
         Box<dyn PackageFormat>,
@@ -114,24 +115,27 @@ pub(super) async fn resolve_and_parse_package(
             .to_str()
             .ok_or_else(|| anyhow::anyhow!("Invalid CCS path (non-UTF8)"))?;
         progress.clear();
-        install_ccs_artifact(CcsArtifactInstallOptions {
-            ccs_path,
-            db_path: ccs_opts.db_path,
-            root: ccs_opts.root,
-            dry_run: ccs_opts.dry_run,
-            sandbox_mode: ccs_opts.sandbox_mode,
-            no_deps: ccs_opts.no_deps,
-            allow_downgrade: ccs_opts.allow_downgrade,
-            intent: ccs_opts.intent,
-            yes: ccs_opts.yes,
-            envelope_authority: direct_ccs_envelope_authority(
-                resolved.source_type,
-                repository_provenance.as_ref(),
-            )?,
-            repository_provenance,
-            requested_source_identity: ccs_opts.requested_source_identity,
-            resolution_policy,
-        })
+        install_ccs_artifact_with_report(
+            CcsArtifactInstallOptions {
+                ccs_path,
+                db_path: ccs_opts.db_path,
+                root: ccs_opts.root,
+                dry_run: ccs_opts.dry_run,
+                sandbox_mode: ccs_opts.sandbox_mode,
+                no_deps: ccs_opts.no_deps,
+                allow_downgrade: ccs_opts.allow_downgrade,
+                intent: ccs_opts.intent,
+                yes: ccs_opts.yes,
+                envelope_authority: direct_ccs_envelope_authority(
+                    resolved.source_type,
+                    repository_provenance.as_ref(),
+                )?,
+                repository_provenance,
+                requested_source_identity: ccs_opts.requested_source_identity,
+                resolution_policy,
+            },
+            report,
+        )
         .await?;
         return Ok(None);
     }
@@ -146,24 +150,27 @@ pub(super) async fn resolve_and_parse_package(
     {
         info!("Detected CCS package archive contract, installing directly");
         progress.clear();
-        install_ccs_artifact(CcsArtifactInstallOptions {
-            ccs_path: path_str,
-            db_path: ccs_opts.db_path,
-            root: ccs_opts.root,
-            dry_run: ccs_opts.dry_run,
-            sandbox_mode: ccs_opts.sandbox_mode,
-            no_deps: ccs_opts.no_deps,
-            allow_downgrade: ccs_opts.allow_downgrade,
-            intent: ccs_opts.intent,
-            yes: ccs_opts.yes,
-            envelope_authority: direct_ccs_envelope_authority(
-                resolved.source_type,
-                repository_provenance.as_ref(),
-            )?,
-            repository_provenance,
-            requested_source_identity: ccs_opts.requested_source_identity,
-            resolution_policy,
-        })
+        install_ccs_artifact_with_report(
+            CcsArtifactInstallOptions {
+                ccs_path: path_str,
+                db_path: ccs_opts.db_path,
+                root: ccs_opts.root,
+                dry_run: ccs_opts.dry_run,
+                sandbox_mode: ccs_opts.sandbox_mode,
+                no_deps: ccs_opts.no_deps,
+                allow_downgrade: ccs_opts.allow_downgrade,
+                intent: ccs_opts.intent,
+                yes: ccs_opts.yes,
+                envelope_authority: direct_ccs_envelope_authority(
+                    resolved.source_type,
+                    repository_provenance.as_ref(),
+                )?,
+                repository_provenance,
+                requested_source_identity: ccs_opts.requested_source_identity,
+                resolution_policy,
+            },
+            report,
+        )
         .await?;
         return Ok(None);
     }
@@ -215,6 +222,7 @@ pub(super) async fn resolve_and_parse_package(
                         requested_source_identity: ccs_opts.requested_source_identity,
                         resolution_policy,
                     },
+                    report,
                 )
                 .await?;
                 if let Some(trove_id) = installed_trove_id {

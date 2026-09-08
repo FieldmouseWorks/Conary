@@ -40,7 +40,11 @@ impl BatchInstaller<'_> {
         rollback_root: conary_core::generation::root_manifest::SelectedRootSnapshot,
         ccs_hook_executors: &mut [Option<conary_core::ccs::HookExecutor>],
         promise_plan: &mut super::promises::PromiseWitnessPlan,
-    ) -> Result<(i64, Vec<i64>, Vec<i64>)> {
+    ) -> Result<(
+        i64,
+        Vec<i64>,
+        crate::commands::generation::publication::PublicationOutcome,
+    )> {
         let graph_inputs = self.prepare_graph_execution(conn, packages)?;
         let repository_transitions = packages
             .iter()
@@ -187,12 +191,8 @@ impl BatchInstaller<'_> {
                     self.db_path,
                 ),
             )?;
-            crate::commands::generation::publication::warn_if_publication_pending(
-                changeset_id,
-                &outcome,
-            );
         }
-        Ok((changeset_id, trove_ids, Vec::new()))
+        Ok((changeset_id, trove_ids, outcome))
     }
 
     fn prepare_graph_execution(

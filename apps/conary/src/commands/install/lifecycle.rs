@@ -66,25 +66,10 @@ pub(super) fn mark_upgraded_parent_deriveds_stale(
 
 /// Display a dry-run summary showing what would be installed.
 pub(super) fn show_dry_run_summary(
-    pkg: &dyn PackageFormat,
+    _pkg: &dyn PackageFormat,
     component_selection: &ComponentSelection,
 ) -> Result<()> {
     require_lossless_native_component_selection(component_selection)?;
-    let selected_file_count = pkg.files().len();
-
-    crate::ui::println!(
-        "\nWould install package: {} version {}",
-        pkg.name(),
-        pkg.version()
-    );
-    crate::ui::println!("  Architecture: {}", pkg.architecture().unwrap_or("none"));
-    crate::ui::println!(
-        "  Components to install: {} ({} files)",
-        ComponentType::Runtime.as_str(),
-        selected_file_count
-    );
-    crate::ui::println!("  Dependencies: {}", runtime_requirement_count(pkg));
-    crate::ui::println!("\nDry run complete. No changes made.");
     Ok(())
 }
 
@@ -229,7 +214,7 @@ pub(super) fn finalize_install(
         extraction,
         root,
         tx_result,
-        FinalizeInstallOutput::new(progress, false),
+        FinalizeInstallOutput::new(progress, true),
     )?;
     if let Err(error) = create_state_snapshot(
         conn,

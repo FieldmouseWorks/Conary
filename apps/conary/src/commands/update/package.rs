@@ -7,7 +7,7 @@ use super::super::install::{
     verify_ccs_package_authority,
 };
 use super::super::progress::{UpdatePhase, UpdateProgress};
-use super::super::{InstallOptions, SandboxMode, cmd_install, open_db};
+use super::super::{InstallOptions, SandboxMode, open_db};
 use super::adopted_authority::{
     AdoptedUpdateDecision, AdoptedUpdateSkip, AdoptedUpdateSkipReason, adopted_update_decision,
     native_manager_for_trove, no_update_message, render_adopted_skip_sample,
@@ -16,6 +16,10 @@ use super::selection::{
     SecurityMetadataUnavailable, SelectedUpdateCandidate, UpdateCandidateSelection,
     installed_troves_for_update, print_security_metadata_unavailable,
     render_security_update_marker, security_metadata_unavailable_error, select_update_candidate,
+};
+use crate::commands::install::{
+    cmd_install_with_report,
+    report::{InstallChange, InstallReport, PackageIdentity},
 };
 use anyhow::{Context, Result};
 use conary_core::ccs::CcsPackage;
@@ -471,23 +475,37 @@ pub(super) async fn update_packages(
             }
         );
     }
-    for (trove, selected) in &updates_available {
-        let security_marker = render_security_update_marker(&selected.package);
-        crate::ui::println!(
-            "  {} {} -> {}{}",
-            trove.name,
-            trove.version,
-            selected.package.version,
-            security_marker
-        );
+    let planned = updates_available
+        .iter()
+        .map(|(trove, selected)| {
+            InstallChange::incoming(PackageIdentity::repository(&selected.package), Some(trove))
+        })
+        .collect();
+    let preview = InstallReport {
+        planned,
+        commits: Vec::new(),
+    };
+    crate::ui::transaction_summary::install_preview(&preview.planned);
+    for (_, selected) in &updates_available {
+        if selected.package.is_security_update {
+            crate::ui::note(&format!(
+                "{}{}",
+                selected.package.name,
+                render_security_update_marker(&selected.package)
+            ));
+        }
     }
-
     if dry_run {
-        crate::ui::println!("\nDry run: no updates were applied.");
+        crate::ui::note("Dry run: no updates were applied.");
         return Ok(super::outcome::UpdateOutcome::Planned {
             packages: updates_available.len(),
         });
     }
+    let targets: std::collections::BTreeSet<_> = updates_available
+        .iter()
+        .map(|(_, selected)| PackageIdentity::repository(&selected.package))
+        .collect();
+    let mut report = InstallReport::default();
 
     // Phase 1: Check for deltas and categorize updates
     let mut delta_updates: Vec<(Trove, RepositoryPackage, Repository, PackageDelta)> = Vec::new();
@@ -604,7 +622,7 @@ pub(super) async fn update_packages(
                                         );
                                     } else {
                                         let path_str = pkg_file.to_string_lossy().to_string();
-                                        match cmd_install(
+                                        match cmd_install_with_report(
                                             &path_str,
                                             InstallOptions {
                                                 db_path,
@@ -619,6 +637,7 @@ pub(super) async fn update_packages(
                                                 ),
                                                 ..Default::default()
                                             },
+                                            &mut report,
                                         )
                                         .await
                                         {
@@ -698,7 +717,7 @@ pub(super) async fn update_packages(
 
                 let path_str = pkg_path.to_string_lossy().to_string();
 
-                if let Err(e) = cmd_install(
+                if let Err(e) = cmd_install_with_report(
                     &path_str,
                     install_options_for_update(
                         db_path,
@@ -709,6 +728,7 @@ pub(super) async fn update_packages(
                         &repo_pkg,
                         &repo,
                     )?,
+                    &mut report,
                 )
                 .await
                 {
@@ -782,7 +802,7 @@ pub(super) async fn update_packages(
 
                 let path_str = pkg_path.to_string_lossy().to_string();
 
-                if let Err(e) = cmd_install(
+                if let Err(e) = cmd_install_with_report(
                     &path_str,
                     install_options_for_update(
                         db_path,
@@ -793,6 +813,7 @@ pub(super) async fn update_packages(
                         &repo_pkg,
                         &repo,
                     )?,
+                    &mut report,
                 )
                 .await
                 {
@@ -839,7 +860,7 @@ pub(super) async fn update_packages(
             Ok(())
         })?;
 
-        crate::ui::println!("\n=== Update Summary ===");
+        crate::ui::heading("Update transfer results:");
         crate::ui::println!("Delta updates: {}", deltas_applied);
         crate::ui::println!("Full downloads: {}", full_downloads);
         crate::ui::println!("Delta failures: {}", delta_failures);
@@ -861,7 +882,7 @@ pub(super) async fn update_packages(
             crate::ui::println!("Bandwidth saved: {:.2} MB", saved_mb);
         }
 
-        let packages = usize::try_from(deltas_applied)? + usize::try_from(full_downloads)?;
+        let packages = report.applied_targets(&targets);
         Ok(if packages == 0 {
             super::outcome::UpdateOutcome::NoChanges
         } else {
@@ -869,6 +890,8 @@ pub(super) async fn update_packages(
         })
     }
     .await;
+
+    report.render(db_path, false);
 
     match update_result {
         Ok(outcome) => Ok(outcome),

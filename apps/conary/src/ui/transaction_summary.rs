@@ -9,6 +9,9 @@ use conary_core::db::models::Trove;
 enum Change {
     Remove,
     Restore,
+    Install,
+    Update,
+    Deconfigure,
 }
 
 struct PackageChange<'a> {
@@ -69,8 +72,22 @@ pub(crate) fn database_command(command: &str, db_path: &str) -> String {
 }
 
 fn change_lines(changes: &[PackageChange<'_>]) -> Vec<String> {
-    let mut lines = vec![super::heading_line("Applied package changes:")];
-    for (change, label) in [(Change::Remove, "Removed"), (Change::Restore, "Restored")] {
+    change_lines_with_heading(changes, false)
+}
+
+fn change_lines_with_heading(changes: &[PackageChange<'_>], preview: bool) -> Vec<String> {
+    let mut lines = vec![super::heading_line(if preview {
+        "Planned package changes:"
+    } else {
+        "Applied package changes:"
+    })];
+    for (change, label) in [
+        (Change::Install, "Installed"),
+        (Change::Update, "Updated"),
+        (Change::Remove, "Removed"),
+        (Change::Deconfigure, "Deconfigured"),
+        (Change::Restore, "Restored"),
+    ] {
         let rows: Vec<[String; 4]> = changes
             .iter()
             .filter(|entry| entry.change == change)
@@ -213,6 +230,9 @@ pub(crate) fn rollback_summary(
     lines.extend(closing_lines(rollback_changeset_id, publication, db_path));
     super::message(&lines.join("\n"));
 }
+
+mod install;
+pub(crate) use install::{install_preview, install_summary};
 
 #[cfg(test)]
 mod tests;

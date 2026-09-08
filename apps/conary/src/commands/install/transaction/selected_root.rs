@@ -240,8 +240,9 @@ where
     crate::commands::install::run_triggers(&tx, &selected_path, changeset_id, &file_paths)?;
     changeset.update_status(&tx, ChangesetStatus::Applied)?;
     config_transaction.validate()?;
-    if ctx.defer_generation {
+    let publication = if ctx.defer_generation {
         tx.commit()?;
+        None
     } else {
         let runtime_root = conary_core::runtime_root::ConaryRuntimeRoot::from_db_path(ctx.db_path);
         let publication_debt =
@@ -280,17 +281,15 @@ where
                     ctx.db_path,
                 ),
             )?;
-            crate::commands::generation::publication::warn_if_publication_pending(
-                changeset_id,
-                &outcome,
-            );
         }
-    }
+        Some(outcome)
+    };
 
     Ok(InstallTransactionResult {
         trove_id: inner_result.trove_id,
         changeset_id,
         triggers_executed: true,
+        publication,
     })
 }
 

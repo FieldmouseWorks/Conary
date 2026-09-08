@@ -210,6 +210,7 @@ pub struct BatchInstaller<'a> {
 
 pub(crate) struct BatchInstallResult {
     installed: Vec<BatchInstalledPackage>,
+    pub(crate) report: super::report::InstallReport,
 }
 
 struct BatchInstalledPackage {
@@ -268,7 +269,10 @@ impl<'a> BatchInstaller<'a> {
     /// all changes are rolled back. Packages must be ordered with dependencies
     /// before dependents.
     pub fn install_batch(self, packages: Vec<PreparedPackage>) -> Result<()> {
-        self.install_batch_with_result(packages).map(|_| ())
+        let db_path = self.db_path;
+        let result = self.install_batch_with_result(packages)?;
+        result.report.render(db_path, false);
+        Ok(())
     }
 
     /// Run the read-only dependency ordering and relation validation shared
@@ -300,6 +304,7 @@ impl<'a> BatchInstaller<'a> {
         if packages.is_empty() {
             return Ok(BatchInstallResult {
                 installed: Vec::new(),
+                report: Default::default(),
             });
         }
         let package_count = packages.len();
@@ -417,6 +422,7 @@ impl<'a> BatchInstaller<'a> {
 
         // Phase 4: Single DB transaction for ALL packages
         let summary = format!("Batch install: {main_pkg_name}");
+        let changes = super::report::batch_changes(&conn, &packages)?;
         let transaction_result = self.execute_selected_root_native_graph(
             &mut conn,
             &cas,
@@ -431,26 +437,24 @@ impl<'a> BatchInstaller<'a> {
             &mut ccs_hook_executors,
             &mut promise_plan,
         );
-        let (_changeset_id, trove_ids, _retained_upgrade_trove_ids) = transaction_result?;
+        let (changeset_id, trove_ids, publication) = transaction_result?;
+        let report = super::report::InstallReport {
+            planned: Vec::new(),
+            commits: vec![super::report::InstallCommit {
+                changes,
+                changeset_id,
+                file_records: packages
+                    .iter()
+                    .map(|package| package.extracted_files.len())
+                    .sum(),
+                publication: Some(publication),
+            }],
+        };
 
         info!(
             "Batch transaction completed: {} packages installed",
             package_count
         );
-
-        // Print summary
-        println!(
-            "Batch installed {} package(s) successfully:",
-            trove_ids.len()
-        );
-        for pkg in &packages {
-            println!(
-                "  {} {} ({} files)",
-                pkg.name,
-                pkg.version,
-                pkg.extracted_files.len()
-            );
-        }
 
         let installed = packages
             .iter()
@@ -463,7 +467,7 @@ impl<'a> BatchInstaller<'a> {
                 trove_id,
             })
             .collect();
-        Ok(BatchInstallResult { installed })
+        Ok(BatchInstallResult { installed, report })
     }
 
     fn preflight_file_ownership_for_batch(

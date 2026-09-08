@@ -36,7 +36,10 @@ pub(super) struct DepAnalysisContext<'a> {
 }
 
 /// Handle dependency analysis: resolve, prompt, and install repository deps.
-pub(super) async fn handle_dependencies(ctx: &DepAnalysisContext<'_>) -> Result<()> {
+pub(super) async fn handle_dependencies(
+    ctx: &DepAnalysisContext<'_>,
+    report: &mut super::report::InstallReport,
+) -> Result<()> {
     let runtime_requirement_count = ctx
         .pkg
         .requirements()
@@ -124,7 +127,7 @@ pub(super) async fn handle_dependencies(ctx: &DepAnalysisContext<'_>) -> Result<
         }
     }
 
-    handle_dep_installs(ctx, &dep_plan, &progress).await?;
+    handle_dep_installs(ctx, &dep_plan, &progress, report).await?;
 
     // Check for unresolvable dependencies
     check_unresolvable_deps(ctx, &dep_plan)?;
@@ -153,6 +156,7 @@ async fn handle_dep_installs(
     ctx: &DepAnalysisContext<'_>,
     dep_plan: &dep_resolution::DepResolutionPlan,
     progress: &InstallProgress,
+    report: &mut super::report::InstallReport,
 ) -> Result<()> {
     if dep_plan.to_install.is_empty() {
         return Ok(());
@@ -165,8 +169,10 @@ async fn handle_dep_installs(
         );
         let to_download =
             dep_resolution::exact_repository_downloads(ctx.conn, &dep_plan.to_install)?;
-        for dependency in &dep_plan.to_install {
-            crate::ui::println!("    {}", dependency.package.name);
+        for (_, dependency) in &to_download {
+            report.planned.push(super::report::InstallChange::Install(
+                super::report::PackageIdentity::repository(&dependency.package),
+            ));
         }
         if to_download.is_empty() {
             crate::ui::println!("  (all dependencies already available locally)");
@@ -245,7 +251,11 @@ async fn handle_dep_installs(
 
                 if !prepared_packages.is_empty() {
                     let installer = BatchInstaller::new(ctx.db_path, ctx.sandbox_mode);
-                    installer.install_batch(prepared_packages)?;
+                    report.extend(
+                        installer
+                            .install_batch_with_result(prepared_packages)?
+                            .report,
+                    );
                     crate::ui::row(
                         crate::ui::Status::Ok,
                         &[&format!("Installed {} dependencies", downloaded.len())],

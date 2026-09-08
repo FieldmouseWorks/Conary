@@ -48,6 +48,7 @@ pub(super) struct InstallTransactionResult {
     pub(super) trove_id: i64,
     pub(super) changeset_id: i64,
     pub(super) triggers_executed: bool,
+    pub(super) publication: Option<crate::commands::generation::publication::PublicationOutcome>,
 }
 
 pub(super) fn delete_non_residual_config_rows(
