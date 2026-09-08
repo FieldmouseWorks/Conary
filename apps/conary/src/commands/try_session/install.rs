@@ -44,6 +44,7 @@ pub(super) fn install_try_package(
         conn,
         package,
         CcsTransactionInstallOptions {
+            preview: None,
             db_path: &db_path_string,
             root: &root_string,
             dry_run: false,

@@ -27,6 +27,7 @@ pub(crate) struct CcsTransactionInstallOptions<'a> {
     pub db_path: &'a str,
     pub root: &'a str,
     pub dry_run: bool,
+    pub preview: Option<&'a super::preview::PreviewDatabase>,
     pub defer_generation: bool,
     pub quiet: bool,
     pub sandbox_mode: SandboxMode,
@@ -333,6 +334,15 @@ fn install_ccs_package_transactionally_inner(
     opts: CcsTransactionInstallOptions<'_>,
     selected_root: Option<&mut crate::commands::generation::selected_root::SelectedRootSession>,
 ) -> Result<CcsTransactionInstallResult> {
+    anyhow::ensure!(
+        opts.preview.is_none() || opts.dry_run,
+        "projected package paths require a dry run"
+    );
+    let declared_paths = opts
+        .preview
+        .map(|preview| preview.declared_paths())
+        .transpose()?
+        .unwrap_or_default();
     let caller_owned_selected_root = selected_root.is_some();
     let progress = InstallProgress::single("Installing");
     let semantics = install_semantics_for_ccs_manifest(pkg.manifest())?;
@@ -411,9 +421,9 @@ fn install_ccs_package_transactionally_inner(
         .context("CCS package conflicts and replacements cannot be applied")?;
     let native_lifecycle_bundle = pkg.manifest().native_lifecycle.as_ref();
     let resolution_capabilities = pkg.resolution_capabilities()?;
-    let native_transaction = PreparedNativeTransaction::prepare_install(
+    let native_transaction = PreparedNativeTransaction::prepare_batch_with_declared_paths(
         conn,
-        NativeInstallInput {
+        &[NativeInstallInput {
             package_name: pkg.name(),
             package_version: pkg.version(),
             package_arch: pkg.architecture(),
@@ -428,7 +438,8 @@ fn install_ccs_package_transactionally_inner(
                 .iter()
                 .map(|file| file.path.clone())
                 .collect(),
-        },
+        }],
+        &declared_paths,
     )?;
     let hooks = &pkg.manifest().hooks;
     // CCS hooks are package-scoped authority. Component names do not infer

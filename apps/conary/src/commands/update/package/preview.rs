@@ -38,7 +38,6 @@ pub(super) async fn plan_selected_updates(
     let temporary = tempfile::tempdir()?;
     let projection = std::sync::Arc::new(crate::commands::install::preview::PreviewDatabase::new(
         conn,
-        options.root,
     )?);
     let mut report = InstallReport {
         projection: Some(projection.clone()),

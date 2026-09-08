@@ -683,6 +683,7 @@ async fn install_verified_ccs_artifact(
             &mut conn,
             &ccs_pkg,
             CcsTransactionInstallOptions {
+                preview: report.projection.as_deref(),
                 db_path,
                 root,
                 dry_run,

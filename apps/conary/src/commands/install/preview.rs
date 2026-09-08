@@ -5,21 +5,60 @@ use super::batch::PreparedPackage;
 use anyhow::{Context, Result};
 use conary_core::ccs::native_transaction::DebPackageState;
 use conary_core::db::models::{
-    Changeset, FileEntry, InstalledNativeLifecycleBundle, InstalledRequirementGroup, Trove,
+    Changeset, InstalledNativeLifecycleBundle, InstalledRequirementGroup, PackagePayloadOwnership,
+    Trove,
 };
-use std::collections::BTreeSet;
-use std::path::Path;
+use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::sync::Mutex;
+
+/// Declared paths for projected packages, without claiming resolved owners or
+/// materialized files. Existing packages retain their installed payload authority.
+#[derive(Clone, Default)]
+pub(super) struct DeclaredPayloadPaths {
+    packages: BTreeMap<i64, BTreeSet<String>>,
+}
+
+impl DeclaredPayloadPaths {
+    pub(super) fn for_trove(
+        &self,
+        conn: &rusqlite::Connection,
+        id: i64,
+    ) -> Result<BTreeSet<String>> {
+        match self.packages.get(&id) {
+            Some(paths) => Ok(paths.clone()),
+            None => Ok(PackagePayloadOwnership::load(conn, id)?
+                .lifecycle_paths()
+                .iter()
+                .cloned()
+                .collect()),
+        }
+    }
+
+    pub(super) fn installed_paths_excluding(
+        &self,
+        conn: &rusqlite::Connection,
+        excluded: &HashSet<i64>,
+    ) -> Result<BTreeSet<String>> {
+        let mut paths = PackagePayloadOwnership::installed_paths_excluding(conn, excluded)?;
+        for (id, declared) in &self.packages {
+            if !excluded.contains(id) {
+                paths.extend(declared.iter().cloned());
+            }
+        }
+        Ok(paths)
+    }
+}
 
 /// Only the private temporary database can receive projected package facts.
 /// Lifecycle programs, selected-root writes, and publication never run here.
 pub(crate) struct PreviewDatabase {
     _temporary: tempfile::TempDir,
     path: String,
-    root: String,
+    declared_paths: Mutex<DeclaredPayloadPaths>,
 }
 
 impl PreviewDatabase {
-    pub(crate) fn new(conn: &rusqlite::Connection, root: &str) -> Result<Self> {
+    pub(crate) fn new(conn: &rusqlite::Connection) -> Result<Self> {
         let temporary = tempfile::tempdir()?;
         let path = temporary.path().join("conary.db");
         conn.backup(rusqlite::MAIN_DB, &path, None)?;
@@ -28,7 +67,7 @@ impl PreviewDatabase {
                 .to_str()
                 .context("preview database path is not UTF-8")?
                 .into(),
-            root: root.into(),
+            declared_paths: Mutex::default(),
             _temporary: temporary,
         })
     }
@@ -37,7 +76,20 @@ impl PreviewDatabase {
         &self.path
     }
 
+    pub(super) fn declared_paths(&self) -> Result<DeclaredPayloadPaths> {
+        Ok(self
+            .declared_paths
+            .lock()
+            .map_err(|_| anyhow::anyhow!("preview path state poisoned"))?
+            .clone())
+    }
+
     pub(super) fn project(&self, packages: &[PreparedPackage]) -> Result<()> {
+        let mut declared_paths = self
+            .declared_paths
+            .lock()
+            .map_err(|_| anyhow::anyhow!("preview path state poisoned"))?;
+        let mut projected = declared_paths.clone();
         let mut conn = super::super::open_db(&self.path)?;
         let tx = conn.transaction()?;
         let mut changeset = Changeset::new("Disposable update preview projection".into());
@@ -54,6 +106,7 @@ impl PreviewDatabase {
         }
         for id in removals {
             Trove::delete(&tx, id)?;
+            projected.packages.remove(&id);
         }
         for package in packages {
             for deconfiguration in &package.relation_deconfigurations {
@@ -96,27 +149,19 @@ impl PreviewDatabase {
                 InstalledNativeLifecycleBundle::new(id, Some(changeset_id), bundle)?
                     .insert_or_replace(&tx)?;
             }
-            // Reuse the install payload authority to preserve exact paths,
-            // ownership, kinds, and content identities for later relation and
-            // native-lifecycle planning. CAS belongs to this disposable DB.
-            let cas = conary_core::filesystem::CasStore::new(conary_core::db::paths::objects_dir(
-                &self.path,
-            ))?;
-            let stored =
-                super::inner::store_extracted_files_in_cas(&cas, &package.extracted_files)?;
-            let files = super::inner::resolve_stored_install_files(
-                Path::new(&self.root),
-                &stored,
-                package.semantics,
-            )?;
-            for file in files {
-                FileEntry::new(file.path, file.node, file.content, id).insert_or_replace(
-                    &tx,
-                    conary_core::db::models::ExistingDirectoryMaterialization::ApplyIncoming,
-                )?;
-            }
+            // Named identities can be created by pre-payload lifecycle programs.
+            // Preview retains paths; apply resolves ownership after those programs.
+            projected.packages.insert(
+                id,
+                package
+                    .extracted_files
+                    .iter()
+                    .map(|file| file.path.clone())
+                    .collect(),
+            );
         }
         tx.commit()?;
+        *declared_paths = projected;
         Ok(())
     }
 }

@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-09
-revision: 17
+revision: 18
 summary: Daily-driver CLI routes, grouped install/update/removal/rollback results, planner-backed previews, scoped recovery, coordinated progress, typed diagnostics, and truthful collection outcomes
 ---
 
@@ -235,7 +235,12 @@ exact admitted artifacts from preview, retaining one full-artifact download.
 
 `apps/conary/src/commands/install/preview.rs` owns a private database snapshot
 that advances from prepared artifact identities, requirements, capabilities,
-lifecycle contracts, payload records, and typed relation effects. Each later
+lifecycle contracts, declared payload paths, and typed relation effects. Native
+install/batch lifecycle planning lives in
+`apps/conary/src/commands/install/native_events/install.rs`; its preview path
+view preserves later file-trigger planning without fabricating resolved owners.
+Named payload ownership resolves during apply after pre-payload lifecycle
+programs can create the declared accounts. Each later
 update is planned against earlier successful effects, in the execution order
 of deltas followed by full updates. Failed delta downloads, reconstruction, or
 installation use the admitted full artifact immediately in that same position;

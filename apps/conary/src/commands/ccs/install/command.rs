@@ -218,6 +218,7 @@ pub fn cmd_ccs_install(
             &mut conn,
             &ccs_pkg,
             CcsTransactionInstallOptions {
+                preview: None,
                 db_path,
                 root,
                 dry_run,
@@ -242,6 +243,7 @@ pub fn cmd_ccs_install(
         &mut conn,
         &ccs_pkg,
         CcsTransactionInstallOptions {
+            preview: None,
             db_path,
             root,
             dry_run,
