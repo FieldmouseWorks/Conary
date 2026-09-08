@@ -52,7 +52,7 @@ fn pinned_members_are_not_reported_as_current() {
     let (_temp, db, conn) = super::common::create_test_db();
     let mut collection = Trove::new(
         "base".into(),
-        "1".into(),
+        "1.0.0".into(),
         TroveType::Collection,
         conary_core::repository::versioning::VersionScheme::Conary,
     );
@@ -62,7 +62,7 @@ fn pinned_members_are_not_reported_as_current() {
         .unwrap();
     let mut trove = Trove::new(
         "pinned".into(),
-        "1".into(),
+        "1.0.0".into(),
         TroveType::Package,
         conary_core::repository::versioning::VersionScheme::Conary,
     );
@@ -78,7 +78,7 @@ fn pinned_members_are_not_reported_as_current() {
             assert!(!text.contains("up to date"), "{text}");
             assert!(text.contains("  Pinned packages: 1\n"), "{text}");
             assert!(
-                text.contains("pinned 1 [x86_64]  pinned; not checked"),
+                text.contains("pinned 1.0.0 [x86_64]  pinned; not checked"),
                 "{text}"
             );
             assert!(
