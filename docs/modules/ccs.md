@@ -20,8 +20,8 @@ path, package names, and layer size. These reports do not print to a terminal.
 Verification refusals live in `verify/errors.rs`: `VerifyError` carries distinct
 `TrustViolation` facts and `VerificationSubject` retains the requested archive
 path through anyhow context. `TrustPolicySubject` retains the policy file path
-when its configured keys fail validation. Claimed key IDs remain untrusted labels; exact
-public keys determine trust. Timestamp policy failures retain timestamp and age
+when its configured keys fail validation. Claimed key IDs remain untrusted
+labels; exact public keys determine trust. Timestamp policy failures retain timestamp and age
 limits, with unsigned comparison across the full configured `u64` range.
 `V3ValidationError` survives both document and streaming readers without being
 converted to text. These error types grant no verified-archive capability and
@@ -29,7 +29,8 @@ introduce no persisted schema change. Verifier unit tests live in
 `verify/tests.rs`, alongside the streaming tests under `verify/stream/tests.rs`.
 
 CLI refusal presentation belongs to `apps/conary/src/ui/diagnostics/ccs.rs`,
-including existing typed host-capability preflight failures. The quiet service in `apps/conary/src/commands/ccs/verification.rs` serves human,
+including existing typed host-capability preflight failures. The quiet service
+in `apps/conary/src/commands/ccs/verification.rs` serves human,
 JSON, and local MCP verification. Successful human output prints the package
 path and verified facts only after verification. The transport-neutral strict
 report lives in `conary-agent-contract`; the [report contract](../specs/ccs-verification-report-v1.md)

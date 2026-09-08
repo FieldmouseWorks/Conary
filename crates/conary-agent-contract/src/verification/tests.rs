@@ -81,3 +81,38 @@ fn schema_declares_version_and_disjoint_outcomes() {
     let outcome = &schema["$defs"]["CcsVerificationOutcome"];
     assert_eq!(outcome["oneOf"].as_array().unwrap().len(), 2);
 }
+
+#[test]
+fn unit_causes_and_verified_facts_reject_extra_fields() {
+    assert!(
+        serde_json::from_value::<CcsVerificationCause>(
+            json!({"kind":"not_signed", "allow_unsigned":true})
+        )
+        .is_err()
+    );
+    let facts = VerifiedCcsFacts {
+        name: "fixture".into(),
+        version: "1.0.0".into(),
+        architecture: None,
+        release: "1".into(),
+        version_scheme: "conary".into(),
+        archive_sha256: "hash".into(),
+        archive_bytes: 12,
+        files_checked: 1,
+        public_key: "key".into(),
+        claimed_key_id: None,
+        timestamp: None,
+    };
+    let outcome = CcsVerificationOutcome::Verified { facts };
+    let value = serde_json::to_value(&outcome).unwrap();
+    assert_eq!(
+        serde_json::from_value::<CcsVerificationOutcome>(value.clone()).unwrap(),
+        outcome
+    );
+    let mut mixed = value.clone();
+    mixed["failure"] = json!({});
+    assert!(serde_json::from_value::<CcsVerificationOutcome>(mixed).is_err());
+    let mut extra = value;
+    extra["facts"]["install_authorized"] = json!(true);
+    assert!(serde_json::from_value::<CcsVerificationOutcome>(extra).is_err());
+}
