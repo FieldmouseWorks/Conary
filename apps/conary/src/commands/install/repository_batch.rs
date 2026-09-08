@@ -202,3 +202,6 @@ pub(super) async fn prepare_repository_batch(
         _download_root: download_root,
     })
 }
+
+#[cfg(test)]
+mod tests;

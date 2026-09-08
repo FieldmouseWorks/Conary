@@ -625,3 +625,5 @@ pub(crate) fn database_rows(
         })
         .collect()
 }
+
+pub(crate) mod native_artifact;
