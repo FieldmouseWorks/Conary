@@ -438,6 +438,7 @@ pub fn cmd_generation_publish(db_path: &str, changeset: Option<i64>) -> Result<(
         return Err(pending_publication_error(
             "Generation publication",
             &outcome,
+            db_path,
         ));
     }
 
@@ -451,14 +452,15 @@ pub fn cmd_generation_publish(db_path: &str, changeset: Option<i64>) -> Result<(
 fn pending_publication_error(
     context: &str,
     outcome: &crate::commands::generation::publication::PublicationOutcome,
+    db_path: &str,
 ) -> anyhow::Error {
     let cause = outcome
         .failure_reason
         .as_deref()
         .unwrap_or("publication failed without a recorded cause");
-    let retry = outcome.retry_command.clone().unwrap_or_else(
-        crate::commands::generation::publication::PublicationOutcome::default_retry_command,
-    );
+    let retry = outcome.retry_command.clone().unwrap_or_else(|| {
+        crate::commands::generation::publication::PublicationOutcome::retry_command(db_path)
+    });
     anyhow!("{context} is still pending.\nCause: {cause}\nRetry with: {retry}")
 }
 
@@ -466,18 +468,18 @@ pub fn cmd_generation_pending(db_path: &str) -> Result<()> {
     let conn = crate::commands::open_db(db_path)?;
     let debts = conary_core::db::models::GenerationPublication::pending_recoverable(&conn)?;
     if debts.is_empty() {
-        println!("No pending generation publication debt.");
+        crate::ui::println!("No pending generation publication debt.");
         return Ok(());
     }
 
-    println!("Pending generation publication debt:");
+    crate::ui::println!("Pending generation publication debt:");
     for debt in debts {
         let id = debt.id.unwrap_or_default();
         let changeset = debt
             .trigger_changeset_id
             .map(|id| id.to_string())
             .unwrap_or_else(|| "-".to_string());
-        println!(
+        crate::ui::println!(
             "  [{id}] changeset={changeset} status={} phase={} generation={} state={} retry=\"{}\"",
             debt.status.as_str(),
             debt.phase.as_str(),
@@ -487,7 +489,7 @@ pub fn cmd_generation_pending(db_path: &str) -> Result<()> {
             debt.state_number
                 .map(|n| n.to_string())
                 .unwrap_or_else(|| "-".to_string()),
-            crate::commands::generation::publication::PublicationOutcome::default_retry_command()
+            crate::commands::generation::publication::PublicationOutcome::retry_command(db_path)
         );
     }
     Ok(())
@@ -725,6 +727,7 @@ pub fn cmd_generation_recover(db_path: &str) -> Result<()> {
             return Err(pending_publication_error(
                 "Generation publication recovery",
                 &outcome,
+                db_path,
             ));
         }
     }

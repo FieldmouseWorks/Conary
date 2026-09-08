@@ -94,6 +94,32 @@ fn command_capture_child() {
         assert_eq!(pending.is_empty(), !scenario.starts_with("pending"));
     }
     println!("FRAME_END");
+    if scenario.starts_with("pending") {
+        let metadata: Option<String> = conn
+            .query_row(
+                "SELECT metadata FROM changesets ORDER BY id DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let followups = crate::commands::deferred_follow_up(metadata.as_deref()).unwrap();
+        let expected = PublicationOutcome::retry_command(&db_path);
+        assert_eq!(followups.len(), 1);
+        assert_eq!(
+            followups[0].retry_command.as_deref(),
+            Some(expected.as_str())
+        );
+        let before_recovery = database_rows(&conn);
+        println!("RECOVERY_BEGIN");
+        crate::commands::cmd_history(&db_path).unwrap();
+        crate::commands::generation::commands::cmd_generation_pending(&db_path).unwrap();
+        println!("RECOVERY_END");
+        assert_eq!(
+            database_rows(&conn),
+            before_recovery,
+            "recovery inspection changed persisted state"
+        );
+    }
     // All disposable state remains alive until after the captured command completes.
     drop(temp);
 }
@@ -204,6 +230,23 @@ fn command_results_in_terminal_pipe_and_no_color() {
                     "{diagnostic}"
                 );
                 assert!(!frame.contains(" published"), "{frame}");
+                let recovery = stdout
+                    .split_once("RECOVERY_BEGIN\n")
+                    .unwrap()
+                    .1
+                    .split_once("RECOVERY_END")
+                    .unwrap()
+                    .0;
+                assert!(
+                    recovery.contains("Retry: conary system generation publish --yes --db-path='"),
+                    "{recovery}"
+                );
+                assert!(
+                    recovery.contains("retry=\"conary system generation publish --yes --db-path='"),
+                    "{recovery}"
+                );
+                assert!(!recovery.contains("publish --yes."), "{recovery}");
+                assert!(!recovery.contains("publish --yes\""), "{recovery}");
             } else {
                 assert!(frame.contains(" published"), "{frame}");
                 assert!(

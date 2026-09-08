@@ -277,6 +277,7 @@ where
                 changeset_id,
                 crate::commands::publication_deferred_follow_up(
                     "generation publication is pending".to_string(),
+                    ctx.db_path,
                 ),
             )?;
             crate::commands::generation::publication::warn_if_publication_pending(

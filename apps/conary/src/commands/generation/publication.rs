@@ -31,8 +31,8 @@ pub(crate) struct PublicationOutcome {
 pub(crate) const DEFAULT_PUBLICATION_RETRY_COMMAND: &str = "conary system generation publish --yes";
 
 impl PublicationOutcome {
-    pub(crate) fn default_retry_command() -> String {
-        DEFAULT_PUBLICATION_RETRY_COMMAND.to_string()
+    pub(crate) fn retry_command(db_path: &str) -> String {
+        crate::ui::transaction_summary::database_command(DEFAULT_PUBLICATION_RETRY_COMMAND, db_path)
     }
 }
 
@@ -164,10 +164,7 @@ fn publish_pending_debt_with_hook(
                 generation_number: None,
                 state_number: None,
                 needs_publication: true,
-                retry_command: Some(crate::ui::transaction_summary::database_command(
-                    DEFAULT_PUBLICATION_RETRY_COMMAND,
-                    db_path,
-                )),
+                retry_command: Some(PublicationOutcome::retry_command(db_path)),
                 failure_reason: Some(failure_reason),
                 completed_debts: 0,
             })

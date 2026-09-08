@@ -5,6 +5,7 @@
 //! Functions for displaying changeset/transaction history.
 
 use super::super::open_db;
+use crate::ui::println;
 use anyhow::Result;
 
 fn format_changeset_line(
@@ -37,12 +38,13 @@ fn format_changeset_line(
 
 fn format_deferred_follow_up_lines(
     changeset: &conary_core::db::models::Changeset,
+    db_path: &str,
 ) -> Result<Vec<String>> {
     Ok(
         crate::commands::deferred_follow_up(changeset.metadata.as_deref())?
             .into_iter()
             .map(|follow_up| {
-                let retry = deferred_retry_hint(&follow_up);
+                let retry = deferred_retry_hint(&follow_up, db_path);
                 format!(
                     "      deferred {} {}: {}{}",
                     follow_up.kind, follow_up.status, follow_up.message, retry
@@ -52,11 +54,16 @@ fn format_deferred_follow_up_lines(
     )
 }
 
-fn deferred_retry_hint(follow_up: &crate::commands::DeferredFollowUp) -> String {
+fn deferred_retry_hint(follow_up: &crate::commands::DeferredFollowUp, db_path: &str) -> String {
     let kind = crate::commands::classify_deferred_follow_up_kind(follow_up);
     match kind {
         crate::commands::DeferredFollowUpKind::GenerationPublication => {
-            " Retry: conary system generation publish --yes.".to_string()
+            format!(
+                " Retry: {}.",
+                crate::commands::generation::publication::PublicationOutcome::retry_command(
+                    db_path
+                )
+            )
         }
         crate::commands::DeferredFollowUpKind::Other => follow_up
             .retry_command
@@ -115,7 +122,7 @@ pub fn cmd_history(db_path: &str) -> Result<()> {
         println!("Changeset history:");
         for changeset in &changesets {
             println!("{}", format_changeset_line(changeset, &publications)?);
-            for line in format_deferred_follow_up_lines(changeset)? {
+            for line in format_deferred_follow_up_lines(changeset, db_path)? {
                 println!("{line}");
             }
             if let Some(changeset_id) = changeset.id {
@@ -151,7 +158,7 @@ mod tests {
             "  [7] 2026-05-14 12:00:00 - Install fixture-1.0.0 (Applied)"
         );
         assert!(
-            format_deferred_follow_up_lines(&changeset)
+            format_deferred_follow_up_lines(&changeset, "/tmp/history.db")
                 .unwrap()
                 .is_empty()
         );
@@ -177,11 +184,12 @@ mod tests {
             format_changeset_line(&changeset, &[]).unwrap(),
             "  [8] 2026-05-14 12:01:00 - Install fixture-1.0.0 (Applied) [deferred]"
         );
-        let details = format_deferred_follow_up_lines(&changeset).unwrap();
+        let details = format_deferred_follow_up_lines(&changeset, "/tmp/history.db").unwrap();
         assert_eq!(details.len(), 1);
         assert!(details[0].contains("deferred generation_publication failed"));
         assert!(details[0].contains("Retry: conary system generation publish --yes"));
-        assert!(details[0].contains("system generation publish"));
+        assert!(details[0].contains("--db-path='/tmp/history.db'"));
+        assert!(!details[0].contains("ignored stale command"));
     }
 
     #[test]

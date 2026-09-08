@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-08
-revision: 11
+revision: 12
 summary: Daily-driver CLI routes, grouped removal and changeset-rollback results with publication and recovery facts, coordinated progress, typed diagnostics, and truthful collection outcomes
 ---
 
@@ -240,7 +240,10 @@ note: Inspect history: conary system history --db-path='<fixture>/conary.db'
 ```
 
 A pending outcome instead says `Generation: publication pending`, followed by the
-single existing warning with its cause and publication retry. Retry and history
+single existing warning with its cause and publication retry. Persisted deferred
+follow-ups use the same scoped retry renderer. History regenerates publication
+guidance for the database it opened, ignoring obsolete stored retry text;
+`system generation pending` uses that same context. Retry and history
 commands retain the selected database, with shell quoting for ordinary paths;
 control-containing paths require the original path in an explicit placeholder.
 Removal also gives the changeset-rollback request, after publication when pending.
@@ -250,7 +253,9 @@ is not a claim that the running system has activated it.
 
 `cargo test -p conary --lib ui::transaction_summary --features test-hooks` captures
 real removal and rollback command execution in terminals, pipes, and `NO_COLOR`,
-including forced publication failure and precommit refusals. It checks resulting
+including forced publication failure and precommit refusals. Pending captures also
+verify persisted retry guidance and read-only history/pending output for the same
+database. It checks resulting
 installed state, rollback lineage, publication debt, exact identity rows, and the
 absence of applied summaries on refused operations. Pure rendering tests cover
 mixed remove/restore groups, control characters, missing generation facts, and

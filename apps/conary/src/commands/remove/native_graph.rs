@@ -234,6 +234,7 @@ fn execute_selected_root_graph(
             changeset_id,
             crate::commands::publication_deferred_follow_up(
                 "generation publication is pending".to_string(),
+                db_path,
             ),
         )?;
     }
