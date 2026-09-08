@@ -113,6 +113,7 @@ pub(super) async fn resolve_and_parse_package(
             .path
             .to_str()
             .ok_or_else(|| anyhow::anyhow!("Invalid CCS path (non-UTF8)"))?;
+        progress.clear();
         install_ccs_artifact(CcsArtifactInstallOptions {
             ccs_path,
             db_path: ccs_opts.db_path,
@@ -144,6 +145,7 @@ pub(super) async fn resolve_and_parse_package(
         .context("Failed to inspect package archive contract")?
     {
         info!("Detected CCS package archive contract, installing directly");
+        progress.clear();
         install_ccs_artifact(CcsArtifactInstallOptions {
             ccs_path: path_str,
             db_path: ccs_opts.db_path,
@@ -194,6 +196,7 @@ pub(super) async fn resolve_and_parse_package(
                     .to_string();
                 let signing_public_key = conversion.trusted_signing_public_key().to_string();
                 let (pending_conversion, _temp_dir) = conversion.into_pending_parts();
+                progress.clear();
                 // Install via CCS path (temp_dir kept alive until install completes)
                 let (installed_trove_id, pending_record) = install_pending_ccs_conversion(
                     pending_conversion,
@@ -336,16 +339,16 @@ fn print_package_suggestions(conn: &rusqlite::Connection, package_name: &str) {
     if let Ok(suggestions) = find_package_suggestions(conn, package_name)
         && !suggestions.is_empty()
     {
-        eprintln!("\nDid you mean:");
+        crate::ui::eprintln!("\nDid you mean:");
         for (name, distros) in suggestions.iter().take(5) {
             if distros.is_empty() {
-                eprintln!("  {name}");
+                crate::ui::eprintln!("  {name}");
             } else {
-                eprintln!("  {name:<20} ({distros})");
+                crate::ui::eprintln!("  {name:<20} ({distros})");
             }
         }
         let stem = package_name.split('-').next().unwrap_or(package_name);
-        eprintln!("\nUse 'conary canonical search {}' for more options.", stem);
+        crate::ui::eprintln!("\nUse 'conary canonical search {}' for more options.", stem);
     }
 }
 

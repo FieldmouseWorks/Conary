@@ -4,85 +4,37 @@
 //! Provides visual feedback during package installation, removal, and updates
 //! with overall progress bars and per-operation status displays.
 //!
-use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
-use std::time::Duration;
+use crate::ui::progress::ProgressDisplay;
 
 /// Installation progress tracker for multi-package operations
 ///
 /// Displays an overall progress bar at the top with a status line below
 /// showing the current operation.
 pub struct InstallProgress {
-    _multi: MultiProgress,
-    overall: ProgressBar,
-    status: ProgressBar,
+    display: ProgressDisplay,
     completed: u64,
 }
 
 impl InstallProgress {
     /// Create a new installation progress tracker
     pub fn new(total_packages: u64, operation: &str) -> Self {
-        let multi = MultiProgress::new();
-
-        // Overall progress bar
-        let overall = ProgressBar::new(total_packages);
-        overall.set_style(
-            ProgressStyle::default_bar()
-                .template("{msg} ({pos}/{len}) [{bar:40.green/dim}] {percent}%")
-                .expect("Invalid progress bar template")
-                .progress_chars("##-"),
-        );
-        overall.set_message(operation.to_string());
-
-        // Status line below (spinner with message)
-        let status = ProgressBar::new_spinner();
-        status.set_style(
-            ProgressStyle::default_spinner()
-                .template("  {spinner:.cyan} {msg}")
-                .expect("Invalid spinner template"),
-        );
-        status.enable_steady_tick(Duration::from_millis(100));
-
-        let overall = multi.add(overall);
-        let status = multi.add(status);
-
         Self {
-            _multi: multi,
-            overall,
-            status,
+            display: ProgressDisplay::new(total_packages, operation),
             completed: 0,
         }
     }
 
     /// Create a minimal progress tracker for single-package operations
     pub fn single(operation: &str) -> Self {
-        let multi = MultiProgress::new();
-
-        // Just a spinner for single package
-        let overall = ProgressBar::new_spinner();
-        overall.set_style(
-            ProgressStyle::default_spinner()
-                .template("{spinner:.green} {msg}")
-                .expect("Invalid spinner template"),
-        );
-        overall.set_message(operation.to_string());
-        overall.enable_steady_tick(Duration::from_millis(100));
-
-        let status = ProgressBar::hidden();
-
-        let overall = multi.add(overall);
-        let status = multi.add(status);
-
         Self {
-            _multi: multi,
-            overall,
-            status,
+            display: ProgressDisplay::new(0, operation),
             completed: 0,
         }
     }
 
     /// Update the status message for the current operation
     pub fn set_status(&self, message: &str) {
-        self.status.set_message(message.to_string());
+        self.display.set_status(message.to_string());
     }
 
     /// Update status with package name and phase
@@ -101,13 +53,13 @@ impl InstallProgress {
             InstallPhase::Complete => format!("{package} done"),
             InstallPhase::Failed(ref err) => format!("{package} failed: {err}"),
         };
-        self.status.set_message(msg);
+        self.display.set_status(msg);
     }
 
     /// Mark a package as complete and advance the overall progress
     pub fn complete_package(&mut self, package: &str) {
         self.completed += 1;
-        self.overall.set_position(self.completed);
+        self.display.set_position(self.completed);
         self.set_phase(package, InstallPhase::Complete);
     }
 
@@ -116,16 +68,15 @@ impl InstallProgress {
         self.set_phase(package, InstallPhase::Failed(error.to_string()));
     }
 
-    /// Finish the overall progress with a success message
-    pub fn finish(&self, message: &str) {
-        self.status.finish_and_clear();
-        self.overall.finish_with_message(message.to_string());
+    /// Pause redraw for a prompt without finishing the operation.
+    /// The closure writes directly to stdio because the terminal is already suspended.
+    pub fn suspend<T>(&self, operation: impl FnOnce() -> T) -> T {
+        self.display.suspend(operation)
     }
 
-    /// Finish the overall progress with a failure message
-    pub fn finish_with_error(&self, message: &str) {
-        self.status.finish_and_clear();
-        self.overall.abandon_with_message(message.to_string());
+    /// Clear transient rows before the command renders its result.
+    pub fn clear(&self) {
+        self.display.clear();
     }
 }
 
@@ -148,40 +99,14 @@ pub enum InstallPhase {
 
 /// Progress tracker for package removal
 pub struct RemoveProgress {
-    _multi: MultiProgress,
-    overall: ProgressBar,
-    status: ProgressBar,
+    display: ProgressDisplay,
 }
 
 impl RemoveProgress {
     /// Create a new removal progress tracker
     pub fn new(package: &str) -> Self {
-        let multi = MultiProgress::new();
-
-        let overall = ProgressBar::new_spinner();
-        overall.set_style(
-            ProgressStyle::default_spinner()
-                .template("{spinner:.red} Removing {msg}...")
-                .expect("Invalid spinner template"),
-        );
-        overall.set_message(package.to_string());
-        overall.enable_steady_tick(Duration::from_millis(100));
-
-        let status = ProgressBar::new_spinner();
-        status.set_style(
-            ProgressStyle::default_spinner()
-                .template("  {spinner:.cyan} {msg}")
-                .expect("Invalid spinner template"),
-        );
-        status.enable_steady_tick(Duration::from_millis(100));
-
-        let overall = multi.add(overall);
-        let status = multi.add(status);
-
         Self {
-            _multi: multi,
-            overall,
-            status,
+            display: ProgressDisplay::new(0, &format!("Removing {package}...")),
         }
     }
 
@@ -193,19 +118,12 @@ impl RemoveProgress {
             RemovePhase::RemovingDirs => "Cleaning up directories...",
             RemovePhase::UpdatingDb => "Updating database...",
         };
-        self.status.set_message(msg.to_string());
+        self.display.set_status(msg.to_string());
     }
 
-    /// Finish with success
-    pub fn finish(&self, message: &str) {
-        self.status.finish_and_clear();
-        self.overall.finish_with_message(message.to_string());
-    }
-
-    /// Finish with error
-    pub fn finish_with_error(&self, message: &str) {
-        self.status.finish_and_clear();
-        self.overall.abandon_with_message(message.to_string());
+    /// Clear transient rows before the command renders its result.
+    pub fn clear(&self) {
+        self.display.clear();
     }
 }
 
@@ -220,47 +138,22 @@ pub enum RemovePhase {
 
 /// Progress tracker for update operations
 pub struct UpdateProgress {
-    _multi: MultiProgress,
-    overall: ProgressBar,
-    status: ProgressBar,
+    display: ProgressDisplay,
     completed: u64,
 }
 
 impl UpdateProgress {
     /// Create a new update progress tracker
     pub fn new(total_packages: u64) -> Self {
-        let multi = MultiProgress::new();
-
-        let overall = ProgressBar::new(total_packages);
-        overall.set_style(
-            ProgressStyle::default_bar()
-                .template("Updating packages ({pos}/{len}) [{bar:40.yellow/dim}] {percent}%")
-                .expect("Invalid progress bar template")
-                .progress_chars("##-"),
-        );
-
-        let status = ProgressBar::new_spinner();
-        status.set_style(
-            ProgressStyle::default_spinner()
-                .template("  {spinner:.cyan} {msg}")
-                .expect("Invalid spinner template"),
-        );
-        status.enable_steady_tick(Duration::from_millis(100));
-
-        let overall = multi.add(overall);
-        let status = multi.add(status);
-
         Self {
-            _multi: multi,
-            overall,
-            status,
+            display: ProgressDisplay::new(total_packages, "Updating packages"),
             completed: 0,
         }
     }
 
     /// Set status message
     pub fn set_status(&self, message: &str) {
-        self.status.set_message(message.to_string());
+        self.display.set_status(message.to_string());
     }
 
     /// Update phase for a specific package
@@ -274,13 +167,13 @@ impl UpdateProgress {
             UpdatePhase::Complete => format!("{package} done"),
             UpdatePhase::Failed(ref err) => format!("{package} failed: {err}"),
         };
-        self.status.set_message(msg);
+        self.display.set_status(msg);
     }
 
     /// Complete a package update
     pub fn complete_package(&mut self, package: &str) {
         self.completed += 1;
-        self.overall.set_position(self.completed);
+        self.display.set_position(self.completed);
         self.set_phase(package, UpdatePhase::Complete);
     }
 
@@ -289,10 +182,9 @@ impl UpdateProgress {
         self.set_phase(package, UpdatePhase::Failed(error.to_string()));
     }
 
-    /// Finish with success
-    pub fn finish(&self, message: &str) {
-        self.status.finish_and_clear();
-        self.overall.finish_with_message(message.to_string());
+    /// Clear transient rows before the command renders its result.
+    pub fn clear(&self) {
+        self.display.clear();
     }
 }
 
@@ -310,67 +202,23 @@ pub enum UpdatePhase {
 
 /// Progress tracker for package adoption
 pub struct AdoptProgress {
-    _multi: MultiProgress,
-    overall: ProgressBar,
-    status: ProgressBar,
+    display: ProgressDisplay,
     completed: u64,
 }
 
 impl AdoptProgress {
     /// Create a new adoption progress tracker for bulk operations
     pub fn new(total_packages: u64, operation: &str) -> Self {
-        let multi = MultiProgress::new();
-
-        let overall = ProgressBar::new(total_packages);
-        overall.set_style(
-            ProgressStyle::default_bar()
-                .template("{msg} ({pos}/{len}) [{bar:40.cyan/dim}] {percent}%")
-                .expect("Invalid progress bar template")
-                .progress_chars("##-"),
-        );
-        overall.set_message(operation.to_string());
-
-        let status = ProgressBar::new_spinner();
-        status.set_style(
-            ProgressStyle::default_spinner()
-                .template("  {spinner:.cyan} {msg}")
-                .expect("Invalid spinner template"),
-        );
-        status.enable_steady_tick(Duration::from_millis(100));
-
-        let overall = multi.add(overall);
-        let status = multi.add(status);
-
         Self {
-            _multi: multi,
-            overall,
-            status,
+            display: ProgressDisplay::new(total_packages, operation),
             completed: 0,
         }
     }
 
     /// Create a minimal progress tracker for single-package adoption
     pub fn single(operation: &str) -> Self {
-        let multi = MultiProgress::new();
-
-        let overall = ProgressBar::new_spinner();
-        overall.set_style(
-            ProgressStyle::default_spinner()
-                .template("{spinner:.cyan} {msg}")
-                .expect("Invalid spinner template"),
-        );
-        overall.set_message(operation.to_string());
-        overall.enable_steady_tick(Duration::from_millis(100));
-
-        let status = ProgressBar::hidden();
-
-        let overall = multi.add(overall);
-        let status = multi.add(status);
-
         Self {
-            _multi: multi,
-            overall,
-            status,
+            display: ProgressDisplay::new(0, operation),
             completed: 0,
         }
     }
@@ -386,39 +234,39 @@ impl AdoptProgress {
             AdoptPhase::Complete => format!("{package} done"),
             AdoptPhase::Failed(ref err) => format!("{package} failed: {err}"),
         };
-        self.status.set_message(msg);
+        self.display.set_status(msg);
     }
 
     /// Mark a package as complete and advance the overall progress
     pub fn complete_package(&mut self, package: &str) {
         self.completed += 1;
-        self.overall.set_position(self.completed);
+        self.display.set_position(self.completed);
         self.set_phase(package, AdoptPhase::Complete);
     }
 
     /// Mark a package as failed
     pub fn fail_package(&mut self, package: &str, error: &str) {
         self.completed += 1;
-        self.overall.set_position(self.completed);
+        self.display.set_position(self.completed);
         self.set_phase(package, AdoptPhase::Failed(error.to_string()));
     }
 
     /// Mark a package as skipped (already tracked)
     pub fn skip_package(&mut self) {
         self.completed += 1;
-        self.overall.set_position(self.completed);
+        self.display.set_position(self.completed);
     }
 
     /// Finish the overall progress with a success message
     pub fn finish(&self, message: &str) {
-        self.status.finish_and_clear();
-        self.overall.finish_with_message(message.to_string());
+        self.display.clear();
+        crate::ui::message(message);
     }
 
     /// Finish the overall progress with a failure message
     pub fn finish_with_error(&self, message: &str) {
-        self.status.finish_and_clear();
-        self.overall.abandon_with_message(message.to_string());
+        self.display.clear();
+        crate::ui::error(message);
     }
 }
 

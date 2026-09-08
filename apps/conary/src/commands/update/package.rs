@@ -291,7 +291,7 @@ pub async fn cmd_update(
         installed_troves_for_update(&conn, package, package_version, architecture)?;
 
     if installed_troves.is_empty() {
-        println!("No packages to update");
+        crate::ui::println!("No packages to update");
         return Ok(());
     }
 
@@ -340,7 +340,7 @@ pub async fn cmd_update(
                         || "use the recorded external owner".to_string(),
                         |manager| format!("use '{}'", manager.update_command(&trove.name)),
                     );
-                    println!(
+                    crate::ui::println!(
                         "  {} {} -> {} (adopted as {}, external authority: {})",
                         trove.name,
                         trove.version,
@@ -356,9 +356,11 @@ pub async fn cmd_update(
                     continue;
                 }
                 AdoptedUpdateDecision::QueueTakeover => {
-                    println!(
+                    crate::ui::println!(
                         "  {} {} -> {} (taking over from system PM)",
-                        trove.name, trove.version, selected.package.version
+                        trove.name,
+                        trove.version,
+                        selected.package.version
                     );
                 }
             }
@@ -381,7 +383,7 @@ pub async fn cmd_update(
 
     // Report pinned packages that were skipped
     if !pinned_skipped.is_empty() {
-        println!(
+        crate::ui::println!(
             "Skipping {} pinned package(s): {}",
             pinned_skipped.len(),
             pinned_skipped.join(", ")
@@ -395,16 +397,16 @@ pub async fn cmd_update(
             .filter(|skip| skip.reason == AdoptedUpdateSkipReason::NativeAuthority)
             .collect();
         if !native_authority.is_empty() {
-            println!(
+            crate::ui::println!(
                 "Skipping {} adopted package(s); native package-manager authority owns updates: {}",
                 native_authority.len(),
                 render_adopted_skip_sample(&native_authority)
             );
-            println!(
+            crate::ui::println!(
                 "Run 'conary system adopt --refresh' after native package-manager changes before retrying Conary workflows."
             );
             if !matches!(requested_ownership, Some(OwnershipMode::Takeover)) {
-                println!(
+                crate::ui::println!(
                     "Use --ownership takeover to request Conary takeover for adopted packages."
                 );
             }
@@ -412,7 +414,7 @@ pub async fn cmd_update(
     }
 
     if updates_available.is_empty() {
-        println!(
+        crate::ui::println!(
             "{}",
             no_update_message(security_only, !adopted_skipped.is_empty())
         );
@@ -424,12 +426,12 @@ pub async fn cmd_update(
         .filter(|(_, selected)| selected.package.is_security_update)
         .count();
     if security_only {
-        println!(
+        crate::ui::println!(
             "Found {} security update(s) available:",
             updates_available.len()
         );
     } else {
-        println!(
+        crate::ui::println!(
             "Found {} package(s) with updates available{}:",
             updates_available.len(),
             if security_count > 0 {
@@ -441,14 +443,17 @@ pub async fn cmd_update(
     }
     for (trove, selected) in &updates_available {
         let security_marker = render_security_update_marker(&selected.package);
-        println!(
+        crate::ui::println!(
             "  {} {} -> {}{}",
-            trove.name, trove.version, selected.package.version, security_marker
+            trove.name,
+            trove.version,
+            selected.package.version,
+            security_marker
         );
     }
 
     if dry_run {
-        println!("\nDry run: no updates were applied.");
+        crate::ui::println!("\nDry run: no updates were applied.");
         return Ok(());
     }
 
@@ -461,7 +466,7 @@ pub async fn cmd_update(
         let repo = selected.repository;
         match PackageDelta::find_delta(&conn, &trove.name, &trove.version, &repo_pkg.version)? {
             Some(delta_info) => {
-                println!(
+                crate::ui::println!(
                     "  {} has delta: {} bytes ({:.1}% of full)",
                     trove.name,
                     delta_info.delta_size,
@@ -486,7 +491,7 @@ pub async fn cmd_update(
 
     // Only create a changeset when there is actual work to do
     if total_requested == 0 {
-        println!("No updates to apply.");
+        crate::ui::println!("No updates to apply.");
         return Ok(());
     }
 
@@ -522,7 +527,7 @@ pub async fn cmd_update(
     let update_result: Result<()> = async {
         // Phase 2: Download and apply deltas (sequential - requires CAS access)
         for (trove, repo_pkg, repo, delta_info) in delta_updates {
-            println!("\nUpdating {} (delta)...", trove.name);
+            crate::ui::println!("\nUpdating {} (delta)...", trove.name);
 
             match repository::download_delta(
                 &repository::DeltaInfo {
@@ -775,10 +780,7 @@ pub async fn cmd_update(
                 let _ = std::fs::remove_file(&pkg_path);
             }
 
-            progress.finish(&format!(
-                "Updated {} package(s)",
-                deltas_applied + full_downloads
-            ));
+            progress.clear();
         }
 
         conary_core::db::transaction(&mut conn, |tx| {
@@ -805,24 +807,26 @@ pub async fn cmd_update(
             Ok(())
         })?;
 
-        println!("\n=== Update Summary ===");
-        println!("Delta updates: {}", deltas_applied);
-        println!("Full downloads: {}", full_downloads);
-        println!("Delta failures: {}", delta_failures);
+        crate::ui::println!("\n=== Update Summary ===");
+        crate::ui::println!("Delta updates: {}", deltas_applied);
+        crate::ui::println!("Full downloads: {}", full_downloads);
+        crate::ui::println!("Delta failures: {}", delta_failures);
         if let Some(message) = update_required_failure_message(&required_failures, total_requested)
         {
-            println!("Required failures: {}", required_failures.len());
+            crate::ui::println!("Required failures: {}", required_failures.len());
             for failure in &required_failures {
-                println!(
+                crate::ui::println!(
                     "  {} {}: {}",
-                    failure.package, failure.version, failure.reason
+                    failure.package,
+                    failure.version,
+                    failure.reason
                 );
             }
             return Err(anyhow::anyhow!(message));
         }
         if total_bytes_saved > 0 {
             let saved_mb = total_bytes_saved as f64 / 1_048_576.0;
-            println!("Bandwidth saved: {:.2} MB", saved_mb);
+            crate::ui::println!("Bandwidth saved: {:.2} MB", saved_mb);
         }
 
         Ok(())
