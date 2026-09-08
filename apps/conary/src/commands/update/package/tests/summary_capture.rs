@@ -3,134 +3,9 @@
 use super::*;
 use std::process::Command;
 
-fn add_candidate(conn: &rusqlite::Connection, dir: &Path, name: &str, fail: bool, relation: bool) {
-    let mut bundle = rpm_upgrade_bundle(name, "2.0.0");
-    if fail {
-        bundle.entries[0].body = "error('forced update summary lifecycle failure')\n".into();
-        bundle.entries[0].body_sha256 =
-            conary_core::hash::sha256_prefixed(bundle.entries[0].body.as_bytes());
-    }
-    let artifact_dir = dir.join(name);
-    std::fs::create_dir_all(&artifact_dir).unwrap();
-    let relations = if relation {
-        use conary_core::repository::{
-            dependency_model::RepositoryRequirementKind, versioning::VersionScheme,
-        };
-        let mut old = Trove::new(
-            "summary-obsolete".into(),
-            "1".into(),
-            TroveType::Package,
-            VersionScheme::Debian,
-        );
-        old.debian_multi_arch =
-            Some(conary_core::repository::dependency_model::DebianMultiArch::No);
-        old.architecture = Some("amd64".into());
-        let obsolete_id = old.insert(conn).unwrap();
-        let mut consumer = Trove::new(
-            "summary-consumer".into(),
-            "1".into(),
-            TroveType::Package,
-            VersionScheme::Debian,
-        );
-        consumer.architecture = Some("amd64".into());
-        consumer.debian_multi_arch =
-            Some(conary_core::repository::dependency_model::DebianMultiArch::No);
-        let consumer_id = consumer.insert(conn).unwrap();
-        let dependency = conary_core::repository::requirement::parse_native_requirement(
-            RepositoryRequirementKind::Depends,
-            VersionScheme::Debian,
-            "summary-obsolete",
-        )
-        .unwrap();
-        conary_core::db::models::InstalledRequirementGroup::insert_groups(
-            conn,
-            consumer_id,
-            VersionScheme::Debian,
-            &[dependency],
-        )
-        .unwrap();
-        let mut consumer_bundle = rpm_upgrade_bundle("summary-consumer", "1");
-        consumer_bundle.source_format = SourceFormat::Deb;
-        consumer_bundle.source_family = "debian".into();
-        consumer_bundle.source_profile = Some("ubuntu-26.04".into());
-        consumer_bundle.source_release = Some("26.04".into());
-        consumer_bundle.source_arch = Some("amd64".into());
-        consumer_bundle.evidence_digest = None;
-        consumer_bundle.version_scheme = conary_core::ccs::native_lifecycle::VersionScheme::Deb;
-        consumer_bundle.entries.clear();
-        let mut obsolete_bundle = consumer_bundle.clone();
-        obsolete_bundle.source_package = "summary-obsolete".into();
-        conary_core::db::models::InstalledNativeLifecycleBundle::new(
-            obsolete_id,
-            None,
-            &obsolete_bundle,
-        )
-        .unwrap()
-        .insert_or_replace(conn)
-        .unwrap();
-        conary_core::db::models::InstalledNativeLifecycleBundle::new(
-            consumer_id,
-            None,
-            &consumer_bundle,
-        )
-        .unwrap()
-        .insert_or_replace(conn)
-        .unwrap();
-        vec![
-            conary_core::repository::package_relation::parse_native_relation(
-                RepositoryRequirementKind::Obsolete,
-                VersionScheme::Rpm,
-                "summary-obsolete",
-            )
-            .unwrap(),
-        ]
-    } else {
-        Vec::new()
-    };
-    let path = build_test_ccs_package_with_relations(
-        &artifact_dir,
-        name,
-        "2.0.0",
-        Some(bundle),
-        relations,
-    );
-    let bytes = std::fs::read(&path).unwrap();
-    let (url, _) = serve_test_file(path);
-    let repo = insert_test_static_ccs_repository(conn, name, &url);
-    let mut old = Trove::new_with_source(
-        name.into(),
-        "1.0.0".into(),
-        TroveType::Package,
-        InstallSource::Repository,
-        conary_core::repository::versioning::VersionScheme::Rpm,
-    );
-    old.architecture = Some("x86_64".into());
-    old.source_profile = Some("fedora-44".into());
-    old.installed_from_repository_id = Some(repo);
-    old.insert(conn).unwrap();
-    let mut candidate = RepositoryPackage::new(
-        repo,
-        name.into(),
-        "2.0.0".into(),
-        conary_core::repository::versioning::VersionScheme::Rpm,
-        conary_core::hash::sha256(&bytes),
-        bytes.len() as i64,
-        url,
-    );
-    candidate.architecture = Some("x86_64".into());
-    candidate.source_profile = Some("fedora-44".into());
-    let id = candidate.insert(conn).unwrap();
-    let mut resolution = PackageResolution::new(
-        repo,
-        name.into(),
-        vec![ResolutionStrategy::RepositoryPackage {
-            repository_package_id: id,
-        }],
-    );
-    resolution.version = Some("2.0.0".into());
-    resolution.primary_strategy = PrimaryStrategy::RepositoryPackage;
-    resolution.insert(conn).unwrap();
-}
+#[path = "summary_capture/fixtures.rs"]
+mod fixtures;
+use fixtures::add_candidate;
 
 #[tokio::test]
 async fn update_summary_capture_child() {
@@ -147,9 +22,15 @@ async fn update_summary_capture_child() {
         "a-summary-update",
         false,
         scenario.starts_with("relation_"),
+        scenario
+            .starts_with("sequence_")
+            .then_some("z-summary-update"),
     );
     if scenario == "mixed" {
-        add_candidate(&conn, temp.path(), "z-summary-failed", true, false);
+        add_candidate(&conn, temp.path(), "z-summary-failed", true, false, None);
+    }
+    if scenario.starts_with("sequence_") {
+        add_candidate(&conn, temp.path(), "z-summary-update", false, false, None);
     }
     if scenario == "noop" {
         conn.execute(
@@ -170,7 +51,10 @@ async fn update_summary_capture_child() {
         &db_path,
         temp.path().to_str().unwrap(),
         false,
-        matches!(scenario.as_str(), "preview" | "relation_preview"),
+        matches!(
+            scenario.as_str(),
+            "preview" | "relation_preview" | "sequence_preview"
+        ),
         SandboxMode::Always,
         None,
         true,
@@ -189,6 +73,10 @@ async fn update_summary_capture_child() {
         assert_eq!(
             result.unwrap(),
             match scenario.as_str() {
+                "sequence_preview" =>
+                    crate::commands::update::outcome::UpdateOutcome::Planned { packages: 2 },
+                "sequence_apply" =>
+                    crate::commands::update::outcome::UpdateOutcome::Applied { packages: 2 },
                 "preview" | "relation_preview" =>
                     crate::commands::update::outcome::UpdateOutcome::Planned { packages: 1 },
                 "noop" => crate::commands::update::outcome::UpdateOutcome::NoChanges,
@@ -196,7 +84,10 @@ async fn update_summary_capture_child() {
             }
         );
     }
-    if matches!(scenario.as_str(), "preview" | "relation_preview" | "noop") {
+    if matches!(
+        scenario.as_str(),
+        "preview" | "relation_preview" | "sequence_preview" | "noop"
+    ) {
         assert_eq!(crate::commands::test_helpers::database_rows(&conn), before);
     } else {
         assert_eq!(
@@ -219,6 +110,8 @@ fn update_summaries_in_terminal_pipe_and_no_color() {
             "preview",
             "relation_preview",
             "relation_apply",
+            "sequence_preview",
+            "sequence_apply",
             "apply",
             "pending",
             "mixed",
@@ -294,6 +187,23 @@ fn update_summaries_in_terminal_pipe_and_no_color() {
             ] {
                 assert!(frame.contains(field), "{frame}");
             }
+            if scenario.starts_with("sequence_") {
+                let planned = frame
+                    .split_once("Planned package changes:")
+                    .unwrap()
+                    .1
+                    .split("Applied package changes:")
+                    .next()
+                    .unwrap();
+                for field in [
+                    "Update (1):",
+                    "Install (1):",
+                    "Remove (1):",
+                    "z-summary-update",
+                ] {
+                    assert!(planned.contains(field), "{frame}");
+                }
+            }
             if scenario.starts_with("relation_") {
                 let planned = frame
                     .split_once("Planned package changes:")
@@ -312,7 +222,10 @@ fn update_summaries_in_terminal_pipe_and_no_color() {
                     assert!(planned.contains(field), "{frame}");
                 }
             }
-            if matches!(scenario, "preview" | "relation_preview") {
+            if matches!(
+                scenario,
+                "preview" | "relation_preview" | "sequence_preview"
+            ) {
                 assert!(!frame.contains("Generation:"), "{frame}");
                 assert!(!frame.contains("Applied package changes:"), "{frame}");
                 continue;
@@ -324,6 +237,16 @@ fn update_summaries_in_terminal_pipe_and_no_color() {
             );
             let applied = frame.split_once("Applied package changes:").unwrap().1;
             assert!(applied.contains("Updated (1):"), "{frame}");
+            if scenario == "sequence_apply" {
+                for field in [
+                    "Updated (1):",
+                    "Installed (1):",
+                    "Removed (1):",
+                    "z-summary-update",
+                ] {
+                    assert!(applied.contains(field), "{frame}");
+                }
+            }
             if scenario == "relation_apply" {
                 for field in [
                     "Removed (1):",

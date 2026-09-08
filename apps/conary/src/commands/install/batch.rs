@@ -47,6 +47,7 @@ use conary_core::scriptlet::SandboxMode;
 #[cfg(test)]
 use preparation::BatchConflict;
 pub use preparation::prepare_package_for_batch;
+pub(super) use preparation::prepare_parsed_package_for_batch;
 use rusqlite::{Connection, Transaction};
 use std::collections::HashMap;
 use std::fmt;
@@ -290,10 +291,15 @@ impl<'a> BatchInstaller<'a> {
     pub(super) fn preview_batch(
         self,
         mut packages: Vec<PreparedPackage>,
+        projection: Option<&super::preview::PreviewDatabase>,
     ) -> Result<Vec<super::report::InstallChange>> {
         let conn = open_db(self.db_path)?;
         self.validate_batch_transaction(&conn, &mut packages)?;
-        super::report::batch_changes(&conn, &packages)
+        let changes = super::report::batch_changes(&conn, &packages)?;
+        if let Some(projection) = projection {
+            projection.project(&packages)?;
+        }
+        Ok(changes)
     }
 
     fn validate_batch_transaction(
@@ -448,6 +454,7 @@ impl<'a> BatchInstaller<'a> {
         );
         let (changeset_id, trove_ids, publication) = transaction_result?;
         let report = super::report::InstallReport {
+            projection: None,
             planned: Vec::new(),
             commits: vec![super::report::InstallCommit {
                 changes,

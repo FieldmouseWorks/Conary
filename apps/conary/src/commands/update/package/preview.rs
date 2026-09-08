@@ -13,8 +13,31 @@ pub(super) async fn plan_selected_updates(
     // Resolution may hydrate a CCS artifact into CAS. A preview owns disposable
     // downloads and objects; it must not populate the installed runtime's CAS.
     let temporary = tempfile::tempdir()?;
-    let mut report = InstallReport::default();
-    for (trove, candidate) in selected {
+    let projection = std::sync::Arc::new(crate::commands::install::preview::PreviewDatabase::new(
+        conn,
+        options.root,
+    )?);
+    let mut report = InstallReport {
+        projection: Some(projection.clone()),
+        ..Default::default()
+    };
+    let mut ordered = selected
+        .iter()
+        .map(|entry| {
+            let has_delta = PackageDelta::find_delta(
+                conn,
+                &entry.0.name,
+                &entry.0.version,
+                &entry.1.package.version,
+            )?
+            .is_some();
+            Ok((!has_delta, entry))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    // Apply executes deltas before full downloads, retaining selection order
+    // within each group. Preview the same successful execution sequence.
+    ordered.sort_by_key(|(full, _)| *full);
+    for (_, (trove, candidate)) in ordered {
         let resolution = resolution_options_for_selected_update(
             &candidate.package,
             &candidate.repository,
@@ -31,6 +54,7 @@ pub(super) async fn plan_selected_updates(
         cmd_install_with_report(
             &path.to_string_lossy(),
             InstallOptions {
+                db_path: projection.path(),
                 repository_provenance: Some(repository_install_provenance_from_package(
                     &candidate.package,
                     &candidate.repository,

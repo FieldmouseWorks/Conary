@@ -22,6 +22,7 @@ mod ownership_mode;
 mod package_set;
 mod payload_identity;
 mod prepare;
+pub(crate) mod preview;
 pub(crate) mod report;
 mod repository_batch;
 mod resolve;

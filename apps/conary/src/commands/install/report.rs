@@ -112,6 +112,7 @@ pub(crate) struct InstallCommit {
 pub(crate) struct InstallReport {
     pub planned: Vec<InstallChange>,
     pub commits: Vec<InstallCommit>,
+    pub projection: Option<std::sync::Arc<super::preview::PreviewDatabase>>,
 }
 
 impl InstallReport {
@@ -217,6 +218,7 @@ mod identity_tests {
         let mut dependency = installed.clone();
         dependency.name = "dependency".into();
         let report = InstallReport {
+            projection: None,
             planned: Vec::new(),
             commits: vec![InstallCommit {
                 changes: vec![

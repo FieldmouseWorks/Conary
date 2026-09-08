@@ -61,6 +61,27 @@ pub fn prepare_package_for_batch(
 
     // Parse package
     let pkg = parse_package(package_path, format)?;
+    prepare_parsed_package_for_batch(
+        pkg.as_ref(),
+        format,
+        db_path,
+        install_reason,
+        selection_reason,
+        allow_downgrade,
+        source_profile_id,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(in crate::commands::install) fn prepare_parsed_package_for_batch(
+    pkg: &dyn conary_core::packages::PackageFormat,
+    format: super::super::PackageFormatType,
+    db_path: &str,
+    install_reason: InstallReason,
+    selection_reason: &str,
+    allow_downgrade: bool,
+    source_profile_id: Option<&str>,
+) -> Result<Option<PreparedPackage>> {
     let semantics = InstallSemantics::native_package(format);
 
     // Open database
@@ -69,7 +90,7 @@ pub fn prepare_package_for_batch(
     // Check for existing installation
     let (is_upgrade, old_trove) = match check_upgrade_status(
         &conn,
-        pkg.as_ref(),
+        pkg,
         &semantics,
         allow_downgrade,
         InstallIntent::PackageChange,
@@ -107,7 +128,7 @@ pub fn prepare_package_for_batch(
     let installed_components = vec![ComponentType::Runtime];
 
     let native_lifecycle_state =
-        NativeLifecycleInstallState::from_native_package(pkg.as_ref(), format, source_profile_id)?;
+        NativeLifecycleInstallState::from_native_package(pkg, format, source_profile_id)?;
 
     // A native header declares only its own `Provides`; the payload it ships is
     // the only authority for the file providers that satisfy path dependencies.

@@ -57,8 +57,9 @@ impl PreparedRepositoryBatch {
     pub(super) fn preview(
         self,
         installer: BatchInstaller<'_>,
+        projection: Option<&super::preview::PreviewDatabase>,
     ) -> Result<Vec<super::report::InstallChange>> {
-        installer.preview_batch(self.packages)
+        installer.preview_batch(self.packages, projection)
     }
 
     pub(super) fn install_with_result(

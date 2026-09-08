@@ -189,9 +189,10 @@ async fn handle_dep_installs(
             super::repository_batch::RepositoryBatchMode::Validate,
         )
         .await?;
-        report
-            .planned
-            .extend(prepared.preview(BatchInstaller::new(ctx.db_path, ctx.sandbox_mode))?);
+        report.planned.extend(prepared.preview(
+            BatchInstaller::new(ctx.db_path, ctx.sandbox_mode),
+            report.projection.as_deref(),
+        )?);
         return Ok(());
     }
 

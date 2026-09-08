@@ -258,6 +258,22 @@ async fn cmd_install_with_intent(
     // --- Phase 6: Dry run summary ---
     if dry_run {
         require_lossless_native_component_selection(&component_selection)?;
+        if let Some(projection) = report.projection.as_deref() {
+            let mut prepared = super::batch::prepare_parsed_package_for_batch(
+                pkg.as_ref(),
+                format,
+                db_path,
+                conary_core::db::models::InstallReason::Explicit,
+                selection_reason.unwrap_or("Explicit package request"),
+                allow_downgrade,
+                source_profile,
+            )?
+            .context("planned native package is already installed in preview state")?;
+            prepared.repository_provenance = repository_provenance.clone();
+            prepared.relation_removals = relation_plan.removals;
+            prepared.relation_deconfigurations = relation_plan.deconfigurations;
+            projection.project(&[prepared])?;
+        }
         report.planned.extend(changes);
         return Ok(());
     }

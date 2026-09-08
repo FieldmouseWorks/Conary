@@ -694,10 +694,26 @@ async fn install_verified_ccs_artifact(
                 reinstall: false,
                 selection_reason: None,
                 selected_manifest_components: None,
-                repository_provenance,
+                repository_provenance: repository_provenance.clone(),
                 requested_source_identity,
             },
         )?;
+        if dry_run && let Some(projection) = report.projection.as_deref() {
+            let prepared = prepare_ccs_package_for_batch(
+                &ccs_pkg,
+                db_path,
+                conary_core::db::models::InstallReason::Explicit,
+                "Explicit package request",
+                allow_downgrade,
+                intent,
+                PreparedPackageSourceAuthority {
+                    repository_provenance,
+                    requested_source_identity,
+                },
+            )?;
+            BatchInstaller::new(db_path, sandbox_mode)
+                .preview_batch(vec![prepared], Some(projection))?;
+        }
         report.extend(result.report);
         return Ok(result.trove_id);
     }
@@ -755,9 +771,10 @@ async fn install_verified_ccs_artifact(
 
     crate::ui::println!("Installing CCS package...");
     if dry_run {
-        report
-            .planned
-            .extend(prepared.preview(BatchInstaller::new(db_path, sandbox_mode))?);
+        report.planned.extend(prepared.preview(
+            BatchInstaller::new(db_path, sandbox_mode),
+            report.projection.as_deref(),
+        )?);
         return Ok(None);
     }
     let result = prepared.install_with_result(BatchInstaller::new(db_path, sandbox_mode))?;
