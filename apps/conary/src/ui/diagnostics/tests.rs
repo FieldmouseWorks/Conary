@@ -179,3 +179,16 @@ fn default_publication_output_has_one_warning_and_one_retry() {
         "{stdout}"
     );
 }
+
+#[test]
+fn refusal_display_keeps_plain_guidance_for_library_consumers() {
+    let refusal = LiveMutationRefusal {
+        command_label: Cow::Borrowed("conaryd install"),
+        class: LiveMutationClass::CurrentlyLiveEvenWithRootArguments,
+    };
+    let message = refusal.to_string();
+    assert_eq!(message, mutation_refusal(&refusal).plain_body());
+    assert!(message.contains("--dry-run"));
+    assert!(message.contains("--yes"));
+    assert!(!message.contains('\x1b'));
+}

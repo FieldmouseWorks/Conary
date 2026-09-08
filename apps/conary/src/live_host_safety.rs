@@ -41,10 +41,15 @@ pub struct LiveMutationRequest {
 /// Presentation belongs to `ui::diagnostics`; callers can inspect this error
 /// through an anyhow context chain without parsing its display text.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("command '{command_label}' requires explicit apply intent")]
 pub struct LiveMutationRefusal {
     pub command_label: Cow<'static, str>,
     pub class: LiveMutationClass,
+}
+
+impl std::fmt::Display for LiveMutationRefusal {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&crate::ui::diagnostics::plain_mutation_refusal(self))
+    }
 }
 
 pub fn require_mutation_intent(request: &LiveMutationRequest) -> anyhow::Result<()> {

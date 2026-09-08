@@ -42,6 +42,18 @@ impl Diagnostic {
             .join("\n")
     }
 
+    fn plain_body(&self) -> String {
+        std::iter::once(self.message.clone())
+            .chain(
+                self.facts
+                    .iter()
+                    .map(|(label, value)| format!("  {label}: {value}")),
+            )
+            .chain(self.notes.iter().map(|note| format!("note: {note}")))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     pub(crate) fn warn(&self) {
         super::warn(&self.body());
     }
@@ -88,6 +100,12 @@ fn from_error(error: &anyhow::Error) -> Diagnostic {
         diagnostic = diagnostic.fact("Cause", cause.to_string());
     }
     diagnostic
+}
+
+/// Plain fallback for library consumers, including persisted daemon job errors.
+/// It uses the same facts and actions as terminal presentation without ANSI.
+pub(crate) fn plain_mutation_refusal(refusal: &LiveMutationRefusal) -> String {
+    mutation_refusal(refusal).plain_body()
 }
 
 fn mutation_refusal(refusal: &LiveMutationRefusal) -> Diagnostic {

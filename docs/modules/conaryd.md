@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-07-25
-revision: 5
-summary: Document conaryd authorization, exact-generation package jobs, routes, and daemon boundaries
+last_updated: 2026-09-08
+revision: 6
+summary: Document conaryd authorization, typed apply refusals, exact-generation package jobs, routes, and daemon boundaries
 ---
 
 # conaryd
@@ -38,6 +38,13 @@ currently calls the CLI command functions from the `conary` crate
 therefore need both daemon-route/job proof and the owning CLI package-command
 proof; `package_ops.rs` is the adapter boundary, not an independent package
 manager implementation.
+
+Apply-intent refusals retain `conary::live_host_safety::LiveMutationRefusal`,
+including the exact command label and mutation class. Its plain display uses
+the same diagnostic facts and guidance as the CLI without terminal escapes,
+so direct package-job callers and persisted error messages retain the safe
+preview/confirmation routes. This does not change job error schemas or the
+apply-intent predicate.
 
 A mutating package operation is complete only when its exact selected-root
 generation is published. If the package database commit succeeds but generation
