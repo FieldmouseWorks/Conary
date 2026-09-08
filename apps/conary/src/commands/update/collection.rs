@@ -247,22 +247,15 @@ pub async fn cmd_update_group(
 mod tests {
     use super::*;
     use crate::commands::SandboxMode;
-    use crate::commands::test_helpers::create_test_db;
-    use conary_core::db::models::{
-        CollectionMember, InstallSource, Repository, RepositoryPackage, Trove, TroveType,
-    };
+    use crate::commands::test_helpers::{create_test_db, update_ccs};
+    use conary_core::db::models::{CollectionMember, InstallSource, Trove, TroveType};
 
     #[tokio::test]
     async fn collection_update_preserves_member_variant_selector() {
-        let (_temp, db_path) = create_test_db();
+        let (temp, db_path) = create_test_db();
         let conn = conary_core::db::open(&db_path).unwrap();
 
-        let mut repo = Repository::new(
-            "variant-repo".to_string(),
-            "https://example.test/variant".to_string(),
-        );
-        repo.source_profile = Some("solus".to_string());
-        let repo_id = repo.insert(&conn).unwrap();
+        let (repo_id, key) = update_ccs::repository(&conn);
 
         let mut collection = Trove::new(
             "base".to_string(),
@@ -288,18 +281,7 @@ mod tests {
             installed.installed_from_repository_id = Some(repo_id);
             installed.insert(&conn).unwrap();
 
-            let mut candidate = RepositoryPackage::new(
-                repo_id,
-                "demo".to_string(),
-                "1.0-2".to_string(),
-                conary_core::repository::versioning::VersionScheme::Eopkg,
-                format!("sha256:demo-{arch}"),
-                123,
-                format!("https://example.test/variant/demo-1.0.1-{arch}.ccs"),
-            );
-            candidate.architecture = Some(arch.to_string());
-            candidate.source_profile = Some("solus".to_string());
-            candidate.insert(&conn).unwrap();
+            update_ccs::candidate(&conn, temp.path(), repo_id, &key, "demo", arch);
         }
         drop(conn);
 

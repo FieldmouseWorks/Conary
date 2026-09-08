@@ -19,7 +19,7 @@ use super::selection::{
 };
 use crate::commands::install::{
     cmd_install_with_report,
-    report::{InstallChange, InstallReport, PackageIdentity},
+    report::{InstallReport, PackageIdentity},
 };
 use anyhow::{Context, Result};
 use conary_core::ccs::CcsPackage;
@@ -31,6 +31,8 @@ use conary_core::repository::{
 };
 use std::path::{Path, PathBuf};
 use tracing::{info, warn};
+
+mod preview;
 
 fn read_delta_result_from_cas(
     cas: &conary_core::filesystem::CasStore,
@@ -346,13 +348,6 @@ pub(super) async fn update_packages(
     )?;
     let policy = effective_source_policy.resolution.clone();
 
-    let objects_dir = objects_dir(db_path);
-    let temp_dir = Path::new(db_path)
-        .parent()
-        .unwrap_or(Path::new("."))
-        .join("tmp");
-    std::fs::create_dir_all(&temp_dir)?;
-
     let installed_troves =
         installed_troves_for_update(&conn, package, package_version, architecture)?;
 
@@ -507,16 +502,21 @@ pub(super) async fn update_packages(
             }
         );
     }
-    let planned = updates_available
-        .iter()
-        .map(|(trove, selected)| {
-            InstallChange::incoming(PackageIdentity::repository(&selected.package), Some(trove))
-        })
-        .collect();
-    let preview = InstallReport {
-        planned,
-        commits: Vec::new(),
-    };
+    let preview = preview::plan_selected_updates(
+        &conn,
+        &updates_available,
+        &policy,
+        InstallOptions {
+            db_path,
+            root,
+            sandbox_mode,
+            ownership: Some(ownership),
+            dry_run: true,
+            yes: true,
+            ..Default::default()
+        },
+    )
+    .await?;
     crate::ui::transaction_summary::install_preview(&preview.planned);
     for (_, selected) in &updates_available {
         if selected.package.is_security_update {
@@ -533,6 +533,12 @@ pub(super) async fn update_packages(
             packages: updates_available.len(),
         });
     }
+    let objects_dir = objects_dir(db_path);
+    let temp_dir = Path::new(db_path)
+        .parent()
+        .unwrap_or(Path::new("."))
+        .join("tmp");
+    std::fs::create_dir_all(&temp_dir)?;
     let targets: std::collections::HashSet<_> = updates_available
         .iter()
         .map(|(_, selected)| PackageIdentity::repository(&selected.package))

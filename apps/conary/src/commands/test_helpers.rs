@@ -6,6 +6,9 @@
 //! and generation-artifact fixtures here instead of reconstructing partial
 //! package state independently.
 
+#[path = "../../tests/common/update_ccs.rs"]
+pub(crate) mod update_ccs;
+
 use conary_core::db::models::{
     Changeset, ChangesetStatus, Component, FileEntry, InstalledRequirementGroup, ProvideEntry,
     Repository, RepositoryPackageKey, RepositoryPackageKeyStatus, Trove, TroveType,

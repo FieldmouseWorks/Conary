@@ -27,6 +27,16 @@ fn build_test_ccs_package_with_bundle(
     version: &str,
     native_lifecycle: Option<NativeLifecycleBundle>,
 ) -> PathBuf {
+    build_test_ccs_package_with_relations(dir, name, version, native_lifecycle, Vec::new())
+}
+
+fn build_test_ccs_package_with_relations(
+    dir: &Path,
+    name: &str,
+    version: &str,
+    native_lifecycle: Option<NativeLifecycleBundle>,
+    relations: Vec<conary_core::repository::dependency_model::RepositoryRequirementGroup>,
+) -> PathBuf {
     let source_dir = dir.join("src");
     std::fs::create_dir_all(source_dir.join("usr/bin")).unwrap();
     std::fs::write(
@@ -44,6 +54,7 @@ fn build_test_ccs_package_with_bundle(
         abi: None,
     });
     manifest.native_lifecycle = native_lifecycle;
+    manifest.relations = relations;
 
     let result = CcsBuilder::new(manifest, &source_dir)
         .unwrap()

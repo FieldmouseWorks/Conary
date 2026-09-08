@@ -2,6 +2,8 @@
 
 //! Shared test utilities and helpers for integration tests.
 
+pub mod update_ccs;
+
 use conary_core::db;
 use conary_core::db::models::{
     Changeset, ChangesetStatus, Component, FileEntry, InstalledRequirementGroup, ProvideEntry,

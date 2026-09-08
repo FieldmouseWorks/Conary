@@ -3,7 +3,7 @@
 use super::*;
 use std::process::Command;
 
-fn add_candidate(conn: &rusqlite::Connection, dir: &Path, name: &str, fail: bool) {
+fn add_candidate(conn: &rusqlite::Connection, dir: &Path, name: &str, fail: bool, relation: bool) {
     let mut bundle = rpm_upgrade_bundle(name, "2.0.0");
     if fail {
         bundle.entries[0].body = "error('forced update summary lifecycle failure')\n".into();
@@ -12,7 +12,55 @@ fn add_candidate(conn: &rusqlite::Connection, dir: &Path, name: &str, fail: bool
     }
     let artifact_dir = dir.join(name);
     std::fs::create_dir_all(&artifact_dir).unwrap();
-    let path = build_test_ccs_package_with_bundle(&artifact_dir, name, "2.0.0", Some(bundle));
+    let relations = if relation {
+        use conary_core::repository::{
+            dependency_model::RepositoryRequirementKind, versioning::VersionScheme,
+        };
+        let mut old = Trove::new(
+            "summary-obsolete".into(),
+            "1".into(),
+            TroveType::Package,
+            VersionScheme::Rpm,
+        );
+        old.insert(conn).unwrap();
+        let mut consumer = Trove::new(
+            "summary-consumer".into(),
+            "1".into(),
+            TroveType::Package,
+            VersionScheme::Rpm,
+        );
+        let consumer_id = consumer.insert(conn).unwrap();
+        let dependency = conary_core::repository::requirement::parse_native_requirement(
+            RepositoryRequirementKind::Depends,
+            VersionScheme::Rpm,
+            "summary-obsolete",
+        )
+        .unwrap();
+        conary_core::db::models::InstalledRequirementGroup::insert_groups(
+            conn,
+            consumer_id,
+            VersionScheme::Rpm,
+            &[dependency],
+        )
+        .unwrap();
+        vec![
+            conary_core::repository::package_relation::parse_native_relation(
+                RepositoryRequirementKind::Obsolete,
+                VersionScheme::Rpm,
+                "summary-obsolete",
+            )
+            .unwrap(),
+        ]
+    } else {
+        Vec::new()
+    };
+    let path = build_test_ccs_package_with_relations(
+        &artifact_dir,
+        name,
+        "2.0.0",
+        Some(bundle),
+        relations,
+    );
     let bytes = std::fs::read(&path).unwrap();
     let (url, _) = serve_test_file(path);
     let repo = insert_test_static_ccs_repository(conn, name, &url);
@@ -60,9 +108,15 @@ async fn update_summary_capture_child() {
     let (temp, db_path) = create_test_db();
     seed_test_bootable_runtime(Path::new(&db_path));
     let conn = conary_core::db::open(&db_path).unwrap();
-    add_candidate(&conn, temp.path(), "a-summary-update", false);
+    add_candidate(
+        &conn,
+        temp.path(),
+        "a-summary-update",
+        false,
+        scenario.starts_with("relation_"),
+    );
     if scenario == "mixed" {
-        add_candidate(&conn, temp.path(), "z-summary-failed", true);
+        add_candidate(&conn, temp.path(), "z-summary-failed", true, false);
     }
     if scenario == "noop" {
         conn.execute(
@@ -83,7 +137,7 @@ async fn update_summary_capture_child() {
         &db_path,
         temp.path().to_str().unwrap(),
         false,
-        scenario == "preview",
+        matches!(scenario.as_str(), "preview" | "relation_preview"),
         SandboxMode::Always,
         None,
         true,
@@ -102,14 +156,14 @@ async fn update_summary_capture_child() {
         assert_eq!(
             result.unwrap(),
             match scenario.as_str() {
-                "preview" =>
+                "preview" | "relation_preview" =>
                     crate::commands::update::outcome::UpdateOutcome::Planned { packages: 1 },
                 "noop" => crate::commands::update::outcome::UpdateOutcome::NoChanges,
                 _ => crate::commands::update::outcome::UpdateOutcome::Applied { packages: 1 },
             }
         );
     }
-    if matches!(scenario.as_str(), "preview" | "noop") {
+    if matches!(scenario.as_str(), "preview" | "relation_preview" | "noop") {
         assert_eq!(crate::commands::test_helpers::database_rows(&conn), before);
     } else {
         assert_eq!(
@@ -128,7 +182,15 @@ async fn update_summary_capture_child() {
 #[test]
 fn update_summaries_in_terminal_pipe_and_no_color() {
     for (tty, no_color) in [(false, false), (false, true), (true, false), (true, true)] {
-        for scenario in ["preview", "apply", "pending", "mixed", "noop"] {
+        for scenario in [
+            "preview",
+            "relation_preview",
+            "relation_apply",
+            "apply",
+            "pending",
+            "mixed",
+            "noop",
+        ] {
             let test =
                 "commands::update::package::tests::summary_capture::update_summary_capture_child";
             let mut command = if tty {
@@ -199,7 +261,25 @@ fn update_summaries_in_terminal_pipe_and_no_color() {
             ] {
                 assert!(frame.contains(field), "{frame}");
             }
-            if scenario == "preview" {
+            if scenario.starts_with("relation_") {
+                let planned = frame
+                    .split_once("Planned package changes:")
+                    .unwrap()
+                    .1
+                    .split("Applied package changes:")
+                    .next()
+                    .unwrap();
+                for field in [
+                    "Remove (1):",
+                    "Deconfigure (1):",
+                    "summary-obsolete",
+                    "summary-consumer",
+                    "obsolete",
+                ] {
+                    assert!(planned.contains(field), "{frame}");
+                }
+            }
+            if matches!(scenario, "preview" | "relation_preview") {
                 assert!(!frame.contains("Generation:"), "{frame}");
                 assert!(!frame.contains("Applied package changes:"), "{frame}");
                 continue;
@@ -211,6 +291,16 @@ fn update_summaries_in_terminal_pipe_and_no_color() {
             );
             let applied = frame.split_once("Applied package changes:").unwrap().1;
             assert!(applied.contains("Updated (1):"), "{frame}");
+            if scenario == "relation_apply" {
+                for field in [
+                    "Removed (1):",
+                    "Deconfigured (1):",
+                    "summary-obsolete",
+                    "summary-consumer",
+                ] {
+                    assert!(applied.contains(field), "{frame}");
+                }
+            }
             assert!(
                 applied.contains(if scenario == "pending" {
                     "Generation: publication pending"
