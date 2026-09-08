@@ -439,6 +439,38 @@ async fn repository_ccs_closure_runs_root_pretransaction_before_dependency_paylo
         &local_key,
     );
 
+    let conn = conary_core::db::open(&db_path).unwrap();
+    let before_preview = crate::commands::test_helpers::database_rows(&conn);
+    let mut preview_report = super::super::super::report::InstallReport::default();
+    let preview_result = install_ccs_artifact_with_report(
+        CcsArtifactInstallOptions {
+            ccs_path: root_artifact.to_str().unwrap(),
+            db_path: db_path.to_str().unwrap(),
+            root: install_root.to_str().unwrap(),
+            dry_run: true,
+            sandbox_mode: SandboxMode::Always,
+            no_deps: false,
+            allow_downgrade: false,
+            intent: InstallIntent::PackageChange,
+            yes: true,
+            envelope_authority: CcsEnvelopeAuthority::LocalDev,
+            repository_provenance: None,
+            requested_source_identity: None,
+            resolution_policy: test_resolution_policy().with_primary_source_identity("fedora-44"),
+        },
+        &mut preview_report,
+    )
+    .await
+    .unwrap();
+    assert!(preview_result.is_none());
+    assert!(preview_report.commits.is_empty());
+    assert_eq!(preview_report.planned.len(), 2);
+    assert_eq!(
+        crate::commands::test_helpers::database_rows(&conn),
+        before_preview
+    );
+    drop(conn);
+
     let installed_root = install_ccs_artifact(CcsArtifactInstallOptions {
         ccs_path: root_artifact.to_str().unwrap(),
         db_path: db_path.to_str().unwrap(),

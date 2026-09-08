@@ -336,7 +336,8 @@ fn rpm_root_ownership_dry_run_does_not_require_account_databases() {
 
     assert!(output.status.success(), "{}", output_text(&output));
     assert!(
-        String::from_utf8_lossy(&output.stdout).contains("Dry run complete. No changes made."),
+        String::from_utf8_lossy(&output.stdout)
+            .contains("Dry run: no package changes were applied."),
         "{}",
         output_text(&output)
     );

@@ -12,8 +12,8 @@ use super::{
     TransactionContext, UpgradeCheck, bind_transaction_source_identity, build_execution_mode,
     build_resolution_policy, effective_source_profile,
     execute_install_transaction_in_selected_root, extract_and_classify_files, finalize_install,
-    preflight_extracted_file_ownership, resolve_canonical_name, show_dry_run_summary,
-    source_profile_projection,
+    preflight_extracted_file_ownership, require_lossless_native_component_selection,
+    resolve_canonical_name, source_profile_projection,
 };
 use crate::commands::generation::selected_root::LockedRuntimeRoot;
 use crate::commands::open_db;
@@ -257,7 +257,7 @@ async fn cmd_install_with_intent(
 
     // --- Phase 6: Dry run summary ---
     if dry_run {
-        show_dry_run_summary(pkg.as_ref(), &component_selection)?;
+        require_lossless_native_component_selection(&component_selection)?;
         report.planned.extend(changes);
         return Ok(());
     }
@@ -362,6 +362,7 @@ async fn cmd_install_with_intent(
 
     // --- Phase 10: Post-install finalization ---
     finalize_install(
+        db_path,
         &conn,
         pkg.as_ref(),
         &extraction,

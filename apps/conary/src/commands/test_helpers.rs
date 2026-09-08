@@ -590,3 +590,35 @@ pub(crate) fn run_exact_test_in_user_mount_namespace(test_name: &str) -> bool {
     );
     false
 }
+
+/// Capture every persisted table for read-only and refusal command proofs.
+pub(crate) fn database_rows(
+    conn: &rusqlite::Connection,
+) -> Vec<(String, Vec<Vec<rusqlite::types::Value>>)> {
+    let tables = conn
+        .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' ORDER BY name")
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(0))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    tables
+        .into_iter()
+        .map(|table| {
+            let mut statement = conn
+                .prepare(&format!("SELECT * FROM \"{}\"", table.replace('"', "\"\"")))
+                .unwrap();
+            let columns = statement.column_count();
+            let rows = statement
+                .query_map([], |row| {
+                    (0..columns)
+                        .map(|column| row.get(column))
+                        .collect::<rusqlite::Result<Vec<_>>>()
+                })
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap();
+            (table, rows)
+        })
+        .collect()
+}

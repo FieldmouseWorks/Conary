@@ -71,7 +71,8 @@ use execute::{
 };
 use lifecycle::{
     ExtractionResult, FinalizeInstallOutput, extract_and_classify_files, finalize_install,
-    finalize_install_without_snapshot, mark_upgraded_parent_deriveds_stale, show_dry_run_summary,
+    finalize_install_without_snapshot, mark_upgraded_parent_deriveds_stale,
+    require_lossless_native_component_selection,
 };
 use prepare::check_upgrade_status;
 pub(crate) use semantics::InstallIntent;

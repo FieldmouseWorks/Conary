@@ -58,7 +58,7 @@ fn phase4_native_pm_parity_manifest_carries_cross_source_contract() {
         "source_profile=\"arch\"",
         "--from \"${source_profile}\"",
         "--dry-run 2>&1",
-        "Dry run complete. No changes made.",
+        "Dry run: no package changes were applied.",
         "expected_trace_digest",
         "assert_trace",
         "forbid-native-pm",

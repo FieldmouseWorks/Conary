@@ -51,35 +51,6 @@ fn artifact(dir: &Path, name: &str, version: &str, ccs: bool, dependency: bool) 
     path
 }
 
-fn rows(conn: &rusqlite::Connection) -> Vec<(String, Vec<Vec<rusqlite::types::Value>>)> {
-    let tables = conn
-        .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' ORDER BY name")
-        .unwrap()
-        .query_map([], |row| row.get::<_, String>(0))
-        .unwrap()
-        .collect::<rusqlite::Result<Vec<_>>>()
-        .unwrap();
-    tables
-        .into_iter()
-        .map(|table| {
-            let mut statement = conn
-                .prepare(&format!("SELECT * FROM \"{}\"", table.replace('"', "\"\"")))
-                .unwrap();
-            let columns = statement.column_count();
-            let rows = statement
-                .query_map([], |row| {
-                    (0..columns)
-                        .map(|column| row.get(column))
-                        .collect::<rusqlite::Result<Vec<_>>>()
-                })
-                .unwrap()
-                .collect::<rusqlite::Result<Vec<_>>>()
-                .unwrap();
-            (table, rows)
-        })
-        .collect()
-}
-
 #[tokio::test]
 async fn install_summary_capture_child() {
     let Ok(scenario) = std::env::var("CONARY_INSTALL_CAPTURE") else {
@@ -175,7 +146,7 @@ async fn install_summary_capture_child() {
             "forced install summary publication failure",
         )
     });
-    let before = rows(&conn);
+    let before = crate::commands::test_helpers::database_rows(&conn);
     println!("FRAME_BEGIN");
     let result = if scenario.starts_with("batch") {
         let second = artifact(temp.path(), "summary-second", "3.0.0", false, false);
@@ -229,7 +200,7 @@ async fn install_summary_capture_child() {
     }
     if preview || failed || canceled {
         assert_eq!(
-            rows(&conn),
+            crate::commands::test_helpers::database_rows(&conn),
             before,
             "preview/refusal/cancellation mutated database"
         );
