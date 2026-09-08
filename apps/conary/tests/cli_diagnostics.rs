@@ -95,3 +95,6 @@ fn terminal_database_error_preserves_the_same_facts_with_and_without_color() {
 
 #[path = "cli_diagnostics/verification.rs"]
 mod verification;
+
+#[path = "cli_diagnostics/machine.rs"]
+mod machine;

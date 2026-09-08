@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-09-08
-revision: 7
-summary: Daily-driver CLI routes, coordinated progress, typed first-use and CCS verification diagnostics, and focused output proof
+revision: 8
+summary: Daily-driver CLI routes, coordinated progress, typed first-use and CCS verification diagnostics, strict verification JSON, and focused output proof
 ---
 
 # Daily-Driver UX Matrix
@@ -136,9 +136,15 @@ actual signing key allows the same intact archive to verify. Core tests prove
 untrusted archives cannot commit payload objects into CAS and preserve all
 validation diagnostics through both document and streaming readers.
 
-Remaining #644 work includes strict machine command rendering and consistent
-fields and empty states across other commands; this slice adds no machine-output
-flag or schema.
+`ccs verify --json` emits the versioned verification report shared with the local
+MCP `conary.packaging.verify_artifact` tool. Verification failures preserve exit
+status 1 and emit one JSON object without a duplicate human error. Raw typed
+fields survive serialization independently of the human renderer's escaping.
+See [CCS Verification Report V1](../specs/ccs-verification-report-v1.md) for the
+strict schema, explicit-policy MCP boundary, and authority contract.
+
+Remaining #644 work includes machine/refusal coverage on other command surfaces
+and consistent fields, headings, and empty states.
 
 ## Ranked UI Slices
 

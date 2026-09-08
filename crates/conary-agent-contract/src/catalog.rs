@@ -49,6 +49,15 @@ pub struct CatalogItem {
 pub fn packaging_tools() -> Vec<CatalogItem> {
     vec![
         CatalogItem {
+            name: "conary.packaging.verify_artifact".to_string(),
+            description: "Verify a local CCS archive against an explicit trust policy.".to_string(),
+            when_to_use:
+                "Use before relying on a local CCS artifact; reports do not authorize installation"
+                    .to_string(),
+            risk: RiskLevel::ReadOnly,
+            cache: CachePolicy::private_short(),
+        },
+        CatalogItem {
             name: "conary.packaging.inspect_project".to_string(),
             description: "Inspect local packaging project or artifact facts without building."
                 .to_string(),
@@ -117,7 +126,7 @@ mod tests {
             .map(|item| item.name.as_str())
             .collect::<std::collections::BTreeSet<_>>();
 
-        assert_eq!(tools.len(), 6);
+        assert_eq!(tools.len(), 7);
         assert_eq!(names.len(), tools.len());
         assert!(tools.iter().all(|item| !item.when_to_use.is_empty()));
         assert!(tools.iter().all(|item| item.cache.ttl_ms > 0));

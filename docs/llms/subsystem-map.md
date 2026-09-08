@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-08
-revision: 80
+revision: 81
 summary: Compact workspace orientation index routing feature ownership, CLI diagnostics and progress, and focused proof through agent-context
 ---
 
@@ -16,7 +16,7 @@ summary: Compact workspace orientation index routing feature ownership, CLI diag
 | `apps/conaryd/` | Local daemon authorization, job queue, REST routes, and SSE events |
 | `apps/conary-test/` | Declarative integration runner, fixtures, result delivery, and QEMU proof |
 | `crates/conary-bootstrap/` | Shared binary startup, tracing, runtime, and exit behavior |
-| `crates/conary-agent-contract/` | Transport-neutral operation, resource, risk, and approval vocabulary |
+| `crates/conary-agent-contract/` | Transport-neutral operation, resource, risk, approval, and strict CCS verification report vocabulary |
 | `crates/conary-mcp/` | Shared MCP adapter plumbing |
 
 These eight Cargo packages are code-ownership boundaries. The four artifact

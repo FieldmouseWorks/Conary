@@ -5,7 +5,7 @@
 //! Commands for inspecting package contents and verifying signatures.
 
 use anyhow::{Context, Result};
-use conary_core::ccs::{TrustPolicy, UntrustedPackageInspection, verify};
+use conary_core::ccs::UntrustedPackageInspection;
 use std::path::Path;
 
 mod render;
@@ -50,54 +50,6 @@ pub fn cmd_ccs_inspect(
             render::print_dependencies(&pkg);
         }
     }
-
-    Ok(())
-}
-
-/// Verify a CCS package signature and contents
-pub fn cmd_ccs_verify(package: &str, policy_path: Option<String>) -> Result<()> {
-    let path = Path::new(package);
-
-    if !path.exists() {
-        anyhow::bail!("Package not found: {}", package);
-    }
-
-    // Load or create trust policy
-    let policy = if let Some(policy_file) = policy_path {
-        TrustPolicy::from_file(Path::new(&policy_file)).context("Failed to load trust policy")?
-    } else if let Some(local_policy) = super::local_dev::local_dev_trust_policy()? {
-        local_policy
-    } else {
-        anyhow::bail!("CCS verification requires --policy or an initialized local-dev signing key");
-    };
-
-    // Run verification
-    let result = verify::verify_package(path, &policy).context("Verification failed")?;
-
-    // Print results only after verification succeeds.
-    crate::ui::field("Package", &path.display().to_string());
-    crate::ui::row(
-        crate::ui::Status::Ok,
-        &[&format!(
-            "{} v{}",
-            result.package_name(),
-            result.package_version()
-        )],
-    );
-    let signature = result
-        .signature()
-        .key_id
-        .as_deref()
-        .map(|id| format!("Signature: valid key={id}"))
-        .unwrap_or_else(|| "Signature: valid".to_string());
-    crate::ui::row(crate::ui::Status::Ok, &[&signature]);
-    crate::ui::row(
-        crate::ui::Status::Ok,
-        &[&format!(
-            "Content: {} files verified",
-            result.files_checked()
-        )],
-    );
 
     Ok(())
 }
