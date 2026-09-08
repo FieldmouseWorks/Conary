@@ -37,6 +37,31 @@ impl PackagingMcpServer {
 #[tool_router]
 impl PackagingMcpServer {
     #[tool(
+        name = "conary.packaging.verify_artifact",
+        description = "Verify a local CCS archive against an explicit trust policy.",
+        output_schema = rmcp::handler::server::tool::schema_for_output::<conary_agent_contract::CcsVerificationReport>(),
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn verify_artifact(
+        &self,
+        Parameters(input): Parameters<conary_agent_contract::CcsVerificationRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let report = tokio::task::spawn_blocking(move || {
+            crate::commands::ccs::verification::verification_report(
+                &input.package,
+                Some(&input.policy),
+            )
+        })
+        .await
+        .map_err(map_internal)?;
+        let failed = !report.is_verified();
+        let value = serde_json::to_value(report).map_err(map_internal)?;
+        let mut result = CallToolResult::structured(value);
+        result.is_error = Some(failed);
+        Ok(result)
+    }
+
+    #[tool(
         name = "conary.packaging.inspect_project",
         description = "Inspect local packaging project or artifact facts without building.",
         annotations(read_only_hint = true, open_world_hint = false)

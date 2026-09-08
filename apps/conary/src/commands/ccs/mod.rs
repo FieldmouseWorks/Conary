@@ -17,6 +17,7 @@ mod payload_paths;
 mod signing;
 mod templates;
 mod test;
+pub(crate) mod verification;
 
 // Re-export all public commands
 pub use build::{CcsBuildOptions, cmd_ccs_build};
@@ -24,7 +25,7 @@ pub use enhance::cmd_ccs_enhance;
 pub use export::cmd_ccs_export;
 pub use init::cmd_ccs_init;
 pub use init_template::CcsInitTemplate;
-pub use inspect::{cmd_ccs_inspect, cmd_ccs_verify};
+pub use inspect::cmd_ccs_inspect;
 pub use install::cmd_ccs_install;
 pub(crate) use install::validate_ccs_capability_declaration;
 pub use lint::cmd_ccs_lint;
@@ -35,3 +36,4 @@ pub(crate) use payload_paths::{
 };
 pub use signing::{cmd_ccs_keygen, cmd_ccs_sign};
 pub use test::cmd_ccs_test;
+pub use verification::cmd_ccs_verify;

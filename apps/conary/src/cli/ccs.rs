@@ -117,6 +117,10 @@ pub enum CcsCommands {
         /// Trust policy file (optional)
         #[arg(long)]
         policy: Option<String>,
+
+        /// Emit one versioned JSON verification result; failures retain exit status 1
+        #[arg(long)]
+        json: bool,
     },
 
     /// Verify and dry-run-test a CCS package in an isolated workspace

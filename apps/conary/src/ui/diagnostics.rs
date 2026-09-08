@@ -2,6 +2,8 @@
 //! Human diagnostics derived from typed failures and publication facts.
 
 mod ccs;
+mod verification;
+pub(crate) use verification::{verification_failure, write_verification_report};
 
 use crate::commands::generation::publication::PublicationOutcome;
 use crate::live_host_safety::{LiveMutationClass, LiveMutationRefusal};
@@ -73,6 +75,9 @@ impl Diagnostic {
 }
 
 pub(crate) fn report_error(error: &anyhow::Error) {
+    if error.is::<verification::ReportedVerificationFailure>() {
+        return;
+    }
     super::error(&from_error(error).body());
 }
 

@@ -51,9 +51,11 @@ pub(super) fn dispatch_ccs_command(ccs_cmd: cli::CcsCommands) -> Result<()> {
             format,
         } => commands::ccs::cmd_ccs_inspect(&package, files, hooks, deps, &format),
 
-        cli::CcsCommands::Verify { package, policy } => {
-            commands::ccs::cmd_ccs_verify(&package, policy)
-        }
+        cli::CcsCommands::Verify {
+            package,
+            policy,
+            json,
+        } => commands::ccs::cmd_ccs_verify(&package, policy, json),
 
         cli::CcsCommands::Test {
             package,
