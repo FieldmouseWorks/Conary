@@ -260,10 +260,8 @@
 					<span class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary update --dry-run</span></span>
 				</TerminalFrame>
 				<p class="evidence-note">
-					Dry runs plan and print without applying a package transaction, with one known
-					client defect: if the named package is already installed as a dependency,
-					<code>install --dry-run</code> records it as explicitly installed before honouring
-					the flag (<a href={commandRisk.dryRunIssueUrl}>{commandRisk.dryRunIssue}</a>).
+					Dry runs plan and print without applying a package transaction or changing an
+					installed dependency to an explicitly installed package.
 					The live install, update, and remove loop is owned by the tester guide, which is
 					{#if previewRelease.testerAssigned}still paused even though {previewRelease.tag} is assigned{:else}paused until a release is pinned{/if};
 					the <a href="/install/#tester-loop">install page</a> keeps its retained commands

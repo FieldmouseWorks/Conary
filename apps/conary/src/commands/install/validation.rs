@@ -83,12 +83,14 @@ pub(super) fn parse_component_and_validate(
 }
 
 /// Check if the package is already installed as a dependency and promote it
-/// to explicit.  Returns `true` if no further work is needed (same version).
+/// to explicit, or report the planned promotion during a dry run. Returns
+/// `true` if no further work is needed (same version).
 pub(super) fn try_promote_existing_dep(
     conn: &rusqlite::Connection,
     package_name: &str,
     version: Option<&str>,
     architecture: Option<&str>,
+    dry_run: bool,
     selection_reason: Option<&str>,
 ) -> Result<bool> {
     let mut candidates = Trove::find_by_name(conn, package_name)?
@@ -119,10 +121,30 @@ pub(super) fn try_promote_existing_dep(
         )
     })?;
 
-    let reason = selection_reason.unwrap_or("Explicitly installed by user");
-    Trove::promote_to_explicit(conn, trove_id, Some(reason))?;
-    println!("Promoted {} from dependency to explicit", package_name);
-    println!("{} {} is already installed", package_name, existing.version);
+    if dry_run {
+        crate::ui::row(
+            crate::ui::Status::Info,
+            &[&format!(
+                "Would promote {package_name} from dependency to explicit"
+            )],
+        );
+    } else {
+        let reason = selection_reason.unwrap_or("Explicitly installed by user");
+        Trove::promote_to_explicit(conn, trove_id, Some(reason))?;
+        crate::ui::row(
+            crate::ui::Status::Ok,
+            &[&format!(
+                "Promoted {package_name} from dependency to explicit"
+            )],
+        );
+    }
+    crate::ui::row(
+        crate::ui::Status::Info,
+        &[&format!(
+            "{package_name} {} is already installed",
+            existing.version
+        )],
+    );
     Ok(true)
 }
 

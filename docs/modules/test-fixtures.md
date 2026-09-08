@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-09-03
-revision: 43
-summary: Map fixture ownership, including stable boot-tool interfaces, typed public and candidate profiles, attributable daily-driver same-name provides, configuration upgrade, payload topology, and snapshot-bound cross-source lifecycle proof
+last_updated: 2026-09-08
+revision: 44
+summary: Map fixture ownership, including stable boot-tool and failing EFI formatter interfaces, typed public and candidate profiles, attributable daily-driver same-name provides, configuration upgrade, payload topology, and snapshot-bound cross-source lifecycle proof
 ---
 
 # Test Fixtures And Proof Maps
@@ -174,7 +174,7 @@ Each fixture family should record:
 - **Owner:** typed linker and fixture catalog:
   `crates/conary-core/src/test_support.rs`; stable executable sources:
   `crates/conary-core/tests/fixtures/host-tools/`.
-- **Purpose:** Exercise guest-profile key generation, generation boot tools,
+- **Purpose:** Exercise guest-profile key generation, EFI formatter failure, generation boot tools,
   and the exact systemd, sysusers, tmpfiles, sysctl, and ldconfig
   executable-interface contracts
   without writing an executable inode immediately before production code
@@ -185,13 +185,13 @@ Each fixture family should record:
   `var/lib/conary-test/systemctl-calls` and copies the selected tmpfiles
   declaration to
   `var/lib/conary-test/systemd-tmpfiles-captured.conf`.
-- **Consumes:** `bootstrap::guest_profile::tests`;
+- **Consumes:** `bootstrap::image::tests`; `bootstrap::guest_profile::tests`;
   `generation::builder::boot_assets::tests`;
   `ccs::hooks::capabilities::tests`;
   `ccs::hooks::capabilities::interface_contract::tests`;
   `ccs::hooks::systemd::tests`; and `ccs::hooks::tmpfiles::tests`.
-- **Fast proof:** `cargo test -p conary-core
-  bootstrap::guest_profile::tests`; `cargo test -p conary-core ccs::hooks`.
+- **Fast proof:** `cargo test -p conary-core bootstrap::image`;
+  `cargo test -p conary-core bootstrap::guest_profile::tests`; `cargo test -p conary-core ccs::hooks`.
 - **Medium proof:** `cargo test -p conary-core --lib`.
 - **Slow proof:** the pull-request `workspace-tests` job under parallel hosted
   CI.
