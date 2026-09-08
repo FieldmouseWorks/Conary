@@ -37,6 +37,17 @@ fn build_test_ccs_package_with_relations(
     native_lifecycle: Option<NativeLifecycleBundle>,
     relations: Vec<conary_core::repository::dependency_model::RepositoryRequirementGroup>,
 ) -> PathBuf {
+    build_test_ccs_package_with_owners(dir, name, version, native_lifecycle, relations, false)
+}
+
+fn build_test_ccs_package_with_owners(
+    dir: &Path,
+    name: &str,
+    version: &str,
+    native_lifecycle: Option<NativeLifecycleBundle>,
+    relations: Vec<conary_core::repository::dependency_model::RepositoryRequirementGroup>,
+    named: bool,
+) -> PathBuf {
     let source_dir = dir.join("src");
     std::fs::create_dir_all(source_dir.join("usr/bin")).unwrap();
     std::fs::write(
@@ -56,10 +67,35 @@ fn build_test_ccs_package_with_relations(
     manifest.native_lifecycle = native_lifecycle;
     manifest.relations = relations;
 
-    let result = CcsBuilder::new(manifest, &source_dir)
+    let mut result = CcsBuilder::new(manifest, &source_dir)
         .unwrap()
         .build()
         .unwrap();
+    if named {
+        let user = conary_core::payload::PayloadIdentity::Named {
+            name: "summary-late-user".into(),
+        };
+        let group = conary_core::payload::PayloadIdentity::Named {
+            name: "summary-late-group".into(),
+        };
+        for file in result.files.iter_mut().chain(
+            result
+                .components
+                .values_mut()
+                .flat_map(|component| &mut component.files),
+        ) {
+            if file.path == format!("/usr/bin/{name}") {
+                file.node.user = user.clone();
+                file.node.group = group.clone();
+            }
+        }
+        for file in &mut result.payloads {
+            if file.path == format!("/usr/bin/{name}") {
+                file.node.user = user.clone();
+                file.node.group = group.clone();
+            }
+        }
+    }
     let package_path = dir.join(format!("{name}-{version}.ccs"));
     let signing_key = crate::commands::ccs::load_or_create_local_dev_key().unwrap();
     write_signed_current_ccs_package(&result, &package_path, &signing_key, true).unwrap();

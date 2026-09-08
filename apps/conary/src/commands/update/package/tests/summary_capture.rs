@@ -25,12 +25,29 @@ async fn update_summary_capture_child() {
         scenario
             .starts_with("sequence_")
             .then_some("z-summary-update < 2.0.0"),
+        scenario.starts_with("named_"),
     );
     if scenario == "mixed" {
-        add_candidate(&conn, temp.path(), "z-summary-failed", true, false, None);
+        add_candidate(
+            &conn,
+            temp.path(),
+            "z-summary-failed",
+            true,
+            false,
+            None,
+            false,
+        );
     }
     if scenario.starts_with("sequence_") {
-        add_candidate(&conn, temp.path(), "z-summary-update", false, false, None);
+        add_candidate(
+            &conn,
+            temp.path(),
+            "z-summary-update",
+            false,
+            false,
+            None,
+            false,
+        );
     }
     if scenario.starts_with("fallback_") {
         add_candidate(
@@ -40,8 +57,28 @@ async fn update_summary_capture_child() {
             false,
             false,
             Some("a-summary-update <= 2.0.0"),
+            false,
         );
         fixtures::add_failing_delta(&conn, temp.path(), scenario != "fallback_apply");
+    }
+    if scenario.starts_with("named_") {
+        let base = Trove::find_by_name(&conn, "test-runtime-base").unwrap()[0]
+            .id
+            .unwrap();
+        for (path, contents) in [
+            ("/etc/passwd", "root:x:0:0:root:/root:/bin/sh\n"),
+            ("/etc/group", "root:x:0:\n"),
+        ] {
+            crate::commands::test_helpers::insert_test_regular_file_with_parents(
+                &conn,
+                Path::new(&db_path),
+                path,
+                contents.as_bytes(),
+                0o644,
+                base,
+                None,
+            );
+        }
     }
     if scenario == "noop" {
         conn.execute(
@@ -64,7 +101,11 @@ async fn update_summary_capture_child() {
         false,
         matches!(
             scenario.as_str(),
-            "preview" | "relation_preview" | "sequence_preview" | "fallback_preview"
+            "preview"
+                | "relation_preview"
+                | "sequence_preview"
+                | "fallback_preview"
+                | "named_preview"
         ),
         SandboxMode::Always,
         None,
@@ -88,7 +129,7 @@ async fn update_summary_capture_child() {
                     crate::commands::update::outcome::UpdateOutcome::Planned { packages: 2 },
                 "sequence_apply" | "fallback_download" | "fallback_apply" =>
                     crate::commands::update::outcome::UpdateOutcome::Applied { packages: 2 },
-                "preview" | "relation_preview" =>
+                "preview" | "relation_preview" | "named_preview" =>
                     crate::commands::update::outcome::UpdateOutcome::Planned { packages: 1 },
                 "noop" => crate::commands::update::outcome::UpdateOutcome::NoChanges,
                 _ => crate::commands::update::outcome::UpdateOutcome::Applied { packages: 1 },
@@ -97,7 +138,12 @@ async fn update_summary_capture_child() {
     }
     if matches!(
         scenario.as_str(),
-        "preview" | "relation_preview" | "sequence_preview" | "fallback_preview" | "noop"
+        "preview"
+            | "relation_preview"
+            | "sequence_preview"
+            | "fallback_preview"
+            | "named_preview"
+            | "noop"
     ) {
         assert_eq!(crate::commands::test_helpers::database_rows(&conn), before);
     } else if scenario.starts_with("fallback_") {
@@ -115,6 +161,20 @@ async fn update_summary_capture_child() {
         assert_eq!(
             Trove::find_by_name(&conn, "a-summary-update").unwrap()[0].version,
             "2.0.0"
+        );
+    }
+    if scenario == "named_apply" {
+        let file =
+            conary_core::db::models::FileEntry::find_by_path(&conn, "/usr/bin/a-summary-update")
+                .unwrap()
+                .unwrap();
+        assert_eq!(file.node.uid, u64::from(unsafe { libc::geteuid() }));
+        assert_eq!(file.node.gid, u64::from(unsafe { libc::getegid() }));
+        assert_eq!(
+            file.node.source.user,
+            conary_core::payload::PayloadIdentity::Named {
+                name: "summary-late-user".into()
+            }
         );
     }
     if scenario == "sequence_apply" {
@@ -142,6 +202,8 @@ fn update_summaries_in_terminal_pipe_and_no_color() {
             "fallback_preview",
             "fallback_download",
             "fallback_apply",
+            "named_preview",
+            "named_apply",
             "apply",
             "pending",
             "mixed",
@@ -272,7 +334,11 @@ fn update_summaries_in_terminal_pipe_and_no_color() {
             }
             if matches!(
                 scenario,
-                "preview" | "relation_preview" | "sequence_preview" | "fallback_preview"
+                "preview"
+                    | "relation_preview"
+                    | "sequence_preview"
+                    | "fallback_preview"
+                    | "named_preview"
             ) {
                 assert!(!frame.contains("Generation:"), "{frame}");
                 assert!(!frame.contains("Applied package changes:"), "{frame}");

@@ -9,10 +9,19 @@ pub(super) fn add_candidate(
     fail: bool,
     relation: bool,
     replacement: Option<&str>,
+    named: bool,
 ) {
     let mut bundle = rpm_upgrade_bundle(name, "2.0.0");
     if fail {
         bundle.entries[0].body = "error('forced update summary lifecycle failure')\n".into();
+        bundle.entries[0].body_sha256 =
+            conary_core::hash::sha256_prefixed(bundle.entries[0].body.as_bytes());
+    }
+    if named {
+        let (uid, gid) = (unsafe { libc::geteuid() }, unsafe { libc::getegid() });
+        bundle.entries[0].body = format!(
+            "local p = assert(io.open('/etc/passwd', 'a'))\np:write('summary-late-user:x:{uid}:{gid}:fixture:/:/sbin/nologin\\n')\np:close()\nlocal g = assert(io.open('/etc/group', 'a'))\ng:write('summary-late-group:x:{gid}:\\n')\ng:close()\n"
+        );
         bundle.entries[0].body_sha256 =
             conary_core::hash::sha256_prefixed(bundle.entries[0].body.as_bytes());
     }
@@ -102,12 +111,13 @@ pub(super) fn add_candidate(
     } else {
         Vec::new()
     };
-    let path = build_test_ccs_package_with_relations(
+    let path = build_test_ccs_package_with_owners(
         &artifact_dir,
         name,
         "2.0.0",
         Some(bundle),
         relations,
+        named,
     );
     let bytes = std::fs::read(&path).unwrap();
     let (url, _) = serve_test_file(path);
