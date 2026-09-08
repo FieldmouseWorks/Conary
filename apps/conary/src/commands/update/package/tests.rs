@@ -657,3 +657,6 @@ fn mark_pending_changeset_rolled_back_leaves_applied_rows_alone() {
         conary_core::db::models::ChangesetStatus::Applied
     );
 }
+
+#[cfg(feature = "test-hooks")]
+mod summary_capture;

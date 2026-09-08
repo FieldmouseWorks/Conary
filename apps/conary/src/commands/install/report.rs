@@ -174,3 +174,6 @@ pub(super) fn batch_changes(
     }
     Ok(changes)
 }
+
+#[cfg(all(test, feature = "test-hooks"))]
+mod tests;
