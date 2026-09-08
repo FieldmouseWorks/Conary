@@ -107,6 +107,7 @@ fn removal_statistics_include_debian_config_purge() {
         VersionScheme::Debian,
     );
     trove.architecture = Some("amd64".into());
+    trove.debian_multi_arch = Some(conary_core::repository::dependency_model::DebianMultiArch::No);
     let id = trove.insert(&conn).unwrap();
     crate::commands::test_helpers::insert_test_regular_file_with_parents(
         &conn,
