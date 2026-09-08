@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-08
-revision: 84
+revision: 85
 summary: Compact workspace orientation index routing feature ownership, CLI diagnostics, package result summaries, and progress, and focused proof through agent-context
 ---
 
@@ -45,7 +45,7 @@ and safety invariant for that task.
 | --- | --- | --- |
 | `database-state` | Current schema, persisted states, rebuilds, and fallible row decoding | `docs/ARCHITECTURE.md` |
 | `dispatch` | CLI parsing, dispatch, command risk, and live-mutation labels | `docs/ARCHITECTURE.md` |
-| `cli-ui` | Durable diagnostics, collection selection/update and removal/rollback summaries, and transient progress coordination | `docs/operations/daily-driver-ux-matrix.md` |
+| `cli-ui` | Durable diagnostics, grouped package preview/apply and collection summaries, and transient progress coordination | `docs/operations/daily-driver-ux-matrix.md` |
 | `install` | Install, update, remove, rollback, scriptlets, and selected-root mutation | `docs/specs/foreign-package-lifecycle-contracts.md` |
 | `adopt` | Adoption, takeover, unadoption, and native-authority handoff | `docs/modules/source-selection.md` |
 | `model` | Declarative model diff, apply, lock, snapshot, and replatform planning | `docs/modules/source-selection.md` |

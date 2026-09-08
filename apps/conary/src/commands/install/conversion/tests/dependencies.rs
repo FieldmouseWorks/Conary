@@ -464,7 +464,20 @@ async fn repository_ccs_closure_runs_root_pretransaction_before_dependency_paylo
     .unwrap();
     assert!(preview_result.is_none());
     assert!(preview_report.commits.is_empty());
-    assert_eq!(preview_report.planned.len(), 2);
+    let mut planned_names: Vec<_> = preview_report
+        .planned
+        .iter()
+        .map(|change| match change {
+            super::super::super::report::InstallChange::Install(identity) => identity.name.as_str(),
+            other => {
+                panic!("fresh dependency closure preview contains unexpected change: {other:?}")
+            }
+        })
+        .collect();
+    planned_names.sort_unstable();
+    let mut expected_names = [dependency_name, root_name];
+    expected_names.sort_unstable();
+    assert_eq!(planned_names, expected_names);
     assert_eq!(
         crate::commands::test_helpers::database_rows(&conn),
         before_preview

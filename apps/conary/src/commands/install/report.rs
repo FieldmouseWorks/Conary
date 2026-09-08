@@ -193,3 +193,52 @@ pub(super) fn batch_changes(
 
 #[cfg(all(test, feature = "test-hooks"))]
 mod tests;
+
+#[cfg(test)]
+mod identity_tests {
+    use super::*;
+    use conary_core::repository::versioning::VersionScheme;
+
+    #[test]
+    fn applied_count_excludes_dependencies_and_respects_selected_identity_constraints() {
+        let installed = PackageIdentity {
+            name: "requested".into(),
+            version: "2.0.0".into(),
+            version_scheme: VersionScheme::Conary,
+            release: Some("7".into()),
+            architecture: Some("x86_64".into()),
+        };
+        let mut dependency = installed.clone();
+        dependency.name = "dependency".into();
+        let report = InstallReport {
+            planned: Vec::new(),
+            commits: vec![InstallCommit {
+                changes: vec![
+                    InstallChange::Install(installed.clone()),
+                    InstallChange::Install(dependency),
+                ],
+                changeset_id: 42,
+                file_records: 0,
+                publication: None,
+            }],
+        };
+        for (release, scheme, architecture, expected) in [
+            (None, VersionScheme::Conary, "x86_64", 1),
+            (Some("7"), VersionScheme::Conary, "x86_64", 1),
+            (Some("8"), VersionScheme::Conary, "x86_64", 0),
+            (Some("7"), VersionScheme::Rpm, "x86_64", 0),
+            (Some("7"), VersionScheme::Conary, "aarch64", 0),
+        ] {
+            let target = PackageIdentity {
+                release: release.map(str::to_owned),
+                version_scheme: scheme,
+                architecture: Some(architecture.into()),
+                ..installed.clone()
+            };
+            assert_eq!(
+                report.applied_targets(&std::collections::HashSet::from([target])),
+                expected
+            );
+        }
+    }
+}

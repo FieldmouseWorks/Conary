@@ -158,3 +158,50 @@ pub(crate) fn install_rollback_route(report: &InstallReport, db_path: &str) {
         )
     )));
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::commands::install_report::PackageIdentity;
+    use conary_core::repository::versioning::VersionScheme;
+
+    #[test]
+    fn shared_preview_retains_version_release_and_architecture_transitions() {
+        let before = PackageIdentity {
+            name: "demo".into(),
+            version: "1.0.0".into(),
+            version_scheme: VersionScheme::Conary,
+            release: Some("7".into()),
+            architecture: Some("aarch64".into()),
+        };
+        let after = PackageIdentity {
+            version: "2.0.0".into(),
+            release: Some("8".into()),
+            architecture: Some("x86_64".into()),
+            ..before.clone()
+        };
+        let rows = [
+            InstallChange::Update {
+                before: before.clone(),
+                after,
+            },
+            InstallChange::Remove(before.clone()),
+            InstallChange::Deconfigure(before),
+        ];
+        let lines = install_lines(&rows, true).join("\n");
+        let text = console::strip_ansi_codes(&lines);
+        for expected in [
+            "Planned package changes:",
+            "Update (1):",
+            "1.0.0 -> 2.0.0",
+            "7 -> 8",
+            "aarch64 -> x86_64",
+            "Remove (1):",
+            "Deconfigure (1):",
+        ] {
+            assert!(text.contains(expected), "{text}");
+        }
+        assert!(!text.contains("Applied"));
+        assert!(!text.contains("Generation"));
+    }
+}

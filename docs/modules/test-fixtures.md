@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-09-08
-revision: 44
-summary: Map fixture ownership, including stable boot-tool and failing EFI formatter interfaces, typed public and candidate profiles, attributable daily-driver same-name provides, configuration upgrade, payload topology, and snapshot-bound cross-source lifecycle proof
+revision: 45
+summary: Map fixture ownership, including command transaction captures, typed boot-tool interfaces, public and candidate profiles, and cross-source lifecycle proof
 ---
 
 # Test Fixtures And Proof Maps
@@ -727,6 +727,26 @@ Each fixture family should record:
   `conary-remi-deploy publish-test-artifact` operation after authenticated SSH
   staging. Update every active manifest to one version before accepting the
   gate.
+
+### cli-transaction-summary-captures
+
+- **Fixture name:** `cli-transaction-summary-captures`
+- **Owner:** `apps/conary/src/commands/install/report/tests.rs`,
+  `apps/conary/src/commands/update/package/tests/summary_capture.rs`, and
+  `apps/conary/src/ui/transaction_summary/capture.rs`.
+- **Authority source:** Parsed native/verified CCS identities, exact repository
+  selections, committed transaction results, and returned publication outcomes.
+- **Construction:** Disposable databases and selected roots with typed boot and
+  account fixtures; child test processes run real commands under pipes, terminals,
+  and `NO_COLOR`. Test hooks isolate mounting and force publication failure.
+- **Assertions:** Grouped preview/apply rows, exact before/after identities,
+  partial failure, publication state, database-scoped recovery, and cancellation.
+  `commands::test_helpers::database_rows` compares all persisted tables around
+  read-only or refused operations.
+- **Proof:** `cargo test -p conary --features test-hooks --lib summary` and
+  `cargo test -p conary --features test-hooks --lib commands::install`.
+- **Boundary:** These fixtures prove command behavior on disposable authority;
+  hosted native lifecycle and clean-host gates remain required for their surfaces.
 
 ## How To Use This Map
 
