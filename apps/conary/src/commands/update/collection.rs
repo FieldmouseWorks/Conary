@@ -7,7 +7,8 @@ use super::super::{SandboxMode, open_db};
 use super::adopted_authority::{
     AdoptedUpdateDecision, adopted_update_decision, native_manager_for_trove,
 };
-use super::cmd_update;
+use super::outcome::{CollectionUpdateEntry, CollectionUpdateStatus};
+use super::package::update_packages;
 use super::selection::{
     SecurityMetadataUnavailable, UpdateCandidateSelection, print_security_metadata_unavailable,
     security_metadata_unavailable_error, select_update_candidate,
@@ -78,7 +79,7 @@ pub async fn cmd_update_group(
     let members = CollectionMember::find_by_collection(&conn, collection_id)?;
 
     if members.is_empty() {
-        println!("Collection '{}' has no members.", name);
+        crate::ui::println!("Collection '{}' has no members.", name);
         return Ok(());
     }
 
@@ -100,7 +101,7 @@ pub async fn cmd_update_group(
 
         for trove in &installed {
             if trove.pinned {
-                println!(
+                crate::ui::println!(
                     "  {} is pinned, skipping",
                     CollectionUpdateTarget::from_trove(trove).display()
                 );
@@ -125,7 +126,7 @@ pub async fn cmd_update_group(
                             || "the recorded external owner".to_string(),
                             |manager| manager.update_command(&trove.name),
                         );
-                        println!(
+                        crate::ui::println!(
                             "  {} is adopted; external authority owns updates: {}",
                             CollectionUpdateTarget::from_trove(trove).display(),
                             guidance
@@ -163,7 +164,7 @@ pub async fn cmd_update_group(
     }
 
     if !not_installed.is_empty() {
-        println!(
+        crate::ui::println!(
             "Note: {} member(s) not installed: {}",
             not_installed.len(),
             not_installed.join(", ")
@@ -172,37 +173,42 @@ pub async fn cmd_update_group(
 
     if updates_to_apply.is_empty() {
         if adopted_updates_skipped {
-            println!(
+            crate::ui::println!(
                 "No Conary-managed updates available for collection '{}'; adopted package updates remain under native package-manager authority",
                 name
             );
-            println!(
+            crate::ui::println!(
                 "Run 'conary system adopt --refresh' after native package-manager changes before retrying Conary workflows."
             );
         } else if security_only {
-            println!("No security updates available for collection '{}'", name);
+            crate::ui::println!("No security updates available for collection '{}'", name);
         } else {
-            println!("All members of collection '{}' are up to date", name);
+            crate::ui::println!("All members of collection '{}' are up to date", name);
         }
         return Ok(());
     }
 
-    println!(
-        "Updating {} package(s) from collection '{}':",
+    crate::ui::println!(
+        "{} {} package request(s) from collection '{}':",
+        if dry_run { "Previewing" } else { "Updating" },
         updates_to_apply.len(),
         name
     );
     for target in &updates_to_apply {
-        println!("  {}", target.display());
+        crate::ui::println!("  {}", target.display());
     }
 
     // Update each package
-    let mut updated_count = 0;
+    let mut outcomes = Vec::with_capacity(updates_to_apply.len());
     let mut failed_count = 0;
 
     for target in &updates_to_apply {
-        println!("\nUpdating {}...", target.display());
-        match cmd_update(
+        crate::ui::println!(
+            "\n{} {}...",
+            if dry_run { "Previewing" } else { "Updating" },
+            target.display()
+        );
+        let status = match update_packages(
             Some(target.name.clone()),
             db_path,
             root,
@@ -216,20 +222,23 @@ pub async fn cmd_update_group(
         )
         .await
         {
-            Ok(()) => updated_count += 1,
-            Err(e) => {
-                eprintln!("  Failed to update {}: {}", target.display(), e);
+            Ok(outcome) => CollectionUpdateStatus::Completed(outcome),
+            Err(error) => {
+                crate::ui::diagnostics::report_error(&error);
                 failed_count += 1;
+                CollectionUpdateStatus::Failed
             }
-        }
+        };
+        outcomes.push(CollectionUpdateEntry {
+            target: target.display(),
+            status,
+        });
     }
 
-    println!("\nCollection update complete:");
-    println!("  Updated: {} package(s)", updated_count);
+    crate::ui::update_summary::collection_update_summary(name, dry_run, &outcomes);
     if failed_count > 0 {
-        println!("  Failed: {} package(s)", failed_count);
         return Err(anyhow::anyhow!(
-            "{} of {} package(s) in collection '{}' failed to update",
+            "{} of {} update request(s) in collection '{}' failed",
             failed_count,
             updates_to_apply.len(),
             name
@@ -316,5 +325,42 @@ mod tests {
             "collection update should preserve member variant selectors: {:?}",
             result
         );
+
+        let planned = update_packages(
+            Some("demo".into()),
+            &db_path,
+            "/",
+            false,
+            true,
+            SandboxMode::Always,
+            None,
+            true,
+            Some("1.0-1".into()),
+            Some("x86_64".into()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            planned,
+            super::super::outcome::UpdateOutcome::Planned { packages: 1 }
+        );
+        let conn = conary_core::db::open(&db_path).unwrap();
+        conn.execute("DELETE FROM repository_packages", []).unwrap();
+        drop(conn);
+        let unchanged = update_packages(
+            Some("demo".into()),
+            &db_path,
+            "/",
+            false,
+            false,
+            SandboxMode::Always,
+            None,
+            true,
+            Some("1.0-1".into()),
+            Some("x86_64".into()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(unchanged, super::super::outcome::UpdateOutcome::NoChanges);
     }
 }

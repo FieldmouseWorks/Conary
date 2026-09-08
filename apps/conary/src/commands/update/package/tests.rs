@@ -268,7 +268,7 @@ async fn update_executes_typed_rpm_lifecycle_and_commits_changeset() {
     let before_changesets = table_count(&conn, "changesets");
     drop(conn);
 
-    cmd_update(
+    let outcome = update_packages(
         Some("vim".to_string()),
         &db_path,
         root.path().to_str().unwrap(),
@@ -282,6 +282,10 @@ async fn update_executes_typed_rpm_lifecycle_and_commits_changeset() {
     )
     .await
     .expect("typed RPM lifecycle update should execute");
+    assert_eq!(
+        outcome,
+        super::super::outcome::UpdateOutcome::Applied { packages: 1 }
+    );
 
     let conn = crate::commands::open_db(&db_path).unwrap();
     assert!(

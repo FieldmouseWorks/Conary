@@ -264,6 +264,36 @@ pub async fn cmd_update(
     package_version: Option<String>,
     architecture: Option<String>,
 ) -> Result<()> {
+    update_packages(
+        package,
+        db_path,
+        root,
+        security_only,
+        dry_run,
+        sandbox_mode,
+        ownership,
+        yes,
+        package_version,
+        architecture,
+    )
+    .await
+    .map(|_| ())
+}
+
+/// Retain selection/execution outcomes for callers that summarize several requests.
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn update_packages(
+    package: Option<String>,
+    db_path: &str,
+    root: &str,
+    security_only: bool,
+    dry_run: bool,
+    sandbox_mode: SandboxMode,
+    ownership: Option<OwnershipMode>,
+    yes: bool,
+    package_version: Option<String>,
+    architecture: Option<String>,
+) -> Result<super::outcome::UpdateOutcome> {
     if security_only {
         info!("Checking for security updates only");
     } else {
@@ -292,7 +322,7 @@ pub async fn cmd_update(
 
     if installed_troves.is_empty() {
         crate::ui::println!("No packages to update");
-        return Ok(());
+        return Ok(super::outcome::UpdateOutcome::NoChanges);
     }
 
     // Collect updates with their repository info (needed for GPG verification)
@@ -418,7 +448,7 @@ pub async fn cmd_update(
             "{}",
             no_update_message(security_only, !adopted_skipped.is_empty())
         );
-        return Ok(());
+        return Ok(super::outcome::UpdateOutcome::NoChanges);
     }
 
     let security_count = updates_available
@@ -454,7 +484,9 @@ pub async fn cmd_update(
 
     if dry_run {
         crate::ui::println!("\nDry run: no updates were applied.");
-        return Ok(());
+        return Ok(super::outcome::UpdateOutcome::Planned {
+            packages: updates_available.len(),
+        });
     }
 
     // Phase 1: Check for deltas and categorize updates
@@ -492,7 +524,7 @@ pub async fn cmd_update(
     // Only create a changeset when there is actual work to do
     if total_requested == 0 {
         crate::ui::println!("No updates to apply.");
-        return Ok(());
+        return Ok(super::outcome::UpdateOutcome::NoChanges);
     }
 
     let delta_admission_updates = delta_updates
@@ -524,7 +556,7 @@ pub async fn cmd_update(
         changeset.insert(tx)
     })?;
 
-    let update_result: Result<()> = async {
+    let update_result: Result<super::outcome::UpdateOutcome> = async {
         // Phase 2: Download and apply deltas (sequential - requires CAS access)
         for (trove, repo_pkg, repo, delta_info) in delta_updates {
             crate::ui::println!("\nUpdating {} (delta)...", trove.name);
@@ -829,12 +861,17 @@ pub async fn cmd_update(
             crate::ui::println!("Bandwidth saved: {:.2} MB", saved_mb);
         }
 
-        Ok(())
+        let packages = usize::try_from(deltas_applied)? + usize::try_from(full_downloads)?;
+        Ok(if packages == 0 {
+            super::outcome::UpdateOutcome::NoChanges
+        } else {
+            super::outcome::UpdateOutcome::Applied { packages }
+        })
     }
     .await;
 
     match update_result {
-        Ok(()) => Ok(()),
+        Ok(outcome) => Ok(outcome),
         Err(err) => {
             if let Err(cleanup_err) = mark_pending_changeset_rolled_back(&mut conn, changeset_id) {
                 warn!(

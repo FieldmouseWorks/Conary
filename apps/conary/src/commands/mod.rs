@@ -61,6 +61,7 @@ mod triggers;
 pub mod trust;
 pub(crate) mod try_session;
 mod update;
+pub(crate) use update::outcome as update_outcome;
 mod update_channel;
 pub mod verify;
 
