@@ -59,7 +59,7 @@ fn deferred_retry_hint(follow_up: &crate::commands::DeferredFollowUp, db_path: &
     match kind {
         crate::commands::DeferredFollowUpKind::GenerationPublication => {
             format!(
-                " Retry: {}.",
+                " Retry: {}",
                 crate::commands::generation::publication::PublicationOutcome::retry_command(
                     db_path
                 )
@@ -68,7 +68,7 @@ fn deferred_retry_hint(follow_up: &crate::commands::DeferredFollowUp, db_path: &
         crate::commands::DeferredFollowUpKind::Other => follow_up
             .retry_command
             .as_ref()
-            .map(|command| format!(" Retry: {command}."))
+            .map(|command| format!(" Retry: {command}"))
             .unwrap_or_default(),
     }
 }
@@ -188,7 +188,7 @@ mod tests {
         assert_eq!(details.len(), 1);
         assert!(details[0].contains("deferred generation_publication failed"));
         assert!(details[0].contains("Retry: conary system generation publish --yes"));
-        assert!(details[0].contains("--db-path='/tmp/history.db'"));
+        assert!(details[0].ends_with("--db-path='/tmp/history.db'"));
         assert!(!details[0].contains("ignored stale command"));
     }
 
