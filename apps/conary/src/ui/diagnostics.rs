@@ -23,7 +23,18 @@ impl Diagnostic {
     }
 
     fn fact(mut self, label: &'static str, value: impl Into<String>) -> Self {
-        self.facts.push((label, value.into()));
+        // Paths and package-provided labels are data, never terminal commands
+        // or additional diagnostic rows. Keep the underlying error untouched.
+        let value = value.into();
+        let mut visible = String::with_capacity(value.len());
+        for character in value.chars() {
+            if character.is_control() {
+                visible.extend(character.escape_debug());
+            } else {
+                visible.push(character);
+            }
+        }
+        self.facts.push((label, visible));
         self
     }
 

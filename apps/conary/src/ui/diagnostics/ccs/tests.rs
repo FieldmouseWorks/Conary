@@ -140,3 +140,33 @@ fn capability_preflight_preserves_requirement_and_affected_path() {
     let root = preflight(&HostCapabilityPreflightError::InvalidExecutionRoot { root: "/".into() });
     assert_eq!(root.facts, [("Root", "/".into())]);
 }
+
+#[test]
+fn package_claims_cannot_inject_diagnostic_rows_or_terminal_controls() {
+    let claim = "release\nnote: forged action\r\x1b[2J";
+    let error = VerifyError::TrustViolation(TrustViolation::UntrustedSigner {
+        key_id: Some(claim.into()),
+        public_key: "key".into(),
+    });
+    let diagnostic = from_error(
+        &anyhow::Error::new(error.clone()).context(VerificationSubject {
+            path: PathBuf::from("/fixture/with\nnewline.ccs"),
+        }),
+    )
+    .unwrap();
+    let body = diagnostic.plain_body();
+    assert_eq!(
+        body.lines()
+            .filter(|line| line.starts_with("note:"))
+            .count(),
+        1
+    );
+    assert!(!body.contains('\x1b'));
+    assert!(!body.contains('\r'));
+    assert!(body.contains("release\\nnote: forged action"));
+    assert!(body.contains("with\\nnewline.ccs"));
+    let VerifyError::TrustViolation(TrustViolation::UntrustedSigner { key_id, .. }) = error else {
+        unreachable!()
+    };
+    assert_eq!(key_id.as_deref(), Some(claim));
+}

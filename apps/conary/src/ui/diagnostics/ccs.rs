@@ -17,9 +17,8 @@ pub(super) fn from_error(error: &anyhow::Error) -> Option<Diagnostic> {
         return None;
     };
     if let Some(subject) = error.downcast_ref::<VerificationSubject>() {
-        diagnostic
-            .facts
-            .insert(0, ("Package", subject.path.display().to_string()));
+        diagnostic = diagnostic.fact("Package", subject.path.display().to_string());
+        diagnostic.facts.rotate_right(1);
     }
     Some(diagnostic)
 }
