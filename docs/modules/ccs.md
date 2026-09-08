@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-09-05
-revision: 75
+last_updated: 2026-09-08
+revision: 76
 summary: Convert foreign packages through lossless source authority, decode-pass typed native digest evidence, one-pass authenticated payload layout derivation and object staging, atomic exact archive emission, typed pending-to-verified finalization, batched permanent-CAS durability, and typed native relation, lifecycle, and export contracts
 ---
 
@@ -16,6 +16,21 @@ Core inspection, authoring, verification, and native export return typed facts
 through `UntrustedPackageInspection`, `BuildResult`, `VerifiedCcsArchive`, and
 `LossReport`. OCI export returns `OciExportReport` with the written archive
 path, package names, and layer size. These reports do not print to a terminal.
+
+Verification refusals live in `verify/errors.rs`: `VerifyError` carries distinct
+`TrustViolation` facts and `VerificationSubject` retains the requested archive
+path through anyhow context. `TrustPolicySubject` retains the policy file path
+when its configured keys fail validation. Claimed key IDs remain untrusted labels; exact
+public keys determine trust. Timestamp policy failures retain timestamp and age
+limits, with unsigned comparison across the full configured `u64` range.
+`V3ValidationError` survives both document and streaming readers without being
+converted to text. These error types grant no verified-archive capability and
+introduce no persisted schema change. Verifier unit tests live in
+`verify/tests.rs`, alongside the streaming tests under `verify/stream/tests.rs`.
+
+CLI refusal presentation belongs to `apps/conary/src/ui/diagnostics/ccs.rs`,
+including existing typed host-capability preflight failures. Successful
+`ccs verify` prints the package path and verified facts only after verification.
 
 CLI presentation belongs to `apps/conary/src/commands/ccs/inspect/render.rs`,
 `apps/conary/src/commands/ccs/build/render.rs`, and the owning verification and

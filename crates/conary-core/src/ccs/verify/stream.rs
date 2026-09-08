@@ -321,8 +321,7 @@ fn read_authority_entry(
         "MANIFEST",
     )?;
     let authority = CCS_BUDGET.decode_authority(&raw)?;
-    let census = crate::ccs::v3::authority_census(&authority)
-        .map_err(|error| VerifyError::PackageError(format!("invalid CCS v3 MANIFEST: {error}")))?;
+    let census = crate::ccs::v3::authority_census(&authority)?;
     CCS_BUDGET.admit_encoded_authority(&census, raw.len() as u64)?;
     state.census = Some(census);
     state.manifest = Some(raw);

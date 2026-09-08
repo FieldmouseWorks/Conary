@@ -24,10 +24,10 @@ pub fn read_authority_document(
 ) -> Result<ReadAuthorityV3> {
     let authority =
         AuthorityDocumentV3::from_cbor(raw_manifest).context("decode CCS v3 MANIFEST")?;
-    validate_authority(&authority).map_err(|error| anyhow::anyhow!("{error}"))?;
+    validate_authority(&authority)?;
     let signature_raw = signature_raw.ok_or(VerifyError::NotSigned)?;
-    let signature: PackageSignature =
-        serde_json::from_str(signature_raw).context("parse MANIFEST.sig")?;
+    let signature: PackageSignature = serde_json::from_str(signature_raw)
+        .map_err(|error| VerifyError::InvalidSignatureFormat(error.to_string()))?;
     verify_v3_signature(raw_manifest, &signature, policy)?;
     verify_debug_toml_hash(&authority, toml_raw)?;
     validate_debug_toml(&authority, toml_raw)?;
@@ -364,6 +364,11 @@ description = "hello"
             &policy,
         )
         .unwrap_err();
-        assert!(format!("{error:#}").contains("unsupported algorithm"));
+        assert_eq!(
+            error.downcast_ref::<VerifyError>(),
+            Some(&VerifyError::UnsupportedAlgorithm {
+                algorithm: "rsa".to_owned()
+            })
+        );
     }
 }

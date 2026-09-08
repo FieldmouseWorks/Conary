@@ -411,18 +411,19 @@ fn pending_conversion_rejects_archive_tampering_before_finalization() {
     let pending = converter
         .author_payload(&metadata, payload.files(), "rpm", &checksum)
         .unwrap();
-    std::fs::write(
-        pending.unverified_package_path(),
-        b"tampered pending archive",
-    )
-    .unwrap();
+    let path = pending.unverified_package_path().to_path_buf();
+    std::fs::write(&path, b"tampered pending archive").unwrap();
 
     let error = converter.finalize(pending).unwrap_err();
 
-    assert!(
-        format!("{error:#}").contains("verify streaming CCS v3 archive"),
-        "{error:#}"
+    assert_eq!(
+        error
+            .downcast_ref::<crate::ccs::verify::VerificationSubject>()
+            .unwrap()
+            .path,
+        path
     );
+    assert_eq!(std::fs::read(path).unwrap(), b"tampered pending archive");
 }
 
 #[test]

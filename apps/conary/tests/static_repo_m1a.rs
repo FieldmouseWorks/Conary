@@ -271,10 +271,7 @@ fn m1a_unsigned_static_package_fails_install() {
     assert_success(&fixture.sync());
 
     let output = fixture.install();
-    assert_failure_contains(
-        &output,
-        &["CCS package authority verification", "not signed"],
-    );
+    assert_failure_contains(&output, &["error: CCS package is not signed.", "Package:"]);
 }
 
 #[test]

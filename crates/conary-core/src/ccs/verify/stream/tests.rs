@@ -554,3 +554,30 @@ fn signed_object_authority_uses_lowercase_sha256_and_u64_sizes() {
     let error = expected_objects(&authority).unwrap_err();
     assert!(format!("{error:#}").contains("canonical lowercase SHA-256"));
 }
+
+#[test]
+fn streamed_invalid_authority_preserves_diagnostics_and_input_path() {
+    let (temp, mut entries, policy, _) = fixture();
+    let manifest = entries
+        .iter_mut()
+        .find(|entry| entry.path == "MANIFEST")
+        .unwrap();
+    let mut authority = CCS_BUDGET.decode_authority(&manifest.content).unwrap();
+    authority.format_version = 999;
+    let expected = crate::ccs::v3::validate_authority(&authority).unwrap_err();
+    manifest.content = authority.to_cbor().unwrap();
+    let path = temp.path().join("invalid-authority.ccs");
+    write_fixture(&path, &entries);
+    let error = crate::ccs::verify::verify_package(&path, &policy).unwrap_err();
+    assert_eq!(
+        error.downcast_ref::<crate::ccs::v3::V3ValidationError>(),
+        Some(&expected)
+    );
+    assert_eq!(
+        error
+            .downcast_ref::<crate::ccs::verify::VerificationSubject>()
+            .unwrap()
+            .path,
+        path
+    );
+}

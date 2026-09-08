@@ -62,14 +62,10 @@ pub fn cmd_ccs_verify(package: &str, policy_path: Option<String>) -> Result<()> 
         anyhow::bail!("Package not found: {}", package);
     }
 
-    println!("Verifying: {}", path.display());
-    println!();
-
     // Load or create trust policy
     let policy = if let Some(policy_file) = policy_path {
         TrustPolicy::from_file(Path::new(&policy_file)).context("Failed to load trust policy")?
     } else if let Some(local_policy) = super::local_dev::local_dev_trust_policy()? {
-        println!("Using local-dev CCS trust policy for verification.");
         local_policy
     } else {
         anyhow::bail!("CCS verification requires --policy or an initialized local-dev signing key");
@@ -78,7 +74,8 @@ pub fn cmd_ccs_verify(package: &str, policy_path: Option<String>) -> Result<()> 
     // Run verification
     let result = verify::verify_package(path, &policy).context("Verification failed")?;
 
-    // Print results
+    // Print results only after verification succeeds.
+    crate::ui::field("Package", &path.display().to_string());
     crate::ui::row(
         crate::ui::Status::Ok,
         &[&format!(
