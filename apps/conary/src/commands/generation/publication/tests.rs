@@ -15,7 +15,7 @@ use std::path::Path;
 #[test]
 fn retry_command_uses_parameterless_publish() {
     assert_eq!(
-        PublicationOutcome::default_retry_command(),
+        PublicationOutcome::retry_command(ConaryRuntimeRoot::default().db_path().to_str().unwrap()),
         "conary system generation publish --yes"
     );
 }

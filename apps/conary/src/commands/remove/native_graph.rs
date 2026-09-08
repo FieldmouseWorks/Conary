@@ -17,6 +17,8 @@ use std::path::PathBuf;
 pub(crate) struct GraphRemoveResult {
     pub(crate) removal: RemoveInnerResult,
     pub(crate) stats: crate::commands::LiveRootStats,
+    pub(crate) changeset_id: i64,
+    pub(crate) publication: crate::commands::generation::publication::PublicationOutcome,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -170,10 +172,12 @@ fn execute_selected_root_graph(
                 let plan = purge_plan
                     .take()
                     .context("Debian purge boundary has no captured conffile plan")?;
-                if output.is_none() {
-                    bail!("Debian purge ran before ordinary payload removal");
-                }
-                selected.apply_remove_paths(&plan.remove_paths)?;
+                let (_, stats) = output
+                    .as_mut()
+                    .context("Debian purge ran before ordinary payload removal")?;
+                let purge_stats = selected.apply_remove_paths(&plan.remove_paths)?;
+                stats.files_removed += purge_stats.files_removed;
+                stats.dirs_removed += purge_stats.dirs_removed;
                 plan.delete_rows(conn)?;
                 Ok(())
             }
@@ -230,14 +234,16 @@ fn execute_selected_root_graph(
             changeset_id,
             crate::commands::publication_deferred_follow_up(
                 "generation publication is pending".to_string(),
+                db_path,
             ),
         )?;
-        crate::commands::generation::publication::warn_if_publication_pending(
-            changeset_id,
-            &outcome,
-        );
     }
-    Ok(GraphRemoveResult { removal, stats })
+    Ok(GraphRemoveResult {
+        removal,
+        stats,
+        changeset_id,
+        publication: outcome,
+    })
 }
 
 #[cfg(test)]

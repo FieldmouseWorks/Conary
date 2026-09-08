@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-09-08
-revision: 10
-summary: Daily-driver CLI routes, coordinated progress, typed first-use and CCS verification diagnostics, strict verification JSON, truthful collection selection and update outcomes, and focused output proof
+revision: 13
+summary: Daily-driver CLI routes, grouped removal and changeset-rollback results with publication and recovery facts, coordinated progress, typed diagnostics, and truthful collection outcomes
 ---
 
 # Daily-Driver UX Matrix
@@ -211,7 +211,60 @@ security-metadata refusals, comparing every database table before and after.
 The UI proof distinguishes member counts from installed variant counts. Update
 unit tests prove no-change/preview/apply outcomes against real selection and
 execution; UI tests cover mixed results and partial-failure wording. Grouped
-install/remove/rollback tables and generation/recovery closing rows remain #132.
+install/update tables and remaining generation/recovery surfaces remain #132.
+
+## Removal And Changeset Rollback Results
+
+`apps/conary/src/ui/transaction_summary.rs` groups committed removals and
+restores into one table. Each row preserves package name, version, separate CCS
+release, and architecture; absent optional identity fields use `-`. Displayed
+identity values escape control characters. Removal statistics describe selected-root
+file and directory changes, including Debian’s separate conffile purge stage, while rollback's restored file count describes database
+records, not physical writes or recovered disk space.
+
+The old removal frame began `Removed package: ...`; rollback scattered removed
+and restored identities around `Rollback complete`, even when publication remained
+pending. The applied frame now distinguishes the reversed forward mutation from
+the compensating changeset and reports only the returned publication outcome:
+
+```text
+Applied package changes:
+  Restored (1):
+    Package          Version  CCS release  Architecture
+    summary-fixture  2.0.0    7            x86_64
+  Reversed changeset: 1
+  Restored file records: 0
+  Changeset: 2
+  Generation: 1 published
+note: Inspect history: conary system history --db-path='<fixture>/conary.db'
+```
+
+A pending outcome instead says `Generation: publication pending`, followed by the
+single existing warning with its cause and publication retry. Persisted deferred
+follow-ups use the same scoped retry renderer. History regenerates publication
+guidance for the database it opened, ignoring obsolete stored retry text;
+`system generation pending` uses that same context. Retry and history
+commands retain the selected database, with shell quoting for ordinary paths;
+control-containing paths require the original path in an explicit placeholder.
+Top-level CLI removal also gives the changeset-rollback request, after publication
+when pending. Nested removals used by autoremove, model apply, and automation
+retain their result and history link but leave final rollback guidance to the
+enclosing operation; later mutations can make an earlier removal ineligible.
+The rollback command retains its eligibility checks; a compensating rollback row
+is never offered as another forward mutation to reverse. A published generation
+is not a claim that the running system has activated it.
+
+`cargo test -p conary --lib ui::transaction_summary --features test-hooks` captures
+real removal and rollback command execution in terminals, pipes, and `NO_COLOR`,
+including forced publication failure, precommit refusals, and a two-package
+autoremove that must not advertise stale per-package rollback commands. Pending captures also
+verify persisted retry guidance and read-only history/pending output for the same
+database. It checks resulting
+installed state, rollback lineage, publication debt, exact identity rows, and the
+absence of applied summaries on refused operations. Pure rendering tests cover
+mixed remove/restore groups, control characters, missing generation facts, and
+shell argument preservation. Removal preview remains #642; install/update grouping
+and other generation command frames remain #132.
 
 ## Ranked UI Slices
 

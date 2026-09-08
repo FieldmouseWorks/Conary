@@ -6,12 +6,12 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use tracing::info;
 
-use super::types::{RemoveInnerResult, RemoveLifecycleOptions};
+use super::types::RemoveLifecycleOptions;
 use crate::commands::progress::RemoveProgress;
 use crate::commands::{InstalledPackageSelector, SandboxMode, open_db, resolve_installed_package};
+use crate::ui::transaction_summary::RemovalOutput;
 
-/// Remove an installed package
-#[allow(clippy::too_many_arguments)]
+/// Remove a package within an enclosing operation. Its caller owns final recovery guidance.
 pub fn cmd_remove(
     package_name: &str,
     db_path: &str,
@@ -19,6 +19,46 @@ pub fn cmd_remove(
     architecture: Option<String>,
     sandbox_mode: SandboxMode,
     purge: bool,
+) -> Result<()> {
+    remove_with_output(
+        package_name,
+        db_path,
+        version,
+        architecture,
+        sandbox_mode,
+        purge,
+        RemovalOutput::Nested,
+    )
+}
+
+/// Render final rollback guidance only at the top-level CLI operation boundary.
+pub(crate) fn cmd_remove_cli(
+    package_name: &str,
+    db_path: &str,
+    version: Option<String>,
+    architecture: Option<String>,
+    sandbox_mode: SandboxMode,
+    purge: bool,
+) -> Result<()> {
+    remove_with_output(
+        package_name,
+        db_path,
+        version,
+        architecture,
+        sandbox_mode,
+        purge,
+        RemovalOutput::Command,
+    )
+}
+
+fn remove_with_output(
+    package_name: &str,
+    db_path: &str,
+    version: Option<String>,
+    architecture: Option<String>,
+    sandbox_mode: SandboxMode,
+    purge: bool,
+    output: RemovalOutput,
 ) -> Result<()> {
     info!("Removing package: {}", package_name);
     crate::ui::println!("Removing package: {}", package_name);
@@ -95,28 +135,19 @@ pub fn cmd_remove(
         &progress,
     )?;
     progress.clear();
-    print_remove_summary(&graph_result.removal, &graph_result.stats);
+    crate::ui::transaction_summary::removal_summary(
+        &graph_result.removal.trove,
+        &graph_result.stats,
+        graph_result.changeset_id,
+        &graph_result.publication,
+        db_path,
+        output,
+    );
+    crate::commands::generation::publication::warn_if_publication_pending(
+        graph_result.changeset_id,
+        &graph_result.publication,
+    );
     Ok(())
-}
-
-fn print_remove_summary(remove_result: &RemoveInnerResult, stats: &crate::commands::LiveRootStats) {
-    crate::ui::println!(
-        "Removed package: {} version {}",
-        remove_result.trove.name,
-        remove_result.trove.version
-    );
-    crate::ui::println!(
-        "  Architecture: {}",
-        remove_result
-            .trove
-            .architecture
-            .as_deref()
-            .unwrap_or("none")
-    );
-    crate::ui::println!("  Files removed: {}", stats.files_removed);
-    if stats.dirs_removed > 0 {
-        crate::ui::println!("  Directories removed: {}", stats.dirs_removed);
-    }
 }
 
 #[cfg(test)]

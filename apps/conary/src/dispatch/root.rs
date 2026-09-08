@@ -131,7 +131,7 @@ pub(super) async fn dispatch_command(command: Option<Commands>) -> Result<()> {
                 LiveMutationClass::CurrentlyLiveEvenWithRootArguments,
                 false,
             )?;
-            commands::cmd_remove(
+            commands::cmd_remove_cli(
                 &package_name,
                 &common.db.db_path,
                 version,

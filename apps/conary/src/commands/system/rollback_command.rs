@@ -3,6 +3,7 @@
 //! Serialized, retryable changeset rollback.
 
 use super::rollback_restore;
+use crate::ui::println;
 use anyhow::{Context, Result, anyhow, bail};
 use conary_core::db::models::{
     Changeset, ChangesetKind, ChangesetStatus, GenerationPublication, PackageTransactionStaging,
@@ -178,33 +179,22 @@ where
             committed.rollback_id,
             crate::commands::publication_deferred_follow_up(
                 "rollback generation publication is pending".to_string(),
+                db_path,
             ),
         )?;
-        crate::commands::generation::publication::warn_if_publication_pending(
-            committed.rollback_id,
-            &publication,
-        );
     }
-
-    for trove in &committed.removed_troves {
-        println!(
-            "  Removed reverted package {} {}",
-            trove.name, trove.version
-        );
-    }
-    println!(
-        "Rollback complete. Changeset {} has been reversed.",
-        changeset_id
+    crate::ui::transaction_summary::rollback_summary(
+        changeset_id,
+        committed.rollback_id,
+        &committed.removed_troves,
+        &committed.snapshots,
+        &publication,
+        db_path,
     );
-    for snapshot in &committed.snapshots {
-        println!("  Restored {} version {}", snapshot.name, snapshot.version);
-    }
-    let restored_file_count: usize = committed
-        .snapshots
-        .iter()
-        .map(|snapshot| snapshot.files.len())
-        .sum();
-    println!("  Files in DB: {}", restored_file_count);
+    crate::commands::generation::publication::warn_if_publication_pending(
+        committed.rollback_id,
+        &publication,
+    );
     Ok(())
 }
 

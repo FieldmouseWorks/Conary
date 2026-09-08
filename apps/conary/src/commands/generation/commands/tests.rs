@@ -230,7 +230,8 @@ fn explicit_publication_failure_reports_recorded_cause_and_retry() {
     };
 
     assert_eq!(
-        pending_publication_error("Generation publication", &outcome).to_string(),
+        pending_publication_error("Generation publication", &outcome, "/tmp/recovery.db")
+            .to_string(),
         "Generation publication is still pending.\n\
          Cause: exact generation builder failure\n\
          Retry with: conary system generation publish --yes"

@@ -35,12 +35,14 @@ pub(crate) fn classify_deferred_follow_up_kind(
     }
 }
 
-pub(crate) fn publication_deferred_follow_up(message: String) -> DeferredFollowUp {
+pub(crate) fn publication_deferred_follow_up(message: String, db_path: &str) -> DeferredFollowUp {
     DeferredFollowUp {
         kind: "generation_publication".to_string(),
         status: "pending".to_string(),
         message,
-        retry_command: Some("conary system generation publish --yes".to_string()),
+        retry_command: Some(
+            super::generation::publication::PublicationOutcome::retry_command(db_path),
+        ),
     }
 }
 
@@ -418,12 +420,12 @@ mod tests {
 
     #[test]
     fn publication_deferred_follow_up_uses_publish_retry() {
-        let follow_up = publication_deferred_follow_up("forced".to_string());
+        let follow_up = publication_deferred_follow_up("forced".to_string(), "/tmp/recovery.db");
         assert_eq!(follow_up.kind, "generation_publication");
         assert_eq!(follow_up.status, "pending");
         assert_eq!(
             follow_up.retry_command.as_deref(),
-            Some("conary system generation publish --yes")
+            Some("conary system generation publish --yes --db-path='/tmp/recovery.db'")
         );
     }
 
@@ -573,7 +575,7 @@ mod tests {
         let error = append_deferred_follow_up_metadata(
             &conn,
             changeset_id,
-            publication_deferred_follow_up("pending".to_string()),
+            publication_deferred_follow_up("pending".to_string(), db_path.to_str().unwrap()),
         )
         .expect_err("corrupt persisted metadata must stop the append");
         assert!(error.to_string().contains("expected ident"));

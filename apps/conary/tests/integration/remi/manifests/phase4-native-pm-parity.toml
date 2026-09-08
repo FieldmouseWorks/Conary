@@ -433,7 +433,8 @@ run = "CONARY_TEST_SKIP_GENERATION_MOUNT=1 ${CONARY_BIN} remove phase4-runtime-f
 
 [test.step.assert]
 exit_code = 0
-stdout_contains = "Removed package: phase4-runtime-fixture version ${native_update_version}"
+stdout_contains_all = ["Applied package changes:\n  Removed (1):", "phase4-runtime-fixture  ${native_update_version}", "${native_arch}\n", "  Changeset: ", "  Generation: ", " published\n", "note: Request rollback: conary system state rollback "]
+stdout_not_contains = "publication pending"
 
 [[test.step]]
 run = "/opt/remi-tests/fixtures/native/assert-selected-generation.py --root /conary --absent /usr/bin/phase4-runtime-fixture --absent /etc/phase4-runtime-fixture/app.conf --absent /usr/include/phase4-runtime-fixture/api.h"
