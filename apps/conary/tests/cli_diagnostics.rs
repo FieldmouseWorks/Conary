@@ -92,3 +92,6 @@ fn terminal_database_error_preserves_the_same_facts_with_and_without_color() {
         assert_eq!(std::fs::read_dir(temp.path()).unwrap().count(), 0);
     }
 }
+
+#[path = "cli_diagnostics/verification.rs"]
+mod verification;
