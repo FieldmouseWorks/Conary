@@ -739,7 +739,8 @@ run = "CONARY_TEST_SKIP_GENERATION_MOUNT=1 ${CONARY_BIN} remove phase4-daily-dri
 
 [test.step.assert]
 exit_code = 0
-stdout_contains = "Removed package: phase4-daily-driver-corpus version ${native_corpus_update_version}"
+stdout_contains_all = ["Applied package changes:\n  Removed (1):", "phase4-daily-driver-corpus  ${native_corpus_update_version}", "${native_arch}\n", "  Changeset: ", "  Generation: ", " published\n", "note: Request rollback: conary system state rollback "]
+stdout_not_contains = "publication pending"
 
 [[test.step]]
 run = "/opt/remi-tests/fixtures/native/assert-selected-generation.py --root /conary --expect-sha256 /var/lib/phase4-corpus/remove.marker=e1f79758cc42e6fe6037941205d1fbc37f5780f13aa077d0ba8287fd93cecd52 --absent /opt --absent /usr/bin/phase4-corpus --absent /usr/bin/phase4-corpus-alt --absent /usr/bin/phase4-corpus-link --absent /usr/lib/phase4-corpus/state --absent /usr/lib/phase4-corpus/hardlink-anchor --absent /usr/lib/phase4-corpus/hardlink-copy --absent /etc/phase4-corpus/app.conf --absent /etc/phase4-corpus/app-local.conf --absent /etc/phase4-corpus/app-deleted.conf --absent /usr/lib/systemd/system/phase4-corpus.service --absent /usr/lib/kernel/install.d/95-phase4-corpus.install --absent /usr/share/phase4-corpus/large-payload.bin"
