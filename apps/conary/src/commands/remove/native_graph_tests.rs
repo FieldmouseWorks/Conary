@@ -86,3 +86,85 @@ fn remove_graph_resolves_package_identity_under_the_mutation_lock() {
         "2.0.0"
     );
 }
+
+#[test]
+#[cfg(feature = "test-hooks")]
+fn removal_statistics_include_debian_config_purge() {
+    use conary_core::ccs::native_lifecycle::{
+        NATIVE_LIFECYCLE_SCHEMA_REVISION, NATIVE_LIFECYCLE_SCHEMA_V1, NativeLifecycleBundle,
+        ScriptletFidelity, SourceFormat, VersionScheme as LifecycleVersionScheme,
+    };
+    use conary_core::db::models::{ConfigFile, ConfigSource, InstalledNativeLifecycleBundle};
+
+    let _mount = crate::commands::composefs_ops::test_mount_skip_guard();
+    let (_temp, db_path) = crate::commands::test_helpers::create_test_db();
+    crate::commands::test_helpers::seed_test_bootable_runtime(std::path::Path::new(&db_path));
+    let conn = conary_core::db::open(&db_path).unwrap();
+    let mut trove = Trove::new(
+        "purge-fixture".into(),
+        "1.0-1".into(),
+        TroveType::Package,
+        VersionScheme::Debian,
+    );
+    trove.architecture = Some("amd64".into());
+    let id = trove.insert(&conn).unwrap();
+    crate::commands::test_helpers::insert_test_regular_file_with_parents(
+        &conn,
+        std::path::Path::new(&db_path),
+        "/etc/purge-fixture.conf",
+        b"configuration",
+        0o644,
+        id,
+        None,
+    );
+    let mut config = ConfigFile::new(
+        "/etc/purge-fixture.conf".into(),
+        id,
+        conary_core::hash::sha256(b"configuration"),
+    );
+    config.source = ConfigSource::Deb;
+    config.insert(&conn).unwrap();
+    let bundle = NativeLifecycleBundle {
+        schema: NATIVE_LIFECYCLE_SCHEMA_V1.into(),
+        schema_revision: NATIVE_LIFECYCLE_SCHEMA_REVISION,
+        source_format: SourceFormat::Deb,
+        source_family: "debian".into(),
+        source_profile: Some("ubuntu-26.04".into()),
+        source_release: Some("26.04".into()),
+        source_arch: Some("amd64".into()),
+        source_package: trove.name.clone(),
+        source_version: trove.version.clone(),
+        source_checksum: None,
+        version_scheme: LifecycleVersionScheme::Deb,
+        conversion_tool: "test".into(),
+        conversion_tool_version: "1".into(),
+        conversion_policy: "typed-removal-test".into(),
+        evidence_digest: None,
+        scriptlet_fidelity: ScriptletFidelity::NativeLifecycle,
+        entries: Vec::new(),
+    };
+    InstalledNativeLifecycleBundle::new(id, None, &bundle)
+        .unwrap()
+        .upsert(&conn)
+        .unwrap();
+    let result = execute_installed_trove_remove_graph(
+        &conn,
+        &trove,
+        &db_path,
+        &trove.name,
+        RemoveLifecycleOptions::new(crate::commands::SandboxMode::Always)
+            .with_purge_config_files(true),
+        &RemoveProgress::new(&trove.name),
+    )
+    .unwrap();
+    assert!(Trove::find_by_id(&conn, id).unwrap().is_none());
+    assert!(
+        ConfigFile::find_by_path(&conn, "/etc/purge-fixture.conf")
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        result.stats.files_removed, 1,
+        "the separate native purge stage must contribute its actual removals"
+    );
+}
