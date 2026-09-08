@@ -104,7 +104,7 @@ async fn install_summary_capture_child() {
     ] {
         test_helpers::insert_test_regular_file_with_parents(
             &conn,
-            &db_path,
+            Path::new(&db_path),
             path,
             contents.as_bytes(),
             0o644,
@@ -134,7 +134,17 @@ async fn install_summary_capture_child() {
         );
         dep.architecture = Some("x86_64".into());
         dep.source_profile = Some("fedora-44".into());
-        dep.insert(&conn).unwrap();
+        let id = dep.insert(&conn).unwrap();
+        conary_core::db::models::RepositoryProvide::new(
+            id,
+            "summary-dependency".into(),
+            Some("1.0.0-1".into()),
+            "package".into(),
+            None,
+            VersionScheme::Rpm,
+        )
+        .insert(&conn)
+        .unwrap();
     }
     if scenario.contains("upgrade") || failed {
         let version = if failed {

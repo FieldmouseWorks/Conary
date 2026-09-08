@@ -74,8 +74,8 @@ pub(super) fn no_update_message(
         (false, true) => {
             "No Conary-managed updates available; adopted package updates remain under recorded external authority"
         }
-        (true, false) => "No security updates available",
-        (false, false) => "All packages are up to date",
+        (true, false) => "No eligible security updates selected.",
+        (false, false) => "No eligible updates selected.",
     }
 }
 

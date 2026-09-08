@@ -207,6 +207,8 @@ fn update_summaries_in_terminal_pipe_and_no_color() {
             let frame = console::strip_ansi_codes(frame);
             if scenario == "noop" {
                 assert!(frame.contains("pinned"), "{frame}");
+                assert!(frame.contains("No eligible updates selected."), "{frame}");
+                assert!(!frame.contains("up to date"), "{frame}");
                 assert!(!frame.contains("Applied package changes:"), "{frame}");
                 continue;
             }
