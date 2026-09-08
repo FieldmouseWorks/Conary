@@ -222,7 +222,8 @@ these observations to the same package table used for removal and rollback.
 A preview uses `Planned package changes` with `Install`, `Update`, `Remove`, and
 `Deconfigure` groups; committed results use `Applied package changes`. Update
 rows retain before/after versions and CCS releases, plus architecture transitions
-when those differ. An unspecified repository CCS release remains `-` in the
+when those differ. Relation-driven removals retain their typed relation kind in
+a `Reason` column. An unspecified repository CCS release remains `-` in the
 selection preview; the applied row names the verified artifact's actual release.
 
 Previously, native/CCS install printed independent `Installed package` fields,

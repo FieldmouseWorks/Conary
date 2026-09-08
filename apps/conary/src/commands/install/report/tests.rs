@@ -14,6 +14,9 @@ fn artifact(dir: &Path, name: &str, version: &str, ccs: bool, dependency: bool) 
     if !ccs {
         let mut builder =
             rpm::PackageBuilder::new(name, version, "MIT", "x86_64", "summary fixture");
+        if obsolete {
+            builder.obsoletes(rpm::Dependency::any("summary-obsolete"));
+        }
         if dependency {
             builder.requires(rpm::Dependency::any("summary-dependency"));
         }
@@ -88,6 +91,29 @@ async fn install_summary_capture_child() {
     let failed = scenario.contains("failed");
     let canceled = scenario == "canceled_native";
     let package = artifact(temp.path(), "summary-incoming", "2.0.0", ccs, canceled);
+    if scenario.contains("relation") {
+        let old_package = artifact(
+            temp.path(),
+            "summary-obsolete",
+            "1.0.0",
+            false,
+            false,
+            false,
+        );
+        crate::commands::cmd_install(
+            old_package.to_str().unwrap(),
+            InstallOptions {
+                db_path: &db_path,
+                root: temp.path().to_str().unwrap(),
+                no_deps: true,
+                yes: true,
+                sandbox_mode: SandboxMode::Always,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    }
     if canceled {
         let repository = test_helpers::insert_test_static_ccs_repository(
             &conn,
@@ -149,7 +175,7 @@ async fn install_summary_capture_child() {
     let before = crate::commands::test_helpers::database_rows(&conn);
     println!("FRAME_BEGIN");
     let result = if scenario.starts_with("batch") {
-        let second = artifact(temp.path(), "summary-second", "3.0.0", false, false);
+        let second = artifact(temp.path(), "summary-second", "3.0.0", false, false, false);
         let packages = [&package, &second]
             .into_iter()
             .map(|path| {
@@ -232,6 +258,8 @@ fn install_summary_commands_in_terminal_pipe_and_no_color() {
             "batch_preview",
             "batch_pending",
             "canceled_native",
+            "relation_native",
+            "relation_preview_native",
         ] {
             let test = "commands::install::report::tests::install_summary_capture_child";
             let mut command = if tty {
@@ -318,6 +346,11 @@ fn install_summary_commands_in_terminal_pipe_and_no_color() {
             if scenario.contains("upgrade") {
                 assert!(frame.contains(" -> "), "{frame}");
                 assert!(frame.contains("Updated (1):"), "{frame}");
+            }
+            if scenario.contains("relation") {
+                assert!(frame.contains("summary-obsolete"), "{frame}");
+                assert!(frame.contains("Reason"), "{frame}");
+                assert!(frame.contains("obsoletes"), "{frame}");
             }
             if scenario.starts_with("batch") {
                 assert!(frame.contains("summary-second"), "{frame}");

@@ -51,6 +51,7 @@ fn displayed_identity_cannot_inject_rows_or_terminal_controls() {
         version: "2\x1b[2J",
         release: None,
         architecture: Some("x\t64"),
+        reason: None,
     };
     let lines = change_lines(&[entry]).join("\n");
     let text = console::strip_ansi_codes(&lines);

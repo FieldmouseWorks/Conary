@@ -11,7 +11,7 @@ fn install_lines(changes: &[InstallChange], preview: bool) -> Vec<String> {
             let (kind, identity, before) = match change {
                 InstallChange::Install(identity) => (Change::Install, identity, None),
                 InstallChange::Update { before, after } => (Change::Update, after, Some(before)),
-                InstallChange::Remove(identity) => (Change::Remove, identity, None),
+                InstallChange::Remove(identity, _) => (Change::Remove, identity, None),
                 InstallChange::Deconfigure(identity) => (Change::Deconfigure, identity, None),
             };
             let transition = |old: Option<&str>, new: Option<&str>| {
@@ -43,18 +43,23 @@ fn install_lines(changes: &[InstallChange], preview: bool) -> Vec<String> {
                     }
                 },
             );
-            (kind, &identity.name, version, release, architecture)
+            let reason = match change {
+                InstallChange::Remove(_, kind) => Some(kind.as_str()),
+                _ => None,
+            };
+            (kind, &identity.name, version, release, architecture, reason)
         })
         .collect();
     let rows: Vec<_> = rows
         .iter()
         .map(
-            |(change, name, version, release, architecture)| PackageChange {
+            |(change, name, version, release, architecture, reason)| PackageChange {
                 change: *change,
                 name,
                 version,
                 release: release.as_deref(),
                 architecture: architecture.as_deref(),
+                reason: *reason,
             },
         )
         .collect();
@@ -185,7 +190,10 @@ mod tests {
                 before: before.clone(),
                 after,
             },
-            InstallChange::Remove(before.clone()),
+            InstallChange::Remove(
+                before.clone(),
+                conary_core::repository::dependency_model::RepositoryRequirementKind::Obsoletes,
+            ),
             InstallChange::Deconfigure(before),
         ];
         let lines = install_lines(&rows, true).join("\n");
@@ -197,6 +205,8 @@ mod tests {
             "7 -> 8",
             "aarch64 -> x86_64",
             "Remove (1):",
+            "Reason",
+            "obsoletes",
             "Deconfigure (1):",
         ] {
             assert!(text.contains(expected), "{text}");

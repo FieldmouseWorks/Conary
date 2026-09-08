@@ -56,7 +56,10 @@ pub(crate) enum InstallChange {
         before: PackageIdentity,
         after: PackageIdentity,
     },
-    Remove(PackageIdentity),
+    Remove(
+        PackageIdentity,
+        conary_core::repository::dependency_model::RepositoryRequirementKind,
+    ),
     Deconfigure(PackageIdentity),
 }
 
@@ -83,7 +86,10 @@ pub(crate) fn relation_changes(
     };
     let mut changes = Vec::new();
     for removal in &plan.removals {
-        changes.push(InstallChange::Remove(identity(removal.trove_id)?));
+        changes.push(InstallChange::Remove(
+            identity(removal.trove_id)?,
+            removal.kind,
+        ));
     }
     for deconfiguration in &plan.deconfigurations {
         changes.push(InstallChange::Deconfigure(identity(
