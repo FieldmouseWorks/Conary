@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-09-08
-revision: 97
-summary: Route features and CLI output to their smallest start context, owned paths, focused proof, interaction gates, and safety constraints.
+revision: 98
+summary: Route features, CLI diagnostics, and progress to their smallest start context, owned paths, focused proof, interaction gates, and safety constraints.
 ---
 
 # Feature Ownership And Interaction Gates
@@ -154,18 +154,19 @@ proof.
 one terminal coordinator while preserving command-owned phases and results.
 
 **Start here:** `apps/conary/src/ui/mod.rs`;
-`apps/conary/src/ui/progress.rs`; `apps/conary/src/commands/progress.rs`;
+`apps/conary/src/ui/diagnostics.rs`; `apps/conary/src/ui/progress.rs`; `apps/conary/src/commands/progress.rs`;
 `docs/operations/daily-driver-ux-matrix.md`.
 
 **Neighbor systems:** install, update, remove, and adoption command output;
 command summaries; tracing diagnostics.
 
 **Paths:** `apps/conary/src/ui/*`; `apps/conary/src/commands/progress.rs`;
-`apps/conary/tests/cli_progress.rs`;
+`apps/conary/tests/cli_progress.rs`; `apps/conary/tests/cli_diagnostics.rs`;
 `apps/conary/tests/cli_output_snapshots.rs`;
 `apps/conary/tests/output_vocabulary_guard.rs`.
 
 **Focused proof:** `cargo test -p conary --lib ui::`;
+`cargo test -p conary --test cli_diagnostics`;
 `cargo test -p conary --test cli_progress`;
 `cargo test -p conary --test output_vocabulary_guard`;
 `cargo test -p conary --test cli_daily_ux`;

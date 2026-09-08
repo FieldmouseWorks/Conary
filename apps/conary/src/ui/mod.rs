@@ -5,15 +5,22 @@ pub(crate) mod diagnostics;
 pub(crate) mod progress;
 
 use console::style;
+use std::io::Write;
 
 /// Write durable text without colliding with active progress rows.
 pub fn message(message: &str) {
-    progress::suspend(|| std::println!("{message}"));
+    write_line(std::io::stdout(), message).expect("failed printing to stdout");
 }
 
 /// Write a diagnostic without colliding with active progress rows.
 pub fn diagnostic(message: &str) {
-    progress::suspend(|| std::eprintln!("{message}"));
+    write_line(std::io::stderr(), message).expect("failed printing to stderr");
+}
+
+// Report I/O failure after the coordinator unlocks. Panicking while it is held
+// would poison the lock and make progress cleanup panic during unwinding.
+fn write_line(mut writer: impl Write, message: &str) -> std::io::Result<()> {
+    progress::suspend(|| writeln!(writer, "{message}"))
 }
 
 /// Per-item indicator used by [`row`]/[`row_line`].
@@ -168,5 +175,28 @@ mod tests {
         assert_eq!(status_line("Installing", "nginx"), "Installing nginx");
         assert_eq!(field_line("Arch", "x86_64"), "  Arch: x86_64");
         assert_eq!(heading_line("Installed packages:"), "Installed packages:");
+    }
+
+    #[test]
+    fn failed_output_releases_the_coordinator_before_unwinding() {
+        struct FailedWriter;
+        impl Write for FailedWriter {
+            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::ErrorKind::BrokenPipe.into())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let progress = crate::commands::progress::InstallProgress::single("Installing fixture");
+        let failed = std::panic::catch_unwind(|| {
+            write_line(FailedWriter, "fixture output").expect("output failed");
+        });
+        assert!(failed.is_err());
+        // Cleanup and subsequent writes must still acquire the coordinator.
+        drop(progress);
+        let mut output = Vec::new();
+        write_line(&mut output, "retained diagnostic").unwrap();
+        assert_eq!(output, b"retained diagnostic\n");
     }
 }

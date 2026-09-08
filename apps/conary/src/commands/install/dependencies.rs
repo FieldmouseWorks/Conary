@@ -104,10 +104,15 @@ pub(super) async fn handle_dependencies(ctx: &DepAnalysisContext<'_>) -> Result<
         let input = progress.suspend(|| -> Result<String> {
             // The progress coordinator already owns the terminal here. Nested
             // ui writes would try to acquire its lock again.
-            std::println!();
-            print!("Proceed with {} dependency changes? [Y/n] ", total_changes);
             use std::io::Write;
-            std::io::stdout().flush()?;
+            let mut output = std::io::stdout().lock();
+            writeln!(output)?;
+            write!(
+                output,
+                "Proceed with {} dependency changes? [Y/n] ",
+                total_changes
+            )?;
+            output.flush()?;
             let mut input = String::new();
             std::io::stdin().read_line(&mut input)?;
             Ok(input)
