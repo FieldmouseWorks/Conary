@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-09-06
-revision: 97
+last_updated: 2026-09-08
+revision: 98
 summary: Document non-secret CI, release, deployment, hosting, and production evidence workflows, including survey outcome contracts and failure recovery; host-local access belongs in ignored LOCAL_ACCESS.md.
 ---
 
@@ -47,7 +47,11 @@ The transport-neutral contract lives in `crates/conary-agent-contract`;
 ### Local Packaging MCP
 
 `conary mcp packaging` starts the local stdio MCP server for packaging agent
-workflows. It does not open a network listener. The first mutation contract is
+workflows. It does not open a network listener. Its read-only
+`conary.packaging.verify_artifact` tool requires an explicit package and trust
+policy path, calls the shared CCS verifier, and returns the same versioned
+structured report as `ccs verify --json`. See the
+[CCS verification report contract](../specs/ccs-verification-report-v1.md). The first mutation contract is
 confirmed static artifact publish through `conary.packaging.publish.plan` and
 `conary.packaging.publish.apply`; Remi publish apply and project-form publish
 apply are intentionally unsupported in this slice.

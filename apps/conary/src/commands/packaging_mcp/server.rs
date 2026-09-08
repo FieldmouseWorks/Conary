@@ -263,3 +263,7 @@ install = "true"
         assert!(text.text.contains("\"risk\": \"read_only\""));
     }
 }
+
+#[cfg(test)]
+#[path = "server/verification_tests.rs"]
+mod verification_tests;

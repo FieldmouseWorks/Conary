@@ -2,8 +2,12 @@
 
 use std::process::Command;
 
-#[test]
-fn untrusted_archive_names_its_path_and_claimed_signer_once() {
+pub(super) fn fixture() -> (
+    tempfile::TempDir,
+    std::path::PathBuf,
+    std::path::PathBuf,
+    conary_core::ccs::SigningKeyPair,
+) {
     let temp = tempfile::tempdir().unwrap();
     let project = temp.path().join("project");
     let destination = temp.path().join("out");
@@ -49,6 +53,12 @@ fn untrusted_archive_names_its_path_and_claimed_signer_once() {
         assert!(output.status.success(), "{output:?}");
     }
     let package = destination.join("diagnostic-1.0.0-1.ccs");
+    (temp, package, policy, signer)
+}
+
+#[test]
+fn untrusted_archive_names_its_path_and_claimed_signer_once() {
+    let (_temp, package, policy, signer) = fixture();
     let original = std::fs::read(&package).unwrap();
     let expected = format!(
         "error: CCS package signer is not trusted.\n  Package: {}\n  Claimed key ID: fixture-signer\n  Public key: {}\nnote: Verify the signing key through a trusted source and use a policy that authorizes this package.\n",

@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-08
-revision: 76
+revision: 77
 summary: Convert foreign packages through lossless source authority, decode-pass typed native digest evidence, one-pass authenticated payload layout derivation and object staging, atomic exact archive emission, typed pending-to-verified finalization, batched permanent-CAS durability, and typed native relation, lifecycle, and export contracts
 ---
 
@@ -29,8 +29,11 @@ introduce no persisted schema change. Verifier unit tests live in
 `verify/tests.rs`, alongside the streaming tests under `verify/stream/tests.rs`.
 
 CLI refusal presentation belongs to `apps/conary/src/ui/diagnostics/ccs.rs`,
-including existing typed host-capability preflight failures. Successful
-`ccs verify` prints the package path and verified facts only after verification.
+including existing typed host-capability preflight failures. The quiet service in `apps/conary/src/commands/ccs/verification.rs` serves human,
+JSON, and local MCP verification. Successful human output prints the package
+path and verified facts only after verification. The transport-neutral strict
+report lives in `conary-agent-contract`; the [report contract](../specs/ccs-verification-report-v1.md)
+owns its fields, exit behavior, and observation-only authority boundary.
 
 CLI presentation belongs to `apps/conary/src/commands/ccs/inspect/render.rs`,
 `apps/conary/src/commands/ccs/build/render.rs`, and the owning verification and
