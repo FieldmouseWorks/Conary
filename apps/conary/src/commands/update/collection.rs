@@ -213,6 +213,7 @@ pub async fn cmd_update_group(
             yes,
             Some(target.version.clone()),
             target.architecture.clone(),
+            false,
         )
         .await
         {
@@ -331,6 +332,7 @@ mod tests {
             true,
             Some("1.0-1".into()),
             Some("x86_64".into()),
+            false,
         )
         .await
         .unwrap();
@@ -352,6 +354,7 @@ mod tests {
             true,
             Some("1.0-1".into()),
             Some("x86_64".into()),
+            false,
         )
         .await
         .unwrap();

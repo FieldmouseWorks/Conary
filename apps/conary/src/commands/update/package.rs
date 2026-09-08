@@ -279,6 +279,37 @@ pub async fn cmd_update(
         yes,
         package_version,
         architecture,
+        false,
+    )
+    .await
+    .map(|_| ())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn cmd_update_cli(
+    package: Option<String>,
+    db_path: &str,
+    root: &str,
+    security_only: bool,
+    dry_run: bool,
+    sandbox_mode: SandboxMode,
+    ownership: Option<OwnershipMode>,
+    yes: bool,
+    package_version: Option<String>,
+    architecture: Option<String>,
+) -> Result<()> {
+    update_packages(
+        package,
+        db_path,
+        root,
+        security_only,
+        dry_run,
+        sandbox_mode,
+        ownership,
+        yes,
+        package_version,
+        architecture,
+        true,
     )
     .await
     .map(|_| ())
@@ -297,6 +328,7 @@ pub(super) async fn update_packages(
     yes: bool,
     package_version: Option<String>,
     architecture: Option<String>,
+    show_rollback: bool,
 ) -> Result<super::outcome::UpdateOutcome> {
     if security_only {
         info!("Checking for security updates only");
@@ -892,6 +924,9 @@ pub(super) async fn update_packages(
     .await;
 
     report.render(db_path, false);
+    if show_rollback && update_result.is_ok() {
+        crate::ui::transaction_summary::install_rollback_route(&report, db_path);
+    }
 
     match update_result {
         Ok(outcome) => Ok(outcome),

@@ -279,6 +279,7 @@ async fn update_executes_typed_rpm_lifecycle_and_commits_changeset() {
         true,
         None,
         Some("x86_64".to_string()),
+        false,
     )
     .await
     .expect("typed RPM lifecycle update should execute");

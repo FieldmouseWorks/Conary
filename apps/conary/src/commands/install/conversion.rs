@@ -8,7 +8,6 @@
 use super::super::open_db;
 use super::PackageFormatType;
 use super::batch::{BatchInstaller, PreparedPackageSourceAuthority, prepare_ccs_package_for_batch};
-use super::dep_resolution;
 use super::dependencies::resolved_repository_deps_from_sat_result;
 use super::repository_batch::{
     RepositoryBatchMode, RepositoryBatchSelection, prepare_repository_batch,

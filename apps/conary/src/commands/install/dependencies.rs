@@ -35,11 +35,17 @@ pub(super) struct DepAnalysisContext<'a> {
     pub(super) policy: &'a conary_core::repository::resolution_policy::ResolutionPolicy,
 }
 
+#[derive(PartialEq, Eq)]
+pub(super) enum DependencyDecision {
+    Continue,
+    Cancelled,
+}
+
 /// Handle dependency analysis: resolve, prompt, and install repository deps.
 pub(super) async fn handle_dependencies(
     ctx: &DepAnalysisContext<'_>,
     report: &mut super::report::InstallReport,
-) -> Result<()> {
+) -> Result<DependencyDecision> {
     let runtime_requirement_count = ctx
         .pkg
         .requirements()
@@ -58,11 +64,11 @@ pub(super) async fn handle_dependencies(
             "Skipping {} dependencies (--no-deps specified)",
             runtime_requirement_count
         );
-        return Ok(());
+        return Ok(DependencyDecision::Continue);
     }
 
     if runtime_requirement_count == 0 {
-        return Ok(());
+        return Ok(DependencyDecision::Continue);
     }
 
     let progress = InstallProgress::single("Installing");
@@ -92,7 +98,7 @@ pub(super) async fn handle_dependencies(
 
     if selected.is_empty() {
         crate::ui::println!("All dependencies already satisfied");
-        return Ok(());
+        return Ok(DependencyDecision::Continue);
     }
 
     info!("Found {} missing dependencies", selected.len());
@@ -123,7 +129,7 @@ pub(super) async fn handle_dependencies(
         let input = input.trim().to_lowercase();
         if input == "n" || input == "no" {
             crate::ui::println!("Cancelled.");
-            return Ok(());
+            return Ok(DependencyDecision::Cancelled);
         }
     }
 
@@ -132,7 +138,7 @@ pub(super) async fn handle_dependencies(
     // Check for unresolvable dependencies
     check_unresolvable_deps(ctx, &dep_plan)?;
 
-    Ok(())
+    Ok(DependencyDecision::Continue)
 }
 
 pub(super) fn resolved_repository_deps_from_sat_result(

@@ -215,7 +215,11 @@ async fn cmd_install_with_intent(
         sandbox_mode,
         policy: &policy,
     };
-    handle_dependencies(&dep_ctx, report).await?;
+    if handle_dependencies(&dep_ctx, report).await?
+        == super::dependencies::DependencyDecision::Cancelled
+    {
+        return Ok(());
+    }
 
     // Dry-run planning is read-only and does not participate in the runtime
     // mutation serialization boundary. A real install takes that boundary
