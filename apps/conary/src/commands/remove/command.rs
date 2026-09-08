@@ -9,9 +9,9 @@ use tracing::info;
 use super::types::RemoveLifecycleOptions;
 use crate::commands::progress::RemoveProgress;
 use crate::commands::{InstalledPackageSelector, SandboxMode, open_db, resolve_installed_package};
+use crate::ui::transaction_summary::RemovalOutput;
 
-/// Remove an installed package
-#[allow(clippy::too_many_arguments)]
+/// Remove a package within an enclosing operation. Its caller owns final recovery guidance.
 pub fn cmd_remove(
     package_name: &str,
     db_path: &str,
@@ -19,6 +19,46 @@ pub fn cmd_remove(
     architecture: Option<String>,
     sandbox_mode: SandboxMode,
     purge: bool,
+) -> Result<()> {
+    remove_with_output(
+        package_name,
+        db_path,
+        version,
+        architecture,
+        sandbox_mode,
+        purge,
+        RemovalOutput::Nested,
+    )
+}
+
+/// Render final rollback guidance only at the top-level CLI operation boundary.
+pub(crate) fn cmd_remove_cli(
+    package_name: &str,
+    db_path: &str,
+    version: Option<String>,
+    architecture: Option<String>,
+    sandbox_mode: SandboxMode,
+    purge: bool,
+) -> Result<()> {
+    remove_with_output(
+        package_name,
+        db_path,
+        version,
+        architecture,
+        sandbox_mode,
+        purge,
+        RemovalOutput::Command,
+    )
+}
+
+fn remove_with_output(
+    package_name: &str,
+    db_path: &str,
+    version: Option<String>,
+    architecture: Option<String>,
+    sandbox_mode: SandboxMode,
+    purge: bool,
+    output: RemovalOutput,
 ) -> Result<()> {
     info!("Removing package: {}", package_name);
     crate::ui::println!("Removing package: {}", package_name);
@@ -101,6 +141,7 @@ pub fn cmd_remove(
         graph_result.changeset_id,
         &graph_result.publication,
         db_path,
+        output,
     );
     crate::commands::generation::publication::warn_if_publication_pending(
         graph_result.changeset_id,

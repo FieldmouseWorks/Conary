@@ -21,9 +21,15 @@ fn command_capture_child() {
     );
     trove.architecture = Some("x86_64".into());
     trove.package_release = Some("7".into());
+    if scenario == "autoremove" {
+        trove.install_reason = conary_core::db::models::InstallReason::Dependency;
+        let mut second = trove.clone();
+        second.name = "summary-second".into();
+        second.insert(&conn).unwrap();
+    }
     trove.insert(&conn).unwrap();
     let remove = || {
-        crate::commands::cmd_remove(
+        crate::commands::cmd_remove_cli(
             "summary-fixture",
             &db_path,
             None,
@@ -55,7 +61,9 @@ fn command_capture_child() {
     }
     let before = database_rows(&conn);
     println!("FRAME_BEGIN");
-    let result = if rollback {
+    let result = if scenario == "autoremove" {
+        crate::commands::cmd_autoremove(&db_path, false, crate::commands::SandboxMode::Always)
+    } else if rollback {
         crate::commands::cmd_rollback(
             if scenario == "failed_rollback" {
                 forward + 999
@@ -78,6 +86,13 @@ fn command_capture_child() {
         result.unwrap();
         let installed = Trove::find_by_name(&conn, "summary-fixture").unwrap();
         assert_eq!(installed.len(), usize::from(rollback));
+        if scenario == "autoremove" {
+            assert!(
+                Trove::find_by_name(&conn, "summary-second")
+                    .unwrap()
+                    .is_empty()
+            );
+        }
         if rollback {
             assert_eq!(installed[0].package_release.as_deref(), Some("7"));
             let reversed: i64 = conn
@@ -129,6 +144,7 @@ fn command_results_in_terminal_pipe_and_no_color() {
     for (tty, no_color) in [(false, false), (false, true), (true, false), (true, true)] {
         for scenario in [
             "remove",
+            "autoremove",
             "rollback",
             "pending_remove",
             "pending_rollback",
@@ -175,6 +191,21 @@ fn command_results_in_terminal_pipe_and_no_color() {
             if scenario.starts_with("failed") {
                 assert!(!frame.contains("Applied package changes:"), "{frame}");
                 assert!(!frame.contains("Generation:"), "{frame}");
+                continue;
+            }
+            if scenario == "autoremove" {
+                assert_eq!(
+                    frame.matches("Applied package changes:").count(),
+                    2,
+                    "{frame}"
+                );
+                assert!(
+                    frame.contains("summary-fixture") && frame.contains("summary-second"),
+                    "{frame}"
+                );
+                assert!(frame.contains("  Removed: 2 package(s)"), "{frame}");
+                assert!(!frame.contains("conary system state rollback"), "{frame}");
+                assert_eq!(frame.matches("Inspect history:").count(), 2, "{frame}");
                 continue;
             }
             assert_eq!(

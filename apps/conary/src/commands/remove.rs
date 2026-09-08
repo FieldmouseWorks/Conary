@@ -17,6 +17,7 @@ pub(crate) use ccs_hook::{
     preflight_loaded_ccs_remove_hook,
 };
 pub use command::cmd_remove;
+pub(crate) use command::cmd_remove_cli;
 pub(crate) use payload_ownership::PackagePayloadOwnership;
 pub(crate) use transaction::{commit_remove_db, prepare_remove_for_state_restore, snapshot_trove};
 pub(crate) use types::RemoveLifecycleOptions;

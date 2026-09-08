@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-08
-revision: 12
+revision: 13
 summary: Daily-driver CLI routes, grouped removal and changeset-rollback results with publication and recovery facts, coordinated progress, typed diagnostics, and truthful collection outcomes
 ---
 
@@ -246,14 +246,18 @@ guidance for the database it opened, ignoring obsolete stored retry text;
 `system generation pending` uses that same context. Retry and history
 commands retain the selected database, with shell quoting for ordinary paths;
 control-containing paths require the original path in an explicit placeholder.
-Removal also gives the changeset-rollback request, after publication when pending.
+Top-level CLI removal also gives the changeset-rollback request, after publication
+when pending. Nested removals used by autoremove, model apply, and automation
+retain their result and history link but leave final rollback guidance to the
+enclosing operation; later mutations can make an earlier removal ineligible.
 The rollback command retains its eligibility checks; a compensating rollback row
 is never offered as another forward mutation to reverse. A published generation
 is not a claim that the running system has activated it.
 
 `cargo test -p conary --lib ui::transaction_summary --features test-hooks` captures
 real removal and rollback command execution in terminals, pipes, and `NO_COLOR`,
-including forced publication failure and precommit refusals. Pending captures also
+including forced publication failure, precommit refusals, and a two-package
+autoremove that must not advertise stale per-package rollback commands. Pending captures also
 verify persisted retry guidance and read-only history/pending output for the same
 database. It checks resulting
 installed state, rollback lineage, publication debt, exact identity rows, and the

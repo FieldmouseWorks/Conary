@@ -165,6 +165,7 @@ pub use redirect::{
     cmd_redirect_add, cmd_redirect_list, cmd_redirect_remove, cmd_redirect_resolve,
     cmd_redirect_show,
 };
+pub(crate) use remove::cmd_remove_cli;
 pub use remove::{cmd_autoremove, cmd_remove};
 pub use repo::{
     RepoAddOptions, cmd_repo_add, cmd_repo_disable, cmd_repo_enable, cmd_repo_list,

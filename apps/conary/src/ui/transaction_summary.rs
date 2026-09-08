@@ -144,12 +144,20 @@ fn closing_lines(
     ]
 }
 
+/// Presentation scope, supplied by the operation boundary rather than inferred from state.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RemovalOutput {
+    Command,
+    Nested,
+}
+
 pub(crate) fn removal_summary(
     trove: &Trove,
     stats: &LiveRootStats,
     changeset_id: i64,
     publication: &PublicationOutcome,
     db_path: &str,
+    output: RemovalOutput,
 ) {
     let mut lines = change_lines(&[PackageChange::removed(trove)]);
     lines.push(super::field_line(
@@ -161,16 +169,18 @@ pub(crate) fn removal_summary(
         &stats.dirs_removed.to_string(),
     ));
     lines.extend(closing_lines(changeset_id, publication, db_path));
-    let route = database_command(
-        &format!("conary system state rollback {changeset_id} --yes"),
-        db_path,
-    );
-    let when = if publication.needs_publication {
-        "After publication, request rollback"
-    } else {
-        "Request rollback"
-    };
-    lines.push(super::note_line(&format!("{when}: {route}")));
+    if output == RemovalOutput::Command {
+        let route = database_command(
+            &format!("conary system state rollback {changeset_id} --yes"),
+            db_path,
+        );
+        let when = if publication.needs_publication {
+            "After publication, request rollback"
+        } else {
+            "Request rollback"
+        };
+        lines.push(super::note_line(&format!("{when}: {route}")));
+    }
     super::message(&lines.join("\n"));
 }
 
