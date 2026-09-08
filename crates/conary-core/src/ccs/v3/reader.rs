@@ -364,6 +364,11 @@ description = "hello"
             &policy,
         )
         .unwrap_err();
-        assert!(format!("{error:#}").contains("unsupported algorithm"));
+        assert_eq!(
+            error.downcast_ref::<VerifyError>(),
+            Some(&VerifyError::UnsupportedAlgorithm {
+                algorithm: "rsa".to_owned()
+            })
+        );
     }
 }
