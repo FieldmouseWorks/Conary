@@ -257,9 +257,9 @@ pub(super) fn print_security_metadata_unavailable(unavailable: &[SecurityMetadat
         return;
     }
 
-    println!("Security metadata unavailable for requested update source(s):");
+    crate::ui::println!("Security metadata unavailable for requested update source(s):");
     for item in unavailable {
-        println!(
+        crate::ui::println!(
             "  {} {} from {} ({})",
             item.package,
             item.candidate_version,

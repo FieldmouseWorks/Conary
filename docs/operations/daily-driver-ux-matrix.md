@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-09-08
-revision: 9
-summary: Daily-driver CLI routes, coordinated progress, typed first-use and CCS verification diagnostics, strict verification JSON, truthful collection update outcomes, and focused output proof
+revision: 10
+summary: Daily-driver CLI routes, coordinated progress, typed first-use and CCS verification diagnostics, strict verification JSON, truthful collection selection and update outcomes, and focused output proof
 ---
 
 # Daily-Driver UX Matrix
@@ -169,6 +169,35 @@ Collection update preview
 Dry run: no updates were applied.
 ```
 
+Before the request-result summary, collection selection renders its retained
+reasons through `apps/conary/src/ui/update_summary/selection.rs`: selected,
+pinned, externally managed, no eligible update, and not installed. The update
+command records these observations at the existing branch decisions; rendering
+does not select a package or change ownership policy. Counts distinguish collection
+members from installed package variants. Zero-valued reason fields are omitted.
+
+A pinned-only collection previously said `All members ... are up to date` after
+skipping its packages. It now reports:
+
+```text
+Collection update selection
+  Collection: base
+  Members: 1
+  Selected packages: 0
+  Pinned packages: 1
+[skip]     demo 1.0-1 [x86_64]  pinned; not checked
+No eligible updates selected.
+```
+
+Security-only selection says `No eligible security updates selected`; it does
+not imply skipped packages were checked. An empty collection says `Collection
+has no members`. Missing members are explicitly not installed by an update.
+External-owner rows retain the recorded manager's update guidance and the
+adoption-refresh note, including when other members have eligible updates.
+Mixed collections retain all selection reasons alongside the planned changes.
+Unavailable security metadata remains an error before the selection summary or
+any update execution; it never becomes an empty-selection success claim.
+
 Apply uses `Collection update results` and `Applied packages`; a request that
 finds no eligible update on re-selection is shown as `[skip]` with `no changes`.
 Failed requests retain failure status and never imply that prior successful
@@ -177,7 +206,9 @@ package state before retrying when a request failed during apply. Planning,
 source selection, lifecycle execution, and publication authority are unchanged.
 
 `cargo test -p conary --test cli_update_summary` captures terminal, pipe, and
-`NO_COLOR` previews and compares every database table before and after. Update
+`NO_COLOR` previews, empty/pinned/uninstalled/externally managed/mixed selections, and
+security-metadata refusals, comparing every database table before and after.
+The UI proof distinguishes member counts from installed variant counts. Update
 unit tests prove no-change/preview/apply outcomes against real selection and
 execution; UI tests cover mixed results and partial-failure wording. Grouped
 install/remove/rollback tables and generation/recovery closing rows remain #132.
