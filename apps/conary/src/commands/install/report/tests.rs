@@ -20,7 +20,10 @@ fn artifact(dir: &Path, name: &str, version: &str, ccs: bool, dependency: bool) 
         builder
             .with_file_contents(
                 b"fixture\n".to_vec(),
-                rpm::FileOptions::new(format!("/usr/share/{name}/data")).permissions(0o644),
+                rpm::FileOptions::new(format!("/usr/share/{name}/data"))
+                    .permissions(0o644)
+                    .user("summary-user")
+                    .group("summary-group"),
             )
             .unwrap();
         let path = dir.join(format!("{name}-{version}.rpm"));
@@ -86,6 +89,29 @@ async fn install_summary_capture_child() {
     let (temp, db_path) = test_helpers::create_test_db();
     test_helpers::seed_test_bootable_runtime(Path::new(&db_path));
     let conn = conary_core::db::open(&db_path).unwrap();
+    let base = Trove::find_by_name(&conn, "test-runtime-base").unwrap()[0]
+        .id
+        .unwrap();
+    let (uid, gid) = (unsafe { libc::geteuid() }, unsafe { libc::getegid() });
+    for (path, contents) in [
+        (
+            "/etc/passwd",
+            format!(
+                "root:x:0:0:root:/root:/bin/sh\nsummary-user:x:{uid}:{gid}:fixture:/:/sbin/nologin\n"
+            ),
+        ),
+        ("/etc/group", format!("root:x:0:\nsummary-group:x:{gid}:\n")),
+    ] {
+        test_helpers::insert_test_regular_file_with_parents(
+            &conn,
+            &db_path,
+            path,
+            contents.as_bytes(),
+            0o644,
+            base,
+            None,
+        );
+    }
     let ccs = scenario.contains("ccs");
     let preview = scenario.contains("preview");
     let failed = scenario.contains("failed");

@@ -150,11 +150,11 @@ pub(crate) fn install_rollback_route(report: &InstallReport, db_path: &str) {
     } else {
         "Request rollback of latest changeset"
     };
-    super::super::note(&format!(
+    super::super::message(&super::super::note_line(&format!(
         "{when}: {}",
         database_command(
             &format!("conary system state rollback {} --yes", commit.changeset_id),
             db_path
         )
-    ));
+    )));
 }

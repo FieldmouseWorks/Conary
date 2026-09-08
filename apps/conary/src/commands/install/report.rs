@@ -105,6 +105,9 @@ pub(crate) struct InstallReport {
 }
 
 impl InstallReport {
+    /// Count committed requested identities, excluding dependency-only mutations.
+    /// An absent repository CCS release is an unspecified selection constraint;
+    /// a conversion may supply that release at the verified artifact boundary.
     pub(crate) fn applied_targets(
         &self,
         targets: &std::collections::BTreeSet<PackageIdentity>,
@@ -114,7 +117,15 @@ impl InstallReport {
             .flat_map(|commit| &commit.changes)
             .filter_map(|change| match change {
                 InstallChange::Install(after) | InstallChange::Update { after, .. }
-                    if targets.contains(after) =>
+                    if targets.iter().any(|target| {
+                        target.name == after.name
+                            && target.version == after.version
+                            && target.architecture == after.architecture
+                            && target
+                                .release
+                                .as_ref()
+                                .is_none_or(|release| after.release.as_ref() == Some(release))
+                    }) =>
                 {
                     Some(after)
                 }
@@ -144,9 +155,8 @@ pub(super) fn batch_changes(
     for package in packages {
         let before = package
             .old_trove_id()?
-            .map(|id| Trove::find_by_id(conn, id))
-            .transpose()?
-            .flatten();
+            .map(|id| Trove::find_by_id(conn, id)?.context("planned upgrade package disappeared"))
+            .transpose()?;
         changes.push(InstallChange::incoming(
             PackageIdentity {
                 name: package.name.clone(),
