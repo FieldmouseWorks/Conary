@@ -145,7 +145,7 @@ fn removal_statistics_include_debian_config_purge() {
     };
     InstalledNativeLifecycleBundle::new(id, None, &bundle)
         .unwrap()
-        .upsert(&conn)
+        .insert_or_replace(&conn)
         .unwrap();
     let result = execute_installed_trove_remove_graph(
         &conn,
