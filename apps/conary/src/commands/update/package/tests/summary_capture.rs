@@ -24,13 +24,24 @@ async fn update_summary_capture_child() {
         scenario.starts_with("relation_"),
         scenario
             .starts_with("sequence_")
-            .then_some("z-summary-update"),
+            .then_some("z-summary-update < 2.0.0"),
     );
     if scenario == "mixed" {
         add_candidate(&conn, temp.path(), "z-summary-failed", true, false, None);
     }
     if scenario.starts_with("sequence_") {
         add_candidate(&conn, temp.path(), "z-summary-update", false, false, None);
+    }
+    if scenario.starts_with("fallback_") {
+        add_candidate(
+            &conn,
+            temp.path(),
+            "z-summary-update",
+            false,
+            false,
+            Some("a-summary-update <= 2.0.0"),
+        );
+        fixtures::add_failing_delta(&conn, temp.path(), scenario != "fallback_apply");
     }
     if scenario == "noop" {
         conn.execute(
@@ -53,7 +64,7 @@ async fn update_summary_capture_child() {
         false,
         matches!(
             scenario.as_str(),
-            "preview" | "relation_preview" | "sequence_preview"
+            "preview" | "relation_preview" | "sequence_preview" | "fallback_preview"
         ),
         SandboxMode::Always,
         None,
@@ -73,9 +84,9 @@ async fn update_summary_capture_child() {
         assert_eq!(
             result.unwrap(),
             match scenario.as_str() {
-                "sequence_preview" =>
+                "sequence_preview" | "fallback_preview" =>
                     crate::commands::update::outcome::UpdateOutcome::Planned { packages: 2 },
-                "sequence_apply" =>
+                "sequence_apply" | "fallback_download" | "fallback_apply" =>
                     crate::commands::update::outcome::UpdateOutcome::Applied { packages: 2 },
                 "preview" | "relation_preview" =>
                     crate::commands::update::outcome::UpdateOutcome::Planned { packages: 1 },
@@ -86,9 +97,20 @@ async fn update_summary_capture_child() {
     }
     if matches!(
         scenario.as_str(),
-        "preview" | "relation_preview" | "sequence_preview" | "noop"
+        "preview" | "relation_preview" | "sequence_preview" | "fallback_preview" | "noop"
     ) {
         assert_eq!(crate::commands::test_helpers::database_rows(&conn), before);
+    } else if scenario.starts_with("fallback_") {
+        assert!(
+            Trove::find_by_name(&conn, "a-summary-update")
+                .unwrap()
+                .is_empty(),
+            "deferred delta fallback reinstalled the removed target"
+        );
+        assert_eq!(
+            Trove::find_by_name(&conn, "z-summary-update").unwrap()[0].version,
+            "2.0.0"
+        );
     } else {
         assert_eq!(
             Trove::find_by_name(&conn, "a-summary-update").unwrap()[0].version,
@@ -117,6 +139,9 @@ fn update_summaries_in_terminal_pipe_and_no_color() {
             "relation_apply",
             "sequence_preview",
             "sequence_apply",
+            "fallback_preview",
+            "fallback_download",
+            "fallback_apply",
             "apply",
             "pending",
             "mixed",
@@ -192,6 +217,24 @@ fn update_summaries_in_terminal_pipe_and_no_color() {
             ] {
                 assert!(frame.contains(field), "{frame}");
             }
+            if scenario.starts_with("fallback_") {
+                let planned = frame
+                    .split_once("Planned package changes:")
+                    .unwrap()
+                    .1
+                    .split("Applied package changes:")
+                    .next()
+                    .unwrap();
+                for field in [
+                    "Update (2):",
+                    "Remove (1):",
+                    "a-summary-update",
+                    "z-summary-update",
+                ] {
+                    assert!(planned.contains(field), "{frame}");
+                }
+                assert!(!planned.contains("Install (1):"), "{frame}");
+            }
             if scenario.starts_with("sequence_") {
                 let planned = frame
                     .split_once("Planned package changes:")
@@ -229,7 +272,7 @@ fn update_summaries_in_terminal_pipe_and_no_color() {
             }
             if matches!(
                 scenario,
-                "preview" | "relation_preview" | "sequence_preview"
+                "preview" | "relation_preview" | "sequence_preview" | "fallback_preview"
             ) {
                 assert!(!frame.contains("Generation:"), "{frame}");
                 assert!(!frame.contains("Applied package changes:"), "{frame}");
@@ -241,7 +284,19 @@ fn update_summaries_in_terminal_pipe_and_no_color() {
                 "{frame}"
             );
             let applied = frame.split_once("Applied package changes:").unwrap().1;
-            assert!(applied.contains("Updated (1):"), "{frame}");
+            assert!(
+                applied.contains(if scenario.starts_with("fallback_") {
+                    "Updated (2):"
+                } else {
+                    "Updated (1):"
+                }),
+                "{frame}"
+            );
+            if scenario.starts_with("fallback_") {
+                assert!(applied.contains("Removed (1):"), "{frame}");
+                assert!(!applied.contains("Installed (1):"), "{frame}");
+                assert!(frame.contains("Delta failures: 1"), "{frame}");
+            }
             if scenario == "sequence_apply" {
                 for field in [
                     "Updated (1):",

@@ -23,7 +23,7 @@ pub(super) fn add_candidate(
             conary_core::repository::package_relation::parse_native_relation(
                 conary_core::repository::dependency_model::RepositoryRequirementKind::Obsolete,
                 conary_core::repository::versioning::VersionScheme::Rpm,
-                &format!("{replacement} < 2.0.0"),
+                replacement,
             )
             .unwrap(),
         ]
@@ -145,4 +145,38 @@ pub(super) fn add_candidate(
     resolution.version = Some("2.0.0".into());
     resolution.primary_strategy = PrimaryStrategy::RepositoryPackage;
     resolution.insert(conn).unwrap();
+}
+
+pub(super) fn add_failing_delta(conn: &rusqlite::Connection, dir: &Path, download_failure: bool) {
+    let from_hash = conary_core::hash::sha256(b"ordered update base");
+    let to_hash = conary_core::hash::sha256(b"ordered update target");
+    for hash in [&from_hash, &to_hash] {
+        conn.execute(
+            "INSERT INTO file_contents (sha256_hash, content_path, size) VALUES (?1, ?2, 0)",
+            rusqlite::params![hash, format!("objects/{hash}")],
+        )
+        .unwrap();
+    }
+    let path = dir.join("a-summary-update.delta");
+    let bytes = b"invalid delta fixture";
+    std::fs::write(&path, bytes).unwrap();
+    let (url, _) = serve_test_file(path);
+    let checksum = conary_core::hash::sha256(if download_failure {
+        b"different downloaded bytes"
+    } else {
+        bytes
+    });
+    PackageDelta::new(
+        "a-summary-update".into(),
+        "1.0.0".into(),
+        "2.0.0".into(),
+        from_hash,
+        to_hash,
+        url,
+        bytes.len() as i64,
+        checksum,
+        4096,
+    )
+    .insert(conn)
+    .unwrap();
 }
