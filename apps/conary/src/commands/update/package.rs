@@ -533,7 +533,7 @@ pub(super) async fn update_packages(
             packages: updates_available.len(),
         });
     }
-    let targets: std::collections::BTreeSet<_> = updates_available
+    let targets: std::collections::HashSet<_> = updates_available
         .iter()
         .map(|(_, selected)| PackageIdentity::repository(&selected.package))
         .collect();

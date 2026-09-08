@@ -214,6 +214,7 @@ async fn install_summary_capture_child() {
                 dry_run: preview,
                 no_deps: !canceled,
                 yes: !canceled,
+                from_source: canceled.then(|| "fedora-44".into()),
                 sandbox_mode: SandboxMode::Always,
                 ..Default::default()
             },

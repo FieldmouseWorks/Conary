@@ -62,7 +62,10 @@ impl PendingCcsProvider {
     }
 }
 
-fn selected_ccs_release_matches(ccs_release: Option<&str>, selected_release: Option<&str>) -> bool {
+pub(super) fn selected_ccs_release_matches(
+    ccs_release: Option<&str>,
+    selected_release: Option<&str>,
+) -> bool {
     match selected_release {
         Some(selected_release) => ccs_release == Some(selected_release),
         None => true,

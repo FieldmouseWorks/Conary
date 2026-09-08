@@ -8,10 +8,11 @@ use conary_core::db::models::Trove;
 use conary_core::packages::PackageFormat;
 use conary_core::transaction::PackageRelationPlan;
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct PackageIdentity {
     pub name: String,
     pub version: String,
+    pub version_scheme: conary_core::repository::versioning::VersionScheme,
     pub release: Option<String>,
     pub architecture: Option<String>,
 }
@@ -21,6 +22,7 @@ impl PackageIdentity {
         Self {
             name: pkg.name().into(),
             version: pkg.version().into(),
+            version_scheme: pkg.version_scheme(),
             release: pkg.package_release().map(str::to_owned),
             architecture: pkg.architecture().map(str::to_owned),
         }
@@ -30,6 +32,7 @@ impl PackageIdentity {
         Self {
             name: package.name.clone(),
             version: package.version.clone(),
+            version_scheme: package.version_scheme,
             release: (!package.package_release.is_empty()).then(|| package.package_release.clone()),
             architecture: package.architecture.clone(),
         }
@@ -39,6 +42,7 @@ impl PackageIdentity {
         Self {
             name: trove.name.clone(),
             version: trove.version.clone(),
+            version_scheme: trove.version_scheme,
             release: trove.package_release.clone(),
             architecture: trove.architecture.clone(),
         }
@@ -110,7 +114,7 @@ impl InstallReport {
     /// a conversion may supply that release at the verified artifact boundary.
     pub(crate) fn applied_targets(
         &self,
-        targets: &std::collections::BTreeSet<PackageIdentity>,
+        targets: &std::collections::HashSet<PackageIdentity>,
     ) -> usize {
         self.commits
             .iter()
@@ -120,18 +124,19 @@ impl InstallReport {
                     if targets.iter().any(|target| {
                         target.name == after.name
                             && target.version == after.version
+                            && target.version_scheme == after.version_scheme
                             && target.architecture == after.architecture
-                            && target
-                                .release
-                                .as_ref()
-                                .is_none_or(|release| after.release.as_ref() == Some(release))
+                            && super::conversion::selected_ccs_release_matches(
+                                after.release.as_deref(),
+                                target.release.as_deref(),
+                            )
                     }) =>
                 {
                     Some(after)
                 }
                 _ => None,
             })
-            .collect::<std::collections::BTreeSet<_>>()
+            .collect::<std::collections::HashSet<_>>()
             .len()
     }
 
@@ -161,6 +166,7 @@ pub(super) fn batch_changes(
             PackageIdentity {
                 name: package.name.clone(),
                 version: package.version.clone(),
+                version_scheme: package.semantics.version_scheme,
                 release: package.package_release.clone(),
                 architecture: package.architecture.clone(),
             },
