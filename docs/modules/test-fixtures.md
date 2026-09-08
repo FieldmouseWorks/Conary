@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-09
-revision: 49
+revision: 50
 summary: Map fixture ownership, including command transaction captures, typed boot-tool interfaces, public and candidate profiles, and cross-source lifecycle proof
 ---
 
@@ -747,6 +747,11 @@ Each fixture family should record:
   Ordered captures prove that a later selected package removed by an earlier
   update is previewed and applied as a fresh install. `native_pm_live_root`
   retains a one-shot artifact server to prove apply reuses preview's download.
+  `install/repository_batch/tests.rs` proves signed native dependency preparation
+  against projected state uses the real runtime keyring and still refuses absent
+  trust, with no installed-database or permanent-CAS writes. Shared signed RPM
+  construction lives in `commands/test_helpers/native_artifact.rs` and also
+  serves the exact-acquisition tests.
   Paired named-owner preview/apply captures keep accounts absent during preview,
   create them through a typed RPM pre-payload event during apply, and verify
   persisted payload ownership.

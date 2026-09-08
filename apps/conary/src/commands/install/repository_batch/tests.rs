@@ -103,12 +103,12 @@ async fn projected_native_dependency_uses_runtime_keyring_without_mutation() {
         }]
     };
     let before = crate::commands::test_helpers::database_rows(&conn);
-    let projection = super::super::preview::PreviewDatabase::new(&conn).unwrap();
+    let projection = super::super::preview::PreviewDatabase::new(&conn, &db_path).unwrap();
     assert!(!keyring_dir(projection.path()).exists());
     let prepared = prepare_repository_batch(
         projection.path(),
         selections(),
-        RepositoryBatchMode::Validate,
+        RepositoryBatchMode::for_preview(Some(&projection)),
     )
     .await
     .unwrap();
@@ -123,7 +123,7 @@ async fn projected_native_dependency_uses_runtime_keyring_without_mutation() {
     let error = prepare_repository_batch(
         projection.path(),
         selections(),
-        RepositoryBatchMode::Validate,
+        RepositoryBatchMode::for_preview(Some(&projection)),
     )
     .await
     .err()

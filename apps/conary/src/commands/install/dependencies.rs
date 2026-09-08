@@ -186,7 +186,7 @@ async fn handle_dep_installs(
         let prepared = super::repository_batch::prepare_repository_batch(
             ctx.db_path,
             selections,
-            super::repository_batch::RepositoryBatchMode::Validate,
+            super::repository_batch::RepositoryBatchMode::for_preview(report.projection.as_deref()),
         )
         .await?;
         report.planned.extend(prepared.preview(

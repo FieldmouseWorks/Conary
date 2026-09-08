@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-09
-revision: 18
+revision: 19
 summary: Daily-driver CLI routes, grouped install/update/removal/rollback results, planner-backed previews, scoped recovery, coordinated progress, typed diagnostics, and truthful collection outcomes
 ---
 
@@ -248,6 +248,9 @@ fallback does not reorder package effects. If an earlier update removes a later 
 that later row is an install. Dependency batches advance the same snapshot.
 Lifecycle programs, selected-root mutation, and generation publication do not
 run in this projection; the installed database and permanent CAS stay unchanged.
+Native dependency acquisition reads prepared trust from the original runtime
+keyring while planning against projected package state; it neither copies nor
+relaxes that trust.
 
 Previously, native/CCS install printed independent `Installed package` fields,
 batches printed a separate success list, and update ended with transfer counters.

@@ -9,6 +9,7 @@ use conary_core::db::models::{
     Trove,
 };
 use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 /// Declared paths for projected packages, without claiming resolved owners or
@@ -54,11 +55,12 @@ impl DeclaredPayloadPaths {
 pub(crate) struct PreviewDatabase {
     _temporary: tempfile::TempDir,
     path: String,
+    keyring_dir: PathBuf,
     declared_paths: Mutex<DeclaredPayloadPaths>,
 }
 
 impl PreviewDatabase {
-    pub(crate) fn new(conn: &rusqlite::Connection) -> Result<Self> {
+    pub(crate) fn new(conn: &rusqlite::Connection, runtime_db_path: &str) -> Result<Self> {
         let temporary = tempfile::tempdir()?;
         let path = temporary.path().join("conary.db");
         conn.backup(rusqlite::MAIN_DB, &path, None)?;
@@ -67,6 +69,7 @@ impl PreviewDatabase {
                 .to_str()
                 .context("preview database path is not UTF-8")?
                 .into(),
+            keyring_dir: conary_core::db::paths::keyring_dir(runtime_db_path),
             declared_paths: Mutex::default(),
             _temporary: temporary,
         })
@@ -74,6 +77,10 @@ impl PreviewDatabase {
 
     pub(crate) fn path(&self) -> &str {
         &self.path
+    }
+
+    pub(super) fn keyring_dir(&self) -> &Path {
+        &self.keyring_dir
     }
 
     pub(super) fn declared_paths(&self) -> Result<DeclaredPayloadPaths> {

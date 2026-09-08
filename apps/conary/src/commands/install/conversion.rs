@@ -751,7 +751,7 @@ async fn install_verified_ccs_artifact(
         db_path,
         selections,
         if dry_run {
-            RepositoryBatchMode::Validate
+            RepositoryBatchMode::for_preview(report.projection.as_deref())
         } else {
             RepositoryBatchMode::Install
         },
