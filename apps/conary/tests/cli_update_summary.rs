@@ -39,10 +39,6 @@ fn fixture() -> (tempfile::TempDir, String) {
             conary_core::repository::versioning::VersionScheme::Eopkg,
         );
         installed.architecture = Some(arch.to_string());
-        installed.native_package_identity = Some(
-            conary_core::packages::InstalledPackageIdentity::eopkg(name, name, "1.0", 1, arch)
-                .unwrap(),
-        );
         installed.source_profile = Some("solus".to_string());
         installed.installed_from_repository_id = Some(repo_id);
         installed.insert(&conn).unwrap();

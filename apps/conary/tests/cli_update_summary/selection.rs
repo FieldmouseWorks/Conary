@@ -98,25 +98,36 @@ fn pinned_members_are_not_reported_as_current() {
 fn empty_selection_preserves_each_reason_in_all_output_modes() {
     for (sql, expected, empty) in [
         (
-            "DELETE FROM troves WHERE type = 'package'",
+            Some("DELETE FROM troves WHERE type = 'package'"),
             "  Uninstalled members: 2\n",
             false,
         ),
         (
-            "DELETE FROM repository_packages",
+            Some("DELETE FROM repository_packages"),
             "  Packages without eligible updates: 2\n",
             false,
         ),
-        ("DELETE FROM collection_members", "  Members: 0\n", true),
         (
-            "UPDATE troves SET install_source = 'adopted-track' WHERE type = 'package'",
-            "  Externally managed packages: 2\n",
-            false,
+            Some("DELETE FROM collection_members"),
+            "  Members: 0\n",
+            true,
         ),
+        (None, "  Externally managed packages: 2\n", false),
     ] {
         let (_temp, db) = fixture();
         let conn = conary_core::db::open(&db).unwrap();
-        conn.execute(sql, []).unwrap();
+        if let Some(sql) = sql {
+            conn.execute(sql, []).unwrap();
+        } else {
+            for name in ["demo", "tools"] {
+                let identity = conary_core::packages::InstalledPackageIdentity::eopkg(
+                    name, name, "1.0", 1, "x86_64",
+                )
+                .unwrap();
+                conn.execute("UPDATE troves SET install_source = ?1, native_package_identity_json = ?2 WHERE name = ?3",
+                    rusqlite::params![InstallSource::AdoptedTrack.as_str(), serde_json::to_string(&identity).unwrap(), name]).unwrap();
+            }
+        }
         drop(conn);
         let before = common::database_snapshot(&db);
         for security in [false, true] {
