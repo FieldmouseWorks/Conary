@@ -754,13 +754,13 @@ pub(super) async fn update_packages(
                         version: repo_pkg.version.clone(),
                         reason: e.to_string(),
                     });
-                    let _ = std::fs::remove_file(&pkg_path);
+                    let _ = std::fs::remove_file(pkg_path);
                     continue;
                 }
 
                 full_downloads += 1;
                 progress.complete_package(&trove.name);
-                let _ = std::fs::remove_file(&pkg_path);
+                let _ = std::fs::remove_file(pkg_path);
             }
 
             progress.clear();
