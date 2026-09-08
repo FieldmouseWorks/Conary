@@ -1,9 +1,9 @@
 ---
-last_updated: 2026-09-06
-revision: 14
+last_updated: 2026-09-08
+revision: 15
 status: postponed
 target_release: unassigned
-summary: Align the postponed launch packet with published v0.17.1 while tester authority remains unassigned
+summary: Keep tester authority unassigned until the launch floor includes actionable CLI preflight and refusal presentation
 ---
 
 # External Tester Launch Packet
@@ -203,7 +203,7 @@ failed attempts are useful evidence.
 - [x] Pass #110's ordinary-package corpus gate through PR #487 without treating
   release proof as corpus proof.
 - [ ] Activate #598's signed zero-exclusion public universe behind #638's typed
-  read surface; complete the #122/#534/#718/#132/#642/#643 daily-driver floor,
+  read surface; complete the #122/#534/#718/#132/#644/#642/#643 daily-driver floor,
   #639's synchronized release, and #121/#149 launch proof; then assign the
   re-proven suite as exact tester authority.
 - [ ] Obtain GitHub Support confirmation that cached pre-rewrite pull-request

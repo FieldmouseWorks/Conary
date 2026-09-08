@@ -224,14 +224,14 @@ EOF
   "tester_authority": {
     "state": "unassigned",
     "reason": "The launch gates remain open.",
-    "blocking_issues": [638, 598, 122, 534, 132, 642, 643, 639, 121, 149]
+    "blocking_issues": [638, 598, 122, 534, 132, 644, 642, 643, 639, 121, 149]
   },
   "gates": {
     "ordinary_package_journey": {"state": "passed", "issue": 110},
     "public_ingress": {"state": "passed", "issue": 637},
     "public_read_surfaces": {"state": "blocked", "issue": 638},
     "public_universe": {"state": "blocked", "issue": 598, "promotion_threshold": "zero_exclusions"},
-    "daily_driver_floor": {"state": "blocked", "issues": [122, 534, 132, 642, 643]},
+    "daily_driver_floor": {"state": "blocked", "issues": [122, 534, 132, 644, 642, 643]},
     "synchronized_release": {"state": "blocked", "issue": 639},
     "launch_proof": {"state": "blocked", "issues": [121, 149]},
     "external_outreach": {"state": "not_started", "issue": 48, "broad_outreach_requires_guided_completions": 5}
@@ -724,6 +724,15 @@ break_launch_status_contract() {
         "$1/docs/roadmaps/launch-status.json"
 }
 
+break_pretester_presentation_gate() {
+    local status="$1/docs/roadmaps/launch-status.json"
+    jq '
+        .gates.daily_driver_floor.issues |= map(select(. != 644))
+        | .tester_authority.blocking_issues |= map(select(. != 644))
+    ' "$status" > "${status}.next"
+    mv "${status}.next" "$status"
+}
+
 break_site_generation_apply_intent() {
     sed -i 's/generation build --summary test --yes/generation build --summary test/' "$1/site/src/routes/features/+page.svelte"
 }
@@ -866,6 +875,7 @@ expect_failure "system init source independence" break_system_init_profile 'syst
 expect_failure "site release version drift" break_site_release_version 'derived published-release version'
 expect_failure "site release version duplication" break_site_release_version_duplication 'duplicates the site published-release version'
 expect_failure "launch status contract drift" break_launch_status_contract 'malformed or drifted launch-status contract'
+expect_failure "missing pre-tester presentation gate" break_pretester_presentation_gate 'malformed or drifted launch-status contract'
 expect_failure "site generation apply intent" break_site_generation_apply_intent 'generation build apply-intent example'
 expect_failure "site federation boundary" break_site_federation_boundary 'federation preview-boundary caveat'
 expect_failure "package index every-operation claim" break_package_index_every_operation_claim 'public frontend every-operation generation/integrity claim'

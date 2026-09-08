@@ -393,6 +393,7 @@ check_launch_status() {
         and (.gates.public_universe.issue | type == "number" and . > 0)
         and .gates.public_universe.promotion_threshold == "zero_exclusions"
         and (.gates.daily_driver_floor.issues | positive_unique_issues)
+        and (.gates.daily_driver_floor.issues | index(644) != null)
         and (.gates.synchronized_release.issue | type == "number" and . > 0)
         and (.gates.launch_proof.issues | positive_unique_issues)
         and (.gates.external_outreach.issue | type == "number" and . > 0)

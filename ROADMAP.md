@@ -20,8 +20,11 @@ action.
 
 W7's ordinary-package gate closed through #110 and PR #487. The active launch
 lane now completes the signed immutable public universe in #598, the
-pre-release daily-driver floor in #122, #534, #132, #642, and #643, the
+pre-release daily-driver floor in #122, #534, #718, #132 (including #644),
+#642, and #643, the
 synchronized public-artifact journey in #639, and launch proof in #121/#149.
+CLI usability is the next product workstream and proceeds alongside the
+universe work, with clear preflight/refusal messages required before testing.
 Outreach remains at 0/10 and still waits for
 the separate cached-history and venue checks. The machine-readable
 [launch status](docs/roadmaps/launch-status.json) owns the current gate and

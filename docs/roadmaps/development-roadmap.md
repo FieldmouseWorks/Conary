@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-09-06
-revision: 38
-summary: Track published v0.17.1 artifact proof alongside the signed-universe, daily-driver, and external tester gates
+last_updated: 2026-09-08
+revision: 39
+summary: Prioritize first-use CLI usability alongside signed-universe work before the synchronized release and external tester gates
 proof_baseline: "W7/#110 closed through PR #487; immutable v0.16.1 remains historical release evidence rather than tester authority; #598 owns first complete signed public universe; external tester result remains 0/10"
 current_milestone: first external tester loop
 active_workstream: W7.5 Signed Universe And Launch Gate
@@ -170,6 +170,17 @@ the stated scope, not whether a workstream happens to be active.
   ingress and prevents deploy-helper ownership drift. #638 must prove typed
   unavailability before activation and one-revision search/detail/index/stats
   agreement after activation. #639 owns the release cut and released journey.
+- **Immediate execution priority:** the daily-driver usability floor runs now
+  alongside signed-universe engineering; it does not wait for the production
+  survey or public-universe activation. #132 is the next product workstream
+  after already-open fixes. Prioritize first-run and install journeys: stable
+  progress, actionable errors/refusals, and readable preview/apply summaries.
+  Further resolver micro-optimizations yield to this work unless exact survey
+  evidence identifies a correctness or launch-blocking throughput defect.
+  #644's typed preflight, field, and refusal presentation is a dependency of
+  #132's existing launch deliverable, rather than a post-preview horizon item.
+  This changes implementation order; the zero-exclusion universe and safety
+  gates still apply before release or outreach.
 - **Phase 0 -- ingress and truth:** #637's production remediation, protected
   helper deployment, and closeout are complete. Land #640 so W7 closure and
   current blockers are truthful; pursue the cached-history dereference and
@@ -180,13 +191,14 @@ the stated scope, not whether a workstream happens to be active.
   requires every exact candidate variant to succeed with zero exclusions. A
   proof-derived partial preview universe would be a separate reviewed authority
   contract; it is not an alternate #598 readout or a post-failure goal change.
-- **Phase 2 -- daily-driver floor:** #534 proves that a supported normal apply
+- **Parallel daily-driver floor (formerly Phase 2):** #534 proves that a supported normal apply
   publishes its exact changeset before success or returns a typed recoverable
   partial outcome; #122 rejects complete materialization conflicts before any
   mutation; #718 keeps the basic package loop independent of composefs by
   selecting a verified materialized generation lower when the direct carrier
-  is unavailable; and #132's first three ranked slices establish correct TTY
-  progress, one warning/error voice, and one grouped transaction summary. #642 gives
+  is unavailable; and #132 establishes correct TTY progress, one warning/error
+  voice, and one grouped transaction summary, with #644 supplying actionable
+  typed preflight/refusal presentation and consistent fields. #642 gives
   removal the same non-mutating plan/apply control as install and update. #643
   provides one read-only typed status result for release, repository,
   generation/publication, carrier, and database health.
@@ -200,12 +212,12 @@ the stated scope, not whether a workstream happens to be active.
   foreign-only workloads from the exact release; and contributor-facing #497
   follows the known non-root/umask hermeticity repairs rather than advertising
   a setup whose owning tests fail locally.
-- **Parked before the preview:** #539, #538, #537, #536, #644, #69, #66, #65,
+- **Parked before the preview:** #539, #538, #537, #536, #69, #66, #65,
   #63, #64, #72, #70, #74, #50, #46, federation completion, and #272's
   full-system replacement proof do not enter this launch lane without a new
   issue-backed dependency justified by launch or tester evidence.
 - **Gate:** #598 zero-exclusion evidence, #638 read-surface agreement, the
-  #122/#534/#718/#132/#642/#643 floor, #639 released public-artifact proof, and
+  #122/#534/#718/#132 (including #644)/#642/#643 floor, #639 released public-artifact proof, and
   #121/#149 launch proof are complete.
   The announcement claim remains the individual-package cross-distribution
   bridge recorded in `launch-status.json`; #272 owns any later full-system
@@ -273,12 +285,12 @@ horizon unless an issue-backed roadmap change says otherwise.
 | W5 Source Authority Model | #108 specification, #104, #105 | complete |
 | W6 Authority Audit Closure | #67 epic, #109, plus narrow ledger slices | P1 |
 | W7 Just-Works Corpus Gate | #110 closed in PR #487; #39 protocol in PR #486 | complete |
-| W7.5 Signed Universe And Launch Gate | milestone deliverables #598, #638, #122, #534, #132, #642, #643, #639, #121, #149; dependencies #517, #601, #605, #606, #614, #619; completed ingress #637; truth/disposition #640; contributor follow-up #497 | P0/P1 |
+| W7.5 Signed Universe And Launch Gate | milestone deliverables #598, #638, #122, #534, #132, #642, #643, #639, #121, #149; dependencies #517, #601, #605, #606, #614, #619, #644; completed ingress #637; truth/disposition #640; contributor follow-up #497 | P0/P1 |
 | W8 External Tester Outreach | #48 | gated |
 | W9 Common Package Capability Classes | #74, #50, #46, #67 P2 remainder | P1 |
 | W10 Distro-Agnostic Takeover | #62 epic decomposed, #68 | P2 |
 | Native packaging horizon | #70, #51, #72 | P2 |
-| Service and operator horizon | #69, #65, #66, #73, #644 (remaining #132 presentation slices) | P2 |
+| Service and operator horizon | #69, #65, #66, #73 | P2 |
 | System artifacts horizon | #63, #64, #71 | P2 |
 | Closed | #41 closed 2026-07-31 after the selected-root alias regression repair and current Fedora export/boot proof; original Artix route tracked as W8 evidence | not engineering work |
 
