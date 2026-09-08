@@ -170,3 +170,20 @@ fn package_claims_cannot_inject_diagnostic_rows_or_terminal_controls() {
     };
     assert_eq!(key_id.as_deref(), Some(claim));
 }
+
+#[test]
+fn invalid_policy_names_the_affected_policy_file() {
+    let error = anyhow::Error::new(VerifyError::TrustViolation(TrustViolation::NoTrustedKeys))
+        .context(TrustPolicySubject {
+            path: "/fixture/policy.toml".into(),
+        });
+    let diagnostic = from_error(&error).unwrap();
+    assert_eq!(
+        diagnostic.facts,
+        [("Policy", "/fixture/policy.toml".into())]
+    );
+    assert_eq!(
+        diagnostic.message,
+        "No trusted CCS signing keys are configured."
+    );
+}

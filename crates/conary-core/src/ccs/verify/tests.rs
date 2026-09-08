@@ -403,3 +403,21 @@ fn authority_validation_retains_every_diagnostic_through_the_reader() {
         Some(&expected)
     );
 }
+
+#[test]
+fn invalid_policy_file_preserves_its_path_and_typed_cause() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("empty-policy.toml");
+    std::fs::write(&path, "trusted_keys = []\n").unwrap();
+    let error = TrustPolicy::from_file(&path)
+        .unwrap_err()
+        .context("load policy");
+    assert_eq!(
+        error.downcast_ref::<TrustPolicySubject>().unwrap().path,
+        path
+    );
+    assert_eq!(
+        error.downcast_ref::<VerifyError>(),
+        Some(&VerifyError::TrustViolation(TrustViolation::NoTrustedKeys))
+    );
+}

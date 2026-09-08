@@ -55,3 +55,10 @@ pub enum TrustViolation {
 pub struct VerificationSubject {
     pub path: PathBuf,
 }
+
+/// The policy file supplied to the trust-policy reader.
+#[derive(Error, Debug, Clone, PartialEq, Eq)]
+#[error("read CCS trust policy {}", path.display())]
+pub struct TrustPolicySubject {
+    pub path: PathBuf,
+}

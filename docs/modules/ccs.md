@@ -19,7 +19,8 @@ path, package names, and layer size. These reports do not print to a terminal.
 
 Verification refusals live in `verify/errors.rs`: `VerifyError` carries distinct
 `TrustViolation` facts and `VerificationSubject` retains the requested archive
-path through anyhow context. Claimed key IDs remain untrusted labels; exact
+path through anyhow context. `TrustPolicySubject` retains the policy file path
+when its configured keys fail validation. Claimed key IDs remain untrusted labels; exact
 public keys determine trust. Timestamp policy failures retain timestamp and age
 limits, with unsigned comparison across the full configured `u64` range.
 `V3ValidationError` survives both document and streaming readers without being

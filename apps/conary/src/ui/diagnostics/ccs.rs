@@ -4,7 +4,9 @@
 use super::Diagnostic;
 use conary_core::ccs::HostCapabilityPreflightError;
 use conary_core::ccs::v3::{V3DiagnosticCode, V3ValidationError};
-use conary_core::ccs::verify::{TrustViolation, VerificationSubject, VerifyError};
+use conary_core::ccs::verify::{
+    TrustPolicySubject, TrustViolation, VerificationSubject, VerifyError,
+};
 
 pub(super) fn from_error(error: &anyhow::Error) -> Option<Diagnostic> {
     let mut diagnostic = if let Some(error) = error.downcast_ref::<VerifyError>() {
@@ -18,6 +20,10 @@ pub(super) fn from_error(error: &anyhow::Error) -> Option<Diagnostic> {
     };
     if let Some(subject) = error.downcast_ref::<VerificationSubject>() {
         diagnostic = diagnostic.fact("Package", subject.path.display().to_string());
+        diagnostic.facts.rotate_right(1);
+    }
+    if let Some(subject) = error.downcast_ref::<TrustPolicySubject>() {
+        diagnostic = diagnostic.fact("Policy", subject.path.display().to_string());
         diagnostic.facts.rotate_right(1);
     }
     Some(diagnostic)

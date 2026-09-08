@@ -15,7 +15,7 @@ use std::path::Path;
 
 mod archive_identity;
 mod errors;
-pub use errors::{TrustViolation, VerificationSubject, VerifyError};
+pub use errors::{TrustPolicySubject, TrustViolation, VerificationSubject, VerifyError};
 pub(crate) mod content;
 mod object_sink;
 mod stream;
@@ -77,7 +77,9 @@ impl TrustPolicy {
     pub fn from_file(path: &Path) -> Result<Self> {
         let content = std::fs::read_to_string(path)
             .with_context(|| format!("read CCS trust policy {}", path.display()))?;
-        Self::from_toml(&content)
+        Self::from_toml(&content).with_context(|| TrustPolicySubject {
+            path: path.to_path_buf(),
+        })
     }
 
     pub fn from_toml(content: &str) -> Result<Self> {

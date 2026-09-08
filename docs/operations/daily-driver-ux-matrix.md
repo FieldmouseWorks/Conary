@@ -111,7 +111,8 @@ same user-visible warning. Publication outcomes and retry authority are unchange
 unclassified cause retention, publication facts, and one default warning/retry.
 CCS verification retains its typed trust-policy cause and input archive path
 through install and verification contexts. Untrusted signer output labels the
-package-provided key ID as a claim; the exact public key remains the trust-anchor
+package-provided key ID as a claim; control characters in displayed facts are
+escaped to keep them on one visible line. The exact public key remains the trust-anchor
 identity. A failed `ccs verify` emits no success preamble:
 
 ```text
