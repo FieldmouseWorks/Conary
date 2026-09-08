@@ -79,7 +79,7 @@ pub async fn cmd_update_group(
     let members = CollectionMember::find_by_collection(&conn, collection_id)?;
 
     if members.is_empty() {
-        println!("Collection '{}' has no members.", name);
+        crate::ui::println!("Collection '{}' has no members.", name);
         return Ok(());
     }
 
@@ -101,7 +101,7 @@ pub async fn cmd_update_group(
 
         for trove in &installed {
             if trove.pinned {
-                println!(
+                crate::ui::println!(
                     "  {} is pinned, skipping",
                     CollectionUpdateTarget::from_trove(trove).display()
                 );
@@ -126,7 +126,7 @@ pub async fn cmd_update_group(
                             || "the recorded external owner".to_string(),
                             |manager| manager.update_command(&trove.name),
                         );
-                        println!(
+                        crate::ui::println!(
                             "  {} is adopted; external authority owns updates: {}",
                             CollectionUpdateTarget::from_trove(trove).display(),
                             guidance
@@ -164,7 +164,7 @@ pub async fn cmd_update_group(
     }
 
     if !not_installed.is_empty() {
-        println!(
+        crate::ui::println!(
             "Note: {} member(s) not installed: {}",
             not_installed.len(),
             not_installed.join(", ")
@@ -173,29 +173,29 @@ pub async fn cmd_update_group(
 
     if updates_to_apply.is_empty() {
         if adopted_updates_skipped {
-            println!(
+            crate::ui::println!(
                 "No Conary-managed updates available for collection '{}'; adopted package updates remain under native package-manager authority",
                 name
             );
-            println!(
+            crate::ui::println!(
                 "Run 'conary system adopt --refresh' after native package-manager changes before retrying Conary workflows."
             );
         } else if security_only {
-            println!("No security updates available for collection '{}'", name);
+            crate::ui::println!("No security updates available for collection '{}'", name);
         } else {
-            println!("All members of collection '{}' are up to date", name);
+            crate::ui::println!("All members of collection '{}' are up to date", name);
         }
         return Ok(());
     }
 
-    println!(
+    crate::ui::println!(
         "{} {} package request(s) from collection '{}':",
         if dry_run { "Previewing" } else { "Updating" },
         updates_to_apply.len(),
         name
     );
     for target in &updates_to_apply {
-        println!("  {}", target.display());
+        crate::ui::println!("  {}", target.display());
     }
 
     // Update each package
@@ -203,7 +203,7 @@ pub async fn cmd_update_group(
     let mut failed_count = 0;
 
     for target in &updates_to_apply {
-        println!(
+        crate::ui::println!(
             "\n{} {}...",
             if dry_run { "Previewing" } else { "Updating" },
             target.display()
