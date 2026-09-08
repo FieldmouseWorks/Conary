@@ -1,6 +1,8 @@
 // apps/conary/src/ui/diagnostics.rs
 //! Human diagnostics derived from typed failures and publication facts.
 
+mod ccs;
+
 use crate::commands::generation::publication::PublicationOutcome;
 use crate::live_host_safety::{LiveMutationClass, LiveMutationRefusal};
 
@@ -64,6 +66,9 @@ pub(crate) fn report_error(error: &anyhow::Error) {
 }
 
 fn from_error(error: &anyhow::Error) -> Diagnostic {
+    if let Some(diagnostic) = ccs::from_error(error) {
+        return diagnostic;
+    }
     if let Some(refusal) = error.downcast_ref::<LiveMutationRefusal>() {
         return mutation_refusal(refusal);
     }

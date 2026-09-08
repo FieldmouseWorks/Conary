@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-09-08
-revision: 6
-summary: Daily-driver CLI routes, coordinated progress, typed first-use diagnostics, and focused output proof
+revision: 7
+summary: Daily-driver CLI routes, coordinated progress, typed first-use and CCS verification diagnostics, and focused output proof
 ---
 
 # Daily-Driver UX Matrix
@@ -109,8 +109,35 @@ same user-visible warning. Publication outcomes and retry authority are unchange
 `NO_COLOR` frames and proves first-use refusals create no database or other files.
 `cargo test -p conary --lib ui::diagnostics` checks typed refusal downcasts,
 unclassified cause retention, publication facts, and one default warning/retry.
-Remaining #644 work includes typed signature/preflight presentation, strict
-machine rendering, consistent fields and empty states across other commands.
+CCS verification retains its typed trust-policy cause and input archive path
+through install and verification contexts. Untrusted signer output labels the
+package-provided key ID as a claim; the exact public key remains the trust-anchor
+identity. A failed `ccs verify` emits no success preamble:
+
+```text
+error: CCS package signer is not trusted.
+  Package: <fixture>/diagnostic-1.0.0-1.ccs
+  Claimed key ID: fixture-signer
+  Public key: <exact Ed25519 public key>
+note: Verify the signing key through a trusted source and use a policy that authorizes this package.
+```
+
+This replaces repeated archive/context lines and `key_id=Some(...)` debug text.
+Missing, malformed, future, and expired timestamps retain distinct causes;
+expiry includes timestamp, age, and configured maximum. Invalid authority
+retains every diagnostic code, field, path, and publisher-facing suggestion.
+Host-capability preflight names the required interface, hook or affected path,
+and the existing inventory-refresh action. UI rendering never authorizes a
+signing key or changes a capability requirement.
+
+The verification capture also proves that changing to a policy containing the
+actual signing key allows the same intact archive to verify. Core tests prove
+untrusted archives cannot commit payload objects into CAS and preserve all
+validation diagnostics through both document and streaming readers.
+
+Remaining #644 work includes strict machine command rendering and consistent
+fields and empty states across other commands; this slice adds no machine-output
+flag or schema.
 
 ## Ranked UI Slices
 
