@@ -85,8 +85,8 @@ fn from_error(error: &anyhow::Error) -> Diagnostic {
                     .note("Run 'conary system init --db-path <PATH>' with the same custom path.")
             }
             conary_core::Error::NotFound(detail) => Diagnostic::new(detail),
-            conary_core::Error::ConflictError(detail) => Diagnostic::new("Package conflict.")
-                .fact("Conflict", detail),
+            conary_core::Error::ConflictError(detail) => Diagnostic::new("Conflict.")
+                .fact("Detail", detail),
             conary_core::Error::PathTraversal(detail) => Diagnostic::new("Path safety violation.")
                 .fact("Path", detail)
                 .note("This may indicate a malicious or corrupt package."),

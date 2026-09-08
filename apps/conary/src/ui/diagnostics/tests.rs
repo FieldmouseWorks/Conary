@@ -84,14 +84,16 @@ fn unclassified_errors_keep_each_cause_without_inventing_remedies() {
 }
 
 #[test]
-fn conflict_does_not_invent_a_force_or_remove_remedy() {
-    let diagnostic =
-        from_error(&conary_core::Error::ConflictError("conflicting path".into()).into());
-    assert_eq!(
-        diagnostic.facts,
-        [("Conflict", "conflicting path".to_owned())]
-    );
-    assert!(diagnostic.notes.is_empty());
+fn conflicts_stay_domain_neutral_without_inventing_remedies() {
+    for detail in [
+        "conflicting path",
+        "native projection cache logical attestation does not bind its exact catalog",
+    ] {
+        let diagnostic = from_error(&conary_core::Error::ConflictError(detail.into()).into());
+        assert_eq!(diagnostic.message, "Conflict.");
+        assert_eq!(diagnostic.facts, [("Detail", detail.to_owned())]);
+        assert!(diagnostic.notes.is_empty());
+    }
 }
 
 #[test]
