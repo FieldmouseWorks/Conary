@@ -36,6 +36,8 @@ mod execution;
 #[path = "native_events/graph_execution.rs"]
 mod graph_execution;
 mod identity;
+mod refusal;
+pub(crate) use refusal::NativePreflightContext;
 mod install;
 #[path = "native_events/preflight.rs"]
 mod preflight;

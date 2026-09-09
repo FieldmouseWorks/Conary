@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-09-09
-revision: 58
-summary: Map fixture ownership, including repository discovery journeys, command transaction captures, typed boot-tool interfaces, and cross-source lifecycle proof
+revision: 59
+summary: Map fixture ownership, including native refusal boundaries, repository discovery journeys, command transaction captures, typed boot-tool interfaces, and cross-source lifecycle proof
 ---
 
 # Test Fixtures And Proof Maps
@@ -746,6 +746,28 @@ Each fixture family should record:
 - **Regeneration:** in-test builders; PTY frames use util-linux `script`.
 - **Safety notes:** no live database or remote repository access. This fixture
   does not establish native metadata trust or clean-host initialization support.
+
+### cli-native-preflight-refusals
+
+- **Owners:** `apps/conary/src/commands/install/report/tests.rs`,
+  `apps/conary/src/commands/update/package/tests/summary_capture.rs`,
+  `apps/conary/src/commands/package_failure/tests.rs`,
+  `crates/conary-core/src/scriptlet/native_lifecycle/tests.rs`, and
+  `crates/conary-agent-contract/src/package_failure/tests.rs`.
+- **Consumes:** typed runtime requirements, transaction-wide preflight context,
+  update error aggregation, shared human/agent reports, and daemon job errors.
+- **Proof:** `cargo test -p conary --features test-hooks --lib terminal_pipe_and_no_color`,
+  `cargo test -p conary --lib package_failure`,
+  `cargo test -p conary-core --lib native_preflight_requirements`,
+  `cargo test -p conary-agent-contract`, and `cargo test -p conaryd`.
+- **Assertions:** standalone and batch native missing-interpreter refusals leave
+  every database table unchanged, including baseline snapshots and mutation
+  epoch; first/later CCS update refusals preserve failed package state and
+  earlier commits; terminal, pipe, and `NO_COLOR` keep exact causal facts.
+  Strict machine reports retain requested/event identities and distinct roots;
+  daemon job storage and terminal events preserve the same extension.
+- **Boundary:** report data never establishes compatibility or mutation
+  authority. Unclassified errors retain their chain without guessed remediation.
 
 ### cli-transaction-summary-captures
 

@@ -11,6 +11,7 @@ license.workspace = true
 [dependencies]
 conary = { path = "../conary" }
 conary-core = { path = "../../crates/conary-core" }
+conary-agent-contract = { path = "../../crates/conary-agent-contract" }
 
 # Web framework
 axum.workspace = true
@@ -48,4 +49,5 @@ name = "conaryd"
 path = "src/bin/conaryd.rs"
 
 [dev-dependencies]
+rpm.workspace = true
 conary = { path = "../conary", features = ["test-hooks"] }

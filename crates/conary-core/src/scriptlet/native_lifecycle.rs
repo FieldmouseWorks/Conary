@@ -2,6 +2,8 @@
 
 mod arch_install;
 mod contracts;
+mod preflight_error;
+pub use preflight_error::NativeLifecyclePreflightError;
 
 use contracts::{
     NATIVE_LIFECYCLE_SAFE_PATH, validate_chroot_contract, validate_environment_key,
@@ -244,18 +246,21 @@ impl ScriptletExecutor {
         rpm: Option<&RpmRuntimeMetadata>,
         interpreter_availability: NativeInterpreterAvailability,
     ) -> AnyhowResult<()> {
-        self.require_target_root()
-            .map_err(|error| anyhow::anyhow!("SandboxRequirementUnsupported: {error}"))?;
+        self.require_target_root().map_err(|_| {
+            NativeLifecyclePreflightError::InvalidExecutionRoot {
+                root: self.root.clone(),
+            }
+        })?;
         if execution.timeout_ms < NATIVE_LIFECYCLE_MIN_TIMEOUT_MS
             || execution.timeout_ms > NATIVE_LIFECYCLE_MAX_TIMEOUT_MS
         {
-            bail!(
-                "TimeoutOutOfRange: native lifecycle entry '{}' timeout_ms {} is outside {}..={}",
-                execution.entry_id,
-                execution.timeout_ms,
-                NATIVE_LIFECYCLE_MIN_TIMEOUT_MS,
-                NATIVE_LIFECYCLE_MAX_TIMEOUT_MS
-            );
+            return Err(NativeLifecyclePreflightError::TimeoutOutOfRange {
+                entry_id: execution.entry_id.into(),
+                timeout_ms: execution.timeout_ms,
+                minimum_ms: NATIVE_LIFECYCLE_MIN_TIMEOUT_MS,
+                maximum_ms: NATIVE_LIFECYCLE_MAX_TIMEOUT_MS,
+            }
+            .into());
         }
 
         let body_bytes = decode_native_lifecycle_body_bytes(execution)?;
@@ -325,11 +330,12 @@ impl ScriptletExecutor {
         };
 
         if !interpreter_present {
-            bail!(
-                "SandboxRequirementUnsupported: Interpreter not found: {}. Cannot execute native lifecycle entry '{}'.",
-                execution.interpreter,
-                execution.entry_id
-            );
+            return Err(NativeLifecyclePreflightError::MissingInterpreter {
+                interpreter: execution.interpreter.into(),
+                entry_id: execution.entry_id.into(),
+                projected: interpreter_availability != NativeInterpreterAvailability::CurrentRoot,
+            }
+            .into());
         }
 
         Ok(())

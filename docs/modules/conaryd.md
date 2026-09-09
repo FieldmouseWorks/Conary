@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-09-08
-revision: 6
-summary: Document conaryd authorization, typed apply refusals, exact-generation package jobs, routes, and daemon boundaries
+last_updated: 2026-09-09
+revision: 7
+summary: Document conaryd authorization, typed apply and native preflight refusals, exact-generation package jobs, routes, and daemon boundaries
 ---
 
 # conaryd
@@ -45,6 +45,19 @@ the same diagnostic facts and guidance as the CLI without terminal escapes,
 so direct package-job callers and persisted error messages retain the safe
 preview/confirmation routes. This does not change job error schemas or the
 apply-intent predicate.
+
+Native runtime preflight and aggregated update failures retain the versioned
+`conary.package.failure.v1` observation report in
+`error.extensions.package_failure`. The report type lives in
+`crates/conary-agent-contract/src/package_failure.rs`; the Conary command adapter
+projects the original typed errors before the daemon converts its summary to
+text. Persisted job errors, job inspection, and `JobFailed` SSE use the same
+extension. It distinguishes requested root/database scope from the disposable
+execution root and reports observed earlier committed changesets for an update
+selection. An absent commit list means observations were not supplied, not that
+an enclosing job changed nothing. Unknown failure chains remain data and never
+authorize a retry. Job status, socket authorization, and approval predicates
+are unchanged; no database authority schema changes.
 
 A mutating package operation is complete only when its exact selected-root
 generation is published. If the package database commit succeeds but generation

@@ -2,7 +2,7 @@
 
 //! Transaction-wide runtime validation for exact native lifecycle programs.
 
-use super::{PreparedNativeTransaction, executor_for_owner, runtime};
+use super::{NativePreflightContext, PreparedNativeTransaction, executor_for_owner, runtime};
 use anyhow::{Context, Result, bail};
 use conary_core::ccs::native_transaction::{
     DebRecoveryResult, NativeEventPathProjection, NativeEventProgram, NativePackageIdentity,
@@ -105,12 +105,7 @@ impl PreparedNativeTransaction {
         for (event_index, event) in self.plan.events.iter().enumerate() {
             let projection = self.path_projection.for_event(event_index)?;
             self.preflight_event(event, root, mode, projection)
-                .with_context(|| {
-                    format!(
-                        "native transaction preflight failed for {} {} at stage {:?}",
-                        event.owner_package, event.owner_version, event.stage
-                    )
-                })?;
+                .context(NativePreflightContext::event(event, root))?;
             if let Some(recovery) = self.plan.deb.recovery_for_event(event) {
                 self.preflight_deb_recovery(recovery, root, mode, projection)?;
             }
@@ -189,12 +184,7 @@ impl PreparedNativeTransaction {
             }
             DebRecoveryResult::Run(node) => {
                 self.preflight_event(&node.event, root, mode, projection)
-                    .with_context(|| {
-                        format!(
-                            "Debian recovery preflight failed for {} {}",
-                            node.event.owner_package, node.event.owner_version
-                        )
-                    })?;
+                    .context(NativePreflightContext::event(&node.event, root))?;
                 self.preflight_deb_recovery(&node.on_success, root, mode, projection)?;
                 self.preflight_deb_recovery(&node.on_failure, root, mode, projection)
             }

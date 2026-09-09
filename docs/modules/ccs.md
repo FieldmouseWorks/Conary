@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-09-08
-revision: 77
-summary: Convert foreign packages through lossless source authority, decode-pass typed native digest evidence, one-pass authenticated payload layout derivation and object staging, atomic exact archive emission, typed pending-to-verified finalization, batched permanent-CAS durability, and typed native relation, lifecycle, and export contracts
+last_updated: 2026-09-09
+revision: 78
+summary: Preserve lossless foreign package authority, authenticated payload staging, exact archive emission, typed lifecycle execution and refusal facts, and native export contracts
 ---
 
 # CCS Module (conary-core/src/ccs/)
@@ -40,6 +40,16 @@ CLI presentation belongs to `apps/conary/src/commands/ccs/inspect/render.rs`,
 `apps/conary/src/commands/ccs/build/render.rs`, and the owning verification and
 export commands. Inspection JSON is a CLI projection of untrusted facts;
 rendering does not grant package trust or mutation authority.
+
+Native executor runtime requirements use
+`scriptlet/native_lifecycle/preflight_error.rs` for missing interpreters, invalid
+execution roots, and out-of-range timeouts. Current-root and projected interpreter
+absence remain distinct facts. Install-side event context and update aggregation
+preserve these errors through human and daemon reporting; they do not change
+lifecycle admission or execution order. Native, CCS, and batch install preparation
+savepoints roll back baseline snapshot creation on preflight refusal, before any
+lifecycle execution or package mutation. The UI and machine report contract are
+documented in the daily-driver UX matrix.
 
 ## Data Flow: Package Build
 

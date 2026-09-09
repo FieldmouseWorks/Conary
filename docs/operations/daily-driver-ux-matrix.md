@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-09-09
-revision: 26
-summary: Daily-driver CLI routes, enabled-source discovery, grouped transaction results, scoped recovery, coordinated progress, and typed diagnostics
+revision: 27
+summary: Daily-driver CLI routes, enabled-source discovery, grouped transaction results, scoped recovery, coordinated progress, and typed native runtime refusals
 ---
 
 # Daily-Driver UX Matrix
@@ -243,6 +243,59 @@ security-metadata refusals, comparing every database table before and after.
 The UI proof distinguishes member counts from installed variant counts. Update
 unit tests prove no-change/preview/apply outcomes against real selection and
 execution; UI tests cover mixed results and partial-failure wording. Remaining first-use fields and generation/recovery surfaces remain #132.
+
+## Native Runtime Refusals
+
+`commands/install/native_events/refusal.rs` retains the event owner, version,
+architecture, source format, stage, program, and actual execution root at the
+transaction-wide preflight boundary. Core returns typed missing-interpreter,
+invalid-root, and timeout-range failures; other causes retain their complete
+chain without text-derived remediation. `commands/package_failure.rs` projects
+these observations into `conary-agent-contract`'s closed, versioned
+`conary.package.failure.v1` report. `ui/diagnostics/package.rs` renders the same
+report; daemon jobs retain it in `error.extensions.package_failure`.
+
+Requested root/database scope stays separate from the materialized execution
+root, which can be temporary. For example, a refused native install reports:
+
+```text
+error: Native transaction preflight refused.
+  Package: summary-incoming
+  Version: 2.0.0-1
+  Architecture: x86_64
+  Source format: rpm
+  Stage: package-pre-install
+  Root: <requested root>
+  Database: <selected database>
+  Execution root: <materialized transaction root>
+  Entry: rpm:%pre
+  Cause: Required interpreter is missing
+  Interpreter: /missing/summary-interpreter
+  Path state: Current selected root
+note: Provide the required interpreter in the selected root at this lifecycle stage before retrying.
+```
+
+Update aggregation retains every underlying error and the changeset IDs returned
+by earlier commits. It renders each failure once at the closing diagnostic,
+after the applied table, with an explicit note that earlier commits remain
+applied. Requested package and event owner are separate when dependencies,
+relations, triggers, or recovery make them differ. Unknown errors retain every
+cause; their text cannot establish a typed refusal or generate a retry action.
+
+Native, CCS, and dependency-batch installs keep baseline selected-root preparation
+inside a savepoint until preflight succeeds. A refused transaction therefore
+does not leave baseline snapshot rows or advance the database mutation epoch.
+The runtime mutation lock still precedes preparation; the savepoint closes before
+lifecycle execution and does not combine independently committed updates.
+Artifact acquisition and disposable root preparation are not package mutation.
+
+Terminal/pipe/`NO_COLOR` captures cover standalone and batch native refusals, a
+first CCS update refusal, and a later CCS update refusal with earlier applied
+rows preserved. The standalone and batch fixtures compare every database table.
+Core tests distinguish current-root and projected interpreter absence without
+staging files. Strict report tests reject unknown schemas, variants, and fields.
+Broader native contract classification and full install/update JSON result
+surfaces remain under #644; this report is failure evidence, not apply authority.
 
 ## Install And Update Results
 

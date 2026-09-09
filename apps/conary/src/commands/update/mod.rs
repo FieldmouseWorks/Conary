@@ -4,6 +4,7 @@
 mod adopted_authority;
 mod collection;
 mod delta_stats;
+pub(crate) mod failure;
 pub(crate) mod outcome;
 mod package;
 mod pinning;

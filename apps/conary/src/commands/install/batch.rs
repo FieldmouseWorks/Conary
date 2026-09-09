@@ -377,7 +377,9 @@ impl<'a> BatchInstaller<'a> {
         let locked_root =
             crate::commands::generation::selected_root::LockedRuntimeRoot::acquire(self.db_path)?;
         let mut promise_plan = self.validate_batch_transaction(&conn, &mut packages)?;
-        let mut selected_root = locked_root.prepare(&conn, &tx_description)?;
+        // Baseline snapshot preparation belongs to the preflight refusal boundary.
+        let preflight_state = conn.savepoint()?;
+        let mut selected_root = locked_root.prepare(&preflight_state, &tx_description)?;
         let selected_path = selected_root.selected_root().to_path_buf();
         for package in &mut packages {
             package.normalize_ccs_for_selected_root(&selected_path)?;
@@ -394,9 +396,10 @@ impl<'a> BatchInstaller<'a> {
             .iter()
             .map(PreparedPackage::native_install_input)
             .collect::<Vec<_>>();
-        let native_transaction = PreparedNativeTransaction::prepare_batch(&conn, &native_inputs)?;
+        let native_transaction =
+            PreparedNativeTransaction::prepare_batch(&preflight_state, &native_inputs)?;
         let ccs_removal_hook_plan = CcsRemovalHookPlan::prepare(
-            &conn,
+            &preflight_state,
             packages
                 .iter()
                 .filter_map(|package| package.old_trove.as_deref()),
@@ -408,7 +411,8 @@ impl<'a> BatchInstaller<'a> {
         native_transaction.preflight(&selected_path, &native_execution_mode)?;
         let preflighted_ccs_removal_hooks =
             ccs_removal_hook_plan.preflight(&selected_path, self.sandbox_mode)?;
-        let mut ccs_hook_executors = ccs::prepare_hook_executors(&conn, &packages, &selected_path)?;
+        let mut ccs_hook_executors =
+            ccs::prepare_hook_executors(&preflight_state, &packages, &selected_path)?;
         let rollback_root = selected_root.capture_rollback_authority()?;
         let cas = selected_root.cas().clone();
 
@@ -416,7 +420,7 @@ impl<'a> BatchInstaller<'a> {
 
         // Phase 1: Unified planning across all packages after selected-root
         // normalization. Collect all files and detect cross-package conflicts.
-        let batch_plan = self.plan_batch(&packages, &conn)?;
+        let batch_plan = self.plan_batch(&packages, &preflight_state)?;
         if !batch_plan.conflicts.is_empty() {
             let conflict_msgs: Vec<String> =
                 batch_plan.conflicts.iter().map(|c| c.to_string()).collect();
@@ -429,7 +433,9 @@ impl<'a> BatchInstaller<'a> {
             "Batch plan: {} total files across {} packages",
             batch_plan.total_files, package_count
         );
-        self.preflight_file_ownership_for_batch(&conn, &packages)?;
+        self.preflight_file_ownership_for_batch(&preflight_state, &packages)?;
+
+        preflight_state.commit()?;
 
         // Phase 2: Run exact typed lifecycle events before payload mutation.
         preflighted_ccs_removal_hooks.execute()?;

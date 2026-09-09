@@ -102,12 +102,7 @@ fn mark_pending_changeset_rolled_back(
     })?)
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct UpdatePackageFailure {
-    package: String,
-    version: String,
-    reason: String,
-}
+use super::failure::{UpdateFailures, UpdatePackageFailure};
 
 struct PreparedFullUpdate {
     trove: Trove,
@@ -115,33 +110,6 @@ struct PreparedFullUpdate {
     repo: Repository,
     pkg_path: PathBuf,
     _source: PackageSource,
-}
-
-fn update_required_failure_message(
-    failures: &[UpdatePackageFailure],
-    total_requested: usize,
-) -> Option<String> {
-    if failures.is_empty() {
-        return None;
-    }
-
-    let sample = failures
-        .iter()
-        .map(|failure| {
-            format!(
-                "{} {} ({})",
-                failure.package, failure.version, failure.reason
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(", ");
-
-    Some(format!(
-        "{} of {} requested package update(s) failed: {}",
-        failures.len(),
-        total_requested,
-        sample
-    ))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -707,11 +675,11 @@ pub(super) async fn update_packages(
                         Ok(crate::commands::install::InstallOutcome::Completed) => {}
                         Err(e) => {
                             progress.fail_package(&trove.name, &e.to_string());
-                            warn!("  Package installation failed: {}", e);
+                            tracing::debug!("Package installation failed: {e:#}");
                             required_failures.push(UpdatePackageFailure {
                                 package: trove.name.clone(),
                                 version: repo_pkg.version.clone(),
-                                reason: e.to_string(),
+                                error: e,
                             });
                             let _ = std::fs::remove_file(pkg_path);
                             continue;
@@ -770,11 +738,11 @@ pub(super) async fn update_packages(
                         Ok(crate::commands::install::InstallOutcome::Completed) => {}
                         Err(e) => {
                             progress.fail_package(&trove.name, &e.to_string());
-                            warn!("  Package installation failed: {}", e);
+                            tracing::debug!("Package installation failed: {e:#}");
                             required_failures.push(UpdatePackageFailure {
                                 package: trove.name.clone(),
                                 version: repo_pkg.version.clone(),
-                                reason: e.to_string(),
+                                error: e,
                             });
                             let _ = std::fs::remove_file(&pkg_path);
                             continue;
@@ -821,18 +789,12 @@ pub(super) async fn update_packages(
         if let Some(package) = cancelled_package {
             anyhow::bail!("Update cancelled while installing {package}; remaining updates were not applied");
         }
-        if let Some(message) = update_required_failure_message(&required_failures, total_requested)
-        {
-            crate::ui::println!("Required failures: {}", required_failures.len());
-            for failure in &required_failures {
-                crate::ui::println!(
-                    "  {} {}: {}",
-                    failure.package,
-                    failure.version,
-                    failure.reason
-                );
-            }
-            return Err(anyhow::anyhow!(message));
+        if !required_failures.is_empty() {
+            return Err(UpdateFailures {
+                failures: required_failures,
+                total_requested,
+                committed_changesets: report.commits.iter().map(|commit| commit.changeset_id).collect(),
+            }.into());
         }
 
         let packages = report.applied_targets(&targets);

@@ -387,3 +387,15 @@ fn format_packages(packages: &[String]) -> String {
 #[cfg(test)]
 #[path = "package_ops/tests.rs"]
 mod tests;
+
+/// Preserve versioned package observations through persistence and terminal SSE.
+pub(super) fn job_error(
+    message: &str,
+    report: Option<&conary_agent_contract::PackageFailureReport>,
+) -> crate::daemon::DaemonError {
+    let mut error = crate::daemon::DaemonError::internal(message);
+    if let Some(report) = report {
+        error.extensions = Some(serde_json::json!({ "package_failure": report }));
+    }
+    error
+}
