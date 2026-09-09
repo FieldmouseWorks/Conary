@@ -8,6 +8,27 @@ use crate::packages::config_authority::{
 use crate::payload::PayloadNodeKind;
 use std::os::unix::fs::PermissionsExt;
 
+/// Declare fixture ownership consistently in entries and reopenable descriptors.
+/// Export must still reject disagreements; the fixture cannot change only one
+/// projection of the source tree's host-dependent ownership.
+pub(super) fn declare_root_fixture_ownership(result: &mut BuildResult) {
+    let nodes = result
+        .files
+        .iter_mut()
+        .map(|file| &mut file.node)
+        .chain(
+            result
+                .components
+                .values_mut()
+                .flat_map(|component| component.files.iter_mut().map(|file| &mut file.node)),
+        )
+        .chain(result.payloads.iter_mut().map(|payload| &mut payload.node));
+    for node in nodes {
+        node.user = crate::payload::PayloadIdentity::Numeric { id: 0 };
+        node.group = crate::payload::PayloadIdentity::Numeric { id: 0 };
+    }
+}
+
 #[test]
 fn source_backed_copy_preserves_bytes_and_computes_debian_md5() {
     let result = crate::ccs::builder::test_support::minimal_file_build_result(
@@ -67,6 +88,18 @@ fn architecture_mapping_remains_format_specific() {
 fn native_exporters_encode_absent_config_declarations_per_format() {
     let source = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(source.path().join("etc/demo")).unwrap();
+    // Fixture ancestor modes are declared explicitly so exports do not depend on
+    // the host umask or the source tree's creation defaults.
+    std::fs::set_permissions(
+        source.path().join("etc"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    std::fs::set_permissions(
+        source.path().join("etc/demo"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
     std::fs::write(source.path().join("etc/demo/app.conf"), b"matched\n").unwrap();
 
     let mut manifest = crate::ccs::manifest::CcsManifest::new_minimal("config-demo", "1.0.0");
@@ -92,10 +125,11 @@ fn native_exporters_encode_absent_config_declarations_per_format() {
             payload: ConfigPayloadAssociation::Absent,
         }),
     ];
-    let result = crate::ccs::builder::CcsBuilder::new(manifest, source.path())
+    let mut result = crate::ccs::builder::CcsBuilder::new(manifest, source.path())
         .unwrap()
         .build()
         .unwrap();
+    declare_root_fixture_ownership(&mut result);
     let output = tempfile::tempdir().unwrap();
 
     let rpm_path = output.path().join("config-demo.rpm");
@@ -183,6 +217,15 @@ fn native_exporters_round_trip_explicit_directory_and_symlink_topology() {
     let bin_dir = source.path().join("usr/bin");
     std::fs::create_dir_all(&state_dir).unwrap();
     std::fs::create_dir_all(&bin_dir).unwrap();
+    // Fixture ancestor modes are declared explicitly so exports do not depend on
+    // the host umask or the source tree's creation defaults.
+    for ancestor in ["usr", "usr/lib", "usr/lib/topology", "usr/bin"] {
+        std::fs::set_permissions(
+            source.path().join(ancestor),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+    }
     std::fs::set_permissions(&state_dir, std::fs::Permissions::from_mode(0o750)).unwrap();
     std::fs::write(bin_dir.join("topology-tool"), b"topology\n").unwrap();
     std::os::unix::fs::symlink("topology-tool", bin_dir.join("topology-link")).unwrap();
@@ -202,13 +245,14 @@ fn native_exporters_round_trip_explicit_directory_and_symlink_topology() {
         .unwrap()
         .build()
         .unwrap();
-    let state = result
-        .files
-        .iter_mut()
-        .find(|file| file.path == "/usr/lib/topology/state")
-        .expect("explicit topology directory authority");
-    state.node.user = crate::payload::PayloadIdentity::Numeric { id: 0 };
-    state.node.group = crate::payload::PayloadIdentity::Numeric { id: 0 };
+    assert!(
+        result
+            .files
+            .iter()
+            .any(|file| file.path == "/usr/lib/topology/state"),
+        "explicit topology directory authority"
+    );
+    declare_root_fixture_ownership(&mut result);
     let output = tempfile::tempdir().unwrap();
 
     let rpm_path = output.path().join("topology.rpm");
