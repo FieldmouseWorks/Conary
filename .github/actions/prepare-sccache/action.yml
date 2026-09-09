@@ -27,7 +27,7 @@ runs:
       run: python3 -I "$GITHUB_ACTION_PATH/prepare.py" describe
     - name: Restore the pinned sccache archive
       id: cache
-      uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+      uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
       with:
         path: ${{ steps.describe.outputs.cache_path }}
         key: ${{ steps.describe.outputs.cache_key }}
@@ -36,3 +36,9 @@ runs:
       env:
         SCCACHE_ARCHIVE_CACHE_HIT: ${{ steps.cache.outputs.cache-hit }}
       run: python3 -I "$GITHUB_ACTION_PATH/prepare.py" prepare
+    - name: Save the verified sccache archive
+      if: ${{ steps.cache.outputs.cache-hit != 'true' }}
+      uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+      with:
+        path: ${{ steps.describe.outputs.cache_path }}
+        key: ${{ steps.describe.outputs.cache_key }}
