@@ -2,6 +2,8 @@
 
 use super::*;
 
+mod hook_preflight;
+
 fn write_signed_ccs_fixture(
     directory: &std::path::Path,
     name: &str,
