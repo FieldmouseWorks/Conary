@@ -6,6 +6,7 @@ use super::*;
 use conary_core::packages::PackageFormat;
 use std::collections::{HashMap, HashSet};
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn prepare_ccs_package_for_batch(
     package: &conary_core::ccs::CcsPackage,
     db_path: &str,
