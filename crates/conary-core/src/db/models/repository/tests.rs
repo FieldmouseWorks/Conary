@@ -634,3 +634,42 @@ fn repository_delete_removes_only_an_orphaned_source_policy() {
         0
     );
 }
+
+#[test]
+fn package_search_matches_only_enabled_repositories_and_literal_patterns() {
+    let conn = Connection::open_in_memory().unwrap();
+    crate::db::schema::ensure_current(&conn).unwrap();
+    for enabled in [true, false] {
+        let mut repo = Repository::new(format!("source-{enabled}"), "https://example.test".into());
+        repo.enabled = enabled;
+        repo.insert(&conn).unwrap();
+        for (name, description) in [("literal_%", "needle"), ("literal-ab", "other")] {
+            let mut package = RepositoryPackage::new(
+                repo.id.unwrap(),
+                name.into(),
+                "1".into(),
+                VersionScheme::Rpm,
+                "checksum".into(),
+                1,
+                "https://example.test/pkg".into(),
+            );
+            package.description = Some(description.into());
+            package.insert(&conn).unwrap();
+        }
+    }
+    for pattern in ["literal_%", "needle"] {
+        let packages = RepositoryPackage::search(&conn, pattern).unwrap();
+        assert_eq!(packages.len(), 1);
+        assert_eq!(packages[0].name, "literal_%");
+        assert!(
+            Repository::find_by_id(&conn, packages[0].repository_id)
+                .unwrap()
+                .unwrap()
+                .enabled
+        );
+    }
+    assert_eq!(
+        RepositoryPackage::search(&conn, "").unwrap().len(),
+        RepositoryPackage::list_all(&conn).unwrap().len()
+    );
+}

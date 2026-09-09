@@ -311,6 +311,7 @@ fn update_summaries_in_terminal_pipe_and_no_color() {
                 command.args(["--exact", test, "--nocapture"]);
                 command
             };
+            crate::test_hooks::clear_inherited_hooks(&mut command);
             command
                 .env("CONARY_UPDATE_SUMMARY_CAPTURE", scenario)
                 .env("TERM", "xterm")

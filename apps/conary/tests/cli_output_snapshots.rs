@@ -35,7 +35,7 @@ fn search_no_match() {
     let (_tmp, db, _conn) = common::create_test_db();
     assert_eq!(
         stdout_of(&["search", "nonesuch", "--db-path", &db]),
-        "No packages found matching 'nonesuch'\n"
+        "Available packages:\n  Pattern: nonesuch\nNo matching packages in cached metadata from enabled repositories.\n  Packages: 0\n"
     );
 }
 

@@ -134,7 +134,7 @@ conary = "search ${repo_install_pkg}"
 [test.step.assert]
 exit_code = 0
 stdout_contains = "${repo_install_pkg}"
-stdout_not_contains = "No packages found"
+stdout_not_contains = "No matching packages"
 
 # --------------------------------------------------------------------------
 # TNPM02: local native fixture build

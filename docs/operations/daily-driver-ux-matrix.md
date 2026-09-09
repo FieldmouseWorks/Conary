@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-09-09
-revision: 23
-summary: Daily-driver CLI routes, grouped install/update/removal/rollback results, planner-backed previews, scoped recovery, coordinated progress, typed diagnostics, and truthful collection outcomes
+revision: 26
+summary: Daily-driver CLI routes, enabled-source discovery, grouped transaction results, scoped recovery, coordinated progress, and typed diagnostics
 ---
 
 # Daily-Driver UX Matrix
@@ -27,6 +27,37 @@ takeover, generation activation, or conaryd, the CLI should say that directly.
 | `autoremove` | Removes Conary-owned orphaned dependency packages | Adopted orphaned packages remain native-PM owned | Native package-manager authority is preserved for adopted orphans | Existing `cargo test -p conary --test native_pm_daily_driver autoremove_dry_run_lists_conary_owned_orphans_and_skips_adopted` |
 | `pin <pkg>` | Pins a selected installed variant | Ambiguous installed variants | Use `--version` and `--arch` to pin the intended variant | Existing `cargo test -p conary --test query pin_and_unpin_use_same_variant_selector` |
 | `unpin <pkg>` | Releases a selected installed variant | Ambiguous installed variants | Use `--version` and `--arch` to unpin the intended variant | Existing `cargo test -p conary --test query pin_and_unpin_use_same_variant_selector` |
+
+## Repository Discovery
+
+`search` and `query repquery` result lists, plus `repo list`, render through
+`apps/conary/src/ui/repository.rs`. Pattern and unfiltered queries both read
+packages from enabled repositories. Result-list fields retain version, release,
+architecture (or `Unspecified`), and source identity; absent architecture does
+not imply `noarch`. Empty results explicitly describe the cached metadata
+searched, rather than claiming that a package is unavailable upstream.
+
+Discovery distinguishes no configured repositories, all sources disabled,
+enabled sources without published metadata, and metadata checks due under the
+core sync policy. Guidance appears even alongside matching cached packages.
+A successful recent check with no matches needs no automatic retry advice.
+`repo list --all` retains disabled sources with `[off]` and separate checked
+and published timestamps. These facts do not establish package compatibility,
+source authentication, or transaction readiness.
+
+Recovery commands retain the selected database with shell-safe quoting. Disabled
+source recovery offers actual quoted repository names after an option terminator;
+control-containing names or database paths get explicit instructions rather than
+a runnable placeholder. Missing
+publication recommends a forced sync so a recent check alone cannot suppress
+the requested refresh. Queries never refresh metadata or change source state
+implicitly. `cargo test -p conary --test cli_repository_discovery` proves local
+repository enrollment, sync, search, disable/enable, stale and empty catalogs,
+execution of the printed recovery command, and terminal/pipe/`NO_COLOR` frames.
+The fixture uses an isolated database and local JSON metadata; it makes no
+claim about supported-host setup or native-source authentication.
+Container and VM onboarding assertions inspect read-only repository state, so
+these human output changes do not become a second source-state authority.
 
 ## Cross-Cutting Routes
 

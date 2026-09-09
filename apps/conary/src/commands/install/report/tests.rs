@@ -348,6 +348,7 @@ fn install_summary_commands_in_terminal_pipe_and_no_color() {
                 command.args(["--exact", test, "--nocapture"]);
                 command
             };
+            crate::test_hooks::clear_inherited_hooks(&mut command);
             command
                 .env("CONARY_INSTALL_CAPTURE", scenario)
                 .env("TERM", "xterm")

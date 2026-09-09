@@ -153,7 +153,9 @@ fn publication_capture_child() {
 
 #[test]
 fn default_publication_output_has_one_warning_and_one_retry() {
-    let output = Command::new(std::env::current_exe().unwrap())
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    crate::test_hooks::clear_inherited_hooks(&mut command);
+    let output = command
         .args([
             "--exact",
             "ui::diagnostics::tests::publication_capture_child",

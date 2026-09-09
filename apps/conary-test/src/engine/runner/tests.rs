@@ -607,19 +607,23 @@ async fn test_resource_scoped_flaky_retries_use_fresh_container() {
             .len()
             .saturating_sub(1)
         + 1;
-    let successful_setup = || ExecResult {
+    let successful_setup = |index| ExecResult {
         exit_code: 0,
-        stdout: String::new(),
+        stdout: if index + 1 == setup_exec_count {
+            "1\n".to_owned()
+        } else {
+            String::new()
+        },
         stderr: String::new(),
     };
     let mut exec_results = Vec::new();
-    exec_results.extend((0..setup_exec_count).map(|_| successful_setup()));
+    exec_results.extend((0..setup_exec_count).map(successful_setup));
     exec_results.push(ExecResult {
         exit_code: 1,
         stdout: String::new(),
         stderr: "first attempt".to_string(),
     });
-    exec_results.extend((0..setup_exec_count).map(|_| successful_setup()));
+    exec_results.extend((0..setup_exec_count).map(successful_setup));
     exec_results.push(ExecResult {
         exit_code: 1,
         stdout: "ok".to_string(),

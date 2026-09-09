@@ -572,37 +572,9 @@ fn exact_parser_config(
 pub fn cmd_repo_list(db_path: &str, all: bool) -> Result<()> {
     info!("Listing repositories");
     let conn = open_db(db_path)?;
-    let repos = if all {
-        conary_core::db::models::Repository::list_all(&conn)?
-    } else {
-        conary_core::db::models::Repository::list_enabled(&conn)?
-    };
+    let repos = conary_core::db::models::Repository::list_all(&conn)?;
+    crate::ui::repository::list(&repos, all, db_path);
 
-    if repos.is_empty() {
-        println!("No repositories configured");
-    } else {
-        println!("Repositories:");
-        for repo in repos {
-            let enabled_mark = if repo.enabled { "[x]" } else { "[ ]" };
-            let sync_status = repo
-                .last_checked_at
-                .as_ref()
-                .map(|ts| format!("checked {}", ts))
-                .unwrap_or_else(|| "never checked".to_string());
-            println!(
-                "  {} {} (priority: {}, {})",
-                enabled_mark, repo.name, repo.priority, sync_status
-            );
-            println!("      metadata: {}", repo.url);
-            if let Some(ref content) = repo.content_url {
-                println!("      content:  {} (reference mirror)", content);
-            }
-            println!(
-                "      security advisories: {}",
-                repo.security_advisory_support.as_str()
-            );
-        }
-    }
     Ok(())
 }
 
@@ -650,7 +622,9 @@ pub async fn cmd_repo_sync(name: Option<String>, db_path: &str, force: bool) -> 
     };
 
     if repos_to_sync.is_empty() {
-        println!("No repositories to sync");
+        crate::ui::message("No enabled repositories to sync.");
+        let repos = conary_core::db::models::Repository::list_all(&conn)?;
+        crate::ui::repository::metadata_guidance(&repos, db_path);
         return Ok(());
     }
 
@@ -719,18 +693,9 @@ pub fn cmd_search(pattern: &str, db_path: &str) -> Result<()> {
     let conn = open_db(db_path)?;
     let packages = conary_core::repository::search_packages(&conn, pattern)?;
 
-    if packages.is_empty() {
-        println!("No packages found matching '{}'", pattern);
-    } else {
-        println!("Found {} packages matching '{}':", packages.len(), pattern);
-        for pkg in packages {
-            let arch_str = pkg.architecture.as_deref().unwrap_or("noarch");
-            println!("  {} {} ({})", pkg.name, pkg.version, arch_str);
-            if let Some(desc) = &pkg.description {
-                println!("      {}", desc);
-            }
-        }
-    }
+    let repos = conary_core::db::models::Repository::list_all(&conn)?;
+    crate::ui::repository::packages(&packages, &repos, Some(pattern), db_path)?;
+
     Ok(())
 }
 
