@@ -18,11 +18,35 @@ use std::path::Path;
 // MOVE_MOUNT_F_EMPTY_PATH for musl; the kernel ABI is identical on both libc targets.
 const MOVE_MOUNT_F_EMPTY_PATH: libc::c_uint = 0x0000_0004;
 
-pub(super) struct PreparedBuildMounts(Vec<Option<PreparedBuildMount>>);
+pub(super) struct PreparedBuildMounts(Vec<PreparedMount>);
 
-struct PreparedBuildMount {
+/// Per-bind state recorded before fork. An optional input absent at preparation
+/// stays absent without a fresh source lookup, so it cannot later be attached
+/// as an ordinary host bind.
+enum PreparedMount {
+    /// Detached, identity-mapped clone ready to attach by descriptor.
+    Detached(DetachedBuildMount),
+    /// Ordinary host bind, or a caller that keeps its own host identity.
+    Direct,
+    /// Optional build input that did not exist when preparation inspected it.
+    AbsentInput,
+}
+
+struct DetachedBuildMount {
     fd: OwnedFd,
     readonly: bool,
+}
+
+/// What mount setup must do for one configured bind.
+pub(super) enum BuildMountPlan {
+    /// Optional input absent at preparation: skip without touching the source.
+    SkipAbsentInput,
+    /// Direct bind whose source is missing now: skip.
+    SkipMissingSource,
+    /// Attach the detached, identity-mapped clone by descriptor.
+    AttachDetached,
+    /// Plain bind of the source path with the caller's identity.
+    BindSource,
 }
 
 impl PreparedBuildMounts {
@@ -30,7 +54,7 @@ impl PreparedBuildMounts {
         let mut prepared = Vec::with_capacity(mounts.len());
         for mount in mounts {
             if mount.identity == BindMountIdentity::Host {
-                prepared.push(None);
+                prepared.push(PreparedMount::Direct);
                 continue;
             }
             let exists = mount.source.try_exists().map_err(|error| {
@@ -41,7 +65,9 @@ impl PreparedBuildMounts {
             })?;
             if !exists {
                 if mount.identity == BindMountIdentity::BuildInput {
-                    prepared.push(None);
+                    // Recorded absence: mount setup skips this entry on this
+                    // state even if the path appears before the child runs.
+                    prepared.push(PreparedMount::AbsentInput);
                     continue;
                 }
                 return Err(sandbox_error(format!(
@@ -52,7 +78,7 @@ impl PreparedBuildMounts {
             // An ordinary caller keeps its host UID in the user-namespace map;
             // its own files already have the right identity through plain binds.
             if !Uid::effective().is_root() {
-                prepared.push(None);
+                prepared.push(PreparedMount::Direct);
                 continue;
             }
             let source = CString::new(mount.source.as_os_str().as_bytes())
@@ -80,7 +106,7 @@ impl PreparedBuildMounts {
             if !metadata.is_dir() {
                 return Err(sandbox_error("Build workspace mount must be a directory"));
             }
-            prepared.push(Some(PreparedBuildMount {
+            prepared.push(PreparedMount::Detached(DetachedBuildMount {
                 fd,
                 readonly: !mount.writable,
             }));
@@ -89,11 +115,11 @@ impl PreparedBuildMounts {
     }
 
     pub(super) fn map_into(&self, child: Pid) -> Result<()> {
-        if self.0.iter().all(Option::is_none) {
+        if self.0.iter().all(|mount| mount.detached().is_none()) {
             return Ok(());
         }
         let namespace = File::open(format!("/proc/{child}/ns/user"))?;
-        for mount in self.0.iter().flatten() {
+        for mount in self.0.iter().filter_map(PreparedMount::detached) {
             let attr = libc::mount_attr {
                 attr_set: libc::MOUNT_ATTR_IDMAP
                     | if mount.readonly {
@@ -132,14 +158,34 @@ impl PreparedBuildMounts {
         Ok(())
     }
 
-    pub(super) fn contains(&self, index: usize) -> bool {
-        self.0[index].is_some()
+    /// Decide mount setup for one configured bind without re-resolving sources
+    /// that preparation already classified. `source_exists` runs only for
+    /// direct binds; an absent optional input is skipped on its recorded state.
+    pub(super) fn plan(
+        &self,
+        index: usize,
+        source_exists: impl FnOnce() -> bool,
+    ) -> BuildMountPlan {
+        match &self.0[index] {
+            PreparedMount::AbsentInput => BuildMountPlan::SkipAbsentInput,
+            PreparedMount::Detached(_) => BuildMountPlan::AttachDetached,
+            PreparedMount::Direct => {
+                if source_exists() {
+                    BuildMountPlan::BindSource
+                } else {
+                    BuildMountPlan::SkipMissingSource
+                }
+            }
+        }
     }
 
     /// Post-fork: attach a prepared mount without resolving the source again.
-    pub(super) fn attach(&self, index: usize, target: &Path) -> Result<bool> {
-        let Some(mount) = &self.0[index] else {
-            return Ok(false);
+    /// Only [`BuildMountPlan::AttachDetached`] entries carry one.
+    pub(super) fn attach(&self, index: usize, target: &Path) -> Result<()> {
+        let PreparedMount::Detached(mount) = &self.0[index] else {
+            return Err(sandbox_error(
+                "Build mount attachment requires a detached prepared mount",
+            ));
         };
         let target = CString::new(target.as_os_str().as_bytes())
             .map_err(|error| sandbox_error(format!("Invalid build target: {error}")))?;
@@ -160,7 +206,16 @@ impl PreparedBuildMounts {
                 std::io::Error::last_os_error()
             )));
         }
-        Ok(true)
+        Ok(())
+    }
+}
+
+impl PreparedMount {
+    fn detached(&self) -> Option<&DetachedBuildMount> {
+        match self {
+            Self::Detached(mount) => Some(mount),
+            Self::Direct | Self::AbsentInput => None,
+        }
     }
 }
 
@@ -189,7 +244,60 @@ mod tests {
         let source = directory.path().join("missing");
         let mounts =
             PreparedBuildMounts::prepare(&[BindMount::build_input(&source, "/input")]).unwrap();
-        assert!(!mounts.contains(0));
+        assert!(matches!(
+            mounts.plan(0, || false),
+            BuildMountPlan::SkipAbsentInput
+        ));
+    }
+
+    #[test]
+    fn absent_optional_input_stays_skipped_after_source_appears() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("input");
+        let mounts =
+            PreparedBuildMounts::prepare(&[BindMount::build_input(&source, "/input")]).unwrap();
+
+        // The source appears after preparation but before mount setup.
+        std::fs::create_dir(&source).unwrap();
+
+        let mut probed = false;
+        let plan = mounts.plan(0, || {
+            probed = true;
+            true
+        });
+        assert!(matches!(plan, BuildMountPlan::SkipAbsentInput));
+        assert!(
+            !probed,
+            "absent optional input must not be re-resolved during mount setup"
+        );
+    }
+
+    #[test]
+    fn host_bind_source_is_planned_as_a_direct_bind() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("host");
+        std::fs::create_dir(&source).unwrap();
+        let mounts =
+            PreparedBuildMounts::prepare(&[BindMount::readonly(&source, "/host")]).unwrap();
+        assert!(matches!(
+            mounts.plan(0, || true),
+            BuildMountPlan::BindSource
+        ));
+    }
+
+    #[test]
+    fn host_bind_with_missing_source_is_skipped() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("missing");
+        let mounts =
+            PreparedBuildMounts::prepare(&[BindMount::readonly(&source, "/host")]).unwrap();
+        let mut probed = false;
+        let plan = mounts.plan(0, || {
+            probed = true;
+            false
+        });
+        assert!(matches!(plan, BuildMountPlan::SkipMissingSource));
+        assert!(probed, "direct binds still re-check the source");
     }
 
     #[test]

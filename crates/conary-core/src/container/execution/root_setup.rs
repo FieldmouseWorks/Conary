@@ -8,6 +8,7 @@
 //! [`crate::container::child_safety`] for why, and `child_fork_safety` in the
 //! container tests for the check that keeps it true.
 
+use super::build_mounts::BuildMountPlan;
 use super::credentials::seal_namespace_credentials;
 use super::monitor::PidNamespaceMonitor;
 use super::*;
@@ -273,16 +274,32 @@ impl Sandbox {
             .map_err(|e| sandbox_error(format!("mount --make-rprivate failed: {e}")))?;
 
         for (index, bind_mount) in self.config.bind_mounts.iter().enumerate() {
-            if !build_mounts.contains(index) && !bind_mount.source.exists() {
-                // The hot path: a missing optional bind source is ordinary, and
-                // this ran on essentially every sandbox start. It was the most
-                // frequently executed `tracing` call in the post-fork child.
-                child_diag(&[
-                    b"skipping bind mount, source does not exist: ",
-                    bind_mount.source.as_os_str().as_bytes(),
-                ]);
-                continue;
-            }
+            let detached = match build_mounts.plan(index, || bind_mount.source.exists()) {
+                BuildMountPlan::AttachDetached => true,
+                BuildMountPlan::BindSource => false,
+                BuildMountPlan::SkipAbsentInput => {
+                    // Preparation proved this optional input absent. Never
+                    // resolve the source here: a path that appeared since is
+                    // not the input preparation classified, and binding it
+                    // would attach it under the caller's host identity.
+                    child_diag(&[
+                        b"skipping absent optional build input: ",
+                        bind_mount.source.as_os_str().as_bytes(),
+                    ]);
+                    continue;
+                }
+                BuildMountPlan::SkipMissingSource => {
+                    // The hot path: a missing optional bind source is ordinary,
+                    // and this ran on essentially every sandbox start. It was
+                    // the most frequently executed `tracing` call in the
+                    // post-fork child.
+                    child_diag(&[
+                        b"skipping bind mount, source does not exist: ",
+                        bind_mount.source.as_os_str().as_bytes(),
+                    ]);
+                    continue;
+                }
+            };
 
             let target = root.join(
                 bind_mount
@@ -290,7 +307,7 @@ impl Sandbox {
                     .strip_prefix("/")
                     .unwrap_or(&bind_mount.target),
             );
-            if build_mounts.contains(index) || bind_mount.source.is_dir() {
+            if detached || bind_mount.source.is_dir() {
                 fs::create_dir_all(&target)?;
             } else {
                 if let Some(parent) = target.parent() {
@@ -301,7 +318,8 @@ impl Sandbox {
                 }
             }
 
-            if build_mounts.attach(index, &target)? {
+            if detached {
+                build_mounts.attach(index, &target)?;
                 continue;
             }
 

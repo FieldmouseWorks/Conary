@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-10
-revision: 16
+revision: 17
 summary: Explicit recipe scaffolding, parsing, hermetic cook, Kitchen execution, and source provenance
 ---
 
@@ -168,6 +168,8 @@ execution follow it. Setup refuses a missing user namespace instead of
 continuing with the caller's host identity. Conary-owned writable layers use
 the mapped host ownership. The selected-root native lifecycle boundary remains
 owned by `scriptlet/process.rs`.
+An EOF before the mandatory namespace handshake is a typed sandbox setup
+refusal, and the parent terminates and reaps the child.
 
 Privileged Kitchen build directories use explicit ID-mapped bind mounts. The
 parent pins detached mounts before forking, makes each projection private, and
@@ -182,6 +184,8 @@ layers have caller-only outer directories; generated mount-point directories
 use explicit modes so a restrictive caller umask cannot break traversal. A filesystem or kernel that cannot
 provide the requested mapping produces a typed sandbox setup refusal before
 build execution.
+Optional build inputs absent during preparation remain absent for that
+execution, even if their source paths appear before mount attachment.
 
 Record mode uses the same explicit workspace projection for its private source,
 work, and install roots. The recording plan carries typed bind mounts through

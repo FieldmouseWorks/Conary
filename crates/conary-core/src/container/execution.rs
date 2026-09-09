@@ -651,7 +651,9 @@ impl Sandbox {
         let bytes_read = nix::unistd::read(request_fd, &mut message)
             .map_err(|e| sandbox_error(format!("User namespace handshake failed: {e}")))?;
         if bytes_read == 0 {
-            return Ok(());
+            return Err(sandbox_error(
+                "Sandbox child exited before requesting mandatory user namespace setup",
+            ));
         }
 
         match message[0] {
@@ -679,6 +681,43 @@ impl Sandbox {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn handshake_eof_is_setup_refusal_and_reaps_child() {
+        let sandbox = Sandbox::new(ContainerConfig::minimal(Duration::from_secs(5)));
+        let (request_read, request_write) = nix::unistd::pipe().expect("request pipe");
+        let (ack_read, ack_write) = nix::unistd::pipe().expect("ack pipe");
+
+        // SAFETY: the child performs only the async-signal-safe _exit call,
+        // reproducing a namespace setup failure before the handshake request.
+        match unsafe { nix::unistd::fork() }.expect("test fork should succeed") {
+            ForkResult::Child => unsafe { libc::_exit(127) },
+            ForkResult::Parent { child } => {
+                drop(request_write);
+                drop(ack_read);
+                let error = sandbox
+                    .complete_user_namespace_handshake(
+                        child,
+                        &request_read,
+                        &ack_write,
+                        &PreparedBuildMounts::prepare(&[]).unwrap(),
+                        Instant::now() + Duration::from_secs(5),
+                    )
+                    .expect_err("EOF before the mandatory request must refuse setup");
+                assert!(matches!(
+                    error,
+                    Error::ScriptletExecution {
+                        kind: ScriptletFailureKind::SandboxSetupUnavailable,
+                        ..
+                    }
+                ));
+                assert_eq!(
+                    waitpid(child, Some(nix::sys::wait::WaitPidFlag::WNOHANG)),
+                    Err(nix::errno::Errno::ECHILD)
+                );
+            }
+        }
+    }
 
     #[test]
     fn handshake_timeout_terminates_and_reaps_child() {
