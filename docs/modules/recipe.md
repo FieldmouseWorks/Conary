@@ -170,9 +170,10 @@ the mapped host ownership. The selected-root native lifecycle boundary remains
 owned by `scriptlet/process.rs`.
 
 Privileged Kitchen build directories use explicit ID-mapped bind mounts. The
-parent pins detached mounts before forking and applies the child's UID/GID map
-before acknowledging namespace setup; the child attaches them only in its own
-mount namespace. Builds can read private inputs and write their managed source,
+parent pins detached mounts before forking, makes each projection private, and
+applies the child's UID/GID map before acknowledging namespace setup. The child
+attaches them only in its own mount namespace; nested mounts cannot propagate
+back into a shared caller workspace. Builds can read private inputs and write their managed source,
 build, and destination trees while retaining root ownership on disk and in CCS
 payload entries. Explicit caller-provided destinations carry the same write
 authority; selected sysroot inputs receive read-only projections; ordinary host binds receive no ownership projection. No recursive
