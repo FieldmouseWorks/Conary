@@ -33,8 +33,8 @@ fn main() {
         "unknown".to_string()
     });
 
-    println!("cargo:rustc-env=CONARY_TEST_GIT_COMMIT={git_commit}");
-    println!("cargo:rustc-env=CONARY_TEST_COMMIT_TIMESTAMP={commit_timestamp}");
+    println!("cargo:rustc-env=CONARY_HARNESS_GIT_COMMIT={git_commit}");
+    println!("cargo:rustc-env=CONARY_HARNESS_COMMIT_TIMESTAMP={commit_timestamp}");
 
     if let Ok(build_timestamp) = env::var("CONARY_TEST_BUILD_TIMESTAMP")
         && !build_timestamp.is_empty()

@@ -32,8 +32,8 @@ impl BuildInfo {
     pub fn current() -> Self {
         Self::new(
             env!("CARGO_PKG_VERSION"),
-            env!("CONARY_TEST_GIT_COMMIT"),
-            env!("CONARY_TEST_COMMIT_TIMESTAMP"),
+            env!("CONARY_HARNESS_GIT_COMMIT"),
+            env!("CONARY_HARNESS_COMMIT_TIMESTAMP"),
             option_env!("CONARY_TEST_BUILD_TIMESTAMP").map(ToOwned::to_owned),
         )
     }
