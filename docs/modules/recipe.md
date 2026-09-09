@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-09
-revision: 13
+revision: 14
 summary: Explicit recipe scaffolding, parsing, hermetic cook, Kitchen execution, and source provenance
 ---
 
@@ -181,6 +181,11 @@ layers have caller-only outer directories; generated mount-point directories
 use explicit modes so a restrictive caller umask cannot break traversal. A filesystem or kernel that cannot
 provide the requested mapping produces a typed sandbox setup refusal before
 build execution.
+
+Record mode uses the same explicit workspace projection for its private source,
+work, and install roots. The recording plan carries typed bind mounts through
+execution, preserving their ownership authority; the caller's original source
+and incidental host paths receive no writable ownership projection.
 
 Before executing a build, the sandbox clears process, ambient, and bounding
 capabilities and enables no-new-privileges. Read-only mounts preserve inherited
