@@ -289,6 +289,7 @@ fn update_summaries_in_terminal_pipe_and_no_color() {
             "preflight",
             "noop",
             "cancel_full",
+            "cancel_ccs",
             "cancel_delta",
             "cancel_fallback",
         ] {

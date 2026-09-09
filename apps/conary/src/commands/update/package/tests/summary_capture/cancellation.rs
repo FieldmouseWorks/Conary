@@ -39,8 +39,33 @@ pub(super) async fn add_candidate(
             &package.header_bytes().unwrap(),
         ))
         .unwrap();
-    let path = dir.join("cancel-update.rpm");
+    let mut path = dir.join("cancel-update.rpm");
     package.write_file(&path).unwrap();
+    let ccs = scenario == "cancel_ccs";
+    if ccs {
+        let source = dir.join("cancel-ccs-source");
+        std::fs::create_dir_all(source.join("usr/share/a-summary-update")).unwrap();
+        std::fs::write(
+            source.join("usr/share/a-summary-update/data"),
+            b"updated payload",
+        )
+        .unwrap();
+        let mut manifest = CcsManifest::new_minimal("a-summary-update", "2.0.0-1");
+        manifest.package.version_scheme = VersionScheme::Rpm;
+        manifest.native_lifecycle = Some(rpm_upgrade_bundle("a-summary-update", "2.0.0-1"));
+        manifest.requirements = vec![
+            conary_core::repository::dependency_model::RepositoryRequirementGroup::simple(
+                conary_core::repository::dependency_model::RepositoryRequirementKind::Depends,
+                conary_core::repository::dependency_model::RepositoryRequirementClause::name_only(
+                    "summary-dependency".into(),
+                ),
+            ),
+        ];
+        let result = CcsBuilder::new(manifest, &source).unwrap().build().unwrap();
+        path = dir.join("cancel-update.ccs");
+        let key = crate::commands::ccs::load_or_create_local_dev_key().unwrap();
+        write_signed_current_ccs_package(&result, &path, &key, true).unwrap();
+    }
     let bytes = std::fs::read(&path).unwrap();
     let (url, _) = serve_test_file(path);
     let mut repo = Repository::new(
@@ -72,14 +97,20 @@ pub(super) async fn add_candidate(
     )
     .unwrap();
     repo.source_profile = Some("fedora-44".into());
-    let repo_id = repo.insert(conn).unwrap();
-    conary_core::repository::trust::openpgp::PreparedOpenPgpTrust::prepare(
-        &repo.name,
-        &conary_core::db::paths::keyring_dir(db_path),
-        repo.require_trust_policy().unwrap(),
-    )
-    .await
-    .unwrap();
+    let repo_id = if ccs {
+        insert_test_static_ccs_repository(conn, "cancel-ccs", "https://example.invalid/fixture")
+    } else {
+        repo.insert(conn).unwrap()
+    };
+    if !ccs {
+        conary_core::repository::trust::openpgp::PreparedOpenPgpTrust::prepare(
+            &repo.name,
+            &conary_core::db::paths::keyring_dir(db_path),
+            repo.require_trust_policy().unwrap(),
+        )
+        .await
+        .unwrap();
+    }
     let mut old = Trove::new_with_source(
         "a-summary-update".into(),
         "1.0.0".into(),
@@ -153,7 +184,7 @@ pub(super) async fn add_candidate(
     .insert(conn)
     .unwrap();
     fixtures::add_candidate(conn, dir, "z-summary-update", None, false, None, false);
-    if scenario != "cancel_full" {
+    if !matches!(scenario, "cancel_full" | "cancel_ccs") {
         let objects = conary_core::db::paths::objects_dir(db_path);
         let cas = conary_core::filesystem::CasStore::new(&objects).unwrap();
         let from_hash = cas.store(b"old package bytes").unwrap();
