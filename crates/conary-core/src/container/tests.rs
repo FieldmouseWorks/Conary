@@ -790,3 +790,53 @@ fn test_nested_build_mounts_do_not_propagate_to_caller() {
     assert_eq!(fs::read(destination.join("output")).unwrap(), b"phasephase");
     nix::mount::umount(workspace.path()).unwrap();
 }
+
+#[test]
+fn test_private_sandbox_directories_under_each_umask() {
+    const CHILD_MARKER: &str = "CONARY_TEST_PRIVATE_SANDBOX_UMASK";
+    if let Ok(mask) = std::env::var(CHILD_MARKER) {
+        let mask = u32::from_str_radix(&mask, 8).unwrap();
+        // This test process runs only this exact case; do not change the
+        // process-wide umask in the parent test runner.
+        unsafe { libc::umask(mask) };
+        let root = create_private_sandbox_dir().unwrap();
+        assert_eq!(
+            fs::metadata(root.path()).unwrap().permissions().mode() & 0o7777,
+            0o700
+        );
+        let mut config = ContainerConfig::default();
+        let inner = config
+            .add_private_writable_mount("/scratch", 0o1777)
+            .unwrap();
+        assert_eq!(
+            fs::metadata(inner.parent().unwrap())
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o7777,
+            0o700
+        );
+        assert_eq!(
+            fs::metadata(inner).unwrap().permissions().mode() & 0o7777,
+            0o1777
+        );
+        return;
+    }
+    for mask in ["0000", "0022", "0077"] {
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "container::tests::test_private_sandbox_directories_under_each_umask",
+                "--test-threads=1",
+            ])
+            .env(CHILD_MARKER, mask)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "umask {mask}: stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}

@@ -252,7 +252,7 @@ impl Sandbox {
         stdin: &[u8],
     ) -> Result<(i32, String, String)> {
         // Create temporary root directory for the container
-        let root_dir = TempDir::new()?;
+        let root_dir = create_private_sandbox_dir()?;
         let root = root_dir.path().join("root");
         fs::create_dir(&root)?;
         fs::set_permissions(&root, fs::Permissions::from_mode(0o755))?;
@@ -363,7 +363,7 @@ impl Sandbox {
         env: &[(&str, &str)],
         stdin: &[u8],
     ) -> Result<(i32, String, String)> {
-        let root_dir = TempDir::new()?;
+        let root_dir = create_private_sandbox_dir()?;
         let root = root_dir.path().join("root");
         fs::create_dir(&root)?;
         fs::set_permissions(&root, fs::Permissions::from_mode(0o755))?;

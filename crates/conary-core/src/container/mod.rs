@@ -418,7 +418,7 @@ impl ContainerConfig {
         mode: u32,
     ) -> Result<PathBuf> {
         let target = target.into();
-        let private_dir = Arc::new(TempDir::new()?);
+        let private_dir = Arc::new(create_private_sandbox_dir()?);
         let private_path = &private_dir.path().join("mount");
         fs::create_dir(private_path)?;
         let host_uid = sandbox_host_uid(Uid::effective().as_raw());
@@ -525,6 +525,13 @@ fn default_bind_mounts() -> Vec<BindMount> {
         BindMount::readonly("/etc/group", "/etc/group"),
         BindMount::readonly("/etc/hosts", "/etc/hosts"),
     ]
+}
+
+/// Request caller-only permissions at mkdir time, independently of the umask.
+fn create_private_sandbox_dir() -> std::io::Result<TempDir> {
+    tempfile::Builder::new()
+        .permissions(fs::Permissions::from_mode(0o700))
+        .tempdir()
 }
 
 fn add_private_tmp_mount(config: &mut ContainerConfig) {
