@@ -192,16 +192,12 @@ pub(super) fn prepare_user_namespace_root(root: &Path) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn signal_parent_user_namespace_ready(
-    sync: Option<&UserNamespaceSync>,
-    user_namespace_enabled: bool,
-) -> Result<()> {
+pub(super) fn signal_parent_user_namespace_ready(sync: Option<&UserNamespaceSync>) -> Result<()> {
     let Some(sync) = sync else {
         return Ok(());
     };
 
-    let message = if user_namespace_enabled { b"U" } else { b"N" };
-    nix::unistd::write(&sync.request_fd, message).map_err(|e| {
+    nix::unistd::write(&sync.request_fd, b"U").map_err(|e| {
         Error::scriptlet(
             ScriptletFailureKind::SandboxSetupUnavailable,
             format!("User namespace handshake request failed: {e}"),

@@ -169,8 +169,6 @@ continuing with the caller's host identity. Conary-owned writable layers use
 the mapped host ownership. The selected-root native lifecycle boundary remains
 owned by `scriptlet/process.rs`.
 
-See also: [docs/ARCHITECTURE.md](/docs/ARCHITECTURE.md).
-
 Privileged Kitchen build directories use explicit ID-mapped bind mounts. The
 parent pins detached mounts before forking and applies the child's UID/GID map
 before acknowledging namespace setup; the child attaches them only in its own
@@ -188,3 +186,5 @@ mount restrictions, and an unenforceable read-only mount fails closed regardless
 of optional capability-policy mode. Build-mount preparation lives in
 `container/execution/build_mounts.rs`; the final credential seal lives in
 `container/execution/credentials.rs`.
+
+See also: [docs/ARCHITECTURE.md](/docs/ARCHITECTURE.md).

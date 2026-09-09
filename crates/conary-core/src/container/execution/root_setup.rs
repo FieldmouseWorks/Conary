@@ -128,7 +128,7 @@ impl Sandbox {
                 ))
             })?;
             user_namespace_enabled = true;
-            signal_parent_user_namespace_ready(userns_sync.as_ref(), true)?;
+            signal_parent_user_namespace_ready(userns_sync.as_ref())?;
         }
 
         if self.config.isolate_pid {

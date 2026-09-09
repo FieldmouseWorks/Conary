@@ -668,8 +668,10 @@ fn test_sandbox_cannot_restore_mount_authority() {
     let mut mapped = BindMount::build_workspace(workspace.path());
     mapped.target = PathBuf::from("/sealed");
     mapped.writable = false;
-    let mut config = ContainerConfig::default();
-    config.memory_limit = 0;
+    let mut config = ContainerConfig {
+        memory_limit: 0,
+        ..ContainerConfig::default()
+    };
     config.add_bind_mount(mapped);
     config.add_bind_mount(BindMount::readonly(
         std::env::current_exe().unwrap(),

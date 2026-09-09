@@ -656,7 +656,6 @@ impl Sandbox {
                 )?;
                 build_mounts.map_into(child)?;
             }
-            b'N' => {}
             other => {
                 return Err(sandbox_error(format!(
                     "Unexpected user namespace handshake message: {other}"
