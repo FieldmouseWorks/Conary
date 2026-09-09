@@ -14,6 +14,10 @@ use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 
+// Linux UAPI include/uapi/linux/mount.h (v6.16). libc does not expose
+// MOVE_MOUNT_F_EMPTY_PATH for musl; the kernel ABI is identical on both libc targets.
+const MOVE_MOUNT_F_EMPTY_PATH: libc::c_uint = 0x0000_0004;
+
 pub(super) struct PreparedBuildMounts(Vec<Option<PreparedBuildMount>>);
 
 struct PreparedBuildMount {
@@ -147,7 +151,7 @@ impl PreparedBuildMounts {
                 c"".as_ptr(),
                 libc::AT_FDCWD,
                 target.as_ptr(),
-                libc::MOVE_MOUNT_F_EMPTY_PATH,
+                MOVE_MOUNT_F_EMPTY_PATH,
             )
         };
         if result < 0 {
