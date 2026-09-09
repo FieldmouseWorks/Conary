@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-09-09
-revision: 60
-summary: Map fixture ownership, including native refusal boundaries, repository discovery journeys, command transaction captures, typed boot-tool interfaces, and cross-source lifecycle proof
+revision: 61
+summary: Map fixture ownership, including native refusals, repository discovery, command captures, typed boot-tool interfaces, and the refreshed Tumbleweed lifecycle snapshot
 ---
 
 # Test Fixtures And Proof Maps
@@ -463,7 +463,11 @@ Each fixture family should record:
   its enabled OSS and non-OSS declarations to the official history snapshot
   matching the pinned image `VERSION_ID`; Update and OpenH264 remain authentic
   declarations but are disabled because they have no release-matched history
-  authority and are not inputs to the lifecycle proof. `fedora44` is the existing
+  authority and are not inputs to the lifecycle proof. The current snapshot is
+  `20260908`, observed from the digest-pinned amd64 image; repository declaration
+  hashes are measured after the snapshot rewrite. Upstream retention is not
+  guaranteed by a digest pin; #971 owns durable preservation of reviewed image
+  bytes after the recurring retired-manifest failures. `fedora44` is the existing
   `conary-test` runner distro key; public CCS target IDs remain
   `fedora-44`, `ubuntu-26.04`, and `arch`; `solus` remains a separate candidate
   and conformance-fixture identity.
