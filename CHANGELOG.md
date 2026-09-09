@@ -12,6 +12,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - expose typed CCS verification through JSON and MCP (#960)
 
 ### Changed
+- batch isolated release-policy mutations for faster verification (#990)
 - remove retired host-identity setup path
 
 ### Fixed
