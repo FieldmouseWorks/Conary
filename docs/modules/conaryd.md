@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-09-09
-revision: 8
+last_updated: 2026-09-10
+revision: 9
 summary: Document conaryd authorization, typed apply and native preflight refusals, exact-generation package jobs, routes, and daemon boundaries
 ---
 
@@ -70,6 +70,15 @@ publication never mutates the ambient root passed to the daemon; the new
 generation is the execution result.
 
 ## Route Reference
+
+The Unix-socket client checks response media types before decoding: ordinary
+JSON results require `application/json`, structured daemon errors require
+`application/problem+json`, and event streams require `text/event-stream`
+before any event callback. Header names and media-type names are case
+insensitive, and valid parameters are accepted through the media-type parser.
+Missing, malformed, duplicate, or mismatched Content-Type fields produce bounded
+protocol errors. Empty cancellation responses do not require a JSON media type.
+The interpretation follows [RFC 9110, section 8.3](https://www.rfc-editor.org/rfc/rfc9110.html#section-8.3).
 
 The route list below is checked by `scripts/check-doc-truth.sh` against
 `apps/conaryd/src/daemon/routes/{system,transactions,query,events}.rs`.

@@ -39,6 +39,13 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+mod response;
+
+/// Read timeout while waiting for the SSE response head.
+const SSE_HEADER_TIMEOUT: Duration = Duration::from_secs(10);
+/// Read timeout while consuming SSE events after a verified head.
+const SSE_EVENT_TIMEOUT: Duration = Duration::from_secs(300);
+
 /// Daemon client for connecting to conaryd
 pub struct DaemonClient {
     /// Path to the Unix socket
@@ -104,6 +111,8 @@ pub struct UpdateOptions {
 /// HTTP response from daemon
 struct HttpResponse {
     status_code: u16,
+    /// Every `Content-Type` header value, in wire order.
+    content_type: Vec<String>,
     body: String,
 }
 
@@ -262,7 +271,7 @@ impl DaemonClient {
     {
         // Connect to SSE stream for this job
         let mut stream = UnixStream::connect(&self.socket_path)?;
-        stream.set_read_timeout(Some(Duration::from_secs(300)))?;
+        stream.set_read_timeout(Some(SSE_HEADER_TIMEOUT))?;
 
         // Send HTTP request for SSE
         let request = format!(
@@ -276,17 +285,12 @@ impl DaemonClient {
         );
         stream.write_all(request.as_bytes())?;
 
-        // Read response headers
+        // Read the bounded response head and verify SSE setup before consuming
+        // any event data, so a mismatch cannot reach the event callback.
         let mut reader = BufReader::new(stream);
-        let mut status_line = String::new();
-        reader.read_line(&mut status_line)?;
-
-        // Parse status
-        let status_code: u16 = status_line
-            .split_whitespace()
-            .nth(1)
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(500);
+        let (status_code, content_types) =
+            response::read_network_head(&mut reader, self.timeout.min(SSE_HEADER_TIMEOUT))
+                .map_err(|diagnostic| conary_core::Error::IoError(diagnostic.to_string()))?;
 
         if status_code != 200 {
             return Err(conary_core::Error::IoError(format!(
@@ -295,14 +299,9 @@ impl DaemonClient {
             )));
         }
 
-        // Skip headers until empty line
-        loop {
-            let mut header = String::new();
-            reader.read_line(&mut header)?;
-            if header.trim().is_empty() {
-                break;
-            }
-        }
+        response::verify_content_type(&content_types, response::ExpectedMediaType::EventStream)
+            .map_err(conary_core::Error::IoError)?;
+        reader.get_ref().set_read_timeout(Some(SSE_EVENT_TIMEOUT))?;
 
         // Read SSE events
         let mut event_data = String::new();
@@ -411,44 +410,28 @@ impl DaemonClient {
         // Send request
         stream.write_all(request.as_bytes())?;
 
-        // Read response
-        let mut response = String::new();
-        stream.read_to_string(&mut response)?;
-
-        // Parse response
-        self.parse_http_response(&response)
-    }
-
-    /// Parse HTTP response
-    fn parse_http_response(&self, response: &str) -> Result<HttpResponse> {
-        let mut lines = response.lines();
-
-        // Parse status line
-        let status_line = lines
-            .next()
-            .ok_or_else(|| conary_core::Error::IoError("Empty response from daemon".to_string()))?;
-
-        let status_code: u16 = status_line
-            .split_whitespace()
-            .nth(1)
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(500);
-
-        for line in &mut lines {
-            if line.is_empty() {
-                break;
-            }
-        }
-
-        // Get body (everything after headers)
-        let body: String = lines.collect::<Vec<_>>().join("\n");
-
-        Ok(HttpResponse { status_code, body })
+        // Parse the bounded HTTP head before reading or decoding its body.
+        let mut reader = BufReader::new(stream);
+        let (status_code, content_type) = response::read_network_head(&mut reader, self.timeout)
+            .map_err(|diagnostic| conary_core::Error::IoError(diagnostic.to_string()))?;
+        reader.get_ref().set_read_timeout(Some(self.timeout))?;
+        let mut body = String::new();
+        reader.read_to_string(&mut body)?;
+        Ok(HttpResponse {
+            status_code,
+            content_type,
+            body,
+        })
     }
 
     /// Parse successful response body
     fn parse_response<T: serde::de::DeserializeOwned>(&self, response: HttpResponse) -> Result<T> {
         if response.status_code >= 200 && response.status_code < 300 {
+            response::verify_content_type(
+                &response.content_type,
+                response::ExpectedMediaType::Json,
+            )
+            .map_err(conary_core::Error::IoError)?;
             serde_json::from_str(&response.body).map_err(|e| {
                 conary_core::Error::IoError(format!("Failed to parse response: {}", e))
             })
@@ -459,7 +442,13 @@ impl DaemonClient {
 
     /// Parse error response
     fn parse_error<T>(&self, response: HttpResponse) -> Result<T> {
-        // Try to parse as DaemonError
+        // Daemon errors are RFC 7807 problem+json; verify before deserializing.
+        response::verify_content_type(
+            &response.content_type,
+            response::ExpectedMediaType::ProblemJson,
+        )
+        .map_err(conary_core::Error::IoError)?;
+
         if let Ok(error) = serde_json::from_str::<DaemonError>(&response.body) {
             Err(conary_core::Error::IoError(format!(
                 "Daemon error ({}): {}",
@@ -467,8 +456,8 @@ impl DaemonClient {
             )))
         } else {
             Err(conary_core::Error::IoError(format!(
-                "Request failed with status {}: {}",
-                response.status_code, response.body
+                "Daemon error response body is not valid problem JSON (status {})",
+                response.status_code
             )))
         }
     }
@@ -508,6 +497,172 @@ pub fn should_forward_to_daemon() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn response(status_code: u16, content_type: &[&str], body: &str) -> HttpResponse {
+        HttpResponse {
+            status_code,
+            content_type: content_type.iter().map(|value| value.to_string()).collect(),
+            body: body.to_string(),
+        }
+    }
+
+    /// Serve the given raw HTTP responses on a Unix socket, one per accept.
+    fn serve_responses(socket_path: PathBuf, responses: Vec<String>) {
+        let listener = std::os::unix::net::UnixListener::bind(&socket_path).unwrap();
+        std::thread::spawn(move || {
+            for raw in responses {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    return;
+                };
+                let mut request = [0u8; 1024];
+                let _ = stream.read(&mut request);
+                let _ = stream.write_all(raw.as_bytes());
+            }
+        });
+    }
+
+    #[test]
+    fn parse_response_accepts_json_with_parameters_and_case() {
+        let client = DaemonClient::new();
+        let parsed: CreateTransactionResponse = client
+            .parse_response(response(
+                200,
+                &["Application/JSON; charset=\"UTF-8\""],
+                r#"{"job_id":"job-1","status":"queued","queue_position":0,"location":"/v1/transactions/job-1"}"#,
+            ))
+            .unwrap();
+        assert_eq!(parsed.job_id, "job-1");
+    }
+
+    #[test]
+    fn parse_response_rejects_missing_malformed_duplicate_and_mismatched_types() {
+        let client = DaemonClient::new();
+        let cases: [(&[&str], &str); 4] = [
+            (&[], "daemon response is missing a Content-Type header"),
+            (
+                &["not a media type"],
+                "daemon response has a malformed Content-Type header",
+            ),
+            (
+                &["application/json", "application/json"],
+                "daemon response has duplicate Content-Type headers",
+            ),
+            (
+                &["text/plain"],
+                "daemon response Content-Type is not application/json",
+            ),
+        ];
+
+        for (content_type, expected) in cases {
+            let error = client
+                .parse_response::<CreateTransactionResponse>(response(200, content_type, "{}"))
+                .unwrap_err();
+            assert!(error.to_string().contains(expected), "{error}");
+        }
+    }
+
+    #[test]
+    fn parse_error_accepts_problem_json() {
+        let client = DaemonClient::new();
+        let error = client
+            .parse_error::<CreateTransactionResponse>(response(
+                400,
+                &["application/problem+json"],
+                r#"{"type":"urn:conary:error:bad_request","title":"Bad Request","status":400,"detail":"bad spec"}"#,
+            ))
+            .unwrap_err();
+        assert!(error.to_string().contains("Daemon error (400): bad spec"));
+    }
+
+    #[test]
+    fn parse_error_rejects_non_problem_json() {
+        let client = DaemonClient::new();
+        let error = client
+            .parse_error::<CreateTransactionResponse>(response(500, &["text/plain"], "boom"))
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("daemon response Content-Type is not application/problem+json"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn cancel_transaction_accepts_empty_204_without_content_type() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket_path = dir.path().join("daemon.sock");
+        serve_responses(
+            socket_path.clone(),
+            vec!["HTTP/1.1 204 No Content\r\n\r\n".to_string()],
+        );
+
+        let client = DaemonClient::with_socket_path(&socket_path);
+        assert!(client.cancel_transaction("job-1").is_ok());
+    }
+
+    #[test]
+    fn wait_for_job_streams_events_after_verified_event_stream_head() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket_path = dir.path().join("daemon.sock");
+        let sse = concat!(
+            "HTTP/1.1 200 OK\r\n",
+            "Content-Type: text/event-stream\r\n",
+            "\r\n",
+            "data: {\"type\":\"job_completed\",\"job_id\":\"job-1\",\"duration_ms\":5}\n\n"
+        );
+        let details = concat!(
+            "HTTP/1.1 200 OK\r\n",
+            "Content-Type: application/json\r\n",
+            "\r\n",
+            r#"{"id":"job-1","idempotency_key":null,"kind":"install","status":"completed","spec":{},"result":null,"error":null,"requested_by_uid":null,"created_at":"2026-01-01T00:00:00Z","started_at":null,"completed_at":null,"queue_position":null}"#
+        );
+        serve_responses(
+            socket_path.clone(),
+            vec![sse.to_string(), details.to_string()],
+        );
+
+        let client = DaemonClient::with_socket_path(&socket_path);
+        let events = AtomicUsize::new(0);
+        let details = client
+            .wait_for_job("job-1", |_| {
+                events.fetch_add(1, Ordering::Relaxed);
+            })
+            .unwrap();
+
+        assert_eq!(events.load(Ordering::Relaxed), 1);
+        assert_eq!(details.id, "job-1");
+    }
+
+    #[test]
+    fn wait_for_job_rejects_non_event_stream_before_callback() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket_path = dir.path().join("daemon.sock");
+        let raw = concat!(
+            "HTTP/1.1 200 OK\r\n",
+            "Content-Type: application/json\r\n",
+            "\r\n",
+            "data: {\"type\":\"job_completed\",\"job_id\":\"job-1\",\"duration_ms\":5}\n\n"
+        );
+        serve_responses(socket_path.clone(), vec![raw.to_string()]);
+
+        let client = DaemonClient::with_socket_path(&socket_path);
+        let events = AtomicUsize::new(0);
+        let error = client
+            .wait_for_job("job-1", |_| {
+                events.fetch_add(1, Ordering::Relaxed);
+            })
+            .unwrap_err();
+
+        assert_eq!(events.load(Ordering::Relaxed), 0);
+        assert!(
+            error
+                .to_string()
+                .contains("daemon response Content-Type is not text/event-stream"),
+            "{error}"
+        );
+    }
 
     #[test]
     fn test_client_creation_uses_dedicated_daemon_socket_default() {
