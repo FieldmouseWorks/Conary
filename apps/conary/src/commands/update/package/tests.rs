@@ -450,7 +450,7 @@ async fn static_ccs_update_verifies_signature_before_lifecycle_execution_preflig
 }
 
 #[tokio::test]
-async fn update_delta_candidate_executes_typed_rpm_lifecycle() {
+async fn update_with_advertised_delta_executes_typed_rpm_lifecycle() {
     let (_temp, db_path) = create_test_db();
     seed_test_bootable_runtime(Path::new(&db_path));
     let root = tempfile::tempdir().unwrap();
@@ -554,12 +554,12 @@ async fn update_delta_candidate_executes_typed_rpm_lifecycle() {
         Some("x86_64".to_string()),
     )
     .await
-    .expect("delta-selected typed RPM lifecycle update should execute");
+    .expect("advertised-delta typed RPM lifecycle update should execute");
 
     let conn = crate::commands::open_db(&db_path).unwrap();
     assert!(
         table_count(&conn, "changesets") > before_changesets,
-        "successful delta-selected lifecycle update must commit a changeset"
+        "successful advertised-delta lifecycle update must commit a changeset"
     );
     let installed_versions = Trove::find_by_name(&conn, "vim")
         .unwrap()

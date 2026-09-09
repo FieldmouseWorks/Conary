@@ -62,7 +62,7 @@ async fn update_summary_capture_child() {
             false,
         );
     }
-    if scenario.starts_with("fallback_") {
+    if scenario.starts_with("advertised_delta_") {
         add_candidate(
             &conn,
             temp.path(),
@@ -72,7 +72,7 @@ async fn update_summary_capture_child() {
             Some("a-summary-update <= 2.0.0"),
             false,
         );
-        fixtures::add_failing_delta(&conn, temp.path(), scenario != "fallback_apply");
+        fixtures::add_failing_delta(&conn, temp.path(), scenario != "advertised_delta_apply");
     }
     if scenario.starts_with("named_") {
         let base = Trove::find_by_name(&conn, "test-runtime-base").unwrap()[0]
@@ -117,7 +117,7 @@ async fn update_summary_capture_child() {
             "preview"
                 | "relation_preview"
                 | "sequence_preview"
-                | "fallback_preview"
+                | "advertised_delta_preview"
                 | "named_preview"
         ),
         SandboxMode::Always,
@@ -242,9 +242,9 @@ async fn update_summary_capture_child() {
         assert_eq!(
             result.unwrap(),
             match scenario.as_str() {
-                "sequence_preview" | "fallback_preview" =>
+                "sequence_preview" | "advertised_delta_preview" =>
                     crate::commands::update::outcome::UpdateOutcome::Planned { packages: 2 },
-                "sequence_apply" | "fallback_download" | "fallback_apply" =>
+                "sequence_apply" | "advertised_delta_download" | "advertised_delta_apply" =>
                     crate::commands::update::outcome::UpdateOutcome::Applied { packages: 2 },
                 "preview" | "relation_preview" | "named_preview" =>
                     crate::commands::update::outcome::UpdateOutcome::Planned { packages: 1 },
@@ -258,17 +258,17 @@ async fn update_summary_capture_child() {
         "preview"
             | "relation_preview"
             | "sequence_preview"
-            | "fallback_preview"
+            | "advertised_delta_preview"
             | "named_preview"
             | "noop"
     ) {
         assert_eq!(crate::commands::test_helpers::database_rows(&conn), before);
-    } else if scenario.starts_with("fallback_") {
+    } else if scenario.starts_with("advertised_delta_") {
         assert!(
             Trove::find_by_name(&conn, "a-summary-update")
                 .unwrap()
                 .is_empty(),
-            "deferred delta fallback reinstalled the removed target"
+            "admitted artifact order reinstalled the removed target"
         );
         assert_eq!(
             Trove::find_by_name(&conn, "z-summary-update").unwrap()[0].version,
@@ -287,14 +287,18 @@ async fn update_summary_capture_child() {
             | "published"
             | "pending"
             | "sequence_apply"
-            | "fallback_download"
-            | "fallback_apply"
+            | "advertised_delta_download"
+            | "advertised_delta_apply"
             | "named_apply"
     ) {
         let (prepared, saved): (i32, i64) = conn.query_row("SELECT full_downloads, total_bytes_saved FROM delta_stats ORDER BY id DESC LIMIT 1", [], |row| Ok((row.get(0)?, row.get(1)?))).unwrap();
         let selected = if matches!(
             scenario.as_str(),
-            "mixed" | "preflight" | "sequence_apply" | "fallback_download" | "fallback_apply"
+            "mixed"
+                | "preflight"
+                | "sequence_apply"
+                | "advertised_delta_download"
+                | "advertised_delta_apply"
         ) {
             2
         } else {
@@ -345,9 +349,9 @@ fn update_summaries_in_terminal_pipe_and_no_color() {
             "relation_apply",
             "sequence_preview",
             "sequence_apply",
-            "fallback_preview",
-            "fallback_download",
-            "fallback_apply",
+            "advertised_delta_preview",
+            "advertised_delta_download",
+            "advertised_delta_apply",
             "named_preview",
             "named_apply",
             "apply",
@@ -358,8 +362,8 @@ fn update_summaries_in_terminal_pipe_and_no_color() {
             "noop",
             "cancel_full",
             "cancel_ccs",
-            "cancel_delta",
-            "cancel_fallback",
+            "cancel_advertised_delta",
+            "cancel_advertised_bad_delta",
         ] {
             let test =
                 "commands::update::package::tests::summary_capture::update_summary_capture_child";
@@ -488,7 +492,7 @@ fn update_summaries_in_terminal_pipe_and_no_color() {
             ] {
                 assert!(frame.contains(field), "{frame}");
             }
-            if scenario.starts_with("fallback_") {
+            if scenario.starts_with("advertised_delta_") {
                 let planned = frame
                     .split_once("Planned package changes:")
                     .unwrap()
@@ -546,7 +550,7 @@ fn update_summaries_in_terminal_pipe_and_no_color() {
                 "preview"
                     | "relation_preview"
                     | "sequence_preview"
-                    | "fallback_preview"
+                    | "advertised_delta_preview"
                     | "named_preview"
             ) {
                 assert!(!frame.contains("Generation:"), "{frame}");
@@ -560,14 +564,14 @@ fn update_summaries_in_terminal_pipe_and_no_color() {
             );
             let applied = frame.split_once("Applied package changes:").unwrap().1;
             assert!(
-                applied.contains(if scenario.starts_with("fallback_") {
+                applied.contains(if scenario.starts_with("advertised_delta_") {
                     "Updated (2):"
                 } else {
                     "Updated (1):"
                 }),
                 "{frame}"
             );
-            if scenario.starts_with("fallback_") {
+            if scenario.starts_with("advertised_delta_") {
                 assert!(applied.contains("Removed (1):"), "{frame}");
                 assert!(!applied.contains("Installed (1):"), "{frame}");
                 assert!(!frame.contains("Delta failures:"), "{frame}");
