@@ -153,15 +153,18 @@ mod tests {
 
     #[test]
     fn missing_authority_command_is_typed() {
-        let error = query_package_names(
-            "test",
-            "/conary/definitely-missing-install-reason-authority",
-            &[],
-        )
-        .unwrap_err();
-        assert!(matches!(
-            error,
-            InstallReasonAuthorityError::CommandUnavailable { .. }
-        ));
+        let temp_dir = tempfile::tempdir().unwrap();
+        let missing_command = temp_dir
+            .path()
+            .join("definitely-missing-install-reason-authority")
+            .display()
+            .to_string();
+        let error = query_package_names("test", &missing_command, &[]).unwrap_err();
+        match error {
+            InstallReasonAuthorityError::CommandUnavailable { command, .. } => {
+                assert_eq!(command, missing_command);
+            }
+            other => panic!("expected CommandUnavailable, got {other:?}"),
+        }
     }
 }
