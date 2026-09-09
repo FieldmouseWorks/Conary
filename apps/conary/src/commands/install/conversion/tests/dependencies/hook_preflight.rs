@@ -19,6 +19,8 @@ async fn ccs_dependency_preview_preserves_incoming_hook_preflight_without_mutati
         let key = crate::commands::ccs::load_or_create_local_dev_key().unwrap();
         let mut dependency = CcsManifest::new_minimal("hook-dependency", "1.0.0");
         let mut incoming = CcsManifest::new_minimal("hook-root", "1.0.0");
+        dependency.package.platform.as_mut().unwrap().arch = Some("x86_64".into());
+        incoming.package.platform.as_mut().unwrap().arch = Some("x86_64".into());
         if with_dependency {
             incoming.requirements = vec![RepositoryRequirementGroup::simple(
                 RepositoryRequirementKind::Depends,
