@@ -10,6 +10,8 @@ use tracing::info;
 /// Pin a package to prevent updates and removal
 pub fn cmd_pin(selector: InstalledPackageSelector, db_path: &str) -> Result<()> {
     info!("Pinning package: {}", selector.name);
+    let _mutation =
+        crate::commands::generation::selected_root::LockedRuntimeRoot::acquire(db_path)?;
     let conn = open_db(db_path)?;
     let resolved = resolve_installed_package(&conn, &selector)?;
     let trove = resolved.trove;
@@ -33,6 +35,8 @@ pub fn cmd_pin(selector: InstalledPackageSelector, db_path: &str) -> Result<()> 
 /// Unpin a package to allow updates and removal
 pub fn cmd_unpin(selector: InstalledPackageSelector, db_path: &str) -> Result<()> {
     info!("Unpinning package: {}", selector.name);
+    let _mutation =
+        crate::commands::generation::selected_root::LockedRuntimeRoot::acquire(db_path)?;
     let conn = open_db(db_path)?;
     let resolved = resolve_installed_package(&conn, &selector)?;
     let trove = resolved.trove;
@@ -77,3 +81,6 @@ pub fn cmd_list_pinned(db_path: &str) -> Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests;
