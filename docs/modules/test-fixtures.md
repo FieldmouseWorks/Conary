@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-09
-revision: 59
+revision: 60
 summary: Map fixture ownership, including native refusal boundaries, repository discovery journeys, command transaction captures, typed boot-tool interfaces, and cross-source lifecycle proof
 ---
 
@@ -762,7 +762,8 @@ Each fixture family should record:
   `cargo test -p conary-agent-contract`, and `cargo test -p conaryd`.
 - **Assertions:** standalone and batch native missing-interpreter refusals leave
   every database table unchanged, including baseline snapshots and mutation
-  epoch; first/later CCS update refusals preserve failed package state and
+  epoch; `native_pm_daily_driver` additionally checks all-table autoremove
+  refusal with the typed interpreter diagnostic; first/later CCS update refusals preserve failed package state and
   earlier commits; terminal, pipe, and `NO_COLOR` keep exact causal facts.
   Strict machine reports retain requested/event identities and distinct roots;
   daemon job storage and terminal events preserve the same extension.

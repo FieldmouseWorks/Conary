@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-09
-revision: 28
+revision: 29
 summary: Daily-driver CLI routes, enabled-source discovery, grouped transaction results, scoped recovery, coordinated progress, and typed native runtime refusals
 ---
 
@@ -288,6 +288,8 @@ cause; their text cannot establish a typed refusal or generate a retry action.
 Native, CCS, and dependency-batch installs keep baseline selected-root preparation
 inside a savepoint until preflight succeeds. A refused transaction therefore
 does not leave baseline snapshot rows or advance the database mutation epoch.
+Autoremove retains the native cause through its preflight wrapper and rolls back
+preparation observations after each read-only check, on success as well as refusal.
 The runtime mutation lock still precedes preparation; the savepoint closes before
 lifecycle execution and does not combine independently committed updates.
 Artifact acquisition and disposable root preparation are not package mutation.
