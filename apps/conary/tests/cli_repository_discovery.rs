@@ -299,3 +299,18 @@ fn disabled_repository_recovery_preserves_option_like_and_quoted_names() {
             .enabled
     );
 }
+
+#[test]
+fn control_containing_recovery_values_are_instructions_not_runnable_placeholders() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = temp.path().join("line\nbreak.db");
+    conary_core::db::init(&db).unwrap();
+    let conn = conary_core::db::open(&db).unwrap();
+    let mut repo = Repository::new("line\nbreak".into(), "https://example.invalid".into());
+    repo.enabled = false;
+    repo.insert(&conn).unwrap();
+    let (_, stderr) = run(&db, &["repo", "list"]);
+    assert!(stderr.contains("Use 'conary repo enable' with repository name line\\nbreak"));
+    assert!(!stderr.contains("note: Run:"));
+    assert!(!stderr.contains("line\nbreak"));
+}

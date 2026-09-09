@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-09
-revision: 24
+revision: 25
 summary: Daily-driver CLI routes, enabled-source discovery, grouped transaction results, scoped recovery, coordinated progress, and typed diagnostics
 ---
 
@@ -45,7 +45,10 @@ A successful recent check with no matches needs no automatic retry advice.
 and published timestamps. These facts do not establish package compatibility,
 source authentication, or transaction readiness.
 
-Recovery commands retain the selected database with shell-safe quoting. Missing
+Recovery commands retain the selected database with shell-safe quoting. Disabled
+source recovery offers actual quoted repository names after an option terminator;
+control-containing names or database paths get explicit instructions rather than
+a runnable placeholder. Missing
 publication recommends a forced sync so a recent check alone cannot suppress
 the requested refresh. Queries never refresh metadata or change source state
 implicitly. `cargo test -p conary --test cli_repository_discovery` proves local

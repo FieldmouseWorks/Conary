@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-09
-revision: 55
+revision: 56
 summary: Map fixture ownership, including repository discovery journeys, command transaction captures, typed boot-tool interfaces, and cross-source lifecycle proof
 ---
 
@@ -733,7 +733,8 @@ Each fixture family should record:
 - **Owner:** `apps/conary/src/ui/repository.rs` and repository query commands.
 - **Purpose:** Prove enabled-source discovery, explicit cached-result scope,
   missing/disabled/unpublished/stale/empty source guidance, exact package
-  fields, and copyable database-scoped recovery.
+  fields, and copyable database-scoped recovery, including option-like and
+  shell-sensitive repository names.
 - **Fixture sources:** disposable loopback HTTP JSON catalog and isolated database in
   `apps/conary/tests/cli_repository_discovery.rs`.
 - **Fast proof:** `cargo test -p conary --test cli_repository_discovery`;
