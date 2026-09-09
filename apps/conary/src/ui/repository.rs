@@ -61,7 +61,7 @@ pub(crate) fn metadata_guidance(repos: &[Repository], db_path: &str) {
     if enabled.is_empty() {
         note("All configured repositories are disabled.");
         command_note("conary repo list --all", db_path);
-        command_note("conary repo enable <NAME> --yes", db_path);
+        command_note("conary repo enable <NAME>", db_path);
         return;
     }
     let unpublished: Vec<_> = enabled
@@ -89,9 +89,9 @@ pub(crate) fn metadata_guidance(repos: &[Repository], db_path: &str) {
     if !unpublished.is_empty() || !due.is_empty() {
         command_note(
             if unpublished.is_empty() {
-                "conary repo sync --yes"
+                "conary repo sync"
             } else {
-                "conary repo sync --force --yes"
+                "conary repo sync --force"
             },
             db_path,
         );

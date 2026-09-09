@@ -67,7 +67,7 @@ fn discovery_journey_distinguishes_missing_disabled_unpublished_and_cached_sourc
     add(&db, temp.path());
     let (_, stderr) = run(&db, &["query", "repquery"]);
     assert!(stderr.contains("Repository fixture has no published metadata."));
-    assert!(stderr.contains("conary repo sync --force --yes --db-path='"));
+    assert!(stderr.contains("conary repo sync --force --db-path='"));
     assert!(stderr.contains("'\"'\"'"));
 
     // Execute the exact printed recovery command, including its quoted database.
@@ -116,9 +116,9 @@ fn discovery_journey_distinguishes_missing_disabled_unpublished_and_cached_sourc
     let (stdout, stderr) = run(&db, &["search", "needle"]);
     assert!(stdout.contains("Packages: 1"));
     assert!(stderr.contains("cached results may be outdated"));
-    assert!(stderr.contains("conary repo sync --yes --db-path="));
+    assert!(stderr.contains("conary repo sync --db-path="));
 
-    run(&db, &["repo", "disable", "fixture", "--yes"]);
+    run(&db, &["repo", "disable", "fixture"]);
     for args in [
         vec!["search", "needle"],
         vec!["query", "repquery", "needle"],
@@ -127,7 +127,7 @@ fn discovery_journey_distinguishes_missing_disabled_unpublished_and_cached_sourc
         let (stdout, stderr) = run(&db, &args);
         assert!(!stdout.contains("fixture-package"));
         assert!(stderr.contains("All configured repositories are disabled."));
-        assert!(stderr.contains("conary repo enable <NAME> --yes --db-path="));
+        assert!(stderr.contains("conary repo enable <NAME> --db-path="));
         assert!(!stderr.contains("repo sync"));
     }
     let (stdout, _) = run(&db, &["repo", "list"]);
@@ -136,9 +136,9 @@ fn discovery_journey_distinguishes_missing_disabled_unpublished_and_cached_sourc
     let (stdout, _) = run(&db, &["repo", "list", "--all"]);
     assert!(stdout.contains("[off]"));
     assert!(stdout.contains("Last published:"));
-    run(&db, &["repo", "enable", "fixture", "--yes"]);
+    run(&db, &["repo", "enable", "fixture"]);
     write_metadata(temp.path(), false);
-    run(&db, &["repo", "sync", "--force", "--yes"]);
+    run(&db, &["repo", "sync", "--force"]);
     let (stdout, stderr) = run(&db, &["query", "repquery"]);
     assert!(stdout.contains("Packages: 0"));
     assert!(
