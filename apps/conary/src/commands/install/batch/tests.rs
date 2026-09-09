@@ -22,6 +22,8 @@ mod mutation_lock;
 mod preview;
 #[path = "tests/preview_native.rs"]
 mod preview_native;
+#[path = "tests/replacement.rs"]
+mod replacement;
 #[path = "tests/witness_universe.rs"]
 mod witness_universe;
 
@@ -153,6 +155,7 @@ fn test_batch_plan_detects_cross_package_conflict() {
         selection_reason: "Test".to_string(),
         is_upgrade: false,
         old_trove: None,
+        replacement: None,
         installed_components: vec![ComponentType::Runtime],
         classified_files: HashMap::new(),
         installed_component_names: None,
@@ -187,6 +190,7 @@ fn test_batch_plan_detects_cross_package_conflict() {
         selection_reason: "Test".to_string(),
         is_upgrade: false,
         old_trove: None,
+        replacement: None,
         installed_components: vec![ComponentType::Runtime],
         classified_files: HashMap::new(),
         installed_component_names: None,
@@ -244,6 +248,7 @@ fn test_prepared_package_to_trove() {
         selection_reason: "selected from the exact nginx dependency closure".to_string(),
         is_upgrade: false,
         old_trove: None,
+        replacement: None,
         installed_components: Vec::new(),
         classified_files: HashMap::new(),
         installed_component_names: None,
@@ -300,6 +305,7 @@ fn prepared_package_to_trove_preserves_matching_repository_provenance() {
         selection_reason: "selected from the exact parent closure".to_string(),
         is_upgrade: false,
         old_trove: None,
+        replacement: None,
         installed_components: Vec::new(),
         classified_files: HashMap::new(),
         installed_component_names: None,
@@ -362,6 +368,7 @@ fn prepared_test_package(name: &str, path: &str, content: &[u8]) -> PreparedPack
         selection_reason: "Required by wording that must not control ownership".to_string(),
         is_upgrade: false,
         old_trove: None,
+        replacement: None,
         installed_components: vec![ComponentType::Runtime],
         classified_files: HashMap::from([(ComponentType::Runtime, vec![path.to_string()])]),
         installed_component_names: None,
@@ -1171,6 +1178,7 @@ fn prepare_signed_ccs_dependency(
             repository_provenance: None,
             requested_source_identity: None,
         },
+        None,
     )
     .unwrap()
 }

@@ -182,6 +182,7 @@ pub(super) async fn prepare_repository_batch(
                     repository_provenance: Some(provenance),
                     requested_source_identity: None,
                 },
+                None,
             )?);
         } else {
             let Some(mut package) = prepare_package_for_batch(

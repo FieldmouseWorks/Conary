@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-09-09
-revision: 30
-summary: Daily-driver CLI routes, repository candidate and installed-variant details, grouped transaction results, scoped recovery, coordinated progress, and typed native runtime refusals
+revision: 32
+summary: Daily-driver CLI routes, exact installed CCS release selectors, repository details, grouped transaction results, scoped recovery, and typed native refusals
 ---
 
 # Daily-Driver UX Matrix
@@ -23,10 +23,54 @@ takeover, generation activation, or conaryd, the CLI should say that directly.
 | `remove <pkg>` | Conary-owned package removal; Debian residual conffiles are preserved | Adopted package removal without `--purge` | Use `--purge` to delete residual config state or externally owned adopted files; use `conary system unadopt <pkg> --yes` to stop adopted tracking without deleting files | `cargo test -p conary --test cli_daily_ux adopted_remove_refusal_routes_to_unadopt_or_purge` |
 | `update [pkg]` | Conary-owned update or security update from trusted advisory metadata | Adopted package update remains externally owned, unsupported advisory source fails before mutation | Refresh adoption after external changes; use `--ownership takeover` only for explicit Conary takeover | `cargo test -p conary --test cli_daily_ux adopted_update_routes_to_native_pm_and_refresh` |
 | `search <pattern>` | Repository search results from synced metadata | Empty or stale repository metadata | Run `conary repo sync` before assuming a package is unavailable | Existing query/search tests plus `cargo run -p conary -- search --help` |
-| `list [pkg]` | Installed package identity, files, path owner, pinned state | Ambiguous installed package variants | Use `--version` and `--arch` to select a specific installed variant | Existing `cargo test -p conary --test query list_info_refuses_ambiguous_variants_until_selector_is_given` |
+| `list [pkg]` | Installed package identity, files, path owner, pinned state | Ambiguous installed package variants | Use `--version`, `--release`, and `--arch` to select a specific installed variant | Existing `cargo test -p conary --test query list_info_refuses_ambiguous_variants_until_selector_is_given` |
 | `autoremove` | Removes Conary-owned orphaned dependency packages | Adopted orphaned packages remain native-PM owned | Native package-manager authority is preserved for adopted orphans | Existing `cargo test -p conary --test native_pm_daily_driver autoremove_dry_run_lists_conary_owned_orphans_and_skips_adopted` |
-| `pin <pkg>` | Pins a selected installed variant | Ambiguous installed variants | Use `--version` and `--arch` to pin the intended variant | Existing `cargo test -p conary --test query pin_and_unpin_use_same_variant_selector` |
-| `unpin <pkg>` | Releases a selected installed variant | Ambiguous installed variants | Use `--version` and `--arch` to unpin the intended variant | Existing `cargo test -p conary --test query pin_and_unpin_use_same_variant_selector` |
+| `pin <pkg>` | Pins a selected installed variant | Ambiguous installed variants | Use `--version`, `--release`, and `--arch` to pin the intended variant | Existing `cargo test -p conary --test query pin_and_unpin_use_same_variant_selector` |
+| `unpin <pkg>` | Releases a selected installed variant | Ambiguous installed variants | Use `--version`, `--release`, and `--arch` to unpin the intended variant | Existing `cargo test -p conary --test query pin_and_unpin_use_same_variant_selector` |
+
+## Installed Variant Selection
+
+Installed package selection combines exact version, separate signed CCS release,
+and architecture. `--release 3` selects the exact recorded release string;
+`--release none` selects records without a CCS envelope release. Omitting
+`--release` leaves releases unconstrained. The existing core release grammar
+validates numeric inputs; selection does not split a source version or normalize
+release strings.
+
+The selector is available on `list`, `pin`, `unpin`, `remove`, single-package
+`update`, `query scripts`, `query whatbreaks`, and `system adopt --convert`.
+For example, `conary list demo --info --version 2.0-1 --arch x86_64 --release 3`
+can inspect one of two installed CCS releases that share the source version
+and architecture. Ambiguity output includes each separate release and names
+these actual selection flags. `list` and installed script inspection retain
+the selected release in human output; scripts JSON keeps its existing schema.
+
+Selectors cannot be combined with list path/pinned queries, collection updates,
+unscoped updates, or artifact script inspection. Adopt conversion selectors
+require one package. Invalid release syntax fails in argument parsing, before
+database access. Selection does not change candidate resolution, dependencies,
+package ownership, lifecycle admission, or live-mutation confirmation.
+`cargo test -p conary --test installed_release_selector` and the shared selector
+unit tests prove numbered/absent releases, ambiguity, source version and
+architecture filters, and selected pin state on disposable databases.
+The parser in `apps/conary/src/commands/package_target/release.rs` is shared by
+runtime argument parsing and generated manuals.
+
+Update carries the selected installed snapshot through preview, full-artifact,
+and delta installation. Root preparation revalidates its record ID, identity,
+source observations, and pin state; batch execution repeats that validation
+under the runtime mutation lock. Unexpectedly missing or changed targets and a conflicting incoming identity
+refuse before mutation. Every target is validated in the initial private
+projection. If an earlier admitted relation effect then removes a later target,
+that later installation carries an explicit planned-absence guard: its original
+record must remain absent, and it never replaces a surviving name-match.
+Dependencies keep their own targets. The feature-enabled update summary
+captures prove this relation sequence in preview and apply.
+`cargo test -p conary --features test-hooks --test installed_release_update`
+proves that updating the second same-version/architecture release preserves
+its sibling and publishes the incoming payload ownership and CAS bytes. This
+fixture uses the fenced test-only mount boundary; real-mount proof remains a
+separate lifecycle gate.
 
 ## Repository Discovery
 

@@ -11,6 +11,19 @@ pub(super) struct PreparedUpdatePreview {
 }
 
 impl PreparedUpdatePreview {
+    pub(super) fn replacement_for(
+        &self,
+        trove: &Trove,
+    ) -> Result<&crate::commands::install::InstallReplacement> {
+        let id = trove
+            .id
+            .context("selected update has no installed identity")?;
+        self.packages
+            .get(&id)
+            .map(|package| &package.replacement)
+            .context("selected update has no retained replacement authority")
+    }
+
     pub(super) fn take_package(&mut self, trove: &Trove) -> Result<PreparedFullUpdate> {
         self.packages
             .remove(
@@ -44,6 +57,13 @@ pub(super) async fn plan_selected_updates(
         projection: Some(projection.clone()),
         ..Default::default()
     };
+    // Establish that every requested snapshot exists in the initial projection
+    // before earlier planned relation effects can legitimately remove one.
+    let initial = conary_core::db::open(projection.path())?;
+    for (trove, _) in selected {
+        crate::commands::install::revalidate_replacement_snapshot(&initial, trove)?;
+    }
+    drop(initial);
     let mut packages = std::collections::HashMap::new();
     let mut ordered = selected
         .iter()
@@ -85,10 +105,24 @@ pub(super) async fn plan_selected_updates(
             options.db_path,
         )?;
         let pkg_path = path.to_path_buf();
+        let projected = conary_core::db::open(projection.path())?;
+        let id = trove
+            .id
+            .context("selected update has no installed identity")?;
+        let replacement = if Trove::find_by_id(&projected, id)?.is_some() {
+            crate::commands::install::InstallReplacement::Existing(trove.clone())
+        } else {
+            // The private projection started with this exact selected row. Its
+            // absence here is an effect of an earlier admitted package, not a
+            // fallback for unexpected drift in the real installed database.
+            crate::commands::install::InstallReplacement::PlannedAbsent(trove.clone())
+        };
+        drop(projected);
         cmd_install_with_report(
             &path.to_string_lossy(),
             InstallOptions {
                 db_path: projection.path(),
+                replacement: Some(replacement.clone()),
                 repository_provenance: Some(repository_install_provenance_from_package(
                     &candidate.package,
                     &candidate.repository,
@@ -106,6 +140,7 @@ pub(super) async fn plan_selected_updates(
                 id,
                 PreparedFullUpdate {
                     trove: trove.clone(),
+                    replacement,
                     repo_pkg: candidate.package.clone(),
                     repo: candidate.repository.clone(),
                     pkg_path,

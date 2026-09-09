@@ -105,6 +105,7 @@ async fn cmd_install_with_intent(
         yes,
         from_source,
         repository_provenance: requested_repository_provenance,
+        replacement,
     } = opts;
 
     // Hint if source policy is unconfigured (first-run guidance)
@@ -183,6 +184,7 @@ async fn cmd_install_with_intent(
         yes,
         repository_provenance: requested_repository_provenance,
         requested_source_identity: from_source.as_deref(),
+        replacement: replacement.clone(),
     };
 
     let Some((pkg, format, repository_provenance)) = resolve_and_parse_package(
@@ -264,21 +266,27 @@ async fn cmd_install_with_intent(
     validate_package_relation_plan(&conn, &relation_plan)
         .context("Package conflicts and replacements cannot be applied")?;
 
-    let old_trove_to_upgrade =
-        match check_upgrade_status(&conn, pkg.as_ref(), &semantics, allow_downgrade, intent)? {
-            UpgradeCheck::FreshInstall => None,
-            UpgradeCheck::AlreadyInstalled(trove) => {
-                anyhow::bail!(
-                    "Package {} version {} ({}) is already installed",
-                    trove.name,
-                    trove.version,
-                    trove.architecture.as_deref().unwrap_or("no-arch")
-                )
-            }
-            UpgradeCheck::Upgrade(trove)
-            | UpgradeCheck::Downgrade(trove)
-            | UpgradeCheck::Replatform(trove) => Some(trove),
-        };
+    let old_trove_to_upgrade = match check_upgrade_status(
+        &conn,
+        pkg.as_ref(),
+        &semantics,
+        allow_downgrade,
+        intent,
+        replacement.as_ref(),
+    )? {
+        UpgradeCheck::FreshInstall => None,
+        UpgradeCheck::AlreadyInstalled(trove) => {
+            anyhow::bail!(
+                "Package {} version {} ({}) is already installed",
+                trove.name,
+                trove.version,
+                trove.architecture.as_deref().unwrap_or("no-arch")
+            )
+        }
+        UpgradeCheck::Upgrade(trove)
+        | UpgradeCheck::Downgrade(trove)
+        | UpgradeCheck::Replatform(trove) => Some(trove),
+    };
     let mut changes = vec![super::report::InstallChange::incoming(
         super::report::PackageIdentity::package(pkg.as_ref()),
         old_trove_to_upgrade.as_deref(),
@@ -297,6 +305,7 @@ async fn cmd_install_with_intent(
                 selection_reason.unwrap_or("Explicit package request"),
                 allow_downgrade,
                 source_profile,
+                replacement.as_ref(),
             )?
             .context("planned native package is already installed in preview state")?;
             prepared.repository_provenance = repository_provenance.clone();

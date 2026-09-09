@@ -13,8 +13,9 @@ use super::repository_batch::{
     RepositoryBatchMode, RepositoryBatchSelection, prepare_repository_batch,
 };
 use super::{
-    CcsEnvelopeAuthority, CcsTransactionInstallOptions, InstallIntent, RepositoryInstallProvenance,
-    verify_ccs_package_authority, verify_pending_ccs_conversion_authority,
+    CcsEnvelopeAuthority, CcsTransactionInstallOptions, InstallIntent, InstallReplacement,
+    RepositoryInstallProvenance, verify_ccs_package_authority,
+    verify_pending_ccs_conversion_authority,
 };
 use anyhow::{Context, Result};
 use conary_core::ccs::CcsPackage;
@@ -382,6 +383,9 @@ pub struct CcsArtifactInstallOptions<'a> {
     /// Exact transaction source policy established by explicit scope,
     /// persisted pin, or selected root repository provenance.
     pub resolution_policy: conary_core::repository::resolution_policy::ResolutionPolicy,
+    /// Exact installed-record authority selected by an update, distinct from
+    /// the incoming artifact selectors. `None` for ordinary installs.
+    pub replacement: Option<InstallReplacement>,
 }
 
 /// Attempt to convert a native package to CCS format
@@ -642,6 +646,7 @@ async fn install_verified_ccs_artifact(
         repository_provenance,
         requested_source_identity,
         resolution_policy,
+        replacement,
     } = opts;
 
     let ccs_pkg = CcsPackage::from_verified_archive(ccs_path, &verified)
@@ -697,6 +702,7 @@ async fn install_verified_ccs_artifact(
                 selected_manifest_components: None,
                 repository_provenance: repository_provenance.clone(),
                 requested_source_identity,
+                replacement: replacement.clone(),
             },
         )?;
         if dry_run && let Some(projection) = report.projection.as_deref() {
@@ -711,6 +717,7 @@ async fn install_verified_ccs_artifact(
                     repository_provenance,
                     requested_source_identity,
                 },
+                replacement.as_ref(),
             )?;
             BatchInstaller::new(db_path, sandbox_mode).preview_batch(
                 vec![prepared],
@@ -772,6 +779,7 @@ async fn install_verified_ccs_artifact(
             repository_provenance,
             requested_source_identity,
         },
+        replacement.as_ref(),
     )?);
 
     crate::ui::println!("Installing CCS package...");

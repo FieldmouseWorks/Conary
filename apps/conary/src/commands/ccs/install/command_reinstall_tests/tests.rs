@@ -213,6 +213,7 @@ async fn ccs_noarch_replacement_uses_transaction_trove_for_dependent_validation(
         false,
         crate::commands::install::InstallIntent::PackageChange,
         true,
+        None,
     )
     .unwrap();
     assert_eq!(upgrade_trove_id(&command_upgrade), noarch_id);

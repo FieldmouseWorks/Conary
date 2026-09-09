@@ -21,10 +21,8 @@ pub fn cmd_remove(
     purge: bool,
 ) -> Result<()> {
     remove_with_output(
-        package_name,
+        InstalledPackageSelector::new(package_name.to_string(), version, architecture),
         db_path,
-        version,
-        architecture,
         sandbox_mode,
         purge,
         RemovalOutput::Nested,
@@ -39,12 +37,12 @@ pub(crate) fn cmd_remove_cli(
     architecture: Option<String>,
     sandbox_mode: SandboxMode,
     purge: bool,
+    release: Option<crate::commands::InstalledRelease>,
 ) -> Result<()> {
     remove_with_output(
-        package_name,
+        InstalledPackageSelector::new(package_name.to_string(), version, architecture)
+            .with_release(release),
         db_path,
-        version,
-        architecture,
         sandbox_mode,
         purge,
         RemovalOutput::Command,
@@ -52,14 +50,13 @@ pub(crate) fn cmd_remove_cli(
 }
 
 fn remove_with_output(
-    package_name: &str,
+    selector: InstalledPackageSelector,
     db_path: &str,
-    version: Option<String>,
-    architecture: Option<String>,
     sandbox_mode: SandboxMode,
     purge: bool,
     output: RemovalOutput,
 ) -> Result<()> {
+    let package_name = selector.name.as_str();
     info!("Removing package: {}", package_name);
     crate::ui::println!("Removing package: {}", package_name);
     std::io::stdout().flush()?;
@@ -70,8 +67,6 @@ fn remove_with_output(
     }
 
     let conn = open_db(db_path)?;
-    let selector =
-        InstalledPackageSelector::new(package_name.to_string(), version.clone(), architecture);
     let resolved = resolve_installed_package(&conn, &selector)
         .with_context(|| format!("Failed to select package '{}'", package_name))?;
     let trove = resolved.trove;

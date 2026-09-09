@@ -280,14 +280,16 @@ pub(super) fn installed_troves_for_update(
     package: Option<String>,
     package_version: Option<String>,
     architecture: Option<String>,
+    release: Option<crate::commands::InstalledRelease>,
 ) -> Result<Vec<Trove>> {
     if let Some(pkg_name) = package {
-        let selector = InstalledPackageSelector::new(pkg_name, package_version, architecture);
+        let selector = InstalledPackageSelector::new(pkg_name, package_version, architecture)
+            .with_release(release);
         return Ok(vec![resolve_installed_package(conn, &selector)?.trove]);
     }
 
-    if package_version.is_some() || architecture.is_some() {
-        anyhow::bail!("A package name is required with --version or --arch for update");
+    if package_version.is_some() || release.is_some() || architecture.is_some() {
+        anyhow::bail!("A package name is required with --version, --release, or --arch for update");
     }
 
     Ok(Trove::list_all(conn)?)

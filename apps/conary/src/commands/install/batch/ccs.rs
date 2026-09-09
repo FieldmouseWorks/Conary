@@ -6,6 +6,7 @@ use super::*;
 use conary_core::packages::PackageFormat;
 use std::collections::{HashMap, HashSet};
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn prepare_ccs_package_for_batch(
     package: &conary_core::ccs::CcsPackage,
     db_path: &str,
@@ -14,6 +15,7 @@ pub(crate) fn prepare_ccs_package_for_batch(
     allow_downgrade: bool,
     intent: InstallIntent,
     source_authority: PreparedPackageSourceAuthority<'_>,
+    replacement: Option<&InstallReplacement>,
 ) -> Result<PreparedPackage> {
     let PreparedPackageSourceAuthority {
         repository_provenance,
@@ -30,6 +32,7 @@ pub(crate) fn prepare_ccs_package_for_batch(
         allow_downgrade,
         intent,
         false,
+        replacement,
     )?;
     let (is_upgrade, old_trove) = match upgrade {
         UpgradeCheck::FreshInstall => (false, None),
@@ -140,6 +143,7 @@ pub(crate) fn prepare_ccs_package_for_batch(
         selection_reason: selection_reason.to_string(),
         is_upgrade,
         old_trove,
+        replacement: replacement.cloned(),
         installed_components,
         classified_files,
         installed_component_names: Some(component_names),

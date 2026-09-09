@@ -366,6 +366,7 @@ fn converted_install_options<'a>(
         repository_provenance,
         requested_source_identity: None,
         resolution_policy: test_resolution_policy(),
+        replacement: None,
     }
 }
 
@@ -467,6 +468,7 @@ async fn converted_ccs_install_executes_directory_hooks() {
         repository_provenance: None,
         requested_source_identity: None,
         resolution_policy: test_resolution_policy(),
+        replacement: None,
     })
     .await
     .unwrap();
@@ -708,6 +710,7 @@ async fn converted_ccs_install_rolls_back_post_hook_failure() {
         repository_provenance: None,
         requested_source_identity: None,
         resolution_policy: test_resolution_policy(),
+        replacement: None,
     })
     .await
     .unwrap_err();
@@ -804,6 +807,7 @@ async fn converted_ccs_install_rejects_symlink_child_payload() {
         repository_provenance: None,
         requested_source_identity: None,
         resolution_policy: test_resolution_policy(),
+        replacement: None,
     })
     .await
     .unwrap_err();
@@ -895,6 +899,7 @@ async fn converted_ccs_install_rejects_child_before_package_symlink() {
         repository_provenance: None,
         requested_source_identity: None,
         resolution_policy: test_resolution_policy(),
+        replacement: None,
     })
     .await
     .unwrap_err();

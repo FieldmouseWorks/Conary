@@ -97,6 +97,7 @@ async fn ccs_dependency_preview_preserves_incoming_hook_preflight_without_mutati
                 repository_provenance: None,
                 requested_source_identity: None,
                 resolution_policy: test_resolution_policy(),
+                replacement: None,
             },
             &mut report,
         )

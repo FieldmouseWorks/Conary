@@ -41,4 +41,6 @@ pub struct QueryOptions {
     pub version: Option<String>,
     /// Installed package architecture selector for detailed package operations
     pub architecture: Option<String>,
+    /// Installed package release selector for detailed package operations
+    pub release: Option<crate::commands::InstalledRelease>,
 }

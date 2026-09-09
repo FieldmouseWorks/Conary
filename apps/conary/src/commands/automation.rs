@@ -124,6 +124,7 @@ async fn execute_planned_op(op: &PlannedOp, db_path: &str, root: &str) -> Result
                     yes: true,
                     from_source: None,
                     repository_provenance: None,
+                    replacement: None,
                 },
             )
             .await

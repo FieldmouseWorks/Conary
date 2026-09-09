@@ -59,6 +59,18 @@ pub enum QueryCommands {
 
         #[command(flatten)]
         db: DbArgs,
+
+        /// Installed package version to select
+        #[arg(short, long)]
+        version: Option<String>,
+
+        /// Installed package architecture to select
+        #[arg(long = "arch")]
+        architecture: Option<String>,
+
+        /// Installed CCS release to select, or "none" for a record without a CCS release
+        #[arg(long)]
+        release: Option<crate::commands::InstalledRelease>,
     },
 
     /// Query packages by installation reason
@@ -126,6 +138,10 @@ pub enum QueryCommands {
         /// Installed package architecture to select when multiple variants are installed
         #[arg(long = "arch")]
         architecture: Option<String>,
+
+        /// Installed CCS release to select, or "none" for a record without a CCS release
+        #[arg(long)]
+        release: Option<crate::commands::InstalledRelease>,
 
         /// Show full bundle entry details
         #[arg(long)]

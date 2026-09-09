@@ -104,6 +104,7 @@ async fn local_conversion_key_is_distinct_from_persisted_native_repository_autho
             repository_provenance: Some(provenance),
             requested_source_identity: None,
             resolution_policy: test_resolution_policy(),
+            replacement: None,
         },
         &mut Default::default(),
     )
@@ -178,6 +179,7 @@ async fn converted_local_artifact_persists_explicit_source_identity_without_repo
             repository_provenance: None,
             requested_source_identity: Some("fedora-44"),
             resolution_policy: test_resolution_policy(),
+            replacement: None,
         },
         &mut Default::default(),
     )

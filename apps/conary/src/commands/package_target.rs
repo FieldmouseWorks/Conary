@@ -4,12 +4,15 @@
 
 use anyhow::Result;
 use conary_core::db::models::{InstallSource, Trove, TroveType};
+mod release;
+pub use release::InstalledRelease;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct InstalledPackageSelector {
     pub(crate) name: String,
     pub(crate) version: Option<String>,
     pub(crate) architecture: Option<String>,
+    pub(crate) release: Option<InstalledRelease>,
 }
 
 impl InstalledPackageSelector {
@@ -18,7 +21,13 @@ impl InstalledPackageSelector {
             name,
             version,
             architecture,
+            release: None,
         }
+    }
+
+    pub(crate) fn with_release(mut self, release: Option<InstalledRelease>) -> Self {
+        self.release = release;
+        self
     }
 }
 
@@ -44,9 +53,10 @@ pub(crate) fn resolve_installed_package(
     let matches = matching_installed_packages(&troves, selector);
     match matches.as_slice() {
         [] => anyhow::bail!(
-            "Package '{}' with selector version={:?} architecture={:?} is not installed. Installed variants: {}",
+            "Package '{}' with selector version={:?} release={} architecture={:?} is not installed. Installed variants: {}. Use --version, --release, and/or --arch to choose one.",
             selector.name,
             selector.version,
+            format_selector_release(selector.release.as_ref()),
             selector.architecture,
             format_installed_variants(&troves)
         ),
@@ -66,7 +76,7 @@ pub(crate) fn resolve_installed_package(
                 .collect::<Vec<_>>()
                 .join("\n");
             anyhow::bail!(
-                "Multiple installed variants of '{}' match the selector:\n{}\nUse --version and/or --arch to choose one.",
+                "Multiple installed variants of '{}' match the selector:\n{}\nUse --version, --release, and/or --arch to choose one.",
                 selector.name,
                 variants
             )
@@ -85,12 +95,21 @@ fn matching_installed_packages<'a>(
                 .version
                 .as_deref()
                 .is_none_or(|version| trove.version == version)
+                && release_matches(selector.release.as_ref(), trove.package_release.as_deref())
                 && architecture_matches(
                     selector.architecture.as_deref(),
                     trove.architecture.as_deref(),
                 )
         })
         .collect()
+}
+
+fn release_matches(selector: Option<&InstalledRelease>, actual: Option<&str>) -> bool {
+    match selector {
+        None => true,
+        Some(InstalledRelease::Unspecified) => actual.is_none(),
+        Some(InstalledRelease::Exact(release)) => actual == Some(release.as_str()),
+    }
 }
 
 fn architecture_matches(selector: Option<&str>, actual: Option<&str>) -> bool {
@@ -103,12 +122,21 @@ fn architecture_matches(selector: Option<&str>, actual: Option<&str>) -> bool {
 
 fn format_installed_variant(trove: &Trove) -> String {
     format!(
-        "version {} [{}] ({}, {})",
+        "version {} [{}] (release {}, {}, {})",
         trove.version,
         trove.architecture.as_deref().unwrap_or("none"),
+        trove.package_release.as_deref().unwrap_or("none"),
         package_authority_label(trove.install_source.clone()),
         trove.version_scheme.as_str()
     )
+}
+
+fn format_selector_release(release: Option<&InstalledRelease>) -> &str {
+    match release {
+        None => "*",
+        Some(InstalledRelease::Unspecified) => "none",
+        Some(InstalledRelease::Exact(release)) => release.as_str(),
+    }
 }
 
 fn format_installed_variants(troves: &[Trove]) -> String {
@@ -157,6 +185,145 @@ mod tests {
         arm.insert(&conn).unwrap();
 
         conn
+    }
+
+    fn db_with_release_variants() -> rusqlite::Connection {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conary_core::db::schema::ensure_current(&conn).unwrap();
+
+        for release in [Some("1"), Some("2"), None] {
+            let mut trove = Trove::new_with_source(
+                "demo".to_string(),
+                "1.0.0".to_string(),
+                TroveType::Package,
+                InstallSource::Repository,
+                conary_core::repository::versioning::VersionScheme::Conary,
+            );
+            trove.architecture = Some("x86_64".to_string());
+            trove.package_release = release.map(str::to_string);
+            trove.insert(&conn).unwrap();
+        }
+
+        conn
+    }
+
+    #[test]
+    fn installed_release_parses_literal_none_as_unspecified() {
+        assert_eq!(
+            "none".parse::<InstalledRelease>().unwrap(),
+            InstalledRelease::Unspecified
+        );
+    }
+
+    #[test]
+    fn installed_release_retains_exact_digits_without_normalizing() {
+        assert_eq!(
+            "007".parse::<InstalledRelease>().unwrap(),
+            InstalledRelease::Exact("007".to_string())
+        );
+    }
+
+    #[test]
+    fn installed_release_rejects_invalid_values() {
+        for raw in [
+            "",
+            "0",
+            "00",
+            "-1",
+            "+1",
+            "1.0",
+            "abc",
+            " 1",
+            "18446744073709551616",
+        ] {
+            assert!(
+                raw.parse::<InstalledRelease>().is_err(),
+                "release {raw:?} should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn selector_new_leaves_release_unfiltered() {
+        let selector = InstalledPackageSelector::new("demo".to_string(), None, None);
+
+        assert!(selector.release.is_none());
+    }
+
+    #[test]
+    fn selector_resolves_exact_release() {
+        let conn = db_with_release_variants();
+        let selector = InstalledPackageSelector::new(
+            "demo".to_string(),
+            Some("1.0.0".to_string()),
+            Some("x86_64".to_string()),
+        )
+        .with_release(Some("2".parse().unwrap()));
+
+        let resolved = resolve_installed_package(&conn, &selector).unwrap();
+
+        assert_eq!(resolved.trove.package_release.as_deref(), Some("2"));
+    }
+
+    #[test]
+    fn selector_resolves_unspecified_release() {
+        let conn = db_with_release_variants();
+        let selector = InstalledPackageSelector::new("demo".to_string(), None, None)
+            .with_release(Some(InstalledRelease::Unspecified));
+
+        let resolved = resolve_installed_package(&conn, &selector).unwrap();
+
+        assert_eq!(resolved.trove.package_release, None);
+    }
+
+    #[test]
+    fn selector_without_release_filter_refuses_release_ambiguity() {
+        let conn = db_with_release_variants();
+        let selector = InstalledPackageSelector::new(
+            "demo".to_string(),
+            Some("1.0.0".to_string()),
+            Some("x86_64".to_string()),
+        );
+
+        let err = resolve_installed_package(&conn, &selector)
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("Multiple installed variants of 'demo' match"));
+        assert!(err.contains("release 1"));
+        assert!(err.contains("release 2"));
+        assert!(err.contains("release none"));
+        assert!(err.contains("--version, --release, and/or --arch"));
+    }
+
+    #[test]
+    fn selector_reports_no_match_for_unknown_release() {
+        let conn = db_with_release_variants();
+        let selector = InstalledPackageSelector::new("demo".to_string(), None, None)
+            .with_release(Some(InstalledRelease::Exact("3".to_string())));
+
+        let err = resolve_installed_package(&conn, &selector)
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("Package 'demo' with selector"));
+        assert!(err.contains("release=3"));
+        assert!(err.contains("Installed variants:"));
+        assert!(err.contains("release none"));
+        assert!(err.contains("--release"));
+    }
+
+    #[test]
+    fn selector_with_release_none_keeps_no_release_filter() {
+        let conn = db_with_release_variants();
+        let selector =
+            InstalledPackageSelector::new("demo".to_string(), None, None).with_release(None);
+
+        let err = resolve_installed_package(&conn, &selector)
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("Multiple installed variants of 'demo' match"));
     }
 
     #[test]
