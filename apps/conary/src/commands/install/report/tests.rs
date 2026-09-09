@@ -243,7 +243,7 @@ async fn install_summary_capture_child() {
         let packages = [&package, &second]
             .into_iter()
             .map(|path| {
-                super::super::prepare_package_for_batch(
+                super::super::batch::prepare_package_for_batch(
                     path,
                     &db_path,
                     InstallReason::Explicit,

@@ -34,7 +34,7 @@ mod source_policy;
 mod transaction;
 mod validation;
 
-pub use batch::{BatchInstaller, prepare_package_for_batch};
+pub use batch::BatchInstaller;
 pub use command::cmd_install;
 pub(crate) use command::cmd_install_cli;
 pub(crate) use command::cmd_install_replatform;
