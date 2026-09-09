@@ -15,6 +15,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - remove retired host-identity setup path
 
 ### Fixed
+- select only packages for model metadata mutations and preserve ambiguity refusals (#988)
 - distinguish absent inputs from lookup failures
 - privatize detached build mount projections
 - recheck pin state under the mutation lock
@@ -58,6 +59,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - seal execution capabilities, enforce read-only mounts, and prevent build mounts propagating into the caller
 
 ### Performance
+- cache and verify pinned sccache release archives across hosted jobs (#987)
 - consume admitted artifacts without redundant deltas
 - borrow relation facts across planning (#951)
 - remove candidate loading and relation-planning amplification (#944)
