@@ -2,20 +2,30 @@
 
 use super::*;
 
+#[derive(Clone, Copy)]
+pub(super) enum FixtureFailure {
+    Lifecycle,
+    MissingInterpreter,
+}
+
 pub(super) fn add_candidate(
     conn: &rusqlite::Connection,
     dir: &Path,
     name: &str,
-    fail: bool,
+    failure: Option<FixtureFailure>,
     relation: bool,
     replacement: Option<&str>,
     named: bool,
 ) {
     let mut bundle = rpm_upgrade_bundle(name, "2.0.0");
-    if fail {
+    if let Some(failure) = failure {
         bundle.entries[0].body = "error('forced update summary lifecycle failure')\n".into();
         bundle.entries[0].body_sha256 =
             conary_core::hash::sha256_prefixed(bundle.entries[0].body.as_bytes());
+        if matches!(failure, FixtureFailure::MissingInterpreter) {
+            bundle.entries[0].interpreter = "/missing/summary-interpreter".into();
+            bundle.entries[0].rpm_runtime.as_mut().unwrap().program = RpmProgram::External;
+        }
     }
     if named {
         let (uid, gid) = (unsafe { libc::geteuid() }, unsafe { libc::getegid() });

@@ -28,7 +28,7 @@ async fn update_summary_capture_child() {
             &conn,
             temp.path(),
             "a-summary-update",
-            false,
+            None,
             scenario.starts_with("relation_"),
             scenario
                 .starts_with("sequence_")
@@ -36,12 +36,16 @@ async fn update_summary_capture_child() {
             scenario.starts_with("named_"),
         );
     }
-    if scenario == "mixed" {
+    if (scenario == "mixed" || scenario == "preflight") {
         add_candidate(
             &conn,
             temp.path(),
             "z-summary-failed",
-            true,
+            Some(if scenario == "preflight" {
+                fixtures::FixtureFailure::MissingInterpreter
+            } else {
+                fixtures::FixtureFailure::Lifecycle
+            }),
             false,
             None,
             false,
@@ -52,7 +56,7 @@ async fn update_summary_capture_child() {
             &conn,
             temp.path(),
             "z-summary-update",
-            false,
+            None,
             false,
             None,
             false,
@@ -63,7 +67,7 @@ async fn update_summary_capture_child() {
             &conn,
             temp.path(),
             "z-summary-update",
-            false,
+            None,
             false,
             Some("a-summary-update <= 2.0.0"),
             false,
@@ -149,11 +153,19 @@ async fn update_summary_capture_child() {
         assert_eq!(stats, (2, 0));
         return;
     }
-    if scenario == "mixed" {
-        assert!(
-            result.is_err(),
-            "mixed lifecycle failure unexpectedly succeeded"
-        );
+    if (scenario == "mixed" || scenario == "preflight") {
+        let error = result.expect_err("later lifecycle/preflight failure unexpectedly succeeded");
+        if scenario == "preflight" {
+            assert!(format!("{error:#}").contains("preflight"), "{error:#}");
+            assert!(
+                conary_core::db::models::FileEntry::find_by_path(
+                    &conn,
+                    "/usr/bin/z-summary-failed"
+                )
+                .unwrap()
+                .is_none()
+            );
+        }
     } else {
         assert_eq!(
             result.unwrap(),
@@ -199,6 +211,7 @@ async fn update_summary_capture_child() {
     if matches!(
         scenario.as_str(),
         "mixed"
+            | "preflight"
             | "published"
             | "pending"
             | "sequence_apply"
@@ -209,7 +222,7 @@ async fn update_summary_capture_child() {
         let (prepared, saved): (i32, i64) = conn.query_row("SELECT full_downloads, total_bytes_saved FROM delta_stats ORDER BY id DESC LIMIT 1", [], |row| Ok((row.get(0)?, row.get(1)?))).unwrap();
         let selected = if matches!(
             scenario.as_str(),
-            "mixed" | "sequence_apply" | "fallback_download" | "fallback_apply"
+            "mixed" | "preflight" | "sequence_apply" | "fallback_download" | "fallback_apply"
         ) {
             2
         } else {
@@ -243,7 +256,7 @@ async fn update_summary_capture_child() {
         assert_eq!(installed.len(), 1);
         assert_eq!(installed[0].version, "2.0.0");
     }
-    if scenario == "mixed" {
+    if (scenario == "mixed" || scenario == "preflight") {
         assert_eq!(
             Trove::find_by_name(&conn, "z-summary-failed").unwrap()[0].version,
             "1.0.0"
@@ -268,6 +281,7 @@ fn update_summaries_in_terminal_pipe_and_no_color() {
             "apply",
             "pending",
             "mixed",
+            "preflight",
             "noop",
             "cancel_full",
             "cancel_delta",
@@ -474,7 +488,7 @@ fn update_summaries_in_terminal_pipe_and_no_color() {
                 "{frame}"
             );
             assert!(applied.contains("--db-path='"), "{frame}");
-            if scenario == "mixed" {
+            if (scenario == "mixed" || scenario == "preflight") {
                 assert!(!applied.contains("z-summary-failed"), "{frame}");
                 assert!(!applied.contains("Request rollback"), "{frame}");
             } else {

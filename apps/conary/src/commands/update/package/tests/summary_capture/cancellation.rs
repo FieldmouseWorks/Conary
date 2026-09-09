@@ -152,7 +152,7 @@ pub(super) async fn add_candidate(
     )
     .insert(conn)
     .unwrap();
-    fixtures::add_candidate(conn, dir, "z-summary-update", false, false, None, false);
+    fixtures::add_candidate(conn, dir, "z-summary-update", None, false, None, false);
     if scenario != "cancel_full" {
         let objects = conary_core::db::paths::objects_dir(db_path);
         let cas = conary_core::filesystem::CasStore::new(&objects).unwrap();
