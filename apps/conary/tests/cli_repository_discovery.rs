@@ -2,7 +2,7 @@
 //! Disposable repository discovery journey and terminal/pipe presentation proof.
 
 use conary_core::db::models::Repository;
-use std::io::{Read, Write};
+use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
 use std::path::Path;
 use std::sync::{
@@ -31,9 +31,9 @@ impl CatalogServer {
                         stream
                             .set_read_timeout(Some(std::time::Duration::from_secs(2)))
                             .unwrap();
-                        let mut request = [0; 4096];
-                        let count = stream.read(&mut request).unwrap();
-                        let metadata = request[..count].starts_with(b"GET /metadata.json HTTP/");
+                        let mut request = String::new();
+                        BufReader::new(&mut stream).read_line(&mut request).unwrap();
+                        let metadata = request.starts_with("GET /metadata.json HTTP/");
                         let (status, body) = if metadata {
                             (
                                 "200 OK",
@@ -91,7 +91,7 @@ fn write_metadata(path: &Path, packages: bool) {
             "name": "fixture", "version": "1",
             "packages": if packages { vec![serde_json::json!({
                 "name": "fixture-package", "version": "1.2", "release": "3",
-                "version_scheme": "rpm", "description": "a searchable needle",
+                "version_scheme": "rpm", "description": "a searchable needle\n[ok] injected",
                 "checksum": "a".repeat(64), "size": 17,
                 "download_url": "https://example.invalid/fixture.rpm"
             })] } else { vec![] }
@@ -162,6 +162,7 @@ fn discovery_journey_distinguishes_missing_disabled_unpublished_and_cached_sourc
         "Release: 3",
         "Architecture: Unspecified",
         "Repository: fixture",
+        "Description: a searchable needle\\n[ok] injected",
         "Packages: 1",
     ] {
         assert!(search.contains(fact), "{search}");
@@ -220,37 +221,42 @@ fn discovery_terminal_frames_match_pipe_facts_with_and_without_color() {
     write_metadata(temp.path(), true);
     let server = CatalogServer::new(temp.path());
     add(&db, &server.url);
-    for args in [
-        vec!["repo", "list"],
-        vec!["search", "needle"],
-        vec!["query", "repquery"],
-    ] {
-        let (stdout, stderr) = run(&db, &args);
-        for no_color in [false, true] {
-            let command = format!(
-                "exec \"$CONARY_DISCOVERY_EXE\" {} --db-path \"$CONARY_DISCOVERY_DB\"",
-                args.join(" ")
-            );
-            let mut capture = Command::new("script");
-            capture
-                .args(["-qec", &command, "/dev/null"])
-                .env("CONARY_DISCOVERY_EXE", env!("CARGO_BIN_EXE_conary"))
-                .env("CONARY_DISCOVERY_DB", &db)
-                .env("TERM", "xterm")
-                .env_remove("NO_COLOR")
-                .env_remove("CLICOLOR_FORCE")
-                .env_remove("RUST_LOG");
-            if no_color {
-                capture.env("NO_COLOR", "1");
+    for synced in [false, true] {
+        if synced {
+            run(&db, &["repo", "sync", "--force"]);
+        }
+        for args in [
+            vec!["repo", "list"],
+            vec!["search", "needle"],
+            vec!["query", "repquery"],
+        ] {
+            let (stdout, stderr) = run(&db, &args);
+            for no_color in [false, true] {
+                let command = format!(
+                    "exec \"$CONARY_DISCOVERY_EXE\" {} --db-path \"$CONARY_DISCOVERY_DB\"",
+                    args.join(" ")
+                );
+                let mut capture = Command::new("script");
+                capture
+                    .args(["-qec", &command, "/dev/null"])
+                    .env("CONARY_DISCOVERY_EXE", env!("CARGO_BIN_EXE_conary"))
+                    .env("CONARY_DISCOVERY_DB", &db)
+                    .env("TERM", "xterm")
+                    .env_remove("NO_COLOR")
+                    .env_remove("CLICOLOR_FORCE")
+                    .env_remove("RUST_LOG");
+                if no_color {
+                    capture.env("NO_COLOR", "1");
+                }
+                let output = capture.output().unwrap();
+                assert!(output.status.success());
+                let text = String::from_utf8(output.stdout).unwrap();
+                assert_eq!(text.contains('\x1b'), !no_color, "{text:?}");
+                assert_eq!(
+                    console::strip_ansi_codes(&text).replace("\r\n", "\n"),
+                    format!("{stdout}{stderr}")
+                );
             }
-            let output = capture.output().unwrap();
-            assert!(output.status.success());
-            let text = String::from_utf8(output.stdout).unwrap();
-            assert_eq!(text.contains('\x1b'), !no_color, "{text:?}");
-            assert_eq!(
-                console::strip_ansi_codes(&text).replace("\r\n", "\n"),
-                format!("{stdout}{stderr}")
-            );
         }
     }
 }
