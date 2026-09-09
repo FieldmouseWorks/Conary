@@ -36,6 +36,17 @@ pub(crate) fn execute_installed_trove_remove_graph(
     let identity =
         NativePackageIdentity::new(&trove.name, &trove.version, trove.architecture.as_deref());
     let locked_root = LockedRuntimeRoot::acquire(db_path)?;
+    // The command's earlier pin check may predate a pin operation that won
+    // this lock. Re-read before preparing ownership, lifecycle or root state.
+    let current = Trove::find_by_id(conn, trove_id)?
+        .context("selected package disappeared before removal acquired the mutation lock")?;
+    if current.pinned {
+        bail!(
+            "Package '{}' is pinned and cannot be removed. Use 'conary unpin {}' first.",
+            current.name,
+            current.name
+        );
+    }
     let ownership = super::PackagePayloadOwnership::load(conn, trove_id)?;
     let native_transaction = PreparedNativeTransaction::prepare_remove(
         conn,
