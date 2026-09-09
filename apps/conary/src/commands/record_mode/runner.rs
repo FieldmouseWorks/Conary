@@ -18,7 +18,7 @@ pub(crate) struct RecordCommandRequest {
 pub(crate) struct RecordSandboxPlan {
     pub(crate) cwd: String,
     pub(crate) network_isolated: bool,
-    pub(crate) mounts: Vec<(PathBuf, String, bool)>,
+    pub(crate) mounts: Vec<BindMount>,
     pub(crate) env: Vec<(String, String)>,
 }
 
@@ -33,11 +33,11 @@ impl RecordSandboxPlan {
 
     #[cfg(test)]
     fn has_mount(&self, source: &std::path::Path, target: &str, writable: bool) -> bool {
-        self.mounts
-            .iter()
-            .any(|(candidate, mount_target, mount_writable)| {
-                candidate == source && mount_target == target && *mount_writable == writable
-            })
+        self.mounts.iter().any(|mount| {
+            mount.source == source
+                && mount.target == std::path::Path::new(target)
+                && mount.writable == writable
+        })
     }
 }
 
@@ -51,17 +51,9 @@ pub(crate) fn sandbox_plan(request: &RecordCommandRequest) -> Result<RecordSandb
         cwd: "/conary/source".to_string(),
         network_isolated: true,
         mounts: vec![
-            (
-                request.source_root.clone(),
-                "/conary/source".to_string(),
-                true,
-            ),
-            (request.work_root.clone(), "/conary/work".to_string(), true),
-            (
-                request.install_root.clone(),
-                "/conary/destdir".to_string(),
-                true,
-            ),
+            BindMount::build_workspace(&request.source_root, "/conary/source"),
+            BindMount::build_workspace(&request.work_root, "/conary/work"),
+            BindMount::build_workspace(&request.install_root, "/conary/destdir"),
         ],
         env: vec![
             ("DESTDIR".to_string(), "/conary/destdir".to_string()),
@@ -85,14 +77,7 @@ pub(crate) fn run_record_command(request: &RecordCommandRequest) -> Result<Recor
     config.timeout = Duration::from_secs(3600);
     config.workdir = PathBuf::from(&plan.cwd);
     config.isolate_network = plan.network_isolated;
-    for (source, target, writable) in &plan.mounts {
-        let mount = if *writable {
-            BindMount::writable(source, target)
-        } else {
-            BindMount::readonly(source, target)
-        };
-        config.bind_mounts.push(mount);
-    }
+    config.bind_mounts.extend(plan.mounts.iter().cloned());
     let env = plan
         .env
         .iter()

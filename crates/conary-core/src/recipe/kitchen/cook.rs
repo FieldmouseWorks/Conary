@@ -641,12 +641,12 @@ impl<'a> Cook<'a> {
             // Destination directory (writable - where install goes)
             container_config
                 .bind_mounts
-                .push(BindMount::build_workspace(&self.dest_dir));
+                .push(BindMount::build_workspace(&self.dest_dir, &self.dest_dir));
 
             // Build directory (writable - for build artifacts)
             container_config
                 .bind_mounts
-                .push(BindMount::build_workspace(self.build_dir.as_path()));
+                .push(BindMount::build_workspace(&self.build_dir, &self.build_dir));
         }
 
         let mut sandbox = Sandbox::new(container_config);

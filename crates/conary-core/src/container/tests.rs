@@ -390,7 +390,7 @@ fn test_sandbox_reports_root_inside_without_host_write_access() {
         .add_private_writable_mount("/sandbox-output", 0o700)
         .unwrap();
     let workspace = tempfile::tempdir().unwrap();
-    let mut build_mount = BindMount::build_workspace(workspace.path());
+    let mut build_mount = BindMount::build_workspace(workspace.path(), workspace.path());
     build_mount.target = PathBuf::from("/mapped-output");
     config.add_bind_mount(build_mount);
     std::os::unix::fs::symlink("/host-probe", workspace.path().join("host-link")).unwrap();
@@ -665,7 +665,7 @@ fn test_sandbox_cannot_restore_mount_authority() {
         fs::Permissions::from_mode(0o600),
     )
     .unwrap();
-    let mut mapped = BindMount::build_workspace(workspace.path());
+    let mut mapped = BindMount::build_workspace(workspace.path(), workspace.path());
     mapped.target = PathBuf::from("/sealed");
     mapped.writable = false;
     let mut config = ContainerConfig {

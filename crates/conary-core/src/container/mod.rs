@@ -124,11 +124,10 @@ impl BindMount {
     /// Grant namespace root access to a caller-owned build directory while
     /// preserving its on-disk ownership. This grants write authority over the
     /// selected tree and must never be used for incidental host bind mounts.
-    pub(crate) fn build_workspace(path: impl Into<PathBuf>) -> Self {
-        let path = path.into();
+    pub fn build_workspace(source: impl Into<PathBuf>, target: impl Into<PathBuf>) -> Self {
         Self {
-            source: path.clone(),
-            target: path,
+            source: source.into(),
+            target: target.into(),
             writable: true,
             identity: BindMountIdentity::BuildWorkspace,
         }
@@ -278,7 +277,7 @@ impl ContainerConfig {
     /// // Mount only the toolchain and build directories
     /// config.add_bind_mount(BindMount::readonly("/tools", "/tools"));
     /// config.add_bind_mount(BindMount::readonly("/src", "/src"));
-    /// config.add_bind_mount(BindMount::writable("/build", "/build"));
+    /// config.add_bind_mount(BindMount::build_workspace("/build", "/build"));
     /// ```
     pub fn pristine() -> Self {
         Self {
@@ -350,10 +349,10 @@ impl ContainerConfig {
         config.add_bind_mount(BindMount::build_input(source_dir, source_dir));
 
         // Build directory (writable for object files, etc.)
-        config.add_bind_mount(BindMount::build_workspace(build_dir));
+        config.add_bind_mount(BindMount::build_workspace(build_dir, build_dir));
 
         // Destination directory (writable for `make install DESTDIR=...`)
-        config.add_bind_mount(BindMount::build_workspace(dest_dir));
+        config.add_bind_mount(BindMount::build_workspace(dest_dir, dest_dir));
 
         // Set working directory to build directory
         config.workdir = build_dir.to_path_buf();
@@ -396,8 +395,8 @@ impl ContainerConfig {
         }
 
         config.add_bind_mount(BindMount::build_input(source_dir, source_dir));
-        config.add_bind_mount(BindMount::build_workspace(build_dir));
-        config.add_bind_mount(BindMount::build_workspace(dest_dir));
+        config.add_bind_mount(BindMount::build_workspace(build_dir, build_dir));
+        config.add_bind_mount(BindMount::build_workspace(dest_dir, dest_dir));
         config.workdir = build_dir.to_path_buf();
 
         config
@@ -529,14 +528,9 @@ fn default_bind_mounts() -> Vec<BindMount> {
 }
 
 fn add_private_tmp_mount(config: &mut ContainerConfig) {
-    let private_tmp = Arc::new(TempDir::new().expect("failed to create private sandbox tmpdir"));
-    let mut perms = fs::metadata(private_tmp.path())
-        .expect("failed to stat private sandbox tmpdir")
-        .permissions();
-    perms.set_mode(0o1777);
-    fs::set_permissions(private_tmp.path(), perms).expect("failed to chmod private sandbox tmpdir");
-    config.add_bind_mount(BindMount::writable(private_tmp.path(), "/tmp"));
-    config.owned_temp_dirs.push(private_tmp);
+    config
+        .add_private_writable_mount("/tmp", 0o1777)
+        .expect("failed to create private sandbox tmpdir");
 }
 
 /// Write script content to a file and set it executable (mode 0o700).
