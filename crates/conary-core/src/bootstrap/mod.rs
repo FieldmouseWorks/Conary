@@ -674,24 +674,34 @@ mod tests {
         let config = BootstrapConfig::new();
         let bootstrap = Bootstrap::with_config(dir.path(), config).unwrap();
 
-        // The dry_run test requires a complete, cycle-free set of recipes.
-        // Skip when recipes are unavailable (CI) or the graph is incomplete.
-        if !std::path::Path::new("recipes/cross-tools").exists() {
-            eprintln!("Skipping: recipes/cross-tools not found in cwd");
-            return;
+        let recipe_dir = dir.path().join("recipes");
+        for (phase, name, requires) in [
+            ("cross-tools", "linux-headers", &[][..]),
+            ("cross-tools", "binutils-pass1", &[][..]),
+            ("cross-tools", "gcc-pass1", &[][..]),
+            ("cross-tools", "glibc", &[][..]),
+            ("cross-tools", "libstdcxx", &[][..]),
+            ("system", "base", &[][..]),
+            ("system", "app", &["base"][..]),
+            ("tier2", "extra", &[][..]),
+        ] {
+            let phase_dir = recipe_dir.join(phase);
+            std::fs::create_dir_all(&phase_dir).unwrap();
+            let recipe = format!(
+                "[package]\nname = {name:?}\nversion = \"1.0.0\"\n\n[source]\narchive = \"https://example.invalid/{name}.tar.gz\"\nchecksum = \"sha256:{}\"\n\n[build]\nrequires = {requires:?}\n",
+                "0".repeat(64)
+            );
+            std::fs::write(phase_dir.join(format!("{name}.toml")), recipe).unwrap();
         }
-
-        let recipe_dir = std::path::Path::new("recipes");
-        let report = bootstrap.dry_run(recipe_dir).unwrap();
+        let report = bootstrap.dry_run(&recipe_dir).unwrap();
         assert_eq!(
             report.cross_tools_count, 5,
             "Expected 5 cross-tools recipes"
         );
-        assert!(
-            report.system_count >= 10,
-            "Expected at least 10 system recipes"
-        );
-        assert!(report.graph_resolved, "Graph should resolve");
+        assert_eq!(report.system_count, 2);
+        assert_eq!(report.tier2_count, 1);
+        assert!(report.graph_resolved, "Graph should resolve: {report:?}");
+        assert!(report.errors.is_empty(), "{report:?}");
     }
 
     #[test]

@@ -133,6 +133,18 @@ impl CrossToolsBuilder {
     /// sequence. On success, returns a `Toolchain` with `kind: CrossTools`
     /// rooted at `$LFS/tools/`.
     pub fn build_all(&self, completed: &[String]) -> Result<Toolchain, CrossToolsError> {
+        self.build_all_with(completed, |pkg, env| self.build_package(pkg, env))
+    }
+
+    /// Scheduling core for [`Self::build_all`] with an injectable package build.
+    ///
+    /// `build` receives each package name and its hermetic environment in
+    /// `CROSS_TOOLS_ORDER`; already-completed packages are skipped.
+    fn build_all_with(
+        &self,
+        completed: &[String],
+        mut build: impl FnMut(&str, &[(String, String)]) -> Result<(), CrossToolsError>,
+    ) -> Result<Toolchain, CrossToolsError> {
         let target = lfs_tgt(&self.config);
 
         info!(
@@ -172,7 +184,7 @@ impl CrossToolsBuilder {
                 CROSS_TOOLS_ORDER.len(),
                 pkg
             );
-            self.build_package(pkg, &bootstrap_env)?;
+            build(pkg, &bootstrap_env)?;
         }
 
         let tools_path = self.lfs_root.join("tools");
@@ -344,18 +356,49 @@ impl CrossToolsBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bootstrap::config::TargetArch;
+
+    fn host_toolchain() -> Toolchain {
+        Toolchain {
+            kind: ToolchainKind::Host,
+            path: PathBuf::from("/usr"),
+            target: "x86_64-linux-gnu".to_string(),
+            gcc_version: None,
+            glibc_version: None,
+            binutils_version: None,
+            is_static: false,
+        }
+    }
+
+    fn env_value<'a>(env: &'a [(String, String)], key: &str) -> &'a str {
+        env.iter()
+            .find(|(name, _)| name == key)
+            .map(|(_, value)| value.as_str())
+            .unwrap_or_else(|| panic!("missing environment variable {key}"))
+    }
+
+    fn assert_bootstrap_env(env: &[(String, String)], lfs_root: &Path, target: &str) {
+        assert_eq!(env_value(env, "LFS"), lfs_root.display().to_string());
+        assert_eq!(env_value(env, "LFS_TGT"), target);
+        assert_eq!(
+            env_value(env, "PATH"),
+            format!(
+                "{}:{}",
+                lfs_root.join("tools/bin").display(),
+                Toolchain::BOOTSTRAP_PATH_FALLBACK
+            )
+        );
+    }
 
     #[test]
     fn test_lfs_tgt_derives_from_config() {
         let default_config = BootstrapConfig::new();
         assert_eq!(lfs_tgt(&default_config), "x86_64-conary-linux-gnu");
 
-        let aarch64_config =
-            BootstrapConfig::new().with_target(super::super::config::TargetArch::Aarch64);
+        let aarch64_config = BootstrapConfig::new().with_target(TargetArch::Aarch64);
         assert_eq!(lfs_tgt(&aarch64_config), "aarch64-conary-linux-gnu");
 
-        let riscv_config =
-            BootstrapConfig::new().with_target(super::super::config::TargetArch::Riscv64);
+        let riscv_config = BootstrapConfig::new().with_target(TargetArch::Riscv64);
         assert_eq!(lfs_tgt(&riscv_config), "riscv64-conary-linux-gnu");
     }
 
@@ -408,57 +451,81 @@ mod tests {
 
     #[test]
     fn test_build_all_returns_stage1_toolchain() {
-        // build_package() resolves recipes via a relative path from the cwd.
-        // Skip when the directory is unreachable (e.g. CI or cwd != workspace root).
-        if !std::path::Path::new("recipes/cross-tools").exists() {
-            eprintln!("Skipping: recipes/cross-tools not found in cwd");
-            return;
-        }
-
         let work = tempfile::tempdir().unwrap();
         let lfs = tempfile::tempdir().unwrap();
         let config = BootstrapConfig::new();
-        let host = Toolchain {
-            kind: ToolchainKind::Host,
-            path: PathBuf::from("/usr"),
-            target: "x86_64-linux-gnu".to_string(),
-            gcc_version: None,
-            glibc_version: None,
-            binutils_version: None,
-            is_static: false,
-        };
 
-        let builder = CrossToolsBuilder::new(work.path(), lfs.path(), config, host).unwrap();
-        let toolchain = builder.build_all(&[]).unwrap();
+        let builder =
+            CrossToolsBuilder::new(work.path(), lfs.path(), config, host_toolchain()).unwrap();
+        let mut calls: Vec<(String, Vec<(String, String)>)> = Vec::new();
+        let toolchain = builder
+            .build_all_with(&[], |package, env| {
+                calls.push((package.to_string(), env.to_vec()));
+                Ok(())
+            })
+            .unwrap();
 
+        let requested: Vec<&str> = calls.iter().map(|(name, _)| name.as_str()).collect();
+        assert_eq!(requested, CROSS_TOOLS_ORDER);
         assert_eq!(toolchain.kind, ToolchainKind::CrossTools);
         assert_eq!(toolchain.target, "x86_64-conary-linux-gnu");
-        assert!(toolchain.path.ends_with("tools"));
+        assert_eq!(toolchain.path, lfs.path().join("tools"));
+        for (_, env) in &calls {
+            assert_bootstrap_env(env, lfs.path(), "x86_64-conary-linux-gnu");
+        }
     }
 
     #[test]
     fn test_build_all_aarch64_toolchain() {
-        if !std::path::Path::new("recipes/cross-tools").exists() {
-            eprintln!("Skipping: recipes/cross-tools not found in cwd");
-            return;
-        }
-
         let work = tempfile::tempdir().unwrap();
         let lfs = tempfile::tempdir().unwrap();
-        let config = BootstrapConfig::new().with_target(super::super::config::TargetArch::Aarch64);
-        let host = Toolchain {
-            kind: ToolchainKind::Host,
-            path: PathBuf::from("/usr"),
-            target: "x86_64-linux-gnu".to_string(),
-            gcc_version: None,
-            glibc_version: None,
-            binutils_version: None,
-            is_static: false,
-        };
+        let config = BootstrapConfig::new().with_target(TargetArch::Aarch64);
 
-        let builder = CrossToolsBuilder::new(work.path(), lfs.path(), config, host).unwrap();
-        let toolchain = builder.build_all(&[]).unwrap();
+        let builder =
+            CrossToolsBuilder::new(work.path(), lfs.path(), config, host_toolchain()).unwrap();
+        let mut requested: Vec<String> = Vec::new();
+        let toolchain = builder
+            .build_all_with(&[], |package, env| {
+                requested.push(package.to_string());
+                assert_bootstrap_env(env, lfs.path(), "aarch64-conary-linux-gnu");
+                Ok(())
+            })
+            .unwrap();
 
+        assert_eq!(requested, CROSS_TOOLS_ORDER.map(str::to_string));
+        assert_eq!(toolchain.kind, ToolchainKind::CrossTools);
         assert_eq!(toolchain.target, "aarch64-conary-linux-gnu");
+        assert_eq!(toolchain.path, lfs.path().join("tools"));
+    }
+
+    #[test]
+    fn test_build_all_with_skips_completed_and_stops_on_build_error() {
+        let work = tempfile::tempdir().unwrap();
+        let lfs = tempfile::tempdir().unwrap();
+        let config = BootstrapConfig::new();
+
+        let builder =
+            CrossToolsBuilder::new(work.path(), lfs.path(), config, host_toolchain()).unwrap();
+        let completed = vec!["binutils-pass1".to_string(), "linux-headers".to_string()];
+        let mut attempted: Vec<String> = Vec::new();
+        let result = builder.build_all_with(&completed, |package, _env| {
+            attempted.push(package.to_string());
+            if package == "glibc" {
+                return Err(CrossToolsError::BuildFailed {
+                    package: package.to_string(),
+                    reason: "injected failure".to_string(),
+                });
+            }
+            Ok(())
+        });
+
+        assert_eq!(attempted, vec!["gcc-pass1", "glibc"]);
+        match result {
+            Err(CrossToolsError::BuildFailed { package, reason }) => {
+                assert_eq!(package, "glibc");
+                assert_eq!(reason, "injected failure");
+            }
+            other => panic!("expected BuildFailed for glibc, got {other:?}"),
+        }
     }
 }
