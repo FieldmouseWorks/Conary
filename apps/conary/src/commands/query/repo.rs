@@ -35,50 +35,17 @@ fn show_repo_package_info(
     conn: &rusqlite::Connection,
     pkg: &conary_core::db::models::RepositoryPackage,
 ) -> Result<()> {
-    println!("Name        : {}", pkg.name);
-    println!("Version     : {}", pkg.version);
-
-    if let Some(arch) = &pkg.architecture {
-        println!("Architecture: {}", arch);
-    }
-
-    if let Some(desc) = &pkg.description {
-        println!("Description : {}", desc);
-    }
-
-    println!("Size        : {}", pkg.size_human());
-
-    if let Ok(repo_name) = pkg.get_repository_name(conn) {
-        println!("Repository  : {}", repo_name);
-    }
-
-    println!("Checksum    : {}", pkg.checksum);
-    println!("URL         : {}", pkg.download_url);
-
-    // Check if installed
-    let installed = conary_core::db::models::Trove::find_by_name(conn, &pkg.name)?;
-    if let Some(installed_pkg) = installed.first() {
-        println!("Status      : Installed ({})", installed_pkg.version);
-    } else {
-        println!("Status      : Not installed");
-    }
-
+    // Resolve every fallible fact before the renderer emits a partial frame.
+    let repository = pkg.get_repository_name(conn)?;
+    let mut installed = conary_core::db::models::Trove::find_by_name(conn, &pkg.name)?;
+    installed.retain(|trove| trove.trove_type == conary_core::db::models::TroveType::Package);
+    installed.sort_by_key(|trove| trove.id);
     let requirements =
         conary_core::db::models::RepositoryRequirementGroup::find_by_repository_package(
             conn,
             pkg.id
                 .ok_or_else(|| anyhow::anyhow!("repository package has no database ID"))?,
         )?;
-    if !requirements.is_empty() {
-        println!("\nRequirements ({}):", requirements.len());
-        for requirement in requirements {
-            let expression = requirement
-                .native_text
-                .as_deref()
-                .unwrap_or(&requirement.expression_json);
-            println!("  {}: {}", requirement.kind, expression);
-        }
-    }
-
+    crate::ui::repository::package_details(pkg, &repository, &installed, &requirements);
     Ok(())
 }

@@ -4,7 +4,7 @@
 
 use super::transaction_summary::{database_command, visible};
 use super::{Status, field, heading, message, note, row};
-use conary_core::db::models::{Repository, RepositoryPackage};
+use conary_core::db::models::{Repository, RepositoryPackage, RepositoryRequirementGroup, Trove};
 
 fn command_note(command: &str, db_path: &str) {
     if db_path.chars().any(char::is_control) {
@@ -169,4 +169,85 @@ pub(crate) fn packages(
     field("Packages", &packages.len().to_string());
     metadata_guidance(repos, db_path);
     Ok(())
+}
+
+/// Display observations, without equating a cached candidate with a same-name
+/// installed record or deciding source compatibility.
+pub(crate) fn package_details(
+    package: &RepositoryPackage,
+    repository: &str,
+    installed: &[Trove],
+    requirements: &[RepositoryRequirementGroup],
+) {
+    heading("Repository package:");
+    row(Status::Info, &[&visible(&package.name)]);
+    identity_fields(
+        &package.version,
+        (!package.package_release.is_empty()).then_some(package.package_release.as_str()),
+        package.architecture.as_deref(),
+        package.version_scheme.as_str(),
+        package.source_profile.as_deref(),
+    );
+    field("Repository", &visible(repository));
+    if let Some(description) = &package.description {
+        field("Description", &visible(description));
+    }
+    field("Size", &package.size_human());
+    field("Checksum", &visible(&package.checksum));
+    field("URL", &visible(&package.download_url));
+
+    heading("Installed packages with this name:");
+    if installed.is_empty() {
+        message("No installed packages with this name.");
+    }
+    for trove in installed {
+        row(Status::Info, &[&visible(&trove.name)]);
+        if let Some(id) = trove.id {
+            field("Trove ID", &id.to_string());
+        }
+        identity_fields(
+            &trove.version,
+            trove.package_release.as_deref(),
+            trove.architecture.as_deref(),
+            trove.version_scheme.as_str(),
+            trove.source_profile.as_deref(),
+        );
+        field("Install source", trove.install_source.as_ref());
+        if let Some(repository_id) = trove.installed_from_repository_id {
+            field("Repository ID", &repository_id.to_string());
+        }
+    }
+    field("Installed packages", &installed.len().to_string());
+
+    heading(&format!("Requirements ({}):", requirements.len()));
+    if requirements.is_empty() {
+        message("No requirements recorded in cached metadata.");
+    }
+    for requirement in requirements {
+        let expression = requirement
+            .native_text
+            .as_deref()
+            .unwrap_or(&requirement.expression_json);
+        field(&visible(&requirement.kind), &visible(expression));
+    }
+}
+
+fn identity_fields(
+    version: &str,
+    release: Option<&str>,
+    architecture: Option<&str>,
+    version_scheme: &str,
+    source_profile: Option<&str>,
+) {
+    field("Version", &visible(version));
+    field("Release", &visible(release.unwrap_or("Unspecified")));
+    field(
+        "Architecture",
+        &visible(architecture.unwrap_or("Unspecified")),
+    );
+    field("Version scheme", version_scheme);
+    field(
+        "Source profile",
+        &visible(source_profile.unwrap_or("Unspecified")),
+    );
 }

@@ -6,7 +6,7 @@ use std::process::Command;
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rerun-if-env-changed=CONARY_TEST_BUILD_TIMESTAMP");
+    println!("cargo:rerun-if-env-changed=CONARY_HARNESS_BUILD_TIMESTAMP");
 
     if let (Some(git_dir), Some(git_common_dir), Some(repo_root)) = (
         git_path(&["rev-parse", "--git-dir"]),
@@ -33,13 +33,13 @@ fn main() {
         "unknown".to_string()
     });
 
-    println!("cargo:rustc-env=CONARY_TEST_GIT_COMMIT={git_commit}");
-    println!("cargo:rustc-env=CONARY_TEST_COMMIT_TIMESTAMP={commit_timestamp}");
+    println!("cargo:rustc-env=CONARY_HARNESS_GIT_COMMIT={git_commit}");
+    println!("cargo:rustc-env=CONARY_HARNESS_COMMIT_TIMESTAMP={commit_timestamp}");
 
-    if let Ok(build_timestamp) = env::var("CONARY_TEST_BUILD_TIMESTAMP")
+    if let Ok(build_timestamp) = env::var("CONARY_HARNESS_BUILD_TIMESTAMP")
         && !build_timestamp.is_empty()
     {
-        println!("cargo:rustc-env=CONARY_TEST_BUILD_TIMESTAMP={build_timestamp}");
+        println!("cargo:rustc-env=CONARY_HARNESS_BUILD_TIMESTAMP={build_timestamp}");
     }
 }
 
