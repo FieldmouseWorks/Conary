@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-09-09
 revision: 55
-summary: Map fixture ownership, including command transaction captures, typed boot-tool interfaces, public and candidate profiles, and cross-source lifecycle proof
+summary: Map fixture ownership, including repository discovery journeys, command transaction captures, typed boot-tool interfaces, and cross-source lifecycle proof
 ---
 
 # Test Fixtures And Proof Maps
@@ -734,7 +734,7 @@ Each fixture family should record:
 - **Purpose:** Prove enabled-source discovery, explicit cached-result scope,
   missing/disabled/unpublished/stale/empty source guidance, exact package
   fields, and copyable database-scoped recovery.
-- **Fixture sources:** disposable local JSON catalog and isolated database in
+- **Fixture sources:** disposable loopback HTTP JSON catalog and isolated database in
   `apps/conary/tests/cli_repository_discovery.rs`.
 - **Fast proof:** `cargo test -p conary --test cli_repository_discovery`;
   `cargo test -p conary-core --lib package_search_matches_only_enabled`.

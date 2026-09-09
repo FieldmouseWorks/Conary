@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-09-09
 revision: 24
-summary: Daily-driver CLI routes, grouped install/update/removal/rollback results, planner-backed previews, scoped recovery, coordinated progress, typed diagnostics, and truthful collection outcomes
+summary: Daily-driver CLI routes, enabled-source discovery, grouped transaction results, scoped recovery, coordinated progress, and typed diagnostics
 ---
 
 # Daily-Driver UX Matrix
@@ -30,9 +30,9 @@ takeover, generation activation, or conaryd, the CLI should say that directly.
 
 ## Repository Discovery
 
-`search`, `query repquery`, and `repo list` render through
+`search` and `query repquery` result lists, plus `repo list`, render through
 `apps/conary/src/ui/repository.rs`. Pattern and unfiltered queries both read
-packages from enabled repositories. Result fields retain version, release,
+packages from enabled repositories. Result-list fields retain version, release,
 architecture (or `Unspecified`), and source identity; absent architecture does
 not imply `noarch`. Empty results explicitly describe the cached metadata
 searched, rather than claiming that a package is unavailable upstream.
