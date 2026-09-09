@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-09
-revision: 53
+revision: 54
 summary: Map fixture ownership, including command transaction captures, typed boot-tool interfaces, public and candidate profiles, and cross-source lifecycle proof
 ---
 
@@ -817,3 +817,8 @@ successful delta reconstruction, and delta fallback, checking remaining package
 state, acquisition statistics, and temporary-file cleanup. A later native runtime
 preflight failure proves transaction-scoped refusal and accurate earlier committed
 results.
+
+`install/conversion/tests/dependencies/hook_preflight.rs` checks incoming CCS
+service-hook refusals on direct roots, roots with dependencies, and dependency
+packages while preserving all database tables, the selected root, and permanent
+CAS. Update cancellation captures cover both native and CCS root packages.

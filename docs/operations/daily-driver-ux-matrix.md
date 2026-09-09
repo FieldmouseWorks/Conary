@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-09
-revision: 22
+revision: 23
 summary: Daily-driver CLI routes, grouped install/update/removal/rollback results, planner-backed previews, scoped recovery, coordinated progress, typed diagnostics, and truthful collection outcomes
 ---
 
@@ -262,6 +262,10 @@ Standalone native install previews also share this state between their
 dependency stage and root planning. Native dependency preview and apply both
 use the authenticated repository-batch preparation owner, including signed
 CCS dependencies; the duplicate native-only preparation path is removed.
+Atomic dependency previews run the existing incoming CCS hook preflight for
+every prepared package with the caller's root context before adding planned rows
+or advancing disposable state. Native and CCS dependency prompts carry the same
+cancelled outcome through the enclosing update.
 
 Previously, native/CCS install printed independent `Installed package` fields,
 batches printed a separate success list, and update ended with artifact preparation counters.

@@ -258,8 +258,11 @@ async fn install_summary_capture_child() {
         let installer = super::super::BatchInstaller::new(&db_path, SandboxMode::Always);
         if preview {
             InstallReport {
+                outcome: Default::default(),
                 projection: None,
-                planned: installer.preview_batch(packages, None).unwrap(),
+                planned: installer
+                    .preview_batch(packages, None, temp.path())
+                    .unwrap(),
                 commits: Vec::new(),
             }
             .render(&db_path, true);

@@ -110,6 +110,7 @@ pub(crate) struct InstallCommit {
 
 #[derive(Default)]
 pub(crate) struct InstallReport {
+    pub outcome: super::InstallOutcome,
     pub planned: Vec<InstallChange>,
     pub commits: Vec<InstallCommit>,
     pub projection: Option<std::sync::Arc<super::preview::PreviewDatabase>>,
@@ -148,6 +149,9 @@ impl InstallReport {
     }
 
     pub(crate) fn extend(&mut self, other: Self) {
+        if other.outcome == super::InstallOutcome::Cancelled {
+            self.outcome = other.outcome;
+        }
         self.planned.extend(other.planned);
         self.commits.extend(other.commits);
     }
@@ -218,6 +222,7 @@ mod identity_tests {
         let mut dependency = installed.clone();
         dependency.name = "dependency".into();
         let report = InstallReport {
+            outcome: Default::default(),
             projection: None,
             planned: Vec::new(),
             commits: vec![InstallCommit {

@@ -311,9 +311,11 @@ impl<'a> BatchInstaller<'a> {
         self,
         mut packages: Vec<PreparedPackage>,
         projection: Option<&super::preview::PreviewDatabase>,
+        root: &Path,
     ) -> Result<Vec<super::report::InstallChange>> {
         let conn = open_db(self.db_path)?;
         self.validate_batch_transaction(&conn, &mut packages)?;
+        ccs::prepare_hook_executors(&conn, &packages, root)?;
         let changes = super::report::batch_changes(&conn, &packages)?;
         if let Some(projection) = projection {
             projection.project(&packages)?;
@@ -458,6 +460,7 @@ impl<'a> BatchInstaller<'a> {
         );
         let (changeset_id, trove_ids, publication) = transaction_result?;
         let report = super::report::InstallReport {
+            outcome: Default::default(),
             projection: None,
             planned: Vec::new(),
             commits: vec![super::report::InstallCommit {

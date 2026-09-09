@@ -467,6 +467,7 @@ fn install_ccs_package_transactionally_inner(
         progress.clear();
         show_ccs_lifecycle_dry_run(pkg.manifest());
         let report = super::report::InstallReport {
+            outcome: Default::default(),
             projection: None,
             planned: changes,
             commits: Vec::new(),
@@ -576,6 +577,7 @@ fn install_ccs_package_transactionally_inner(
         FinalizeInstallOutput::new(&progress, true),
     )?;
     let report = super::report::InstallReport {
+        outcome: Default::default(),
         projection: None,
         planned: Vec::new(),
         commits: vec![super::report::InstallCommit {

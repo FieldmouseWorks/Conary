@@ -712,8 +712,11 @@ async fn install_verified_ccs_artifact(
                     requested_source_identity,
                 },
             )?;
-            BatchInstaller::new(db_path, sandbox_mode)
-                .preview_batch(vec![prepared], Some(projection))?;
+            BatchInstaller::new(db_path, sandbox_mode).preview_batch(
+                vec![prepared],
+                Some(projection),
+                std::path::Path::new(root),
+            )?;
         }
         report.extend(result.report);
         return Ok(result.trove_id);
@@ -733,6 +736,7 @@ async fn install_verified_ccs_artifact(
         let input = input.trim().to_lowercase();
         if input == "n" || input == "no" {
             crate::ui::println!("Cancelled.");
+            report.outcome = super::InstallOutcome::Cancelled;
             return Ok(None);
         }
     }
@@ -775,6 +779,7 @@ async fn install_verified_ccs_artifact(
         report.planned.extend(prepared.preview(
             BatchInstaller::new(db_path, sandbox_mode),
             report.projection.as_deref(),
+            std::path::Path::new(root),
         )?);
         return Ok(None);
     }

@@ -23,8 +23,9 @@ use conary_core::repository::resolution_policy::RequestScope;
 use conary_core::transaction::{plan_package_relations, validate_package_relation_plan};
 use std::path::Path;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum InstallOutcome {
+    #[default]
     Completed,
     Cancelled,
 }
@@ -198,8 +199,8 @@ async fn cmd_install_with_intent(
     )
     .await?
     else {
-        // Already installed as CCS — no further processing needed.
-        return Ok(InstallOutcome::Completed);
+        // CCS handling may complete or be cancelled during dependency confirmation.
+        return Ok(report.outcome);
     };
     let policy = bind_transaction_source_identity(policy, repository_provenance.as_ref())?;
     let source_profile =
@@ -238,10 +239,12 @@ async fn cmd_install_with_intent(
         db_path,
         sandbox_mode,
         policy: &policy,
+        root,
     };
     if handle_dependencies(&dep_ctx, report).await?
         == super::dependencies::DependencyDecision::Cancelled
     {
+        report.outcome = InstallOutcome::Cancelled;
         return Ok(InstallOutcome::Cancelled);
     }
 

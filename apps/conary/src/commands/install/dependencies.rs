@@ -24,6 +24,7 @@ pub(super) struct DepAnalysisContext<'a> {
     pub(super) yes: bool,
     pub(super) allow_downgrade: bool,
     pub(super) db_path: &'a str,
+    pub(super) root: &'a str,
     pub(super) sandbox_mode: SandboxMode,
     pub(super) policy: &'a conary_core::repository::resolution_policy::ResolutionPolicy,
 }
@@ -191,9 +192,11 @@ async fn handle_dep_installs(
         super::repository_batch::prepare_repository_batch(ctx.db_path, selections, mode).await?;
     let installer = BatchInstaller::new(ctx.db_path, ctx.sandbox_mode);
     if ctx.dry_run {
-        report
-            .planned
-            .extend(prepared.preview(installer, report.projection.as_deref())?);
+        report.planned.extend(prepared.preview(
+            installer,
+            report.projection.as_deref(),
+            std::path::Path::new(ctx.root),
+        )?);
     } else {
         report.extend(prepared.install_with_result(installer)?.report);
         crate::ui::row(
