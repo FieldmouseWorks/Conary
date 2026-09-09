@@ -282,6 +282,10 @@ sysroot_hash = "{HASH}"
             ),
         )
         .unwrap();
+        // These are trusted policy fixtures, independent of the caller's umask.
+        fs::set_permissions(self.work.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        fs::set_permissions(&self.sysroot, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::set_permissions(&config_path, fs::Permissions::from_mode(0o600)).unwrap();
         config_path
     }
 

@@ -505,9 +505,31 @@ fn test_local_native_fixture_builder_generates_all_supported_formats() {
     }
 
     let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let fixture_dir = repo_root.join("tests/fixtures/phase4-runtime-fixture");
+    let source_fixture = repo_root.join("tests/fixtures/phase4-runtime-fixture");
     let build_script = repo_root.join("tests/fixtures/native/build-native-fixtures.sh");
     let temp_dir = tempfile::tempdir().unwrap();
+    let fixture_dir = temp_dir.path().join("fixture");
+    // Checkout directories inherit the caller's umask. The fixture describes
+    // ordinary 0755 parent directories, which native export may omit rather
+    // than claiming shared target paths such as /usr/bin. Establish that exact
+    // fixture in a private copy without changing the shared checkout.
+    for entry in walkdir::WalkDir::new(&source_fixture) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let entry = entry.unwrap();
+        let target = fixture_dir.join(entry.path().strip_prefix(&source_fixture).unwrap());
+        if entry.file_type().is_dir() {
+            fs::create_dir_all(&target).unwrap();
+            fs::set_permissions(&target, fs::Permissions::from_mode(0o755)).unwrap();
+        } else {
+            assert!(
+                entry.file_type().is_file(),
+                "fixture must contain only regular files"
+            );
+            fs::copy(entry.path(), &target).unwrap();
+            fs::set_permissions(&target, fs::Permissions::from_mode(0o644)).unwrap();
+        }
+    }
     let native_output_root = temp_dir.path().join("native-output");
 
     for (target, extension) in [("rpm", ".rpm"), ("deb", ".deb"), ("arch", ".pkg.tar.zst")] {

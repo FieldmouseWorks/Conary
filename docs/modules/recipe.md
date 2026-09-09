@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-09-03
-revision: 9
+last_updated: 2026-09-09
+revision: 10
 summary: Explicit recipe scaffolding, parsing, hermetic cook, Kitchen execution, and source provenance
 ---
 
@@ -106,6 +106,11 @@ Default location: `/var/cache/conary/builds`, sharded by first 2 chars
 of cache key. Configurable max_size (10GB) and max_age (30 days).
 
 ## Hermetic Cook
+
+Hermetic-config policy regressions live in
+`apps/conary/src/commands/hermetic_config/tests.rs`. Their fixtures set trusted
+file and directory modes explicitly; negative cases then make exactly the
+config file, sysroot, or config ancestor writable and assert the refused path.
 
 `conary cook --isolated` is the hermetic build path. The CLI loads
 `apps/conary/src/commands/hermetic_config.rs`, requires exact content-identity
