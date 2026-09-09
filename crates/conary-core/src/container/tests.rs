@@ -714,3 +714,79 @@ fn test_sandbox_cannot_restore_mount_authority() {
         b"sealed\n"
     );
 }
+
+#[test]
+fn test_nested_build_mounts_do_not_propagate_to_caller() {
+    const CHILD_MARKER: &str = "CONARY_TEST_SHARED_BUILD_MOUNTS";
+    if !Uid::effective().is_root() {
+        return;
+    }
+    if std::env::var_os(CHILD_MARKER).is_none() {
+        let result = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "container::tests::test_nested_build_mounts_do_not_propagate_to_caller",
+                "--nocapture",
+            ])
+            .env(CHILD_MARKER, "1")
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        return;
+    }
+
+    // Create a shared caller workspace in a disposable mount namespace. This
+    // exercises propagation without letting a broken candidate change the host.
+    nix::sched::unshare(nix::sched::CloneFlags::CLONE_NEWNS).unwrap();
+    nix::mount::mount::<str, str, str, str>(
+        None,
+        "/",
+        None,
+        nix::mount::MsFlags::MS_PRIVATE | nix::mount::MsFlags::MS_REC,
+        None,
+    )
+    .unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    let destination = workspace.path().join("dest");
+    fs::create_dir(&destination).unwrap();
+    nix::mount::mount::<Path, Path, str, str>(
+        Some(workspace.path()),
+        workspace.path(),
+        None,
+        nix::mount::MsFlags::MS_BIND,
+        None,
+    )
+    .unwrap();
+    nix::mount::mount::<str, Path, str, str>(
+        None,
+        workspace.path(),
+        None,
+        nix::mount::MsFlags::MS_SHARED,
+        None,
+    )
+    .unwrap();
+    let before = fs::read_to_string("/proc/self/mountinfo").unwrap();
+    let mut config = ContainerConfig::minimal(Duration::from_secs(30));
+    config.isolate_mount = true;
+    config.bind_mounts = default_bind_mounts();
+    config.add_bind_mount(BindMount::build_workspace(workspace.path(), "/build"));
+    config.add_bind_mount(BindMount::build_workspace(&destination, "/build/dest"));
+    let mut sandbox = Sandbox::new(config);
+    for _ in 0..2 {
+        let (code, _, stderr) = sandbox
+            .execute("/bin/sh", "printf phase >> /build/dest/output", &[], &[])
+            .unwrap();
+        assert_eq!(code, 0, "{stderr}");
+        assert_eq!(
+            fs::read_to_string("/proc/self/mountinfo").unwrap(),
+            before,
+            "nested mounts propagated into the caller namespace"
+        );
+    }
+    assert_eq!(fs::read(destination.join("output")).unwrap(), b"phasephase");
+    nix::mount::umount(workspace.path()).unwrap();
+}

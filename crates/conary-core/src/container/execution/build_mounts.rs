@@ -79,7 +79,10 @@ impl PreparedBuildMounts {
                         0
                     },
                 attr_clr: 0,
-                propagation: 0,
+                // Detached clones retain the source peer group. Make each private
+                // before attachment so nested mounts cannot propagate back to
+                // the caller through a shared workspace mount.
+                propagation: libc::MS_PRIVATE,
                 userns_fd: namespace.as_raw_fd() as u64,
             };
 

@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-09
-revision: 14
+revision: 15
 summary: Explicit recipe scaffolding, parsing, hermetic cook, Kitchen execution, and source provenance
 ---
 
