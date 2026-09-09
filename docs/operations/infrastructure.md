@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-09-08
-revision: 98
+last_updated: 2026-09-09
+revision: 99
 summary: Document non-secret CI, release, deployment, hosting, and production evidence workflows, including survey outcome contracts and failure recovery; host-local access belongs in ignored LOCAL_ACCESS.md.
 ---
 
@@ -715,6 +715,11 @@ files.
   Once independently verified, the packaged static bundle is cached under the
   exact workflow run and commit so a retry can verify and reopen it before
   skipping setup and relinking. This reuse never crosses runs or source heads.
+  Linux x64 GNU and native-matrix jobs also cache the immutable sccache release
+  archive under its pinned version and SHA-256. Every restore is verified before
+  the executable enters the runner tool cache; corrupt archives fail closed.
+  A cold miss downloads the pinned archive once. This tool archive is separate
+  from compiler objects and does not change their source or policy authority.
   Workspace tests fan out by Conary, conary-core library, conary-core binary
   and integration targets, and remaining workspace ownership, then converge on the stable
   fail-closed `workspace-tests` check.
