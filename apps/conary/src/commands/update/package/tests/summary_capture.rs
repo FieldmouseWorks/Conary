@@ -1,7 +1,11 @@
 // apps/conary/src/commands/update/package/tests/summary_capture.rs
 
 use super::*;
-use std::process::Command;
+use std::io::Write;
+use std::process::{Command, Stdio};
+
+#[path = "summary_capture/cancellation.rs"]
+mod cancellation;
 
 #[path = "summary_capture/fixtures.rs"]
 mod fixtures;
@@ -16,17 +20,22 @@ async fn update_summary_capture_child() {
     let (temp, db_path) = create_test_db();
     seed_test_bootable_runtime(Path::new(&db_path));
     let conn = conary_core::db::open(&db_path).unwrap();
-    add_candidate(
-        &conn,
-        temp.path(),
-        "a-summary-update",
-        false,
-        scenario.starts_with("relation_"),
-        scenario
-            .starts_with("sequence_")
-            .then_some("z-summary-update < 2.0.0"),
-        scenario.starts_with("named_"),
-    );
+    let cancelled = scenario.starts_with("cancel_");
+    if cancelled {
+        cancellation::add_candidate(&conn, temp.path(), &db_path, &scenario).await;
+    } else {
+        add_candidate(
+            &conn,
+            temp.path(),
+            "a-summary-update",
+            false,
+            scenario.starts_with("relation_"),
+            scenario
+                .starts_with("sequence_")
+                .then_some("z-summary-update < 2.0.0"),
+            scenario.starts_with("named_"),
+        );
+    }
     if scenario == "mixed" {
         add_candidate(
             &conn,
@@ -109,13 +118,37 @@ async fn update_summary_capture_child() {
         ),
         SandboxMode::Always,
         None,
-        true,
+        !cancelled,
         None,
         None,
         true,
     )
     .await;
     println!("FRAME_END");
+    if cancelled {
+        let error = result.expect_err("dependency cancellation must stop the update");
+        assert!(error.to_string().contains("Update cancelled"), "{error:#}");
+        for name in ["a-summary-update", "z-summary-update"] {
+            assert_eq!(
+                Trove::find_by_name(&conn, name).unwrap()[0].version,
+                "1.0.0"
+            );
+        }
+        assert!(
+            Trove::find_by_name(&conn, "summary-dependency")
+                .unwrap()
+                .is_empty()
+        );
+        let stats: (i64, i64) = conn
+            .query_row(
+                "SELECT full_downloads, deltas_applied FROM delta_stats ORDER BY id DESC LIMIT 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(stats, (2, 0));
+        return;
+    }
     if scenario == "mixed" {
         assert!(
             result.is_err(),
@@ -236,6 +269,9 @@ fn update_summaries_in_terminal_pipe_and_no_color() {
             "pending",
             "mixed",
             "noop",
+            "cancel_full",
+            "cancel_delta",
+            "cancel_fallback",
         ] {
             let test =
                 "commands::update::package::tests::summary_capture::update_summary_capture_child";
@@ -264,7 +300,18 @@ fn update_summaries_in_terminal_pipe_and_no_color() {
             if no_color {
                 command.env("NO_COLOR", "1");
             }
-            let output = command.output().unwrap();
+            let mut child = command
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap();
+            if scenario.starts_with("cancel_") {
+                child.stdin.take().unwrap().write_all(b"n\n").unwrap();
+            } else {
+                drop(child.stdin.take());
+            }
+            let output = child.wait_with_output().unwrap();
             let stdout = String::from_utf8(output.stdout)
                 .unwrap()
                 .replace("\r\n", "\n");
@@ -284,6 +331,13 @@ fn update_summaries_in_terminal_pipe_and_no_color() {
                 assert!(!frame.contains('\x1b'), "{frame:?}");
             }
             let frame = console::strip_ansi_codes(frame);
+            if scenario.starts_with("cancel_") {
+                assert!(frame.contains("Cancelled."), "{frame}");
+                assert!(!frame.contains("Applied package changes:"), "{frame}");
+                assert!(!frame.contains("Rollback:"), "{frame}");
+                assert!(!frame.contains("[ok] a-summary-update"), "{frame}");
+                continue;
+            }
             if scenario == "noop" {
                 assert!(frame.contains("pinned"), "{frame}");
                 assert!(frame.contains("No eligible updates selected."), "{frame}");
