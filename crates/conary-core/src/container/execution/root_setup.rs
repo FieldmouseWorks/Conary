@@ -64,9 +64,8 @@ impl Sandbox {
             "dev", "etc", "proc", "sys", "tmp", "usr", "lib", "lib64", "bin", "sbin", "var",
         ] {
             let path = root.join(dir);
-            if !path.exists() {
-                fs::create_dir_all(&path)?;
-            }
+            fs::create_dir_all(&path)?;
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o755))?;
         }
 
         let mut tmp_perms = fs::metadata(root.join("tmp"))?.permissions();
@@ -82,6 +81,31 @@ impl Sandbox {
             let mut perms = fs::metadata(&path)?.permissions();
             perms.set_mode(0o666);
             fs::set_permissions(&path, perms)?;
+        }
+
+        for bind in &self.config.bind_mounts {
+            if !bind.source.exists() {
+                continue;
+            }
+            let relative = bind.target.strip_prefix("/").unwrap_or(&bind.target);
+            if relative
+                .components()
+                .any(|part| !matches!(part, std::path::Component::Normal(_)))
+            {
+                return Err(sandbox_error(
+                    "Sandbox bind targets must contain only normal path components",
+                ));
+            }
+            let target = root.join(relative);
+            let directory = if bind.source.is_dir() {
+                target.as_path()
+            } else {
+                target.parent().unwrap_or(root)
+            };
+            create_mount_parents(root, directory)?;
+            if !bind.source.is_dir() && !target.exists() {
+                File::create(&target)?;
+            }
         }
 
         Ok(())
@@ -481,4 +505,29 @@ fn set_mount_readonly(target: &Path) -> std::result::Result<(), nix::errno::Errn
     } else {
         Ok(())
     }
+}
+
+/// Create only sandbox-owned mount-point parents before any binds are attached.
+/// Explicit modes make namespace traversal independent of the caller's umask.
+fn create_mount_parents(root: &Path, directory: &Path) -> Result<()> {
+    let mut current = root.to_path_buf();
+    for component in directory
+        .strip_prefix(root)
+        .map_err(|error| sandbox_error(error.to_string()))?
+        .components()
+    {
+        current.push(component);
+        match fs::create_dir(&current) {
+            Ok(()) => fs::set_permissions(&current, fs::Permissions::from_mode(0o755))?,
+            Err(error)
+                if error.kind() == std::io::ErrorKind::AlreadyExists
+                    && fs::symlink_metadata(&current)?.is_dir() => {}
+            Err(error) => {
+                return Err(sandbox_error(format!(
+                    "Cannot prepare mount directory: {error}"
+                )));
+            }
+        }
+    }
+    Ok(())
 }

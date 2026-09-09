@@ -25,7 +25,10 @@ impl PreparedBuildMounts {
     pub(super) fn prepare(mounts: &[BindMount]) -> Result<Self> {
         let mut prepared = Vec::with_capacity(mounts.len());
         for mount in mounts {
-            if !Uid::effective().is_root() || mount.identity != BindMountIdentity::BuildWorkspace {
+            if !Uid::effective().is_root()
+                || mount.identity == BindMountIdentity::Host
+                || (mount.identity == BindMountIdentity::BuildInput && !mount.source.exists())
+            {
                 prepared.push(None);
                 continue;
             }

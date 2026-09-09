@@ -253,14 +253,17 @@ impl Sandbox {
     ) -> Result<(i32, String, String)> {
         // Create temporary root directory for the container
         let root_dir = TempDir::new()?;
+        let root = root_dir.path().join("root");
+        fs::create_dir(&root)?;
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o755))?;
 
         // Set up the container filesystem
-        self.setup_container_fs(root_dir.path())?;
+        self.setup_container_fs(&root)?;
 
-        let script_path = root_dir.path().join("script.sh");
+        let script_path = root.join("script.sh");
         write_executable_script_bytes(&script_path, script_content)?;
-        prepare_user_namespace_entrypoint(root_dir.path(), &script_path)?;
-        let stdin_path = root_dir.path().join(".conary-stdin");
+        prepare_user_namespace_entrypoint(&root, &script_path)?;
+        let stdin_path = root.join(".conary-stdin");
         fs::write(&stdin_path, stdin)?;
         let stdin_file = File::open(&stdin_path)?;
         let prepared_enforcement = self.prepare_enforcement()?;
@@ -323,7 +326,7 @@ impl Sandbox {
                     userns_request_read_fd,
                     userns_ack_write_fd,
                     execution: ChildExecution {
-                        root: root_dir.path(),
+                        root: &root,
                         build_mounts: &build_mounts,
                         program: interpreter,
                         interpreter_args,
@@ -361,9 +364,12 @@ impl Sandbox {
         stdin: &[u8],
     ) -> Result<(i32, String, String)> {
         let root_dir = TempDir::new()?;
-        self.setup_container_fs(root_dir.path())?;
-        prepare_user_namespace_root(root_dir.path())?;
-        let stdin_path = root_dir.path().join(".conary-stdin");
+        let root = root_dir.path().join("root");
+        fs::create_dir(&root)?;
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o755))?;
+        self.setup_container_fs(&root)?;
+        prepare_user_namespace_root(&root)?;
+        let stdin_path = root.join(".conary-stdin");
         fs::write(&stdin_path, stdin)?;
         let stdin_file = File::open(&stdin_path)?;
         let prepared_enforcement = self.prepare_enforcement()?;
@@ -420,7 +426,7 @@ impl Sandbox {
                     userns_request_read_fd,
                     userns_ack_write_fd,
                     execution: ChildExecution {
-                        root: root_dir.path(),
+                        root: &root,
                         build_mounts: &build_mounts,
                         program,
                         interpreter_args: &[],

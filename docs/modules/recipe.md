@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-09
-revision: 12
+revision: 13
 summary: Explicit recipe scaffolding, parsing, hermetic cook, Kitchen execution, and source provenance
 ---
 
@@ -175,8 +175,10 @@ before acknowledging namespace setup; the child attaches them only in its own
 mount namespace. Builds can read private inputs and write their managed source,
 build, and destination trees while retaining root ownership on disk and in CCS
 payload entries. Explicit caller-provided destinations carry the same write
-authority; ordinary host binds receive no ownership projection. No recursive
-ownership or permission rewrite is used. A filesystem or kernel that cannot
+authority; selected sysroot inputs receive read-only projections; ordinary host binds receive no ownership projection. No recursive
+ownership or permission rewrite is used. Private sandbox roots and writable
+layers have caller-only outer directories; generated mount-point directories
+use explicit modes so a restrictive caller umask cannot break traversal. A filesystem or kernel that cannot
 provide the requested mapping produces a typed sandbox setup refusal before
 build execution.
 
