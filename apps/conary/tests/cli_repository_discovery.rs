@@ -2,7 +2,70 @@
 //! Disposable repository discovery journey and terminal/pipe presentation proof.
 
 use conary_core::db::models::Repository;
+use std::io::{Read, Write};
+use std::net::TcpListener;
 use std::path::Path;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
+
+struct CatalogServer {
+    url: String,
+    stop: Arc<AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl CatalogServer {
+    fn new(directory: &Path) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        listener.set_nonblocking(true).unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let stopping = Arc::clone(&stop);
+        let directory = directory.to_path_buf();
+        let thread = std::thread::spawn(move || {
+            while !stopping.load(Ordering::Relaxed) {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        stream
+                            .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+                            .unwrap();
+                        let mut request = [0; 4096];
+                        let count = stream.read(&mut request).unwrap();
+                        let metadata = request[..count].starts_with(b"GET /metadata.json HTTP/");
+                        let (status, body) = if metadata {
+                            (
+                                "200 OK",
+                                std::fs::read(directory.join("metadata.json")).unwrap(),
+                            )
+                        } else {
+                            ("404 Not Found", Vec::new())
+                        };
+                        write!(stream, "HTTP/1.1 {status}\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n", body.len()).unwrap();
+                        stream.write_all(&body).unwrap();
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(std::time::Duration::from_millis(5))
+                    }
+                    Err(error) => panic!("catalog accept: {error}"),
+                }
+            }
+        });
+        Self {
+            url,
+            stop,
+            thread: Some(thread),
+        }
+    }
+}
+
+impl Drop for CatalogServer {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        self.thread.take().unwrap().join().unwrap();
+    }
+}
 use std::process::Command;
 
 fn run(db: &Path, args: &[&str]) -> (String, String) {
@@ -38,14 +101,14 @@ fn write_metadata(path: &Path, packages: bool) {
     .unwrap();
 }
 
-fn add(db: &Path, directory: &Path) {
+fn add(db: &Path, url: &str) {
     run(
         db,
         &[
             "repo",
             "add",
             "fixture",
-            directory.to_str().unwrap(),
+            url,
             "--package-format",
             "json",
             "--yes",
@@ -64,7 +127,8 @@ fn discovery_journey_distinguishes_missing_disabled_unpublished_and_cached_sourc
     assert!(!stderr.contains("repo sync"));
 
     write_metadata(temp.path(), true);
-    add(&db, temp.path());
+    let server = CatalogServer::new(temp.path());
+    add(&db, &server.url);
     let (_, stderr) = run(&db, &["query", "repquery"]);
     assert!(stderr.contains("Repository fixture has no published metadata."));
     assert!(stderr.contains("conary repo sync --force --db-path='"));
@@ -86,7 +150,8 @@ fn discovery_journey_distinguishes_missing_disabled_unpublished_and_cached_sourc
         .unwrap();
     assert!(
         output.status.success(),
-        "{}",
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
 
@@ -153,7 +218,8 @@ fn discovery_terminal_frames_match_pipe_facts_with_and_without_color() {
     let db = temp.path().join("fixture.db");
     conary_core::db::init(&db).unwrap();
     write_metadata(temp.path(), true);
-    add(&db, temp.path());
+    let server = CatalogServer::new(temp.path());
+    add(&db, &server.url);
     for args in [
         vec!["repo", "list"],
         vec!["search", "needle"],
