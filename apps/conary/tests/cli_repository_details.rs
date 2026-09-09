@@ -105,7 +105,7 @@ fn capture(db: &str) -> String {
 
 #[test]
 fn details_retain_separate_releases_and_every_installed_package_variant() {
-    let (_temp, db, conn, _) = fixture();
+    let (_temp, db, conn, candidate) = fixture();
     let variants = [
         ("1.0-1", Some("9"), Some("x86_64")),
         ("2.0-1", Some("2"), Some("x86_64")),
@@ -119,6 +119,10 @@ fn details_retain_separate_releases_and_every_installed_package_variant() {
             installed(&conn, version, *release, *arch, TroveType::Package)
         })
         .collect();
+    conn.execute(
+        "UPDATE troves SET source_profile = 'fedora-44', install_source = 'repository', installed_from_repository_id = ?1 WHERE id = ?2",
+        rusqlite::params![candidate.repository_id, ids[0]],
+    ).unwrap();
     installed(&conn, "99-1", None, None, TroveType::Collection);
     let text = capture(&db);
     let (candidate, records) = text
@@ -146,6 +150,17 @@ fn details_retain_separate_releases_and_every_installed_package_variant() {
         );
         assert!(records.contains(&expected), "{records}");
     }
+    assert!(
+        records.contains(&format!(
+            "  Source profile: fedora-44\n  Install source: repository\n  Repository ID: {}\n",
+            candidate.repository_id,
+        )),
+        "{records}"
+    );
+    assert!(
+        records.contains("  Source profile: Unspecified\n  Install source: file\n"),
+        "{records}"
+    );
     assert!(!text.contains("Status"), "{text}");
 }
 
