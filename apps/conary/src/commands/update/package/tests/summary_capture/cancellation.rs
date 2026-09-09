@@ -42,6 +42,7 @@ pub(super) async fn add_candidate(
     let path = dir.join("cancel-update.rpm");
     package.write_file(&path).unwrap();
     let bytes = std::fs::read(&path).unwrap();
+    let (url, _) = serve_test_file(path);
     let mut repo = Repository::new(
         "cancel-native".into(),
         "https://example.invalid/fixture".into(),
@@ -97,7 +98,7 @@ pub(super) async fn add_candidate(
         VersionScheme::Rpm,
         conary_core::hash::sha256(&bytes),
         bytes.len() as i64,
-        url::Url::from_file_path(&path).unwrap().to_string(),
+        url,
     );
     candidate.architecture = Some("x86_64".into());
     candidate.source_profile = Some("fedora-44".into());
