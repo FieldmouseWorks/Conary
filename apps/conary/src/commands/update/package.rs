@@ -547,246 +547,246 @@ pub(super) async fn update_packages(
     let update_result: Result<super::outcome::UpdateOutcome> = async {
         let mut cancelled_package = None;
         'apply_updates: {
-        // Phase 2: Download and apply deltas (sequential - requires CAS access)
-        for (trove, repo_pkg, repo, delta_info) in delta_updates {
-            crate::ui::println!("\nUpdating {} (delta)...", trove.name);
-            let mut needs_full = false;
+            // Phase 2: Download and apply deltas (sequential - requires CAS access)
+            for (trove, repo_pkg, repo, delta_info) in delta_updates {
+                crate::ui::println!("\nUpdating {} (delta)...", trove.name);
+                let mut needs_full = false;
 
-            match repository::download_delta(
-                &repository::DeltaInfo {
-                    from_version: delta_info.from_version.clone(),
-                    from_hash: delta_info.from_hash.clone(),
-                    delta_url: delta_info.delta_url.clone(),
-                    delta_size: delta_info.delta_size,
-                    delta_checksum: delta_info.delta_checksum.clone(),
-                    compression_ratio: delta_info.compression_ratio,
-                },
-                &trove.name,
-                &repo_pkg.version,
-                &temp_dir,
-            )
-            .await
-            {
-                Ok(actual_delta_path) => {
-                    let applier = DeltaApplier::new(&objects_dir)?;
-                    match applier.apply_delta(
-                        &delta_info.from_hash,
-                        &actual_delta_path,
-                        &delta_info.to_hash,
-                    ) {
-                        Ok(new_hash) => {
-                            crate::ui::row(crate::ui::Status::Ok, &["Delta applied to CAS"]);
-                            // Delta reconstructed the new package in CAS. Retrieve
-                            // it and feed through the normal install pipeline so all
-                            // DB metadata (files, deps, provides, history) and the
-                            // live generation transition correctly -- without a
-                            // redundant network download.
-                            let cas = conary_core::filesystem::CasStore::new(&objects_dir)?;
-                            let mut delta_installed = false;
-                            match read_delta_result_from_cas(&cas, &new_hash) {
-                                Ok(content) => {
-                                    let pkg_file = temp_dir
-                                        .join(format!("{}-{}.ccs", trove.name, repo_pkg.version));
-                                    if let Err(e) = std::fs::write(&pkg_file, &content) {
-                                        warn!(
-                                            "  Failed to write delta result for {}: {}",
-                                            trove.name, e
-                                        );
-                                    } else {
-                                        let path_str = pkg_file.to_string_lossy().to_string();
-                                        match cmd_install_with_report(
-                                            &path_str,
-                                            InstallOptions {
-                                                db_path,
-                                                root,
-                                                sandbox_mode,
-                                                ownership: Some(ownership),
-                                                yes,
-                                                repository_provenance: Some(
-                                                    repository_install_provenance_from_package(
-                                                        &repo_pkg, &repo,
-                                                    )?,
-                                                ),
-                                                ..Default::default()
-                                            },
-                                            &mut report,
-                                        )
-                                        .await
-                                        {
-                                            Ok(crate::commands::install::InstallOutcome::Cancelled) => {
-                                                let _ = std::fs::remove_file(&pkg_file);
-                                                let _ = std::fs::remove_file(&actual_delta_path);
-                                                cancelled_package = Some(trove.name.clone());
-                                                break 'apply_updates;
+                match repository::download_delta(
+                    &repository::DeltaInfo {
+                        from_version: delta_info.from_version.clone(),
+                        from_hash: delta_info.from_hash.clone(),
+                        delta_url: delta_info.delta_url.clone(),
+                        delta_size: delta_info.delta_size,
+                        delta_checksum: delta_info.delta_checksum.clone(),
+                        compression_ratio: delta_info.compression_ratio,
+                    },
+                    &trove.name,
+                    &repo_pkg.version,
+                    &temp_dir,
+                )
+                .await
+                {
+                    Ok(actual_delta_path) => {
+                        let applier = DeltaApplier::new(&objects_dir)?;
+                        match applier.apply_delta(
+                            &delta_info.from_hash,
+                            &actual_delta_path,
+                            &delta_info.to_hash,
+                        ) {
+                            Ok(new_hash) => {
+                                crate::ui::row(crate::ui::Status::Ok, &["Delta applied to CAS"]);
+                                // Delta reconstructed the new package in CAS. Retrieve
+                                // it and feed through the normal install pipeline so all
+                                // DB metadata (files, deps, provides, history) and the
+                                // live generation transition correctly -- without a
+                                // redundant network download.
+                                let cas = conary_core::filesystem::CasStore::new(&objects_dir)?;
+                                let mut delta_installed = false;
+                                match read_delta_result_from_cas(&cas, &new_hash) {
+                                    Ok(content) => {
+                                        let pkg_file = temp_dir
+                                            .join(format!("{}-{}.ccs", trove.name, repo_pkg.version));
+                                        if let Err(e) = std::fs::write(&pkg_file, &content) {
+                                            warn!(
+                                                "  Failed to write delta result for {}: {}",
+                                                trove.name, e
+                                            );
+                                        } else {
+                                            let path_str = pkg_file.to_string_lossy().to_string();
+                                            match cmd_install_with_report(
+                                                &path_str,
+                                                InstallOptions {
+                                                    db_path,
+                                                    root,
+                                                    sandbox_mode,
+                                                    ownership: Some(ownership),
+                                                    yes,
+                                                    repository_provenance: Some(
+                                                        repository_install_provenance_from_package(
+                                                            &repo_pkg, &repo,
+                                                        )?,
+                                                    ),
+                                                    ..Default::default()
+                                                },
+                                                &mut report,
+                                            )
+                                            .await
+                                            {
+                                                Ok(crate::commands::install::InstallOutcome::Cancelled) => {
+                                                    let _ = std::fs::remove_file(&pkg_file);
+                                                    let _ = std::fs::remove_file(&actual_delta_path);
+                                                    cancelled_package = Some(trove.name.clone());
+                                                    break 'apply_updates;
+                                                }
+                                                Ok(crate::commands::install::InstallOutcome::Completed) => {
+                                                    delta_installed = true;
+                                                    let row = format!(
+                                                        "{} {} -> {}",
+                                                        trove.name, trove.version, repo_pkg.version
+                                                    );
+                                                    crate::ui::row(crate::ui::Status::Ok, &[&row]);
+                                                }
+                                                Err(e) => {
+                                                    warn!(
+                                                        "  Delta install failed for {}: {}",
+                                                        trove.name, e
+                                                    );
+                                                }
                                             }
-                                            Ok(crate::commands::install::InstallOutcome::Completed) => {
-                                                delta_installed = true;
-                                                let row = format!(
-                                                    "{} {} -> {}",
-                                                    trove.name, trove.version, repo_pkg.version
-                                                );
-                                                crate::ui::row(crate::ui::Status::Ok, &[&row]);
-                                            }
-                                            Err(e) => {
-                                                warn!(
-                                                    "  Delta install failed for {}: {}",
-                                                    trove.name, e
-                                                );
-                                            }
+                                            let _ = std::fs::remove_file(&pkg_file);
                                         }
-                                        let _ = std::fs::remove_file(&pkg_file);
+                                    }
+                                    Err(e) => {
+                                        warn!("  Failed to retrieve delta result from CAS: {}", e);
                                     }
                                 }
-                                Err(e) => {
-                                    warn!("  Failed to retrieve delta result from CAS: {}", e);
+                                if delta_installed {
+                                    // Only count success after the full install pipeline
+                                    // completes -- not just after apply_delta().
+                                    deltas_applied += 1;
+                                } else {
+                                    // Use the admitted full artifact in this same update slot
+                                    delta_failures += 1;
+                                    needs_full = true;
                                 }
                             }
-                            if delta_installed {
-                                // Only count success after the full install pipeline
-                                // completes -- not just after apply_delta().
-                                deltas_applied += 1;
-                            } else {
-                                // Use the admitted full artifact in this same update slot
+                            Err(e) => {
+                                warn!(
+                                    "  Delta application failed: {}, using admitted full package",
+                                    e
+                                );
                                 delta_failures += 1;
                                 needs_full = true;
                             }
                         }
+                        let _ = std::fs::remove_file(&actual_delta_path);
+                    }
+                    Err(e) => {
+                        warn!(
+                            "  Delta download failed: {}, using admitted full package",
+                            e
+                        );
+                        delta_failures += 1;
+                        needs_full = true;
+                    }
+                }
+                if needs_full {
+                    let mut progress = UpdateProgress::new(1);
+                    info!(
+                        "Installing admitted full artifact for {} from {}",
+                        trove.name, repo.name
+                    );
+
+                    let prepared = preview.take_package(&trove)?;
+                    let pkg_path = &prepared.pkg_path;
+
+                    progress.set_phase(&trove.name, UpdatePhase::Installing);
+
+                    let path_str = pkg_path.to_string_lossy().to_string();
+
+                    match cmd_install_with_report(
+                        &path_str,
+                        install_options_for_update(
+                            db_path,
+                            root,
+                            sandbox_mode,
+                            ownership,
+                            yes,
+                            &repo_pkg,
+                            &repo,
+                        )?,
+                        &mut report,
+                    )
+                    .await
+                    {
+                        Ok(crate::commands::install::InstallOutcome::Cancelled) => {
+                            cancelled_package = Some(trove.name.clone());
+                            break 'apply_updates;
+                        }
+                        Ok(crate::commands::install::InstallOutcome::Completed) => {}
                         Err(e) => {
-                            warn!(
-                                "  Delta application failed: {}, using admitted full package",
-                                e
-                            );
-                            delta_failures += 1;
-                            needs_full = true;
+                            progress.fail_package(&trove.name, &e.to_string());
+                            warn!("  Package installation failed: {}", e);
+                            required_failures.push(UpdatePackageFailure {
+                                package: trove.name.clone(),
+                                version: repo_pkg.version.clone(),
+                                reason: e.to_string(),
+                            });
+                            let _ = std::fs::remove_file(pkg_path);
+                            continue;
                         }
                     }
-                    let _ = std::fs::remove_file(&actual_delta_path);
-                }
-                Err(e) => {
-                    warn!(
-                        "  Delta download failed: {}, using admitted full package",
-                        e
-                    );
-                    delta_failures += 1;
-                    needs_full = true;
+
+                    progress.complete_package(&trove.name);
+                    let _ = std::fs::remove_file(pkg_path);
+                    progress.clear();
                 }
             }
-            if needs_full {
-                let mut progress = UpdateProgress::new(1);
-                info!(
-                    "Installing admitted full artifact for {} from {}",
-                    trove.name, repo.name
-                );
 
-                let prepared = preview.take_package(&trove)?;
-                let pkg_path = &prepared.pkg_path;
+            // Phase 3 & 4: Install the remaining admitted full packages
+            // This respects per-repo routing strategies (remi, binary, etc.)
+            if !prepared_full_updates.is_empty() {
+                let total_to_install = prepared_full_updates.len() as u64;
+                let mut progress = UpdateProgress::new(total_to_install);
 
-                progress.set_phase(&trove.name, UpdatePhase::Installing);
+                progress.set_status("Installing packages...");
 
-                let path_str = pkg_path.to_string_lossy().to_string();
-
-                match cmd_install_with_report(
-                    &path_str,
-                    install_options_for_update(
-                        db_path,
-                        root,
-                        sandbox_mode,
-                        ownership,
-                        yes,
-                        &repo_pkg,
-                        &repo,
-                    )?,
-                    &mut report,
-                )
-                .await
+                for PreparedFullUpdate {
+                    trove,
+                    repo_pkg,
+                    repo,
+                    pkg_path,
+                    _source,
+                } in prepared_full_updates
                 {
-                    Ok(crate::commands::install::InstallOutcome::Cancelled) => {
-                        cancelled_package = Some(trove.name.clone());
-                        break 'apply_updates;
+                    info!(
+                        "Installing prepared update {} from {}",
+                        trove.name, repo.name
+                    );
+                    progress.set_phase(&trove.name, UpdatePhase::Installing);
+
+                    let path_str = pkg_path.to_string_lossy().to_string();
+
+                    match cmd_install_with_report(
+                        &path_str,
+                        install_options_for_update(
+                            db_path,
+                            root,
+                            sandbox_mode,
+                            ownership,
+                            yes,
+                            &repo_pkg,
+                            &repo,
+                        )?,
+                        &mut report,
+                    )
+                    .await
+                    {
+                        Ok(crate::commands::install::InstallOutcome::Cancelled) => {
+                            cancelled_package = Some(trove.name.clone());
+                            break 'apply_updates;
+                        }
+                        Ok(crate::commands::install::InstallOutcome::Completed) => {}
+                        Err(e) => {
+                            progress.fail_package(&trove.name, &e.to_string());
+                            warn!("  Package installation failed: {}", e);
+                            required_failures.push(UpdatePackageFailure {
+                                package: trove.name.clone(),
+                                version: repo_pkg.version.clone(),
+                                reason: e.to_string(),
+                            });
+                            let _ = std::fs::remove_file(&pkg_path);
+                            continue;
+                        }
                     }
-                    Ok(crate::commands::install::InstallOutcome::Completed) => {}
-                    Err(e) => {
-                    progress.fail_package(&trove.name, &e.to_string());
-                    warn!("  Package installation failed: {}", e);
-                    required_failures.push(UpdatePackageFailure {
-                        package: trove.name.clone(),
-                        version: repo_pkg.version.clone(),
-                        reason: e.to_string(),
-                    });
-                    let _ = std::fs::remove_file(pkg_path);
-                    continue;
-                    }
+
+                    progress.complete_package(&trove.name);
+                    let _ = std::fs::remove_file(&pkg_path);
                 }
 
-                progress.complete_package(&trove.name);
-                let _ = std::fs::remove_file(pkg_path);
                 progress.clear();
             }
-        }
-
-        // Phase 3 & 4: Install the remaining admitted full packages
-        // This respects per-repo routing strategies (remi, binary, etc.)
-        if !prepared_full_updates.is_empty() {
-            let total_to_install = prepared_full_updates.len() as u64;
-            let mut progress = UpdateProgress::new(total_to_install);
-
-            progress.set_status("Installing packages...");
-
-            for PreparedFullUpdate {
-                trove,
-                repo_pkg,
-                repo,
-                pkg_path,
-                _source,
-            } in prepared_full_updates
-            {
-                info!(
-                    "Installing prepared update {} from {}",
-                    trove.name, repo.name
-                );
-                progress.set_phase(&trove.name, UpdatePhase::Installing);
-
-                let path_str = pkg_path.to_string_lossy().to_string();
-
-                match cmd_install_with_report(
-                    &path_str,
-                    install_options_for_update(
-                        db_path,
-                        root,
-                        sandbox_mode,
-                        ownership,
-                        yes,
-                        &repo_pkg,
-                        &repo,
-                    )?,
-                    &mut report,
-                )
-                .await
-                {
-                    Ok(crate::commands::install::InstallOutcome::Cancelled) => {
-                        cancelled_package = Some(trove.name.clone());
-                        break 'apply_updates;
-                    }
-                    Ok(crate::commands::install::InstallOutcome::Completed) => {}
-                    Err(e) => {
-                    progress.fail_package(&trove.name, &e.to_string());
-                    warn!("  Package installation failed: {}", e);
-                    required_failures.push(UpdatePackageFailure {
-                        package: trove.name.clone(),
-                        version: repo_pkg.version.clone(),
-                        reason: e.to_string(),
-                    });
-                    let _ = std::fs::remove_file(&pkg_path);
-                    continue;
-                    }
-                }
-
-                progress.complete_package(&trove.name);
-                let _ = std::fs::remove_file(&pkg_path);
-            }
-
-            progress.clear();
-        }
 
         }
         conary_core::db::transaction(&mut conn, |tx| {
