@@ -53,6 +53,6 @@ fn list_one_package() {
 
     assert_eq!(
         stdout_of(&["list", "--db-path", &db]),
-        "Installed packages:\n  nginx 1.27.2 (Package) [x86_64]\n\nTotal: 1 package(s)\n"
+        "Installed packages:\n  nginx 1.27.2 (Package) release=Unspecified [x86_64]\n\nTotal: 1 package(s)\n"
     );
 }

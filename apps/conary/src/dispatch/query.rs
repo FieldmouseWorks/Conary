@@ -26,9 +26,13 @@ pub(super) fn dispatch_query_command(query_cmd: cli::QueryCommands) -> Result<()
             commands::cmd_whatprovides(&capability, &db.db_path)
         }
 
-        cli::QueryCommands::Whatbreaks { package_name, db } => {
-            commands::cmd_whatbreaks(&package_name, &db.db_path)
-        }
+        cli::QueryCommands::Whatbreaks {
+            package_name,
+            db,
+            version,
+            architecture,
+            release,
+        } => commands::cmd_whatbreaks(&package_name, &db.db_path, version, architecture, release),
 
         cli::QueryCommands::Reason { pattern, db } => {
             commands::cmd_query_reason(pattern.as_deref(), &db.db_path)
@@ -51,6 +55,7 @@ pub(super) fn dispatch_query_command(query_cmd: cli::QueryCommands) -> Result<()
             db,
             version,
             architecture,
+            release,
             verbose,
             entry,
             json,
@@ -61,6 +66,7 @@ pub(super) fn dispatch_query_command(query_cmd: cli::QueryCommands) -> Result<()
                 db_path: Some(db.db_path),
                 version,
                 architecture,
+                release,
                 verbose,
                 entry,
                 json,

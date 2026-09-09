@@ -213,6 +213,10 @@ pub enum SystemCommands {
         #[arg(long, requires = "convert")]
         arch: Option<String>,
 
+        /// Installed CCS release to convert, or "none" for a record without a CCS release
+        #[arg(long, requires = "convert")]
+        release: Option<crate::commands::InstalledRelease>,
+
         /// Install/remove system PM sync hooks
         #[arg(long, conflicts_with_all = ["system", "status", "refresh", "convert"])]
         sync_hook: bool,

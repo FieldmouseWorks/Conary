@@ -121,6 +121,7 @@ pub(super) async fn dispatch_command(command: Option<Commands>) -> Result<()> {
             common,
             version,
             architecture,
+            release,
             yes,
             sandbox,
             purge,
@@ -138,6 +139,7 @@ pub(super) async fn dispatch_command(command: Option<Commands>) -> Result<()> {
                 architecture,
                 sandbox.into(),
                 purge,
+                release,
             )
         }
 
@@ -146,6 +148,7 @@ pub(super) async fn dispatch_command(command: Option<Commands>) -> Result<()> {
             common,
             version,
             architecture,
+            release,
             security,
             dry_run,
             sandbox,
@@ -157,9 +160,9 @@ pub(super) async fn dispatch_command(command: Option<Commands>) -> Result<()> {
             if let Some(ref pkg) = package
                 && pkg.starts_with('@')
             {
-                if version.is_some() || architecture.is_some() {
+                if version.is_some() || release.is_some() || architecture.is_some() {
                     anyhow::bail!(
-                        "Installed package selectors --version/--arch cannot be used with collection updates"
+                        "Installed package selectors --version/--release/--arch cannot be used with collection updates"
                     );
                 }
                 require_live_mutation(
@@ -198,6 +201,7 @@ pub(super) async fn dispatch_command(command: Option<Commands>) -> Result<()> {
                 yes,
                 version,
                 architecture,
+                release,
             )
             .await
         }
@@ -208,6 +212,7 @@ pub(super) async fn dispatch_command(command: Option<Commands>) -> Result<()> {
             pattern,
             version,
             architecture,
+            release,
             db,
             path,
             info,
@@ -216,9 +221,9 @@ pub(super) async fn dispatch_command(command: Option<Commands>) -> Result<()> {
             pinned,
         }) => {
             if pinned {
-                if version.is_some() || architecture.is_some() {
+                if version.is_some() || release.is_some() || architecture.is_some() {
                     anyhow::bail!(
-                        "Installed package selectors --version/--arch cannot be used with --pinned"
+                        "Installed package selectors --version/--release/--arch cannot be used with --pinned"
                     );
                 }
                 commands::cmd_list_pinned(&db.db_path)
@@ -230,6 +235,7 @@ pub(super) async fn dispatch_command(command: Option<Commands>) -> Result<()> {
                     files,
                     version,
                     architecture,
+                    release,
                 };
                 commands::cmd_query(pattern.as_deref(), &db.db_path, options)
             }
@@ -254,10 +260,12 @@ pub(super) async fn dispatch_command(command: Option<Commands>) -> Result<()> {
             package_name,
             version,
             architecture,
+            release,
             db,
         }) => {
             let selector =
-                commands::InstalledPackageSelector::new(package_name, version, architecture);
+                commands::InstalledPackageSelector::new(package_name, version, architecture)
+                    .with_release(release);
             commands::cmd_pin(selector, &db.db_path)
         }
 
@@ -265,10 +273,12 @@ pub(super) async fn dispatch_command(command: Option<Commands>) -> Result<()> {
             package_name,
             version,
             architecture,
+            release,
             db,
         }) => {
             let selector =
-                commands::InstalledPackageSelector::new(package_name, version, architecture);
+                commands::InstalledPackageSelector::new(package_name, version, architecture)
+                    .with_release(release);
             commands::cmd_unpin(selector, &db.db_path)
         }
 

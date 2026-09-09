@@ -36,6 +36,7 @@ fn command_capture_child() {
             None,
             crate::commands::SandboxMode::Always,
             false,
+            None,
         )
     };
     let rollback = scenario.contains("rollback");

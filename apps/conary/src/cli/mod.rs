@@ -237,6 +237,10 @@ pub enum Commands {
         #[arg(long = "arch")]
         architecture: Option<String>,
 
+        /// Installed CCS release to select, or "none" for a record without a CCS release
+        #[arg(long)]
+        release: Option<crate::commands::InstalledRelease>,
+
         /// Confirm applying this command's active-system changes
         #[arg(short = 'y', long)]
         yes: bool,
@@ -267,6 +271,10 @@ pub enum Commands {
         /// Installed package architecture to select when multiple variants are installed
         #[arg(long = "arch")]
         architecture: Option<String>,
+
+        /// Installed CCS release to select, or "none" for a record without a CCS release
+        #[arg(long)]
+        release: Option<crate::commands::InstalledRelease>,
 
         /// Only apply updates with trusted security-advisory metadata
         #[arg(long)]
@@ -321,6 +329,10 @@ pub enum Commands {
         /// Installed package architecture to select when multiple variants are installed
         #[arg(long = "arch")]
         architecture: Option<String>,
+
+        /// Installed CCS release to select, or "none" for a record without a CCS release
+        #[arg(long)]
+        release: Option<crate::commands::InstalledRelease>,
 
         #[command(flatten)]
         db: DbArgs,
@@ -379,6 +391,10 @@ pub enum Commands {
         #[arg(long = "arch")]
         architecture: Option<String>,
 
+        /// Installed CCS release to select, or "none" for a record without a CCS release
+        #[arg(long)]
+        release: Option<crate::commands::InstalledRelease>,
+
         #[command(flatten)]
         db: DbArgs,
     },
@@ -395,6 +411,10 @@ pub enum Commands {
         /// Installed package architecture to select when multiple variants are installed
         #[arg(long = "arch")]
         architecture: Option<String>,
+
+        /// Installed CCS release to select, or "none" for a record without a CCS release
+        #[arg(long)]
+        release: Option<crate::commands::InstalledRelease>,
 
         #[command(flatten)]
         db: DbArgs,

@@ -25,6 +25,7 @@ pub struct ScriptQueryOptions {
     pub db_path: Option<String>,
     pub version: Option<String>,
     pub architecture: Option<String>,
+    pub release: Option<crate::commands::InstalledRelease>,
     pub verbose: bool,
     pub entry: Option<String>,
     pub json: bool,
@@ -116,9 +117,17 @@ pub fn cmd_scripts(package_path: &str) -> Result<()> {
 }
 
 pub fn cmd_scripts_with_options(package_path: &str, options: ScriptQueryOptions) -> Result<()> {
-    if !looks_like_package_file(package_path)
-        && let Some(db_path) = options.db_path.as_deref()
+    let package_is_file = looks_like_package_file(package_path);
+    if package_is_file
+        && (options.version.is_some()
+            || options.architecture.is_some()
+            || options.release.is_some())
     {
+        bail!(
+            "Installed package selectors --version/--release/--arch cannot be used with a package file"
+        );
+    }
+    if !package_is_file && let Some(db_path) = options.db_path.as_deref() {
         return print_installed_scriptlets(package_path, db_path, &options);
     }
 
@@ -244,7 +253,8 @@ fn print_installed_scriptlets(
         package_name.to_string(),
         options.version.clone(),
         options.architecture.clone(),
-    );
+    )
+    .with_release(options.release.clone());
     let resolved = resolve_installed_package(&conn, &selector)?;
     let ccs_remove_hook = InstalledCcsRemoveHook::find_by_trove(&conn, resolved.trove_id)?;
     let installed_bundle = InstalledNativeLifecycleBundle::find_by_trove(&conn, resolved.trove_id)?
@@ -282,10 +292,11 @@ fn render_installed_scripts_text(
 ) -> Result<String> {
     let mut output = String::new();
     output.push_str(&format!(
-        "Installed package: {} {} [{}]\n",
+        "Installed package: {} {} [{}] release={}\n",
         trove.name,
         trove.version,
-        trove.architecture.as_deref().unwrap_or("none")
+        trove.architecture.as_deref().unwrap_or("none"),
+        trove.package_release.as_deref().unwrap_or("Unspecified")
     ));
     if let Some(hook) = ccs_remove_hook {
         output.push_str(&format!(

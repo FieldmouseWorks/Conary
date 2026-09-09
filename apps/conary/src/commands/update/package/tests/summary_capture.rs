@@ -126,6 +126,7 @@ async fn update_summary_capture_child() {
         None,
         None,
         true,
+        None,
     )
     .await;
     if scenario == "preflight" || scenario == "preflight_first" {

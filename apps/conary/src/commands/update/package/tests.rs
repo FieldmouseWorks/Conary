@@ -217,7 +217,7 @@ fn package_specific_update_requires_selector_for_ambiguous_variants() {
         trove.insert(&conn).unwrap();
     }
 
-    let err = installed_troves_for_update(&conn, Some("demo".to_string()), None, None)
+    let err = installed_troves_for_update(&conn, Some("demo".to_string()), None, None, None)
         .unwrap_err()
         .to_string();
     assert!(err.contains("Multiple installed variants"), "{err}");
@@ -228,6 +228,7 @@ fn package_specific_update_requires_selector_for_ambiguous_variants() {
         Some("demo".to_string()),
         Some("1.0.0".to_string()),
         Some("aarch64".to_string()),
+        None,
     )
     .unwrap();
     assert_eq!(selected.len(), 1);
@@ -239,7 +240,7 @@ fn update_selector_without_package_refuses() {
     let conn = rusqlite::Connection::open_in_memory().unwrap();
     conary_core::db::schema::ensure_current(&conn).unwrap();
 
-    let err = installed_troves_for_update(&conn, None, None, Some("x86_64".to_string()))
+    let err = installed_troves_for_update(&conn, None, None, Some("x86_64".to_string()), None)
         .unwrap_err()
         .to_string();
 
@@ -327,6 +328,7 @@ async fn update_executes_typed_rpm_lifecycle_and_commits_changeset() {
         None,
         Some("x86_64".to_string()),
         false,
+        None,
     )
     .await
     .expect("typed RPM lifecycle update should execute");

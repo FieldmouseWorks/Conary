@@ -197,6 +197,7 @@ pub async fn cmd_update(
         package_version,
         architecture,
         false,
+        None,
     )
     .await
     .map(|_| ())
@@ -214,6 +215,7 @@ pub(crate) async fn cmd_update_cli(
     yes: bool,
     package_version: Option<String>,
     architecture: Option<String>,
+    release: Option<crate::commands::InstalledRelease>,
 ) -> Result<()> {
     update_packages(
         package,
@@ -227,6 +229,7 @@ pub(crate) async fn cmd_update_cli(
         package_version,
         architecture,
         true,
+        release,
     )
     .await
     .map(|_| ())
@@ -246,6 +249,7 @@ pub(super) async fn update_packages(
     package_version: Option<String>,
     architecture: Option<String>,
     show_rollback: bool,
+    release: Option<crate::commands::InstalledRelease>,
 ) -> Result<super::outcome::UpdateOutcome> {
     if security_only {
         info!("Checking for security updates only");
@@ -264,7 +268,7 @@ pub(super) async fn update_packages(
     let policy = effective_source_policy.resolution.clone();
 
     let installed_troves =
-        installed_troves_for_update(&conn, package, package_version, architecture)?;
+        installed_troves_for_update(&conn, package, package_version, architecture, release)?;
 
     if installed_troves.is_empty() {
         crate::ui::println!("No packages to update");

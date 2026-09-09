@@ -117,6 +117,7 @@ pub(super) async fn dispatch_system_command(sys_cmd: cli::SystemCommands) -> Res
             convert,
             version,
             arch,
+            release,
             sync_hook,
             remove_hook,
             quiet,
@@ -132,6 +133,7 @@ pub(super) async fn dispatch_system_command(sys_cmd: cli::SystemCommands) -> Res
                     arch.as_deref(),
                     &db.db_path,
                     dry_run,
+                    release.as_ref(),
                 )
                 .await
             } else if status {

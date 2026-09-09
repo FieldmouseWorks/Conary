@@ -79,14 +79,21 @@ pub fn cmd_rdepends(package_name: &str, db_path: &str) -> Result<()> {
 }
 
 /// Show what packages would break if a package is removed
-pub fn cmd_whatbreaks(package_name: &str, db_path: &str) -> Result<()> {
+pub fn cmd_whatbreaks(
+    package_name: &str,
+    db_path: &str,
+    version: Option<String>,
+    architecture: Option<String>,
+    release: Option<crate::commands::InstalledRelease>,
+) -> Result<()> {
     info!(
         "Checking what would break if '{}' is removed...",
         package_name
     );
     let conn = open_db(db_path)?;
 
-    let selector = InstalledPackageSelector::new(package_name.to_string(), None, None);
+    let selector = InstalledPackageSelector::new(package_name.to_string(), version, architecture)
+        .with_release(release);
     let resolved = resolve_installed_package(&conn, &selector)?;
     let trove = resolved.trove;
 

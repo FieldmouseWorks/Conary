@@ -148,6 +148,7 @@ pub use model::{
     cmd_model_publish, cmd_model_remote_diff, cmd_model_snapshot, cmd_model_update,
 };
 pub use new::cmd_new;
+pub use package_target::InstalledRelease;
 pub(crate) use package_target::{
     InstalledPackageSelector, package_authority_label, resolve_installed_package,
 };

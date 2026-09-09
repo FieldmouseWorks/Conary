@@ -18,9 +18,10 @@ pub fn cmd_query(pattern: Option<&str>, db_path: &str, options: QueryOptions) ->
 
     // Path query mode: find package containing a file
     if let Some(file_path) = &options.path {
-        if options.version.is_some() || options.architecture.is_some() {
+        if options.version.is_some() || options.architecture.is_some() || options.release.is_some()
+        {
             anyhow::bail!(
-                "Installed package selectors --version/--arch cannot be used with --path"
+                "Installed package selectors --version/--release/--arch cannot be used with --path"
             );
         }
         return query_by_path(&conn, file_path, &options);
@@ -34,7 +35,8 @@ pub fn cmd_query(pattern: Option<&str>, db_path: &str, options: QueryOptions) ->
             package_name.to_string(),
             options.version.clone(),
             options.architecture.clone(),
-        );
+        )
+        .with_release(options.release.clone());
         let resolved = resolve_installed_package(&conn, &selector)?;
 
         if options.info {
@@ -43,15 +45,16 @@ pub fn cmd_query(pattern: Option<&str>, db_path: &str, options: QueryOptions) ->
         return list_package_files(&conn, &resolved.trove, options.lsl);
     }
 
-    if options.version.is_some() || options.architecture.is_some() {
+    if options.version.is_some() || options.architecture.is_some() || options.release.is_some() {
         let package_name = pattern.ok_or_else(|| {
-            anyhow::anyhow!("A package name is required with --version or --arch")
+            anyhow::anyhow!("A package name is required with --version, --release, or --arch")
         })?;
         let selector = InstalledPackageSelector::new(
             package_name.to_string(),
             options.version.clone(),
             options.architecture.clone(),
-        );
+        )
+        .with_release(options.release.clone());
         let resolved = resolve_installed_package(&conn, &selector)?;
         print_installed_packages(&[resolved.trove]);
         return Ok(());
@@ -77,10 +80,11 @@ fn print_installed_packages(troves: &[conary_core::db::models::Trove]) {
     crate::ui::heading("Installed packages:");
     for trove in troves {
         print!(
-            "  {} {} ({})",
+            "  {} {} ({}) release={}",
             trove.name,
             trove.version,
-            trove_type_label(&trove.trove_type)
+            trove_type_label(&trove.trove_type),
+            installed_release_label(trove)
         );
         if let Some(arch) = &trove.architecture {
             print!(" [{}]", arch);
@@ -88,6 +92,10 @@ fn print_installed_packages(troves: &[conary_core::db::models::Trove]) {
         println!();
     }
     println!("\nTotal: {} package(s)", troves.len());
+}
+
+fn installed_release_label(trove: &conary_core::db::models::Trove) -> &str {
+    trove.package_release.as_deref().unwrap_or("Unspecified")
 }
 
 fn trove_type_label(trove_type: &conary_core::db::models::TroveType) -> &'static str {
@@ -164,6 +172,7 @@ fn show_package_info(
 
     println!("Name        : {}", trove.name);
     println!("Version     : {}", trove.version);
+    crate::ui::field("Release", installed_release_label(trove));
     println!("Type        : {:?}", trove.trove_type);
     println!(
         "Authority   : {}",
@@ -277,9 +286,10 @@ fn list_package_files(
     }
 
     println!(
-        "Files in {} {} ({} files):",
+        "Files in {} {} release={} ({} files):",
         trove.name,
         trove.version,
+        installed_release_label(trove),
         files.len()
     );
 

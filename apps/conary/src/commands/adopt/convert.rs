@@ -80,18 +80,19 @@ pub async fn cmd_adopt_convert(
     architecture: Option<&str>,
     db_path: &str,
     dry_run: bool,
+    release: Option<&crate::commands::InstalledRelease>,
 ) -> Result<()> {
     if packages.is_empty() {
         bail!("Specify at least one adopted package to convert");
     }
-    if packages.len() > 1 && (version.is_some() || architecture.is_some()) {
-        bail!("--version and --arch may be used only with one adopted package");
+    if packages.len() > 1 && (version.is_some() || release.is_some() || architecture.is_some()) {
+        bail!("--version, --release, and --arch may be used only with one adopted package");
     }
 
     if dry_run {
         let conn = open_db(db_path)?;
         for package in packages {
-            let plan = plan_conversion(&conn, package, version, architecture)?;
+            let plan = plan_conversion(&conn, package, version, architecture, release)?;
             render_plan(&plan);
         }
         crate::ui::note("Dry run: no artifacts were acquired, converted, or published");
@@ -102,7 +103,7 @@ pub async fn cmd_adopt_convert(
         .context("failed to acquire the runtime mutation lock for adopted conversion")?;
     let mut conn = open_db(db_path)?;
     for package in packages {
-        let plan = plan_conversion(&conn, package, version, architecture)?;
+        let plan = plan_conversion(&conn, package, version, architecture, release)?;
         if current_conversion_is_usable(&conn, db_path, &plan)? {
             crate::ui::note(&format!(
                 "{} already has a verified current CCS artifact",
@@ -147,6 +148,7 @@ fn plan_conversion(
     package: &str,
     version: Option<&str>,
     architecture: Option<&str>,
+    release: Option<&crate::commands::InstalledRelease>,
 ) -> Result<AdoptedConversionPlan> {
     let installed = super::super::resolve_installed_package(
         conn,
@@ -154,7 +156,8 @@ fn plan_conversion(
             package.to_string(),
             version.map(str::to_string),
             architecture.map(str::to_string),
-        ),
+        )
+        .with_release(release.cloned()),
     )?;
     if !installed.trove.install_source.is_adopted() {
         bail!(
