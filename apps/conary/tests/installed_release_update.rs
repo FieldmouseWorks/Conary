@@ -67,5 +67,14 @@ fn update_replaces_the_selected_release_and_preserves_its_sibling() {
     let rows = Trove::find_by_name(&conn, "demo").unwrap();
     assert_eq!(rows.len(), 2, "{rows:?}");
     assert_eq!(rows.iter().filter(|row| row.version == "1.0-2").count(), 1);
-    assert_eq!(std::fs::read(root.join("usr/share/demo")).unwrap(), b"demo");
+    let updated = rows.iter().find(|row| row.version == "1.0-2").unwrap();
+    let payload =
+        conary_core::db::models::PackagePayloadOwnership::load(&conn, updated.id.unwrap()).unwrap();
+    assert!(payload.lifecycle_paths.contains("/usr/share/demo"));
+    let cas =
+        conary_core::filesystem::CasStore::new(conary_core::db::paths::objects_dir(&db)).unwrap();
+    assert_eq!(
+        cas.retrieve(&conary_core::hash::sha256(b"demo")).unwrap(),
+        b"demo"
+    );
 }

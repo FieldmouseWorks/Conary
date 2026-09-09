@@ -53,6 +53,19 @@ package ownership, lifecycle admission, or live-mutation confirmation.
 `cargo test -p conary --test installed_release_selector` and the shared selector
 unit tests prove numbered/absent releases, ambiguity, source version and
 architecture filters, and selected pin state on disposable databases.
+The parser in `apps/conary/src/commands/package_target/release.rs` is shared by
+runtime argument parsing and generated manuals.
+
+Update carries the selected installed snapshot through preview, full-artifact,
+and delta installation. Root preparation revalidates its record ID, identity,
+source observations, and pin state; batch execution repeats that validation
+under the runtime mutation lock. Missing or changed targets and a conflicting
+incoming identity refuse before mutation. Dependencies keep their own targets.
+`cargo test -p conary --features test-hooks --test installed_release_update`
+proves that updating the second same-version/architecture release preserves
+its sibling and publishes the incoming payload ownership and CAS bytes. This
+fixture uses the fenced test-only mount boundary; real-mount proof remains a
+separate lifecycle gate.
 
 ## Repository Discovery
 

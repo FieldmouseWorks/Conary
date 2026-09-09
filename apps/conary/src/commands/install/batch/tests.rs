@@ -22,6 +22,8 @@ mod mutation_lock;
 mod preview;
 #[path = "tests/preview_native.rs"]
 mod preview_native;
+#[path = "tests/replacement.rs"]
+mod replacement;
 #[path = "tests/witness_universe.rs"]
 mod witness_universe;
 
