@@ -38,7 +38,7 @@ pub use batch::BatchInstaller;
 pub use command::cmd_install;
 pub(crate) use command::cmd_install_cli;
 pub(crate) use command::cmd_install_replatform;
-pub(crate) use command::cmd_install_with_report;
+pub(crate) use command::{InstallOutcome, cmd_install_with_report};
 pub(crate) use conversion::{
     PendingInstalledConversion, PendingNativeCcsConversion, convert_native_package_to_ccs,
 };

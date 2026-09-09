@@ -23,6 +23,12 @@ use conary_core::repository::resolution_policy::RequestScope;
 use conary_core::transaction::{plan_package_relations, validate_package_relation_plan};
 use std::path::Path;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InstallOutcome {
+    Completed,
+    Cancelled,
+}
+
 /// Install a package
 ///
 /// Uses the unified resolution flow with per-package routing strategies.
@@ -47,10 +53,10 @@ async fn install_command(
     if result.is_ok() || !report.commits.is_empty() {
         report.render(db_path, dry_run);
     }
-    if show_rollback && result.is_ok() && !dry_run {
+    if show_rollback && matches!(result, Ok(InstallOutcome::Completed)) && !dry_run {
         crate::ui::transaction_summary::install_rollback_route(&report, db_path);
     }
-    result
+    result.map(|_| ())
 }
 
 pub(crate) async fn cmd_install_replatform(package: &str, opts: InstallOptions<'_>) -> Result<()> {
@@ -61,14 +67,14 @@ pub(crate) async fn cmd_install_replatform(package: &str, opts: InstallOptions<'
     if result.is_ok() || !report.commits.is_empty() {
         report.render(db_path, dry_run);
     }
-    result
+    result.map(|_| ())
 }
 
 pub(crate) async fn cmd_install_with_report(
     package: &str,
     opts: InstallOptions<'_>,
     report: &mut super::report::InstallReport,
-) -> Result<()> {
+) -> Result<InstallOutcome> {
     cmd_install_with_intent(package, opts, InstallIntent::PackageChange, report).await
 }
 
@@ -77,7 +83,7 @@ async fn cmd_install_with_intent(
     opts: InstallOptions<'_>,
     intent: InstallIntent,
     report: &mut super::report::InstallReport,
-) -> Result<()> {
+) -> Result<InstallOutcome> {
     let InstallOptions {
         db_path,
         root,
@@ -158,7 +164,7 @@ async fn cmd_install_with_intent(
         dry_run,
         selection_reason,
     )? {
-        return Ok(());
+        return Ok(InstallOutcome::Completed);
     }
 
     // --- Phase 4: Package resolution + format detection ---
@@ -193,7 +199,7 @@ async fn cmd_install_with_intent(
     .await?
     else {
         // Already installed as CCS — no further processing needed.
-        return Ok(());
+        return Ok(InstallOutcome::Completed);
     };
     let policy = bind_transaction_source_identity(policy, repository_provenance.as_ref())?;
     let source_profile =
@@ -236,7 +242,7 @@ async fn cmd_install_with_intent(
     if handle_dependencies(&dep_ctx, report).await?
         == super::dependencies::DependencyDecision::Cancelled
     {
-        return Ok(());
+        return Ok(InstallOutcome::Cancelled);
     }
 
     // Dry-run planning is read-only and does not participate in the runtime
@@ -293,7 +299,7 @@ async fn cmd_install_with_intent(
             projection.project(&[prepared])?;
         }
         report.planned.extend(changes);
-        return Ok(());
+        return Ok(InstallOutcome::Completed);
     }
 
     // --- Phase 7: File extraction + lossless component assignment ---
@@ -404,7 +410,7 @@ async fn cmd_install_with_intent(
         &tx_result,
         &progress,
     )?;
-    Ok(())
+    Ok(InstallOutcome::Completed)
 }
 
 #[cfg(test)]

@@ -545,6 +545,8 @@ pub(super) async fn update_packages(
     })?;
 
     let update_result: Result<super::outcome::UpdateOutcome> = async {
+        let mut cancelled_package = None;
+        'apply_updates: {
         // Phase 2: Download and apply deltas (sequential - requires CAS access)
         for (trove, repo_pkg, repo, delta_info) in delta_updates {
             crate::ui::println!("\nUpdating {} (delta)...", trove.name);
@@ -611,7 +613,11 @@ pub(super) async fn update_packages(
                                         )
                                         .await
                                         {
-                                            Ok(()) => {
+                                            Ok(crate::commands::install::InstallOutcome::Cancelled) => {
+                                                cancelled_package = Some(trove.name.clone());
+                                                break 'apply_updates;
+                                            }
+                                            Ok(crate::commands::install::InstallOutcome::Completed) => {
                                                 delta_installed = true;
                                                 let row = format!(
                                                     "{} {} -> {}",
@@ -677,7 +683,7 @@ pub(super) async fn update_packages(
 
                 let path_str = pkg_path.to_string_lossy().to_string();
 
-                if let Err(e) = cmd_install_with_report(
+                match cmd_install_with_report(
                     &path_str,
                     install_options_for_update(
                         db_path,
@@ -692,6 +698,12 @@ pub(super) async fn update_packages(
                 )
                 .await
                 {
+                    Ok(crate::commands::install::InstallOutcome::Cancelled) => {
+                        cancelled_package = Some(trove.name.clone());
+                        break 'apply_updates;
+                    }
+                    Ok(crate::commands::install::InstallOutcome::Completed) => {}
+                    Err(e) => {
                     progress.fail_package(&trove.name, &e.to_string());
                     warn!("  Package installation failed: {}", e);
                     required_failures.push(UpdatePackageFailure {
@@ -701,6 +713,7 @@ pub(super) async fn update_packages(
                     });
                     let _ = std::fs::remove_file(pkg_path);
                     continue;
+                    }
                 }
 
                 progress.complete_package(&trove.name);
@@ -733,7 +746,7 @@ pub(super) async fn update_packages(
 
                 let path_str = pkg_path.to_string_lossy().to_string();
 
-                if let Err(e) = cmd_install_with_report(
+                match cmd_install_with_report(
                     &path_str,
                     install_options_for_update(
                         db_path,
@@ -748,6 +761,12 @@ pub(super) async fn update_packages(
                 )
                 .await
                 {
+                    Ok(crate::commands::install::InstallOutcome::Cancelled) => {
+                        cancelled_package = Some(trove.name.clone());
+                        break 'apply_updates;
+                    }
+                    Ok(crate::commands::install::InstallOutcome::Completed) => {}
+                    Err(e) => {
                     progress.fail_package(&trove.name, &e.to_string());
                     warn!("  Package installation failed: {}", e);
                     required_failures.push(UpdatePackageFailure {
@@ -757,6 +776,7 @@ pub(super) async fn update_packages(
                     });
                     let _ = std::fs::remove_file(&pkg_path);
                     continue;
+                    }
                 }
 
                 progress.complete_package(&trove.name);
@@ -766,6 +786,7 @@ pub(super) async fn update_packages(
             progress.clear();
         }
 
+        }
         conary_core::db::transaction(&mut conn, |tx| {
             let mut stats = DeltaStats::new(changeset_id);
             // Preview already admitted every full artifact. Delta reconstruction
@@ -781,7 +802,7 @@ pub(super) async fn update_packages(
             })?;
             if !report.commits.is_empty() {
                 changeset.update_status(tx, conary_core::db::models::ChangesetStatus::Applied)?;
-            } else if !required_failures.is_empty() {
+            } else if !required_failures.is_empty() || cancelled_package.is_some() {
                 changeset
                     .update_status(tx, conary_core::db::models::ChangesetStatus::RolledBack)?;
             } else {
@@ -795,6 +816,9 @@ pub(super) async fn update_packages(
         crate::ui::println!("Deltas applied: {}", deltas_applied);
         crate::ui::println!("Full artifacts prepared: {}", prepared_full_artifacts);
         crate::ui::println!("Delta failures: {}", delta_failures);
+        if let Some(package) = cancelled_package {
+            anyhow::bail!("Update cancelled while installing {package}; remaining updates were not applied");
+        }
         if let Some(message) = update_required_failure_message(&required_failures, total_requested)
         {
             crate::ui::println!("Required failures: {}", required_failures.len());
