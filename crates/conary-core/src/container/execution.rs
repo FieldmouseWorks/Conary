@@ -2,9 +2,13 @@
 
 use super::*;
 
+mod build_mounts;
+mod credentials;
+mod monitor;
 mod process_wait;
 mod root_setup;
 
+use build_mounts::PreparedBuildMounts;
 use process_wait::{
     ChildWaitOutcome, terminate_and_reap, wait_for_child_until, wait_until_readable,
 };
@@ -19,6 +23,7 @@ fn sandbox_error(message: impl Into<String>) -> Error {
 
 struct ChildExecution<'a> {
     root: &'a Path,
+    build_mounts: &'a PreparedBuildMounts,
     program: &'a str,
     interpreter_args: &'a [String],
     script_path: Option<&'a Path>,
@@ -248,18 +253,22 @@ impl Sandbox {
         stdin: &[u8],
     ) -> Result<(i32, String, String)> {
         // Create temporary root directory for the container
-        let root_dir = TempDir::new()?;
+        let root_dir = create_private_sandbox_dir()?;
+        let root = root_dir.path().join("root");
+        fs::create_dir(&root)?;
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o755))?;
 
         // Set up the container filesystem
-        self.setup_container_fs(root_dir.path())?;
+        self.setup_container_fs(&root)?;
 
-        let script_path = root_dir.path().join("script.sh");
+        let script_path = root.join("script.sh");
         write_executable_script_bytes(&script_path, script_content)?;
-        prepare_user_namespace_entrypoint(root_dir.path(), &script_path)?;
-        let stdin_path = root_dir.path().join(".conary-stdin");
+        prepare_user_namespace_entrypoint(&root, &script_path)?;
+        let stdin_path = root.join(".conary-stdin");
         fs::write(&stdin_path, stdin)?;
         let stdin_file = File::open(&stdin_path)?;
         let prepared_enforcement = self.prepare_enforcement()?;
+        let build_mounts = PreparedBuildMounts::prepare(&self.config.bind_mounts)?;
 
         // Set up pipes before fork to capture child stdout/stderr
         let (stdout_read_fd, stdout_write_fd) = nix::unistd::pipe()
@@ -287,6 +296,7 @@ impl Sandbox {
                     child,
                     &userns_request_read_fd,
                     &userns_ack_write_fd,
+                    &build_mounts,
                     deadline,
                 )?;
                 drop(userns_request_read_fd);
@@ -317,7 +327,8 @@ impl Sandbox {
                     userns_request_read_fd,
                     userns_ack_write_fd,
                     execution: ChildExecution {
-                        root: root_dir.path(),
+                        root: &root,
+                        build_mounts: &build_mounts,
                         program: interpreter,
                         interpreter_args,
                         script_path: Some(&script_path),
@@ -353,13 +364,17 @@ impl Sandbox {
         env: &[(&str, &str)],
         stdin: &[u8],
     ) -> Result<(i32, String, String)> {
-        let root_dir = TempDir::new()?;
-        self.setup_container_fs(root_dir.path())?;
-        prepare_user_namespace_root(root_dir.path())?;
-        let stdin_path = root_dir.path().join(".conary-stdin");
+        let root_dir = create_private_sandbox_dir()?;
+        let root = root_dir.path().join("root");
+        fs::create_dir(&root)?;
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o755))?;
+        self.setup_container_fs(&root)?;
+        prepare_user_namespace_root(&root)?;
+        let stdin_path = root.join(".conary-stdin");
         fs::write(&stdin_path, stdin)?;
         let stdin_file = File::open(&stdin_path)?;
         let prepared_enforcement = self.prepare_enforcement()?;
+        let build_mounts = PreparedBuildMounts::prepare(&self.config.bind_mounts)?;
 
         let (stdout_read_fd, stdout_write_fd) = nix::unistd::pipe()
             .map_err(|e| sandbox_error(format!("Failed to create stdout pipe: {e}")))?;
@@ -384,6 +399,7 @@ impl Sandbox {
                     child,
                     &userns_request_read_fd,
                     &userns_ack_write_fd,
+                    &build_mounts,
                     deadline,
                 )?;
                 drop(userns_request_read_fd);
@@ -411,7 +427,8 @@ impl Sandbox {
                     userns_request_read_fd,
                     userns_ack_write_fd,
                     execution: ChildExecution {
-                        root: root_dir.path(),
+                        root: &root,
+                        build_mounts: &build_mounts,
                         program,
                         interpreter_args: &[],
                         script_path: None,
@@ -590,10 +607,16 @@ impl Sandbox {
         child: Pid,
         request_fd: &std::os::fd::OwnedFd,
         ack_fd: &std::os::fd::OwnedFd,
+        build_mounts: &PreparedBuildMounts,
         deadline: Instant,
     ) -> Result<()> {
-        let result =
-            self.complete_user_namespace_handshake_inner(child, request_fd, ack_fd, deadline);
+        let result = self.complete_user_namespace_handshake_inner(
+            child,
+            request_fd,
+            ack_fd,
+            build_mounts,
+            deadline,
+        );
         if let Err(error) = result {
             if let Err(cleanup_error) = terminate_and_reap(child) {
                 return Err(execution_error(
@@ -613,6 +636,7 @@ impl Sandbox {
         child: Pid,
         request_fd: &std::os::fd::OwnedFd,
         ack_fd: &std::os::fd::OwnedFd,
+        build_mounts: &PreparedBuildMounts,
         deadline: Instant,
     ) -> Result<()> {
         if !wait_until_readable(request_fd.as_fd(), deadline).map_err(|error| {
@@ -627,7 +651,9 @@ impl Sandbox {
         let bytes_read = nix::unistd::read(request_fd, &mut message)
             .map_err(|e| sandbox_error(format!("User namespace handshake failed: {e}")))?;
         if bytes_read == 0 {
-            return Ok(());
+            return Err(sandbox_error(
+                "Sandbox child exited before requesting mandatory user namespace setup",
+            ));
         }
 
         match message[0] {
@@ -637,8 +663,8 @@ impl Sandbox {
                     sandbox_host_uid(Uid::effective().as_raw()),
                     sandbox_host_gid(Gid::effective().as_raw()),
                 )?;
+                build_mounts.map_into(child)?;
             }
-            b'N' => {}
             other => {
                 return Err(sandbox_error(format!(
                     "Unexpected user namespace handshake message: {other}"
@@ -655,6 +681,43 @@ impl Sandbox {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn handshake_eof_is_setup_refusal_and_reaps_child() {
+        let sandbox = Sandbox::new(ContainerConfig::minimal(Duration::from_secs(5)));
+        let (request_read, request_write) = nix::unistd::pipe().expect("request pipe");
+        let (ack_read, ack_write) = nix::unistd::pipe().expect("ack pipe");
+
+        // SAFETY: the child performs only the async-signal-safe _exit call,
+        // reproducing a namespace setup failure before the handshake request.
+        match unsafe { nix::unistd::fork() }.expect("test fork should succeed") {
+            ForkResult::Child => unsafe { libc::_exit(127) },
+            ForkResult::Parent { child } => {
+                drop(request_write);
+                drop(ack_read);
+                let error = sandbox
+                    .complete_user_namespace_handshake(
+                        child,
+                        &request_read,
+                        &ack_write,
+                        &PreparedBuildMounts::prepare(&[]).unwrap(),
+                        Instant::now() + Duration::from_secs(5),
+                    )
+                    .expect_err("EOF before the mandatory request must refuse setup");
+                assert!(matches!(
+                    error,
+                    Error::ScriptletExecution {
+                        kind: ScriptletFailureKind::SandboxSetupUnavailable,
+                        ..
+                    }
+                ));
+                assert_eq!(
+                    waitpid(child, Some(nix::sys::wait::WaitPidFlag::WNOHANG)),
+                    Err(nix::errno::Errno::ECHILD)
+                );
+            }
+        }
+    }
 
     #[test]
     fn handshake_timeout_terminates_and_reaps_child() {
@@ -681,6 +744,7 @@ mod tests {
                         child,
                         &request_read,
                         &ack_write,
+                        &PreparedBuildMounts::prepare(&[]).unwrap(),
                         Instant::now() + Duration::from_millis(20),
                     )
                     .expect_err("silent child must hit the handshake deadline");

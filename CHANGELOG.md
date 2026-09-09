@@ -4,6 +4,73 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v0.17.2] - 2026-09-09
+
+### Added
+- group install and update transaction summaries (#964)
+- group removal and rollback results (#963)
+- expose typed CCS verification through JSON and MCP (#960)
+
+### Changed
+- batch isolated release-policy mutations for faster verification (#990)
+- remove retired host-identity setup path
+
+### Fixed
+- select only packages for model metadata mutations and preserve ambiguity refusals (#988)
+- distinguish absent inputs from lookup failures
+- privatize detached build mount projections
+- recheck pin state under the mutation lock
+- serialize the package metadata mutation phase
+- serialize pin state with package mutations
+- distinguish planned removal from replacement drift
+- finish replacement adapter lint and payload proof
+- share release parsing with manual generation
+- retain exact replacement through installation
+- select installed variants by separate CCS release
+- preserve repository detail identity and installed variants (#969)
+- preserve native preflight refusals and earlier commits (#967)
+- clarify enabled repository discovery (#966)
+- explain collection selection without claiming skipped packages are current (#962)
+- report collection update previews and outcomes accurately (#961)
+- preserve typed CCS verification and preflight diagnostics (#959)
+- render actionable typed CLI diagnostics (#958)
+- clear and coordinate transient package progress (#957)
+- preserve dependency state during dry runs (#953)
+- preserve absent native package releases (#952)
+- retain complete Debian and ALPM source requirements (#932)
+- project retained RPM package facts to native identities (#929)
+- enforce typed recovery fields and retain survey details
+- bind recovery documentation to helper usage
+- bind recovered inputs through their typed validator
+- retain completed restore envelopes during recovery
+- distinguish empty stderr from evidence failures
+- allowlist safe recovered evidence strings
+- share recovery path and URI redaction policy
+- redact complete overlapping connection identifiers
+- redact overlapping SSH identifiers in one pass
+- redact SSH identities before publishing failures
+- withhold unusable recovery members and redact paths
+- keep recovery export stderr private
+- require included recovery input manifest
+- name malformed survey JSON failures
+- bind survey outcomes and recover helper failures
+
+### Security
+- confine privileged Kitchen and recording builds to mapped credentials and explicit workspace grants (GHSA-6qhh-qcc5-fxxg)
+- seal execution capabilities, enforce read-only mounts, and prevent build mounts propagating into the caller
+
+### Performance
+- cache and verify pinned sccache release archives across hosted jobs (#987)
+- consume admitted artifacts without redundant deltas
+- borrow relation facts across planning (#951)
+- remove candidate loading and relation-planning amplification (#944)
+- batch release-policy fixture copies (#943)
+- index exact Debian resolution identities (#938)
+- batch private native package spool writes (#934)
+
+### Other
+- build(deps): replace rpm-rs fork with rpm 0.28.0
+
 ## [v0.17.1] - 2026-09-05
 
 ### Added

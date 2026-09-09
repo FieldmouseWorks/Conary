@@ -60,8 +60,7 @@ use namespaces::{
     RlimitResource, UserNamespaceSync, chdir_syscall, chroot_syscall,
     configure_user_namespace_root_mapping_for_pid, fork_process, prepare_user_namespace_entrypoint,
     prepare_user_namespace_root, sandbox_host_gid, sandbox_host_uid, sandbox_namespace_flags,
-    set_parent_death_signal, set_rlimit_syscall, sethostname_syscall,
-    signal_parent_user_namespace_ready,
+    set_rlimit_syscall, sethostname_syscall, signal_parent_user_namespace_ready,
 };
 
 /// Default resource limits for sandboxed execution
@@ -80,6 +79,15 @@ pub struct BindMount {
     pub target: PathBuf,
     /// Whether to mount read-write (default is read-only)
     pub writable: bool,
+    /// Explicit build-workspace authority; ordinary host binds retain host IDs.
+    identity: BindMountIdentity,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BindMountIdentity {
+    Host,
+    BuildWorkspace,
+    BuildInput,
 }
 
 impl BindMount {
@@ -88,6 +96,7 @@ impl BindMount {
             source: source.into(),
             target: target.into(),
             writable: false,
+            identity: BindMountIdentity::Host,
         }
     }
 
@@ -96,6 +105,30 @@ impl BindMount {
             source: source.into(),
             target: target.into(),
             writable: true,
+            identity: BindMountIdentity::Host,
+        }
+    }
+
+    /// Project an explicitly selected build input read-only. Missing optional
+    /// sysroot subdirectories remain absent; no host directory is substituted.
+    pub(crate) fn build_input(source: impl Into<PathBuf>, target: impl Into<PathBuf>) -> Self {
+        Self {
+            source: source.into(),
+            target: target.into(),
+            writable: false,
+            identity: BindMountIdentity::BuildInput,
+        }
+    }
+
+    /// Grant namespace root access to a caller-owned build directory while
+    /// preserving its on-disk ownership. This grants write authority over the
+    /// selected tree and must never be used for incidental host bind mounts.
+    pub fn build_workspace(source: impl Into<PathBuf>, target: impl Into<PathBuf>) -> Self {
+        Self {
+            source: source.into(),
+            target: target.into(),
+            writable: true,
+            identity: BindMountIdentity::BuildWorkspace,
         }
     }
 }
@@ -243,7 +276,7 @@ impl ContainerConfig {
     /// // Mount only the toolchain and build directories
     /// config.add_bind_mount(BindMount::readonly("/tools", "/tools"));
     /// config.add_bind_mount(BindMount::readonly("/src", "/src"));
-    /// config.add_bind_mount(BindMount::writable("/build", "/build"));
+    /// config.add_bind_mount(BindMount::build_workspace("/build", "/build"));
     /// ```
     pub fn pristine() -> Self {
         Self {
@@ -304,21 +337,21 @@ impl ContainerConfig {
         add_private_tmp_mount(&mut config);
 
         // Mount the toolchain sysroot (read-only)
-        config.add_bind_mount(BindMount::readonly(sysroot, sysroot));
+        config.add_bind_mount(BindMount::build_input(sysroot, sysroot));
 
         // Standard toolchain paths often expected at /tools
         if sysroot != Path::new("/tools") {
-            config.add_bind_mount(BindMount::readonly(sysroot, "/tools"));
+            config.add_bind_mount(BindMount::build_input(sysroot, "/tools"));
         }
 
         // Source code (read-only to prevent accidental modification)
-        config.add_bind_mount(BindMount::readonly(source_dir, source_dir));
+        config.add_bind_mount(BindMount::build_input(source_dir, source_dir));
 
         // Build directory (writable for object files, etc.)
-        config.add_bind_mount(BindMount::writable(build_dir, build_dir));
+        config.add_bind_mount(BindMount::build_workspace(build_dir, build_dir));
 
         // Destination directory (writable for `make install DESTDIR=...`)
-        config.add_bind_mount(BindMount::writable(dest_dir, dest_dir));
+        config.add_bind_mount(BindMount::build_workspace(dest_dir, dest_dir));
 
         // Set working directory to build directory
         config.workdir = build_dir.to_path_buf();
@@ -342,9 +375,9 @@ impl ContainerConfig {
 
         add_private_tmp_mount(&mut config);
 
-        config.add_bind_mount(BindMount::readonly(sysroot, sysroot));
+        config.add_bind_mount(BindMount::build_input(sysroot, sysroot));
         if sysroot != Path::new("/tools") {
-            config.add_bind_mount(BindMount::readonly(sysroot, "/tools"));
+            config.add_bind_mount(BindMount::build_input(sysroot, "/tools"));
         }
 
         for (source, target) in [
@@ -357,12 +390,12 @@ impl ContainerConfig {
             ("usr/lib", "/usr/lib"),
             ("usr/lib64", "/usr/lib64"),
         ] {
-            config.add_bind_mount(BindMount::readonly(sysroot.join(source), target));
+            config.add_bind_mount(BindMount::build_input(sysroot.join(source), target));
         }
 
-        config.add_bind_mount(BindMount::readonly(source_dir, source_dir));
-        config.add_bind_mount(BindMount::writable(build_dir, build_dir));
-        config.add_bind_mount(BindMount::writable(dest_dir, dest_dir));
+        config.add_bind_mount(BindMount::build_input(source_dir, source_dir));
+        config.add_bind_mount(BindMount::build_workspace(build_dir, build_dir));
+        config.add_bind_mount(BindMount::build_workspace(dest_dir, dest_dir));
         config.workdir = build_dir.to_path_buf();
 
         config
@@ -375,17 +408,18 @@ impl ContainerConfig {
 
     /// Add a writable sandbox layer backed by an owned temporary directory.
     ///
-    /// The tempdir is kept alive by the config and is owned by the host UID/GID
-    /// that root maps to inside the sandbox user namespace, so scriptlets can
-    /// write there without touching the corresponding live host path.
+    /// The config keeps a caller-private outer directory alive. Its inner
+    /// mount directory is owned by the mapped host UID/GID, so the sandbox can
+    /// write through the bind without exposing it to other host nobody tasks.
     pub fn add_private_writable_mount(
         &mut self,
         target: impl Into<PathBuf>,
         mode: u32,
     ) -> Result<PathBuf> {
         let target = target.into();
-        let private_dir = Arc::new(TempDir::new()?);
-        let private_path = private_dir.path();
+        let private_dir = Arc::new(create_private_sandbox_dir()?);
+        let private_path = &private_dir.path().join("mount");
+        fs::create_dir(private_path)?;
         let host_uid = sandbox_host_uid(Uid::effective().as_raw());
         let host_gid = sandbox_host_gid(Gid::effective().as_raw());
         let metadata = fs::metadata(private_path)?;
@@ -492,15 +526,17 @@ fn default_bind_mounts() -> Vec<BindMount> {
     ]
 }
 
+/// Request caller-only permissions at mkdir time, independently of the umask.
+fn create_private_sandbox_dir() -> std::io::Result<TempDir> {
+    tempfile::Builder::new()
+        .permissions(fs::Permissions::from_mode(0o700))
+        .tempdir()
+}
+
 fn add_private_tmp_mount(config: &mut ContainerConfig) {
-    let private_tmp = Arc::new(TempDir::new().expect("failed to create private sandbox tmpdir"));
-    let mut perms = fs::metadata(private_tmp.path())
-        .expect("failed to stat private sandbox tmpdir")
-        .permissions();
-    perms.set_mode(0o1777);
-    fs::set_permissions(private_tmp.path(), perms).expect("failed to chmod private sandbox tmpdir");
-    config.add_bind_mount(BindMount::writable(private_tmp.path(), "/tmp"));
-    config.owned_temp_dirs.push(private_tmp);
+    config
+        .add_private_writable_mount("/tmp", 0o1777)
+        .expect("failed to create private sandbox tmpdir");
 }
 
 /// Write script content to a file and set it executable (mode 0o700).

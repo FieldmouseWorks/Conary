@@ -8,8 +8,14 @@
 //! [`crate::container::child_safety`] for why, and `child_fork_safety` in the
 //! container tests for the check that keeps it true.
 
+use super::build_mounts::BuildMountPlan;
+use super::credentials::seal_namespace_credentials;
+use super::monitor::PidNamespaceMonitor;
 use super::*;
 use crate::container::child_safety::{bring_loopback_up, child_diag, format_int, int_buffer};
+use crate::container::namespaces::{
+    clear_privileged_supplementary_groups, enter_mapped_namespace_root,
+};
 use std::os::unix::ffi::OsStrExt;
 
 impl Sandbox {
@@ -60,9 +66,8 @@ impl Sandbox {
             "dev", "etc", "proc", "sys", "tmp", "usr", "lib", "lib64", "bin", "sbin", "var",
         ] {
             let path = root.join(dir);
-            if !path.exists() {
-                fs::create_dir_all(&path)?;
-            }
+            fs::create_dir_all(&path)?;
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o755))?;
         }
 
         let mut tmp_perms = fs::metadata(root.join("tmp"))?.permissions();
@@ -80,6 +85,31 @@ impl Sandbox {
             fs::set_permissions(&path, perms)?;
         }
 
+        for bind in &self.config.bind_mounts {
+            if !bind.source.exists() {
+                continue;
+            }
+            let relative = bind.target.strip_prefix("/").unwrap_or(&bind.target);
+            if relative
+                .components()
+                .any(|part| !matches!(part, std::path::Component::Normal(_)))
+            {
+                return Err(sandbox_error(
+                    "Sandbox bind targets must contain only normal path components",
+                ));
+            }
+            let target = root.join(relative);
+            let directory = if bind.source.is_dir() {
+                target.as_path()
+            } else {
+                target.parent().unwrap_or(root)
+            };
+            create_mount_parents(root, directory)?;
+            if !bind.source.is_dir() && !target.exists() {
+                File::create(&target)?;
+            }
+        }
+
         Ok(())
     }
 
@@ -87,6 +117,7 @@ impl Sandbox {
     pub(super) fn child_setup_and_execute(&self, execution: ChildExecution<'_>) -> Result<i32> {
         let ChildExecution {
             root,
+            build_mounts,
             program,
             interpreter_args,
             script_path,
@@ -113,25 +144,25 @@ impl Sandbox {
             .filter(|(enabled, _)| *enabled)
             .fold(CloneFlags::empty(), |acc, (_, flag)| acc | *flag);
         let flags_with_user = sandbox_namespace_flags(flags);
-        let mut user_namespace_enabled = false;
-
-        if !flags_with_user.is_empty() {
-            if let Err(userns_error) = unshare(flags_with_user) {
-                let mut digits = int_buffer();
-                child_diag(&[
-                    b"user namespace isolation unavailable (errno ",
-                    format_int(&mut digits, userns_error as i64),
-                    b"); continuing with existing namespace isolation",
-                ]);
-                unshare(flags).map_err(|e| sandbox_error(format!("Unshare failed: {e}")))?;
-                signal_parent_user_namespace_ready(userns_sync.as_ref(), false)?;
-            } else {
-                user_namespace_enabled = true;
-                signal_parent_user_namespace_ready(userns_sync.as_ref(), true)?;
-            }
+        if !flags.contains(CloneFlags::CLONE_NEWNS) {
+            return Err(sandbox_error(
+                "Isolated execution requires a mount namespace",
+            ));
         }
+        clear_privileged_supplementary_groups()?;
+        unshare(flags_with_user).map_err(|error| {
+            sandbox_error(format!(
+                "Unshare with mandatory user identity failed: {error}"
+            ))
+        })?;
+        signal_parent_user_namespace_ready(userns_sync.as_ref())?;
 
-        if self.config.isolate_pid {
+        let monitor = if self.config.isolate_pid {
+            Some(PidNamespaceMonitor::current()?)
+        } else {
+            None
+        };
+        if let Some(monitor) = &monitor {
             match fork_process()
                 .map_err(|error| sandbox_error(format!("PID namespace fork failed: {error}")))?
             {
@@ -139,17 +170,7 @@ impl Sandbox {
                     return wait_for_pid_namespace_init(child, deadline);
                 }
                 ForkResult::Child => {
-                    let parent = unsafe { libc::getppid() };
-                    set_parent_death_signal(libc::SIGKILL).map_err(|error| {
-                        sandbox_error(format!(
-                            "failed to bind PID namespace init lifetime to its monitor: {error}"
-                        ))
-                    })?;
-                    if unsafe { libc::getppid() } != parent {
-                        return Err(sandbox_error(
-                            "PID namespace monitor exited during init setup",
-                        ));
-                    }
+                    monitor.bind()?;
                 }
             }
         }
@@ -180,8 +201,14 @@ impl Sandbox {
             }
         }
 
-        if self.config.isolate_mount {
-            self.setup_mount_namespace(root, user_namespace_enabled)?;
+        self.setup_mount_namespace(root, build_mounts)?;
+
+        // Assemble mounts while the setup process can access its private root.
+        // Enter the mapped identity before enforcing and executing the payload.
+        enter_mapped_namespace_root()?;
+        seal_namespace_credentials()?;
+        if let Some(monitor) = &monitor {
+            monitor.bind()?;
         }
 
         self.apply_resource_limits()?;
@@ -242,21 +269,37 @@ impl Sandbox {
         ))
     }
 
-    fn setup_mount_namespace(&self, root: &Path, user_namespace_enabled: bool) -> Result<()> {
+    fn setup_mount_namespace(&self, root: &Path, build_mounts: &PreparedBuildMounts) -> Result<()> {
         mount::<str, str, str, str>(None, "/", None, MsFlags::MS_PRIVATE | MsFlags::MS_REC, None)
             .map_err(|e| sandbox_error(format!("mount --make-rprivate failed: {e}")))?;
 
-        for bind_mount in &self.config.bind_mounts {
-            if !bind_mount.source.exists() {
-                // The hot path: a missing optional bind source is ordinary, and
-                // this ran on essentially every sandbox start. It was the most
-                // frequently executed `tracing` call in the post-fork child.
-                child_diag(&[
-                    b"skipping bind mount, source does not exist: ",
-                    bind_mount.source.as_os_str().as_bytes(),
-                ]);
-                continue;
-            }
+        for (index, bind_mount) in self.config.bind_mounts.iter().enumerate() {
+            let detached = match build_mounts.plan(index, || bind_mount.source.exists()) {
+                BuildMountPlan::AttachDetached => true,
+                BuildMountPlan::BindSource => false,
+                BuildMountPlan::SkipAbsentInput => {
+                    // Preparation proved this optional input absent. Never
+                    // resolve the source here: a path that appeared since is
+                    // not the input preparation classified, and binding it
+                    // would attach it under the caller's host identity.
+                    child_diag(&[
+                        b"skipping absent optional build input: ",
+                        bind_mount.source.as_os_str().as_bytes(),
+                    ]);
+                    continue;
+                }
+                BuildMountPlan::SkipMissingSource => {
+                    // The hot path: a missing optional bind source is ordinary,
+                    // and this ran on essentially every sandbox start. It was
+                    // the most frequently executed `tracing` call in the
+                    // post-fork child.
+                    child_diag(&[
+                        b"skipping bind mount, source does not exist: ",
+                        bind_mount.source.as_os_str().as_bytes(),
+                    ]);
+                    continue;
+                }
+            };
 
             let target = root.join(
                 bind_mount
@@ -264,7 +307,7 @@ impl Sandbox {
                     .strip_prefix("/")
                     .unwrap_or(&bind_mount.target),
             );
-            if bind_mount.source.is_dir() {
+            if detached || bind_mount.source.is_dir() {
                 fs::create_dir_all(&target)?;
             } else {
                 if let Some(parent) = target.parent() {
@@ -273,6 +316,11 @@ impl Sandbox {
                 if !target.exists() {
                     File::create(&target)?;
                 }
+            }
+
+            if detached {
+                build_mounts.attach(index, &target)?;
+                continue;
             }
 
             mount::<Path, Path, str, str>(
@@ -296,13 +344,7 @@ impl Sandbox {
             })?;
 
             if !bind_mount.writable
-                && let Err(error) = mount::<Path, Path, str, str>(
-                    None,
-                    &target,
-                    None,
-                    MsFlags::MS_REMOUNT | MsFlags::MS_BIND | MsFlags::MS_RDONLY,
-                    None,
-                )
+                && let Err(error) = set_mount_readonly(&target)
             {
                 if bind_mount.target == Path::new("/etc/resolv.conf")
                     && self.try_fallback_readonly_copy(&bind_mount.source, &target)?
@@ -313,32 +355,7 @@ impl Sandbox {
             }
         }
 
-        if user_namespace_enabled {
-            self.chroot_into(root)?;
-            return Ok(());
-        }
-
-        if let Err(error) = self.try_pivot_root(root) {
-            if self.is_enforce_mode() {
-                return Err(sandbox_error(format!(
-                    "pivot_root failed ({error}) and chroot fallback is not allowed in Enforce mode"
-                )));
-            }
-            child_diag(&[
-                b"pivot_root failed, falling back to chroot. ",
-                b"This is less secure -- chroot can be escaped by a privileged process.",
-            ]);
-            self.chroot_into(root)?;
-        }
-
-        Ok(())
-    }
-
-    fn is_enforce_mode(&self) -> bool {
-        self.config
-            .capability_policy
-            .as_ref()
-            .is_some_and(|policy| policy.mode == EnforcementMode::Enforce)
+        self.chroot_into(root)
     }
 
     pub(in crate::container) fn try_fallback_readonly_copy(
@@ -380,14 +397,10 @@ impl Sandbox {
         error: nix::errno::Errno,
     ) -> Result<()> {
         let message = format!("read-only remount failed for {}: {error}", target.display());
-        if self.is_enforce_mode() {
-            return Err(execution_error(
-                ScriptletFailureKind::EnforcementSetupFailed,
-                message,
-            ));
-        }
-        child_diag(&[message.as_bytes()]);
-        Ok(())
+        Err(execution_error(
+            ScriptletFailureKind::EnforcementSetupFailed,
+            message,
+        ))
     }
 
     fn chroot_into(&self, root: &Path) -> Result<()> {
@@ -397,26 +410,6 @@ impl Sandbox {
         chroot_syscall(&root_cstr).map_err(|e| sandbox_error(format!("chroot failed: {e}")))?;
         chdir_syscall(c"/")
             .map_err(|e| sandbox_error(format!("chdir after chroot failed: {e}")))?;
-        Ok(())
-    }
-
-    fn try_pivot_root(&self, root: &Path) -> Result<()> {
-        mount::<Path, Path, str, str>(Some(root), root, None, MsFlags::MS_BIND, None)
-            .map_err(|e| sandbox_error(format!("bind mount for pivot_root: {e}")))?;
-
-        let old_root = root.join(".old_root");
-        std::fs::create_dir_all(&old_root)
-            .map_err(|e| sandbox_error(format!("create old_root dir: {e}")))?;
-        nix::unistd::pivot_root(root, &old_root)
-            .map_err(|e| sandbox_error(format!("pivot_root failed: {e}")))?;
-        std::env::set_current_dir("/")
-            .map_err(|e| sandbox_error(format!("chdir / after pivot_root: {e}")))?;
-        nix::mount::umount2(
-            &std::path::PathBuf::from("/.old_root"),
-            nix::mount::MntFlags::MNT_DETACH,
-        )
-        .map_err(|e| sandbox_error(format!("umount old_root: {e}")))?;
-        let _ = std::fs::remove_dir("/.old_root");
         Ok(())
     }
 
@@ -445,4 +438,59 @@ fn wait_for_pid_namespace_init(child: Pid, deadline: Instant) -> Result<i32> {
             "failed to wait for PID namespace init: {error}"
         ))),
     }
+}
+
+/// Set only the requested restriction. A legacy remount without inherited
+/// flags tries to clear locked nosuid/nodev/noexec flags in a user namespace.
+fn set_mount_readonly(target: &Path) -> std::result::Result<(), nix::errno::Errno> {
+    let target =
+        CString::new(target.as_os_str().as_bytes()).map_err(|_| nix::errno::Errno::EINVAL)?;
+    let attr = libc::mount_attr {
+        attr_set: libc::MOUNT_ATTR_RDONLY,
+        attr_clr: 0,
+        propagation: 0,
+        userns_fd: 0,
+    };
+    // SAFETY: target and the initialized mount attribute remain valid for the
+    // synchronous syscall; no mount restrictions are cleared.
+    if unsafe {
+        libc::syscall(
+            libc::SYS_mount_setattr,
+            libc::AT_FDCWD,
+            target.as_ptr(),
+            0,
+            &attr,
+            std::mem::size_of::<libc::mount_attr>(),
+        )
+    } < 0
+    {
+        Err(nix::errno::Errno::last())
+    } else {
+        Ok(())
+    }
+}
+
+/// Create only sandbox-owned mount-point parents before any binds are attached.
+/// Explicit modes make namespace traversal independent of the caller's umask.
+fn create_mount_parents(root: &Path, directory: &Path) -> Result<()> {
+    let mut current = root.to_path_buf();
+    for component in directory
+        .strip_prefix(root)
+        .map_err(|error| sandbox_error(error.to_string()))?
+        .components()
+    {
+        current.push(component);
+        match fs::create_dir(&current) {
+            Ok(()) => fs::set_permissions(&current, fs::Permissions::from_mode(0o755))?,
+            Err(error)
+                if error.kind() == std::io::ErrorKind::AlreadyExists
+                    && fs::symlink_metadata(&current)?.is_dir() => {}
+            Err(error) => {
+                return Err(sandbox_error(format!(
+                    "Cannot prepare mount directory: {error}"
+                )));
+            }
+        }
+    }
+    Ok(())
 }

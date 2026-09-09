@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-09-09
-revision: 10
+last_updated: 2026-09-10
+revision: 17
 summary: Explicit recipe scaffolding, parsing, hermetic cook, Kitchen execution, and source provenance
 ---
 
@@ -158,5 +158,50 @@ pipeline as any other installation. The Kitchen uses Linux namespace isolation
 through the container module for sandboxed builds and pristine sysroot-only
 mounts for hermetic builds. Provenance data captured during cooking is
 embedded in the output CCS manifest.
+
+Namespace-isolated Kitchen builds require a user namespace. Root callers map
+sandbox root to the host nobody identity; before payload execution, the child
+clears inherited privileged supplementary groups and explicitly enters the
+mapped user and group. The map alone does not change process credentials.
+Mount assembly precedes the credential transition; enforcement and payload
+execution follow it. Setup refuses a missing user namespace instead of
+continuing with the caller's host identity. Conary-owned writable layers use
+the mapped host ownership. The selected-root native lifecycle boundary remains
+owned by `scriptlet/process.rs`.
+An EOF before the mandatory namespace handshake is a typed sandbox setup
+refusal, and the parent terminates and reaps the child.
+
+Privileged Kitchen build directories use explicit ID-mapped bind mounts. The
+parent pins detached mounts before forking, makes each projection private, and
+applies the child's UID/GID map before acknowledging namespace setup. The child
+attaches them only in its own mount namespace; nested mounts cannot propagate
+back into a shared caller workspace. Builds can read private inputs and write their managed source,
+build, and destination trees while retaining root ownership on disk and in CCS
+payload entries. Explicit caller-provided destinations carry the same write
+authority; selected sysroot inputs receive read-only projections; ordinary host binds receive no ownership projection. No recursive
+ownership or permission rewrite is used. Private sandbox roots and writable
+layers have caller-only outer directories; generated mount-point directories
+use explicit modes so a restrictive caller umask cannot break traversal. A filesystem or kernel that cannot
+provide the requested mapping produces a typed sandbox setup refusal before
+build execution.
+Optional build inputs absent during preparation remain absent for that
+execution, even if their source paths appear before mount attachment.
+
+Record mode uses the same explicit workspace projection for its private source,
+work, and install roots. The recording plan carries typed bind mounts through
+execution, preserving their ownership authority; the caller's original source
+and incidental host paths receive no writable ownership projection.
+
+Before executing a build, the sandbox clears process, ambient, and bounding
+capabilities and enables no-new-privileges. Read-only mounts preserve inherited
+mount restrictions, and an unenforceable read-only mount fails closed regardless
+of optional capability-policy mode. Build-mount preparation lives in
+`container/execution/build_mounts.rs`; the final credential seal lives in
+`container/execution/credentials.rs`. Private backing directories request
+owner-only permissions at creation rather than relying on the caller's umask.
+`container/execution/monitor.rs` pins the PID-namespace monitor with a pidfd
+before its fork. Namespace init restores its parent-death signal after the
+credential transition and checks that pinned monitor is still alive before
+continuing; the descriptor closes on exec.
 
 See also: [docs/ARCHITECTURE.md](/docs/ARCHITECTURE.md).
