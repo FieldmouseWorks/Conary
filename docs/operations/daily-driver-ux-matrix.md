@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-09-09
-revision: 33
-summary: Daily-driver CLI routes, exact installed CCS release selectors, repository details, grouped transaction results, scoped recovery, and typed native refusals
+revision: 36
+summary: Daily-driver CLI routes, exact installed CCS release selectors, serialized pin state, repository details, grouped transaction results, scoped recovery, and typed native refusals
 ---
 
 # Daily-Driver UX Matrix
@@ -71,6 +71,18 @@ proves that updating the second same-version/architecture release preserves
 its sibling and publishes the incoming payload ownership and CAS bytes. This
 fixture uses the fenced test-only mount boundary; real-mount proof remains a
 separate lifecycle gate.
+
+`pin` and `unpin` acquire the same runtime mutation lock as package operations
+before resolving their installed selector, and hold it through the pin-state
+write. A command waiting behind another package mutation therefore selects the
+current record after that operation completes. A removed selected release is
+refused; another same-name release is not silently changed. Read-only pinned
+listing does not acquire the mutation lock.
+Removal rechecks the current pin state after acquiring that same lock, before
+preparing payload ownership, lifecycle, or the selected root. A pin completed
+while removal waited therefore prevents deletion.
+The removal graph regressions live in
+`apps/conary/src/commands/remove/native_graph/tests.rs`.
 
 ## Repository Discovery
 

@@ -1,4 +1,4 @@
-// apps/conary/src/commands/remove/native_graph_tests.rs
+// apps/conary/src/commands/remove/native_graph/tests.rs
 
 use super::*;
 use conary_core::db::models::{InstallSource, TroveType};
@@ -84,6 +84,155 @@ fn remove_graph_resolves_package_identity_under_the_mutation_lock() {
     assert_eq!(
         Trove::find_by_id(&conn, trove_id).unwrap().unwrap().version,
         "2.0.0"
+    );
+}
+
+#[test]
+fn remove_graph_refuses_package_pinned_while_waiting_for_mutation_lock() {
+    let _mount_skip = crate::commands::composefs_ops::test_mount_skip_guard();
+    let temp = tempfile::tempdir().unwrap();
+    let db_path = temp.path().join("conary.db");
+    conary_core::db::init(&db_path).unwrap();
+    let bootable_trove_id = crate::commands::test_helpers::seed_test_bootable_runtime(&db_path);
+
+    let conn = conary_core::db::open(&db_path).unwrap();
+    let mut trove = Trove::new_with_source(
+        "remove-post-lock-pin-fixture".to_string(),
+        "1.0.0".to_string(),
+        TroveType::Package,
+        InstallSource::Repository,
+        VersionScheme::Conary,
+    );
+    trove.architecture = Some("x86_64".to_string());
+    let trove_id = trove.insert(&conn).unwrap();
+    let trove = Trove::find_by_id(&conn, trove_id).unwrap().unwrap();
+    assert!(
+        !trove.pinned,
+        "the selected snapshot handed to removal must start unpinned"
+    );
+    let mut sibling = Trove::new_with_source(
+        "remove-post-lock-pin-sibling".to_string(),
+        "3.0.0".to_string(),
+        TroveType::Package,
+        InstallSource::Repository,
+        VersionScheme::Conary,
+    );
+    sibling.architecture = Some("x86_64".to_string());
+    let sibling_id = sibling.insert(&conn).unwrap();
+    let changesets_before: i64 = conn
+        .query_row("SELECT COUNT(*) FROM changesets", [], |row| row.get(0))
+        .unwrap();
+    let publications_before: i64 = conn
+        .query_row("SELECT COUNT(*) FROM generation_publications", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    let snapshots_before: i64 = conn
+        .query_row("SELECT COUNT(*) FROM selected_root_snapshots", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    drop(conn);
+
+    let db_path_string = db_path.to_string_lossy().into_owned();
+    let locked = LockedRuntimeRoot::acquire(&db_path_string).unwrap();
+    let (attempt_tx, attempt_rx) = std::sync::mpsc::sync_channel(0);
+    let (result_tx, result_rx) = std::sync::mpsc::sync_channel(0);
+    let waiter_db_path = db_path_string.clone();
+    let waiter = std::thread::spawn(move || {
+        let conn = conary_core::db::open(&waiter_db_path).unwrap();
+        let progress = RemoveProgress::new("remove-post-lock-pin-fixture");
+        attempt_tx.send(()).unwrap();
+        let result = execute_installed_trove_remove_graph(
+            &conn,
+            &trove,
+            &waiter_db_path,
+            "remove-post-lock-pin-fixture",
+            RemoveLifecycleOptions::new(crate::commands::SandboxMode::Always),
+            &progress,
+        )
+        .map_err(|error| format!("{error:#}"));
+        result_tx.send(result).unwrap();
+    });
+
+    attempt_rx.recv().unwrap();
+    assert!(
+        matches!(
+            result_rx.recv_timeout(std::time::Duration::from_millis(250)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        ),
+        "remove reached a verdict while another transaction held the mutation lock"
+    );
+
+    let conn = conary_core::db::open(&db_path).unwrap();
+    Trove::pin(&conn, trove_id).unwrap();
+    assert!(
+        Trove::find_by_id(&conn, trove_id).unwrap().unwrap().pinned,
+        "fixture pin must land on the exact selected trove id"
+    );
+    drop(conn);
+    drop(locked);
+
+    let result = result_rx
+        .recv_timeout(std::time::Duration::from_secs(60))
+        .expect("remove must finish once the mutation lock is released");
+    waiter.join().unwrap();
+    let error = match result {
+        Ok(_) => panic!("remove accepted a package pinned before it acquired the mutation lock"),
+        Err(error) => error,
+    };
+    assert!(
+        error.contains("is pinned and cannot be removed"),
+        "post-lock pin must refuse removal through the graph guard, got: {error}"
+    );
+
+    let conn = conary_core::db::open(&db_path).unwrap();
+    let selected = Trove::find_by_id(&conn, trove_id)
+        .unwrap()
+        .expect("refused removal must leave the selected trove installed");
+    assert_eq!(selected.id, Some(trove_id));
+    assert!(selected.pinned);
+    assert_eq!(selected.version, "1.0.0");
+    assert!(
+        Trove::find_by_id(&conn, bootable_trove_id)
+            .unwrap()
+            .is_some(),
+        "the bootable runtime fixture must survive the refused removal"
+    );
+    let sibling = Trove::find_by_id(&conn, sibling_id)
+        .unwrap()
+        .expect("unrelated sibling record must survive the refused removal");
+    assert_eq!(sibling.id, Some(sibling_id));
+    assert_eq!(sibling.name, "remove-post-lock-pin-sibling");
+    assert_eq!(sibling.version, "3.0.0");
+    assert!(!sibling.pinned);
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM changesets", [], |row| row
+            .get::<_, i64>(0))
+            .unwrap(),
+        changesets_before
+    );
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM generation_publications", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .unwrap(),
+        publications_before
+    );
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM selected_root_snapshots", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .unwrap(),
+        snapshots_before
+    );
+    drop(conn);
+
+    let runtime_root = conary_core::runtime_root::ConaryRuntimeRoot::from_db_path(db_path.clone());
+    let sessions = runtime_root.root().join("selected-root-sessions");
+    assert!(
+        !sessions.exists() || std::fs::read_dir(sessions).unwrap().next().is_none(),
+        "a refusal before selected-root preparation must not leave a session behind"
     );
 }
 

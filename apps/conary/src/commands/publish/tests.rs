@@ -350,12 +350,14 @@ struct DirtyGitPublishFixture {
 impl DirtyGitPublishFixture {
     fn new() -> Self {
         let temp = tempfile::tempdir().unwrap();
+        set_fixture_mode(temp.path(), 0o700);
         let project_dir = temp.path().join("project");
         let recipe_path = project_dir.join("recipe.toml");
         let sysroot = temp.path().join("sysroot");
         let config_path = temp.path().join("hermetic.toml");
         std::fs::create_dir_all(&project_dir).unwrap();
         std::fs::create_dir_all(&sysroot).unwrap();
+        set_fixture_mode(&sysroot, 0o700);
         std::fs::write(project_dir.join("source.txt"), "clean\n").unwrap();
         std::fs::write(
                 &recipe_path,
@@ -396,6 +398,7 @@ sysroot_hash = "{TEST_HASH}"
             ),
         )
         .unwrap();
+        set_fixture_mode(&config_path, 0o600);
 
         Self {
             repo_dir: temp.path().join("repo"),
@@ -520,6 +523,18 @@ fn run_git(root: &Path, args: &[&str]) {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+#[cfg(unix)]
+fn set_fixture_mode(path: &Path, mode: u32) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut permissions = std::fs::metadata(path).unwrap().permissions();
+    permissions.set_mode(mode);
+    std::fs::set_permissions(path, permissions).unwrap();
+}
+
+#[cfg(not(unix))]
+fn set_fixture_mode(_path: &Path, _mode: u32) {}
 
 struct EnvVarGuard {
     key: &'static str,
