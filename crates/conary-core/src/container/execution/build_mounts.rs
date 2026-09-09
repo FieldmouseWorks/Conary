@@ -25,10 +25,29 @@ impl PreparedBuildMounts {
     pub(super) fn prepare(mounts: &[BindMount]) -> Result<Self> {
         let mut prepared = Vec::with_capacity(mounts.len());
         for mount in mounts {
-            if !Uid::effective().is_root()
-                || mount.identity == BindMountIdentity::Host
-                || (mount.identity == BindMountIdentity::BuildInput && !mount.source.exists())
-            {
+            if mount.identity == BindMountIdentity::Host {
+                prepared.push(None);
+                continue;
+            }
+            let exists = mount.source.try_exists().map_err(|error| {
+                sandbox_error(format!(
+                    "Cannot inspect build mount {}: {error}",
+                    mount.source.display()
+                ))
+            })?;
+            if !exists {
+                if mount.identity == BindMountIdentity::BuildInput {
+                    prepared.push(None);
+                    continue;
+                }
+                return Err(sandbox_error(format!(
+                    "Required build workspace is missing: {}",
+                    mount.source.display()
+                )));
+            }
+            // An ordinary caller keeps its host UID in the user-namespace map;
+            // its own files already have the right identity through plain binds.
+            if !Uid::effective().is_root() {
                 prepared.push(None);
                 continue;
             }
@@ -138,5 +157,50 @@ impl PreparedBuildMounts {
             )));
         }
         Ok(true)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unavailable_build_input_is_not_classified_as_absent() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("loop");
+        std::os::unix::fs::symlink("loop", &source).unwrap();
+        let result = PreparedBuildMounts::prepare(&[BindMount::build_input(&source, "/input")]);
+        let Err(error) = result else {
+            panic!("symlink loop must fail preparation")
+        };
+        assert!(
+            error.to_string().contains("Cannot inspect build mount"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn missing_optional_input_is_skipped() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("missing");
+        let mounts =
+            PreparedBuildMounts::prepare(&[BindMount::build_input(&source, "/input")]).unwrap();
+        assert!(!mounts.contains(0));
+    }
+
+    #[test]
+    fn missing_workspace_is_refused_before_identity_selection() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("missing");
+        let result = PreparedBuildMounts::prepare(&[BindMount::build_workspace(&source, "/build")]);
+        let Err(error) = result else {
+            panic!("required workspace must exist")
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("Required build workspace is missing"),
+            "{error}"
+        );
     }
 }
