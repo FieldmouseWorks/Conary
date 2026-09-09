@@ -147,3 +147,58 @@ fn replacement_refuses_when_the_incoming_identity_already_lives_on_another_row()
         "{error}"
     );
 }
+
+#[test]
+fn planned_absent_target_is_rechecked_after_the_batch_waits_for_its_lock() {
+    let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
+    let temp = tempfile::tempdir().unwrap();
+    let (db_path, db) = db_with_prior_transaction(
+        temp.path(),
+        vec![prepared_test_package(TARGET, TARGET_PATH, OLD_PAYLOAD)],
+    );
+    let conn = conary_core::db::open(&db_path).unwrap();
+    let original = Trove::find_by_name(&conn, TARGET).unwrap().remove(0);
+    let original_id = original.id.unwrap();
+    conn.execute("DELETE FROM troves WHERE id = ?1", [original_id])
+        .unwrap();
+    let before = authority_counts(&conn);
+    let mut incoming = prepared_test_package(TARGET, TARGET_PATH, NEW_PAYLOAD);
+    incoming.version = "2.0.0".into();
+    incoming.replacement = Some(crate::commands::install::InstallReplacement::PlannedAbsent(
+        original.clone(),
+    ));
+    let locked =
+        crate::commands::generation::selected_root::LockedRuntimeRoot::acquire(&db).unwrap();
+    let (started_tx, started_rx) = std::sync::mpsc::sync_channel(0);
+    let (result_tx, result_rx) = std::sync::mpsc::sync_channel(0);
+    let waiter = std::thread::spawn(move || {
+        started_tx.send(()).unwrap();
+        let result = BatchInstaller::new(&db, SandboxMode::Always)
+            .install_batch(vec![incoming])
+            .map_err(|error| format!("{error:#}"));
+        result_tx.send(result).unwrap();
+    });
+    started_rx.recv().unwrap();
+    assert!(matches!(
+        result_rx.recv_timeout(std::time::Duration::from_millis(250)),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+    ));
+    let mut restored = original;
+    let inserted = restored.insert(&conn).unwrap();
+    conn.execute(
+        "UPDATE troves SET id = ?1 WHERE id = ?2",
+        [original_id, inserted],
+    )
+    .unwrap();
+    drop(locked);
+    let error = result_rx
+        .recv_timeout(std::time::Duration::from_secs(60))
+        .unwrap()
+        .unwrap_err();
+    waiter.join().unwrap();
+    assert!(
+        error.contains("was planned absent but is currently installed"),
+        "{error}"
+    );
+    assert_eq!(authority_counts(&conn), before);
+}
