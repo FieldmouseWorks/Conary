@@ -12,7 +12,7 @@ use conary_core::payload::{
 };
 use std::collections::BTreeMap;
 
-// Both children need an explicit path: `tests` is itself loaded through a
+// These children need an explicit path: `tests` is itself loaded through a
 // `#[path]` attribute, so its submodules resolve against `batch/` rather than
 // `batch/tests/`. Without this, `mod witness_universe;` silently binds to the
 // source module of the same name instead of the test file.
@@ -20,6 +20,8 @@ use std::collections::BTreeMap;
 mod mutation_lock;
 #[path = "tests/preview.rs"]
 mod preview;
+#[path = "tests/preview_native.rs"]
+mod preview_native;
 #[path = "tests/witness_universe.rs"]
 mod witness_universe;
 

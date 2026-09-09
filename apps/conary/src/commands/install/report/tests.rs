@@ -54,6 +54,17 @@ fn artifact(
         libc: "gnu".into(),
         abi: None,
     });
+    if obsolete {
+        manifest.package.version_scheme = VersionScheme::Rpm;
+        manifest.relations = vec![
+            conary_core::repository::package_relation::parse_native_relation(
+                conary_core::repository::dependency_model::RepositoryRequirementKind::Obsolete,
+                VersionScheme::Rpm,
+                "summary-obsolete",
+            )
+            .unwrap(),
+        ];
+    }
     let result = CcsBuilder::new(manifest, &source).unwrap().build().unwrap();
     let path = dir.join(format!("{name}-{version}.ccs"));
     let key = crate::commands::ccs::load_or_create_local_dev_key().unwrap();
@@ -97,12 +108,13 @@ async fn install_summary_capture_child() {
     let preview = scenario.contains("preview");
     let failed = scenario.contains("failed");
     let canceled = scenario == "canceled_native";
+    let dependency_relation = scenario.starts_with("dependency_relation");
     let package = artifact(
         temp.path(),
         "summary-incoming",
         "2.0.0",
         ccs,
-        canceled,
+        canceled || dependency_relation,
         scenario.contains("relation"),
     );
     if scenario.contains("relation") {
@@ -150,6 +162,44 @@ async fn install_summary_capture_child() {
             id,
             "summary-dependency".into(),
             Some("1.0.0-1".into()),
+            "package".into(),
+            None,
+            VersionScheme::Rpm,
+        )
+        .insert(&conn)
+        .unwrap();
+    }
+    if dependency_relation {
+        let path = artifact(
+            temp.path(),
+            "summary-dependency",
+            "1.0.0",
+            true,
+            false,
+            true,
+        );
+        let bytes = std::fs::read(&path).unwrap();
+        let repository = test_helpers::insert_test_static_ccs_repository(
+            &conn,
+            "summary-repo",
+            "https://example.invalid/fixture",
+        );
+        let mut dep = conary_core::db::models::RepositoryPackage::new(
+            repository,
+            "summary-dependency".into(),
+            "1.0.0".into(),
+            VersionScheme::Rpm,
+            conary_core::hash::sha256(&bytes),
+            bytes.len() as i64,
+            url::Url::from_file_path(&path).unwrap().to_string(),
+        );
+        dep.architecture = Some("x86_64".into());
+        dep.source_profile = Some("fedora-44".into());
+        let id = dep.insert(&conn).unwrap();
+        conary_core::db::models::RepositoryProvide::new(
+            id,
+            "summary-dependency".into(),
+            Some("1.0.0".into()),
             "package".into(),
             None,
             VersionScheme::Rpm,
@@ -224,9 +274,9 @@ async fn install_summary_capture_child() {
                 db_path: &db_path,
                 root: temp.path().to_str().unwrap(),
                 dry_run: preview,
-                no_deps: !canceled,
+                no_deps: !(canceled || dependency_relation),
                 yes: !canceled,
-                from_source: canceled.then(|| "fedora-44".into()),
+                from_source: (canceled || dependency_relation).then(|| "fedora-44".into()),
                 sandbox_mode: SandboxMode::Always,
                 ..Default::default()
             },
@@ -275,6 +325,8 @@ fn install_summary_commands_in_terminal_pipe_and_no_color() {
             "canceled_native",
             "relation_native",
             "relation_preview_native",
+            "dependency_relation_preview_native",
+            "dependency_relation_native",
         ] {
             let test = "commands::install::report::tests::install_summary_capture_child";
             let mut command = if tty {
@@ -361,6 +413,17 @@ fn install_summary_commands_in_terminal_pipe_and_no_color() {
             if scenario.contains("upgrade") {
                 assert!(frame.contains(" -> "), "{frame}");
                 assert!(frame.contains("Updated (1):"), "{frame}");
+            }
+            if scenario.starts_with("dependency_relation") {
+                assert_eq!(
+                    frame
+                        .lines()
+                        .filter(|line| line.contains("Remove") && line.contains("summary-obsolete"))
+                        .count(),
+                    1,
+                    "{frame}"
+                );
+                assert!(frame.contains("summary-dependency"), "{frame}");
             }
             if scenario.contains("relation") {
                 assert!(frame.contains("summary-obsolete"), "{frame}");
