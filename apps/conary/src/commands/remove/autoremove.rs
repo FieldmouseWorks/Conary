@@ -195,8 +195,8 @@ fn preflight_autoremove_round(
             selected_root,
             lifecycle_options.sandbox_mode,
         )?;
-        drop(selected);
         preflight_state.finish()?;
+        drop(selected);
     }
 
     Ok(())
