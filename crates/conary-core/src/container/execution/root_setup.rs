@@ -9,6 +9,7 @@
 //! container tests for the check that keeps it true.
 
 use super::credentials::seal_namespace_credentials;
+use super::monitor::PidNamespaceMonitor;
 use super::*;
 use crate::container::child_safety::{bring_loopback_up, child_diag, format_int, int_buffer};
 use crate::container::namespaces::{
@@ -155,7 +156,12 @@ impl Sandbox {
         })?;
         signal_parent_user_namespace_ready(userns_sync.as_ref())?;
 
-        if self.config.isolate_pid {
+        let monitor = if self.config.isolate_pid {
+            Some(PidNamespaceMonitor::current()?)
+        } else {
+            None
+        };
+        if let Some(monitor) = &monitor {
             match fork_process()
                 .map_err(|error| sandbox_error(format!("PID namespace fork failed: {error}")))?
             {
@@ -163,17 +169,7 @@ impl Sandbox {
                     return wait_for_pid_namespace_init(child, deadline);
                 }
                 ForkResult::Child => {
-                    let parent = unsafe { libc::getppid() };
-                    set_parent_death_signal(libc::SIGKILL).map_err(|error| {
-                        sandbox_error(format!(
-                            "failed to bind PID namespace init lifetime to its monitor: {error}"
-                        ))
-                    })?;
-                    if unsafe { libc::getppid() } != parent {
-                        return Err(sandbox_error(
-                            "PID namespace monitor exited during init setup",
-                        ));
-                    }
+                    monitor.bind()?;
                 }
             }
         }
@@ -210,6 +206,9 @@ impl Sandbox {
         // Enter the mapped identity before enforcing and executing the payload.
         enter_mapped_namespace_root()?;
         seal_namespace_credentials()?;
+        if let Some(monitor) = &monitor {
+            monitor.bind()?;
+        }
 
         self.apply_resource_limits()?;
 

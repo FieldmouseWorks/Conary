@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-09-09
-revision: 15
+last_updated: 2026-09-10
+revision: 16
 summary: Explicit recipe scaffolding, parsing, hermetic cook, Kitchen execution, and source provenance
 ---
 
@@ -193,6 +193,11 @@ capabilities and enables no-new-privileges. Read-only mounts preserve inherited
 mount restrictions, and an unenforceable read-only mount fails closed regardless
 of optional capability-policy mode. Build-mount preparation lives in
 `container/execution/build_mounts.rs`; the final credential seal lives in
-`container/execution/credentials.rs`.
+`container/execution/credentials.rs`. Private backing directories request
+owner-only permissions at creation rather than relying on the caller's umask.
+`container/execution/monitor.rs` pins the PID-namespace monitor with a pidfd
+before its fork. Namespace init restores its parent-death signal after the
+credential transition and checks that pinned monitor is still alive before
+continuing; the descriptor closes on exec.
 
 See also: [docs/ARCHITECTURE.md](/docs/ARCHITECTURE.md).

@@ -26,6 +26,10 @@
 /// Sources that run between `fork()` and `exec()`.
 const CHILD_PATH_SOURCES: &[(&str, &str)] = &[
     (
+        "container/execution/monitor.rs",
+        include_str!("execution/monitor.rs"),
+    ),
+    (
         "container/execution/credentials.rs",
         include_str!("execution/credentials.rs"),
     ),

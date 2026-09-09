@@ -4,6 +4,7 @@ use super::*;
 
 mod build_mounts;
 mod credentials;
+mod monitor;
 mod process_wait;
 mod root_setup;
 

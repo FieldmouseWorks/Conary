@@ -629,6 +629,16 @@ fn test_sandbox_cannot_restore_mount_authority() {
             fs::metadata("/dev").unwrap().permissions().mode() & 0o7777,
             0o755
         );
+        let mut parent_signal = 0;
+        assert_eq!(
+            unsafe { libc::prctl(libc::PR_GET_PDEATHSIG, &mut parent_signal) },
+            0
+        );
+        assert_eq!(
+            parent_signal,
+            libc::SIGKILL,
+            "monitor death must kill namespace init"
+        );
         // The ABI-v3 capability header is two 32-bit words; pid 0 means self.
         let header = [0x2008_0522_u32, 0];
         let mut data = [[u32::MAX; 3]; 2];

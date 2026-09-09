@@ -60,8 +60,7 @@ use namespaces::{
     RlimitResource, UserNamespaceSync, chdir_syscall, chroot_syscall,
     configure_user_namespace_root_mapping_for_pid, fork_process, prepare_user_namespace_entrypoint,
     prepare_user_namespace_root, sandbox_host_gid, sandbox_host_uid, sandbox_namespace_flags,
-    set_parent_death_signal, set_rlimit_syscall, sethostname_syscall,
-    signal_parent_user_namespace_ready,
+    set_rlimit_syscall, sethostname_syscall, signal_parent_user_namespace_ready,
 };
 
 /// Default resource limits for sandboxed execution
