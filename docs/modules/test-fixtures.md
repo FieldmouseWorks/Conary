@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-09-08
-revision: 44
-summary: Map fixture ownership, including stable boot-tool and failing EFI formatter interfaces, typed public and candidate profiles, attributable daily-driver same-name provides, configuration upgrade, payload topology, and snapshot-bound cross-source lifecycle proof
+last_updated: 2026-09-09
+revision: 54
+summary: Map fixture ownership, including command transaction captures, typed boot-tool interfaces, public and candidate profiles, and cross-source lifecycle proof
 ---
 
 # Test Fixtures And Proof Maps
@@ -728,6 +728,51 @@ Each fixture family should record:
   staging. Update every active manifest to one version before accepting the
   gate.
 
+### cli-transaction-summary-captures
+
+- **Fixture name:** `cli-transaction-summary-captures`
+- **Owner:** `apps/conary/src/commands/install/report/tests.rs`,
+  `apps/conary/src/commands/update/package/tests/summary_capture.rs`, and
+  `apps/conary/src/ui/transaction_summary/capture.rs`.
+- **Authority source:** Parsed native/verified CCS identities, exact repository
+  selections, committed transaction results, and returned publication outcomes.
+- **Construction:** Disposable databases and selected roots with typed boot and
+  account fixtures; child test processes run real commands under pipes, terminals,
+  and `NO_COLOR`. Test hooks isolate mounting and force publication failure.
+  `apps/conary/tests/common/update_ccs.rs` supplies signed RPM artifacts and
+  repository keys to both collection unit tests and `cli_update_summary` captures;
+  update relation captures use signed RPM CCS artifacts with an obsolete target
+  and a Debian dependent package that must be deconfigured. Their shared builder
+  lives in `apps/conary/src/commands/update/package/tests/summary_capture/fixtures.rs`.
+  Ordered captures prove that a later selected package removed by an earlier
+  update is previewed and applied as a fresh install. `native_pm_live_root`
+  retains a one-shot artifact server to prove apply reuses preview's download.
+  `install/repository_batch/tests.rs` proves signed native dependency preparation
+  against projected state uses the real runtime keyring and still refuses absent
+  trust, with no installed-database or permanent-CAS writes. Shared signed RPM
+  construction lives in `commands/test_helpers/native_artifact.rs` and also
+  serves the exact-acquisition tests.
+  `apps/conary/src/commands/install/batch/tests/preview.rs` covers repository
+  enrollment replacement, dropped declarations, shared owners, and both
+  last-owner removal dispositions without changing the installed database.
+  `apps/conary/src/commands/install/batch/tests/preview_native.rs` preserves
+  Debian config-files residual state after removal and clears it for disappearance.
+  Native dependency/root captures prevent duplicate relation rows; update
+  captures count admitted artifacts even when a later apply fails.
+  Paired named-owner preview/apply captures keep accounts absent during preview,
+  create them through a typed RPM pre-payload event during apply, and verify
+  persisted payload ownership.
+  Failed delta download and application captures verify that fallback keeps the
+  planned package order and does not reinstall a subsequently removed target.
+- **Assertions:** Grouped preview/apply rows, exact before/after identities,
+  partial failure, publication state, database-scoped recovery, and cancellation.
+  `commands::test_helpers::database_rows` compares all persisted tables around
+  read-only or refused operations.
+- **Proof:** `cargo test -p conary --features test-hooks --lib summary` and
+  `cargo test -p conary --features test-hooks --lib commands::install`.
+- **Boundary:** These fixtures prove command behavior on disposable authority;
+  hosted native lifecycle and clean-host gates remain required for their surfaces.
+
 ## How To Use This Map
 
 - For docs-only edits to this map, run `bash scripts/check-doc-truth.sh` and
@@ -766,3 +811,14 @@ roots and proof commands before treating them as committed gates:
 - TUF trust and signature verification fixtures under `apps/conary/tests/fixtures/trust/`.
 
 Add these in later Phase 3 slices using the same schema.
+
+Update summary captures also cover dependency cancellation through full artifacts,
+successful delta reconstruction, and delta fallback, checking remaining package
+state, acquisition statistics, and temporary-file cleanup. A later native runtime
+preflight failure proves transaction-scoped refusal and accurate earlier committed
+results.
+
+`install/conversion/tests/dependencies/hook_preflight.rs` checks incoming CCS
+service-hook refusals on direct roots, roots with dependencies, and dependency
+packages while preserving all database tables, the selected root, and permanent
+CAS. Update cancellation captures cover both native and CCS root packages.

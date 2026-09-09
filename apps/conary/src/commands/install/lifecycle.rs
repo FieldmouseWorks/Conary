@@ -14,7 +14,7 @@ use conary_core::packages::payload::PackagePayloadFile;
 use conary_core::repository::dependency_model::RepositoryRequirementKind;
 use std::collections::HashMap;
 use std::path::Path;
-use tracing::{info, warn};
+use tracing::{debug, info};
 
 pub(super) struct FinalizeInstallOutput<'a> {
     progress: &'a InstallProgress,
@@ -64,30 +64,6 @@ pub(super) fn mark_upgraded_parent_deriveds_stale(
     Ok(())
 }
 
-/// Display a dry-run summary showing what would be installed.
-pub(super) fn show_dry_run_summary(
-    pkg: &dyn PackageFormat,
-    component_selection: &ComponentSelection,
-) -> Result<()> {
-    require_lossless_native_component_selection(component_selection)?;
-    let selected_file_count = pkg.files().len();
-
-    crate::ui::println!(
-        "\nWould install package: {} version {}",
-        pkg.name(),
-        pkg.version()
-    );
-    crate::ui::println!("  Architecture: {}", pkg.architecture().unwrap_or("none"));
-    crate::ui::println!(
-        "  Components to install: {} ({} files)",
-        ComponentType::Runtime.as_str(),
-        selected_file_count
-    );
-    crate::ui::println!("  Dependencies: {}", runtime_requirement_count(pkg));
-    crate::ui::println!("\nDry run complete. No changes made.");
-    Ok(())
-}
-
 /// Extract a native package without inventing component boundaries.
 ///
 /// Native RPM, Debian, Arch, and eopkg packages do not expose Conary's component
@@ -129,7 +105,9 @@ pub(super) fn extract_and_classify_files(
     })
 }
 
-fn require_lossless_native_component_selection(selection: &ComponentSelection) -> Result<()> {
+pub(super) fn require_lossless_native_component_selection(
+    selection: &ComponentSelection,
+) -> Result<()> {
     if let ComponentSelection::Specific(components) = selection
         && (components.is_empty()
             || components
@@ -216,6 +194,7 @@ pub(super) fn runtime_requirement_count(pkg: &dyn PackageFormat) -> usize {
 }
 
 pub(super) fn finalize_install(
+    db_path: &str,
     conn: &rusqlite::Connection,
     pkg: &dyn PackageFormat,
     extraction: &ExtractionResult,
@@ -229,7 +208,7 @@ pub(super) fn finalize_install(
         extraction,
         root,
         tx_result,
-        FinalizeInstallOutput::new(progress, false),
+        FinalizeInstallOutput::new(progress, true),
     )?;
     if let Err(error) = create_state_snapshot(
         conn,
@@ -243,13 +222,13 @@ pub(super) fn finalize_install(
                 kind: "state_snapshot".to_string(),
                 status: "failed".to_string(),
                 message: error.to_string(),
-                retry_command: Some(format!(
-                    "conary system state create \"Install {}\"",
-                    pkg.name()
+                retry_command: Some(crate::ui::transaction_summary::database_command(
+                    "conary system state create 'Deferred install snapshot'",
+                    db_path,
                 )),
             },
         )?;
-        warn!(
+        debug!(
             changeset_id = tx_result.changeset_id,
             "Package mutation completed, but state snapshot was deferred: {}", error
         );

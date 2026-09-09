@@ -12,4 +12,5 @@ mod selection;
 pub use collection::cmd_update_group;
 pub use delta_stats::cmd_delta_stats;
 pub use package::cmd_update;
+pub(crate) use package::cmd_update_cli;
 pub use pinning::{cmd_list_pinned, cmd_pin, cmd_unpin};

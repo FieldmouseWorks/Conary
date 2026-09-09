@@ -47,6 +47,7 @@ use conary_core::scriptlet::SandboxMode;
 #[cfg(test)]
 use preparation::BatchConflict;
 pub use preparation::prepare_package_for_batch;
+pub(super) use preparation::prepare_parsed_package_for_batch;
 use rusqlite::{Connection, Transaction};
 use std::collections::HashMap;
 use std::fmt;
@@ -140,6 +141,25 @@ pub(super) struct BatchDbRows {
 }
 
 impl PreparedPackage {
+    pub(super) fn native_install_input(&self) -> NativeInstallInput<'_> {
+        NativeInstallInput {
+            package_name: &self.name,
+            package_version: &self.version,
+            package_arch: self.architecture.as_deref(),
+            version_scheme: self.semantics.version_scheme,
+            provides: &self.provides,
+            new_bundle: self.native_lifecycle_state.bundle_to_persist.as_ref(),
+            old_trove: self.old_trove.as_deref(),
+            relation_removals: &self.relation_removals,
+            relation_deconfigurations: &self.relation_deconfigurations,
+            paths: self
+                .extracted_files
+                .iter()
+                .map(|file| file.path.clone())
+                .collect(),
+        }
+    }
+
     pub(super) fn old_trove_id(&self) -> Result<Option<i64>> {
         self.old_trove
             .as_deref()
@@ -210,6 +230,7 @@ pub struct BatchInstaller<'a> {
 
 pub(crate) struct BatchInstallResult {
     installed: Vec<BatchInstalledPackage>,
+    pub(crate) report: super::report::InstallReport,
 }
 
 struct BatchInstalledPackage {
@@ -268,7 +289,10 @@ impl<'a> BatchInstaller<'a> {
     /// all changes are rolled back. Packages must be ordered with dependencies
     /// before dependents.
     pub fn install_batch(self, packages: Vec<PreparedPackage>) -> Result<()> {
-        self.install_batch_with_result(packages).map(|_| ())
+        let db_path = self.db_path;
+        let result = self.install_batch_with_result(packages)?;
+        result.report.render(db_path, false);
+        Ok(())
     }
 
     /// Run the read-only dependency ordering and relation validation shared
@@ -281,6 +305,22 @@ impl<'a> BatchInstaller<'a> {
         let conn = open_db(self.db_path)?;
         self.validate_batch_transaction(&conn, &mut packages)?;
         Ok(())
+    }
+
+    pub(super) fn preview_batch(
+        self,
+        mut packages: Vec<PreparedPackage>,
+        projection: Option<&super::preview::PreviewDatabase>,
+        root: &Path,
+    ) -> Result<Vec<super::report::InstallChange>> {
+        let conn = open_db(self.db_path)?;
+        self.validate_batch_transaction(&conn, &mut packages)?;
+        ccs::prepare_hook_executors(&conn, &packages, root)?;
+        let changes = super::report::batch_changes(&conn, &packages)?;
+        if let Some(projection) = projection {
+            projection.project(&packages)?;
+        }
+        Ok(changes)
     }
 
     fn validate_batch_transaction(
@@ -300,6 +340,7 @@ impl<'a> BatchInstaller<'a> {
         if packages.is_empty() {
             return Ok(BatchInstallResult {
                 installed: Vec::new(),
+                report: Default::default(),
             });
         }
         let package_count = packages.len();
@@ -351,22 +392,7 @@ impl<'a> BatchInstaller<'a> {
         }
         let native_inputs = packages
             .iter()
-            .map(|package| NativeInstallInput {
-                package_name: &package.name,
-                package_version: &package.version,
-                package_arch: package.architecture.as_deref(),
-                version_scheme: package.semantics.version_scheme,
-                provides: &package.provides,
-                new_bundle: package.native_lifecycle_state.bundle_to_persist.as_ref(),
-                old_trove: package.old_trove.as_deref(),
-                relation_removals: &package.relation_removals,
-                relation_deconfigurations: &package.relation_deconfigurations,
-                paths: package
-                    .extracted_files
-                    .iter()
-                    .map(|file| file.path.clone())
-                    .collect(),
-            })
+            .map(PreparedPackage::native_install_input)
             .collect::<Vec<_>>();
         let native_transaction = PreparedNativeTransaction::prepare_batch(&conn, &native_inputs)?;
         let ccs_removal_hook_plan = CcsRemovalHookPlan::prepare(
@@ -417,6 +443,7 @@ impl<'a> BatchInstaller<'a> {
 
         // Phase 4: Single DB transaction for ALL packages
         let summary = format!("Batch install: {main_pkg_name}");
+        let changes = super::report::batch_changes(&conn, &packages)?;
         let transaction_result = self.execute_selected_root_native_graph(
             &mut conn,
             &cas,
@@ -431,26 +458,26 @@ impl<'a> BatchInstaller<'a> {
             &mut ccs_hook_executors,
             &mut promise_plan,
         );
-        let (_changeset_id, trove_ids, _retained_upgrade_trove_ids) = transaction_result?;
+        let (changeset_id, trove_ids, publication) = transaction_result?;
+        let report = super::report::InstallReport {
+            outcome: Default::default(),
+            projection: None,
+            planned: Vec::new(),
+            commits: vec![super::report::InstallCommit {
+                changes,
+                changeset_id,
+                file_records: packages
+                    .iter()
+                    .map(|package| package.extracted_files.len())
+                    .sum(),
+                publication: Some(publication),
+            }],
+        };
 
         info!(
             "Batch transaction completed: {} packages installed",
             package_count
         );
-
-        // Print summary
-        println!(
-            "Batch installed {} package(s) successfully:",
-            trove_ids.len()
-        );
-        for pkg in &packages {
-            println!(
-                "  {} {} ({} files)",
-                pkg.name,
-                pkg.version,
-                pkg.extracted_files.len()
-            );
-        }
 
         let installed = packages
             .iter()
@@ -463,7 +490,7 @@ impl<'a> BatchInstaller<'a> {
                 trove_id,
             })
             .collect();
-        Ok(BatchInstallResult { installed })
+        Ok(BatchInstallResult { installed, report })
     }
 
     fn preflight_file_ownership_for_batch(
@@ -772,3 +799,19 @@ impl<'a> BatchInstaller<'a> {
 #[cfg(test)]
 #[path = "batch/tests.rs"]
 mod tests;
+
+/// Native graph change indices list incoming packages before relation removals.
+pub(super) fn finalization_trove_ids(packages: &[PreparedPackage]) -> Result<Vec<Option<i64>>> {
+    Ok(packages
+        .iter()
+        .map(PreparedPackage::old_trove_id)
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .chain(
+            packages
+                .iter()
+                .flat_map(|package| package.relation_removals.iter())
+                .map(|removal| Some(removal.trove_id)),
+        )
+        .collect::<Vec<_>>())
+}

@@ -13,7 +13,6 @@ use super::{
     build_execution_mode, check_upgrade_status,
     execute_install_transaction_in_selected_root_with_post_graph,
     finalize_install_without_snapshot, preflight_extracted_file_ownership,
-    runtime_requirement_count,
 };
 use anyhow::{Context, Result};
 use conary_core::ccs::native_lifecycle::SourceFormat;
@@ -28,6 +27,7 @@ pub(crate) struct CcsTransactionInstallOptions<'a> {
     pub db_path: &'a str,
     pub root: &'a str,
     pub dry_run: bool,
+    pub preview: Option<&'a super::preview::PreviewDatabase>,
     pub defer_generation: bool,
     pub quiet: bool,
     pub sandbox_mode: SandboxMode,
@@ -43,6 +43,7 @@ pub(crate) struct CcsTransactionInstallOptions<'a> {
 pub(crate) struct CcsTransactionInstallResult {
     pub trove_id: Option<i64>,
     pub changeset_id: i64,
+    pub report: super::report::InstallReport,
 }
 
 fn extract_and_classify_ccs_manifest_files(
@@ -127,30 +128,6 @@ fn extract_and_classify_ccs_manifest_files(
         skipped_components: Vec::new(),
         language_provides: Vec::new(),
     })
-}
-
-fn show_ccs_dry_run_summary(pkg: &conary_core::ccs::CcsPackage, extraction: &ExtractionResult) {
-    let component_names = extraction
-        .installed_component_names
-        .as_deref()
-        .unwrap_or_default();
-    crate::ui::println!(
-        "\nWould install package: {} version {}",
-        pkg.name(),
-        pkg.version()
-    );
-    crate::ui::println!("  Architecture: {}", pkg.architecture().unwrap_or("none"));
-    crate::ui::println!(
-        "  Components to install: {} ({} files)",
-        if component_names.is_empty() {
-            "(metadata-only)".to_string()
-        } else {
-            component_names.join(", ")
-        },
-        extraction.extracted_files.len()
-    );
-    crate::ui::println!("  Dependencies: {}", runtime_requirement_count(pkg));
-    crate::ui::println!("\nDry run complete. No changes made.");
 }
 
 pub(crate) fn check_ccs_upgrade_status(
@@ -357,6 +334,15 @@ fn install_ccs_package_transactionally_inner(
     opts: CcsTransactionInstallOptions<'_>,
     selected_root: Option<&mut crate::commands::generation::selected_root::SelectedRootSession>,
 ) -> Result<CcsTransactionInstallResult> {
+    anyhow::ensure!(
+        opts.preview.is_none() || opts.dry_run,
+        "projected package paths require a dry run"
+    );
+    let declared_paths = opts
+        .preview
+        .map(|preview| preview.declared_paths())
+        .transpose()?
+        .unwrap_or_default();
     let caller_owned_selected_root = selected_root.is_some();
     let progress = InstallProgress::single("Installing");
     let semantics = install_semantics_for_ccs_manifest(pkg.manifest())?;
@@ -435,9 +421,9 @@ fn install_ccs_package_transactionally_inner(
         .context("CCS package conflicts and replacements cannot be applied")?;
     let native_lifecycle_bundle = pkg.manifest().native_lifecycle.as_ref();
     let resolution_capabilities = pkg.resolution_capabilities()?;
-    let native_transaction = PreparedNativeTransaction::prepare_install(
+    let native_transaction = PreparedNativeTransaction::prepare_batch_with_declared_paths(
         conn,
-        NativeInstallInput {
+        &[NativeInstallInput {
             package_name: pkg.name(),
             package_version: pkg.version(),
             package_arch: pkg.architecture(),
@@ -452,7 +438,8 @@ fn install_ccs_package_transactionally_inner(
                 .iter()
                 .map(|file| file.path.clone())
                 .collect(),
-        },
+        }],
+        &declared_paths,
     )?;
     let hooks = &pkg.manifest().hooks;
     // CCS hooks are package-scoped authority. Component names do not infer
@@ -471,21 +458,27 @@ fn install_ccs_package_transactionally_inner(
             .context("CCS lifecycle host capability preflight failed")?;
     }
 
+    let mut changes = vec![super::report::InstallChange::incoming(
+        super::report::PackageIdentity::package(pkg),
+        old_trove,
+    )];
+    changes.extend(super::report::relation_changes(conn, &relation_plan)?);
     if opts.dry_run {
         progress.clear();
         show_ccs_lifecycle_dry_run(pkg.manifest());
-        show_ccs_dry_run_summary(pkg, &extraction);
-        for removal in &relation_plan.removals {
-            crate::ui::println!(
-                "  Would remove {} {} ({})",
-                removal.package_name,
-                removal.package_version,
-                removal.kind.as_str()
-            );
+        let report = super::report::InstallReport {
+            outcome: Default::default(),
+            projection: None,
+            planned: changes,
+            commits: Vec::new(),
+        };
+        if !opts.quiet {
+            report.render(opts.db_path, true);
         }
         return Ok(CcsTransactionInstallResult {
             trove_id: None,
             changeset_id: 0,
+            report,
         });
     }
 
@@ -581,9 +574,24 @@ fn install_ccs_package_transactionally_inner(
         &extraction,
         opts.root,
         &tx_result,
-        FinalizeInstallOutput::new(&progress, opts.quiet),
+        FinalizeInstallOutput::new(&progress, true),
     )?;
+    let report = super::report::InstallReport {
+        outcome: Default::default(),
+        projection: None,
+        planned: Vec::new(),
+        commits: vec![super::report::InstallCommit {
+            changes,
+            changeset_id: tx_result.changeset_id,
+            file_records: extraction.extracted_files.len(),
+            publication: tx_result.publication,
+        }],
+    };
+    if !opts.quiet {
+        report.render(opts.db_path, false);
+    }
     Ok(CcsTransactionInstallResult {
+        report,
         trove_id: Some(tx_result.trove_id),
         changeset_id: tx_result.changeset_id,
     })

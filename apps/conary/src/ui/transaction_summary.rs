@@ -9,6 +9,9 @@ use conary_core::db::models::Trove;
 enum Change {
     Remove,
     Restore,
+    Install,
+    Update,
+    Deconfigure,
 }
 
 struct PackageChange<'a> {
@@ -17,6 +20,7 @@ struct PackageChange<'a> {
     version: &'a str,
     release: Option<&'a str>,
     architecture: Option<&'a str>,
+    reason: Option<&'a str>,
 }
 
 impl<'a> PackageChange<'a> {
@@ -27,6 +31,7 @@ impl<'a> PackageChange<'a> {
             version: &trove.version,
             release: trove.package_release.as_deref(),
             architecture: trove.architecture.as_deref(),
+            reason: None,
         }
     }
 
@@ -37,6 +42,7 @@ impl<'a> PackageChange<'a> {
             version: &snapshot.version,
             release: snapshot.package_release.as_deref(),
             architecture: snapshot.architecture.as_deref(),
+            reason: None,
         }
     }
 }
@@ -69,13 +75,30 @@ pub(crate) fn database_command(command: &str, db_path: &str) -> String {
 }
 
 fn change_lines(changes: &[PackageChange<'_>]) -> Vec<String> {
-    let mut lines = vec![super::heading_line("Applied package changes:")];
-    for (change, label) in [(Change::Remove, "Removed"), (Change::Restore, "Restored")] {
-        let rows: Vec<[String; 4]> = changes
+    change_lines_with_heading(changes, false)
+}
+
+fn change_lines_with_heading(changes: &[PackageChange<'_>], preview: bool) -> Vec<String> {
+    let mut lines = vec![super::heading_line(if preview {
+        "Planned package changes:"
+    } else {
+        "Applied package changes:"
+    })];
+    for (change, label) in [
+        (Change::Install, "Installed"),
+        (Change::Update, "Updated"),
+        (Change::Remove, "Removed"),
+        (Change::Deconfigure, "Deconfigured"),
+        (Change::Restore, "Restored"),
+    ] {
+        let has_reason = changes
+            .iter()
+            .any(|entry| entry.change == change && entry.reason.is_some());
+        let rows: Vec<Vec<String>> = changes
             .iter()
             .filter(|entry| entry.change == change)
             .map(|entry| {
-                [
+                let mut row = vec![
                     visible(entry.name),
                     visible(entry.version),
                     entry.release.map(visible).unwrap_or_else(|| "-".into()),
@@ -83,27 +106,48 @@ fn change_lines(changes: &[PackageChange<'_>]) -> Vec<String> {
                         .architecture
                         .map(visible)
                         .unwrap_or_else(|| "-".into()),
-                ]
+                ];
+                if has_reason {
+                    row.push(entry.reason.map(visible).unwrap_or_else(|| "-".into()));
+                }
+                row
             })
             .collect();
         if rows.is_empty() {
             continue;
         }
+        let label = if preview {
+            match change {
+                Change::Install => "Install",
+                Change::Update => "Update",
+                Change::Remove => "Remove",
+                Change::Deconfigure => "Deconfigure",
+                Change::Restore => "Restore",
+            }
+        } else {
+            label
+        };
         lines.push(super::heading_line(&format!("  {label} ({}):", rows.len())));
-        let headings = ["Package", "Version", "CCS release", "Architecture"].map(String::from);
-        let widths: [usize; 4] = std::array::from_fn(|column| {
-            rows.iter()
-                .chain(std::iter::once(&headings))
-                .map(|row| console::measure_text_width(&row[column]))
-                .max()
-                .unwrap_or(0)
-        });
+        let mut headings = vec!["Package", "Version", "CCS release", "Architecture"];
+        if has_reason {
+            headings.push("Reason");
+        }
+        let headings: Vec<_> = headings.into_iter().map(String::from).collect();
+        let widths: Vec<_> = (0..headings.len())
+            .map(|column| {
+                rows.iter()
+                    .chain(std::iter::once(&headings))
+                    .map(|row| console::measure_text_width(&row[column]))
+                    .max()
+                    .unwrap_or(0)
+            })
+            .collect();
         for row in std::iter::once(&headings).chain(&rows) {
             let cells: Vec<String> = row
                 .iter()
                 .enumerate()
                 .map(|(column, cell)| {
-                    if column == 3 {
+                    if column + 1 == headings.len() {
                         cell.clone()
                     } else {
                         format!(
@@ -213,6 +257,9 @@ pub(crate) fn rollback_summary(
     lines.extend(closing_lines(rollback_changeset_id, publication, db_path));
     super::message(&lines.join("\n"));
 }
+
+mod install;
+pub(crate) use install::{install_preview, install_rollback_route, install_summary};
 
 #[cfg(test)]
 mod tests;

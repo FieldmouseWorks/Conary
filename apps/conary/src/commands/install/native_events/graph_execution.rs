@@ -15,6 +15,22 @@ impl PreparedNativeTransaction {
         &self.plan.graph.steps
     }
 
+    /// Project declared successful lifecycle state without executing a program.
+    /// The caller supplies only its disposable preview database.
+    pub(in crate::commands::install) fn project_graph_event_success(
+        &self,
+        conn: &rusqlite::Connection,
+        event_index: usize,
+    ) -> Result<()> {
+        let event = self
+            .plan
+            .events
+            .get(event_index)
+            .context("preview graph refers to a missing native event")?;
+        self.persist_trigger_pending(conn, event)?;
+        self.persist_event_success(conn, event)
+    }
+
     pub(crate) fn graph_event_stage(&self, event_index: usize) -> Result<NativeEventStage> {
         self.plan
             .events

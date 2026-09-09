@@ -31,9 +31,16 @@ pub(super) struct RepositoryBatchSelection {
 }
 
 #[derive(Clone, Copy)]
-pub(super) enum RepositoryBatchMode {
+pub(super) enum RepositoryBatchMode<'a> {
     Validate,
+    Preview(&'a super::preview::PreviewDatabase),
     Install,
+}
+
+impl<'a> RepositoryBatchMode<'a> {
+    pub(super) fn for_preview(projection: Option<&'a super::preview::PreviewDatabase>) -> Self {
+        projection.map_or(Self::Validate, Self::Preview)
+    }
 }
 
 pub(super) struct PreparedRepositoryBatch {
@@ -54,6 +61,15 @@ impl PreparedRepositoryBatch {
         installer.validate_batch(self.packages)
     }
 
+    pub(super) fn preview(
+        self,
+        installer: BatchInstaller<'_>,
+        projection: Option<&super::preview::PreviewDatabase>,
+        root: &std::path::Path,
+    ) -> Result<Vec<super::report::InstallChange>> {
+        installer.preview_batch(self.packages, projection, root)
+    }
+
     pub(super) fn install_with_result(
         self,
         installer: BatchInstaller<'_>,
@@ -65,7 +81,7 @@ impl PreparedRepositoryBatch {
 pub(super) async fn prepare_repository_batch(
     db_path: &str,
     selections: Vec<RepositoryBatchSelection>,
-    mode: RepositoryBatchMode,
+    mode: RepositoryBatchMode<'_>,
 ) -> Result<PreparedRepositoryBatch> {
     let selected = selections
         .iter()
@@ -81,11 +97,17 @@ pub(super) async fn prepare_repository_batch(
     } else {
         conary_core::filesystem::CasStore::new(download_root.path().join("objects"))?
     };
+    // Installed-state planning and filesystem trust have separate locations.
+    // A preview reads the runtime's prepared keyring and keeps all writes disposable.
+    let keyring = match mode {
+        RepositoryBatchMode::Preview(projection) => projection.keyring_dir().to_path_buf(),
+        _ => keyring_dir(db_path),
+    };
     let downloaded = repository::download_dependencies(
         &conn,
         &to_download,
         download_root.path(),
-        &keyring_dir(db_path),
+        &keyring,
         &transport_cas,
     )
     .await?;
@@ -194,3 +216,6 @@ pub(super) async fn prepare_repository_batch(
         _download_root: download_root,
     })
 }
+
+#[cfg(test)]
+mod tests;

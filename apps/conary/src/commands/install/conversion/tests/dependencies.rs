@@ -2,6 +2,8 @@
 
 use super::*;
 
+mod hook_preflight;
+
 fn write_signed_ccs_fixture(
     directory: &std::path::Path,
     name: &str,
@@ -438,6 +440,51 @@ async fn repository_ccs_closure_runs_root_pretransaction_before_dependency_paylo
         b"test init",
         &local_key,
     );
+
+    let conn = conary_core::db::open(&db_path).unwrap();
+    let before_preview = crate::commands::test_helpers::database_rows(&conn);
+    let mut preview_report = super::super::super::report::InstallReport::default();
+    let preview_result = install_ccs_artifact_with_report(
+        CcsArtifactInstallOptions {
+            ccs_path: root_artifact.to_str().unwrap(),
+            db_path: db_path.to_str().unwrap(),
+            root: install_root.to_str().unwrap(),
+            dry_run: true,
+            sandbox_mode: SandboxMode::Always,
+            no_deps: false,
+            allow_downgrade: false,
+            intent: InstallIntent::PackageChange,
+            yes: true,
+            envelope_authority: CcsEnvelopeAuthority::LocalDev,
+            repository_provenance: None,
+            requested_source_identity: None,
+            resolution_policy: test_resolution_policy().with_primary_source_identity("fedora-44"),
+        },
+        &mut preview_report,
+    )
+    .await
+    .unwrap();
+    assert!(preview_result.is_none());
+    assert!(preview_report.commits.is_empty());
+    let mut planned_names: Vec<_> = preview_report
+        .planned
+        .iter()
+        .map(|change| match change {
+            super::super::super::report::InstallChange::Install(identity) => identity.name.as_str(),
+            other => {
+                panic!("fresh dependency closure preview contains unexpected change: {other:?}")
+            }
+        })
+        .collect();
+    planned_names.sort_unstable();
+    let mut expected_names = [dependency_name, root_name];
+    expected_names.sort_unstable();
+    assert_eq!(planned_names, expected_names);
+    assert_eq!(
+        crate::commands::test_helpers::database_rows(&conn),
+        before_preview
+    );
+    drop(conn);
 
     let installed_root = install_ccs_artifact(CcsArtifactInstallOptions {
         ccs_path: root_artifact.to_str().unwrap(),

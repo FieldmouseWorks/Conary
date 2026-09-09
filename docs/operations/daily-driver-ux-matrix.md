@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-09-08
-revision: 13
-summary: Daily-driver CLI routes, grouped removal and changeset-rollback results with publication and recovery facts, coordinated progress, typed diagnostics, and truthful collection outcomes
+last_updated: 2026-09-09
+revision: 23
+summary: Daily-driver CLI routes, grouped install/update/removal/rollback results, planner-backed previews, scoped recovery, coordinated progress, typed diagnostics, and truthful collection outcomes
 ---
 
 # Daily-Driver UX Matrix
@@ -149,7 +149,8 @@ and consistent fields, headings, and empty states.
 ## Collection Update Summary
 
 `apps/conary/src/commands/update/outcome.rs` retains no-change, planned, and
-applied outcomes from the existing update selection and execution counters.
+applied outcomes from update selection and committed package observations. Download
+counters do not establish an applied package count.
 `apps/conary/src/ui/update_summary.rs` renders collection results from these
 observations. Successful return alone is never counted as an applied update.
 Package counts and request counts have distinct labels; rows retain the selected
@@ -210,8 +211,132 @@ source selection, lifecycle execution, and publication authority are unchanged.
 security-metadata refusals, comparing every database table before and after.
 The UI proof distinguishes member counts from installed variant counts. Update
 unit tests prove no-change/preview/apply outcomes against real selection and
-execution; UI tests cover mixed results and partial-failure wording. Grouped
-install/update tables and remaining generation/recovery surfaces remain #132.
+execution; UI tests cover mixed results and partial-failure wording. Remaining first-use fields and generation/recovery surfaces remain #132.
+
+## Install And Update Results
+
+`apps/conary/src/commands/install/report.rs` carries planner and committed
+transaction observations through native installs, CCS installs, dependency
+batches, and updates. `apps/conary/src/ui/transaction_summary/install.rs` adapts
+these observations to the same package table used for removal and rollback.
+A preview uses `Planned package changes` with `Install`, `Update`, `Remove`, and
+`Deconfigure` groups; committed results use `Applied package changes`. Update
+rows retain before/after versions and CCS releases, plus architecture transitions
+when those differ. Relation-driven removals retain their typed relation kind in
+a `Reason` column. Update previews resolve and verify the exact selected artifacts
+through `apps/conary/src/commands/update/package/preview.rs`, then call the install
+planner with dry-run options. This includes relation removals, deconfigurations,
+and dependencies; CCS releases come from verified artifacts even when repository
+metadata leaves the release unspecified. Downloads and CAS objects used for the
+preview live in a disposable directory. Unavailable or untrusted artifacts fail
+the preview before a planned table or database mutation. CLI diagnostic tracing
+uses color only on terminal stderr when `NO_COLOR` is absent. Apply reuses the
+exact admitted artifacts from preview, retaining one full-artifact download.
+
+`apps/conary/src/commands/install/preview.rs` owns a private database snapshot
+that advances from prepared artifact identities, requirements, capabilities,
+lifecycle contracts, declared payload paths, and typed relation effects. Native
+install/batch lifecycle planning lives in
+`apps/conary/src/commands/install/native_events/install.rs`; its preview path
+view preserves later file-trigger planning without fabricating resolved owners.
+Named payload ownership resolves during apply after pre-payload lifecycle
+programs can create the declared accounts. Each later
+update is planned against earlier successful effects, in the execution order
+of deltas followed by full updates. Failed delta downloads, reconstruction, or
+installation use the admitted full artifact immediately in that same position;
+fallback does not reorder package effects. If an earlier update removes a later target,
+that later row is an install. Dependency batches advance the same snapshot.
+Lifecycle programs, selected-root mutation, and generation publication do not
+run in this projection; the installed database and permanent CAS stay unchanged.
+Native dependency acquisition reads prepared trust from the original runtime
+keyring while planning against projected package state; it neither copies nor
+relaxes that trust. Projected database effects follow the native graph payload
+boundaries through `apps/conary/src/commands/install/preview/effects.rs`,
+including typed repository enrollment transitions and last-owner dispositions.
+A removed repository and its cached candidates disappear before later update
+selection; retained and shared ownership follow the same enrollment authority
+as apply. Debian payload completion, declared successful event state, and
+trigger-state transitions use the native lifecycle state owner, retaining
+config-files residual authority after removal and clearing it after disappearance.
+Standalone native install previews also share this state between their
+dependency stage and root planning. Native dependency preview and apply both
+use the authenticated repository-batch preparation owner, including signed
+CCS dependencies; the duplicate native-only preparation path is removed.
+Atomic dependency previews run the existing incoming CCS hook preflight for
+every prepared package with the caller's root context before adding planned rows
+or advancing disposable state. Native and CCS dependency prompts carry the same
+cancelled outcome through the enclosing update.
+
+Previously, native/CCS install printed independent `Installed package` fields,
+batches printed a separate success list, and update ended with artifact preparation counters.
+A dry run could print its completion line before relation removals, while CCS
+dependency selections were absent from that frame. Planner-backed dependency and
+relation rows now precede the closing dry-run note. Declining the native
+dependency prompt stops the enclosing install.
+
+The update selection preview is:
+
+```text
+Planned package changes:
+  Update (1):
+    Package           Version         CCS release  Architecture
+    a-summary-update  1.0.0 -> 2.0.0  - -> 1       x86_64
+note: Dry run: no updates were applied.
+```
+
+A committed CCS upgrade renders:
+
+```text
+Applied package changes:
+  Updated (1):
+    Package           Version         CCS release  Architecture
+    summary-incoming  1.0.0 -> 2.0.0  1 -> 1       x86_64
+  Installed file records: 4
+  Changeset: 1
+  Generation: 0 published
+note: Inspect history: conary system history --db-path='<fixture>/conary.db'
+note: Request rollback of latest changeset: conary system state rollback 1 --yes --db-path='<fixture>/conary.db'
+```
+
+Installed file records count the selected payload descriptors, including
+directories; they do not measure physical writes or disk savings. Multiple
+committed transactions share one result table and list their changeset IDs;
+the closing generation reflects the last transaction's returned publication
+outcome. The report survives a later command error, so partially completed
+updates retain their committed rows without claiming the failed package changed.
+Preview rows describe planned successful effects. Apply preflights each transaction
+against its then-current selected root before that transaction runs lifecycle or
+payload mutation; an update selection spans separate committed transactions.
+A later runtime preflight failure retains earlier committed rows and leaves the
+failing package unchanged. Dependency cancellation stops the enclosing update,
+keeps every remaining target unchanged, and records no applied delta for the
+declined package. Acquisition counts still include all prepared full artifacts.
+A publication delegated to an enclosing selected-root operation is explicitly
+labeled as such rather than assigned a generation. Only a successful top-level
+install/update command offers the latest changeset's rollback request. Nested
+install and collection-member calls leave that guidance to their enclosing
+operation. A multi-transaction rollback request reverses only the named changeset.
+
+Pending publication retains the existing warning and same-database retry.
+Native install snapshot follow-ups also retain that database. Empty update
+selections say `No eligible updates selected` (or the security-specific form)
+rather than declaring skipped packages current. Existing collection selection
+reasons and security-metadata failure semantics remain intact.
+
+`cargo test -p conary --features test-hooks --lib commands::install::report`
+captures native/CCS install, upgrade, preview, pending publication, duplicate
+refusal, batch results, and dependency cancellation in terminal, pipe, and
+`NO_COLOR` modes. `cargo test -p conary --features test-hooks --lib summary_capture`
+proves update preview, apply, relation removal and dependent deconfiguration,
+pending publication, ordered co-selected replacement, mixed lifecycle failure,
+and pinned no-op output. Preview/refusal/cancellation captures compare every
+persisted database table. The verified CCS dependency fixture additionally
+proves that its batch preview includes the same two package identities without
+changing database state. Cross-source lifecycle fixtures assert exact grouped
+preview rows before their existing payload, native lifecycle, and rollback proof.
+
+Broader source-format, size, disk-delta, and first-use fields remain under #132
+and #644; the transaction table does not infer values the operation did not return.
 
 ## Removal And Changeset Rollback Results
 
@@ -263,8 +388,8 @@ database. It checks resulting
 installed state, rollback lineage, publication debt, exact identity rows, and the
 absence of applied summaries on refused operations. Pure rendering tests cover
 mixed remove/restore groups, control characters, missing generation facts, and
-shell argument preservation. Removal preview remains #642; install/update grouping
-and other generation command frames remain #132.
+shell argument preservation. Removal preview remains #642; other generation command frames and broader first-use
+fields remain #132 and #644.
 
 ## Ranked UI Slices
 
@@ -308,3 +433,9 @@ Do not mark an unsupported route as implemented in docs unless the focused test
 target above or the referenced integration suite proves it. Keep active docs
 clear that native package managers remain authoritative for adopted packages
 until the user chooses explicit takeover.
+
+Update artifact results count all selected full artifacts admitted for preview,
+including targets whose later apply fails. They do not claim delta bandwidth
+savings after those full artifacts were acquired. Persisted delta success rate
+uses successful and failed delta attempts; full-artifact preparation is a
+separate count. Committed package rows remain the applied-result authority.

@@ -314,8 +314,11 @@ for source_format in "${source_formats[@]}"; do
     --from "${source_profile}" \
     --dry-run 2>&1)"
   printf '%s\n' "${preview}"
-  grep -F "Would install package: ${package_name} version ${v1_version}" <<<"${preview}"
-  grep -F "Dry run complete. No changes made." <<<"${preview}"
+  grep -F "Planned package changes:" <<<"${preview}"
+  grep -F "  Install (1):" <<<"${preview}"
+  awk -v package="${package_name}" -v version="${v1_version}" -v architecture="${source_architecture}" \
+    '$1 == package && $2 == version && $3 == "1" && $4 == architecture { found = 1 } END { exit !found }' <<<"${preview}"
+  grep -F "Dry run: no package changes were applied." <<<"${preview}"
   test "$(
     sqlite3 "${db}" \
       "SELECT COUNT(*) FROM troves WHERE name = '${package_name}'"
@@ -353,8 +356,11 @@ for source_format in "${source_formats[@]}"; do
     --from "${source_profile}" \
     --dry-run 2>&1)"
   printf '%s\n' "${update_preview}"
-  grep -F "Would install package: ${package_name} version ${v2_version}" <<<"${update_preview}"
-  grep -F "Dry run complete. No changes made." <<<"${update_preview}"
+  grep -F "Planned package changes:" <<<"${update_preview}"
+  grep -F "  Update (1):" <<<"${update_preview}"
+  awk -v package="${package_name}" -v before="${v1_version}" -v after="${v2_version}" -v architecture="${source_architecture}" \
+    '$1 == package && $2 == before && $3 == "->" && $4 == after && $5 == "1" && $6 == "->" && $7 == "1" && $8 == architecture { found = 1 } END { exit !found }' <<<"${update_preview}"
+  grep -F "Dry run: no package changes were applied." <<<"${update_preview}"
   run_conary_requiring_hook CONARY_TEST_SKIP_GENERATION_MOUNT install "${v2_package}" \
     --convert-to-ccs \
     --db-path "${db}" \

@@ -22,6 +22,8 @@ mod ownership_mode;
 mod package_set;
 mod payload_identity;
 mod prepare;
+pub(crate) mod preview;
+pub(crate) mod report;
 mod repository_batch;
 mod resolve;
 mod restore;
@@ -32,9 +34,11 @@ mod source_policy;
 mod transaction;
 mod validation;
 
-pub use batch::{BatchInstaller, prepare_package_for_batch};
+pub use batch::BatchInstaller;
 pub use command::cmd_install;
+pub(crate) use command::cmd_install_cli;
 pub(crate) use command::cmd_install_replatform;
+pub(crate) use command::{InstallOutcome, cmd_install_with_report};
 pub(crate) use conversion::{
     PendingInstalledConversion, PendingNativeCcsConversion, convert_native_package_to_ccs,
 };
@@ -69,7 +73,7 @@ use execute::{
 use lifecycle::{
     ExtractionResult, FinalizeInstallOutput, extract_and_classify_files, finalize_install,
     finalize_install_without_snapshot, mark_upgraded_parent_deriveds_stale,
-    runtime_requirement_count, show_dry_run_summary,
+    require_lossless_native_component_selection,
 };
 use prepare::check_upgrade_status;
 pub(crate) use semantics::InstallIntent;

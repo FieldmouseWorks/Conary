@@ -5,19 +5,12 @@ pub mod common;
 #[path = "cli_update_summary/selection.rs"]
 mod selection;
 
-use conary_core::db::models::{
-    CollectionMember, InstallSource, Repository, RepositoryPackage, Trove, TroveType,
-};
+use conary_core::db::models::{CollectionMember, InstallSource, Trove, TroveType};
 use std::process::Command;
 
 fn fixture() -> (tempfile::TempDir, String) {
     let (temp, db_path, conn) = common::create_test_db();
-    let mut repo = Repository::new(
-        "variant-repo".to_string(),
-        "https://example.test/variant".to_string(),
-    );
-    repo.source_profile = Some("solus".to_string());
-    let repo_id = repo.insert(&conn).unwrap();
+    let (repo_id, key) = common::update_ccs::repository(&conn);
 
     let mut collection = Trove::new(
         "base".to_string(),
@@ -36,25 +29,14 @@ fn fixture() -> (tempfile::TempDir, String) {
             "1.0-1".to_string(),
             TroveType::Package,
             InstallSource::Repository,
-            conary_core::repository::versioning::VersionScheme::Eopkg,
+            conary_core::repository::versioning::VersionScheme::Rpm,
         );
         installed.architecture = Some(arch.to_string());
-        installed.source_profile = Some("solus".to_string());
+        installed.source_profile = Some("fedora-44".to_string());
         installed.installed_from_repository_id = Some(repo_id);
         installed.insert(&conn).unwrap();
 
-        let mut candidate = RepositoryPackage::new(
-            repo_id,
-            name.to_string(),
-            "1.0-2".to_string(),
-            conary_core::repository::versioning::VersionScheme::Eopkg,
-            format!("sha256:{name}-{arch}"),
-            123,
-            format!("https://example.test/variant/{name}-1.0.1-{arch}.ccs"),
-        );
-        candidate.architecture = Some(arch.to_string());
-        candidate.source_profile = Some("solus".to_string());
-        candidate.insert(&conn).unwrap();
+        common::update_ccs::candidate(&conn, temp.path(), repo_id, &key, name, arch);
     }
     drop(conn);
     (temp, db_path)
@@ -64,6 +46,8 @@ fn fixture() -> (tempfile::TempDir, String) {
 fn collection_preview_never_claims_applied_updates_and_preserves_database() {
     let (_temp, db_path) = fixture();
     let before = common::database_snapshot(&db_path);
+    let objects = conary_core::db::paths::objects_dir(&db_path);
+    assert!(!objects.exists());
     for (tty, no_color) in [(false, false), (false, true), (true, false), (true, true)] {
         let mut command = if tty {
             let mut command = Command::new("script");
@@ -106,5 +90,6 @@ fn collection_preview_never_claims_applied_updates_and_preserves_database() {
             "{text}"
         );
         assert_eq!(common::database_snapshot(&db_path), before);
+        assert!(!objects.exists(), "preview populated permanent CAS");
     }
 }

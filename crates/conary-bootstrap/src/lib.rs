@@ -1,6 +1,7 @@
 // crates/conary-bootstrap/src/lib.rs
 
 use std::future::Future;
+use std::io::IsTerminal;
 
 pub fn init_server_tracing() {
     tracing_subscriber::fmt()
@@ -14,6 +15,7 @@ pub fn init_server_tracing() {
 
 pub fn init_cli_tracing(default_directive: &str) {
     tracing_subscriber::fmt()
+        .with_ansi(std::io::stderr().is_terminal() && std::env::var_os("NO_COLOR").is_none())
         .with_writer(std::io::stderr)
         .without_time()
         .with_target(false)

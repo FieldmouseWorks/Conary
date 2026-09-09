@@ -78,6 +78,7 @@ fn standalone_ccs_install_resolves_upgrade_identity_under_the_mutation_lock() {
             &mut conn,
             &package,
             CcsTransactionInstallOptions {
+                preview: None,
                 db_path: &waiter_db_path,
                 root: &install_root_string,
                 dry_run: false,

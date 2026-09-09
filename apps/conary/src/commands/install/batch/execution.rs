@@ -40,7 +40,11 @@ impl BatchInstaller<'_> {
         rollback_root: conary_core::generation::root_manifest::SelectedRootSnapshot,
         ccs_hook_executors: &mut [Option<conary_core::ccs::HookExecutor>],
         promise_plan: &mut super::promises::PromiseWitnessPlan,
-    ) -> Result<(i64, Vec<i64>, Vec<i64>)> {
+    ) -> Result<(
+        i64,
+        Vec<i64>,
+        crate::commands::generation::publication::PublicationOutcome,
+    )> {
         let graph_inputs = self.prepare_graph_execution(conn, packages)?;
         let repository_transitions = packages
             .iter()
@@ -187,12 +191,8 @@ impl BatchInstaller<'_> {
                     self.db_path,
                 ),
             )?;
-            crate::commands::generation::publication::warn_if_publication_pending(
-                changeset_id,
-                &outcome,
-            );
         }
-        Ok((changeset_id, trove_ids, Vec::new()))
+        Ok((changeset_id, trove_ids, outcome))
     }
 
     fn prepare_graph_execution(
@@ -205,18 +205,7 @@ impl BatchInstaller<'_> {
             .flat_map(|package| package.extracted_files.iter())
             .map(|file| super::super::native_graph::normalize_archive_path(&file.path))
             .collect::<BTreeSet<_>>();
-        let finalization_troves = packages
-            .iter()
-            .map(PreparedPackage::old_trove_id)
-            .collect::<Result<Vec<_>>>()?
-            .into_iter()
-            .chain(
-                packages
-                    .iter()
-                    .flat_map(|package| package.relation_removals.iter())
-                    .map(|removal| Some(removal.trove_id)),
-            )
-            .collect::<Vec<_>>();
+        let finalization_troves = super::finalization_trove_ids(packages)?;
         let relation_removal_trove_ids = packages
             .iter()
             .flat_map(|package| package.relation_removals.iter())
