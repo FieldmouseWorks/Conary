@@ -12,6 +12,7 @@ pub(crate) fn refusal(cause: NativeLifecyclePreflightError) -> anyhow::Error {
                 source_format: "rpm".into(),
                 root: "/tmp/materialized".into(),
                 stage: NativeEventStage::PackagePreInstall,
+                recovery: false,
                 program: NativeEventProgram::BundleEntry {
                     entry_id: "rpm:%pre".into(),
                 },
@@ -107,6 +108,7 @@ fn text_that_resembles_a_refusal_cannot_establish_typed_facts() {
         source_format: "rpm".into(),
         root: "/selected".into(),
         stage: NativeEventStage::PackagePreInstall,
+        recovery: false,
         program: NativeEventProgram::BundleEntry {
             entry_id: "rpm:%pre".into(),
         },

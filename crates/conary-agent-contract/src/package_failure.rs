@@ -47,6 +47,7 @@ pub struct NativePreflightFailure {
     /// Materialized transaction root actually checked; it may be temporary.
     pub execution_root: String,
     pub stage: String,
+    pub recovery: bool,
     pub program: NativePreflightProgram,
     pub cause: NativePreflightCause,
     pub notes: Vec<String>,

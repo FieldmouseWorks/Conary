@@ -15,11 +15,12 @@ pub(crate) struct NativePreflightContext {
     pub source_format: String,
     pub root: PathBuf,
     pub stage: NativeEventStage,
+    pub recovery: bool,
     pub program: NativeEventProgram,
 }
 
 impl NativePreflightContext {
-    pub(super) fn event(event: &NativeTransactionEvent, root: &Path) -> Self {
+    pub(super) fn event(event: &NativeTransactionEvent, root: &Path, recovery: bool) -> Self {
         Self {
             package: event.owner_package.clone(),
             version: event.owner_version.clone(),
@@ -27,6 +28,7 @@ impl NativePreflightContext {
             source_format: event.source_format.clone(),
             root: root.into(),
             stage: event.stage,
+            recovery,
             program: event.program.clone(),
         }
     }

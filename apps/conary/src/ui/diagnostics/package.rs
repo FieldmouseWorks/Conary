@@ -49,7 +49,15 @@ fn native_failure(mut diagnostic: Diagnostic, failure: NativePreflightFailure) -
             failure.architecture.unwrap_or_else(|| "Unspecified".into()),
         )
         .fact("Source format", failure.source_format)
-        .fact("Stage", failure.stage);
+        .fact("Stage", failure.stage)
+        .fact(
+            "Event",
+            if failure.recovery {
+                "Recovery"
+            } else {
+                "Normal"
+            },
+        );
     if let Some(root) = failure.requested_root {
         diagnostic = diagnostic.fact("Root", root);
     }

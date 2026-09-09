@@ -100,6 +100,7 @@ fn native_failure(error: &anyhow::Error) -> Option<NativePreflightFailure> {
             .downcast_ref::<PackageFailureScope>()
             .map(|scope| scope.database.clone()),
         stage: stage_name(context.stage).into(),
+        recovery: context.recovery,
         program: match &context.program {
             NativeEventProgram::BundleEntry { entry_id } => NativePreflightProgram::BundleEntry {
                 entry_id: entry_id.clone(),

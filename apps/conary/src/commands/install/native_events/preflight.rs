@@ -105,7 +105,7 @@ impl PreparedNativeTransaction {
         for (event_index, event) in self.plan.events.iter().enumerate() {
             let projection = self.path_projection.for_event(event_index)?;
             self.preflight_event(event, root, mode, projection)
-                .context(NativePreflightContext::event(event, root))?;
+                .context(NativePreflightContext::event(event, root, false))?;
             if let Some(recovery) = self.plan.deb.recovery_for_event(event) {
                 self.preflight_deb_recovery(recovery, root, mode, projection)?;
             }
@@ -184,7 +184,7 @@ impl PreparedNativeTransaction {
             }
             DebRecoveryResult::Run(node) => {
                 self.preflight_event(&node.event, root, mode, projection)
-                    .context(NativePreflightContext::event(&node.event, root))?;
+                    .context(NativePreflightContext::event(&node.event, root, true))?;
                 self.preflight_deb_recovery(&node.on_success, root, mode, projection)?;
                 self.preflight_deb_recovery(&node.on_failure, root, mode, projection)
             }

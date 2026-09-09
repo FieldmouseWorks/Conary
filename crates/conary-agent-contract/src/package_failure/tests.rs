@@ -42,6 +42,7 @@ fn package_failure_schema_is_closed_and_preserves_all_refusal_facts() {
                     database: Some("/state/db".into()),
                     execution_root: "/temporary/materialized".into(),
                     stage: "package-pre-install".into(),
+                    recovery: false,
                     program: NativePreflightProgram::BundleEntry {
                         entry_id: "rpm:%pre".into(),
                     },

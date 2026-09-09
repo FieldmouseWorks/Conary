@@ -265,6 +265,7 @@ error: Native transaction preflight refused.
   Architecture: x86_64
   Source format: rpm
   Stage: package-pre-install
+  Event: Normal
   Root: <requested root>
   Database: <selected database>
   Execution root: <materialized transaction root>
