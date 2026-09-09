@@ -82,6 +82,15 @@ const TEST_HOOK_NAMES: &[&str] = &[
     names::TRY_WATCH_READY_FILE,
 ];
 
+/// Start a subprocess fixture with no controls inherited from concurrent tests.
+/// Call before adding the child's own explicit test-hook environment.
+#[cfg(test)]
+pub(crate) fn clear_inherited_hooks(command: &mut std::process::Command) {
+    for name in TEST_HOOK_NAMES {
+        command.env_remove(name);
+    }
+}
+
 #[derive(Debug, Error)]
 #[error("test-hook environment variables are disabled in this Conary build; unset: {variables}")]
 pub(crate) struct TestHooksError {
@@ -440,5 +449,29 @@ mod tests {
             assert!(key_name_is_test_hook(OsStr::new(name)), "{name}");
         }
         assert!(!key_name_is_test_hook(OsStr::new("CONARY_DB")));
+    }
+
+    #[test]
+    fn child_controls_are_isolated_and_explicit_overrides_survive() {
+        let mut command = std::process::Command::new("sh");
+        for name in TEST_HOOK_NAMES {
+            command.env(name, "inherited test contamination");
+        }
+        clear_inherited_hooks(&mut command);
+        command.env(names::BOOT_ID, "explicit-child-value");
+        let checks = TEST_HOOK_NAMES
+            .iter()
+            .map(|name| {
+                if *name == names::BOOT_ID {
+                    format!("test \"${{{name}}}\" = explicit-child-value")
+                } else {
+                    format!("test -z \"${{{name}+x}}\"")
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" && ");
+        let output = command.args(["-c", &checks]).output().unwrap();
+        assert!(output.status.success(), "child inherited test controls");
+        assert!(output.stdout.is_empty() && output.stderr.is_empty());
     }
 }
