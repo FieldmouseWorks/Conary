@@ -126,7 +126,7 @@ conary = "search ${TEST_PACKAGE_1}"
 [test.step.assert]
 exit_code = 0
 stdout_contains = "${TEST_PACKAGE_1}"
-stdout_not_contains = "No packages found"
+stdout_not_contains = "No matching packages"
 
 # --------------------------------------------------------------------------
 # T06: Search Nonexistent
@@ -144,7 +144,7 @@ conary = "search zzz-nonexistent-pkg-12345"
 
 [test.step.assert]
 exit_code = 0
-stdout_contains = "No packages found"
+stdout_contains = "No matching packages in cached metadata from enabled repositories."
 
 # --------------------------------------------------------------------------
 # T07: Install Package
