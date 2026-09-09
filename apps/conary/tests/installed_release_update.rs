@@ -60,7 +60,9 @@ fn update_replaces_the_selected_release_and_preserves_its_sibling() {
             assert!(!root.join("usr/share/demo").exists());
         }
     }
-    let retained = Trove::find_by_id(&conn, ids[0]).unwrap().unwrap();
+    let retained = Trove::find_by_id(&conn, ids[0])
+        .unwrap()
+        .expect("update removed the unselected release sibling");
     assert_eq!(retained.version, "1.0-1");
     assert_eq!(retained.package_release.as_deref(), Some("1"));
     assert!(Trove::find_by_id(&conn, ids[1]).unwrap().is_none());
