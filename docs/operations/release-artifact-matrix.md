@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-09-06
-revision: 38
-summary: Record immutable v0.17.1 publication, all 18 asset digests, license split, and independent three-host artifact proof
+last_updated: 2026-09-10
+revision: 39
+summary: Record the prepared v0.17.2 security update separately from immutable v0.17.1 publication and artifact proof
 ---
 
 # Release Artifact Matrix
@@ -91,6 +91,13 @@ verified within the artifact-proof scope recorded below. Deployment routing
 passed; terminal live deployment proof remains pending. Historical
 product-prefixed tags and releases remain immutable evidence for their own
 trees, but they are not current release inputs.
+
+The workspace and packaging are prepared for `v0.17.2`, including the
+privileged build-sandbox repair tracked by GHSA-6qhh-qcc5-fxxg and
+[PR #989](https://github.com/FieldmouseWorks/Conary/pull/989). This is a prepared
+target only: its protected merge, annotated tag, immutable publication, and
+independent artifact and deployment proof must complete before it replaces the
+published authority above.
 
 The v0.16.1 release-era deployment ran the exact tagged `remi 0.16.1` binary
 whose release asset has SHA-256
