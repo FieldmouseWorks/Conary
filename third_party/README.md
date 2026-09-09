@@ -67,28 +67,9 @@ exit_type = "crates-io-newer-release"
 exit_condition = "Evaluate every newer non-yanked resolvo release; drop the patch only when the focused unreachable-branch regression passes against that release."
 exit_test = "cargo test --manifest-path third_party/resolvo-0.12.0-patched/Cargo.toml conflict_graph_discards_learned_branches_unreachable_from_root"
 
-[[dependency]]
-id = "rpm-rs-builder-authority"
-cargo_name = "rpm"
-kind = "git-dependency"
-declaration = "Cargo.toml:[workspace.dependencies].rpm"
-git = "https://github.com/FieldmouseWorks/rpm-rs"
-rev = "1d34711495afe021993707ad64fb60fa8dc34881"
-upstream = "https://github.com/rpm-rs/rpm-rs"
-upstream_repo = "rpm-rs/rpm-rs"
-upstream_ref = "master"
-upstream_base = "283563a92383dd63cf92fe1d261d42ecdf71ff12"
-divergence = "Two commits add explicit package-local hardlink sets and canonical root-child directory headers/payload paths; the fork differs in builder code and tests, not RPM signature verification."
-reason = "Conary's native export must preserve hardlink identity and canonical root-directory payload semantics when authoring RPMs."
-exit_type = "upstream-git-integration"
-exit_condition = "Prefer upstreaming both builder changes. Drop the fork when upstream contains equivalent behavior, then pin a released or reviewed upstream revision and pass the focused native-export and daily-driver corpus tests."
-exit_test = "cargo test -p conary-core ccs::native_export::rpm && cargo test -p conary-test native_corpus"
 ```
 <!-- conary-third-party-divergence:end -->
 
 The vendored crates retain their upstream license metadata and notices. The
 resolvo patch has additional implementation context in
 [`resolvo-0.12.0-patched/CONARY_PATCH.md`](resolvo-0.12.0-patched/CONARY_PATCH.md).
-The rpm-rs fork is pinned by commit because it parses and authors package data
-at a trust boundary; changing that revision requires updating the recorded
-base and re-running the named exit tests.
