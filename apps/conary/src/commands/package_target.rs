@@ -4,32 +4,8 @@
 
 use anyhow::Result;
 use conary_core::db::models::{InstallSource, Trove, TroveType};
-use conary_core::repository::versioning::validate_package_release;
-use std::str::FromStr;
-
-/// Exact installed package release selector.
-///
-/// `Unspecified` matches only installed troves that carry no CCS package
-/// release. `Exact` matches the identical release string; validated releases
-/// are retained verbatim, so leading zeros are never normalized.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum InstalledRelease {
-    Exact(String),
-    Unspecified,
-}
-
-impl FromStr for InstalledRelease {
-    type Err = anyhow::Error;
-
-    fn from_str(raw: &str) -> Result<Self, Self::Err> {
-        if raw == "none" {
-            return Ok(Self::Unspecified);
-        }
-        validate_package_release(raw)
-            .map_err(|error| anyhow::anyhow!("invalid package release '{raw}': {error}"))?;
-        Ok(Self::Exact(raw.to_string()))
-    }
-}
+mod release;
+pub use release::InstalledRelease;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct InstalledPackageSelector {

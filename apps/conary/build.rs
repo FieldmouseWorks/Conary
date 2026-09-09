@@ -12,8 +12,12 @@ mod ccs_init_template;
 #[path = "src/commands/install/ownership_mode.rs"]
 mod ownership_mode;
 
+#[path = "src/commands/package_target/release.rs"]
+mod installed_release;
+
 pub mod commands {
     pub use super::ccs_init_template::CcsInitTemplate;
+    pub use super::installed_release::InstalledRelease;
     pub use super::ownership_mode::OwnershipMode;
 }
 
@@ -44,6 +48,7 @@ fn trim_roff_line_endings(rendered: Vec<u8>) -> Vec<u8> {
 fn main() -> Result<(), Box<dyn Error>> {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=src/cli");
+    println!("cargo:rerun-if-changed=src/commands/package_target/release.rs");
     println!("cargo:rerun-if-changed=src/commands/ccs/init_template.rs");
     println!("cargo:rerun-if-changed=src/commands/install/ownership_mode.rs");
 
