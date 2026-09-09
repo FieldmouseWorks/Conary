@@ -1,0 +1,5 @@
+{
+  "version": "0.16.0",
+  "target": "x86_64-unknown-linux-musl",
+  "sha256": "aec995a83ad3dff3d14b6314e08858b7b73d35ca85a5bcf3d3a9ec07dee35588"
+}

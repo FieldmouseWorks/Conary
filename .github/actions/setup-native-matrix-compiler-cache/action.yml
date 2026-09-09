@@ -80,6 +80,9 @@ runs:
         path: ${{ runner.temp }}/native-matrix-sccache
         key: ${{ steps.policy.outputs.exact_key }}
         restore-keys: ${{ steps.policy.outputs.restore_prefix }}
+    - name: Prepare verified compiler-cache tool
+      if: ${{ runner.os == 'Linux' && runner.arch == 'X64' }}
+      uses: ./.github/actions/prepare-sccache
     - name: Install bounded shared compiler cache
       uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
       with:

@@ -272,3 +272,6 @@ if ! rg -q 'composite-action description contains an unquoted mapping colon' \
 fi
 
 echo "GitHub Actions runtime policy fixtures passed."
+
+# Exercise pinned archive verification and the runner tool-cache handoff.
+python3 -I scripts/test-sccache-archive.py
