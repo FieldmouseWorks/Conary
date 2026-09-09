@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-09
-revision: 32
+revision: 33
 summary: Daily-driver CLI routes, exact installed CCS release selectors, repository details, grouped transaction results, scoped recovery, and typed native refusals
 ---
 
@@ -57,7 +57,7 @@ The parser in `apps/conary/src/commands/package_target/release.rs` is shared by
 runtime argument parsing and generated manuals.
 
 Update carries the selected installed snapshot through preview, full-artifact,
-and delta installation. Root preparation revalidates its record ID, identity,
+and retained-artifact installation. Root preparation revalidates its record ID, identity,
 source observations, and pin state; batch execution repeats that validation
 under the runtime mutation lock. Unexpectedly missing or changed targets and a conflicting incoming identity
 refuse before mutation. Every target is validated in the initial private
@@ -418,10 +418,11 @@ install/batch lifecycle planning lives in
 view preserves later file-trigger planning without fabricating resolved owners.
 Named payload ownership resolves during apply after pre-payload lifecycle
 programs can create the declared accounts. Each later
-update is planned against earlier successful effects, in the execution order
-of deltas followed by full updates. Failed delta downloads, reconstruction, or
-installation use the admitted full artifact immediately in that same position;
-fallback does not reorder package effects. If an earlier update removes a later target,
+update is planned against earlier successful effects. The planner retains its
+established advertised-delta priority, then full-only targets, preserving order
+within each group. Apply consumes that same ordered vector of admitted full
+artifacts directly; it does not download or reconstruct a delta after full
+admission, and artifact reuse cannot reorder package effects. If an earlier update removes a later target,
 that later row is an install. Dependency batches advance the same snapshot.
 Lifecycle programs, selected-root mutation, and generation publication do not
 run in this projection; the installed database and permanent CAS stay unchanged.
@@ -486,8 +487,8 @@ against its then-current selected root before that transaction runs lifecycle or
 payload mutation; an update selection spans separate committed transactions.
 A later runtime preflight failure retains earlier committed rows and leaves the
 failing package unchanged. Dependency cancellation stops the enclosing update,
-keeps every remaining target unchanged, and records no applied delta for the
-declined package. Acquisition counts still include all prepared full artifacts.
+keeps every remaining target unchanged, and records no applied package effect
+for the declined package. Acquisition counts still include all prepared full artifacts.
 A publication delegated to an enclosing selected-root operation is explicitly
 labeled as such rather than assigned a generation. Only a successful top-level
 install/update command offers the latest changeset's rollback request. Nested
@@ -612,7 +613,12 @@ clear that native package managers remain authoritative for adopted packages
 until the user chooses explicit takeover.
 
 Update artifact results count all selected full artifacts admitted for preview,
-including targets whose later apply fails. They do not claim delta bandwidth
-savings after those full artifacts were acquired. Persisted delta success rate
-uses successful and failed delta attempts; full-artifact preparation is a
-separate count. Committed package rows remain the applied-result authority.
+including targets whose later apply fails. The closing artifact frame reports
+full artifacts prepared; it has no delta-attempt or bandwidth-savings lines.
+New updates fetch no delta after full admission and persist zero delta attempts
+and savings. Historical delta statistics remain readable and compute their
+success rate from actual recorded attempts. Committed package rows remain the
+applied-result authority. `cargo test -p conary --features test-hooks --test
+update_artifact_acquisition -- --nocapture` counts signed full-artifact and
+advertised valid/invalid delta response payloads in cold and warm CAS fixtures;
+the durable guard is described in `docs/performance/README.md`.
