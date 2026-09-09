@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-09
-revision: 35
+revision: 36
 summary: Daily-driver CLI routes, exact installed CCS release selectors, serialized pin state, repository details, grouped transaction results, scoped recovery, and typed native refusals
 ---
 
@@ -81,6 +81,8 @@ listing does not acquire the mutation lock.
 Removal rechecks the current pin state after acquiring that same lock, before
 preparing payload ownership, lifecycle, or the selected root. A pin completed
 while removal waited therefore prevents deletion.
+The removal graph regressions live in
+`apps/conary/src/commands/remove/native_graph/tests.rs`.
 
 ## Repository Discovery
 

@@ -258,5 +258,4 @@ fn execute_selected_root_graph(
 }
 
 #[cfg(test)]
-#[path = "native_graph_tests.rs"]
 mod tests;

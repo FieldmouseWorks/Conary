@@ -1,4 +1,4 @@
-// apps/conary/src/commands/remove/native_graph_tests.rs
+// apps/conary/src/commands/remove/native_graph/tests.rs
 
 use super::*;
 use conary_core::db::models::{InstallSource, TroveType};
