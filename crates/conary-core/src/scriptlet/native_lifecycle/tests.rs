@@ -131,7 +131,10 @@ fn native_lifecycle_native_arg_contracts_refuse_malformed_or_missing_runtime_val
 
 #[test]
 fn native_lifecycle_preflight_refuses_unsupported_invocation_fields() {
-    let executor = ScriptletExecutor::new(Path::new("/"), "test-pkg", "1.0.0", PackageFormat::Rpm)
+    // A valid root shape lets each malformed invocation reach its own check.
+    // Using '/' made every case pass on the unrelated root refusal.
+    let root = tempfile::tempdir().unwrap();
+    let executor = ScriptletExecutor::new(root.path(), "test-pkg", "1.0.0", PackageFormat::Rpm)
         .with_sandbox_mode(SandboxMode::Always);
     let mode = ExecutionMode::Install;
     let runtime = NativeInvocationRuntime {
