@@ -285,6 +285,10 @@ fn rpm_file_capability_round_trips_from_typed_manifest_authority() {
     let source = temp_dir.path().join("source");
     let tool = source.join("usr/bin/tool");
     fs::create_dir_all(tool.parent().unwrap()).unwrap();
+    // Fixture ancestor modes are declared explicitly so exports do not depend on
+    // the host umask or the source tree's creation defaults.
+    fs::set_permissions(source.join("usr"), fs::Permissions::from_mode(0o755)).unwrap();
+    fs::set_permissions(source.join("usr/bin"), fs::Permissions::from_mode(0o755)).unwrap();
     fs::write(&tool, b"#!/bin/sh\nexit 0\n").unwrap();
     fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
 
@@ -296,10 +300,11 @@ fn rpm_file_capability_round_trips_from_typed_manifest_authority() {
         effective: true,
         inheritable: false,
     }];
-    let result = crate::ccs::builder::CcsBuilder::new(manifest, &source)
+    let mut result = crate::ccs::builder::CcsBuilder::new(manifest, &source)
         .unwrap()
         .build()
         .unwrap();
+    crate::ccs::native_export::tests::declare_root_fixture_ownership(&mut result);
     let output_path = temp_dir.path().join("capability.rpm");
 
     generate(&result, &output_path).unwrap();
