@@ -7,7 +7,13 @@ use super::{Status, field, heading, message, note, row};
 use conary_core::db::models::{Repository, RepositoryPackage};
 
 fn command_note(command: &str, db_path: &str) {
-    note(&format!("Run: {}", database_command(command, db_path)));
+    if db_path.chars().any(char::is_control) {
+        note(&format!(
+            "Use '{command}' with --db-path set to the same database path."
+        ));
+    } else {
+        note(&format!("Run: {}", database_command(command, db_path)));
+    }
 }
 
 pub(crate) fn list(repos: &[Repository], all: bool, db_path: &str) {
@@ -61,7 +67,21 @@ pub(crate) fn metadata_guidance(repos: &[Repository], db_path: &str) {
     if enabled.is_empty() {
         note("All configured repositories are disabled.");
         command_note("conary repo list --all", db_path);
-        command_note("conary repo enable <NAME>", db_path);
+        note("Choose a repository to enable:");
+        for repo in repos {
+            if repo.name.chars().any(char::is_control) || db_path.chars().any(char::is_control) {
+                note(&format!(
+                    "Use 'conary repo enable' with repository name {} and the same database path.",
+                    visible(&repo.name)
+                ));
+            } else {
+                let command = database_command("conary repo enable", db_path);
+                note(&format!(
+                    "Run: {command} -- '{}'",
+                    repo.name.replace('\'', "'\"'\"'")
+                ));
+            }
+        }
         return;
     }
     let unpublished: Vec<_> = enabled

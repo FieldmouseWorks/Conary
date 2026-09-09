@@ -84,6 +84,24 @@ fn run(db: &Path, args: &[&str]) -> (String, String) {
     (stdout, stderr)
 }
 
+fn execute_recovery(recovery: &str) {
+    let executable = env!("CARGO_BIN_EXE_conary");
+    let command = recovery.replacen("conary", "\"$CONARY_DISCOVERY_EXE\"", 1);
+    let output = Command::new("sh")
+        .args(["-c", &command])
+        .env("CONARY_DISCOVERY_EXE", executable)
+        .env("NO_COLOR", "1")
+        .env_remove("RUST_LOG")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 fn write_metadata(path: &Path, packages: bool) {
     std::fs::write(
         path.join("metadata.json"),
@@ -139,21 +157,7 @@ fn discovery_journey_distinguishes_missing_disabled_unpublished_and_cached_sourc
         .lines()
         .find_map(|line| line.strip_prefix("note: Run: "))
         .unwrap();
-    let executable = env!("CARGO_BIN_EXE_conary");
-    let command = recovery.replacen("conary", "\"$CONARY_DISCOVERY_EXE\"", 1);
-    let output = Command::new("sh")
-        .args(["-c", &command])
-        .env("CONARY_DISCOVERY_EXE", executable)
-        .env("NO_COLOR", "1")
-        .env_remove("RUST_LOG")
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
+    execute_recovery(recovery);
 
     let (search, stderr) = run(&db, &["search", "needle"]);
     assert!(stderr.is_empty(), "{stderr}");
@@ -193,7 +197,7 @@ fn discovery_journey_distinguishes_missing_disabled_unpublished_and_cached_sourc
         let (stdout, stderr) = run(&db, &args);
         assert!(!stdout.contains("fixture-package"));
         assert!(stderr.contains("All configured repositories are disabled."));
-        assert!(stderr.contains("conary repo enable <NAME> --db-path="));
+        assert!(stderr.contains("conary repo enable --db-path="));
         assert!(!stderr.contains("repo sync"));
     }
     let (stdout, _) = run(&db, &["repo", "list"]);
@@ -202,7 +206,15 @@ fn discovery_journey_distinguishes_missing_disabled_unpublished_and_cached_sourc
     let (stdout, _) = run(&db, &["repo", "list", "--all"]);
     assert!(stdout.contains("[off]"));
     assert!(stdout.contains("Last published:"));
-    run(&db, &["repo", "enable", "fixture"]);
+    let (_, stderr) = run(&db, &["search", "needle"]);
+    let recovery = stderr
+        .lines()
+        .find_map(|line| {
+            line.strip_prefix("note: Run: ")
+                .filter(|command| command.starts_with("conary repo enable"))
+        })
+        .unwrap();
+    execute_recovery(recovery);
     write_metadata(temp.path(), false);
     run(&db, &["repo", "sync", "--force"]);
     let (stdout, stderr) = run(&db, &["query", "repquery"]);
@@ -259,4 +271,31 @@ fn discovery_terminal_frames_match_pipe_facts_with_and_without_color() {
             }
         }
     }
+}
+
+#[test]
+fn disabled_repository_recovery_preserves_option_like_and_quoted_names() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = temp.path().join("fixture.db");
+    conary_core::db::init(&db).unwrap();
+    let conn = conary_core::db::open(&db).unwrap();
+    let name = "--a ' quoted $(exit 19) `exit 20` ; source";
+    let mut repo = Repository::new(name.into(), "https://example.invalid".into());
+    repo.enabled = false;
+    repo.insert(&conn).unwrap();
+    let (_, stderr) = run(&db, &["repo", "list"]);
+    let recovery = stderr
+        .lines()
+        .find_map(|line| {
+            line.strip_prefix("note: Run: ")
+                .filter(|command| command.starts_with("conary repo enable"))
+        })
+        .unwrap();
+    execute_recovery(recovery);
+    assert!(
+        Repository::find_by_name(&conn, name)
+            .unwrap()
+            .unwrap()
+            .enabled
+    );
 }
