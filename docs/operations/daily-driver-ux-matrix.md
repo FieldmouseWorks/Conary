@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-09-09
-revision: 29
-summary: Daily-driver CLI routes, enabled-source discovery, grouped transaction results, scoped recovery, coordinated progress, and typed native runtime refusals
+revision: 30
+summary: Daily-driver CLI routes, repository candidate and installed-variant details, grouped transaction results, scoped recovery, coordinated progress, and typed native runtime refusals
 ---
 
 # Daily-Driver UX Matrix
@@ -36,6 +36,50 @@ packages from enabled repositories. Result-list fields retain version, release,
 architecture (or `Unspecified`), and source identity; absent architecture does
 not imply `noarch`. Empty results explicitly describe the cached metadata
 searched, rather than claiming that a package is unavailable upstream.
+
+`query repquery --info` renders a single cached candidate through the same UI
+owner. Candidate and installed observations remain separate: every same-name
+installed package record retains its trove ID, version, separate CCS release,
+architecture, version scheme, source profile, and install source. Repository
+provenance IDs are shown when recorded. Components, collections, and retained
+configuration state do not count as installed packages. Missing release,
+architecture, or source-profile metadata is `Unspecified`; it does not establish
+identity equivalence or compatibility. Multiple candidate matches retain the
+existing result-list behavior.
+
+The former detail frame omitted the separate release and reported only the
+first name-matched trove as `Status: Installed (<version>)`. The replacement
+makes both observations inspectable, for example:
+
+```text
+Repository package:
+[info]     demo
+  Version: 2.0-1
+  Release: 3
+  Architecture: x86_64
+  Version scheme: rpm
+  Source profile: fedora-44
+  Repository: fedora
+...
+Installed packages with this name:
+[info]     demo
+  Trove ID: 7
+  Version: 2.0-1
+  Release: 2
+  Architecture: aarch64
+  Version scheme: rpm
+  Source profile: fedora-44
+  Install source: repository
+  Installed packages: 1
+```
+
+Detail reads resolve the source, installed records, and requirements before
+printing. Database errors remain errors; package-provided controls are escaped
+in all displayed metadata and requirement text. Empty requirements mean none
+are recorded in cached metadata. `cargo test -p conary --test
+cli_repository_details` proves release and architecture variants, other-version
+and non-package matches, absent metadata, requirement text, four terminal/pipe/
+`NO_COLOR` modes, and unchanged database contents.
 
 Discovery distinguishes no configured repositories, all sources disabled,
 enabled sources without published metadata, and metadata checks due under the
