@@ -180,6 +180,17 @@ impl TempToolsBuilder {
         completed: &[String],
         stage_manager: &mut StageManager,
     ) -> Result<(), TempToolsError> {
+        self.build_cross_packages_with(completed, stage_manager, |package, env| {
+            self.build_cross_package(package, env)
+        })
+    }
+
+    fn build_cross_packages_with(
+        &self,
+        completed: &[String],
+        stage_manager: &mut StageManager,
+        mut build: impl FnMut(&str, &[(String, String)]) -> Result<(), TempToolsError>,
+    ) -> Result<(), TempToolsError> {
         info!(
             "Phase 2a: Cross-compiling temp tools ({} packages)",
             CH6_PACKAGES.len()
@@ -215,58 +226,7 @@ impl TempToolsBuilder {
                 pkg
             );
 
-            let recipe_path =
-                std::path::Path::new("recipes/temp-tools").join(format!("{pkg}.toml"));
-            let recipe =
-                parse_recipe_file(&recipe_path).map_err(|e| TempToolsError::BuildFailed {
-                    package: pkg.to_string(),
-                    reason: format!("Failed to parse recipe: {e}"),
-                })?;
-
-            info!("  Fetching source for {pkg}...");
-            self.runner
-                .fetch_source(pkg, &recipe)
-                .map_err(|e| TempToolsError::BuildFailed {
-                    package: pkg.to_string(),
-                    reason: format!("Source fetch failed: {e}"),
-                })?;
-
-            let config = KitchenConfig {
-                source_cache: self.work_dir.join("sources"),
-                jobs: self.config.jobs as u32,
-                use_isolation: false,
-                extra_env: bootstrap_env.clone(),
-                ..Default::default()
-            };
-            let kitchen = Kitchen::new(config);
-            let mut cook = kitchen
-                .new_cook_with_dest(&recipe, std::path::Path::new("/"))
-                .map_err(|e| TempToolsError::BuildFailed {
-                    package: pkg.to_string(),
-                    reason: format!("Cook setup failed: {e}"),
-                })?;
-
-            info!("  Preparing {pkg}...");
-            cook.prep().map_err(|e| TempToolsError::BuildFailed {
-                package: pkg.to_string(),
-                reason: format!("Prep failed: {e}"),
-            })?;
-            cook.unpack().map_err(|e| TempToolsError::BuildFailed {
-                package: pkg.to_string(),
-                reason: format!("Unpack failed: {e}"),
-            })?;
-            cook.patch().map_err(|e| TempToolsError::BuildFailed {
-                package: pkg.to_string(),
-                reason: format!("Patch failed: {e}"),
-            })?;
-
-            info!("  Building {pkg}...");
-            cook.simmer().map_err(|e| TempToolsError::BuildFailed {
-                package: pkg.to_string(),
-                reason: format!("Build failed: {e}"),
-            })?;
-
-            info!("  [OK] {pkg} built successfully");
+            build(pkg, &bootstrap_env)?;
 
             // Persist per-package completion immediately so a crash during the
             // next package does not lose this one's progress.
@@ -275,6 +235,65 @@ impl TempToolsBuilder {
             }
         }
         info!("Phase 2a complete: all Chapter 6 packages cross-compiled");
+        Ok(())
+    }
+
+    /// Execute one Chapter 6 package; scheduling and checkpoints stay above.
+    fn build_cross_package(
+        &self,
+        pkg: &str,
+        extra_env: &[(String, String)],
+    ) -> Result<(), TempToolsError> {
+        let recipe_path = std::path::Path::new("recipes/temp-tools").join(format!("{pkg}.toml"));
+        let recipe = parse_recipe_file(&recipe_path).map_err(|e| TempToolsError::BuildFailed {
+            package: pkg.to_string(),
+            reason: format!("Failed to parse recipe: {e}"),
+        })?;
+
+        info!("  Fetching source for {pkg}...");
+        self.runner
+            .fetch_source(pkg, &recipe)
+            .map_err(|e| TempToolsError::BuildFailed {
+                package: pkg.to_string(),
+                reason: format!("Source fetch failed: {e}"),
+            })?;
+
+        let config = KitchenConfig {
+            source_cache: self.work_dir.join("sources"),
+            jobs: self.config.jobs as u32,
+            use_isolation: false,
+            extra_env: extra_env.to_vec(),
+            ..Default::default()
+        };
+        let kitchen = Kitchen::new(config);
+        let mut cook = kitchen
+            .new_cook_with_dest(&recipe, std::path::Path::new("/"))
+            .map_err(|e| TempToolsError::BuildFailed {
+                package: pkg.to_string(),
+                reason: format!("Cook setup failed: {e}"),
+            })?;
+
+        info!("  Preparing {pkg}...");
+        cook.prep().map_err(|e| TempToolsError::BuildFailed {
+            package: pkg.to_string(),
+            reason: format!("Prep failed: {e}"),
+        })?;
+        cook.unpack().map_err(|e| TempToolsError::BuildFailed {
+            package: pkg.to_string(),
+            reason: format!("Unpack failed: {e}"),
+        })?;
+        cook.patch().map_err(|e| TempToolsError::BuildFailed {
+            package: pkg.to_string(),
+            reason: format!("Patch failed: {e}"),
+        })?;
+
+        info!("  Building {pkg}...");
+        cook.simmer().map_err(|e| TempToolsError::BuildFailed {
+            package: pkg.to_string(),
+            reason: format!("Build failed: {e}"),
+        })?;
+
+        info!("  [OK] {pkg} built successfully");
         Ok(())
     }
 
@@ -581,12 +600,7 @@ mod tests {
     }
 
     #[test]
-    fn test_cross_packages_placeholder() {
-        if !std::path::Path::new("recipes/cross-tools").exists() {
-            eprintln!("Skipping: recipes/cross-tools not found in cwd");
-            return;
-        }
-
+    fn test_cross_packages_checkpoint_completed_builds() {
         let work = tempfile::tempdir().unwrap();
         let lfs = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(lfs.path().join("tools/bin")).unwrap();
@@ -604,7 +618,66 @@ mod tests {
 
         let mut sm = StageManager::new(work.path()).unwrap();
         let builder = TempToolsBuilder::new(work.path(), lfs.path(), config, cross_tc).unwrap();
-        assert!(builder.build_cross_packages(&[], &mut sm).is_ok());
+        let mut requested = Vec::new();
+        builder
+            .build_cross_packages_with(&[], &mut sm, |package, env| {
+                let persisted = StageManager::new(work.path()).unwrap();
+                assert_eq!(
+                    persisted.completed_packages(BootstrapStage::TempTools),
+                    requested
+                );
+                assert!(
+                    env.iter()
+                        .any(|(key, value)| key == "LFS"
+                            && value == &lfs.path().display().to_string())
+                );
+                assert!(
+                    env.iter()
+                        .any(|(key, value)| key == "LFS_TGT" && value == "x86_64-conary-linux-gnu")
+                );
+                requested.push(package.to_string());
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(requested, CH6_PACKAGES);
+        assert_eq!(
+            StageManager::new(work.path())
+                .unwrap()
+                .completed_packages(BootstrapStage::TempTools),
+            requested
+        );
+
+        // Resume from completed work; a failed build must not be checkpointed
+        // or permit later packages to start.
+        let mut resumed = StageManager::new(work.path()).unwrap();
+        let mut attempted = Vec::new();
+        let completed = vec![CH6_PACKAGES[0].to_string()];
+        resumed.reset_from(BootstrapStage::TempTools).unwrap();
+        resumed
+            .mark_package_complete(BootstrapStage::TempTools, CH6_PACKAGES[0])
+            .unwrap();
+        let error = builder
+            .build_cross_packages_with(&completed, &mut resumed, |package, _| {
+                attempted.push(package.to_string());
+                if package == CH6_PACKAGES[2] {
+                    return Err(TempToolsError::BuildFailed {
+                        package: package.to_string(),
+                        reason: "injected".to_string(),
+                    });
+                }
+                Ok(())
+            })
+            .unwrap_err();
+        assert!(
+            matches!(error, TempToolsError::BuildFailed { package, reason } if package == CH6_PACKAGES[2] && reason == "injected")
+        );
+        assert_eq!(attempted, CH6_PACKAGES[1..3]);
+        assert_eq!(
+            StageManager::new(work.path())
+                .unwrap()
+                .completed_packages(BootstrapStage::TempTools),
+            CH6_PACKAGES[..2]
+        );
     }
 
     #[test]

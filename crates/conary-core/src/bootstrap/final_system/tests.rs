@@ -130,12 +130,7 @@ fn test_new_succeeds_with_usr_bin() {
 }
 
 #[test]
-fn test_build_all_placeholder() {
-    if !std::path::Path::new("recipes/cross-tools").exists() {
-        eprintln!("Skipping: recipes/cross-tools not found in cwd");
-        return;
-    }
-
+fn test_build_all_checkpoints_completed_packages() {
     let work = tempfile::tempdir().unwrap();
     let lfs = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(lfs.path().join("usr/bin")).unwrap();
@@ -144,17 +139,32 @@ fn test_build_all_placeholder() {
 
     let mut sm = StageManager::new(work.path()).unwrap();
     let mut builder = FinalSystemBuilder::new(work.path(), lfs.path(), config).unwrap();
-    assert!(builder.build_all(&[], &mut sm).is_ok());
-    assert_eq!(builder.completed().len(), 83);
+    let mut requested = Vec::new();
+    builder
+        .build_all_with(&[], &mut sm, |current, package| {
+            assert_eq!(current.completed(), requested);
+            assert_eq!(
+                StageManager::new(work.path())
+                    .unwrap()
+                    .completed_packages(BootstrapStage::FinalSystem),
+                requested
+            );
+            requested.push(package.to_string());
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(requested, SYSTEM_BUILD_ORDER);
+    assert_eq!(builder.completed(), requested);
+    assert_eq!(
+        StageManager::new(work.path())
+            .unwrap()
+            .completed_packages(BootstrapStage::FinalSystem),
+        requested
+    );
 }
 
 #[test]
 fn test_build_from_resume() {
-    if !std::path::Path::new("recipes/cross-tools").exists() {
-        eprintln!("Skipping: recipes/cross-tools not found in cwd");
-        return;
-    }
-
     let work = tempfile::tempdir().unwrap();
     let lfs = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(lfs.path().join("usr/bin")).unwrap();
@@ -163,9 +173,22 @@ fn test_build_from_resume() {
 
     let mut sm = StageManager::new(work.path()).unwrap();
     let mut builder = FinalSystemBuilder::new(work.path(), lfs.path(), config).unwrap();
-    assert!(builder.build_from("gcc", &mut sm).is_ok());
-    // gcc is at index 27, so 83 - 27 = 56 remaining
-    assert_eq!(builder.completed().len(), 56);
+    let mut requested = Vec::new();
+    builder
+        .build_from_with("gcc", &mut sm, |_, package| {
+            requested.push(package.to_string());
+            Ok(())
+        })
+        .unwrap();
+    // gcc is the inclusive resume point at index 27.
+    assert_eq!(requested, SYSTEM_BUILD_ORDER[27..]);
+    assert_eq!(builder.completed(), requested);
+    assert_eq!(
+        StageManager::new(work.path())
+            .unwrap()
+            .completed_packages(BootstrapStage::FinalSystem),
+        requested
+    );
 }
 
 #[test]
@@ -262,4 +285,41 @@ fn test_setup_chroot_repairs_missing_shadow_prerequisite_groups() {
     assert!(group.contains("mail:x:34:"));
     assert!(group.contains("users:x:999:"));
     assert!(group.contains("wheel:x:10:"));
+}
+
+#[test]
+fn test_build_all_skips_completed_and_does_not_checkpoint_failed_package() {
+    let work = tempfile::tempdir().unwrap();
+    let lfs = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(lfs.path().join("usr/bin")).unwrap();
+    let mut stages = StageManager::new(work.path()).unwrap();
+    stages
+        .mark_package_complete(BootstrapStage::FinalSystem, "man-pages")
+        .unwrap();
+    let mut builder =
+        FinalSystemBuilder::new(work.path(), lfs.path(), BootstrapConfig::new()).unwrap();
+    let mut attempted = Vec::new();
+    let error = builder
+        .build_all_with(&["man-pages".to_string()], &mut stages, |_, package| {
+            attempted.push(package.to_string());
+            if package == "glibc" {
+                return Err(FinalSystemError::BuildFailed {
+                    package: package.to_string(),
+                    reason: "injected".to_string(),
+                });
+            }
+            Ok(())
+        })
+        .unwrap_err();
+    assert!(
+        matches!(error, FinalSystemError::BuildFailed { package, reason } if package == "glibc" && reason == "injected")
+    );
+    assert_eq!(attempted, ["iana-etc", "glibc"]);
+    assert_eq!(builder.completed(), ["iana-etc"]);
+    assert_eq!(
+        StageManager::new(work.path())
+            .unwrap()
+            .completed_packages(BootstrapStage::FinalSystem),
+        ["man-pages", "iana-etc"]
+    );
 }

@@ -209,6 +209,15 @@ impl FinalSystemBuilder {
         already_completed: &[String],
         stage_manager: &mut StageManager,
     ) -> Result<(), FinalSystemError> {
+        self.build_all_with(already_completed, stage_manager, Self::build_package)
+    }
+
+    fn build_all_with(
+        &mut self,
+        already_completed: &[String],
+        stage_manager: &mut StageManager,
+        mut build: impl FnMut(&Self, &str) -> Result<(), FinalSystemError>,
+    ) -> Result<(), FinalSystemError> {
         info!(
             "Phase 3: Building final system ({} packages)",
             SYSTEM_BUILD_ORDER.len()
@@ -225,7 +234,7 @@ impl FinalSystemBuilder {
                 SYSTEM_BUILD_ORDER.len(),
                 pkg
             );
-            self.build_package(pkg)?;
+            build(self, pkg)?;
             self.completed.push((*pkg).to_string());
             // Persist per-package completion immediately so a crash during the
             // next package does not lose this one's progress.
@@ -279,6 +288,15 @@ impl FinalSystemBuilder {
         from_package: &str,
         stage_manager: &mut StageManager,
     ) -> Result<(), FinalSystemError> {
+        self.build_from_with(from_package, stage_manager, Self::build_package)
+    }
+
+    fn build_from_with(
+        &mut self,
+        from_package: &str,
+        stage_manager: &mut StageManager,
+        mut build: impl FnMut(&Self, &str) -> Result<(), FinalSystemError>,
+    ) -> Result<(), FinalSystemError> {
         let start_idx = SYSTEM_BUILD_ORDER
             .iter()
             .position(|&p| p == from_package)
@@ -297,7 +315,7 @@ impl FinalSystemBuilder {
                 SYSTEM_BUILD_ORDER.len(),
                 pkg
             );
-            self.build_package(pkg)?;
+            build(self, pkg)?;
             self.completed.push((*pkg).to_string());
             // Persist per-package completion immediately so a crash during the
             // next package does not lose this one's progress.
