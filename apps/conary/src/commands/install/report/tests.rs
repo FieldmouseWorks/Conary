@@ -418,7 +418,7 @@ fn install_summary_commands_in_terminal_pipe_and_no_color() {
                 assert_eq!(
                     frame
                         .lines()
-                        .filter(|line| line.contains("Remove") && line.contains("summary-obsolete"))
+                        .filter(|line| line.split_whitespace().next() == Some("summary-obsolete"))
                         .count(),
                     1,
                     "{frame}"

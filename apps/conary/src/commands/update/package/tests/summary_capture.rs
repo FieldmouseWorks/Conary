@@ -163,6 +163,34 @@ async fn update_summary_capture_child() {
             "2.0.0"
         );
     }
+    if matches!(
+        scenario.as_str(),
+        "mixed"
+            | "published"
+            | "pending"
+            | "sequence_apply"
+            | "fallback_download"
+            | "fallback_apply"
+            | "named_apply"
+    ) {
+        let (prepared, saved): (i32, i64) = conn.query_row("SELECT full_downloads, total_bytes_saved FROM delta_stats ORDER BY id DESC LIMIT 1", [], |row| Ok((row.get(0)?, row.get(1)?))).unwrap();
+        let selected = if matches!(
+            scenario.as_str(),
+            "mixed" | "sequence_apply" | "fallback_download" | "fallback_apply"
+        ) {
+            2
+        } else {
+            1
+        };
+        assert_eq!(
+            prepared, selected,
+            "artifact preparation must include targets whose later apply failed"
+        );
+        assert_eq!(
+            saved, 0,
+            "full-artifact preview has already consumed the full package"
+        );
+    }
     if scenario == "named_apply" {
         let file =
             conary_core::db::models::FileEntry::find_by_path(&conn, "/usr/bin/a-summary-update")
