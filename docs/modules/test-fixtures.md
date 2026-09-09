@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-09
-revision: 57
+revision: 58
 summary: Map fixture ownership, including repository discovery journeys, command transaction captures, typed boot-tool interfaces, and cross-source lifecycle proof
 ---
 
@@ -748,6 +748,13 @@ Each fixture family should record:
   does not establish native metadata trust or clean-host initialization support.
 
 ### cli-transaction-summary-captures
+
+Capture subprocesses clear the registered test-hook environment before adding
+their own controls. Concurrent parent tests cannot inject publication failures,
+mount overrides, or other test-only settings into a normal capture scenario.
+`test_hooks::tests::child_controls_are_isolated_and_explicit_overrides_survive`
+checks the complete registry; poisoned-parent capture runs cover install, update,
+and removal/rollback frames. This isolation is compiled only for unit tests.
 
 - **Fixture name:** `cli-transaction-summary-captures`
 - **Owner:** `apps/conary/src/commands/install/report/tests.rs`,
