@@ -203,7 +203,7 @@ pub(super) async fn add_candidate(
             .unwrap();
         let delta = std::fs::read(&path).unwrap();
         let (url, _) = serve_test_file(path);
-        let checksum = conary_core::hash::sha256(if scenario == "cancel_fallback" {
+        let checksum = conary_core::hash::sha256(if scenario == "cancel_advertised_bad_delta" {
             b"bad checksum"
         } else {
             &delta

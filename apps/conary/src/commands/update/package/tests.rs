@@ -15,7 +15,6 @@ use conary_core::db::models::{
     Changeset, ChangesetStatus, InstallSource, PackageDelta, PackageResolution, PrimaryStrategy,
     Repository, ResolutionStrategy, Trove, TroveType,
 };
-use conary_core::filesystem::{CasStore, object_path};
 use conary_core::repository::resolution_policy::ResolutionPolicy;
 use std::io::{Read, Write};
 use std::net::TcpListener;
@@ -451,7 +450,7 @@ async fn static_ccs_update_verifies_signature_before_lifecycle_execution_preflig
 }
 
 #[tokio::test]
-async fn update_delta_candidate_executes_typed_rpm_lifecycle() {
+async fn update_with_advertised_delta_executes_typed_rpm_lifecycle() {
     let (_temp, db_path) = create_test_db();
     seed_test_bootable_runtime(Path::new(&db_path));
     let root = tempfile::tempdir().unwrap();
@@ -555,12 +554,12 @@ async fn update_delta_candidate_executes_typed_rpm_lifecycle() {
         Some("x86_64".to_string()),
     )
     .await
-    .expect("delta-selected typed RPM lifecycle update should execute");
+    .expect("advertised-delta typed RPM lifecycle update should execute");
 
     let conn = crate::commands::open_db(&db_path).unwrap();
     assert!(
         table_count(&conn, "changesets") > before_changesets,
-        "successful delta-selected lifecycle update must commit a changeset"
+        "successful advertised-delta lifecycle update must commit a changeset"
     );
     let installed_versions = Trove::find_by_name(&conn, "vim")
         .unwrap()
@@ -655,18 +654,6 @@ fn partial_update_failure_message_is_not_clean_success() {
     assert_eq!(error.failures[0].package, "broken");
     assert_eq!(error.failures[0].error.to_string(), "resolver failed");
     assert!(!message.contains("All packages are up to date"));
-}
-
-#[test]
-fn delta_result_uses_verified_cas_retrieval() {
-    let temp_dir = tempfile::tempdir().unwrap();
-    let cas = CasStore::new(temp_dir.path()).unwrap();
-    let expected_hash = conary_core::hash::sha256(b"expected-bytes");
-    let corrupted_path = object_path(temp_dir.path(), &expected_hash).unwrap();
-    std::fs::create_dir_all(corrupted_path.parent().unwrap()).unwrap();
-    std::fs::write(&corrupted_path, b"corrupted-bytes").unwrap();
-
-    assert!(read_delta_result_from_cas(&cas, &expected_hash).is_err());
 }
 
 #[test]

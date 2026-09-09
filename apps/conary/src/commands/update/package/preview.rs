@@ -3,40 +3,17 @@
 //! Artifact-backed update previews use the install planner without publishing state.
 
 use super::*;
+use conary_core::db::models::PackageDelta;
 
 pub(super) struct PreparedUpdatePreview {
     pub(super) report: InstallReport,
-    packages: std::collections::HashMap<i64, PreparedFullUpdate>,
+    packages: Vec<PreparedFullUpdate>,
     _temporary: tempfile::TempDir,
 }
 
 impl PreparedUpdatePreview {
-    pub(super) fn replacement_for(
-        &self,
-        trove: &Trove,
-    ) -> Result<&crate::commands::install::InstallReplacement> {
-        let id = trove
-            .id
-            .context("selected update has no installed identity")?;
-        self.packages
-            .get(&id)
-            .map(|package| &package.replacement)
-            .context("selected update has no retained replacement authority")
-    }
-
-    pub(super) fn take_package(&mut self, trove: &Trove) -> Result<PreparedFullUpdate> {
-        self.packages
-            .remove(
-                &trove
-                    .id
-                    .context("selected update has no installed identity")?,
-            )
-            .with_context(|| {
-                format!(
-                    "selected update artifact for {} was not retained",
-                    trove.name
-                )
-            })
+    pub(super) fn take_packages(&mut self) -> Vec<PreparedFullUpdate> {
+        std::mem::take(&mut self.packages)
     }
 }
 
@@ -64,7 +41,8 @@ pub(super) async fn plan_selected_updates(
         crate::commands::install::revalidate_replacement_snapshot(&initial, trove)?;
     }
     drop(initial);
-    let mut packages = std::collections::HashMap::new();
+    let mut packages = Vec::with_capacity(selected.len());
+    let mut identities = std::collections::HashSet::new();
     let mut ordered = selected
         .iter()
         .map(|entry| {
@@ -78,9 +56,9 @@ pub(super) async fn plan_selected_updates(
             Ok((!has_delta, entry))
         })
         .collect::<Result<Vec<_>>>()?;
-    // Apply executes deltas before full downloads, retaining selection order
-    // within each group. A failed delta uses its retained full artifact
-    // immediately, so fallback preserves this same package sequence.
+    // Preserve the established admission priority of advertised delta targets.
+    // This only orders candidates: all are admitted as full artifacts, and apply
+    // consumes this exact vector without consulting or fetching deltas again.
     ordered.sort_by_key(|(full, _)| *full);
     for (_, (trove, candidate)) in ordered {
         let resolution = resolution_options_for_selected_update(
@@ -135,22 +113,17 @@ pub(super) async fn plan_selected_updates(
         let id = trove
             .id
             .context("selected update has no installed identity")?;
-        if packages
-            .insert(
-                id,
-                PreparedFullUpdate {
-                    trove: trove.clone(),
-                    replacement,
-                    repo_pkg: candidate.package.clone(),
-                    repo: candidate.repository.clone(),
-                    pkg_path,
-                    _source: source,
-                },
-            )
-            .is_some()
-        {
+        if !identities.insert(id) {
             anyhow::bail!("update selected installed identity {id} more than once");
         }
+        packages.push(PreparedFullUpdate {
+            trove: trove.clone(),
+            replacement,
+            repo_pkg: candidate.package.clone(),
+            repo: candidate.repository.clone(),
+            pkg_path,
+            _source: source,
+        });
     }
     Ok(PreparedUpdatePreview {
         report,

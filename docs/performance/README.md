@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-09-03
-revision: 18
-summary: Define Remi benchmark methodology and record commit-bound performance evidence, command resource metrics, comparison anchors, and measured optimization results
+last_updated: 2026-09-09
+revision: 19
+summary: Define benchmark methodology and record commit-bound performance evidence, command resource metrics, comparison anchors, and the update artifact acquisition guard
 ---
 
 # Performance evidence
@@ -1037,3 +1037,29 @@ lookup before source transfer. Across the three hot samples it avoids
 totals remained in the same workload shape (514 ms, 565 ms, and 269,813 ms);
 their network-dependent elapsed-time differences are not attributed to the
 cache-hit fix.
+
+
+## Update artifact acquisition guard (#965)
+
+Artifact-backed update planning authenticates full packages before it can prove
+lifecycle, relation, enrollment, and payload effects. Apply reuses those exact
+retained artifacts in the same admitted order. Downloading a delta afterward
+cannot avoid the already-acquired full bytes, so that redundant acquisition and
+reconstruction path is removed.
+
+`cargo test -p conary --features test-hooks --test update_artifact_acquisition -- --nocapture`
+uses a private signed repository and loopback response counters. It crosses an
+absent/present signed-full-archive CAS object with valid/invalid advertised
+deltas. The base delta object is present in both cache conditions; the warm
+condition additionally stores the signed full archive. Both still require one
+full-artifact GET and exactly its response-payload length, with zero delta GETs
+or response-payload bytes. Counters are separate from installed version and
+committed effects. The fixture uses explicit test-only mount fencing and makes
+no real-mount, elapsed-time, or total-wire-bandwidth claim.
+
+The update summary captures additionally preserve cancellation, relation-order,
+preview/apply equivalence, earlier committed failures, and full-artifact
+preparation accounting. Historical delta statistics remain readable; new runs
+record no delta attempt or unearned savings. A future delta-only planning path
+must authenticate the same exact lifecycle/relation/enrollment authority before
+it can claim avoided full-artifact acquisition.
