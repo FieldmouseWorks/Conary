@@ -168,10 +168,10 @@ fn autoremove_preflight_reads_package_identity_under_the_mutation_lock() {
     let (result_tx, result_rx) = std::sync::mpsc::sync_channel(0);
     let waiter_db_path = db_path_string.clone();
     let waiter = std::thread::spawn(move || {
-        let conn = conary_core::db::open(&waiter_db_path).unwrap();
+        let mut conn = conary_core::db::open(&waiter_db_path).unwrap();
         attempt_tx.send(()).unwrap();
         let result = preflight_autoremove_round(
-            &conn,
+            &mut conn,
             &[trove],
             &waiter_db_path,
             RemoveLifecycleOptions::new(SandboxMode::Always),
