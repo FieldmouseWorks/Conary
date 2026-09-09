@@ -15,7 +15,6 @@ use conary_core::db::models::{
     Changeset, ChangesetStatus, InstallSource, PackageDelta, PackageResolution, PrimaryStrategy,
     Repository, ResolutionStrategy, Trove, TroveType,
 };
-use conary_core::filesystem::{CasStore, object_path};
 use conary_core::repository::resolution_policy::ResolutionPolicy;
 use std::io::{Read, Write};
 use std::net::TcpListener;
@@ -655,18 +654,6 @@ fn partial_update_failure_message_is_not_clean_success() {
     assert_eq!(error.failures[0].package, "broken");
     assert_eq!(error.failures[0].error.to_string(), "resolver failed");
     assert!(!message.contains("All packages are up to date"));
-}
-
-#[test]
-fn delta_result_uses_verified_cas_retrieval() {
-    let temp_dir = tempfile::tempdir().unwrap();
-    let cas = CasStore::new(temp_dir.path()).unwrap();
-    let expected_hash = conary_core::hash::sha256(b"expected-bytes");
-    let corrupted_path = object_path(temp_dir.path(), &expected_hash).unwrap();
-    std::fs::create_dir_all(corrupted_path.parent().unwrap()).unwrap();
-    std::fs::write(&corrupted_path, b"corrupted-bytes").unwrap();
-
-    assert!(read_delta_result_from_cas(&cas, &expected_hash).is_err());
 }
 
 #[test]

@@ -570,7 +570,7 @@ fn update_summaries_in_terminal_pipe_and_no_color() {
             if scenario.starts_with("fallback_") {
                 assert!(applied.contains("Removed (1):"), "{frame}");
                 assert!(!applied.contains("Installed (1):"), "{frame}");
-                assert!(frame.contains("Delta failures: 1"), "{frame}");
+                assert!(!frame.contains("Delta failures:"), "{frame}");
             }
             if scenario == "sequence_apply" {
                 for field in [
