@@ -79,6 +79,8 @@ insensitive, and valid parameters are accepted through the media-type parser.
 Missing, malformed, duplicate, or mismatched Content-Type fields produce bounded
 protocol errors. Empty cancellation responses do not require a JSON media type.
 The interpretation follows [RFC 9110, section 8.3](https://www.rfc-editor.org/rfc/rfc9110.html#section-8.3).
+`apps/conaryd/src/daemon/client/response.rs` owns the shared header parser,
+media-type validation, and header size and wall-clock deadline limits.
 
 The route list below is checked by `scripts/check-doc-truth.sh` against
 `apps/conaryd/src/daemon/routes/{system,transactions,query,events}.rs`.
