@@ -8,6 +8,12 @@ use std::time::{Duration, Instant};
 fn server(
     responses: Vec<String>,
 ) -> (tempfile::TempDir, DaemonClient, std::thread::JoinHandle<()>) {
+    server_bytes(responses.into_iter().map(String::into_bytes).collect())
+}
+
+fn server_bytes(
+    responses: Vec<Vec<u8>>,
+) -> (tempfile::TempDir, DaemonClient, std::thread::JoinHandle<()>) {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("daemon.sock");
     let listener = UnixListener::bind(&path).unwrap();
@@ -41,7 +47,7 @@ fn server(
                 }
             }
             // An early media-type refusal may close before consuming the body.
-            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.write_all(&response);
         }
     });
     (root, client, task)
@@ -163,4 +169,27 @@ fn slow_sse_header_trickle_cannot_extend_the_header_deadline() {
         elapsed < Duration::from_millis(400),
         "header deadline extended to {elapsed:?}"
     );
+}
+
+#[test]
+fn response_type_refusal_precedes_invalid_body_utf8() {
+    for (status, fields) in [
+        (200, ""),
+        (200, "Content-Type: text/plain\r\n"),
+        (200, "Content-Type: invalid type\r\n"),
+        (
+            200,
+            "Content-Type: application/json\r\nContent-Type: application/json\r\n",
+        ),
+        (500, "Content-Type: application/json\r\n"),
+    ] {
+        let mut raw =
+            format!("HTTP/1.1 {status} Fixture\r\n{fields}Content-Length: 2\r\n\r\n").into_bytes();
+        raw.extend_from_slice(&[0xff, 0xfe]);
+        let (_root, client, task) = server_bytes(vec![raw]);
+        let error = client.get_transaction("job-1").unwrap_err().to_string();
+        task.join().unwrap();
+        assert!(error.contains("Content-Type"), "{status} {fields}: {error}");
+        assert!(error.len() < 256);
+    }
 }

@@ -43,6 +43,16 @@ pub(crate) enum ExpectedMediaType {
 }
 
 impl ExpectedMediaType {
+    /// A 204 has no representation body; every other ordinary response is
+    /// decoded under the daemon's status-dependent JSON contract.
+    pub(crate) const fn for_status(status: u16) -> Option<Self> {
+        match status {
+            204 => None,
+            200..300 => Some(Self::Json),
+            _ => Some(Self::ProblemJson),
+        }
+    }
+
     /// Exact essence string expected for this response class.
     pub(crate) const fn essence(self) -> &'static str {
         match self {

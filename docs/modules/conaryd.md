@@ -71,7 +71,7 @@ generation is the execution result.
 
 ## Route Reference
 
-The Unix-socket client checks response media types before decoding: ordinary
+The Unix-socket client checks response media types before consuming the body: ordinary
 JSON results require `application/json`, structured daemon errors require
 `application/problem+json`, and event streams require `text/event-stream`
 before any event callback. Header names and media-type names are case

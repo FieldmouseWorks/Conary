@@ -108,11 +108,9 @@ pub struct UpdateOptions {
     pub apply_intent: bool,
 }
 
-/// HTTP response from daemon
+/// HTTP response whose media type was validated before body consumption.
 struct HttpResponse {
     status_code: u16,
-    /// Every `Content-Type` header value, in wire order.
-    content_type: Vec<String>,
     body: String,
 }
 
@@ -414,24 +412,19 @@ impl DaemonClient {
         let mut reader = BufReader::new(stream);
         let (status_code, content_type) = response::read_network_head(&mut reader, self.timeout)
             .map_err(|diagnostic| conary_core::Error::IoError(diagnostic.to_string()))?;
-        reader.get_ref().set_read_timeout(Some(self.timeout))?;
         let mut body = String::new();
-        reader.read_to_string(&mut body)?;
-        Ok(HttpResponse {
-            status_code,
-            content_type,
-            body,
-        })
+        if let Some(expected) = response::ExpectedMediaType::for_status(status_code) {
+            response::verify_content_type(&content_type, expected)
+                .map_err(conary_core::Error::IoError)?;
+            reader.get_ref().set_read_timeout(Some(self.timeout))?;
+            reader.read_to_string(&mut body)?;
+        }
+        Ok(HttpResponse { status_code, body })
     }
 
     /// Parse successful response body
     fn parse_response<T: serde::de::DeserializeOwned>(&self, response: HttpResponse) -> Result<T> {
         if response.status_code >= 200 && response.status_code < 300 {
-            response::verify_content_type(
-                &response.content_type,
-                response::ExpectedMediaType::Json,
-            )
-            .map_err(conary_core::Error::IoError)?;
             serde_json::from_str(&response.body).map_err(|e| {
                 conary_core::Error::IoError(format!("Failed to parse response: {}", e))
             })
@@ -442,13 +435,6 @@ impl DaemonClient {
 
     /// Parse error response
     fn parse_error<T>(&self, response: HttpResponse) -> Result<T> {
-        // Daemon errors are RFC 7807 problem+json; verify before deserializing.
-        response::verify_content_type(
-            &response.content_type,
-            response::ExpectedMediaType::ProblemJson,
-        )
-        .map_err(conary_core::Error::IoError)?;
-
         if let Ok(error) = serde_json::from_str::<DaemonError>(&response.body) {
             Err(conary_core::Error::IoError(format!(
                 "Daemon error ({}): {}",
@@ -499,10 +485,9 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    fn response(status_code: u16, content_type: &[&str], body: &str) -> HttpResponse {
+    fn response(status_code: u16, body: &str) -> HttpResponse {
         HttpResponse {
             status_code,
-            content_type: content_type.iter().map(|value| value.to_string()).collect(),
             body: body.to_string(),
         }
     }
@@ -523,12 +508,11 @@ mod tests {
     }
 
     #[test]
-    fn parse_response_accepts_json_with_parameters_and_case() {
+    fn parse_response_decodes_validated_json() {
         let client = DaemonClient::new();
         let parsed: CreateTransactionResponse = client
             .parse_response(response(
                 200,
-                &["Application/JSON; charset=\"UTF-8\""],
                 r#"{"job_id":"job-1","status":"queued","queue_position":0,"location":"/v1/transactions/job-1"}"#,
             ))
             .unwrap();
@@ -536,57 +520,15 @@ mod tests {
     }
 
     #[test]
-    fn parse_response_rejects_missing_malformed_duplicate_and_mismatched_types() {
-        let client = DaemonClient::new();
-        let cases: [(&[&str], &str); 4] = [
-            (&[], "daemon response is missing a Content-Type header"),
-            (
-                &["not a media type"],
-                "daemon response has a malformed Content-Type header",
-            ),
-            (
-                &["application/json", "application/json"],
-                "daemon response has duplicate Content-Type headers",
-            ),
-            (
-                &["text/plain"],
-                "daemon response Content-Type is not application/json",
-            ),
-        ];
-
-        for (content_type, expected) in cases {
-            let error = client
-                .parse_response::<CreateTransactionResponse>(response(200, content_type, "{}"))
-                .unwrap_err();
-            assert!(error.to_string().contains(expected), "{error}");
-        }
-    }
-
-    #[test]
-    fn parse_error_accepts_problem_json() {
+    fn parse_error_decodes_validated_problem_json() {
         let client = DaemonClient::new();
         let error = client
             .parse_error::<CreateTransactionResponse>(response(
                 400,
-                &["application/problem+json"],
                 r#"{"type":"urn:conary:error:bad_request","title":"Bad Request","status":400,"detail":"bad spec"}"#,
             ))
             .unwrap_err();
         assert!(error.to_string().contains("Daemon error (400): bad spec"));
-    }
-
-    #[test]
-    fn parse_error_rejects_non_problem_json() {
-        let client = DaemonClient::new();
-        let error = client
-            .parse_error::<CreateTransactionResponse>(response(500, &["text/plain"], "boom"))
-            .unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("daemon response Content-Type is not application/problem+json"),
-            "{error}"
-        );
     }
 
     #[test]
