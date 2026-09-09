@@ -214,6 +214,21 @@ fn test_container_config_pristine_for_bootstrap() {
         .expect("bootstrap config should mount a private /tmp");
     assert_ne!(tmp_mount.source, PathBuf::from("/tmp"));
     assert_eq!(config.owned_temp_dirs.len(), 1);
+    let outer = config.owned_temp_dirs[0].path();
+    assert_ne!(tmp_mount.source, outer);
+    assert_eq!(tmp_mount.source.parent(), Some(outer));
+    assert_eq!(
+        fs::metadata(outer).unwrap().permissions().mode() & 0o7777,
+        0o700
+    );
+    assert_eq!(
+        fs::metadata(&tmp_mount.source)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o7777,
+        0o1777
+    );
 }
 
 #[test]
@@ -609,6 +624,11 @@ fn test_set_rlimit_syscall_rejects_invalid_resource() {
 fn test_sandbox_cannot_restore_mount_authority() {
     const CHILD_MARKER: &str = "CONARY_TEST_SEALED_SANDBOX";
     if std::env::var_os(CHILD_MARKER).is_some() {
+        assert!(fs::read_dir("/").is_ok(), "namespace root must be readable");
+        assert_eq!(
+            fs::metadata("/dev").unwrap().permissions().mode() & 0o7777,
+            0o755
+        );
         // The ABI-v3 capability header is two 32-bit words; pid 0 means self.
         let header = [0x2008_0522_u32, 0];
         let mut data = [[u32::MAX; 3]; 2];
