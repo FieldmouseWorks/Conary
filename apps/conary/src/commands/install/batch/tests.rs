@@ -18,6 +18,8 @@ use std::collections::BTreeMap;
 // source module of the same name instead of the test file.
 #[path = "tests/mutation_lock.rs"]
 mod mutation_lock;
+#[path = "tests/preview.rs"]
+mod preview;
 #[path = "tests/witness_universe.rs"]
 mod witness_universe;
 
