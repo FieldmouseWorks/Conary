@@ -193,10 +193,11 @@ impl RepositoryPackage {
             .replace('_', "\\_");
         let search_pattern = format!("%{escaped}%");
         let sql = format!(
-            "SELECT {} FROM resolved_repository_packages \
-             WHERE name LIKE ?1 ESCAPE '\\' OR description LIKE ?1 ESCAPE '\\' \
-             ORDER BY name, version",
-            Self::COLUMNS
+            "SELECT {} FROM resolved_repository_packages rp \
+             JOIN repositories r ON rp.repository_id = r.id \
+             WHERE r.enabled = 1 AND (rp.name LIKE ?1 ESCAPE '\\' OR rp.description LIKE ?1 ESCAPE '\\') \
+             ORDER BY rp.name, rp.version",
+            Self::COLUMNS_PREFIXED
         );
         let mut stmt = conn.prepare(&sql)?;
         let packages = stmt

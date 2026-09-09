@@ -19,38 +19,13 @@ pub fn cmd_repquery(pattern: Option<&str>, db_path: &str, info: bool) -> Result<
         conary_core::db::models::RepositoryPackage::list_all(&conn)?
     };
 
-    if packages.is_empty() {
-        if let Some(p) = pattern {
-            println!("No packages matching '{}' found in repositories.", p);
-        } else {
-            println!("No packages in repositories. Run 'conary repo-sync' first.");
-        }
-        return Ok(());
-    }
-
-    // If info mode and single result, show detailed info
+    let repos = conary_core::db::models::Repository::list_all(&conn)?;
     if info && packages.len() == 1 {
-        return show_repo_package_info(&conn, &packages[0]);
+        show_repo_package_info(&conn, &packages[0])?;
+        crate::ui::repository::metadata_guidance(&repos, db_path);
+    } else {
+        crate::ui::repository::packages(&packages, &repos, pattern, db_path)?;
     }
-
-    println!(
-        "Available packages{}:",
-        pattern
-            .map(|p| format!(" matching '{}'", p))
-            .unwrap_or_default()
-    );
-    for pkg in &packages {
-        print!("  {} {}", pkg.name, pkg.version);
-        if let Some(arch) = &pkg.architecture {
-            print!(" [{}]", arch);
-        }
-        // Show which repo it's from
-        if let Ok(repo_name) = pkg.get_repository_name(&conn) {
-            print!(" @{}", repo_name);
-        }
-        println!();
-    }
-    println!("\nTotal: {} package(s) available", packages.len());
 
     Ok(())
 }

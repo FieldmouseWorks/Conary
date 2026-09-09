@@ -47,7 +47,7 @@ impl<'a> PackageChange<'a> {
     }
 }
 
-fn visible(value: &str) -> String {
+pub(super) fn visible(value: &str) -> String {
     value
         .chars()
         .flat_map(|character| {

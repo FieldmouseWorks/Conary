@@ -3,6 +3,7 @@
 
 pub(crate) mod diagnostics;
 pub(crate) mod progress;
+pub(crate) mod repository;
 pub(crate) mod transaction_summary;
 pub(crate) mod update_summary;
 

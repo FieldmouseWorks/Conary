@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-09
-revision: 54
+revision: 55
 summary: Map fixture ownership, including command transaction captures, typed boot-tool interfaces, public and candidate profiles, and cross-source lifecycle proof
 ---
 
@@ -727,6 +727,21 @@ Each fixture family should record:
   `conary-remi-deploy publish-test-artifact` operation after authenticated SSH
   staging. Update every active manifest to one version before accepting the
   gate.
+
+### cli-repository-discovery
+
+- **Owner:** `apps/conary/src/ui/repository.rs` and repository query commands.
+- **Purpose:** Prove enabled-source discovery, explicit cached-result scope,
+  missing/disabled/unpublished/stale/empty source guidance, exact package
+  fields, and copyable database-scoped recovery.
+- **Fixture sources:** disposable local JSON catalog and isolated database in
+  `apps/conary/tests/cli_repository_discovery.rs`.
+- **Fast proof:** `cargo test -p conary --test cli_repository_discovery`;
+  `cargo test -p conary-core --lib package_search_matches_only_enabled`.
+- **Medium proof:** `cargo test -p conary` and core repository model tests.
+- **Regeneration:** in-test builders; PTY frames use util-linux `script`.
+- **Safety notes:** no live database or remote repository access. This fixture
+  does not establish native metadata trust or clean-host initialization support.
 
 ### cli-transaction-summary-captures
 
