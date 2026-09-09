@@ -629,16 +629,6 @@ fn test_sandbox_cannot_restore_mount_authority() {
             fs::metadata("/dev").unwrap().permissions().mode() & 0o7777,
             0o755
         );
-        let mut parent_signal = 0;
-        assert_eq!(
-            unsafe { libc::prctl(libc::PR_GET_PDEATHSIG, &mut parent_signal) },
-            0
-        );
-        assert_eq!(
-            parent_signal,
-            libc::SIGKILL,
-            "monitor death must kill namespace init"
-        );
         // The ABI-v3 capability header is two 32-bit words; pid 0 means self.
         let header = [0x2008_0522_u32, 0];
         let mut data = [[u32::MAX; 3]; 2];
@@ -849,4 +839,22 @@ fn test_private_sandbox_directories_under_each_umask() {
             String::from_utf8_lossy(&output.stderr)
         );
     }
+}
+
+#[test]
+fn test_namespace_init_keeps_monitor_death_signal_after_exec() {
+    if !Uid::effective().is_root() {
+        return;
+    }
+    // Execute the probe directly: libtest runs cases on a new thread, whose
+    // parent-death signal is cleared by clone independently of credential setup.
+    let probe = "import ctypes, signal; value = ctypes.c_int(); libc = ctypes.CDLL(None); assert libc.prctl(2, ctypes.byref(value), 0, 0, 0) == 0; assert value.value == signal.SIGKILL, value.value";
+    let config = ContainerConfig {
+        memory_limit: 0,
+        ..ContainerConfig::default()
+    };
+    let (code, stdout, stderr) = Sandbox::new(config)
+        .execute_command("/usr/bin/python3", &["-c".into(), probe.into()], &[])
+        .unwrap();
+    assert_eq!(code, 0, "stdout={stdout} stderr={stderr}");
 }
