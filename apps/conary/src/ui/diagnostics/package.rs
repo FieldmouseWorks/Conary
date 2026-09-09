@@ -31,11 +31,11 @@ pub(super) fn from_error(error: &anyhow::Error) -> Option<Diagnostic> {
             }
         }
     }
-    if let Some(committed) = report.committed_changesets {
-        if !committed.is_empty() {
-            diagnostic = diagnostic.fact("Committed changesets", committed.iter().map(ToString::to_string).collect::<Vec<_>>().join(", "))
+    if let Some(committed) = report.committed_changesets
+        && !committed.is_empty()
+    {
+        diagnostic = diagnostic.fact("Committed changesets", committed.iter().map(ToString::to_string).collect::<Vec<_>>().join(", "))
                 .note("Earlier committed changes remain applied. Inspect package state and history before retrying.");
-        }
     }
     Some(diagnostic)
 }
