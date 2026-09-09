@@ -200,8 +200,26 @@ async fn cmd_install_with_intent(
         effective_source_profile(repository_provenance.as_ref(), requested_source_profile);
     let semantics = InstallSemantics::native_package(format);
 
-    // Promote the pre-install connection to mutable for the main install transaction
-    let mut conn = conn;
+    // Native dependencies apply before the root. Standalone dry runs use the
+    // same disposable state across both stages, after root artifact acquisition.
+    let projection = if dry_run {
+        if report.projection.is_none() {
+            report.projection = Some(std::sync::Arc::new(super::preview::PreviewDatabase::new(
+                &conn, db_path,
+            )?));
+        }
+        report.projection.clone()
+    } else {
+        None
+    };
+    let db_path = projection
+        .as_ref()
+        .map_or(db_path, |projection| projection.path());
+    let mut conn = if projection.is_some() {
+        open_db(db_path)?
+    } else {
+        conn
+    };
 
     // --- Phase 5: Dependency analysis ---
     let dep_ctx = DepAnalysisContext {

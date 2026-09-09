@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-09
-revision: 20
+revision: 21
 summary: Daily-driver CLI routes, grouped install/update/removal/rollback results, planner-backed previews, scoped recovery, coordinated progress, typed diagnostics, and truthful collection outcomes
 ---
 
@@ -255,10 +255,14 @@ boundaries through `apps/conary/src/commands/install/preview/effects.rs`,
 including typed repository enrollment transitions and last-owner dispositions.
 A removed repository and its cached candidates disappear before later update
 selection; retained and shared ownership follow the same enrollment authority
-as apply.
+as apply. Debian payload completion, declared successful event state, and
+trigger-state transitions use the native lifecycle state owner, retaining
+config-files residual authority after removal and clearing it after disappearance.
+Standalone native install previews also share this state between their
+dependency stage and root planning.
 
 Previously, native/CCS install printed independent `Installed package` fields,
-batches printed a separate success list, and update ended with transfer counters.
+batches printed a separate success list, and update ended with artifact preparation counters.
 A dry run could print its completion line before relation removals, while CCS
 dependency selections were absent from that frame. Planner-backed dependency and
 relation rows now precede the closing dry-run note. Declining the native
@@ -416,3 +420,9 @@ Do not mark an unsupported route as implemented in docs unless the focused test
 target above or the referenced integration suite proves it. Keep active docs
 clear that native package managers remain authoritative for adopted packages
 until the user chooses explicit takeover.
+
+Update artifact results count all selected full artifacts admitted for preview,
+including targets whose later apply fails. They do not claim delta bandwidth
+savings after those full artifacts were acquired. Persisted delta success rate
+uses successful and failed delta attempts; full-artifact preparation is a
+separate count. Committed package rows remain the applied-result authority.

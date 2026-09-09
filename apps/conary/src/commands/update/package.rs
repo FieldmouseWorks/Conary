@@ -480,6 +480,8 @@ pub(super) async fn update_packages(
             packages: updates_available.len(),
         });
     }
+    let prepared_full_artifacts = i32::try_from(updates_available.len())
+        .context("too many selected update artifacts for statistics")?;
     let objects_dir = objects_dir(db_path);
     let temp_dir = Path::new(db_path)
         .parent()
@@ -513,9 +515,7 @@ pub(super) async fn update_packages(
         }
     }
 
-    let mut total_bytes_saved = 0i64;
     let mut deltas_applied = 0i32;
-    let mut full_downloads = 0i32;
     let mut delta_failures = 0i32;
     let mut required_failures: Vec<UpdatePackageFailure> = Vec::new();
 
@@ -574,7 +574,6 @@ pub(super) async fn update_packages(
                     ) {
                         Ok(new_hash) => {
                             crate::ui::row(crate::ui::Status::Ok, &["Delta applied to CAS"]);
-                            let delta_saved = (repo_pkg.size - delta_info.delta_size).max(0);
                             // Delta reconstructed the new package in CAS. Retrieve
                             // it and feed through the normal install pipeline so all
                             // DB metadata (files, deps, provides, history) and the
@@ -638,7 +637,6 @@ pub(super) async fn update_packages(
                                 // Only count success after the full install pipeline
                                 // completes -- not just after apply_delta().
                                 deltas_applied += 1;
-                                total_bytes_saved += delta_saved;
                             } else {
                                 // Use the admitted full artifact in this same update slot
                                 delta_failures += 1;
@@ -705,7 +703,6 @@ pub(super) async fn update_packages(
                     continue;
                 }
 
-                full_downloads += 1;
                 progress.complete_package(&trove.name);
                 let _ = std::fs::remove_file(pkg_path);
                 progress.clear();
@@ -762,7 +759,6 @@ pub(super) async fn update_packages(
                     continue;
                 }
 
-                full_downloads += 1;
                 progress.complete_package(&trove.name);
                 let _ = std::fs::remove_file(&pkg_path);
             }
@@ -772,9 +768,10 @@ pub(super) async fn update_packages(
 
         conary_core::db::transaction(&mut conn, |tx| {
             let mut stats = DeltaStats::new(changeset_id);
-            stats.total_bytes_saved = total_bytes_saved;
+            // Preview already admitted every full artifact. Delta reconstruction
+            // cannot claim bandwidth savings for bytes already acquired.
             stats.deltas_applied = deltas_applied;
-            stats.full_downloads = full_downloads;
+            stats.full_downloads = prepared_full_artifacts;
             stats.delta_failures = delta_failures;
             stats.insert(tx)?;
 
@@ -782,7 +779,7 @@ pub(super) async fn update_packages(
                 .ok_or_else(|| {
                 conary_core::Error::NotFound("Changeset not found".to_string())
             })?;
-            if deltas_applied > 0 || full_downloads > 0 {
+            if !report.commits.is_empty() {
                 changeset.update_status(tx, conary_core::db::models::ChangesetStatus::Applied)?;
             } else if !required_failures.is_empty() {
                 changeset
@@ -794,9 +791,9 @@ pub(super) async fn update_packages(
             Ok(())
         })?;
 
-        crate::ui::heading("Update transfer results:");
-        crate::ui::println!("Delta updates: {}", deltas_applied);
-        crate::ui::println!("Full downloads: {}", full_downloads);
+        crate::ui::heading("Update artifact results:");
+        crate::ui::println!("Deltas applied: {}", deltas_applied);
+        crate::ui::println!("Full artifacts prepared: {}", prepared_full_artifacts);
         crate::ui::println!("Delta failures: {}", delta_failures);
         if let Some(message) = update_required_failure_message(&required_failures, total_requested)
         {
@@ -810,10 +807,6 @@ pub(super) async fn update_packages(
                 );
             }
             return Err(anyhow::anyhow!(message));
-        }
-        if total_bytes_saved > 0 {
-            let saved_mb = total_bytes_saved as f64 / 1_048_576.0;
-            crate::ui::println!("Bandwidth saved: {:.2} MB", saved_mb);
         }
 
         let packages = report.applied_targets(&targets);

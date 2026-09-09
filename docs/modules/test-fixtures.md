@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-09
-revision: 51
+revision: 52
 summary: Map fixture ownership, including command transaction captures, typed boot-tool interfaces, public and candidate profiles, and cross-source lifecycle proof
 ---
 
@@ -755,6 +755,10 @@ Each fixture family should record:
   `apps/conary/src/commands/install/batch/tests/preview.rs` covers repository
   enrollment replacement, dropped declarations, shared owners, and both
   last-owner removal dispositions without changing the installed database.
+  `apps/conary/src/commands/install/batch/tests/preview_native.rs` preserves
+  Debian config-files residual state after removal and clears it for disappearance.
+  Native dependency/root captures prevent duplicate relation rows; update
+  captures count admitted artifacts even when a later apply fails.
   Paired named-owner preview/apply captures keep accounts absent during preview,
   create them through a typed RPM pre-payload event during apply, and verify
   persisted payload ownership.

@@ -108,6 +108,14 @@ impl PreviewDatabase {
                 &conn, &inputs, &projected,
             )?;
         let finalization_troves = super::batch::finalization_trove_ids(packages)?;
+        let removing_deb_identities = finalization_troves
+            .iter()
+            .map(|id| {
+                id.map(|id| super::native_events::deb_identity_for_trove(&conn, id))
+                    .transpose()
+                    .map(Option::flatten)
+            })
+            .collect::<Result<Vec<_>>>()?;
         let relation_removals = packages
             .iter()
             .flat_map(|package| &package.relation_removals)
@@ -145,6 +153,24 @@ impl PreviewDatabase {
                 NativeTransactionStep::ApplyPayload { change_index } => {
                     if let Some(package) = packages.get(change_index) {
                         let id = effects::insert_package(&tx, changeset_id, package)?;
+                        if let Some(bundle) = package
+                            .native_lifecycle_state
+                            .bundle_to_persist
+                            .as_ref()
+                            .filter(|bundle| {
+                                bundle.source_format
+                                    == conary_core::ccs::native_lifecycle::SourceFormat::Deb
+                            })
+                        {
+                            native.mark_install_payload_applied_for(
+                                &tx,
+                                &conary_core::ccs::native_transaction::NativePackageIdentity::new(
+                                    &package.name,
+                                    &package.version,
+                                    bundle.source_arch.as_deref(),
+                                ),
+                            )?;
+                        }
                         projected.packages.insert(
                             id,
                             package
@@ -160,15 +186,34 @@ impl PreviewDatabase {
                         if relation_removals.contains(id) {
                             enrollment::apply_removal(&tx, *id)?;
                         }
+                        if let Some(Some(identity)) = removing_deb_identities.get(change_index) {
+                            native.mark_remove_payload_started_for(&tx, identity)?;
+                        }
                         Trove::delete(&tx, *id)?;
+                        if let Some(Some(identity)) = removing_deb_identities.get(change_index) {
+                            native.mark_remove_payload_completed_for(
+                                &tx,
+                                identity,
+                                change_index,
+                            )?;
+                        }
                         projected.packages.remove(id);
                     }
                 }
-                NativeTransactionStep::RunEvent { .. }
-                | NativeTransactionStep::PersistDebTriggerActivations { .. }
-                | NativeTransactionStep::PurgeConfigFiles { .. } => {}
+                NativeTransactionStep::RunEvent { event_index } => {
+                    native.project_graph_event_success(&tx, event_index)?;
+                }
+                NativeTransactionStep::PersistDebTriggerActivations {
+                    transaction_index,
+                    boundary,
+                    ..
+                } => {
+                    native.persist_trigger_activations_for(&tx, transaction_index, boundary)?;
+                }
+                NativeTransactionStep::PurgeConfigFiles { .. } => {}
             }
         }
+        native.finalize_successful_debian_installs(&tx)?;
         tx.commit()?;
         *declared_paths = projected;
         Ok(())
