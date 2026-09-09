@@ -142,18 +142,18 @@ impl Sandbox {
             .filter(|(enabled, _)| *enabled)
             .fold(CloneFlags::empty(), |acc, (_, flag)| acc | *flag);
         let flags_with_user = sandbox_namespace_flags(flags);
-        let mut user_namespace_enabled = false;
-
-        if !flags_with_user.is_empty() {
-            clear_privileged_supplementary_groups()?;
-            unshare(flags_with_user).map_err(|error| {
-                sandbox_error(format!(
-                    "Unshare with mandatory user identity failed: {error}"
-                ))
-            })?;
-            user_namespace_enabled = true;
-            signal_parent_user_namespace_ready(userns_sync.as_ref())?;
+        if !flags.contains(CloneFlags::CLONE_NEWNS) {
+            return Err(sandbox_error(
+                "Isolated execution requires a mount namespace",
+            ));
         }
+        clear_privileged_supplementary_groups()?;
+        unshare(flags_with_user).map_err(|error| {
+            sandbox_error(format!(
+                "Unshare with mandatory user identity failed: {error}"
+            ))
+        })?;
+        signal_parent_user_namespace_ready(userns_sync.as_ref())?;
 
         if self.config.isolate_pid {
             match fork_process()
@@ -204,16 +204,12 @@ impl Sandbox {
             }
         }
 
-        if self.config.isolate_mount {
-            self.setup_mount_namespace(root, user_namespace_enabled, build_mounts)?;
-        }
+        self.setup_mount_namespace(root, build_mounts)?;
 
         // Assemble mounts while the setup process can access its private root.
         // Enter the mapped identity before enforcing and executing the payload.
-        if user_namespace_enabled {
-            enter_mapped_namespace_root()?;
-            seal_namespace_credentials()?;
-        }
+        enter_mapped_namespace_root()?;
+        seal_namespace_credentials()?;
 
         self.apply_resource_limits()?;
 
@@ -273,12 +269,7 @@ impl Sandbox {
         ))
     }
 
-    fn setup_mount_namespace(
-        &self,
-        root: &Path,
-        user_namespace_enabled: bool,
-        build_mounts: &PreparedBuildMounts,
-    ) -> Result<()> {
+    fn setup_mount_namespace(&self, root: &Path, build_mounts: &PreparedBuildMounts) -> Result<()> {
         mount::<str, str, str, str>(None, "/", None, MsFlags::MS_PRIVATE | MsFlags::MS_REC, None)
             .map_err(|e| sandbox_error(format!("mount --make-rprivate failed: {e}")))?;
 
@@ -347,32 +338,7 @@ impl Sandbox {
             }
         }
 
-        if user_namespace_enabled {
-            self.chroot_into(root)?;
-            return Ok(());
-        }
-
-        if let Err(error) = self.try_pivot_root(root) {
-            if self.is_enforce_mode() {
-                return Err(sandbox_error(format!(
-                    "pivot_root failed ({error}) and chroot fallback is not allowed in Enforce mode"
-                )));
-            }
-            child_diag(&[
-                b"pivot_root failed, falling back to chroot. ",
-                b"This is less secure -- chroot can be escaped by a privileged process.",
-            ]);
-            self.chroot_into(root)?;
-        }
-
-        Ok(())
-    }
-
-    fn is_enforce_mode(&self) -> bool {
-        self.config
-            .capability_policy
-            .as_ref()
-            .is_some_and(|policy| policy.mode == EnforcementMode::Enforce)
+        self.chroot_into(root)
     }
 
     pub(in crate::container) fn try_fallback_readonly_copy(
@@ -427,26 +393,6 @@ impl Sandbox {
         chroot_syscall(&root_cstr).map_err(|e| sandbox_error(format!("chroot failed: {e}")))?;
         chdir_syscall(c"/")
             .map_err(|e| sandbox_error(format!("chdir after chroot failed: {e}")))?;
-        Ok(())
-    }
-
-    fn try_pivot_root(&self, root: &Path) -> Result<()> {
-        mount::<Path, Path, str, str>(Some(root), root, None, MsFlags::MS_BIND, None)
-            .map_err(|e| sandbox_error(format!("bind mount for pivot_root: {e}")))?;
-
-        let old_root = root.join(".old_root");
-        std::fs::create_dir_all(&old_root)
-            .map_err(|e| sandbox_error(format!("create old_root dir: {e}")))?;
-        nix::unistd::pivot_root(root, &old_root)
-            .map_err(|e| sandbox_error(format!("pivot_root failed: {e}")))?;
-        std::env::set_current_dir("/")
-            .map_err(|e| sandbox_error(format!("chdir / after pivot_root: {e}")))?;
-        nix::mount::umount2(
-            &std::path::PathBuf::from("/.old_root"),
-            nix::mount::MntFlags::MNT_DETACH,
-        )
-        .map_err(|e| sandbox_error(format!("umount old_root: {e}")))?;
-        let _ = std::fs::remove_dir("/.old_root");
         Ok(())
     }
 
