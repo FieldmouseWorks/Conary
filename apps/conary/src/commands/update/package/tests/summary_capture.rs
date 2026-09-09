@@ -220,7 +220,7 @@ async fn update_summary_capture_child() {
         assert_eq!(stats, (2, 0));
         let temporary = Path::new(&db_path).parent().unwrap().join("tmp");
         assert!(
-            std::fs::read_dir(temporary).unwrap().next().is_none(),
+            !temporary.exists() || std::fs::read_dir(temporary).unwrap().next().is_none(),
             "cancelled update left temporary delta artifacts"
         );
         return;
