@@ -41,6 +41,19 @@ pub(crate) fn resolve_installed_package(
     conn: &rusqlite::Connection,
     selector: &InstalledPackageSelector,
 ) -> Result<ResolvedInstalledPackage> {
+    resolve_installed_package_with_hint(
+        conn,
+        selector,
+        "Use --version, --release, and/or --arch to choose one.",
+    )
+}
+
+/// Keep installed-package selection shared while callers own actionable guidance.
+pub(crate) fn resolve_installed_package_with_hint(
+    conn: &rusqlite::Connection,
+    selector: &InstalledPackageSelector,
+    ambiguity_hint: &str,
+) -> Result<ResolvedInstalledPackage> {
     let troves = Trove::find_by_name(conn, &selector.name)?
         .into_iter()
         .filter(|trove| trove.trove_type == TroveType::Package)
@@ -53,12 +66,13 @@ pub(crate) fn resolve_installed_package(
     let matches = matching_installed_packages(&troves, selector);
     match matches.as_slice() {
         [] => anyhow::bail!(
-            "Package '{}' with selector version={:?} release={} architecture={:?} is not installed. Installed variants: {}. Use --version, --release, and/or --arch to choose one.",
+            "Package '{}' with selector version={:?} release={} architecture={:?} is not installed. Installed variants: {}. {}",
             selector.name,
             selector.version,
             format_selector_release(selector.release.as_ref()),
             selector.architecture,
-            format_installed_variants(&troves)
+            format_installed_variants(&troves),
+            ambiguity_hint
         ),
         [trove] => {
             let trove_id = trove
@@ -76,9 +90,10 @@ pub(crate) fn resolve_installed_package(
                 .collect::<Vec<_>>()
                 .join("\n");
             anyhow::bail!(
-                "Multiple installed variants of '{}' match the selector:\n{}\nUse --version, --release, and/or --arch to choose one.",
+                "Multiple installed variants of '{}' match the selector:\n{}\n{}",
                 selector.name,
-                variants
+                variants,
+                ambiguity_hint
             )
         }
     }
