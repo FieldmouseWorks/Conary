@@ -159,8 +159,8 @@ pub async fn cmd_model_apply(opts: ApplyOptions<'_>) -> Result<()> {
     errors.extend(replatform_errors);
     errors.extend(package_errors);
 
-    // Phase 4: metadata changes (pin/unpin, mark explicit/dependency, update)
-    let (metadata_applied, metadata_errors) = apply_metadata_changes(&conn, &actions);
+    // Phase 4: pin/unpin and install-reason metadata changes
+    let (metadata_applied, metadata_errors) = apply_metadata_changes(db_path, &actions);
     errors.extend(metadata_errors);
 
     if autoremove {
@@ -606,13 +606,38 @@ pub(super) fn apply_derived_packages(
     (derived_built, derived_rebuilt, errors)
 }
 
-/// Apply package metadata changes: pin/unpin, mark explicit/dependency, update.
+/// Apply pin/unpin and install-reason changes under the runtime mutation lock.
 ///
 /// Returns the number of changes applied and any errors encountered.
 pub(super) fn apply_metadata_changes(
-    conn: &Connection,
+    db_path: &str,
     actions: &[&DiffAction],
 ) -> (usize, Vec<String>) {
+    if !actions.iter().any(|action| {
+        matches!(
+            action,
+            DiffAction::Pin { .. }
+                | DiffAction::Unpin { .. }
+                | DiffAction::MarkExplicit { .. }
+                | DiffAction::MarkDependency { .. }
+        )
+    }) {
+        return (0, Vec::new());
+    }
+
+    // Package execution above and autoremove below acquire their own locks.
+    // Hold this guard only for metadata reads and writes, using a connection
+    // opened after waiting so selection observes the committed current state.
+    let _mutation =
+        match crate::commands::generation::selected_root::LockedRuntimeRoot::acquire(db_path) {
+            Ok(locked) => locked,
+            Err(error) => return (0, vec![format!("Model metadata lock: {error:#}")]),
+        };
+    let connection = match crate::commands::open_db(db_path) {
+        Ok(conn) => conn,
+        Err(error) => return (0, vec![format!("Model metadata database: {error:#}")]),
+    };
+    let conn = &connection;
     let mut applied = 0usize;
     let mut errors: Vec<String> = Vec::new();
 
@@ -711,3 +736,6 @@ pub(super) fn apply_metadata_changes(
 mod dry_run_tests;
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod metadata_lock_tests;
