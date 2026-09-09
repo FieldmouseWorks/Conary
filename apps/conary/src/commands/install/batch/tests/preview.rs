@@ -102,6 +102,11 @@ fn preview_releases_dropped_repository_enrollments_before_later_selection() {
     let projection = PreviewDatabase::new(&conn, &db_path).unwrap();
     let mut new = prepared_test_package("repository-release", "/usr/bin/new", b"new");
     new.version = "2".into();
+    new.provides = vec![crate::commands::test_helpers::exact_package_self_provider(
+        &new.name,
+        &new.version,
+        VersionScheme::Rpm,
+    )];
     new.is_upgrade = true;
     new.old_trove = Some(Box::new(trove));
     projection.project(&[new]).unwrap();

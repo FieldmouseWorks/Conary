@@ -133,6 +133,11 @@ impl PreviewDatabase {
         let tx = conn.transaction()?;
         let changeset_id =
             Changeset::new("Disposable update preview projection".into()).insert(&tx)?;
+        // Deconfiguration is a lifecycle outcome without its own payload node.
+        // Retain the declared success projection before any target is replaced.
+        for change in deconfigurations {
+            effects::deconfigure(&tx, change)?;
+        }
         // Replay the source-owned payload boundaries. Lifecycle programs and
         // trigger execution never run; these are projected database facts only.
         for step in native.graph_steps() {
@@ -148,12 +153,6 @@ impl PreviewDatabase {
                                 .map(|file| file.path.clone())
                                 .collect(),
                         );
-                    } else if let Some(index) = change_index.checked_sub(finalization_troves.len())
-                    {
-                        let change = deconfigurations
-                            .get(index)
-                            .context("preview graph references an absent deconfiguration")?;
-                        effects::deconfigure(&tx, change)?;
                     }
                 }
                 NativeTransactionStep::FinalizeOldPayload { change_index } => {
