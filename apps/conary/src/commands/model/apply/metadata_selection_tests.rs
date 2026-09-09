@@ -140,7 +140,7 @@ fn insert_package(db_path: &str, name: &str, release: &str, action: MetadataActi
 }
 
 fn insert_component(db_path: &str, name: &str, action: MetadataAction) -> i64 {
-    insert_trove(db_path, name, "0", TroveType::Component, action)
+    insert_trove(db_path, name, "3", TroveType::Component, action)
 }
 
 fn stored_trove(db_path: &str, id: i64) -> Trove {
