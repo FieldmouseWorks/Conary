@@ -178,12 +178,18 @@ async fn update_summary_capture_child() {
             "troves",
             "files",
             "file_history",
-            "package_payload_ownership",
+            "payload_claims",
             "generation_publications",
         ] {
             assert_eq!(
-                after.iter().find(|(name, _)| name == table),
-                before.iter().find(|(name, _)| name == table),
+                after
+                    .iter()
+                    .find(|(name, _)| name == table)
+                    .expect("asserted table exists after refusal"),
+                before
+                    .iter()
+                    .find(|(name, _)| name == table)
+                    .expect("asserted table exists before refusal"),
                 "refused CCS update changed {table}"
             );
         }
