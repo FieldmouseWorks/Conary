@@ -1,7 +1,7 @@
 // apps/conary/src/commands/install/prepare.rs
 //! Package parsing and pre-installation validation
 
-use super::{InstallIntent, InstallSemantics};
+use super::{InstallIntent, InstallReplacement, InstallSemantics};
 use crate::commands::PackageFormatType;
 use anyhow::{Context, Result};
 use conary_core::components::ComponentType;
@@ -69,28 +69,35 @@ pub enum UpgradeCheck {
 
 /// Check if package is already installed and determine upgrade status
 ///
-/// `replacement` is the exact installed record selected by an update. When it
-/// is supplied, this function never falls back to the first name/architecture
-/// match: the snapshot's persisted row is reloaded and revalidated under the
-/// caller's existing mutation-lock/preparation boundary, and only that row may
-/// be replaced. Ordinary installs pass `None` and keep first-match behavior.
+/// `replacement` is the exact installed-record authority selected by an
+/// update. When it is supplied, this function never falls back to the first
+/// name/architecture match: the snapshot's persisted row is reloaded and
+/// revalidated under the caller's existing mutation-lock/preparation boundary,
+/// and only that row may be replaced. A `PlannedAbsent` target must have no
+/// persisted row and yields a fresh install. Ordinary installs pass `None` and
+/// keep first-match behavior.
 pub fn check_upgrade_status(
     conn: &Connection,
     pkg: &dyn PackageFormat,
     semantics: &InstallSemantics,
     allow_downgrade: bool,
     intent: InstallIntent,
-    replacement: Option<&Trove>,
+    replacement: Option<&InstallReplacement>,
 ) -> Result<UpgradeCheck> {
-    if let Some(expected) = replacement {
-        return check_explicit_replacement_status(
-            conn,
-            pkg,
-            semantics,
-            allow_downgrade,
-            intent,
-            expected,
-        );
+    if let Some(replacement) = replacement {
+        return match replacement {
+            InstallReplacement::Existing(expected) => check_explicit_replacement_status(
+                conn,
+                pkg,
+                semantics,
+                allow_downgrade,
+                intent,
+                expected,
+            ),
+            InstallReplacement::PlannedAbsent(expected) => {
+                check_planned_absent_replacement_status(conn, pkg, expected)
+            }
+        };
     }
 
     let existing = conary_core::db::models::Trove::find_by_name(conn, pkg.name())?;
@@ -158,8 +165,91 @@ fn check_explicit_replacement_status(
     classify_installed_trove(&current, pkg, semantics, allow_downgrade, intent)
 }
 
+/// A replacement target an earlier planned effect removes in the same
+/// already-verified preview: the original row must be gone, the incoming
+/// package must still match the original identity, and the incoming exact
+/// identity must not collide with any surviving row. The result is a fresh
+/// install, never a first-match upgrade.
+fn check_planned_absent_replacement_status(
+    conn: &Connection,
+    pkg: &dyn PackageFormat,
+    expected: &Trove,
+) -> Result<UpgradeCheck> {
+    validate_planned_absent_replacement(
+        conn,
+        expected,
+        pkg.name(),
+        pkg.version(),
+        pkg.package_release(),
+        pkg.version_scheme(),
+        pkg.architecture(),
+    )?;
+    Ok(UpgradeCheck::FreshInstall)
+}
+
+/// Revalidate a planned-absent replacement guard against installed state.
+///
+/// The guard is the row observed absent in the private preview database after
+/// earlier planned effects; installed state must agree that its persisted ID
+/// is absent while the incoming identity still matches the original package
+/// and does not collide with another installed row.
+pub(super) fn validate_planned_absent_replacement(
+    conn: &Connection,
+    expected: &Trove,
+    name: &str,
+    version: &str,
+    release: Option<&str>,
+    scheme: conary_core::repository::versioning::VersionScheme,
+    architecture: Option<&str>,
+) -> Result<()> {
+    let expected_id = expected.id.ok_or_else(|| {
+        anyhow::anyhow!(
+            "Update replacement target '{}' has no persisted installed record identity",
+            expected.name
+        )
+    })?;
+    if Trove::find_by_id(conn, expected_id)?.is_some() {
+        anyhow::bail!(
+            "Update replacement target '{}-{}' (installed trove {expected_id}) was planned absent but is currently installed",
+            expected.name,
+            expected.version
+        );
+    }
+    if name != expected.name {
+        anyhow::bail!(
+            "Incoming package '{}' does not match update replacement target '{}'",
+            name,
+            expected.name
+        );
+    }
+    if !architectures_share_install_slot(
+        expected.version_scheme,
+        expected.architecture.as_deref(),
+        scheme,
+        architecture,
+    )? {
+        anyhow::bail!(
+            "Incoming package '{}' architecture '{}' is incompatible with update replacement target '{}' architecture '{}'",
+            name,
+            architecture.unwrap_or("no-arch"),
+            expected.name,
+            expected.architecture.as_deref().unwrap_or("no-arch")
+        );
+    }
+
+    check_replacement_identity_available(
+        conn,
+        expected_id,
+        name,
+        version,
+        release,
+        scheme,
+        architecture,
+    )
+}
+
 /// Reload prepared replacement authority at the caller's mutation boundary.
-pub(super) fn revalidate_replacement_snapshot(
+pub(crate) fn revalidate_replacement_snapshot(
     conn: &Connection,
     expected: &Trove,
 ) -> Result<Trove> {

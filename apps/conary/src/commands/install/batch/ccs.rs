@@ -15,7 +15,7 @@ pub(crate) fn prepare_ccs_package_for_batch(
     allow_downgrade: bool,
     intent: InstallIntent,
     source_authority: PreparedPackageSourceAuthority<'_>,
-    replacement: Option<&Trove>,
+    replacement: Option<&InstallReplacement>,
 ) -> Result<PreparedPackage> {
     let PreparedPackageSourceAuthority {
         repository_provenance,
@@ -143,6 +143,7 @@ pub(crate) fn prepare_ccs_package_for_batch(
         selection_reason: selection_reason.to_string(),
         is_upgrade,
         old_trove,
+        replacement: replacement.cloned(),
         installed_components,
         classified_files,
         installed_component_names: Some(component_names),

@@ -106,6 +106,7 @@ use super::failure::{UpdateFailures, UpdatePackageFailure};
 
 struct PreparedFullUpdate {
     trove: Trove,
+    replacement: crate::commands::install::InstallReplacement,
     repo_pkg: RepositoryPackage,
     repo: Repository,
     pkg_path: PathBuf,
@@ -156,7 +157,7 @@ fn install_options_for_update<'a>(
     yes: bool,
     repo_pkg: &RepositoryPackage,
     repo: &Repository,
-    trove: &Trove,
+    replacement: &crate::commands::install::InstallReplacement,
 ) -> Result<InstallOptions<'a>> {
     Ok(InstallOptions {
         db_path,
@@ -164,7 +165,7 @@ fn install_options_for_update<'a>(
         sandbox_mode,
         ownership: Some(ownership),
         yes,
-        replacement: Some(trove.clone()),
+        replacement: Some(replacement.clone()),
         repository_provenance: Some(repository_install_provenance_from_package(repo_pkg, repo)?),
         ..Default::default()
     })
@@ -469,7 +470,7 @@ pub(super) async fn update_packages(
     let mut report = InstallReport::default();
 
     // Phase 1: Check for deltas and categorize updates
-    let mut delta_updates: Vec<(Trove, RepositoryPackage, Repository, PackageDelta)> = Vec::new();
+    let mut delta_updates = Vec::new();
     let mut full_updates: Vec<(Trove, RepositoryPackage, Repository)> = Vec::new();
 
     for (trove, selected) in updates_available {
@@ -483,7 +484,8 @@ pub(super) async fn update_packages(
                     delta_info.delta_size,
                     delta_info.compression_ratio * 100.0
                 );
-                delta_updates.push((trove, repo_pkg, repo, delta_info));
+                let replacement = preview.replacement_for(&trove)?.clone();
+                delta_updates.push((trove, repo_pkg, repo, delta_info, replacement));
             }
             None => full_updates.push((trove, repo_pkg, repo)),
         }
@@ -522,7 +524,7 @@ pub(super) async fn update_packages(
         let mut cancelled_package = None;
         'apply_updates: {
             // Phase 2: Download and apply deltas (sequential - requires CAS access)
-            for (trove, repo_pkg, repo, delta_info) in delta_updates {
+            for (trove, repo_pkg, repo, delta_info, replacement) in delta_updates {
                 crate::ui::println!("\nUpdating {} (delta)...", trove.name);
                 let mut needs_full = false;
 
@@ -576,7 +578,7 @@ pub(super) async fn update_packages(
                                                     sandbox_mode,
                                                     ownership: Some(ownership),
                                                     yes,
-                                                    replacement: Some(trove.clone()),
+                                                    replacement: Some(replacement.clone()),
                                                     repository_provenance: Some(
                                                         repository_install_provenance_from_package(
                                                             &repo_pkg, &repo,
@@ -670,7 +672,7 @@ pub(super) async fn update_packages(
                             yes,
                             &repo_pkg,
                             &repo,
-                            &trove,
+                            &replacement,
                         )?,
                         &mut report,
                     )
@@ -710,6 +712,7 @@ pub(super) async fn update_packages(
 
                 for PreparedFullUpdate {
                     trove,
+                    replacement,
                     repo_pkg,
                     repo,
                     pkg_path,
@@ -734,7 +737,7 @@ pub(super) async fn update_packages(
                             yes,
                             &repo_pkg,
                             &repo,
-                            &trove,
+                            &replacement,
                         )?,
                         &mut report,
                     )

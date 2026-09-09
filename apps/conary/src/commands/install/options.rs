@@ -10,6 +10,19 @@ use conary_core::repository::RepositorySourceKind;
 use conary_core::scriptlet::SandboxMode;
 use std::path::Path;
 
+/// Exact installed-record authority selected by an update.
+///
+/// `Existing` carries the row an update plans to replace; it must still exist
+/// and match this snapshot under the mutation boundary. `PlannedAbsent`
+/// carries a row that an earlier transaction in the same already-verified
+/// preview removes; its original ID must be absent, while the incoming
+/// identity is validated against the original name/architecture.
+#[derive(Debug, Clone)]
+pub(crate) enum InstallReplacement {
+    Existing(Trove),
+    PlannedAbsent(Trove),
+}
+
 /// Options for package installation
 #[derive(Debug, Clone, Default)]
 pub struct InstallOptions<'a> {
@@ -49,10 +62,10 @@ pub struct InstallOptions<'a> {
     /// Repository provenance supplied by an internal caller that already
     /// selected and downloaded the package before calling `cmd_install`.
     pub(crate) repository_provenance: Option<RepositoryInstallProvenance>,
-    /// Exact installed record selected by an update, distinct from the
-    /// incoming artifact selectors. It is reloaded and revalidated against
+    /// Exact installed-record authority selected by an update, distinct from
+    /// the incoming artifact selectors. It is reloaded and revalidated against
     /// this snapshot under the mutation boundary before any replacement.
-    pub(crate) replacement: Option<Trove>,
+    pub(crate) replacement: Option<InstallReplacement>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -13,8 +13,9 @@ use super::repository_batch::{
     RepositoryBatchMode, RepositoryBatchSelection, prepare_repository_batch,
 };
 use super::{
-    CcsEnvelopeAuthority, CcsTransactionInstallOptions, InstallIntent, RepositoryInstallProvenance,
-    verify_ccs_package_authority, verify_pending_ccs_conversion_authority,
+    CcsEnvelopeAuthority, CcsTransactionInstallOptions, InstallIntent, InstallReplacement,
+    RepositoryInstallProvenance, verify_ccs_package_authority,
+    verify_pending_ccs_conversion_authority,
 };
 use anyhow::{Context, Result};
 use conary_core::ccs::CcsPackage;
@@ -22,7 +23,6 @@ use conary_core::ccs::convert::ForeignConversionInput;
 use conary_core::ccs::convert::{
     ConversionOptions, NativePackageConverter, PendingConversionResult, ScriptletBundleSummary,
 };
-use conary_core::db::models::Trove;
 use conary_core::packages::PackageFormat;
 use conary_core::repository::versioning::VersionScheme;
 use conary_core::resolver::{SatPackage, SatSource};
@@ -383,9 +383,9 @@ pub struct CcsArtifactInstallOptions<'a> {
     /// Exact transaction source policy established by explicit scope,
     /// persisted pin, or selected root repository provenance.
     pub resolution_policy: conary_core::repository::resolution_policy::ResolutionPolicy,
-    /// Exact installed record selected by an update, distinct from the
-    /// incoming artifact selectors. `None` for ordinary installs.
-    pub replacement: Option<Trove>,
+    /// Exact installed-record authority selected by an update, distinct from
+    /// the incoming artifact selectors. `None` for ordinary installs.
+    pub replacement: Option<InstallReplacement>,
 }
 
 /// Attempt to convert a native package to CCS format

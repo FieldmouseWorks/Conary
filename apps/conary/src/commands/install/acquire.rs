@@ -10,12 +10,11 @@ use super::resolve::{
     ResolvedSourceType, resolve_package_path_with_policy,
 };
 use super::{
-    CcsEnvelopeAuthority, InstallIntent, InstallPhase, InstallProgress, PackageFormatType,
-    RepositoryInstallProvenance, bind_transaction_source_identity, detect_package_format,
-    effective_source_profile,
+    CcsEnvelopeAuthority, InstallIntent, InstallPhase, InstallProgress, InstallReplacement,
+    PackageFormatType, RepositoryInstallProvenance, bind_transaction_source_identity,
+    detect_package_format, effective_source_profile,
 };
 use anyhow::{Context, Result};
-use conary_core::db::models::Trove;
 use conary_core::packages::PackageFormat;
 use conary_core::repository::resolution_policy::ResolutionPolicy;
 use conary_core::scriptlet::SandboxMode;
@@ -34,10 +33,10 @@ pub(super) struct CcsInstallParams<'a> {
     pub(super) yes: bool,
     pub(super) repository_provenance: Option<RepositoryInstallProvenance>,
     pub(super) requested_source_identity: Option<&'a str>,
-    /// Exact installed record selected by an update, forwarded unchanged to
-    /// every direct CCS install path so the same target is revalidated under
-    /// the mutation boundary.
-    pub(super) replacement: Option<Trove>,
+    /// Exact installed-record authority selected by an update, forwarded
+    /// unchanged to every direct CCS install path so the same target is
+    /// revalidated under the mutation boundary.
+    pub(super) replacement: Option<InstallReplacement>,
 }
 
 /// Resolve a package path, detect its format, and parse it.

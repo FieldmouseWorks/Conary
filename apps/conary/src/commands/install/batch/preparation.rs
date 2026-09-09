@@ -75,10 +75,10 @@ pub fn prepare_package_for_batch(
 
 /// Prepare an already parsed package.
 ///
-/// `replacement` is the exact installed record selected by an update. It is
-/// forwarded unchanged to the shared upgrade authority; dependency packages
-/// are prepared through the public wrapper above and structurally cannot
-/// inherit the root snapshot.
+/// `replacement` is the exact installed-record authority selected by an
+/// update. It is forwarded unchanged to the shared upgrade authority and
+/// retained on the prepared root; dependency packages are prepared through the
+/// public wrapper above and structurally cannot inherit the root guard.
 #[allow(clippy::too_many_arguments)]
 pub(in crate::commands::install) fn prepare_parsed_package_for_batch(
     pkg: &dyn conary_core::packages::PackageFormat,
@@ -88,7 +88,7 @@ pub(in crate::commands::install) fn prepare_parsed_package_for_batch(
     selection_reason: &str,
     allow_downgrade: bool,
     source_profile_id: Option<&str>,
-    replacement: Option<&Trove>,
+    replacement: Option<&InstallReplacement>,
 ) -> Result<Option<PreparedPackage>> {
     let semantics = InstallSemantics::native_package(format);
 
@@ -168,6 +168,7 @@ pub(in crate::commands::install) fn prepare_parsed_package_for_batch(
         selection_reason: selection_reason.to_string(),
         is_upgrade,
         old_trove,
+        replacement: replacement.cloned(),
         installed_components,
         classified_files,
         installed_component_names: None,

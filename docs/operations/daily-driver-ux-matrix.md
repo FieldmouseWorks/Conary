@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-09
-revision: 31
+revision: 32
 summary: Daily-driver CLI routes, exact installed CCS release selectors, repository details, grouped transaction results, scoped recovery, and typed native refusals
 ---
 
@@ -59,8 +59,13 @@ runtime argument parsing and generated manuals.
 Update carries the selected installed snapshot through preview, full-artifact,
 and delta installation. Root preparation revalidates its record ID, identity,
 source observations, and pin state; batch execution repeats that validation
-under the runtime mutation lock. Missing or changed targets and a conflicting
-incoming identity refuse before mutation. Dependencies keep their own targets.
+under the runtime mutation lock. Unexpectedly missing or changed targets and a conflicting incoming identity
+refuse before mutation. Every target is validated in the initial private
+projection. If an earlier admitted relation effect then removes a later target,
+that later installation carries an explicit planned-absence guard: its original
+record must remain absent, and it never replaces a surviving name-match.
+Dependencies keep their own targets. The feature-enabled update summary
+captures prove this relation sequence in preview and apply.
 `cargo test -p conary --features test-hooks --test installed_release_update`
 proves that updating the second same-version/architecture release preserves
 its sibling and publishes the incoming payload ownership and CAS bytes. This

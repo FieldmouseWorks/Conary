@@ -54,10 +54,11 @@ pub(crate) use ccs_transaction::{
 pub(crate) use native_lifecycle::NativeLifecycleInstallState;
 pub use options::InstallOptions;
 pub(crate) use options::{
-    CcsEnvelopeAuthority, RepositoryInstallProvenance, repository_install_provenance_from_package,
-    verify_ccs_package_authority, verify_ccs_package_authority_into_cas,
-    verify_pending_ccs_conversion_authority,
+    CcsEnvelopeAuthority, InstallReplacement, RepositoryInstallProvenance,
+    repository_install_provenance_from_package, verify_ccs_package_authority,
+    verify_ccs_package_authority_into_cas, verify_pending_ccs_conversion_authority,
 };
+pub(crate) use prepare::revalidate_replacement_snapshot;
 pub use prepare::{ComponentSelection, UpgradeCheck};
 pub(crate) use restore::{
     add_prepared_install_to_target_state, build_target_state_view,

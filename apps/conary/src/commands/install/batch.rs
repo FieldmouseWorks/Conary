@@ -29,8 +29,8 @@ use super::inner;
 use super::native_events::{NativeInstallInput, PreparedNativeTransaction};
 use super::prepare::{UpgradeCheck, check_upgrade_status, parse_package};
 use super::{
-    InstallIntent, InstallSemantics, NativeLifecycleInstallState, RepositoryInstallProvenance,
-    build_execution_mode, detect_package_format,
+    InstallIntent, InstallReplacement, InstallSemantics, NativeLifecycleInstallState,
+    RepositoryInstallProvenance, build_execution_mode, detect_package_format,
 };
 use anyhow::{Context, Result};
 pub(crate) use ccs::prepare_ccs_package_for_batch;
@@ -103,6 +103,12 @@ pub struct PreparedPackage {
     pub is_upgrade: bool,
     /// Old trove being upgraded (if any)
     pub old_trove: Option<Box<Trove>>,
+    /// Exact installed-record authority retained from root preparation.
+    ///
+    /// Ordinary and dependency preparation leave this `None`; their old trove
+    /// remains the upgrade authority. Batch roots that carry an update guard
+    /// revalidate it under the mutation lock before baseline mutation.
+    pub(crate) replacement: Option<InstallReplacement>,
     /// Which components are being installed
     pub installed_components: Vec<ComponentType>,
     /// Files assigned by exact component metadata.
@@ -329,19 +335,67 @@ impl<'a> BatchInstaller<'a> {
         packages: &mut Vec<PreparedPackage>,
     ) -> Result<promises::PromiseWitnessPlan> {
         for package in packages.iter() {
-            if let Some(expected) = package.old_trove.as_deref() {
-                let current = super::prepare::revalidate_replacement_snapshot(conn, expected)?;
-                super::prepare::check_replacement_identity_available(
-                    conn,
-                    current
+            match package.replacement.as_ref() {
+                Some(InstallReplacement::Existing(expected)) => {
+                    let current = super::prepare::revalidate_replacement_snapshot(conn, expected)?;
+                    let current_id = current
                         .id
-                        .context("prepared replacement has no installed identity")?,
-                    &package.name,
-                    &package.version,
-                    package.package_release.as_deref(),
-                    package.semantics.version_scheme,
-                    package.architecture.as_deref(),
-                )?;
+                        .context("prepared replacement has no installed identity")?;
+                    if !package.is_upgrade
+                        || package.old_trove.as_deref().and_then(|trove| trove.id)
+                            != Some(current_id)
+                    {
+                        anyhow::bail!(
+                            "Prepared replacement guard for '{}' does not agree with its old trove",
+                            package.name
+                        );
+                    }
+                    super::prepare::check_replacement_identity_available(
+                        conn,
+                        current_id,
+                        &package.name,
+                        &package.version,
+                        package.package_release.as_deref(),
+                        package.semantics.version_scheme,
+                        package.architecture.as_deref(),
+                    )?;
+                }
+                Some(InstallReplacement::PlannedAbsent(expected)) => {
+                    if package.is_upgrade || package.old_trove.is_some() {
+                        anyhow::bail!(
+                            "Prepared package '{}' was planned absent but carries an old trove",
+                            package.name
+                        );
+                    }
+                    super::prepare::validate_planned_absent_replacement(
+                        conn,
+                        expected,
+                        &package.name,
+                        &package.version,
+                        package.package_release.as_deref(),
+                        package.semantics.version_scheme,
+                        package.architecture.as_deref(),
+                    )?;
+                }
+                None => {
+                    // Ordinary batches keep the pre-existing old-trove
+                    // drift and collision validation.
+                    if let Some(expected) = package.old_trove.as_deref() {
+                        let current =
+                            super::prepare::revalidate_replacement_snapshot(conn, expected)?;
+                        super::prepare::check_replacement_identity_available(
+                            conn,
+                            current
+                                .id
+                                .context("prepared replacement has no installed identity")?,
+                            &package.name,
+                            &package.version,
+                            package.package_release.as_deref(),
+                            package.semantics.version_scheme,
+                            package.architecture.as_deref(),
+                        )?;
+                    }
+                }
             }
         }
         let promise_plan = ordering::order_packages_for_transaction(conn, packages)?;

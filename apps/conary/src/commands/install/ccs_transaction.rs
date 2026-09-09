@@ -9,15 +9,14 @@ use super::ccs_removal_hooks::CcsRemovalHookPlan;
 use super::native_events::{NativeInstallInput, PreparedNativeTransaction};
 use super::{
     ExtractionResult, FinalizeInstallOutput, InstallIntent, InstallPhase, InstallProgress,
-    InstallSemantics, RepositoryInstallProvenance, TransactionContext, UpgradeCheck,
-    build_execution_mode, check_upgrade_status,
+    InstallReplacement, InstallSemantics, RepositoryInstallProvenance, TransactionContext,
+    UpgradeCheck, build_execution_mode, check_upgrade_status,
     execute_install_transaction_in_selected_root_with_post_graph,
     finalize_install_without_snapshot, preflight_extracted_file_ownership,
 };
 use anyhow::{Context, Result};
 use conary_core::ccs::native_lifecycle::SourceFormat;
 use conary_core::components::ComponentType;
-use conary_core::db::models::Trove;
 use conary_core::packages::PackageFormat;
 use conary_core::scriptlet::SandboxMode;
 use std::collections::HashMap;
@@ -39,9 +38,9 @@ pub(crate) struct CcsTransactionInstallOptions<'a> {
     pub selected_manifest_components: Option<Vec<String>>,
     pub repository_provenance: Option<RepositoryInstallProvenance>,
     pub requested_source_identity: Option<&'a str>,
-    /// Exact installed record selected by an update. `None` for ordinary
-    /// installs, which keep first name/architecture match behavior.
-    pub replacement: Option<Trove>,
+    /// Exact installed-record authority selected by an update. `None` for
+    /// ordinary installs, which keep first name/architecture match behavior.
+    pub replacement: Option<InstallReplacement>,
 }
 
 pub(crate) struct CcsTransactionInstallResult {
@@ -141,7 +140,7 @@ pub(crate) fn check_ccs_upgrade_status(
     allow_downgrade: bool,
     intent: InstallIntent,
     reinstall: bool,
-    replacement: Option<&Trove>,
+    replacement: Option<&InstallReplacement>,
 ) -> Result<UpgradeCheck> {
     // An explicit update replacement is authoritative: the shared upgrade
     // authority reloads and revalidates the exact selected row and never
