@@ -1,4 +1,8 @@
 // apps/conary/tests/installed_release_update.rs
+#![cfg(feature = "test-hooks")]
+
+// The production update path runs with the explicit test-only mount boundary,
+// as in the native mutation fixtures; this proves row and payload selection.
 
 pub mod common;
 
@@ -44,7 +48,8 @@ fn update_replaces_the_selected_release_and_preserves_its_sibling() {
             .arg(&root)
             .env_clear()
             .env("PATH", std::env::var_os("PATH").unwrap_or_default())
-            .env("NO_COLOR", "1");
+            .env("NO_COLOR", "1")
+            .env("CONARY_TEST_SKIP_GENERATION_MOUNT", "1");
         if preview {
             command.arg("--dry-run");
         }
