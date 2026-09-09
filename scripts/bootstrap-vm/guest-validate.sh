@@ -124,7 +124,7 @@ check_for_baked_private_key() {
 }
 
 main() {
-    require_cmd conary cargo tar sha256sum
+    require_cmd conary cargo tar sha256sum sqlite3
     verify_workspace_inputs
     unpack_workspace
     check_for_baked_private_key
@@ -141,9 +141,10 @@ main() {
             --source-profile "$REMI_DISTRO"
     fi
 
-    repo_output="$(conary repo list --all)"
-    remi_count="$(printf '%s\n' "$repo_output" | grep -Ec "^[[:space:]]+\\[[x ]\\][[:space:]]+$REPO_NAME[[:space:]]")"
-    if [[ "$remi_count" -ne 1 ]]; then
+    # Inspect persisted source state; human status tags are presentation only.
+    repo_sql_name="${REPO_NAME//\'/\'\'}"
+    remi_count="$(sqlite3 -readonly /var/lib/conary/conary.db "SELECT COUNT(*) FROM repositories WHERE name = '$repo_sql_name' AND enabled = 1;")"
+    if [[ "$remi_count" != 1 ]]; then
         echo "Expected packaged source '$REPO_NAME', found $remi_count rows" >&2
         exit 1
     fi

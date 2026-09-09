@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-09
-revision: 56
+revision: 57
 summary: Map fixture ownership, including repository discovery journeys, command transaction captures, typed boot-tool interfaces, and cross-source lifecycle proof
 ---
 
@@ -740,6 +740,9 @@ Each fixture family should record:
 - **Fast proof:** `cargo test -p conary --test cli_repository_discovery`;
   `cargo test -p conary-core --lib package_search_matches_only_enabled`.
 - **Medium proof:** `cargo test -p conary` and core repository model tests.
+  Harness onboarding also runs `cargo test -p conary-test container_setup` and
+  `bash scripts/bootstrap-vm/test-guest-validate.sh`; these assert persisted
+  source state without parsing human repository output.
 - **Regeneration:** in-test builders; PTY frames use util-linux `script`.
 - **Safety notes:** no live database or remote repository access. This fixture
   does not establish native metadata trust or clean-host initialization support.

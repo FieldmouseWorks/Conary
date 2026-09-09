@@ -122,24 +122,119 @@ pub async fn initialize_container_state(
         }
     }
 
-    let verify_seed_cmd = format!(
-        "repo_output=\"$({} repo list --all --db-path {})\" && count=\"$(printf '%s\\n' \"$repo_output\" | grep -Ec '^[[:space:]]+\\[[x ]\\][[:space:]]+{}[[:space:]]')\" && [ \"$count\" -eq 1 ]",
-        config.paths.conary_bin, config.paths.db, distro_config.repo_name
-    );
-    let verify_result = backend
+    verify_selected_seed(
+        backend,
+        container_id,
+        &config.paths.db,
+        &distro_config.repo_name,
+    )
+    .await
+}
+
+fn selected_seed_query(name: &str) -> String {
+    format!(
+        "SELECT COUNT(*) FROM repositories WHERE name = '{}' AND enabled = 1;",
+        name.replace('\'', "''")
+    )
+}
+
+async fn verify_selected_seed(
+    backend: &dyn ContainerBackend,
+    container_id: &ContainerId,
+    db_path: &str,
+    name: &str,
+) -> anyhow::Result<()> {
+    // Onboarding evidence comes from persisted state, never human status tags.
+    let query = selected_seed_query(name);
+    let result = backend
         .exec(
             container_id,
-            &["sh", "-c", &verify_seed_cmd],
-            Duration::from_secs(30),
+            &["sqlite3", "-readonly", db_path, &query],
+            std::time::Duration::from_secs(30),
         )
         .await?;
-    if verify_result.exit_code != 0 {
+    if result.exit_code != 0 {
         bail!(
-            "packaged onboarding must leave its selected Remi source: {}{}",
-            verify_result.stdout,
-            verify_result.stderr
+            "failed to inspect packaged repository seed: {}{}",
+            result.stdout,
+            result.stderr
         );
     }
-
+    let count: u64 = result
+        .stdout
+        .trim()
+        .parse()
+        .context("invalid packaged repository seed count")?;
+    if count != 1 {
+        bail!(
+            "packaged onboarding must leave one enabled selected Remi source '{name}'; found {count}"
+        );
+    }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::container::{ExecResult, mock::MockBackend};
+
+    #[test]
+    fn selected_seed_query_requires_the_exact_enabled_source() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE repositories (name TEXT, enabled INTEGER);")
+            .unwrap();
+        let name = "remi-quoted' OR 1=1 --";
+        conn.execute(
+            "INSERT INTO repositories VALUES (?1, 1), ('other', 1)",
+            [name],
+        )
+        .unwrap();
+        let count = |query: String| {
+            conn.query_row(&query, [], |row| row.get::<_, i64>(0))
+                .unwrap()
+        };
+        assert_eq!(count(selected_seed_query(name)), 1);
+        assert_eq!(count(selected_seed_query("missing")), 0);
+        conn.execute(
+            "UPDATE repositories SET enabled = 0 WHERE name = ?1",
+            [name],
+        )
+        .unwrap();
+        assert_eq!(count(selected_seed_query(name)), 0);
+    }
+
+    #[tokio::test]
+    async fn selected_seed_inspection_is_read_only_and_rejects_missing_or_invalid_evidence() {
+        for (exit_code, stdout, valid) in [
+            (0, "1\n", true),
+            (0, "0\n", false),
+            (0, "2\n", false),
+            (0, "Repositories: [info] remi-fixture", false),
+            (1, "1\n", false),
+        ] {
+            let backend = MockBackend::new(vec![ExecResult {
+                exit_code,
+                stdout: stdout.into(),
+                stderr: String::new(),
+            }]);
+            let result = verify_selected_seed(
+                &backend,
+                &"fixture".into(),
+                "/db with ' quotes.db",
+                "remi-fixture",
+            )
+            .await;
+            assert_eq!(result.is_ok(), valid, "{result:?}");
+            let calls = backend.exec_calls();
+            assert_eq!(
+                calls[0],
+                vec![
+                    "sqlite3",
+                    "-readonly",
+                    "/db with ' quotes.db",
+                    &selected_seed_query("remi-fixture")
+                ]
+            );
+        }
+    }
 }

@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-09
-revision: 25
+revision: 26
 summary: Daily-driver CLI routes, enabled-source discovery, grouped transaction results, scoped recovery, coordinated progress, and typed diagnostics
 ---
 
@@ -56,6 +56,8 @@ repository enrollment, sync, search, disable/enable, stale and empty catalogs,
 execution of the printed recovery command, and terminal/pipe/`NO_COLOR` frames.
 The fixture uses an isolated database and local JSON metadata; it makes no
 claim about supported-host setup or native-source authentication.
+Container and VM onboarding assertions inspect read-only repository state, so
+these human output changes do not become a second source-state authority.
 
 ## Cross-Cutting Routes
 

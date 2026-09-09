@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-09-05
-revision: 67
-summary: Document typed change-scope matrix skips, local security-advisory authority, trusted-main compiler seeds, isolated hosted-Ubuntu CI package bootstrap, attributable daily-driver same-name provides, configuration upgrade, payload topology, typed corpus coverage, and native lifecycle gates
+last_updated: 2026-09-09
+revision: 68
+summary: Document read-only repository onboarding assertions, typed change-scope matrix skips, local security-advisory authority, trusted-main compiler seeds, isolated hosted-Ubuntu CI package bootstrap, attributable daily-driver same-name provides, configuration upgrade, payload topology, typed corpus coverage, and native lifecycle gates
 ---
 
 # Integration Testing
@@ -27,6 +27,13 @@ tests with `cargo test -p conary --features test-hooks`; the static integration
 artifact builder enables that feature explicitly for `conary-test` manifests,
 while ordinary and release binaries reject any `CONARY_TEST_*` variable at
 startup instead of honoring or silently ignoring it.
+
+Container initialization and VM guest validation inspect the selected enabled
+repository directly with read-only SQLite queries. The configured images carry
+`sqlite3`; human `repo list` status markers and recovery notes are never source
+state evidence. A missing or disabled selected source fails before sync. Focused
+proof is `cargo test -p conary-test container_setup` and
+`bash scripts/bootstrap-vm/test-guest-validate.sh`.
 
 ## Running Tests
 
