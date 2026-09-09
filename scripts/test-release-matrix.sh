@@ -31,11 +31,33 @@ assert_contains() {
     fi
 }
 
+RELEASE_MATRIX_MUTATION_WORKER_PIDS=()
+
+drain_release_matrix_mutation_workers() {
+    local pid
+    local -a pending_pids=()
+
+    # Ignore repeated termination requests while reaping bounded workers.
+    trap '' INT TERM
+
+    # The job table also covers interruption between launching a worker and
+    # recording $! in the array. Write it directly in this parent shell.
+    jobs -pr > "${TEST_RUN_ROOT}/pending-workers"
+    mapfile -t pending_pids < "${TEST_RUN_ROOT}/pending-workers"
+    for pid in "${RELEASE_MATRIX_MUTATION_WORKER_PIDS[@]}" "${pending_pids[@]}"; do
+        wait "$pid" 2>/dev/null || true
+    done
+    RELEASE_MATRIX_MUTATION_WORKER_PIDS=()
+}
+
 cleanup() {
+    drain_release_matrix_mutation_workers
     rm -rf -- "$TEST_RUN_ROOT"
 }
 
 trap cleanup EXIT
+trap 'drain_release_matrix_mutation_workers; exit 130' INT
+trap 'drain_release_matrix_mutation_workers; exit 143' TERM
 
 run_matrix() {
     bash "$MATRIX" "$@"
@@ -1119,29 +1141,23 @@ for case in cases:
 PY
 }
 
-run_release_policy_mutation_cases() {
-    local name kind file old new expected repo cases_file
+run_release_policy_mutation_case() {
+    local name="$1" kind="$2" file="$3" old="$4" new="$5" expected="$6"
+    local repo
 
-    cases_file="${TEST_RUN_ROOT}/release-matrix-mutation-cases"
-    release_matrix_mutation_cases >"$cases_file" ||
-        fail "could not generate release-matrix mutation cases"
+    # Background workers must never run the parent EXIT/INT/TERM cleanup.
+    trap - EXIT INT TERM
 
-    while IFS= read -r -d '' name \
-        && IFS= read -r -d '' kind \
-        && IFS= read -r -d '' file \
-        && IFS= read -r -d '' old \
-        && IFS= read -r -d '' new \
-        && IFS= read -r -d '' expected; do
-        repo="$(create_release_policy_fixture)"
-        case "$kind" in
-            replace)
-                replace_fixture_text_once "$repo/$file" "$old" "$new"
-                ;;
-            append)
-                printf '%s' "$new" >> "$repo/$file"
-                ;;
-            python-rfind)
-                python3 - "$repo/$file" "$old" "$new" <<'PY'
+    repo="$(create_release_policy_fixture)"
+    case "$kind" in
+        replace)
+            replace_fixture_text_once "$repo/$file" "$old" "$new"
+            ;;
+        append)
+            printf '%s' "$new" >> "$repo/$file"
+            ;;
+        python-rfind)
+            python3 - "$repo/$file" "$old" "$new" <<'PY'
 import sys
 from pathlib import Path
 
@@ -1152,15 +1168,110 @@ if position < 0:
     raise SystemExit("fixture could not find final mutation target")
 path.write_text(text[:position] + sys.argv[3] + text[position + len(sys.argv[2]):])
 PY
-                ;;
-            *)
-                fail "unknown release-policy mutation kind $kind"
-                ;;
-        esac
-        assert_check_release_matrix_fails "$repo" "$expected"
-        printf 'ok - %s
+            ;;
+        *)
+            fail "unknown release-policy mutation kind $kind"
+            ;;
+    esac
+    assert_check_release_matrix_fails "$repo" "$expected"
+    printf 'ok - %s
 ' "$name"
+}
+
+run_release_policy_mutation_cases() {
+    local name kind file old new expected cases_file mutation_jobs
+    local nul_count case_count batch_start batch_end case_index pid status
+    local failed failed_case failed_status
+    local -a names kinds files olds news expecteds batch_pids
+
+    mutation_jobs="${CONARY_RELEASE_MATRIX_MUTATION_JOBS-4}"
+    case "$mutation_jobs" in
+        1 | 2 | 3 | 4) ;;
+        *)
+            fail "CONARY_RELEASE_MATRIX_MUTATION_JOBS must be 1, 2, 3, or 4 (got [$mutation_jobs])"
+            ;;
+    esac
+
+    cases_file="${TEST_RUN_ROOT}/release-matrix-mutation-cases"
+    release_matrix_mutation_cases >"$cases_file" ||
+        fail "could not generate release-matrix mutation cases"
+
+    nul_count="$(tr -cd '\000' <"$cases_file" | wc -c)"
+    if [[ "$(tail -c 1 "$cases_file" | od -An -tu1 | tr -d '[:space:]')" != 0 ]]; then
+        fail "release-matrix mutation cases must end with a NUL field terminator"
+    fi
+    if ((nul_count == 0 || nul_count % 6 != 0)); then
+        fail "release-matrix mutation cases are truncated: [$nul_count] NUL-separated fields is not a positive multiple of 6"
+    fi
+
+    while IFS= read -r -d '' name \
+        && IFS= read -r -d '' kind \
+        && IFS= read -r -d '' file \
+        && IFS= read -r -d '' old \
+        && IFS= read -r -d '' new \
+        && IFS= read -r -d '' expected; do
+        names+=("$name")
+        kinds+=("$kind")
+        files+=("$file")
+        olds+=("$old")
+        news+=("$new")
+        expecteds+=("$expected")
     done <"$cases_file"
+
+    case_count="${#names[@]}"
+    if ((case_count * 6 != nul_count)); then
+        fail "release-matrix mutation cases are truncated: parsed [$case_count] of [$((nul_count / 6))] complete records"
+    fi
+
+    for ((batch_start = 0; batch_start < case_count; batch_start += mutation_jobs)); do
+        batch_end=$((batch_start + mutation_jobs))
+        if ((batch_end > case_count)); then
+            batch_end="$case_count"
+        fi
+
+        batch_pids=()
+        for ((case_index = batch_start; case_index < batch_end; case_index++)); do
+            run_release_policy_mutation_case \
+                "${names[$case_index]}" \
+                "${kinds[$case_index]}" \
+                "${files[$case_index]}" \
+                "${olds[$case_index]}" \
+                "${news[$case_index]}" \
+                "${expecteds[$case_index]}" \
+                >"${TEST_RUN_ROOT}/release-matrix-mutation-case-${case_index}.log" 2>&1 &
+            pid=$!
+            batch_pids+=("$pid")
+            RELEASE_MATRIX_MUTATION_WORKER_PIDS+=("$pid")
+        done
+
+        failed=0
+        failed_case=""
+        failed_status=0
+        for ((case_index = batch_start; case_index < batch_end; case_index++)); do
+            if wait "${batch_pids[$((case_index - batch_start))]}"; then
+                :
+            else
+                status=$?
+                if ((failed == 0)); then
+                    failed=1
+                    failed_case="$case_index"
+                    failed_status="$status"
+                fi
+            fi
+        done
+
+        RELEASE_MATRIX_MUTATION_WORKER_PIDS=()
+        for ((case_index = batch_start; case_index < batch_end; case_index++)); do
+            cat -- "${TEST_RUN_ROOT}/release-matrix-mutation-case-${case_index}.log"
+            if ((failed != 0 && case_index == failed_case)); then
+                break
+            fi
+        done
+
+        if ((failed != 0)); then
+            fail "release-policy mutation case ${names[$failed_case]} failed with exit status ${failed_status}"
+        fi
+    done
 }
 
 
@@ -2151,6 +2262,7 @@ main() {
         printf 'ok - %s\n' "$test_name"
     done
 
+    python3 "$REPO_ROOT/scripts/test-release-matrix-runner.py"
     python3 "$REPO_ROOT/scripts/test-nightly-release.py"
     run_release_policy_mutation_cases
 }
