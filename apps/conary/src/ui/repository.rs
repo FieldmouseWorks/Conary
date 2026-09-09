@@ -212,7 +212,7 @@ pub(crate) fn package_details(
             trove.version_scheme.as_str(),
             trove.source_profile.as_deref(),
         );
-        field("Install source", &trove.install_source.to_string());
+        field("Install source", trove.install_source.as_ref());
         if let Some(repository_id) = trove.installed_from_repository_id {
             field("Repository ID", &repository_id.to_string());
         }
