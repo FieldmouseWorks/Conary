@@ -201,7 +201,7 @@ fn unsupported_selector_combinations_are_refused_without_state_change() {
             "cannot be used with --pinned",
         ),
         (
-            vec!["update", "@base", "--release", "1"],
+            vec!["update", "@base", "--release", "1", "--dry-run"],
             "cannot be used with collection updates",
         ),
         (
