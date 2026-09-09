@@ -639,13 +639,19 @@ fn partial_update_failure_message_is_not_clean_success() {
     let failures = vec![UpdatePackageFailure {
         package: "broken".to_string(),
         version: "2.0.0".to_string(),
-        reason: "resolver failed".to_string(),
+        error: anyhow::anyhow!("resolver failed"),
     }];
 
-    let message = update_required_failure_message(&failures, 2).unwrap();
+    let error = UpdateFailures {
+        failures,
+        total_requested: 2,
+        committed_changesets: vec![7],
+    };
+    let message = error.to_string();
 
     assert!(message.contains("1 of 2"));
-    assert!(message.contains("broken"));
+    assert_eq!(error.failures[0].package, "broken");
+    assert_eq!(error.failures[0].error.to_string(), "resolver failed");
     assert!(!message.contains("All packages are up to date"));
 }
 

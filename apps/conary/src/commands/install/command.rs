@@ -76,7 +76,10 @@ pub(crate) async fn cmd_install_with_report(
     opts: InstallOptions<'_>,
     report: &mut super::report::InstallReport,
 ) -> Result<InstallOutcome> {
-    cmd_install_with_intent(package, opts, InstallIntent::PackageChange, report).await
+    let (root, database) = (opts.root, opts.db_path);
+    cmd_install_with_intent(package, opts, InstallIntent::PackageChange, report)
+        .await
+        .map_err(|error| crate::commands::package_failure::with_scope(error, root, database))
 }
 
 async fn cmd_install_with_intent(
@@ -358,13 +361,20 @@ async fn cmd_install_with_intent(
             .as_deref()
             .map(|trove| trove.version.as_str()),
     );
+    // Preparation seeds selected-root authority. Keep those observations in the
+    // refusal boundary too; a failed preflight must not advance database state.
+    let preflight_state = conn.savepoint()?;
     let mut selected_root = locked_root
         .context("real install has no locked runtime root")?
-        .prepare(&conn, format!("Install {}-{}", pkg.name(), pkg.version()))?;
+        .prepare(
+            &preflight_state,
+            format!("Install {}-{}", pkg.name(), pkg.version()),
+        )?;
     let transaction_root = selected_root.selected_root().to_string_lossy().into_owned();
     native_transaction.preflight(Path::new(&transaction_root), &native_execution_mode)?;
     let preflighted_ccs_removal_hooks =
         ccs_removal_hook_plan.preflight(Path::new(&transaction_root), sandbox_mode)?;
+    preflight_state.commit()?;
     preflighted_ccs_removal_hooks.execute()?;
     // --- Phase 9: Graph-driven lifecycle and transaction execution ---
     let tx_ctx = TransactionContext {

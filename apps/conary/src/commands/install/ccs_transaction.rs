@@ -379,9 +379,14 @@ fn install_ccs_package_transactionally_inner(
     };
     // Dry-run remains filesystem-read-only. Every real CCS mutation receives
     // either its caller-owned try root or a freshly prepared selected root.
+    // Roll back baseline preparation as well as package state on preflight refusal.
+    let preflight_state = conn.savepoint()?;
     let mut owned_selected_root = locked_root
         .map(|locked_root| {
-            locked_root.prepare(conn, format!("Install {}-{}", pkg.name(), pkg.version()))
+            locked_root.prepare(
+                &preflight_state,
+                format!("Install {}-{}", pkg.name(), pkg.version()),
+            )
         })
         .transpose()?;
     let selected_root = match selected_root {
@@ -414,15 +419,18 @@ fn install_ccs_package_transactionally_inner(
         };
     extraction.ccs_remove_hook = pkg.manifest().hooks.pre_remove.clone();
 
-    let relation_plan =
-        conary_core::transaction::plan_package_relations(conn, pkg, semantics.version_scheme)
-            .context("Failed to plan CCS package conflicts and replacements")?;
-    conary_core::transaction::validate_package_relation_plan(conn, &relation_plan)
+    let relation_plan = conary_core::transaction::plan_package_relations(
+        &preflight_state,
+        pkg,
+        semantics.version_scheme,
+    )
+    .context("Failed to plan CCS package conflicts and replacements")?;
+    conary_core::transaction::validate_package_relation_plan(&preflight_state, &relation_plan)
         .context("CCS package conflicts and replacements cannot be applied")?;
     let native_lifecycle_bundle = pkg.manifest().native_lifecycle.as_ref();
     let resolution_capabilities = pkg.resolution_capabilities()?;
     let native_transaction = PreparedNativeTransaction::prepare_batch_with_declared_paths(
-        conn,
+        &preflight_state,
         &[NativeInstallInput {
             package_name: pkg.name(),
             package_version: pkg.version(),
@@ -445,7 +453,7 @@ fn install_ccs_package_transactionally_inner(
     // CCS hooks are package-scoped authority. Component names do not infer
     // lifecycle ownership, so every package install runs all declared hooks.
     let host_capabilities = if ccs_requires_host_capability_inventory(hooks) {
-        conary_core::ccs::HostCapabilityInventory::load_required(conn)
+        conary_core::ccs::HostCapabilityInventory::load_required(&preflight_state)
             .context("CCS lifecycle host capability preflight failed")?
     } else {
         conary_core::ccs::HostCapabilityInventory::default()
@@ -462,7 +470,10 @@ fn install_ccs_package_transactionally_inner(
         super::report::PackageIdentity::package(pkg),
         old_trove,
     )];
-    changes.extend(super::report::relation_changes(conn, &relation_plan)?);
+    changes.extend(super::report::relation_changes(
+        &preflight_state,
+        &relation_plan,
+    )?);
     if opts.dry_run {
         progress.clear();
         show_ccs_lifecycle_dry_run(pkg.manifest());
@@ -483,7 +494,7 @@ fn install_ccs_package_transactionally_inner(
     }
 
     let ccs_removal_hook_plan =
-        CcsRemovalHookPlan::prepare(conn, old_trove, relation_plan.removals.iter())?;
+        CcsRemovalHookPlan::prepare(&preflight_state, old_trove, relation_plan.removals.iter())?;
 
     let selected_component_names =
         if let Some(selected) = opts.selected_manifest_components.as_ref() {
@@ -498,7 +509,12 @@ fn install_ccs_package_transactionally_inner(
         pkg,
         &selected_component_names,
     )?;
-    preflight_extracted_file_ownership(conn, pkg, &extraction, &relation_plan.removals)?;
+    preflight_extracted_file_ownership(
+        &preflight_state,
+        pkg,
+        &extraction,
+        &relation_plan.removals,
+    )?;
     let normalized_file_capabilities = crate::commands::ccs::normalize_ccs_file_capabilities(
         Path::new(&transaction_root),
         &pkg.manifest().file_capabilities,
@@ -538,6 +554,7 @@ fn install_ccs_package_transactionally_inner(
     native_transaction.preflight(Path::new(&transaction_root), &native_execution_mode)?;
     let preflighted_ccs_removal_hooks =
         ccs_removal_hook_plan.preflight(Path::new(&transaction_root), opts.sandbox_mode)?;
+    preflight_state.commit()?;
     preflighted_ccs_removal_hooks.execute()?;
     if ccs_has_pre_hooks(hooks) {
         info!("Executing CCS pre-install hooks");

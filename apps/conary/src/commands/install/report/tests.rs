@@ -117,6 +117,27 @@ async fn install_summary_capture_child() {
         canceled || dependency_relation,
         scenario.contains("relation"),
     );
+    let preflight = matches!(scenario.as_str(), "preflight_native" | "batch_preflight");
+    if preflight {
+        let mut builder = rpm::PackageBuilder::new(
+            "summary-incoming",
+            "2.0.0",
+            "MIT",
+            "x86_64",
+            "refusal fixture",
+        );
+        builder.pre_install_script(
+            rpm::Scriptlet::new("touch /preflight-must-not-run")
+                .prog(vec!["/missing/summary-interpreter"]),
+        );
+        builder
+            .with_file_contents(
+                b"must not install".to_vec(),
+                rpm::FileOptions::new("/usr/share/summary-incoming/data").permissions(0o644),
+            )
+            .unwrap();
+        builder.build().unwrap().write_file(&package).unwrap();
+    }
     if scenario.contains("relation") {
         let old_package = artifact(
             temp.path(),
@@ -236,6 +257,20 @@ async fn install_summary_capture_child() {
             "forced install summary publication failure",
         )
     });
+    if scenario == "batch_preflight" {
+        // Recorded path capability satisfies planning, but its runtime provider
+        // is absent. Runtime preflight must still refuse before batch mutation.
+        conary_core::db::models::ProvideEntry::new_typed(
+            base,
+            conary_core::repository::dependency_model::RepositoryCapabilityKind::File,
+            "/missing/summary-interpreter".into(),
+            None,
+            VersionScheme::Conary,
+            conary_core::repository::dependency_model::ProvideArchitectureQualifier::Implicit,
+        )
+        .insert(&conn)
+        .unwrap();
+    }
     let before = crate::commands::test_helpers::database_rows(&conn);
     println!("FRAME_BEGIN");
     let result = if scenario.starts_with("batch") {
@@ -286,13 +321,34 @@ async fn install_summary_capture_child() {
         )
         .await
     };
+    if preflight {
+        let error = result
+            .as_ref()
+            .expect_err("missing interpreter must refuse installation");
+        crate::ui::diagnostics::report_error(error);
+        let report = crate::commands::package_failure::package_failure_report(error).unwrap();
+        let native = report.failures[0].native_preflight.as_ref().unwrap();
+        assert_eq!(native.package, "summary-incoming");
+        assert!(
+            matches!(&native.cause, conary_agent_contract::NativePreflightCause::MissingInterpreter { interpreter, .. } if interpreter == "/missing/summary-interpreter")
+        );
+        assert!(report.committed_changesets.is_none());
+        assert!(!temp.path().join("preflight-must-not-run").exists());
+        assert!(
+            Trove::find_by_name(&conn, "summary-incoming")
+                .unwrap()
+                .is_empty()
+        );
+    }
     println!("FRAME_END");
-    if failed {
+    if preflight {
+        assert!(result.is_err());
+    } else if failed {
         assert!(result.is_err(), "expected duplicate-identity refusal");
     } else {
         result.unwrap();
     }
-    if preview || failed || canceled {
+    if preview || failed || canceled || preflight {
         assert_eq!(
             crate::commands::test_helpers::database_rows(&conn),
             before,
@@ -317,6 +373,8 @@ fn install_summary_commands_in_terminal_pipe_and_no_color() {
             "upgrade_native",
             "pending_native",
             "failed_native",
+            "preflight_native",
+            "batch_preflight",
             "ccs",
             "preview_ccs",
             "upgrade_ccs",
@@ -389,6 +447,28 @@ fn install_summary_commands_in_terminal_pipe_and_no_color() {
                 assert!(!frame.contains('\x1b'), "{frame:?}");
             }
             let frame = console::strip_ansi_codes(frame);
+            if matches!(scenario, "preflight_native" | "batch_preflight") {
+                let diagnostic = if tty {
+                    frame.to_string()
+                } else {
+                    String::from_utf8(output.stderr).unwrap()
+                };
+                let diagnostic = console::strip_ansi_codes(&diagnostic);
+                assert_eq!(diagnostic.matches("error:").count(), 1, "{diagnostic}");
+                for fact in [
+                    "Native transaction preflight refused.",
+                    "Package: summary-incoming",
+                    "Version: 2.0.0-1",
+                    "Stage: package-pre-install",
+                    "Interpreter: /missing/summary-interpreter",
+                    "Execution root:",
+                    "note: Provide the required interpreter",
+                ] {
+                    assert!(diagnostic.contains(fact), "{diagnostic}");
+                }
+                assert!(!frame.contains("Applied package changes:"), "{frame}");
+                continue;
+            }
             if scenario.contains("failed") || scenario == "canceled_native" {
                 assert!(!frame.contains("Applied package changes:"), "{frame}");
                 assert!(!frame.contains("Generation:"), "{frame}");

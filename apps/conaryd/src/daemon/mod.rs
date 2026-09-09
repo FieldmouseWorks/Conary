@@ -528,6 +528,7 @@ async fn job_executor_loop(state: Arc<DaemonState>) {
         });
 
         // Execute the job based on its kind
+        let mut package_failure = None;
         let result: std::result::Result<Option<serde_json::Value>, String> = match job_kind {
             JobKind::Enhance => {
                 match serde_json::from_value::<enhance::EnhanceJobSpec>(job.spec.clone()) {
@@ -556,7 +557,11 @@ async fn job_executor_loop(state: Arc<DaemonState>) {
                     Ok(result) => serde_json::to_value(result)
                         .map(Some)
                         .map_err(|error| format!("serialize package job result: {error}")),
-                    Err(error) => Err(error.to_string()),
+                    Err(error) => {
+                        package_failure =
+                            conary::commands::package_failure::package_failure_report(&error);
+                        Err(error.to_string())
+                    }
                 }
             }
         };
@@ -592,7 +597,7 @@ async fn job_executor_loop(state: Arc<DaemonState>) {
                 tracing::info!("Job {} completed in {}ms", job_id, duration_ms);
             }
             Err(error_msg) => {
-                let daemon_error = DaemonError::internal(&error_msg);
+                let daemon_error = package_ops::job_error(&error_msg, package_failure.as_ref());
                 let err_for_db = daemon_error.clone();
                 let log_id = final_id.clone();
                 if let Err(e) = tokio::task::spawn_blocking(move || {

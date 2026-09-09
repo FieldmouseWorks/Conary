@@ -415,3 +415,136 @@ async fn package_executor_accepts_update_dry_run_without_live_ack() {
     assert!(result.operations[0].dry_run);
     assert!(result.operations[0].packages.is_empty());
 }
+
+#[test]
+fn package_failure_extension_survives_job_storage_and_terminal_event() {
+    use crate::daemon::{DaemonJob, JobStatus};
+    use conary_agent_contract::{PackageFailure, PackageFailureReport, PackageFailureSchema};
+    let (state, _temp) = create_test_state();
+    let conn = state.open_db().unwrap();
+    let report = PackageFailureReport {
+        schema: PackageFailureSchema::V1,
+        requested_updates: Some(2),
+        committed_changesets: Some(vec![17]),
+        failures: vec![PackageFailure {
+            package: "failed-package".into(),
+            version: "2".into(),
+            native_preflight: None,
+            causes: vec!["outer".into(), "leaf".into()],
+        }],
+    };
+    let error = job_error("1 of 2 requested package update(s) failed", Some(&report));
+    let job = DaemonJob::new(JobKind::Update, serde_json::json!([]));
+    job.insert(&conn).unwrap();
+    DaemonJob::set_error(&conn, &job.id, &error).unwrap();
+    DaemonJob::update_status(&conn, &job.id, JobStatus::Failed).unwrap();
+    let stored = DaemonJob::find_by_id(&conn, &job.id).unwrap().unwrap();
+    assert_eq!(stored.status, JobStatus::Failed);
+    let value = stored.error.unwrap().extensions.unwrap()["package_failure"].clone();
+    assert_eq!(
+        serde_json::from_value::<PackageFailureReport>(value).unwrap(),
+        report
+    );
+    let event = serde_json::to_value(DaemonEvent::JobFailed {
+        job_id: job.id,
+        error,
+    })
+    .unwrap();
+    assert_eq!(
+        serde_json::from_value::<PackageFailureReport>(
+            event["error"]["extensions"]["package_failure"].clone()
+        )
+        .unwrap(),
+        report
+    );
+    assert!(job_error("unclassified", None).extensions.is_none());
+}
+
+#[tokio::test]
+async fn queued_native_install_refusal_retains_machine_facts() {
+    use crate::daemon::{DaemonJob, JobPriority, JobStatus};
+    use conary_agent_contract::{NativePreflightCause, PackageFailureReport};
+    let _mount_skip = TestGenerationMountSkipGuard::acquire();
+    let (state, temp) = create_test_state();
+    seed_test_bootable_runtime(&state);
+    let package = temp.path().join("missing-runtime.rpm");
+    let mut builder =
+        rpm::PackageBuilder::new("missing-runtime", "2", "MIT", "x86_64", "refusal fixture");
+    builder.pre_install_script(
+        rpm::Scriptlet::new("touch /must-not-run").prog(vec!["/missing/daemon-interpreter"]),
+    );
+    builder
+        .with_file_contents(
+            b"not installed".to_vec(),
+            rpm::FileOptions::new("/usr/share/missing-runtime").permissions(0o644),
+        )
+        .unwrap();
+    builder.build().unwrap().write_file(&package).unwrap();
+    let conn = state.open_db().unwrap();
+    let snapshots_before: i64 = conn
+        .query_row("SELECT COUNT(*) FROM selected_root_snapshots", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    let job = DaemonJob::new(
+        JobKind::Install,
+        serde_json::json!([{
+            "type": "install", "packages": [package.to_str().unwrap()], "skip_deps": true, "yes": true, "apply_intent": true
+        }]),
+    );
+    let id = job.id.clone();
+    job.insert(&conn).unwrap();
+    let mut events = state.subscribe();
+    state.queue.enqueue(job, JobPriority::Normal).await;
+    let executor = tokio::spawn(crate::daemon::job_executor_loop(state.clone()));
+    let terminal = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            let event = events.recv().await.unwrap();
+            match event {
+                DaemonEvent::JobFailed { job_id, error } if job_id == id => break error,
+                DaemonEvent::JobCompleted { job_id, .. } if job_id == id => {
+                    panic!("missing interpreter installed")
+                }
+                _ => {}
+            }
+        }
+    })
+    .await;
+    executor.abort();
+    let error = terminal.expect("native refusal terminal event");
+    for detail in [
+        "missing-runtime",
+        "at stage PackagePreInstall",
+        "Interpreter not found: /missing/daemon-interpreter",
+        "rpm:%pre",
+    ] {
+        assert!(error.detail.contains(detail), "{}", error.detail);
+    }
+    let report: PackageFailureReport =
+        serde_json::from_value(error.extensions.as_ref().unwrap()["package_failure"].clone())
+            .unwrap();
+    let native = report.failures[0].native_preflight.as_ref().unwrap();
+    assert_eq!(native.package, "missing-runtime");
+    assert_eq!(native.requested_root.as_deref(), state.config.root.to_str());
+    assert_eq!(native.database.as_deref(), state.config.db_path.to_str());
+    assert!(
+        matches!(&native.cause, NativePreflightCause::MissingInterpreter { interpreter, .. } if interpreter == "/missing/daemon-interpreter")
+    );
+    let stored = DaemonJob::find_by_id(&conn, &id).unwrap().unwrap();
+    assert_eq!(stored.status, JobStatus::Failed);
+    let stored_error = stored.error.unwrap();
+    assert_eq!(stored_error.detail, error.detail);
+    assert_eq!(stored_error.extensions, error.extensions);
+    assert!(
+        Trove::find_by_name(&conn, "missing-runtime")
+            .unwrap()
+            .is_empty()
+    );
+    assert!(!state.config.root.join("must-not-run").exists());
+    let snapshots_after: i64 = conn
+        .query_row("SELECT COUNT(*) FROM selected_root_snapshots", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(snapshots_after, snapshots_before);
+}

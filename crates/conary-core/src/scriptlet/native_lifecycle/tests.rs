@@ -131,7 +131,10 @@ fn native_lifecycle_native_arg_contracts_refuse_malformed_or_missing_runtime_val
 
 #[test]
 fn native_lifecycle_preflight_refuses_unsupported_invocation_fields() {
-    let executor = ScriptletExecutor::new(Path::new("/"), "test-pkg", "1.0.0", PackageFormat::Rpm)
+    // A valid root shape lets each malformed invocation reach its own check.
+    // Using '/' made every case pass on the unrelated root refusal.
+    let root = tempfile::tempdir().unwrap();
+    let executor = ScriptletExecutor::new(root.path(), "test-pkg", "1.0.0", PackageFormat::Rpm)
         .with_sandbox_mode(SandboxMode::Always);
     let mode = ExecutionMode::Install;
     let runtime = NativeInvocationRuntime {
@@ -426,4 +429,69 @@ fn rpm_native_lifecycle_executes_query_format_and_embedded_lua_programs() {
         matches!(embedded, ScriptletOutcome::Success { .. }),
         "{embedded:?}"
     );
+}
+
+#[test]
+fn native_preflight_requirements_are_typed_and_do_not_stage_files() {
+    use super::NativeLifecyclePreflightError;
+    let root = tempfile::tempdir().unwrap();
+    let executor = ScriptletExecutor::new(root.path(), "typed-runtime", "2", PackageFormat::Rpm);
+    let mode = ExecutionMode::Install;
+    let runtime = upgrade_runtime(&mode);
+    let execution = native_lifecycle_execution_with_contracts(&[]);
+    for (availability, projected) in [
+        (NativeInterpreterAvailability::CurrentRoot, false),
+        (NativeInterpreterAvailability::ProjectedMissing, true),
+    ] {
+        let error = executor
+            .preflight_native_lifecycle_entry(&execution, &runtime, availability)
+            .unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<NativeLifecyclePreflightError>(),
+            Some(&NativeLifecyclePreflightError::MissingInterpreter {
+                interpreter: "/bin/sh".into(),
+                entry_id: execution.entry_id.into(),
+                projected,
+            })
+        );
+        assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
+    }
+    executor
+        .preflight_native_lifecycle_entry(
+            &execution,
+            &runtime,
+            NativeInterpreterAvailability::ProjectedPresent,
+        )
+        .unwrap();
+    for timeout_ms in [999, 300_001] {
+        let invalid = NativeLifecycleExecution {
+            timeout_ms,
+            ..native_lifecycle_execution_with_contracts(&[])
+        };
+        let error = executor
+            .preflight_native_lifecycle_entry(
+                &invalid,
+                &runtime,
+                NativeInterpreterAvailability::ProjectedPresent,
+            )
+            .unwrap_err();
+        assert!(
+            matches!(error.downcast_ref::<NativeLifecyclePreflightError>(), Some(NativeLifecyclePreflightError::TimeoutOutOfRange { timeout_ms: actual, minimum_ms: 1000, maximum_ms: 300_000, .. }) if *actual == timeout_ms)
+        );
+    }
+    for path in [Path::new("/"), Path::new("relative-root")] {
+        let executor = ScriptletExecutor::new(path, "typed-runtime", "2", PackageFormat::Rpm);
+        let error = executor
+            .preflight_native_lifecycle_entry(
+                &execution,
+                &runtime,
+                NativeInterpreterAvailability::ProjectedPresent,
+            )
+            .unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<NativeLifecyclePreflightError>(),
+            Some(&NativeLifecyclePreflightError::InvalidExecutionRoot { root: path.into() })
+        );
+    }
+    assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
 }

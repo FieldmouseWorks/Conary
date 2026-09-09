@@ -57,6 +57,7 @@ pub use lifecycle_bridge::{
 };
 pub use native_lifecycle::{
     NativeInterpreterAvailability, NativeInvocationRuntime, NativeLifecycleExecution,
+    NativeLifecyclePreflightError,
 };
 pub use outcome::{ScriptletFailureKind, ScriptletFailureOutcome, ScriptletOutcome};
 pub(crate) use process::configure_target_command_boundary;

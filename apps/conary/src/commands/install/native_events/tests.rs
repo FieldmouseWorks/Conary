@@ -598,11 +598,21 @@ fn transaction_preflight_walks_debian_recovery_branches() {
         .preflight(&selected_root, &ExecutionMode::Remove)
         .expect_err("missing recovery interpreter must fail before removal mutation");
 
+    let context = error
+        .downcast_ref::<NativePreflightContext>()
+        .expect("typed recovery event context");
+    assert!(context.recovery);
+    assert_eq!(context.package, "deb-fixture");
     assert!(
-        error
-            .to_string()
-            .contains("Debian recovery preflight failed"),
-        "unexpected error: {error:#}"
+        matches!(error.downcast_ref::<conary_core::scriptlet::NativeLifecyclePreflightError>(), Some(conary_core::scriptlet::NativeLifecyclePreflightError::MissingInterpreter { interpreter, .. }) if interpreter == "/definitely/missing-recovery-interpreter")
+    );
+    let report = crate::commands::package_failure::package_failure_report(&error).unwrap();
+    assert!(
+        report.failures[0]
+            .native_preflight
+            .as_ref()
+            .unwrap()
+            .recovery
     );
 }
 

@@ -1,6 +1,6 @@
 // apps/conary/src/commands/remove/autoremove.rs
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use conary_core::db::models::{PackagePayloadOwnership, Trove};
 use conary_core::scriptlet::ExecutionMode;
 use std::collections::HashSet;
@@ -85,9 +85,9 @@ pub fn cmd_autoremove(db_path: &str, dry_run: bool, sandbox_mode: SandboxMode) -
             );
         }
 
-        let conn = open_db(db_path)?;
+        let mut conn = open_db(db_path)?;
         preflight_autoremove_round(
-            &conn,
+            &mut conn,
             &current_plan.removable,
             db_path,
             RemoveLifecycleOptions::new(sandbox_mode),
@@ -137,7 +137,7 @@ pub fn cmd_autoremove(db_path: &str, dry_run: bool, sandbox_mode: SandboxMode) -
 }
 
 fn preflight_autoremove_round(
-    conn: &rusqlite::Connection,
+    conn: &mut rusqlite::Connection,
     troves: &[Trove],
     db_path: &str,
     lifecycle_options: RemoveLifecycleOptions,
@@ -164,39 +164,39 @@ fn preflight_autoremove_round(
                 paths,
                 false,
             );
-        let native_transaction = match native_transaction {
-            Ok(transaction) => transaction,
-            Err(error) => {
-                anyhow::bail!(
-                    "autoremove lifecycle execution preflight failed for {} {}: {error}",
-                    trove.name,
-                    trove.version
-                );
-            }
-        };
+        let native_transaction = native_transaction.with_context(|| {
+            format!(
+                "autoremove lifecycle execution preflight failed for {} {}",
+                trove.name, trove.version
+            )
+        })?;
+        // This pass is read-only even when root materialization seeds baseline
+        // authority. Actual removals prepare their own transaction roots later.
+        let preflight_state = conn.savepoint()?;
         let selected = locked_root.prepare(
-            conn,
+            &preflight_state,
             format!("Autoremove preflight {}-{}", trove.name, trove.version),
         )?;
-        if let Err(error) =
-            native_transaction.preflight(selected.selected_root(), &ExecutionMode::Remove)
-        {
-            anyhow::bail!(
-                "autoremove lifecycle execution preflight failed for {} {}: {error}",
-                trove.name,
-                trove.version
-            );
-        }
+        native_transaction
+            .preflight(selected.selected_root(), &ExecutionMode::Remove)
+            .with_context(|| {
+                format!(
+                    "autoremove lifecycle execution preflight failed for {} {}",
+                    trove.name, trove.version
+                )
+            })?;
         let selected_root = selected
             .selected_root()
             .to_str()
             .ok_or_else(|| anyhow::anyhow!("autoremove selected root is not valid UTF-8"))?;
         super::preflight_ccs_remove_hook(
-            conn,
+            &preflight_state,
             trove,
             selected_root,
             lifecycle_options.sandbox_mode,
         )?;
+        preflight_state.finish()?;
+        drop(selected);
     }
 
     Ok(())

@@ -329,6 +329,7 @@ fn autoremove_preflight_failure_leaves_all_orphans_unchanged() {
         InstallSource::Repository,
     );
     drop(conn);
+    let before = common::database_snapshot(db_path.to_str().unwrap());
 
     let output = run_conary(&[
         "autoremove",
@@ -349,10 +350,16 @@ fn autoremove_preflight_failure_leaves_all_orphans_unchanged() {
 
     let text = output_text(&output);
     assert!(
-        text.contains("autoremove lifecycle execution preflight failed"),
+        text.contains("Native transaction preflight refused."),
         "{text}"
     );
-    assert!(text.contains("at stage PackagePreRemove"), "{text}");
+    assert!(text.contains("Stage: package-pre-remove"), "{text}");
+    assert!(text.contains("Package: broken-orphan"), "{text}");
+    assert!(
+        text.contains("Interpreter: /definitely/missing/conary-hook"),
+        "{text}"
+    );
+    assert_eq!(common::database_snapshot(db_path.to_str().unwrap()), before);
     let conn = db::open(&db_path).unwrap();
     assert!(
         Trove::find_one_by_name(&conn, "broken-orphan")

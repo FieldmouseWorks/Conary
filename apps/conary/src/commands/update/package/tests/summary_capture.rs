@@ -28,7 +28,7 @@ async fn update_summary_capture_child() {
             &conn,
             temp.path(),
             "a-summary-update",
-            None,
+            (scenario == "preflight_first").then_some(fixtures::FixtureFailure::MissingInterpreter),
             scenario.starts_with("relation_"),
             scenario
                 .starts_with("sequence_")
@@ -128,7 +128,73 @@ async fn update_summary_capture_child() {
         true,
     )
     .await;
+    if scenario == "preflight" || scenario == "preflight_first" {
+        let error = result
+            .as_ref()
+            .expect_err("missing interpreter must refuse update");
+        crate::ui::diagnostics::report_error(error);
+        let report = crate::commands::package_failure::package_failure_report(error).unwrap();
+        assert_eq!(
+            report.requested_updates,
+            Some(if scenario == "preflight" { 2 } else { 1 })
+        );
+        assert_eq!(
+            report.committed_changesets.as_ref().unwrap().is_empty(),
+            scenario == "preflight_first"
+        );
+        assert_eq!(report.failures.len(), 1);
+        let native = report.failures[0].native_preflight.as_ref().unwrap();
+        assert_eq!(
+            native.package,
+            if scenario == "preflight" {
+                "z-summary-failed"
+            } else {
+                "a-summary-update"
+            }
+        );
+        assert!(
+            matches!(&native.cause, conary_agent_contract::NativePreflightCause::MissingInterpreter { interpreter, .. } if interpreter == "/missing/summary-interpreter")
+        );
+        for id in report.committed_changesets.unwrap() {
+            let committed = conary_core::db::models::Changeset::find_by_id(&conn, id)
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                committed.status,
+                conary_core::db::models::ChangesetStatus::Applied
+            );
+        }
+    }
     println!("FRAME_END");
+    if scenario == "preflight_first" {
+        assert_eq!(
+            Trove::find_by_name(&conn, "a-summary-update").unwrap()[0].version,
+            "1.0.0"
+        );
+        let after = crate::commands::test_helpers::database_rows(&conn);
+        for table in [
+            "selected_root_snapshots",
+            "selected_root_snapshot_entries",
+            "troves",
+            "files",
+            "file_history",
+            "payload_claims",
+            "generation_publications",
+        ] {
+            assert_eq!(
+                after
+                    .iter()
+                    .find(|(name, _)| name == table)
+                    .expect("asserted table exists after refusal"),
+                before
+                    .iter()
+                    .find(|(name, _)| name == table)
+                    .expect("asserted table exists before refusal"),
+                "refused CCS update changed {table}"
+            );
+        }
+        return;
+    }
     if cancelled {
         let error = result.expect_err("dependency cancellation must stop the update");
         assert!(error.to_string().contains("Update cancelled"), "{error:#}");
@@ -161,7 +227,7 @@ async fn update_summary_capture_child() {
     if scenario == "mixed" || scenario == "preflight" {
         let error = result.expect_err("later lifecycle/preflight failure unexpectedly succeeded");
         if scenario == "preflight" {
-            assert!(format!("{error:#}").contains("preflight"), "{error:#}");
+            assert!(error.is::<crate::commands::update::failure::UpdateFailures>());
             assert!(
                 conary_core::db::models::FileEntry::find_by_path(
                     &conn,
@@ -287,6 +353,7 @@ fn update_summaries_in_terminal_pipe_and_no_color() {
             "pending",
             "mixed",
             "preflight",
+            "preflight_first",
             "noop",
             "cancel_full",
             "cancel_ccs",
@@ -352,6 +419,44 @@ fn update_summaries_in_terminal_pipe_and_no_color() {
                 assert!(!frame.contains('\x1b'), "{frame:?}");
             }
             let frame = console::strip_ansi_codes(frame);
+            let error_prefix = console::strip_ansi_codes(&crate::ui::error_line("")).into_owned();
+            if scenario == "preflight" || scenario == "preflight_first" {
+                let diagnostic = if tty {
+                    frame.to_string()
+                } else {
+                    String::from_utf8(output.stderr).unwrap()
+                };
+                let diagnostic = console::strip_ansi_codes(&diagnostic);
+                if scenario == "preflight_first" {
+                    assert!(
+                        diagnostic.contains(&format!(
+                            "{error_prefix}1 of 1 requested package update(s) failed."
+                        )),
+                        "{diagnostic}"
+                    );
+                    assert!(
+                        diagnostic.contains("Interpreter: /missing/summary-interpreter"),
+                        "{diagnostic}"
+                    );
+                    assert!(
+                        !diagnostic.contains("Committed changesets:"),
+                        "{diagnostic}"
+                    );
+                    assert!(!frame.contains("Applied package changes:"), "{frame}");
+                    continue;
+                }
+                for fact in [
+                    "1 of 2 requested package update(s) failed.",
+                    "Package: z-summary-failed",
+                    "Interpreter: /missing/summary-interpreter",
+                    "Committed changesets:",
+                    "Earlier committed changes remain applied.",
+                ] {
+                    assert!(diagnostic.contains(fact), "{diagnostic}");
+                }
+                assert_eq!(diagnostic.matches("error:").count(), 1, "{diagnostic}");
+            }
+            let frame = frame.split(&error_prefix).next().unwrap();
             if scenario.starts_with("cancel_") {
                 assert!(frame.contains("Cancelled."), "{frame}");
                 assert!(!frame.contains("Applied package changes:"), "{frame}");

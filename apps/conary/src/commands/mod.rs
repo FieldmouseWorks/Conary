@@ -34,6 +34,7 @@ mod live_root;
 mod model;
 mod new;
 mod operation_records;
+pub mod package_failure;
 mod package_parsing;
 mod package_target;
 pub(crate) mod packaging_mcp;
