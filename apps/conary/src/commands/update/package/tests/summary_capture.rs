@@ -128,7 +128,7 @@ async fn update_summary_capture_child() {
         true,
     )
     .await;
-    if scenario == "preflight" {
+    if scenario == "preflight" || scenario == "preflight_first" {
         let error = result
             .as_ref()
             .expect_err("missing interpreter must refuse update");
@@ -413,6 +413,7 @@ fn update_summaries_in_terminal_pipe_and_no_color() {
                 assert!(!frame.contains('\x1b'), "{frame:?}");
             }
             let frame = console::strip_ansi_codes(frame);
+            let error_prefix = console::strip_ansi_codes(&crate::ui::error_line("")).into_owned();
             if scenario == "preflight" || scenario == "preflight_first" {
                 let diagnostic = if tty {
                     frame.to_string()
@@ -422,7 +423,9 @@ fn update_summaries_in_terminal_pipe_and_no_color() {
                 let diagnostic = console::strip_ansi_codes(&diagnostic);
                 if scenario == "preflight_first" {
                     assert!(
-                        diagnostic.contains("error: 1 of 1 requested package update(s) failed."),
+                        diagnostic.contains(&format!(
+                            "{error_prefix}1 of 1 requested package update(s) failed."
+                        )),
                         "{diagnostic}"
                     );
                     assert!(
@@ -437,7 +440,7 @@ fn update_summaries_in_terminal_pipe_and_no_color() {
                     continue;
                 }
                 for fact in [
-                    "error: 1 of 2 requested package update(s) failed.",
+                    "1 of 2 requested package update(s) failed.",
                     "Package: z-summary-failed",
                     "Interpreter: /missing/summary-interpreter",
                     "Committed changesets:",
@@ -447,7 +450,7 @@ fn update_summaries_in_terminal_pipe_and_no_color() {
                 }
                 assert_eq!(diagnostic.matches("error:").count(), 1, "{diagnostic}");
             }
-            let frame = frame.split("error:").next().unwrap();
+            let frame = frame.split(&error_prefix).next().unwrap();
             if scenario.starts_with("cancel_") {
                 assert!(frame.contains("Cancelled."), "{frame}");
                 assert!(!frame.contains("Applied package changes:"), "{frame}");

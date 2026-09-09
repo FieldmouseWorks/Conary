@@ -257,6 +257,20 @@ async fn install_summary_capture_child() {
             "forced install summary publication failure",
         )
     });
+    if scenario == "batch_preflight" {
+        // Recorded path capability satisfies planning, but its runtime provider
+        // is absent. Runtime preflight must still refuse before batch mutation.
+        conary_core::db::models::ProvideEntry::new_typed(
+            base,
+            conary_core::repository::dependency_model::RepositoryCapabilityKind::File,
+            "/missing/summary-interpreter".into(),
+            None,
+            VersionScheme::Conary,
+            conary_core::repository::dependency_model::ProvideArchitectureQualifier::Implicit,
+        )
+        .insert(&conn)
+        .unwrap();
+    }
     let before = crate::commands::test_helpers::database_rows(&conn);
     println!("FRAME_BEGIN");
     let result = if scenario.starts_with("batch") {
