@@ -328,6 +328,22 @@ impl<'a> BatchInstaller<'a> {
         conn: &Connection,
         packages: &mut Vec<PreparedPackage>,
     ) -> Result<promises::PromiseWitnessPlan> {
+        for package in packages.iter() {
+            if let Some(expected) = package.old_trove.as_deref() {
+                let current = super::prepare::revalidate_replacement_snapshot(conn, expected)?;
+                super::prepare::check_replacement_identity_available(
+                    conn,
+                    current
+                        .id
+                        .context("prepared replacement has no installed identity")?,
+                    &package.name,
+                    &package.version,
+                    package.package_release.as_deref(),
+                    package.semantics.version_scheme,
+                    package.architecture.as_deref(),
+                )?;
+            }
+        }
         let promise_plan = ordering::order_packages_for_transaction(conn, packages)?;
         self.plan_package_relations_for_batch(conn, packages)?;
         Ok(promise_plan)

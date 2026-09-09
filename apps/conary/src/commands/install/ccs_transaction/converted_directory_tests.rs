@@ -231,6 +231,7 @@ async fn reloaded_converted_formats_install_with_their_directory_contract() {
                 .with_mixing(
                     conary_core::repository::resolution_policy::DependencyMixingPolicy::Permissive,
                 ),
+            replacement: None,
         })
         .await
         .unwrap_or_else(|error| {

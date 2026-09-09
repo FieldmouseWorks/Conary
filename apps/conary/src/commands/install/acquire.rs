@@ -15,6 +15,7 @@ use super::{
     effective_source_profile,
 };
 use anyhow::{Context, Result};
+use conary_core::db::models::Trove;
 use conary_core::packages::PackageFormat;
 use conary_core::repository::resolution_policy::ResolutionPolicy;
 use conary_core::scriptlet::SandboxMode;
@@ -33,6 +34,10 @@ pub(super) struct CcsInstallParams<'a> {
     pub(super) yes: bool,
     pub(super) repository_provenance: Option<RepositoryInstallProvenance>,
     pub(super) requested_source_identity: Option<&'a str>,
+    /// Exact installed record selected by an update, forwarded unchanged to
+    /// every direct CCS install path so the same target is revalidated under
+    /// the mutation boundary.
+    pub(super) replacement: Option<Trove>,
 }
 
 /// Resolve a package path, detect its format, and parse it.
@@ -133,6 +138,7 @@ pub(super) async fn resolve_and_parse_package(
                 repository_provenance,
                 requested_source_identity: ccs_opts.requested_source_identity,
                 resolution_policy,
+                replacement: ccs_opts.replacement.clone(),
             },
             report,
         )
@@ -168,6 +174,7 @@ pub(super) async fn resolve_and_parse_package(
                 repository_provenance,
                 requested_source_identity: ccs_opts.requested_source_identity,
                 resolution_policy,
+                replacement: ccs_opts.replacement.clone(),
             },
             report,
         )
@@ -221,6 +228,7 @@ pub(super) async fn resolve_and_parse_package(
                         repository_provenance,
                         requested_source_identity: ccs_opts.requested_source_identity,
                         resolution_policy,
+                        replacement: ccs_opts.replacement.clone(),
                     },
                     report,
                 )

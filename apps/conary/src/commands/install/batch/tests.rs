@@ -1171,6 +1171,7 @@ fn prepare_signed_ccs_dependency(
             repository_provenance: None,
             requested_source_identity: None,
         },
+        None,
     )
     .unwrap()
 }

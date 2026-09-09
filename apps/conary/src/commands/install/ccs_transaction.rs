@@ -17,6 +17,7 @@ use super::{
 use anyhow::{Context, Result};
 use conary_core::ccs::native_lifecycle::SourceFormat;
 use conary_core::components::ComponentType;
+use conary_core::db::models::Trove;
 use conary_core::packages::PackageFormat;
 use conary_core::scriptlet::SandboxMode;
 use std::collections::HashMap;
@@ -38,6 +39,9 @@ pub(crate) struct CcsTransactionInstallOptions<'a> {
     pub selected_manifest_components: Option<Vec<String>>,
     pub repository_provenance: Option<RepositoryInstallProvenance>,
     pub requested_source_identity: Option<&'a str>,
+    /// Exact installed record selected by an update. `None` for ordinary
+    /// installs, which keep first name/architecture match behavior.
+    pub replacement: Option<Trove>,
 }
 
 pub(crate) struct CcsTransactionInstallResult {
@@ -137,7 +141,15 @@ pub(crate) fn check_ccs_upgrade_status(
     allow_downgrade: bool,
     intent: InstallIntent,
     reinstall: bool,
+    replacement: Option<&Trove>,
 ) -> Result<UpgradeCheck> {
+    // An explicit update replacement is authoritative: the shared upgrade
+    // authority reloads and revalidates the exact selected row and never
+    // falls back to the first same-name/same-architecture match.
+    if replacement.is_some() {
+        return check_upgrade_status(conn, pkg, semantics, allow_downgrade, intent, replacement);
+    }
+
     let existing = conary_core::db::models::Trove::find_by_name(conn, pkg.name())?;
 
     for trove in &existing {
@@ -158,7 +170,7 @@ pub(crate) fn check_ccs_upgrade_status(
         }
     }
 
-    check_upgrade_status(conn, pkg, semantics, allow_downgrade, intent)
+    check_upgrade_status(conn, pkg, semantics, allow_downgrade, intent, None)
 }
 
 /// Recover the package-manager semantics carried through a converted CCS
@@ -362,6 +374,7 @@ fn install_ccs_package_transactionally_inner(
         opts.allow_downgrade,
         opts.intent,
         opts.reinstall,
+        opts.replacement.as_ref(),
     )?;
     let old_trove = match &upgrade {
         UpgradeCheck::FreshInstall => None,

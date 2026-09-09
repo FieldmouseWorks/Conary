@@ -68,13 +68,31 @@ pub enum UpgradeCheck {
 }
 
 /// Check if package is already installed and determine upgrade status
+///
+/// `replacement` is the exact installed record selected by an update. When it
+/// is supplied, this function never falls back to the first name/architecture
+/// match: the snapshot's persisted row is reloaded and revalidated under the
+/// caller's existing mutation-lock/preparation boundary, and only that row may
+/// be replaced. Ordinary installs pass `None` and keep first-match behavior.
 pub fn check_upgrade_status(
     conn: &Connection,
     pkg: &dyn PackageFormat,
     semantics: &InstallSemantics,
     allow_downgrade: bool,
     intent: InstallIntent,
+    replacement: Option<&Trove>,
 ) -> Result<UpgradeCheck> {
+    if let Some(expected) = replacement {
+        return check_explicit_replacement_status(
+            conn,
+            pkg,
+            semantics,
+            allow_downgrade,
+            intent,
+            expected,
+        );
+    }
+
     let existing = conary_core::db::models::Trove::find_by_name(conn, pkg.name())?;
 
     for trove in &existing {
@@ -84,70 +102,202 @@ pub fn check_upgrade_status(
             pkg.version_scheme(),
             pkg.architecture(),
         )? {
-            if trove.version == pkg.version()
-                && trove.package_release.as_deref() == pkg.package_release()
-            {
-                return Ok(UpgradeCheck::AlreadyInstalled(Box::new(trove.clone())));
-            }
-
-            if trove.version_scheme != semantics.version_scheme {
-                if intent == InstallIntent::Replatform {
-                    info!(
-                        "Replatforming {} from {} version scheme {} to {} version scheme {}",
-                        pkg.name(),
-                        trove.version_scheme.as_str(),
-                        trove.version,
-                        semantics.version_scheme.as_str(),
-                        pkg.version()
-                    );
-                    return Ok(UpgradeCheck::Replatform(Box::new(trove.clone())));
-                }
-                return Err(anyhow::anyhow!(
-                    "Cannot replace package {} across {} and {} version schemes without an explicit replatform operation",
-                    pkg.name(),
-                    trove.version_scheme.as_str(),
-                    semantics.version_scheme.as_str()
-                ));
-            }
-
-            match compare_installed_and_incoming_versions(
-                trove,
-                pkg.version(),
-                pkg.package_release(),
-                semantics,
-            )? {
-                Ordering::Less => {
-                    info!(
-                        "Upgrading {} from version {} to {}",
-                        pkg.name(),
-                        trove.version,
-                        pkg.version()
-                    );
-                    return Ok(UpgradeCheck::Upgrade(Box::new(trove.clone())));
-                }
-                Ordering::Equal | Ordering::Greater => {
-                    if allow_downgrade {
-                        warn!(
-                            "Downgrading {} from version {} to {}",
-                            pkg.name(),
-                            trove.version,
-                            pkg.version()
-                        );
-                        return Ok(UpgradeCheck::Downgrade(Box::new(trove.clone())));
-                    } else {
-                        return Err(anyhow::anyhow!(
-                            "Cannot downgrade package {} from version {} to {} (use --allow-downgrade to override)",
-                            pkg.name(),
-                            trove.version,
-                            pkg.version()
-                        ));
-                    }
-                }
-            }
+            return classify_installed_trove(trove, pkg, semantics, allow_downgrade, intent);
         }
     }
 
     Ok(UpgradeCheck::FreshInstall)
+}
+
+/// Exact update replacement: reload the selected row by ID and refuse when it
+/// disappeared or no longer matches the snapshot the update planned against.
+fn check_explicit_replacement_status(
+    conn: &Connection,
+    pkg: &dyn PackageFormat,
+    semantics: &InstallSemantics,
+    allow_downgrade: bool,
+    intent: InstallIntent,
+    expected: &Trove,
+) -> Result<UpgradeCheck> {
+    let current = revalidate_replacement_snapshot(conn, expected)?;
+    let expected_id = current
+        .id
+        .context("revalidated replacement has no identity")?;
+    if pkg.name() != current.name {
+        anyhow::bail!(
+            "Incoming package '{}' does not match update replacement target '{}'",
+            pkg.name(),
+            current.name
+        );
+    }
+    if !architectures_share_install_slot(
+        current.version_scheme,
+        current.architecture.as_deref(),
+        pkg.version_scheme(),
+        pkg.architecture(),
+    )? {
+        anyhow::bail!(
+            "Incoming package '{}' architecture '{}' is incompatible with update replacement target '{}' architecture '{}'",
+            pkg.name(),
+            pkg.architecture().unwrap_or("no-arch"),
+            current.name,
+            current.architecture.as_deref().unwrap_or("no-arch")
+        );
+    }
+
+    check_replacement_identity_available(
+        conn,
+        expected_id,
+        pkg.name(),
+        pkg.version(),
+        pkg.package_release(),
+        pkg.version_scheme(),
+        pkg.architecture(),
+    )?;
+
+    classify_installed_trove(&current, pkg, semantics, allow_downgrade, intent)
+}
+
+/// Reload prepared replacement authority at the caller's mutation boundary.
+pub(super) fn revalidate_replacement_snapshot(
+    conn: &Connection,
+    expected: &Trove,
+) -> Result<Trove> {
+    let expected_id = expected.id.ok_or_else(|| {
+        anyhow::anyhow!(
+            "Update replacement target '{}' has no persisted installed record identity",
+            expected.name
+        )
+    })?;
+    let current = Trove::find_by_id(conn, expected_id)?.ok_or_else(|| {
+        anyhow::anyhow!(
+            "Update replacement target '{}-{}' (installed trove {expected_id}) disappeared before replacement",
+            expected.name,
+            expected.version
+        )
+    })?;
+    if current.name != expected.name
+        || current.version != expected.version
+        || current.package_release != expected.package_release
+        || current.architecture != expected.architecture
+        || current.version_scheme != expected.version_scheme
+        || current.source_profile != expected.source_profile
+        || current.install_source != expected.install_source
+        || current.trove_type != expected.trove_type
+        || current.pinned != expected.pinned
+        || current.installed_from_repository_id != expected.installed_from_repository_id
+        || current.native_package_identity != expected.native_package_identity
+        || current.debian_multi_arch != expected.debian_multi_arch
+    {
+        anyhow::bail!(
+            "Update replacement target '{}' changed after selection; refusing to replace a different installed record",
+            expected.name
+        );
+    }
+    Ok(current)
+}
+
+pub(super) fn check_replacement_identity_available(
+    conn: &Connection,
+    expected_id: i64,
+    name: &str,
+    version: &str,
+    release: Option<&str>,
+    scheme: conary_core::repository::versioning::VersionScheme,
+    architecture: Option<&str>,
+) -> Result<()> {
+    // The incoming exact identity must not already live on a different
+    // installed row, or this replacement would duplicate it.
+    for other in Trove::find_by_name(conn, name)? {
+        if other.id == Some(expected_id) {
+            continue;
+        }
+        if architectures_share_install_slot(
+            other.version_scheme,
+            other.architecture.as_deref(),
+            scheme,
+            architecture,
+        )? && other.version == version
+            && other.package_release.as_deref() == release
+        {
+            anyhow::bail!(
+                "Package {} version {} ({}) is already installed as a separate record (installed trove {})",
+                name,
+                version,
+                architecture.unwrap_or("no-arch"),
+                other.id.unwrap_or_default()
+            );
+        }
+    }
+
+    Ok(())
+}
+
+fn classify_installed_trove(
+    trove: &Trove,
+    pkg: &dyn PackageFormat,
+    semantics: &InstallSemantics,
+    allow_downgrade: bool,
+    intent: InstallIntent,
+) -> Result<UpgradeCheck> {
+    if trove.version == pkg.version() && trove.package_release.as_deref() == pkg.package_release() {
+        return Ok(UpgradeCheck::AlreadyInstalled(Box::new(trove.clone())));
+    }
+
+    if trove.version_scheme != semantics.version_scheme {
+        if intent == InstallIntent::Replatform {
+            info!(
+                "Replatforming {} from {} version scheme {} to {} version scheme {}",
+                pkg.name(),
+                trove.version_scheme.as_str(),
+                trove.version,
+                semantics.version_scheme.as_str(),
+                pkg.version()
+            );
+            return Ok(UpgradeCheck::Replatform(Box::new(trove.clone())));
+        }
+        return Err(anyhow::anyhow!(
+            "Cannot replace package {} across {} and {} version schemes without an explicit replatform operation",
+            pkg.name(),
+            trove.version_scheme.as_str(),
+            semantics.version_scheme.as_str()
+        ));
+    }
+
+    match compare_installed_and_incoming_versions(
+        trove,
+        pkg.version(),
+        pkg.package_release(),
+        semantics,
+    )? {
+        Ordering::Less => {
+            info!(
+                "Upgrading {} from version {} to {}",
+                pkg.name(),
+                trove.version,
+                pkg.version()
+            );
+            Ok(UpgradeCheck::Upgrade(Box::new(trove.clone())))
+        }
+        Ordering::Equal | Ordering::Greater => {
+            if allow_downgrade {
+                warn!(
+                    "Downgrading {} from version {} to {}",
+                    pkg.name(),
+                    trove.version,
+                    pkg.version()
+                );
+                Ok(UpgradeCheck::Downgrade(Box::new(trove.clone())))
+            } else {
+                Err(anyhow::anyhow!(
+                    "Cannot downgrade package {} from version {} to {} (use --allow-downgrade to override)",
+                    pkg.name(),
+                    trove.version,
+                    pkg.version()
+                ))
+            }
+        }
+    }
 }
 
 fn architectures_share_install_slot(
@@ -220,241 +370,4 @@ impl ComponentSelection {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use conary_core::db::models::{InstallSource, Trove, TroveType};
-    use conary_core::db::schema;
-    use conary_core::packages::traits::PackageFile;
-
-    struct TestPackage {
-        name: String,
-        version: String,
-        version_scheme: VersionScheme,
-        architecture: Option<String>,
-    }
-
-    impl conary_core::packages::PackageFormat for TestPackage {
-        fn parse(_path: &str) -> conary_core::Result<Self>
-        where
-            Self: Sized,
-        {
-            unreachable!("tests construct package instances directly")
-        }
-
-        fn name(&self) -> &str {
-            &self.name
-        }
-
-        fn version(&self) -> &str {
-            &self.version
-        }
-
-        fn version_scheme(&self) -> conary_core::repository::versioning::VersionScheme {
-            self.version_scheme
-        }
-
-        fn architecture(&self) -> Option<&str> {
-            self.architecture.as_deref()
-        }
-
-        fn debian_multi_arch(
-            &self,
-        ) -> Option<conary_core::repository::dependency_model::DebianMultiArch> {
-            (self.version_scheme == VersionScheme::Debian)
-                .then_some(conary_core::repository::dependency_model::DebianMultiArch::No)
-        }
-
-        fn description(&self) -> Option<&str> {
-            None
-        }
-
-        fn files(&self) -> &[PackageFile] {
-            &[]
-        }
-
-        fn requirements(
-            &self,
-        ) -> &[conary_core::repository::dependency_model::RepositoryRequirementGroup] {
-            &[]
-        }
-
-        fn package_payload(&self) -> conary_core::Result<conary_core::packages::PackagePayload> {
-            Ok(conary_core::packages::PackagePayload::default())
-        }
-
-        fn to_trove(&self) -> Trove {
-            let mut trove = Trove::new_with_source(
-                self.name.clone(),
-                self.version.clone(),
-                TroveType::Package,
-                InstallSource::Repository,
-                conary_core::repository::versioning::VersionScheme::Conary,
-            );
-            trove.architecture = self.architecture.clone();
-            trove
-        }
-    }
-
-    fn create_test_db() -> rusqlite::Connection {
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        schema::ensure_current(&conn).unwrap();
-        conn
-    }
-
-    #[test]
-    fn check_upgrade_status_uses_debian_version_scheme() {
-        let conn = create_test_db();
-        let mut trove = Trove::new_with_source(
-            "demo".to_string(),
-            "1.0~beta1".to_string(),
-            TroveType::Package,
-            InstallSource::Repository,
-            conary_core::repository::versioning::VersionScheme::Debian,
-        );
-        trove.architecture = Some("amd64".to_string());
-        trove.debian_multi_arch =
-            Some(conary_core::repository::dependency_model::DebianMultiArch::No);
-        trove.insert(&conn).unwrap();
-
-        let pkg = TestPackage {
-            name: "demo".to_string(),
-            version: "1.0".to_string(),
-            version_scheme: VersionScheme::Debian,
-            architecture: Some("amd64".to_string()),
-        };
-
-        let result = check_upgrade_status(
-            &conn,
-            &pkg,
-            &InstallSemantics::native_package(PackageFormatType::Deb),
-            false,
-            InstallIntent::PackageChange,
-        )
-        .unwrap();
-        assert!(matches!(result, UpgradeCheck::Upgrade(_)));
-    }
-
-    #[test]
-    fn check_upgrade_status_uses_arch_version_scheme() {
-        let conn = create_test_db();
-        let mut trove = Trove::new_with_source(
-            "demo".to_string(),
-            "1.0-1".to_string(),
-            TroveType::Package,
-            InstallSource::Repository,
-            conary_core::repository::versioning::VersionScheme::Arch,
-        );
-        trove.architecture = Some("x86_64".to_string());
-        trove.insert(&conn).unwrap();
-
-        let pkg = TestPackage {
-            name: "demo".to_string(),
-            version: "1.0-2".to_string(),
-            version_scheme: VersionScheme::Arch,
-            architecture: Some("x86_64".to_string()),
-        };
-
-        let result = check_upgrade_status(
-            &conn,
-            &pkg,
-            &InstallSemantics::native_package(PackageFormatType::Arch),
-            false,
-            InstallIntent::PackageChange,
-        )
-        .unwrap();
-        assert!(matches!(result, UpgradeCheck::Upgrade(_)));
-    }
-
-    #[test]
-    fn check_upgrade_status_returns_typed_already_installed_outcome() {
-        let conn = create_test_db();
-        let mut trove = Trove::new_with_source(
-            "demo".to_string(),
-            "1.0-1".to_string(),
-            TroveType::Package,
-            InstallSource::Repository,
-            conary_core::repository::versioning::VersionScheme::Arch,
-        );
-        trove.architecture = Some("x86_64".to_string());
-        trove.insert(&conn).unwrap();
-
-        let pkg = TestPackage {
-            name: "demo".to_string(),
-            version: "1.0-1".to_string(),
-            version_scheme: VersionScheme::Arch,
-            architecture: Some("x86_64".to_string()),
-        };
-
-        let result = check_upgrade_status(
-            &conn,
-            &pkg,
-            &InstallSemantics::native_package(PackageFormatType::Arch),
-            false,
-            InstallIntent::PackageChange,
-        )
-        .unwrap();
-        assert!(matches!(result, UpgradeCheck::AlreadyInstalled(_)));
-    }
-
-    #[test]
-    fn check_upgrade_status_matches_cross_distro_architecture_aliases() {
-        let conn = create_test_db();
-        let mut trove = Trove::new_with_source(
-            "demo".to_string(),
-            "1.0-1".to_string(),
-            TroveType::Package,
-            InstallSource::Repository,
-            conary_core::repository::versioning::VersionScheme::Arch,
-        );
-        trove.architecture = Some("x86_64".to_string());
-        trove.insert(&conn).unwrap();
-
-        let pkg = TestPackage {
-            name: "demo".to_string(),
-            version: "1.0-1".to_string(),
-            version_scheme: VersionScheme::Debian,
-            architecture: Some("amd64".to_string()),
-        };
-
-        let result = check_upgrade_status(
-            &conn,
-            &pkg,
-            &InstallSemantics::native_package(PackageFormatType::Deb),
-            false,
-            InstallIntent::PackageChange,
-        )
-        .unwrap();
-        assert!(matches!(result, UpgradeCheck::AlreadyInstalled(_)));
-    }
-
-    #[test]
-    fn check_upgrade_status_matches_architecture_independent_markers() {
-        let conn = create_test_db();
-        let mut trove = Trove::new_with_source(
-            "demo".to_string(),
-            "1.0-1".to_string(),
-            TroveType::Package,
-            InstallSource::Repository,
-            conary_core::repository::versioning::VersionScheme::Rpm,
-        );
-        trove.architecture = Some("noarch".to_string());
-        trove.insert(&conn).unwrap();
-
-        let pkg = TestPackage {
-            name: "demo".to_string(),
-            version: "1.0-1".to_string(),
-            version_scheme: VersionScheme::Debian,
-            architecture: Some("all".to_string()),
-        };
-
-        let result = check_upgrade_status(
-            &conn,
-            &pkg,
-            &InstallSemantics::native_package(PackageFormatType::Deb),
-            false,
-            InstallIntent::PackageChange,
-        )
-        .unwrap();
-        assert!(matches!(result, UpgradeCheck::AlreadyInstalled(_)));
-    }
-}
+mod tests;

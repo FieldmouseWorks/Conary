@@ -89,6 +89,7 @@ pub(super) async fn plan_selected_updates(
             &path.to_string_lossy(),
             InstallOptions {
                 db_path: projection.path(),
+                replacement: Some(trove.clone()),
                 repository_provenance: Some(repository_install_provenance_from_package(
                     &candidate.package,
                     &candidate.repository,

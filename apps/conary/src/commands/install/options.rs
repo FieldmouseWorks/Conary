@@ -4,7 +4,7 @@ use super::OwnershipMode;
 use anyhow::{Context, Result};
 use conary_core::ccs::convert::{PendingConversionResult, VerifiedConversionResult};
 use conary_core::ccs::verify::{TrustPolicy, verify_package, verify_package_into_cas};
-use conary_core::db::models::{Repository, RepositoryPackage, RepositoryPackageKey};
+use conary_core::db::models::{Repository, RepositoryPackage, RepositoryPackageKey, Trove};
 use conary_core::filesystem::CasStore;
 use conary_core::repository::RepositorySourceKind;
 use conary_core::scriptlet::SandboxMode;
@@ -49,6 +49,10 @@ pub struct InstallOptions<'a> {
     /// Repository provenance supplied by an internal caller that already
     /// selected and downloaded the package before calling `cmd_install`.
     pub(crate) repository_provenance: Option<RepositoryInstallProvenance>,
+    /// Exact installed record selected by an update, distinct from the
+    /// incoming artifact selectors. It is reloaded and revalidated against
+    /// this snapshot under the mutation boundary before any replacement.
+    pub(crate) replacement: Option<Trove>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

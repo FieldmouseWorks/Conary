@@ -156,6 +156,7 @@ fn install_options_for_update<'a>(
     yes: bool,
     repo_pkg: &RepositoryPackage,
     repo: &Repository,
+    trove: &Trove,
 ) -> Result<InstallOptions<'a>> {
     Ok(InstallOptions {
         db_path,
@@ -163,6 +164,7 @@ fn install_options_for_update<'a>(
         sandbox_mode,
         ownership: Some(ownership),
         yes,
+        replacement: Some(trove.clone()),
         repository_provenance: Some(repository_install_provenance_from_package(repo_pkg, repo)?),
         ..Default::default()
     })
@@ -574,6 +576,7 @@ pub(super) async fn update_packages(
                                                     sandbox_mode,
                                                     ownership: Some(ownership),
                                                     yes,
+                                                    replacement: Some(trove.clone()),
                                                     repository_provenance: Some(
                                                         repository_install_provenance_from_package(
                                                             &repo_pkg, &repo,
@@ -667,6 +670,7 @@ pub(super) async fn update_packages(
                             yes,
                             &repo_pkg,
                             &repo,
+                            &trove,
                         )?,
                         &mut report,
                     )
@@ -730,6 +734,7 @@ pub(super) async fn update_packages(
                             yes,
                             &repo_pkg,
                             &repo,
+                            &trove,
                         )?,
                         &mut report,
                     )

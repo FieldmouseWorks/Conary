@@ -14,6 +14,7 @@ pub(crate) fn prepare_ccs_package_for_batch(
     allow_downgrade: bool,
     intent: InstallIntent,
     source_authority: PreparedPackageSourceAuthority<'_>,
+    replacement: Option<&Trove>,
 ) -> Result<PreparedPackage> {
     let PreparedPackageSourceAuthority {
         repository_provenance,
@@ -30,6 +31,7 @@ pub(crate) fn prepare_ccs_package_for_batch(
         allow_downgrade,
         intent,
         false,
+        replacement,
     )?;
     let (is_upgrade, old_trove) = match upgrade {
         UpgradeCheck::FreshInstall => (false, None),

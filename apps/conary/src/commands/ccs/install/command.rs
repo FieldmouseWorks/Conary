@@ -30,6 +30,7 @@ pub(super) fn check_ccs_install_upgrade_status(
         false,
         InstallIntent::PackageChange,
         reinstall,
+        None,
     )
 }
 
@@ -232,6 +233,7 @@ pub fn cmd_ccs_install(
                 selected_manifest_components: Some(selected_components.names.clone()),
                 repository_provenance: None,
                 requested_source_identity: None,
+                replacement: None,
             },
         )?;
         return Ok(());
@@ -257,6 +259,7 @@ pub fn cmd_ccs_install(
             selected_manifest_components: Some(selected_components.names.clone()),
             repository_provenance: None,
             requested_source_identity: None,
+            replacement: None,
         },
     )?;
     let _changeset_id = tx_result.changeset_id;

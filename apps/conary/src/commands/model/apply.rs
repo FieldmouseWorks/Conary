@@ -315,6 +315,7 @@ pub(super) async fn apply_replatform_changes(
                 yes: true,
                 from_source: None,
                 repository_provenance: None,
+                replacement: None,
             },
         )
         .await

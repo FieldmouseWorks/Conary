@@ -69,9 +69,16 @@ pub fn prepare_package_for_batch(
         selection_reason,
         allow_downgrade,
         source_profile_id,
+        None,
     )
 }
 
+/// Prepare an already parsed package.
+///
+/// `replacement` is the exact installed record selected by an update. It is
+/// forwarded unchanged to the shared upgrade authority; dependency packages
+/// are prepared through the public wrapper above and structurally cannot
+/// inherit the root snapshot.
 #[allow(clippy::too_many_arguments)]
 pub(in crate::commands::install) fn prepare_parsed_package_for_batch(
     pkg: &dyn conary_core::packages::PackageFormat,
@@ -81,6 +88,7 @@ pub(in crate::commands::install) fn prepare_parsed_package_for_batch(
     selection_reason: &str,
     allow_downgrade: bool,
     source_profile_id: Option<&str>,
+    replacement: Option<&Trove>,
 ) -> Result<Option<PreparedPackage>> {
     let semantics = InstallSemantics::native_package(format);
 
@@ -94,6 +102,7 @@ pub(in crate::commands::install) fn prepare_parsed_package_for_batch(
         &semantics,
         allow_downgrade,
         InstallIntent::PackageChange,
+        replacement,
     )? {
         UpgradeCheck::FreshInstall => (false, None),
         UpgradeCheck::AlreadyInstalled(_) => return Ok(None),

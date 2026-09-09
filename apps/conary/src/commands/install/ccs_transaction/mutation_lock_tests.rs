@@ -92,6 +92,7 @@ fn standalone_ccs_install_resolves_upgrade_identity_under_the_mutation_lock() {
                 selected_manifest_components: None,
                 repository_provenance: None,
                 requested_source_identity: None,
+                replacement: None,
             },
         )
         .map_err(|error| format!("{error:#}"));

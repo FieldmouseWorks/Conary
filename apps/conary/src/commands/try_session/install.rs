@@ -58,6 +58,7 @@ pub(super) fn install_try_package(
             selected_manifest_components: None,
             repository_provenance: None,
             requested_source_identity: None,
+            replacement: None,
         },
         &mut selected,
     )?;

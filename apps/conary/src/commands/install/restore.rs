@@ -397,6 +397,7 @@ pub(crate) async fn prepare_install_for_restore(
         &semantics,
         allow_downgrade,
         InstallIntent::PackageChange,
+        None,
     )? {
         UpgradeCheck::FreshInstall => None,
         UpgradeCheck::AlreadyInstalled(trove) => {

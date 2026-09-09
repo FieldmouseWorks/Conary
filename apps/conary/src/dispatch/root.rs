@@ -110,6 +110,7 @@ pub(super) async fn dispatch_command(command: Option<Commands>) -> Result<()> {
                         yes,
                         from_source: from,
                         repository_provenance: None,
+                        replacement: None,
                     },
                 )
                 .await
