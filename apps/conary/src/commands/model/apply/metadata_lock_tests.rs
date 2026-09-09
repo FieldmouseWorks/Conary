@@ -203,28 +203,32 @@ fn metadata_actions_re_read_target_existence_after_the_lock_is_released() {
                 pattern: "*".to_string(),
             },
             InstallReason::Explicit,
-            Some(format!("Pin '{name}': package not installed")),
+            Some(format!("Pin '{name}': Package '{name}' is not installed")),
         ),
         (
             DiffAction::Unpin {
                 package: name.to_string(),
             },
             InstallReason::Explicit,
-            Some(format!("Unpin '{name}': package not installed")),
+            Some(format!("Unpin '{name}': Package '{name}' is not installed")),
         ),
         (
             DiffAction::MarkExplicit {
                 package: name.to_string(),
             },
             InstallReason::Dependency,
-            None,
+            Some(format!(
+                "MarkExplicit '{name}': Package '{name}' is not installed"
+            )),
         ),
         (
             DiffAction::MarkDependency {
                 package: name.to_string(),
             },
             InstallReason::Explicit,
-            None,
+            Some(format!(
+                "MarkDependency '{name}': Package '{name}' is not installed"
+            )),
         ),
     ];
 
@@ -266,13 +270,16 @@ fn ambiguous_metadata_target_is_refused_without_writes() {
     );
 
     assert_eq!(applied, 0);
-    assert_eq!(
-        errors,
-        vec![format!(
-            "Pin '{name}': Conflict: package '{name}' has 2 installed variants; \
-             select version and architecture"
-        )]
+    assert_eq!(errors.len(), 1);
+    assert!(
+        errors[0].starts_with(&format!(
+            "Pin '{name}': Multiple installed variants of '{name}'"
+        )),
+        "{errors:?}"
     );
+    assert!(errors[0].contains("release 1"), "{errors:?}");
+    assert!(errors[0].contains("release 2"), "{errors:?}");
+    assert!(!errors[0].contains("--version"), "{errors:?}");
     for id in [first, second] {
         let trove = stored_trove(&db_path, id);
         assert!(
