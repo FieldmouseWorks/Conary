@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-09
-revision: 71
+revision: 72
 summary: Describe package-variant selection, source identity, architecture and ABI admission, supported profiles, signed Remi universes, adoption, dependency acquisition, and lifecycle handoff.
 ---
 
@@ -60,9 +60,12 @@ repository declaration + authenticated trust
 Model apply serializes its pin/unpin and install-reason metadata phase with the
 runtime mutation lock. It opens the metadata connection and resolves installed
 names after acquiring that lock, and releases it before autoremove. Package
-execution retains its own lock scopes. Name-only metadata actions continue to
-refuse multiple installed variants; this phase does not infer a release or
-architecture selector. Metadata-only lock regressions live in
+execution retains its own lock scopes. All four metadata actions use the shared
+installed-package selector: a same-name component is neither a target nor a
+source of package ambiguity. Missing packages and multiple installed package
+variants produce action-labeled refusals; this phase does not infer a release
+or architecture selector. Metadata selection and lock regressions live in
+`apps/conary/src/commands/model/apply/metadata_selection_tests.rs` and
 `apps/conary/src/commands/model/apply/metadata_lock_tests.rs`.
 
 `[system]` owns only target ownership convergence. Distro pins, source

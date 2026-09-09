@@ -10,6 +10,9 @@ use super::presentation::{
     is_replatform_action, print_source_policy_and_replatform, render_replatform_summary,
 };
 use crate::commands::install::cmd_install_replatform;
+use crate::commands::package_target::{
+    InstalledPackageSelector, ResolvedInstalledPackage, resolve_installed_package_with_hint,
+};
 use crate::commands::replatform_rendering::{
     render_replatform_blocked_reason, render_replatform_execution_plan,
 };
@@ -609,6 +612,10 @@ pub(super) fn apply_derived_packages(
 /// Apply pin/unpin and install-reason changes under the runtime mutation lock.
 ///
 /// Returns the number of changes applied and any errors encountered.
+///
+/// The system model addresses installed packages by name only, so every
+/// metadata action selects through the shared package-only resolver on the
+/// far side of the mutation lock and mutates the resolved trove id.
 pub(super) fn apply_metadata_changes(
     db_path: &str,
     actions: &[&DiffAction],
@@ -643,43 +650,35 @@ pub(super) fn apply_metadata_changes(
 
     for action in actions {
         match action {
-            DiffAction::Pin { package, pattern } => match Trove::find_one_by_name(conn, package) {
-                Ok(Some(trove)) => {
-                    if let Some(id) = trove.id {
-                        if let Err(e) = Trove::pin(conn, id) {
-                            errors.push(format!("Pin '{}': {}", package, e));
-                        } else {
+            DiffAction::Pin { package, pattern } => {
+                match resolve_metadata_target(conn, "Pin", package) {
+                    Ok(resolved) => match Trove::pin(conn, resolved.trove_id) {
+                        Ok(()) => {
                             println!("Pinned '{}' to pattern '{}'", package, pattern);
                             applied += 1;
                         }
-                    }
+                        Err(e) => errors.push(format!("Pin '{}': {}", package, e)),
+                    },
+                    Err(error) => errors.push(error),
                 }
-                Ok(None) => {
-                    errors.push(format!("Pin '{}': package not installed", package));
-                }
-                Err(e) => errors.push(format!("Pin '{}': {}", package, e)),
-            },
-            DiffAction::Unpin { package } => match Trove::find_one_by_name(conn, package) {
-                Ok(Some(trove)) => {
-                    if let Some(id) = trove.id {
-                        if let Err(e) = Trove::unpin(conn, id) {
-                            errors.push(format!("Unpin '{}': {}", package, e));
-                        } else {
+            }
+            DiffAction::Unpin { package } => {
+                match resolve_metadata_target(conn, "Unpin", package) {
+                    Ok(resolved) => match Trove::unpin(conn, resolved.trove_id) {
+                        Ok(()) => {
                             println!("Unpinned '{}'", package);
                             applied += 1;
                         }
-                    }
+                        Err(e) => errors.push(format!("Unpin '{}': {}", package, e)),
+                    },
+                    Err(error) => errors.push(error),
                 }
-                Ok(None) => {
-                    errors.push(format!("Unpin '{}': package not installed", package));
-                }
-                Err(e) => errors.push(format!("Unpin '{}': {}", package, e)),
-            },
-            DiffAction::MarkExplicit { package } => match Trove::find_one_by_name(conn, package) {
-                Ok(Some(trove)) => match trove.id {
-                    Some(trove_id) => match Trove::promote_to_explicit(
+            }
+            DiffAction::MarkExplicit { package } => {
+                match resolve_metadata_target(conn, "MarkExplicit", package) {
+                    Ok(resolved) => match Trove::promote_to_explicit(
                         conn,
-                        trove_id,
+                        resolved.trove_id,
                         Some("Marked explicit by model apply"),
                     ) {
                         Ok(true) => {
@@ -687,42 +686,30 @@ pub(super) fn apply_metadata_changes(
                             applied += 1;
                         }
                         Ok(false) => {
-                            debug!("'{}' already explicit or not found", package);
+                            debug!("'{}' already explicit", package);
                         }
                         Err(e) => errors.push(format!("MarkExplicit '{}': {}", package, e)),
                     },
-                    None => errors.push(format!(
-                        "MarkExplicit '{}': installed trove has no persisted ID",
-                        package
-                    )),
-                },
-                Ok(None) => debug!("'{}' not installed", package),
-                Err(e) => errors.push(format!("MarkExplicit '{}': {}", package, e)),
-            },
+                    Err(error) => errors.push(error),
+                }
+            }
             DiffAction::MarkDependency { package } => {
-                match Trove::find_one_by_name(conn, package) {
-                    Ok(Some(trove)) => match trove.id {
-                        Some(trove_id) => match conn.execute(
-                            "UPDATE troves SET install_reason = 'dependency' \
+                match resolve_metadata_target(conn, "MarkDependency", package) {
+                    Ok(resolved) => match conn.execute(
+                        "UPDATE troves SET install_reason = 'dependency' \
                              WHERE id = ?1 AND install_reason = 'explicit' AND type = 'package'",
-                            rusqlite::params![trove_id],
-                        ) {
-                            Ok(rows) if rows > 0 => {
-                                println!("Marked '{}' as dependency", package);
-                                applied += 1;
-                            }
-                            Ok(_) => {
-                                debug!("'{}' already a dependency", package);
-                            }
-                            Err(e) => errors.push(format!("MarkDependency '{}': {}", package, e)),
-                        },
-                        None => errors.push(format!(
-                            "MarkDependency '{}': installed trove has no persisted ID",
-                            package
-                        )),
+                        rusqlite::params![resolved.trove_id],
+                    ) {
+                        Ok(rows) if rows > 0 => {
+                            println!("Marked '{}' as dependency", package);
+                            applied += 1;
+                        }
+                        Ok(_) => {
+                            debug!("'{}' already a dependency", package);
+                        }
+                        Err(e) => errors.push(format!("MarkDependency '{}': {}", package, e)),
                     },
-                    Ok(None) => debug!("'{}' not installed", package),
-                    Err(e) => errors.push(format!("MarkDependency '{}': {}", package, e)),
+                    Err(error) => errors.push(error),
                 }
             }
             _ => {}
@@ -732,6 +719,24 @@ pub(super) fn apply_metadata_changes(
     (applied, errors)
 }
 
+/// Ambiguity guidance for model metadata actions.
+///
+/// The model language has no per-variant package selector, so advising
+/// `--version`, `--release`, or `--arch` would recommend flags this command
+/// does not accept. The operator has to resolve the duplicate installed
+/// variants in installed state before the model can apply.
+const MODEL_METADATA_AMBIGUITY_HINT: &str = "The system model selects installed packages by name only; resolve the duplicate installed variants before applying.";
+
+fn resolve_metadata_target(
+    conn: &Connection,
+    action_label: &str,
+    package: &str,
+) -> std::result::Result<ResolvedInstalledPackage, String> {
+    let selector = InstalledPackageSelector::new(package.to_string(), None, None);
+    resolve_installed_package_with_hint(conn, &selector, MODEL_METADATA_AMBIGUITY_HINT)
+        .map_err(|error| format!("{action_label} '{package}': {error:#}"))
+}
+
 #[cfg(test)]
 mod dry_run_tests;
 #[cfg(test)]
@@ -739,3 +744,6 @@ mod tests;
 
 #[cfg(test)]
 mod metadata_lock_tests;
+
+#[cfg(test)]
+mod metadata_selection_tests;
