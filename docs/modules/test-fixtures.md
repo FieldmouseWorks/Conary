@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-09
-revision: 50
+revision: 51
 summary: Map fixture ownership, including command transaction captures, typed boot-tool interfaces, public and candidate profiles, and cross-source lifecycle proof
 ---
 
@@ -752,6 +752,9 @@ Each fixture family should record:
   trust, with no installed-database or permanent-CAS writes. Shared signed RPM
   construction lives in `commands/test_helpers/native_artifact.rs` and also
   serves the exact-acquisition tests.
+  `apps/conary/src/commands/install/batch/tests/preview.rs` covers repository
+  enrollment replacement, dropped declarations, shared owners, and both
+  last-owner removal dispositions without changing the installed database.
   Paired named-owner preview/apply captures keep accounts absent during preview,
   create them through a typed RPM pre-payload event during apply, and verify
   persisted payload ownership.

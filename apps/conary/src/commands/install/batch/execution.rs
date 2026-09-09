@@ -205,18 +205,7 @@ impl BatchInstaller<'_> {
             .flat_map(|package| package.extracted_files.iter())
             .map(|file| super::super::native_graph::normalize_archive_path(&file.path))
             .collect::<BTreeSet<_>>();
-        let finalization_troves = packages
-            .iter()
-            .map(PreparedPackage::old_trove_id)
-            .collect::<Result<Vec<_>>>()?
-            .into_iter()
-            .chain(
-                packages
-                    .iter()
-                    .flat_map(|package| package.relation_removals.iter())
-                    .map(|removal| Some(removal.trove_id)),
-            )
-            .collect::<Vec<_>>();
+        let finalization_troves = super::finalization_trove_ids(packages)?;
         let relation_removal_trove_ids = packages
             .iter()
             .flat_map(|package| package.relation_removals.iter())

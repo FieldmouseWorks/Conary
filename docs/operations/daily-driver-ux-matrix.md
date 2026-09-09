@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-09
-revision: 19
+revision: 20
 summary: Daily-driver CLI routes, grouped install/update/removal/rollback results, planner-backed previews, scoped recovery, coordinated progress, typed diagnostics, and truthful collection outcomes
 ---
 
@@ -250,7 +250,12 @@ Lifecycle programs, selected-root mutation, and generation publication do not
 run in this projection; the installed database and permanent CAS stay unchanged.
 Native dependency acquisition reads prepared trust from the original runtime
 keyring while planning against projected package state; it neither copies nor
-relaxes that trust.
+relaxes that trust. Projected database effects follow the native graph payload
+boundaries through `apps/conary/src/commands/install/preview/effects.rs`,
+including typed repository enrollment transitions and last-owner dispositions.
+A removed repository and its cached candidates disappear before later update
+selection; retained and shared ownership follow the same enrollment authority
+as apply.
 
 Previously, native/CCS install printed independent `Installed package` fields,
 batches printed a separate success list, and update ended with transfer counters.

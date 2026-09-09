@@ -1,13 +1,11 @@
 // apps/conary/src/commands/install/preview.rs
 //! Disposable installed-package state for ordered update planning.
 
+mod effects;
+
 use super::batch::PreparedPackage;
 use anyhow::{Context, Result};
-use conary_core::ccs::native_transaction::DebPackageState;
-use conary_core::db::models::{
-    Changeset, InstalledNativeLifecycleBundle, InstalledRequirementGroup, PackagePayloadOwnership,
-    Trove,
-};
+use conary_core::db::models::{Changeset, PackagePayloadOwnership, Trove};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -92,80 +90,85 @@ impl PreviewDatabase {
     }
 
     pub(super) fn project(&self, packages: &[PreparedPackage]) -> Result<()> {
+        use conary_core::ccs::native_transaction::NativeTransactionStep;
+        use conary_core::repository::enrollment::transaction as enrollment;
+
         let mut declared_paths = self
             .declared_paths
             .lock()
             .map_err(|_| anyhow::anyhow!("preview path state poisoned"))?;
         let mut projected = declared_paths.clone();
         let mut conn = super::super::open_db(&self.path)?;
+        let inputs = packages
+            .iter()
+            .map(PreparedPackage::native_install_input)
+            .collect::<Vec<_>>();
+        let native =
+            super::native_events::PreparedNativeTransaction::prepare_batch_with_declared_paths(
+                &conn, &inputs, &projected,
+            )?;
+        let finalization_troves = super::batch::finalization_trove_ids(packages)?;
+        let relation_removals = packages
+            .iter()
+            .flat_map(|package| &package.relation_removals)
+            .map(|removal| removal.trove_id)
+            .collect::<BTreeSet<_>>();
+        let deconfigurations = packages
+            .iter()
+            .flat_map(|package| &package.relation_deconfigurations)
+            .collect::<Vec<_>>();
+        let transitions = packages
+            .iter()
+            .map(|package| {
+                Ok((
+                    package.old_trove_id()?,
+                    package.repository_enrollments.as_slice(),
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        enrollment::preflight_batch(&conn, &transitions)?;
+        for id in &relation_removals {
+            enrollment::preflight_removal(&conn, *id)?;
+        }
         let tx = conn.transaction()?;
-        let mut changeset = Changeset::new("Disposable update preview projection".into());
-        let changeset_id = changeset.insert(&tx)?;
-        let mut removals = BTreeSet::new();
-        for package in packages {
-            removals.extend(package.old_trove_id()?);
-            removals.extend(
-                package
-                    .relation_removals
-                    .iter()
-                    .map(|removal| removal.trove_id),
-            );
-        }
-        for id in removals {
-            Trove::delete(&tx, id)?;
-            projected.packages.remove(&id);
-        }
-        for package in packages {
-            for deconfiguration in &package.relation_deconfigurations {
-                let mut installed = InstalledNativeLifecycleBundle::find_by_trove(
-                    &tx,
-                    deconfiguration.package.trove_id,
-                )?
-                .context("planned deconfiguration has no installed native lifecycle contract")?;
-                let bundle = installed.bundle()?;
-                anyhow::ensure!(
-                    bundle.source_format == conary_core::ccs::native_lifecycle::SourceFormat::Deb,
-                    "planned deconfiguration requires Debian's native lifecycle contract"
-                );
-                installed.set_lifecycle_state(DebPackageState::Unpacked);
-                installed.insert_or_replace(&tx)?;
+        let changeset_id =
+            Changeset::new("Disposable update preview projection".into()).insert(&tx)?;
+        // Replay the source-owned payload boundaries. Lifecycle programs and
+        // trigger execution never run; these are projected database facts only.
+        for step in native.graph_steps() {
+            match *step {
+                NativeTransactionStep::ApplyPayload { change_index } => {
+                    if let Some(package) = packages.get(change_index) {
+                        let id = effects::insert_package(&tx, changeset_id, package)?;
+                        projected.packages.insert(
+                            id,
+                            package
+                                .extracted_files
+                                .iter()
+                                .map(|file| file.path.clone())
+                                .collect(),
+                        );
+                    } else if let Some(index) = change_index.checked_sub(finalization_troves.len())
+                    {
+                        let change = deconfigurations
+                            .get(index)
+                            .context("preview graph references an absent deconfiguration")?;
+                        effects::deconfigure(&tx, change)?;
+                    }
+                }
+                NativeTransactionStep::FinalizeOldPayload { change_index } => {
+                    if let Some(Some(id)) = finalization_troves.get(change_index) {
+                        if relation_removals.contains(id) {
+                            enrollment::apply_removal(&tx, *id)?;
+                        }
+                        Trove::delete(&tx, *id)?;
+                        projected.packages.remove(id);
+                    }
+                }
+                NativeTransactionStep::RunEvent { .. }
+                | NativeTransactionStep::PersistDebTriggerActivations { .. }
+                | NativeTransactionStep::PurgeConfigFiles { .. } => {}
             }
-            let mut trove = package.to_trove(changeset_id)?;
-            let id = trove.insert(&tx)?;
-            InstalledRequirementGroup::insert_groups(
-                &tx,
-                id,
-                trove.version_scheme,
-                &package.requirements,
-            )?;
-            InstalledRequirementGroup::insert_groups(
-                &tx,
-                id,
-                trove.version_scheme,
-                &package.relations,
-            )?;
-            super::transaction::persist_declared_provides(
-                &tx,
-                id,
-                &package.name,
-                &package.version,
-                trove.version_scheme,
-                &package.provides,
-            )?;
-            if let Some(bundle) = package.native_lifecycle_state.bundle_to_persist.as_ref() {
-                InstalledNativeLifecycleBundle::new(id, Some(changeset_id), bundle)?
-                    .insert_or_replace(&tx)?;
-            }
-            // Named identities can be created by pre-payload lifecycle programs.
-            // Preview retains paths; apply resolves ownership after those programs.
-            projected.packages.insert(
-                id,
-                package
-                    .extracted_files
-                    .iter()
-                    .map(|file| file.path.clone())
-                    .collect(),
-            );
         }
         tx.commit()?;
         *declared_paths = projected;
