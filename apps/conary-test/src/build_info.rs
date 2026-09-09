@@ -34,7 +34,7 @@ impl BuildInfo {
             env!("CARGO_PKG_VERSION"),
             env!("CONARY_HARNESS_GIT_COMMIT"),
             env!("CONARY_HARNESS_COMMIT_TIMESTAMP"),
-            option_env!("CONARY_TEST_BUILD_TIMESTAMP").map(ToOwned::to_owned),
+            option_env!("CONARY_HARNESS_BUILD_TIMESTAMP").map(ToOwned::to_owned),
         )
     }
 }
@@ -90,7 +90,7 @@ mod tests {
         assert!(!info.commit_timestamp.is_empty());
         assert_eq!(
             info.build_timestamp.as_deref(),
-            option_env!("CONARY_TEST_BUILD_TIMESTAMP")
+            option_env!("CONARY_HARNESS_BUILD_TIMESTAMP")
         );
     }
 }
