@@ -259,7 +259,9 @@ as apply. Debian payload completion, declared successful event state, and
 trigger-state transitions use the native lifecycle state owner, retaining
 config-files residual authority after removal and clearing it after disappearance.
 Standalone native install previews also share this state between their
-dependency stage and root planning.
+dependency stage and root planning. Native dependency preview and apply both
+use the authenticated repository-batch preparation owner, including signed
+CCS dependencies; the duplicate native-only preparation path is removed.
 
 Previously, native/CCS install printed independent `Installed package` fields,
 batches printed a separate success list, and update ended with artifact preparation counters.

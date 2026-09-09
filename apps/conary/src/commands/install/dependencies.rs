@@ -7,19 +7,12 @@
 //! repositories.
 
 use super::dep_resolution;
-use super::{
-    BatchInstaller, InstallPhase, InstallProgress, prepare_package_for_batch,
-    repository_install_provenance_from_package,
-};
+use super::{BatchInstaller, InstallPhase, InstallProgress};
 use anyhow::{Context, Result};
-use conary_core::db::paths::keyring_dir;
 use conary_core::packages::PackageFormat;
-use conary_core::repository;
 use conary_core::repository::dependency_model::RepositoryRequirementKind;
 use conary_core::resolver::{SatResolution, SatSource};
 use conary_core::scriptlet::SandboxMode;
-use std::collections::HashMap;
-use tempfile::TempDir;
 use tracing::info;
 
 /// Context for the dependency analysis phase.
@@ -168,123 +161,48 @@ async fn handle_dep_installs(
         return Ok(());
     }
 
-    if ctx.dry_run {
-        let selections = dep_plan
-            .to_install
-            .iter()
-            .cloned()
-            .map(
-                |selected| super::repository_batch::RepositoryBatchSelection {
-                    selected,
-                    install_reason: conary_core::db::models::InstallReason::Dependency,
-                    selection_reason: format!("Required by {}", ctx.pkg.name()),
-                    allow_downgrade: ctx.allow_downgrade,
-                    intent: super::InstallIntent::PackageChange,
-                },
-            )
-            .collect();
-        let prepared = super::repository_batch::prepare_repository_batch(
-            ctx.db_path,
-            selections,
-            super::repository_batch::RepositoryBatchMode::for_preview(report.projection.as_deref()),
+    let selections = dep_plan
+        .to_install
+        .iter()
+        .cloned()
+        .map(
+            |selected| super::repository_batch::RepositoryBatchSelection {
+                selected,
+                install_reason: conary_core::db::models::InstallReason::Dependency,
+                selection_reason: format!("Required by {}", ctx.pkg.name()),
+                allow_downgrade: ctx.allow_downgrade,
+                intent: super::InstallIntent::PackageChange,
+            },
         )
-        .await?;
-        report.planned.extend(prepared.preview(
-            BatchInstaller::new(ctx.db_path, ctx.sandbox_mode),
-            report.projection.as_deref(),
-        )?);
-        return Ok(());
-    }
-
-    crate::ui::println!("  Installing {} dependencies:", dep_plan.to_install.len());
-    for dependency in &dep_plan.to_install {
-        crate::ui::println!("    {}", dependency.package.name);
-    }
-
-    match dep_resolution::exact_repository_downloads(ctx.conn, &dep_plan.to_install) {
-        Ok(to_download) => {
-            if !to_download.is_empty() {
-                progress.set_phase(ctx.pkg.name(), InstallPhase::InstallingDeps);
-                let temp_dir = TempDir::new()?;
-                let keyring_dir = keyring_dir(ctx.db_path);
-                let mut provenance_by_dep = HashMap::new();
-                for (dep_name, pkg_with_repo) in &to_download {
-                    provenance_by_dep.insert(
-                        dep_name.clone(),
-                        repository_install_provenance_from_package(
-                            &pkg_with_repo.package,
-                            &pkg_with_repo.repository,
-                        )?,
-                    );
-                }
-                let runtime_root =
-                    conary_core::runtime_root::ConaryRuntimeRoot::from_db_path(ctx.db_path);
-                let transport_cas =
-                    conary_core::filesystem::CasStore::new(runtime_root.objects_dir())?;
-                let downloaded = repository::download_dependencies(
-                    ctx.conn,
-                    &to_download,
-                    temp_dir.path(),
-                    &keyring_dir,
-                    &transport_cas,
-                )
-                .await?;
-
-                let parent_name = ctx.pkg.name().to_string();
-                let mut prepared_packages = Vec::with_capacity(downloaded.len());
-
-                for (dep_name, dep_path) in &downloaded {
-                    progress.set_status(&format!("Preparing dependency: {}", dep_name));
-                    let reason = format!("Required by {}", parent_name);
-                    match prepare_package_for_batch(
-                        dep_path,
-                        ctx.db_path,
-                        conary_core::db::models::InstallReason::Dependency,
-                        &reason,
-                        ctx.allow_downgrade,
-                        provenance_by_dep
-                            .get(dep_name)
-                            .and_then(|provenance| provenance.source_profile.as_deref()),
-                    ) {
-                        Ok(Some(prepared)) => {
-                            let mut prepared = prepared;
-                            prepared.repository_provenance =
-                                provenance_by_dep.get(dep_name).cloned();
-                            prepared_packages.push(prepared);
-                        }
-                        Ok(None) => {
-                            info!("Dependency {} already installed, skipping", dep_name);
-                        }
-                        Err(e) => {
-                            return Err(anyhow::anyhow!(
-                                "Failed to prepare dependency {}: {}",
-                                dep_name,
-                                e
-                            ));
-                        }
-                    }
-                }
-
-                if !prepared_packages.is_empty() {
-                    let installer = BatchInstaller::new(ctx.db_path, ctx.sandbox_mode);
-                    report.extend(
-                        installer
-                            .install_batch_with_result(prepared_packages)?
-                            .report,
-                    );
-                    crate::ui::row(
-                        crate::ui::Status::Ok,
-                        &[&format!("Installed {} dependencies", downloaded.len())],
-                    );
-                }
-            }
+        .collect();
+    if !ctx.dry_run {
+        crate::ui::println!("  Installing {} dependencies:", dep_plan.to_install.len());
+        for dependency in &dep_plan.to_install {
+            crate::ui::println!("    {}", dependency.package.name);
         }
-        Err(e) => {
-            return Err(anyhow::anyhow!(
-                "Failed to resolve dependencies from repositories: {}",
-                e
-            ));
-        }
+        progress.set_phase(ctx.pkg.name(), InstallPhase::InstallingDeps);
+    }
+    let mode = if ctx.dry_run {
+        super::repository_batch::RepositoryBatchMode::for_preview(report.projection.as_deref())
+    } else {
+        super::repository_batch::RepositoryBatchMode::Install
+    };
+    let prepared =
+        super::repository_batch::prepare_repository_batch(ctx.db_path, selections, mode).await?;
+    let installer = BatchInstaller::new(ctx.db_path, ctx.sandbox_mode);
+    if ctx.dry_run {
+        report
+            .planned
+            .extend(prepared.preview(installer, report.projection.as_deref())?);
+    } else {
+        report.extend(prepared.install_with_result(installer)?.report);
+        crate::ui::row(
+            crate::ui::Status::Ok,
+            &[&format!(
+                "Installed {} dependencies",
+                dep_plan.to_install.len()
+            )],
+        );
     }
 
     Ok(())
