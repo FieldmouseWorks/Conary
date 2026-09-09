@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-09-07
-revision: 70
+last_updated: 2026-09-09
+revision: 71
 summary: Describe package-variant selection, source identity, architecture and ABI admission, supported profiles, signed Remi universes, adoption, dependency acquisition, and lifecycle handoff.
 ---
 
@@ -56,6 +56,14 @@ repository declaration + authenticated trust
 | `ReplatformExecutionPlan` | `model/replatform.rs` | Executable and blocked replatform transactions derived from planned replacements |
 
 ## Model Inputs
+
+Model apply serializes its pin/unpin and install-reason metadata phase with the
+runtime mutation lock. It opens the metadata connection and resolves installed
+names after acquiring that lock, and releases it before autoremove. Package
+execution retains its own lock scopes. Name-only metadata actions continue to
+refuse multiple installed variants; this phase does not infer a release or
+architecture selector. Metadata-only lock regressions live in
+`apps/conary/src/commands/model/apply/metadata_lock_tests.rs`.
 
 `[system]` owns only target ownership convergence. Distro pins, source
 allowlists, and mixing settings are rejected as unknown fields. Source choice
