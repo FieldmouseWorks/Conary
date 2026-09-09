@@ -107,6 +107,42 @@ pub(super) fn sandbox_host_gid(egid: u32) -> u32 {
     }
 }
 
+/// Clear inherited privileged groups before the parent denies setgroups in the
+/// new namespace. Raw syscalls avoid libc's process-wide credential signalling
+/// in this post-fork child.
+pub(super) fn clear_privileged_supplementary_groups() -> Result<()> {
+    if unsafe { libc::geteuid() } == 0 {
+        let result = unsafe {
+            libc::syscall(
+                libc::SYS_setgroups,
+                0_usize,
+                std::ptr::null::<libc::gid_t>(),
+            )
+        };
+        credential_transition_result(result, "clear inherited supplementary groups")?;
+    }
+    Ok(())
+}
+
+/// Occupy the mapped namespace identity; writing uid_map/gid_map alone leaves
+/// the child's underlying host credentials unchanged.
+pub(super) fn enter_mapped_namespace_root() -> Result<()> {
+    let group_result = unsafe { libc::syscall(libc::SYS_setresgid, 0, 0, 0) };
+    credential_transition_result(group_result, "enter mapped namespace group")?;
+    let user_result = unsafe { libc::syscall(libc::SYS_setresuid, 0, 0, 0) };
+    credential_transition_result(user_result, "enter mapped namespace user")
+}
+
+fn credential_transition_result(result: libc::c_long, operation: &str) -> Result<()> {
+    if result < 0 {
+        return Err(Error::scriptlet(
+            ScriptletFailureKind::SandboxSetupUnavailable,
+            format!("Failed to {operation}: {}", std::io::Error::last_os_error()),
+        ));
+    }
+    Ok(())
+}
+
 pub(super) fn namespace_map_contents(host_id: u32) -> String {
     format!("0 {host_id} 1\n")
 }

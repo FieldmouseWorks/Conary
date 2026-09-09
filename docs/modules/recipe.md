@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-09
-revision: 10
+revision: 11
 summary: Explicit recipe scaffolding, parsing, hermetic cook, Kitchen execution, and source provenance
 ---
 
@@ -158,5 +158,15 @@ pipeline as any other installation. The Kitchen uses Linux namespace isolation
 through the container module for sandboxed builds and pristine sysroot-only
 mounts for hermetic builds. Provenance data captured during cooking is
 embedded in the output CCS manifest.
+
+Namespace-isolated Kitchen builds require a user namespace. Root callers map
+sandbox root to the host nobody identity; before payload execution, the child
+clears inherited privileged supplementary groups and explicitly enters the
+mapped user and group. The map alone does not change process credentials.
+Mount assembly precedes the credential transition; enforcement and payload
+execution follow it. Setup refuses a missing user namespace instead of
+continuing with the caller's host identity. Conary-owned writable layers use
+the mapped host ownership. The selected-root native lifecycle boundary remains
+owned by `scriptlet/process.rs`.
 
 See also: [docs/ARCHITECTURE.md](/docs/ARCHITECTURE.md).

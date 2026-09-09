@@ -375,18 +375,34 @@ fn test_sandbox_reports_root_inside_without_host_write_access() {
     let mut config = ContainerConfig::minimal(Duration::from_secs(30));
     config.isolate_mount = true;
     config.bind_mounts = default_bind_mounts();
-    config.add_bind_mount(BindMount::writable("/etc/passwd", "/host-passwd"));
+    let probe_dir = tempfile::tempdir().unwrap();
+    let probe = probe_dir.path().join("host-owned-probe");
+    let sentinel = b"host probe must remain unchanged\n";
+    fs::write(&probe, sentinel).unwrap();
+    let privileged = Uid::effective().is_root();
+    fs::set_permissions(
+        &probe,
+        fs::Permissions::from_mode(if privileged { 0o644 } else { 0o444 }),
+    )
+    .unwrap();
+    config.add_bind_mount(BindMount::writable(&probe, "/host-probe"));
+    let private_output = config
+        .add_private_writable_mount("/sandbox-output", 0o700)
+        .unwrap();
     let mut sandbox = Sandbox::new(config);
 
     let (code, stdout, stderr) = match sandbox.execute(
         "/bin/sh",
         r#"#!/bin/sh
 printf 'uid=%s\n' "$(id -u)"
-if [ -w /host-passwd ]; then
+printf 'gid=%s\n' "$(id -g)"
+printf 'groups=%s\n' "$(id -G)"
+if (printf 'sandbox-write\n' >> /host-probe) 2>/dev/null; then
     echo host-write-access
 else
     echo host-write-blocked
 fi
+printf 'sandbox-owned\n' > /sandbox-output/created
 "#,
         &[],
         &[],
@@ -415,9 +431,32 @@ fi
         return;
     }
 
+    assert_eq!(
+        fs::read(&probe).unwrap(),
+        sentinel,
+        "sandbox modified host probe"
+    );
     assert_eq!(code, 0, "stderr: {stderr}");
-    assert!(stdout.contains("uid=0"), "stdout: {stdout}");
+    assert!(
+        stdout.lines().any(|line| line == "uid=0"),
+        "stdout: {stdout}"
+    );
+    assert!(
+        stdout.lines().any(|line| line == "gid=0"),
+        "stdout: {stdout}"
+    );
+    if privileged {
+        assert!(
+            stdout.lines().any(|line| line == "groups=0"),
+            "privileged supplementary groups survived: {stdout}"
+        );
+    }
     assert!(stdout.contains("host-write-blocked"), "stdout: {stdout}");
+    assert_eq!(
+        fs::read(private_output.join("created")).unwrap(),
+        b"sandbox-owned\n",
+        "mapped root must retain access to its owned writable layer"
+    );
 }
 
 #[test]

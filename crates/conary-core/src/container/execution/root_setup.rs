@@ -10,6 +10,9 @@
 
 use super::*;
 use crate::container::child_safety::{bring_loopback_up, child_diag, format_int, int_buffer};
+use crate::container::namespaces::{
+    clear_privileged_supplementary_groups, enter_mapped_namespace_root,
+};
 use std::os::unix::ffi::OsStrExt;
 
 impl Sandbox {
@@ -116,19 +119,14 @@ impl Sandbox {
         let mut user_namespace_enabled = false;
 
         if !flags_with_user.is_empty() {
-            if let Err(userns_error) = unshare(flags_with_user) {
-                let mut digits = int_buffer();
-                child_diag(&[
-                    b"user namespace isolation unavailable (errno ",
-                    format_int(&mut digits, userns_error as i64),
-                    b"); continuing with existing namespace isolation",
-                ]);
-                unshare(flags).map_err(|e| sandbox_error(format!("Unshare failed: {e}")))?;
-                signal_parent_user_namespace_ready(userns_sync.as_ref(), false)?;
-            } else {
-                user_namespace_enabled = true;
-                signal_parent_user_namespace_ready(userns_sync.as_ref(), true)?;
-            }
+            clear_privileged_supplementary_groups()?;
+            unshare(flags_with_user).map_err(|error| {
+                sandbox_error(format!(
+                    "Unshare with mandatory user identity failed: {error}"
+                ))
+            })?;
+            user_namespace_enabled = true;
+            signal_parent_user_namespace_ready(userns_sync.as_ref(), true)?;
         }
 
         if self.config.isolate_pid {
@@ -182,6 +180,12 @@ impl Sandbox {
 
         if self.config.isolate_mount {
             self.setup_mount_namespace(root, user_namespace_enabled)?;
+        }
+
+        // Assemble mounts while the setup process can access its private root.
+        // Enter the mapped identity before enforcing and executing the payload.
+        if user_namespace_enabled {
+            enter_mapped_namespace_root()?;
         }
 
         self.apply_resource_limits()?;
