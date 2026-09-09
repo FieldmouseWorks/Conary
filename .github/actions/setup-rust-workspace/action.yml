@@ -132,6 +132,9 @@ runs:
         path: ${{ runner.temp }}/protected-gnu-sccache
         key: ${{ steps.compiler-cache-policy.outputs.exact_key }}
         fail-on-cache-miss: true
+    - name: Prepare verified compiler-cache tool
+      if: ${{ inputs.compiler-cache != 'off' && runner.os == 'Linux' && runner.arch == 'X64' }}
+      uses: ./.github/actions/prepare-sccache
     - name: Install bounded shared compiler cache
       if: ${{ inputs.compiler-cache != 'off' }}
       uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11

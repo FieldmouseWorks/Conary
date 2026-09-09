@@ -1,0 +1,44 @@
+name: prepare-sccache
+description: >-
+  Download, digest-verify, archive-cache, and preseed the pinned Mozilla
+  sccache v0.16.0 x86_64-unknown-linux-musl release into the runner tool
+  cache before mozilla-actions/sccache-action runs. The Mozilla action still
+  exports SCCACHE_PATH and PATH; this action only prepares its tool-cache
+  find() input (sccache/0.16.0/x64 plus x64.complete). Linux X64 only.
+outputs:
+  cache_path:
+    description: Compressed pinned archive restored and saved by actions/cache.
+    value: ${{ steps.describe.outputs.cache_path }}
+  cache_key:
+    description: Exact archive cache key (platform, version, and digest).
+    value: ${{ steps.describe.outputs.cache_key }}
+runs:
+  using: composite
+  steps:
+    - name: Reject unsupported runners
+      if: ${{ runner.os != 'Linux' || runner.arch != 'X64' }}
+      shell: bash
+      run: |
+        echo "prepare-sccache supports Linux X64 runners only" >&2
+        exit 1
+    - name: Describe the pinned archive cache
+      id: describe
+      shell: bash
+      run: python3 -I "$GITHUB_ACTION_PATH/prepare.py" describe
+    - name: Restore the pinned sccache archive
+      id: cache
+      uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+      with:
+        path: ${{ steps.describe.outputs.cache_path }}
+        key: ${{ steps.describe.outputs.cache_key }}
+    - name: Verify and preseed the pinned sccache tool cache
+      shell: bash
+      env:
+        SCCACHE_ARCHIVE_CACHE_HIT: ${{ steps.cache.outputs.cache-hit }}
+      run: python3 -I "$GITHUB_ACTION_PATH/prepare.py" prepare
+    - name: Save the verified sccache archive
+      if: ${{ steps.cache.outputs.cache-hit != 'true' }}
+      uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+      with:
+        path: ${{ steps.describe.outputs.cache_path }}
+        key: ${{ steps.describe.outputs.cache_key }}
