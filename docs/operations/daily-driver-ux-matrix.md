@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-09
-revision: 21
+revision: 22
 summary: Daily-driver CLI routes, grouped install/update/removal/rollback results, planner-backed previews, scoped recovery, coordinated progress, typed diagnostics, and truthful collection outcomes
 ---
 
@@ -300,6 +300,13 @@ committed transactions share one result table and list their changeset IDs;
 the closing generation reflects the last transaction's returned publication
 outcome. The report survives a later command error, so partially completed
 updates retain their committed rows without claiming the failed package changed.
+Preview rows describe planned successful effects. Apply preflights each transaction
+against its then-current selected root before that transaction runs lifecycle or
+payload mutation; an update selection spans separate committed transactions.
+A later runtime preflight failure retains earlier committed rows and leaves the
+failing package unchanged. Dependency cancellation stops the enclosing update,
+keeps every remaining target unchanged, and records no applied delta for the
+declined package. Acquisition counts still include all prepared full artifacts.
 A publication delegated to an enclosing selected-root operation is explicitly
 labeled as such rather than assigned a generation. Only a successful top-level
 install/update command offers the latest changeset's rollback request. Nested

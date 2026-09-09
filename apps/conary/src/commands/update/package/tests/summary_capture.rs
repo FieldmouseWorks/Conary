@@ -36,7 +36,7 @@ async fn update_summary_capture_child() {
             scenario.starts_with("named_"),
         );
     }
-    if (scenario == "mixed" || scenario == "preflight") {
+    if scenario == "mixed" || scenario == "preflight" {
         add_candidate(
             &conn,
             temp.path(),
@@ -151,9 +151,14 @@ async fn update_summary_capture_child() {
             )
             .unwrap();
         assert_eq!(stats, (2, 0));
+        let temporary = Path::new(&db_path).parent().unwrap().join("tmp");
+        assert!(
+            std::fs::read_dir(temporary).unwrap().next().is_none(),
+            "cancelled update left temporary delta artifacts"
+        );
         return;
     }
-    if (scenario == "mixed" || scenario == "preflight") {
+    if scenario == "mixed" || scenario == "preflight" {
         let error = result.expect_err("later lifecycle/preflight failure unexpectedly succeeded");
         if scenario == "preflight" {
             assert!(format!("{error:#}").contains("preflight"), "{error:#}");
@@ -256,7 +261,7 @@ async fn update_summary_capture_child() {
         assert_eq!(installed.len(), 1);
         assert_eq!(installed[0].version, "2.0.0");
     }
-    if (scenario == "mixed" || scenario == "preflight") {
+    if scenario == "mixed" || scenario == "preflight" {
         assert_eq!(
             Trove::find_by_name(&conn, "z-summary-failed").unwrap()[0].version,
             "1.0.0"
@@ -488,7 +493,7 @@ fn update_summaries_in_terminal_pipe_and_no_color() {
                 "{frame}"
             );
             assert!(applied.contains("--db-path='"), "{frame}");
-            if (scenario == "mixed" || scenario == "preflight") {
+            if scenario == "mixed" || scenario == "preflight" {
                 assert!(!applied.contains("z-summary-failed"), "{frame}");
                 assert!(!applied.contains("Request rollback"), "{frame}");
             } else {

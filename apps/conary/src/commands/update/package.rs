@@ -614,6 +614,8 @@ pub(super) async fn update_packages(
                                         .await
                                         {
                                             Ok(crate::commands::install::InstallOutcome::Cancelled) => {
+                                                let _ = std::fs::remove_file(&pkg_file);
+                                                let _ = std::fs::remove_file(&actual_delta_path);
                                                 cancelled_package = Some(trove.name.clone());
                                                 break 'apply_updates;
                                             }

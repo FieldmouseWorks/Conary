@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-09
-revision: 52
+revision: 53
 summary: Map fixture ownership, including command transaction captures, typed boot-tool interfaces, public and candidate profiles, and cross-source lifecycle proof
 ---
 
@@ -811,3 +811,9 @@ roots and proof commands before treating them as committed gates:
 - TUF trust and signature verification fixtures under `apps/conary/tests/fixtures/trust/`.
 
 Add these in later Phase 3 slices using the same schema.
+
+Update summary captures also cover dependency cancellation through full artifacts,
+successful delta reconstruction, and delta fallback, checking remaining package
+state, acquisition statistics, and temporary-file cleanup. A later native runtime
+preflight failure proves transaction-scoped refusal and accurate earlier committed
+results.
