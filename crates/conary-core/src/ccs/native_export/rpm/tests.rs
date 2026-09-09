@@ -4,7 +4,7 @@ use super::*;
 use crate::ccs::builder::FileEntry;
 use crate::ccs::manifest::{CcsManifest, FileCapability, NativeExport, RpmExport};
 use crate::packages::PackageFormat;
-use crate::payload::{PayloadIdentity, PayloadNode, PayloadTimestamp};
+use crate::payload::{PayloadContentAuthority, PayloadIdentity, PayloadNode, PayloadTimestamp};
 use std::collections::HashMap;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -265,6 +265,102 @@ fn directory_export_rejects_nonzero_numeric_ownership() {
             .contains("cannot represent numeric user identity 1001 exactly")
     );
     assert!(!output_path.exists());
+}
+
+/// Regression for issue #981: RPM export stages every regular file at
+/// `temp_dir/<content_hash>`, so unrelated destinations with identical bytes
+/// share one temporary source path. Upstream rpm 0.28.0 (commit 3537ca5)
+/// excludes repeated source paths from automatic filesystem-hardlink grouping;
+/// without that exclusion these two entries would be treated as one hardlink
+/// set and rejected for differing metadata.
+#[test]
+fn identical_content_at_distinct_paths_does_not_form_automatic_hardlinks() {
+    let content = b"identical payload bytes for unrelated destinations\n".to_vec();
+    let authority = PayloadContentAuthority {
+        sha256: crate::hash::sha256(&content),
+        size: content.len() as u64,
+    };
+    let mtime = PayloadTimestamp {
+        seconds: 1_700_000_000,
+        nanoseconds: 0,
+    };
+    let files = [("/usr/bin/alpha", 0o644), ("/opt/beta", 0o600)]
+        .into_iter()
+        .map(|(path, permissions)| {
+            let mut node = PayloadNode::regular(permissions);
+            node.user = PayloadIdentity::Numeric { id: 0 };
+            node.group = PayloadIdentity::Numeric { id: 0 };
+            node.mtime = mtime;
+            FileEntry {
+                path: path.to_string(),
+                node,
+                content: Some(authority.clone()),
+                component: "runtime".to_string(),
+                chunks: None,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let mut result = create_test_build_result();
+    result.payloads = crate::ccs::builder::payloads_from_bounded_memory_for_tests(
+        &files,
+        HashMap::from([(authority.sha256.clone(), content)]),
+    )
+    .unwrap();
+    result.total_size = files.len() as u64 * authority.size;
+    result.files = files;
+
+    let temp_dir = TempDir::new().unwrap();
+    let output_path = temp_dir.path().join("repeated-content.rpm");
+    generate(&result, &output_path)
+        .expect("identical staged content must export as distinct regular files");
+
+    let package = crate::packages::rpm::RpmPackage::parse(output_path.to_str().unwrap())
+        .expect("parse generated RPM");
+    let payload = package.package_payload().expect("read RPM payload");
+    assert_eq!(payload.files().len(), 2);
+
+    for (path, permissions) in [("/usr/bin/alpha", 0o644), ("/opt/beta", 0o600)] {
+        let file = payload
+            .files()
+            .iter()
+            .find(|file| file.path == path)
+            .unwrap_or_else(|| panic!("missing RPM payload path {path}"));
+        assert!(
+            matches!(
+                file.node.kind,
+                PayloadNodeKind::Regular {
+                    hardlink_identity: None
+                }
+            ),
+            "{path} must stay a standalone regular inode, got {:?}",
+            file.node.kind
+        );
+        assert_eq!(file.node.mode & 0o7777, permissions, "{path} permissions");
+        assert_eq!(
+            file.node.user,
+            PayloadIdentity::Named {
+                name: "root".to_string()
+            },
+            "{path} user"
+        );
+        assert_eq!(
+            file.node.group,
+            PayloadIdentity::Named {
+                name: "root".to_string()
+            },
+            "{path} group"
+        );
+        let content_authority = file
+            .content_authority
+            .as_ref()
+            .unwrap_or_else(|| panic!("{path} has no content authority"));
+        assert_eq!(content_authority.sha256, authority.sha256, "{path} payload");
+        assert_eq!(
+            content_authority.size, authority.size,
+            "{path} payload size"
+        );
+    }
 }
 
 #[test]
