@@ -14,6 +14,7 @@ use conary_core::scriptlet::NativeLifecyclePreflightError;
 #[error("{summary}")]
 pub(crate) struct PackageFailureScope {
     summary: String,
+    causes: Vec<String>,
     pub root: String,
     pub database: String,
 }
@@ -21,8 +22,10 @@ pub(crate) struct PackageFailureScope {
 pub(crate) fn with_scope(error: anyhow::Error, root: &str, database: &str) -> anyhow::Error {
     if error.is::<NativePreflightContext>() {
         let summary = plain_failure_summary(&error);
+        let causes = causes(&error);
         error.context(PackageFailureScope {
             summary,
+            causes,
             root: root.into(),
             database: database.into(),
         })
@@ -78,7 +81,12 @@ pub fn package_failure_report(error: &anyhow::Error) -> Option<PackageFailureRep
 }
 
 fn causes(error: &anyhow::Error) -> Vec<String> {
-    error.chain().map(ToString::to_string).collect()
+    // Scope's Display retains this chain for plain consumers. It is not a new
+    // cause and must not repeat the entire chain in structured reports.
+    error.downcast_ref::<PackageFailureScope>().map_or_else(
+        || error.chain().map(ToString::to_string).collect(),
+        |scope| scope.causes.clone(),
+    )
 }
 
 fn native_failure(error: &anyhow::Error) -> Option<NativePreflightFailure> {

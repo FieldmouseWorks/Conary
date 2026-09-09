@@ -123,12 +123,16 @@ fn text_that_resembles_a_refusal_cannot_establish_typed_facts() {
             entry_id: "rpm:%pre".into(),
         },
     });
+    let original_causes = causes(&error);
+    let error = with_scope(with_scope(error, "/root", "/db"), "/root", "/db");
     let report = package_failure_report(&error).unwrap();
     let native = report.failures[0].native_preflight.as_ref().unwrap();
-    assert!(matches!(
+    assert_eq!(
         native.cause,
-        NativePreflightCause::Unclassified { .. }
-    ));
+        NativePreflightCause::Unclassified {
+            causes: original_causes
+        }
+    );
     assert!(native.notes.is_empty());
 }
 
