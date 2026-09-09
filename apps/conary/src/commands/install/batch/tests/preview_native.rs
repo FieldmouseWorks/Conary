@@ -29,9 +29,15 @@ fn preview_preserves_debian_removal_completion_and_disappearance() {
         old.debian_multi_arch = Some(DebianMultiArch::No);
         let old_id = old.insert(&conn).unwrap();
         let old_path = "/usr/share/deb-obsolete/data";
-        installed_regular_file(old_path, b"old", 0o644, old_id)
-            .insert(&conn)
-            .unwrap();
+        installed_regular_file(
+            std::path::Path::new(&db_path),
+            old_path,
+            b"old",
+            0o644,
+            old_id,
+        )
+        .insert(&conn)
+        .unwrap();
         let bundle = NativeLifecycleBundle {
             schema: NATIVE_LIFECYCLE_SCHEMA_V1.into(),
             schema_revision: NATIVE_LIFECYCLE_SCHEMA_REVISION,
