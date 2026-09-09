@@ -2,9 +2,12 @@
 
 use super::*;
 
+mod build_mounts;
+mod credentials;
 mod process_wait;
 mod root_setup;
 
+use build_mounts::PreparedBuildMounts;
 use process_wait::{
     ChildWaitOutcome, terminate_and_reap, wait_for_child_until, wait_until_readable,
 };
@@ -19,6 +22,7 @@ fn sandbox_error(message: impl Into<String>) -> Error {
 
 struct ChildExecution<'a> {
     root: &'a Path,
+    build_mounts: &'a PreparedBuildMounts,
     program: &'a str,
     interpreter_args: &'a [String],
     script_path: Option<&'a Path>,
@@ -260,6 +264,7 @@ impl Sandbox {
         fs::write(&stdin_path, stdin)?;
         let stdin_file = File::open(&stdin_path)?;
         let prepared_enforcement = self.prepare_enforcement()?;
+        let build_mounts = PreparedBuildMounts::prepare(&self.config.bind_mounts)?;
 
         // Set up pipes before fork to capture child stdout/stderr
         let (stdout_read_fd, stdout_write_fd) = nix::unistd::pipe()
@@ -287,6 +292,7 @@ impl Sandbox {
                     child,
                     &userns_request_read_fd,
                     &userns_ack_write_fd,
+                    &build_mounts,
                     deadline,
                 )?;
                 drop(userns_request_read_fd);
@@ -318,6 +324,7 @@ impl Sandbox {
                     userns_ack_write_fd,
                     execution: ChildExecution {
                         root: root_dir.path(),
+                        build_mounts: &build_mounts,
                         program: interpreter,
                         interpreter_args,
                         script_path: Some(&script_path),
@@ -360,6 +367,7 @@ impl Sandbox {
         fs::write(&stdin_path, stdin)?;
         let stdin_file = File::open(&stdin_path)?;
         let prepared_enforcement = self.prepare_enforcement()?;
+        let build_mounts = PreparedBuildMounts::prepare(&self.config.bind_mounts)?;
 
         let (stdout_read_fd, stdout_write_fd) = nix::unistd::pipe()
             .map_err(|e| sandbox_error(format!("Failed to create stdout pipe: {e}")))?;
@@ -384,6 +392,7 @@ impl Sandbox {
                     child,
                     &userns_request_read_fd,
                     &userns_ack_write_fd,
+                    &build_mounts,
                     deadline,
                 )?;
                 drop(userns_request_read_fd);
@@ -412,6 +421,7 @@ impl Sandbox {
                     userns_ack_write_fd,
                     execution: ChildExecution {
                         root: root_dir.path(),
+                        build_mounts: &build_mounts,
                         program,
                         interpreter_args: &[],
                         script_path: None,
@@ -590,10 +600,16 @@ impl Sandbox {
         child: Pid,
         request_fd: &std::os::fd::OwnedFd,
         ack_fd: &std::os::fd::OwnedFd,
+        build_mounts: &PreparedBuildMounts,
         deadline: Instant,
     ) -> Result<()> {
-        let result =
-            self.complete_user_namespace_handshake_inner(child, request_fd, ack_fd, deadline);
+        let result = self.complete_user_namespace_handshake_inner(
+            child,
+            request_fd,
+            ack_fd,
+            build_mounts,
+            deadline,
+        );
         if let Err(error) = result {
             if let Err(cleanup_error) = terminate_and_reap(child) {
                 return Err(execution_error(
@@ -613,6 +629,7 @@ impl Sandbox {
         child: Pid,
         request_fd: &std::os::fd::OwnedFd,
         ack_fd: &std::os::fd::OwnedFd,
+        build_mounts: &PreparedBuildMounts,
         deadline: Instant,
     ) -> Result<()> {
         if !wait_until_readable(request_fd.as_fd(), deadline).map_err(|error| {
@@ -637,6 +654,7 @@ impl Sandbox {
                     sandbox_host_uid(Uid::effective().as_raw()),
                     sandbox_host_gid(Gid::effective().as_raw()),
                 )?;
+                build_mounts.map_into(child)?;
             }
             b'N' => {}
             other => {
@@ -681,6 +699,7 @@ mod tests {
                         child,
                         &request_read,
                         &ack_write,
+                        &PreparedBuildMounts::prepare(&[]).unwrap(),
                         Instant::now() + Duration::from_millis(20),
                     )
                     .expect_err("silent child must hit the handshake deadline");

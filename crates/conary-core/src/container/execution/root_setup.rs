@@ -8,6 +8,7 @@
 //! [`crate::container::child_safety`] for why, and `child_fork_safety` in the
 //! container tests for the check that keeps it true.
 
+use super::credentials::seal_namespace_credentials;
 use super::*;
 use crate::container::child_safety::{bring_loopback_up, child_diag, format_int, int_buffer};
 use crate::container::namespaces::{
@@ -90,6 +91,7 @@ impl Sandbox {
     pub(super) fn child_setup_and_execute(&self, execution: ChildExecution<'_>) -> Result<i32> {
         let ChildExecution {
             root,
+            build_mounts,
             program,
             interpreter_args,
             script_path,
@@ -179,13 +181,14 @@ impl Sandbox {
         }
 
         if self.config.isolate_mount {
-            self.setup_mount_namespace(root, user_namespace_enabled)?;
+            self.setup_mount_namespace(root, user_namespace_enabled, build_mounts)?;
         }
 
         // Assemble mounts while the setup process can access its private root.
         // Enter the mapped identity before enforcing and executing the payload.
         if user_namespace_enabled {
             enter_mapped_namespace_root()?;
+            seal_namespace_credentials()?;
         }
 
         self.apply_resource_limits()?;
@@ -246,12 +249,17 @@ impl Sandbox {
         ))
     }
 
-    fn setup_mount_namespace(&self, root: &Path, user_namespace_enabled: bool) -> Result<()> {
+    fn setup_mount_namespace(
+        &self,
+        root: &Path,
+        user_namespace_enabled: bool,
+        build_mounts: &PreparedBuildMounts,
+    ) -> Result<()> {
         mount::<str, str, str, str>(None, "/", None, MsFlags::MS_PRIVATE | MsFlags::MS_REC, None)
             .map_err(|e| sandbox_error(format!("mount --make-rprivate failed: {e}")))?;
 
-        for bind_mount in &self.config.bind_mounts {
-            if !bind_mount.source.exists() {
+        for (index, bind_mount) in self.config.bind_mounts.iter().enumerate() {
+            if !build_mounts.contains(index) && !bind_mount.source.exists() {
                 // The hot path: a missing optional bind source is ordinary, and
                 // this ran on essentially every sandbox start. It was the most
                 // frequently executed `tracing` call in the post-fork child.
@@ -268,7 +276,7 @@ impl Sandbox {
                     .strip_prefix("/")
                     .unwrap_or(&bind_mount.target),
             );
-            if bind_mount.source.is_dir() {
+            if build_mounts.contains(index) || bind_mount.source.is_dir() {
                 fs::create_dir_all(&target)?;
             } else {
                 if let Some(parent) = target.parent() {
@@ -277,6 +285,10 @@ impl Sandbox {
                 if !target.exists() {
                     File::create(&target)?;
                 }
+            }
+
+            if build_mounts.attach(index, &target)? {
+                continue;
             }
 
             mount::<Path, Path, str, str>(
@@ -300,13 +312,7 @@ impl Sandbox {
             })?;
 
             if !bind_mount.writable
-                && let Err(error) = mount::<Path, Path, str, str>(
-                    None,
-                    &target,
-                    None,
-                    MsFlags::MS_REMOUNT | MsFlags::MS_BIND | MsFlags::MS_RDONLY,
-                    None,
-                )
+                && let Err(error) = set_mount_readonly(&target)
             {
                 if bind_mount.target == Path::new("/etc/resolv.conf")
                     && self.try_fallback_readonly_copy(&bind_mount.source, &target)?
@@ -384,14 +390,10 @@ impl Sandbox {
         error: nix::errno::Errno,
     ) -> Result<()> {
         let message = format!("read-only remount failed for {}: {error}", target.display());
-        if self.is_enforce_mode() {
-            return Err(execution_error(
-                ScriptletFailureKind::EnforcementSetupFailed,
-                message,
-            ));
-        }
-        child_diag(&[message.as_bytes()]);
-        Ok(())
+        Err(execution_error(
+            ScriptletFailureKind::EnforcementSetupFailed,
+            message,
+        ))
     }
 
     fn chroot_into(&self, root: &Path) -> Result<()> {
@@ -448,5 +450,35 @@ fn wait_for_pid_namespace_init(child: Pid, deadline: Instant) -> Result<i32> {
         Err(error) => Err(sandbox_error(format!(
             "failed to wait for PID namespace init: {error}"
         ))),
+    }
+}
+
+/// Set only the requested restriction. A legacy remount without inherited
+/// flags tries to clear locked nosuid/nodev/noexec flags in a user namespace.
+fn set_mount_readonly(target: &Path) -> std::result::Result<(), nix::errno::Errno> {
+    let target =
+        CString::new(target.as_os_str().as_bytes()).map_err(|_| nix::errno::Errno::EINVAL)?;
+    let attr = libc::mount_attr {
+        attr_set: libc::MOUNT_ATTR_RDONLY,
+        attr_clr: 0,
+        propagation: 0,
+        userns_fd: 0,
+    };
+    // SAFETY: target and the initialized mount attribute remain valid for the
+    // synchronous syscall; no mount restrictions are cleared.
+    if unsafe {
+        libc::syscall(
+            libc::SYS_mount_setattr,
+            libc::AT_FDCWD,
+            target.as_ptr(),
+            0,
+            &attr,
+            std::mem::size_of::<libc::mount_attr>(),
+        )
+    } < 0
+    {
+        Err(nix::errno::Errno::last())
+    } else {
+        Ok(())
     }
 }

@@ -80,6 +80,14 @@ pub struct BindMount {
     pub target: PathBuf,
     /// Whether to mount read-write (default is read-only)
     pub writable: bool,
+    /// Explicit build-workspace authority; ordinary host binds retain host IDs.
+    identity: BindMountIdentity,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BindMountIdentity {
+    Host,
+    BuildWorkspace,
 }
 
 impl BindMount {
@@ -88,6 +96,7 @@ impl BindMount {
             source: source.into(),
             target: target.into(),
             writable: false,
+            identity: BindMountIdentity::Host,
         }
     }
 
@@ -96,6 +105,20 @@ impl BindMount {
             source: source.into(),
             target: target.into(),
             writable: true,
+            identity: BindMountIdentity::Host,
+        }
+    }
+
+    /// Grant namespace root access to a caller-owned build directory while
+    /// preserving its on-disk ownership. This grants write authority over the
+    /// selected tree and must never be used for incidental host bind mounts.
+    pub(crate) fn build_workspace(path: impl Into<PathBuf>) -> Self {
+        let path = path.into();
+        Self {
+            source: path.clone(),
+            target: path,
+            writable: true,
+            identity: BindMountIdentity::BuildWorkspace,
         }
     }
 }
@@ -315,10 +338,10 @@ impl ContainerConfig {
         config.add_bind_mount(BindMount::readonly(source_dir, source_dir));
 
         // Build directory (writable for object files, etc.)
-        config.add_bind_mount(BindMount::writable(build_dir, build_dir));
+        config.add_bind_mount(BindMount::build_workspace(build_dir));
 
         // Destination directory (writable for `make install DESTDIR=...`)
-        config.add_bind_mount(BindMount::writable(dest_dir, dest_dir));
+        config.add_bind_mount(BindMount::build_workspace(dest_dir));
 
         // Set working directory to build directory
         config.workdir = build_dir.to_path_buf();
@@ -361,8 +384,8 @@ impl ContainerConfig {
         }
 
         config.add_bind_mount(BindMount::readonly(source_dir, source_dir));
-        config.add_bind_mount(BindMount::writable(build_dir, build_dir));
-        config.add_bind_mount(BindMount::writable(dest_dir, dest_dir));
+        config.add_bind_mount(BindMount::build_workspace(build_dir));
+        config.add_bind_mount(BindMount::build_workspace(dest_dir));
         config.workdir = build_dir.to_path_buf();
 
         config

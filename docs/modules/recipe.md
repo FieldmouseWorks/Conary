@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-09
-revision: 11
+revision: 12
 summary: Explicit recipe scaffolding, parsing, hermetic cook, Kitchen execution, and source provenance
 ---
 
@@ -170,3 +170,21 @@ the mapped host ownership. The selected-root native lifecycle boundary remains
 owned by `scriptlet/process.rs`.
 
 See also: [docs/ARCHITECTURE.md](/docs/ARCHITECTURE.md).
+
+Privileged Kitchen build directories use explicit ID-mapped bind mounts. The
+parent pins detached mounts before forking and applies the child's UID/GID map
+before acknowledging namespace setup; the child attaches them only in its own
+mount namespace. Builds can read private inputs and write their managed source,
+build, and destination trees while retaining root ownership on disk and in CCS
+payload entries. Explicit caller-provided destinations carry the same write
+authority; ordinary host binds receive no ownership projection. No recursive
+ownership or permission rewrite is used. A filesystem or kernel that cannot
+provide the requested mapping produces a typed sandbox setup refusal before
+build execution.
+
+Before executing a build, the sandbox clears process, ambient, and bounding
+capabilities and enables no-new-privileges. Read-only mounts preserve inherited
+mount restrictions, and an unenforceable read-only mount fails closed regardless
+of optional capability-policy mode. Build-mount preparation lives in
+`container/execution/build_mounts.rs`; the final credential seal lives in
+`container/execution/credentials.rs`.

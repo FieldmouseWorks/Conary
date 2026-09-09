@@ -114,7 +114,7 @@ fn configure_provenance_from_kitchen(
 pub struct Cook<'a> {
     pub(super) kitchen: &'a Kitchen,
     pub(super) recipe: &'a Recipe,
-    /// Owner of the temporary build directory (None when an external dest_dir is provided)
+    /// Owner of the temporary build directory, including with an external destination.
     pub(super) _build_dir_owner: Option<TempDir>,
     /// Build directory path
     pub(super) build_dir: PathBuf,
@@ -641,13 +641,12 @@ impl<'a> Cook<'a> {
             // Destination directory (writable - where install goes)
             container_config
                 .bind_mounts
-                .push(BindMount::writable(&self.dest_dir, &self.dest_dir));
+                .push(BindMount::build_workspace(&self.dest_dir));
 
             // Build directory (writable - for build artifacts)
-            container_config.bind_mounts.push(BindMount::writable(
-                self.build_dir.as_path(),
-                self.build_dir.as_path(),
-            ));
+            container_config
+                .bind_mounts
+                .push(BindMount::build_workspace(self.build_dir.as_path()));
         }
 
         let mut sandbox = Sandbox::new(container_config);

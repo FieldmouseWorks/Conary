@@ -1,6 +1,9 @@
 // crates/conary-core/src/recipe/kitchen/cook/tests.rs
 
 use super::*;
+use crate::ccs::builder::CcsBuilder;
+use crate::ccs::manifest::CcsManifest;
+use crate::payload::PayloadIdentity;
 use crate::recipe::format::{
     BuildSection, LocalSourceSection, PackageSection, PatchInfo, PatchSection, Recipe,
     RemoteSourceSection, SourceSection,
@@ -698,4 +701,110 @@ fn dummy_hermetic_evidence() -> HermeticBuildEvidence {
         divergence: Default::default(),
         diagnostics: Vec::new(),
     }
+}
+
+/// A mapped build identity must preserve on-disk and packaged ownership for
+/// managed and explicitly provided destinations, including in-source builds.
+/// Run this test with root privileges to exercise the privileged projection.
+#[cfg(unix)]
+#[test]
+fn test_isolated_build_step_preserves_root_ownership_authority() {
+    if unsafe { libc::geteuid() } != 0 {
+        return;
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let kitchen = Kitchen::new(KitchenConfig {
+        source_cache: dir.path().join("source-cache"),
+        use_isolation: true,
+        memory_limit: 8 * 1024 * 1024 * 1024,
+        ..KitchenConfig::default()
+    });
+    let recipe = minimal_recipe();
+
+    let mut managed_cook = Cook::new(&kitchen, &recipe).unwrap();
+    assert_isolated_build_step_root_authority(&mut managed_cook);
+
+    let caller_dest = dir.path().join("caller-dest");
+    std::fs::create_dir_all(&caller_dest).unwrap();
+    let mut caller_cook = Cook::new_with_dest(&kitchen, &recipe, &caller_dest).unwrap();
+    assert_isolated_build_step_root_authority(&mut caller_cook);
+}
+
+#[cfg(unix)]
+fn assert_isolated_build_step_root_authority(cook: &mut Cook<'_>) {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    let input_contents = "root-authority-input\n";
+    let input_path = cook.source_dir.join("input.txt");
+    std::fs::write(&input_path, input_contents).unwrap();
+    std::fs::set_permissions(&input_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let input_before = std::fs::metadata(&input_path).unwrap();
+
+    let dest = cook.dest_dir.clone();
+    let dest_before = std::fs::metadata(&dest).unwrap();
+
+    let workdir = cook.source_dir.clone();
+    let env = vec![("DESTDIR".to_string(), dest.display().to_string())];
+    let command = "IFS= read -r value < input.txt \
+        && printf '%s\\n' \"$value\" > build-artifact.txt \
+        && printf '%s\\n' \"$value\" > \"$DESTDIR/output.txt\"";
+
+    cook.run_build_step_isolated("install", command, &workdir, &env)
+        .unwrap();
+
+    let input_after = std::fs::metadata(&input_path).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&input_path).unwrap(),
+        input_contents
+    );
+    assert_eq!(
+        input_after.mode() & 0o7777,
+        0o600,
+        "isolated build must not loosen the mode-0600 input"
+    );
+    assert_eq!(input_after.uid(), input_before.uid());
+    assert_eq!(input_after.gid(), input_before.gid());
+
+    let artifact_path = workdir.join("build-artifact.txt");
+    assert_eq!(
+        std::fs::read_to_string(&artifact_path).unwrap(),
+        input_contents,
+        "in-source build artifact must be written by the isolated step"
+    );
+
+    let output_path = dest.join("output.txt");
+    assert_eq!(
+        std::fs::read_to_string(&output_path).unwrap(),
+        input_contents,
+        "dest output must contain the input value"
+    );
+    let output_metadata = std::fs::metadata(&output_path).unwrap();
+    assert_eq!(
+        output_metadata.uid(),
+        0,
+        "root-run isolated build must leave dest output owned by uid 0"
+    );
+    assert_eq!(
+        output_metadata.gid(),
+        0,
+        "root-run isolated build must leave dest output owned by gid 0"
+    );
+
+    let dest_after = std::fs::metadata(&dest).unwrap();
+    assert_eq!(dest_after.uid(), dest_before.uid());
+    assert_eq!(dest_after.gid(), dest_before.gid());
+    assert_eq!(dest_after.mode() & 0o7777, dest_before.mode() & 0o7777);
+
+    let built = CcsBuilder::new(CcsManifest::new_minimal("root-authority", "1.0.0"), &dest)
+        .unwrap()
+        .build()
+        .unwrap();
+    let entry = built
+        .files
+        .iter()
+        .find(|entry| entry.path == "/output.txt")
+        .expect("CCS build must capture the dest output");
+    assert_eq!(entry.node.user, PayloadIdentity::Numeric { id: 0 });
+    assert_eq!(entry.node.group, PayloadIdentity::Numeric { id: 0 });
 }

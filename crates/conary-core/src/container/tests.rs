@@ -56,7 +56,7 @@ fn test_readonly_remount_failure_is_fatal_in_enforce_mode() {
 }
 
 #[test]
-fn test_readonly_remount_failure_is_nonfatal_outside_enforce_mode() {
+fn test_readonly_remount_failure_is_fatal_outside_enforce_mode() {
     let mut config = ContainerConfig::minimal(Duration::from_secs(30));
     config.capability_policy = Some(EnforcementPolicy {
         mode: EnforcementMode::Warn,
@@ -71,8 +71,8 @@ fn test_readonly_remount_failure_is_nonfatal_outside_enforce_mode() {
     assert!(
         sandbox
             .handle_readonly_remount_failure(Path::new("/etc/passwd"), nix::errno::Errno::EPERM)
-            .is_ok(),
-        "warn mode should log and continue on read-only remount errors"
+            .is_err(),
+        "optional capability policy must not weaken a declared read-only mount"
     );
 }
 
@@ -389,6 +389,11 @@ fn test_sandbox_reports_root_inside_without_host_write_access() {
     let private_output = config
         .add_private_writable_mount("/sandbox-output", 0o700)
         .unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    let mut build_mount = BindMount::build_workspace(workspace.path());
+    build_mount.target = PathBuf::from("/mapped-output");
+    config.add_bind_mount(build_mount);
+    std::os::unix::fs::symlink("/host-probe", workspace.path().join("host-link")).unwrap();
     let mut sandbox = Sandbox::new(config);
 
     let (code, stdout, stderr) = match sandbox.execute(
@@ -403,6 +408,10 @@ else
     echo host-write-blocked
 fi
 printf 'sandbox-owned\n' > /sandbox-output/created
+printf 'build-owned\n' > /mapped-output/created
+if (printf 'through-symlink\n' >> /mapped-output/host-link) 2>/dev/null; then
+    exit 93
+fi
 "#,
         &[],
         &[],
@@ -457,6 +466,14 @@ printf 'sandbox-owned\n' > /sandbox-output/created
         b"sandbox-owned\n",
         "mapped root must retain access to its owned writable layer"
     );
+    assert_eq!(
+        fs::read(workspace.path().join("created")).unwrap(),
+        b"build-owned\n"
+    );
+    use std::os::unix::fs::MetadataExt;
+    let created = fs::metadata(workspace.path().join("created")).unwrap();
+    assert_eq!(created.uid(), Uid::effective().as_raw());
+    assert_eq!(created.gid(), Gid::effective().as_raw());
 }
 
 #[test]
@@ -586,4 +603,92 @@ fn test_set_rlimit_syscall_rejects_invalid_resource() {
     };
     let invalid_resource = super::RlimitResource::MAX;
     assert!(set_rlimit_syscall(invalid_resource, &limit).is_err());
+}
+
+#[test]
+fn test_sandbox_cannot_restore_mount_authority() {
+    const CHILD_MARKER: &str = "CONARY_TEST_SEALED_SANDBOX";
+    if std::env::var_os(CHILD_MARKER).is_some() {
+        // The ABI-v3 capability header is two 32-bit words; pid 0 means self.
+        let header = [0x2008_0522_u32, 0];
+        let mut data = [[u32::MAX; 3]; 2];
+        assert_eq!(
+            unsafe { libc::syscall(libc::SYS_capget, &header, &mut data) },
+            0
+        );
+        assert_eq!(
+            data, [[0; 3]; 2],
+            "payload must have no process capabilities"
+        );
+        for capability in 0..64 {
+            let value = unsafe { libc::prctl(libc::PR_CAPBSET_READ, capability, 0, 0, 0) };
+            if value < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EINVAL) {
+                break;
+            }
+            assert_eq!(
+                value, 0,
+                "capability {capability} survived in the bounding set"
+            );
+        }
+        assert_eq!(
+            unsafe { libc::prctl(libc::PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0) },
+            1
+        );
+        assert_eq!(fs::read("/sealed/probe").unwrap(), b"sealed\n");
+        let error = fs::write("/sealed/probe", b"overwrite\n").unwrap_err();
+        assert_eq!(error.raw_os_error(), Some(libc::EROFS));
+        assert_eq!(
+            unsafe {
+                libc::mount(
+                    std::ptr::null(),
+                    c"/sealed".as_ptr(),
+                    std::ptr::null(),
+                    libc::MS_REMOUNT | libc::MS_BIND,
+                    std::ptr::null(),
+                )
+            },
+            -1
+        );
+        assert_eq!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::EPERM)
+        );
+        return;
+    }
+    if !Uid::effective().is_root() {
+        return; // The owning privileged proof runs this exact test under sudo.
+    }
+    let workspace = tempfile::tempdir().unwrap();
+    fs::write(workspace.path().join("probe"), b"sealed\n").unwrap();
+    fs::set_permissions(
+        workspace.path().join("probe"),
+        fs::Permissions::from_mode(0o600),
+    )
+    .unwrap();
+    let mut mapped = BindMount::build_workspace(workspace.path());
+    mapped.target = PathBuf::from("/sealed");
+    mapped.writable = false;
+    let mut config = ContainerConfig::default();
+    config.memory_limit = 0;
+    config.add_bind_mount(mapped);
+    config.add_bind_mount(BindMount::readonly(
+        std::env::current_exe().unwrap(),
+        "/test-program",
+    ));
+    let (code, stdout, stderr) = Sandbox::new(config)
+        .execute_command(
+            "/test-program",
+            &[
+                "--exact".into(),
+                "container::tests::test_sandbox_cannot_restore_mount_authority".into(),
+                "--nocapture".into(),
+            ],
+            &[(CHILD_MARKER, "1")],
+        )
+        .unwrap();
+    assert_eq!(code, 0, "child stdout: {stdout}\nchild stderr: {stderr}");
+    assert_eq!(
+        fs::read(workspace.path().join("probe")).unwrap(),
+        b"sealed\n"
+    );
 }
