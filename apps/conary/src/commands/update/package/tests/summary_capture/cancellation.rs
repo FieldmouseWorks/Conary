@@ -60,7 +60,7 @@ pub(super) async fn add_candidate(
     .unwrap();
     repo.set_native_source_policy(
         RepositorySourcePolicy::new(
-            "cancel-native",
+            "fedora-44",
             RepositoryPolicyScope::repository("fedora-44").unwrap(),
             NativeSourceEcosystem::Rpm,
             NativeSourceStream::channel("stable").unwrap(),
