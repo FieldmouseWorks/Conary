@@ -73,6 +73,16 @@ fn aggregated_failures_keep_each_cause_and_only_observed_commits() {
         ],
     })
     .context("update wrapper");
+    let displayed = error.downcast_ref::<UpdateFailures>().unwrap().to_string();
+    for detail in [
+        "2 of 3",
+        "requested 3",
+        "TimeoutOutOfRange",
+        "other 4",
+        "outer: leaf",
+    ] {
+        assert!(displayed.contains(detail), "{displayed}");
+    }
     let updates = error.downcast_ref::<UpdateFailures>().unwrap();
     assert_eq!(
         updates.failures[0]
@@ -120,4 +130,35 @@ fn text_that_resembles_a_refusal_cannot_establish_typed_facts() {
         NativePreflightCause::Unclassified { .. }
     ));
     assert!(native.notes.is_empty());
+}
+
+#[test]
+fn typed_scope_preserves_plain_refusal_through_repeated_context() {
+    let error = refusal(NativeLifecyclePreflightError::MissingInterpreter {
+        interpreter: "/bin/missing".into(),
+        entry_id: "rpm:%pre".into(),
+        projected: false,
+    });
+    let summary = error.to_string();
+    for detail in [
+        "event-owner",
+        "at stage PackagePreInstall",
+        "Interpreter not found: /bin/missing",
+        "rpm:%pre",
+    ] {
+        assert!(summary.contains(detail), "{summary}");
+    }
+    let rescoped = with_scope(error, "/outer-root", "/outer-db");
+    assert_eq!(rescoped.to_string(), summary);
+    assert_eq!(plain_failure_summary(&rescoped), summary);
+    let report = package_failure_report(&rescoped).unwrap();
+    assert_eq!(
+        report.failures[0]
+            .native_preflight
+            .as_ref()
+            .unwrap()
+            .requested_root
+            .as_deref(),
+        Some("/outer-root")
+    );
 }

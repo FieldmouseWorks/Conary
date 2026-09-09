@@ -512,6 +512,14 @@ async fn queued_native_install_refusal_retains_machine_facts() {
     .await;
     executor.abort();
     let error = terminal.expect("native refusal terminal event");
+    for detail in [
+        "missing-runtime",
+        "at stage PackagePreInstall",
+        "Interpreter not found: /missing/daemon-interpreter",
+        "rpm:%pre",
+    ] {
+        assert!(error.detail.contains(detail), "{}", error.detail);
+    }
     let report: PackageFailureReport =
         serde_json::from_value(error.extensions.as_ref().unwrap()["package_failure"].clone())
             .unwrap();
@@ -524,7 +532,9 @@ async fn queued_native_install_refusal_retains_machine_facts() {
     );
     let stored = DaemonJob::find_by_id(&conn, &id).unwrap().unwrap();
     assert_eq!(stored.status, JobStatus::Failed);
-    assert_eq!(stored.error.unwrap().extensions, error.extensions);
+    let stored_error = stored.error.unwrap();
+    assert_eq!(stored_error.detail, error.detail);
+    assert_eq!(stored_error.extensions, error.extensions);
     assert!(
         Trove::find_by_name(&conn, "missing-runtime")
             .unwrap()

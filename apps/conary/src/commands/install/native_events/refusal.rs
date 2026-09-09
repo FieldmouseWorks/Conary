@@ -7,7 +7,7 @@ use conary_core::ccs::native_transaction::{
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, thiserror::Error)]
-#[error("native transaction preflight failed for {package} {version}")]
+#[error("native transaction preflight failed for {package} {version} at stage {stage:?}")]
 pub(crate) struct NativePreflightContext {
     pub package: String,
     pub version: String,

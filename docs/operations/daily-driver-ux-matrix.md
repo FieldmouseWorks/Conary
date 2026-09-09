@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-09
-revision: 27
+revision: 28
 summary: Daily-driver CLI routes, enabled-source discovery, grouped transaction results, scoped recovery, coordinated progress, and typed native runtime refusals
 ---
 
@@ -277,7 +277,9 @@ note: Provide the required interpreter in the selected root at this lifecycle st
 ```
 
 Update aggregation retains every underlying error and the changeset IDs returned
-by earlier commits. It renders each failure once at the closing diagnostic,
+by earlier commits. Typed operation scope preserves the full ordinary error
+summary, including package, stage, and cause, for library consumers; aggregation
+also retains per-package detail in its ordinary display. It renders each failure once at the closing diagnostic,
 after the applied table, with an explicit note that earlier commits remain
 applied. Requested package and event owner are separate when dependencies,
 relations, triggers, or recovery make them differ. Unknown errors retain every

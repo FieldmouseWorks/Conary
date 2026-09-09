@@ -11,21 +11,32 @@ use conary_core::ccs::native_transaction::{NativeEventProgram, NativeEventStage}
 use conary_core::scriptlet::NativeLifecyclePreflightError;
 
 #[derive(Debug, thiserror::Error)]
-#[error("package operation targeting {root}")]
+#[error("{summary}")]
 pub(crate) struct PackageFailureScope {
+    summary: String,
     pub root: String,
     pub database: String,
 }
 
 pub(crate) fn with_scope(error: anyhow::Error, root: &str, database: &str) -> anyhow::Error {
     if error.is::<NativePreflightContext>() {
+        let summary = plain_failure_summary(&error);
         error.context(PackageFailureScope {
+            summary,
             root: root.into(),
             database: database.into(),
         })
     } else {
         error
     }
+}
+
+/// Scope is additional typed context, not a replacement for the failure's
+/// ordinary Display contract. Avoid expanding an already retained chain twice.
+pub(crate) fn plain_failure_summary(error: &anyhow::Error) -> String {
+    error
+        .downcast_ref::<PackageFailureScope>()
+        .map_or_else(|| format!("{error:#}"), |scope| scope.summary.clone())
 }
 
 /// Return package failures without interpreting free-form text or querying mutable state.

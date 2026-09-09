@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-09
-revision: 7
+revision: 8
 summary: Document conaryd authorization, typed apply and native preflight refusals, exact-generation package jobs, routes, and daemon boundaries
 ---
 
@@ -51,7 +51,9 @@ Native runtime preflight and aggregated update failures retain the versioned
 `error.extensions.package_failure`. The report type lives in
 `crates/conary-agent-contract/src/package_failure.rs`; the Conary command adapter
 projects the original typed errors before the daemon converts its summary to
-text. Persisted job errors, job inspection, and `JobFailed` SSE use the same
+text. The ordinary error detail still includes the package, stage, and causal
+summary for clients that do not inspect the extension. Persisted job errors,
+job inspection, and `JobFailed` SSE use the same
 extension. It distinguishes requested root/database scope from the disposable
 execution root and reports observed earlier committed changesets for an update
 selection. An absent commit list means observations were not supplied, not that
