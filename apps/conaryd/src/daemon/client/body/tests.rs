@@ -416,3 +416,41 @@ fn trailer_section_requires_a_complete_parse() {
         Err(MALFORMED_TRAILER)
     );
 }
+
+#[test]
+fn interrupted_reads_preserve_partial_chunk_metadata() {
+    struct InterruptedBytes<'a> {
+        bytes: &'a [u8],
+        interrupt: bool,
+    }
+    impl Read for InterruptedBytes<'_> {
+        fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
+            let bytes = self.fill_buf()?;
+            let count = out.len().min(bytes.len());
+            out[..count].copy_from_slice(&bytes[..count]);
+            self.consume(count);
+            Ok(count)
+        }
+    }
+    impl BufRead for InterruptedBytes<'_> {
+        fn fill_buf(&mut self) -> io::Result<&[u8]> {
+            if self.interrupt {
+                self.interrupt = false;
+                return Err(io::Error::from(ErrorKind::Interrupted));
+            }
+            Ok(&self.bytes[..self.bytes.len().min(1)])
+        }
+        fn consume(&mut self, count: usize) {
+            self.bytes = &self.bytes[count..];
+            self.interrupt = true;
+        }
+    }
+    let source = InterruptedBytes {
+        bytes: b"3;name=\"value\"\r\nabc\r\n0\r\nX-Fixture: yes\r\n\r\n",
+        interrupt: false,
+    };
+    let mut reader = BodyReader::new(source, BodyFraming::Chunked);
+    let mut bytes = Vec::new();
+    reader.read_to_end(&mut bytes).unwrap();
+    assert_eq!(bytes, b"abc");
+}
