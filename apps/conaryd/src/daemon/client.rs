@@ -39,12 +39,16 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+mod body;
+mod body_stream;
 mod response;
 
 /// Read timeout while waiting for the SSE response head.
 const SSE_HEADER_TIMEOUT: Duration = Duration::from_secs(10);
 /// Read timeout while consuming SSE events after a verified head.
 const SSE_EVENT_TIMEOUT: Duration = Duration::from_secs(300);
+/// Maximum time to validate the remaining HTTP body after a terminal event.
+const SSE_COMPLETION_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Daemon client for connecting to conaryd
 pub struct DaemonClient {
@@ -286,9 +290,9 @@ impl DaemonClient {
         // Read the bounded response head and verify SSE setup before consuming
         // any event data, so a mismatch cannot reach the event callback.
         let mut reader = BufReader::new(stream);
-        let (status_code, content_types) =
-            response::read_network_head(&mut reader, self.timeout.min(SSE_HEADER_TIMEOUT))
-                .map_err(|diagnostic| conary_core::Error::IoError(diagnostic.to_string()))?;
+        let head = response::read_network_head(&mut reader, self.timeout.min(SSE_HEADER_TIMEOUT))
+            .map_err(|diagnostic| conary_core::Error::IoError(diagnostic.to_string()))?;
+        let status_code = head.status_code;
 
         if status_code != 200 {
             return Err(conary_core::Error::IoError(format!(
@@ -297,11 +301,18 @@ impl DaemonClient {
             )));
         }
 
-        response::verify_content_type(&content_types, response::ExpectedMediaType::EventStream)
-            .map_err(conary_core::Error::IoError)?;
+        response::verify_content_type(
+            &head.content_types,
+            response::ExpectedMediaType::EventStream,
+        )
+        .map_err(conary_core::Error::IoError)?;
         reader.get_ref().set_read_timeout(Some(SSE_EVENT_TIMEOUT))?;
+        let mut reader = BufReader::new(body::BodyReader::new(
+            body_stream::BodyStream::new(reader),
+            head.framing,
+        ));
 
-        // Read SSE events
+        // Read SSE events from decoded HTTP content.
         let mut event_data = String::new();
 
         loop {
@@ -325,21 +336,25 @@ impl DaemonClient {
                                     | DaemonEvent::JobCancelled { .. }
                             );
 
-                            on_event(event);
-
                             if is_terminal {
+                                // The per-job route ends its body after a terminal
+                                // event. Validate its remaining framing before a
+                                // callback or final lookup can report completion.
+                                reader
+                                    .get_mut()
+                                    .get_mut()
+                                    .limit_read_time(self.timeout.min(SSE_COMPLETION_TIMEOUT))?;
+                                std::io::copy(&mut reader, &mut std::io::sink())?;
+                                on_event(event);
                                 break;
                             }
+                            on_event(event);
                         }
 
                         event_data.clear();
                     } else if line.starts_with(':') {
                         // Comment/keepalive, ignore
                     }
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                    // Timeout, check job status
-                    continue;
                 }
                 Err(e) => return Err(e.into()),
             }
@@ -410,14 +425,16 @@ impl DaemonClient {
 
         // Parse the bounded HTTP head before reading or decoding its body.
         let mut reader = BufReader::new(stream);
-        let (status_code, content_type) = response::read_network_head(&mut reader, self.timeout)
+        let head = response::read_network_head(&mut reader, self.timeout)
             .map_err(|diagnostic| conary_core::Error::IoError(diagnostic.to_string()))?;
+        let status_code = head.status_code;
         let mut body = String::new();
         if let Some(expected) = response::ExpectedMediaType::for_status(status_code) {
-            response::verify_content_type(&content_type, expected)
+            response::verify_content_type(&head.content_types, expected)
                 .map_err(conary_core::Error::IoError)?;
-            reader.get_ref().set_read_timeout(Some(self.timeout))?;
-            reader.read_to_string(&mut body)?;
+            let mut stream = body_stream::BodyStream::new(reader);
+            stream.limit_read_time(self.timeout)?;
+            body::BodyReader::new(stream, head.framing).read_to_string(&mut body)?;
         }
         Ok(HttpResponse { status_code, body })
     }

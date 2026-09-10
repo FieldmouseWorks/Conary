@@ -6,12 +6,16 @@
 //! errors as `application/problem+json`, and SSE setup as
 //! `text/event-stream`. Media types are parsed with the `mime` grammar and
 //! verified before any body is deserialized, and response header reads are
-//! bounded so a malformed stream cannot grow or block without limit.
+//! bounded so a malformed stream cannot grow or block without limit. The
+//! parsed head also carries its RFC 9112 body framing, so callers decode the
+//! body under the same authority that validated the headers.
 
 use std::io::{BufRead, BufReader};
 use std::os::unix::net::UnixStream;
 use std::str::FromStr;
 use std::time::{Duration, Instant};
+
+use super::body::{BodyFraming, derive_framing};
 
 /// Maximum number of response header lines accepted from the daemon.
 pub(crate) const MAX_HEADER_LINES: usize = 128;
@@ -19,6 +23,8 @@ pub(crate) const MAX_HEADER_LINES: usize = 128;
 pub(crate) const MAX_HEADER_LINE_BYTES: usize = 8 * 1024;
 /// Maximum total response header bytes accepted from the daemon.
 pub(crate) const MAX_HEADER_BYTES: usize = 32 * 1024;
+/// Maximum interim response heads before the final response.
+const MAX_INFORMATIONAL_RESPONSES: usize = 8;
 
 /// Fixed diagnostic for a response without a Content-Type header.
 pub(crate) const MISSING_CONTENT_TYPE: &str = "daemon response is missing a Content-Type header";
@@ -30,6 +36,17 @@ pub(crate) const DUPLICATE_CONTENT_TYPE: &str =
     "daemon response has duplicate Content-Type headers";
 /// Fixed diagnostic for a response head that exceeds the accepted bounds.
 pub(crate) const MALFORMED_HEADERS: &str = "daemon response headers are malformed or too large";
+
+/// Parsed response head and the body framing its headers declare.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ResponseHead {
+    /// Status code from the response status line.
+    pub(crate) status_code: u16,
+    /// Every `Content-Type` value, in wire order.
+    pub(crate) content_types: Vec<String>,
+    /// Body framing derived from the parsed headers by [`derive_framing`].
+    pub(crate) framing: BodyFraming,
+}
 
 /// Media type the client expects for a response class.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -131,12 +148,13 @@ pub(crate) fn verify_content_type(
 ///
 /// Reads at most [`MAX_HEADER_LINES`] lines and [`MAX_HEADER_BYTES`] total
 /// bytes, and rejects any line that does not terminate within
-/// [`MAX_HEADER_LINE_BYTES`]. Returns the status code and every
-/// `Content-Type` value with the header name matched case-insensitively.
+/// [`MAX_HEADER_LINE_BYTES`]. Returns the status code, every `Content-Type`
+/// value with the header name matched case-insensitively, and the body
+/// framing derived from the same parsed header list.
 pub(crate) fn read_response_head<R: BufRead>(
     reader: &mut R,
     mut before_read: impl FnMut() -> Result<(), &'static str>,
-) -> Result<(u16, Vec<String>), &'static str> {
+) -> Result<ResponseHead, &'static str> {
     let mut bytes = Vec::new();
     for _ in 0..=MAX_HEADER_LINES {
         let mut line = String::new();
@@ -153,7 +171,7 @@ pub(crate) fn read_response_head<R: BufRead>(
                 _ => return Err(MALFORMED_HEADERS),
             }
             let status = response.code.ok_or(MALFORMED_HEADERS)?;
-            let values = response
+            let content_types = response
                 .headers
                 .iter()
                 .filter(|header| header.name.eq_ignore_ascii_case("content-type"))
@@ -163,7 +181,12 @@ pub(crate) fn read_response_head<R: BufRead>(
                         .map_err(|_| MALFORMED_CONTENT_TYPE)
                 })
                 .collect::<Result<Vec<_>, _>>()?;
-            return Ok((status, values));
+            let framing = derive_framing(status, response.headers)?;
+            return Ok(ResponseHead {
+                status_code: status,
+                content_types,
+                framing,
+            });
         }
     }
     Err(MALFORMED_HEADERS)
@@ -174,7 +197,7 @@ pub(crate) fn read_response_head<R: BufRead>(
 pub(crate) fn read_network_head(
     reader: &mut BufReader<UnixStream>,
     timeout: Duration,
-) -> Result<(u16, Vec<String>), &'static str> {
+) -> Result<ResponseHead, &'static str> {
     let deadline = Instant::now()
         .checked_add(timeout)
         .ok_or(MALFORMED_HEADERS)?;
@@ -182,15 +205,23 @@ pub(crate) fn read_network_head(
         .get_ref()
         .try_clone()
         .map_err(|_| MALFORMED_HEADERS)?;
-    read_response_head(reader, || {
-        let remaining = deadline
-            .checked_duration_since(Instant::now())
-            .filter(|duration| !duration.is_zero())
-            .ok_or(MALFORMED_HEADERS)?;
-        timer
-            .set_read_timeout(Some(remaining))
-            .map_err(|_| MALFORMED_HEADERS)
-    })
+    for _ in 0..=MAX_INFORMATIONAL_RESPONSES {
+        let head = read_response_head(reader, || {
+            let remaining = deadline
+                .checked_duration_since(Instant::now())
+                .filter(|duration| !duration.is_zero())
+                .ok_or(MALFORMED_HEADERS)?;
+            timer
+                .set_read_timeout(Some(remaining))
+                .map_err(|_| MALFORMED_HEADERS)
+        })?;
+        match head.status_code {
+            101 => return Err("daemon response unexpectedly switches protocols"),
+            100..=199 => continue,
+            _ => return Ok(head),
+        }
+    }
+    Err("daemon response has too many informational heads")
 }
 
 /// Read one line, failing instead of buffering past the per-line bound.
@@ -229,7 +260,7 @@ mod tests {
     use super::*;
     use std::io::BufReader;
 
-    fn head(raw: &[u8]) -> Result<(u16, Vec<String>), &'static str> {
+    fn head(raw: &[u8]) -> Result<ResponseHead, &'static str> {
         let mut reader = BufReader::new(raw);
         read_response_head(&mut reader, || Ok(()))
     }
@@ -277,9 +308,37 @@ mod tests {
     #[test]
     fn parses_status_and_content_type_header_case_insensitively() {
         let raw = b"HTTP/1.1 200 OK\r\ncOnTeNt-TyPe: text/event-stream\r\n\r\n";
-        let (status, content_types) = head(raw).unwrap();
-        assert_eq!(status, 200);
-        assert_eq!(content_types, vec!["text/event-stream".to_string()]);
+        let parsed = head(raw).unwrap();
+        assert_eq!(parsed.status_code, 200);
+        assert_eq!(parsed.content_types, vec!["text/event-stream".to_string()]);
+        assert_eq!(parsed.framing, BodyFraming::CloseDelimited);
+    }
+
+    #[test]
+    fn derives_framing_from_the_parsed_header_list() {
+        let raw = b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n";
+        assert_eq!(head(raw).unwrap().framing, BodyFraming::Fixed(2));
+
+        let raw = b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n";
+        assert_eq!(head(raw).unwrap().framing, BodyFraming::Chunked);
+
+        for raw in [
+            b"HTTP/1.1 100 Continue\r\n\r\n".as_slice(),
+            b"HTTP/1.1 204 No Content\r\nContent-Length: 7\r\n\r\n",
+            b"HTTP/1.1 304 Not Modified\r\nTransfer-Encoding: chunked\r\n\r\n",
+        ] {
+            assert_eq!(
+                head(raw).unwrap().framing,
+                BodyFraming::Empty,
+                "raw {raw:?}"
+            );
+        }
+
+        let raw = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nContent-Length: 5\r\n\r\n";
+        assert_eq!(
+            head(raw),
+            Err(super::super::body::TRANSFER_ENCODING_WITH_CONTENT_LENGTH)
+        );
     }
 
     #[test]
