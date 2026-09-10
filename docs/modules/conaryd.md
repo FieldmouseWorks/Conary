@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-09-10
-revision: 9
-summary: Document conaryd authorization, typed apply and native preflight refusals, exact-generation package jobs, routes, and daemon boundaries
+revision: 10
+summary: Document conaryd authorization, package jobs, routes, and shared bounded HTTP response framing before JSON and SSE
 ---
 
 # conaryd
@@ -81,6 +81,19 @@ protocol errors. Empty cancellation responses do not require a JSON media type.
 The interpretation follows [RFC 9110, section 8.3](https://www.rfc-editor.org/rfc/rfc9110.html#section-8.3).
 `apps/conaryd/src/daemon/client/response.rs` owns the shared header parser,
 media-type validation, and header size and wall-clock deadline limits.
+`apps/conaryd/src/daemon/client/body.rs` owns HTTP body framing before JSON or
+SSE parsing, following [RFC 9112, sections 6 and 7](https://www.rfc-editor.org/rfc/rfc9112.html#section-6).
+It supports exact Content-Length, connection-close bodies, and chunked coding.
+Repeated Content-Length values must agree; conflicting framing and unsupported
+transfer codings fail before body interpretation. Chunk boundaries may split
+JSON tokens, UTF-8 characters, or SSE lines without changing decoded content.
+Fixed-length and completed chunked responses finish without waiting for socket
+close. Premature EOF, invalid chunk syntax, and malformed trailers fail with
+bounded diagnostics. Chunk metadata lines are limited to 8 KiB; trailer sections
+are limited to 32 KiB and 128 fields. Trailers cannot redefine body framing or
+Content-Type. SSE retains terminal-event callbacks and final job lookup; a
+socket timeout ends the stream with an error instead of resuming a partially
+read frame.
 
 The route list below is checked by `scripts/check-doc-truth.sh` against
 `apps/conaryd/src/daemon/routes/{system,transactions,query,events}.rs`.
