@@ -40,12 +40,15 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 mod body;
+mod body_stream;
 mod response;
 
 /// Read timeout while waiting for the SSE response head.
 const SSE_HEADER_TIMEOUT: Duration = Duration::from_secs(10);
 /// Read timeout while consuming SSE events after a verified head.
 const SSE_EVENT_TIMEOUT: Duration = Duration::from_secs(300);
+/// Maximum time to validate the remaining HTTP body after a terminal event.
+const SSE_COMPLETION_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Daemon client for connecting to conaryd
 pub struct DaemonClient {
@@ -304,7 +307,10 @@ impl DaemonClient {
         )
         .map_err(conary_core::Error::IoError)?;
         reader.get_ref().set_read_timeout(Some(SSE_EVENT_TIMEOUT))?;
-        let mut reader = BufReader::new(body::BodyReader::new(reader, head.framing));
+        let mut reader = BufReader::new(body::BodyReader::new(
+            body_stream::BodyStream::new(reader),
+            head.framing,
+        ));
 
         // Read SSE events from decoded HTTP content.
         let mut event_data = String::new();
@@ -330,11 +336,19 @@ impl DaemonClient {
                                     | DaemonEvent::JobCancelled { .. }
                             );
 
-                            on_event(event);
-
                             if is_terminal {
+                                // The per-job route ends its body after a terminal
+                                // event. Validate its remaining framing before a
+                                // callback or final lookup can report completion.
+                                reader
+                                    .get_mut()
+                                    .get_mut()
+                                    .limit_read_time(self.timeout.min(SSE_COMPLETION_TIMEOUT))?;
+                                std::io::copy(&mut reader, &mut std::io::sink())?;
+                                on_event(event);
                                 break;
                             }
+                            on_event(event);
                         }
 
                         event_data.clear();
@@ -418,8 +432,9 @@ impl DaemonClient {
         if let Some(expected) = response::ExpectedMediaType::for_status(status_code) {
             response::verify_content_type(&head.content_types, expected)
                 .map_err(conary_core::Error::IoError)?;
-            reader.get_ref().set_read_timeout(Some(self.timeout))?;
-            body::BodyReader::new(reader, head.framing).read_to_string(&mut body)?;
+            let mut stream = body_stream::BodyStream::new(reader);
+            stream.limit_read_time(self.timeout)?;
+            body::BodyReader::new(stream, head.framing).read_to_string(&mut body)?;
         }
         Ok(HttpResponse { status_code, body })
     }

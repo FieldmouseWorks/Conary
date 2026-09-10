@@ -93,9 +93,12 @@ Fixed-length and completed chunked responses finish without waiting for socket
 close. Premature EOF, invalid chunk syntax, and malformed trailers fail with
 bounded diagnostics. Chunk metadata lines are limited to 8 KiB; trailer sections
 are limited to 32 KiB and 128 fields. Trailers cannot redefine body framing or
-Content-Type. SSE retains terminal-event callbacks and final job lookup; a
-socket timeout ends the stream with an error instead of resuming a partially
-read frame.
+Content-Type. `apps/conaryd/src/daemon/client/body_stream.rs` owns body read
+deadlines, including every internal read used to assemble chunk metadata.
+Ordinary response bodies share one configured body deadline. SSE validates the
+remaining HTTP framing before its terminal callback or final job lookup, under
+the lesser of the configured timeout and ten seconds. A socket timeout ends
+the stream with an error instead of resuming a partially read frame.
 
 The route list below is checked by `scripts/check-doc-truth.sh` against
 `apps/conaryd/src/daemon/routes/{system,transactions,query,events}.rs`.

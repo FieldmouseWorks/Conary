@@ -25,6 +25,9 @@ fn server(
         for response in responses {
             let deadline = Instant::now() + Duration::from_secs(3);
             let mut stream = loop {
+                if wait.try_recv().is_ok() {
+                    return;
+                }
                 match listener.accept() {
                     Ok((stream, _)) => break stream,
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
@@ -241,4 +244,89 @@ fn informational_response_count_and_protocol_upgrades_are_bounded() {
         assert!(error.contains("informational") || error.contains("switches protocols"));
         assert!(error.len() < 256);
     }
+}
+
+#[test]
+fn terminal_sse_event_cannot_bypass_remaining_http_framing() {
+    let event = "data: {\"type\":\"job_completed\",\"job_id\":\"job-1\",\"duration_ms\":1}\n\n";
+    let mut responses = vec![format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\n\r\n{event}",
+        event.len() + 1
+    ).into_bytes()];
+    for tail in [
+        "",
+        "XX0\r\n\r\n",
+        "\r\n",
+        "\r\n0\r\nContent-Type: text/plain\r\n\r\n",
+    ] {
+        responses.push(format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n{:x}\r\n{event}{tail}", event.len()).into_bytes());
+    }
+    for response in responses {
+        let (_root, client, release, task) = server(
+            vec![response, fixed("application/json", details().as_bytes())],
+            false,
+        );
+        let mut terminal_events = 0;
+        let result = client.wait_for_job("job-1", |_| terminal_events += 1);
+        // Permit the fixture server to stop if framing refusal prevents lookup.
+        let _ = release.send(());
+        task.join().unwrap();
+        assert!(
+            result.is_err(),
+            "terminal event bypassed incomplete HTTP framing"
+        );
+        assert_eq!(
+            terminal_events, 0,
+            "terminal callback preceded framing validation"
+        );
+    }
+}
+
+#[test]
+fn terminal_sse_framing_trickle_cannot_extend_completion_deadline() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("trickle.sock");
+    let listener = UnixListener::bind(&path).unwrap();
+    let task = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        stream
+            .set_write_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        let mut request = BufReader::new(stream.try_clone().unwrap());
+        loop {
+            let mut line = String::new();
+            assert_ne!(request.read_line(&mut line).unwrap(), 0);
+            if line == "\r\n" {
+                break;
+            }
+        }
+        let event = "data: {\"type\":\"job_completed\",\"job_id\":\"job-1\",\"duration_ms\":1}\n\n";
+        let initial = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n{:x}\r\n{event}\r\n",
+            event.len()
+        );
+        stream.write_all(initial.as_bytes()).unwrap();
+        let tail = format!("0;{}\r\n\r\n", "a".repeat(64));
+        for byte in tail.bytes() {
+            if stream.write_all(&[byte]).is_err() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    });
+    let client = DaemonClient::with_socket_path(path).with_timeout(Duration::from_millis(80));
+    let start = Instant::now();
+    let mut terminal_events = 0;
+    let result = client.wait_for_job("job-1", |_| terminal_events += 1);
+    let elapsed = start.elapsed();
+    task.join().unwrap();
+    assert!(result.is_err());
+    assert_eq!(terminal_events, 0);
+    assert!(
+        elapsed < Duration::from_millis(500),
+        "extended completion deadline: {elapsed:?}"
+    );
 }

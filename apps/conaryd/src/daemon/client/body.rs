@@ -201,6 +201,11 @@ impl<R: BufRead> BodyReader<R> {
         }
     }
 
+    /// Adjust the underlying transport without changing its framing state.
+    pub(crate) fn get_mut(&mut self) -> &mut R {
+        &mut self.reader
+    }
+
     /// Read one line, bounded to `max` bytes including its terminating LF.
     fn read_line_bounded(&mut self, max: usize, over_bound: &'static str) -> io::Result<Vec<u8>> {
         let mut line = Vec::new();
