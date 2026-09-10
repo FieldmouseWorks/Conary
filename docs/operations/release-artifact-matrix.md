@@ -327,9 +327,21 @@ synchronized suite authority below.
   Its default GitHub latest-release manifest matched the verified `v0.17.2`
   manifest above. This proves served bytes and release selection; the endpoint
   fetch itself is not a full newcomer journey.
-- Published native artifact proof is being recorded from
-  [34422047623](https://github.com/FieldmouseWorks/Conary/actions/runs/34422047623),
-  using workflow authority `1a838a4af3c756f40c86fd459b7f68cb27aece72`.
+- Independent released-artifact proof
+  [34422047623](https://github.com/FieldmouseWorks/Conary/actions/runs/34422047623)
+  passed all three native-package lifecycle jobs and the aggregate gate using
+  workflow authority `1a838a4af3c756f40c86fd459b7f68cb27aece72`:
+  - `fedora44`: signed bootstrap and RPM installation passed; lifecycle 4/4,
+    zero failures; published-binary corpus gate passed (3 cases).
+  - `ubuntu-26.04`: signed bootstrap and DEB installation passed; lifecycle
+    4/4, zero failures; published-binary corpus gate passed (3 cases).
+  - `arch`: signed bootstrap and Arch package installation passed; lifecycle
+    4/4, zero failures; published-binary corpus gate passed (3 cases).
+  Each host proved the published binary rejects test hooks. Hook-free
+  operations use that published binary; the four mutations use a separate
+  integration binary with explicit test hooks. Released-byte mutation on real
+  mounts remains the separate [#848](https://github.com/FieldmouseWorks/Conary/issues/848)
+  proof boundary.
 - Deployment run
   [34419260966](https://github.com/FieldmouseWorks/Conary/actions/runs/34419260966)
   passed routing and build-only route checks. On 2026-09-10, `deploy-remi`
