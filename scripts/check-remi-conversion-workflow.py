@@ -108,6 +108,10 @@ SHARED_CONCURRENCY = (
         "native-oracle export serialized with candidate and release deployment",
     ),
     (
+        ".github/workflows/survey-remi-resolution.yml",
+        "resolution survey exact oracle input, read-only permissions, and shared serialization",
+    ),
+    (
         BENCHMARK_WORKFLOW,
         "conversion benchmark serialized with deployment and verification",
     ),
@@ -297,12 +301,22 @@ def load_workflow(repo_root: Path, relative: str) -> dict[str, Any]:
 
 def validate_shared_concurrency(repo_root: Path) -> dict[str, dict[str, Any]]:
     workflows: dict[str, dict[str, Any]] = {}
-    expected = {"group": "deploy-and-verify", "cancel-in-progress": False}
+    # Retain pending runs in queue order instead of replacing the previous
+    # pending run whenever another operation arrives.
+    expected = {
+        "group": "deploy-and-verify",
+        "cancel-in-progress": False,
+        "queue": "max",
+    }
     for relative, error in SHARED_CONCURRENCY:
         workflow = load_workflow(repo_root, relative)
         workflows[relative] = workflow
         concurrency = exact_mapping(workflow.get("concurrency"), f"{relative} concurrency")
-        require(concurrency == expected, error)
+        require(
+            concurrency == expected
+            and type(concurrency["cancel-in-progress"]) is bool,
+            error,
+        )
     return workflows
 
 

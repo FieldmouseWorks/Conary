@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-09-10
-revision: 40
-summary: Record immutable v0.17.2 security publication and independent artifact proof while preserving blocked production and tester gates
+revision: 41
+summary: Record immutable v0.17.2 proof and retained serialized deployment queues while preserving blocked production and tester gates
 ---
 
 # Release Artifact Matrix
@@ -248,6 +248,16 @@ only a successful `push` artifact for the requested SHA on this repository's
 locate/download/verify budget. It never compiles Remi itself. These artifacts
 are deployment candidates, not tags, releases, or substitutes for the
 synchronized suite authority below.
+
+All seven protected production workflow members retain the shared
+`deploy-and-verify` concurrency group with `cancel-in-progress: false` and
+`queue: max`. Waiting runs are ordered by queue arrival, with GitHub's maximum
+of 100 pending entries; a full queue rejects new arrivals. This prevents normal
+pending-run replacement while preserving production serialization. The exact
+YAML mapping is checked for every member by the shared concurrency validator.
+See [infrastructure](infrastructure.md) for the platform contract and the
+remaining [#927](https://github.com/FieldmouseWorks/Conary/issues/927) deployment
+completion/deadline boundary.
 
 | Artifact product | Artifact classes | Current construction authority | Suite deploy mode | Current immutable authority | Local build |
 | --- | --- | --- | --- | --- | --- |
