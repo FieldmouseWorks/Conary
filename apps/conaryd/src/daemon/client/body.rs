@@ -7,7 +7,7 @@
 //! stream and never emits chunk metadata to its caller. Chunk sizes, chunk
 //! extensions, and trailer sections are validated with typed grammars
 //! (RFC 9112 sections 7.1 and 7.1.2) under fixed byte and line bounds, so a
-//! peer cannot grow, block, or re-frame the client's view of the body.
+//! peer cannot grow metadata without limit or re-frame the body.
 //!
 //! Fixed-length and bodyless readers finish after exactly the declared bytes
 //! and never wait for connection EOF or consume a following message;
@@ -101,7 +101,8 @@ pub(crate) fn derive_framing(
                 return Err(UNSUPPORTED_TRANSFER_CODING);
             }
             transfer_encoding = true;
-            let value = header_text(header.value)?;
+            let value =
+                std::str::from_utf8(header.value).map_err(|_| UNSUPPORTED_TRANSFER_CODING)?;
             parse_transfer_encoding(value)?;
         }
     }
@@ -200,23 +201,14 @@ impl<R: BufRead> BodyReader<R> {
         }
     }
 
-    /// Borrow the wrapped stream, for timeouts or TLS state outside the body.
-    #[allow(dead_code)]
-    pub(crate) fn get_ref(&self) -> &R {
-        &self.reader
-    }
-
-    /// Return the wrapped stream, positioned just past the decoded body.
-    #[allow(dead_code)]
-    pub(crate) fn into_inner(self) -> R {
-        self.reader
-    }
-
     /// Read one line, bounded to `max` bytes including its terminating LF.
     fn read_line_bounded(&mut self, max: usize, over_bound: &'static str) -> io::Result<Vec<u8>> {
         let mut line = Vec::new();
         loop {
-            let available = self.reader.fill_buf()?;
+            let available = match self.reader.fill_buf() {
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                result => result?,
+            };
             if available.is_empty() {
                 return Err(io::Error::new(
                     io::ErrorKind::UnexpectedEof,
@@ -252,11 +244,14 @@ impl<R: BufRead> BodyReader<R> {
     fn read_trailers(&mut self) -> io::Result<()> {
         loop {
             let line = self.read_line_bounded(MAX_TRAILER_LINE_BYTES, MALFORMED_TRAILER)?;
+            if !line.ends_with(b"\r\n") {
+                return Err(invalid_framing(MALFORMED_TRAILER));
+            }
             if self.trailer_bytes.len() + line.len() > MAX_TRAILER_BYTES {
                 return Err(invalid_framing(MALFORMED_TRAILER));
             }
             self.trailer_bytes.extend_from_slice(&line);
-            if line == b"\r\n" || line == b"\n" {
+            if line == b"\r\n" {
                 validate_trailer_section(&self.trailer_bytes).map_err(invalid_framing)?;
                 self.trailer_bytes.clear();
                 self.state = FramingState::Done;
@@ -350,10 +345,7 @@ fn invalid_framing(diagnostic: &'static str) -> io::Error {
 ///
 /// The size is parsed with overflow checking: leading zeros of any length are
 /// accepted, and a value above `u64::MAX` is rejected rather than truncated.
-/// The extension region is validated by
-/// [`validate_chunk_extensions`]. The line's CRLF and hex prefix are enforced
-/// here instead of by `httparse::parse_chunk_size`, whose 16-digit cap and
-/// arbitrary extension octets are both weaker than this typed grammar.
+/// The extension region is validated by [`validate_chunk_extensions`].
 fn parse_chunk_size_line(line: &[u8]) -> Result<u64, &'static str> {
     let body = match line.strip_suffix(b"\r\n") {
         Some(body) => body,
@@ -380,11 +372,11 @@ fn parse_chunk_size_line(line: &[u8]) -> Result<u64, &'static str> {
 fn validate_chunk_extensions(bytes: &[u8]) -> Result<(), &'static str> {
     let mut index = 0;
     loop {
-        index = skip_bws(bytes, index);
         if index == bytes.len() {
             return Ok(());
         }
-        if bytes[index] != b';' {
+        index = skip_bws(bytes, index);
+        if bytes.get(index) != Some(&b';') {
             return Err(MALFORMED_CHUNK_EXTENSION);
         }
         index = skip_bws(bytes, index + 1);
@@ -393,10 +385,11 @@ fn validate_chunk_extensions(bytes: &[u8]) -> Result<(), &'static str> {
         if name_end == index {
             return Err(MALFORMED_CHUNK_EXTENSION);
         }
-        index = skip_bws(bytes, name_end);
+        index = name_end;
+        let separator = skip_bws(bytes, index);
 
-        if index < bytes.len() && bytes[index] == b'=' {
-            index = skip_bws(bytes, index + 1);
+        if bytes.get(separator) == Some(&b'=') {
+            index = skip_bws(bytes, separator + 1);
             match bytes.get(index) {
                 Some(b'"') => index = quoted_string_end(bytes, index)?,
                 Some(_) => {

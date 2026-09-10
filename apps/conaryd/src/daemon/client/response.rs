@@ -327,7 +327,7 @@ mod tests {
         let raw = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nContent-Length: 5\r\n\r\n";
         assert_eq!(
             head(raw),
-            Err(super::body::TRANSFER_ENCODING_WITH_CONTENT_LENGTH)
+            Err(super::super::body::TRANSFER_ENCODING_WITH_CONTENT_LENGTH)
         );
     }
 
