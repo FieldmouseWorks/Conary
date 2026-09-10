@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-09-10
-revision: 39
-summary: Record the prepared v0.17.2 security update separately from immutable v0.17.1 publication and artifact proof
+revision: 40
+summary: Record immutable v0.17.2 security publication and independent artifact proof while preserving blocked production and tester gates
 ---
 
 # Release Artifact Matrix
@@ -83,21 +83,21 @@ independent closeout proof. The `Protect suite tags` ruleset separately permits
 new `v*` tags while rejecting updates and deletions from the moment each tag is
 created.
 
-Version `0.17.1` is the current immutable release authority. Annotated tag
-object `ff70eb6aefe18e8554c94ced4592b4727e99feac` peels to reviewed merge commit
-`83376626f8f238e4763389ce2084d655fc4d6cf3`; all four products were published
-together, routed through their declared deployment modes, and independently
-verified within the artifact-proof scope recorded below. Deployment routing
-passed; terminal live deployment proof remains pending. Historical
-product-prefixed tags and releases remain immutable evidence for their own
-trees, but they are not current release inputs.
+Version `0.17.2` is the current immutable release authority. Annotated tag
+object `1e4045b57b43d1776fa06e30cc5e5f2a138fca87` peels to reviewed merge commit
+`1a838a4af3c756f40c86fd459b7f68cb27aece72`; all four products were published
+together and independently verified within the artifact-proof scope recorded
+below. Deployment routing passed; terminal live deployment proof remains
+pending behind the no-active-universe completion defect
+[#927](https://github.com/FieldmouseWorks/Conary/issues/927) and public promotion
+[#598](https://github.com/FieldmouseWorks/Conary/issues/598). Historical releases
+remain immutable evidence for their own trees, but are not current release inputs.
 
-The workspace and packaging are prepared for `v0.17.2`, including the
-privileged build-sandbox repair tracked by GHSA-6qhh-qcc5-fxxg and
-[PR #989](https://github.com/FieldmouseWorks/Conary/pull/989). This is a prepared
-target only: its protected merge, annotated tag, immutable publication, and
-independent artifact and deployment proof must complete before it replaces the
-published authority above.
+The suite includes the privileged build-sandbox repair from
+[PR #989](https://github.com/FieldmouseWorks/Conary/pull/989).
+[GHSA-6qhh-qcc5-fxxg](https://github.com/FieldmouseWorks/Conary/security/advisories/GHSA-6qhh-qcc5-fxxg)
+is public and identifies `0.17.1` as affected and `0.17.2` as patched.
+Publication does not activate a public universe or assign tester authority.
 
 The v0.16.1 release-era deployment ran the exact tagged `remi 0.16.1` binary
 whose release asset has SHA-256
@@ -119,8 +119,7 @@ verifies that signature before parsing any selection field and verifies the
 selected artifact before a native package transaction. Exact-tag release-build
 and released-artifact proof both completed the clean three-host bootstrap path.
 
-The `v0.17.1` suite is published and independently artifact-verified. It is
-the first release under the license split from
+The historical `v0.17.1` suite was the first release under the license split from
 [#905](https://github.com/FieldmouseWorks/Conary/pull/905): the Conary client
 and libraries are `MIT OR Apache-2.0`, and Remi is `AGPL-3.0-or-later`. The
 release includes `LICENSE-MIT`, `LICENSE-APACHE`, and `LICENSE-AGPL-3.0-remi`.
@@ -252,12 +251,96 @@ synchronized suite authority below.
 
 | Artifact product | Artifact classes | Current construction authority | Suite deploy mode | Current immutable authority | Local build |
 | --- | --- | --- | --- | --- | --- |
-| `conary` | binary, `.ccs`, `.rpm`, `.deb`, `.pkg.tar.zst`, signed bootstrap manifest | `.github/workflows/release-build.yml`, `scripts/release.sh suite`, `scripts/release-matrix.sh` | protected release assets, static sites, and released-package proof | synchronized suite `v0.17.1`; detached signatures for the CCS artifact and bootstrap manifest | `cargo build -p conary` |
-| `remi` | binary and tarball | `.github/workflows/release-build.yml` for suites; `.github/workflows/build-remi-candidate.yml` for build-once exact-main candidates; `scripts/release.sh suite`, `scripts/release-matrix.sh` | protected Remi deployment and repopulation proof, serialized before Conary deployment | synchronized suite `v0.17.1`; released binary digest verified; live deployment proof pending | `cargo build -p remi` |
-| `conaryd` | binary and tarball | `.github/workflows/release-build.yml`, `scripts/release.sh suite`, `scripts/release-matrix.sh` | `none` | synchronized suite `v0.17.1`; build-only route | `cargo build -p conaryd` |
-| `conary-test` | binary and tarball | `.github/workflows/release-build.yml`, `scripts/release.sh suite`, `scripts/release-matrix.sh` | `none` | synchronized suite `v0.17.1`; build-only route | `cargo build -p conary-test` |
+| `conary` | binary, `.ccs`, `.rpm`, `.deb`, `.pkg.tar.zst`, signed bootstrap manifest | `.github/workflows/release-build.yml`, `scripts/release.sh suite`, `scripts/release-matrix.sh` | protected release assets, static sites, and released-package proof | synchronized suite `v0.17.2`; detached signatures for the CCS artifact and bootstrap manifest | `cargo build -p conary` |
+| `remi` | binary and tarball | `.github/workflows/release-build.yml` for suites; `.github/workflows/build-remi-candidate.yml` for build-once exact-main candidates; `scripts/release.sh suite`, `scripts/release-matrix.sh` | protected Remi deployment and repopulation proof, serialized before Conary deployment | synchronized suite `v0.17.2`; released binary digest verified; live deployment proof pending | `cargo build -p remi` |
+| `conaryd` | binary and tarball | `.github/workflows/release-build.yml`, `scripts/release.sh suite`, `scripts/release-matrix.sh` | `none` | synchronized suite `v0.17.2`; build-only route | `cargo build -p conaryd` |
+| `conary-test` | binary and tarball | `.github/workflows/release-build.yml`, `scripts/release.sh suite`, `scripts/release-matrix.sh` | `none` | synchronized suite `v0.17.2`; build-only route | `cargo build -p conary-test` |
 
 ## Recorded Evidence
+
+### Conary 0.17.2 security suite
+
+- Security PR [#989](https://github.com/FieldmouseWorks/Conary/pull/989) passed
+  all 41 hosted checks and merged as reviewed commit
+  `1a838a4af3c756f40c86fd459b7f68cb27aece72`. Protected annotated tag `v0.17.2`
+  has tag object `1e4045b57b43d1776fa06e30cc5e5f2a138fca87` and peels to that
+  exact merge commit.
+- Exact-tag release-build
+  [34415794323](https://github.com/FieldmouseWorks/Conary/actions/runs/34415794323)
+  passed all 14 applicable jobs (nightly-only proof skipped), publishing the
+  immutable 18-asset [v0.17.2 release](https://github.com/FieldmouseWorks/Conary/releases/tag/v0.17.2)
+  at `2026-09-09T23:58:48Z`. Independently downloaded SHA-256 digests:
+  - `LICENSE-AGPL-3.0-remi`:
+    `0d96a4ff68ad6d4b6f1f30f713b18d5184912ba8dd389f86aa7710db079abcb0`
+  - `LICENSE-APACHE`:
+    `cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30`
+  - `LICENSE-MIT`:
+    `3681cd22a07cf6ae3dbadde8a04fde421b28f30c9c378e8031874ab95025cd83`
+  - `SHA256SUMS`:
+    `22082cbd6c7c3dd35ff7f843ba77fb0591bcb7029323e48d5a8e55553f5e1ab4`
+  - `conary-0.17.2-1-x86_64.pkg.tar.zst`:
+    `1524939c713797ff1d0945c443d71e3f03b593fb2b697a8ef4bde6f9b19a1196`
+  - `conary-0.17.2-1.fc44.x86_64.rpm`:
+    `a42aacea65d81e2d0f27f18fb8af629f9162b8ed8a569d86b478dbcb29aa025d`
+  - `conary-0.17.2.ccs`:
+    `c8ff7fbd63d149477d349661e03c2e343bcdedfafbc60fc79b898c7ea1b5b7b0`
+  - `conary-0.17.2.ccs.sig`:
+    `710bede860c38522c761922ece6b54a954d6851cfb71c1d6c2034096a300e54d`
+  - `conary-bootstrap-v1.manifest`:
+    `7219f283e063da46b6501ea7410269c913edb506a26fe7d29cba633f4d10513f`
+  - `conary-bootstrap-v1.manifest.sig`:
+    `7b4466d27c7d5f91242ba7306257bd2ea383f08891d64651ae205c4e26204330`
+  - `conary-test-0.17.2-linux-x64`:
+    `88545a192c8b620cb88c56b7310540a237c9b3732304ec482f47be31a1833c2f`
+  - `conary-test-0.17.2-linux-x64.tar.gz`:
+    `21e097e91c089fcb49207ae4a1b60716331887ec0460d8b2d4d1ea7d8325260d`
+  - `conary_0.17.2-1_amd64.deb`:
+    `0f548d388ac64b4e9b397bd82869003a23ff3226b5cc4b54f28f22642bd6a613`
+  - `conaryd-0.17.2-linux-x64`:
+    `87201316760c25f30cc2aa00cd3349a410b00713182ff170ef9900b651bc8b3a`
+  - `conaryd-0.17.2-linux-x64.tar.gz`:
+    `2ba8bd0969041c9d8a943077c6d6cec374868a825cdde71bd260a2b4d8e17d2b`
+  - `metadata.json`:
+    `7213117225946271c6c82b467b233373645b46a7cca5cccf2045fcce267cbfd4`
+  - `remi-0.17.2-linux-x64`:
+    `55f73d9f23bb0b35346e42fa88149b96bec22ba4847b7ab907d28eb0ae927ca6`
+  - `remi-0.17.2-linux-x64.tar.gz`:
+    `ab6e472885227e531f5a5cbd5b9b93b29a953f6a0f328dbac7dadfc3f3c06be2`
+- Independent downloads matched all 18 GitHub asset digests and all 17
+  `SHA256SUMS` entries. `gh release verify v0.17.2` and `gh release verify-asset`
+  passed for the release and all 18 assets. OpenSSL verified both detached
+  Ed25519 signatures using only the public release key. The extracted Conary
+  DEB binary and each downloaded Remi, conaryd, and conary-test binary reported
+  exact version `0.17.2`.
+- Schema-v1 metadata names release `suite`, tag `v0.17.2`, version `0.17.2`,
+  bundle `suite-bundle`, typed `dry_run=false`, and exactly four product routes:
+  Conary `release_bundle`, Remi `remote_bundle`, and `deploy_mode=none` for
+  conaryd and conary-test.
+- Public advisory
+  [GHSA-6qhh-qcc5-fxxg](https://github.com/FieldmouseWorks/Conary/security/advisories/GHSA-6qhh-qcc5-fxxg)
+  was published at `2026-09-10T00:38:46Z` after independent artifact verification;
+  the release notes link to it.
+- On 2026-09-10, the public HTTPS installer at
+  [install-conary-preview.sh](https://conary.io/install-conary-preview.sh)
+  matched the checked-in script exactly, SHA-256
+  `1daa7263129a4ab1eaa11023b8018f95efc34dd81f3f8f95be0bb2458675f453`.
+  Its default GitHub latest-release manifest matched the verified `v0.17.2`
+  manifest above. This proves served bytes and release selection; the endpoint
+  fetch itself is not a full newcomer journey.
+- Published native artifact proof is being recorded from
+  [34422047623](https://github.com/FieldmouseWorks/Conary/actions/runs/34422047623),
+  using workflow authority `1a838a4af3c756f40c86fd459b7f68cb27aece72`.
+- Deployment run
+  [34419260966](https://github.com/FieldmouseWorks/Conary/actions/runs/34419260966)
+  passed routing and build-only route checks. On 2026-09-10, `deploy-remi`
+  remained in progress and public `/health/ready` returned HTTP 503 because
+  Arch had no active immutable catalog revision. Release verification does not
+  satisfy [#927](https://github.com/FieldmouseWorks/Conary/issues/927)'s deployment
+  completion repair or [#598](https://github.com/FieldmouseWorks/Conary/issues/598)'s
+  signed public-universe promotion. No terminal live deployment proof is claimed.
+- `published_release.tester_authority` remains `false`; the tester pin remains
+  unassigned. [#639](https://github.com/FieldmouseWorks/Conary/issues/639) retains
+  the post-universe release and complete three-host public journey acceptance.
 
 ### Conary 0.17.1 synchronized suite
 
@@ -322,9 +405,11 @@ synchronized suite authority below.
   Conary `release_bundle`, Remi `remote_bundle`, and `deploy_mode=none` for
   conaryd and conary-test. Protected deployment run
   [33997142651](https://github.com/FieldmouseWorks/Conary/actions/runs/33997142651)
-  passed `validate-routing` and `verify-build-only-routes`; at closeout on
-  2026-09-06, `deploy-remi` remained in progress. This records route proof;
-  terminal live Remi/Conary deployment proof remains pending.
+  passed `validate-routing` and `verify-build-only-routes`, then failed on
+  2026-09-06 because the deployment required repopulation with no active
+  universe. Its claimed one-hour wait held the deployment group for over five
+  hours. [#927](https://github.com/FieldmouseWorks/Conary/issues/927) owns the
+  completion contract and deadline repair; this run proves routing only.
 - Independent release-artifact-proof run
   [33998911117](https://github.com/FieldmouseWorks/Conary/actions/runs/33998911117)
   passed all three native-package lifecycle jobs and the aggregate

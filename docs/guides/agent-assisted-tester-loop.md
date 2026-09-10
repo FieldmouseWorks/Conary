@@ -1,8 +1,8 @@
 ---
-last_updated: 2026-09-06
-revision: 19
+last_updated: 2026-09-10
+revision: 20
 status: paused
-summary: Align the paused tester-loop commands with published v0.17.1 while signed-universe, daily-driver, and synchronized-release gates complete
+summary: Align the paused tester-loop commands with published v0.17.2 while signed-universe, daily-driver, and synchronized-release gates complete
 ---
 
 # Agent-Assisted Tester Loop
@@ -16,7 +16,7 @@ Use a disposable VM, a snapshot, or a non-critical host. Do not run this loop
 first on an irreplaceable daily driver.
 
 **Do not run this guide while its frontmatter status is `paused`.** Its
-`v0.17.1` commands match the current immutable, independently verified suite,
+`v0.17.2` commands match the current immutable, independently verified suite,
 and W7's ordinary-package gate has passed. The suite is not pinned
 tester authority while the launch-status gates remain open. Resume only
 after the canonical [launch status](../roadmaps/launch-status.json) assigns an
@@ -43,15 +43,15 @@ https://github.com/FieldmouseWorks/Conary/blob/main/docs/guides/agent-assisted-t
 
 Goal: install, inspect, update-preview, and remove a package whose source
 format differs from this host's native package format with pinned Conary
-v0.17.1, then draft a pre-alpha tester feedback issue. You are testing the user-facing
+v0.17.2, then draft a pre-alpha tester feedback issue. You are testing the user-facing
 cross-distro package-manager flow, not developing Conary itself.
 
 Safety rules:
 - Stop immediately if this is not a VM, snapshot, or explicitly non-critical
   host.
 - Confirm distro, architecture, kernel, and sudo before installing anything.
-- Use only the pinned v0.17.1 release from
-  https://github.com/FieldmouseWorks/Conary/releases/tag/v0.17.1 and confirm its
+- Use only the pinned v0.17.2 release from
+  https://github.com/FieldmouseWorks/Conary/releases/tag/v0.17.2 and confirm its
   release page provides the package for this host plus SHA256SUMS.
 - Verify SHA256SUMS for every downloaded artifact before installation.
 - Run dry-run commands before live commands when the loop provides both.
@@ -77,7 +77,7 @@ Stop and do not install Conary if any of these are true:
 - the host is not Fedora 44, Ubuntu 26.04 LTS, or Arch Linux;
 - the host is not `x86_64`;
 - `sudo -v` fails;
-- the pinned `v0.17.1` release page does not provide the package for this host
+- the pinned `v0.17.2` release page does not provide the package for this host
   plus `SHA256SUMS`;
 - downloaded artifact checksums do not match `SHA256SUMS`;
 - the agent or human cannot explain what a live mutation command is about to
@@ -117,45 +117,45 @@ stack matter only for generation-model features outside this test.
 Create a clean work directory:
 
 ```bash
-mkdir -p "$HOME/conary-preview-v0.17.1"
-cd "$HOME/conary-preview-v0.17.1"
+mkdir -p "$HOME/conary-preview-v0.17.2"
+cd "$HOME/conary-preview-v0.17.2"
 ```
 
 Download `SHA256SUMS` and the package for the current distro from:
 
 ```text
-https://github.com/FieldmouseWorks/Conary/releases/tag/v0.17.1
+https://github.com/FieldmouseWorks/Conary/releases/tag/v0.17.2
 ```
 
 Use exactly one package. Fedora 44:
 
 ```bash
-base="https://github.com/FieldmouseWorks/Conary/releases/download/v0.17.1"
+base="https://github.com/FieldmouseWorks/Conary/releases/download/v0.17.2"
 curl -fLO "$base/SHA256SUMS"
-curl -fLO "$base/conary-0.17.1-1.fc44.x86_64.rpm"
+curl -fLO "$base/conary-0.17.2-1.fc44.x86_64.rpm"
 ```
 
 Ubuntu 26.04 LTS:
 
 ```bash
-base="https://github.com/FieldmouseWorks/Conary/releases/download/v0.17.1"
+base="https://github.com/FieldmouseWorks/Conary/releases/download/v0.17.2"
 curl -fLO "$base/SHA256SUMS"
-curl -fLO "$base/conary_0.17.1-1_amd64.deb"
+curl -fLO "$base/conary_0.17.2-1_amd64.deb"
 ```
 
 Arch Linux:
 
 ```bash
-base="https://github.com/FieldmouseWorks/Conary/releases/download/v0.17.1"
+base="https://github.com/FieldmouseWorks/Conary/releases/download/v0.17.2"
 curl -fLO "$base/SHA256SUMS"
-curl -fLO "$base/conary-0.17.1-1-x86_64.pkg.tar.zst"
+curl -fLO "$base/conary-0.17.2-1-x86_64.pkg.tar.zst"
 ```
 
 Downloaded package names:
 
-- Fedora 44: `conary-0.17.1-1.fc44.x86_64.rpm`
-- Ubuntu 26.04 LTS: `conary_0.17.1-1_amd64.deb`
-- Arch Linux: `conary-0.17.1-1-x86_64.pkg.tar.zst`
+- Fedora 44: `conary-0.17.2-1.fc44.x86_64.rpm`
+- Ubuntu 26.04 LTS: `conary_0.17.2-1_amd64.deb`
+- Arch Linux: `conary-0.17.2-1-x86_64.pkg.tar.zst`
 
 Verify the downloaded package against `SHA256SUMS`:
 
@@ -172,19 +172,19 @@ Ask the human before running the matching install command.
 Fedora 44:
 
 ```bash
-sudo dnf install ./conary-0.17.1-1.fc44.x86_64.rpm
+sudo dnf install ./conary-0.17.2-1.fc44.x86_64.rpm
 ```
 
 Ubuntu 26.04 LTS:
 
 ```bash
-sudo apt install ./conary_0.17.1-1_amd64.deb
+sudo apt install ./conary_0.17.2-1_amd64.deb
 ```
 
 Arch Linux:
 
 ```bash
-sudo pacman -U ./conary-0.17.1-1-x86_64.pkg.tar.zst
+sudo pacman -U ./conary-0.17.2-1-x86_64.pkg.tar.zst
 ```
 
 Then record:
