@@ -23,6 +23,8 @@ pub(crate) const MAX_HEADER_LINES: usize = 128;
 pub(crate) const MAX_HEADER_LINE_BYTES: usize = 8 * 1024;
 /// Maximum total response header bytes accepted from the daemon.
 pub(crate) const MAX_HEADER_BYTES: usize = 32 * 1024;
+/// Maximum interim response heads before the final response.
+const MAX_INFORMATIONAL_RESPONSES: usize = 8;
 
 /// Fixed diagnostic for a response without a Content-Type header.
 pub(crate) const MISSING_CONTENT_TYPE: &str = "daemon response is missing a Content-Type header";
@@ -203,15 +205,23 @@ pub(crate) fn read_network_head(
         .get_ref()
         .try_clone()
         .map_err(|_| MALFORMED_HEADERS)?;
-    read_response_head(reader, || {
-        let remaining = deadline
-            .checked_duration_since(Instant::now())
-            .filter(|duration| !duration.is_zero())
-            .ok_or(MALFORMED_HEADERS)?;
-        timer
-            .set_read_timeout(Some(remaining))
-            .map_err(|_| MALFORMED_HEADERS)
-    })
+    for _ in 0..=MAX_INFORMATIONAL_RESPONSES {
+        let head = read_response_head(reader, || {
+            let remaining = deadline
+                .checked_duration_since(Instant::now())
+                .filter(|duration| !duration.is_zero())
+                .ok_or(MALFORMED_HEADERS)?;
+            timer
+                .set_read_timeout(Some(remaining))
+                .map_err(|_| MALFORMED_HEADERS)
+        })?;
+        match head.status_code {
+            101 => return Err("daemon response unexpectedly switches protocols"),
+            100..=199 => continue,
+            _ => return Ok(head),
+        }
+    }
+    Err("daemon response has too many informational heads")
 }
 
 /// Read one line, failing instead of buffering past the per-line bound.

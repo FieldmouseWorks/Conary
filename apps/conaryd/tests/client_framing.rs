@@ -216,3 +216,29 @@ fn invalid_chunk_metadata_cannot_wrap_an_otherwise_valid_json_result() {
         assert!(result.is_err(), "accepted malformed chunk metadata");
     }
 }
+
+#[test]
+fn informational_heads_do_not_replace_the_final_response() {
+    let mut response =
+        b"HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 103 Early Hints\r\nLink: </example>\r\n\r\n"
+            .to_vec();
+    response.extend_from_slice(&chunked("application/json", details().as_bytes(), 3));
+    let (_root, client, _release, task) = server(vec![response], false);
+    let result = client.get_transaction("job-1");
+    task.join().unwrap();
+    assert_eq!(result.unwrap().status, "completed");
+}
+
+#[test]
+fn informational_response_count_and_protocol_upgrades_are_bounded() {
+    for response in [
+        b"HTTP/1.1 103 Early Hints\r\n\r\n".repeat(9),
+        b"HTTP/1.1 101 Switching Protocols\r\n\r\n".to_vec(),
+    ] {
+        let (_root, client, _release, task) = server(vec![response], false);
+        let error = client.get_transaction("job-1").unwrap_err().to_string();
+        task.join().unwrap();
+        assert!(error.contains("informational") || error.contains("switches protocols"));
+        assert!(error.len() < 256);
+    }
+}

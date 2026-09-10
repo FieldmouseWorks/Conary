@@ -84,6 +84,8 @@ media-type validation, and header size and wall-clock deadline limits.
 `apps/conaryd/src/daemon/client/body.rs` owns HTTP body framing before JSON or
 SSE parsing, following [RFC 9112, sections 6 and 7](https://www.rfc-editor.org/rfc/rfc9112.html#section-6).
 It supports exact Content-Length, connection-close bodies, and chunked coding.
+Up to eight informational response heads may precede the final response under
+the same header deadline; unsolicited protocol upgrades are rejected.
 Repeated Content-Length values must agree; conflicting framing and unsupported
 transfer codings fail before body interpretation. Chunk boundaries may split
 JSON tokens, UTF-8 characters, or SSE lines without changing decoded content.
