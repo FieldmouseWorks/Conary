@@ -43,6 +43,7 @@ permissions:
 concurrency:
   group: deploy-and-verify
   cancel-in-progress: false
+  queue: max
 
 jobs:
   benchmark:

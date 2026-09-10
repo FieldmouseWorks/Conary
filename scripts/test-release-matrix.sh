@@ -1135,6 +1135,64 @@ cases = (
     ('test_check_release_matrix_requires_shared_namespace_setup_in_every_workspace_lane__02', 'replace', '.github/workflows/merge-validation.yml', '        uses: ./.github/actions/setup-exact-ownership-tests', '        run: echo "exact ownership setup removed"', 'shared exact ownership setup'),
     ('test_check_release_matrix_requires_shared_namespace_setup_in_every_workspace_lane__03', 'replace', '.github/workflows/release-build.yml', '        uses: ./workflow-authority/.github/actions/setup-exact-ownership-tests', '        run: echo "exact ownership setup removed"', 'shared exact ownership setup'),
 )
+
+# Every shared deploy-and-verify member must keep FIFO serialization: one
+# exact typed concurrency mapping, never a degraded queue or a cancelling run.
+SHARED_CONCURRENCY_MEMBERS = (
+    ('.github/workflows/deploy-and-verify.yml', 'release deployment serialized with production host authority'),
+    ('.github/workflows/deploy-remi-candidate.yml', 'candidate deployment serialized with production host authority'),
+    ('.github/workflows/deploy-site.yml', 'site deployment serialized with production host authority'),
+    ('.github/workflows/export-remi-native-oracle-inputs.yml', 'native-oracle export serialized with candidate and release deployment'),
+    ('.github/workflows/survey-remi-resolution.yml', 'resolution survey exact oracle input, read-only permissions, and shared serialization'),
+    ('.github/workflows/remi-conversion-benchmark.yml', 'conversion benchmark serialized with deployment and verification'),
+    ('.github/workflows/remi-r2-durability.yml', 'R2 durability serialized with production host authority'),
+)
+
+generated_cases = []
+for _workflow, _diagnostic in SHARED_CONCURRENCY_MEMBERS:
+    _slug = _workflow.rsplit('/', 1)[1][:-len('.yml')].replace('-', '_')
+    generated_cases.append((
+        f'test_check_release_matrix_rejects_missing_shared_concurrency_queue_{_slug}',
+        'replace',
+        _workflow,
+        '  queue: max\n',
+        '',
+        _diagnostic,
+    ))
+    generated_cases.append((
+        f'test_check_release_matrix_rejects_single_shared_concurrency_queue_{_slug}',
+        'replace',
+        _workflow,
+        '  queue: max\n',
+        '  queue: single\n',
+        _diagnostic,
+    ))
+generated_cases.append((
+    'test_check_release_matrix_rejects_boolean_shared_concurrency_queue',
+    'replace',
+    '.github/workflows/deploy-and-verify.yml',
+    '  queue: max\n',
+    '  queue: true\n',
+    'release deployment serialized with production host authority',
+))
+generated_cases.append((
+    'test_check_release_matrix_rejects_cancelling_shared_concurrency',
+    'replace',
+    '.github/workflows/deploy-site.yml',
+    '  cancel-in-progress: false\n',
+    '  cancel-in-progress: true\n',
+    'site deployment serialized with production host authority',
+))
+generated_cases.append((
+    'test_check_release_matrix_rejects_numeric_shared_concurrency_cancellation',
+    'replace',
+    '.github/workflows/deploy-site.yml',
+    '  cancel-in-progress: false\n',
+    '  cancel-in-progress: 0\n',
+    'site deployment serialized with production host authority',
+))
+cases += tuple(generated_cases)
+
 for case in cases:
     for field in case:
         sys.stdout.buffer.write(field.encode() + b"\0")

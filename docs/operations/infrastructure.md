@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-09-09
-revision: 99
-summary: Document non-secret CI, release, deployment, hosting, and production evidence workflows, including survey outcome contracts and failure recovery; host-local access belongs in ignored LOCAL_ACCESS.md.
+last_updated: 2026-09-10
+revision: 100
+summary: Document serialized production operations with retained FIFO deployment queues, release and survey proof, and recovery boundaries
 ---
 
 # Infrastructure Overview
@@ -113,6 +113,18 @@ workflow.
   `remi-conversion-benchmark`, and `remi-r2-durability`. A stopped-service
   survey or benchmark therefore cannot overlap a deploy, frontend probe,
   native-oracle export, or durability operation.
+  Every member opts into `queue: max` while retaining `cancel-in-progress:
+  false`. GitHub orders waiting runs by when they entered the concurrency
+  group, retaining up to 100 pending runs instead of replacing the previous
+  pending run on each arrival. A full queue rejects additional arrivals; this
+  is a bounded platform queue, not an unlimited backlog. Existing running or
+  cancelled historical runs are not repaired by this policy change. The
+  [GitHub queue contract](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency)
+  applies to all seven members, including static-site deployment, so queue
+  retention preserves the stopped-service/probe exclusion above.
+  [#927](https://github.com/FieldmouseWorks/Conary/issues/927) still owns
+  launch-state-aware deployment completion and a real elapsed-time budget;
+  retaining queued runs does not make an unsatisfiable deployment complete.
 - Candidate deployment uses one fail-closed SSH option contract for every
   remote command and transfer: authentication is noninteractive, initial
   connection time is bounded, and protocol keepalives cover long refresh and
