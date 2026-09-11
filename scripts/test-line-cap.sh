@@ -304,10 +304,11 @@ fi
 grep -Fq 'undeclared top-level Rust source root(s)' "$fixture_root/undeclared.out"
 grep -Fq 'fixture_pkg' "$fixture_root/undeclared.out"
 
-# The classification error is keyed to the declared policy, so the same Rust
-# measured from a declared root no longer fails for that reason.
-mv "$fixture_root/fixture_pkg" "$fixture_root/crates/fixture_pkg"
-write_fixture "$fixture_root/crates/fixture_pkg/src/undeclared.rs" <<'EOF'
+# The classification error is keyed to the declared root names in SOURCE_ROOTS,
+# which is compile-time policy: the same Rust under a declared top-level name
+# clears the error and is measured from there.
+mv "$fixture_root/fixture_pkg" "$fixture_root/apps"
+write_fixture "$fixture_root/apps/src/undeclared.rs" <<'EOF'
 fn undeclared() {}
 EOF
 declared_report="$("$checker" --root "$fixture_root" --allowlist "$allowlist" --report)"
@@ -315,8 +316,9 @@ if grep -Fq 'undeclared top-level Rust source root' <<<"$declared_report"; then
     echo "ERROR: declared source root was reported as undeclared" >&2
     exit 1
 fi
-grep -q $'crates/fixture_pkg/src/undeclared.rs\ttotal=2\tproduction=2\tinline_test=0' <<<"$declared_report"
-rm -rf "$fixture_root/crates/fixture_pkg"
+grep -q 'SOURCE ROOTS: apps=1 files (scanned);' <<<"$declared_report"
+grep -q $'apps/src/undeclared.rs\ttotal=2\tproduction=2\tinline_test=0' <<<"$declared_report"
+rm -rf "$fixture_root/apps"
 
 # A declared-but-vendor-excluded root is counted and never measured: its
 # over-cap file and its stale path comment cannot fail the gate.
