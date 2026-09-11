@@ -9,9 +9,14 @@ use std::path::{Component, Path, PathBuf};
 use std::time::UNIX_EPOCH;
 use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
-use syn::{Attribute, ForeignItem, ImplItem, Item, TraitItem};
+use syn::{Attribute, Expr, ExprLit, ForeignItem, ImplItem, Item, ItemMod, Lit, Meta, TraitItem};
 
 mod cfg;
+mod roots;
+mod siblings;
+
+pub(crate) use roots::*;
+pub(crate) use siblings::*;
 
 const PRODUCTION_LINE_LIMIT: usize = 1_000;
 const INLINE_TEST_LINE_LIMIT: usize = 300;
@@ -30,11 +35,48 @@ impl LineSpan {
     }
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
 struct FileMetrics {
     total_lines: usize,
     production_lines: usize,
     inline_test_lines: usize,
+}
+
+/// Lines a file moved out of itself into `mod name;` child modules.
+///
+/// `reduction` is deliberately reported as `sibling_lines`: the mass that would
+/// be measured on the parent again if the same content were still declared
+/// inline. This is a static attribution of where the lines are now, not a
+/// git-verified before/after, so it never claims a historical delta.
+#[derive(Debug, Default, Clone, Copy, Eq, PartialEq)]
+struct SiblingAttribution {
+    siblings: usize,
+    sibling_lines: usize,
+}
+
+/// Metrics for scanned files, filled on demand so a parent can measure a child
+/// before the scan reaches it. `analyze_source` is a pure function of the file
+/// bytes, so a child measured early and in its own turn always agree.
+#[derive(Default)]
+struct MeasuredFiles {
+    metrics: BTreeMap<PathBuf, Option<FileMetrics>>,
+}
+
+impl MeasuredFiles {
+    fn insert(&mut self, path: &Path, metrics: FileMetrics) {
+        self.metrics.insert(path.to_path_buf(), Some(metrics));
+    }
+
+    fn measure(&mut self, path: &Path) -> Option<FileMetrics> {
+        if let Some(metrics) = self.metrics.get(path) {
+            return *metrics;
+        }
+        let metrics = fs::read_to_string(path)
+            .ok()
+            .and_then(|source| analyze_source(&source).ok());
+        self.metrics.insert(path.to_path_buf(), metrics);
+        metrics
+    }
 }
 
 #[derive(Debug)]
@@ -74,6 +116,8 @@ pub(crate) fn run(args: impl Iterator<Item = String>) -> Result<(), String> {
     if options.report {
         println!("SOURCE ROOTS: {}", source_roots_text(&scan.coverage));
     }
+    let scanned = scan.files.iter().cloned().collect::<BTreeSet<_>>();
+    let mut measured = MeasuredFiles::default();
     let mut used_allowlist_entries = BTreeSet::new();
     let mut errors = Vec::new();
 
@@ -87,13 +131,13 @@ pub(crate) fn run(args: impl Iterator<Item = String>) -> Result<(), String> {
         validate_allowlist_issue_state(&allowlist, issue_state_path, &issue_state, &mut errors);
     }
 
-    for path in scan.files {
+    for path in &scan.files {
         let relative = path
             .strip_prefix(&root)
             .map_err(|error| format!("cannot relativize {}: {error}", path.display()))?;
         let relative_path = relative;
         let relative = path_text(relative_path);
-        let source = match fs::read_to_string(&path) {
+        let source = match fs::read_to_string(path) {
             Ok(source) => source,
             Err(error) => {
                 errors.push(format!("cannot read {relative}: {error}"));
@@ -110,16 +154,25 @@ pub(crate) fn run(args: impl Iterator<Item = String>) -> Result<(), String> {
                 continue;
             }
         };
+        measured.insert(path, metrics);
 
         if excluded_test_file(relative_path) {
+            if options.report {
+                // Exempt-named files stay out of the cap check and out of the
+                // ordinary row stream; this distinct line only makes the mass a
+                // parent reduced itself by visible.
+                println!(
+                    "EXTRACTED: {relative}\ttotal={}\tproduction={}\tinline_test={}",
+                    metrics.total_lines, metrics.production_lines, metrics.inline_test_lines
+                );
+            }
             continue;
         }
 
         if options.report {
-            println!(
-                "{relative}\ttotal={}\tproduction={}\tinline_test={}",
-                metrics.total_lines, metrics.production_lines, metrics.inline_test_lines
-            );
+            let children = resolve_child_modules(path, &source, &scanned);
+            let attribution = sibling_attribution(&children, &mut measured);
+            println!("{}", report_row(&relative, metrics, attribution));
         }
 
         let production_over = metrics.production_lines > PRODUCTION_LINE_LIMIT;
@@ -488,222 +541,6 @@ fn validate_allowlist_issue_state(
     }
 }
 
-/// How a declared top-level Rust source root participates in the cap gate.
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-enum RootPolicy {
-    /// Measured: path comments validated, both caps compared, allowlist-eligible.
-    Scanned,
-    /// Vendored upstream source patched into the build by path; not
-    /// Conary-authored. Deliberately not measured, and therefore not
-    /// allowlist-eligible.
-    VendorExcluded { reason: &'static str },
-}
-
-impl RootPolicy {
-    fn is_scanned(self) -> bool {
-        matches!(self, Self::Scanned)
-    }
-}
-
-/// A declared top-level Rust source root and its cap-gate policy.
-struct SourceRoot {
-    name: &'static str,
-    policy: RootPolicy,
-}
-
-/// Every top-level directory that holds Rust built into the product, with the
-/// policy the cap gate applies to it. A top-level directory carrying `.rs`
-/// files that is absent here fails the gate until its policy is recorded, so a
-/// new source root cannot escape measurement silently.
-const SOURCE_ROOTS: &[SourceRoot] = &[
-    SourceRoot {
-        name: "apps",
-        policy: RootPolicy::Scanned,
-    },
-    SourceRoot {
-        name: "crates",
-        policy: RootPolicy::Scanned,
-    },
-    SourceRoot {
-        name: "third_party",
-        policy: RootPolicy::VendorExcluded {
-            reason: "vendored aws-creds, rust-s3, and resolvo patched by path through [patch.crates-io] in Cargo.toml",
-        },
-    },
-];
-
-/// Directory names that never hold a scannable Rust source root: build output,
-/// dependency trees, and VCS metadata. Directories with a leading `.` are
-/// ignored by name as well, at the top level and inside a scan candidate.
-const IGNORED_DIRECTORY_NAMES: &[&str] = &["target", "node_modules", ".git", ".worktrees"];
-
-/// One declared root's measured contribution to the coverage statement.
-#[derive(Debug, Eq, PartialEq)]
-struct RootCoverage {
-    name: &'static str,
-    policy: RootPolicy,
-    files: usize,
-}
-
-/// How many files each declared root contributed, plus the files the gate
-/// measures. Vendor-excluded roots are counted but never measured.
-#[derive(Debug, Eq, PartialEq)]
-struct SourceScan {
-    files: Vec<PathBuf>,
-    coverage: Vec<RootCoverage>,
-}
-
-fn declared_source_root(name: &str) -> Option<&'static SourceRoot> {
-    SOURCE_ROOTS
-        .iter()
-        .find(|source_root| source_root.name == name)
-}
-
-fn skipped_directory(name: &OsStr) -> bool {
-    let Some(name) = name.to_str() else {
-        return false;
-    };
-    name.starts_with('.') || IGNORED_DIRECTORY_NAMES.contains(&name)
-}
-
-fn rust_source_files(root: &Path) -> Result<SourceScan, String> {
-    let scan = scan_source_roots(root)?;
-    let undeclared = undeclared_rust_roots(root)?;
-    if undeclared.is_empty() {
-        return Ok(scan);
-    }
-    Err(format!(
-        "undeclared top-level Rust source root(s) below {}: {}; classify each in SOURCE_ROOTS in crates/conary-xtask/src/line_cap.rs as Scanned or VendorExcluded",
-        root.display(),
-        undeclared.join(", ")
-    ))
-}
-
-fn scan_source_roots(root: &Path) -> Result<SourceScan, String> {
-    let mut files = Vec::new();
-    let mut coverage = Vec::new();
-    let mut scanned_roots = Vec::new();
-    for source_root in SOURCE_ROOTS {
-        let directory = root.join(source_root.name);
-        let mut root_files = Vec::new();
-        if directory.is_dir() {
-            collect_rust_files(&directory, &mut root_files)?;
-        }
-        coverage.push(RootCoverage {
-            name: source_root.name,
-            policy: source_root.policy,
-            files: root_files.len(),
-        });
-        if source_root.policy.is_scanned() && directory.is_dir() {
-            scanned_roots.push(source_root.name);
-            files.extend(root_files);
-        }
-    }
-    if scanned_roots.is_empty() {
-        return Err(format!(
-            "no scanned source root below {} (declared: {})",
-            root.display(),
-            SOURCE_ROOTS
-                .iter()
-                .filter(|source_root| source_root.policy.is_scanned())
-                .map(|source_root| source_root.name)
-                .collect::<Vec<_>>()
-                .join(", ")
-        ));
-    }
-    files.sort();
-    Ok(SourceScan { files, coverage })
-}
-
-/// The `--report` coverage statement: one entry per declared root naming the
-/// filesystem-derived file count and the policy applied to it.
-fn source_roots_text(coverage: &[RootCoverage]) -> String {
-    coverage
-        .iter()
-        .map(|covered| match covered.policy {
-            RootPolicy::Scanned => format!("{}={} files (scanned)", covered.name, covered.files),
-            RootPolicy::VendorExcluded { reason } => format!(
-                "{}={} files (vendor-excluded: {reason})",
-                covered.name, covered.files
-            ),
-        })
-        .collect::<Vec<_>>()
-        .join("; ")
-}
-
-/// Top-level directories below `root` that carry `.rs` files but have no
-/// recorded policy. Each candidate is probed with a walk that stops at the
-/// first `.rs` file instead of enumerating the whole tree.
-fn undeclared_rust_roots(root: &Path) -> Result<Vec<String>, String> {
-    let entries =
-        fs::read_dir(root).map_err(|error| format!("cannot read {}: {error}", root.display()))?;
-    let mut undeclared = Vec::new();
-    for entry in entries {
-        let entry = entry.map_err(|error| format!("cannot read directory entry: {error}"))?;
-        let file_name = entry.file_name();
-        if skipped_directory(&file_name) {
-            continue;
-        }
-        let name = file_name.to_string_lossy();
-        if declared_source_root(name.as_ref()).is_some() {
-            continue;
-        }
-        let path = entry.path();
-        let file_type = entry
-            .file_type()
-            .map_err(|error| format!("cannot inspect {}: {error}", path.display()))?;
-        if file_type.is_dir() && contains_rust_file(&path)? {
-            undeclared.push(name.into_owned());
-        }
-    }
-    undeclared.sort();
-    Ok(undeclared)
-}
-
-/// Whether a `.rs` file exists anywhere below `directory`, stopping at the
-/// first match.
-fn contains_rust_file(directory: &Path) -> Result<bool, String> {
-    let entries = fs::read_dir(directory)
-        .map_err(|error| format!("cannot read {}: {error}", directory.display()))?;
-    for entry in entries {
-        let entry = entry.map_err(|error| format!("cannot read directory entry: {error}"))?;
-        let path = entry.path();
-        let file_type = entry
-            .file_type()
-            .map_err(|error| format!("cannot inspect {}: {error}", path.display()))?;
-        if file_type.is_file() && path.extension() == Some(OsStr::new("rs")) {
-            return Ok(true);
-        }
-        if file_type.is_dir()
-            && !skipped_directory(entry.file_name().as_os_str())
-            && contains_rust_file(&path)?
-        {
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
-
-fn collect_rust_files(directory: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
-    let entries = fs::read_dir(directory)
-        .map_err(|error| format!("cannot read {}: {error}", directory.display()))?;
-    for entry in entries {
-        let entry = entry.map_err(|error| format!("cannot read directory entry: {error}"))?;
-        let path = entry.path();
-        let file_type = entry
-            .file_type()
-            .map_err(|error| format!("cannot inspect {}: {error}", path.display()))?;
-        if file_type.is_dir() {
-            if entry.file_name() != OsStr::new("target") {
-                collect_rust_files(&path, files)?;
-            }
-        } else if file_type.is_file() && path.extension() == Some(OsStr::new("rs")) {
-            files.push(path);
-        }
-    }
-    Ok(())
-}
-
 fn excluded_test_file(relative: &Path) -> bool {
     relative.file_name() == Some(OsStr::new("tests.rs"))
         || relative
@@ -711,6 +548,10 @@ fn excluded_test_file(relative: &Path) -> bool {
             .any(|component| component == Component::Normal(OsStr::new("tests")))
 }
 
+/// One `--report` row. The first four fields keep their existing text and
+/// order; the sibling fields are appended only when the file declares
+/// out-of-line child modules that resolve to scanned files, so every row that
+/// had no sibling keeps its exact previous shape.
 fn validate_path_comment(source: &str, relative: &Path) -> Result<(), String> {
     let first_line = source.lines().next().unwrap_or_default();
     let expected = path_text(relative);
