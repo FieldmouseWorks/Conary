@@ -8,7 +8,7 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
-use syn::{Attribute, ForeignItem, ImplItem, Item, TraitItem};
+use syn::{Attribute, Expr, ExprLit, ForeignItem, ImplItem, Item, ItemMod, Lit, Meta, TraitItem};
 
 mod cfg;
 
@@ -27,11 +27,48 @@ impl LineSpan {
     }
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
 struct FileMetrics {
     total_lines: usize,
     production_lines: usize,
     inline_test_lines: usize,
+}
+
+/// Lines a file moved out of itself into `mod name;` child modules.
+///
+/// `reduction` is deliberately reported as `sibling_lines`: the mass that would
+/// be measured on the parent again if the same content were still declared
+/// inline. This is a static attribution of where the lines are now, not a
+/// git-verified before/after, so it never claims a historical delta.
+#[derive(Debug, Default, Clone, Copy, Eq, PartialEq)]
+struct SiblingAttribution {
+    siblings: usize,
+    sibling_lines: usize,
+}
+
+/// Metrics for scanned files, filled on demand so a parent can measure a child
+/// before the scan reaches it. `analyze_source` is a pure function of the file
+/// bytes, so a child measured early and in its own turn always agree.
+#[derive(Default)]
+struct MeasuredFiles {
+    metrics: BTreeMap<PathBuf, Option<FileMetrics>>,
+}
+
+impl MeasuredFiles {
+    fn insert(&mut self, path: &Path, metrics: FileMetrics) {
+        self.metrics.insert(path.to_path_buf(), Some(metrics));
+    }
+
+    fn measure(&mut self, path: &Path) -> Option<FileMetrics> {
+        if let Some(metrics) = self.metrics.get(path) {
+            return *metrics;
+        }
+        let metrics = fs::read_to_string(path)
+            .ok()
+            .and_then(|source| analyze_source(&source).ok());
+        self.metrics.insert(path.to_path_buf(), metrics);
+        metrics
+    }
 }
 
 #[derive(Debug)]
@@ -64,16 +101,18 @@ pub(crate) fn run(args: impl Iterator<Item = String>) -> Result<(), String> {
     if options.report {
         println!("SOURCE ROOTS: {}", source_roots_text(&scan.coverage));
     }
+    let scanned = scan.files.iter().cloned().collect::<BTreeSet<_>>();
+    let mut measured = MeasuredFiles::default();
     let mut used_allowlist_entries = BTreeSet::new();
     let mut errors = Vec::new();
 
-    for path in scan.files {
+    for path in &scan.files {
         let relative = path
             .strip_prefix(&root)
             .map_err(|error| format!("cannot relativize {}: {error}", path.display()))?;
         let relative_path = relative;
         let relative = path_text(relative_path);
-        let source = match fs::read_to_string(&path) {
+        let source = match fs::read_to_string(path) {
             Ok(source) => source,
             Err(error) => {
                 errors.push(format!("cannot read {relative}: {error}"));
@@ -90,16 +129,25 @@ pub(crate) fn run(args: impl Iterator<Item = String>) -> Result<(), String> {
                 continue;
             }
         };
+        measured.insert(path, metrics);
 
         if excluded_test_file(relative_path) {
+            if options.report {
+                // Exempt-named files stay out of the cap check and out of the
+                // ordinary row stream; this distinct line only makes the mass a
+                // parent reduced itself by visible.
+                println!(
+                    "EXTRACTED: {relative}\ttotal={}\tproduction={}\tinline_test={}",
+                    metrics.total_lines, metrics.production_lines, metrics.inline_test_lines
+                );
+            }
             continue;
         }
 
         if options.report {
-            println!(
-                "{relative}\ttotal={}\tproduction={}\tinline_test={}",
-                metrics.total_lines, metrics.production_lines, metrics.inline_test_lines
-            );
+            let children = resolve_child_modules(path, &source, &scanned);
+            let attribution = sibling_attribution(&children, &mut measured);
+            println!("{}", report_row(&relative, metrics, attribution));
         }
 
         let production_over = metrics.production_lines > PRODUCTION_LINE_LIMIT;
@@ -437,6 +485,142 @@ fn excluded_test_file(relative: &Path) -> bool {
         || relative
             .components()
             .any(|component| component == Component::Normal(OsStr::new("tests")))
+}
+
+/// One `--report` row. The first four fields keep their existing text and
+/// order; the sibling fields are appended only when the file declares
+/// out-of-line child modules that resolve to scanned files, so every row that
+/// had no sibling keeps its exact previous shape.
+fn report_row(relative: &str, metrics: FileMetrics, attribution: SiblingAttribution) -> String {
+    let mut row = format!(
+        "{relative}\ttotal={}\tproduction={}\tinline_test={}",
+        metrics.total_lines, metrics.production_lines, metrics.inline_test_lines
+    );
+    if attribution.siblings > 0 {
+        row.push_str(&format!(
+            "\tsiblings={}\tsibling_tests={}\treduction={}",
+            attribution.siblings, attribution.sibling_lines, attribution.sibling_lines
+        ));
+    }
+    row
+}
+
+/// Sum the measured mass of a file's resolved child modules. A child that
+/// cannot be read or parsed is left out of both the count and the sum; it is
+/// already reported as its own scan error.
+fn sibling_attribution(children: &[PathBuf], measured: &mut MeasuredFiles) -> SiblingAttribution {
+    let mut attribution = SiblingAttribution::default();
+    for child in children {
+        let Some(metrics) = measured.measure(child) else {
+            continue;
+        };
+        attribution.siblings += 1;
+        attribution.sibling_lines += metrics.total_lines;
+    }
+    attribution
+}
+
+/// Resolve every top-level `mod name;` declaration (one with no inline body) to
+/// the file rustc would read for it, keeping only files inside the scanned
+/// roots. Declarations naming no scanned file are dropped rather than guessed
+/// at.
+///
+/// The declaration is attributed to the file that declares it, so a parent that
+/// shrank by moving tests into `<parent-stem>/tests.rs` now states the mass that
+/// left it and the exempt sibling reports itself on an `EXTRACTED:` line.
+///
+/// Known limit: `lib.rs`, `main.rs`, and `build.rs` are crate roots and really
+/// own their own directory, but they are treated like any other non-`mod.rs`
+/// file here. Crate roots carry ordinary `mod` wiring rather than extracted
+/// test siblings, so leaving them unresolved under-reports instead of
+/// mis-attributing production modules as a test reduction.
+fn resolve_child_modules(
+    containing: &Path,
+    source: &str,
+    scanned: &BTreeSet<PathBuf>,
+) -> Vec<PathBuf> {
+    let Ok(syntax) = syn::parse_file(source) else {
+        return Vec::new();
+    };
+    let mut resolved = BTreeSet::new();
+    for item in &syntax.items {
+        let Item::Mod(declaration) = item else {
+            continue;
+        };
+        if declaration.content.is_some() {
+            continue;
+        }
+        let candidate = match declared_module_path(declaration) {
+            // rustc resolves `#[path]` against the directory of the containing
+            // file, not against the module directory chosen below.
+            Some(relative) => containing
+                .parent()
+                .map(|directory| normalize_path(directory.join(relative))),
+            None => module_directory(containing).and_then(|directory| {
+                let name = declaration.ident.to_string();
+                [
+                    directory.join(format!("{name}.rs")),
+                    directory.join(&name).join("mod.rs"),
+                ]
+                .into_iter()
+                .find(|candidate| scanned.contains(candidate))
+            }),
+        };
+        if let Some(candidate) = candidate
+            && scanned.contains(&candidate)
+        {
+            resolved.insert(candidate);
+        }
+    }
+    resolved.into_iter().collect()
+}
+
+/// The directory rustc searches for a child declared without `#[path]`. A
+/// `mod.rs` file owns the directory it sits in; every other file owns
+/// `<dir>/<stem>/`, which is why `canonical.rs` declares `mod tests;` as
+/// `canonical/tests.rs`.
+fn module_directory(containing: &Path) -> Option<PathBuf> {
+    let directory = containing.parent()?;
+    if containing.file_name() == Some(OsStr::new("mod.rs")) {
+        return Some(directory.to_path_buf());
+    }
+    Some(directory.join(containing.file_stem()?))
+}
+
+/// The literal `#[path = "..."]` value on a `mod` declaration, when present.
+fn declared_module_path(declaration: &ItemMod) -> Option<String> {
+    declaration.attrs.iter().find_map(|attribute| {
+        if !attribute.path().is_ident("path") {
+            return None;
+        }
+        let Meta::NameValue(name_value) = &attribute.meta else {
+            return None;
+        };
+        let Expr::Lit(ExprLit {
+            lit: Lit::Str(text),
+            ..
+        }) = &name_value.value
+        else {
+            return None;
+        };
+        Some(text.value())
+    })
+}
+
+/// Lexically resolve `.` and `..` so a joined `#[path]` compares equal to the
+/// paths collected from the scan without touching the filesystem.
+fn normalize_path(path: PathBuf) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            component => normalized.push(component.as_os_str()),
+        }
+    }
+    normalized
 }
 
 fn validate_path_comment(source: &str, relative: &Path) -> Result<(), String> {

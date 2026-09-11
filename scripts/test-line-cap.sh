@@ -115,6 +115,11 @@ grep -q $'standalone_tests.rs\ttotal=7\tproduction=3\tinline_test=4' <<<"$report
 grep -q $'inner_cfg_test.rs\ttotal=4\tproduction=0\tinline_test=4' <<<"$report"
 grep -q $'enclosing_cfg.rs\ttotal=7\tproduction=5\tinline_test=2' <<<"$report"
 grep -q $'cfg_attr_gating.rs\ttotal=5\tproduction=3\tinline_test=2' <<<"$report"
+# A file whose declarations all stay inline keeps the original row shape.
+if grep -q $'block_comment_attribute.rs\ttotal=7\tproduction=1\tinline_test=6\tsiblings=' <<<"$report"; then
+    echo "ERROR: sibling fields appeared without a resolved out-of-line module" >&2
+    exit 1
+fi
 
 for header_kind in missing legacy; do
     header_path="$fixture_root/crates/fixture/src/invalid_header.rs"
@@ -338,6 +343,57 @@ for vendor_file in over_cap.rs legacy_header.rs; do
 done
 if grep -q 'SOURCE ROOTS' <<<"$("$checker" --root "$fixture_root" --allowlist "$allowlist")"; then
     echo "ERROR: coverage statement leaked outside --report" >&2
+    exit 1
+fi
+
+# Extracted sibling attribution (issue #998). The exempt-named siblings below
+# are deliberately over the production cap, so the gate passing here is itself
+# the proof that making them visible did not un-exempt them.
+: > "$allowlist"
+mkdir -p "$fixture_root/crates/fixture/src/path_sibling"
+mkdir -p "$fixture_root/crates/fixture/src/mod_parent"
+
+# (a) `#[path = "..."] mod tests;` under a non-`mod.rs` parent, the shape
+# apps/conary-test/src/engine/qemu.rs uses.
+write_fixture "$fixture_root/crates/fixture/src/path_sibling.rs" <<'EOF'
+#[cfg(test)]
+#[path = "path_sibling/tests.rs"]
+mod tests;
+EOF
+write_lines "$fixture_root/crates/fixture/src/path_sibling/tests.rs" 1200
+
+# (b) a plain `mod tests;` under a `mod.rs` parent, the shape
+# crates/conary-core/src/repository/catalog/parity/rpm/mod.rs uses. A `mod.rs`
+# parent resolves children in its own directory, not in `mod/tests.rs`.
+write_fixture "$fixture_root/crates/fixture/src/mod_parent/mod.rs" <<'EOF'
+#[cfg(test)]
+mod tests;
+EOF
+write_lines "$fixture_root/crates/fixture/src/mod_parent/tests.rs" 600
+
+# (c) a declaration naming no scanned file is not a sibling.
+write_fixture "$fixture_root/crates/fixture/src/unresolved_child.rs" <<'EOF'
+#[cfg(test)]
+mod tests;
+EOF
+
+"$checker" --root "$fixture_root" --allowlist "$allowlist" >/dev/null
+sibling_report="$("$checker" --root "$fixture_root" --allowlist "$allowlist" --report)"
+grep -q $'path_sibling.rs\ttotal=4\tproduction=1\tinline_test=3\tsiblings=1\tsibling_tests=1200\treduction=1200' <<<"$sibling_report"
+grep -q $'mod_parent/mod.rs\ttotal=3\tproduction=1\tinline_test=2\tsiblings=1\tsibling_tests=600\treduction=600' <<<"$sibling_report"
+grep -q $'EXTRACTED: crates/fixture/src/path_sibling/tests.rs\ttotal=1200\tproduction=1200\tinline_test=0' <<<"$sibling_report"
+grep -q $'EXTRACTED: crates/fixture/src/mod_parent/tests.rs\ttotal=600\tproduction=600\tinline_test=0' <<<"$sibling_report"
+if grep -q 'unresolved_child.rs.*siblings=' <<<"$sibling_report"; then
+    echo "ERROR: an unresolved declaration produced sibling fields" >&2
+    exit 1
+fi
+# The exempt-named sibling gains an EXTRACTED line but never an ordinary row.
+if grep -q $'^crates/fixture/src/path_sibling/tests.rs\t' <<<"$sibling_report"; then
+    echo "ERROR: exempt-named sibling gained an ordinary report row" >&2
+    exit 1
+fi
+if grep -q $'^crates/fixture/src/mod_parent/tests.rs\t' <<<"$sibling_report"; then
+    echo "ERROR: exempt-named sibling gained an ordinary report row" >&2
     exit 1
 fi
 
