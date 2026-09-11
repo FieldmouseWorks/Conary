@@ -292,6 +292,72 @@ fi
 grep -q 'test_block.rs has 301 inline test lines' "$fixture_root/test-block.out"
 rm "$fixture_root/crates/fixture/src/test_block.rs"
 
+# Issue #997: exempt-named files are reported and classified instead of being
+# silently dropped. Classifying an exempt file must never move the exit code or
+# the error set: this increment is report-only.
+: > "$allowlist"
+mkdir -p "$fixture_root/crates/fixture/src/gated_owner" "$fixture_root/crates/fixture/src/ungated_owner"
+write_fixture "$fixture_root/crates/fixture/src/gated_owner.rs" <<'EOF'
+#[cfg(test)]
+mod tests;
+EOF
+write_lines "$fixture_root/crates/fixture/src/gated_owner/tests.rs" 1200
+write_fixture "$fixture_root/crates/fixture/src/ungated_owner.rs" <<'EOF'
+mod tests;
+EOF
+write_lines "$fixture_root/crates/fixture/src/ungated_owner/tests.rs" 1200
+write_fixture "$fixture_root/crates/fixture/src/tests/inner_gate.rs" <<'EOF'
+#![cfg(test)]
+fn helper() {}
+EOF
+
+exempt_report="$("$checker" --root "$fixture_root" --allowlist "$allowlist" --report)"
+grep -q $'EXEMPT: crates/fixture/src/gated_owner/tests.rs\ttotal=1200\tproduction=1200\tinline_test=0\tgate=test-gated' <<<"$exempt_report"
+grep -q $'EXEMPT: crates/fixture/src/ungated_owner/tests.rs\ttotal=1200\tproduction=1200\tinline_test=0\tgate=ungated' <<<"$exempt_report"
+grep -q $'EXEMPT: crates/fixture/src/tests/inner_gate.rs\ttotal=3\tproduction=0\tinline_test=3\tgate=test-gated' <<<"$exempt_report"
+grep -q 'EXEMPT SUMMARY: test-gated=2 ungated=3' <<<"$exempt_report"
+
+# The same exempt file, declared with and without `#[cfg(test)]`, keeps the
+# exit code and the ALLOWLISTED/ERROR set identical. An over-cap production file
+# keeps the compared set non-empty, so the comparison is not vacuous.
+write_lines "$fixture_root/crates/fixture/src/exempt_context_over_cap.rs" 1001
+exempt_ungated_status=0
+"$checker" --root "$fixture_root" --allowlist "$allowlist" >"$fixture_root/exempt-ungated.out" 2>&1 || exempt_ungated_status=$?
+grep -E '^(ALLOWLISTED|ERROR):' "$fixture_root/exempt-ungated.out" | sort >"$fixture_root/exempt-ungated.errors" || true
+write_fixture "$fixture_root/crates/fixture/src/ungated_owner.rs" <<'EOF'
+#[cfg(test)]
+mod tests;
+EOF
+exempt_gated_status=0
+"$checker" --root "$fixture_root" --allowlist "$allowlist" >"$fixture_root/exempt-gated.out" 2>&1 || exempt_gated_status=$?
+grep -E '^(ALLOWLISTED|ERROR):' "$fixture_root/exempt-gated.out" | sort >"$fixture_root/exempt-gated.errors" || true
+if [[ "$exempt_ungated_status" != "1" || "$exempt_gated_status" != "1" ]]; then
+    echo "ERROR: exempt-file fixtures did not exercise a real gate failure ($exempt_ungated_status, $exempt_gated_status)" >&2
+    exit 1
+fi
+grep -q 'exempt_context_over_cap.rs has 1001 non-test lines' "$fixture_root/exempt-ungated.errors"
+if ! diff -u "$fixture_root/exempt-ungated.errors" "$fixture_root/exempt-gated.errors"; then
+    echo "ERROR: gating an exempt-named file changed the ALLOWLISTED/ERROR set" >&2
+    exit 1
+fi
+grep -q $'EXEMPT: crates/fixture/src/ungated_owner/tests.rs\ttotal=1200\tproduction=1200\tinline_test=0\tgate=test-gated' \
+    <<<"$("$checker" --root "$fixture_root" --allowlist "$allowlist" --report 2>/dev/null || true)"
+rm "$fixture_root/crates/fixture/src/exempt_context_over_cap.rs"
+
+# An over-cap exempt-named file may be allowlisted: its entry is recorded as
+# used instead of being rejected as stale by the bookkeeping bug (#997).
+echo 'crates/fixture/src/ungated_owner/tests.rs #123' > "$allowlist"
+if ! "$checker" --root "$fixture_root" --allowlist "$allowlist" >"$fixture_root/exempt-allowlist.out" 2>&1; then
+    echo "ERROR: an allowlisted exempt-named file was rejected as stale" >&2
+    cat "$fixture_root/exempt-allowlist.out" >&2
+    exit 1
+fi
+if grep -q 'stale line-cap allowlist entry' "$fixture_root/exempt-allowlist.out"; then
+    echo "ERROR: an allowlisted exempt-named file was reported stale" >&2
+    exit 1
+fi
+: > "$allowlist"
+
 write_fixture "$fixture_root/crates/fixture/src/malformed.rs" <<'EOF'
 fn malformed( {
 EOF

@@ -8,7 +8,7 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
-use syn::{Attribute, ForeignItem, ImplItem, Item, TraitItem};
+use syn::{Attribute, Expr, ForeignItem, ImplItem, Item, Lit, Meta, TraitItem};
 
 mod cfg;
 
@@ -63,6 +63,9 @@ pub(crate) fn run(args: impl Iterator<Item = String>) -> Result<(), String> {
     let files = rust_source_files(&root)?;
     let mut used_allowlist_entries = BTreeSet::new();
     let mut errors = Vec::new();
+    let mut declarations: BTreeMap<String, Vec<ModuleDeclaration>> = BTreeMap::new();
+    let mut file_gates: BTreeMap<String, bool> = BTreeMap::new();
+    let mut exempt_files: Vec<(String, FileMetrics)> = Vec::new();
 
     for path in files {
         let relative = path
@@ -80,15 +83,23 @@ pub(crate) fn run(args: impl Iterator<Item = String>) -> Result<(), String> {
         if let Err(error) = validate_path_comment(&source, relative_path) {
             errors.push(error);
         }
-        let metrics = match analyze_source(&source) {
-            Ok(metrics) => metrics,
+        let syntax = match syn::parse_file(&source) {
+            Ok(syntax) => syntax,
             Err(error) => {
                 errors.push(format!("failed to parse {relative}: {error}"));
                 continue;
             }
         };
+        let metrics = measure_source(&syntax, &source);
+        collect_module_declarations(&syntax, relative_path, &mut declarations);
+        collect_include_declarations(&syntax, relative_path, &mut declarations);
+        file_gates.insert(
+            relative.clone(),
+            file_level_test_gate(&syntax, relative_path),
+        );
 
         if excluded_test_file(relative_path) {
+            exempt_files.push((relative, metrics));
             continue;
         }
 
@@ -126,6 +137,47 @@ pub(crate) fn run(args: impl Iterator<Item = String>) -> Result<(), String> {
                 metrics.inline_test_lines
             ));
         }
+    }
+
+    // Issue #997: an exempt-named file is reported and classified instead of
+    // being silently dropped. Its exemption is established from the module
+    // declaration graph (and the file's own inner attributes), never from the
+    // file's text alone, because a test-named helper such as
+    // `catalog_authority/tests/test_support.rs` looks like production code when
+    // parsed standalone while its declaring site is `#[cfg(test)]`-gated.
+    //
+    // This increment is report-only: exempt files stay uncapped, so no
+    // classification can add or remove an error.
+    let resolved_gates = resolve_test_gates(&file_gates, &declarations);
+    let mut test_gated_exemptions = 0usize;
+    let mut ungated_exemptions = 0usize;
+    for (relative, metrics) in &exempt_files {
+        let gate = exemption_gate(resolved_gates.get(relative).copied().unwrap_or(false));
+        match gate {
+            ExemptionGate::TestGated => test_gated_exemptions += 1,
+            ExemptionGate::Ungated => ungated_exemptions += 1,
+        }
+        if options.report {
+            println!(
+                "EXEMPT: {relative}\ttotal={}\tproduction={}\tinline_test={}\tgate={}",
+                metrics.total_lines,
+                metrics.production_lines,
+                metrics.inline_test_lines,
+                gate.label()
+            );
+        }
+        // Issue #997: exempt-named files used to skip the allowlist bookkeeping
+        // entirely, so a listed entry for one of them stayed unused and the
+        // stale-entry sweep below rejected it: an over-cap exempt file could
+        // never be allowlisted. Record a listed exempt file as used. The file
+        // stays uncapped in this report-only increment, so no cap outcome
+        // changes.
+        if allowlist.contains_key(relative) {
+            used_allowlist_entries.insert(relative.clone());
+        }
+    }
+    if options.report {
+        println!("EXEMPT SUMMARY: test-gated={test_gated_exemptions} ungated={ungated_exemptions}");
     }
 
     for (path, issue) in allowlist {
@@ -272,8 +324,7 @@ fn validate_path_comment(source: &str, relative: &Path) -> Result<(), String> {
     }
 }
 
-fn analyze_source(source: &str) -> syn::Result<FileMetrics> {
-    let syntax = syn::parse_file(source)?;
+fn measure_source(syntax: &syn::File, source: &str) -> FileMetrics {
     let total_lines = source.lines().count();
     // Inner attributes such as `#![cfg(test)]` gate the whole file; syn keeps them
     // on `File::attrs`, which no descendant visit sees.
@@ -289,15 +340,15 @@ fn analyze_source(source: &str) -> syn::Result<FileMetrics> {
             inherited: cfg_attributes(&syntax.attrs),
             spans: Vec::new(),
         };
-        visitor.visit_file(&syntax);
+        visitor.visit_file(syntax);
         union_spans(visitor.spans)
     };
     let inline_test_lines = spans.iter().copied().map(LineSpan::line_count).sum();
-    Ok(FileMetrics {
+    FileMetrics {
         total_lines,
         production_lines: total_lines.saturating_sub(inline_test_lines),
         inline_test_lines,
-    })
+    }
 }
 
 #[derive(Default)]
@@ -527,272 +578,357 @@ fn path_text(path: &Path) -> String {
         .join("/")
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn counts_the_union_of_typed_test_item_spans() {
-        let source = r#"fn production() {}
-#[cfg(test)]
-/* retained inside the test span */
-/// test helper
-fn helper() {
-    assert!(true);
+/// How an exempt-named file earns its exemption from the line caps.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub(super) enum ExemptionGate {
+    /// Defensibly test-only. Established by any of: an inner `#![cfg(test)]` on
+    /// the file itself; a cargo integration-test target root; or every module
+    /// declaration that resolves to the file (transitively) gated by
+    /// `#[cfg(test)]`.
+    TestGated,
+    /// No gate is established anywhere, so the file's name alone hides it from
+    /// the caps. This is the masking case issue #997 exposes.
+    Ungated,
 }
-fn middle() {}
-#[cfg(all(test, feature = "fixture"))]
-const FIXTURE: &str = "value";
-"#;
 
-        assert_eq!(
-            analyze_source(source).unwrap(),
-            FileMetrics {
-                total_lines: 10,
-                production_lines: 2,
-                inline_test_lines: 8,
-            }
-        );
-    }
-
-    #[test]
-    fn rejects_malformed_rust() {
-        assert!(analyze_source("fn broken( {").is_err());
-    }
-
-    #[test]
-    fn counts_standalone_and_conditionally_annotated_tests() {
-        for annotation in [
-            "test",
-            "tokio::test(flavor = \"current_thread\")",
-            "cfg_attr(all(), test)",
-            "cfg_attr(all(), allow(dead_code), cfg_attr(all(), tokio::test))",
-            // Annotated in every non-test build, so no production build keeps it.
-            "cfg_attr(not(test), test)",
-        ] {
-            let source = format!("#[{annotation}]\nasync fn example() {{}}\n");
-            assert_eq!(
-                analyze_source(&source).unwrap().inline_test_lines,
-                2,
-                "{annotation}"
-            );
-        }
-        // A conditional annotation whose condition can be false in a non-test
-        // build leaves an ordinary function that production compiles.
-        for annotation in [
-            "cfg_attr(test, test)",
-            "cfg_attr(all(test, feature = \"x\"), tokio::test)",
-            "cfg_attr(test, allow(dead_code), cfg_attr(feature = \"x\", test))",
-            "cfg_attr(feature = \"x\", test)",
-            "cfg_attr(test, allow(dead_code))",
-            "cfg_attr(all(test, not(test)), test)",
-            "test_helper",
-        ] {
-            let source = format!("#[{annotation}]\nfn example() {{}}\n");
-            assert_eq!(
-                analyze_source(&source).unwrap().production_lines,
-                2,
-                "{annotation}"
-            );
-        }
-        let source = "#[cfg(test)]\nmod tests {\n    #[test]\n    fn nested() {}\n}\n#[test]\nfn standalone() {}\n";
-        assert_eq!(analyze_source(source).unwrap().inline_test_lines, 7);
-    }
-
-    #[test]
-    fn cfg_feature_named_test_is_not_the_test_predicate() {
-        let source = "#[cfg(feature = \"test\")]\nfn production() {}\n";
-        assert_eq!(analyze_source(source).unwrap().production_lines, 2);
-    }
-
-    #[test]
-    fn cfg_attr_gating_preserves_the_inactive_production_branch() {
-        for (attribute, test_only) in [
-            ("cfg_attr(all(), cfg(test))", true),
-            ("cfg_attr(feature = \"x\", cfg(test))", false),
-            (
-                "cfg_attr(all(), cfg_attr(feature = \"x\", cfg(test)))",
-                false,
-            ),
-            ("cfg_attr(all(), cfg_attr(all(), cfg(test)))", true),
-            ("cfg_attr(any(), cfg(test))", false),
-            ("cfg_attr(all(), allow(dead_code), cfg(test))", true),
-        ] {
-            let source = format!("#[{attribute}]\nfn example() {{}}\n");
-            assert_eq!(
-                analyze_source(&source).unwrap().inline_test_lines,
-                if test_only { 2 } else { 0 },
-                "{attribute}"
-            );
+impl ExemptionGate {
+    fn label(self) -> &'static str {
+        match self {
+            Self::TestGated => "test-gated",
+            Self::Ungated => "ungated",
         }
     }
-
-    #[test]
-    fn evaluates_cfg_test_polarity() {
-        let source = r#"#[cfg(not(test))]
-fn production_when_not_testing() {}
-#[cfg(any(test, feature = "fixture"))]
-fn production_with_feature() {}
-#[cfg(all(test, feature = "fixture"))]
-fn test_only() {}
-#[cfg(not(not(test)))]
-fn nested_test_only() {}
-#[cfg(any(not(test), all(test, feature = "fixture")))]
-fn nested_production() {}
-"#;
-
-        assert_eq!(
-            analyze_source(source).unwrap(),
-            FileMetrics {
-                total_lines: 10,
-                production_lines: 6,
-                inline_test_lines: 4,
-            }
-        );
-    }
-
-    #[test]
-    fn cfg_symbols_preserve_negation_and_repeated_atom_identity() {
-        for (predicate, test_only) in [
-            ("any(test, not(unix))", false),
-            ("all(test, not(unix))", true),
-            ("any(test, all(unix, not(unix)))", true),
-            ("all(test, unix, not(unix))", false),
-            ("any(test, not(feature = \"x\"))", false),
-            ("all(test, not(feature = \"x\"))", true),
-        ] {
-            let source = format!("#[cfg({predicate})]\nfn example() {{}}\n");
-            assert_eq!(
-                analyze_source(&source).unwrap().inline_test_lines,
-                if test_only { 2 } else { 0 },
-                "{predicate}"
-            );
-        }
-        let source = "#[cfg(any(test, unix))]\n#[cfg(any(test, not(unix)))]\nfn helper() {}\n";
-        assert_eq!(analyze_source(source).unwrap().inline_test_lines, 3);
-    }
-
-    #[test]
-    fn counts_fields_statements_and_expressions_as_test_regions() {
-        let source = r#"struct Example {
-    #[cfg(test)]
-    helper: usize,
 }
-fn example() {
-    #[cfg(test)]
-    let helper = 1;
-    #[cfg(test)]
-    {
-        #[cfg(test)]
-        let nested = 2;
+
+fn exemption_gate(test_gated: bool) -> ExemptionGate {
+    if test_gated {
+        ExemptionGate::TestGated
+    } else {
+        ExemptionGate::Ungated
     }
-    #[cfg(test)]
-    assert!(true);
-    let value = Example {
-        #[cfg(test)]
-        helper: 3,
+}
+
+/// A `mod x;` declaration that makes one file a module of another.
+#[derive(Debug)]
+struct ModuleDeclaration {
+    declaring_file: String,
+    /// The declaration's own gate: its `cfg`/`cfg_attr` attributes conjoined
+    /// with those of every enclosing inline module.
+    test_gated: bool,
+}
+
+/// The file's own gate, before any declaring site is considered.
+fn file_level_test_gate(syntax: &syn::File, relative: &Path) -> bool {
+    cfg::is_test_only(&syntax.attrs) || cargo_target_root(relative) == Some(CargoTarget::Test)
+}
+
+/// Index every external module declaration by the repo-relative path Rust would
+/// load for it, so exempt-named files can be classified by their declaring
+/// sites rather than by their own text.
+fn collect_module_declarations(
+    syntax: &syn::File,
+    relative: &Path,
+    declarations: &mut BTreeMap<String, Vec<ModuleDeclaration>>,
+) {
+    let mut collector = DeclarationCollector {
+        declaring_file: path_text(relative),
+        file_dir: relative
+            .parent()
+            .unwrap_or_else(|| Path::new(""))
+            .to_path_buf(),
+        declarations,
     };
+    let module_dir = module_directory(relative);
+    collector.run(&syntax.items, &module_dir, &syntax.attrs);
 }
-enum Choice {
-    #[cfg(test)]
-    Test,
-    Production,
+
+struct DeclarationCollector<'a> {
+    declaring_file: String,
+    /// Directory of the containing file, which is the base for `#[path]` on a
+    /// declaration that is not nested in an inline module. Verified against
+    /// `apps/remi/src/server/catalog_authority.rs`, whose
+    /// `#[path = "catalog_authority/tests/test_support.rs"]` resolves below
+    /// `apps/remi/src/server/`, and against `apps/conary/build.rs`, whose
+    /// `#[path = "src/cli/mod.rs"]` resolves below `apps/conary/`.
+    file_dir: PathBuf,
+    declarations: &'a mut BTreeMap<String, Vec<ModuleDeclaration>>,
 }
-"#;
-        assert_eq!(
-            analyze_source(source).unwrap(),
-            FileMetrics {
-                total_lines: 24,
-                production_lines: 9,
-                inline_test_lines: 15,
-            }
-        );
+
+impl DeclarationCollector<'_> {
+    fn run(&mut self, items: &[Item], module_dir: &Path, file_attributes: &[Attribute]) {
+        let path_base = self.file_dir.clone();
+        self.collect(items, module_dir, &path_base, file_attributes);
     }
 
-    #[test]
-    fn counts_associated_items_without_double_counting_a_test_impl() {
-        let source = r#"struct Example;
-impl Example {
-    #[cfg(test)]
-    const FIXTURE: usize = 1;
-    fn production() {}
+    fn collect(
+        &mut self,
+        items: &[Item],
+        module_dir: &Path,
+        path_base: &Path,
+        inherited: &[Attribute],
+    ) {
+        for item in items {
+            let Item::Mod(item_module) = item else {
+                continue;
+            };
+            let mut effective = inherited.to_vec();
+            effective.extend(cfg_attributes(&item_module.attrs));
+            let test_gated = cfg::is_test_only(&effective);
+            let name = item_module.ident.to_string();
+            let declared_path = path_attribute(&item_module.attrs);
+
+            if let Some((_, items)) = &item_module.content {
+                // An inline module owns a directory named after it; a `#[path]`
+                // attribute on it renames that directory.
+                let nested_dir = match &declared_path {
+                    Some(path) => module_dir.join(path),
+                    None => module_dir.join(&name),
+                };
+                self.collect(items, &nested_dir, &nested_dir, &effective);
+                continue;
+            }
+
+            match declared_path {
+                Some(path) => self.record(normalize(&path_base.join(path)), test_gated),
+                None => {
+                    // Rust loads `<module>/<name>.rs` or, failing that,
+                    // `<module>/<name>/mod.rs`.
+                    self.record(module_dir.join(format!("{name}.rs")), test_gated);
+                    self.record(module_dir.join(&name).join("mod.rs"), test_gated);
+                }
+            }
+        }
+    }
+
+    fn record(&mut self, target: PathBuf, test_gated: bool) {
+        self.declarations
+            .entry(path_text(&target))
+            .or_default()
+            .push(ModuleDeclaration {
+                declaring_file: self.declaring_file.clone(),
+                test_gated,
+            });
+    }
 }
-#[cfg(test)]
-impl Example {
-    #[cfg(test)]
-    fn nested_test_helper() {}
+
+/// Index textual `include!("x.rs")` sites as declaring sites too. An included
+/// file is not a module, but its tokens are compiled in the including module, so
+/// a `#[cfg(test)]` include site is exactly as strong as a gated declaration.
+/// This is how `crates/conary-core/src/repository/sync/tests.rs` and its
+/// `tests/native.rs` chain are compiled: `sync.rs` ends with
+/// `#[cfg(test)] include!("sync/tests.rs");`.
+fn collect_include_declarations(
+    syntax: &syn::File,
+    relative: &Path,
+    declarations: &mut BTreeMap<String, Vec<ModuleDeclaration>>,
+) {
+    let mut visitor = IncludeVisitor {
+        declaring_file: path_text(relative),
+        file_dir: relative
+            .parent()
+            .unwrap_or_else(|| Path::new(""))
+            .to_path_buf(),
+        inherited: Vec::new(),
+        declarations,
+    };
+    visitor.visit_file(syntax);
 }
-"#;
 
-        assert_eq!(
-            analyze_source(source).unwrap(),
-            FileMetrics {
-                total_lines: 11,
-                production_lines: 4,
-                inline_test_lines: 7,
-            }
-        );
+struct IncludeVisitor<'a> {
+    declaring_file: String,
+    /// The included path is relative to the containing file's directory, the
+    /// same base `#[path]` uses for a declaration outside an inline module.
+    file_dir: PathBuf,
+    inherited: Vec<Attribute>,
+    declarations: &'a mut BTreeMap<String, Vec<ModuleDeclaration>>,
+}
+
+impl IncludeVisitor<'_> {
+    fn record(&mut self, attributes: &[Attribute], mac: &syn::Macro) {
+        if !mac.path.is_ident("include") {
+            return;
+        }
+        let Ok(path) = syn::parse2::<syn::LitStr>(mac.tokens.clone()) else {
+            return;
+        };
+        let mut effective = self.inherited.clone();
+        effective.extend(cfg_attributes(attributes));
+        let target = normalize(&self.file_dir.join(path.value()));
+        self.declarations
+            .entry(path_text(&target))
+            .or_default()
+            .push(ModuleDeclaration {
+                declaring_file: self.declaring_file.clone(),
+                test_gated: cfg::is_test_only(&effective),
+            });
+    }
+}
+
+impl<'ast> Visit<'ast> for IncludeVisitor<'_> {
+    fn visit_item(&mut self, item: &'ast Item) {
+        let depth = self.inherited.len();
+        self.inherited.extend(cfg_attributes(item_attributes(item)));
+        visit::visit_item(self, item);
+        self.inherited.truncate(depth);
     }
 
-    #[test]
-    fn file_level_inner_cfg_test_owns_the_whole_file() {
-        let source =
-            "// crates/example/src/support.rs\n#![cfg(test)]\n\nfn helper() {}\nfn other() {}\n";
-        assert_eq!(
-            analyze_source(source).unwrap(),
-            FileMetrics {
-                total_lines: 5,
-                production_lines: 0,
-                inline_test_lines: 5,
-            }
-        );
-        let source = "#![allow(dead_code)]\n#![cfg(not(test))]\nfn production() {}\n";
-        assert_eq!(analyze_source(source).unwrap().production_lines, 3);
-        let source = "#![cfg_attr(feature = \"x\", cfg(test))]\nfn production() {}\n";
-        assert_eq!(analyze_source(source).unwrap().production_lines, 2);
+    fn visit_item_macro(&mut self, node: &'ast syn::ItemMacro) {
+        self.record(&node.attrs, &node.mac);
     }
 
-    #[test]
-    fn enclosing_cfg_predicates_narrow_child_classification() {
-        // The module is production-capable (feature = "prod"), but its child can
-        // only exist when `test` is set, so the child is inline-test code.
-        let source = "#[cfg(any(test, feature = \"prod\"))]\nmod mixed {\n    #[cfg(not(feature = \"prod\"))]\n    fn test_only_child() {}\n    fn production_child() {}\n}\n";
-        assert_eq!(
-            analyze_source(source).unwrap(),
-            FileMetrics {
-                total_lines: 6,
-                production_lines: 4,
-                inline_test_lines: 2,
-            }
-        );
-        // File-level constraints propagate the same way.
-        let source = "#![cfg(any(test, feature = \"prod\"))]\n#[cfg(not(feature = \"prod\"))]\nfn test_only() {}\nfn production() {}\n";
-        assert_eq!(analyze_source(source).unwrap().inline_test_lines, 2);
-        // A child that widens nothing stays production under a production parent.
-        let source =
-            "#[cfg(feature = \"prod\")]\nmod prod {\n    #[cfg(unix)]\n    fn child() {}\n}\n";
-        assert_eq!(analyze_source(source).unwrap().inline_test_lines, 0);
-        // Constraints do not leak to siblings after leaving the parent.
-        let source = "#[cfg(any(test, feature = \"prod\"))]\nmod mixed {\n    #[cfg(not(feature = \"prod\"))]\n    fn child() {}\n}\n#[cfg(not(feature = \"prod\"))]\nfn sibling() {}\n";
-        assert_eq!(analyze_source(source).unwrap().inline_test_lines, 2);
+    fn visit_stmt_macro(&mut self, node: &'ast syn::StmtMacro) {
+        self.record(&node.attrs, &node.mac);
     }
 
-    #[test]
-    fn validates_repo_relative_path_comments() {
-        let path = Path::new("crates/example/src/tests.rs");
-        assert!(validate_path_comment("// crates/example/src/tests.rs\n", path).is_ok());
-        assert!(
-            validate_path_comment("// crates/wrong/src/tests.rs\n", path)
-                .unwrap_err()
-                .contains("expected `// crates/example/src/tests.rs`")
-        );
-        for source in [
-            "",
-            "fn example() {}\n",
-            "// ordinary comment\n",
-            "// example/src/tests.rs\n",
-        ] {
-            assert!(validate_path_comment(source, path).is_err());
+    fn visit_expr_macro(&mut self, node: &'ast syn::ExprMacro) {
+        self.record(&node.attrs, &node.mac);
+    }
+}
+
+/// Propagate file-level gates through the module graph until it stabilizes. A
+/// file is test-only when its own attributes gate it, or when it is declared at
+/// least once and every declaration resolving to it is test-gated (directly or
+/// because the declaring file is itself test-only). A single ungated declaring
+/// site keeps the file in production builds.
+fn resolve_test_gates(
+    file_gates: &BTreeMap<String, bool>,
+    declarations: &BTreeMap<String, Vec<ModuleDeclaration>>,
+) -> BTreeMap<String, bool> {
+    let mut gated = file_gates.clone();
+    loop {
+        let mut changed = false;
+        for (target, sites) in declarations {
+            if gated.get(target).copied().unwrap_or(false) {
+                continue;
+            }
+            let all_sites_gated = sites.iter().all(|site| {
+                site.test_gated || gated.get(&site.declaring_file).copied().unwrap_or(false)
+            });
+            if all_sites_gated {
+                gated.insert(target.clone(), true);
+                changed = true;
+            }
+        }
+        if !changed {
+            return gated;
         }
     }
 }
+
+/// How cargo compiles a file, when the file is a target root.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum CargoTarget {
+    /// An integration test target (`<package>/tests/<name>.rs`). Cargo builds it
+    /// only for `cargo test`, so the whole module tree below it is test-only.
+    Test,
+    /// A bin, bench, or example target root: a crate root that owns its
+    /// directory, but is not test-only.
+    Other,
+}
+
+/// Cargo target roots relative to `apps/<package>/` or `crates/<package>/`.
+/// Auto-discovery covers `<dir>/<name>.rs` and `<dir>/<name>/main.rs` below
+/// `tests/`, `benches/`, `examples/`, and `src/bin/`.
+fn cargo_target_root(relative: &Path) -> Option<CargoTarget> {
+    let rest = package_relative(relative)?;
+    let parts = rest
+        .components()
+        .filter_map(normal_text)
+        .collect::<Vec<String>>();
+    let (kind, tail) = match parts.split_first()?.0.as_str() {
+        "tests" => (CargoTarget::Test, &parts[1..]),
+        "benches" | "examples" => (CargoTarget::Other, &parts[1..]),
+        "src" => match parts.get(1).map(String::as_str) {
+            Some("bin") => (CargoTarget::Other, &parts[2..]),
+            _ => return None,
+        },
+        _ => return None,
+    };
+    let is_root = match tail {
+        [name] => name.ends_with(".rs"),
+        [_, main] => main == "main.rs",
+        _ => false,
+    };
+    is_root.then_some(kind)
+}
+
+fn package_relative(relative: &Path) -> Option<PathBuf> {
+    let mut components = relative.components();
+    let Component::Normal(kind) = components.next()? else {
+        return None;
+    };
+    if kind != OsStr::new("apps") && kind != OsStr::new("crates") {
+        return None;
+    }
+    components.next()?;
+    Some(components.as_path().to_path_buf())
+}
+
+fn normal_text(component: Component<'_>) -> Option<String> {
+    match component {
+        Component::Normal(text) => Some(text.to_string_lossy().into_owned()),
+        _ => None,
+    }
+}
+
+/// The directory Rust searches for `mod x;` declared by this file.
+fn module_directory(relative: &Path) -> PathBuf {
+    let parent = relative.parent().unwrap_or_else(|| Path::new(""));
+    if owns_its_directory(relative) {
+        parent.to_path_buf()
+    } else {
+        parent.join(relative.file_stem().unwrap_or(OsStr::new("")))
+    }
+}
+
+/// Crate roots and `mod.rs` own their containing directory; any other file owns
+/// a sibling directory named after its file stem. `Foo.rs` therefore declares
+/// `mod tests;` as `Foo/tests.rs` while `Foo/mod.rs` declares it as
+/// `Foo/tests.rs` too; both forms are verified in unit tests and against
+/// `apps/conary-test/src/bootstrap.rs` (`bootstrap/tests.rs`) and
+/// `apps/conary-test/src/config/mod.rs` (`config/tests.rs`).
+fn owns_its_directory(relative: &Path) -> bool {
+    let name = relative.file_name().and_then(OsStr::to_str);
+    matches!(name, Some("mod.rs" | "lib.rs" | "main.rs" | "build.rs"))
+        || cargo_target_root(relative).is_some()
+}
+
+fn path_attribute(attributes: &[Attribute]) -> Option<String> {
+    attributes.iter().find_map(|attribute| {
+        if !attribute.path().is_ident("path") {
+            return None;
+        }
+        let Meta::NameValue(named) = &attribute.meta else {
+            return None;
+        };
+        let Expr::Lit(literal) = &named.value else {
+            return None;
+        };
+        let Lit::Str(value) = &literal.lit else {
+            return None;
+        };
+        Some(value.value())
+    })
+}
+
+/// Resolve `.` and `..` components of a `#[path]` value without touching the
+/// filesystem, so `../../tests/common/update_ccs.rs` from
+/// `apps/conary/src/commands/test_helpers.rs` becomes
+/// `apps/conary/tests/common/update_ccs.rs`.
+fn normalize(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+    normalized
+}
+
+#[cfg(test)]
+#[path = "line_cap/tests.rs"]
+mod tests;
