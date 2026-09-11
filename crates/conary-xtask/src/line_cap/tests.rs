@@ -854,6 +854,30 @@ fn accepts_a_snapshot_checked_out_alongside_the_allowlist() {
 }
 
 #[test]
+fn a_cfg_gated_include_site_gates_the_included_file() {
+    let classified = classify(&[
+        (
+            "crates/x/src/owner.rs",
+            "#[cfg(test)]\ninclude!(\"tests.rs\");\n",
+        ),
+        ("crates/x/src/tests.rs", "fn helper() {}\n"),
+    ]);
+    assert_eq!(
+        gate(&classified, "crates/x/src/tests.rs"),
+        ExemptionGate::TestGated
+    );
+
+    let classified = classify(&[
+        ("crates/x/src/owner.rs", "include!(\"tests.rs\");\n"),
+        ("crates/x/src/tests.rs", "fn production() {}\n"),
+    ]);
+    assert_eq!(
+        gate(&classified, "crates/x/src/tests.rs"),
+        ExemptionGate::Ungated
+    );
+}
+
+#[test]
 fn accepts_an_allowlist_older_than_the_snapshot_refresh_date() {
     let scratch = ScratchDir::new("fresh-allowlist");
     let allowlist = scratch.path().join("allowlist.txt");
@@ -889,4 +913,330 @@ impl Drop for ScratchDir {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.0);
     }
+}
+
+#[test]
+fn a_test_gated_declaring_file_gates_its_own_declarations() {
+    let classified = classify(&[
+        ("crates/x/src/lib.rs", "#[cfg(test)]\nmod suite;\n"),
+        ("crates/x/src/suite.rs", "mod tests;\n"),
+        ("crates/x/src/suite/tests.rs", "fn helper() {}\n"),
+    ]);
+    assert_eq!(
+        gate(&classified, "crates/x/src/suite/tests.rs"),
+        ExemptionGate::TestGated
+    );
+}
+
+#[test]
+fn cargo_integration_test_targets_are_test_gated() {
+    let classified = classify(&[
+        ("crates/x/tests/query.rs", "mod common;\n"),
+        ("crates/x/tests/common/mod.rs", "pub fn helper() {}\n"),
+    ]);
+    assert_eq!(
+        gate(&classified, "crates/x/tests/query.rs"),
+        ExemptionGate::TestGated
+    );
+    // Reached through the target root's own directory, not a sibling stem
+    // directory, because the target root is a crate root.
+    assert_eq!(
+        gate(&classified, "crates/x/tests/common/mod.rs"),
+        ExemptionGate::TestGated
+    );
+}
+
+#[test]
+fn declaration_forms_resolve_the_way_rust_loads_them() {
+    assert_eq!(
+        relative_module_directory(Path::new("crates/x/src/foo.rs")),
+        PathBuf::from("crates/x/src/foo")
+    );
+    assert_eq!(
+        relative_module_directory(Path::new("crates/x/src/foo/mod.rs")),
+        PathBuf::from("crates/x/src/foo")
+    );
+    assert_eq!(
+        relative_module_directory(Path::new("crates/x/src/lib.rs")),
+        PathBuf::from("crates/x/src")
+    );
+    // A cargo integration test target is a crate root, so it owns its
+    // directory instead of a sibling named after its stem.
+    assert_eq!(
+        relative_module_directory(Path::new("crates/x/tests/query.rs")),
+        PathBuf::from("crates/x/tests")
+    );
+
+    // `Foo.rs` declares `mod tests;` as `Foo/tests.rs`.
+    let (_, declarations) = declarations_of(&[("crates/x/src/foo.rs", "mod tests;\n")]);
+    assert!(declarations.contains_key("crates/x/src/foo/tests.rs"));
+    assert!(declarations.contains_key("crates/x/src/foo/tests/mod.rs"));
+    assert!(!declarations.contains_key("crates/x/src/tests.rs"));
+
+    // `Foo/mod.rs` declares `mod tests;` as `Foo/tests.rs`.
+    let (_, declarations) = declarations_of(&[("crates/x/src/foo/mod.rs", "mod tests;\n")]);
+    assert!(declarations.contains_key("crates/x/src/foo/tests.rs"));
+    assert!(declarations.contains_key("crates/x/src/foo/tests/mod.rs"));
+
+    // A crate root declares `mod tests;` beside itself.
+    let (_, declarations) = declarations_of(&[("crates/x/src/lib.rs", "mod tests;\n")]);
+    assert!(declarations.contains_key("crates/x/src/tests.rs"));
+    assert!(declarations.contains_key("crates/x/src/tests/mod.rs"));
+
+    assert_eq!(
+        cargo_target_root(Path::new("crates/x/tests/query.rs")),
+        Some(CargoTarget::Test)
+    );
+    assert_eq!(
+        cargo_target_root(Path::new("crates/x/tests/common/mod.rs")),
+        None
+    );
+    assert_eq!(cargo_target_root(Path::new("crates/x/src/tests.rs")), None);
+    assert_eq!(
+        cargo_target_root(Path::new("crates/x/benches/throughput.rs")),
+        Some(CargoTarget::Other)
+    );
+    assert_eq!(
+        cargo_target_root(Path::new("crates/x/src/bin/tool.rs")),
+        Some(CargoTarget::Other)
+    );
+}
+
+#[test]
+fn declaration_predicates_gate_an_exempt_file() {
+    for declaration in [
+        "#[cfg(test)]\nmod tests;\n",
+        "#[cfg(all(test, feature = \"fixture\"))]\nmod tests;\n",
+        "#[cfg_attr(all(), cfg(test))]\nmod tests;\n",
+        "#[cfg(not(not(test)))]\nmod tests;\n",
+    ] {
+        let classified = classify(&[
+            ("crates/x/src/owner.rs", declaration),
+            ("crates/x/src/owner/tests.rs", "fn helper() {}\n"),
+        ]);
+        assert_eq!(
+            gate(&classified, "crates/x/src/owner/tests.rs"),
+            ExemptionGate::TestGated,
+            "{declaration}"
+        );
+    }
+    // Reachable from a non-test build, so the file stays production code.
+    let classified = classify(&[
+        (
+            "crates/x/src/owner.rs",
+            "#[cfg(any(test, feature = \"fixture\"))]\nmod tests;\n",
+        ),
+        ("crates/x/src/owner/tests.rs", "fn production() {}\n"),
+    ]);
+    assert_eq!(
+        gate(&classified, "crates/x/src/owner/tests.rs"),
+        ExemptionGate::Ungated
+    );
+}
+
+#[test]
+fn exempt_file_gated_by_its_own_inner_attribute_is_test_gated() {
+    for source in [
+        "#![cfg(test)]\nfn helper() {}\n",
+        "#![cfg(all(test, feature = \"fixture\"))]\nfn helper() {}\n",
+    ] {
+        let classified = classify(&[("crates/x/src/tests/support.rs", source)]);
+        assert_eq!(
+            gate(&classified, "crates/x/src/tests/support.rs"),
+            ExemptionGate::TestGated,
+            "{source}"
+        );
+    }
+    // A file-level gate that holds in a non-test build leaves production.
+    let classified = classify(&[(
+        "crates/x/src/tests/support.rs",
+        "#![cfg(any(test, feature = \"fixture\"))]\nfn production() {}\n",
+    )]);
+    assert_eq!(
+        gate(&classified, "crates/x/src/tests/support.rs"),
+        ExemptionGate::Ungated
+    );
+}
+
+#[test]
+fn exempt_file_with_a_test_gated_declaring_site_is_test_gated() {
+    let classified = classify(&[
+        ("crates/x/src/owner.rs", "#[cfg(test)]\nmod tests;\n"),
+        ("crates/x/src/owner/tests.rs", "fn helper() {}\n"),
+    ]);
+    assert_eq!(
+        gate(&classified, "crates/x/src/owner/tests.rs"),
+        ExemptionGate::TestGated
+    );
+}
+
+#[test]
+fn exempt_file_with_no_gate_anywhere_is_ungated() {
+    // Never declared at all.
+    let classified = classify(&[("crates/x/src/tests.rs", "fn production() {}\n")]);
+    assert_eq!(
+        gate(&classified, "crates/x/src/tests.rs"),
+        ExemptionGate::Ungated
+    );
+    // Declared, but the declaring site is not test-gated: the masking case.
+    let classified = classify(&[
+        ("crates/x/src/owner.rs", "mod tests;\n"),
+        ("crates/x/src/owner/tests.rs", "fn production() {}\n"),
+    ]);
+    assert_eq!(
+        gate(&classified, "crates/x/src/owner/tests.rs"),
+        ExemptionGate::Ungated
+    );
+}
+
+#[test]
+fn include_chains_inherit_the_including_files_gate() {
+    // The shape of crates/conary-core/src/repository/sync.rs: a test-gated
+    // include whose text opens `mod tests` and includes a deeper file from
+    // inside that module.
+    let classified = classify(&[
+        (
+            "crates/x/src/sync.rs",
+            "#[cfg(test)]\ninclude!(\"sync/tests.rs\");\n",
+        ),
+        (
+            "crates/x/src/sync/tests.rs",
+            "mod tests {\n    include!(\"tests/native.rs\");\n}\n",
+        ),
+        ("crates/x/src/sync/tests/native.rs", "fn helper() {}\n"),
+    ]);
+    assert_eq!(
+        gate(&classified, "crates/x/src/sync/tests.rs"),
+        ExemptionGate::TestGated
+    );
+    assert_eq!(
+        gate(&classified, "crates/x/src/sync/tests/native.rs"),
+        ExemptionGate::TestGated
+    );
+}
+
+#[test]
+fn inline_module_gates_flow_to_their_declared_files() {
+    let classified = classify(&[
+        (
+            "crates/x/src/lib.rs",
+            "mod outer {\n    #[cfg(test)]\n    mod tests;\n}\n",
+        ),
+        ("crates/x/src/outer/tests.rs", "fn helper() {}\n"),
+    ]);
+    assert_eq!(
+        gate(&classified, "crates/x/src/outer/tests.rs"),
+        ExemptionGate::TestGated
+    );
+
+    let classified = classify(&[
+        (
+            "crates/x/src/lib.rs",
+            "#[cfg(test)]\nmod outer {\n    mod tests;\n}\n",
+        ),
+        ("crates/x/src/outer/tests.rs", "fn helper() {}\n"),
+    ]);
+    assert_eq!(
+        gate(&classified, "crates/x/src/outer/tests.rs"),
+        ExemptionGate::TestGated
+    );
+}
+
+#[test]
+fn one_ungated_declaring_site_keeps_the_file_in_production() {
+    let classified = classify(&[
+        ("crates/x/src/lib.rs", "#[cfg(test)]\nmod tests;\n"),
+        (
+            "crates/x/src/other.rs",
+            "#[path = \"tests.rs\"]\nmod tests;\n",
+        ),
+        ("crates/x/src/tests.rs", "fn production() {}\n"),
+    ]);
+    assert_eq!(
+        gate(&classified, "crates/x/src/tests.rs"),
+        ExemptionGate::Ungated
+    );
+}
+
+#[test]
+fn path_attribute_resolves_relative_to_the_containing_file() {
+    // The real declaring site of apps/remi/src/server/catalog_authority/tests/test_support.rs.
+    let classified = classify(&[
+        (
+            "apps/remi/src/server/catalog_authority.rs",
+            "#[cfg(test)]\n#[path = \"catalog_authority/tests/test_support.rs\"]\npub(crate) mod test_support;\n",
+        ),
+        (
+            "apps/remi/src/server/catalog_authority/tests/test_support.rs",
+            "fn helper() {}\n",
+        ),
+    ]);
+    assert_eq!(
+        gate(
+            &classified,
+            "apps/remi/src/server/catalog_authority/tests/test_support.rs"
+        ),
+        ExemptionGate::TestGated
+    );
+
+    // The real `#[path]` value of apps/conary/src/commands/test_helpers.rs
+    // crosses out of its own directory into the package's tests/ tree.
+    let classified = classify(&[
+        (
+            "apps/conary/src/commands/mod.rs",
+            "#[cfg(test)]\npub(crate) mod test_helpers;\n",
+        ),
+        (
+            "apps/conary/src/commands/test_helpers.rs",
+            "#[path = \"../../tests/common/update_ccs.rs\"]\npub(crate) mod update_ccs;\n",
+        ),
+        (
+            "apps/conary/tests/common/update_ccs.rs",
+            "pub(crate) fn helper() {}\n",
+        ),
+    ]);
+    assert_eq!(
+        gate(&classified, "apps/conary/tests/common/update_ccs.rs"),
+        ExemptionGate::TestGated
+    );
+}
+
+// --- helpers for the exemption-classification tests (#997) ---
+
+fn declarations_of(
+    sources: &[(&str, &str)],
+) -> (
+    BTreeMap<String, bool>,
+    BTreeMap<String, Vec<ModuleDeclaration>>,
+) {
+    let mut declarations = BTreeMap::new();
+    let mut gates = BTreeMap::new();
+    for (relative, source) in sources {
+        let syntax = syn::parse_file(source).unwrap();
+        let path = Path::new(relative);
+        collect_module_declarations(&syntax, path, &mut declarations);
+        collect_include_declarations(&syntax, path, &mut declarations);
+        gates.insert(relative.to_string(), file_level_test_gate(&syntax, path));
+    }
+    (gates, declarations)
+}
+
+fn classify(sources: &[(&str, &str)]) -> BTreeMap<String, ExemptionGate> {
+    let (gates, declarations) = declarations_of(sources);
+    let resolved = resolve_test_gates(&gates, &declarations);
+    let mut classified = BTreeMap::new();
+    for (relative, _) in sources {
+        if !excluded_test_file(Path::new(relative)) {
+            continue;
+        }
+        let gate = exemption_gate(resolved.get(*relative).copied().unwrap_or(false));
+        classified.insert(relative.to_string(), gate);
+    }
+    classified
+}
+
+fn gate(classified: &BTreeMap<String, ExemptionGate>, path: &str) -> ExemptionGate {
+    *classified
+        .get(path)
+        .unwrap_or_else(|| panic!("{path} was not classified as exempt"))
 }

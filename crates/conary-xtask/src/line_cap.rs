@@ -9,14 +9,20 @@ use std::path::{Component, Path, PathBuf};
 use std::time::UNIX_EPOCH;
 use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
-use syn::{Attribute, Expr, ExprLit, ForeignItem, ImplItem, Item, ItemMod, Lit, Meta, TraitItem};
+use syn::{Attribute, ForeignItem, ImplItem, Item, TraitItem};
 
 mod cfg;
 mod roots;
 mod siblings;
 
+pub(crate) mod exemption;
+
 pub(crate) use roots::*;
 pub(crate) use siblings::*;
+
+// Re-exported so the sibling test module reaches both graphs through the
+// parent, the same way it reaches every other item here.
+pub(super) use exemption::*;
 
 const PRODUCTION_LINE_LIMIT: usize = 1_000;
 const INLINE_TEST_LINE_LIMIT: usize = 300;
@@ -36,7 +42,7 @@ impl LineSpan {
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
-struct FileMetrics {
+pub(crate) struct FileMetrics {
     total_lines: usize,
     production_lines: usize,
     inline_test_lines: usize,
@@ -49,7 +55,7 @@ struct FileMetrics {
 /// inline. This is a static attribution of where the lines are now, not a
 /// git-verified before/after, so it never claims a historical delta.
 #[derive(Debug, Default, Clone, Copy, Eq, PartialEq)]
-struct SiblingAttribution {
+pub(crate) struct SiblingAttribution {
     siblings: usize,
     sibling_lines: usize,
 }
@@ -58,7 +64,7 @@ struct SiblingAttribution {
 /// before the scan reaches it. `analyze_source` is a pure function of the file
 /// bytes, so a child measured early and in its own turn always agree.
 #[derive(Default)]
-struct MeasuredFiles {
+pub(crate) struct MeasuredFiles {
     metrics: BTreeMap<PathBuf, Option<FileMetrics>>,
 }
 
@@ -120,6 +126,9 @@ pub(crate) fn run(args: impl Iterator<Item = String>) -> Result<(), String> {
     let mut measured = MeasuredFiles::default();
     let mut used_allowlist_entries = BTreeSet::new();
     let mut errors = Vec::new();
+    let mut declarations: BTreeMap<String, Vec<ModuleDeclaration>> = BTreeMap::new();
+    let mut file_gates: BTreeMap<String, bool> = BTreeMap::new();
+    let mut exempt_files: Vec<(String, FileMetrics)> = Vec::new();
 
     if let Some(issue_state_path) = &options.issue_state {
         let issue_state = read_issue_state(issue_state_path)?;
@@ -147,14 +156,21 @@ pub(crate) fn run(args: impl Iterator<Item = String>) -> Result<(), String> {
         if let Err(error) = validate_path_comment(&source, relative_path) {
             errors.push(error);
         }
-        let metrics = match analyze_source(&source) {
-            Ok(metrics) => metrics,
+        let syntax = match syn::parse_file(&source) {
+            Ok(syntax) => syntax,
             Err(error) => {
                 errors.push(format!("failed to parse {relative}: {error}"));
                 continue;
             }
         };
+        let metrics = measure_source(&syntax, &source);
         measured.insert(path, metrics);
+        collect_module_declarations(&syntax, relative_path, &mut declarations);
+        collect_include_declarations(&syntax, relative_path, &mut declarations);
+        file_gates.insert(
+            relative.clone(),
+            file_level_test_gate(&syntax, relative_path),
+        );
 
         if excluded_test_file(relative_path) {
             if options.report {
@@ -166,6 +182,7 @@ pub(crate) fn run(args: impl Iterator<Item = String>) -> Result<(), String> {
                     metrics.total_lines, metrics.production_lines, metrics.inline_test_lines
                 );
             }
+            exempt_files.push((relative, metrics));
             continue;
         }
 
@@ -202,6 +219,47 @@ pub(crate) fn run(args: impl Iterator<Item = String>) -> Result<(), String> {
                 metrics.inline_test_lines
             ));
         }
+    }
+
+    // Issue #997: an exempt-named file is reported and classified instead of
+    // being silently dropped. Its exemption is established from the module
+    // declaration graph (and the file's own inner attributes), never from the
+    // file's text alone, because a test-named helper such as
+    // `catalog_authority/tests/test_support.rs` looks like production code when
+    // parsed standalone while its declaring site is `#[cfg(test)]`-gated.
+    //
+    // This increment is report-only: exempt files stay uncapped, so no
+    // classification can add or remove an error.
+    let resolved_gates = resolve_test_gates(&file_gates, &declarations);
+    let mut test_gated_exemptions = 0usize;
+    let mut ungated_exemptions = 0usize;
+    for (relative, metrics) in &exempt_files {
+        let gate = exemption_gate(resolved_gates.get(relative).copied().unwrap_or(false));
+        match gate {
+            ExemptionGate::TestGated => test_gated_exemptions += 1,
+            ExemptionGate::Ungated => ungated_exemptions += 1,
+        }
+        if options.report {
+            println!(
+                "EXEMPT: {relative}\ttotal={}\tproduction={}\tinline_test={}\tgate={}",
+                metrics.total_lines,
+                metrics.production_lines,
+                metrics.inline_test_lines,
+                gate.label()
+            );
+        }
+        // Issue #997: exempt-named files used to skip the allowlist bookkeeping
+        // entirely, so a listed entry for one of them stayed unused and the
+        // stale-entry sweep below rejected it: an over-cap exempt file could
+        // never be allowlisted. Record a listed exempt file as used. The file
+        // stays uncapped in this report-only increment, so no cap outcome
+        // changes.
+        if allowlist.contains_key(relative) {
+            used_allowlist_entries.insert(relative.clone());
+        }
+    }
+    if options.report {
+        println!("EXEMPT SUMMARY: test-gated={test_gated_exemptions} ungated={ungated_exemptions}");
     }
 
     for (path, issue) in allowlist {
@@ -564,8 +622,7 @@ fn validate_path_comment(source: &str, relative: &Path) -> Result<(), String> {
     }
 }
 
-fn analyze_source(source: &str) -> syn::Result<FileMetrics> {
-    let syntax = syn::parse_file(source)?;
+fn measure_source(syntax: &syn::File, source: &str) -> FileMetrics {
     let total_lines = source.lines().count();
     // Inner attributes such as `#![cfg(test)]` gate the whole file; syn keeps them
     // on `File::attrs`, which no descendant visit sees.
@@ -581,15 +638,22 @@ fn analyze_source(source: &str) -> syn::Result<FileMetrics> {
             inherited: cfg_attributes(&syntax.attrs),
             spans: Vec::new(),
         };
-        visitor.visit_file(&syntax);
+        visitor.visit_file(syntax);
         union_spans(visitor.spans)
     };
     let inline_test_lines = spans.iter().copied().map(LineSpan::line_count).sum();
-    Ok(FileMetrics {
+    FileMetrics {
         total_lines,
         production_lines: total_lines.saturating_sub(inline_test_lines),
         inline_test_lines,
-    })
+    }
+}
+
+/// Parse-and-measure, for callers holding only source text: the sibling
+/// measurement cache reads a file it has not parsed yet.
+fn analyze_source(source: &str) -> syn::Result<FileMetrics> {
+    let syntax = syn::parse_file(source)?;
+    Ok(measure_source(&syntax, source))
 }
 
 #[derive(Default)]

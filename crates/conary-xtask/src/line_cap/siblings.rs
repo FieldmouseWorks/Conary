@@ -12,7 +12,7 @@ use std::collections::BTreeSet;
 use std::ffi::OsStr;
 use std::path::{Component, Path, PathBuf};
 
-use syn::{Attribute, Expr, ExprLit, Item, ItemMod, Lit, Meta};
+use syn::{Expr, ExprLit, Item, ItemMod, Lit, Meta};
 
 use super::{FileMetrics, MeasuredFiles, SiblingAttribution};
 
