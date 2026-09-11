@@ -1,0 +1,9 @@
+# Issue state for scripts/line-cap-allowlist.txt entries.
+# Regenerate with scripts/refresh-line-cap-issue-state.sh after any allowlist change.
+# refreshed: 2026-09-11
+#
+# Format: #<issue> <STATE>
+# refreshed is the UTC date; the checker fails when the allowlist file is newer than it.
+154 OPEN
+814 CLOSED
+852 OPEN

@@ -3,6 +3,7 @@
 use super::*;
 use std::process;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::SystemTime;
 
 #[test]
 fn counts_the_union_of_typed_test_item_spans() {
@@ -411,5 +412,213 @@ impl TempRoot {
 impl Drop for TempRoot {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.path);
+    }
+}
+
+#[test]
+fn parses_issue_state_snapshots() {
+    let source = r#"# Issue state for scripts/line-cap-allowlist.txt entries.
+# Regenerate with scripts/refresh-line-cap-issue-state.sh after any allowlist change.
+# refreshed: 2026-09-12
+#
+# Format: #<issue> <STATE>
+154 OPEN
+852 OPEN
+"#;
+    let snapshot =
+        parse_issue_state(source, Path::new("scripts/line-cap-issue-state.txt")).unwrap();
+    assert_eq!(snapshot.refreshed, "2026-09-12");
+    assert_eq!(snapshot.refreshed_day, days_from_civil(2026, 9, 12));
+    assert_eq!(snapshot.states.get(&154), Some(&IssueState::Open));
+    assert_eq!(snapshot.states.get(&852), Some(&IssueState::Open));
+    assert_eq!(snapshot.states.get(&853), None);
+    // The documented `#<issue>` sigil is accepted as well.
+    let sigil = parse_issue_state(
+        "# refreshed: 2026-09-12\n#154 OPEN\n",
+        Path::new("scripts/line-cap-issue-state.txt"),
+    )
+    .unwrap();
+    assert_eq!(sigil.states.get(&154), Some(&IssueState::Open));
+}
+
+#[test]
+fn rejects_malformed_issue_state_snapshots() {
+    let path = Path::new("scripts/line-cap-issue-state.txt");
+    for (source, expected) in [
+        ("154 OPEN\n", "has no 'refreshed"),
+        (
+            "# refreshed: 2026-09-12\n#154\n",
+            "invalid issue-state entry",
+        ),
+        (
+            "# refreshed: 2026-09-12\n#0 OPEN\n",
+            "invalid issue-state entry",
+        ),
+        (
+            "# refreshed: 2026-09-12\n154 OPEN extra\n",
+            "invalid issue-state entry",
+        ),
+        (
+            "# refreshed: 2026-09-12\n154 UNKNOWN\n",
+            "invalid issue state",
+        ),
+        (
+            "# refreshed: 2026-09-12\n154 OPEN\n154 OPEN\n",
+            "duplicate issue-state entry",
+        ),
+        (
+            "# refreshed: 2026-09-12\n# refreshed: 2026-09-13\n154 OPEN\n",
+            "duplicate refreshed date",
+        ),
+        (
+            "# refreshed: 2026-02-30\n154 OPEN\n",
+            "invalid refreshed date",
+        ),
+        (
+            "# refreshed: 2026-9-12\n154 OPEN\n",
+            "invalid refreshed date",
+        ),
+        (
+            "# refreshed: 2026-13-01\n154 OPEN\n",
+            "invalid refreshed date",
+        ),
+    ] {
+        let error = parse_issue_state(source, path).unwrap_err();
+        assert!(error.contains(expected), "{source:?} -> {error}");
+    }
+}
+
+#[test]
+fn parses_calendar_dates_strictly() {
+    assert_eq!(parse_refreshed_day("1970-01-01"), Ok(0));
+    assert_eq!(parse_refreshed_day("2026-09-12"), Ok(20_708));
+    assert_eq!(
+        parse_refreshed_day("2024-02-29"),
+        Ok(days_from_civil(2024, 2, 29))
+    );
+    for value in [
+        "2023-02-29",
+        "2026-00-10",
+        "2026-12-32",
+        "20260912",
+        "2026-09-12T00:00:00Z",
+    ] {
+        assert!(parse_refreshed_day(value).is_err(), "{value}");
+    }
+}
+
+#[test]
+fn rejects_a_citation_the_snapshot_records_as_closed() {
+    let allowlist = BTreeMap::from([("crates/demo/src/lib.rs".to_string(), "#814".to_string())]);
+    let snapshot_path = Path::new("scripts/line-cap-issue-state.txt");
+    let snapshot =
+        parse_issue_state("# refreshed: 2026-09-12\n#814 CLOSED\n", snapshot_path).unwrap();
+    let mut errors = Vec::new();
+    validate_allowlist_issue_state(&allowlist, snapshot_path, &snapshot, &mut errors);
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(
+        errors[0].contains("crates/demo/src/lib.rs"),
+        "{}",
+        errors[0]
+    );
+    assert!(
+        errors[0].contains("snapshot records #814 as CLOSED"),
+        "{}",
+        errors[0]
+    );
+}
+
+#[test]
+fn rejects_a_citation_missing_from_the_snapshot() {
+    let allowlist = BTreeMap::from([("crates/demo/src/lib.rs".to_string(), "#999".to_string())]);
+    let snapshot_path = Path::new("scripts/line-cap-issue-state.txt");
+    let snapshot =
+        parse_issue_state("# refreshed: 2026-09-12\n#852 OPEN\n", snapshot_path).unwrap();
+    let mut errors = Vec::new();
+    validate_allowlist_issue_state(&allowlist, snapshot_path, &snapshot, &mut errors);
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(
+        errors[0].contains("crates/demo/src/lib.rs"),
+        "{}",
+        errors[0]
+    );
+    assert!(errors[0].contains("#999"), "{}", errors[0]);
+    assert!(
+        errors[0].contains("absent from issue-state snapshot"),
+        "{}",
+        errors[0]
+    );
+}
+
+#[test]
+fn accepts_open_citations_covered_by_the_snapshot() {
+    let allowlist = BTreeMap::from([
+        ("crates/demo/src/lib.rs".to_string(), "#154".to_string()),
+        ("crates/demo/src/other.rs".to_string(), "#852".to_string()),
+    ]);
+    let snapshot_path = Path::new("scripts/line-cap-issue-state.txt");
+    let snapshot = parse_issue_state(
+        "# refreshed: 2026-09-12\n#154 OPEN\n#852 OPEN\n",
+        snapshot_path,
+    )
+    .unwrap();
+    let mut errors = Vec::new();
+    validate_allowlist_issue_state(&allowlist, snapshot_path, &snapshot, &mut errors);
+    assert!(errors.is_empty(), "{errors:?}");
+}
+
+#[test]
+fn rejects_an_allowlist_newer_than_the_snapshot_refresh_date() {
+    let scratch = ScratchDir::new("stale-allowlist");
+    let allowlist = scratch.path().join("allowlist.txt");
+    fs::write(&allowlist, "crates/demo/src/lib.rs #123\n").unwrap();
+    let snapshot_path = scratch.path().join("issue-state.txt");
+    let snapshot =
+        parse_issue_state("# refreshed: 1970-01-02\n#123 OPEN\n", &snapshot_path).unwrap();
+    let error = validate_allowlist_freshness(&allowlist, &snapshot_path, &snapshot).unwrap_err();
+    assert!(
+        error.contains("run scripts/refresh-line-cap-issue-state.sh"),
+        "{error}"
+    );
+    assert!(error.contains("refreshed: 1970-01-02"), "{error}");
+    assert!(error.contains("allowlist.txt"), "{error}");
+    assert!(error.contains("issue-state.txt"), "{error}");
+}
+
+#[test]
+fn accepts_an_allowlist_older_than_the_snapshot_refresh_date() {
+    let scratch = ScratchDir::new("fresh-allowlist");
+    let allowlist = scratch.path().join("allowlist.txt");
+    fs::write(&allowlist, "crates/demo/src/lib.rs #123\n").unwrap();
+    let snapshot_path = scratch.path().join("issue-state.txt");
+    let snapshot =
+        parse_issue_state("# refreshed: 9999-12-31\n#123 OPEN\n", &snapshot_path).unwrap();
+    validate_allowlist_freshness(&allowlist, &snapshot_path, &snapshot).unwrap();
+}
+
+struct ScratchDir(PathBuf);
+
+impl ScratchDir {
+    fn new(name: &str) -> Self {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock before the Unix epoch")
+            .as_nanos();
+        let path = env::temp_dir().join(format!(
+            "conary-xtask-line-cap-{name}-{}-{unique}",
+            process::id()
+        ));
+        fs::create_dir_all(&path).expect("create scratch dir");
+        Self(path)
+    }
+
+    fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for ScratchDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
     }
 }

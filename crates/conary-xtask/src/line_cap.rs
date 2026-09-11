@@ -6,6 +6,7 @@ use std::env;
 use std::ffi::OsStr;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
+use std::time::UNIX_EPOCH;
 use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
 use syn::{Attribute, ForeignItem, ImplItem, Item, TraitItem};
@@ -14,6 +15,8 @@ mod cfg;
 
 const PRODUCTION_LINE_LIMIT: usize = 1_000;
 const INLINE_TEST_LINE_LIMIT: usize = 300;
+const SECONDS_PER_DAY: u64 = 60 * 60 * 24;
+const REFRESH_ISSUE_STATE_SCRIPT: &str = "scripts/refresh-line-cap-issue-state.sh";
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 struct LineSpan {
@@ -38,6 +41,10 @@ struct FileMetrics {
 struct Options {
     root: PathBuf,
     allowlist: PathBuf,
+    // Optional so a caller can measure a tree without an issue-state snapshot.
+    // `scripts/check-line-cap.sh` always supplies it, so the checked-in gate
+    // always validates citations; omitting it here only skips that validation.
+    issue_state: Option<PathBuf>,
     report: bool,
 }
 
@@ -48,7 +55,10 @@ pub(crate) fn run(args: impl Iterator<Item = String>) -> Result<(), String> {
         .any(|argument| argument == "-h" || argument == "--help")
     {
         println!(
-            "Usage: cargo run -q -p conary-xtask -- line-cap --allowlist <path> [--root <path>] [--report]"
+            "Usage: cargo run -q -p conary-xtask -- line-cap --allowlist <path> --issue-state <path> [--root <path>] [--report]"
+        );
+        println!(
+            "  --issue-state <path>  checked-in snapshot (no network I/O) that records every cited issue as OPEN"
         );
         return Ok(());
     }
@@ -66,6 +76,16 @@ pub(crate) fn run(args: impl Iterator<Item = String>) -> Result<(), String> {
     }
     let mut used_allowlist_entries = BTreeSet::new();
     let mut errors = Vec::new();
+
+    if let Some(issue_state_path) = &options.issue_state {
+        let issue_state = read_issue_state(issue_state_path)?;
+        if let Err(error) =
+            validate_allowlist_freshness(&options.allowlist, issue_state_path, &issue_state)
+        {
+            errors.push(error);
+        }
+        validate_allowlist_issue_state(&allowlist, issue_state_path, &issue_state, &mut errors);
+    }
 
     for path in scan.files {
         let relative = path
@@ -152,6 +172,7 @@ impl Options {
     fn parse(mut args: impl Iterator<Item = String>) -> Result<Self, String> {
         let mut root = env::current_dir().map_err(|error| format!("cannot read cwd: {error}"))?;
         let mut allowlist = None;
+        let mut issue_state = None;
         let mut report = false;
 
         while let Some(argument) = args.next() {
@@ -168,6 +189,12 @@ impl Options {
                             .ok_or_else(|| "--allowlist requires a path".to_string())?,
                     ));
                 }
+                "--issue-state" => {
+                    issue_state =
+                        Some(PathBuf::from(args.next().ok_or_else(|| {
+                            "--issue-state requires a path".to_string()
+                        })?));
+                }
                 "--report" => report = true,
                 _ => return Err(format!("unknown line-cap argument: {argument}")),
             }
@@ -177,6 +204,7 @@ impl Options {
         Ok(Self {
             root,
             allowlist,
+            issue_state,
             report,
         })
     }
@@ -209,11 +237,239 @@ fn read_allowlist(path: &Path) -> Result<BTreeMap<String, String>, String> {
     Ok(entries)
 }
 
+fn positive_number(value: &str) -> Option<u64> {
+    value.parse::<u64>().ok().filter(|number| *number > 0)
+}
+
+fn issue_number(value: &str) -> Option<u64> {
+    value.strip_prefix('#').and_then(positive_number)
+}
+
 fn valid_issue(value: &str) -> bool {
-    value
-        .strip_prefix('#')
-        .and_then(|number| number.parse::<u64>().ok())
-        .is_some_and(|number| number > 0)
+    issue_number(value).is_some()
+}
+
+/// GitHub state of one cited issue, as recorded in the checked-in snapshot.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum IssueState {
+    Open,
+    Closed,
+}
+
+impl IssueState {
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "OPEN" => Some(Self::Open),
+            "CLOSED" => Some(Self::Closed),
+            _ => None,
+        }
+    }
+}
+
+/// Checked-in issue state for every allowlist citation.
+///
+/// The gate performs no network I/O: `scripts/refresh-line-cap-issue-state.sh`
+/// is the only producer of this snapshot and the only line-cap step that talks
+/// to GitHub.
+#[derive(Debug)]
+struct IssueStateSnapshot {
+    refreshed: String,
+    refreshed_day: i64,
+    states: BTreeMap<u64, IssueState>,
+}
+
+fn read_issue_state(path: &Path) -> Result<IssueStateSnapshot, String> {
+    let contents = fs::read_to_string(path).map_err(|error| {
+        format!(
+            "line-cap issue-state snapshot not found: {}: {error}",
+            path.display()
+        )
+    })?;
+    parse_issue_state(&contents, path)
+}
+
+fn parse_issue_state(contents: &str, path: &Path) -> Result<IssueStateSnapshot, String> {
+    let mut refreshed = None;
+    let mut states = BTreeMap::new();
+
+    for line in contents.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        // `#` lines are comments, but a data line may carry the issue sigil
+        // (`#154 OPEN`); the checked-in snapshot writes it bare (`154 OPEN`).
+        let data = match line.strip_prefix('#') {
+            Some(rest) if !rest.trim_start().starts_with(|c: char| c.is_ascii_digit()) => {
+                if let Some(value) = rest.trim().strip_prefix("refreshed:") {
+                    if refreshed.is_some() {
+                        return Err(format!(
+                            "duplicate refreshed date in issue-state snapshot {}",
+                            path.display()
+                        ));
+                    }
+                    refreshed = Some(value.trim().to_string());
+                }
+                continue;
+            }
+            Some(rest) => rest,
+            None => line,
+        };
+        let fields = data.split_whitespace().collect::<Vec<_>>();
+        if fields.len() != 2 {
+            return Err(format!(
+                "invalid issue-state entry in {} (expected '<issue> <STATE>'): {line}",
+                path.display()
+            ));
+        }
+        let Some(number) = positive_number(fields[0]) else {
+            return Err(format!(
+                "invalid issue-state entry in {} (expected '<issue> <STATE>'): {line}",
+                path.display()
+            ));
+        };
+        let Some(state) = IssueState::parse(fields[1]) else {
+            return Err(format!(
+                "invalid issue state in {} (expected OPEN or CLOSED): {line}",
+                path.display()
+            ));
+        };
+        if states.insert(number, state).is_some() {
+            return Err(format!(
+                "duplicate issue-state entry in {}: #{number}",
+                path.display()
+            ));
+        }
+    }
+
+    let refreshed = refreshed.ok_or_else(|| {
+        format!(
+            "issue-state snapshot {} has no 'refreshed: <YYYY-MM-DD>' line",
+            path.display()
+        )
+    })?;
+    let refreshed_day = parse_refreshed_day(&refreshed).map_err(|error| {
+        format!(
+            "issue-state snapshot {} has an invalid refreshed date `{refreshed}`: {error}",
+            path.display()
+        )
+    })?;
+    Ok(IssueStateSnapshot {
+        refreshed,
+        refreshed_day,
+        states,
+    })
+}
+
+fn parse_refreshed_day(value: &str) -> Result<i64, String> {
+    let parts = value.split('-').collect::<Vec<_>>();
+    let [year, month, day] = parts.as_slice() else {
+        return Err("expected YYYY-MM-DD".to_string());
+    };
+    if year.len() != 4 || month.len() != 2 || day.len() != 2 {
+        return Err("expected YYYY-MM-DD".to_string());
+    }
+    let (Ok(year), Ok(month), Ok(day)) = (
+        year.parse::<i64>(),
+        month.parse::<i64>(),
+        day.parse::<i64>(),
+    ) else {
+        return Err("expected YYYY-MM-DD".to_string());
+    };
+    if !(1..=12).contains(&month) {
+        return Err(format!("month out of range: {month}"));
+    }
+    let last_day = days_in_month(year, month);
+    if !(1..=last_day).contains(&day) {
+        return Err(format!("day out of range for {year:04}-{month:02}"));
+    }
+    Ok(days_from_civil(year, month, day))
+}
+
+fn leap_year(year: i64) -> bool {
+    year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
+}
+
+fn days_in_month(year: i64, month: i64) -> i64 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if leap_year(year) => 29,
+        2 => 28,
+        _ => 0,
+    }
+}
+
+/// Days from 1970-01-01 (Howard Hinnant's `days_from_civil`).
+fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
+    let year = if month <= 2 { year - 1 } else { year };
+    let era = if year >= 0 { year } else { year - 399 } / 400;
+    let year_of_era = year - era * 400;
+    let month_index = if month > 2 { month - 3 } else { month + 9 };
+    let day_of_year = (153 * month_index + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    era * 146_097 + day_of_era - 719_468
+}
+
+/// The snapshot cannot silently rot: any allowlist change must be followed by a
+/// refresh, because freshly cited issues are exactly what the snapshot cannot know.
+fn validate_allowlist_freshness(
+    allowlist: &Path,
+    snapshot_path: &Path,
+    snapshot: &IssueStateSnapshot,
+) -> Result<(), String> {
+    let metadata = fs::metadata(allowlist).map_err(|error| {
+        format!(
+            "cannot read line-cap allowlist metadata {}: {error}",
+            allowlist.display()
+        )
+    })?;
+    let modified = metadata.modified().map_err(|error| {
+        format!(
+            "cannot read line-cap allowlist modification time {}: {error}",
+            allowlist.display()
+        )
+    })?;
+    let elapsed = modified.duration_since(UNIX_EPOCH).map_err(|error| {
+        format!(
+            "line-cap allowlist {} was modified before the Unix epoch: {error}",
+            allowlist.display()
+        )
+    })?;
+    let modified_day = (elapsed.as_secs() / SECONDS_PER_DAY) as i64;
+    if modified_day > snapshot.refreshed_day {
+        return Err(format!(
+            "line-cap allowlist {} is newer than issue-state snapshot {} (refreshed: {}); run {REFRESH_ISSUE_STATE_SCRIPT}",
+            allowlist.display(),
+            snapshot_path.display(),
+            snapshot.refreshed
+        ));
+    }
+    Ok(())
+}
+
+fn validate_allowlist_issue_state(
+    allowlist: &BTreeMap<String, String>,
+    snapshot_path: &Path,
+    snapshot: &IssueStateSnapshot,
+    errors: &mut Vec<String>,
+) {
+    for (path, issue) in allowlist {
+        let Some(number) = issue_number(issue) else {
+            continue;
+        };
+        match snapshot.states.get(&number) {
+            Some(IssueState::Open) => {}
+            Some(IssueState::Closed) => errors.push(format!(
+                "allowlist entry {path} cites {issue}; snapshot records {issue} as CLOSED in {}",
+                snapshot_path.display()
+            )),
+            None => errors.push(format!(
+                "allowlist entry {path} cites {issue}, which is absent from issue-state snapshot {}",
+                snapshot_path.display()
+            )),
+        }
+    }
 }
 
 /// How a declared top-level Rust source root participates in the cap gate.
