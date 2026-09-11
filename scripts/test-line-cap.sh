@@ -292,6 +292,55 @@ fi
 grep -q 'test_block.rs has 301 inline test lines' "$fixture_root/test-block.out"
 rm "$fixture_root/crates/fixture/src/test_block.rs"
 
+# A top-level Rust directory that no policy declares must fail the gate.
+mkdir -p "$fixture_root/fixture_pkg/src"
+write_fixture "$fixture_root/fixture_pkg/src/undeclared.rs" <<'EOF'
+fn undeclared() {}
+EOF
+if "$checker" --root "$fixture_root" --allowlist "$allowlist" >"$fixture_root/undeclared.out" 2>&1; then
+    echo "ERROR: undeclared top-level Rust source root unexpectedly passed" >&2
+    exit 1
+fi
+grep -Fq 'undeclared top-level Rust source root(s)' "$fixture_root/undeclared.out"
+grep -Fq 'fixture_pkg' "$fixture_root/undeclared.out"
+
+# The classification error is keyed to the declared root names in SOURCE_ROOTS,
+# which is compile-time policy: the same Rust under a declared top-level name
+# clears the error and is measured from there.
+mv "$fixture_root/fixture_pkg" "$fixture_root/apps"
+write_fixture "$fixture_root/apps/src/undeclared.rs" <<'EOF'
+fn undeclared() {}
+EOF
+declared_report="$("$checker" --root "$fixture_root" --allowlist "$allowlist" --report)"
+if grep -Fq 'undeclared top-level Rust source root' <<<"$declared_report"; then
+    echo "ERROR: declared source root was reported as undeclared" >&2
+    exit 1
+fi
+grep -q 'SOURCE ROOTS: apps=1 files (scanned);' <<<"$declared_report"
+grep -q $'apps/src/undeclared.rs\ttotal=2\tproduction=2\tinline_test=0' <<<"$declared_report"
+rm -rf "$fixture_root/apps"
+
+# A declared-but-vendor-excluded root is counted and never measured: its
+# over-cap file and its stale path comment cannot fail the gate.
+mkdir -p "$fixture_root/third_party/vendored/src"
+write_lines "$fixture_root/third_party/vendored/src/over_cap.rs" 1001
+{
+    echo '// vendor/src/legacy_header.rs'
+    echo 'fn vendored() {}'
+} > "$fixture_root/third_party/vendored/src/legacy_header.rs"
+vendor_report="$("$checker" --root "$fixture_root" --allowlist "$allowlist" --report)"
+grep -q 'SOURCE ROOTS: apps=0 files (scanned); crates=[0-9]* files (scanned); third_party=2 files (vendor-excluded: ' <<<"$vendor_report"
+for vendor_file in over_cap.rs legacy_header.rs; do
+    if grep -Fq "third_party/vendored/src/$vendor_file" <<<"$vendor_report"; then
+        echo "ERROR: vendor-excluded $vendor_file was reported as measured" >&2
+        exit 1
+    fi
+done
+if grep -q 'SOURCE ROOTS' <<<"$("$checker" --root "$fixture_root" --allowlist "$allowlist")"; then
+    echo "ERROR: coverage statement leaked outside --report" >&2
+    exit 1
+fi
+
 write_fixture "$fixture_root/crates/fixture/src/malformed.rs" <<'EOF'
 fn malformed( {
 EOF

@@ -105,6 +105,13 @@ essential operation available only through ad hoc shell or free-form output.
   the parent, with that reduction stated in the commit. Thin dispatch,
   registration, and re-export wiring may remain in a large hub only through an
   issue-linked exception.
+- The line-cap gate scans the declared top-level Rust source roots (`apps/`,
+  `crates/`) and prints each root's file count under `--report`. `third_party/`
+  is deliberately excluded as vendored upstream source (aws-creds, rust-s3,
+  resolvo) patched into the build by path from `Cargo.toml`, so it is neither
+  measured nor allowlist-eligible. Adding a new top-level Rust source root fails
+  the gate until its policy is recorded in `SOURCE_ROOTS` in
+  `crates/conary-xtask/src/line_cap.rs`.
 - Before changing behavior in a Rust file over 1,500 lines, name the ownership
   boundary being preserved or improved. Files over 2,500 lines need a reviewed
   decomposition path before major feature work unless the fix is urgent.
