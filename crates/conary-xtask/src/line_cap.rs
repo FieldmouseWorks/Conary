@@ -60,11 +60,14 @@ pub(crate) fn run(args: impl Iterator<Item = String>) -> Result<(), String> {
         )
     })?;
     let allowlist = read_allowlist(&options.allowlist)?;
-    let files = rust_source_files(&root)?;
+    let scan = rust_source_files(&root)?;
+    if options.report {
+        println!("SOURCE ROOTS: {}", source_roots_text(&scan.coverage));
+    }
     let mut used_allowlist_entries = BTreeSet::new();
     let mut errors = Vec::new();
 
-    for path in files {
+    for path in scan.files {
         let relative = path
             .strip_prefix(&root)
             .map_err(|error| format!("cannot relativize {}: {error}", path.display()))?;
@@ -213,24 +216,200 @@ fn valid_issue(value: &str) -> bool {
         .is_some_and(|number| number > 0)
 }
 
-fn rust_source_files(root: &Path) -> Result<Vec<PathBuf>, String> {
-    let mut files = Vec::new();
-    let mut found_source_root = false;
-    for source_root in [root.join("apps"), root.join("crates")] {
-        if !source_root.is_dir() {
-            continue;
-        }
-        found_source_root = true;
-        collect_rust_files(&source_root, &mut files)?;
+/// How a declared top-level Rust source root participates in the cap gate.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum RootPolicy {
+    /// Measured: path comments validated, both caps compared, allowlist-eligible.
+    Scanned,
+    /// Vendored upstream source patched into the build by path; not
+    /// Conary-authored. Deliberately not measured, and therefore not
+    /// allowlist-eligible.
+    VendorExcluded { reason: &'static str },
+}
+
+impl RootPolicy {
+    fn is_scanned(self) -> bool {
+        matches!(self, Self::Scanned)
     }
-    if !found_source_root {
+}
+
+/// A declared top-level Rust source root and its cap-gate policy.
+struct SourceRoot {
+    name: &'static str,
+    policy: RootPolicy,
+}
+
+/// Every top-level directory that holds Rust built into the product, with the
+/// policy the cap gate applies to it. A top-level directory carrying `.rs`
+/// files that is absent here fails the gate until its policy is recorded, so a
+/// new source root cannot escape measurement silently.
+const SOURCE_ROOTS: &[SourceRoot] = &[
+    SourceRoot {
+        name: "apps",
+        policy: RootPolicy::Scanned,
+    },
+    SourceRoot {
+        name: "crates",
+        policy: RootPolicy::Scanned,
+    },
+    SourceRoot {
+        name: "third_party",
+        policy: RootPolicy::VendorExcluded {
+            reason: "vendored aws-creds, rust-s3, and resolvo patched by path through [patch.crates-io] in Cargo.toml",
+        },
+    },
+];
+
+/// Directory names that never hold a scannable Rust source root: build output,
+/// dependency trees, and VCS metadata. Directories with a leading `.` are
+/// ignored by name as well, at the top level and inside a scan candidate.
+const IGNORED_DIRECTORY_NAMES: &[&str] = &["target", "node_modules", ".git", ".worktrees"];
+
+/// One declared root's measured contribution to the coverage statement.
+#[derive(Debug, Eq, PartialEq)]
+struct RootCoverage {
+    name: &'static str,
+    policy: RootPolicy,
+    files: usize,
+}
+
+/// How many files each declared root contributed, plus the files the gate
+/// measures. Vendor-excluded roots are counted but never measured.
+#[derive(Debug, Eq, PartialEq)]
+struct SourceScan {
+    files: Vec<PathBuf>,
+    coverage: Vec<RootCoverage>,
+}
+
+fn declared_source_root(name: &str) -> Option<&'static SourceRoot> {
+    SOURCE_ROOTS
+        .iter()
+        .find(|source_root| source_root.name == name)
+}
+
+fn skipped_directory(name: &OsStr) -> bool {
+    let Some(name) = name.to_str() else {
+        return false;
+    };
+    name.starts_with('.') || IGNORED_DIRECTORY_NAMES.contains(&name)
+}
+
+fn rust_source_files(root: &Path) -> Result<SourceScan, String> {
+    let scan = scan_source_roots(root)?;
+    let undeclared = undeclared_rust_roots(root)?;
+    if undeclared.is_empty() {
+        return Ok(scan);
+    }
+    Err(format!(
+        "undeclared top-level Rust source root(s) below {}: {}; classify each in SOURCE_ROOTS in crates/conary-xtask/src/line_cap.rs as Scanned or VendorExcluded",
+        root.display(),
+        undeclared.join(", ")
+    ))
+}
+
+fn scan_source_roots(root: &Path) -> Result<SourceScan, String> {
+    let mut files = Vec::new();
+    let mut coverage = Vec::new();
+    let mut scanned_roots = Vec::new();
+    for source_root in SOURCE_ROOTS {
+        let directory = root.join(source_root.name);
+        let mut root_files = Vec::new();
+        if directory.is_dir() {
+            collect_rust_files(&directory, &mut root_files)?;
+        }
+        coverage.push(RootCoverage {
+            name: source_root.name,
+            policy: source_root.policy,
+            files: root_files.len(),
+        });
+        if source_root.policy.is_scanned() && directory.is_dir() {
+            scanned_roots.push(source_root.name);
+            files.extend(root_files);
+        }
+    }
+    if scanned_roots.is_empty() {
         return Err(format!(
-            "no apps/ or crates/ source roots below {}",
-            root.display()
+            "no scanned source root below {} (declared: {})",
+            root.display(),
+            SOURCE_ROOTS
+                .iter()
+                .filter(|source_root| source_root.policy.is_scanned())
+                .map(|source_root| source_root.name)
+                .collect::<Vec<_>>()
+                .join(", ")
         ));
     }
     files.sort();
-    Ok(files)
+    Ok(SourceScan { files, coverage })
+}
+
+/// The `--report` coverage statement: one entry per declared root naming the
+/// filesystem-derived file count and the policy applied to it.
+fn source_roots_text(coverage: &[RootCoverage]) -> String {
+    coverage
+        .iter()
+        .map(|covered| match covered.policy {
+            RootPolicy::Scanned => format!("{}={} files (scanned)", covered.name, covered.files),
+            RootPolicy::VendorExcluded { reason } => format!(
+                "{}={} files (vendor-excluded: {reason})",
+                covered.name, covered.files
+            ),
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+/// Top-level directories below `root` that carry `.rs` files but have no
+/// recorded policy. Each candidate is probed with a walk that stops at the
+/// first `.rs` file instead of enumerating the whole tree.
+fn undeclared_rust_roots(root: &Path) -> Result<Vec<String>, String> {
+    let entries =
+        fs::read_dir(root).map_err(|error| format!("cannot read {}: {error}", root.display()))?;
+    let mut undeclared = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|error| format!("cannot read directory entry: {error}"))?;
+        let file_name = entry.file_name();
+        if skipped_directory(&file_name) {
+            continue;
+        }
+        let name = file_name.to_string_lossy();
+        if declared_source_root(name.as_ref()).is_some() {
+            continue;
+        }
+        let path = entry.path();
+        let file_type = entry
+            .file_type()
+            .map_err(|error| format!("cannot inspect {}: {error}", path.display()))?;
+        if file_type.is_dir() && contains_rust_file(&path)? {
+            undeclared.push(name.into_owned());
+        }
+    }
+    undeclared.sort();
+    Ok(undeclared)
+}
+
+/// Whether a `.rs` file exists anywhere below `directory`, stopping at the
+/// first match.
+fn contains_rust_file(directory: &Path) -> Result<bool, String> {
+    let entries = fs::read_dir(directory)
+        .map_err(|error| format!("cannot read {}: {error}", directory.display()))?;
+    for entry in entries {
+        let entry = entry.map_err(|error| format!("cannot read directory entry: {error}"))?;
+        let path = entry.path();
+        let file_type = entry
+            .file_type()
+            .map_err(|error| format!("cannot inspect {}: {error}", path.display()))?;
+        if file_type.is_file() && path.extension() == Some(OsStr::new("rs")) {
+            return Ok(true);
+        }
+        if file_type.is_dir()
+            && !skipped_directory(entry.file_name().as_os_str())
+            && contains_rust_file(&path)?
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn collect_rust_files(directory: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
@@ -528,271 +707,5 @@ fn path_text(path: &Path) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn counts_the_union_of_typed_test_item_spans() {
-        let source = r#"fn production() {}
-#[cfg(test)]
-/* retained inside the test span */
-/// test helper
-fn helper() {
-    assert!(true);
-}
-fn middle() {}
-#[cfg(all(test, feature = "fixture"))]
-const FIXTURE: &str = "value";
-"#;
-
-        assert_eq!(
-            analyze_source(source).unwrap(),
-            FileMetrics {
-                total_lines: 10,
-                production_lines: 2,
-                inline_test_lines: 8,
-            }
-        );
-    }
-
-    #[test]
-    fn rejects_malformed_rust() {
-        assert!(analyze_source("fn broken( {").is_err());
-    }
-
-    #[test]
-    fn counts_standalone_and_conditionally_annotated_tests() {
-        for annotation in [
-            "test",
-            "tokio::test(flavor = \"current_thread\")",
-            "cfg_attr(all(), test)",
-            "cfg_attr(all(), allow(dead_code), cfg_attr(all(), tokio::test))",
-            // Annotated in every non-test build, so no production build keeps it.
-            "cfg_attr(not(test), test)",
-        ] {
-            let source = format!("#[{annotation}]\nasync fn example() {{}}\n");
-            assert_eq!(
-                analyze_source(&source).unwrap().inline_test_lines,
-                2,
-                "{annotation}"
-            );
-        }
-        // A conditional annotation whose condition can be false in a non-test
-        // build leaves an ordinary function that production compiles.
-        for annotation in [
-            "cfg_attr(test, test)",
-            "cfg_attr(all(test, feature = \"x\"), tokio::test)",
-            "cfg_attr(test, allow(dead_code), cfg_attr(feature = \"x\", test))",
-            "cfg_attr(feature = \"x\", test)",
-            "cfg_attr(test, allow(dead_code))",
-            "cfg_attr(all(test, not(test)), test)",
-            "test_helper",
-        ] {
-            let source = format!("#[{annotation}]\nfn example() {{}}\n");
-            assert_eq!(
-                analyze_source(&source).unwrap().production_lines,
-                2,
-                "{annotation}"
-            );
-        }
-        let source = "#[cfg(test)]\nmod tests {\n    #[test]\n    fn nested() {}\n}\n#[test]\nfn standalone() {}\n";
-        assert_eq!(analyze_source(source).unwrap().inline_test_lines, 7);
-    }
-
-    #[test]
-    fn cfg_feature_named_test_is_not_the_test_predicate() {
-        let source = "#[cfg(feature = \"test\")]\nfn production() {}\n";
-        assert_eq!(analyze_source(source).unwrap().production_lines, 2);
-    }
-
-    #[test]
-    fn cfg_attr_gating_preserves_the_inactive_production_branch() {
-        for (attribute, test_only) in [
-            ("cfg_attr(all(), cfg(test))", true),
-            ("cfg_attr(feature = \"x\", cfg(test))", false),
-            (
-                "cfg_attr(all(), cfg_attr(feature = \"x\", cfg(test)))",
-                false,
-            ),
-            ("cfg_attr(all(), cfg_attr(all(), cfg(test)))", true),
-            ("cfg_attr(any(), cfg(test))", false),
-            ("cfg_attr(all(), allow(dead_code), cfg(test))", true),
-        ] {
-            let source = format!("#[{attribute}]\nfn example() {{}}\n");
-            assert_eq!(
-                analyze_source(&source).unwrap().inline_test_lines,
-                if test_only { 2 } else { 0 },
-                "{attribute}"
-            );
-        }
-    }
-
-    #[test]
-    fn evaluates_cfg_test_polarity() {
-        let source = r#"#[cfg(not(test))]
-fn production_when_not_testing() {}
-#[cfg(any(test, feature = "fixture"))]
-fn production_with_feature() {}
-#[cfg(all(test, feature = "fixture"))]
-fn test_only() {}
-#[cfg(not(not(test)))]
-fn nested_test_only() {}
-#[cfg(any(not(test), all(test, feature = "fixture")))]
-fn nested_production() {}
-"#;
-
-        assert_eq!(
-            analyze_source(source).unwrap(),
-            FileMetrics {
-                total_lines: 10,
-                production_lines: 6,
-                inline_test_lines: 4,
-            }
-        );
-    }
-
-    #[test]
-    fn cfg_symbols_preserve_negation_and_repeated_atom_identity() {
-        for (predicate, test_only) in [
-            ("any(test, not(unix))", false),
-            ("all(test, not(unix))", true),
-            ("any(test, all(unix, not(unix)))", true),
-            ("all(test, unix, not(unix))", false),
-            ("any(test, not(feature = \"x\"))", false),
-            ("all(test, not(feature = \"x\"))", true),
-        ] {
-            let source = format!("#[cfg({predicate})]\nfn example() {{}}\n");
-            assert_eq!(
-                analyze_source(&source).unwrap().inline_test_lines,
-                if test_only { 2 } else { 0 },
-                "{predicate}"
-            );
-        }
-        let source = "#[cfg(any(test, unix))]\n#[cfg(any(test, not(unix)))]\nfn helper() {}\n";
-        assert_eq!(analyze_source(source).unwrap().inline_test_lines, 3);
-    }
-
-    #[test]
-    fn counts_fields_statements_and_expressions_as_test_regions() {
-        let source = r#"struct Example {
-    #[cfg(test)]
-    helper: usize,
-}
-fn example() {
-    #[cfg(test)]
-    let helper = 1;
-    #[cfg(test)]
-    {
-        #[cfg(test)]
-        let nested = 2;
-    }
-    #[cfg(test)]
-    assert!(true);
-    let value = Example {
-        #[cfg(test)]
-        helper: 3,
-    };
-}
-enum Choice {
-    #[cfg(test)]
-    Test,
-    Production,
-}
-"#;
-        assert_eq!(
-            analyze_source(source).unwrap(),
-            FileMetrics {
-                total_lines: 24,
-                production_lines: 9,
-                inline_test_lines: 15,
-            }
-        );
-    }
-
-    #[test]
-    fn counts_associated_items_without_double_counting_a_test_impl() {
-        let source = r#"struct Example;
-impl Example {
-    #[cfg(test)]
-    const FIXTURE: usize = 1;
-    fn production() {}
-}
-#[cfg(test)]
-impl Example {
-    #[cfg(test)]
-    fn nested_test_helper() {}
-}
-"#;
-
-        assert_eq!(
-            analyze_source(source).unwrap(),
-            FileMetrics {
-                total_lines: 11,
-                production_lines: 4,
-                inline_test_lines: 7,
-            }
-        );
-    }
-
-    #[test]
-    fn file_level_inner_cfg_test_owns_the_whole_file() {
-        let source =
-            "// crates/example/src/support.rs\n#![cfg(test)]\n\nfn helper() {}\nfn other() {}\n";
-        assert_eq!(
-            analyze_source(source).unwrap(),
-            FileMetrics {
-                total_lines: 5,
-                production_lines: 0,
-                inline_test_lines: 5,
-            }
-        );
-        let source = "#![allow(dead_code)]\n#![cfg(not(test))]\nfn production() {}\n";
-        assert_eq!(analyze_source(source).unwrap().production_lines, 3);
-        let source = "#![cfg_attr(feature = \"x\", cfg(test))]\nfn production() {}\n";
-        assert_eq!(analyze_source(source).unwrap().production_lines, 2);
-    }
-
-    #[test]
-    fn enclosing_cfg_predicates_narrow_child_classification() {
-        // The module is production-capable (feature = "prod"), but its child can
-        // only exist when `test` is set, so the child is inline-test code.
-        let source = "#[cfg(any(test, feature = \"prod\"))]\nmod mixed {\n    #[cfg(not(feature = \"prod\"))]\n    fn test_only_child() {}\n    fn production_child() {}\n}\n";
-        assert_eq!(
-            analyze_source(source).unwrap(),
-            FileMetrics {
-                total_lines: 6,
-                production_lines: 4,
-                inline_test_lines: 2,
-            }
-        );
-        // File-level constraints propagate the same way.
-        let source = "#![cfg(any(test, feature = \"prod\"))]\n#[cfg(not(feature = \"prod\"))]\nfn test_only() {}\nfn production() {}\n";
-        assert_eq!(analyze_source(source).unwrap().inline_test_lines, 2);
-        // A child that widens nothing stays production under a production parent.
-        let source =
-            "#[cfg(feature = \"prod\")]\nmod prod {\n    #[cfg(unix)]\n    fn child() {}\n}\n";
-        assert_eq!(analyze_source(source).unwrap().inline_test_lines, 0);
-        // Constraints do not leak to siblings after leaving the parent.
-        let source = "#[cfg(any(test, feature = \"prod\"))]\nmod mixed {\n    #[cfg(not(feature = \"prod\"))]\n    fn child() {}\n}\n#[cfg(not(feature = \"prod\"))]\nfn sibling() {}\n";
-        assert_eq!(analyze_source(source).unwrap().inline_test_lines, 2);
-    }
-
-    #[test]
-    fn validates_repo_relative_path_comments() {
-        let path = Path::new("crates/example/src/tests.rs");
-        assert!(validate_path_comment("// crates/example/src/tests.rs\n", path).is_ok());
-        assert!(
-            validate_path_comment("// crates/wrong/src/tests.rs\n", path)
-                .unwrap_err()
-                .contains("expected `// crates/example/src/tests.rs`")
-        );
-        for source in [
-            "",
-            "fn example() {}\n",
-            "// ordinary comment\n",
-            "// example/src/tests.rs\n",
-        ] {
-            assert!(validate_path_comment(source, path).is_err());
-        }
-    }
-}
+#[path = "line_cap/tests.rs"]
+mod tests;
