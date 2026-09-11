@@ -1,9 +1,10 @@
 // crates/conary-xtask/src/line_cap/tests.rs
 
 use super::*;
+use std::fs::File;
 use std::process;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 #[test]
 fn counts_the_union_of_typed_test_item_spans() {
@@ -573,6 +574,16 @@ fn rejects_an_allowlist_newer_than_the_snapshot_refresh_date() {
     let allowlist = scratch.path().join("allowlist.txt");
     fs::write(&allowlist, "crates/demo/src/lib.rs #123\n").unwrap();
     let snapshot_path = scratch.path().join("issue-state.txt");
+    fs::write(&snapshot_path, "# refreshed: 1970-01-02\n#123 OPEN\n").unwrap();
+    // Backdate the snapshot so the allowlist is genuinely the newer file. The
+    // equal-mtime checkout case is covered by the next test.
+    let day_ago = SystemTime::now() - Duration::from_secs(SECONDS_PER_DAY);
+    File::options()
+        .write(true)
+        .open(&snapshot_path)
+        .unwrap()
+        .set_modified(day_ago)
+        .unwrap();
     let snapshot =
         parse_issue_state("# refreshed: 1970-01-02\n#123 OPEN\n", &snapshot_path).unwrap();
     let error = validate_allowlist_freshness(&allowlist, &snapshot_path, &snapshot).unwrap_err();
@@ -583,6 +594,32 @@ fn rejects_an_allowlist_newer_than_the_snapshot_refresh_date() {
     assert!(error.contains("refreshed: 1970-01-02"), "{error}");
     assert!(error.contains("allowlist.txt"), "{error}");
     assert!(error.contains("issue-state.txt"), "{error}");
+}
+
+#[test]
+fn accepts_a_snapshot_checked_out_alongside_the_allowlist() {
+    // A fresh checkout stamps every file with the checkout time, so the
+    // allowlist's mtime can be far newer than the snapshot's `refreshed:` date
+    // without anyone editing it. That must not fail CI, or every PR would fail
+    // from the day after the snapshot was generated.
+    let scratch = ScratchDir::new("fresh-checkout");
+    let allowlist = scratch.path().join("allowlist.txt");
+    fs::write(&allowlist, "crates/demo/src/lib.rs #123\n").unwrap();
+    let snapshot_path = scratch.path().join("issue-state.txt");
+    fs::write(&snapshot_path, "# refreshed: 1970-01-02\n#123 OPEN\n").unwrap();
+    let later = SystemTime::now() + Duration::from_secs(1);
+    File::options()
+        .write(true)
+        .open(&snapshot_path)
+        .unwrap()
+        .set_modified(later)
+        .unwrap();
+    let snapshot =
+        parse_issue_state("# refreshed: 1970-01-02\n#123 OPEN\n", &snapshot_path).unwrap();
+    assert_eq!(
+        validate_allowlist_freshness(&allowlist, &snapshot_path, &snapshot),
+        Ok(())
+    );
 }
 
 #[test]

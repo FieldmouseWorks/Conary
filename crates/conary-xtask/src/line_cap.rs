@@ -437,15 +437,31 @@ fn validate_allowlist_freshness(
         )
     })?;
     let modified_day = (elapsed.as_secs() / SECONDS_PER_DAY) as i64;
-    if modified_day > snapshot.refreshed_day {
-        return Err(format!(
-            "line-cap allowlist {} is newer than issue-state snapshot {} (refreshed: {}); run {REFRESH_ISSUE_STATE_SCRIPT}",
-            allowlist.display(),
-            snapshot_path.display(),
-            snapshot.refreshed
-        ));
+    if modified_day <= snapshot.refreshed_day {
+        return Ok(());
     }
-    Ok(())
+    // A fresh checkout stamps every file with the checkout time, so the
+    // allowlist's mtime alone cannot distinguish "edited after the snapshot"
+    // from "checked out today". Compare the two files directly: a snapshot
+    // written after the allowlist in the same checkout is fresh, and an
+    // allowlist edited after the snapshot still fails.
+    let snapshot_modified = fs::metadata(snapshot_path)
+        .and_then(|metadata| metadata.modified())
+        .map_err(|error| {
+            format!(
+                "cannot read line-cap issue-state snapshot modification time {}: {error}",
+                snapshot_path.display()
+            )
+        })?;
+    if snapshot_modified >= modified {
+        return Ok(());
+    }
+    Err(format!(
+        "line-cap allowlist {} is newer than issue-state snapshot {} (refreshed: {}); run {REFRESH_ISSUE_STATE_SCRIPT}",
+        allowlist.display(),
+        snapshot_path.display(),
+        snapshot.refreshed
+    ))
 }
 
 fn validate_allowlist_issue_state(

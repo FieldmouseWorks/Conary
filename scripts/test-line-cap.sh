@@ -230,12 +230,27 @@ grep -Fq 'absent from issue-state snapshot' "$fixture_root/missing-issue.out"
 echo 'crates/fixture/src/over_cap.rs #123' > "$allowlist"
 stale_issue_state="$fixture_root/stale-issue-state.txt"
 write_issue_state "$stale_issue_state" "1970-01-01" "123 OPEN"
+# Backdate the snapshot so the allowlist is genuinely the newer file. A fresh
+# checkout stamps both files with the checkout time, which the next case covers.
+touch -d '2000-01-01 00:00:00' "$stale_issue_state"
 if run_checker --issue-state "$stale_issue_state" >"$fixture_root/stale-issue-state.out" 2>&1; then
     echo "ERROR: allowlist newer than the snapshot refresh date unexpectedly passed" >&2
     exit 1
 fi
 grep -Fq 'is newer than issue-state snapshot' "$fixture_root/stale-issue-state.out"
 grep -Fq 'scripts/refresh-line-cap-issue-state.sh' "$fixture_root/stale-issue-state.out"
+
+# A snapshot checked out alongside the allowlist is fresh even when its
+# `refreshed:` date is long past: every file in a fresh checkout is stamped
+# with the checkout time, so mtime alone cannot mean "edited". Without this the
+# gate would fail every pull request from the day after the snapshot was made.
+write_issue_state "$stale_issue_state" "1970-01-01" "123 OPEN"
+touch "$stale_issue_state"
+run_checker --issue-state "$stale_issue_state" >"$fixture_root/fresh-checkout.out" 2>&1 || {
+    cat "$fixture_root/fresh-checkout.out" >&2
+    echo "ERROR: a snapshot checked out with the allowlist was treated as stale" >&2
+    exit 1
+}
 
 run_checker >/dev/null
 

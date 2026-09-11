@@ -104,8 +104,10 @@ essential operation available only through ad hoc shell or free-form output.
   `scripts/refresh-line-cap-issue-state.sh` regenerates. The gate is
   intentionally hermetic (no network I/O), so that snapshot is its only source
   of issue state: closing a cited issue requires refreshing the snapshot, and an
-  allowlist file newer than the snapshot's `refreshed:` date fails so the
-  snapshot cannot silently rot.
+  allowlist newer than the snapshot fails so the snapshot cannot silently rot.
+  That comparison is by file modification time, not by the `refreshed:` date, so
+  a fresh checkout — where every file carries the checkout time — stays valid
+  while an allowlist genuinely edited after the snapshot does not.
   Once a Rust source file carries more than 300 inline unit-test lines, its unit
   tests live in a sibling `<file>/tests.rs`. A sibling extraction must reduce
   the parent, with that reduction stated in the commit. Thin dispatch,

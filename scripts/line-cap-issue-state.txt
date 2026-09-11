@@ -5,5 +5,4 @@
 # Format: #<issue> <STATE>
 # refreshed is the UTC date; the checker fails when the allowlist file is newer than it.
 154 OPEN
-814 CLOSED
 852 OPEN
