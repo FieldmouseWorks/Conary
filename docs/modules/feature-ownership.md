@@ -1259,14 +1259,16 @@ exception tied to an owned decomposition issue.
 
 **Start here:** `crates/conary-xtask/src/line_cap.rs`;
 `crates/conary-xtask/Cargo.toml`; `scripts/check-line-cap.sh`;
-`scripts/test-line-cap.sh`; `scripts/line-cap-allowlist.txt`; `AGENTS.md`;
-`CONTRIBUTING.md`.
+`scripts/test-line-cap.sh`; `scripts/line-cap-allowlist.txt`;
+`scripts/line-cap-issue-state.txt`; `scripts/refresh-line-cap-issue-state.sh`;
+`AGENTS.md`.
 
 **Neighbor systems:** every Rust source owner, pull-request shell gates,
 contributor guidance, and feature ownership routing.
 
 **Paths:** `crates/conary-xtask/**`; `scripts/check-line-cap.sh`;
-`scripts/test-line-cap.sh`; `scripts/line-cap-allowlist.txt`.
+`scripts/test-line-cap.sh`; `scripts/line-cap-allowlist.txt`;
+`scripts/line-cap-issue-state.txt`; `scripts/refresh-line-cap-issue-state.sh`.
 
 **Focused proof:** `cargo test -p conary-xtask`;
 `bash scripts/check-line-cap.sh`; `bash scripts/test-line-cap.sh`.
@@ -1290,7 +1292,12 @@ Files with more than 300 total test-only lines fail. Files named `tests.rs`
 and Rust files below a `tests/`
 directory are excluded. Every allowlist entry carries the open issue that owns
 the remaining production or test-placement decomposition; stale entries fail
-the gate. Every Rust file, including excluded test files, must begin exactly
+the gate. Each citation is validated against the checked-in
+`scripts/line-cap-issue-state.txt` snapshot, which only
+`scripts/refresh-line-cap-issue-state.sh` regenerates: a citation the snapshot
+records `CLOSED`, a citation absent from the snapshot, and an allowlist newer
+than the snapshot's `refreshed:` date all fail. The checker itself performs no
+network I/O. Every Rust file, including excluded test files, must begin exactly
 with `// {repo-relative path}`; missing and legacy headers fail the gate.
 
 ## Developer Build Environment
