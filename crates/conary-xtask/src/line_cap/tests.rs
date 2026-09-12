@@ -2093,3 +2093,40 @@ fn qualified_builtin_includes_cannot_hide_production_imports() {
         );
     }
 }
+
+#[test]
+fn include_aliases_fail_as_unresolved_source_authority() {
+    for source in [
+        r#"use std::include as inc; #[cfg(not(test))] inc!("tests.rs"); #[cfg(test)] mod tests;"#,
+        r#"use core::{include as inc}; inc!("tests.rs");"#,
+        r#"pub use std::include as public_include;"#,
+        r#"fn run() { use std::include as inc; inc!("tests.rs"); }"#,
+        r#"use std as rust; use rust::include as inc; inc!("tests.rs");"#,
+    ] {
+        let syntax = syn::parse_file(source).unwrap();
+        let error = collect_include_declarations(
+            &syntax,
+            Path::new("crates/x/src/lib.rs"),
+            &mut BTreeMap::new(),
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("aliased include! imports require macro name resolution"),
+            "{source}: {error}"
+        );
+    }
+    for source in [
+        "#[cfg(any())] use std::include as inc;",
+        "use std::include;",
+        "use std::include as include;",
+        "use std::include as _;",
+    ] {
+        let syntax = syn::parse_file(source).unwrap();
+        collect_include_declarations(
+            &syntax,
+            Path::new("crates/x/src/lib.rs"),
+            &mut BTreeMap::new(),
+        )
+        .unwrap();
+    }
+}

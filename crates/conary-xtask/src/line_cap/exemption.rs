@@ -345,17 +345,45 @@ pub(crate) fn collect_include_declarations(
             .unwrap_or_else(|| Path::new(""))
             .to_path_buf(),
         inherited: syntax.attrs.clone(),
-        unresolved: false,
+        unresolved: None,
         declarations,
     };
     visitor.visit_file(syntax);
-    if visitor.unresolved {
+    if let Some(failure) = visitor.unresolved {
         Err(format!(
-            "cannot resolve include! source path in {}: expected a builtin include! (unqualified, std::, or core::) with a string literal or literal concat! path",
-            relative.display()
+            "cannot resolve include! source authority in {}: {}",
+            relative.display(),
+            failure.reason()
         ))
     } else {
         Ok(())
+    }
+}
+
+enum IncludeAuthorityFailure {
+    Path,
+    Alias,
+}
+
+impl IncludeAuthorityFailure {
+    fn reason(&self) -> &'static str {
+        match self {
+            Self::Path => {
+                "expected a builtin include! (unqualified, std::, or core::) with a string literal or literal concat! path"
+            }
+            Self::Alias => "aliased include! imports require macro name resolution",
+        }
+    }
+}
+
+fn imports_include_alias(tree: &syn::UseTree) -> bool {
+    match tree {
+        syn::UseTree::Path(path) => imports_include_alias(&path.tree),
+        syn::UseTree::Group(group) => group.items.iter().any(imports_include_alias),
+        syn::UseTree::Rename(rename) => {
+            rename.ident == "include" && rename.rename != "include" && rename.rename != "_"
+        }
+        syn::UseTree::Name(_) | syn::UseTree::Glob(_) => false,
     }
 }
 
@@ -363,7 +391,7 @@ pub(crate) struct IncludeVisitor<'a> {
     declaring_file: String,
     file_dir: PathBuf,
     inherited: Vec<Attribute>,
-    unresolved: bool,
+    unresolved: Option<IncludeAuthorityFailure>,
     declarations: &'a mut BTreeMap<String, Vec<ModuleDeclaration>>,
 }
 
@@ -393,7 +421,7 @@ impl IncludeVisitor<'_> {
             return;
         }
         if !builtin_macro_path(&mac.path, "include") {
-            self.unresolved = true;
+            self.unresolved = Some(IncludeAuthorityFailure::Path);
             return;
         }
         let Some(path) = syn::parse2::<syn::Expr>(mac.tokens.clone())
@@ -402,7 +430,7 @@ impl IncludeVisitor<'_> {
         else {
             // An opaque include may reach any scanned file. Fail the scan
             // rather than certifying exemptions from an incomplete graph.
-            self.unresolved = true;
+            self.unresolved = Some(IncludeAuthorityFailure::Path);
             return;
         };
         let target = normalize(&self.file_dir.join(path));
@@ -487,6 +515,12 @@ impl<'ast> Visit<'ast> for IncludeVisitor<'_> {
         self.descend(foreign_item_attributes(item), item.span(), |visitor| {
             visit::visit_foreign_item(visitor, item)
         });
+    }
+
+    fn visit_item_use(&mut self, node: &'ast syn::ItemUse) {
+        if imports_include_alias(&node.tree) {
+            self.unresolved = Some(IncludeAuthorityFailure::Alias);
+        }
     }
 
     fn visit_macro(&mut self, node: &'ast syn::Macro) {
