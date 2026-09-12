@@ -1,0 +1,18 @@
+# Issue state for scripts/line-cap-allowlist.txt entries.
+# Regenerate with scripts/refresh-line-cap-issue-state.sh after any allowlist change.
+# refreshed: 2026-09-11
+#
+# Format: #<issue> <STATE>
+# The '== allowlist' section records the entries these states were read for;
+# it is the binding the gate checks, so edit the allowlist and refresh together.
+154 OPEN
+852 OPEN
+
+== allowlist
+apps/conary-test/src/engine/qemu.rs #154
+crates/conary-core/src/ccs/budget.rs #852
+crates/conary-core/src/ccs/native_transaction/rpm_tests.rs #852
+crates/conary-core/src/db/models/payload_claim/sharing_tests.rs #852
+crates/conary-core/src/generation/root_manifest/delta.rs #852
+crates/conary-core/src/model/replatform/execution_tests.rs #852
+crates/conary-core/src/model/replatform/snapshot_tests.rs #852

@@ -13,6 +13,7 @@ fixture_root="$(mktemp -d)"
 trap 'rm -rf "$fixture_root"' EXIT
 mkdir -p "$fixture_root/crates/fixture/src/tests"
 allowlist="$fixture_root/allowlist.txt"
+issue_state="$fixture_root/line-cap-issue-state.txt"
 : > "$allowlist"
 
 write_lines() {
@@ -26,6 +27,36 @@ write_fixture() {
     local path="$1"
     { echo "// ${path#"$fixture_root"/}"; cat; } > "$path"
 }
+
+write_issue_state() {
+    local path="$1"
+    local refreshed="$2"
+    shift 2
+    {
+        echo "# Issue state for the fixture allowlist."
+        echo "# refreshed: $refreshed"
+        echo "#"
+        echo "# Format: #<issue> <STATE>"
+        printf '%s\n' "$@"
+        # The binding the gate actually checks: the canonical entries these
+        # states were read for.
+        echo
+        echo "== allowlist"
+        if [[ -f "$allowlist" ]]; then
+            LC_ALL=C sort -u "$allowlist" | awk 'NF > 0 && $1 !~ /^#/'
+        fi
+    } > "$path"
+}
+
+run_checker() {
+    "$checker" \
+        --root "$fixture_root" \
+        --allowlist "$allowlist" \
+        --issue-state "$issue_state" \
+        "$@"
+}
+
+write_issue_state "$issue_state" "$(date -u +%Y-%m-%d)" "123 OPEN"
 
 write_lines "$fixture_root/crates/fixture/src/at_cap.rs" 1000
 write_lines "$fixture_root/crates/fixture/src/inline_tests.rs" 900
@@ -104,8 +135,8 @@ cat <<'EOF' > "$fixture_root/crates/fixture/src/correct_path_header.rs"
 fn production() {}
 EOF
 
-"$checker" --root "$fixture_root" --allowlist "$allowlist" >/dev/null
-report="$("$checker" --root "$fixture_root" --allowlist "$allowlist" --report)"
+run_checker >/dev/null
+report="$(run_checker --report)"
 grep -q $'block_comment_attribute.rs\ttotal=7\tproduction=1\tinline_test=6' <<<"$report"
 grep -q $'doc_comment_attribute.rs\ttotal=4\tproduction=1\tinline_test=3' <<<"$report"
 grep -q $'all_test_predicate.rs\ttotal=3\tproduction=1\tinline_test=2' <<<"$report"
@@ -124,7 +155,7 @@ for header_kind in missing legacy; do
         : > "$header_path"
     fi
     echo 'fn production() {}' >> "$header_path"
-    if "$checker" --root "$fixture_root" --allowlist "$allowlist" >"$fixture_root/invalid-header.out" 2>&1; then
+    if run_checker >"$fixture_root/invalid-header.out" 2>&1; then
         echo "ERROR: $header_kind path header unexpectedly passed" >&2
         exit 1
     fi
@@ -136,7 +167,7 @@ cat <<'EOF' > "$fixture_root/crates/fixture/src/wrong_path_header.rs"
 // crates/wrong/src/wrong_path_header.rs
 fn production() {}
 EOF
-if "$checker" --root "$fixture_root" --allowlist "$allowlist" >"$fixture_root/path-header.out" 2>&1; then
+if run_checker >"$fixture_root/path-header.out" 2>&1; then
     echo "ERROR: mismatched Rust path header unexpectedly passed" >&2
     exit 1
 fi
@@ -160,7 +191,7 @@ cat <<'EOF'
 EOF
 awk 'BEGIN { for (i = 1; i <= 301; i++) print "// trailing production line " i }'
 } | write_fixture "$fixture_root/crates/fixture/src/production_after_inline.rs"
-if "$checker" --root "$fixture_root" --allowlist "$allowlist" >"$fixture_root/after-inline.out" 2>&1; then
+if run_checker >"$fixture_root/after-inline.out" 2>&1; then
     echo "ERROR: production after an inline test module was not counted" >&2
     exit 1
 fi
@@ -168,25 +199,117 @@ grep -q 'production_after_inline.rs has 1001 non-test lines' "$fixture_root/afte
 rm "$fixture_root/crates/fixture/src/production_after_inline.rs"
 
 write_lines "$fixture_root/crates/fixture/src/over_cap.rs" 1001
-if "$checker" --root "$fixture_root" --allowlist "$allowlist" >"$fixture_root/over.out" 2>&1; then
+if run_checker >"$fixture_root/over.out" 2>&1; then
     echo "ERROR: unallowlisted over-cap fixture unexpectedly passed" >&2
     exit 1
 fi
 grep -q 'over_cap.rs has 1001 non-test lines' "$fixture_root/over.out"
 
 echo 'crates/fixture/src/over_cap.rs #0' > "$allowlist"
-if "$checker" --root "$fixture_root" --allowlist "$allowlist" >"$fixture_root/nonpositive-issue.out" 2>&1; then
+if run_checker >"$fixture_root/nonpositive-issue.out" 2>&1; then
     echo "ERROR: non-positive allowlist issue unexpectedly passed" >&2
     exit 1
 fi
 grep -q "invalid allowlist entry" "$fixture_root/nonpositive-issue.out"
 
 echo 'crates/fixture/src/over_cap.rs #123' > "$allowlist"
-allowlisted_out="$("$checker" --root "$fixture_root" --allowlist "$allowlist")"
+# The snapshot is bound to the entries it was generated for, so regenerate it
+# whenever the allowlist changes. This call is the binding's happy path.
+write_issue_state "$issue_state" "$(date -u +%Y-%m-%d)" "123 OPEN"
+allowlisted_out="$(run_checker)"
 grep -q 'ALLOWLISTED: crates/fixture/src/over_cap.rs .* issue=#123' <<<"$allowlisted_out"
 
+closed_issue_state="$fixture_root/closed-issue-state.txt"
+write_issue_state "$closed_issue_state" "$(date -u +%Y-%m-%d)" "123 OPEN" "814 CLOSED"
+echo 'crates/fixture/src/over_cap.rs #814' > "$allowlist"
+if run_checker --issue-state "$closed_issue_state" >"$fixture_root/closed-issue.out" 2>&1; then
+    echo "ERROR: allowlist entry citing a closed issue unexpectedly passed" >&2
+    exit 1
+fi
+grep -Fq 'allowlist entry crates/fixture/src/over_cap.rs cites #814' "$fixture_root/closed-issue.out"
+grep -Fq 'snapshot records #814 as CLOSED' "$fixture_root/closed-issue.out"
+
+# A citation missing from the snapshot's *states* is its own failure, distinct
+# from a binding mismatch: bind the entry first, then leave the state out.
+echo 'crates/fixture/src/over_cap.rs #999' > "$allowlist"
+rm -f "$issue_state"
+awk '!/^== allowlist$/{print} /^== allowlist$/{print; print "crates/fixture/src/over_cap.rs #999"; skip=1; next} skip{next}' "$allowlist" >/dev/null 2>&1 || true
+{
+    echo "# Issue state for the fixture allowlist."
+    echo "# refreshed: $(date -u +%Y-%m-%d)"
+    echo "#"
+    echo "# Format: #<issue> <STATE>"
+    echo "123 OPEN"
+    echo
+    echo "== allowlist"
+    echo "crates/fixture/src/over_cap.rs #999"
+} > "$issue_state"
+if run_checker >"$fixture_root/missing-issue.out" 2>&1; then
+    echo "ERROR: allowlist entry absent from the snapshot unexpectedly passed" >&2
+    exit 1
+fi
+grep -Fq 'allowlist entry crates/fixture/src/over_cap.rs cites #999' "$fixture_root/missing-issue.out"
+grep -Fq 'absent from issue-state snapshot' "$fixture_root/missing-issue.out"
+
+echo 'crates/fixture/src/over_cap.rs #123' > "$allowlist"
+# Restore the default snapshot so later default-checker calls bind to this
+# allowlist; the missing-issue case above deliberately left it bound to #999.
+write_issue_state "$issue_state" "$(date -u +%Y-%m-%d)" "123 OPEN"
+run_checker >/dev/null
+binding_issue_state="$fixture_root/binding-issue-state.txt"
+
+# A snapshot whose recorded entries do not match the allowlist is stale, no
+# matter what the file timestamps say. This is the case the mtime rule missed:
+# an allowlist edited on the same UTC day as the last refresh.
+write_issue_state "$binding_issue_state" "$(date -u +%Y-%m-%d)" "123 OPEN"
+echo 'crates/fixture/src/other.rs #123' >> "$allowlist"
+if run_checker --issue-state "$binding_issue_state" >"$fixture_root/binding-mismatch.out" 2>&1; then
+    echo "ERROR: an allowlist the snapshot does not record unexpectedly passed" >&2
+    exit 1
+fi
+grep -Fq 'does not match issue-state snapshot' "$fixture_root/binding-mismatch.out"
+grep -Fq 'not recorded: crates/fixture/src/other.rs #123' "$fixture_root/binding-mismatch.out"
+grep -Fq 'scripts/refresh-line-cap-issue-state.sh' "$fixture_root/binding-mismatch.out"
+echo 'crates/fixture/src/over_cap.rs #123' > "$allowlist"
+
+# A snapshot recording an entry the allowlist no longer cites is stale too, so
+# a removed exception cannot leave a stale binding behind.
+write_issue_state "$binding_issue_state" "$(date -u +%Y-%m-%d)" "123 OPEN"
+# The snapshot binds only the first entry; citing an extra one afterwards makes
+# the recorded and live sets differ in both directions.
+printf 'crates/fixture/src/over_cap.rs #123\ncrates/fixture/src/gone.rs #123\n' > "$allowlist"
+write_issue_state "$binding_issue_state" "$(date -u +%Y-%m-%d)" "123 OPEN"
+echo 'crates/fixture/src/over_cap.rs #123' > "$allowlist"
+if run_checker --issue-state "$binding_issue_state" >"$fixture_root/binding-extra.out" 2>&1; then
+    echo "ERROR: a snapshot recording an uncited entry unexpectedly passed" >&2
+    exit 1
+fi
+grep -Fq 'recorded but no longer cited' "$fixture_root/binding-extra.out"
+
+# A fresh checkout stamps every file with the checkout time, so neither file is
+# distinguishable by mtime. A matching binding must pass in either ordering,
+# and a `git restore` of unchanged bytes must not fail the gate. Both
+# orderings are driven here; the earlier mtime rule failed the first one.
+write_issue_state "$binding_issue_state" "1970-01-01" "123 OPEN"
+for ordering in allowlist-newer snapshot-newer; do
+    if [[ "$ordering" == allowlist-newer ]]; then
+        touch -d '2000-01-01 00:00:00' "$binding_issue_state"
+        touch "$allowlist"
+    else
+        touch "$allowlist"
+        touch -d '2000-01-01 00:00:00' "$binding_issue_state"
+    fi
+    run_checker --issue-state "$binding_issue_state" >"$fixture_root/binding-order.out" 2>&1 || {
+        cat "$fixture_root/binding-order.out" >&2
+        echo "ERROR: a matching binding was rejected with $ordering timestamps" >&2
+        exit 1
+    }
+done
+
+run_checker >/dev/null
+
 rm "$fixture_root/crates/fixture/src/over_cap.rs"
-if "$checker" --root "$fixture_root" --allowlist "$allowlist" >"$fixture_root/stale.out" 2>&1; then
+if run_checker >"$fixture_root/stale.out" 2>&1; then
     echo "ERROR: stale allowlist fixture unexpectedly passed" >&2
     exit 1
 fi
@@ -201,17 +324,19 @@ EOF
 awk 'BEGIN { for (i = 1; i <= 298; i++) print "    // test line " i }'
 echo '}'
 } | write_fixture "$fixture_root/crates/fixture/src/oversized_inline_tests.rs"
-if "$checker" --root "$fixture_root" --allowlist "$allowlist" >"$fixture_root/inline-size.out" 2>&1; then
+if run_checker >"$fixture_root/inline-size.out" 2>&1; then
     echo "ERROR: oversized inline test module unexpectedly passed" >&2
     exit 1
 fi
 grep -q 'oversized_inline_tests.rs has 301 inline test lines' "$fixture_root/inline-size.out"
 
 echo 'crates/fixture/src/oversized_inline_tests.rs #123' > "$allowlist"
-"$checker" --root "$fixture_root" --allowlist "$allowlist" >/dev/null
+write_issue_state "$issue_state" "$(date -u +%Y-%m-%d)" "123 OPEN"
+run_checker >/dev/null
 rm "$fixture_root/crates/fixture/src/oversized_inline_tests.rs"
 
 : > "$allowlist"
+write_issue_state "$issue_state" "$(date -u +%Y-%m-%d)" "123 OPEN"
 {
 cat <<'EOF'
 #[cfg(test)]
@@ -226,7 +351,7 @@ EOF
 awk 'BEGIN { for (i = 1; i <= 148; i++) print "    // second test line " i }'
 echo '}'
 } | write_fixture "$fixture_root/crates/fixture/src/multiple_inline_tests.rs"
-if "$checker" --root "$fixture_root" --allowlist "$allowlist" >"$fixture_root/multiple-inline.out" 2>&1; then
+if run_checker >"$fixture_root/multiple-inline.out" 2>&1; then
     echo "ERROR: multiple inline test regions were not summed" >&2
     exit 1
 fi
@@ -241,7 +366,7 @@ rm "$fixture_root/crates/fixture/src/multiple_inline_tests.rs"
     awk 'BEGIN { for (i = 1; i <= 296; i++) print "    // test line " i }'
     echo '}'
 } | write_fixture "$fixture_root/crates/fixture/src/mixed_inline_tests.rs"
-if "$checker" --root "$fixture_root" --allowlist "$allowlist" >"$fixture_root/mixed-inline.out" 2>&1; then
+if run_checker >"$fixture_root/mixed-inline.out" 2>&1; then
     echo "ERROR: standalone and cfg-gated tests were not summed" >&2
     exit 1
 fi
@@ -256,7 +381,7 @@ mod tests;
 EOF
 awk 'BEGIN { for (i = 1; i <= 1000; i++) print "// production line " i }'
 } | write_fixture "$fixture_root/crates/fixture/src/external_tests.rs"
-if "$checker" --root "$fixture_root" --allowlist "$allowlist" >"$fixture_root/external.out" 2>&1; then
+if run_checker >"$fixture_root/external.out" 2>&1; then
     echo "ERROR: external test declaration hid trailing production lines" >&2
     exit 1
 fi
@@ -270,7 +395,7 @@ rm "$fixture_root/crates/fixture/src/external_tests.rs"
     awk 'BEGIN { for (i = 1; i <= 997; i++) print "    // production" }'
     echo '}'
 } | write_fixture "$fixture_root/crates/fixture/src/platform_production.rs"
-if "$checker" --root "$fixture_root" --allowlist "$allowlist" >"$fixture_root/platform.out" 2>&1; then
+if run_checker >"$fixture_root/platform.out" 2>&1; then
     echo "ERROR: negated platform predicate hid production lines" >&2
     exit 1
 fi
@@ -285,7 +410,7 @@ rm "$fixture_root/crates/fixture/src/platform_production.rs"
     echo '    }'
     echo '}'
 } | write_fixture "$fixture_root/crates/fixture/src/test_block.rs"
-if "$checker" --root "$fixture_root" --allowlist "$allowlist" >"$fixture_root/test-block.out" 2>&1; then
+if run_checker >"$fixture_root/test-block.out" 2>&1; then
     echo "ERROR: oversized test-only block escaped the inline cap" >&2
     exit 1
 fi
@@ -297,28 +422,26 @@ mkdir -p "$fixture_root/fixture_pkg/src"
 write_fixture "$fixture_root/fixture_pkg/src/undeclared.rs" <<'EOF'
 fn undeclared() {}
 EOF
-if "$checker" --root "$fixture_root" --allowlist "$allowlist" >"$fixture_root/undeclared.out" 2>&1; then
+if run_checker >"$fixture_root/undeclared.out" 2>&1; then
     echo "ERROR: undeclared top-level Rust source root unexpectedly passed" >&2
     exit 1
 fi
 grep -Fq 'undeclared top-level Rust source root(s)' "$fixture_root/undeclared.out"
 grep -Fq 'fixture_pkg' "$fixture_root/undeclared.out"
 
-# The classification error is keyed to the declared root names in SOURCE_ROOTS,
-# which is compile-time policy: the same Rust under a declared top-level name
-# clears the error and is measured from there.
-mv "$fixture_root/fixture_pkg" "$fixture_root/apps"
-write_fixture "$fixture_root/apps/src/undeclared.rs" <<'EOF'
+# The classification error is keyed to the declared policy, so the same Rust
+# measured from a declared root no longer fails for that reason.
+mv "$fixture_root/fixture_pkg" "$fixture_root/crates/fixture_pkg"
+write_fixture "$fixture_root/crates/fixture_pkg/src/undeclared.rs" <<'EOF'
 fn undeclared() {}
 EOF
-declared_report="$("$checker" --root "$fixture_root" --allowlist "$allowlist" --report)"
+declared_report="$(run_checker --report)"
 if grep -Fq 'undeclared top-level Rust source root' <<<"$declared_report"; then
     echo "ERROR: declared source root was reported as undeclared" >&2
     exit 1
 fi
-grep -q 'SOURCE ROOTS: apps=1 files (scanned);' <<<"$declared_report"
-grep -q $'apps/src/undeclared.rs\ttotal=2\tproduction=2\tinline_test=0' <<<"$declared_report"
-rm -rf "$fixture_root/apps"
+grep -q $'crates/fixture_pkg/src/undeclared.rs\ttotal=2\tproduction=2\tinline_test=0' <<<"$declared_report"
+rm -rf "$fixture_root/crates/fixture_pkg"
 
 # A declared-but-vendor-excluded root is counted and never measured: its
 # over-cap file and its stale path comment cannot fail the gate.
@@ -328,7 +451,7 @@ write_lines "$fixture_root/third_party/vendored/src/over_cap.rs" 1001
     echo '// vendor/src/legacy_header.rs'
     echo 'fn vendored() {}'
 } > "$fixture_root/third_party/vendored/src/legacy_header.rs"
-vendor_report="$("$checker" --root "$fixture_root" --allowlist "$allowlist" --report)"
+vendor_report="$(run_checker --report)"
 grep -q 'SOURCE ROOTS: apps=0 files (scanned); crates=[0-9]* files (scanned); third_party=2 files (vendor-excluded: ' <<<"$vendor_report"
 for vendor_file in over_cap.rs legacy_header.rs; do
     if grep -Fq "third_party/vendored/src/$vendor_file" <<<"$vendor_report"; then
@@ -336,7 +459,7 @@ for vendor_file in over_cap.rs legacy_header.rs; do
         exit 1
     fi
 done
-if grep -q 'SOURCE ROOTS' <<<"$("$checker" --root "$fixture_root" --allowlist "$allowlist")"; then
+if grep -q 'SOURCE ROOTS' <<<"$(run_checker)"; then
     echo "ERROR: coverage statement leaked outside --report" >&2
     exit 1
 fi
@@ -344,7 +467,7 @@ fi
 write_fixture "$fixture_root/crates/fixture/src/malformed.rs" <<'EOF'
 fn malformed( {
 EOF
-if "$checker" --root "$fixture_root" --allowlist "$allowlist" >"$fixture_root/malformed.out" 2>&1; then
+if run_checker >"$fixture_root/malformed.out" 2>&1; then
     echo "ERROR: malformed Rust fixture unexpectedly passed" >&2
     exit 1
 fi

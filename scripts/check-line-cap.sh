@@ -9,4 +9,5 @@ exec cargo run -q -p conary-xtask -- \
     line-cap \
     --root "$repo_root" \
     --allowlist "$repo_root/scripts/line-cap-allowlist.txt" \
+    --issue-state "$repo_root/scripts/line-cap-issue-state.txt" \
     "$@"
