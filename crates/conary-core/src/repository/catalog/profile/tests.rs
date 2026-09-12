@@ -799,9 +799,14 @@ const RSS_TEST_NAME: &str =
 
 /// Retain scratch in the parent until the child exits, including signal exits.
 fn run_catalog_rss_child(mut command: std::process::Command) -> std::process::Output {
+    // Cargo has already resolved its target directory when it places this
+    // executable. Use that volume, including custom/relative target settings,
+    // rather than the package cwd or a possibly small TMPDIR tmpfs.
+    let executable = std::env::current_exe().expect("locate the Cargo test artifact");
+    let artifact_directory = executable.parent().expect("test artifact has a parent");
     let scratch = tempfile::Builder::new()
         .prefix("conary-catalog-rss-")
-        .tempdir()
+        .tempdir_in(artifact_directory)
         .expect("create parent-owned catalog RSS scratch");
     command
         .env(RSS_CHILD_SCRATCH_ENV, scratch.path())
@@ -916,15 +921,15 @@ fn bounded_source_and_profile_catalog_peak_rss() {
     .unwrap();
     assert_eq!(profile.counts.packages, 2 * PACKAGES_PER_SOURCE as u64);
 
-    assert_catalog_peak_rss();
+    assert_catalog_peak_rss(RSS_LIMIT_KIB);
 }
 
-fn assert_catalog_peak_rss() {
+fn assert_catalog_peak_rss(limit_kib: u64) {
     let high_water_kib = vm_hwm_kib().expect("Linux must expose the RSS child high-water mark");
     println!("SLICE3_VM_HWM_KIB={high_water_kib}");
     assert!(
-        high_water_kib < RSS_LIMIT_KIB,
-        "VmHWM {high_water_kib} KiB exceeded fixed {RSS_LIMIT_KIB} KiB bound"
+        high_water_kib < limit_kib,
+        "VmHWM {high_water_kib} KiB exceeded fixed {limit_kib} KiB bound"
     );
 }
 
@@ -953,6 +958,11 @@ fn catalog_rss_scratch_is_reclaimed_after_child_exit() {
             scratch.is_absolute(),
             "child did not report its scratch path"
         );
+        assert_eq!(
+            scratch.parent(),
+            std::env::current_exe().unwrap().parent(),
+            "scratch must stay on the Cargo artifact volume"
+        );
         assert!(
             !scratch.exists(),
             "scratch survived child exit: {scratch:?}"
@@ -965,15 +975,18 @@ fn catalog_rss_bound_rejects_real_memory_growth() {
     const PROBE_ENV: &str = "CONARY_CATALOG_RSS_REGRESSION_CHILD";
     const PROBE_TEST: &str =
         "repository::catalog::profile::tests::catalog_rss_bound_rejects_real_memory_growth";
+    // Exercise the same reader/assertion with a small fixed test threshold.
+    // The real catalog workload always passes RSS_LIMIT_KIB (384 MiB).
+    const PROBE_LIMIT_KIB: u64 = 8 * 1024;
     if std::env::var_os(PROBE_ENV).is_some() {
         // Touch every page so the kernel charges resident memory, rather than
         // merely reserving virtual address space. Keep it live through the read.
-        let mut pressure = vec![0_u8; (RSS_LIMIT_KIB as usize + 16 * 1024) * 1024];
+        let mut pressure = vec![0_u8; 16 * 1024 * 1024];
         for page in pressure.chunks_mut(4096) {
             page[0] = 1;
         }
         std::hint::black_box(&pressure);
-        assert_catalog_peak_rss();
+        assert_catalog_peak_rss(PROBE_LIMIT_KIB);
         panic!("the fixed RSS bound accepted deliberate memory growth");
     }
 
@@ -989,7 +1002,7 @@ fn catalog_rss_bound_rejects_real_memory_growth() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stdout.contains("SLICE3_VM_HWM_KIB="), "stdout: {stdout}");
     assert!(
-        stderr.contains(&format!("exceeded fixed {RSS_LIMIT_KIB} KiB bound")),
+        stderr.contains(&format!("exceeded fixed {PROBE_LIMIT_KIB} KiB bound")),
         "the child must fail at the real memory bound: {stderr}"
     );
 }
