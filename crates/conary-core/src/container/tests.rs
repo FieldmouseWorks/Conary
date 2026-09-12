@@ -381,9 +381,90 @@ fn test_namespace_map_contents_maps_root_inside() {
     assert_eq!(namespace_map_contents(65_534), "0 65534 1\n");
 }
 
+// Probe the required syscalls in a disposable child. A sysctl or euid hint does
+// not establish that this host's namespace and mount policy permits the test.
+fn namespace_test_available(pid_namespace: bool) -> bool {
+    let mut command = Command::new("/bin/true");
+    let flags = libc::CLONE_NEWUSER
+        | libc::CLONE_NEWNS
+        | if pid_namespace { libc::CLONE_NEWPID } else { 0 };
+    // SAFETY: the post-fork closure only invokes syscalls with static pointers
+    // and returns their errno. It does not allocate, lock, or modify the parent.
+    unsafe {
+        command.pre_exec(move || {
+            if libc::unshare(flags) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if libc::mount(
+                std::ptr::null(),
+                c"/".as_ptr(),
+                std::ptr::null(),
+                libc::MS_PRIVATE | libc::MS_REC,
+                std::ptr::null(),
+            ) != 0
+            {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let available = namespace_probe_result(command.status())
+        .expect("namespace capability probe failed unexpectedly");
+    if !available {
+        eprintln!(
+            "skipping namespace assertion: host denies user/mount namespace setup (pid={pid_namespace})"
+        );
+    }
+    available
+}
+
+fn namespace_probe_result(
+    result: std::io::Result<std::process::ExitStatus>,
+) -> std::io::Result<bool> {
+    match result {
+        Ok(status) if status.success() => Ok(true),
+        Ok(status) => Err(std::io::Error::other(format!(
+            "namespace probe exited {status}"
+        ))),
+        Err(error) => match error.raw_os_error() {
+            Some(libc::EPERM | libc::EACCES | libc::ENOSYS) => Ok(false),
+            _ => Err(error),
+        },
+    }
+}
+
+#[test]
+fn namespace_probe_only_skips_known_capability_denials() {
+    use std::os::unix::process::ExitStatusExt;
+    for errno in [libc::EPERM, libc::EACCES, libc::ENOSYS] {
+        assert!(!namespace_probe_result(Err(std::io::Error::from_raw_os_error(errno))).unwrap());
+    }
+    for errno in [libc::EIO, libc::EINVAL, libc::ENOENT] {
+        let error =
+            namespace_probe_result(Err(std::io::Error::from_raw_os_error(errno))).unwrap_err();
+        assert_eq!(error.raw_os_error(), Some(errno));
+    }
+    assert!(namespace_probe_result(Ok(std::process::ExitStatus::from_raw(0))).unwrap());
+    for status in [17 << 8, libc::SIGKILL] {
+        assert!(namespace_probe_result(Ok(std::process::ExitStatus::from_raw(status))).is_err());
+    }
+}
+
+#[test]
+fn namespace_probe_preserves_pre_exec_errno() {
+    let mut command = Command::new("/bin/true");
+    // SAFETY: returning a fixed errno neither allocates nor touches shared state.
+    unsafe {
+        command.pre_exec(|| Err(std::io::Error::from_raw_os_error(libc::EACCES)));
+    }
+    let error = command.status().unwrap_err();
+    assert_eq!(error.raw_os_error(), Some(libc::EACCES));
+    assert!(!namespace_probe_result(Err(error)).unwrap());
+}
+
 #[test]
 fn test_sandbox_reports_root_inside_without_host_write_access() {
-    if !isolation_available() {
+    if !namespace_test_available(false) {
         return;
     }
 
@@ -411,9 +492,10 @@ fn test_sandbox_reports_root_inside_without_host_write_access() {
     std::os::unix::fs::symlink("/host-probe", workspace.path().join("host-link")).unwrap();
     let mut sandbox = Sandbox::new(config);
 
-    let (code, stdout, stderr) = match sandbox.execute(
-        "/bin/sh",
-        r#"#!/bin/sh
+    let (code, stdout, stderr) = sandbox
+        .execute(
+            "/bin/sh",
+            r#"#!/bin/sh
 printf 'uid=%s\n' "$(id -u)"
 printf 'gid=%s\n' "$(id -g)"
 printf 'groups=%s\n' "$(id -G)"
@@ -428,32 +510,10 @@ if (printf 'through-symlink\n' >> /mapped-output/host-link) 2>/dev/null; then
     exit 93
 fi
 "#,
-        &[],
-        &[],
-    ) {
-        Ok(result) => result,
-        Err(err)
-            if err
-                .to_string()
-                .contains("mount --make-rprivate failed: EACCES")
-                || err
-                    .to_string()
-                    .contains("mount --make-rprivate failed: EPERM") =>
-        {
-            eprintln!(
-                "skipping sandbox root identity assertion on a host without mount namespace privileges"
-            );
-            return;
-        }
-        Err(err) => panic!("sandbox execution should succeed: {err}"),
-    };
-
-    if code == 127 && stdout.is_empty() && stderr.is_empty() {
-        eprintln!(
-            "skipping sandbox root identity assertion on a host without usable mount namespace isolation"
-        );
-        return;
-    }
+            &[],
+            &[],
+        )
+        .expect("sandbox execution should succeed after a successful capability probe");
 
     assert_eq!(
         fs::read(&probe).unwrap(),
@@ -493,7 +553,7 @@ fi
 
 #[test]
 fn test_pid_namespace_init_can_reap_multiple_child_processes() {
-    if !isolation_available() {
+    if !namespace_test_available(true) {
         return;
     }
 
@@ -503,28 +563,14 @@ fn test_pid_namespace_init_can_reap_multiple_child_processes() {
     config.bind_mounts = default_bind_mounts();
     let mut sandbox = Sandbox::new(config);
 
-    let (code, stdout, stderr) = match sandbox.execute(
-        "/bin/sh",
-        "id -u\nid -u\nprintf 'children-complete\\n'\n",
-        &[],
-        &[],
-    ) {
-        Ok(result) => result,
-        Err(err)
-            if err
-                .to_string()
-                .contains("mount --make-rprivate failed: EACCES")
-                || err
-                    .to_string()
-                    .contains("mount --make-rprivate failed: EPERM") =>
-        {
-            eprintln!(
-                "skipping PID namespace assertion on a host without mount namespace privileges"
-            );
-            return;
-        }
-        Err(err) => panic!("PID namespace execution should succeed: {err}"),
-    };
+    let (code, stdout, stderr) = sandbox
+        .execute(
+            "/bin/sh",
+            "id -u\nid -u\nprintf 'children-complete\\n'\n",
+            &[],
+            &[],
+        )
+        .expect("PID namespace execution should succeed after a successful capability probe");
 
     assert_eq!(code, 0, "stderr: {stderr}");
     assert_eq!(
