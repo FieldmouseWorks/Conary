@@ -225,10 +225,21 @@ non-test portion at 1,000 lines, and caps the total inline test-only spans in
 each file at 300 lines. Attributes whose final path segment is `test` also
 mark inline tests, including those enabled by `cfg_attr` in a test build.
 Every checked-in exception names the open issue that
-owns its decomposition. Add behavior to an over-cap file only through the
+owns its decomposition. The cited issue's state comes from the checked-in
+`scripts/line-cap-issue-state.txt` snapshot, so refresh it with
+`scripts/refresh-line-cap-issue-state.sh` whenever the allowlist changes; the
+gate itself performs no network I/O. The PR gate separately runs
+`scripts/refresh-line-cap-issue-state.sh --check` against the canonical GitHub
+repository, as does the `line-cap-issue-state` workflow on issue-state events,
+every six hours, and by manual dispatch. Live lookup errors or closed owners
+fail that check without rewriting the snapshot. Add behavior to an over-cap file only through the
 ownership-based reorganization named by that issue. Thin registration,
 dispatch, and re-export wiring may remain in the large hub only through an
 issue-linked exception.
+
+Custom scans through `scripts/check-line-cap.sh` that override `--root` or
+`--allowlist` must also supply `--issue-state`. An omitted snapshot is a usage
+error; the wrapper never substitutes repository state for a custom scan.
 
 Large files are review signals. Use `scripts/line-count-report.sh` to refresh
 the current hotspot list when planning broad maintenance work. Do not split a
