@@ -1478,10 +1478,10 @@ fn exempt_report_summarizes_every_gate() {
 }
 
 #[test]
-fn a_listed_exempt_named_file_is_stale_however_large_it_measures() {
+fn a_listed_test_only_file_is_stale_even_when_large() {
     // An entry counts as used only when it excuses a cap violation the gate
-    // actually enforces. The gate enforces no cap on an exempt-named file, so
-    // the entry is stale even when that file is over a cap; a cap-checked file
+    // actually enforces. A proven test-only sibling is exempt, so
+    // its entry is stale even when that file is large; a cap-checked file
     // with the same size makes the entry used.
     let root = TempRoot::new("exempt-stale");
     let header = "// crates/fixture/src/lib.rs\n";
@@ -1514,8 +1514,8 @@ fn a_listed_exempt_named_file_is_stale_however_large_it_measures() {
         .into_iter()
         .map(String::from))
     };
-    // The exempt-named file is over the production cap and still stale: its
-    // exemption comes from its name, independently of the allowlist.
+    // This sibling is over the size limit and still stale: its declaring
+    // context already proves it test-only, independently of the allowlist.
     assert_eq!(
         run_with("crates/fixture/src/gated/tests.rs #123\n"),
         Err("Rust source line caps failed".to_string())
@@ -1749,5 +1749,63 @@ fn includes_cannot_hide_an_unresolved_production_import() {
             &mut BTreeMap::new()
         )
         .is_err()
+    );
+}
+
+#[test]
+fn conditional_module_paths_preserve_test_context_and_attribution() {
+    for attribute in [
+        "cfg_attr(test, path = \"alternate/tests.rs\")",
+        "cfg_attr(all(), cfg_attr(test, path = \"alternate/tests.rs\"))",
+        "cfg_attr(all(test, feature = \"x\"), path = \"alternate/tests.rs\")",
+    ] {
+        let fixture = FixtureRoot::new("conditional-path");
+        fixture.write(
+            "crates/engine/src/lib.rs",
+            &format!("#[{attribute}] mod implementation;\n"),
+        );
+        fixture.write(
+            "crates/engine/src/implementation.rs",
+            "pub fn production() {}\n",
+        );
+        fixture.write(
+            "crates/engine/src/alternate/tests.rs",
+            "fn helper() {}\nfn another() {}\n",
+        );
+        let gates = fixture.gates();
+        assert_eq!(
+            resolved_gate(&gates, "crates/engine/src/alternate/tests.rs"),
+            ExemptionGate::TestGated,
+            "{attribute}"
+        );
+        assert_eq!(
+            resolved_gate(&gates, "crates/engine/src/implementation.rs"),
+            ExemptionGate::Ungated,
+            "{attribute}"
+        );
+        let attribution = sibling_attribution(
+            &fixture.path,
+            &fixture.resolve("crates/engine/src/lib.rs"),
+            &gates,
+            &mut MeasuredFiles::default(),
+        );
+        assert_eq!(attribution.siblings, 1, "{attribute}");
+        assert_eq!(attribution.attributed_test_lines, 2, "{attribute}");
+    }
+}
+
+#[test]
+fn conditional_default_path_is_gated_by_its_complement() {
+    let classified = classify(&[
+        (
+            "crates/x/src/lib.rs",
+            "#[cfg_attr(not(test), path = \"production.rs\")] mod tests;\n",
+        ),
+        ("crates/x/src/tests.rs", "fn helper() {}\n"),
+        ("crates/x/src/production.rs", "pub fn production() {}\n"),
+    ]);
+    assert_eq!(
+        gate(&classified, "crates/x/src/tests.rs"),
+        ExemptionGate::TestGated
     );
 }

@@ -32,9 +32,10 @@ use std::ffi::OsStr;
 use std::path::{Component, Path, PathBuf};
 
 use syn::visit::{self, Visit};
-use syn::{Attribute, Expr, Item, Lit, Meta};
+use syn::{Attribute, Expr, Item, Lit};
 
 use super::cfg;
+use super::paths::module_paths;
 use super::targets::TargetRoots;
 use super::{FileMetrics, cfg_attributes, item_attributes, path_text};
 
@@ -178,55 +179,32 @@ impl DeclarationCollector<'_> {
             };
             let mut effective = inherited.to_vec();
             effective.extend(cfg_attributes(&item_module.attrs));
-            let test_gated = cfg::is_test_only(&effective);
             let name = item_module.ident.to_string();
-            let declared_path = path_attribute(&item_module.attrs);
-            let conditional_paths = conditional_path_attributes(&item_module.attrs);
-
-            if let Some((_, items)) = &item_module.content {
-                // An inline module owns a directory named after it; a `#[path]`
-                // attribute on it renames that directory, and a `#[path]`
-                // inside it resolves against that same directory.
-                let nested_dir = match &declared_path {
-                    Some(path) => path_base.join(path),
-                    None => module_dir.join(&name),
-                };
-                self.collect(items, &nested_dir, &nested_dir, &effective, depth + 1);
-                for path in &conditional_paths {
-                    let alternate = path_base.join(path);
-                    self.collect(items, &alternate, &alternate, &effective, depth + 1);
+            for variant in module_paths(&item_module.attrs) {
+                let mut branch = effective.clone();
+                branch.extend(variant.conditions);
+                if !cfg::can_compile(&branch) {
+                    continue;
                 }
-                continue;
-            }
-
-            // A cfg_attr path can select another file in some configuration.
-            // Record every alternative conservatively; ignoring one could hide
-            // a production importer behind a test-only declaring site.
-            for path in conditional_paths {
-                self.record(
-                    normalize(&path_base.join(path)),
-                    Some(name.clone()),
-                    DeclarationKind::Exact,
-                    depth,
-                    test_gated,
-                    true,
-                );
-            }
-            match declared_path {
-                Some(path) => {
-                    let target = normalize(&path_base.join(path));
+                let test_gated = cfg::is_test_only(&branch);
+                if let Some((_, items)) = &item_module.content {
+                    let nested_dir = match variant.path {
+                        Some(path) => path_base.join(path),
+                        None => module_dir.join(&name),
+                    };
+                    self.collect(items, &nested_dir, &nested_dir, &branch, depth + 1);
+                } else if let Some(path) = variant.path {
                     self.record(
-                        target,
-                        Some(name),
+                        normalize(&path_base.join(path)),
+                        Some(name.clone()),
                         DeclarationKind::Exact,
                         depth,
                         test_gated,
                         true,
                     );
-                }
-                None => {
-                    // Rust loads `<module>/<name>.rs` or, failing that,
-                    // `<module>/<name>/mod.rs`.
+                } else {
+                    // Both candidates are considered; simultaneous files are
+                    // ambiguous and cannot contribute to sibling attribution.
                     self.record(
                         module_dir.join(format!("{name}.rs")),
                         Some(name.clone()),
@@ -237,7 +215,7 @@ impl DeclarationCollector<'_> {
                     );
                     self.record(
                         module_dir.join(&name).join("mod.rs"),
-                        Some(name),
+                        Some(name.clone()),
                         DeclarationKind::ModuleRoot,
                         depth,
                         test_gated,
@@ -634,55 +612,6 @@ pub(crate) fn relative_module_directory(relative: &Path) -> PathBuf {
 pub(crate) fn owns_its_directory(relative: &Path) -> bool {
     let name = relative.file_name().and_then(OsStr::to_str);
     name == Some("mod.rs") || non_test_crate_root(relative) || cargo_target_root(relative).is_some()
-}
-
-pub(crate) fn path_attribute(attributes: &[Attribute]) -> Option<String> {
-    attributes.iter().find_map(|attribute| {
-        if !attribute.path().is_ident("path") {
-            return None;
-        }
-        let Meta::NameValue(named) = &attribute.meta else {
-            return None;
-        };
-        let Expr::Lit(literal) = &named.value else {
-            return None;
-        };
-        let Lit::Str(value) = &literal.lit else {
-            return None;
-        };
-        Some(value.value())
-    })
-}
-
-fn conditional_path_attributes(attributes: &[Attribute]) -> Vec<String> {
-    fn visit(meta: &Meta, paths: &mut Vec<String>) {
-        match meta {
-            Meta::NameValue(value) if value.path.is_ident("path") => {
-                if let Expr::Lit(expression) = &value.value
-                    && let Lit::Str(path) = &expression.lit
-                {
-                    paths.push(path.value());
-                }
-            }
-            Meta::List(list) if list.path.is_ident("cfg_attr") => {
-                use syn::parse::Parser;
-                let parser = syn::punctuated::Punctuated::<Meta, syn::Token![,]>::parse_terminated;
-                if let Ok(items) = parser.parse2(list.tokens.clone()) {
-                    for attribute in items.iter().skip(1) {
-                        visit(attribute, paths);
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-    let mut paths = Vec::new();
-    for attribute in attributes {
-        if attribute.path().is_ident("cfg_attr") {
-            visit(&attribute.meta, &mut paths);
-        }
-    }
-    paths
 }
 
 /// Resolve `.` and `..` components of a `#[path]` or `include!` value without
