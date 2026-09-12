@@ -1294,10 +1294,13 @@ directory are excluded. Every allowlist entry carries the open issue that owns
 the remaining production or test-placement decomposition; stale entries fail
 the gate. Each citation is validated against the checked-in
 `scripts/line-cap-issue-state.txt` snapshot, which only
-`scripts/refresh-line-cap-issue-state.sh` regenerates: a citation the snapshot
-records `CLOSED`, a citation absent from the snapshot, and an allowlist newer
-than the snapshot's `refreshed:` date all fail. The checker itself performs no
-network I/O. Every Rust file, including excluded test files, must begin exactly
+`scripts/refresh-line-cap-issue-state.sh` regenerates. The gate rejects a
+citation the snapshot records `CLOSED`, a citation absent from the snapshot,
+and any mismatch between the snapshot's recorded canonical allowlist entries
+and the current allowlist. The `refreshed:` date is informational; filesystem
+modification times do not affect validation. The checker performs no network
+I/O, so it cannot detect issue-state changes made after the snapshot was
+refreshed. Every Rust file, including excluded test files, must begin exactly
 with `// {repo-relative path}`; missing and legacy headers fail the gate.
 
 ## Developer Build Environment
