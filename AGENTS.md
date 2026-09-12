@@ -107,8 +107,12 @@ essential operation available only through ad hoc shell or free-form output.
   allowlist, so an allowlist edit fails until the snapshot is refreshed, while
   an unchanged allowlist passes however the files reached the working tree. The
   gate is intentionally hermetic (no network I/O), so the snapshot records
-  issue state as of its refresh and cannot discover an issue closed afterwards;
-  keep a separate issue-event, scheduled, or explicit networked check for that.
+  issue state as of its refresh. The PR gate and
+  `.github/workflows/line-cap-issue-state.yml` run the separate networked
+  `scripts/refresh-line-cap-issue-state.sh --check` against
+  `github.com/FieldmouseWorks/Conary` to detect later closures without rewriting
+  the snapshot. The workflow runs on issue closure/reopening/deletion, every
+  six hours, and by manual dispatch; lookup failures fail the check.
   Once a Rust source file carries more than 300 inline unit-test lines, its unit
   tests live in a sibling `<file>/tests.rs`. A sibling extraction must reduce
   the parent, with that reduction stated in the commit. Thin dispatch,
