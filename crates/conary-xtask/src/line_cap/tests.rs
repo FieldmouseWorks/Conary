@@ -1704,3 +1704,26 @@ fn cargo_target_lookup_failure_does_not_grant_exemptions() {
     fixture.write("Cargo.toml", "invalid manifest");
     assert!(targets::read_targets(&fixture.path).is_err());
 }
+
+#[test]
+fn inline_path_attributes_use_the_containing_directory() {
+    let classified = classify(&[
+        (
+            "crates/x/src/lib.rs",
+            "mod owner;\n#[cfg(test)] #[path = \"shared/tests.rs\"] mod tests;\n",
+        ),
+        (
+            "crates/x/src/owner.rs",
+            "#[path = \"shared\"] mod inline { mod tests; }\n",
+        ),
+        ("crates/x/src/shared/tests.rs", "pub fn helper() {}\n"),
+    ]);
+    assert_eq!(
+        gate(&classified, "crates/x/src/shared/tests.rs"),
+        ExemptionGate::Ungated
+    );
+    assert_eq!(
+        relative_module_directory(Path::new("crates/x/src/owner/lib.rs")),
+        Path::new("crates/x/src/owner/lib")
+    );
+}

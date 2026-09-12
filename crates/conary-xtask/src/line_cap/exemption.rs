@@ -188,12 +188,12 @@ impl DeclarationCollector<'_> {
                 // attribute on it renames that directory, and a `#[path]`
                 // inside it resolves against that same directory.
                 let nested_dir = match &declared_path {
-                    Some(path) => module_dir.join(path),
+                    Some(path) => path_base.join(path),
                     None => module_dir.join(&name),
                 };
                 self.collect(items, &nested_dir, &nested_dir, &effective, depth + 1);
                 for path in &conditional_paths {
-                    let alternate = module_dir.join(path);
+                    let alternate = path_base.join(path);
                     self.collect(items, &alternate, &alternate, &effective, depth + 1);
                 }
                 continue;
@@ -596,8 +596,7 @@ pub(crate) fn relative_module_directory(relative: &Path) -> PathBuf {
 /// `apps/conary-test/src/config/mod.rs` (`config/tests.rs`).
 pub(crate) fn owns_its_directory(relative: &Path) -> bool {
     let name = relative.file_name().and_then(OsStr::to_str);
-    matches!(name, Some("mod.rs" | "lib.rs" | "main.rs" | "build.rs"))
-        || cargo_target_root(relative).is_some()
+    name == Some("mod.rs") || non_test_crate_root(relative) || cargo_target_root(relative).is_some()
 }
 
 pub(crate) fn path_attribute(attributes: &[Attribute]) -> Option<String> {
