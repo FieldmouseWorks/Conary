@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-09-12
-revision: 99
-summary: Route features, CLI diagnostics, and progress to their smallest start context, owned paths, focused proof, interaction gates, and safety constraints.
+last_updated: 2026-09-13
+revision: 100
+summary: Route features to owned paths and proof, including context-aware test-file caps, Cargo target evidence, and live exception ownership.
 ---
 
 # Feature Ownership And Interaction Gates
@@ -1291,8 +1291,13 @@ count as items.
 Attributes whose final path segment is `test`, including conditional annotations
 enabled by `cfg_attr` in a test build, also mark inline tests.
 Files with more than 300 total test-only lines fail. Files named `tests.rs`
-and Rust files below a `tests/`
-directory are excluded. Every allowlist entry carries the open issue that owns
+or below `tests/` earn an exemption only through test-only syntax or declaring
+context. Offline Cargo metadata v1 supplies target membership, including
+custom paths and disabled auto-discovery. Production imports win over test-target
+membership; unknown files retain both caps and can use an owned exception.
+`TEST FILE:` report rows expose all such files, and parent rows attribute only
+proven test-only siblings. Before/after reports establish actual extraction
+reduction; current attributed size is not a historical delta. Every allowlist entry carries the open issue that owns
 the remaining production or test-placement decomposition; stale entries fail
 the gate. Each citation is validated against the checked-in
 `scripts/line-cap-issue-state.txt` snapshot, which only

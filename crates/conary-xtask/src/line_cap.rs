@@ -14,6 +14,7 @@ mod cfg;
 mod exemption;
 mod issue_state;
 mod siblings;
+mod targets;
 
 use exemption::{
     ExemptionGate, ExemptionReport, ModuleDeclaration, collect_include_declarations,
@@ -78,6 +79,7 @@ pub(crate) fn run(args: impl Iterator<Item = String>) -> Result<(), String> {
     })?;
     let allowlist = read_allowlist(&options.allowlist)?;
     let scan = rust_source_files(&root)?;
+    let targets = targets::read_targets(&root)?;
     if options.report {
         println!("SOURCE ROOTS: {}", source_roots_text(&scan.coverage));
     }
@@ -95,7 +97,7 @@ pub(crate) fn run(args: impl Iterator<Item = String>) -> Result<(), String> {
     let mut measured = MeasuredFiles::default();
     let mut declarations: BTreeMap<String, Vec<ModuleDeclaration>> = BTreeMap::new();
     let mut intrinsic_gates: BTreeMap<String, ExemptionGate> = BTreeMap::new();
-    let mut rows: Vec<(String, FileMetrics, Vec<String>)> = Vec::new();
+    let mut rows: Vec<(String, FileMetrics)> = Vec::new();
     let mut exemptions = ExemptionReport::default();
     let mut used_allowlist_entries = BTreeSet::new();
     let mut errors = Vec::new();
@@ -133,21 +135,30 @@ pub(crate) fn run(args: impl Iterator<Item = String>) -> Result<(), String> {
         };
         let metrics = measure_source(&syntax, &source);
         measured.insert(&path, metrics);
-        collect_module_declarations(&syntax, relative_path, &mut declarations);
+        collect_module_declarations(&syntax, relative_path, &mut declarations, &targets);
         collect_include_declarations(&syntax, relative_path, &mut declarations);
-        intrinsic_gates.insert(relative.clone(), intrinsic_gate(&syntax, relative_path));
+        intrinsic_gates.insert(
+            relative.clone(),
+            intrinsic_gate(&syntax, relative_path, &targets),
+        );
+        rows.push((relative, metrics));
+    }
 
-        if excluded_test_file(relative_path) {
-            exemptions.record(relative, metrics);
+    // Resolve the complete graph before deciding whether a filename exemption
+    // applies. Unknown and production-reachable files retain both caps.
+    let gates = resolve_gates(&intrinsic_gates, &declarations, &targets);
+    for (relative, metrics) in &rows {
+        let named_test = excluded_test_file(Path::new(relative));
+        if named_test {
+            exemptions.record(relative.clone(), *metrics);
+        }
+        if named_test && exemption::resolved_gate(&gates, relative) == ExemptionGate::TestGated {
             continue;
         }
-
         if options.report {
-            rows.push((
-                relative.clone(),
-                metrics,
-                child_modules(&relative, &declarations, &scanned),
-            ));
+            let children = child_modules(relative, &declarations, &scanned);
+            let attribution = sibling_attribution(&root, &children, &gates, &mut measured);
+            println!("{}", report_row(relative, *metrics, attribution));
         }
 
         let production_over = metrics.production_lines > PRODUCTION_LINE_LIMIT;
@@ -156,12 +167,12 @@ pub(crate) fn run(args: impl Iterator<Item = String>) -> Result<(), String> {
             continue;
         }
 
-        if let Some(issue) = allowlist.get(&relative) {
+        if let Some(issue) = allowlist.get(relative) {
             println!(
                 "ALLOWLISTED: {relative} production={} inline_test={} issue={issue}",
                 metrics.production_lines, metrics.inline_test_lines
             );
-            used_allowlist_entries.insert(relative);
+            used_allowlist_entries.insert(relative.clone());
             continue;
         }
 
@@ -179,21 +190,7 @@ pub(crate) fn run(args: impl Iterator<Item = String>) -> Result<(), String> {
         }
     }
 
-    // Issue #997: an exempt-named file is reported and classified instead of
-    // being silently dropped, and issue #998: a parent row states the test mass
-    // of the children it declares. Both read one resolved gate set, computed
-    // once the whole declaration graph is known.
-    //
-    // Exempt-named files deliberately stay out of the allowlist bookkeeping: an
-    // exception counts as used only when it excuses a cap violation the gate
-    // enforces, and the gate enforces no cap on a file its name exempts. A
-    // listed exempt-named file is therefore stale, however large it measures.
-    let gates = resolve_gates(&intrinsic_gates, &declarations);
     if options.report {
-        for (relative, metrics, children) in &rows {
-            let attribution = sibling_attribution(&root, children, &gates, &mut measured);
-            println!("{}", report_row(relative, *metrics, attribution));
-        }
         print!("{}", exemptions.report(&gates));
     }
 

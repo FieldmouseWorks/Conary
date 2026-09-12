@@ -766,7 +766,12 @@ impl FixtureRoot {
             let relative = path
                 .strip_prefix(&self.path)
                 .expect("fixture file stays inside the fixture");
-            collect_module_declarations(&syntax, relative, &mut declarations);
+            collect_module_declarations(
+                &syntax,
+                relative,
+                &mut declarations,
+                &fixture_targets(self.scanned().iter().map(String::as_str)),
+            );
             collect_include_declarations(&syntax, relative, &mut declarations);
         }
         declarations
@@ -781,9 +786,20 @@ impl FixtureRoot {
             let relative = path
                 .strip_prefix(&self.path)
                 .expect("fixture file stays inside the fixture");
-            intrinsic.insert(path_text(relative), intrinsic_gate(&syntax, relative));
+            intrinsic.insert(
+                path_text(relative),
+                intrinsic_gate(
+                    &syntax,
+                    relative,
+                    &fixture_targets(self.scanned().iter().map(String::as_str)),
+                ),
+            );
         }
-        resolve_gates(&intrinsic, &self.declarations())
+        resolve_gates(
+            &intrinsic,
+            &self.declarations(),
+            &fixture_targets(self.scanned().iter().map(String::as_str)),
+        )
     }
 
     /// Every scanned file, as fixture-relative text.
@@ -1445,18 +1461,18 @@ fn exempt_report_summarizes_every_gate() {
     let text = report.report(&classified);
     assert!(
         text.contains(
-            "EXEMPT: crates/x/src/ungated/tests.rs\ttotal=3\tproduction=3\tinline_test=0\tgate=ungated"
+            "TEST FILE: crates/x/src/ungated/tests.rs\ttotal=3\tproduction=3\tinline_test=0\tgate=ungated"
         ),
         "{text}"
     );
     assert!(
         text.contains(
-            "EXEMPT: crates/x/src/tests/orphan.rs\ttotal=3\tproduction=3\tinline_test=0\tgate=unknown"
+            "TEST FILE: crates/x/src/tests/orphan.rs\ttotal=3\tproduction=3\tinline_test=0\tgate=unknown"
         ),
         "{text}"
     );
     assert!(
-        text.contains("EXEMPT SUMMARY: test-gated=1 ungated=1 unknown=1"),
+        text.contains("TEST FILE SUMMARY: test-gated=1 ungated=1 unknown=1"),
         "{text}"
     );
 }
@@ -1521,9 +1537,21 @@ fn declarations_of(
     for (relative, source) in sources {
         let syntax = syn::parse_file(source).unwrap();
         let path = Path::new(relative);
-        collect_module_declarations(&syntax, path, &mut declarations);
+        collect_module_declarations(
+            &syntax,
+            path,
+            &mut declarations,
+            &fixture_targets(sources.iter().map(|(path, _)| *path)),
+        );
         collect_include_declarations(&syntax, path, &mut declarations);
-        gates.insert(relative.to_string(), intrinsic_gate(&syntax, path));
+        gates.insert(
+            relative.to_string(),
+            intrinsic_gate(
+                &syntax,
+                path,
+                &fixture_targets(sources.iter().map(|(path, _)| *path)),
+            ),
+        );
     }
     (gates, declarations)
 }
@@ -1531,7 +1559,11 @@ fn declarations_of(
 /// Classify the exempt-named files of an in-memory module graph.
 fn classify(sources: &[(&str, &str)]) -> BTreeMap<String, ExemptionGate> {
     let (intrinsic, declarations) = declarations_of(sources);
-    let gates = resolve_gates(&intrinsic, &declarations);
+    let gates = resolve_gates(
+        &intrinsic,
+        &declarations,
+        &fixture_targets(sources.iter().map(|(path, _)| *path)),
+    );
     sources
         .iter()
         .filter(|(relative, _)| excluded_test_file(Path::new(relative)))
@@ -1543,4 +1575,132 @@ fn gate(classified: &BTreeMap<String, ExemptionGate>, path: &str) -> ExemptionGa
     *classified
         .get(path)
         .unwrap_or_else(|| panic!("{path} was not classified as exempt"))
+}
+
+fn fixture_targets<'a>(paths: impl Iterator<Item = &'a str>) -> targets::TargetRoots {
+    paths
+        .filter_map(|path| cargo_target_root(Path::new(path)).map(|kind| (path.to_string(), kind)))
+        .collect()
+}
+
+#[test]
+fn ungated_and_unknown_test_filenames_are_capped_and_allowlistable() {
+    for declare in [true, false] {
+        let fixture = FixtureRoot::new("production-test-name");
+        fixture.write(
+            "crates/x/src/lib.rs",
+            if declare {
+                "// crates/x/src/lib.rs\nmod tests;\n"
+            } else {
+                "// crates/x/src/lib.rs\n"
+            },
+        );
+        fixture.write(
+            "crates/x/src/tests.rs",
+            &format!(
+                "// crates/x/src/tests.rs\n{}",
+                "// production span\n".repeat(1000)
+            ),
+        );
+        let allowlist = fixture.write("allowlist", "");
+        let invoke = || {
+            run([
+                "--root",
+                fixture.path.to_str().unwrap(),
+                "--allowlist",
+                allowlist.to_str().unwrap(),
+            ]
+            .into_iter()
+            .map(String::from))
+        };
+        assert!(
+            invoke().is_err(),
+            "an ungated or unresolved filename cannot grant an exemption"
+        );
+        fs::write(&allowlist, "crates/x/src/tests.rs #123\n").unwrap();
+        assert!(
+            invoke().is_ok(),
+            "the real cap violation must use its exception"
+        );
+    }
+}
+
+#[test]
+fn conditional_paths_cannot_hide_a_production_import() {
+    let classified = classify(&[
+        (
+            "crates/x/src/lib.rs",
+            "#[cfg_attr(feature = \"alternate\", path = \"tests.rs\")] mod implementation;\n#[cfg(test)] mod tests;\n",
+        ),
+        ("crates/x/src/tests.rs", "pub fn helper() {}\n"),
+    ]);
+    assert_eq!(
+        gate(&classified, "crates/x/src/tests.rs"),
+        ExemptionGate::Ungated
+    );
+}
+
+#[test]
+fn cargo_metadata_owns_custom_targets_and_disabled_auto_discovery() {
+    let fixture = FixtureRoot::new("cargo-targets");
+    fixture.write(
+        "Cargo.toml",
+        "[workspace]\nmembers = [\"crates/x\"]\nresolver = \"3\"\n",
+    );
+    fixture.write("crates/x/Cargo.toml", "[package]\nname = \"fixture\"\nversion = \"0.0.0\"\nedition = \"2024\"\nautotests = false\n[lib]\npath = \"src/tests.rs\"\n[[test]]\nname = \"custom\"\npath = \"src/check.rs\"\n");
+    fixture.write("crates/x/src/tests.rs", "mod helper;\n");
+    fixture.write("crates/x/src/helper.rs", "pub fn helper() {}\n");
+    fixture.write("crates/x/src/check.rs", "");
+    fixture.write("crates/x/tests/disabled.rs", "");
+    let roots = targets::read_targets(&fixture.path).unwrap();
+    assert_eq!(
+        roots.get("crates/x/src/tests.rs"),
+        Some(&CargoTarget::Other)
+    );
+    assert_eq!(roots.get("crates/x/src/check.rs"), Some(&CargoTarget::Test));
+    assert!(!roots.contains_key("crates/x/tests/disabled.rs"));
+    let syntax = syn::parse_file("mod helper;\n").unwrap();
+    let mut declarations = BTreeMap::new();
+    collect_module_declarations(
+        &syntax,
+        Path::new("crates/x/src/tests.rs"),
+        &mut declarations,
+        &roots,
+    );
+    assert!(
+        declarations.contains_key("crates/x/src/helper.rs"),
+        "custom crate roots own their directory"
+    );
+    let intrinsic = BTreeMap::from([
+        (
+            "crates/x/src/tests.rs".to_string(),
+            intrinsic_gate(&syntax, Path::new("crates/x/src/tests.rs"), &roots),
+        ),
+        ("crates/x/src/check.rs".to_string(), ExemptionGate::Unknown),
+        (
+            "crates/x/tests/disabled.rs".to_string(),
+            ExemptionGate::Unknown,
+        ),
+    ]);
+    let gates = resolve_gates(&intrinsic, &declarations, &roots);
+    assert_eq!(
+        resolved_gate(&gates, "crates/x/src/tests.rs"),
+        ExemptionGate::Ungated
+    );
+    assert_eq!(
+        resolved_gate(&gates, "crates/x/src/check.rs"),
+        ExemptionGate::TestGated
+    );
+    assert_eq!(
+        resolved_gate(&gates, "crates/x/tests/disabled.rs"),
+        ExemptionGate::Unknown
+    );
+}
+
+#[test]
+fn cargo_target_lookup_failure_does_not_grant_exemptions() {
+    let fixture = FixtureRoot::new("invalid-manifest");
+    assert!(targets::read_targets(&fixture.path).unwrap().is_empty());
+    fixture.write("Cargo.toml", "invalid manifest");
+    assert!(targets::read_targets(&fixture.path).is_err());
 }

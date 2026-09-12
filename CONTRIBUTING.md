@@ -220,9 +220,20 @@ or intentionally changed.
 `scripts/check-line-cap.sh` measures all lines outside syntax nodes whose combined
 `cfg` predicates can hold with `test` enabled but cannot hold with it disabled
 under any assignment of other cfg atoms. Items, fields, statements, and
-expressions all participate. It ignores sibling and package-level test files, caps that
-non-test portion at 1,000 lines, and caps the total inline test-only spans in
-each file at 300 lines. Attributes whose final path segment is `test` also
+expressions all participate. It caps the non-test portion at 1,000 lines and
+the total inline test-only spans at 300 lines. A file named `tests.rs` or below
+`tests/` is exempt only when its file-level gate, declaring contexts, or Cargo
+integration-test target membership establish test-only compilation. Production
+imports override test-target membership; unresolved files retain both caps.
+The gate reads offline Cargo metadata v1, honoring custom targets and disabled
+auto-discovery. A custom tree without a manifest has no Cargo target evidence.
+`--report` shows every test filename as `TEST FILE:` with its measured content
+and context; cap-checked files also receive the ordinary row. An over-cap
+production file under a test filename can use an owned allowlist exception.
+Names ending in `_tests.rs` retain their existing measurement rules.
+Parent rows attribute proven test-only siblings as `attributed_test_lines`;
+compare reports from the base and head to establish an extraction's actual
+reduction. Current sibling size alone is not a historical delta. Attributes whose final path segment is `test` also
 mark inline tests, including those enabled by `cfg_attr` in a test build.
 Every checked-in exception names the open issue that
 owns its decomposition. The cited issue's state comes from the checked-in

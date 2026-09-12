@@ -9,11 +9,8 @@
 //! graph and the gate resolution so `siblings` attributes extracted test mass
 //! through the same reasoning instead of a second, disagreeing rule.
 //!
-//! Classification is report-only and never changes a cap outcome. Enforcing a
-//! cap on an exempt-named file stays deferred, which is also why a listed
-//! exempt-named file is stale however large it measures: the name, not the
-//! allowlist, is what keeps it out of the caps, so there is no violation for an
-//! exception to excuse. Only a cap-checked file can make an entry used.
+//! Only a resolved test-only context earns a filename exemption. Ungated and
+//! unknown files retain the normal caps and can use an issue-owned exception.
 //!
 //! Three answers are possible, and the third is deliberate. An inner
 //! `#![cfg(test)]` is intrinsic, so it is hard: no declaration can un-gate it.
@@ -24,13 +21,11 @@
 //! established the file stays [`ExemptionGate::Unknown`] rather than being
 //! guessed into one.
 //!
-//! Deliberate limits. Cargo target discovery is by path convention
-//! (`<package>/tests/*.rs` and friends) and does not read the Cargo manifest,
-//! so a customized target path or an `autotests = false` layout is invisible
-//! here. `mod` declarations produced by macros, and `include!` calls whose
-//! argument is not a literal, are not seen at all. A file that no seen
-//! declaration reaches, and that no crate-root convention explains, stays
-//! `unknown`.
+//! Cargo target evidence comes from versioned `cargo metadata`, including
+//! custom target paths and auto-discovery settings. Literal module/include
+//! paths and conditional path alternatives participate in the source graph;
+//! unresolved files stay unknown. Filenames alone never establish test-only
+//! authority. This is a syntax gate, not macro expansion or type checking.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
@@ -40,6 +35,7 @@ use syn::visit::{self, Visit};
 use syn::{Attribute, Expr, Item, Lit, Meta};
 
 use super::cfg;
+use super::targets::TargetRoots;
 use super::{FileMetrics, cfg_attributes, item_attributes, path_text};
 
 /// How an exempt-named file is compiled, as far as the declaration graph can
@@ -129,6 +125,7 @@ pub(crate) fn collect_module_declarations(
     syntax: &syn::File,
     relative: &Path,
     declarations: &mut BTreeMap<String, Vec<ModuleDeclaration>>,
+    targets: &TargetRoots,
 ) {
     let mut collector = DeclarationCollector {
         declaring_file: path_text(relative),
@@ -144,7 +141,14 @@ pub(crate) fn collect_module_declarations(
             .to_path_buf(),
         declarations,
     };
-    let module_dir = relative_module_directory(relative);
+    let module_dir = if targets.contains_key(&path_text(relative)) {
+        relative
+            .parent()
+            .unwrap_or_else(|| Path::new(""))
+            .to_path_buf()
+    } else {
+        relative_module_directory(relative)
+    };
     collector.run(&syntax.items, &module_dir, &syntax.attrs);
 }
 
@@ -177,6 +181,7 @@ impl DeclarationCollector<'_> {
             let test_gated = cfg::is_test_only(&effective);
             let name = item_module.ident.to_string();
             let declared_path = path_attribute(&item_module.attrs);
+            let conditional_paths = conditional_path_attributes(&item_module.attrs);
 
             if let Some((_, items)) = &item_module.content {
                 // An inline module owns a directory named after it; a `#[path]`
@@ -187,9 +192,26 @@ impl DeclarationCollector<'_> {
                     None => module_dir.join(&name),
                 };
                 self.collect(items, &nested_dir, &nested_dir, &effective, depth + 1);
+                for path in &conditional_paths {
+                    let alternate = module_dir.join(path);
+                    self.collect(items, &alternate, &alternate, &effective, depth + 1);
+                }
                 continue;
             }
 
+            // A cfg_attr path can select another file in some configuration.
+            // Record every alternative conservatively; ignoring one could hide
+            // a production importer behind a test-only declaring site.
+            for path in conditional_paths {
+                self.record(
+                    normalize(&path_base.join(path)),
+                    Some(name.clone()),
+                    DeclarationKind::Exact,
+                    depth,
+                    test_gated,
+                    true,
+                );
+            }
             match declared_path {
                 Some(path) => {
                     let target = normalize(&path_base.join(path));
@@ -330,10 +352,16 @@ impl<'ast> Visit<'ast> for IncludeVisitor<'_> {
 /// The status a file starts from before any declaring site is read: an inner
 /// `#![cfg(test)]` is intrinsic and hard, a crate root that is not a test
 /// target is production, and everything else starts unknown.
-pub(crate) fn intrinsic_gate(syntax: &syn::File, relative: &Path) -> ExemptionGate {
+pub(crate) fn intrinsic_gate(
+    syntax: &syn::File,
+    relative: &Path,
+    targets: &TargetRoots,
+) -> ExemptionGate {
     if cfg::is_test_only(&syntax.attrs) {
         ExemptionGate::TestGated
-    } else if non_test_crate_root(relative) {
+    } else if targets.get(&path_text(relative)) == Some(&CargoTarget::Other)
+        || (!targets.contains_key(&path_text(relative)) && non_test_crate_root(relative))
+    {
         ExemptionGate::Ungated
     } else {
         ExemptionGate::Unknown
@@ -349,6 +377,7 @@ pub(crate) fn intrinsic_gate(syntax: &syn::File, relative: &Path) -> ExemptionGa
 pub(crate) fn resolve_gates(
     intrinsic: &BTreeMap<String, ExemptionGate>,
     declarations: &BTreeMap<String, Vec<ModuleDeclaration>>,
+    target_roots: &TargetRoots,
 ) -> BTreeMap<String, ExemptionGate> {
     let mut gates = intrinsic.clone();
     // A file nothing declares is still resolvable — a cargo test target is
@@ -365,7 +394,7 @@ pub(crate) fn resolve_gates(
                 .get(target)
                 .map(Vec::as_slice)
                 .unwrap_or_default();
-            let Some(gate) = gate_from_sites(target, sites, &gates) else {
+            let Some(gate) = gate_from_sites(target, sites, &gates, target_roots) else {
                 continue;
             };
             gates.insert(target.clone(), gate);
@@ -395,6 +424,7 @@ fn gate_from_sites(
     target: &str,
     sites: &[ModuleDeclaration],
     gates: &BTreeMap<String, ExemptionGate>,
+    target_roots: &TargetRoots,
 ) -> Option<ExemptionGate> {
     let contexts = sites
         .iter()
@@ -415,7 +445,7 @@ fn gate_from_sites(
     }
     // Cargo test-target membership is a context, so it certifies a file only
     // when nothing else claims to compile it.
-    if contexts.is_empty() && cargo_target_root(Path::new(target)) == Some(CargoTarget::Test) {
+    if contexts.is_empty() && target_roots.get(target) == Some(&CargoTarget::Test) {
         return Some(ExemptionGate::TestGated);
     }
     None
@@ -588,6 +618,37 @@ pub(crate) fn path_attribute(attributes: &[Attribute]) -> Option<String> {
     })
 }
 
+fn conditional_path_attributes(attributes: &[Attribute]) -> Vec<String> {
+    fn visit(meta: &Meta, paths: &mut Vec<String>) {
+        match meta {
+            Meta::NameValue(value) if value.path.is_ident("path") => {
+                if let Expr::Lit(expression) = &value.value
+                    && let Lit::Str(path) = &expression.lit
+                {
+                    paths.push(path.value());
+                }
+            }
+            Meta::List(list) if list.path.is_ident("cfg_attr") => {
+                use syn::parse::Parser;
+                let parser = syn::punctuated::Punctuated::<Meta, syn::Token![,]>::parse_terminated;
+                if let Ok(items) = parser.parse2(list.tokens.clone()) {
+                    for attribute in items.iter().skip(1) {
+                        visit(attribute, paths);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut paths = Vec::new();
+    for attribute in attributes {
+        if attribute.path().is_ident("cfg_attr") {
+            visit(&attribute.meta, &mut paths);
+        }
+    }
+    paths
+}
+
 /// Resolve `.` and `..` components of a `#[path]` or `include!` value without
 /// touching the filesystem, so `../../tests/common/update_ccs.rs` from
 /// `apps/conary/src/commands/test_helpers.rs` becomes
@@ -606,8 +667,8 @@ pub(crate) fn normalize(path: &Path) -> PathBuf {
     normalized
 }
 
-/// Every exempt-named file the cap check skipped, with the metrics the
-/// `EXEMPT:` rows and the stale-entry rule are decided from.
+/// Every file with a test filename, including files that retain normal caps.
+/// The report exposes both the measured content and its resolved context.
 #[derive(Default)]
 pub(crate) struct ExemptionReport {
     files: Vec<ExemptFile>,
@@ -623,7 +684,7 @@ impl ExemptionReport {
         self.files.push(ExemptFile { relative, metrics });
     }
 
-    /// The `EXEMPT:` rows and the `EXEMPT SUMMARY:` line, in scan order.
+    /// The `TEST FILE:` rows and the `TEST FILE SUMMARY:` line, in scan order.
     pub(crate) fn report(&self, gates: &BTreeMap<String, ExemptionGate>) -> String {
         let mut test_gated = 0usize;
         let mut ungated = 0usize;
@@ -637,7 +698,7 @@ impl ExemptionReport {
                 ExemptionGate::Unknown => unknown += 1,
             }
             lines.push_str(&format!(
-                "EXEMPT: {}\ttotal={}\tproduction={}\tinline_test={}\tgate={}\n",
+                "TEST FILE: {}\ttotal={}\tproduction={}\tinline_test={}\tgate={}\n",
                 file.relative,
                 file.metrics.total_lines,
                 file.metrics.production_lines,
@@ -646,7 +707,7 @@ impl ExemptionReport {
             ));
         }
         lines.push_str(&format!(
-            "EXEMPT SUMMARY: test-gated={test_gated} ungated={ungated} unknown={unknown}\n"
+            "TEST FILE SUMMARY: test-gated={test_gated} ungated={ungated} unknown={unknown}\n"
         ));
         lines
     }
