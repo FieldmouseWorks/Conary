@@ -165,3 +165,15 @@ fn test_annotation(meta: &Meta) -> Option<Predicate> {
         .collect();
     Some(Predicate::All(vec![condition, Predicate::Any(annotations)]))
 }
+
+/// Only discard a declaration when its combined cfg is provably impossible.
+pub(super) fn can_compile(attributes: &[Attribute]) -> bool {
+    let Some(predicates) = attributes
+        .iter()
+        .map(|attribute| effective_cfg(&attribute.meta))
+        .collect::<Option<Vec<_>>>()
+    else {
+        return true;
+    };
+    Predicate::All(predicates).satisfiable(&mut BTreeMap::new())
+}
