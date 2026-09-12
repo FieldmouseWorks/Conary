@@ -227,6 +227,8 @@ integration-test target membership establish test-only compilation. Production
 imports override test-target membership; unresolved files retain both caps.
 The gate reads offline Cargo metadata v1, honoring custom targets and disabled
 auto-discovery. A custom tree without a manifest has no Cargo target evidence.
+Literal and literal-concatenated `include!` paths participate in the graph;
+a source include whose path cannot be resolved fails the scan.
 `--report` shows every test filename as `TEST FILE:` with its measured content
 and context; cap-checked files also receive the ordinary row. An over-cap
 production file under a test filename can use an owned allowlist exception.

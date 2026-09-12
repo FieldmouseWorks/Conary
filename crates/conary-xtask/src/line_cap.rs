@@ -136,7 +136,10 @@ pub(crate) fn run(args: impl Iterator<Item = String>) -> Result<(), String> {
         let metrics = measure_source(&syntax, &source);
         measured.insert(&path, metrics);
         collect_module_declarations(&syntax, relative_path, &mut declarations, &targets);
-        collect_include_declarations(&syntax, relative_path, &mut declarations);
+        if let Err(error) = collect_include_declarations(&syntax, relative_path, &mut declarations)
+        {
+            errors.push(error);
+        }
         intrinsic_gates.insert(
             relative.clone(),
             intrinsic_gate(&syntax, relative_path, &targets),

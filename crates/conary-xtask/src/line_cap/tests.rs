@@ -772,7 +772,7 @@ impl FixtureRoot {
                 &mut declarations,
                 &fixture_targets(self.scanned().iter().map(String::as_str)),
             );
-            collect_include_declarations(&syntax, relative, &mut declarations);
+            collect_include_declarations(&syntax, relative, &mut declarations).unwrap();
         }
         declarations
     }
@@ -1543,7 +1543,7 @@ fn declarations_of(
             &mut declarations,
             &fixture_targets(sources.iter().map(|(path, _)| *path)),
         );
-        collect_include_declarations(&syntax, path, &mut declarations);
+        collect_include_declarations(&syntax, path, &mut declarations).unwrap();
         gates.insert(
             relative.to_string(),
             intrinsic_gate(
@@ -1725,5 +1725,29 @@ fn inline_path_attributes_use_the_containing_directory() {
     assert_eq!(
         relative_module_directory(Path::new("crates/x/src/owner/lib.rs")),
         Path::new("crates/x/src/owner/lib")
+    );
+}
+
+#[test]
+fn includes_cannot_hide_an_unresolved_production_import() {
+    let classified = classify(&[
+        (
+            "crates/x/src/lib.rs",
+            "#[cfg(test)] mod tests;\ninclude!(concat!(\"tests\", \".rs\"));\n",
+        ),
+        ("crates/x/src/tests.rs", "pub fn helper() {}\n"),
+    ]);
+    assert_eq!(
+        gate(&classified, "crates/x/src/tests.rs"),
+        ExemptionGate::Ungated
+    );
+    let syntax = syn::parse_file("include!(concat!(env!(\"INPUT_DIR\"), \"/tests.rs\"));").unwrap();
+    assert!(
+        collect_include_declarations(
+            &syntax,
+            Path::new("crates/x/src/lib.rs"),
+            &mut BTreeMap::new()
+        )
+        .is_err()
     );
 }

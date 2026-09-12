@@ -281,7 +281,7 @@ pub(crate) fn collect_include_declarations(
     syntax: &syn::File,
     relative: &Path,
     declarations: &mut BTreeMap<String, Vec<ModuleDeclaration>>,
-) {
+) -> Result<(), String> {
     let mut visitor = IncludeVisitor {
         declaring_file: path_text(relative),
         // The included path shares `#[path]`'s base: the containing file's
@@ -291,15 +291,25 @@ pub(crate) fn collect_include_declarations(
             .unwrap_or_else(|| Path::new(""))
             .to_path_buf(),
         inherited: Vec::new(),
+        unresolved: false,
         declarations,
     };
     visitor.visit_file(syntax);
+    if visitor.unresolved {
+        Err(format!(
+            "cannot resolve include! source path in {}: expected a string literal or literal concat! expression",
+            relative.display()
+        ))
+    } else {
+        Ok(())
+    }
 }
 
 pub(crate) struct IncludeVisitor<'a> {
     declaring_file: String,
     file_dir: PathBuf,
     inherited: Vec<Attribute>,
+    unresolved: bool,
     declarations: &'a mut BTreeMap<String, Vec<ModuleDeclaration>>,
 }
 
@@ -308,12 +318,18 @@ impl IncludeVisitor<'_> {
         if !mac.path.is_ident("include") {
             return;
         }
-        let Ok(path) = syn::parse2::<syn::LitStr>(mac.tokens.clone()) else {
+        let Some(path) = syn::parse2::<syn::Expr>(mac.tokens.clone())
+            .ok()
+            .and_then(include_path)
+        else {
+            // An opaque include may reach any scanned file. Fail the scan
+            // rather than certifying exemptions from an incomplete graph.
+            self.unresolved = true;
             return;
         };
         let mut effective = self.inherited.clone();
         effective.extend(cfg_attributes(attributes));
-        let target = normalize(&self.file_dir.join(path.value()));
+        let target = normalize(&self.file_dir.join(path));
         self.declarations
             .entry(path_text(&target))
             .or_default()
@@ -325,6 +341,27 @@ impl IncludeVisitor<'_> {
                 test_gated: cfg::is_test_only(&effective),
                 is_module: false,
             });
+    }
+}
+
+fn include_path(expression: Expr) -> Option<String> {
+    match expression {
+        Expr::Lit(literal) => match literal.lit {
+            Lit::Str(path) => Some(path.value()),
+            _ => None,
+        },
+        Expr::Paren(parenthesized) => include_path(*parenthesized.expr),
+        Expr::Macro(expression) if expression.mac.path.is_ident("concat") => {
+            use syn::parse::Parser;
+            let parser = syn::punctuated::Punctuated::<Expr, syn::Token![,]>::parse_terminated;
+            parser
+                .parse2(expression.mac.tokens)
+                .ok()?
+                .into_iter()
+                .map(include_path)
+                .collect::<Option<String>>()
+        }
+        _ => None,
     }
 }
 
