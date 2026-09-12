@@ -31,13 +31,18 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::path::{Component, Path, PathBuf};
 
+use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
 use syn::{Attribute, Expr, Item, Lit};
 
+use super::attributes::{visit_attributed_nodes, visit_nodes};
 use super::cfg;
 use super::paths::module_paths;
 use super::targets::TargetRoots;
-use super::{FileMetrics, cfg_attributes, item_attributes, path_text};
+use super::{
+    FileMetrics, cfg_attributes, foreign_item_attributes, impl_item_attributes, item_attributes,
+    path_text, trait_item_attributes,
+};
 
 /// How an exempt-named file is compiled, as far as the declaration graph can
 /// establish it.
@@ -268,7 +273,7 @@ pub(crate) fn collect_include_declarations(
             .parent()
             .unwrap_or_else(|| Path::new(""))
             .to_path_buf(),
-        inherited: Vec::new(),
+        inherited: syntax.attrs.clone(),
         unresolved: false,
         declarations,
     };
@@ -292,8 +297,22 @@ pub(crate) struct IncludeVisitor<'a> {
 }
 
 impl IncludeVisitor<'_> {
-    fn record(&mut self, attributes: &[Attribute], mac: &syn::Macro) {
-        if !mac.path.is_ident("include") {
+    fn descend(
+        &mut self,
+        attributes: &[Attribute],
+        _: proc_macro2::Span,
+        visit: impl FnOnce(&mut Self),
+    ) {
+        let depth = self.inherited.len();
+        self.inherited.extend_from_slice(attributes);
+        if cfg::can_compile(&self.inherited) {
+            visit(self);
+        }
+        self.inherited.truncate(depth);
+    }
+
+    fn record(&mut self, mac: &syn::Macro) {
+        if !mac.path.is_ident("include") || !cfg::can_compile(&self.inherited) {
             return;
         }
         let Some(path) = syn::parse2::<syn::Expr>(mac.tokens.clone())
@@ -305,8 +324,6 @@ impl IncludeVisitor<'_> {
             self.unresolved = true;
             return;
         };
-        let mut effective = self.inherited.clone();
-        effective.extend(cfg_attributes(attributes));
         let target = normalize(&self.file_dir.join(path));
         self.declarations
             .entry(path_text(&target))
@@ -316,7 +333,7 @@ impl IncludeVisitor<'_> {
                 name: None,
                 kind: DeclarationKind::Exact,
                 depth: 0,
-                test_gated: cfg::is_test_only(&effective),
+                test_gated: cfg::is_test_only(&self.inherited),
                 is_module: false,
             });
     }
@@ -344,23 +361,34 @@ fn include_path(expression: Expr) -> Option<String> {
 }
 
 impl<'ast> Visit<'ast> for IncludeVisitor<'_> {
+    visit_attributed_nodes!();
+
     fn visit_item(&mut self, item: &'ast Item) {
-        let depth = self.inherited.len();
-        self.inherited.extend(cfg_attributes(item_attributes(item)));
-        visit::visit_item(self, item);
-        self.inherited.truncate(depth);
+        self.descend(item_attributes(item), item.span(), |visitor| {
+            visit::visit_item(visitor, item)
+        });
     }
 
-    fn visit_item_macro(&mut self, node: &'ast syn::ItemMacro) {
-        self.record(&node.attrs, &node.mac);
+    fn visit_impl_item(&mut self, item: &'ast syn::ImplItem) {
+        self.descend(impl_item_attributes(item), item.span(), |visitor| {
+            visit::visit_impl_item(visitor, item)
+        });
     }
 
-    fn visit_stmt_macro(&mut self, node: &'ast syn::StmtMacro) {
-        self.record(&node.attrs, &node.mac);
+    fn visit_trait_item(&mut self, item: &'ast syn::TraitItem) {
+        self.descend(trait_item_attributes(item), item.span(), |visitor| {
+            visit::visit_trait_item(visitor, item)
+        });
     }
 
-    fn visit_expr_macro(&mut self, node: &'ast syn::ExprMacro) {
-        self.record(&node.attrs, &node.mac);
+    fn visit_foreign_item(&mut self, item: &'ast syn::ForeignItem) {
+        self.descend(foreign_item_attributes(item), item.span(), |visitor| {
+            visit::visit_foreign_item(visitor, item)
+        });
+    }
+
+    fn visit_macro(&mut self, node: &'ast syn::Macro) {
+        self.record(node);
     }
 }
 

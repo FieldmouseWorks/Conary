@@ -1809,3 +1809,81 @@ fn conditional_default_path_is_gated_by_its_complement() {
         ExemptionGate::TestGated
     );
 }
+
+#[test]
+fn included_test_files_inherit_all_enclosing_attributed_nodes() {
+    for source in [
+        r#"fn run() { #[cfg(test)] { include!("tests.rs"); } }"#,
+        r#"fn run() { #[cfg(test)] let _value = { include!("tests.rs"); 0 }; }"#,
+        r#"fn run() { match 0 { #[cfg(test)] 0 => { include!("tests.rs"); }, _ => () } }"#,
+        r#"struct Owner; impl Owner { #[cfg(test)] fn run() { include!("tests.rs"); } }"#,
+        r#"trait Owner { #[cfg(test)] fn run() { include!("tests.rs"); } }"#,
+        r#"#[test] fn run() { include!("tests.rs"); }"#,
+        r#"fn run() { #[cfg(feature = "x")] { #[cfg(any(test, not(feature = "x")))] { include!("tests.rs"); } } }"#,
+    ] {
+        let classified = classify(&[
+            ("crates/x/src/lib.rs", source),
+            ("crates/x/src/tests.rs", "fn helper() {}\n"),
+        ]);
+        assert_eq!(
+            gate(&classified, "crates/x/src/tests.rs"),
+            ExemptionGate::TestGated,
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn enclosing_include_conditions_do_not_escape_their_scope() {
+    for source in [
+        r#"fn run() { #[cfg(test)] { include!("tests.rs"); } include!("tests.rs"); }"#,
+        r#"struct Owner; impl Owner { #[cfg(test)] fn test() { include!("tests.rs"); } fn production() { include!("tests.rs"); } }"#,
+        r#"fn run() { #[cfg_attr(feature = "x", cfg(test))] { include!("tests.rs"); } }"#,
+    ] {
+        let classified = classify(&[
+            ("crates/x/src/lib.rs", source),
+            ("crates/x/src/tests.rs", "fn helper() {}\n"),
+        ]);
+        assert_eq!(
+            gate(&classified, "crates/x/src/tests.rs"),
+            ExemptionGate::Ungated,
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn impossible_include_sites_do_not_override_live_test_declarations() {
+    for dead_site in [
+        r#"#[cfg(any())] include!("tests.rs");"#,
+        r#"#[cfg(all(test, not(test)))] include!("tests.rs");"#,
+        r#"#[cfg_attr(all(), cfg(any()))] include!("tests.rs");"#,
+        r#"fn run() { #[cfg(feature = "x")] { #[cfg(not(feature = "x"))] { include!("tests.rs"); } } }"#,
+    ] {
+        let source = format!("#[cfg(test)] mod tests;\n{dead_site}");
+        let classified = classify(&[
+            ("crates/x/src/lib.rs", &source),
+            ("crates/x/src/tests.rs", "fn helper() {}\n"),
+        ]);
+        assert_eq!(
+            gate(&classified, "crates/x/src/tests.rs"),
+            ExemptionGate::TestGated,
+            "{dead_site}"
+        );
+    }
+}
+
+#[test]
+fn impossible_include_paths_are_discarded_before_path_resolution() {
+    for source in [
+        r#"#[cfg(any())] include!(env!("INPUT"));"#,
+        r#"fn run() { #[cfg(any())] { include!(env!("INPUT")); } }"#,
+        r#"#![cfg(feature = "x")] #[cfg(not(feature = "x"))] include!(env!("INPUT"));"#,
+    ] {
+        let syntax = syn::parse_file(source).unwrap();
+        let mut declarations = BTreeMap::new();
+        collect_include_declarations(&syntax, Path::new("crates/x/src/lib.rs"), &mut declarations)
+            .unwrap();
+        assert!(declarations.is_empty(), "{source}");
+    }
+}

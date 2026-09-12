@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-13
-revision: 100
+revision: 101
 summary: Route features to owned paths and proof, including context-aware test-file caps, Cargo target evidence, and live exception ownership.
 ---
 
@@ -1287,7 +1287,10 @@ with `test` unset under any assignment of the other atoms.
 Conditional `cfg` attributes introduced by nested `cfg_attr` retain the
 unrestricted branch when their condition is false.
 Attributed fields, statements, and expressions participate in the same span
-count as items.
+count as items. `crates/conary-xtask/src/line_cap/attributes.rs` owns the shared
+attributed-node traversal for span measurement and include declarations. Includes
+inherit enclosing conditions; provably impossible sites add no declaration and
+need no path resolution.
 Attributes whose final path segment is `test`, including conditional annotations
 enabled by `cfg_attr` in a test build, also mark inline tests.
 Files with more than 300 total test-only lines fail. Files named `tests.rs`
