@@ -787,22 +787,38 @@ fn profile_streaming_composition_rejects_contradictory_duplicate_identity() {
     assert!(error.to_string().contains("disagrees between repositories"));
 }
 
+const RSS_CHILD_ENV: &str = "CONARY_SLICE3_CATALOG_RSS_CHILD";
+const RSS_CHILD_SCRATCH_ENV: &str = "CONARY_SLICE3_CATALOG_RSS_SCRATCH";
+const RSS_TEST_NAME: &str =
+    "repository::catalog::profile::tests::bounded_source_and_profile_catalog_peak_rss";
+
+/// Retain scratch in the parent until the child exits, including signal exits.
+fn run_catalog_rss_child(mut command: std::process::Command) -> std::process::Output {
+    let scratch = tempfile::Builder::new()
+        .prefix("conary-catalog-rss-")
+        .tempdir()
+        .expect("create parent-owned catalog RSS scratch");
+    command
+        .env(RSS_CHILD_SCRATCH_ENV, scratch.path())
+        .output()
+        .expect("run catalog RSS child")
+}
+
 #[test]
 fn bounded_source_and_profile_catalog_peak_rss() {
-    const CHILD_ENV: &str = "CONARY_SLICE3_CATALOG_RSS_CHILD";
-    if std::env::var_os(CHILD_ENV).is_none() {
-        let output = std::process::Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "repository::catalog::profile::tests::bounded_source_and_profile_catalog_peak_rss",
-                "--nocapture",
-            ])
-            .env(CHILD_ENV, "1")
-            .output()
-            .unwrap();
+    if std::env::var_os(RSS_CHILD_ENV).is_none() {
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command
+            .args(["--exact", RSS_TEST_NAME, "--nocapture"])
+            .env(RSS_CHILD_ENV, "1");
+        let output = run_catalog_rss_child(command);
         print!("{}", String::from_utf8_lossy(&output.stdout));
         std::io::stderr().write_all(&output.stderr).unwrap();
-        assert!(output.status.success(), "catalog RSS child failed");
+        assert!(
+            output.status.success(),
+            "catalog RSS child failed with {}",
+            output.status
+        );
         assert!(
             String::from_utf8_lossy(&output.stdout).contains("SLICE3_VM_HWM_KIB="),
             "catalog RSS child did not report VmHWM"
@@ -812,14 +828,13 @@ fn bounded_source_and_profile_catalog_peak_rss() {
 
     const PACKAGES_PER_SOURCE: usize = 5_000;
     const RSS_LIMIT_KIB: u64 = 384 * 1024;
-    let target_root = std::env::var_os("CARGO_TARGET_DIR")
+    let scratch_root = std::env::var_os(RSS_CHILD_SCRATCH_ENV)
         .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| std::env::current_dir().unwrap().join("target"));
-    std::fs::create_dir_all(&target_root).unwrap();
+        .expect("catalog RSS child requires the parent-owned scratch directory");
     let directory = tempfile::Builder::new()
-        .prefix("slice3-catalog-rss-")
-        .tempdir_in(target_root)
-        .unwrap();
+        .prefix("workload-")
+        .tempdir_in(&scratch_root)
+        .expect("create the RSS workload scratch inside the parent-owned directory");
 
     let build_source = |repository_identity: &str, marker: char, path: &std::path::Path| {
         let scope = CatalogScopeV1::Source {
@@ -903,6 +918,38 @@ fn bounded_source_and_profile_catalog_peak_rss() {
         high_water_kib < RSS_LIMIT_KIB,
         "VmHWM {high_water_kib} KiB exceeded fixed {RSS_LIMIT_KIB} KiB bound"
     );
+}
+
+#[test]
+fn catalog_rss_scratch_is_reclaimed_after_child_exit() {
+    use std::os::unix::process::ExitStatusExt;
+
+    for (termination, expected_code, expected_signal) in [
+        ("exit 0", Some(0), None),
+        ("exit 17", Some(17), None),
+        ("kill -KILL $$", None, Some(9)),
+    ] {
+        let mut command = std::process::Command::new("/bin/sh");
+        command.args([
+            "-ec",
+            &format!(
+                "printf scratch > \"${RSS_CHILD_SCRATCH_ENV}/workload.sqlite\"; \
+                 printf '%s' \"${RSS_CHILD_SCRATCH_ENV}\"; {termination}"
+            ),
+        ]);
+        let output = run_catalog_rss_child(command);
+        assert_eq!(output.status.code(), expected_code);
+        assert_eq!(output.status.signal(), expected_signal);
+        let scratch = std::path::PathBuf::from(String::from_utf8(output.stdout).unwrap());
+        assert!(
+            scratch.is_absolute(),
+            "child did not report its scratch path"
+        );
+        assert!(
+            !scratch.exists(),
+            "scratch survived child exit: {scratch:?}"
+        );
+    }
 }
 
 fn vm_hwm_kib() -> Option<u64> {
