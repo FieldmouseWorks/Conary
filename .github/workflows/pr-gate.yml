@@ -333,6 +333,9 @@ jobs:
 
   line-cap:
     name: line-cap
+    permissions:
+      contents: read
+      issues: read
     runs-on: ubuntu-latest
     needs: gnu-compiler-cache
     if: ${{ always() }}
@@ -349,6 +352,12 @@ jobs:
         run: bash scripts/check-line-cap.sh
       - name: Test Rust non-test line cap checker
         run: bash scripts/test-line-cap.sh
+      - name: Test issue-state producer and live checks
+        run: bash scripts/test-line-cap-issue-state.sh
+      - name: Check current decomposition issue ownership
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/refresh-line-cap-issue-state.sh --check
       - name: Test typed line counter
         run: cargo test -p conary-xtask
       - name: Retain line-cap compiler-cache evidence

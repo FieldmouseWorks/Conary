@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-09-08
-revision: 98
+last_updated: 2026-09-12
+revision: 99
 summary: Route features, CLI diagnostics, and progress to their smallest start context, owned paths, focused proof, interaction gates, and safety constraints.
 ---
 
@@ -1268,10 +1268,12 @@ contributor guidance, and feature ownership routing.
 
 **Paths:** `crates/conary-xtask/**`; `scripts/check-line-cap.sh`;
 `scripts/test-line-cap.sh`; `scripts/line-cap-allowlist.txt`;
-`scripts/line-cap-issue-state.txt`; `scripts/refresh-line-cap-issue-state.sh`.
+`scripts/line-cap-issue-state.txt`; `scripts/refresh-line-cap-issue-state.sh`;
+`scripts/test-line-cap-issue-state.sh`; `.github/workflows/line-cap-issue-state.yml`.
 
 **Focused proof:** `cargo test -p conary-xtask`;
-`bash scripts/check-line-cap.sh`; `bash scripts/test-line-cap.sh`.
+`bash scripts/check-line-cap.sh`; `bash scripts/test-line-cap.sh`;
+`bash scripts/test-line-cap-issue-state.sh`.
 
 **Interaction gate:** `bash scripts/check-doc-truth.sh` and
 `bash scripts/agent-context.sh --validate` when policy or routing changes.
@@ -1299,8 +1301,12 @@ citation the snapshot records `CLOSED`, a citation absent from the snapshot,
 and any mismatch between the snapshot's recorded canonical allowlist entries
 and the current allowlist. The `refreshed:` date is informational; filesystem
 modification times do not affect validation. The checker performs no network
-I/O, so it cannot detect issue-state changes made after the snapshot was
-refreshed. Every Rust file, including excluded test files, must begin exactly
+I/O. The PR gate and `line-cap-issue-state` workflow separately run
+`scripts/refresh-line-cap-issue-state.sh --check` against the canonical GitHub
+repository. Issue closure/reopening/deletion events and the six-hour schedule
+detect later closures; unavailable or invalid responses fail the check. Manual
+dispatch is available, and check mode never rewrites the snapshot.
+Every Rust file, including excluded test files, must begin exactly
 with `// {repo-relative path}`; missing and legacy headers fail the gate.
 
 ## Developer Build Environment
