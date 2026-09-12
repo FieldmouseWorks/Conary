@@ -1887,3 +1887,62 @@ fn impossible_include_paths_are_discarded_before_path_resolution() {
         assert!(declarations.is_empty(), "{source}");
     }
 }
+
+#[test]
+fn production_modules_inside_blocks_override_test_context() {
+    for source in [
+        r#"pub fn run() { #[path = "tests.rs"] mod implementation; }"#,
+        r#"pub fn run() { #[cfg(test)] {} #[path = "tests.rs"] mod implementation; }"#,
+        r#"const VALUE: () = { #[path = "tests.rs"] mod implementation; };"#,
+        r#"struct Owner; impl Owner { fn run() { #[path = "tests.rs"] mod implementation; } }"#,
+        r#"fn run() { #[cfg_attr(feature = "x", cfg(test))] { #[path = "tests.rs"] mod implementation; } }"#,
+    ] {
+        let fixture = FixtureRoot::new("nested-production-module");
+        fixture.write(
+            "crates/x/src/lib.rs",
+            &format!("#[cfg(test)] mod tests;\n{source}"),
+        );
+        fixture.write("crates/x/src/tests.rs", "pub fn helper() {}\n");
+        let gates = fixture.gates();
+        assert_eq!(
+            resolved_gate(&gates, "crates/x/src/tests.rs"),
+            ExemptionGate::Ungated,
+            "{source}"
+        );
+        let attribution = sibling_attribution(
+            &fixture.path,
+            &fixture.resolve("crates/x/src/lib.rs"),
+            &gates,
+            &mut MeasuredFiles::default(),
+        );
+        assert_eq!(attribution.attributed_test_lines, 0, "{source}");
+    }
+}
+
+#[test]
+fn nested_module_conditions_and_sibling_scope_are_preserved() {
+    for source in [
+        r#"fn run() { #[cfg(test)] { #[path = "tests.rs"] mod implementation; } }"#,
+        r#"#[test] fn run() { #[path = "tests.rs"] mod implementation; }"#,
+        r#"struct Owner; impl Owner { #[cfg(test)] fn run() { #[path = "tests.rs"] mod implementation; } }"#,
+        r#"trait Owner { #[cfg(test)] fn run() { #[path = "tests.rs"] mod implementation; } }"#,
+    ] {
+        let fixture = FixtureRoot::new("nested-test-module");
+        fixture.write("crates/x/src/lib.rs", source);
+        fixture.write("crates/x/src/tests.rs", "fn helper() {}\n");
+        assert_eq!(
+            resolved_gate(&fixture.gates(), "crates/x/src/tests.rs"),
+            ExemptionGate::TestGated,
+            "{source}"
+        );
+        assert!(
+            fixture.resolve("crates/x/src/lib.rs").is_empty(),
+            "block-local modules are not direct siblings: {source}"
+        );
+    }
+    let (_, declarations) = declarations_of(&[(
+        "crates/x/src/lib.rs",
+        r#"fn run() { #[cfg(any())] { #[path = "tests.rs"] mod implementation; } }"#,
+    )]);
+    assert!(declarations.is_empty());
+}

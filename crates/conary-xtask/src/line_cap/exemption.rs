@@ -180,6 +180,16 @@ impl DeclarationCollector<'_> {
     ) {
         for item in items {
             let Item::Mod(item_module) = item else {
+                // Item declarations inside function/const/expression blocks
+                // remain real imports, but are not the parent's own siblings.
+                NestedModuleVisitor {
+                    collector: self,
+                    module_dir,
+                    path_base,
+                    inherited: inherited.to_vec(),
+                    depth: depth + 1,
+                }
+                .visit_item(item);
                 continue;
             };
             let mut effective = inherited.to_vec();
@@ -251,6 +261,71 @@ impl DeclarationCollector<'_> {
                 test_gated,
                 is_module,
             });
+    }
+}
+
+/// Follow module items inside attributed non-module syntax using the same
+/// conditions as includes. The collector still owns path variants and module
+/// directories; this visitor only discovers nested item declarations.
+struct NestedModuleVisitor<'a, 'b> {
+    collector: &'a mut DeclarationCollector<'b>,
+    module_dir: &'a Path,
+    path_base: &'a Path,
+    inherited: Vec<Attribute>,
+    depth: usize,
+}
+
+impl NestedModuleVisitor<'_, '_> {
+    fn descend(
+        &mut self,
+        attributes: &[Attribute],
+        _: proc_macro2::Span,
+        visit: impl FnOnce(&mut Self),
+    ) {
+        let depth = self.inherited.len();
+        self.inherited.extend_from_slice(attributes);
+        if cfg::can_compile(&self.inherited) {
+            visit(self);
+        }
+        self.inherited.truncate(depth);
+    }
+}
+
+impl<'ast> Visit<'ast> for NestedModuleVisitor<'_, '_> {
+    visit_attributed_nodes!();
+
+    fn visit_item(&mut self, item: &'ast Item) {
+        if matches!(item, Item::Mod(_)) {
+            self.collector.collect(
+                std::slice::from_ref(item),
+                self.module_dir,
+                self.path_base,
+                &self.inherited,
+                self.depth,
+            );
+        } else {
+            self.descend(item_attributes(item), item.span(), |visitor| {
+                visit::visit_item(visitor, item)
+            });
+        }
+    }
+
+    fn visit_impl_item(&mut self, item: &'ast syn::ImplItem) {
+        self.descend(impl_item_attributes(item), item.span(), |visitor| {
+            visit::visit_impl_item(visitor, item)
+        });
+    }
+
+    fn visit_trait_item(&mut self, item: &'ast syn::TraitItem) {
+        self.descend(trait_item_attributes(item), item.span(), |visitor| {
+            visit::visit_trait_item(visitor, item)
+        });
+    }
+
+    fn visit_foreign_item(&mut self, item: &'ast syn::ForeignItem) {
+        self.descend(foreign_item_attributes(item), item.span(), |visitor| {
+            visit::visit_foreign_item(visitor, item)
+        });
     }
 }
 

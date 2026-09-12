@@ -1,7 +1,7 @@
 // crates/conary-xtask/src/line_cap/attributes.rs
 
 //! Shared traversal of attributed syntax nodes for span and declaration analysis.
-//! Both visitors supply `descend` so enclosing conditions cover the same nodes.
+//! All visitors supply `descend` so enclosing conditions cover the same nodes.
 
 // Each of these typed nodes owns outer attributes and an exact syntax span.
 macro_rules! visit_nodes {
