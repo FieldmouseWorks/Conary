@@ -464,6 +464,116 @@ if grep -q 'SOURCE ROOTS' <<<"$(run_checker)"; then
     exit 1
 fi
 
+# Exemption classification (issue #997). Every exempt-named file is reported and
+# classified instead of being silently dropped, and the classification is
+# report-only: it must never move the exit code. The gates below cover an inner
+# `#![cfg(test)]`, a `#[cfg(test)]` declaring site, a production declaring site,
+# a cargo integration-test target and a file no declaration reaches.
+rm -f "$fixture_root/crates/fixture/src/tests.rs"
+rm -rf "$fixture_root/crates/fixture/src/tests"
+mkdir -p "$fixture_root/crates/fixture/src/gated_small" \
+    "$fixture_root/crates/fixture/src/gated_large" \
+    "$fixture_root/crates/fixture/src/ungated_large" \
+    "$fixture_root/crates/fixture/src/orphan" \
+    "$fixture_root/crates/fixture/src/tests" \
+    "$fixture_root/crates/fixture/tests"
+write_fixture "$fixture_root/crates/fixture/src/lib.rs" <<'EOF'
+mod gated_small;
+mod gated_large;
+mod ungated_large;
+#[path = "../tests/shared.rs"]
+pub mod shared;
+EOF
+write_fixture "$fixture_root/crates/fixture/src/gated_small.rs" <<'EOF'
+#[cfg(test)]
+mod tests;
+EOF
+write_lines "$fixture_root/crates/fixture/src/gated_small/tests.rs" 40
+write_fixture "$fixture_root/crates/fixture/src/gated_large.rs" <<'EOF'
+#[cfg(test)]
+mod tests;
+EOF
+write_lines "$fixture_root/crates/fixture/src/gated_large/tests.rs" 1200
+write_fixture "$fixture_root/crates/fixture/src/ungated_large.rs" <<'EOF'
+mod tests;
+EOF
+write_lines "$fixture_root/crates/fixture/src/ungated_large/tests.rs" 1200
+write_fixture "$fixture_root/crates/fixture/src/tests/inner_gate.rs" <<'EOF'
+#![cfg(test)]
+fn helper() {}
+EOF
+write_fixture "$fixture_root/crates/fixture/src/orphan/tests.rs" <<'EOF'
+fn helper() {}
+EOF
+write_fixture "$fixture_root/crates/fixture/tests/integration.rs" <<'EOF'
+fn integration() {}
+EOF
+write_fixture "$fixture_root/crates/fixture/tests/shared.rs" <<'EOF'
+pub fn helper() {}
+EOF
+
+: > "$allowlist"
+write_issue_state "$issue_state" "$(date -u +%Y-%m-%d)" "123 OPEN"
+exempt_report="$(run_checker --report)"
+grep -q $'EXEMPT: crates/fixture/src/gated_small/tests.rs\ttotal=40\tproduction=40\tinline_test=0\tgate=test-gated' <<<"$exempt_report"
+grep -q $'EXEMPT: crates/fixture/src/gated_large/tests.rs\ttotal=1200\tproduction=1200\tinline_test=0\tgate=test-gated' <<<"$exempt_report"
+grep -q $'EXEMPT: crates/fixture/src/ungated_large/tests.rs\ttotal=1200\tproduction=1200\tinline_test=0\tgate=ungated' <<<"$exempt_report"
+grep -q $'EXEMPT: crates/fixture/src/tests/inner_gate.rs\ttotal=3\tproduction=0\tinline_test=3\tgate=test-gated' <<<"$exempt_report"
+grep -q $'EXEMPT: crates/fixture/src/orphan/tests.rs\ttotal=2\tproduction=2\tinline_test=0\tgate=unknown' <<<"$exempt_report"
+grep -q $'EXEMPT: crates/fixture/tests/integration.rs\ttotal=2\tproduction=2\tinline_test=0\tgate=test-gated' <<<"$exempt_report"
+grep -q $'EXEMPT: crates/fixture/tests/shared.rs\ttotal=2\tproduction=2\tinline_test=0\tgate=ungated' <<<"$exempt_report"
+grep -q 'EXEMPT SUMMARY: test-gated=4 ungated=2 unknown=1' <<<"$exempt_report"
+# An exempt-named file never gains an ordinary row, whatever its gate.
+if grep -q $'^crates/fixture/src/ungated_large/tests.rs\t' <<<"$exempt_report"; then
+    echo "ERROR: exempt-named file gained an ordinary report row" >&2
+    exit 1
+fi
+
+# The allowlist stale-entry rule for exempt-named files (#997 correction). An
+# exception counts as used only when it excuses a cap violation the gate
+# enforces; the gate enforces no cap on a file whose name exempts it, so a
+# listed exempt-named file is stale however large it measures, and its size
+# never produces an error of its own.
+write_lines "$fixture_root/crates/fixture/src/control_over_cap.rs" 1001
+
+# Counterfactual for a cap-checked file: the entry is used, and removing it
+# restores the exact cap error the entry suppresses.
+echo 'crates/fixture/src/control_over_cap.rs #123' > "$allowlist"
+write_issue_state "$issue_state" "$(date -u +%Y-%m-%d)" "123 OPEN"
+used_out="$(run_checker)"
+grep -q 'ALLOWLISTED: crates/fixture/src/control_over_cap.rs production=1001 inline_test=0 issue=#123' <<<"$used_out"
+if grep -q 'stale line-cap allowlist entry' <<<"$used_out"; then
+    echo "ERROR: a cap-checked exception was reported stale" >&2
+    exit 1
+fi
+: > "$allowlist"
+write_issue_state "$issue_state" "$(date -u +%Y-%m-%d)" "123 OPEN"
+if run_checker >"$fixture_root/control-removed.out" 2>&1; then
+    echo "ERROR: removing the cap-checked exception restored no cap error" >&2
+    exit 1
+fi
+grep -q 'control_over_cap.rs has 1001 non-test lines' "$fixture_root/control-removed.out"
+
+printf '%s\n' \
+    'crates/fixture/src/gated_small/tests.rs #123' \
+    'crates/fixture/src/gated_large/tests.rs #123' \
+    'crates/fixture/src/ungated_large/tests.rs #123' > "$allowlist"
+write_issue_state "$issue_state" "$(date -u +%Y-%m-%d)" "123 OPEN"
+if run_checker >"$fixture_root/exempt-stale.out" 2>&1; then
+    echo "ERROR: a listed exempt-named file was not reported stale" >&2
+    exit 1
+fi
+for exempt_entry in gated_small/tests.rs gated_large/tests.rs ungated_large/tests.rs; do
+    grep -q "stale line-cap allowlist entry: crates/fixture/src/$exempt_entry #123" "$fixture_root/exempt-stale.out"
+    if grep -q "crates/fixture/src/$exempt_entry has " "$fixture_root/exempt-stale.out"; then
+        echo "ERROR: exempt-named $exempt_entry was cap-checked" >&2
+        exit 1
+    fi
+done
+: > "$allowlist"
+write_issue_state "$issue_state" "$(date -u +%Y-%m-%d)" "123 OPEN"
+rm "$fixture_root/crates/fixture/src/control_over_cap.rs"
+
 write_fixture "$fixture_root/crates/fixture/src/malformed.rs" <<'EOF'
 fn malformed( {
 EOF
