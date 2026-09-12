@@ -237,6 +237,10 @@ ownership-based reorganization named by that issue. Thin registration,
 dispatch, and re-export wiring may remain in the large hub only through an
 issue-linked exception.
 
+Custom scans through `scripts/check-line-cap.sh` that override `--root` or
+`--allowlist` must also supply `--issue-state`. An omitted snapshot is a usage
+error; the wrapper never substitutes repository state for a custom scan.
+
 Large files are review signals. Use `scripts/line-count-report.sh` to refresh
 the current hotspot list when planning broad maintenance work. Do not split a
 file only to reduce line count; split when a responsibility has a clearer home.
