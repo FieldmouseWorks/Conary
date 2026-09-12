@@ -105,6 +105,18 @@ write_fixture "$fixture_root/crates/fixture/src/lib.rs" <<'EOF'
 #[cfg(test)]
 mod tests;
 EOF
+# Cargo supplies the fixture's crate-root context, just as for a repository scan.
+cat > "$fixture_root/Cargo.toml" <<'EOF'
+[workspace]
+members = ["crates/fixture"]
+resolver = "3"
+EOF
+cat > "$fixture_root/crates/fixture/Cargo.toml" <<'EOF'
+[package]
+name = "fixture"
+version = "0.0.0"
+edition = "2024"
+EOF
 cat >> "$fixture_root/crates/fixture/src/tests.rs" <<'EOF'
 mod helper;
 EOF

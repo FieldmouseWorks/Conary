@@ -37,12 +37,15 @@ use syn::{Attribute, Expr, Item, Lit};
 
 use super::attributes::{visit_attributed_nodes, visit_nodes};
 use super::cfg;
+
+mod graph;
 use super::paths::module_paths;
 use super::targets::TargetRoots;
 use super::{
     FileMetrics, cfg_attributes, foreign_item_attributes, impl_item_attributes, item_attributes,
     path_text, trait_item_attributes,
 };
+pub(crate) use graph::{SourceGraph, collect_source_graph};
 
 /// How an exempt-named file is compiled, as far as the declaration graph can
 /// establish it.
@@ -105,9 +108,9 @@ enum DeclarationKind {
 }
 
 /// One declaring site that makes a file part of another file's compilation.
-#[derive(Debug)]
-pub(crate) struct ModuleDeclaration {
-    declaring_file: String,
+#[derive(Debug, Clone)]
+pub(crate) struct ModuleDeclaration<K = String> {
+    declaring_file: K,
     /// The declared name for `mod name;`, which pairs the flat and `mod.rs`
     /// candidates; `None` for `#[path]` and `include!`, whose target is exact.
     name: Option<String>,
@@ -131,7 +134,7 @@ pub(crate) fn collect_module_declarations(
     syntax: &syn::File,
     relative: &Path,
     declarations: &mut BTreeMap<String, Vec<ModuleDeclaration>>,
-    targets: &TargetRoots,
+    module_dir: &Path,
 ) {
     let mut collector = DeclarationCollector {
         declaring_file: path_text(relative),
@@ -147,15 +150,8 @@ pub(crate) fn collect_module_declarations(
             .to_path_buf(),
         declarations,
     };
-    let module_dir = if targets.contains_key(&path_text(relative)) {
-        relative
-            .parent()
-            .unwrap_or_else(|| Path::new(""))
-            .to_path_buf()
-    } else {
-        relative_module_directory(relative)
-    };
-    collector.run(&syntax.items, &module_dir, &syntax.attrs);
+
+    collector.run(&syntax.items, module_dir, &syntax.attrs);
 }
 
 pub(crate) struct DeclarationCollector<'a> {
@@ -467,36 +463,17 @@ impl<'ast> Visit<'ast> for IncludeVisitor<'_> {
     }
 }
 
-/// The status a file starts from before any declaring site is read: an inner
-/// `#![cfg(test)]` is intrinsic and hard, a crate root that is not a test
-/// target is production, and everything else starts unknown.
-pub(crate) fn intrinsic_gate(
-    syntax: &syn::File,
-    relative: &Path,
-    targets: &TargetRoots,
-) -> ExemptionGate {
-    if cfg::is_test_only(&syntax.attrs) {
-        ExemptionGate::TestGated
-    } else if targets.get(&path_text(relative)) == Some(&CargoTarget::Other)
-        || (!targets.contains_key(&path_text(relative)) && non_test_crate_root(relative))
-    {
-        ExemptionGate::Ungated
-    } else {
-        ExemptionGate::Unknown
-    }
-}
-
-/// Resolve every file's gate from the declaration graph until it stabilizes.
+/// Resolve every load context's gate from the declaration graph until it stabilizes.
 ///
 /// A determined answer is never revised, which is what makes the iteration
 /// terminate and order-independent: an intrinsic gate is permanent, and a file
 /// can only be determined from sites whose declaring files are already
 /// determined (or whose site gate is a property of the declaration itself).
-pub(crate) fn resolve_gates(
-    intrinsic: &BTreeMap<String, ExemptionGate>,
-    declarations: &BTreeMap<String, Vec<ModuleDeclaration>>,
-    target_roots: &TargetRoots,
-) -> BTreeMap<String, ExemptionGate> {
+pub(crate) fn resolve_gates<K: Ord + Clone>(
+    intrinsic: &BTreeMap<K, ExemptionGate>,
+    declarations: &BTreeMap<K, Vec<ModuleDeclaration<K>>>,
+    target_roots: &BTreeMap<K, CargoTarget>,
+) -> BTreeMap<K, ExemptionGate> {
     let mut gates = intrinsic.clone();
     // A file nothing declares is still resolvable — a cargo test target is
     // compiled as one without any declaring site — so both keys are considered.
@@ -505,7 +482,9 @@ pub(crate) fn resolve_gates(
     loop {
         let mut changed = false;
         for target in &targets {
-            if resolved_gate(&gates, target) != ExemptionGate::Unknown {
+            if gates.get(target).copied().unwrap_or(ExemptionGate::Unknown)
+                != ExemptionGate::Unknown
+            {
                 continue;
             }
             let sites = declarations
@@ -527,22 +506,25 @@ pub(crate) fn resolve_gates(
 /// The gate one declaring site compiles its target in, given the declaring
 /// file's own gate. A site that is not test-gated passes the declaring file's
 /// context through unchanged, which is how production reachability propagates.
-fn site_context(
-    site: &ModuleDeclaration,
-    gates: &BTreeMap<String, ExemptionGate>,
+fn site_context<K: Ord>(
+    site: &ModuleDeclaration<K>,
+    gates: &BTreeMap<K, ExemptionGate>,
 ) -> ExemptionGate {
     if site.test_gated {
         return ExemptionGate::TestGated;
     }
-    resolved_gate(gates, &site.declaring_file)
+    gates
+        .get(&site.declaring_file)
+        .copied()
+        .unwrap_or(ExemptionGate::Unknown)
 }
 
 /// `None` while the declaring sites establish neither answer.
-fn gate_from_sites(
-    target: &str,
-    sites: &[ModuleDeclaration],
-    gates: &BTreeMap<String, ExemptionGate>,
-    target_roots: &TargetRoots,
+fn gate_from_sites<K: Ord>(
+    target: &K,
+    sites: &[ModuleDeclaration<K>],
+    gates: &BTreeMap<K, ExemptionGate>,
+    target_roots: &BTreeMap<K, CargoTarget>,
 ) -> Option<ExemptionGate> {
     let contexts = sites
         .iter()
@@ -596,10 +578,12 @@ pub(crate) fn resolve_child_modules(
                     exact.insert(target.clone());
                 }
                 (DeclarationKind::Flat, Some(name)) => {
-                    flat.insert(name.clone(), target.clone());
+                    let directory = Path::new(target).parent().unwrap_or_else(|| Path::new(""));
+                    flat.insert(path_text(&directory.join(name)), target.clone());
                 }
-                (DeclarationKind::ModuleRoot, Some(name)) => {
-                    module_root.insert(name.clone(), target.clone());
+                (DeclarationKind::ModuleRoot, Some(_)) => {
+                    let directory = Path::new(target).parent().unwrap_or_else(|| Path::new(""));
+                    module_root.insert(path_text(directory), target.clone());
                 }
                 (DeclarationKind::Flat | DeclarationKind::ModuleRoot, None) => {}
             }
@@ -629,92 +613,6 @@ pub(crate) enum CargoTarget {
     /// A bin, bench, or example target root: a crate root that owns its
     /// directory, and is not test-only.
     Other,
-}
-
-/// Cargo target roots relative to `apps/<package>/` or `crates/<package>/`.
-/// Auto-discovery covers `<dir>/<name>.rs` and `<dir>/<name>/main.rs` below
-/// `tests/`, `benches/`, `examples/`, and `src/bin/`. Discovery is by path
-/// convention only: it does not read the Cargo manifest, so customized target
-/// paths and `autotests` settings are not modelled.
-pub(crate) fn cargo_target_root(relative: &Path) -> Option<CargoTarget> {
-    let rest = package_relative(relative)?;
-    let parts = rest
-        .components()
-        .filter_map(normal_text)
-        .collect::<Vec<String>>();
-    let (kind, tail) = match parts.split_first()?.0.as_str() {
-        "tests" => (CargoTarget::Test, &parts[1..]),
-        "benches" | "examples" => (CargoTarget::Other, &parts[1..]),
-        "src" => match parts.get(1).map(String::as_str) {
-            Some("bin") => (CargoTarget::Other, &parts[2..]),
-            _ => return None,
-        },
-        _ => return None,
-    };
-    let is_root = match tail {
-        [name] => name.ends_with(".rs"),
-        [_, main] => main == "main.rs",
-        _ => false,
-    };
-    is_root.then_some(kind)
-}
-
-/// Whether the file is a crate root cargo builds outside `cfg(test)`: a
-/// package's `build.rs`, or `src/lib.rs` / `src/main.rs`. Target roots
-/// (`tests/`, `benches/`, `examples/`, `src/bin/`) answer through
-/// `cargo_target_root` instead.
-fn non_test_crate_root(relative: &Path) -> bool {
-    match cargo_target_root(relative) {
-        Some(CargoTarget::Other) => return true,
-        Some(CargoTarget::Test) => return false,
-        None => {}
-    }
-    matches!(
-        package_relative(relative).as_deref().and_then(Path::to_str),
-        Some("build.rs" | "src/lib.rs" | "src/main.rs")
-    )
-}
-
-pub(crate) fn package_relative(relative: &Path) -> Option<PathBuf> {
-    let mut components = relative.components();
-    let Component::Normal(kind) = components.next()? else {
-        return None;
-    };
-    if kind != OsStr::new("apps") && kind != OsStr::new("crates") {
-        return None;
-    }
-    components.next()?;
-    Some(components.as_path().to_path_buf())
-}
-
-pub(crate) fn normal_text(component: Component<'_>) -> Option<String> {
-    match component {
-        Component::Normal(text) => Some(text.to_string_lossy().into_owned()),
-        _ => None,
-    }
-}
-
-/// The directory Rust searches for `mod x;` declared by this repo-relative
-/// path, as a path relative to the scan root. Distinct from
-/// `module_directory`, which is the same question for a bare parent directory.
-pub(crate) fn relative_module_directory(relative: &Path) -> PathBuf {
-    let parent = relative.parent().unwrap_or_else(|| Path::new(""));
-    if owns_its_directory(relative) {
-        parent.to_path_buf()
-    } else {
-        parent.join(relative.file_stem().unwrap_or(OsStr::new("")))
-    }
-}
-
-/// Crate roots and `mod.rs` own their containing directory; any other file owns
-/// a sibling directory named after its file stem. `Foo.rs` therefore declares
-/// `mod tests;` as `Foo/tests.rs`, while `Foo/mod.rs` declares it as
-/// `Foo/tests.rs` too; both forms are verified in unit tests and against
-/// `apps/conary-test/src/bootstrap.rs` (`bootstrap/tests.rs`) and
-/// `apps/conary-test/src/config/mod.rs` (`config/tests.rs`).
-pub(crate) fn owns_its_directory(relative: &Path) -> bool {
-    let name = relative.file_name().and_then(OsStr::to_str);
-    name == Some("mod.rs") || non_test_crate_root(relative) || cargo_target_root(relative).is_some()
 }
 
 /// Resolve `.` and `..` components of a `#[path]` or `include!` value without

@@ -5,6 +5,7 @@ use super::issue_state::*;
 use super::siblings::*;
 use super::*;
 use std::fs::File;
+use std::path::Component;
 use std::process;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -757,49 +758,28 @@ impl FixtureRoot {
         )
     }
 
-    /// The whole fixture tree's declaration graph, as the scan builds it.
-    fn declarations(&self) -> BTreeMap<String, Vec<ModuleDeclaration>> {
-        let mut declarations = BTreeMap::new();
-        for path in self.paths() {
-            let source = fs::read_to_string(&path).expect("fixture file is readable");
-            let syntax = syn::parse_file(&source).expect("fixture file is valid Rust");
-            let relative = path
-                .strip_prefix(&self.path)
-                .expect("fixture file stays inside the fixture");
-            collect_module_declarations(
-                &syntax,
-                relative,
-                &mut declarations,
-                &fixture_targets(self.scanned().iter().map(String::as_str)),
-            );
-            collect_include_declarations(&syntax, relative, &mut declarations).unwrap();
-        }
-        declarations
-    }
-
-    /// The resolved gate set of the whole fixture tree.
-    fn gates(&self) -> BTreeMap<String, ExemptionGate> {
-        let mut intrinsic = BTreeMap::new();
-        for path in self.paths() {
-            let source = fs::read_to_string(&path).expect("fixture file is readable");
-            let syntax = syn::parse_file(&source).expect("fixture file is valid Rust");
-            let relative = path
-                .strip_prefix(&self.path)
-                .expect("fixture file stays inside the fixture");
-            intrinsic.insert(
-                path_text(relative),
-                intrinsic_gate(
-                    &syntax,
-                    relative,
-                    &fixture_targets(self.scanned().iter().map(String::as_str)),
-                ),
-            );
-        }
-        resolve_gates(
-            &intrinsic,
-            &self.declarations(),
+    fn graph(&self) -> SourceGraph {
+        let sources = self
+            .paths()
+            .into_iter()
+            .map(|path| {
+                let syntax = syn::parse_file(&fs::read_to_string(&path).unwrap()).unwrap();
+                (self.relative(&path), syntax)
+            })
+            .collect();
+        collect_source_graph(
+            &sources,
             &fixture_targets(self.scanned().iter().map(String::as_str)),
         )
+        .unwrap()
+    }
+
+    fn declarations(&self) -> BTreeMap<String, Vec<ModuleDeclaration>> {
+        self.graph().declarations
+    }
+
+    fn gates(&self) -> BTreeMap<String, ExemptionGate> {
+        self.graph().gates
     }
 
     /// Every scanned file, as fixture-relative text.
@@ -1027,26 +1007,7 @@ fn omits_sibling_fields_when_no_child_module_resolves() {
 }
 
 #[test]
-fn resolves_relative_module_directories_and_cargo_target_roots() {
-    assert_eq!(
-        relative_module_directory(Path::new("crates/x/src/foo.rs")),
-        PathBuf::from("crates/x/src/foo")
-    );
-    assert_eq!(
-        relative_module_directory(Path::new("crates/x/src/foo/mod.rs")),
-        PathBuf::from("crates/x/src/foo")
-    );
-    assert_eq!(
-        relative_module_directory(Path::new("crates/x/src/lib.rs")),
-        PathBuf::from("crates/x/src")
-    );
-    // A cargo integration test target is a crate root, so it owns its
-    // directory instead of a sibling named after its stem.
-    assert_eq!(
-        relative_module_directory(Path::new("crates/x/tests/query.rs")),
-        PathBuf::from("crates/x/tests")
-    );
-
+fn resolves_conventional_module_declarations_and_fixture_target_roots() {
     // `Foo.rs` declares `mod tests;` as `Foo/tests.rs`.
     let (_, declarations) = declarations_of(&[("crates/x/src/foo.rs", "mod tests;\n")]);
     assert!(declarations.contains_key("crates/x/src/foo/tests.rs"));
@@ -1532,38 +1493,21 @@ fn declarations_of(
     BTreeMap<String, ExemptionGate>,
     BTreeMap<String, Vec<ModuleDeclaration>>,
 ) {
-    let mut declarations = BTreeMap::new();
-    let mut gates = BTreeMap::new();
-    for (relative, source) in sources {
-        let syntax = syn::parse_file(source).unwrap();
-        let path = Path::new(relative);
-        collect_module_declarations(
-            &syntax,
-            path,
-            &mut declarations,
-            &fixture_targets(sources.iter().map(|(path, _)| *path)),
-        );
-        collect_include_declarations(&syntax, path, &mut declarations).unwrap();
-        gates.insert(
-            relative.to_string(),
-            intrinsic_gate(
-                &syntax,
-                path,
-                &fixture_targets(sources.iter().map(|(path, _)| *path)),
-            ),
-        );
-    }
-    (gates, declarations)
+    let parsed = sources
+        .iter()
+        .map(|(path, source)| (path.to_string(), syn::parse_file(source).unwrap()))
+        .collect();
+    let graph = collect_source_graph(
+        &parsed,
+        &fixture_targets(sources.iter().map(|(path, _)| *path)),
+    )
+    .unwrap();
+    (graph.gates, graph.declarations)
 }
 
 /// Classify the exempt-named files of an in-memory module graph.
 fn classify(sources: &[(&str, &str)]) -> BTreeMap<String, ExemptionGate> {
-    let (intrinsic, declarations) = declarations_of(sources);
-    let gates = resolve_gates(
-        &intrinsic,
-        &declarations,
-        &fixture_targets(sources.iter().map(|(path, _)| *path)),
-    );
+    let (gates, _) = declarations_of(sources);
     sources
         .iter()
         .filter(|(relative, _)| excluded_test_file(Path::new(relative)))
@@ -1579,7 +1523,11 @@ fn gate(classified: &BTreeMap<String, ExemptionGate>, path: &str) -> ExemptionGa
 
 fn fixture_targets<'a>(paths: impl Iterator<Item = &'a str>) -> targets::TargetRoots {
     paths
-        .filter_map(|path| cargo_target_root(Path::new(path)).map(|kind| (path.to_string(), kind)))
+        .filter_map(|path| {
+            cargo_target_root(Path::new(path))
+                .or_else(|| non_test_crate_root(Path::new(path)).then_some(CargoTarget::Other))
+                .map(|kind| (path.to_string(), kind))
+        })
         .collect()
 }
 
@@ -1659,30 +1607,22 @@ fn cargo_metadata_owns_custom_targets_and_disabled_auto_discovery() {
     );
     assert_eq!(roots.get("crates/x/src/check.rs"), Some(&CargoTarget::Test));
     assert!(!roots.contains_key("crates/x/tests/disabled.rs"));
-    let syntax = syn::parse_file("mod helper;\n").unwrap();
-    let mut declarations = BTreeMap::new();
-    collect_module_declarations(
-        &syntax,
-        Path::new("crates/x/src/tests.rs"),
-        &mut declarations,
-        &roots,
-    );
+    let sources = fixture
+        .paths()
+        .into_iter()
+        .map(|path| {
+            (
+                fixture.relative(&path),
+                syn::parse_file(&fs::read_to_string(path).unwrap()).unwrap(),
+            )
+        })
+        .collect();
+    let graph = collect_source_graph(&sources, &roots).unwrap();
     assert!(
-        declarations.contains_key("crates/x/src/helper.rs"),
+        graph.declarations.contains_key("crates/x/src/helper.rs"),
         "custom crate roots own their directory"
     );
-    let intrinsic = BTreeMap::from([
-        (
-            "crates/x/src/tests.rs".to_string(),
-            intrinsic_gate(&syntax, Path::new("crates/x/src/tests.rs"), &roots),
-        ),
-        ("crates/x/src/check.rs".to_string(), ExemptionGate::Unknown),
-        (
-            "crates/x/tests/disabled.rs".to_string(),
-            ExemptionGate::Unknown,
-        ),
-    ]);
-    let gates = resolve_gates(&intrinsic, &declarations, &roots);
+    let gates = graph.gates;
     assert_eq!(
         resolved_gate(&gates, "crates/x/src/tests.rs"),
         ExemptionGate::Ungated
@@ -1722,10 +1662,9 @@ fn inline_path_attributes_use_the_containing_directory() {
         gate(&classified, "crates/x/src/shared/tests.rs"),
         ExemptionGate::Ungated
     );
-    assert_eq!(
-        relative_module_directory(Path::new("crates/x/src/owner/lib.rs")),
-        Path::new("crates/x/src/owner/lib")
-    );
+    let (_, declarations) = declarations_of(&[("crates/x/src/owner/lib.rs", "mod tests;\n")]);
+    assert!(declarations.contains_key("crates/x/src/owner/lib/tests.rs"));
+    assert!(!declarations.contains_key("crates/x/src/owner/tests.rs"));
 }
 
 #[test]
@@ -1945,4 +1884,175 @@ fn nested_module_conditions_and_sibling_scope_are_preserved() {
         r#"fn run() { #[cfg(any())] { #[path = "tests.rs"] mod implementation; } }"#,
     )]);
     assert!(declarations.is_empty());
+}
+
+#[test]
+fn exact_load_sites_resolve_children_beside_the_loaded_source() {
+    for load in [
+        r#"#[path = "shared/suite.rs"] mod production;"#,
+        r#"include!("shared/suite.rs");"#,
+    ] {
+        let source = format!("#[cfg(test)] #[path = \"shared/tests.rs\"] mod tests;\n{load}");
+        let classified = classify(&[
+            ("crates/x/src/lib.rs", &source),
+            ("crates/x/src/shared/suite.rs", "mod tests;\n"),
+            ("crates/x/src/shared/tests.rs", "pub fn helper() {}\n"),
+        ]);
+        assert_eq!(
+            gate(&classified, "crates/x/src/shared/tests.rs"),
+            ExemptionGate::Ungated,
+            "{load}"
+        );
+    }
+}
+
+#[test]
+fn distinct_load_contexts_keep_their_own_child_gates() {
+    for (source, flat, adjacent) in [
+        (
+            r#"mod suite; #[cfg(test)] #[path = "suite.rs"] mod alternate;"#,
+            ExemptionGate::Ungated,
+            ExemptionGate::TestGated,
+        ),
+        (
+            r#"#[cfg(test)] mod suite; #[path = "suite.rs"] mod alternate;"#,
+            ExemptionGate::TestGated,
+            ExemptionGate::Ungated,
+        ),
+        (
+            r#"mod suite; #[cfg(test)] include!("suite.rs");"#,
+            ExemptionGate::Ungated,
+            ExemptionGate::TestGated,
+        ),
+    ] {
+        let classified = classify(&[
+            ("crates/x/src/lib.rs", source),
+            ("crates/x/src/suite.rs", "mod tests;\n"),
+            ("crates/x/src/suite/tests.rs", "pub fn helper() {}\n"),
+            ("crates/x/src/tests.rs", "pub fn helper() {}\n"),
+        ]);
+        assert_eq!(
+            gate(&classified, "crates/x/src/suite/tests.rs"),
+            flat,
+            "{source}"
+        );
+        assert_eq!(
+            gate(&classified, "crates/x/src/tests.rs"),
+            adjacent,
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn include_chains_preserve_each_loaded_directory() {
+    let classified = classify(&[
+        (
+            "crates/x/src/lib.rs",
+            r#"include!("shared/suite.rs"); #[cfg(test)] #[path = "shared/nested/tests.rs"] mod tests;"#,
+        ),
+        (
+            "crates/x/src/shared/suite.rs",
+            r#"include!("nested/owner.rs");"#,
+        ),
+        ("crates/x/src/shared/nested/owner.rs", "mod tests;\n"),
+        (
+            "crates/x/src/shared/nested/tests.rs",
+            "pub fn helper() {}\n",
+        ),
+    ]);
+    assert_eq!(
+        gate(&classified, "crates/x/src/shared/nested/tests.rs"),
+        ExemptionGate::Ungated
+    );
+}
+
+#[test]
+fn sibling_candidates_remain_distinct_across_load_directories() {
+    let fixture = FixtureRoot::new("load-context-siblings");
+    fixture.write(
+        "crates/x/src/lib.rs",
+        r#"mod suite; #[cfg(test)] #[path = "suite.rs"] mod alternate;"#,
+    );
+    fixture.write("crates/x/src/suite.rs", "mod tests;\n");
+    fixture.write("crates/x/src/suite/tests.rs", "pub fn production() {}\n");
+    fixture.write("crates/x/src/tests.rs", "fn helper() {}\nfn second() {}\n");
+    let children = fixture.resolve("crates/x/src/suite.rs");
+    assert_eq!(
+        children,
+        ["crates/x/src/suite/tests.rs", "crates/x/src/tests.rs"]
+    );
+    let attribution = sibling_attribution(
+        &fixture.path,
+        &children,
+        &fixture.gates(),
+        &mut MeasuredFiles::default(),
+    );
+    assert_eq!(attribution.siblings, 1);
+    assert_eq!(attribution.attributed_test_lines, 2);
+}
+
+// Default target descriptions used only by in-memory fixtures. Production target
+// membership comes exclusively from Cargo metadata.
+/// Cargo target roots relative to `apps/<package>/` or `crates/<package>/`.
+/// Auto-discovery covers `<dir>/<name>.rs` and `<dir>/<name>/main.rs` below
+/// `tests/`, `benches/`, `examples/`, and `src/bin/`. Discovery is by path
+/// convention only: it does not read the Cargo manifest, so customized target
+/// paths and `autotests` settings are not modelled.
+pub(crate) fn cargo_target_root(relative: &Path) -> Option<CargoTarget> {
+    let rest = package_relative(relative)?;
+    let parts = rest
+        .components()
+        .filter_map(normal_text)
+        .collect::<Vec<String>>();
+    let (kind, tail) = match parts.split_first()?.0.as_str() {
+        "tests" => (CargoTarget::Test, &parts[1..]),
+        "benches" | "examples" => (CargoTarget::Other, &parts[1..]),
+        "src" => match parts.get(1).map(String::as_str) {
+            Some("bin") => (CargoTarget::Other, &parts[2..]),
+            _ => return None,
+        },
+        _ => return None,
+    };
+    let is_root = match tail {
+        [name] => name.ends_with(".rs"),
+        [_, main] => main == "main.rs",
+        _ => false,
+    };
+    is_root.then_some(kind)
+}
+
+/// Whether the file is a crate root cargo builds outside `cfg(test)`: a
+/// package's `build.rs`, or `src/lib.rs` / `src/main.rs`. Target roots
+/// (`tests/`, `benches/`, `examples/`, `src/bin/`) answer through
+/// `cargo_target_root` instead.
+fn non_test_crate_root(relative: &Path) -> bool {
+    match cargo_target_root(relative) {
+        Some(CargoTarget::Other) => return true,
+        Some(CargoTarget::Test) => return false,
+        None => {}
+    }
+    matches!(
+        package_relative(relative).as_deref().and_then(Path::to_str),
+        Some("build.rs" | "src/lib.rs" | "src/main.rs")
+    )
+}
+
+pub(crate) fn package_relative(relative: &Path) -> Option<PathBuf> {
+    let mut components = relative.components();
+    let Component::Normal(kind) = components.next()? else {
+        return None;
+    };
+    if kind != OsStr::new("apps") && kind != OsStr::new("crates") {
+        return None;
+    }
+    components.next()?;
+    Some(components.as_path().to_path_buf())
+}
+
+pub(crate) fn normal_text(component: Component<'_>) -> Option<String> {
+    match component {
+        Component::Normal(text) => Some(text.to_string_lossy().into_owned()),
+        _ => None,
+    }
 }

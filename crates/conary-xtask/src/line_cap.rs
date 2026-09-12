@@ -19,10 +19,7 @@ mod siblings;
 mod targets;
 
 use attributes::{visit_attributed_nodes, visit_nodes};
-use exemption::{
-    ExemptionGate, ExemptionReport, ModuleDeclaration, collect_include_declarations,
-    collect_module_declarations, excluded_test_file, intrinsic_gate, resolve_gates,
-};
+use exemption::{ExemptionGate, ExemptionReport, collect_source_graph, excluded_test_file};
 use issue_state::{read_issue_state, validate_allowlist_binding, validate_allowlist_issue_state};
 use siblings::{MeasuredFiles, child_modules, report_row, sibling_attribution};
 
@@ -98,8 +95,7 @@ pub(crate) fn run(args: impl Iterator<Item = String>) -> Result<(), String> {
         })
         .collect::<Result<BTreeSet<String>, String>>()?;
     let mut measured = MeasuredFiles::default();
-    let mut declarations: BTreeMap<String, Vec<ModuleDeclaration>> = BTreeMap::new();
-    let mut intrinsic_gates: BTreeMap<String, ExemptionGate> = BTreeMap::new();
+    let mut sources = BTreeMap::new();
     let mut rows: Vec<(String, FileMetrics)> = Vec::new();
     let mut exemptions = ExemptionReport::default();
     let mut used_allowlist_entries = BTreeSet::new();
@@ -138,21 +134,15 @@ pub(crate) fn run(args: impl Iterator<Item = String>) -> Result<(), String> {
         };
         let metrics = measure_source(&syntax, &source);
         measured.insert(&path, metrics);
-        collect_module_declarations(&syntax, relative_path, &mut declarations, &targets);
-        if let Err(error) = collect_include_declarations(&syntax, relative_path, &mut declarations)
-        {
-            errors.push(error);
-        }
-        intrinsic_gates.insert(
-            relative.clone(),
-            intrinsic_gate(&syntax, relative_path, &targets),
-        );
+        sources.insert(relative.clone(), syntax);
         rows.push((relative, metrics));
     }
 
     // Resolve the complete graph before deciding whether a filename exemption
     // applies. Unknown and production-reachable files retain both caps.
-    let gates = resolve_gates(&intrinsic_gates, &declarations, &targets);
+    let graph: exemption::SourceGraph = collect_source_graph(&sources, &targets)?;
+    let gates = graph.gates;
+    let declarations = graph.declarations;
     for (relative, metrics) in &rows {
         let named_test = excluded_test_file(Path::new(relative));
         if named_test {
