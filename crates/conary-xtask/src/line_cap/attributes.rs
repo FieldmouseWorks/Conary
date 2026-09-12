@@ -83,3 +83,9 @@ macro_rules! visit_attributed_nodes {
 
 pub(super) use visit_attributed_nodes;
 pub(super) use visit_nodes;
+
+/// Raw identifiers and ordinary identifiers name the same Rust symbol.
+pub(super) fn is_ident(path: &syn::Path, name: &str) -> bool {
+    use syn::ext::IdentExt;
+    path.get_ident().is_some_and(|ident| ident.unraw() == name)
+}

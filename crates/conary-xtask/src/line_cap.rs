@@ -593,7 +593,8 @@ fn cfg_attributes(attributes: &[Attribute]) -> Vec<Attribute> {
     attributes
         .iter()
         .filter(|attribute| {
-            attribute.path().is_ident("cfg") || attribute.path().is_ident("cfg_attr")
+            attributes::is_ident(attribute.path(), "cfg")
+                || attributes::is_ident(attribute.path(), "cfg_attr")
         })
         .cloned()
         .collect()

@@ -2130,3 +2130,96 @@ fn include_aliases_fail_as_unresolved_source_authority() {
         .unwrap();
     }
 }
+
+#[test]
+fn shadowed_builtin_macro_names_fail_as_unresolved_authority() {
+    for source in [
+        r#"macro_rules! include { ($path:literal) => { std::include!("tests.rs"); } } include!("ignored.rs"); #[cfg(test)] mod tests;"#,
+        r#"macro_rules! concat { ($($tokens:tt)*) => { "tests.rs" } } include!(concat!("ignored.rs"));"#,
+        "use custom::include;",
+        "use custom::{concat};",
+        "use custom::other as include;",
+        "use custom::include as include;",
+    ] {
+        let syntax = syn::parse_file(source).unwrap();
+        let error = collect_include_declarations(
+            &syntax,
+            Path::new("crates/x/src/lib.rs"),
+            &mut BTreeMap::new(),
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("local bindings shadow builtin include!/concat! macro authority"),
+            "{source}: {error}"
+        );
+    }
+    for source in [
+        r#"#[cfg(any())] macro_rules! include { () => {}; }"#,
+        "#[cfg(any())] use custom::include;",
+        "use std::{include, concat};",
+        "use core::concat as concat;",
+    ] {
+        let syntax = syn::parse_file(source).unwrap();
+        collect_include_declarations(
+            &syntax,
+            Path::new("crates/x/src/lib.rs"),
+            &mut BTreeMap::new(),
+        )
+        .unwrap();
+    }
+}
+
+#[test]
+fn raw_identifiers_preserve_module_and_macro_authority() {
+    for load in [
+        "mod r#tests;",
+        r#"std::r#include!("tests.rs");"#,
+        r#"r#std::r#include!(r#std::r#concat!("tests", ".rs"));"#,
+        r#"#[r#path = "tests.rs"] mod production;"#,
+        r#"#[r#cfg_attr(feature = "alternate", r#path = "tests.rs")] mod production;"#,
+    ] {
+        let source = format!("#[cfg(test)] #[path = \"tests.rs\"] mod tests_only;\n{load}");
+        let classified = classify(&[
+            ("crates/x/src/lib.rs", &source),
+            ("crates/x/src/tests.rs", "pub fn helper() {}\n"),
+        ]);
+        assert_eq!(
+            gate(&classified, "crates/x/src/tests.rs"),
+            ExemptionGate::Ungated,
+            "{load}"
+        );
+    }
+    for source in [
+        "use std::r#include as inc;",
+        "use custom::other as r#include;",
+        r#"macro_rules! r#include { () => {}; }"#,
+        r#"macro_rules! r#concat { () => {}; }"#,
+    ] {
+        let syntax = syn::parse_file(source).unwrap();
+        assert!(
+            collect_include_declarations(
+                &syntax,
+                Path::new("crates/x/src/lib.rs"),
+                &mut BTreeMap::new()
+            )
+            .is_err(),
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn raw_cfg_identifiers_have_the_same_predicate_identity() {
+    for source in [
+        "#[r#cfg(r#test)] fn helper() {}\n",
+        "#[r#cfg_attr(r#all(), r#cfg(r#test))] fn helper() {}\n",
+        "#[cfg(not(feature = \"x\"))] #[cfg(any(test, r#feature = \"x\"))] fn helper() {}\n",
+        "#[r#test] fn helper() {}\n",
+    ] {
+        assert_eq!(
+            analyze_source(source).unwrap().production_lines,
+            0,
+            "{source}"
+        );
+    }
+}

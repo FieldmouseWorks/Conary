@@ -31,6 +31,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::path::{Component, Path, PathBuf};
 
+use syn::ext::IdentExt;
 use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
 use syn::{Attribute, Expr, Item, Lit};
@@ -190,7 +191,7 @@ impl DeclarationCollector<'_> {
             };
             let mut effective = inherited.to_vec();
             effective.extend(cfg_attributes(&item_module.attrs));
-            let name = item_module.ident.to_string();
+            let name = item_module.ident.unraw().to_string();
             for variant in module_paths(&item_module.attrs) {
                 let mut branch = effective.clone();
                 branch.extend(variant.conditions);
@@ -363,6 +364,7 @@ pub(crate) fn collect_include_declarations(
 enum IncludeAuthorityFailure {
     Path,
     Alias,
+    Shadow,
 }
 
 impl IncludeAuthorityFailure {
@@ -372,19 +374,59 @@ impl IncludeAuthorityFailure {
                 "expected a builtin include! (unqualified, std::, or core::) with a string literal or literal concat! path"
             }
             Self::Alias => "aliased include! imports require macro name resolution",
+            Self::Shadow => "local bindings shadow builtin include!/concat! macro authority",
         }
     }
 }
 
-fn imports_include_alias(tree: &syn::UseTree) -> bool {
+fn include_import_failure(
+    tree: &syn::UseTree,
+    prefix: &[String],
+) -> Option<IncludeAuthorityFailure> {
     match tree {
-        syn::UseTree::Path(path) => imports_include_alias(&path.tree),
-        syn::UseTree::Group(group) => group.items.iter().any(imports_include_alias),
-        syn::UseTree::Rename(rename) => {
-            rename.ident == "include" && rename.rename != "include" && rename.rename != "_"
+        syn::UseTree::Path(path) => {
+            let mut nested = prefix.to_vec();
+            nested.push(path.ident.unraw().to_string());
+            include_import_failure(&path.tree, &nested)
         }
-        syn::UseTree::Name(_) | syn::UseTree::Glob(_) => false,
+        syn::UseTree::Group(group) => group
+            .items
+            .iter()
+            .find_map(|tree| include_import_failure(tree, prefix)),
+        syn::UseTree::Rename(rename) => {
+            if rename.ident.unraw() == "include"
+                && rename.rename.unraw() != "include"
+                && rename.rename.unraw() != "_"
+            {
+                Some(IncludeAuthorityFailure::Alias)
+            } else {
+                builtin_import_failure(
+                    prefix,
+                    &rename.ident.unraw().to_string(),
+                    &rename.rename.unraw().to_string(),
+                )
+            }
+        }
+        syn::UseTree::Name(name) => builtin_import_failure(
+            prefix,
+            &name.ident.unraw().to_string(),
+            &name.ident.unraw().to_string(),
+        ),
+        syn::UseTree::Glob(_) => None,
     }
+}
+
+fn builtin_import_failure(
+    prefix: &[String],
+    original: &str,
+    binding: &str,
+) -> Option<IncludeAuthorityFailure> {
+    if binding != "include" && binding != "concat" {
+        return None;
+    }
+    let builtin_namespace = prefix.is_empty()
+        || matches!(prefix, [namespace] if namespace == "std" || namespace == "core");
+    (!builtin_namespace || original != binding).then_some(IncludeAuthorityFailure::Shadow)
 }
 
 pub(crate) struct IncludeVisitor<'a> {
@@ -415,7 +457,7 @@ impl IncludeVisitor<'_> {
             .path
             .segments
             .last()
-            .is_some_and(|segment| segment.ident == "include")
+            .is_some_and(|segment| segment.ident.unraw() == "include")
             || !cfg::can_compile(&self.inherited)
         {
             return;
@@ -461,9 +503,10 @@ fn builtin_macro_path(path: &syn::Path, name: &str) -> bool {
     }
     let mut segments = path.segments.iter();
     match (segments.next(), segments.next(), segments.next()) {
-        (Some(first), None, None) => first.ident == name && path.leading_colon.is_none(),
+        (Some(first), None, None) => first.ident.unraw() == name && path.leading_colon.is_none(),
         (Some(namespace), Some(last), None) => {
-            (namespace.ident == "std" || namespace.ident == "core") && last.ident == name
+            (namespace.ident.unraw() == "std" || namespace.ident.unraw() == "core")
+                && last.ident.unraw() == name
         }
         _ => false,
     }
@@ -517,9 +560,22 @@ impl<'ast> Visit<'ast> for IncludeVisitor<'_> {
         });
     }
 
+    fn visit_item_macro(&mut self, node: &'ast syn::ItemMacro) {
+        if super::attributes::is_ident(&node.mac.path, "macro_rules")
+            && node
+                .ident
+                .as_ref()
+                .is_some_and(|ident| ident.unraw() == "include" || ident.unraw() == "concat")
+        {
+            self.unresolved = Some(IncludeAuthorityFailure::Shadow);
+        } else {
+            visit::visit_item_macro(self, node);
+        }
+    }
+
     fn visit_item_use(&mut self, node: &'ast syn::ItemUse) {
-        if imports_include_alias(&node.tree) {
-            self.unresolved = Some(IncludeAuthorityFailure::Alias);
+        if let Some(failure) = include_import_failure(&node.tree, &[]) {
+            self.unresolved = Some(failure);
         }
     }
 

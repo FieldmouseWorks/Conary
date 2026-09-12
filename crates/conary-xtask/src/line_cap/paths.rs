@@ -14,14 +14,14 @@ pub(super) struct PathVariant {
 pub(super) fn module_paths(attributes: &[Attribute]) -> Vec<PathVariant> {
     fn collect(meta: &Meta, predicates: &[Meta], paths: &mut Vec<(String, Vec<Meta>)>) {
         match meta {
-            Meta::NameValue(named) if named.path.is_ident("path") => {
+            Meta::NameValue(named) if super::attributes::is_ident(&named.path, "path") => {
                 if let Expr::Lit(literal) = &named.value
                     && let Lit::Str(path) = &literal.lit
                 {
                     paths.push((path.value(), predicates.to_vec()));
                 }
             }
-            Meta::List(list) if list.path.is_ident("cfg_attr") => {
+            Meta::List(list) if super::attributes::is_ident(&list.path, "cfg_attr") => {
                 if let Ok(items) =
                     Punctuated::<Meta, Token![,]>::parse_terminated.parse2(list.tokens.clone())
                 {
