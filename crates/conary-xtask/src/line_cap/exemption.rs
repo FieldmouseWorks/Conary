@@ -37,9 +37,10 @@ use std::ffi::OsStr;
 use std::path::{Component, Path, PathBuf};
 
 use syn::visit::{self, Visit};
-use syn::{Attribute, Expr, Item, Lit, Meta};
+use syn::{Attribute, Item};
 
 use super::cfg;
+use super::paths::module_paths;
 use super::{FileMetrics, cfg_attributes, item_attributes, path_text};
 
 /// How an exempt-named file is compiled, as far as the declaration graph can
@@ -174,37 +175,32 @@ impl DeclarationCollector<'_> {
             };
             let mut effective = inherited.to_vec();
             effective.extend(cfg_attributes(&item_module.attrs));
-            let test_gated = cfg::is_test_only(&effective);
             let name = item_module.ident.to_string();
-            let declared_path = path_attribute(&item_module.attrs);
-
-            if let Some((_, items)) = &item_module.content {
-                // An inline module owns a directory named after it; a `#[path]`
-                // attribute on it renames that directory, and a `#[path]`
-                // inside it resolves against that same directory.
-                let nested_dir = match &declared_path {
-                    Some(path) => module_dir.join(path),
-                    None => module_dir.join(&name),
-                };
-                self.collect(items, &nested_dir, &nested_dir, &effective, depth + 1);
-                continue;
-            }
-
-            match declared_path {
-                Some(path) => {
-                    let target = normalize(&path_base.join(path));
+            for variant in module_paths(&item_module.attrs) {
+                let mut branch = effective.clone();
+                branch.extend(variant.conditions);
+                if !cfg::can_compile(&branch) {
+                    continue;
+                }
+                let test_gated = cfg::is_test_only(&branch);
+                if let Some((_, items)) = &item_module.content {
+                    let nested_dir = match variant.path {
+                        Some(path) => path_base.join(path),
+                        None => module_dir.join(&name),
+                    };
+                    self.collect(items, &nested_dir, &nested_dir, &branch, depth + 1);
+                } else if let Some(path) = variant.path {
                     self.record(
-                        target,
-                        Some(name),
+                        normalize(&path_base.join(path)),
+                        Some(name.clone()),
                         DeclarationKind::Exact,
                         depth,
                         test_gated,
                         true,
                     );
-                }
-                None => {
-                    // Rust loads `<module>/<name>.rs` or, failing that,
-                    // `<module>/<name>/mod.rs`.
+                } else {
+                    // Both candidates are considered; simultaneous files are
+                    // ambiguous and cannot contribute to sibling attribution.
                     self.record(
                         module_dir.join(format!("{name}.rs")),
                         Some(name.clone()),
@@ -215,7 +211,7 @@ impl DeclarationCollector<'_> {
                     );
                     self.record(
                         module_dir.join(&name).join("mod.rs"),
-                        Some(name),
+                        Some(name.clone()),
                         DeclarationKind::ModuleRoot,
                         depth,
                         test_gated,
@@ -568,24 +564,6 @@ pub(crate) fn owns_its_directory(relative: &Path) -> bool {
     let name = relative.file_name().and_then(OsStr::to_str);
     matches!(name, Some("mod.rs" | "lib.rs" | "main.rs" | "build.rs"))
         || cargo_target_root(relative).is_some()
-}
-
-pub(crate) fn path_attribute(attributes: &[Attribute]) -> Option<String> {
-    attributes.iter().find_map(|attribute| {
-        if !attribute.path().is_ident("path") {
-            return None;
-        }
-        let Meta::NameValue(named) = &attribute.meta else {
-            return None;
-        };
-        let Expr::Lit(literal) = &named.value else {
-            return None;
-        };
-        let Lit::Str(value) = &literal.lit else {
-            return None;
-        };
-        Some(value.value())
-    })
 }
 
 /// Resolve `.` and `..` components of a `#[path]` or `include!` value without

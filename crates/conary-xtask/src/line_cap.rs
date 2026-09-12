@@ -13,6 +13,7 @@ use syn::{Attribute, ForeignItem, ImplItem, Item, TraitItem};
 mod cfg;
 mod exemption;
 mod issue_state;
+mod paths;
 mod siblings;
 
 use exemption::{

@@ -1544,3 +1544,61 @@ fn gate(classified: &BTreeMap<String, ExemptionGate>, path: &str) -> ExemptionGa
         .get(path)
         .unwrap_or_else(|| panic!("{path} was not classified as exempt"))
 }
+
+#[test]
+fn conditional_module_paths_preserve_test_context_and_attribution() {
+    for attribute in [
+        "cfg_attr(test, path = \"alternate/tests.rs\")",
+        "cfg_attr(all(), cfg_attr(test, path = \"alternate/tests.rs\"))",
+        "cfg_attr(all(test, feature = \"x\"), path = \"alternate/tests.rs\")",
+    ] {
+        let fixture = FixtureRoot::new("conditional-path");
+        fixture.write(
+            "crates/engine/src/lib.rs",
+            &format!("#[{attribute}] mod implementation;\n"),
+        );
+        fixture.write(
+            "crates/engine/src/implementation.rs",
+            "pub fn production() {}\n",
+        );
+        fixture.write(
+            "crates/engine/src/alternate/tests.rs",
+            "fn helper() {}\nfn another() {}\n",
+        );
+        let gates = fixture.gates();
+        assert_eq!(
+            resolved_gate(&gates, "crates/engine/src/alternate/tests.rs"),
+            ExemptionGate::TestGated,
+            "{attribute}"
+        );
+        assert_eq!(
+            resolved_gate(&gates, "crates/engine/src/implementation.rs"),
+            ExemptionGate::Ungated,
+            "{attribute}"
+        );
+        let attribution = sibling_attribution(
+            &fixture.path,
+            &fixture.resolve("crates/engine/src/lib.rs"),
+            &gates,
+            &mut MeasuredFiles::default(),
+        );
+        assert_eq!(attribution.siblings, 1, "{attribute}");
+        assert_eq!(attribution.attributed_test_lines, 2, "{attribute}");
+    }
+}
+
+#[test]
+fn conditional_default_path_is_gated_by_its_complement() {
+    let classified = classify(&[
+        (
+            "crates/x/src/lib.rs",
+            "#[cfg_attr(not(test), path = \"production.rs\")] mod tests;\n",
+        ),
+        ("crates/x/src/tests.rs", "fn helper() {}\n"),
+        ("crates/x/src/production.rs", "pub fn production() {}\n"),
+    ]);
+    assert_eq!(
+        gate(&classified, "crates/x/src/tests.rs"),
+        ExemptionGate::TestGated
+    );
+}
