@@ -99,7 +99,16 @@ essential operation available only through ad hoc shell or free-form output.
   reason to retry until green.
 - `scripts/check-line-cap.sh` enforces a 1,000 non-test-line cap for Rust source
   files; each checked-in exception names the open issue that owns its
-  decomposition.
+  decomposition, and every citation is validated against
+  `scripts/line-cap-issue-state.txt`, the checked-in snapshot that
+  `scripts/refresh-line-cap-issue-state.sh` regenerates. The snapshot records
+  the state of each cited issue *and* the canonical allowlist entries those
+  states were read for; the gate compares that recorded entry set against the
+  allowlist, so an allowlist edit fails until the snapshot is refreshed, while
+  an unchanged allowlist passes however the files reached the working tree. The
+  gate is intentionally hermetic (no network I/O), so the snapshot records
+  issue state as of its refresh and cannot discover an issue closed afterwards;
+  keep a separate issue-event, scheduled, or explicit networked check for that.
   Once a Rust source file carries more than 300 inline unit-test lines, its unit
   tests live in a sibling `<file>/tests.rs`. A sibling extraction must reduce
   the parent, with that reduction stated in the commit. Thin dispatch,

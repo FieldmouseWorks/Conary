@@ -1,8 +1,10 @@
 // crates/conary-xtask/src/line_cap/tests.rs
 
 use super::*;
+use std::fs::File;
 use std::process;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[test]
 fn counts_the_union_of_typed_test_item_spans() {
@@ -411,5 +413,298 @@ impl TempRoot {
 impl Drop for TempRoot {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.path);
+    }
+}
+
+#[test]
+fn parses_issue_state_snapshots() {
+    let source = r#"# Issue state for scripts/line-cap-allowlist.txt entries.
+# Regenerate with scripts/refresh-line-cap-issue-state.sh after any allowlist change.
+# refreshed: 2026-09-12
+#
+# Format: #<issue> <STATE>
+154 OPEN
+852 OPEN
+
+== allowlist
+apps/conary-test/src/engine/qemu.rs #154
+crates/conary-core/src/ccs/budget.rs #852
+"#;
+    let snapshot =
+        parse_issue_state(source, Path::new("scripts/line-cap-issue-state.txt")).unwrap();
+    assert_eq!(snapshot.refreshed, "2026-09-12");
+    assert_eq!(snapshot.states.get(&154), Some(&IssueState::Open));
+    assert_eq!(snapshot.states.get(&852), Some(&IssueState::Open));
+    assert_eq!(snapshot.states.get(&853), None);
+    // The documented `#<issue>` sigil is accepted as well.
+    let sigil = parse_issue_state(
+        "# refreshed: 2026-09-12\n#154 OPEN\n",
+        Path::new("scripts/line-cap-issue-state.txt"),
+    )
+    .unwrap();
+    assert_eq!(sigil.states.get(&154), Some(&IssueState::Open));
+
+    // The binding is what the gate compares against the live allowlist.
+    assert_eq!(
+        snapshot.allowlist,
+        BTreeSet::from([
+            ("apps/conary-test/src/engine/qemu.rs".to_string(), 154),
+            ("crates/conary-core/src/ccs/budget.rs".to_string(), 852),
+        ])
+    );
+}
+
+#[test]
+fn rejects_malformed_issue_state_snapshots() {
+    let path = Path::new("scripts/line-cap-issue-state.txt");
+    for (source, expected) in [
+        ("154 OPEN\n", "has no 'refreshed"),
+        (
+            "# refreshed: 2026-09-12\n#154\n",
+            "invalid issue-state entry",
+        ),
+        (
+            "# refreshed: 2026-09-12\n#0 OPEN\n",
+            "invalid issue-state entry",
+        ),
+        (
+            "# refreshed: 2026-09-12\n154 OPEN extra\n",
+            "invalid issue-state entry",
+        ),
+        (
+            "# refreshed: 2026-09-12\n154 UNKNOWN\n",
+            "invalid issue state",
+        ),
+        (
+            "# refreshed: 2026-09-12\n154 OPEN\n154 OPEN\n",
+            "duplicate issue-state entry",
+        ),
+        (
+            "# refreshed: 2026-09-12\n154 OPEN\n\n== allowlist\ncrates/x/src/lib.rs\n",
+            "invalid recorded allowlist entry",
+        ),
+        (
+            "# refreshed: 2026-09-12\n154 OPEN\n\n== allowlist\ncrates/x/src/lib.rs #nope\n",
+            "invalid recorded allowlist issue",
+        ),
+        (
+            "# refreshed: 2026-09-12\n154 OPEN\n\n== allowlist\na.rs #1\na.rs #1\n",
+            "duplicate recorded allowlist entry",
+        ),
+        (
+            "# refreshed: 2026-09-12\n# refreshed: 2026-09-13\n154 OPEN\n",
+            "duplicate refreshed date",
+        ),
+    ] {
+        let error = parse_issue_state(source, path).unwrap_err();
+        assert!(error.contains(expected), "{source:?} -> {error}");
+    }
+}
+
+#[test]
+fn rejects_a_citation_the_snapshot_records_as_closed() {
+    let allowlist = BTreeMap::from([("crates/demo/src/lib.rs".to_string(), "#814".to_string())]);
+    let snapshot_path = Path::new("scripts/line-cap-issue-state.txt");
+    let snapshot =
+        parse_issue_state("# refreshed: 2026-09-12\n#814 CLOSED\n", snapshot_path).unwrap();
+    let mut errors = Vec::new();
+    validate_allowlist_issue_state(&allowlist, snapshot_path, &snapshot, &mut errors);
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(
+        errors[0].contains("crates/demo/src/lib.rs"),
+        "{}",
+        errors[0]
+    );
+    assert!(
+        errors[0].contains("snapshot records #814 as CLOSED"),
+        "{}",
+        errors[0]
+    );
+}
+
+#[test]
+fn rejects_a_citation_missing_from_the_snapshot() {
+    let allowlist = BTreeMap::from([("crates/demo/src/lib.rs".to_string(), "#999".to_string())]);
+    let snapshot_path = Path::new("scripts/line-cap-issue-state.txt");
+    let snapshot =
+        parse_issue_state("# refreshed: 2026-09-12\n#852 OPEN\n", snapshot_path).unwrap();
+    let mut errors = Vec::new();
+    validate_allowlist_issue_state(&allowlist, snapshot_path, &snapshot, &mut errors);
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(
+        errors[0].contains("crates/demo/src/lib.rs"),
+        "{}",
+        errors[0]
+    );
+    assert!(errors[0].contains("#999"), "{}", errors[0]);
+    assert!(
+        errors[0].contains("absent from issue-state snapshot"),
+        "{}",
+        errors[0]
+    );
+}
+
+#[test]
+fn accepts_open_citations_covered_by_the_snapshot() {
+    let allowlist = BTreeMap::from([
+        ("crates/demo/src/lib.rs".to_string(), "#154".to_string()),
+        ("crates/demo/src/other.rs".to_string(), "#852".to_string()),
+    ]);
+    let snapshot_path = Path::new("scripts/line-cap-issue-state.txt");
+    let snapshot = parse_issue_state(
+        "# refreshed: 2026-09-12\n#154 OPEN\n#852 OPEN\n",
+        snapshot_path,
+    )
+    .unwrap();
+    let mut errors = Vec::new();
+    validate_allowlist_issue_state(&allowlist, snapshot_path, &snapshot, &mut errors);
+    assert!(errors.is_empty(), "{errors:?}");
+}
+
+#[test]
+fn accepts_a_snapshot_bound_to_the_current_allowlist() {
+    let allowlist = BTreeMap::from([("crates/demo/src/lib.rs".to_string(), "#123".to_string())]);
+    let snapshot = parse_issue_state(
+        "# refreshed: 2026-09-11\n#123 OPEN\n\n== allowlist\ncrates/demo/src/lib.rs #123\n",
+        Path::new("scripts/line-cap-issue-state.txt"),
+    )
+    .unwrap();
+    assert_eq!(
+        validate_allowlist_binding(
+            &allowlist,
+            Path::new("scripts/line-cap-issue-state.txt"),
+            &snapshot
+        ),
+        Ok(())
+    );
+}
+
+#[test]
+fn rejects_an_allowlist_the_snapshot_does_not_record() {
+    let allowlist = BTreeMap::from([("crates/demo/src/lib.rs".to_string(), "#123".to_string())]);
+    let snapshot = parse_issue_state(
+        "# refreshed: 2026-09-11\n#123 OPEN\n\n== allowlist\n",
+        Path::new("scripts/line-cap-issue-state.txt"),
+    )
+    .unwrap();
+    let error = validate_allowlist_binding(
+        &allowlist,
+        Path::new("scripts/line-cap-issue-state.txt"),
+        &snapshot,
+    )
+    .unwrap_err();
+    assert!(error.contains("not recorded"), "{error}");
+    assert!(error.contains("crates/demo/src/lib.rs #123"), "{error}");
+    assert!(
+        error.contains("scripts/refresh-line-cap-issue-state.sh"),
+        "{error}"
+    );
+}
+
+#[test]
+fn rejects_a_snapshot_recording_an_uncited_entry() {
+    let allowlist = BTreeMap::new();
+    let snapshot = parse_issue_state(
+        "# refreshed: 2026-09-11\n#123 OPEN\n\n== allowlist\ncrates/demo/src/lib.rs #123\n",
+        Path::new("scripts/line-cap-issue-state.txt"),
+    )
+    .unwrap();
+    let error = validate_allowlist_binding(
+        &allowlist,
+        Path::new("scripts/line-cap-issue-state.txt"),
+        &snapshot,
+    )
+    .unwrap_err();
+    assert!(error.contains("recorded but no longer cited"), "{error}");
+}
+
+#[test]
+fn binding_ignores_file_modification_times() {
+    // The whole point of content binding: a `git restore` rewrites mtime
+    // without changing policy, and a fresh checkout stamps every file with the
+    // same time. Neither may move the result. This test drives both orderings
+    // on real files and asserts an identical outcome.
+    let scratch = ScratchDir::new("binding-mtime");
+    let allowlist_path = scratch.path().join("allowlist.txt");
+    let snapshot_path = scratch.path().join("issue-state.txt");
+    fs::write(&allowlist_path, "crates/demo/src/lib.rs #123\n").unwrap();
+    fs::write(
+        &snapshot_path,
+        "# refreshed: 2026-09-11\n#123 OPEN\n\n== allowlist\ncrates/demo/src/lib.rs #123\n",
+    )
+    .unwrap();
+    let allowlist = BTreeMap::from([("crates/demo/src/lib.rs".to_string(), "#123".to_string())]);
+    let parse = || {
+        let text = fs::read_to_string(&snapshot_path).unwrap();
+        parse_issue_state(&text, &snapshot_path).unwrap()
+    };
+    let day_ago = SystemTime::now() - Duration::from_secs(86_400);
+    let tomorrow = SystemTime::now() + Duration::from_secs(86_400);
+
+    for stamp in [day_ago, tomorrow] {
+        File::options()
+            .write(true)
+            .open(&snapshot_path)
+            .unwrap()
+            .set_modified(stamp)
+            .unwrap();
+        File::options()
+            .write(true)
+            .open(&allowlist_path)
+            .unwrap()
+            .set_modified(if stamp == day_ago { tomorrow } else { day_ago })
+            .unwrap();
+        assert_eq!(
+            validate_allowlist_binding(&allowlist, &snapshot_path, &parse()),
+            Ok(()),
+            "binding must not depend on which file is newer"
+        );
+    }
+}
+
+#[test]
+fn a_snapshot_without_a_binding_is_rejected() {
+    // An older snapshot has no `== allowlist` section, so every cited entry is
+    // unrecorded. That must fail rather than pass silently.
+    let allowlist = BTreeMap::from([("crates/demo/src/lib.rs".to_string(), "#123".to_string())]);
+    let snapshot = parse_issue_state(
+        "# refreshed: 2026-09-11\n#123 OPEN\n",
+        Path::new("scripts/line-cap-issue-state.txt"),
+    )
+    .unwrap();
+    assert!(
+        validate_allowlist_binding(
+            &allowlist,
+            Path::new("scripts/line-cap-issue-state.txt"),
+            &snapshot
+        )
+        .is_err()
+    );
+}
+
+struct ScratchDir(PathBuf);
+
+impl ScratchDir {
+    fn new(name: &str) -> Self {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock before the Unix epoch")
+            .as_nanos();
+        let path = env::temp_dir().join(format!(
+            "conary-xtask-line-cap-{name}-{}-{unique}",
+            process::id()
+        ));
+        fs::create_dir_all(&path).expect("create scratch dir");
+        Self(path)
+    }
+
+    fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for ScratchDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
     }
 }
