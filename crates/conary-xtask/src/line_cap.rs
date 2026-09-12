@@ -13,12 +13,14 @@ use syn::{Attribute, ForeignItem, ImplItem, Item, TraitItem};
 mod cfg;
 mod exemption;
 mod issue_state;
+mod siblings;
 
 use exemption::{
     ExemptionGate, ExemptionReport, ModuleDeclaration, collect_include_declarations,
     collect_module_declarations, excluded_test_file, intrinsic_gate, resolve_gates,
 };
 use issue_state::{read_issue_state, validate_allowlist_binding, validate_allowlist_issue_state};
+use siblings::{MeasuredFiles, child_modules, report_row, sibling_attribution};
 
 const PRODUCTION_LINE_LIMIT: usize = 1_000;
 const INLINE_TEST_LINE_LIMIT: usize = 300;
@@ -35,7 +37,7 @@ impl LineSpan {
     }
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
 struct FileMetrics {
     total_lines: usize,
     production_lines: usize,
@@ -79,8 +81,21 @@ pub(crate) fn run(args: impl Iterator<Item = String>) -> Result<(), String> {
     if options.report {
         println!("SOURCE ROOTS: {}", source_roots_text(&scan.coverage));
     }
+    // The whole scan set is known before any file is visited, so a parent can
+    // resolve a child that sorts after it.
+    let scanned = scan
+        .files
+        .iter()
+        .map(|path| {
+            path.strip_prefix(&root)
+                .map(path_text)
+                .map_err(|error| format!("cannot relativize {}: {error}", path.display()))
+        })
+        .collect::<Result<BTreeSet<String>, String>>()?;
+    let mut measured = MeasuredFiles::default();
     let mut declarations: BTreeMap<String, Vec<ModuleDeclaration>> = BTreeMap::new();
     let mut intrinsic_gates: BTreeMap<String, ExemptionGate> = BTreeMap::new();
+    let mut rows: Vec<(String, FileMetrics, Vec<String>)> = Vec::new();
     let mut exemptions = ExemptionReport::default();
     let mut used_allowlist_entries = BTreeSet::new();
     let mut errors = Vec::new();
@@ -117,6 +132,7 @@ pub(crate) fn run(args: impl Iterator<Item = String>) -> Result<(), String> {
             }
         };
         let metrics = measure_source(&syntax, &source);
+        measured.insert(&path, metrics);
         collect_module_declarations(&syntax, relative_path, &mut declarations);
         collect_include_declarations(&syntax, relative_path, &mut declarations);
         intrinsic_gates.insert(relative.clone(), intrinsic_gate(&syntax, relative_path));
@@ -127,10 +143,11 @@ pub(crate) fn run(args: impl Iterator<Item = String>) -> Result<(), String> {
         }
 
         if options.report {
-            println!(
-                "{relative}\ttotal={}\tproduction={}\tinline_test={}",
-                metrics.total_lines, metrics.production_lines, metrics.inline_test_lines
-            );
+            rows.push((
+                relative.clone(),
+                metrics,
+                child_modules(&relative, &declarations, &scanned),
+            ));
         }
 
         let production_over = metrics.production_lines > PRODUCTION_LINE_LIMIT;
@@ -163,8 +180,9 @@ pub(crate) fn run(args: impl Iterator<Item = String>) -> Result<(), String> {
     }
 
     // Issue #997: an exempt-named file is reported and classified instead of
-    // being silently dropped, from one resolved gate set computed once the
-    // whole declaration graph is known.
+    // being silently dropped, and issue #998: a parent row states the test mass
+    // of the children it declares. Both read one resolved gate set, computed
+    // once the whole declaration graph is known.
     //
     // Exempt-named files deliberately stay out of the allowlist bookkeeping: an
     // exception counts as used only when it excuses a cap violation the gate
@@ -172,6 +190,10 @@ pub(crate) fn run(args: impl Iterator<Item = String>) -> Result<(), String> {
     // listed exempt-named file is therefore stale, however large it measures.
     let gates = resolve_gates(&intrinsic_gates, &declarations);
     if options.report {
+        for (relative, metrics, children) in &rows {
+            let attribution = sibling_attribution(&root, children, &gates, &mut measured);
+            println!("{}", report_row(relative, *metrics, attribution));
+        }
         print!("{}", exemptions.report(&gates));
     }
 
@@ -501,9 +523,6 @@ fn validate_path_comment(source: &str, relative: &Path) -> Result<(), String> {
     }
 }
 
-/// Metrics for a source string, as the unit tests exercise them. The scan
-/// itself parses once and measures that parse through `measure_source`.
-#[cfg(test)]
 fn analyze_source(source: &str) -> syn::Result<FileMetrics> {
     Ok(measure_source(&syn::parse_file(source)?, source))
 }

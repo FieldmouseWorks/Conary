@@ -574,6 +574,70 @@ done
 write_issue_state "$issue_state" "$(date -u +%Y-%m-%d)" "123 OPEN"
 rm "$fixture_root/crates/fixture/src/control_over_cap.rs"
 
+# Extracted sibling attribution (issue #998). The exempt-named siblings below
+# are deliberately over the production cap, so the gate passing here is itself
+# the proof that making them visible did not un-exempt them. Only a child whose
+# test-only status the exemption gate establishes contributes: an ordinary
+# production child must not inflate `attributed_test_lines`.
+mkdir -p "$fixture_root/crates/fixture/src/path_sibling" \
+    "$fixture_root/crates/fixture/src/mod_parent" \
+    "$fixture_root/crates/fixture/src/mixed_children"
+
+# (a) `#[path = "..."] mod tests;` under a non-`mod.rs` parent, the shape
+# apps/conary-test/src/engine/qemu.rs uses.
+write_fixture "$fixture_root/crates/fixture/src/path_sibling.rs" <<'EOF'
+#[cfg(test)]
+#[path = "path_sibling/tests.rs"]
+mod tests;
+EOF
+write_lines "$fixture_root/crates/fixture/src/path_sibling/tests.rs" 1200
+
+# (b) a plain `mod tests;` under a `mod.rs` parent, the shape
+# crates/conary-core/src/repository/catalog/parity/rpm/mod.rs uses. A `mod.rs`
+# parent resolves children in its own directory, not in `mod/tests.rs`.
+write_fixture "$fixture_root/crates/fixture/src/mod_parent/mod.rs" <<'EOF'
+#[cfg(test)]
+mod tests;
+EOF
+write_lines "$fixture_root/crates/fixture/src/mod_parent/tests.rs" 600
+
+# (c) a declaration naming no scanned file is not a sibling.
+write_fixture "$fixture_root/crates/fixture/src/unresolved_child.rs" <<'EOF'
+#[cfg(test)]
+mod tests;
+EOF
+
+# (d) an ordinary production child beside a gated test child. The production
+# child is longer than the test child, so summing every resolved child could
+# not be mistaken for the attributed value.
+cat >> "$fixture_root/crates/fixture/src/lib.rs" <<'EOF'
+mod mixed_children;
+EOF
+write_fixture "$fixture_root/crates/fixture/src/mixed_children.rs" <<'EOF'
+mod implementation;
+#[cfg(test)]
+mod tests;
+EOF
+write_lines "$fixture_root/crates/fixture/src/mixed_children/implementation.rs" 400
+write_lines "$fixture_root/crates/fixture/src/mixed_children/tests.rs" 50
+
+run_checker >/dev/null
+sibling_report="$(run_checker --report)"
+grep -q $'path_sibling.rs\ttotal=4\tproduction=1\tinline_test=3\tsiblings=1\tattributed_test_lines=1200' <<<"$sibling_report"
+grep -q $'mod_parent/mod.rs\ttotal=3\tproduction=1\tinline_test=2\tsiblings=1\tattributed_test_lines=600' <<<"$sibling_report"
+grep -q $'mixed_children.rs\ttotal=4\tproduction=2\tinline_test=2\tsiblings=1\tattributed_test_lines=50' <<<"$sibling_report"
+if grep -q 'unresolved_child.rs.*siblings=' <<<"$sibling_report"; then
+    echo "ERROR: an unresolved declaration produced sibling fields" >&2
+    exit 1
+fi
+# The exempt-named sibling gains an EXEMPT line but never an ordinary row.
+for sibling in path_sibling/tests.rs mod_parent/tests.rs mixed_children/tests.rs; do
+    if grep -q $'^crates/fixture/src/'"$sibling"$'\t' <<<"$sibling_report"; then
+        echo "ERROR: exempt-named sibling $sibling gained an ordinary report row" >&2
+        exit 1
+    fi
+done
+
 write_fixture "$fixture_root/crates/fixture/src/malformed.rs" <<'EOF'
 fn malformed( {
 EOF

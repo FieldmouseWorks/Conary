@@ -6,8 +6,8 @@
 //! decides how that file is compiled, by resolving `mod` and `include!`
 //! declarations the way rustc loads them and walking the resulting graph to a
 //! `#[cfg(test)]` gate or a cargo test target. It owns both the declaration
-//! graph and the gate resolution, so one rule decides the compilation context
-//! of every exempt-named file.
+//! graph and the gate resolution so `siblings` attributes extracted test mass
+//! through the same reasoning instead of a second, disagreeing rule.
 //!
 //! Classification is report-only and never changes a cap outcome. Enforcing a
 //! cap on an exempt-named file stays deferred, which is also why a listed
@@ -90,13 +90,36 @@ pub(crate) fn excluded_test_file(relative: &Path) -> bool {
             .any(|component| component == Component::Normal(OsStr::new("tests")))
 }
 
+/// How a declaration names its target, which decides how `resolve_child_modules`
+/// chooses between candidates.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum DeclarationKind {
+    /// `#[path = "..."]` or `include!("...")`: the target is exact.
+    Exact,
+    /// `mod name;` resolved to `<directory>/<name>.rs`.
+    Flat,
+    /// `mod name;` resolved to `<directory>/<name>/mod.rs`.
+    ModuleRoot,
+}
+
 /// One declaring site that makes a file part of another file's compilation.
 #[derive(Debug)]
 pub(crate) struct ModuleDeclaration {
     declaring_file: String,
+    /// The declared name for `mod name;`, which pairs the flat and `mod.rs`
+    /// candidates; `None` for `#[path]` and `include!`, whose target is exact.
+    name: Option<String>,
+    kind: DeclarationKind,
+    /// How many inline modules enclose the declaration. Only a top-level
+    /// declaration names a child the parent's own row attributes.
+    depth: usize,
     /// The declaration's own gate: its `cfg`/`cfg_attr` attributes conjoined
     /// with those of every enclosing inline module.
     test_gated: bool,
+    /// True for a `mod` declaration, false for an `include!` site. An included
+    /// file is compiled as part of the includer, so it gates the same way but
+    /// is not a module sibling.
+    is_module: bool,
 }
 
 /// Index every external module declaration by the repo-relative path rustc
@@ -134,7 +157,7 @@ pub(crate) struct DeclarationCollector<'a> {
 impl DeclarationCollector<'_> {
     fn run(&mut self, items: &[Item], module_dir: &Path, file_attributes: &[Attribute]) {
         let path_base = self.file_dir.clone();
-        self.collect(items, module_dir, &path_base, file_attributes);
+        self.collect(items, module_dir, &path_base, file_attributes, 0);
     }
 
     fn collect(
@@ -143,6 +166,7 @@ impl DeclarationCollector<'_> {
         module_dir: &Path,
         path_base: &Path,
         inherited: &[Attribute],
+        depth: usize,
     ) {
         for item in items {
             let Item::Mod(item_module) = item else {
@@ -162,33 +186,65 @@ impl DeclarationCollector<'_> {
                     Some(path) => module_dir.join(path),
                     None => module_dir.join(&name),
                 };
-                self.collect(items, &nested_dir, &nested_dir, &effective);
+                self.collect(items, &nested_dir, &nested_dir, &effective, depth + 1);
                 continue;
             }
 
             match declared_path {
                 Some(path) => {
                     let target = normalize(&path_base.join(path));
-                    self.record(target, test_gated);
+                    self.record(
+                        target,
+                        Some(name),
+                        DeclarationKind::Exact,
+                        depth,
+                        test_gated,
+                        true,
+                    );
                 }
                 None => {
                     // Rust loads `<module>/<name>.rs` or, failing that,
-                    // `<module>/<name>/mod.rs`; both candidates are recorded so
-                    // a declaring site is found whichever exists.
-                    self.record(module_dir.join(format!("{name}.rs")), test_gated);
-                    self.record(module_dir.join(&name).join("mod.rs"), test_gated);
+                    // `<module>/<name>/mod.rs`.
+                    self.record(
+                        module_dir.join(format!("{name}.rs")),
+                        Some(name.clone()),
+                        DeclarationKind::Flat,
+                        depth,
+                        test_gated,
+                        true,
+                    );
+                    self.record(
+                        module_dir.join(&name).join("mod.rs"),
+                        Some(name),
+                        DeclarationKind::ModuleRoot,
+                        depth,
+                        test_gated,
+                        true,
+                    );
                 }
             }
         }
     }
 
-    fn record(&mut self, target: PathBuf, test_gated: bool) {
+    fn record(
+        &mut self,
+        target: PathBuf,
+        name: Option<String>,
+        kind: DeclarationKind,
+        depth: usize,
+        test_gated: bool,
+        is_module: bool,
+    ) {
         self.declarations
             .entry(path_text(&target))
             .or_default()
             .push(ModuleDeclaration {
                 declaring_file: self.declaring_file.clone(),
+                name,
+                kind,
+                depth,
                 test_gated,
+                is_module,
             });
     }
 }
@@ -241,7 +297,11 @@ impl IncludeVisitor<'_> {
             .or_default()
             .push(ModuleDeclaration {
                 declaring_file: self.declaring_file.clone(),
+                name: None,
+                kind: DeclarationKind::Exact,
+                depth: 0,
                 test_gated: cfg::is_test_only(&effective),
+                is_module: false,
             });
     }
 }
@@ -359,6 +419,51 @@ fn gate_from_sites(
         return Some(ExemptionGate::TestGated);
     }
     None
+}
+
+/// Resolve the top-level `mod name;` children of one declaring file to the
+/// files rustc would load, keeping only files in `scanned`. An unresolvable
+/// declaration is dropped rather than guessed at.
+///
+/// Shared with `siblings`, so the file a parent row attributes and the file the
+/// exemption classifier gates are always the same file.
+pub(crate) fn resolve_child_modules(
+    declaring_file: &str,
+    declarations: &BTreeMap<String, Vec<ModuleDeclaration>>,
+    scanned: &BTreeSet<String>,
+) -> Vec<String> {
+    let mut exact = BTreeSet::new();
+    let mut flat = BTreeMap::new();
+    let mut module_root = BTreeMap::new();
+    for (target, sites) in declarations {
+        for site in sites {
+            if !site.is_module || site.depth != 0 || site.declaring_file != declaring_file {
+                continue;
+            }
+            if !scanned.contains(target) {
+                continue;
+            }
+            match (site.kind, &site.name) {
+                (DeclarationKind::Exact, _) => {
+                    exact.insert(target.clone());
+                }
+                (DeclarationKind::Flat, Some(name)) => {
+                    flat.insert(name.clone(), target.clone());
+                }
+                (DeclarationKind::ModuleRoot, Some(name)) => {
+                    module_root.insert(name.clone(), target.clone());
+                }
+                (DeclarationKind::Flat | DeclarationKind::ModuleRoot, None) => {}
+            }
+        }
+    }
+    // rustc prefers `<name>.rs` over `<name>/mod.rs` when both exist.
+    let mut chosen = flat;
+    for (name, target) in module_root {
+        chosen.entry(name).or_insert(target);
+    }
+    exact.extend(chosen.into_values());
+    exact.into_iter().collect()
 }
 
 /// How cargo compiles a file, when the file is a target root.
