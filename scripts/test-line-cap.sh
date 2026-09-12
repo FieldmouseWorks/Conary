@@ -58,6 +58,28 @@ run_checker() {
 
 write_issue_state "$issue_state" "$(date -u +%Y-%m-%d)" "123 OPEN"
 
+for option in --root --allowlist; do
+    if "$checker" "$option" "$fixture_root" > "$fixture_root/wrapper-usage.out" 2>&1; then
+        echo 'ERROR: custom scan inherited the repository snapshot' >&2
+        exit 1
+    else
+        [[ $? == 2 ]] || { cat "$fixture_root/wrapper-usage.out" >&2; exit 1; }
+    fi
+    grep -Fq 'requires an explicit --issue-state path' "$fixture_root/wrapper-usage.out"
+done
+if "$checker" --root --issue-state > "$fixture_root/wrapper-operand.out" 2>&1; then
+    echo 'ERROR: option-like root operand was mistaken for an explicit snapshot' >&2
+    exit 1
+fi
+grep -Fq 'requires an explicit --issue-state path' "$fixture_root/wrapper-operand.out"
+if "$checker" --root "$fixture_root" --issue-state > "$fixture_root/wrapper-missing.out" 2>&1; then
+    echo 'ERROR: missing snapshot operand was accepted' >&2
+    exit 1
+fi
+grep -Fq -- '--issue-state requires a path' "$fixture_root/wrapper-missing.out"
+# The explicit three-input form accepts this independent empty scan.
+run_checker > "$fixture_root/wrapper-explicit.out"
+
 write_lines "$fixture_root/crates/fixture/src/at_cap.rs" 1000
 write_lines "$fixture_root/crates/fixture/src/inline_tests.rs" 900
 {
