@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-13
-revision: 103
+revision: 104
 summary: Route features to owned paths and proof, including context-aware test-file caps, Cargo target evidence, and live exception ownership.
 ---
 
@@ -1296,7 +1296,9 @@ participate in context classification but are not direct sibling attributions.
 and context gates: Cargo roots, explicit paths, and includes load children beside
 the source; conventional flat modules load children below the file stem. A file
 loaded in multiple contexts keeps separate child gates before file-level caps
-aggregate production reachability.
+aggregate production reachability. Builtin includes and literal concat paths
+accept the unqualified, `std::`, and `core::` forms; unresolved include authority
+fails the scan.
 Attributes whose final path segment is `test`, including conditional annotations
 enabled by `cfg_attr` in a test build, also mark inline tests.
 Files with more than 300 total test-only lines fail. Files named `tests.rs`

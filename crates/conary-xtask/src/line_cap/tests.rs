@@ -2056,3 +2056,40 @@ pub(crate) fn normal_text(component: Component<'_>) -> Option<String> {
         _ => None,
     }
 }
+
+#[test]
+fn qualified_builtin_includes_cannot_hide_production_imports() {
+    for load in [
+        r#"std::include!("tests.rs");"#,
+        r#"core::include!("tests.rs");"#,
+        r#"::std::include!("tests.rs");"#,
+        r#"std::include!(std::concat!("tests", ".rs"));"#,
+        r#"core::include!(::core::concat!("tests", ".rs"));"#,
+    ] {
+        let source = format!("#[cfg(test)] mod tests;\n{load}");
+        let classified = classify(&[
+            ("crates/x/src/lib.rs", &source),
+            ("crates/x/src/tests.rs", "fn helper() {}\n"),
+        ]);
+        assert_eq!(
+            gate(&classified, "crates/x/src/tests.rs"),
+            ExemptionGate::Ungated,
+            "{load}"
+        );
+    }
+    for source in [
+        r#"custom::include!("tests.rs");"#,
+        r#"include!(custom::concat!("tests", ".rs"));"#,
+    ] {
+        let syntax = syn::parse_file(source).unwrap();
+        assert!(
+            collect_include_declarations(
+                &syntax,
+                Path::new("crates/x/src/lib.rs"),
+                &mut BTreeMap::new()
+            )
+            .is_err(),
+            "{source}"
+        );
+    }
+}

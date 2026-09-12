@@ -351,7 +351,7 @@ pub(crate) fn collect_include_declarations(
     visitor.visit_file(syntax);
     if visitor.unresolved {
         Err(format!(
-            "cannot resolve include! source path in {}: expected a string literal or literal concat! expression",
+            "cannot resolve include! source path in {}: expected a builtin include! (unqualified, std::, or core::) with a string literal or literal concat! path",
             relative.display()
         ))
     } else {
@@ -383,7 +383,17 @@ impl IncludeVisitor<'_> {
     }
 
     fn record(&mut self, mac: &syn::Macro) {
-        if !mac.path.is_ident("include") || !cfg::can_compile(&self.inherited) {
+        if !mac
+            .path
+            .segments
+            .last()
+            .is_some_and(|segment| segment.ident == "include")
+            || !cfg::can_compile(&self.inherited)
+        {
+            return;
+        }
+        if !builtin_macro_path(&mac.path, "include") {
+            self.unresolved = true;
             return;
         }
         let Some(path) = syn::parse2::<syn::Expr>(mac.tokens.clone())
@@ -410,6 +420,27 @@ impl IncludeVisitor<'_> {
     }
 }
 
+/// Rust exports these builtins both unqualified and through std/core. Other
+/// namespace-qualified include names may be custom macros; fail closed rather
+/// than granting authority from their spelling or guessing their expansion.
+fn builtin_macro_path(path: &syn::Path, name: &str) -> bool {
+    if path
+        .segments
+        .iter()
+        .any(|segment| !matches!(segment.arguments, syn::PathArguments::None))
+    {
+        return false;
+    }
+    let mut segments = path.segments.iter();
+    match (segments.next(), segments.next(), segments.next()) {
+        (Some(first), None, None) => first.ident == name && path.leading_colon.is_none(),
+        (Some(namespace), Some(last), None) => {
+            (namespace.ident == "std" || namespace.ident == "core") && last.ident == name
+        }
+        _ => false,
+    }
+}
+
 fn include_path(expression: Expr) -> Option<String> {
     match expression {
         Expr::Lit(literal) => match literal.lit {
@@ -417,7 +448,7 @@ fn include_path(expression: Expr) -> Option<String> {
             _ => None,
         },
         Expr::Paren(parenthesized) => include_path(*parenthesized.expr),
-        Expr::Macro(expression) if expression.mac.path.is_ident("concat") => {
+        Expr::Macro(expression) if builtin_macro_path(&expression.mac.path, "concat") => {
             use syn::parse::Parser;
             let parser = syn::punctuated::Punctuated::<Expr, syn::Token![,]>::parse_terminated;
             parser
