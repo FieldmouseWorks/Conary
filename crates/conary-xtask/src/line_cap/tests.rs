@@ -902,7 +902,7 @@ fn normalizes_parent_components_in_a_path_attribute() {
 }
 
 #[test]
-fn prefers_the_flat_file_and_drops_unresolved_or_inline_declarations() {
+fn drops_ambiguous_unresolved_or_inline_declarations() {
     let fixture = FixtureRoot::new("precedence");
     fixture.write(
         "crates/engine/src/parent.rs",
@@ -918,10 +918,7 @@ fn prefers_the_flat_file_and_drops_unresolved_or_inline_declarations() {
     fixture.write("crates/engine/src/parent/directory/mod.rs", "");
     assert_eq!(
         fixture.resolve("crates/engine/src/parent.rs"),
-        [
-            "crates/engine/src/parent/directory/mod.rs",
-            "crates/engine/src/parent/flat.rs",
-        ]
+        ["crates/engine/src/parent/directory/mod.rs"]
     );
 }
 

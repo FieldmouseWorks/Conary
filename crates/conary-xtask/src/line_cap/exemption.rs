@@ -457,11 +457,16 @@ pub(crate) fn resolve_child_modules(
             }
         }
     }
-    // rustc prefers `<name>.rs` over `<name>/mod.rs` when both exist.
+    // Rust rejects a module with both candidates. Attribute neither file
+    // when that declaration is ambiguous (Rust Reference: items.mod.outlined.search-mod).
+    let ambiguous = flat
+        .keys()
+        .filter(|name| module_root.contains_key(*name))
+        .cloned()
+        .collect::<BTreeSet<_>>();
     let mut chosen = flat;
-    for (name, target) in module_root {
-        chosen.entry(name).or_insert(target);
-    }
+    chosen.extend(module_root);
+    chosen.retain(|name, _| !ambiguous.contains(name));
     exact.extend(chosen.into_values());
     exact.into_iter().collect()
 }
