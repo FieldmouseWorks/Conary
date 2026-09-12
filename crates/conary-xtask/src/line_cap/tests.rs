@@ -2,6 +2,7 @@
 
 use super::exemption::*;
 use super::issue_state::*;
+use super::siblings::*;
 use super::*;
 use std::fs::File;
 use std::process;
@@ -711,7 +712,306 @@ impl Drop for ScratchDir {
     }
 }
 
-// --- exemption classification (#997) ---
+// --- sibling attribution (#998) and exemption classification (#997) ---
+
+/// A fixture tree written to disk, so module resolution is exercised against
+/// real files, exactly as rustc and the scanner see them.
+struct FixtureRoot {
+    path: PathBuf,
+}
+
+impl FixtureRoot {
+    fn new(label: &str) -> Self {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock is after the epoch")
+            .as_nanos();
+        let path = env::temp_dir().join(format!(
+            "conary-line-cap-{label}-{}-{unique}",
+            process::id()
+        ));
+        fs::create_dir_all(&path).expect("fixture root is creatable");
+        Self { path }
+    }
+
+    fn write(&self, relative: &str, contents: &str) -> PathBuf {
+        let path = self.path.join(relative);
+        fs::create_dir_all(path.parent().expect("fixture file has a parent"))
+            .expect("fixture directory is creatable");
+        fs::write(&path, contents).expect("fixture file is writable");
+        path
+    }
+
+    /// Every `.rs` file below the fixture, as the scanner collects them.
+    fn paths(&self) -> Vec<PathBuf> {
+        let mut files = Vec::new();
+        collect_rust_files(&self.path, &mut files).expect("fixture tree is readable");
+        files.sort();
+        files
+    }
+
+    fn relative(&self, path: &Path) -> String {
+        path_text(
+            path.strip_prefix(&self.path)
+                .expect("a fixture file stays inside the fixture"),
+        )
+    }
+
+    /// The whole fixture tree's declaration graph, as the scan builds it.
+    fn declarations(&self) -> BTreeMap<String, Vec<ModuleDeclaration>> {
+        let mut declarations = BTreeMap::new();
+        for path in self.paths() {
+            let source = fs::read_to_string(&path).expect("fixture file is readable");
+            let syntax = syn::parse_file(&source).expect("fixture file is valid Rust");
+            let relative = path
+                .strip_prefix(&self.path)
+                .expect("fixture file stays inside the fixture");
+            collect_module_declarations(&syntax, relative, &mut declarations);
+            collect_include_declarations(&syntax, relative, &mut declarations);
+        }
+        declarations
+    }
+
+    /// The resolved gate set of the whole fixture tree.
+    fn gates(&self) -> BTreeMap<String, ExemptionGate> {
+        let mut intrinsic = BTreeMap::new();
+        for path in self.paths() {
+            let source = fs::read_to_string(&path).expect("fixture file is readable");
+            let syntax = syn::parse_file(&source).expect("fixture file is valid Rust");
+            let relative = path
+                .strip_prefix(&self.path)
+                .expect("fixture file stays inside the fixture");
+            intrinsic.insert(path_text(relative), intrinsic_gate(&syntax, relative));
+        }
+        resolve_gates(&intrinsic, &self.declarations())
+    }
+
+    /// Every scanned file, as fixture-relative text.
+    fn scanned(&self) -> BTreeSet<String> {
+        self.paths()
+            .iter()
+            .map(|path| self.relative(path))
+            .collect()
+    }
+
+    /// Resolve a parent file's out-of-line children, as fixture-relative text,
+    /// so an assertion reads like the repository path it mirrors.
+    fn resolve(&self, parent: &str) -> Vec<String> {
+        child_modules(parent, &self.declarations(), &self.scanned())
+    }
+}
+
+impl Drop for FixtureRoot {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.path);
+    }
+}
+
+#[test]
+fn resolves_the_declaration_forms_used_in_this_repository() {
+    let fixture = FixtureRoot::new("forms");
+
+    // `#[path = "qemu/tests.rs"] mod tests;` under a non-`mod.rs` parent,
+    // exactly as apps/conary-test/src/engine/qemu.rs declares it.
+    fixture.write(
+        "crates/engine/src/qemu.rs",
+        "#[cfg(test)]\n#[path = \"qemu/tests.rs\"]\nmod tests;\n",
+    );
+    fixture.write("crates/engine/src/qemu/tests.rs", "fn helper() {}\n");
+
+    // A plain `mod tests;` under a non-`mod.rs` parent, exactly as
+    // apps/remi/src/server/catalog_authority.rs declares it, plus that
+    // file's nested `#[path = "catalog_authority/tests/test_support.rs"]`.
+    // The child directory is `<dir>/<stem>/`, never `<dir>/`.
+    fixture.write(
+        "crates/engine/src/catalog_authority.rs",
+        concat!(
+            "#[cfg(test)]\n",
+            "mod tests;\n",
+            "#[cfg(test)]\n",
+            "#[path = \"catalog_authority/tests/test_support.rs\"]\n",
+            "pub(crate) mod test_support;\n",
+        ),
+    );
+    fixture.write("crates/engine/src/catalog_authority/tests.rs", "");
+    fixture.write(
+        "crates/engine/src/catalog_authority/tests/test_support.rs",
+        "",
+    );
+
+    // A plain `mod tests;` under a `mod.rs` parent, exactly as
+    // crates/conary-core/src/repository/catalog/parity/rpm/mod.rs declares
+    // it. A `mod.rs` parent owns its own directory instead.
+    fixture.write(
+        "crates/engine/src/parity/rpm/mod.rs",
+        "mod ffi;\nmod resolution;\n#[cfg(test)]\nmod tests;\n",
+    );
+    fixture.write("crates/engine/src/parity/rpm/ffi.rs", "");
+    fixture.write("crates/engine/src/parity/rpm/resolution/mod.rs", "");
+    fixture.write("crates/engine/src/parity/rpm/tests.rs", "");
+
+    assert_eq!(
+        fixture.resolve("crates/engine/src/qemu.rs"),
+        ["crates/engine/src/qemu/tests.rs"]
+    );
+    assert_eq!(
+        fixture.resolve("crates/engine/src/catalog_authority.rs"),
+        [
+            "crates/engine/src/catalog_authority/tests.rs",
+            "crates/engine/src/catalog_authority/tests/test_support.rs",
+        ]
+    );
+    assert_eq!(
+        fixture.resolve("crates/engine/src/parity/rpm/mod.rs"),
+        [
+            "crates/engine/src/parity/rpm/ffi.rs",
+            "crates/engine/src/parity/rpm/resolution/mod.rs",
+            "crates/engine/src/parity/rpm/tests.rs",
+        ]
+    );
+}
+
+#[test]
+fn resolves_a_path_attribute_under_a_mod_rs_parent() {
+    let fixture = FixtureRoot::new("mod-rs-path");
+    // `#[path]` is relative to the containing file's directory, which for a
+    // `mod.rs` parent is the same directory a plain `mod tests;` searches.
+    fixture.write(
+        "crates/engine/src/rpm/mod.rs",
+        "#[cfg(test)]\n#[path = \"tests.rs\"]\nmod tests;\n",
+    );
+    fixture.write("crates/engine/src/rpm/tests.rs", "");
+    assert_eq!(
+        fixture.resolve("crates/engine/src/rpm/mod.rs"),
+        ["crates/engine/src/rpm/tests.rs"]
+    );
+}
+
+#[test]
+fn normalizes_parent_components_in_a_path_attribute() {
+    let fixture = FixtureRoot::new("normalize");
+    fixture.write(
+        "crates/engine/src/nested/child.rs",
+        "#[path = \"../shared/helper.rs\"]\nmod helper;\n",
+    );
+    fixture.write("crates/engine/src/shared/helper.rs", "");
+    assert_eq!(
+        fixture.resolve("crates/engine/src/nested/child.rs"),
+        ["crates/engine/src/shared/helper.rs"]
+    );
+}
+
+#[test]
+fn prefers_the_flat_file_and_drops_unresolved_or_inline_declarations() {
+    let fixture = FixtureRoot::new("precedence");
+    fixture.write(
+        "crates/engine/src/parent.rs",
+        concat!(
+            "mod flat;\n",
+            "mod directory;\n",
+            "mod missing;\n",
+            "mod inline { mod nested; }\n",
+        ),
+    );
+    fixture.write("crates/engine/src/parent/flat.rs", "");
+    fixture.write("crates/engine/src/parent/flat/mod.rs", "");
+    fixture.write("crates/engine/src/parent/directory/mod.rs", "");
+    assert_eq!(
+        fixture.resolve("crates/engine/src/parent.rs"),
+        [
+            "crates/engine/src/parent/directory/mod.rs",
+            "crates/engine/src/parent/flat.rs",
+        ]
+    );
+}
+
+#[test]
+fn attributes_only_test_gated_children_to_the_declaring_parent() {
+    let fixture = FixtureRoot::new("attribution");
+    let source = "mod implementation;\n#[cfg(test)]\nmod tests;\n";
+    fixture.write("crates/engine/src/lib.rs", "mod extracting;\n");
+    fixture.write("crates/engine/src/extracting.rs", source);
+    // The ordinary production child is longer than the gated test child, so a
+    // sum over every resolved child could not be mistaken for this one.
+    fixture.write(
+        "crates/engine/src/extracting/implementation.rs",
+        "pub fn one() {}\npub fn two() {}\npub fn three() {}\npub fn four() {}\n",
+    );
+    fixture.write(
+        "crates/engine/src/extracting/tests.rs",
+        "fn one() {}\nfn two() {}\n",
+    );
+
+    let children = fixture.resolve("crates/engine/src/extracting.rs");
+    assert_eq!(
+        children,
+        [
+            "crates/engine/src/extracting/implementation.rs",
+            "crates/engine/src/extracting/tests.rs",
+        ]
+    );
+    let mut measured = MeasuredFiles::default();
+    let attribution =
+        sibling_attribution(&fixture.path, &children, &fixture.gates(), &mut measured);
+    assert_eq!(
+        attribution,
+        SiblingAttribution {
+            siblings: 1,
+            attributed_test_lines: 2,
+        }
+    );
+    assert_eq!(
+        report_row(
+            "crates/engine/src/extracting.rs",
+            analyze_source(source).unwrap(),
+            attribution,
+        ),
+        concat!(
+            "crates/engine/src/extracting.rs\ttotal=3\tproduction=1\tinline_test=2",
+            "\tsiblings=1\tattributed_test_lines=2",
+        )
+    );
+}
+
+#[test]
+fn a_child_the_graph_cannot_place_does_not_contribute() {
+    let fixture = FixtureRoot::new("unknown-child");
+    // Nothing declares the parent, so neither the parent's production nor its
+    // test-only compilation is established, and its child inherits that.
+    fixture.write("crates/engine/src/orphan.rs", "mod tests;\n");
+    fixture.write("crates/engine/src/orphan/tests.rs", "fn one() {}\n");
+    let children = fixture.resolve("crates/engine/src/orphan.rs");
+    let gates = fixture.gates();
+    assert_eq!(
+        resolved_gate(&gates, "crates/engine/src/orphan/tests.rs"),
+        ExemptionGate::Unknown
+    );
+    let mut measured = MeasuredFiles::default();
+    assert_eq!(
+        sibling_attribution(&fixture.path, &children, &gates, &mut measured),
+        SiblingAttribution::default()
+    );
+}
+
+#[test]
+fn omits_sibling_fields_when_no_child_module_resolves() {
+    let fixture = FixtureRoot::new("no-siblings");
+    let source = "mod missing;\n#[cfg(test)]\nmod tests { fn helper() {} }\n";
+    fixture.write("crates/engine/src/inline.rs", source);
+
+    assert!(
+        fixture.resolve("crates/engine/src/inline.rs").is_empty(),
+        "an unresolvable declaration is not a sibling"
+    );
+    assert_eq!(
+        report_row(
+            "crates/engine/src/inline.rs",
+            analyze_source(source).unwrap(),
+            SiblingAttribution::default(),
+        ),
+        "crates/engine/src/inline.rs\ttotal=3\tproduction=1\tinline_test=2"
+    );
+}
 
 #[test]
 fn resolves_relative_module_directories_and_cargo_target_roots() {
@@ -1211,7 +1511,7 @@ fn a_listed_exempt_named_file_is_stale_however_large_it_measures() {
     assert_eq!(run_with("crates/fixture/src/checked.rs #123\n"), Ok(()));
 }
 
-// --- helpers for the module-graph tests (#997) ---
+// --- helpers for the module-graph tests (#997, #998) ---
 
 fn declarations_of(
     sources: &[(&str, &str)],
