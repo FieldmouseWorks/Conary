@@ -5,20 +5,23 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::ffi::OsStr;
 use std::fs;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
 use syn::{Attribute, ForeignItem, ImplItem, Item, TraitItem};
 
 mod cfg;
+mod exemption;
+mod issue_state;
+
+use exemption::{
+    ExemptionGate, ExemptionReport, ModuleDeclaration, collect_include_declarations,
+    collect_module_declarations, excluded_test_file, intrinsic_gate, resolve_gates,
+};
+use issue_state::{read_issue_state, validate_allowlist_binding, validate_allowlist_issue_state};
 
 const PRODUCTION_LINE_LIMIT: usize = 1_000;
 const INLINE_TEST_LINE_LIMIT: usize = 300;
-const REFRESH_ISSUE_STATE_SCRIPT: &str = "scripts/refresh-line-cap-issue-state.sh";
-/// Separates the recorded issue states from the allowlist entries they were
-/// generated for. The snapshot is bound to that entry set, so the gate can
-/// tell a stale snapshot from a current one without reading file metadata.
-const ALLOWLIST_SECTION: &str = "== allowlist";
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 struct LineSpan {
@@ -76,6 +79,9 @@ pub(crate) fn run(args: impl Iterator<Item = String>) -> Result<(), String> {
     if options.report {
         println!("SOURCE ROOTS: {}", source_roots_text(&scan.coverage));
     }
+    let mut declarations: BTreeMap<String, Vec<ModuleDeclaration>> = BTreeMap::new();
+    let mut intrinsic_gates: BTreeMap<String, ExemptionGate> = BTreeMap::new();
+    let mut exemptions = ExemptionReport::default();
     let mut used_allowlist_entries = BTreeSet::new();
     let mut errors = Vec::new();
 
@@ -103,15 +109,20 @@ pub(crate) fn run(args: impl Iterator<Item = String>) -> Result<(), String> {
         if let Err(error) = validate_path_comment(&source, relative_path) {
             errors.push(error);
         }
-        let metrics = match analyze_source(&source) {
-            Ok(metrics) => metrics,
+        let syntax = match syn::parse_file(&source) {
+            Ok(syntax) => syntax,
             Err(error) => {
                 errors.push(format!("failed to parse {relative}: {error}"));
                 continue;
             }
         };
+        let metrics = measure_source(&syntax, &source);
+        collect_module_declarations(&syntax, relative_path, &mut declarations);
+        collect_include_declarations(&syntax, relative_path, &mut declarations);
+        intrinsic_gates.insert(relative.clone(), intrinsic_gate(&syntax, relative_path));
 
         if excluded_test_file(relative_path) {
+            exemptions.record(relative, metrics);
             continue;
         }
 
@@ -149,6 +160,19 @@ pub(crate) fn run(args: impl Iterator<Item = String>) -> Result<(), String> {
                 metrics.inline_test_lines
             ));
         }
+    }
+
+    // Issue #997: an exempt-named file is reported and classified instead of
+    // being silently dropped, from one resolved gate set computed once the
+    // whole declaration graph is known.
+    //
+    // Exempt-named files deliberately stay out of the allowlist bookkeeping: an
+    // exception counts as used only when it excuses a cap violation the gate
+    // enforces, and the gate enforces no cap on a file its name exempts. A
+    // listed exempt-named file is therefore stale, however large it measures.
+    let gates = resolve_gates(&intrinsic_gates, &declarations);
+    if options.report {
+        print!("{}", exemptions.report(&gates));
     }
 
     for (path, issue) in allowlist {
@@ -247,224 +271,6 @@ fn issue_number(value: &str) -> Option<u64> {
 
 fn valid_issue(value: &str) -> bool {
     issue_number(value).is_some()
-}
-
-/// GitHub state of one cited issue, as recorded in the checked-in snapshot.
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-enum IssueState {
-    Open,
-    Closed,
-}
-
-impl IssueState {
-    fn parse(value: &str) -> Option<Self> {
-        match value {
-            "OPEN" => Some(Self::Open),
-            "CLOSED" => Some(Self::Closed),
-            _ => None,
-        }
-    }
-}
-
-/// Checked-in issue state for every allowlist citation.
-///
-/// The gate performs no network I/O: `scripts/refresh-line-cap-issue-state.sh`
-/// is the only producer of this snapshot and the only line-cap step that talks
-/// to GitHub.
-#[derive(Debug)]
-struct IssueStateSnapshot {
-    refreshed: String,
-    states: BTreeMap<u64, IssueState>,
-    /// The canonical allowlist entries this snapshot was generated from:
-    /// `(repository-relative path, issue number)`. This binding is what makes
-    /// the snapshot's provenance checkable without consulting file metadata:
-    /// the checked-in snapshot either describes the current allowlist or it
-    /// does not, regardless of how either file reached the working tree.
-    allowlist: BTreeSet<(String, u64)>,
-}
-
-/// The allowlist's canonical entry set: every `(path, issue)` pair, sorted and
-/// deduplicated. This is the binding recorded in the snapshot and compared
-/// against it.
-fn canonical_allowlist_entries(allowlist: &BTreeMap<String, String>) -> BTreeSet<(String, u64)> {
-    allowlist
-        .iter()
-        .filter_map(|(path, issue)| issue_number(issue).map(|number| (path.clone(), number)))
-        .collect()
-}
-
-fn read_issue_state(path: &Path) -> Result<IssueStateSnapshot, String> {
-    let contents = fs::read_to_string(path).map_err(|error| {
-        format!(
-            "line-cap issue-state snapshot not found: {}: {error}",
-            path.display()
-        )
-    })?;
-    parse_issue_state(&contents, path)
-}
-
-fn parse_issue_state(contents: &str, path: &Path) -> Result<IssueStateSnapshot, String> {
-    let mut refreshed = None;
-    let mut states = BTreeMap::new();
-    let mut allowlist = BTreeSet::new();
-    let mut in_allowlist = false;
-
-    for line in contents.lines() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        if line == ALLOWLIST_SECTION {
-            in_allowlist = true;
-            continue;
-        }
-        if in_allowlist {
-            // `<repository-relative path> #<issue>`, the allowlist's own
-            // format, recorded verbatim so the binding is reviewable by eye.
-            let fields = line.split_whitespace().collect::<Vec<_>>();
-            let (Some(entry_path), Some(issue)) = (fields.first(), fields.get(1)) else {
-                return Err(format!(
-                    "invalid recorded allowlist entry in {} (expected '<path> #<issue>'): {line}",
-                    path.display()
-                ));
-            };
-            let Some(number) = issue_number(issue) else {
-                return Err(format!(
-                    "invalid recorded allowlist issue in {} (expected '#<issue>'): {line}",
-                    path.display()
-                ));
-            };
-            if !allowlist.insert(((*entry_path).to_string(), number)) {
-                return Err(format!(
-                    "duplicate recorded allowlist entry in {}: {line}",
-                    path.display()
-                ));
-            }
-            continue;
-        }
-        // `#` lines are comments, but a data line may carry the issue sigil
-        // (`#154 OPEN`); the checked-in snapshot writes it bare (`154 OPEN`).
-        let data = match line.strip_prefix('#') {
-            Some(rest) if !rest.trim_start().starts_with(|c: char| c.is_ascii_digit()) => {
-                if let Some(value) = rest.trim().strip_prefix("refreshed:") {
-                    if refreshed.is_some() {
-                        return Err(format!(
-                            "duplicate refreshed date in issue-state snapshot {}",
-                            path.display()
-                        ));
-                    }
-                    refreshed = Some(value.trim().to_string());
-                }
-                continue;
-            }
-            Some(rest) => rest,
-            None => line,
-        };
-        let fields = data.split_whitespace().collect::<Vec<_>>();
-        if fields.len() != 2 {
-            return Err(format!(
-                "invalid issue-state entry in {} (expected '<issue> <STATE>'): {line}",
-                path.display()
-            ));
-        }
-        let Some(number) = positive_number(fields[0]) else {
-            return Err(format!(
-                "invalid issue-state entry in {} (expected '<issue> <STATE>'): {line}",
-                path.display()
-            ));
-        };
-        let Some(state) = IssueState::parse(fields[1]) else {
-            return Err(format!(
-                "invalid issue state in {} (expected OPEN or CLOSED): {line}",
-                path.display()
-            ));
-        };
-        if states.insert(number, state).is_some() {
-            return Err(format!(
-                "duplicate issue-state entry in {}: #{number}",
-                path.display()
-            ));
-        }
-    }
-
-    let refreshed = refreshed.ok_or_else(|| {
-        format!(
-            "issue-state snapshot {} has no 'refreshed: <YYYY-MM-DD>' line",
-            path.display()
-        )
-    })?;
-    Ok(IssueStateSnapshot {
-        refreshed,
-        states,
-        allowlist,
-    })
-}
-
-/// The snapshot cannot silently rot: any allowlist change must be followed by a
-/// refresh, because freshly cited issues are exactly what the snapshot cannot know.
-/// The snapshot is bound to the allowlist's canonical entry set, not to file
-/// metadata. Modification times cannot answer this question: `git restore`
-/// rewrites them without changing policy, a fresh checkout stamps every file
-/// with the same time, and a same-day edit leaves them indistinguishable. The
-/// recorded binding either matches the current allowlist or it does not.
-fn validate_allowlist_binding(
-    allowlist: &BTreeMap<String, String>,
-    snapshot_path: &Path,
-    snapshot: &IssueStateSnapshot,
-) -> Result<(), String> {
-    let current = canonical_allowlist_entries(allowlist);
-    if current == snapshot.allowlist {
-        return Ok(());
-    }
-    let added = current
-        .difference(&snapshot.allowlist)
-        .map(|(path, issue)| format!("{path} #{issue}"))
-        .collect::<Vec<_>>();
-    let removed = snapshot
-        .allowlist
-        .difference(&current)
-        .map(|(path, issue)| format!("{path} #{issue}"))
-        .collect::<Vec<_>>();
-    let mut detail = Vec::new();
-    if !added.is_empty() {
-        detail.push(format!("not recorded: {}", added.join(", ")));
-    }
-    if !removed.is_empty() {
-        detail.push(format!(
-            "recorded but no longer cited: {}",
-            removed.join(", ")
-        ));
-    }
-    Err(format!(
-        "line-cap allowlist does not match issue-state snapshot {} (refreshed: {}); {}. Run {REFRESH_ISSUE_STATE_SCRIPT}",
-        snapshot_path.display(),
-        snapshot.refreshed,
-        detail.join("; ")
-    ))
-}
-
-fn validate_allowlist_issue_state(
-    allowlist: &BTreeMap<String, String>,
-    snapshot_path: &Path,
-    snapshot: &IssueStateSnapshot,
-    errors: &mut Vec<String>,
-) {
-    for (path, issue) in allowlist {
-        let Some(number) = issue_number(issue) else {
-            continue;
-        };
-        match snapshot.states.get(&number) {
-            Some(IssueState::Open) => {}
-            Some(IssueState::Closed) => errors.push(format!(
-                "allowlist entry {path} cites {issue}; snapshot records {issue} as CLOSED in {}",
-                snapshot_path.display()
-            )),
-            None => errors.push(format!(
-                "allowlist entry {path} cites {issue}, which is absent from issue-state snapshot {}",
-                snapshot_path.display()
-            )),
-        }
-    }
 }
 
 /// How a declared top-level Rust source root participates in the cap gate.
@@ -683,13 +489,6 @@ fn collect_rust_files(directory: &Path, files: &mut Vec<PathBuf>) -> Result<(), 
     Ok(())
 }
 
-fn excluded_test_file(relative: &Path) -> bool {
-    relative.file_name() == Some(OsStr::new("tests.rs"))
-        || relative
-            .components()
-            .any(|component| component == Component::Normal(OsStr::new("tests")))
-}
-
 fn validate_path_comment(source: &str, relative: &Path) -> Result<(), String> {
     let first_line = source.lines().next().unwrap_or_default();
     let expected = path_text(relative);
@@ -702,8 +501,16 @@ fn validate_path_comment(source: &str, relative: &Path) -> Result<(), String> {
     }
 }
 
+/// Metrics for a source string, as the unit tests exercise them. The scan
+/// itself parses once and measures that parse through `measure_source`.
+#[cfg(test)]
 fn analyze_source(source: &str) -> syn::Result<FileMetrics> {
-    let syntax = syn::parse_file(source)?;
+    Ok(measure_source(&syn::parse_file(source)?, source))
+}
+
+/// Metrics for an already-parsed file, so one parse serves the cap check, the
+/// declaration graph, and the exemption classification.
+fn measure_source(syntax: &syn::File, source: &str) -> FileMetrics {
     let total_lines = source.lines().count();
     // Inner attributes such as `#![cfg(test)]` gate the whole file; syn keeps them
     // on `File::attrs`, which no descendant visit sees.
@@ -719,15 +526,15 @@ fn analyze_source(source: &str) -> syn::Result<FileMetrics> {
             inherited: cfg_attributes(&syntax.attrs),
             spans: Vec::new(),
         };
-        visitor.visit_file(&syntax);
+        visitor.visit_file(syntax);
         union_spans(visitor.spans)
     };
     let inline_test_lines = spans.iter().copied().map(LineSpan::line_count).sum();
-    Ok(FileMetrics {
+    FileMetrics {
         total_lines,
         production_lines: total_lines.saturating_sub(inline_test_lines),
         inline_test_lines,
-    })
+    }
 }
 
 #[derive(Default)]
