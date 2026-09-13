@@ -808,9 +808,18 @@ pub(crate) fn normalize(path: &Path) -> PathBuf {
     for component in path.components() {
         match component {
             Component::CurDir => {}
-            Component::ParentDir => {
+            Component::ParentDir
+                if matches!(
+                    normalized.components().next_back(),
+                    Some(Component::Normal(_))
+                ) =>
+            {
                 normalized.pop();
             }
+            // A relative path can escape the scan root. Preserve that identity
+            // instead of aliasing its suffix to a scanned repository source.
+            Component::ParentDir if !normalized.has_root() => normalized.push(".."),
+            Component::ParentDir => {}
             other => normalized.push(other.as_os_str()),
         }
     }

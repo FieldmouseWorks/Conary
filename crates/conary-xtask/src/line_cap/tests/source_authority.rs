@@ -680,3 +680,58 @@ fn unscanned_cargo_targets_retain_production_uncertainty() {
         }
     }
 }
+
+#[test]
+fn lexical_parent_normalization_preserves_external_identity() {
+    for (input, expected) in [
+        (
+            "../../crates/x/src/bridge.rs",
+            "../../crates/x/src/bridge.rs",
+        ),
+        (
+            "crates/x/src/../../../../crates/x/src/bridge.rs",
+            "../crates/x/src/bridge.rs",
+        ),
+        ("../nested/../../bridge.rs", "../../bridge.rs"),
+        ("nested/../bridge.rs", "bridge.rs"),
+        ("./nested/../bridge.rs", "bridge.rs"),
+        ("/../../bridge.rs", "/bridge.rs"),
+        ("/nested/../../bridge.rs", "/bridge.rs"),
+    ] {
+        assert_eq!(normalize(Path::new(input)), Path::new(expected), "{input}");
+    }
+}
+
+#[test]
+fn external_load_suffixes_cannot_alias_scanned_sources() {
+    for intrinsic in [false, true] {
+        let sources = BTreeMap::from([
+            ("crates/x/src/lib.rs".to_owned(), syn::parse_file(r#"#[path = "../../../../crates/x/src/bridge.rs"] mod bridge; #[cfg(test)] mod tests;"#).unwrap()),
+            ("crates/x/src/bridge.rs".to_owned(), syn::parse_file("fn helper() {}").unwrap()),
+            ("crates/x/src/tests.rs".to_owned(), syn::parse_file(if intrinsic { "#![cfg(test)] fn helper() {}" } else { "fn helper() {}" }).unwrap()),
+        ]);
+        let graph = collect_source_graph(
+            &sources,
+            &fixture_targets(sources.keys().map(String::as_str)),
+        )
+        .unwrap();
+        assert!(
+            graph.unresolved_sources["crates/x/src/lib.rs"].contains("../crates/x/src/bridge.rs")
+        );
+        assert!(!graph.declarations.contains_key("crates/x/src/bridge.rs"));
+        assert_eq!(
+            graph.gates["crates/x/src/tests.rs"],
+            if intrinsic {
+                ExemptionGate::TestGated
+            } else {
+                ExemptionGate::Unknown
+            }
+        );
+    }
+    let source = syn::parse_file(r#"include!("../../../../crates/x/src/bridge.rs");"#).unwrap();
+    let mut declarations = BTreeMap::new();
+    collect_include_declarations(&source, Path::new("crates/x/src/lib.rs"), &mut declarations)
+        .unwrap();
+    assert!(declarations.contains_key("../crates/x/src/bridge.rs"));
+    assert!(!declarations.contains_key("crates/x/src/bridge.rs"));
+}

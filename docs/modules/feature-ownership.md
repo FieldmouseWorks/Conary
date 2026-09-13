@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-13
-revision: 111
+revision: 112
 summary: Route features to owned paths and proof, including context-aware test-file caps, Cargo target evidence, and live exception ownership.
 ---
 
@@ -1305,7 +1305,9 @@ records these sources explicitly and retains normal caps for unknown files.
 imports and attribute uncertainty; macro tokens are never interpreted as expansion
 proof. Apparent std/core builtins also need compiler name resolution because the
 extern prelude can replace those namespaces. Loads outside the scanned roots
-and unscanned Cargo production roots also retain uncertainty; an absent conventional alternative is harmless when
+and unscanned Cargo production roots also retain uncertainty. Path normalization
+preserves unmatched leading parents so an external load cannot alias a scanned
+repository suffix; an absent conventional alternative is harmless when
 the other candidate is scanned. `crates/conary-xtask/src/line_cap/exemption/builtin_attributes.rs`
 owns the pinned Rust 1.98 inert attribute grammar, preserving compiler-owned
 metadata such as lint, doc, and repr attributes while derive/custom attributes
