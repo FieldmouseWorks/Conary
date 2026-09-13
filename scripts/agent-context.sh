@@ -467,7 +467,8 @@ span_exists_in_worktree() {
         return 0
     fi
     [[ -d "$span" ]] || return 1
-    [[ -n "$(list_worktree_files | awk -v prefix="$span/" 'index($0, prefix) == 1 { print; exit }')" ]]
+    # Drain the producer even after a match so large inventories cannot hit SIGPIPE.
+    [[ -n "$(list_worktree_files | awk -v prefix="$span/" '!found && index($0, prefix) == 1 { print; found = 1 }')" ]]
 }
 
 mode_validate() {

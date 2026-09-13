@@ -306,6 +306,25 @@ good_out="$( (cd "$good_repo" && bash "$script" --map map.md --validate) )"
 grep -q "validation passed" <<<"$good_out" \
     || fail "well-formed fixture map did not validate; got: $good_out"
 
+# A directory can match before the inventory exceeds the pipe buffer. Validation
+# must consume the remaining paths even when its parent ignores SIGPIPE.
+vr="$tmp/validate-large-directory"
+make_validate_repo "$vr"
+sed -i 's|`a/alpha.rs`;|`a/`;|' "$vr/map.md"
+python3 - "$vr" <<'PY'
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1])
+for index in range(1024):
+    (root / "b" / (f"{index:04d}-" + "x" * 200 + ".rs")).touch()
+PY
+(cd "$vr" && trap '' PIPE && bash "$script" --map map.md --validate) \
+    >"$tmp/large-directory.out" 2>"$tmp/large-directory.err" \
+    || fail "large directory fixture did not validate"
+[[ ! -s "$tmp/large-directory.err" ]] \
+    || fail "large directory validation emitted diagnostics: $(cat "$tmp/large-directory.err")"
+
 vr="$tmp/validate-missing-field"
 make_validate_repo "$vr"
 sed -i '/^\*\*Safety notes:\*\* never break beta invariants\.$/d' "$vr/map.md"

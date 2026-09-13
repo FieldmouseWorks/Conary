@@ -1105,7 +1105,6 @@ deployment, and prove installed or live behavior independently.
 `.github/actions/deploy-remi-bundle/action.yml`;
 `scripts/release.sh`; `scripts/release-matrix.sh`;
 `scripts/remi-candidate-artifact.sh`;
-`scripts/sign-release.sh`;
 `docs/operations/release-artifact-matrix.md`;
 `docs/operations/infrastructure.md`.
 

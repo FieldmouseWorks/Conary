@@ -1004,7 +1004,7 @@ cases = (
     ('test_check_release_matrix_rejects_pretransition_candidate_completion', 'replace', 'deploy/remi-postdeployment-fencing.jq', '                > $final.deployment.transition_completed_at))', '                >= 0))', 'candidate deploy requires a zero-scan publication-attested post-transition refresh, candidate completion, and advances fences only within one schema authority'),
     ('test_check_release_matrix_rejects_preupload_conversion_failure_exit', 'replace', '.github/workflows/remi-conversion-benchmark.yml', '            echo "fixed production conversion benchmark operation failed" >&2\n            exit 0', '            echo "fixed production conversion benchmark operation failed" >&2\n            exit "$helper_status"', 'conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority'),
     ('test_check_release_matrix_rejects_private_conversion_failure_upload', 'replace', '.github/workflows/remi-conversion-benchmark.yml', '          path: remi-conversion-benchmark-failure-v1.json', '          path: ${{ runner.temp }}/remi-conversion-benchmark-helper.stderr', 'conversion benchmark failure-only retained evidence'),
-    ('test_check_release_matrix_rejects_private_mode_public_readiness_claim', 'replace', '.github/actions/deploy-remi-bundle/action.yml', '        if [[ "$COMPLETION_MODE" == "active-repopulation" ]]; then', '        if true; then', 'candidate deploy mode-specific public readiness contract'),
+    ('test_check_release_matrix_rejects_private_mode_public_readiness_claim', 'replace', '.github/actions/deploy-remi-bundle/action.yml', '        if [[ "$COMPLETION_MODE" == "active-repopulation" ]]; then', '        if true; then', 'shared Remi deployment liveness and mode-specific readiness proof'),
     ('test_check_release_matrix_rejects_product_scoped_ccs_version', 'replace', 'packaging/ccs/build.sh', 'assert-owned-version suite "$VERSION"', 'assert-owned-version conary "$VERSION"', 'CCS build must validate the root workspace version authority'),
     ('test_check_release_matrix_rejects_published_binary_as_hook_runner', 'replace', '.github/workflows/release-artifact-proof.yml', '          CONARY_HOOKS_BIN: /usr/libexec/conary-test/conary-test-hooks', '          CONARY_BIN: /usr/libexec/conary-test/conary-test-hooks', 'published native package fence and separate test-hook lifecycle proof'),
     ('test_check_release_matrix_rejects_raw_conversion_benchmark_upload', 'replace', '.github/workflows/remi-conversion-benchmark.yml', '            remi-conversion-benchmark-public-v6.json', '            remi-conversion-benchmark-public-v6.json\n            conversion-benchmark-v8.json', 'conversion benchmark public-only retained evidence'),
@@ -1616,7 +1616,7 @@ test_remi_postdeployment_filter_scopes_fences_to_schema_authority() {
 }
 
 test_candidate_deploy_materializes_policy_across_candidate_history() {
-    local repo candidate_sha workflow_sha materialized
+    local repo candidate_sha workflow_sha materialized authority_path
     repo="$(mktemp -d "${TEST_RUN_ROOT}/workflow-authority.XXXXXX")"
     git -C "$repo" init -q
     git -C "$repo" config user.name "Conary Release Fixture"
@@ -1629,19 +1629,19 @@ test_candidate_deploy_materializes_policy_across_candidate_history() {
 
     cp "$REPO_ROOT/deploy/remi-postdeployment-fencing.jq" \
         "$repo/deploy/remi-postdeployment-fencing.jq"
-    git -C "$repo" add deploy/remi-postdeployment-fencing.jq
+    cp "$REPO_ROOT/deploy/remi-deploy-helper.sh" "$repo/deploy/remi-deploy-helper.sh"
+    git -C "$repo" add deploy/remi-postdeployment-fencing.jq deploy/remi-deploy-helper.sh
     git -C "$repo" commit -q -m workflow-authority
     workflow_sha="$(git -C "$repo" rev-parse HEAD)"
     git -C "$repo" checkout -q --detach "$candidate_sha"
-    [[ ! -e "$repo/deploy/remi-postdeployment-fencing.jq" ]] ||
-        fail "older candidate fixture unexpectedly contains workflow fencing policy"
-
-    materialized="$(mktemp "${TEST_RUN_ROOT}/workflow-fencing.XXXXXX")"
-    git -C "$repo" show \
-        "${workflow_sha}:deploy/remi-postdeployment-fencing.jq" \
-        > "$materialized"
-    cmp "$REPO_ROOT/deploy/remi-postdeployment-fencing.jq" "$materialized" ||
-        fail "exact workflow SHA did not materialize its fencing policy"
+    for authority_path in deploy/remi-postdeployment-fencing.jq deploy/remi-deploy-helper.sh; do
+        [[ ! -e "$repo/$authority_path" ]] ||
+            fail "older candidate fixture unexpectedly contains $authority_path"
+        materialized="$(mktemp "${TEST_RUN_ROOT}/workflow-authority-file.XXXXXX")"
+        git -C "$repo" show "${workflow_sha}:${authority_path}" > "$materialized"
+        cmp "$REPO_ROOT/$authority_path" "$materialized" ||
+            fail "exact workflow SHA did not materialize $authority_path"
+    done
 }
 
 
