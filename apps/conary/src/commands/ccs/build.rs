@@ -130,7 +130,7 @@ pub fn cmd_ccs_build(options: CcsBuildOptions) -> Result<()> {
             .filter_map(|e| e.ok())
             .filter(|e| e.file_type().is_file())
             .count();
-        println!("Scanning {} files...", file_count);
+        ui::field("Files to scan", &file_count.to_string());
 
         let mut builder_instance = CcsBuilder::new(manifest.clone(), &source_dir)
             .context("Invalid CCS build policy configuration")?
@@ -141,7 +141,7 @@ pub fn cmd_ccs_build(options: CcsBuildOptions) -> Result<()> {
             ui::field("Chunking", "disabled");
         }
 
-        println!("Compressing...");
+        println!("Preparing payload...");
         let result = builder_instance
             .build()
             .context("Failed to build package")?;

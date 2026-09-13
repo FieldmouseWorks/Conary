@@ -157,12 +157,9 @@ fn build_and_preview_frames_in_terminal_pipe_and_no_color() {
                 );
                 assert_eq!(frame.matches("Created:").count(), 1, "{frame}");
                 assert_eq!(frame.matches("Built summary-build").count(), 1, "{frame}");
-                assert!(frame.contains("Architecture: -"), "{frame}");
+                assert!(frame.contains("Architecture: noarch"), "{frame}");
                 assert!(frame.contains("Payload size: 8 bytes"), "{frame}");
-                assert!(
-                    frame.contains("Payload sources: 1 regular files"),
-                    "{frame}"
-                );
+                assert!(frame.contains("Payload sources: 1 regular file"), "{frame}");
                 assert!(frame.contains("Components:"), "{frame}");
                 assert!(frame.contains("local-dev CCS key"), "{frame}");
                 assert!(artifact.is_file());

@@ -78,13 +78,16 @@ fn payload_source_count(result: &BuildResult) -> usize {
 }
 
 fn record_lines(result: &BuildResult) -> Vec<String> {
+    let sources = payload_source_count(result);
+    let source_unit = if sources == 1 {
+        "regular file"
+    } else {
+        "regular files"
+    };
     vec![
         field_line("File records", &result.files.len().to_string()),
         field_line("Payload size", &format!("{} bytes", result.total_size)),
-        field_line(
-            "Payload sources",
-            &format!("{} regular files", payload_source_count(result)),
-        ),
+        field_line("Payload sources", &format!("{sources} {source_unit}")),
     ]
 }
 
