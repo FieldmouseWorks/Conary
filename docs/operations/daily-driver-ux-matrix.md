@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-13
-revision: 42
+revision: 43
 summary: Daily-driver CLI source identities, typed installed capability details, fallible file-owner queries, grouped results, history, and native refusals
 ---
 
@@ -679,13 +679,18 @@ exact `native` token is distinct from implicit and wildcard qualifiers. Source
 provenance reports its recorded source format and, for a declaration, its exact
 source record index. Rendering does not infer a source format from the package
 or capability version grammar, renumber source records, or turn promised paths
-into shipped-file observations. Record order and duplicates are preserved.
+into shipped-file observations. `ProvideEntry::find_by_trove` loads records in
+ascending persisted ID order; the renderer preserves that insertion order and
+multiplicity without sorting by capability or source record index.
 
 `cargo test -p conary --lib ui::installed_provides` proves field preservation,
 controls, missing observations, qualifier distinctions, and provenance.
 `cargo test -p conary --test cli_installed_info` captures literal versioned,
 unversioned, qualified, declared, derived-file, and promised-path records in
 TTY, pipe, and `NO_COLOR` modes while proving the database remains unchanged.
+Its complete-section assertion checks the relative order of all six records
+against insertion order, including capability names and source record indexes
+that would sort differently.
 
 This hard-cuts the former hand-padded detail labels and debug enum output.
 Installed-list and file-list layouts, installed variant selection, repository
