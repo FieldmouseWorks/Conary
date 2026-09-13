@@ -1447,6 +1447,14 @@ fn a_listed_test_only_file_is_stale_even_when_large() {
     // its entry is stale even when that file is large; a cap-checked file
     // with the same size makes the entry used.
     let root = TempRoot::new("exempt-stale");
+    write_source(
+        &root.path().join("Cargo.toml"),
+        "[workspace]\nmembers = [\"crates/fixture\"]\nresolver = \"3\"\n",
+    );
+    write_source(
+        &root.path().join("crates/fixture/Cargo.toml"),
+        "[package]\nname = \"fixture\"\nversion = \"0.0.0\"\nedition = \"2024\"\n",
+    );
     let header = "// crates/fixture/src/lib.rs\n";
     write_source(
         &root.path().join("crates/fixture/src/lib.rs"),
