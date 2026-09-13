@@ -434,6 +434,10 @@ impl CandidateResolutionProjection {
         let database = scratch.path().join("candidate.sqlite3");
         crate::db::init(&database)?;
         let mut connection = crate::db::open(&database)?;
+        // Native metadata can repeat an identical requirement declaration.
+        // Preserve each stored group ID even when canonical group digests match;
+        // unresolved read-back binds that ID to its exact package before forming
+        // the canonical set of package/digest evidence pairs.
         connection.execute_batch(
             "CREATE TABLE candidate_resolution_package_keys (
                  repository_package_id INTEGER PRIMARY KEY
@@ -447,8 +451,7 @@ impl CandidateResolutionProjection {
                  repository_package_id INTEGER NOT NULL
                      REFERENCES repository_packages(id) ON DELETE CASCADE,
                  requirement_group_sha256 TEXT NOT NULL
-                     CHECK(length(requirement_group_sha256) = 64),
-                 UNIQUE(repository_package_id, requirement_group_sha256)
+                     CHECK(length(requirement_group_sha256) = 64)
              ) STRICT;",
         )?;
         let mut repository = Repository::new(
