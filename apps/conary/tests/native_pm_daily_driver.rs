@@ -382,12 +382,12 @@ fn list_info_files_and_path_show_installed_package_identity() {
     let info = run_conary(&["list", "nginx", "--info", "--db-path", &db_path]);
     assert!(info.status.success(), "{}", output_text(&info));
     let info_stdout = String::from_utf8_lossy(&info.stdout);
-    assert!(info_stdout.contains("Name        : nginx"), "{info_stdout}");
+    assert!(info_stdout.contains("  Name: nginx"), "{info_stdout}");
     assert!(
-        info_stdout.contains("Authority   : conary-owned"),
+        info_stdout.contains("  Authority: conary-owned"),
         "{info_stdout}"
     );
-    assert!(info_stdout.contains("Pinned      : no"), "{info_stdout}");
+    assert!(info_stdout.contains("  Pinned: no"), "{info_stdout}");
 
     let files = run_conary(&["list", "nginx", "--files", "--db-path", &db_path]);
     assert!(files.status.success(), "{}", output_text(&files));

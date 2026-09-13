@@ -260,8 +260,8 @@ fn list_info_refuses_ambiguous_variants_until_selector_is_given() {
     assert!(selected.status.success(), "{}", output_text(&selected));
     let stdout = String::from_utf8_lossy(&selected.stdout);
     assert!(stdout.contains("Architecture: aarch64"), "{stdout}");
-    assert!(stdout.contains("Authority   : conary-owned"), "{stdout}");
-    assert!(stdout.contains("Source      : file"), "{stdout}");
+    assert!(stdout.contains("  Authority: conary-owned"), "{stdout}");
+    assert!(stdout.contains("  Install source: file"), "{stdout}");
 
     let filtered = run_conary(&[
         "list",

@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-09-13
-revision: 39
-summary: Daily-driver CLI source identities, grouped package results, changeset history fields, scoped recovery, and typed native refusals
+revision: 40
+summary: Daily-driver CLI source identities, installed package details, grouped results, changeset history, scoped recovery, and typed native refusals
 ---
 
 # Daily-Driver UX Matrix
@@ -634,6 +634,109 @@ evidence plus `cargo test -p conary --test output_vocabulary_guard` and
 6. **Structured refusal layout** — Keep the live-host refusal routes from this
    matrix, presented as a short cause plus `note:` next steps. Update
    `live_host_mutation_safety` expectations in the same slice.
+
+## Installed Package Details
+
+`apps/conary/src/commands/query/package.rs::show_package_info` resolves the
+selected trove, prepared authority label, repository name, payload ownership,
+typed dependency/provide entries, and components before emitting any detail
+output. A failed observation returns its existing error without a partial
+package frame. `apps/conary/src/ui/installed_info.rs` owns the resulting
+`Installed package:` frame and performs no lookups or classification.
+
+`Name`, `Version`, and `CCS release` stay separate; an absent CCS release is
+`-`. `Install source` identifies the recorded installation origin, while
+`Version scheme` reports the recorded grammar; neither is inferred to be a
+source package format. Optional architecture, source profile, repository,
+description, installation timestamp, and selection reason appear only when
+observed. Type and install reason use their typed labels. `File records` counts
+the selected payload ownership entries; `Payload size` sums their recorded
+content bytes, without claiming a compressed size or physical disk usage.
+Typed dependencies, provides, and component observations retain their input
+order and multiplicity. Component installation state uses explicit yes/no
+fields. Recorded controls are escaped inside fields and relation lines.
+
+This hard-cuts the former hand-padded detail labels and debug enum output.
+Installed-list and file-list layouts, installed variant selection, repository
+fallback, and persisted authority are unchanged.
+
+The frames below are captured from actual `list --info` executables against the
+same disposable database fixture, with a fixed recorded installation timestamp.
+
+Before:
+
+```text
+Name        : nginx
+Version     : 1.24.0
+  Release: 7
+Type        : Package
+Authority   : conary-owned
+Source      : repository
+Profile     : fedora-44
+Versioning  : rpm
+Repository  : recorded-repository
+Architecture: x86_64
+Description : High performance web server
+Installed   : 2026-01-01 00:00:00
+Reason      : explicitly selected fixture
+Install Type: Explicit
+Pinned      : yes
+Files       : 6
+Size        : 1002.00 KB
+
+Dependencies (1):
+  openssl>= 3.0.0
+
+Provides (2):
+  nginx
+  webserver
+
+Components (2):
+  :config [not installed]
+  :runtime
+```
+
+After:
+
+```text
+Installed package:
+  Name: nginx
+  Version: 1.24.0
+  CCS release: 7
+  Type: package
+  Authority: conary-owned
+  Install source: repository
+  Source profile: fedora-44
+  Version scheme: rpm
+  Repository: recorded-repository
+  Architecture: x86_64
+  Description: High performance web server
+  Installed: 2026-01-01 00:00:00
+  Selection reason: explicitly selected fixture
+  Install reason: explicit
+  Pinned: yes
+  File records: 6
+  Payload size: 1026048 bytes
+
+Dependencies (1):
+  openssl>= 3.0.0
+
+Provides (2):
+  nginx
+  webserver
+
+Components (2):
+  Component: :config
+  Installed: no
+  Component: :runtime
+  Installed: yes
+```
+
+`cargo test -p conary --test cli_installed_info` checks actual TTY/pipe and
+color/`NO_COLOR` output, optional observations, escaped controls, unchanged
+database snapshots, and a late component-read failure without partial output.
+Installed-release selector tests continue to prove exact selection and
+ambiguity refusal.
 
 ## Changeset History
 

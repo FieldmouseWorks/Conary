@@ -499,7 +499,7 @@ conary = "list phase4-daily-driver-corpus --info"
 
 [test.step.assert]
 exit_code = 0
-stdout_contains_all = ["Name        : phase4-daily-driver-corpus", "Version     : ${native_corpus_fixture_version}", "Authority   : conary-owned", "Source      : file", "Install Type: Explicit"]
+stdout_contains_all = ["  Name: phase4-daily-driver-corpus", "  Version: ${native_corpus_fixture_version}", "  Authority: conary-owned", "  Install source: file", "  Install reason: explicit"]
 
 [[test.step]]
 conary = "list phase4-daily-driver-corpus --files"

@@ -237,7 +237,7 @@ conary = "list ${FIXTURE_PKG_NAME} --info"
 
 [test.step.assert]
 exit_code = 0
-stdout_contains = "yes"
+stdout_contains = "  Pinned: yes"
 
 # Unpin the package
 [[test.step]]
@@ -251,7 +251,8 @@ exit_code = 0
 conary = "list ${FIXTURE_PKG_NAME} --info"
 
 [test.step.assert]
-stdout_not_contains = "Pinned      : yes"
+exit_code = 0
+stdout_contains = "  Pinned: no"
 
 # --------------------------------------------------------------------------
 # T50: Orphan detection

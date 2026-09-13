@@ -272,7 +272,7 @@ conary = "list ${FIXTURE_PKG_NAME} --info"
 
 [test.step.assert]
 exit_code = 0
-stdout_contains = "Pinned      : yes"
+stdout_contains = "  Pinned: yes"
 
 [[test.step]]
 conary = "unpin ${FIXTURE_PKG_NAME}"
@@ -469,7 +469,7 @@ conary = "list ${FIXTURE_PKG_NAME} --info"
 
 [test.step.assert]
 exit_code = 0
-stdout_contains = "Pinned      : yes"
+stdout_contains = "  Pinned: yes"
 
 [[test.step]]
 conary = "unpin ${FIXTURE_PKG_NAME}"

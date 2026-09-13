@@ -85,14 +85,14 @@ fn list_info_selects_each_release_and_unspecified_none() {
     let f = fixture();
     let before = common::database_snapshot(&f.db);
     for (release, expected) in [
-        ("1", "  Release: 1"),
-        ("2", "  Release: 2"),
-        ("none", "  Release: Unspecified"),
+        ("1", "  CCS release: 1"),
+        ("2", "  CCS release: 2"),
+        ("none", "  CCS release: -"),
     ] {
         let output = run(&f.db, &["list", "--info", "demo", "--release", release]);
         assert!(output.status.success(), "{}", stderr(&output));
         let text = stdout(&output);
-        assert!(text.contains("Name        : demo"), "{text}");
+        assert!(text.contains("  Name: demo"), "{text}");
         assert!(text.contains(expected), "release {release}: {text}");
         assert_eq!(common::database_snapshot(&f.db), before);
     }
@@ -243,9 +243,9 @@ fn release_combines_with_version_and_arch_selectors() {
     );
     assert!(output.status.success(), "{}", stderr(&output));
     let text = stdout(&output);
-    assert!(text.contains("Version     : 1.0.0"), "{text}");
+    assert!(text.contains("  Version: 1.0.0"), "{text}");
     assert!(text.contains("Architecture: x86_64"), "{text}");
-    assert!(text.contains("  Release: 2"), "{text}");
+    assert!(text.contains("  CCS release: 2"), "{text}");
     assert_eq!(common::database_snapshot(&f.db), before);
 }
 
