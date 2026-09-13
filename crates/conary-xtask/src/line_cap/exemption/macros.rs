@@ -41,48 +41,66 @@ pub(super) fn reachable_external_import(
         .any(|attribute| reachable(&attribute.meta, inherited))
 }
 
+/// Expand the ordered attribute list, preserving conditional test annotations
+/// only after their declaring position. Rust Reference: attributes.meta.order-macro.
 pub(super) fn attributes_require_expansion(
     attributes: &[syn::Attribute],
     inherited: &[syn::Attribute],
 ) -> bool {
-    fn opaque(meta: &syn::Meta, conditions: &[syn::Attribute]) -> bool {
-        if !super::super::cfg::can_compile_without_test(conditions) {
-            return false;
-        }
-        if super::builtin_attributes::parse(meta).is_some() {
-            return false;
-        }
-        let path = meta.path();
-        if super::super::attributes::is_ident(path, "cfg")
-            || super::super::attributes::is_ident(path, "macro_use")
-            || super::super::attributes::is_ident(path, "macro_escape")
-        {
-            return false;
-        }
-        if super::super::attributes::is_ident(path, "path") {
-            return !matches!(meta, syn::Meta::NameValue(value) if matches!(&value.value, syn::Expr::Lit(literal) if matches!(literal.lit, syn::Lit::Str(_))));
-        }
-        if let syn::Meta::List(list) = meta
-            && super::super::attributes::is_ident(path, "cfg_attr")
-        {
-            use syn::parse::Parser;
-            let Ok(items) =
-                syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated
-                    .parse2(list.tokens.clone())
-            else {
+    fn ordered(
+        metas: impl IntoIterator<Item = syn::Meta>,
+        conditions: &[syn::Attribute],
+        mut preceding: Vec<syn::Attribute>,
+    ) -> bool {
+        for meta in metas {
+            if !super::super::cfg::can_expand_without_test(conditions, &preceding) {
+                return false;
+            }
+            let path = meta.path();
+            if let syn::Meta::List(list) = &meta
+                && super::super::attributes::is_ident(path, "cfg_attr")
+            {
+                use syn::parse::Parser;
+                let Ok(items) =
+                    syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated
+                        .parse2(list.tokens.clone())
+                else {
+                    return true;
+                };
+                let mut items = items.into_iter();
+                let Some(condition) = items.next() else {
+                    return true;
+                };
+                let mut nested = conditions.to_vec();
+                nested.push(syn::parse_quote!(#[cfg(#condition)]));
+                if ordered(items, &nested, preceding.clone()) {
+                    return true;
+                }
+            } else if super::builtin_attributes::parse(&meta).is_some()
+                || super::super::attributes::is_ident(path, "cfg")
+                || super::super::attributes::is_ident(path, "test")
+                || super::super::attributes::is_ident(path, "macro_use")
+                || super::super::attributes::is_ident(path, "macro_escape")
+            {
+                // Known attributes do not transform source here. A test marker
+                // participates in reachability only for following attributes.
+            } else if super::super::attributes::is_ident(path, "path") {
+                if !matches!(&meta, syn::Meta::NameValue(value) if matches!(&value.value, syn::Expr::Lit(literal) if matches!(literal.lit, syn::Lit::Str(_))))
+                {
+                    return true;
+                }
+            } else {
                 return true;
-            };
-            let mut items = items.into_iter();
-            let Some(condition) = items.next() else {
-                return true;
-            };
-            let mut nested = conditions.to_vec();
-            nested.push(syn::parse_quote!(#[cfg(#condition)]));
-            return items.any(|meta| opaque(&meta, &nested));
+            }
+            preceding.push(syn::parse_quote!(#[#meta]));
         }
-        true
+        false
     }
-    attributes
-        .iter()
-        .any(|attribute| opaque(&attribute.meta, inherited))
+    let mut configuration = inherited.to_vec();
+    configuration.extend_from_slice(attributes);
+    ordered(
+        attributes.iter().map(|attribute| attribute.meta.clone()),
+        &configuration,
+        inherited.to_vec(),
+    )
 }

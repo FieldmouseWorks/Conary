@@ -196,14 +196,23 @@ pub(super) fn can_compile(attributes: &[Attribute]) -> bool {
 
 /// Expansion outside test builds can introduce production source declarations.
 pub(super) fn can_compile_without_test(attributes: &[Attribute]) -> bool {
-    let Some(predicates) = attributes
+    can_expand_without_test(attributes, attributes)
+}
+
+/// Configuration removes an item before expansion, but only preceding test
+/// annotations can remove it before the next procedural attribute expands.
+pub(super) fn can_expand_without_test(
+    configuration: &[Attribute],
+    preceding: &[Attribute],
+) -> bool {
+    let Some(predicates) = configuration
         .iter()
         .map(|attribute| effective_cfg(&attribute.meta))
         .collect::<Option<Vec<_>>>()
     else {
         return true;
     };
-    let annotations = attributes
+    let annotations = preceding
         .iter()
         .filter_map(|attribute| test_annotation(&attribute.meta, true))
         .collect();

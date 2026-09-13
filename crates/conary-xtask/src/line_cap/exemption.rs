@@ -371,8 +371,8 @@ fn collect_includes_with_authority(
         production_macro: false,
         declarations,
     };
-    if macros::attributes_require_expansion(&syntax.attrs, &syntax.attrs) {
-        visitor.note(SourceAuthorityFailure::Expansion);
+    if macros::attributes_require_expansion(&syntax.attrs, &[]) {
+        visitor.unresolved = Some(SourceAuthorityFailure::Expansion);
     }
     visitor.visit_file(syntax);
     if let Some(failure) = visitor.unresolved {
@@ -486,11 +486,14 @@ impl IncludeVisitor<'_> {
         visit: impl FnOnce(&mut Self),
     ) {
         let depth = self.inherited.len();
+        if macros::attributes_require_expansion(attributes, &self.inherited) {
+            // The ordered check already proves expansion reachability. A later
+            // test annotation must not erase an earlier transformation here.
+            self.unresolved
+                .get_or_insert(SourceAuthorityFailure::Expansion);
+        }
         self.inherited.extend_from_slice(attributes);
         if cfg::can_compile(&self.inherited) {
-            if macros::attributes_require_expansion(attributes, &self.inherited) {
-                self.note(SourceAuthorityFailure::Expansion);
-            }
             visit(self);
         }
         self.inherited.truncate(depth);

@@ -735,3 +735,65 @@ fn external_load_suffixes_cannot_alias_scanned_sources() {
     assert!(declarations.contains_key("../crates/x/src/bridge.rs"));
     assert!(!declarations.contains_key("crates/x/src/bridge.rs"));
 }
+
+#[test]
+fn transformation_reachability_preserves_test_attribute_order() {
+    for (source, unresolved) in [
+        ("#[dep::emit] #[test] fn sample() {}", true),
+        ("#[test] #[dep::emit] fn sample() {}", false),
+        ("#[cfg_attr(all(), dep::emit, test)] fn sample() {}", true),
+        ("#[cfg_attr(all(), test, dep::emit)] fn sample() {}", false),
+        (
+            "#[cfg_attr(feature = \"x\", test)] #[dep::emit] fn sample() {}",
+            true,
+        ),
+        (
+            "#[cfg_attr(not(test), test)] #[dep::emit] fn sample() {}",
+            false,
+        ),
+        (
+            "#[cfg_attr(all(), cfg_attr(all(), dep::emit), test)] fn sample() {}",
+            true,
+        ),
+        (
+            "#[cfg_attr(all(), cfg_attr(all(), test), dep::emit)] fn sample() {}",
+            false,
+        ),
+        ("#[dep::emit] #[cfg(test)] fn sample() {}", false),
+        ("#[dep::emit] #[cfg(any())] fn sample() {}", false),
+        ("#[test] fn outer() { #[dep::emit] fn inner() {} }", false),
+    ] {
+        for intrinsic in [false, true] {
+            let sources = BTreeMap::from([
+                (
+                    "crates/x/src/lib.rs".to_owned(),
+                    syn::parse_file(&format!("{source} #[cfg(test)] mod tests;")).unwrap(),
+                ),
+                (
+                    "crates/x/src/tests.rs".to_owned(),
+                    syn::parse_file(if intrinsic {
+                        "#![cfg(test)] fn helper() {}"
+                    } else {
+                        "fn helper() {}"
+                    })
+                    .unwrap(),
+                ),
+            ]);
+            let graph = collect_source_graph(
+                &sources,
+                &fixture_targets(sources.keys().map(String::as_str)),
+            )
+            .unwrap();
+            assert_eq!(!graph.unresolved_sources.is_empty(), unresolved, "{source}");
+            assert_eq!(
+                graph.gates["crates/x/src/tests.rs"],
+                if unresolved && !intrinsic {
+                    ExemptionGate::Unknown
+                } else {
+                    ExemptionGate::TestGated
+                },
+                "{source}; intrinsic={intrinsic}"
+            );
+        }
+    }
+}
