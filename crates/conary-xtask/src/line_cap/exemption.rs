@@ -34,13 +34,15 @@ use std::path::{Component, Path, PathBuf};
 use syn::ext::IdentExt;
 use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
-use syn::{Attribute, Expr, Item, Lit};
+use syn::{Attribute, Expr, Item};
 
 use super::attributes::{visit_attributed_nodes, visit_nodes};
 use super::cfg;
 
 mod builtin_attributes;
 mod graph;
+mod include_paths;
+use include_paths::include_path;
 mod macros;
 use super::paths::module_paths;
 use super::targets::TargetRoots;
@@ -48,6 +50,8 @@ use super::{
     FileMetrics, cfg_attributes, foreign_item_attributes, impl_item_attributes, item_attributes,
     path_text, trait_item_attributes,
 };
+#[cfg(test)]
+pub(crate) use graph::collect_fixture_graph;
 pub(crate) use graph::{SourceGraph, collect_source_graph};
 
 /// How an exempt-named file is compiled, as far as the declaration graph can
@@ -124,6 +128,9 @@ fn alternate_module_path(target: &Path, kind: DeclarationKind) -> Option<PathBuf
 #[derive(Debug, Clone)]
 pub(crate) struct ModuleDeclaration<K = String> {
     declaring_file: K,
+    /// The original load spelling, before lexical parent cancellation. Filesystem
+    /// identity must agree before a normalized key can establish an edge.
+    load_path: PathBuf,
     /// The declared name for `mod name;`, which pairs the flat and `mod.rs`
     /// candidates; `None` for `#[path]` and `include!`, whose target is exact.
     name: Option<String>,
@@ -219,7 +226,7 @@ impl DeclarationCollector<'_> {
                     self.collect(items, &nested_dir, &nested_dir, &branch, depth + 1);
                 } else if let Some(path) = variant.path {
                     self.record(
-                        normalize(&path_base.join(path)),
+                        path_base.join(path),
                         Some(name.clone()),
                         DeclarationKind::Exact,
                         depth,
@@ -260,10 +267,11 @@ impl DeclarationCollector<'_> {
         is_module: bool,
     ) {
         self.declarations
-            .entry(path_text(&target))
+            .entry(path_text(&normalize(&target)))
             .or_default()
             .push(ModuleDeclaration {
                 declaring_file: self.declaring_file.clone(),
+                load_path: target,
                 name,
                 kind,
                 depth,
@@ -534,12 +542,13 @@ impl IncludeVisitor<'_> {
             self.note(SourceAuthorityFailure::Path);
             return;
         };
-        let target = normalize(&self.file_dir.join(path));
+        let target = self.file_dir.join(path);
         self.declarations
-            .entry(path_text(&target))
+            .entry(path_text(&normalize(&target)))
             .or_default()
             .push(ModuleDeclaration {
                 declaring_file: self.declaring_file.clone(),
+                load_path: target,
                 name: None,
                 kind: DeclarationKind::Exact,
                 depth: 0,
@@ -568,27 +577,6 @@ fn builtin_macro_path(path: &syn::Path, name: &str) -> bool {
                 && last.ident.unraw() == name
         }
         _ => false,
-    }
-}
-
-fn include_path(expression: Expr) -> Option<String> {
-    match expression {
-        Expr::Lit(literal) => match literal.lit {
-            Lit::Str(path) => Some(path.value()),
-            _ => None,
-        },
-        Expr::Paren(parenthesized) => include_path(*parenthesized.expr),
-        Expr::Macro(expression) if builtin_macro_path(&expression.mac.path, "concat") => {
-            use syn::parse::Parser;
-            let parser = syn::punctuated::Punctuated::<Expr, syn::Token![,]>::parse_terminated;
-            parser
-                .parse2(expression.mac.tokens)
-                .ok()?
-                .into_iter()
-                .map(include_path)
-                .collect::<Option<String>>()
-        }
-        _ => None,
     }
 }
 

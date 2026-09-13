@@ -2,6 +2,7 @@
 
 #![cfg(test)]
 
+use super::exemption::collect_fixture_graph as collect_source_graph;
 use super::exemption::*;
 use super::issue_state::*;
 use super::siblings::*;
@@ -769,9 +770,10 @@ impl FixtureRoot {
                 (self.relative(&path), syntax)
             })
             .collect();
-        collect_source_graph(
+        super::exemption::collect_source_graph(
             &sources,
             &fixture_targets(self.scanned().iter().map(String::as_str)),
+            &self.path,
         )
         .unwrap()
     }

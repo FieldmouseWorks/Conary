@@ -41,6 +41,25 @@ pub(crate) struct SourceGraph {
 pub(crate) fn collect_source_graph(
     sources: &BTreeMap<String, syn::File>,
     targets: &TargetRoots,
+    root: &Path,
+) -> Result<SourceGraph, String> {
+    build_source_graph(sources, targets, Some(root))
+}
+
+/// Logical fixtures supply resolved source identities without filesystem I/O.
+/// Production callers always verify load identity against the actual scan root.
+#[cfg(test)]
+pub(crate) fn collect_fixture_graph(
+    sources: &BTreeMap<String, syn::File>,
+    targets: &TargetRoots,
+) -> Result<SourceGraph, String> {
+    build_source_graph(sources, targets, None)
+}
+
+fn build_source_graph(
+    sources: &BTreeMap<String, syn::File>,
+    targets: &TargetRoots,
+    root: Option<&Path>,
 ) -> Result<SourceGraph, String> {
     let mut unresolved_sources = targets
         .iter()
@@ -104,6 +123,25 @@ pub(crate) fn collect_source_graph(
             }
             for (file, entries) in sites {
                 for site in entries {
+                    if sources.contains_key(&file)
+                        && root.is_some_and(|root| {
+                            !load_identity_matches(root, &site.load_path, &file)
+                        })
+                    {
+                        if !site.test_gated {
+                            unresolved_sources
+                                .entry(context.file.clone())
+                                .or_insert_with(|| {
+                                    format!(
+                                        "unresolved filesystem load identity: {}",
+                                        site.load_path.display()
+                                    )
+                                });
+                        }
+                        // Even a test-only spelling cannot certify the wrong
+                        // scanned file. Leave that file to its actual load sites.
+                        continue;
+                    }
                     if !site.test_gated
                         && !sources.contains_key(&file)
                         && !alternate_module_path(Path::new(&file), site.kind)
@@ -127,6 +165,7 @@ pub(crate) fn collect_source_graph(
                         .or_default()
                         .push(ModuleDeclaration {
                             declaring_file: context.clone(),
+                            load_path: site.load_path.clone(),
                             name: site.name.clone(),
                             kind: site.kind,
                             depth: site.depth,
@@ -203,4 +242,14 @@ pub(crate) fn collect_source_graph(
         gates,
         unresolved_sources,
     })
+}
+
+fn load_identity_matches(root: &Path, original: &Path, scanned: &str) -> bool {
+    match (
+        root.join(original).canonicalize(),
+        root.join(scanned).canonicalize(),
+    ) {
+        (Ok(original), Ok(scanned)) => original == scanned,
+        _ => false,
+    }
 }

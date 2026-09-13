@@ -813,3 +813,117 @@ fn source_configuration_does_not_inherit_annotation_measurement_policy() {
     assert!(cfg::configuration_is_test_only(&attributes));
     assert!(!cfg::can_compile_without_test(&attributes));
 }
+
+#[test]
+fn filesystem_load_identity_rejects_symlink_parent_aliases() {
+    for production in [false, true] {
+        for intrinsic in [false, true] {
+            let fixture = FixtureRoot::new("symlink-parent");
+            let external = FixtureRoot::new("symlink-external");
+            external.write("tests/bridge.rs", "fn external() {}");
+            fs::create_dir_all(external.path.join("nested")).unwrap();
+            let source = format!(
+                "{} #[path = \"link/../tests/bridge.rs\"] mod bridge; #[cfg(test)] mod tests;",
+                if production { "" } else { "#[cfg(test)]" }
+            );
+            let test_source = if intrinsic {
+                "#![cfg(test)] fn helper() {}"
+            } else {
+                "fn helper() {}"
+            };
+            fixture.write("crates/x/src/lib.rs", &source);
+            fixture.write("crates/x/src/tests/bridge.rs", "fn unrelated() {}");
+            fixture.write("crates/x/src/tests.rs", test_source);
+            std::os::unix::fs::symlink(
+                external.path.join("nested"),
+                fixture.path.join("crates/x/src/link"),
+            )
+            .unwrap();
+            let graph = fixture.graph();
+            assert_eq!(!graph.unresolved_sources.is_empty(), production);
+            assert!(
+                !graph
+                    .declarations
+                    .contains_key("crates/x/src/tests/bridge.rs")
+            );
+            assert_eq!(
+                graph.gates["crates/x/src/tests/bridge.rs"],
+                ExemptionGate::Unknown
+            );
+            assert_eq!(
+                graph.gates["crates/x/src/tests.rs"],
+                if production && !intrinsic {
+                    ExemptionGate::Unknown
+                } else {
+                    ExemptionGate::TestGated
+                }
+            );
+        }
+    }
+}
+
+#[test]
+fn filesystem_parent_cancellation_requires_a_real_traversable_directory() {
+    for exists in [false, true] {
+        let fixture = FixtureRoot::new("parent-directory");
+        fixture.write(
+            "crates/x/src/lib.rs",
+            "#[cfg(test)] #[path = \"directory/../tests.rs\"] mod tests;",
+        );
+        fixture.write("crates/x/src/tests.rs", "fn helper() {}");
+        if exists {
+            fs::create_dir_all(fixture.path.join("crates/x/src/directory")).unwrap();
+        }
+        let graph = fixture.graph();
+        assert!(graph.unresolved_sources.is_empty());
+        assert_eq!(
+            graph.gates["crates/x/src/tests.rs"],
+            if exists {
+                ExemptionGate::TestGated
+            } else {
+                ExemptionGate::Unknown
+            }
+        );
+    }
+}
+
+#[test]
+fn concat_include_paths_follow_compiler_literal_rendering() {
+    for (literal, rendered) in [
+        ("1", "1"),
+        ("1u8", "1"),
+        ("0xff_u16", "255"),
+        ("0b1011", "11"),
+        ("0o17", "15"),
+        ("1_000", "1000"),
+        ("1f64", "1"),
+        ("1.20E+03_f64", "1.20E+03"),
+        ("-0x10", "-16"),
+        ("-0", "-0"),
+        ("-1_000.5E-02f32", "-1000.5E-02"),
+        ("'é'", "é"),
+        ("true", "true"),
+        ("false", "false"),
+        (r#"r"raw""#, "raw"),
+        (r#"concat!("a", 'b', 1)"#, "ab1"),
+    ] {
+        let fixture = FixtureRoot::new("concat-literals");
+        fixture.write(
+            "crates/x/src/lib.rs",
+            &format!("#[cfg(test)] include!(concat!(\"tests/\", {literal}, \".rs\"));"),
+        );
+        let target = format!("crates/x/src/tests/{rendered}.rs");
+        fixture.write(&target, "fn helper() {}");
+        let graph = fixture.graph();
+        assert!(graph.unresolved_sources.is_empty(), "{literal}");
+        assert_eq!(graph.gates[&target], ExemptionGate::TestGated, "{literal}");
+    }
+    for literal in ["b'a'", r#"b"bytes""#, r#"c"c-string""#, "-true", "1 + 2"] {
+        let source =
+            syn::parse_file(&format!("#[cfg(test)] include!(concat!({literal}));")).unwrap();
+        let mut declarations = BTreeMap::new();
+        collect_include_declarations(&source, Path::new("crates/x/src/lib.rs"), &mut declarations)
+            .unwrap();
+        assert!(declarations.is_empty(), "{literal}");
+    }
+}
