@@ -2977,7 +2977,7 @@ main() {
         return
     fi
     python3 scripts/test-remi-survey-ssh-diagnostic.py
-    python3 scripts/test-remi-readiness-clock.py
+    CONARY_REMI_READINESS_TEST_HELPER="$helper" python3 scripts/test-remi-readiness-clock.py
     test_recovery_path_uri_policy
     test_recovery_typed_policy
     test_deploy_conary_accepts_verified_release

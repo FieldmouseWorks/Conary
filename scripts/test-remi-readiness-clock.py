@@ -9,7 +9,10 @@ import tempfile
 import unittest
 
 
-HELPER = Path(__file__).resolve().parents[1] / "deploy/remi-deploy-helper.sh"
+HELPER = Path(os.environ.get(
+    "CONARY_REMI_READINESS_TEST_HELPER",
+    str(Path(__file__).resolve().parents[1] / "deploy/remi-deploy-helper.sh"),
+)).resolve()
 FAKE = """#!/usr/bin/env python3
 import json, os, sys
 from decimal import Decimal
