@@ -285,7 +285,7 @@ fn classifies_declared_source_roots_by_policy() {
     let Some(RootPolicy::VendorExcluded { reason }) = root_policy("third_party") else {
         panic!("third_party must be vendor-excluded, not scanned");
     };
-    for vendored in ["aws-creds", "rust-s3", "resolvo"] {
+    for vendored in ["aws-creds", "rust-s3", "resolvo", "tantivy"] {
         assert!(
             reason.contains(vendored),
             "vendor reason must name {vendored}: {reason}"
