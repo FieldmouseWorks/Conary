@@ -11,7 +11,9 @@ pub(super) fn reachable_external_import(
     inherited: &[syn::Attribute],
 ) -> bool {
     fn reachable(meta: &syn::Meta, conditions: &[syn::Attribute]) -> bool {
-        if super::super::attributes::is_ident(meta.path(), "macro_use") {
+        if super::super::attributes::is_ident(meta.path(), "macro_use")
+            || super::super::attributes::is_ident(meta.path(), "macro_escape")
+        {
             return super::super::cfg::can_compile_without_test(conditions);
         }
         let syn::Meta::List(list) = meta else {
@@ -47,12 +49,18 @@ pub(super) fn attributes_require_expansion(
         if !super::super::cfg::can_compile_without_test(conditions) {
             return false;
         }
+        if super::builtin_attributes::parse(meta).is_some() {
+            return false;
+        }
         let path = meta.path();
         if super::super::attributes::is_ident(path, "cfg")
-            || super::super::attributes::is_ident(path, "path")
             || super::super::attributes::is_ident(path, "macro_use")
+            || super::super::attributes::is_ident(path, "macro_escape")
         {
             return false;
+        }
+        if super::super::attributes::is_ident(path, "path") {
+            return !matches!(meta, syn::Meta::NameValue(value) if matches!(&value.value, syn::Expr::Lit(literal) if matches!(literal.lit, syn::Lit::Str(_))));
         }
         if let syn::Meta::List(list) = meta
             && super::super::attributes::is_ident(path, "cfg_attr")

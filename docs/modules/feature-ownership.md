@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-13
-revision: 110
+revision: 111
 summary: Route features to owned paths and proof, including context-aware test-file caps, Cargo target evidence, and live exception ownership.
 ---
 
@@ -1304,7 +1304,15 @@ records these sources explicitly and retains normal caps for unknown files.
 `crates/conary-xtask/src/line_cap/exemption/macros.rs` owns conditional external
 imports and attribute uncertainty; macro tokens are never interpreted as expansion
 proof. Apparent std/core builtins also need compiler name resolution because the
-extern prelude can replace those namespaces. Intrinsic `#![cfg(test)]` guards remain authoritative even in an opaque
+extern prelude can replace those namespaces. Loads outside the scanned roots
+and unscanned Cargo production roots also retain uncertainty; an absent conventional alternative is harmless when
+the other candidate is scanned. `crates/conary-xtask/src/line_cap/exemption/builtin_attributes.rs`
+owns the pinned Rust 1.98 inert attribute grammar, preserving compiler-owned
+metadata such as lint, doc, and repr attributes while derive/custom attributes
+retain expansion uncertainty. Opaque path-attribute values cannot certify a
+literal fallback. `crates/conary-xtask/src/line_cap/tests/source_authority.rs`
+owns source-authority regressions; shared graph fixtures remain in `tests.rs`.
+Intrinsic `#![cfg(test)]` guards remain authoritative even in an opaque
 graph, so extracted test files carry their own compiler-enforced boundary as well
 as the parent gate. Test-only or impossible expansions cannot introduce production
 uncertainty. Raw identifiers retain the same module, macro, attribute, and

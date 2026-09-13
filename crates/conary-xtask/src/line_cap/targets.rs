@@ -79,9 +79,9 @@ fn decode_targets(root: &Path, bytes: &[u8]) -> Result<TargetRoots, String> {
                 target.src_path.display()
             )
         })?;
-        let Ok(relative) = path.strip_prefix(root) else {
-            continue;
-        };
+        // An external target can load scanned source. Preserve its identity so
+        // the graph records missing production authority instead of discarding it.
+        let relative = path.strip_prefix(root).unwrap_or(&path);
         roots
             .entry(path_text(relative))
             .and_modify(|prior| {

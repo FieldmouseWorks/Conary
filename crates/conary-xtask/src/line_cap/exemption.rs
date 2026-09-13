@@ -39,6 +39,7 @@ use syn::{Attribute, Expr, Item, Lit};
 use super::attributes::{visit_attributed_nodes, visit_nodes};
 use super::cfg;
 
+mod builtin_attributes;
 mod graph;
 mod macros;
 use super::paths::module_paths;
@@ -107,6 +108,16 @@ enum DeclarationKind {
     Flat,
     /// `mod name;` resolved to `<directory>/<name>/mod.rs`.
     ModuleRoot,
+}
+
+/// A conventional outlined module has exactly two candidate source paths.
+/// Explicit paths and includes do not acquire a conventional fallback.
+fn alternate_module_path(target: &Path, kind: DeclarationKind) -> Option<PathBuf> {
+    match kind {
+        DeclarationKind::Exact => None,
+        DeclarationKind::Flat => Some(target.with_extension("").join("mod.rs")),
+        DeclarationKind::ModuleRoot => Some(target.parent()?.with_extension("rs")),
+    }
 }
 
 /// One declaring site that makes a file part of another file's compilation.
@@ -581,6 +592,14 @@ fn include_path(expression: Expr) -> Option<String> {
 impl<'ast> Visit<'ast> for IncludeVisitor<'_> {
     visit_attributed_nodes!();
 
+    fn visit_attribute(&mut self, node: &'ast Attribute) {
+        // Inert compiler metadata accepts literal-valued macro expansion, not
+        // source declarations. Do not treat its value as a source-load site.
+        if builtin_attributes::parse(&node.meta).is_none() {
+            visit::visit_attribute(self, node);
+        }
+    }
+
     fn visit_item(&mut self, item: &'ast Item) {
         self.descend(item_attributes(item), item.span(), |visitor| {
             visit::visit_item(visitor, item)
@@ -744,9 +763,7 @@ pub(crate) fn resolve_child_modules(
     declarations: &BTreeMap<String, Vec<ModuleDeclaration>>,
     scanned: &BTreeSet<String>,
 ) -> Vec<String> {
-    let mut exact = BTreeSet::new();
-    let mut flat = BTreeMap::new();
-    let mut module_root = BTreeMap::new();
+    let mut chosen = BTreeSet::new();
     for (target, sites) in declarations {
         for site in sites {
             if !site.is_module || site.depth != 0 || site.declaring_file != declaring_file {
@@ -755,34 +772,19 @@ pub(crate) fn resolve_child_modules(
             if !scanned.contains(target) {
                 continue;
             }
-            match (site.kind, &site.name) {
-                (DeclarationKind::Exact, _) => {
-                    exact.insert(target.clone());
-                }
-                (DeclarationKind::Flat, Some(name)) => {
-                    let directory = Path::new(target).parent().unwrap_or_else(|| Path::new(""));
-                    flat.insert(path_text(&directory.join(name)), target.clone());
-                }
-                (DeclarationKind::ModuleRoot, Some(_)) => {
-                    let directory = Path::new(target).parent().unwrap_or_else(|| Path::new(""));
-                    module_root.insert(path_text(directory), target.clone());
-                }
-                (DeclarationKind::Flat | DeclarationKind::ModuleRoot, None) => {}
+            if site.kind != DeclarationKind::Exact && site.name.is_none() {
+                continue;
+            }
+            // Rust rejects two existing conventional candidates. The same
+            // pairing owns missing-load uncertainty in graph construction.
+            if !alternate_module_path(Path::new(target), site.kind)
+                .is_some_and(|alternate| scanned.contains(&path_text(&alternate)))
+            {
+                chosen.insert(target.clone());
             }
         }
     }
-    // Rust rejects a module with both candidates. Attribute neither file
-    // when that declaration is ambiguous (Rust Reference: items.mod.outlined.search-mod).
-    let ambiguous = flat
-        .keys()
-        .filter(|name| module_root.contains_key(*name))
-        .cloned()
-        .collect::<BTreeSet<_>>();
-    let mut chosen = flat;
-    chosen.extend(module_root);
-    chosen.retain(|name, _| !ambiguous.contains(name));
-    exact.extend(chosen.into_values());
-    exact.into_iter().collect()
+    chosen.into_iter().collect()
 }
 
 /// How cargo compiles a file, when the file is a target root.

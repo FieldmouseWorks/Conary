@@ -233,7 +233,9 @@ auto-discovery. A custom tree without a manifest has no Cargo target evidence.
 Literal and literal-concatenated `include!` paths participate in the graph;
 even apparently builtin include calls need compiler name resolution, so they
 also invalidate context-only exemptions. The report
-states how many source files have unresolved expansion authority.
+states how many source files have unresolved expansion authority. Loads outside
+the scanned roots retain uncertainty; inert compiler-owned attributes from the
+pinned Rust catalog preserve complete contextual proof.
 `--report` shows every test filename as `TEST FILE:` with its measured content
 and context; cap-checked files also receive the ordinary row. An over-cap
 production file under a test filename can use an owned allowlist exception.

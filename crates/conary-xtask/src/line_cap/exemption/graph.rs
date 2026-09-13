@@ -42,7 +42,11 @@ pub(crate) fn collect_source_graph(
     sources: &BTreeMap<String, syn::File>,
     targets: &TargetRoots,
 ) -> Result<SourceGraph, String> {
-    let mut unresolved_sources = BTreeMap::new();
+    let mut unresolved_sources = targets
+        .iter()
+        .filter(|(file, kind)| **kind == CargoTarget::Other && !sources.contains_key(*file))
+        .map(|(file, _)| (file.clone(), "unscanned Cargo production target".to_owned()))
+        .collect::<BTreeMap<_, _>>();
     let mut roots = BTreeMap::new();
     for file in sources.keys() {
         let target = targets.get(file).copied();
@@ -100,6 +104,15 @@ pub(crate) fn collect_source_graph(
             }
             for (file, entries) in sites {
                 for site in entries {
+                    if !site.test_gated
+                        && !sources.contains_key(&file)
+                        && !alternate_module_path(Path::new(&file), site.kind)
+                            .is_some_and(|alternate| sources.contains_key(&path_text(&alternate)))
+                    {
+                        unresolved_sources
+                            .entry(context.file.clone())
+                            .or_insert_with(|| format!("unscanned Rust load target: {file}"));
+                    }
                     let target = LoadContext {
                         file: file.clone(),
                         kind: match site.kind {
