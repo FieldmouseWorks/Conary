@@ -502,7 +502,8 @@ fn update_summaries_in_terminal_pipe_and_no_color() {
                 .lines()
                 .find(|line| line.split_whitespace().next() == Some("a-summary-update"))
                 .unwrap();
-            assert_eq!(incoming.split_whitespace().last(), Some("ccs"), "{frame}");
+            // The CCS fixture retains its RPM native lifecycle source.
+            assert_eq!(incoming.split_whitespace().last(), Some("rpm"), "{frame}");
             if scenario.starts_with("advertised_delta_") {
                 let planned = frame
                     .split_once("Planned package changes:")
