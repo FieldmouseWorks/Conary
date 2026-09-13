@@ -296,14 +296,14 @@ fn repeated_requirement_groups_preserve_exact_resolution_and_native_evidence() {
             for workers in [1, 2] {
                 let output_parent = tempfile::tempdir().unwrap();
                 let output = output_parent.path().join("candidate-resolution");
-                let produced = produce_conary_resolution_candidate_with_workers(
+                let (produced, _) = produce_conary_resolution_candidate_with_workers(
                     &candidate.profile,
                     &candidate.reader,
                     package_oracle._directory.path(),
                     native.path(),
                     architecture(ecosystem),
-                    ResolutionWorkerRequest::explicit(ResolutionWorkerCount::new(workers).unwrap()),
                     &output,
+                    ResolutionWorkerRequest::explicit(ResolutionWorkerCount::new(workers).unwrap()),
                 )
                 .unwrap();
                 let reopened = verify_native_resolution_oracle_bundle(
