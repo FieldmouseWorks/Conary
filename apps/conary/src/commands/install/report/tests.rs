@@ -513,6 +513,7 @@ fn install_summary_commands_in_terminal_pipe_and_no_color() {
                 "Applied package changes:"
             };
             assert_eq!(frame.matches(heading).count(), 1, "{frame}");
+            let table = frame.split_once(heading).unwrap().1;
             for field in [
                 "Package",
                 "Version",
@@ -524,7 +525,7 @@ fn install_summary_commands_in_terminal_pipe_and_no_color() {
             ] {
                 assert!(frame.contains(field), "{frame}");
             }
-            let incoming = frame
+            let incoming = table
                 .lines()
                 .find(|line| line.split_whitespace().next() == Some("summary-incoming"))
                 .unwrap();
@@ -553,7 +554,7 @@ fn install_summary_commands_in_terminal_pipe_and_no_color() {
                     "{frame}"
                 );
                 assert!(frame.contains("summary-dependency"), "{frame}");
-                let dependency = frame
+                let dependency = table
                     .lines()
                     .find(|line| line.split_whitespace().next() == Some("summary-dependency"))
                     .unwrap();

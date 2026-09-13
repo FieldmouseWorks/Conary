@@ -496,6 +496,9 @@ fn update_summaries_in_terminal_pipe_and_no_color() {
                 assert!(frame.contains(field), "{frame}");
             }
             let incoming = frame
+                .split_once("Planned package changes:")
+                .unwrap()
+                .1
                 .lines()
                 .find(|line| line.split_whitespace().next() == Some("a-summary-update"))
                 .unwrap();
