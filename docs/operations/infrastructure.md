@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-09-13
-revision: 102
-summary: Share launch-aware Remi completion and enforce a measured repopulation deadline while retaining deployment fencing and serialized queues
+revision: 103
+summary: Enforce precise monotonic Remi readiness intervals and shared launch-aware completion while retaining deployment fencing and serialized queues
 ---
 
 # Infrastructure Overview
@@ -389,8 +389,11 @@ workflow.
   <!-- repo-path: hypothetical -->
   It then attempts service restoration using the deploy helper's `/health`
   endpoint (listener startup; publication readiness remains `/health/ready`).
-  Deploy and survey probes measure monotonic restart-to-ready seconds, including
-  `systemctl start`, and persist a sanitized schema-1 inspection at
+  Deploy and survey probes measure monotonic restart-to-ready intervals with
+  millisecond arithmetic, including `systemctl start`. Each probe and polling
+  pause is bounded by the remaining interval; a response after the deadline is
+  rejected. Completed durations round up to integer seconds for the sanitized
+  schema-1 inspection persisted at
   `/var/lib/conary-remi-deploy/readiness.json`. <!-- repo-path: external -->
   `inspect-remi` includes it as `restart_readiness`. The budget is twice the last
   successful recorded duration (with a one-second measurement floor), capped at
