@@ -3,7 +3,7 @@
 #![cfg(test)]
 //! Installed detail frames retain selected facts and fail before partial output.
 
-mod common;
+pub mod common;
 
 use conary_core::db::{
     self,
@@ -79,7 +79,7 @@ fn selected_package_facts_survive_terminal_pipe_and_no_color_without_mutation() 
     let conn = db::open(&db_path).unwrap();
     conn.execute("INSERT INTO repositories (name, url, enabled, priority) VALUES ('recorded-repository', 'https://repository.example.test', 1, 10)", []).unwrap();
     let repository = conn.last_insert_rowid();
-    conn.execute("UPDATE troves SET package_release = '7', source_profile = 'fedora-44', installed_from_repository_id = ?1, install_source = 'repository', installed_at = '2026-01-01 00:00:00', selection_reason = 'explicitly selected fixture', pinned = 1 WHERE name = 'nginx'", [repository]).unwrap();
+    conn.execute("UPDATE troves SET package_release = '7', source_profile = 'fedora-44', version_scheme = 'rpm', installed_from_repository_id = ?1, install_source = 'repository', installed_at = '2026-01-01 00:00:00', selection_reason = 'explicitly selected fixture', pinned = 1 WHERE name = 'nginx'", [repository]).unwrap();
     conn.execute(
         "UPDATE components SET is_installed = 0 WHERE name = 'config'",
         [],
@@ -116,7 +116,7 @@ fn selected_package_facts_survive_terminal_pipe_and_no_color_without_mutation() 
         for expected in [
             "Installed package:\n  Name: nginx\n  Version: 1.24.0\n  CCS release: 7\n  Type: package\n",
             "  Authority: conary-owned\n  Install source: repository\n  Source profile: fedora-44\n",
-            "  Version scheme: conary\n  Repository: recorded-repository\n  Architecture: x86_64\n",
+            "  Version scheme: rpm\n  Repository: recorded-repository\n  Architecture: x86_64\n",
             "  Description: High performance web server\n  Installed: 2026-01-01 00:00:00\n",
             "  Selection reason: explicitly selected fixture\n  Install reason: explicit\n  Pinned: yes\n",
             "  File records: 6\n  Payload size: 1026048 bytes\n",
@@ -157,6 +157,7 @@ fn missing_observations_and_recorded_controls_remain_explicit() {
         VersionScheme::Conary,
     );
     trove.description = Some("line one\nforged\u{1b}[31m".into());
+    trove.selection_reason = None;
     trove.insert(&conn).unwrap();
     drop(conn);
     let before = common::database_snapshot(&db_path);
