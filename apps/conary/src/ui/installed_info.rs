@@ -31,11 +31,7 @@ pub(crate) fn details(info: &InstalledPackageInfo<'_>) {
 }
 
 fn yes_no(recorded: bool) -> &'static str {
-    if recorded {
-        "yes"
-    } else {
-        "no"
-    }
+    if recorded { "yes" } else { "no" }
 }
 
 /// A nonempty relation section: heading with the recorded count, then every
