@@ -661,6 +661,50 @@ The footer reports `Total changesets: N`. Empty history is exactly
 fixtures extract the numeric `Changeset N:` heading. No persisted schema or
 rollback eligibility contract changes.
 
+Before and after frames below come from the existing `pending_remove`
+command capture, which invokes `cmd_history` after a forced deferred publication
+on a disposable database and compares database rows before/after inspection.
+Fixture roots and recorded timestamps are redacted. The publication row's
+`failed` status and the follow-up record's `pending` status remain separate
+recorded facts.
+
+Before:
+
+```text
+Changeset history:
+  [1] <recorded timestamp> - Remove summary-fixture-2.0.0 (Applied) [deferred] [publication-failed]
+      deferred generation_publication pending: generation publication is pending Retry: conary system generation publish --yes --db-path='<fixture>/conary.db'
+
+Total: 1 changeset(s)
+```
+
+After:
+
+```text
+Changeset history:
+Changeset 1:
+  Description: Remove summary-fixture-2.0.0
+  Kind: mutation
+  Status: applied
+  Created: <recorded timestamp>
+  Applied: <recorded timestamp>
+  Generation publication: failed
+Deferred work (1):
+  Kind: generation_publication
+  Status: pending
+  Reason: generation publication is pending
+note: Retry: conary system generation publish --yes --db-path='<fixture>/conary.db'
+  Total changesets: 1
+```
+
+`cargo test -p conary --features test-hooks --lib ui::` covers the recovery
+frame through TTY, pipe, and `NO_COLOR` modes.
+`cargo test -p conary --test cli_history` runs the actual executable in all four
+TTY/pipe and color/`NO_COLOR` combinations. It covers empty history, pending and
+rolled-back records, exact rollback relationships, lifecycle failure fields,
+scoped versus recorded retry guidance, escaped controls, unchanged database
+rows, and the existing obsolete-metadata refusal.
+
 ## Package Build Results
 
 `apps/conary/src/ui/ccs_build.rs` renders the core-owned `BuildResult` and
