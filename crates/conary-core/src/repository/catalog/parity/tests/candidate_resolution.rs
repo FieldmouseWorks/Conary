@@ -257,6 +257,74 @@ fn complete_candidate_crawl_reopens_and_matches_native_resolution() {
 }
 
 #[test]
+fn repeated_requirement_groups_preserve_exact_resolution_and_native_evidence() {
+    let _capacity = crate::repository::catalog::parity::resolution_test_capacity(2);
+    for ecosystem in [
+        NativeParityEcosystemV1::Alpm,
+        NativeParityEcosystemV1::Debian,
+    ] {
+        let mut baseline = None;
+        for copies in [1, 2, 3] {
+            let candidate = candidate_fixture_with(ecosystem, |_, packages| {
+                for package in packages {
+                    let original = package.requirement_groups.clone();
+                    for _ in 1..copies {
+                        package.requirement_groups.extend(original.clone());
+                    }
+                    package.requirement_groups.reverse();
+                }
+            });
+            let package_oracle = oracle(&candidate, ecosystem, rows(&candidate));
+            // Every original declaration remains in both the catalog and native
+            // package-fact fixture, including required, optional, and build groups.
+            assert_eq!(candidate.profile.counts.requirement_groups, 4 * copies);
+            assert_eq!(
+                package_oracle
+                    .reader
+                    .manifest()
+                    .artifact
+                    .counts
+                    .requirement_groups,
+                4 * copies
+            );
+            let native = write_native_resolution(
+                &candidate,
+                &package_oracle,
+                ecosystem,
+                &expected_roots(&candidate),
+            );
+            for workers in [1, 2] {
+                let output_parent = tempfile::tempdir().unwrap();
+                let output = output_parent.path().join("candidate-resolution");
+                let produced = produce_conary_resolution_candidate_with_workers(
+                    &candidate.profile,
+                    &candidate.reader,
+                    package_oracle._directory.path(),
+                    native.path(),
+                    architecture(ecosystem),
+                    ResolutionWorkerRequest::explicit(ResolutionWorkerCount::new(workers).unwrap()),
+                    &output,
+                )
+                .unwrap();
+                let reopened = verify_native_resolution_oracle_bundle(
+                    &output,
+                    &candidate.profile,
+                    &package_oracle.reader,
+                )
+                .unwrap();
+                assert_eq!(reopened.manifest(), &produced.manifest);
+                let roots = fs::read(output.join(NATIVE_RESOLUTION_ROOT_FILE_NAME)).unwrap();
+                if let Some(expected) = &baseline {
+                    assert_eq!(&roots, expected);
+                } else {
+                    baseline = Some(roots);
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn serial_and_parallel_candidate_outputs_are_byte_identical() {
     let _capacity = crate::repository::catalog::parity::resolution_test_capacity(2);
     let ecosystem = NativeParityEcosystemV1::Rpm;

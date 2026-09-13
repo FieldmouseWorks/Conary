@@ -5,6 +5,34 @@
 use super::*;
 
 #[test]
+fn retained_cargo_msrv_preserves_repeated_native_requirements() {
+    let desc = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/arch/duplicate-requirements/cargo-msrv-0.19.3-2.desc"
+    ));
+    let parser = parser();
+    let fields = parser.parse_desc_file(desc).unwrap();
+    let package = parser
+        .package_from_fields(
+            "https://geo.mirror.pkgbuild.com/extra/os/x86_64",
+            &fields,
+            None,
+        )
+        .unwrap();
+    assert_eq!(package.name, "cargo-msrv");
+    assert_eq!(package.version, "0.19.3-2");
+    assert_eq!(package.requirements.len(), fields["DEPENDS"].len());
+    let repeated = package
+        .requirements
+        .iter()
+        .filter(|group| group.native_text.as_deref() == Some("rustup"))
+        .collect::<Vec<_>>();
+    assert_eq!(repeated.len(), 2);
+    assert_eq!(repeated[0], repeated[1]);
+    assert_eq!(repeated[0].kind, RepositoryRequirementKind::Depends);
+}
+
+#[test]
 fn desc_record_retains_required_and_optional_dependencies() {
     let parser = parser();
     let desc = format!(
