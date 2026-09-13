@@ -82,7 +82,9 @@ pub(super) fn attributes_require_expansion(
         }
         true
     }
+    let mut configuration = inherited.to_vec();
+    configuration.extend_from_slice(attributes);
     attributes
         .iter()
-        .any(|attribute| opaque(&attribute.meta, inherited))
+        .any(|attribute| opaque(&attribute.meta, &configuration))
 }

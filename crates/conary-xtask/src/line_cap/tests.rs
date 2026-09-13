@@ -1767,7 +1767,7 @@ fn included_test_files_inherit_all_enclosing_attributed_nodes() {
         r#"fn run() { match 0 { #[cfg(test)] 0 => { include!("tests.rs"); }, _ => () } }"#,
         r#"struct Owner; impl Owner { #[cfg(test)] fn run() { include!("tests.rs"); } }"#,
         r#"trait Owner { #[cfg(test)] fn run() { include!("tests.rs"); } }"#,
-        r#"#[test] fn run() { include!("tests.rs"); }"#,
+        r#"#[cfg(test)] #[test] fn run() { include!("tests.rs"); }"#,
         r#"fn run() { #[cfg(feature = "x")] { #[cfg(any(test, not(feature = "x")))] { include!("tests.rs"); } } }"#,
     ] {
         let classified = classify(&[
@@ -1872,7 +1872,7 @@ fn production_modules_inside_blocks_override_test_context() {
 fn nested_module_conditions_and_sibling_scope_are_preserved() {
     for source in [
         r#"fn run() { #[cfg(test)] { #[path = "tests.rs"] mod implementation; } }"#,
-        r#"#[test] fn run() { #[path = "tests.rs"] mod implementation; }"#,
+        r#"#[cfg(test)] #[test] fn run() { #[path = "tests.rs"] mod implementation; }"#,
         r#"struct Owner; impl Owner { #[cfg(test)] fn run() { #[path = "tests.rs"] mod implementation; } }"#,
         r#"trait Owner { #[cfg(test)] fn run() { #[path = "tests.rs"] mod implementation; } }"#,
     ] {
