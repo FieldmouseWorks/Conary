@@ -180,5 +180,41 @@
     "key": "message",
     "value": "completed_resolution_survey",
     "reason": "private_string"
+  },
+  {
+    "value": "",
+    "reason": "private_string"
+  },
+  {
+    "value": "plain \u03c0 \u6587\u672c",
+    "reason": "private_string"
+  },
+  {
+    "value": "%61",
+    "reason": "private_string"
+  },
+  {
+    "value": "%3a",
+    "reason": "private_string"
+  },
+  {
+    "value": "%2f",
+    "reason": "private_host_path"
+  },
+  {
+    "value": "%",
+    "reason": "redaction_unproven"
+  },
+  {
+    "value": "FiLe:private",
+    "reason": "private_host_path"
+  },
+  {
+    "value": "ordinary:message",
+    "reason": "private_string"
+  },
+  {
+    "value": "file\\u003aprivate",
+    "reason": "private_string"
   }
 ]
