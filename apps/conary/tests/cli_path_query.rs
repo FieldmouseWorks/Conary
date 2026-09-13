@@ -97,7 +97,7 @@ fn valid_absence_exact_pattern_and_info_queries_remain_read_only() {
             false,
             vec!["nginx 1.24.0 provides:", "/usr/sbin/nginx"],
         ),
-        ("/usr/*", false, vec!["nginx 1.24.0:", "openssl 3.0.0:"]),
+        ("/*", false, vec!["nginx 1.24.0:", "openssl 3.0.0:"]),
         (
             "/usr/sbin/nginx",
             true,
