@@ -81,10 +81,17 @@ runs:
           exit 1
         }
 
+        workflow_deploy_helper="$RUNNER_TEMP/remi-deploy-helper-${GITHUB_RUN_ID}.sh"
+        git show "${WORKFLOW_SHA}:deploy/remi-deploy-helper.sh" > "$workflow_deploy_helper"
+        [[ -s "$workflow_deploy_helper" && ! -L "$workflow_deploy_helper" ]] || {
+          echo "workflow authority has no regular deployment helper" >&2
+          exit 1
+        }
+
         target="$REMI_SSH_TARGET"
         ssh_opts=(-F "$REMI_SSH_CONFIG")
         cleanup_candidate_deploy() {
-          rm -f -- "$workflow_fencing_policy"
+          rm -f -- "$workflow_fencing_policy" "$workflow_deploy_helper"
           if [[ -n "${remote_bundle:-}" ]]; then
             ssh "${ssh_opts[@]}" "$target" \
               "rm -f -- '$remote_bundle' '${remote_repositories:-}' '${remote_helper:-}'" \
@@ -96,10 +103,10 @@ runs:
         remote_bundle="/tmp/remi-${VERSION}-${GITHUB_RUN_ID}.tar.gz"
         remote_repositories="/tmp/remi-repositories-${GITHUB_RUN_ID}.toml"
         remote_helper="/tmp/remi-deploy-helper-${GITHUB_RUN_ID}"
-        helper_sha="$(sha256sum deploy/remi-deploy-helper.sh | cut -d ' ' -f 1)"
+        helper_sha="$(sha256sum "$workflow_deploy_helper" | cut -d ' ' -f 1)"
 
         ssh "${ssh_opts[@]}" "$target" "sudo -n /usr/local/sbin/conary-remi-deploy verify-access"
-        scp "${ssh_opts[@]}" deploy/remi-deploy-helper.sh "${target}:${remote_helper}"
+        scp "${ssh_opts[@]}" "$workflow_deploy_helper" "${target}:${remote_helper}"
         ssh "${ssh_opts[@]}" "$target" \
           "sudo -n /usr/local/sbin/conary-remi-deploy install-helper '$helper_sha' '$remote_helper'"
         scp "${ssh_opts[@]}" "$BUNDLE" "${target}:${remote_bundle}"

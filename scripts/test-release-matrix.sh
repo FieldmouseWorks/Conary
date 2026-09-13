@@ -821,6 +821,7 @@ release_matrix_mutation_cases() {
 import sys
 
 cases = (
+    ('test_check_release_matrix_rejects_artifact_owned_deployment_helper', 'replace', '.github/actions/deploy-remi-bundle/action.yml', 'sha256sum "$workflow_deploy_helper"', 'sha256sum deploy/remi-deploy-helper.sh', 'shared deployment installs the exact workflow helper independently of artifact history'),
     ('test_check_release_matrix_rejects_untyped_release_completion', 'replace', '.github/workflows/deploy-and-verify.yml', '          completion-mode: launch-authority', '          completion-mode: active-repopulation', 'release deploy uses launch-aware shared completion authority'),
     ('test_check_release_matrix_rejects_unbounded_active_completion', 'replace', '.github/actions/deploy-remi-bundle/action.yml', 'helper_args=(wait-remi-repopulation 3600)', 'helper_args=(inspect-remi --require-repopulated)', 'shared completion retains exact launch authority and typed repopulation applicability'),
     ('test_check_release_matrix_rejects_active_completion_after_deadline', 'replace', '.github/actions/deploy-remi-bundle/action.yml', '.repopulation_wait.elapsed_ms <= .repopulation_wait.budget_ms', '.repopulation_wait.elapsed_ms >= 0', 'active completion requires bounded final ingress evidence'),

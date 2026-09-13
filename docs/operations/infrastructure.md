@@ -243,7 +243,10 @@ workflow.
   public readiness as either ready or intentionally unavailable.
   Release and exact-candidate workflows now share
   `.github/actions/deploy-remi-bundle/action.yml`, loaded from the exact workflow
-  commit. Suite deployment selects its mode from that commit's typed
+  commit. The installed root helper is materialized from that same workflow
+  authority, independently of the older artifact checkout; its existing
+  protected-main digest authorization remains mandatory. Suite deployment
+  selects its mode from that commit's typed
   `docs/roadmaps/launch-status.json`: the blocked zero-exclusion public-universe
   gate requires `private-candidates`; the passed gate requires
   `active-repopulation`. Missing, unknown, or obsolete launch authority fails
