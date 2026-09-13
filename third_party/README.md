@@ -57,19 +57,19 @@ id = "resolvo-conflict-graph"
 cargo_name = "resolvo"
 kind = "crates-io-patch"
 declaration = "Cargo.toml:[patch.crates-io].resolvo"
-path = "third_party/resolvo-0.12.0-patched"
-baseline = "0.12.0"
+path = "third_party/resolvo-0.12.1-patched"
+baseline = "0.12.1"
 upstream = "https://crates.io/crates/resolvo"
 upstream_index = "re/so/resolvo"
-divergence = "Filters conflict-graph nodes that are unreachable from the synthetic request root before rendering an unsatisfiable result."
-reason = "Upstream 0.12.0 can panic while formatting valid unsatisfiable solver evidence containing a learned but causally unrelated branch."
+divergence = "Filters root-unreachable conflict evidence and backports upstream PR #293 (dfb403fce20c989a150ef5bbf89c2d2c1e2b3199) to group mixed-name virtual providers by concrete name."
+reason = "Upstream 0.12.1 still panics on unrelated conflict evidence and incorrectly groups virtual capability providers in at-most-one clauses."
 exit_type = "crates-io-newer-release"
-exit_condition = "Evaluate every newer non-yanked resolvo release; drop the patch only when the focused unreachable-branch regression passes against that release."
-exit_test = "cargo test --manifest-path third_party/resolvo-0.12.0-patched/Cargo.toml conflict_graph_discards_learned_branches_unreachable_from_root"
+exit_condition = "Evaluate every newer non-yanked resolvo release; drop the patch only when the conflict-graph and mixed-name-provider regressions passes against that release."
+exit_test = "cargo test --manifest-path third_party/resolvo-0.12.1-patched/Cargo.toml --lib conary_tests"
 
 ```
 <!-- conary-third-party-divergence:end -->
 
 The vendored crates retain their upstream license metadata and notices. The
 resolvo patch has additional implementation context in
-[`resolvo-0.12.0-patched/CONARY_PATCH.md`](resolvo-0.12.0-patched/CONARY_PATCH.md).
+[`resolvo-0.12.1-patched/CONARY_PATCH.md`](resolvo-0.12.1-patched/CONARY_PATCH.md).
