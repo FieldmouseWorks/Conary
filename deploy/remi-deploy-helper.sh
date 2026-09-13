@@ -33,6 +33,7 @@ usage:
   conary-remi-deploy export-resolution-survey-evidence <survey-id> <export-id> <input-manifest-sha256>
   conary-remi-deploy benchmark-remi-conversion <run-id> <installed-binary-sha256> <profile> <revision-sha256> <package-key-sha256> <source-sha256> <source-size>
   conary-remi-deploy verify-ingress
+  conary-remi-deploy wait-remi-repopulation <budget-seconds>
   conary-remi-deploy verify-access
 USAGE
     exit 2
@@ -2564,6 +2565,213 @@ verify_access() {
     [[ -f "$(root_path /etc/conary/remi.toml)" ]] || die "missing /etc/conary/remi.toml"
 }
 
+# Own the active-universe completion wait and the final ingress proof inside one
+# monotonic deadline. The supervisor below spawns only the two fixed helper
+# operations through this installed helper path; it never accepts a caller
+# supplied command or path. It prints one JSON object on stdout and diagnostics
+# on stderr, so a caller can consume the result without a second helper.
+wait_remi_repopulation() {
+    [[ -n "$ROOT" || "$(id -u)" == "0" ]] || die "helper must run as root"
+    local budget="$1"
+    [[ "$budget" =~ ^[1-9][0-9]{0,3}$ ]] ||
+        die "expected canonical repopulation wait budget in seconds, got: $budget"
+    (( budget <= 3600 )) ||
+        die "repopulation wait budget out of allowed range 1..3600: $budget"
+    command -v python3 >/dev/null 2>&1 ||
+        die "python3 is required for wait-remi-repopulation"
+    local helper_path
+    helper_path="$(realpath -- "$0")" || die "cannot resolve helper path: $0"
+    python3 - "$budget" "$helper_path" <<'PY'
+import json
+import os
+import signal
+import subprocess
+import sys
+import time
+
+SCHEMA_VERSION = 1
+SLEEP_CAP_SECONDS = 30.0
+REAP_SECONDS = 5.0
+MIN_BUDGET_SECONDS = 1
+MAX_BUDGET_SECONDS = 3600
+# Fixed helper operations only; no caller supplied command or path reaches exec.
+OPERATIONS = {
+    "inspect": ("inspect-remi", "--require-repopulated"),
+    "ingress": ("verify-ingress",),
+}
+
+
+def diag(message):
+    sys.stderr.write("remi deploy helper: wait-remi-repopulation: {}\n".format(message))
+    sys.stderr.flush()
+
+
+class RepopulationWait:
+    """Supervise a typed repopulation inspection followed by ingress proof."""
+
+    def __init__(self, budget_seconds, helper_path):
+        self.budget_seconds = budget_seconds
+        self.helper_path = helper_path
+        self.started = time.monotonic()
+        self.deadline = self.started + budget_seconds
+        self.attempts = []
+        self.last_inspection = None
+
+    def remaining(self):
+        return self.deadline - time.monotonic()
+
+    def emit(self, outcome, reason):
+        elapsed_ms = int((time.monotonic() - self.started) * 1000.0)
+        envelope = dict(self.last_inspection or {})
+        envelope.update({
+            "repopulation_wait": {
+                "schema_version": SCHEMA_VERSION,
+                "budget_ms": self.budget_seconds * 1000,
+                "elapsed_ms": elapsed_ms,
+                "outcome": outcome,
+                "reason": reason,
+                "attempts": self.attempts,
+            },
+        })
+        sys.stdout.write(json.dumps(envelope, sort_keys=True) + "\n")
+        sys.stdout.flush()
+        return 0 if outcome == "complete" else 1
+
+    @staticmethod
+    def kill_process_group(process):
+        try:
+            # start_new_session makes this PID the stable process-group ID.
+            # The leader may already have exited while descendants hold pipes.
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+    def run_operation(self, operation, timeout):
+        argv = ["/bin/bash", self.helper_path] + list(OPERATIONS[operation])
+        started = time.monotonic()
+        try:
+            process = subprocess.Popen(
+                argv,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                start_new_session=True,
+            )
+        except OSError as error:
+            diag(f"could not start {operation}: {error}")
+            self.attempts.append({"operation": operation, "duration_ms": 0,
+                                  "status": None, "timed_out": False})
+            return None, False, b""
+        status = None
+        timed_out = False
+        stdout = b""
+        try:
+            stdout, _ = process.communicate(timeout=timeout)
+            status = process.returncode
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            diag("{} exceeded the remaining budget; killing its process group".format(operation))
+            self.kill_process_group(process)
+            try:
+                stdout, _ = process.communicate(timeout=REAP_SECONDS)
+            except subprocess.TimeoutExpired:
+                diag(
+                    "{} process group did not reap within {:.0f}s".format(
+                        operation, REAP_SECONDS
+                    )
+                )
+        self.attempts.append(
+            {
+                "operation": operation,
+                "duration_ms": int((time.monotonic() - started) * 1000.0),
+                "status": status,
+                "timed_out": timed_out,
+            }
+        )
+        return status, timed_out, stdout
+
+    @staticmethod
+    def typed_inspection(raw):
+        try:
+            text = raw.decode("utf-8").strip()
+        except UnicodeDecodeError:
+            return None
+        if not text:
+            return None
+        try:
+            parsed = json.loads(text)
+        except ValueError:
+            return None
+        return parsed if isinstance(parsed, dict) else None
+
+    def run(self):
+        while True:
+            remaining = self.remaining()
+            if remaining <= 0:
+                diag("budget exhausted before the repopulation inspection completed")
+                return self.emit("failure", "deadline_exceeded")
+            status, timed_out, raw = self.run_operation("inspect", remaining)
+            if timed_out:
+                # A kill only happens once the shared deadline ran out.
+                return self.emit("failure", "deadline_exceeded")
+            inspection = self.typed_inspection(raw)
+            if status == 0:
+                if inspection is None:
+                    diag("repopulation inspection exited 0 without a typed JSON object")
+                    return self.emit("failure", "invalid_inspection")
+                self.last_inspection = inspection
+                break
+            if inspection is None:
+                diag(
+                    "repopulation inspection failed without typed JSON output (status {})".format(
+                        status
+                    )
+                )
+                return self.emit("failure", "inspection_failed")
+            self.last_inspection = inspection
+            diag(
+                "repopulation pending after {} inspection attempt(s)".format(len(self.attempts))
+            )
+            remaining = self.remaining()
+            if remaining <= 0:
+                diag("budget exhausted before repopulation completed")
+                return self.emit("failure", "deadline_exceeded")
+            time.sleep(min(SLEEP_CAP_SECONDS, remaining))
+
+        remaining = self.remaining()
+        if remaining <= 0:
+            diag("budget exhausted before ingress verification")
+            return self.emit("failure", "deadline_exceeded")
+        status, timed_out, _ = self.run_operation("ingress", remaining)
+        if timed_out:
+            return self.emit("failure", "deadline_exceeded")
+        if status != 0:
+            diag("ingress verification failed with status {}".format(status))
+            return self.emit("failure", "ingress_failed")
+        if self.remaining() <= 0:
+            return self.emit("failure", "deadline_exceeded")
+        return self.emit("complete", None)
+
+
+def main(argv):
+    if len(argv) != 2:
+        diag("internal argument mismatch")
+        return 1
+    try:
+        budget = int(argv[0], 10)
+    except ValueError:
+        diag("expected canonical repopulation wait budget in seconds")
+        return 1
+    if budget < MIN_BUDGET_SECONDS or budget > MAX_BUDGET_SECONDS:
+        diag("repopulation wait budget out of allowed range 1..3600")
+        return 1
+    return RepopulationWait(budget, argv[1]).run()
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
+PY
+}
+
 if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
     return
 fi
@@ -2620,6 +2828,10 @@ case "${1:-}" in
     verify-ingress)
         [[ $# -eq 1 ]] || usage
         verify_ingress
+        ;;
+    wait-remi-repopulation)
+        [[ $# -eq 2 ]] || usage
+        wait_remi_repopulation "$2"
         ;;
     verify-access)
         [[ $# -eq 1 ]] || usage

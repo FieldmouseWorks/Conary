@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-09-13
-revision: 116
-summary: Route features to owned paths and proof, including context-aware test-file caps, Cargo target evidence, and live exception ownership.
+revision: 117
+summary: Route features to owned paths and proof, including shared Remi deployment completion and bounded repopulation evidence.
 ---
 
 # Feature Ownership And Interaction Gates
@@ -1102,6 +1102,7 @@ deployment, and prove installed or live behavior independently.
 
 **Start here:** `.github/workflows/release-build.yml`;
 `.github/workflows/deploy-and-verify.yml`;
+`.github/actions/deploy-remi-bundle/action.yml`;
 `scripts/release.sh`; `scripts/release-matrix.sh`;
 `scripts/remi-candidate-artifact.sh`;
 `scripts/sign-release.sh`;
@@ -1118,6 +1119,9 @@ static-site deployment, and production health proof.
 `.github/workflows/deploy-and-verify.yml`;
 `.github/workflows/build-remi-candidate.yml`;
 `.github/workflows/deploy-remi-candidate.yml`;
+`.github/actions/deploy-remi-bundle/*`;
+`scripts/test-remi-deployment-completion.py`;
+`scripts/test-remi-repopulation-wait.py`;
 `.github/workflows/release-artifact-proof.yml`;
 `.github/actions/setup-rust-workspace/action.yml`;
 `.github/actions/setup-remi-candidate-compiler-cache/action.yml`;

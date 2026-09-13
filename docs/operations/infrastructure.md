@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-09-10
-revision: 100
-summary: Document serialized production operations with retained FIFO deployment queues, release and survey proof, and recovery boundaries
+last_updated: 2026-09-13
+revision: 101
+summary: Share launch-aware Remi completion and enforce a measured repopulation deadline while retaining deployment fencing and serialized queues
 ---
 
 # Infrastructure Overview
@@ -122,9 +122,9 @@ workflow.
   [GitHub queue contract](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency)
   applies to all seven members, including static-site deployment, so queue
   retention preserves the stopped-service/probe exclusion above.
-  [#927](https://github.com/FieldmouseWorks/Conary/issues/927) still owns
-  launch-state-aware deployment completion and a real elapsed-time budget;
-  retaining queued runs does not make an unsatisfiable deployment complete.
+  Launch-state-aware completion and the measured deadline from
+  [#927](https://github.com/FieldmouseWorks/Conary/issues/927) are implemented in
+  the shared deployment action and root helper described below.
 - Candidate deployment uses one fail-closed SSH option contract for every
   remote command and transfer: authentication is noninteractive, initial
   connection time is bounded, and protocol keepalives cover long refresh and
@@ -241,11 +241,32 @@ workflow.
   its typed failure cannot block that public-profile completion contract.
   Private-candidate completion proves no active pointer and accepts structured
   public readiness as either ready or intentionally unavailable.
-  `active-repopulation` polls
+  Release and exact-candidate workflows now share
+  `.github/actions/deploy-remi-bundle/action.yml`, loaded from the exact workflow
+  commit. Suite deployment selects its mode from that commit's typed
+  `docs/roadmaps/launch-status.json`: the blocked zero-exclusion public-universe
+  gate requires `private-candidates`; the passed gate requires
+  `active-repopulation`. Missing, unknown, or obsolete launch authority fails
+  before deployment. Successful private completion records
+  `repopulation: {state: not_applicable, reason: no_active_universe}`; it does
+  not activate a public pointer or claim public readiness.
+  `active-repopulation` invokes `wait-remi-repopulation 3600`, which polls
   `inspect-remi --require-repopulated` and requires all configured public
   profiles to have populated active immutable catalogs, a complete signing role
   set, a fresh signed universe naming the same profile revisions, and at
   least one validated converted artifact pinned to every current revision.
+  The root-owned wait supervisor uses one monotonic 3,600-second operation
+  deadline covering every inspection, the final exact-byte ingress proof, and
+  any wait between attempts. It kills and reaps the complete operation process
+  group at timeout and retains the last valid inspection. Its `repopulation_wait`
+  record contains the budget, actual elapsed milliseconds, outcome/reason, and
+  each inspection/ingress duration, exit status, and timeout flag. Failure after
+  this deadline never starts another unbounded catalog inspection. The recorded
+  duration includes timeout cleanup and may show scheduling/cleanup overhead;
+  successful completion must be within the deadline. The one-hour ceiling
+  replaces the failed 120-attempt policy recorded in #927, whose ~155-second
+  inspections stretched the claimed hour past five hours. Both workflows keep
+  the existing 300-minute whole-job ceiling for transition and forced refresh.
   Mutable `repository_packages` rows are not evidence for either mode;
   dispatch, a preexisting candidate, or a green liveness probe alone is not
   deployment proof.
