@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-09-10
-revision: 41
-summary: Record immutable v0.17.2 proof and retained serialized deployment queues while preserving blocked production and tester gates
+last_updated: 2026-09-13
+revision: 42
+summary: Record shared launch-aware Remi deployment completion and its enforced operation deadline while preserving immutable release and pending live proof
 ---
 
 # Release Artifact Matrix
@@ -88,8 +88,9 @@ object `1e4045b57b43d1776fa06e30cc5e5f2a138fca87` peels to reviewed merge commit
 `1a838a4af3c756f40c86fd459b7f68cb27aece72`; all four products were published
 together and independently verified within the artifact-proof scope recorded
 below. Deployment routing passed; terminal live deployment proof remains
-pending behind the no-active-universe completion defect
-[#927](https://github.com/FieldmouseWorks/Conary/issues/927) and public promotion
+pending until a deployment run proves the shared launch-aware completion
+contract from [#927](https://github.com/FieldmouseWorks/Conary/issues/927).
+Public promotion remains blocked by
 [#598](https://github.com/FieldmouseWorks/Conary/issues/598). Historical releases
 remain immutable evidence for their own trees, but are not current release inputs.
 

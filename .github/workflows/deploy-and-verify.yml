@@ -600,13 +600,14 @@ jobs:
     needs: [resolve, validate-routing]
     if: ${{ needs.resolve.outputs.release == 'suite' && needs.resolve.outputs.deploy_mode == 'suite' && needs.resolve.outputs.dry_run != 'true' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 300
     environment: production
     steps:
       - name: Check out exact release tag
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ needs.resolve.outputs.tag_name }}
-          fetch-depth: 1
+          fetch-depth: 0
           persist-credentials: false
       - name: Check out deploy-remi workflow repository for local actions
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -673,13 +674,11 @@ jobs:
           mkdir -p "$bundle_dir"
           find "$fallback_dir" -maxdepth 1 -type f -exec mv {} "$bundle_dir"/ \;
           rmdir "$fallback_dir"
-      - name: Deploy remi bundle
+      - name: Prepare verified Remi bundle
+        id: remi-bundle
         env:
           VERSION: ${{ needs.resolve.outputs.version }}
           BUNDLE_NAME: ${{ needs.resolve.outputs.bundle_name }}
-          REMI_SSH_CONFIG: ${{ steps.production-ssh.outputs.config-path }}
-          REMI_SSH_TARGET: ${{ secrets.REMI_SSH_TARGET }}
-          REMI_MAX_CONCURRENT: 32
         shell: bash
         run: |
           set -euo pipefail
@@ -698,61 +697,19 @@ jobs:
             echo "remi bundle did not yield a canonical binary SHA-256" >&2
             exit 1
           }
-          target="$REMI_SSH_TARGET"
-          ssh_opts=(-F "$REMI_SSH_CONFIG")
-
-          remote_bundle="/tmp/remi-${VERSION}-${GITHUB_RUN_ID}.tar.gz"
-          remote_repositories="/tmp/remi-repositories-${GITHUB_RUN_ID}.toml"
-          remote_helper="/tmp/remi-deploy-helper-${GITHUB_RUN_ID}"
-          helper_sha="$(sha256sum deploy/remi-deploy-helper.sh | cut -d ' ' -f 1)"
-          ssh "${ssh_opts[@]}" "$target" "sudo -n /usr/local/sbin/conary-remi-deploy verify-access"
-          scp "${ssh_opts[@]}" deploy/remi-deploy-helper.sh "${target}:${remote_helper}"
-          ssh "${ssh_opts[@]}" "$target" \
-            "sudo -n /usr/local/sbin/conary-remi-deploy install-helper '$helper_sha' '$remote_helper'"
-          scp "${ssh_opts[@]}" "$bundle" "${target}:${remote_bundle}"
-          scp "${ssh_opts[@]}" deploy/remi-repositories.toml "${target}:${remote_repositories}"
-          ssh "${ssh_opts[@]}" "$target" bash -s \
-            "$VERSION" "$binary_sha256" "$remote_bundle" \
-            "$remote_repositories" "$REMI_MAX_CONCURRENT" <<'REMOTE_EOF'
-            set -euo pipefail
-            VERSION="$1"
-            binary_sha256="$2"
-            remote_bundle="$3"
-            remote_repositories="$4"
-            max_concurrent="$5"
-            sudo -n /usr/local/sbin/conary-remi-deploy deploy-remi \
-              "$VERSION" "$binary_sha256" "$remote_bundle" \
-              "$remote_repositories" "$max_concurrent"
-            sudo -n /usr/local/sbin/conary-remi-deploy verify-ingress
-
-            for attempt in $(seq 1 120); do
-              if sudo -n /usr/local/sbin/conary-remi-deploy inspect-remi \
-                --require-repopulated
-              then
-                sudo -n /usr/local/sbin/conary-remi-deploy verify-ingress
-                exit 0
-              fi
-              echo "Remi repopulation is still in progress (${attempt}/120)" >&2
-              sleep 30
-            done
-
-            sudo -n /usr/local/sbin/conary-remi-deploy inspect-remi
-            echo "Remi did not repopulate source and conversion state within one hour" >&2
-            exit 1
-          REMOTE_EOF
-      - name: Verify remi health
-        run: curl -fsS https://remi.conary.io/health >/dev/null
-      - name: Verify remi readiness
-        # /health is an unconditional liveness reply and proves only that the
-        # process is listening. /health/ready opens the database, requires the
-        # expected schema revision, and checks the serving directories and free
-        # space, failing closed when a probe cannot run. Deployment evidence
-        # needs the second, not the first.
-        run: |
-          set -euo pipefail
-          body=$(curl -fsS --max-time 30 https://remi.conary.io/health/ready)
-          echo "$body"
-          echo "$body" | jq -e '.ready == true' >/dev/null
+          echo "bundle=$bundle" >> "$GITHUB_OUTPUT"
+          echo "binary_sha256=$binary_sha256" >> "$GITHUB_OUTPUT"
+          echo "commit_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Deploy remi bundle
+        uses: ./workflow-authority/.github/actions/deploy-remi-bundle
+        with:
+          version: ${{ needs.resolve.outputs.version }}
+          bundle: ${{ steps.remi-bundle.outputs.bundle }}
+          binary-sha256: ${{ steps.remi-bundle.outputs.binary_sha256 }}
+          commit-sha: ${{ steps.remi-bundle.outputs.commit_sha }}
+          ssh-config: ${{ steps.production-ssh.outputs.config-path }}
+          ssh-target: ${{ secrets.REMI_SSH_TARGET }}
+          completion-mode: launch-authority
 
   verify-build-only-routes:
     name: verify-build-only-routes
