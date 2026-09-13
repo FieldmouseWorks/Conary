@@ -290,7 +290,8 @@ mod tests {
                 Some(SourcePackageFormat::Rpm),
             )),
         ];
-        let text = console::strip_ansi_codes(&install_lines(&rows, false).join("\n"));
+        let lines = install_lines(&rows, false).join("\n");
+        let text = console::strip_ansi_codes(&lines);
         // Cells after the name: version, CCS release, architecture, source
         // format, then the reason column that only removals carry.
         let row = |name: &str| {
