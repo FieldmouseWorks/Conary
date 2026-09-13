@@ -1,5 +1,7 @@
 // crates/conary-core/src/repository/catalog/parity/alpm/tests/conflict_missing.rs
 
+#![cfg(test)]
+
 //! Prepared paths beat deterministic missing fallbacks; all answers are replayed.
 
 use super::*;

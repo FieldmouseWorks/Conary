@@ -1,5 +1,7 @@
 // crates/conary-core/src/repository/catalog/parity/alpm/tests/conflict_reachability.rs
 
+#![cfg(test)]
+
 //! Conflict relevance follows the native-selected provider's dependency closure.
 
 use super::*;

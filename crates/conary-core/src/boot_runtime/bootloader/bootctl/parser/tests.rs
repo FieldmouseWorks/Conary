@@ -1,5 +1,7 @@
 // crates/conary-core/src/boot_runtime/bootloader/bootctl/parser/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 
 #[test]

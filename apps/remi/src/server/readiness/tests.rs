@@ -1,5 +1,7 @@
 // apps/remi/src/server/readiness/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use conary_core::db::models::RemiCatalogPhysicalAttestation;
 use conary_core::db::schema;

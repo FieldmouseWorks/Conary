@@ -1,5 +1,7 @@
 // apps/conary/src/commands/install/shared_directory/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use conary_core::db::models::{PayloadClaimAnchorPolicy, TroveType};
 use conary_core::payload::{

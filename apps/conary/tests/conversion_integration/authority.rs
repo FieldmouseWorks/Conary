@@ -1,5 +1,7 @@
 // apps/conary/tests/conversion_integration/authority.rs
 
+#![cfg(test)]
+
 use super::*;
 
 #[test]

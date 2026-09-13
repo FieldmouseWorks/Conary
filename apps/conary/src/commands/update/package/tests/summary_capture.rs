@@ -1,5 +1,7 @@
 // apps/conary/src/commands/update/package/tests/summary_capture.rs
 
+#![cfg(test)]
+
 use super::*;
 use std::io::Write;
 use std::process::{Command, Stdio};

@@ -1,5 +1,7 @@
 // apps/conary/src/commands/install/conversion/tests/dependencies.rs
 
+#![cfg(test)]
+
 use super::*;
 
 mod hook_preflight;

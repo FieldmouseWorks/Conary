@@ -1,5 +1,7 @@
 // crates/conary-core/src/ccs/convert/converter/tests/metrics.rs
 
+#![cfg(test)]
+
 use super::*;
 
 #[test]

@@ -1,5 +1,7 @@
 // crates/conary-core/src/bootstrap/build_runner/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::recipe::parse_recipe;
 use std::path::Path;

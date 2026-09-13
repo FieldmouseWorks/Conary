@@ -1,5 +1,7 @@
 // apps/conary/tests/cli_update_summary.rs
 
+#![cfg(test)]
+
 pub mod common;
 
 #[path = "cli_update_summary/selection.rs"]

@@ -1,5 +1,7 @@
 // apps/conary/src/commands/update/package/tests/summary_capture/fixtures.rs
 
+#![cfg(test)]
+
 use super::*;
 
 #[derive(Clone, Copy)]

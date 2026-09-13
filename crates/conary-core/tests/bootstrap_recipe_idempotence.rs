@@ -1,5 +1,7 @@
 // crates/conary-core/tests/bootstrap_recipe_idempotence.rs
 
+#![cfg(test)]
+
 use std::path::Path;
 
 use conary_core::recipe::parse_recipe_file;

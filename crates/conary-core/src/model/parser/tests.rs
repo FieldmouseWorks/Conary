@@ -1,5 +1,7 @@
 // crates/conary-core/src/model/parser/tests.rs
 
+#![cfg(test)]
+
 //! Focused parser and model-policy tests.
 
 use super::*;

@@ -1,5 +1,7 @@
 // apps/remi/src/server/universe_publish/tests.rs
 
+#![cfg(test)]
+
 use std::os::unix::fs::DirBuilderExt;
 
 use conary_core::db::models::{

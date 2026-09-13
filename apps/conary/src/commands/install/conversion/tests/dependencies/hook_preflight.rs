@@ -1,5 +1,7 @@
 // apps/conary/src/commands/install/conversion/tests/dependencies/hook_preflight.rs
 
+#![cfg(test)]
+
 use super::*;
 use conary_core::ccs::manifest::{Service, ServiceAction};
 use conary_core::repository::dependency_model::{

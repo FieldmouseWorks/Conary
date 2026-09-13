@@ -1,5 +1,7 @@
 // crates/conary-agent-contract/src/verification/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use serde_json::json;
 

@@ -1,5 +1,7 @@
 // crates/conary-core/tests/supported_host_generation_export_fixture_contract.rs
 
+#![cfg(test)]
+
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;

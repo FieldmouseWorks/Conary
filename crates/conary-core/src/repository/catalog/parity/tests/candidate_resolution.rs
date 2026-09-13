@@ -1,5 +1,7 @@
 // crates/conary-core/src/repository/catalog/parity/tests/candidate_resolution.rs
 
+#![cfg(test)]
+
 use std::collections::BTreeSet;
 use std::fs;
 

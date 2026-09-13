@@ -1,5 +1,7 @@
 // crates/conary-core/src/repository/declarations/trust_import/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::repository::declarations::discover_selected_root;
 use openpgp::cert::prelude::CertBuilder;

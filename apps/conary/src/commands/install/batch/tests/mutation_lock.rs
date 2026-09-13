@@ -1,5 +1,7 @@
 // apps/conary/src/commands/install/batch/tests/mutation_lock.rs
 
+#![cfg(test)]
+
 //! Certification reads installed state with the mutation lock already held.
 //!
 //! A batch is admitted on facts it reads from installed state: which

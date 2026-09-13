@@ -1,5 +1,7 @@
 // apps/conary/src/commands/install/native_events/tests/arch.rs
 
+#![cfg(test)]
+
 //! Arch lifecycle preparation and preflight coverage.
 
 use super::*;

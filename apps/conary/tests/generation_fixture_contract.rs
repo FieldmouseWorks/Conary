@@ -1,5 +1,7 @@
 // apps/conary/tests/generation_fixture_contract.rs
 
+#![cfg(test)]
+
 use conary_core::generation::artifact::{ARTIFACT_MANIFEST_VERSION, load_generation_artifact};
 use std::path::PathBuf;
 

@@ -1,5 +1,7 @@
 // apps/conary/src/commands/adopt/convert/tests/lifecycle.rs
 
+#![cfg(test)]
+
 use super::super::*;
 use conary_core::ccs::builder::BuildResult;
 use conary_core::ccs::manifest::{Authors, CcsManifest, Platform, ScriptHook};

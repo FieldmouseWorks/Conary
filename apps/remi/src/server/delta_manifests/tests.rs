@@ -1,4 +1,6 @@
 // apps/remi/src/server/delta_manifests/tests.rs
+
+#![cfg(test)]
 use super::*;
 use conary_core::db::models::{
     CONVERSION_VERSION, ConvertedPackage, RemiCatalogResource, RemiCatalogResourceKind,

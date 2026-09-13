@@ -1,5 +1,7 @@
 // apps/conary/src/commands/install/batch/tests/witness_universe.rs
 
+#![cfg(test)]
+
 //! The identities a transaction may reason with are the ones it leaves behind.
 //!
 //! Each test installs a prior transaction, then asks the ordering validator

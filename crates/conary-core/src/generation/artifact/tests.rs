@@ -1,5 +1,7 @@
 // crates/conary-core/src/generation/artifact/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::generation::metadata::{
     GENERATION_FORMAT, GENERATION_METADATA_FILE, GenerationMetadata, mark_generation_pending,

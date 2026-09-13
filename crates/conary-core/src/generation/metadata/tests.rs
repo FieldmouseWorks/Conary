@@ -1,5 +1,7 @@
 // crates/conary-core/src/generation/metadata/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::ccs::signing::SigningKeyPair;
 use tempfile::TempDir;

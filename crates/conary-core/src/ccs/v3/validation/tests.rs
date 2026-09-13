@@ -1,5 +1,7 @@
 // crates/conary-core/src/ccs/v3/validation/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::ccs::v3::diagnostics::V3DiagnosticCode;
 use crate::ccs::v3::schema::{

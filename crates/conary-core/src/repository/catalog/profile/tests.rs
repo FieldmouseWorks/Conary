@@ -1,5 +1,7 @@
 // crates/conary-core/src/repository/catalog/profile/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::repository::catalog::{
     CatalogArtifactV1, CatalogCopyScratchV1, CatalogFinalizationScratchV2,

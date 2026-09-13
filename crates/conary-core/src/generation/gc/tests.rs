@@ -1,5 +1,7 @@
 // crates/conary-core/src/generation/gc/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::db::models::{
     ConvertedPackage, FileEntry, RemiCatalogPhysicalAttestation, RemiCatalogResource,

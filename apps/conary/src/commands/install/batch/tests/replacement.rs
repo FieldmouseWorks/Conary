@@ -1,5 +1,7 @@
 // apps/conary/src/commands/install/batch/tests/replacement.rs
 
+#![cfg(test)]
+
 //! Replacement authority is revalidated under the mutation lock.
 //!
 //! A prepared `old_trove` is installed state read before the batch owned the

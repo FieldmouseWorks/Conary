@@ -1,5 +1,7 @@
 // apps/conary/src/commands/install/prepare/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::commands::install::InstallReplacement;
 use conary_core::db::models::{InstallReason, InstallSource, Trove, TroveType};

@@ -1,5 +1,7 @@
 // apps/conary/src/ui/diagnostics/verification/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 
 #[test]

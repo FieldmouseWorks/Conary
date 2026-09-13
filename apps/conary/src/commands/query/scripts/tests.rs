@@ -1,5 +1,7 @@
 // apps/conary/src/commands/query/scripts/tests.rs
 
+#![cfg(test)]
+
 #[cfg(test)]
 mod query_scripts {
     use super::super::*;

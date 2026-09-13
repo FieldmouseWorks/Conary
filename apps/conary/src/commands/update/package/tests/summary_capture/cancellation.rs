@@ -1,5 +1,7 @@
 // apps/conary/src/commands/update/package/tests/summary_capture/cancellation.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::commands::test_helpers::native_artifact::{detached_signature, pgp_authority};
 use conary_core::db::models::{

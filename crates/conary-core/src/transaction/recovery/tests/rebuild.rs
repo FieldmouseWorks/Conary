@@ -1,5 +1,7 @@
 // crates/conary-core/src/transaction/recovery/tests/rebuild.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::filesystem::fsverity::FsVerityError;
 use crate::generation::builder::test_support::{

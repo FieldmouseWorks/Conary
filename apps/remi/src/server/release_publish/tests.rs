@@ -1,5 +1,7 @@
 // apps/remi/src/server/release_publish/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::server::native_publish::test_support::assert_json_code;
 use axum::body::{Body, to_bytes};

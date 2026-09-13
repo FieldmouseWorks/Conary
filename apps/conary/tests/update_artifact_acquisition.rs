@@ -1,4 +1,6 @@
 // apps/conary/tests/update_artifact_acquisition.rs
+
+#![cfg(test)]
 #![cfg(feature = "test-hooks")]
 
 //! Issue #965 regression: `update` applies the signed full artifact admitted by

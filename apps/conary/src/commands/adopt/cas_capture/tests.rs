@@ -1,5 +1,7 @@
 // apps/conary/src/commands/adopt/cas_capture/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use conary_core::filesystem::CasStore;
 use conary_core::packages::InstalledFileAbsencePolicy;

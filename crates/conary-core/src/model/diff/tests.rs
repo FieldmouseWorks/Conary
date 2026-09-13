@@ -1,4 +1,6 @@
 // crates/conary-core/src/model/diff/tests.rs
+
+#![cfg(test)]
 use super::super::state::InstalledPackage;
 use super::*;
 

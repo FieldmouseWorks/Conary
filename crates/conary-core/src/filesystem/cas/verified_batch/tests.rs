@@ -1,5 +1,7 @@
 // crates/conary-core/src/filesystem/cas/verified_batch/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use std::io::Cursor;
 

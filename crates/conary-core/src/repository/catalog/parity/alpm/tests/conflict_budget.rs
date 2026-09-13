@@ -1,5 +1,7 @@
 // crates/conary-core/src/repository/catalog/parity/alpm/tests/conflict_budget.rs
 
+#![cfg(test)]
+
 //! Native check counts, independent of provider Cartesian-product size.
 
 use super::*;

@@ -1,4 +1,6 @@
 // apps/conary/tests/installed_release_selector.rs
+
+#![cfg(test)]
 //! Installed `--release` selectors must resolve one exact CCS release record.
 //!
 //! The fixture seeds identical name/version/architecture identities that the

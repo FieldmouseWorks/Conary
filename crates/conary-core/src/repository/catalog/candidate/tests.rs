@@ -1,5 +1,7 @@
 // crates/conary-core/src/repository/catalog/candidate/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::repository::catalog::{
     CATALOG_FINALIZATION_SCRATCH_SCHEMA_V2, CatalogCopyScratchV1, CatalogFinalizationScratchV2,

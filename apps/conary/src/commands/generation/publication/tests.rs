@@ -1,5 +1,7 @@
 // apps/conary/src/commands/generation/publication/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 #[cfg(feature = "test-hooks")]
 use conary_core::config_transaction::{

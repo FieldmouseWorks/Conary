@@ -1,4 +1,6 @@
 // apps/conary/src/commands/try_session/watch/tests.rs
+
+#![cfg(test)]
 use super::*;
 use conary_core::diagnostics::{PackagingCommandStatus, PackagingEventKind, PackagingPhase};
 

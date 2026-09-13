@@ -1,5 +1,7 @@
 // crates/conary-core/src/generation/builder/verity/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 
 fn fixture() -> (tempfile::TempDir, std::path::PathBuf) {

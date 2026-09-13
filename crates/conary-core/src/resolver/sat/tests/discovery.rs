@@ -1,5 +1,7 @@
 // crates/conary-core/src/resolver/sat/tests/discovery.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::repository::dependency_model::RepositoryRequirementKind;
 use crate::repository::requirement::parse_native_requirement;

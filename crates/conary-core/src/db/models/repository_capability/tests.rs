@@ -1,5 +1,7 @@
 // crates/conary-core/src/db/models/repository_capability/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::db::schema;
 use rusqlite::Connection;

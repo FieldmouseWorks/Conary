@@ -1,5 +1,7 @@
 // crates/conary-core/src/derivation/executor/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::db::schema::ensure_current;
 use crate::derivation::test_helpers::helpers::test_cas;

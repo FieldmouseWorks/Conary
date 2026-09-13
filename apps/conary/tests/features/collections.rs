@@ -1,5 +1,7 @@
 // apps/conary/tests/features/collections.rs
 
+#![cfg(test)]
+
 use super::*;
 
 // =============================================================================

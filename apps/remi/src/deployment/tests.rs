@@ -1,5 +1,7 @@
 // apps/remi/src/deployment/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use std::os::unix::fs::symlink;
 

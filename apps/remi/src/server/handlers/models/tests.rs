@@ -1,5 +1,7 @@
 // apps/remi/src/server/handlers/models/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;

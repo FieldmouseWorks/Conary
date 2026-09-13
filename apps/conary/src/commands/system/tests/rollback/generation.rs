@@ -1,5 +1,7 @@
 // apps/conary/src/commands/system/tests/rollback/generation.rs
 
+#![cfg(test)]
+
 use super::*;
 use conary_core::activation::{SystemdActivationAction, SystemdActivationInvocation};
 use conary_core::db::models::{

@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-09-12
-revision: 99
-summary: Route features, CLI diagnostics, and progress to their smallest start context, owned paths, focused proof, interaction gates, and safety constraints.
+last_updated: 2026-09-13
+revision: 116
+summary: Route features to owned paths and proof, including context-aware test-file caps, Cargo target evidence, and live exception ownership.
 ---
 
 # Feature Ownership And Interaction Gates
@@ -1287,12 +1287,61 @@ with `test` unset under any assignment of the other atoms.
 Conditional `cfg` attributes introduced by nested `cfg_attr` retain the
 unrestricted branch when their condition is false.
 Attributed fields, statements, and expressions participate in the same span
-count as items.
+count as items. `crates/conary-xtask/src/line_cap/attributes.rs` owns the shared
+attributed-node traversal for span measurement, includes, and block-local module
+declarations. Declarations inherit enclosing conditions; provably impossible
+sites add no declaration and need no path resolution. Block-local modules
+participate in context classification but are not direct sibling attributions.
+`crates/conary-xtask/src/line_cap/exemption/graph.rs` owns per-load directories
+and context gates: Cargo roots, explicit paths, and includes load children beside
+the source; conventional flat modules load children below the file stem. A file
+loaded in multiple contexts keeps separate child gates before file-level caps
+aggregate production reachability. Builtin includes and literal concat paths
+accept the unqualified, `std::`, and `core::` forms and an optional trailing comma.
+`crates/conary-xtask/src/line_cap/exemption/include_paths.rs` owns the pinned
+compiler grammar for concat strings, characters, booleans, integers, floats,
+and negative numeric literals. Integers render in decimal; float exponent
+spelling is preserved without separators or suffixes. Bytes and C strings
+cannot establish a concat string path.
+Production macro invocations, unresolved include paths, shadowing imports,
+and transformation attributes invalidate context-only test exemptions. The graph
+records these sources explicitly and retains normal caps for unknown files.
+`crates/conary-xtask/src/line_cap/exemption/macros.rs` owns conditional external
+imports and attribute uncertainty. Source reachability uses configuration
+predicates alone: even an apparent builtin test annotation can resolve to an
+imported procedural attribute, so it cannot suppress earlier or later expansion
+uncertainty. The established annotation-based span measurement remains separate;
+macro tokens are never interpreted as expansion
+proof. Apparent std/core builtins also need compiler name resolution because the
+extern prelude can replace those namespaces. Loads outside the scanned roots
+and unscanned Cargo production roots also retain uncertainty. Path normalization
+preserves unmatched leading parents so an external load cannot alias a scanned
+repository suffix. Original load spellings must resolve to the scanned file
+before an edge can establish authority; symlink parent aliases and missing path
+components cannot certify another source; an absent conventional alternative is harmless when
+the other candidate is scanned. `crates/conary-xtask/src/line_cap/exemption/builtin_attributes.rs`
+owns the pinned Rust 1.98 inert attribute grammar, preserving compiler-owned
+metadata such as lint, doc, and repr attributes while derive/custom attributes
+retain expansion uncertainty. Opaque path-attribute values cannot certify a
+literal fallback. `crates/conary-xtask/src/line_cap/tests/source_authority.rs`
+owns source-authority regressions; shared graph fixtures remain in `tests.rs`.
+Intrinsic `#![cfg(test)]` guards remain authoritative even in an opaque
+graph, so extracted test files carry their own compiler-enforced boundary as well
+as the parent gate. Test-only or impossible expansions cannot introduce production
+uncertainty. Raw identifiers retain the same module, macro, attribute, and
+cfg-predicate identity as their ordinary Rust spelling.
+The repository resolution and sync test suites use ordinary sibling modules;
+sync's native cases belong to its `tests::native` child module.
 Attributes whose final path segment is `test`, including conditional annotations
 enabled by `cfg_attr` in a test build, also mark inline tests.
 Files with more than 300 total test-only lines fail. Files named `tests.rs`
-and Rust files below a `tests/`
-directory are excluded. Every allowlist entry carries the open issue that owns
+or below `tests/` earn an exemption only through test-only syntax or declaring
+context. Offline Cargo metadata v1 supplies target membership, including
+custom paths and disabled auto-discovery. Production imports win over test-target
+membership; unknown files retain both caps and can use an owned exception.
+`TEST FILE:` report rows expose all such files, and parent rows attribute only
+proven test-only siblings. Before/after reports establish actual extraction
+reduction; current attributed size is not a historical delta. Every allowlist entry carries the open issue that owns
 the remaining production or test-placement decomposition; stale entries fail
 the gate. Each citation is validated against the checked-in
 `scripts/line-cap-issue-state.txt` snapshot, which only

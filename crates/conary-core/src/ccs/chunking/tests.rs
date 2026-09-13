@@ -1,5 +1,7 @@
 // crates/conary-core/src/ccs/chunking/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use tempfile::TempDir;
 

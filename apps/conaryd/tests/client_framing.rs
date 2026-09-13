@@ -1,5 +1,7 @@
 // apps/conaryd/tests/client_framing.rs
 
+#![cfg(test)]
+
 use conaryd::daemon::{DaemonEvent, client::DaemonClient};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixListener;

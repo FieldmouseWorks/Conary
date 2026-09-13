@@ -1,5 +1,7 @@
 // crates/conary-core/src/ccs/policy/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use std::fs::File;
 use std::io::Read;

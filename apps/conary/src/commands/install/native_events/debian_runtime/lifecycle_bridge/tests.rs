@@ -1,5 +1,7 @@
 // apps/conary/src/commands/install/native_events/debian_runtime/lifecycle_bridge/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use conary_core::packages::deb::debconf::{DebconfResultCode, DebconfTemplateLoadErrorKind};
 use conary_core::scriptlet::{

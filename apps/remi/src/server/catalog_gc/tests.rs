@@ -1,5 +1,7 @@
 // apps/remi/src/server/catalog_gc/tests.rs
 
+#![cfg(test)]
+
 //! Focused exact catalog collection and cache-release proofs.
 
 use super::*;

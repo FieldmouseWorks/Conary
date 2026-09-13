@@ -1,5 +1,7 @@
 // crates/conary-core/src/repository/declarations/takeover/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::repository::{OpenPgpTrustRoot, RpmMetadataAuthority};
 use openpgp::cert::prelude::CertBuilder;

@@ -1,5 +1,7 @@
 // crates/conary-core/src/derivation/recipe_hash/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 
 const SAMPLE_RECIPE: &str = r#"

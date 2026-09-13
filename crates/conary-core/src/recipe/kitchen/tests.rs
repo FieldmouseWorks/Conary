@@ -1,5 +1,7 @@
 // crates/conary-core/src/recipe/kitchen/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::hash;
 use crate::recipe::CacheConfig;

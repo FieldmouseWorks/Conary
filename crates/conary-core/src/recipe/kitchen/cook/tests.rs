@@ -1,5 +1,7 @@
 // crates/conary-core/src/recipe/kitchen/cook/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::ccs::builder::CcsBuilder;
 use crate::ccs::manifest::CcsManifest;

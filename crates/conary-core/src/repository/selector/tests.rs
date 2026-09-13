@@ -1,5 +1,7 @@
 // crates/conary-core/src/repository/selector/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::db::models::{Repository, RepositoryPackage};
 use crate::db::schema;

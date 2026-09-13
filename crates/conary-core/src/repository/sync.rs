@@ -941,4 +941,5 @@ pub fn link_canonical_ids(conn: &Connection, repo_id: i64) -> Result<usize> {
 }
 
 #[cfg(test)]
-include!("sync/tests.rs");
+#[path = "sync/tests.rs"]
+mod tests;

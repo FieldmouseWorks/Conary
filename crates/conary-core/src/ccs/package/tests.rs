@@ -1,5 +1,7 @@
 // crates/conary-core/src/ccs/package/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::ccs::VerifiedCcsArchive;
 use crate::ccs::builder::{CcsBuilder, write_signed_current_ccs_package};

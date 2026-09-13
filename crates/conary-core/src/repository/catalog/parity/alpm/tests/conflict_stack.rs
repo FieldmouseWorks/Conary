@@ -1,5 +1,7 @@
 // crates/conary-core/src/repository/catalog/parity/alpm/tests/conflict_stack.rs
 
+#![cfg(test)]
+
 //! Newly exposed native questions descend before ancestor alternatives resume.
 
 use super::*;

@@ -1,5 +1,7 @@
 // apps/conary/tests/features/system_model.rs
 
+#![cfg(test)]
+
 use super::*;
 
 // =============================================================================

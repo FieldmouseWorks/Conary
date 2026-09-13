@@ -1,5 +1,7 @@
 // crates/conary-core/src/repository/catalog/parity/tests/rpm_provides.rs
 
+#![cfg(test)]
+
 use super::super::rpm_provides::native_provides;
 use super::*;
 use crate::repository::dependency_model::{ProvideVersionRelation, SourcePackageFormat};

@@ -1,5 +1,7 @@
 // apps/remi/src/server/federated_index/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 
 const REVISION_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";

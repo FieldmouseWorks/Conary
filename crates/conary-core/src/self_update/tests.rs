@@ -1,5 +1,7 @@
 // crates/conary-core/src/self_update/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use gzp::ZWriter;
 use std::io::{Read, Write};

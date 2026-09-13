@@ -1,4 +1,6 @@
 // crates/conary-core/src/ccs/native_transaction/tests.rs
+
+#![cfg(test)]
 use super::*;
 use crate::ccs::native_lifecycle::{
     ArchHookActionMetadata, ArchHookMetadata, ArchHookOperation, ArchHookTriggerMetadata,

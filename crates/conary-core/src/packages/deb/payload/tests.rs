@@ -1,5 +1,7 @@
 // crates/conary-core/src/packages/deb/payload/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use std::io::Cursor;
 use tar::{Builder, EntryType, Header as TarHeader, HeaderMode};

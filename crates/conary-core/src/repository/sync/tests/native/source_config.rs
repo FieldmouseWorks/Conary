@@ -1,5 +1,7 @@
 // crates/conary-core/src/repository/sync/tests/native/source_config.rs
 
+#![cfg(test)]
+
 use super::*;
 
 pub(super) fn configure(repo: &mut Repository, ecosystem: NativeSourceEcosystem) {

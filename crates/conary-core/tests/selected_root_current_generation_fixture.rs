@@ -1,5 +1,7 @@
 // crates/conary-core/tests/selected_root_current_generation_fixture.rs
 
+#![cfg(test)]
+
 use conary_core::generation::artifact::load_generation_artifact_with_verified_cas;
 use conary_core::generation::mount::current_generation;
 use std::path::PathBuf;

@@ -1,5 +1,7 @@
 // apps/conary/src/cli/tests/installed.rs
 
+#![cfg(test)]
+
 use super::*;
 
 fn command_help(command_name: &str) -> String {

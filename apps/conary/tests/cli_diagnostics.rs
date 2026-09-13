@@ -1,4 +1,6 @@
 // apps/conary/tests/cli_diagnostics.rs
+
+#![cfg(test)]
 //! First-use refusals must be actionable and must precede every mutation.
 
 use std::process::Command;

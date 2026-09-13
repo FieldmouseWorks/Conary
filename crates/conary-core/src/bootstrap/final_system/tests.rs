@@ -1,5 +1,7 @@
 // crates/conary-core/src/bootstrap/final_system/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::bootstrap::stages::StageManager;
 

@@ -1,5 +1,7 @@
 // apps/conary/src/commands/system/tests/rollback.rs
 
+#![cfg(test)]
+
 use super::*;
 
 #[path = "rollback/directories.rs"]

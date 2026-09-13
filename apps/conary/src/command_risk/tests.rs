@@ -1,4 +1,6 @@
 // apps/conary/src/command_risk/tests.rs
+
+#![cfg(test)]
 use super::{CommandRisk, classify_cli};
 use crate::cli::{self, Cli, Commands};
 use clap::Parser;

@@ -1,4 +1,6 @@
 // apps/conary/src/commands/generation/commands/tests.rs
+
+#![cfg(test)]
 //! Tests for generation command parsing, GC, publication, and rendering.
 
 use super::super::gc::{

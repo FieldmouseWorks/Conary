@@ -1,5 +1,7 @@
 // crates/conary-core/src/db/models/generation_publication/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::payload::{PayloadNode, ResolvedPayloadNode};
 use std::str::FromStr;

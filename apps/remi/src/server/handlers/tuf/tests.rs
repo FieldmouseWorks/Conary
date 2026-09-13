@@ -1,5 +1,7 @@
 // apps/remi/src/server/handlers/tuf/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use axum::extract::{Path, State};
 use conary_core::db::models::Repository;

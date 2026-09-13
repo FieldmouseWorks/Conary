@@ -1,4 +1,6 @@
 // apps/conary/tests/output_vocabulary_guard.rs
+
+#![cfg(test)]
 //! Fails if guarded status-vocabulary literals are emitted outside the `ui`
 //! module. This is a line-level lint over Rust string literals.
 

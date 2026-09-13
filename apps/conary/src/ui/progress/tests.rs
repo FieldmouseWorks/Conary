@@ -1,5 +1,7 @@
 // apps/conary/src/ui/progress/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use indicatif::TermLike;
 use std::io;

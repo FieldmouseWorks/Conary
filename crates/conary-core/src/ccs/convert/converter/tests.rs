@@ -1,5 +1,7 @@
 // crates/conary-core/src/ccs/convert/converter/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::ccs::v3::PackageKindV3;
 use crate::packages::config_authority::{ConfigPayloadAssociation, SourceConfigDeclaration};

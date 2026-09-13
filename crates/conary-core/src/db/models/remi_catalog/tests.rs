@@ -1,5 +1,7 @@
 // crates/conary-core/src/db/models/remi_catalog/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::db::models::{
     NativeSourceEcosystem, NativeSourceStream, Repository, RepositoryPolicyScope,

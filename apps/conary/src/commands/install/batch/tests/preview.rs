@@ -1,5 +1,7 @@
 // apps/conary/src/commands/install/batch/tests/preview.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::commands::install::preview::PreviewDatabase;
 use conary_core::db::models::{Repository, RepositoryPackage};

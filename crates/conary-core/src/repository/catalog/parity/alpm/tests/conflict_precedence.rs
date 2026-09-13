@@ -1,5 +1,7 @@
 // crates/conary-core/src/repository/catalog/parity/alpm/tests/conflict_precedence.rs
 
+#![cfg(test)]
+
 //! Registered-database precedence in missing-first conflict probes.
 
 use super::*;

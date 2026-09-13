@@ -9,11 +9,8 @@
 //! graph and the gate resolution so `siblings` attributes extracted test mass
 //! through the same reasoning instead of a second, disagreeing rule.
 //!
-//! Classification is report-only and never changes a cap outcome. Enforcing a
-//! cap on an exempt-named file stays deferred, which is also why a listed
-//! exempt-named file is stale however large it measures: the name, not the
-//! allowlist, is what keeps it out of the caps, so there is no violation for an
-//! exception to excuse. Only a cap-checked file can make an entry used.
+//! Only a resolved test-only context earns a filename exemption. Ungated and
+//! unknown files retain the normal caps and can use an issue-owned exception.
 //!
 //! Three answers are possible, and the third is deliberate. An inner
 //! `#![cfg(test)]` is intrinsic, so it is hard: no declaration can un-gate it.
@@ -24,24 +21,38 @@
 //! established the file stays [`ExemptionGate::Unknown`] rather than being
 //! guessed into one.
 //!
-//! Deliberate limits. Cargo target discovery is by path convention
-//! (`<package>/tests/*.rs` and friends) and does not read the Cargo manifest,
-//! so a customized target path or an `autotests = false` layout is invisible
-//! here. `mod` declarations produced by macros, and `include!` calls whose
-//! argument is not a literal, are not seen at all. A file that no seen
-//! declaration reaches, and that no crate-root convention explains, stays
-//! `unknown`.
+//! Cargo target evidence comes from versioned `cargo metadata`, including
+//! custom target paths and auto-discovery settings. Literal module/include
+//! paths and conditional path alternatives participate in the source graph;
+//! unresolved files stay unknown. Filenames alone never establish test-only
+//! authority. This is a syntax gate, not macro expansion or type checking.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::path::{Component, Path, PathBuf};
 
+use syn::ext::IdentExt;
+use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
-use syn::{Attribute, Item};
+use syn::{Attribute, Expr, Item};
 
+use super::attributes::{visit_attributed_nodes, visit_nodes};
 use super::cfg;
+
+mod builtin_attributes;
+mod graph;
+mod include_paths;
+use include_paths::include_path;
+mod macros;
 use super::paths::module_paths;
-use super::{FileMetrics, cfg_attributes, item_attributes, path_text};
+use super::targets::TargetRoots;
+use super::{
+    FileMetrics, cfg_attributes, foreign_item_attributes, impl_item_attributes, item_attributes,
+    path_text, trait_item_attributes,
+};
+#[cfg(test)]
+pub(crate) use graph::collect_fixture_graph;
+pub(crate) use graph::{SourceGraph, collect_source_graph};
 
 /// How an exempt-named file is compiled, as far as the declaration graph can
 /// establish it.
@@ -103,10 +114,23 @@ enum DeclarationKind {
     ModuleRoot,
 }
 
+/// A conventional outlined module has exactly two candidate source paths.
+/// Explicit paths and includes do not acquire a conventional fallback.
+fn alternate_module_path(target: &Path, kind: DeclarationKind) -> Option<PathBuf> {
+    match kind {
+        DeclarationKind::Exact => None,
+        DeclarationKind::Flat => Some(target.with_extension("").join("mod.rs")),
+        DeclarationKind::ModuleRoot => Some(target.parent()?.with_extension("rs")),
+    }
+}
+
 /// One declaring site that makes a file part of another file's compilation.
-#[derive(Debug)]
-pub(crate) struct ModuleDeclaration {
-    declaring_file: String,
+#[derive(Debug, Clone)]
+pub(crate) struct ModuleDeclaration<K = String> {
+    declaring_file: K,
+    /// The original load spelling, before lexical parent cancellation. Filesystem
+    /// identity must agree before a normalized key can establish an edge.
+    load_path: PathBuf,
     /// The declared name for `mod name;`, which pairs the flat and `mod.rs`
     /// candidates; `None` for `#[path]` and `include!`, whose target is exact.
     name: Option<String>,
@@ -130,6 +154,7 @@ pub(crate) fn collect_module_declarations(
     syntax: &syn::File,
     relative: &Path,
     declarations: &mut BTreeMap<String, Vec<ModuleDeclaration>>,
+    module_dir: &Path,
 ) {
     let mut collector = DeclarationCollector {
         declaring_file: path_text(relative),
@@ -145,8 +170,8 @@ pub(crate) fn collect_module_declarations(
             .to_path_buf(),
         declarations,
     };
-    let module_dir = relative_module_directory(relative);
-    collector.run(&syntax.items, &module_dir, &syntax.attrs);
+
+    collector.run(&syntax.items, module_dir, &syntax.attrs);
 }
 
 pub(crate) struct DeclarationCollector<'a> {
@@ -171,18 +196,28 @@ impl DeclarationCollector<'_> {
     ) {
         for item in items {
             let Item::Mod(item_module) = item else {
+                // Item declarations inside function/const/expression blocks
+                // remain real imports, but are not the parent's own siblings.
+                NestedModuleVisitor {
+                    collector: self,
+                    module_dir,
+                    path_base,
+                    inherited: inherited.to_vec(),
+                    depth: depth + 1,
+                }
+                .visit_item(item);
                 continue;
             };
             let mut effective = inherited.to_vec();
             effective.extend(cfg_attributes(&item_module.attrs));
-            let name = item_module.ident.to_string();
+            let name = item_module.ident.unraw().to_string();
             for variant in module_paths(&item_module.attrs) {
                 let mut branch = effective.clone();
                 branch.extend(variant.conditions);
                 if !cfg::can_compile(&branch) {
                     continue;
                 }
-                let test_gated = cfg::is_test_only(&branch);
+                let test_gated = cfg::configuration_is_test_only(&branch);
                 if let Some((_, items)) = &item_module.content {
                     let nested_dir = match variant.path {
                         Some(path) => path_base.join(path),
@@ -191,7 +226,7 @@ impl DeclarationCollector<'_> {
                     self.collect(items, &nested_dir, &nested_dir, &branch, depth + 1);
                 } else if let Some(path) = variant.path {
                     self.record(
-                        normalize(&path_base.join(path)),
+                        path_base.join(path),
                         Some(name.clone()),
                         DeclarationKind::Exact,
                         depth,
@@ -232,10 +267,11 @@ impl DeclarationCollector<'_> {
         is_module: bool,
     ) {
         self.declarations
-            .entry(path_text(&target))
+            .entry(path_text(&normalize(&target)))
             .or_default()
             .push(ModuleDeclaration {
                 declaring_file: self.declaring_file.clone(),
+                load_path: target,
                 name,
                 kind,
                 depth,
@@ -245,17 +281,91 @@ impl DeclarationCollector<'_> {
     }
 }
 
+/// Follow module items inside attributed non-module syntax using the same
+/// conditions as includes. The collector still owns path variants and module
+/// directories; this visitor only discovers nested item declarations.
+struct NestedModuleVisitor<'a, 'b> {
+    collector: &'a mut DeclarationCollector<'b>,
+    module_dir: &'a Path,
+    path_base: &'a Path,
+    inherited: Vec<Attribute>,
+    depth: usize,
+}
+
+impl NestedModuleVisitor<'_, '_> {
+    fn descend(
+        &mut self,
+        attributes: &[Attribute],
+        _: proc_macro2::Span,
+        visit: impl FnOnce(&mut Self),
+    ) {
+        let depth = self.inherited.len();
+        self.inherited.extend_from_slice(attributes);
+        if cfg::can_compile(&self.inherited) {
+            visit(self);
+        }
+        self.inherited.truncate(depth);
+    }
+}
+
+impl<'ast> Visit<'ast> for NestedModuleVisitor<'_, '_> {
+    visit_attributed_nodes!();
+
+    fn visit_item(&mut self, item: &'ast Item) {
+        if matches!(item, Item::Mod(_)) {
+            self.collector.collect(
+                std::slice::from_ref(item),
+                self.module_dir,
+                self.path_base,
+                &self.inherited,
+                self.depth,
+            );
+        } else {
+            self.descend(item_attributes(item), item.span(), |visitor| {
+                visit::visit_item(visitor, item)
+            });
+        }
+    }
+
+    fn visit_impl_item(&mut self, item: &'ast syn::ImplItem) {
+        self.descend(impl_item_attributes(item), item.span(), |visitor| {
+            visit::visit_impl_item(visitor, item)
+        });
+    }
+
+    fn visit_trait_item(&mut self, item: &'ast syn::TraitItem) {
+        self.descend(trait_item_attributes(item), item.span(), |visitor| {
+            visit::visit_trait_item(visitor, item)
+        });
+    }
+
+    fn visit_foreign_item(&mut self, item: &'ast syn::ForeignItem) {
+        self.descend(foreign_item_attributes(item), item.span(), |visitor| {
+            visit::visit_foreign_item(visitor, item)
+        });
+    }
+}
+
 /// Index textual `include!("x.rs")` sites as declaring sites too. An included
 /// file is not a module, but its tokens are compiled in the including module, so
 /// a `#[cfg(test)]` include site is exactly as strong as a gated declaration.
 /// This is how `crates/conary-core/src/repository/sync/tests.rs` and its
 /// `tests/native.rs` chain are compiled: `sync.rs` ends with
 /// `#[cfg(test)] include!("sync/tests.rs");`.
+#[cfg(test)]
 pub(crate) fn collect_include_declarations(
     syntax: &syn::File,
     relative: &Path,
     declarations: &mut BTreeMap<String, Vec<ModuleDeclaration>>,
-) {
+) -> Result<(), String> {
+    collect_includes_with_authority(syntax, relative, declarations).map(|_| ())
+}
+
+fn collect_includes_with_authority(
+    syntax: &syn::File,
+    relative: &Path,
+    declarations: &mut BTreeMap<String, Vec<ModuleDeclaration>>,
+) -> Result<bool, String> {
     let mut visitor = IncludeVisitor {
         declaring_file: path_text(relative),
         // The included path shares `#[path]`'s base: the containing file's
@@ -264,88 +374,298 @@ pub(crate) fn collect_include_declarations(
             .parent()
             .unwrap_or_else(|| Path::new(""))
             .to_path_buf(),
-        inherited: Vec::new(),
+        inherited: syntax.attrs.clone(),
+        unresolved: None,
+        production_macro: false,
         declarations,
     };
+    if macros::attributes_require_expansion(&syntax.attrs, &[]) {
+        visitor.unresolved = Some(SourceAuthorityFailure::Expansion);
+    }
     visitor.visit_file(syntax);
+    if let Some(failure) = visitor.unresolved {
+        Err(format!(
+            "cannot resolve Rust source authority in {}: {}",
+            relative.display(),
+            failure.reason()
+        ))
+    } else {
+        Ok(visitor.production_macro)
+    }
+}
+
+enum SourceAuthorityFailure {
+    Path,
+    Alias,
+    Shadow,
+    ExternalImport,
+    Expansion,
+}
+
+impl SourceAuthorityFailure {
+    fn reason(&self) -> &'static str {
+        match self {
+            Self::Path => {
+                "expected a builtin include! (unqualified, std::, or core::) with a string literal or literal concat! path"
+            }
+            Self::Alias => "aliased include! imports require macro name resolution",
+            Self::Shadow => "local bindings shadow builtin include!/concat! macro authority",
+            Self::ExternalImport => {
+                "macro_use extern crate imports require macro name resolution and expansion"
+            }
+            Self::Expansion => "macro expansion may introduce source declarations",
+        }
+    }
+}
+
+fn include_import_failure(
+    tree: &syn::UseTree,
+    prefix: &[String],
+) -> Option<SourceAuthorityFailure> {
+    match tree {
+        syn::UseTree::Path(path) => {
+            let mut nested = prefix.to_vec();
+            nested.push(path.ident.unraw().to_string());
+            include_import_failure(&path.tree, &nested)
+        }
+        syn::UseTree::Group(group) => group
+            .items
+            .iter()
+            .find_map(|tree| include_import_failure(tree, prefix)),
+        syn::UseTree::Rename(rename) => {
+            if rename.ident.unraw() == "include"
+                && rename.rename.unraw() != "include"
+                && rename.rename.unraw() != "_"
+            {
+                Some(SourceAuthorityFailure::Alias)
+            } else {
+                builtin_import_failure(
+                    prefix,
+                    &rename.ident.unraw().to_string(),
+                    &rename.rename.unraw().to_string(),
+                )
+            }
+        }
+        syn::UseTree::Name(name) => builtin_import_failure(
+            prefix,
+            &name.ident.unraw().to_string(),
+            &name.ident.unraw().to_string(),
+        ),
+        syn::UseTree::Glob(_) => Some(SourceAuthorityFailure::Shadow),
+    }
+}
+
+fn builtin_import_failure(
+    prefix: &[String],
+    original: &str,
+    binding: &str,
+) -> Option<SourceAuthorityFailure> {
+    if binding == "std" || binding == "core" {
+        return Some(SourceAuthorityFailure::Shadow);
+    }
+    if binding != "include" && binding != "concat" {
+        return None;
+    }
+    let builtin_namespace = prefix.is_empty()
+        || matches!(prefix, [namespace] if namespace == "std" || namespace == "core");
+    (!builtin_namespace || original != binding).then_some(SourceAuthorityFailure::Shadow)
 }
 
 pub(crate) struct IncludeVisitor<'a> {
     declaring_file: String,
     file_dir: PathBuf,
     inherited: Vec<Attribute>,
+    unresolved: Option<SourceAuthorityFailure>,
+    production_macro: bool,
     declarations: &'a mut BTreeMap<String, Vec<ModuleDeclaration>>,
 }
 
 impl IncludeVisitor<'_> {
-    fn record(&mut self, attributes: &[Attribute], mac: &syn::Macro) {
-        if !mac.path.is_ident("include") {
+    fn note(&mut self, failure: SourceAuthorityFailure) {
+        if cfg::can_compile_without_test(&self.inherited) {
+            self.unresolved.get_or_insert(failure);
+        }
+    }
+
+    fn descend(
+        &mut self,
+        attributes: &[Attribute],
+        _: proc_macro2::Span,
+        visit: impl FnOnce(&mut Self),
+    ) {
+        let depth = self.inherited.len();
+        if macros::attributes_require_expansion(attributes, &self.inherited) {
+            // Configuration alone proves source reachability. Attribute names
+            // require compiler resolution, including an apparent builtin test.
+            self.unresolved
+                .get_or_insert(SourceAuthorityFailure::Expansion);
+        }
+        self.inherited.extend_from_slice(attributes);
+        if cfg::can_compile(&self.inherited) {
+            visit(self);
+        }
+        self.inherited.truncate(depth);
+    }
+
+    fn record(&mut self, mac: &syn::Macro) {
+        // Even std/core can be rebound through the compiler's extern prelude.
+        // Literal paths remain useful declaration evidence, but their spelling
+        // cannot certify that expansion adds no other production load sites.
+        self.production_macro |= cfg::can_compile_without_test(&self.inherited);
+        if !cfg::can_compile(&self.inherited) {
             return;
         }
-        let Ok(path) = syn::parse2::<syn::LitStr>(mac.tokens.clone()) else {
+        if !mac
+            .path
+            .segments
+            .last()
+            .is_some_and(|segment| segment.ident.unraw() == "include")
+        {
+            self.note(SourceAuthorityFailure::Expansion);
+            return;
+        }
+        if !builtin_macro_path(&mac.path, "include") {
+            self.note(SourceAuthorityFailure::Path);
+            return;
+        }
+        use syn::parse::Parser;
+        let parser = syn::punctuated::Punctuated::<Expr, syn::Token![,]>::parse_terminated;
+        let Some(path) = parser
+            .parse2(mac.tokens.clone())
+            .ok()
+            .filter(|arguments| arguments.len() == 1)
+            .and_then(|mut arguments| arguments.pop())
+            .and_then(|argument| include_path(argument.into_value()))
+        else {
+            // An opaque include may reach any scanned file, so contextual
+            // exemptions cannot be certified from this incomplete graph.
+            self.note(SourceAuthorityFailure::Path);
             return;
         };
-        let mut effective = self.inherited.clone();
-        effective.extend(cfg_attributes(attributes));
-        let target = normalize(&self.file_dir.join(path.value()));
+        let target = self.file_dir.join(path);
         self.declarations
-            .entry(path_text(&target))
+            .entry(path_text(&normalize(&target)))
             .or_default()
             .push(ModuleDeclaration {
                 declaring_file: self.declaring_file.clone(),
+                load_path: target,
                 name: None,
                 kind: DeclarationKind::Exact,
                 depth: 0,
-                test_gated: cfg::is_test_only(&effective),
+                test_gated: cfg::configuration_is_test_only(&self.inherited),
                 is_module: false,
             });
     }
 }
 
+/// Rust exports these builtins both unqualified and through std/core. Other
+/// namespace-qualified include names may be custom macros; fail closed rather
+/// than granting authority from their spelling or guessing their expansion.
+fn builtin_macro_path(path: &syn::Path, name: &str) -> bool {
+    if path
+        .segments
+        .iter()
+        .any(|segment| !matches!(segment.arguments, syn::PathArguments::None))
+    {
+        return false;
+    }
+    let mut segments = path.segments.iter();
+    match (segments.next(), segments.next(), segments.next()) {
+        (Some(first), None, None) => first.ident.unraw() == name && path.leading_colon.is_none(),
+        (Some(namespace), Some(last), None) => {
+            (namespace.ident.unraw() == "std" || namespace.ident.unraw() == "core")
+                && last.ident.unraw() == name
+        }
+        _ => false,
+    }
+}
+
 impl<'ast> Visit<'ast> for IncludeVisitor<'_> {
+    visit_attributed_nodes!();
+
+    fn visit_attribute(&mut self, node: &'ast Attribute) {
+        // Inert compiler metadata accepts literal-valued macro expansion, not
+        // source declarations. Do not treat its value as a source-load site.
+        if builtin_attributes::parse(&node.meta).is_none() {
+            visit::visit_attribute(self, node);
+        }
+    }
+
     fn visit_item(&mut self, item: &'ast Item) {
-        let depth = self.inherited.len();
-        self.inherited.extend(cfg_attributes(item_attributes(item)));
-        visit::visit_item(self, item);
-        self.inherited.truncate(depth);
+        self.descend(item_attributes(item), item.span(), |visitor| {
+            visit::visit_item(visitor, item)
+        });
+    }
+
+    fn visit_impl_item(&mut self, item: &'ast syn::ImplItem) {
+        self.descend(impl_item_attributes(item), item.span(), |visitor| {
+            visit::visit_impl_item(visitor, item)
+        });
+    }
+
+    fn visit_trait_item(&mut self, item: &'ast syn::TraitItem) {
+        self.descend(trait_item_attributes(item), item.span(), |visitor| {
+            visit::visit_trait_item(visitor, item)
+        });
+    }
+
+    fn visit_foreign_item(&mut self, item: &'ast syn::ForeignItem) {
+        self.descend(foreign_item_attributes(item), item.span(), |visitor| {
+            visit::visit_foreign_item(visitor, item)
+        });
     }
 
     fn visit_item_macro(&mut self, node: &'ast syn::ItemMacro) {
-        self.record(&node.attrs, &node.mac);
+        if super::attributes::is_ident(&node.mac.path, "macro_rules") {
+            if node
+                .ident
+                .as_ref()
+                .is_some_and(|ident| ident.unraw() == "include" || ident.unraw() == "concat")
+            {
+                self.note(SourceAuthorityFailure::Shadow);
+            }
+            // A definition does not expand until called. Every opaque call
+            // requires compiler authority, regardless of its token spelling.
+            return;
+        }
+        visit::visit_item_macro(self, node);
     }
 
-    fn visit_stmt_macro(&mut self, node: &'ast syn::StmtMacro) {
-        self.record(&node.attrs, &node.mac);
+    fn visit_item_use(&mut self, node: &'ast syn::ItemUse) {
+        if let Some(failure) = include_import_failure(&node.tree, &[]) {
+            self.note(failure);
+        }
     }
 
-    fn visit_expr_macro(&mut self, node: &'ast syn::ExprMacro) {
-        self.record(&node.attrs, &node.mac);
+    fn visit_item_extern_crate(&mut self, node: &'ast syn::ItemExternCrate) {
+        if node
+            .rename
+            .as_ref()
+            .is_some_and(|(_, name)| name.unraw() == "std" || name.unraw() == "core")
+        {
+            self.note(SourceAuthorityFailure::Shadow);
+        }
+        if macros::reachable_external_import(&node.attrs, &self.inherited) {
+            self.note(SourceAuthorityFailure::ExternalImport);
+        }
+    }
+
+    fn visit_macro(&mut self, node: &'ast syn::Macro) {
+        self.record(node);
     }
 }
 
-/// The status a file starts from before any declaring site is read: an inner
-/// `#![cfg(test)]` is intrinsic and hard, a crate root that is not a test
-/// target is production, and everything else starts unknown.
-pub(crate) fn intrinsic_gate(syntax: &syn::File, relative: &Path) -> ExemptionGate {
-    if cfg::is_test_only(&syntax.attrs) {
-        ExemptionGate::TestGated
-    } else if non_test_crate_root(relative) {
-        ExemptionGate::Ungated
-    } else {
-        ExemptionGate::Unknown
-    }
-}
-
-/// Resolve every file's gate from the declaration graph until it stabilizes.
+/// Resolve every load context's gate from the declaration graph until it stabilizes.
 ///
 /// A determined answer is never revised, which is what makes the iteration
 /// terminate and order-independent: an intrinsic gate is permanent, and a file
 /// can only be determined from sites whose declaring files are already
 /// determined (or whose site gate is a property of the declaration itself).
-pub(crate) fn resolve_gates(
-    intrinsic: &BTreeMap<String, ExemptionGate>,
-    declarations: &BTreeMap<String, Vec<ModuleDeclaration>>,
-) -> BTreeMap<String, ExemptionGate> {
+pub(crate) fn resolve_gates<K: Ord + Clone>(
+    intrinsic: &BTreeMap<K, ExemptionGate>,
+    declarations: &BTreeMap<K, Vec<ModuleDeclaration<K>>>,
+    target_roots: &BTreeMap<K, CargoTarget>,
+) -> BTreeMap<K, ExemptionGate> {
     let mut gates = intrinsic.clone();
     // A file nothing declares is still resolvable — a cargo test target is
     // compiled as one without any declaring site — so both keys are considered.
@@ -354,14 +674,16 @@ pub(crate) fn resolve_gates(
     loop {
         let mut changed = false;
         for target in &targets {
-            if resolved_gate(&gates, target) != ExemptionGate::Unknown {
+            if gates.get(target).copied().unwrap_or(ExemptionGate::Unknown)
+                != ExemptionGate::Unknown
+            {
                 continue;
             }
             let sites = declarations
                 .get(target)
                 .map(Vec::as_slice)
                 .unwrap_or_default();
-            let Some(gate) = gate_from_sites(target, sites, &gates) else {
+            let Some(gate) = gate_from_sites(target, sites, &gates, target_roots) else {
                 continue;
             };
             gates.insert(target.clone(), gate);
@@ -376,21 +698,25 @@ pub(crate) fn resolve_gates(
 /// The gate one declaring site compiles its target in, given the declaring
 /// file's own gate. A site that is not test-gated passes the declaring file's
 /// context through unchanged, which is how production reachability propagates.
-fn site_context(
-    site: &ModuleDeclaration,
-    gates: &BTreeMap<String, ExemptionGate>,
+fn site_context<K: Ord>(
+    site: &ModuleDeclaration<K>,
+    gates: &BTreeMap<K, ExemptionGate>,
 ) -> ExemptionGate {
     if site.test_gated {
         return ExemptionGate::TestGated;
     }
-    resolved_gate(gates, &site.declaring_file)
+    gates
+        .get(&site.declaring_file)
+        .copied()
+        .unwrap_or(ExemptionGate::Unknown)
 }
 
 /// `None` while the declaring sites establish neither answer.
-fn gate_from_sites(
-    target: &str,
-    sites: &[ModuleDeclaration],
-    gates: &BTreeMap<String, ExemptionGate>,
+fn gate_from_sites<K: Ord>(
+    target: &K,
+    sites: &[ModuleDeclaration<K>],
+    gates: &BTreeMap<K, ExemptionGate>,
+    target_roots: &BTreeMap<K, CargoTarget>,
 ) -> Option<ExemptionGate> {
     let contexts = sites
         .iter()
@@ -411,7 +737,7 @@ fn gate_from_sites(
     }
     // Cargo test-target membership is a context, so it certifies a file only
     // when nothing else claims to compile it.
-    if contexts.is_empty() && cargo_target_root(Path::new(target)) == Some(CargoTarget::Test) {
+    if contexts.is_empty() && target_roots.get(target) == Some(&CargoTarget::Test) {
         return Some(ExemptionGate::TestGated);
     }
     None
@@ -428,9 +754,7 @@ pub(crate) fn resolve_child_modules(
     declarations: &BTreeMap<String, Vec<ModuleDeclaration>>,
     scanned: &BTreeSet<String>,
 ) -> Vec<String> {
-    let mut exact = BTreeSet::new();
-    let mut flat = BTreeMap::new();
-    let mut module_root = BTreeMap::new();
+    let mut chosen = BTreeSet::new();
     for (target, sites) in declarations {
         for site in sites {
             if !site.is_module || site.depth != 0 || site.declaring_file != declaring_file {
@@ -439,32 +763,19 @@ pub(crate) fn resolve_child_modules(
             if !scanned.contains(target) {
                 continue;
             }
-            match (site.kind, &site.name) {
-                (DeclarationKind::Exact, _) => {
-                    exact.insert(target.clone());
-                }
-                (DeclarationKind::Flat, Some(name)) => {
-                    flat.insert(name.clone(), target.clone());
-                }
-                (DeclarationKind::ModuleRoot, Some(name)) => {
-                    module_root.insert(name.clone(), target.clone());
-                }
-                (DeclarationKind::Flat | DeclarationKind::ModuleRoot, None) => {}
+            if site.kind != DeclarationKind::Exact && site.name.is_none() {
+                continue;
+            }
+            // Rust rejects two existing conventional candidates. The same
+            // pairing owns missing-load uncertainty in graph construction.
+            if !alternate_module_path(Path::new(target), site.kind)
+                .is_some_and(|alternate| scanned.contains(&path_text(&alternate)))
+            {
+                chosen.insert(target.clone());
             }
         }
     }
-    // Rust rejects a module with both candidates. Attribute neither file
-    // when that declaration is ambiguous (Rust Reference: items.mod.outlined.search-mod).
-    let ambiguous = flat
-        .keys()
-        .filter(|name| module_root.contains_key(*name))
-        .cloned()
-        .collect::<BTreeSet<_>>();
-    let mut chosen = flat;
-    chosen.extend(module_root);
-    chosen.retain(|name, _| !ambiguous.contains(name));
-    exact.extend(chosen.into_values());
-    exact.into_iter().collect()
+    chosen.into_iter().collect()
 }
 
 /// How cargo compiles a file, when the file is a target root.
@@ -479,93 +790,6 @@ pub(crate) enum CargoTarget {
     Other,
 }
 
-/// Cargo target roots relative to `apps/<package>/` or `crates/<package>/`.
-/// Auto-discovery covers `<dir>/<name>.rs` and `<dir>/<name>/main.rs` below
-/// `tests/`, `benches/`, `examples/`, and `src/bin/`. Discovery is by path
-/// convention only: it does not read the Cargo manifest, so customized target
-/// paths and `autotests` settings are not modelled.
-pub(crate) fn cargo_target_root(relative: &Path) -> Option<CargoTarget> {
-    let rest = package_relative(relative)?;
-    let parts = rest
-        .components()
-        .filter_map(normal_text)
-        .collect::<Vec<String>>();
-    let (kind, tail) = match parts.split_first()?.0.as_str() {
-        "tests" => (CargoTarget::Test, &parts[1..]),
-        "benches" | "examples" => (CargoTarget::Other, &parts[1..]),
-        "src" => match parts.get(1).map(String::as_str) {
-            Some("bin") => (CargoTarget::Other, &parts[2..]),
-            _ => return None,
-        },
-        _ => return None,
-    };
-    let is_root = match tail {
-        [name] => name.ends_with(".rs"),
-        [_, main] => main == "main.rs",
-        _ => false,
-    };
-    is_root.then_some(kind)
-}
-
-/// Whether the file is a crate root cargo builds outside `cfg(test)`: a
-/// package's `build.rs`, or `src/lib.rs` / `src/main.rs`. Target roots
-/// (`tests/`, `benches/`, `examples/`, `src/bin/`) answer through
-/// `cargo_target_root` instead.
-fn non_test_crate_root(relative: &Path) -> bool {
-    match cargo_target_root(relative) {
-        Some(CargoTarget::Other) => return true,
-        Some(CargoTarget::Test) => return false,
-        None => {}
-    }
-    matches!(
-        package_relative(relative).as_deref().and_then(Path::to_str),
-        Some("build.rs" | "src/lib.rs" | "src/main.rs")
-    )
-}
-
-pub(crate) fn package_relative(relative: &Path) -> Option<PathBuf> {
-    let mut components = relative.components();
-    let Component::Normal(kind) = components.next()? else {
-        return None;
-    };
-    if kind != OsStr::new("apps") && kind != OsStr::new("crates") {
-        return None;
-    }
-    components.next()?;
-    Some(components.as_path().to_path_buf())
-}
-
-pub(crate) fn normal_text(component: Component<'_>) -> Option<String> {
-    match component {
-        Component::Normal(text) => Some(text.to_string_lossy().into_owned()),
-        _ => None,
-    }
-}
-
-/// The directory Rust searches for `mod x;` declared by this repo-relative
-/// path, as a path relative to the scan root. Distinct from
-/// `module_directory`, which is the same question for a bare parent directory.
-pub(crate) fn relative_module_directory(relative: &Path) -> PathBuf {
-    let parent = relative.parent().unwrap_or_else(|| Path::new(""));
-    if owns_its_directory(relative) {
-        parent.to_path_buf()
-    } else {
-        parent.join(relative.file_stem().unwrap_or(OsStr::new("")))
-    }
-}
-
-/// Crate roots and `mod.rs` own their containing directory; any other file owns
-/// a sibling directory named after its file stem. `Foo.rs` therefore declares
-/// `mod tests;` as `Foo/tests.rs`, while `Foo/mod.rs` declares it as
-/// `Foo/tests.rs` too; both forms are verified in unit tests and against
-/// `apps/conary-test/src/bootstrap.rs` (`bootstrap/tests.rs`) and
-/// `apps/conary-test/src/config/mod.rs` (`config/tests.rs`).
-pub(crate) fn owns_its_directory(relative: &Path) -> bool {
-    let name = relative.file_name().and_then(OsStr::to_str);
-    matches!(name, Some("mod.rs" | "lib.rs" | "main.rs" | "build.rs"))
-        || cargo_target_root(relative).is_some()
-}
-
 /// Resolve `.` and `..` components of a `#[path]` or `include!` value without
 /// touching the filesystem, so `../../tests/common/update_ccs.rs` from
 /// `apps/conary/src/commands/test_helpers.rs` becomes
@@ -575,17 +799,26 @@ pub(crate) fn normalize(path: &Path) -> PathBuf {
     for component in path.components() {
         match component {
             Component::CurDir => {}
-            Component::ParentDir => {
+            Component::ParentDir
+                if matches!(
+                    normalized.components().next_back(),
+                    Some(Component::Normal(_))
+                ) =>
+            {
                 normalized.pop();
             }
+            // A relative path can escape the scan root. Preserve that identity
+            // instead of aliasing its suffix to a scanned repository source.
+            Component::ParentDir if !normalized.has_root() => normalized.push(".."),
+            Component::ParentDir => {}
             other => normalized.push(other.as_os_str()),
         }
     }
     normalized
 }
 
-/// Every exempt-named file the cap check skipped, with the metrics the
-/// `EXEMPT:` rows and the stale-entry rule are decided from.
+/// Every file with a test filename, including files that retain normal caps.
+/// The report exposes both the measured content and its resolved context.
 #[derive(Default)]
 pub(crate) struct ExemptionReport {
     files: Vec<ExemptFile>,
@@ -601,7 +834,7 @@ impl ExemptionReport {
         self.files.push(ExemptFile { relative, metrics });
     }
 
-    /// The `EXEMPT:` rows and the `EXEMPT SUMMARY:` line, in scan order.
+    /// The `TEST FILE:` rows and the `TEST FILE SUMMARY:` line, in scan order.
     pub(crate) fn report(&self, gates: &BTreeMap<String, ExemptionGate>) -> String {
         let mut test_gated = 0usize;
         let mut ungated = 0usize;
@@ -615,7 +848,7 @@ impl ExemptionReport {
                 ExemptionGate::Unknown => unknown += 1,
             }
             lines.push_str(&format!(
-                "EXEMPT: {}\ttotal={}\tproduction={}\tinline_test={}\tgate={}\n",
+                "TEST FILE: {}\ttotal={}\tproduction={}\tinline_test={}\tgate={}\n",
                 file.relative,
                 file.metrics.total_lines,
                 file.metrics.production_lines,
@@ -624,7 +857,7 @@ impl ExemptionReport {
             ));
         }
         lines.push_str(&format!(
-            "EXEMPT SUMMARY: test-gated={test_gated} ungated={ungated} unknown={unknown}\n"
+            "TEST FILE SUMMARY: test-gated={test_gated} ungated={ungated} unknown={unknown}\n"
         ));
         lines
     }

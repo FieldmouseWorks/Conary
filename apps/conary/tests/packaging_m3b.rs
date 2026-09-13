@@ -1,5 +1,7 @@
 // apps/conary/tests/packaging_m3b.rs
 
+#![cfg(test)]
+
 use std::process::{Command, Output};
 
 fn output_text(output: &Output) -> String {

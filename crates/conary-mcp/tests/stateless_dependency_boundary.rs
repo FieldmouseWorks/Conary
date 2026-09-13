@@ -1,4 +1,6 @@
 // crates/conary-mcp/tests/stateless_dependency_boundary.rs
+
+#![cfg(test)]
 //! Guard tests for the stateless MCP compliance harness boundary.
 
 use std::{fs, path::PathBuf};

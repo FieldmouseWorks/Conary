@@ -1,5 +1,7 @@
 // apps/conary/tests/component.rs
 
+#![cfg(test)]
+
 //! Explicit component-contract and selective-install integration tests.
 
 pub mod common;

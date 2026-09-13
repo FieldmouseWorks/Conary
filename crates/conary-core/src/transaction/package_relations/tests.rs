@@ -1,5 +1,7 @@
 // crates/conary-core/src/transaction/package_relations/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::db::models::TroveType;
 use crate::db::testing::create_test_db;

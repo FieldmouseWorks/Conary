@@ -1,5 +1,7 @@
 // apps/conary/tests/batch_install.rs
 
+#![cfg(test)]
+
 //! Integration tests for batch (atomic multi-package) installation.
 //!
 //! These tests verify that:

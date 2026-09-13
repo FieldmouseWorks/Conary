@@ -1,10 +1,14 @@
 // crates/conary-xtask/src/line_cap/tests.rs
 
+#![cfg(test)]
+
+use super::exemption::collect_fixture_graph as collect_source_graph;
 use super::exemption::*;
 use super::issue_state::*;
 use super::siblings::*;
 use super::*;
 use std::fs::File;
+use std::path::Component;
 use std::process;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -757,33 +761,29 @@ impl FixtureRoot {
         )
     }
 
-    /// The whole fixture tree's declaration graph, as the scan builds it.
-    fn declarations(&self) -> BTreeMap<String, Vec<ModuleDeclaration>> {
-        let mut declarations = BTreeMap::new();
-        for path in self.paths() {
-            let source = fs::read_to_string(&path).expect("fixture file is readable");
-            let syntax = syn::parse_file(&source).expect("fixture file is valid Rust");
-            let relative = path
-                .strip_prefix(&self.path)
-                .expect("fixture file stays inside the fixture");
-            collect_module_declarations(&syntax, relative, &mut declarations);
-            collect_include_declarations(&syntax, relative, &mut declarations);
-        }
-        declarations
+    fn graph(&self) -> SourceGraph {
+        let sources = self
+            .paths()
+            .into_iter()
+            .map(|path| {
+                let syntax = syn::parse_file(&fs::read_to_string(&path).unwrap()).unwrap();
+                (self.relative(&path), syntax)
+            })
+            .collect();
+        super::exemption::collect_source_graph(
+            &sources,
+            &fixture_targets(self.scanned().iter().map(String::as_str)),
+            &self.path,
+        )
+        .unwrap()
     }
 
-    /// The resolved gate set of the whole fixture tree.
+    fn declarations(&self) -> BTreeMap<String, Vec<ModuleDeclaration>> {
+        self.graph().declarations
+    }
+
     fn gates(&self) -> BTreeMap<String, ExemptionGate> {
-        let mut intrinsic = BTreeMap::new();
-        for path in self.paths() {
-            let source = fs::read_to_string(&path).expect("fixture file is readable");
-            let syntax = syn::parse_file(&source).expect("fixture file is valid Rust");
-            let relative = path
-                .strip_prefix(&self.path)
-                .expect("fixture file stays inside the fixture");
-            intrinsic.insert(path_text(relative), intrinsic_gate(&syntax, relative));
-        }
-        resolve_gates(&intrinsic, &self.declarations())
+        self.graph().gates
     }
 
     /// Every scanned file, as fixture-relative text.
@@ -1011,26 +1011,7 @@ fn omits_sibling_fields_when_no_child_module_resolves() {
 }
 
 #[test]
-fn resolves_relative_module_directories_and_cargo_target_roots() {
-    assert_eq!(
-        relative_module_directory(Path::new("crates/x/src/foo.rs")),
-        PathBuf::from("crates/x/src/foo")
-    );
-    assert_eq!(
-        relative_module_directory(Path::new("crates/x/src/foo/mod.rs")),
-        PathBuf::from("crates/x/src/foo")
-    );
-    assert_eq!(
-        relative_module_directory(Path::new("crates/x/src/lib.rs")),
-        PathBuf::from("crates/x/src")
-    );
-    // A cargo integration test target is a crate root, so it owns its
-    // directory instead of a sibling named after its stem.
-    assert_eq!(
-        relative_module_directory(Path::new("crates/x/tests/query.rs")),
-        PathBuf::from("crates/x/tests")
-    );
-
+fn resolves_conventional_module_declarations_and_fixture_target_roots() {
     // `Foo.rs` declares `mod tests;` as `Foo/tests.rs`.
     let (_, declarations) = declarations_of(&[("crates/x/src/foo.rs", "mod tests;\n")]);
     assert!(declarations.contains_key("crates/x/src/foo/tests.rs"));
@@ -1445,29 +1426,37 @@ fn exempt_report_summarizes_every_gate() {
     let text = report.report(&classified);
     assert!(
         text.contains(
-            "EXEMPT: crates/x/src/ungated/tests.rs\ttotal=3\tproduction=3\tinline_test=0\tgate=ungated"
+            "TEST FILE: crates/x/src/ungated/tests.rs\ttotal=3\tproduction=3\tinline_test=0\tgate=ungated"
         ),
         "{text}"
     );
     assert!(
         text.contains(
-            "EXEMPT: crates/x/src/tests/orphan.rs\ttotal=3\tproduction=3\tinline_test=0\tgate=unknown"
+            "TEST FILE: crates/x/src/tests/orphan.rs\ttotal=3\tproduction=3\tinline_test=0\tgate=unknown"
         ),
         "{text}"
     );
     assert!(
-        text.contains("EXEMPT SUMMARY: test-gated=1 ungated=1 unknown=1"),
+        text.contains("TEST FILE SUMMARY: test-gated=1 ungated=1 unknown=1"),
         "{text}"
     );
 }
 
 #[test]
-fn a_listed_exempt_named_file_is_stale_however_large_it_measures() {
+fn a_listed_test_only_file_is_stale_even_when_large() {
     // An entry counts as used only when it excuses a cap violation the gate
-    // actually enforces. The gate enforces no cap on an exempt-named file, so
-    // the entry is stale even when that file is over a cap; a cap-checked file
+    // actually enforces. A proven test-only sibling is exempt, so
+    // its entry is stale even when that file is large; a cap-checked file
     // with the same size makes the entry used.
     let root = TempRoot::new("exempt-stale");
+    write_source(
+        &root.path().join("Cargo.toml"),
+        "[workspace]\nmembers = [\"crates/fixture\"]\nresolver = \"3\"\n",
+    );
+    write_source(
+        &root.path().join("crates/fixture/Cargo.toml"),
+        "[package]\nname = \"fixture\"\nversion = \"0.0.0\"\nedition = \"2024\"\n",
+    );
     let header = "// crates/fixture/src/lib.rs\n";
     write_source(
         &root.path().join("crates/fixture/src/lib.rs"),
@@ -1498,8 +1487,8 @@ fn a_listed_exempt_named_file_is_stale_however_large_it_measures() {
         .into_iter()
         .map(String::from))
     };
-    // The exempt-named file is over the production cap and still stale: its
-    // exemption comes from its name, independently of the allowlist.
+    // This sibling is over the size limit and still stale: its declaring
+    // context already proves it test-only, independently of the allowlist.
     assert_eq!(
         run_with("crates/fixture/src/gated/tests.rs #123\n"),
         Err("Rust source line caps failed".to_string())
@@ -1516,22 +1505,21 @@ fn declarations_of(
     BTreeMap<String, ExemptionGate>,
     BTreeMap<String, Vec<ModuleDeclaration>>,
 ) {
-    let mut declarations = BTreeMap::new();
-    let mut gates = BTreeMap::new();
-    for (relative, source) in sources {
-        let syntax = syn::parse_file(source).unwrap();
-        let path = Path::new(relative);
-        collect_module_declarations(&syntax, path, &mut declarations);
-        collect_include_declarations(&syntax, path, &mut declarations);
-        gates.insert(relative.to_string(), intrinsic_gate(&syntax, path));
-    }
-    (gates, declarations)
+    let parsed = sources
+        .iter()
+        .map(|(path, source)| (path.to_string(), syn::parse_file(source).unwrap()))
+        .collect();
+    let graph = collect_source_graph(
+        &parsed,
+        &fixture_targets(sources.iter().map(|(path, _)| *path)),
+    )
+    .unwrap();
+    (graph.gates, graph.declarations)
 }
 
 /// Classify the exempt-named files of an in-memory module graph.
 fn classify(sources: &[(&str, &str)]) -> BTreeMap<String, ExemptionGate> {
-    let (intrinsic, declarations) = declarations_of(sources);
-    let gates = resolve_gates(&intrinsic, &declarations);
+    let (gates, _) = declarations_of(sources);
     sources
         .iter()
         .filter(|(relative, _)| excluded_test_file(Path::new(relative)))
@@ -1543,6 +1531,176 @@ fn gate(classified: &BTreeMap<String, ExemptionGate>, path: &str) -> ExemptionGa
     *classified
         .get(path)
         .unwrap_or_else(|| panic!("{path} was not classified as exempt"))
+}
+
+fn fixture_targets<'a>(paths: impl Iterator<Item = &'a str>) -> targets::TargetRoots {
+    paths
+        .filter_map(|path| {
+            cargo_target_root(Path::new(path))
+                .or_else(|| non_test_crate_root(Path::new(path)).then_some(CargoTarget::Other))
+                .map(|kind| (path.to_string(), kind))
+        })
+        .collect()
+}
+
+#[test]
+fn ungated_and_unknown_test_filenames_are_capped_and_allowlistable() {
+    for declare in [true, false] {
+        let fixture = FixtureRoot::new("production-test-name");
+        fixture.write(
+            "crates/x/src/lib.rs",
+            if declare {
+                "// crates/x/src/lib.rs\nmod tests;\n"
+            } else {
+                "// crates/x/src/lib.rs\n"
+            },
+        );
+        fixture.write(
+            "crates/x/src/tests.rs",
+            &format!(
+                "// crates/x/src/tests.rs\n{}",
+                "// production span\n".repeat(1000)
+            ),
+        );
+        let allowlist = fixture.write("allowlist", "");
+        let invoke = || {
+            run([
+                "--root",
+                fixture.path.to_str().unwrap(),
+                "--allowlist",
+                allowlist.to_str().unwrap(),
+            ]
+            .into_iter()
+            .map(String::from))
+        };
+        assert!(
+            invoke().is_err(),
+            "an ungated or unresolved filename cannot grant an exemption"
+        );
+        fs::write(&allowlist, "crates/x/src/tests.rs #123\n").unwrap();
+        assert!(
+            invoke().is_ok(),
+            "the real cap violation must use its exception"
+        );
+    }
+}
+
+#[test]
+fn conditional_paths_cannot_hide_a_production_import() {
+    let classified = classify(&[
+        (
+            "crates/x/src/lib.rs",
+            "#[cfg_attr(feature = \"alternate\", path = \"tests.rs\")] mod implementation;\n#[cfg(test)] mod tests;\n",
+        ),
+        ("crates/x/src/tests.rs", "pub fn helper() {}\n"),
+    ]);
+    assert_eq!(
+        gate(&classified, "crates/x/src/tests.rs"),
+        ExemptionGate::Ungated
+    );
+}
+
+#[test]
+fn cargo_metadata_owns_custom_targets_and_disabled_auto_discovery() {
+    let fixture = FixtureRoot::new("cargo-targets");
+    fixture.write(
+        "Cargo.toml",
+        "[workspace]\nmembers = [\"crates/x\"]\nresolver = \"3\"\n",
+    );
+    fixture.write("crates/x/Cargo.toml", "[package]\nname = \"fixture\"\nversion = \"0.0.0\"\nedition = \"2024\"\nautotests = false\n[lib]\npath = \"src/tests.rs\"\n[[test]]\nname = \"custom\"\npath = \"src/check.rs\"\n");
+    fixture.write("crates/x/src/tests.rs", "mod helper;\n");
+    fixture.write("crates/x/src/helper.rs", "pub fn helper() {}\n");
+    fixture.write("crates/x/src/check.rs", "");
+    fixture.write("crates/x/tests/disabled.rs", "");
+    let roots = targets::read_targets(&fixture.path).unwrap();
+    assert_eq!(
+        roots.get("crates/x/src/tests.rs"),
+        Some(&CargoTarget::Other)
+    );
+    assert_eq!(roots.get("crates/x/src/check.rs"), Some(&CargoTarget::Test));
+    assert!(!roots.contains_key("crates/x/tests/disabled.rs"));
+    let sources = fixture
+        .paths()
+        .into_iter()
+        .map(|path| {
+            (
+                fixture.relative(&path),
+                syn::parse_file(&fs::read_to_string(path).unwrap()).unwrap(),
+            )
+        })
+        .collect();
+    let graph = collect_source_graph(&sources, &roots).unwrap();
+    assert!(
+        graph.declarations.contains_key("crates/x/src/helper.rs"),
+        "custom crate roots own their directory"
+    );
+    let gates = graph.gates;
+    assert_eq!(
+        resolved_gate(&gates, "crates/x/src/tests.rs"),
+        ExemptionGate::Ungated
+    );
+    assert_eq!(
+        resolved_gate(&gates, "crates/x/src/check.rs"),
+        ExemptionGate::TestGated
+    );
+    assert_eq!(
+        resolved_gate(&gates, "crates/x/tests/disabled.rs"),
+        ExemptionGate::Unknown
+    );
+}
+
+#[test]
+fn cargo_target_lookup_failure_does_not_grant_exemptions() {
+    let fixture = FixtureRoot::new("invalid-manifest");
+    assert!(targets::read_targets(&fixture.path).unwrap().is_empty());
+    fixture.write("Cargo.toml", "invalid manifest");
+    assert!(targets::read_targets(&fixture.path).is_err());
+}
+
+#[test]
+fn inline_path_attributes_use_the_containing_directory() {
+    let classified = classify(&[
+        (
+            "crates/x/src/lib.rs",
+            "mod owner;\n#[cfg(test)] #[path = \"shared/tests.rs\"] mod tests;\n",
+        ),
+        (
+            "crates/x/src/owner.rs",
+            "#[path = \"shared\"] mod inline { mod tests; }\n",
+        ),
+        ("crates/x/src/shared/tests.rs", "pub fn helper() {}\n"),
+    ]);
+    assert_eq!(
+        gate(&classified, "crates/x/src/shared/tests.rs"),
+        ExemptionGate::Ungated
+    );
+    let (_, declarations) = declarations_of(&[("crates/x/src/owner/lib.rs", "mod tests;\n")]);
+    assert!(declarations.contains_key("crates/x/src/owner/lib/tests.rs"));
+    assert!(!declarations.contains_key("crates/x/src/owner/tests.rs"));
+}
+
+#[test]
+fn includes_cannot_hide_an_unresolved_production_import() {
+    let classified = classify(&[
+        (
+            "crates/x/src/lib.rs",
+            "#[cfg(test)] mod tests;\ninclude!(concat!(\"tests\", \".rs\"));\n",
+        ),
+        ("crates/x/src/tests.rs", "pub fn helper() {}\n"),
+    ]);
+    assert_eq!(
+        gate(&classified, "crates/x/src/tests.rs"),
+        ExemptionGate::Ungated
+    );
+    let syntax = syn::parse_file("include!(concat!(env!(\"INPUT_DIR\"), \"/tests.rs\"));").unwrap();
+    assert!(
+        collect_include_declarations(
+            &syntax,
+            Path::new("crates/x/src/lib.rs"),
+            &mut BTreeMap::new()
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -1602,3 +1760,351 @@ fn conditional_default_path_is_gated_by_its_complement() {
         ExemptionGate::TestGated
     );
 }
+
+#[test]
+fn included_test_files_inherit_all_enclosing_attributed_nodes() {
+    for source in [
+        r#"fn run() { #[cfg(test)] { include!("tests.rs"); } }"#,
+        r#"fn run() { #[cfg(test)] let _value = { include!("tests.rs"); 0 }; }"#,
+        r#"fn run() { match 0 { #[cfg(test)] 0 => { include!("tests.rs"); }, _ => () } }"#,
+        r#"struct Owner; impl Owner { #[cfg(test)] fn run() { include!("tests.rs"); } }"#,
+        r#"trait Owner { #[cfg(test)] fn run() { include!("tests.rs"); } }"#,
+        r#"#[cfg(test)] #[test] fn run() { include!("tests.rs"); }"#,
+        r#"fn run() { #[cfg(feature = "x")] { #[cfg(any(test, not(feature = "x")))] { include!("tests.rs"); } } }"#,
+    ] {
+        let classified = classify(&[
+            ("crates/x/src/lib.rs", source),
+            ("crates/x/src/tests.rs", "fn helper() {}\n"),
+        ]);
+        assert_eq!(
+            gate(&classified, "crates/x/src/tests.rs"),
+            ExemptionGate::TestGated,
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn enclosing_include_conditions_do_not_escape_their_scope() {
+    for source in [
+        r#"fn run() { #[cfg(test)] { include!("tests.rs"); } include!("tests.rs"); }"#,
+        r#"struct Owner; impl Owner { #[cfg(test)] fn test() { include!("tests.rs"); } fn production() { include!("tests.rs"); } }"#,
+        r#"fn run() { #[cfg_attr(feature = "x", cfg(test))] { include!("tests.rs"); } }"#,
+    ] {
+        let classified = classify(&[
+            ("crates/x/src/lib.rs", source),
+            ("crates/x/src/tests.rs", "fn helper() {}\n"),
+        ]);
+        assert_eq!(
+            gate(&classified, "crates/x/src/tests.rs"),
+            ExemptionGate::Ungated,
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn impossible_include_sites_do_not_override_live_test_declarations() {
+    for dead_site in [
+        r#"#[cfg(any())] include!("tests.rs");"#,
+        r#"#[cfg(all(test, not(test)))] include!("tests.rs");"#,
+        r#"#[cfg_attr(all(), cfg(any()))] include!("tests.rs");"#,
+        r#"fn run() { #[cfg(feature = "x")] { #[cfg(not(feature = "x"))] { include!("tests.rs"); } } }"#,
+    ] {
+        let source = format!("#[cfg(test)] mod tests;\n{dead_site}");
+        let classified = classify(&[
+            ("crates/x/src/lib.rs", &source),
+            ("crates/x/src/tests.rs", "fn helper() {}\n"),
+        ]);
+        assert_eq!(
+            gate(&classified, "crates/x/src/tests.rs"),
+            ExemptionGate::TestGated,
+            "{dead_site}"
+        );
+    }
+}
+
+#[test]
+fn impossible_include_paths_are_discarded_before_path_resolution() {
+    for source in [
+        r#"#[cfg(any())] include!(env!("INPUT"));"#,
+        r#"fn run() { #[cfg(any())] { include!(env!("INPUT")); } }"#,
+        r#"#![cfg(feature = "x")] #[cfg(not(feature = "x"))] include!(env!("INPUT"));"#,
+    ] {
+        let syntax = syn::parse_file(source).unwrap();
+        let mut declarations = BTreeMap::new();
+        collect_include_declarations(&syntax, Path::new("crates/x/src/lib.rs"), &mut declarations)
+            .unwrap();
+        assert!(declarations.is_empty(), "{source}");
+    }
+}
+
+#[test]
+fn production_modules_inside_blocks_override_test_context() {
+    for source in [
+        r#"pub fn run() { #[path = "tests.rs"] mod implementation; }"#,
+        r#"pub fn run() { #[cfg(test)] {} #[path = "tests.rs"] mod implementation; }"#,
+        r#"const VALUE: () = { #[path = "tests.rs"] mod implementation; };"#,
+        r#"struct Owner; impl Owner { fn run() { #[path = "tests.rs"] mod implementation; } }"#,
+        r#"fn run() { #[cfg_attr(feature = "x", cfg(test))] { #[path = "tests.rs"] mod implementation; } }"#,
+    ] {
+        let fixture = FixtureRoot::new("nested-production-module");
+        fixture.write(
+            "crates/x/src/lib.rs",
+            &format!("#[cfg(test)] mod tests;\n{source}"),
+        );
+        fixture.write("crates/x/src/tests.rs", "pub fn helper() {}\n");
+        let gates = fixture.gates();
+        assert_eq!(
+            resolved_gate(&gates, "crates/x/src/tests.rs"),
+            ExemptionGate::Ungated,
+            "{source}"
+        );
+        let attribution = sibling_attribution(
+            &fixture.path,
+            &fixture.resolve("crates/x/src/lib.rs"),
+            &gates,
+            &mut MeasuredFiles::default(),
+        );
+        assert_eq!(attribution.attributed_test_lines, 0, "{source}");
+    }
+}
+
+#[test]
+fn nested_module_conditions_and_sibling_scope_are_preserved() {
+    for source in [
+        r#"fn run() { #[cfg(test)] { #[path = "tests.rs"] mod implementation; } }"#,
+        r#"#[cfg(test)] #[test] fn run() { #[path = "tests.rs"] mod implementation; }"#,
+        r#"struct Owner; impl Owner { #[cfg(test)] fn run() { #[path = "tests.rs"] mod implementation; } }"#,
+        r#"trait Owner { #[cfg(test)] fn run() { #[path = "tests.rs"] mod implementation; } }"#,
+    ] {
+        let fixture = FixtureRoot::new("nested-test-module");
+        fixture.write("crates/x/src/lib.rs", source);
+        fixture.write("crates/x/src/tests.rs", "fn helper() {}\n");
+        assert_eq!(
+            resolved_gate(&fixture.gates(), "crates/x/src/tests.rs"),
+            ExemptionGate::TestGated,
+            "{source}"
+        );
+        assert!(
+            fixture.resolve("crates/x/src/lib.rs").is_empty(),
+            "block-local modules are not direct siblings: {source}"
+        );
+    }
+    let (_, declarations) = declarations_of(&[(
+        "crates/x/src/lib.rs",
+        r#"fn run() { #[cfg(any())] { #[path = "tests.rs"] mod implementation; } }"#,
+    )]);
+    assert!(declarations.is_empty());
+}
+
+#[test]
+fn exact_load_sites_resolve_children_beside_the_loaded_source() {
+    for load in [
+        r#"#[path = "shared/suite.rs"] mod production;"#,
+        r#"include!("shared/suite.rs");"#,
+    ] {
+        let source = format!("#[cfg(test)] #[path = \"shared/tests.rs\"] mod tests;\n{load}");
+        let classified = classify(&[
+            ("crates/x/src/lib.rs", &source),
+            ("crates/x/src/shared/suite.rs", "mod tests;\n"),
+            ("crates/x/src/shared/tests.rs", "pub fn helper() {}\n"),
+        ]);
+        assert_eq!(
+            gate(&classified, "crates/x/src/shared/tests.rs"),
+            ExemptionGate::Ungated,
+            "{load}"
+        );
+    }
+}
+
+#[test]
+fn distinct_load_contexts_keep_their_own_child_gates() {
+    for (source, flat, adjacent) in [
+        (
+            r#"mod suite; #[cfg(test)] #[path = "suite.rs"] mod alternate;"#,
+            ExemptionGate::Ungated,
+            ExemptionGate::TestGated,
+        ),
+        (
+            r#"#[cfg(test)] mod suite; #[path = "suite.rs"] mod alternate;"#,
+            ExemptionGate::TestGated,
+            ExemptionGate::Ungated,
+        ),
+        (
+            r#"mod suite; #[cfg(test)] include!("suite.rs");"#,
+            ExemptionGate::Ungated,
+            ExemptionGate::TestGated,
+        ),
+    ] {
+        let classified = classify(&[
+            ("crates/x/src/lib.rs", source),
+            ("crates/x/src/suite.rs", "mod tests;\n"),
+            ("crates/x/src/suite/tests.rs", "pub fn helper() {}\n"),
+            ("crates/x/src/tests.rs", "pub fn helper() {}\n"),
+        ]);
+        assert_eq!(
+            gate(&classified, "crates/x/src/suite/tests.rs"),
+            flat,
+            "{source}"
+        );
+        assert_eq!(
+            gate(&classified, "crates/x/src/tests.rs"),
+            adjacent,
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn include_chains_preserve_each_loaded_directory() {
+    let classified = classify(&[
+        (
+            "crates/x/src/lib.rs",
+            r#"include!("shared/suite.rs"); #[cfg(test)] #[path = "shared/nested/tests.rs"] mod tests;"#,
+        ),
+        (
+            "crates/x/src/shared/suite.rs",
+            r#"include!("nested/owner.rs");"#,
+        ),
+        ("crates/x/src/shared/nested/owner.rs", "mod tests;\n"),
+        (
+            "crates/x/src/shared/nested/tests.rs",
+            "pub fn helper() {}\n",
+        ),
+    ]);
+    assert_eq!(
+        gate(&classified, "crates/x/src/shared/nested/tests.rs"),
+        ExemptionGate::Ungated
+    );
+}
+
+#[test]
+fn sibling_candidates_remain_distinct_across_load_directories() {
+    let fixture = FixtureRoot::new("load-context-siblings");
+    fixture.write(
+        "crates/x/src/lib.rs",
+        r#"mod suite; #[cfg(test)] #[path = "suite.rs"] mod alternate;"#,
+    );
+    fixture.write("crates/x/src/suite.rs", "mod tests;\n");
+    fixture.write("crates/x/src/suite/tests.rs", "pub fn production() {}\n");
+    fixture.write("crates/x/src/tests.rs", "fn helper() {}\nfn second() {}\n");
+    let children = fixture.resolve("crates/x/src/suite.rs");
+    assert_eq!(
+        children,
+        ["crates/x/src/suite/tests.rs", "crates/x/src/tests.rs"]
+    );
+    let attribution = sibling_attribution(
+        &fixture.path,
+        &children,
+        &fixture.gates(),
+        &mut MeasuredFiles::default(),
+    );
+    assert_eq!(attribution.siblings, 1);
+    assert_eq!(attribution.attributed_test_lines, 2);
+}
+
+// Default target descriptions used only by in-memory fixtures. Production target
+// membership comes exclusively from Cargo metadata.
+/// Cargo target roots relative to `apps/<package>/` or `crates/<package>/`.
+/// Auto-discovery covers `<dir>/<name>.rs` and `<dir>/<name>/main.rs` below
+/// `tests/`, `benches/`, `examples/`, and `src/bin/`. Discovery is by path
+/// convention only: it does not read the Cargo manifest, so customized target
+/// paths and `autotests` settings are not modelled.
+pub(crate) fn cargo_target_root(relative: &Path) -> Option<CargoTarget> {
+    let rest = package_relative(relative)?;
+    let parts = rest
+        .components()
+        .filter_map(normal_text)
+        .collect::<Vec<String>>();
+    let (kind, tail) = match parts.split_first()?.0.as_str() {
+        "tests" => (CargoTarget::Test, &parts[1..]),
+        "benches" | "examples" => (CargoTarget::Other, &parts[1..]),
+        "src" => match parts.get(1).map(String::as_str) {
+            Some("bin") => (CargoTarget::Other, &parts[2..]),
+            _ => return None,
+        },
+        _ => return None,
+    };
+    let is_root = match tail {
+        [name] => name.ends_with(".rs"),
+        [_, main] => main == "main.rs",
+        _ => false,
+    };
+    is_root.then_some(kind)
+}
+
+/// Whether the file is a crate root cargo builds outside `cfg(test)`: a
+/// package's `build.rs`, or `src/lib.rs` / `src/main.rs`. Target roots
+/// (`tests/`, `benches/`, `examples/`, `src/bin/`) answer through
+/// `cargo_target_root` instead.
+fn non_test_crate_root(relative: &Path) -> bool {
+    match cargo_target_root(relative) {
+        Some(CargoTarget::Other) => return true,
+        Some(CargoTarget::Test) => return false,
+        None => {}
+    }
+    matches!(
+        package_relative(relative).as_deref().and_then(Path::to_str),
+        Some("build.rs" | "src/lib.rs" | "src/main.rs")
+    )
+}
+
+pub(crate) fn package_relative(relative: &Path) -> Option<PathBuf> {
+    let mut components = relative.components();
+    let Component::Normal(kind) = components.next()? else {
+        return None;
+    };
+    if kind != OsStr::new("apps") && kind != OsStr::new("crates") {
+        return None;
+    }
+    components.next()?;
+    Some(components.as_path().to_path_buf())
+}
+
+pub(crate) fn normal_text(component: Component<'_>) -> Option<String> {
+    match component {
+        Component::Normal(text) => Some(text.to_string_lossy().into_owned()),
+        _ => None,
+    }
+}
+
+#[test]
+fn qualified_builtin_includes_cannot_hide_production_imports() {
+    for load in [
+        r#"std::include!("tests.rs");"#,
+        r#"core::include!("tests.rs");"#,
+        r#"::std::include!("tests.rs");"#,
+        r#"std::include!(std::concat!("tests", ".rs"));"#,
+        r#"core::include!(::core::concat!("tests", ".rs"));"#,
+    ] {
+        let source = format!("#[cfg(test)] mod tests;\n{load}");
+        let classified = classify(&[
+            ("crates/x/src/lib.rs", &source),
+            ("crates/x/src/tests.rs", "fn helper() {}\n"),
+        ]);
+        assert_eq!(
+            gate(&classified, "crates/x/src/tests.rs"),
+            ExemptionGate::Ungated,
+            "{load}"
+        );
+    }
+    for source in [
+        r#"custom::include!("tests.rs");"#,
+        r#"include!(custom::concat!("tests", ".rs"));"#,
+    ] {
+        let syntax = syn::parse_file(source).unwrap();
+        assert!(
+            collect_include_declarations(
+                &syntax,
+                Path::new("crates/x/src/lib.rs"),
+                &mut BTreeMap::new()
+            )
+            .is_err(),
+            "{source}"
+        );
+    }
+}
+
+#[path = "tests/source_authority.rs"]
+mod source_authority;

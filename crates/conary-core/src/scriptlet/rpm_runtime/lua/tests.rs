@@ -1,5 +1,7 @@
 // crates/conary-core/src/scriptlet/rpm_runtime/lua/tests.rs
 
+#![cfg(test)]
+
 use super::execute_embedded_lua;
 use crate::ccs::native_lifecycle::{
     RpmCriticality, RpmHeaderContext, RpmMacroContext, RpmMacroDefinition,

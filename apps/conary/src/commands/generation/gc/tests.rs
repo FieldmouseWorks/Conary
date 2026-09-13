@@ -1,5 +1,7 @@
 // apps/conary/src/commands/generation/gc/tests.rs
 
+#![cfg(test)]
+
 use super::super::selected_root::persist_captured_publication_snapshot;
 use super::*;
 use crate::commands::{

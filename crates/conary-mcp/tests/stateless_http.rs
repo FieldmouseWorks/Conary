@@ -1,4 +1,6 @@
 // crates/conary-mcp/tests/stateless_http.rs
+
+#![cfg(test)]
 #[cfg(test)]
 mod tests {
     use serde_json::{Value, json};

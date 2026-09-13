@@ -100,6 +100,30 @@ echo '}'
 } | write_fixture "$fixture_root/crates/fixture/src/inline_tests_at_cap.rs"
 write_lines "$fixture_root/crates/fixture/src/tests.rs" 1200
 write_lines "$fixture_root/crates/fixture/src/tests/helper.rs" 1200
+# The measurement fixtures below include an opaque test attribute. These two
+# large sources carry their own compiler-enforced test boundary in that graph.
+sed -i '2i#![cfg(test)]' "$fixture_root/crates/fixture/src/tests.rs" \
+    "$fixture_root/crates/fixture/src/tests/helper.rs"
+# A large sibling is exempt only with an actual test gate.
+write_fixture "$fixture_root/crates/fixture/src/lib.rs" <<'EOF'
+#[cfg(test)]
+mod tests;
+EOF
+# Cargo supplies the fixture's crate-root context, just as for a repository scan.
+cat > "$fixture_root/Cargo.toml" <<'EOF'
+[workspace]
+members = ["crates/fixture"]
+resolver = "3"
+EOF
+cat > "$fixture_root/crates/fixture/Cargo.toml" <<'EOF'
+[package]
+name = "fixture"
+version = "0.0.0"
+edition = "2024"
+EOF
+cat >> "$fixture_root/crates/fixture/src/tests.rs" <<'EOF'
+mod helper;
+EOF
 write_fixture "$fixture_root/crates/fixture/src/block_comment_attribute.rs" <<'EOF'
 #[cfg(test)]
 /* the typed item span crosses this block comment
@@ -168,6 +192,9 @@ grep -q $'standalone_tests.rs\ttotal=7\tproduction=3\tinline_test=4' <<<"$report
 grep -q $'inner_cfg_test.rs\ttotal=4\tproduction=0\tinline_test=4' <<<"$report"
 grep -q $'enclosing_cfg.rs\ttotal=7\tproduction=5\tinline_test=2' <<<"$report"
 grep -q $'cfg_attr_gating.rs\ttotal=5\tproduction=3\tinline_test=2' <<<"$report"
+# That fixture proves span measurement, not the expansion of tokio::test.
+# Later contextual-exemption fixtures need a complete source graph of their own.
+rm "$fixture_root/crates/fixture/src/standalone_tests.rs"
 
 for header_kind in missing legacy; do
     header_path="$fixture_root/crates/fixture/src/invalid_header.rs"
@@ -487,8 +514,8 @@ if grep -q 'SOURCE ROOTS' <<<"$(run_checker)"; then
 fi
 
 # Exemption classification (issue #997). Every exempt-named file is reported and
-# classified instead of being silently dropped, and the classification is
-# report-only: it must never move the exit code. The gates below cover an inner
+# classified before enforcing caps. Unknown and ungated files retain caps.
+# The gates below cover an inner
 # `#![cfg(test)]`, a `#[cfg(test)]` declaring site, a production declaring site,
 # a cargo integration-test target and a file no declaration reaches.
 rm -f "$fixture_root/crates/fixture/src/tests.rs"
@@ -533,34 +560,44 @@ EOF
 write_fixture "$fixture_root/crates/fixture/tests/shared.rs" <<'EOF'
 pub fn helper() {}
 EOF
+# Cargo, not directory shape, establishes integration-test membership.
+cat > "$fixture_root/Cargo.toml" <<'EOF'
+[workspace]
+members = ["crates/fixture"]
+resolver = "3"
+EOF
+cat > "$fixture_root/crates/fixture/Cargo.toml" <<'EOF'
+[package]
+name = "line-cap-fixture"
+version = "0.0.0"
+edition = "2024"
+EOF
 
 : > "$allowlist"
 write_issue_state "$issue_state" "$(date -u +%Y-%m-%d)" "123 OPEN"
-exempt_report="$(run_checker --report)"
-grep -q $'EXEMPT: crates/fixture/src/gated_small/tests.rs\ttotal=40\tproduction=40\tinline_test=0\tgate=test-gated' <<<"$exempt_report"
-grep -q $'EXEMPT: crates/fixture/src/gated_large/tests.rs\ttotal=1200\tproduction=1200\tinline_test=0\tgate=test-gated' <<<"$exempt_report"
-grep -q $'EXEMPT: crates/fixture/src/ungated_large/tests.rs\ttotal=1200\tproduction=1200\tinline_test=0\tgate=ungated' <<<"$exempt_report"
-grep -q $'EXEMPT: crates/fixture/src/tests/inner_gate.rs\ttotal=3\tproduction=0\tinline_test=3\tgate=test-gated' <<<"$exempt_report"
-grep -q $'EXEMPT: crates/fixture/src/orphan/tests.rs\ttotal=2\tproduction=2\tinline_test=0\tgate=unknown' <<<"$exempt_report"
-grep -q $'EXEMPT: crates/fixture/tests/integration.rs\ttotal=2\tproduction=2\tinline_test=0\tgate=test-gated' <<<"$exempt_report"
-grep -q $'EXEMPT: crates/fixture/tests/shared.rs\ttotal=2\tproduction=2\tinline_test=0\tgate=ungated' <<<"$exempt_report"
-grep -q 'EXEMPT SUMMARY: test-gated=4 ungated=2 unknown=1' <<<"$exempt_report"
-# An exempt-named file never gains an ordinary row, whatever its gate.
-if grep -q $'^crates/fixture/src/ungated_large/tests.rs\t' <<<"$exempt_report"; then
-    echo "ERROR: exempt-named file gained an ordinary report row" >&2
+if exempt_report="$(run_checker --report 2> "$fixture_root/ungated-error.out")"; then
+    echo 'ERROR: production code escaped through a test filename' >&2
     exit 1
 fi
+grep -q 'ungated_large/tests.rs has 1200 non-test lines' "$fixture_root/ungated-error.out"
+grep -q $'TEST FILE: crates/fixture/src/gated_small/tests.rs\ttotal=40\tproduction=40\tinline_test=0\tgate=test-gated' <<<"$exempt_report"
+grep -q $'TEST FILE: crates/fixture/src/gated_large/tests.rs\ttotal=1200\tproduction=1200\tinline_test=0\tgate=test-gated' <<<"$exempt_report"
+grep -q $'TEST FILE: crates/fixture/src/ungated_large/tests.rs\ttotal=1200\tproduction=1200\tinline_test=0\tgate=ungated' <<<"$exempt_report"
+grep -q $'TEST FILE: crates/fixture/src/tests/inner_gate.rs\ttotal=3\tproduction=0\tinline_test=3\tgate=test-gated' <<<"$exempt_report"
+grep -q $'TEST FILE: crates/fixture/src/orphan/tests.rs\ttotal=2\tproduction=2\tinline_test=0\tgate=unknown' <<<"$exempt_report"
+grep -q $'TEST FILE: crates/fixture/tests/integration.rs\ttotal=2\tproduction=2\tinline_test=0\tgate=test-gated' <<<"$exempt_report"
+grep -q $'TEST FILE: crates/fixture/tests/shared.rs\ttotal=2\tproduction=2\tinline_test=0\tgate=ungated' <<<"$exempt_report"
+grep -q 'TEST FILE SUMMARY: test-gated=4 ungated=2 unknown=1' <<<"$exempt_report"
+# Cap-checked test filenames also receive the ordinary measurement row.
+grep -q $'^crates/fixture/src/ungated_large/tests.rs\ttotal=1200' <<<"$exempt_report"
 
-# The allowlist stale-entry rule for exempt-named files (#997 correction). An
-# exception counts as used only when it excuses a cap violation the gate
-# enforces; the gate enforces no cap on a file whose name exempts it, so a
-# listed exempt-named file is stale however large it measures, and its size
-# never produces an error of its own.
+# An exception for an ungated over-cap filename is used, while an unnecessary
+# exception for either small or large test-only siblings stays stale.
 write_lines "$fixture_root/crates/fixture/src/control_over_cap.rs" 1001
 
 # Counterfactual for a cap-checked file: the entry is used, and removing it
 # restores the exact cap error the entry suppresses.
-echo 'crates/fixture/src/control_over_cap.rs #123' > "$allowlist"
+printf '%s\n' 'crates/fixture/src/control_over_cap.rs #123' 'crates/fixture/src/ungated_large/tests.rs #123' > "$allowlist"
 write_issue_state "$issue_state" "$(date -u +%Y-%m-%d)" "123 OPEN"
 used_out="$(run_checker)"
 grep -q 'ALLOWLISTED: crates/fixture/src/control_over_cap.rs production=1001 inline_test=0 issue=#123' <<<"$used_out"
@@ -585,7 +622,12 @@ if run_checker >"$fixture_root/exempt-stale.out" 2>&1; then
     echo "ERROR: a listed exempt-named file was not reported stale" >&2
     exit 1
 fi
-for exempt_entry in gated_small/tests.rs gated_large/tests.rs ungated_large/tests.rs; do
+grep -q 'ALLOWLISTED: crates/fixture/src/ungated_large/tests.rs production=1200 inline_test=0 issue=#123' "$fixture_root/exempt-stale.out"
+if grep -q 'stale line-cap allowlist entry: crates/fixture/src/ungated_large/tests.rs' "$fixture_root/exempt-stale.out"; then
+    echo 'ERROR: production test filename exception was marked stale' >&2
+    exit 1
+fi
+for exempt_entry in gated_small/tests.rs gated_large/tests.rs; do
     grep -q "stale line-cap allowlist entry: crates/fixture/src/$exempt_entry #123" "$fixture_root/exempt-stale.out"
     if grep -q "crates/fixture/src/$exempt_entry has " "$fixture_root/exempt-stale.out"; then
         echo "ERROR: exempt-named $exempt_entry was cap-checked" >&2
@@ -595,6 +637,7 @@ done
 : > "$allowlist"
 write_issue_state "$issue_state" "$(date -u +%Y-%m-%d)" "123 OPEN"
 rm "$fixture_root/crates/fixture/src/control_over_cap.rs"
+write_lines "$fixture_root/crates/fixture/src/ungated_large/tests.rs" 40
 
 # Extracted sibling attribution (issue #998). The exempt-named siblings below
 # are deliberately over the production cap, so the gate passing here is itself
@@ -668,5 +711,27 @@ if run_checker >"$fixture_root/malformed.out" 2>&1; then
     exit 1
 fi
 grep -q 'failed to parse crates/fixture/src/malformed.rs' "$fixture_root/malformed.out"
+
+# An opaque dependency call can add a production load even with empty input.
+# Only the source's own guard restores its exemption in this incomplete graph.
+rm -rf "$fixture_root/crates/fixture/src"
+mkdir -p "$fixture_root/crates/fixture/src"
+write_fixture "$fixture_root/crates/fixture/src/lib.rs" <<'EOF'
+use dep::emit;
+#[cfg(not(test))]
+emit!();
+#[cfg(test)]
+mod tests;
+EOF
+write_lines "$fixture_root/crates/fixture/src/tests.rs" 1200
+if opaque_report="$(run_checker --report 2> "$fixture_root/opaque-error.out")"; then
+    echo 'ERROR: opaque dependency expansion certified a context-only exemption' >&2
+    exit 1
+fi
+grep -q 'tests.rs has 1200 non-test lines' "$fixture_root/opaque-error.out"
+grep -q $'tests.rs\ttotal=1200\tproduction=1200\tinline_test=0\tgate=unknown' <<<"$opaque_report"
+sed -i '2i#![cfg(test)]' "$fixture_root/crates/fixture/src/tests.rs"
+guarded_report="$(run_checker --report)"
+grep -q $'tests.rs\ttotal=1201\tproduction=0\tinline_test=1201\tgate=test-gated' <<<"$guarded_report"
 
 echo "line-cap tests passed."

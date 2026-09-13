@@ -1,4 +1,6 @@
 // apps/remi/src/server/conversion/benchmark/tests.rs
+
+#![cfg(test)]
 //! Registered-authority and operator-boundary tests for schema-v8 benchmarks.
 
 use super::*;

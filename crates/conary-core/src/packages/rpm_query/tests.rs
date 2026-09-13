@@ -1,5 +1,7 @@
 // crates/conary-core/src/packages/rpm_query/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 
 #[test]

@@ -1,5 +1,7 @@
 // apps/remi/src/server/routes/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use axum::body::Body;
 use std::net::Ipv4Addr;

@@ -1,5 +1,7 @@
 // crates/conary-core/src/packages/rpm/payload/stream/tests.rs
 
+#![cfg(test)]
+
 use super::super::header::DeclaredDigest;
 use super::*;
 use std::io;

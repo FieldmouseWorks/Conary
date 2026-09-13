@@ -1,5 +1,7 @@
 // apps/remi/src/server/config/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 
 #[test]

@@ -1,5 +1,7 @@
 // apps/conary/src/commands/package_failure/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 
 pub(crate) fn refusal(cause: NativeLifecyclePreflightError) -> anyhow::Error {

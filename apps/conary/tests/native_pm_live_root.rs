@@ -1,4 +1,6 @@
 // apps/conary/tests/native_pm_live_root.rs
+
+#![cfg(test)]
 #![cfg(feature = "test-hooks")]
 
 use conary_core::db::models::{

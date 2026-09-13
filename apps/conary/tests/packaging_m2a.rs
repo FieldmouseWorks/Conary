@@ -1,5 +1,7 @@
 // apps/conary/tests/packaging_m2a.rs
 
+#![cfg(test)]
+
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};

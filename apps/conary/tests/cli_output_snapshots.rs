@@ -1,5 +1,7 @@
 // apps/conary/tests/cli_output_snapshots.rs
 
+#![cfg(test)]
+
 pub mod common;
 
 use conary_core::db::models::{Trove, TroveType};

@@ -1,5 +1,7 @@
 // apps/conary/tests/common/mod.rs
 
+#![cfg(test)]
+
 //! Shared test utilities and helpers for integration tests.
 
 pub mod update_ccs;

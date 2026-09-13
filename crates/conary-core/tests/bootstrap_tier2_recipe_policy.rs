@@ -1,5 +1,7 @@
 // crates/conary-core/tests/bootstrap_tier2_recipe_policy.rs
 
+#![cfg(test)]
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Write;

@@ -1,5 +1,7 @@
 // crates/conary-core/src/recipe/kitchen/reproducibility_env/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use std::path::Path;
 

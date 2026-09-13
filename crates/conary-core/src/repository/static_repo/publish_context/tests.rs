@@ -1,5 +1,7 @@
 // crates/conary-core/src/repository/static_repo/publish_context/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::repository::static_repo::publish::{StaticPublishOptions, publish_static_repo};
 use crate::repository::static_repo::{PackageKeyEntry, PackageKeyStatus, PackageKeysFile};

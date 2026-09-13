@@ -1,5 +1,7 @@
 // crates/conary-core/src/ccs/manifest/tests/hooks.rs
 
+#![cfg(test)]
+
 use super::super::*;
 
 #[test]

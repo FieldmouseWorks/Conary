@@ -1,5 +1,7 @@
 // apps/conaryd/src/daemon/client/body/tests.rs
 
+#![cfg(test)]
+
 //! Unit tests for response body framing derivation and chunked decoding.
 
 use super::*;

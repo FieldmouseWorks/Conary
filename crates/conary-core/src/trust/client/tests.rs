@@ -1,5 +1,7 @@
 // crates/conary-core/src/trust/client/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::ccs::signing::SigningKeyPair;
 use crate::db::testing::create_test_db;

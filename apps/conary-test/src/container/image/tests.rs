@@ -1,5 +1,7 @@
 // apps/conary-test/src/container/image/tests.rs
 
+#![cfg(test)]
+
 use super::{
     NativePackageArtifact, find_project_root, resolve_stage_source, stage_build_context,
     stage_native_package,

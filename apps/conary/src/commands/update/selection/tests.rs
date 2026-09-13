@@ -1,5 +1,7 @@
 // apps/conary/src/commands/update/selection/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::commands::test_helpers::create_test_db;
 use conary_core::db::models::{

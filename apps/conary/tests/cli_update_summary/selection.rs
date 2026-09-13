@@ -1,5 +1,7 @@
 // apps/conary/tests/cli_update_summary/selection.rs
 
+#![cfg(test)]
+
 use super::*;
 
 fn capture(db: &str, security: bool, tty: bool, no_color: bool) -> (bool, String) {

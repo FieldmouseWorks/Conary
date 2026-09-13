@@ -1,5 +1,7 @@
 // apps/conary/src/ui/diagnostics/ccs/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use conary_core::ccs::HostCapabilityRequirement;
 use conary_core::ccs::v3::V3Diagnostic;

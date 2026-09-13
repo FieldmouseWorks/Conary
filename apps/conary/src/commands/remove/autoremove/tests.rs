@@ -1,5 +1,7 @@
 // apps/conary/src/commands/remove/autoremove/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 #[cfg(feature = "test-hooks")]
 use conary_core::ccs::native_lifecycle::{

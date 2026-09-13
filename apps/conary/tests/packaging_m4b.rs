@@ -1,5 +1,7 @@
 // apps/conary/tests/packaging_m4b.rs
 
+#![cfg(test)]
+
 use std::process::{Command, Output};
 
 #[test]

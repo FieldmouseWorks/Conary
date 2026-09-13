@@ -1,5 +1,7 @@
 // crates/conary-core/src/repository/catalog/profile/tests/debian_pockets.rs
 
+#![cfg(test)]
+
 //! Production-shaped Debian pocket composition and conflict proofs.
 
 use super::{debian_source_content, debian_source_manifest, digest};

@@ -1,5 +1,7 @@
 // apps/conaryd/src/daemon/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 
 #[test]

@@ -1,5 +1,7 @@
 // crates/conary-core/src/repository/sync/immutable_catalog/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::db::models::{
     NativeSourceEcosystem, NativeSourceStream, RepositoryPolicyScope, RepositorySourcePolicy,

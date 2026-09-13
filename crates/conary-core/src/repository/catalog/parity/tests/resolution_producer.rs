@@ -1,5 +1,7 @@
 // crates/conary-core/src/repository/catalog/parity/tests/resolution_producer.rs
 
+#![cfg(test)]
+
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::*;

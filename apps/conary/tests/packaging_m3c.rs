@@ -1,4 +1,6 @@
 // apps/conary/tests/packaging_m3c.rs
+
+#![cfg(test)]
 #![cfg(feature = "test-hooks")]
 
 pub mod common;

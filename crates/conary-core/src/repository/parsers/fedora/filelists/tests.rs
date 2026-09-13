@@ -1,5 +1,7 @@
 // crates/conary-core/src/repository/parsers/fedora/filelists/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::db::models::Repository;
 use crate::repository::dependency_model::{

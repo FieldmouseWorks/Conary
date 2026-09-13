@@ -1,5 +1,7 @@
 // crates/conary-core/src/db/models/payload_claim/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::db::models::{Component, ExistingDirectoryMaterialization, Trove, TroveType};
 use crate::db::testing::create_test_db;

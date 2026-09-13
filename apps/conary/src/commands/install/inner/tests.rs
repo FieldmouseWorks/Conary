@@ -1,5 +1,7 @@
 // apps/conary/src/commands/install/inner/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::commands::PackageFormatType;
 use crate::commands::install::{

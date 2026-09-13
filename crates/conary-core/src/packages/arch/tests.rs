@@ -1,5 +1,7 @@
 // crates/conary-core/src/packages/arch/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::packages::traits::{
     ArchAlpmHookOperation, ArchAlpmHookTriggerType, ArchNativeScriptletMetadata,

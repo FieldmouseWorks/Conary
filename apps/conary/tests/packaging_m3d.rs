@@ -1,5 +1,7 @@
 // apps/conary/tests/packaging_m3d.rs
 
+#![cfg(test)]
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 

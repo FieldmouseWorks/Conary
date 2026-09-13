@@ -1,4 +1,6 @@
 // apps/conary/tests/native_pm_daily_driver.rs
+
+#![cfg(test)]
 #![cfg(feature = "test-hooks")]
 
 pub mod common;

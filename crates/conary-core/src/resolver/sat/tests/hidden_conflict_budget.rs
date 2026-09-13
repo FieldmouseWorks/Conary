@@ -1,5 +1,7 @@
 // crates/conary-core/src/resolver/sat/tests/hidden_conflict_budget.rs
 
+#![cfg(test)]
+
 use super::*;
 use resolvo::DependencyProvider;
 

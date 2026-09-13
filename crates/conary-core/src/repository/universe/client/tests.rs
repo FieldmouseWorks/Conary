@@ -1,5 +1,7 @@
 // crates/conary-core/src/repository/universe/client/tests.rs
 
+#![cfg(test)]
+
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 

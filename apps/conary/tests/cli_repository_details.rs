@@ -1,4 +1,6 @@
 // apps/conary/tests/cli_repository_details.rs
+
+#![cfg(test)]
 //! Repository detail observations must retain every installed package variant.
 
 pub mod common;

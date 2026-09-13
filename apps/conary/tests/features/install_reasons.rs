@@ -1,5 +1,7 @@
 // apps/conary/tests/features/install_reasons.rs
 
+#![cfg(test)]
+
 use super::*;
 
 // =============================================================================

@@ -1,5 +1,7 @@
 // apps/conary/src/commands/install/native_events/tests/deconfiguration.rs
 
+#![cfg(test)]
+
 //! Exact Debian relation-deconfiguration preparation and state coverage.
 
 use super::*;

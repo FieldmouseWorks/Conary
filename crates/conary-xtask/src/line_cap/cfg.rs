@@ -2,6 +2,7 @@
 
 use quote::ToTokens;
 use std::collections::BTreeMap;
+use syn::ext::IdentExt;
 use syn::{Attribute, Meta, Token, parse::Parser, punctuated::Punctuated};
 
 enum Predicate {
@@ -13,6 +14,20 @@ enum Predicate {
 
 impl Predicate {
     fn parse(meta: Meta) -> Option<Self> {
+        let mut meta = meta;
+        match &mut meta {
+            Meta::Path(path) => {
+                for segment in &mut path.segments {
+                    segment.ident = segment.ident.unraw();
+                }
+            }
+            Meta::NameValue(value) => {
+                for segment in &mut value.path.segments {
+                    segment.ident = segment.ident.unraw();
+                }
+            }
+            Meta::List(_) => {}
+        }
         let Meta::List(list) = meta else {
             return Some(Self::Atom(meta.to_token_stream().to_string()));
         };
@@ -22,11 +37,11 @@ impl Predicate {
             .into_iter()
             .map(Self::parse)
             .collect::<Option<Vec<_>>>()?;
-        if list.path.is_ident("all") {
+        if super::attributes::is_ident(&list.path, "all") {
             Some(Self::All(children))
-        } else if list.path.is_ident("any") {
+        } else if super::attributes::is_ident(&list.path, "any") {
             Some(Self::Any(children))
-        } else if list.path.is_ident("not") && children.len() == 1 {
+        } else if super::attributes::is_ident(&list.path, "not") && children.len() == 1 {
             Some(Self::Not(Box::new(children.into_iter().next()?)))
         } else {
             None
@@ -116,11 +131,11 @@ pub(super) fn is_test_only(attributes: &[Attribute]) -> bool {
 }
 
 fn effective_cfg(meta: &Meta) -> Option<Predicate> {
-    if meta.path().is_ident("cfg") {
+    if super::attributes::is_ident(meta.path(), "cfg") {
         let Meta::List(list) = meta else { return None };
         return Predicate::parse(syn::parse2(list.tokens.clone()).ok()?);
     }
-    if meta.path().is_ident("cfg_attr") {
+    if super::attributes::is_ident(meta.path(), "cfg_attr") {
         let Meta::List(list) = meta else { return None };
         let mut arguments = Punctuated::<Meta, Token![,]>::parse_terminated
             .parse2(list.tokens.clone())
@@ -145,14 +160,14 @@ fn test_annotation(meta: &Meta) -> Option<Predicate> {
         .path()
         .segments
         .last()
-        .is_some_and(|segment| segment.ident == "test")
+        .is_some_and(|segment| segment.ident.unraw() == "test")
     {
         return Some(Predicate::All(Vec::new()));
     }
     let Meta::List(list) = meta else {
         return None;
     };
-    if !list.path.is_ident("cfg_attr") {
+    if !super::attributes::is_ident(&list.path, "cfg_attr") {
         return None;
     }
     let mut arguments = Punctuated::<Meta, Token![,]>::parse_terminated
@@ -176,4 +191,32 @@ pub(super) fn can_compile(attributes: &[Attribute]) -> bool {
         return true;
     };
     Predicate::All(predicates).satisfiable(&mut BTreeMap::new())
+}
+
+/// Source authority follows cfg predicates alone. An apparent builtin test
+/// annotation can be an imported procedural attribute and requires resolution.
+pub(super) fn can_compile_without_test(attributes: &[Attribute]) -> bool {
+    let Some(predicates) = attributes
+        .iter()
+        .map(|attribute| effective_cfg(&attribute.meta))
+        .collect::<Option<Vec<_>>>()
+    else {
+        return true;
+    };
+    Predicate::All(predicates).satisfiable(&mut BTreeMap::from([("test".to_owned(), false)]))
+}
+
+/// Unlike span measurement's annotation convention, source exemption requires
+/// a compiler configuration gate that an opaque attribute cannot replace.
+pub(super) fn configuration_is_test_only(attributes: &[Attribute]) -> bool {
+    let Some(predicates) = attributes
+        .iter()
+        .map(|attribute| effective_cfg(&attribute.meta))
+        .collect::<Option<Vec<_>>>()
+    else {
+        return false;
+    };
+    let predicate = Predicate::All(predicates);
+    !predicate.satisfiable(&mut BTreeMap::from([("test".to_owned(), false)]))
+        && predicate.satisfiable(&mut BTreeMap::from([("test".to_owned(), true)]))
 }

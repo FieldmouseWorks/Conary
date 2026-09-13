@@ -1,5 +1,7 @@
 // crates/conary-core/src/model/replatform/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::db::models::{
     InstallSource, LabelEntry, PackageResolution, ProvideEntry, Repository, RepositoryPackage,

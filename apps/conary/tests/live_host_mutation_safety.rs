@@ -1,5 +1,7 @@
 // apps/conary/tests/live_host_mutation_safety.rs
 
+#![cfg(test)]
+
 pub mod common;
 
 use std::fs;

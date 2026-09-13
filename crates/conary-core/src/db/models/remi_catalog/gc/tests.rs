@@ -1,5 +1,7 @@
 // crates/conary-core/src/db/models/remi_catalog/gc/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::db::models::{
     RemiActiveProfileRevision, RemiCatalogPhysicalAttestation, RemiProfileRevisionMember,

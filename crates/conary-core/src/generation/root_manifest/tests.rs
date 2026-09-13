@@ -1,5 +1,7 @@
 // crates/conary-core/src/generation/root_manifest/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::filesystem::CasStore;
 use crate::payload::{

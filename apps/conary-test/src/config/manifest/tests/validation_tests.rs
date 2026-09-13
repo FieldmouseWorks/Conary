@@ -1,5 +1,7 @@
 // apps/conary-test/src/config/manifest/tests/validation_tests.rs
 
+#![cfg(test)]
+
 use super::*;
 
 fn corpus_manifest(suite_corpus: &str, semantic: &str) -> TestManifest {

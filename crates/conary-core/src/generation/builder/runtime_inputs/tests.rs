@@ -1,5 +1,7 @@
 // crates/conary-core/src/generation/builder/runtime_inputs/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use std::os::unix::fs::PermissionsExt;
 

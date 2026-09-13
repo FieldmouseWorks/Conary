@@ -1,5 +1,7 @@
 // apps/remi/src/server/catalog_authority/tests.rs
 
+#![cfg(test)]
+
 use std::fs;
 use std::path::PathBuf;
 

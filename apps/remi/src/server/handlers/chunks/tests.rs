@@ -1,4 +1,6 @@
 // apps/remi/src/server/handlers/chunks/tests.rs
+
+#![cfg(test)]
 use super::*;
 use crate::server::conversion::test_support::seed_repository_conversion_source;
 

@@ -1,5 +1,7 @@
 // apps/conary/src/commands/export/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use conary_core::generation::artifact::{
     ArtifactWriteInputs, BOOT_ASSETS_DIR, BootAssetsManifest, CasObjectVerification,

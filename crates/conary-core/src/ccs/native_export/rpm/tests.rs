@@ -1,5 +1,7 @@
 // crates/conary-core/src/ccs/native_export/rpm/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::ccs::builder::FileEntry;
 use crate::ccs::manifest::{CcsManifest, FileCapability, NativeExport, RpmExport};

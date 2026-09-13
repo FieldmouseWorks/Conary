@@ -1,5 +1,7 @@
 // crates/conary-core/src/ccs/native_transaction/tests/eopkg.rs
 
+#![cfg(test)]
+
 use super::*;
 
 #[test]

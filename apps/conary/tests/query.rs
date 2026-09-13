@@ -1,5 +1,7 @@
 // apps/conary/tests/query.rs
 
+#![cfg(test)]
+
 //! Query operation tests: package queries, dependency lookups, provides, changesets.
 
 pub mod common;

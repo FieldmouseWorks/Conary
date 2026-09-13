@@ -1,5 +1,7 @@
 // apps/conary/tests/cli_diagnostics/verification.rs
 
+#![cfg(test)]
+
 use std::process::Command;
 
 pub(super) fn fixture() -> (

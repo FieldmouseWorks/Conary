@@ -1,5 +1,7 @@
 // crates/conary-core/src/db/models/installed_native_lifecycle_bundle/tests.rs
 
+#![cfg(test)]
+
 use crate::ccs::native_lifecycle::{
     ArchInstallMetadata, DebMaintainerMetadata, LifecyclePath, NATIVE_LIFECYCLE_SCHEMA_V1,
     NativeInvocation, NativeLifecycleBundle, NativeLifecycleEntry, NativeLifecycleEntryKind,

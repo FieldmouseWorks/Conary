@@ -113,6 +113,12 @@ essential operation available only through ad hoc shell or free-form output.
   `github.com/FieldmouseWorks/Conary` to detect later closures without rewriting
   the snapshot. The workflow runs on issue closure/reopening/deletion, every
   six hours, and by manual dispatch; lookup failures fail the check.
+  Files named `tests.rs` or below `tests/` are exempt only when their file or
+  complete declaring graph establishes test-only compilation. Production macro
+  invocations or opaque attributes invalidate context-only exemptions; extracted test files
+  carry `#![cfg(test)]` so the compiler enforces their boundary. Unknown and
+  production-reachable files keep both caps and may use an owned exception. Offline Cargo
+  metadata supplies target membership; filename conventions do not.
   Once a Rust source file carries more than 300 inline unit-test lines, its unit
   tests live in a sibling `<file>/tests.rs`. A sibling extraction must reduce
   the parent, with that reduction stated in the commit. Thin dispatch,

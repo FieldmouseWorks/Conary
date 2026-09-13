@@ -1,4 +1,6 @@
 // apps/conary/src/commands/try_session/session/tests.rs
+
+#![cfg(test)]
 //! Try-session lifecycle, refresh, keep, rollback, and liveness tests.
 
 use std::path::Path;

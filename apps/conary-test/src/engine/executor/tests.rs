@@ -1,5 +1,7 @@
 // apps/conary-test/src/engine/executor/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::config::manifest::{FileChecksum, TestStep};
 

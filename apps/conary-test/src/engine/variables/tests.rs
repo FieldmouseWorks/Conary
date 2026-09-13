@@ -1,5 +1,7 @@
 // apps/conary-test/src/engine/variables/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::config::distro::{
     DistroConfig, FixtureConfig, GlobalConfig, PathsConfig, RemiConfig, SetupConfig, TestPackage,

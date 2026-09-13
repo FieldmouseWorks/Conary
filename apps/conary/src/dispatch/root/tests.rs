@@ -1,5 +1,7 @@
 // apps/conary/src/dispatch/root/tests.rs
 
+#![cfg(test)]
+
 use super::run_try_session_preflight_for_test;
 use crate::cli::Cli;
 use clap::Parser;

@@ -1,5 +1,7 @@
 // crates/conary-core/src/scriptlet/native_lifecycle/tests.rs
 
+#![cfg(test)]
+
 use super::super::{
     ExecutionMode, PackageFormat, SandboxMode, ScriptletExecutor, ScriptletOutcome,
 };

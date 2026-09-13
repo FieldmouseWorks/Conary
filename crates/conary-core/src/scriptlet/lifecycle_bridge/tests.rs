@@ -1,5 +1,7 @@
 // crates/conary-core/src/scriptlet/lifecycle_bridge/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;

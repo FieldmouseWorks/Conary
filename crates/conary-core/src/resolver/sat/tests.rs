@@ -1,5 +1,7 @@
 // crates/conary-core/src/resolver/sat/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 #[path = "tests/discovery.rs"]
 mod discovery;

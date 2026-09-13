@@ -1,5 +1,7 @@
 // crates/conary-core/src/packages/dpkg_query/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 
 fn dpkg_identity(selector: &str, architecture: &str) -> InstalledPackageIdentity {

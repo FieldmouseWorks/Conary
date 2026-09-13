@@ -1,5 +1,7 @@
 // apps/conary/tests/features/reference_mirrors.rs
 
+#![cfg(test)]
+
 use super::*;
 
 // =============================================================================

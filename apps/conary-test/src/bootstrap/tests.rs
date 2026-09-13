@@ -1,5 +1,7 @@
 // apps/conary-test/src/bootstrap/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use tempfile::tempdir;
 

@@ -1,5 +1,7 @@
 // apps/remi/src/server/handlers/public_read/tests.rs
 
+#![cfg(test)]
+
 use std::net::SocketAddr;
 use std::sync::Arc;
 

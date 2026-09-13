@@ -1,5 +1,7 @@
 // apps/remi/src/server/catalog_capacity/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use conary_core::repository::catalog::{
     CatalogMetadataObjectScratchV1, CatalogProfileMemberScratchV1, SourceMetadataObjectRoleV1,

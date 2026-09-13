@@ -10,16 +10,16 @@ use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
 use syn::{Attribute, ForeignItem, ImplItem, Item, TraitItem};
 
+mod attributes;
 mod cfg;
 mod exemption;
 mod issue_state;
 mod paths;
 mod siblings;
+mod targets;
 
-use exemption::{
-    ExemptionGate, ExemptionReport, ModuleDeclaration, collect_include_declarations,
-    collect_module_declarations, excluded_test_file, intrinsic_gate, resolve_gates,
-};
+use attributes::{visit_attributed_nodes, visit_nodes};
+use exemption::{ExemptionGate, ExemptionReport, collect_source_graph, excluded_test_file};
 use issue_state::{read_issue_state, validate_allowlist_binding, validate_allowlist_issue_state};
 use siblings::{MeasuredFiles, child_modules, report_row, sibling_attribution};
 
@@ -79,6 +79,7 @@ pub(crate) fn run(args: impl Iterator<Item = String>) -> Result<(), String> {
     })?;
     let allowlist = read_allowlist(&options.allowlist)?;
     let scan = rust_source_files(&root)?;
+    let targets = targets::read_targets(&root)?;
     if options.report {
         println!("SOURCE ROOTS: {}", source_roots_text(&scan.coverage));
     }
@@ -94,9 +95,8 @@ pub(crate) fn run(args: impl Iterator<Item = String>) -> Result<(), String> {
         })
         .collect::<Result<BTreeSet<String>, String>>()?;
     let mut measured = MeasuredFiles::default();
-    let mut declarations: BTreeMap<String, Vec<ModuleDeclaration>> = BTreeMap::new();
-    let mut intrinsic_gates: BTreeMap<String, ExemptionGate> = BTreeMap::new();
-    let mut rows: Vec<(String, FileMetrics, Vec<String>)> = Vec::new();
+    let mut sources = BTreeMap::new();
+    let mut rows: Vec<(String, FileMetrics)> = Vec::new();
     let mut exemptions = ExemptionReport::default();
     let mut used_allowlist_entries = BTreeSet::new();
     let mut errors = Vec::new();
@@ -134,21 +134,33 @@ pub(crate) fn run(args: impl Iterator<Item = String>) -> Result<(), String> {
         };
         let metrics = measure_source(&syntax, &source);
         measured.insert(&path, metrics);
-        collect_module_declarations(&syntax, relative_path, &mut declarations);
-        collect_include_declarations(&syntax, relative_path, &mut declarations);
-        intrinsic_gates.insert(relative.clone(), intrinsic_gate(&syntax, relative_path));
+        sources.insert(relative.clone(), syntax);
+        rows.push((relative, metrics));
+    }
 
-        if excluded_test_file(relative_path) {
-            exemptions.record(relative, metrics);
+    // Resolve the complete graph before deciding whether a filename exemption
+    // applies. Unknown and production-reachable files retain both caps.
+    let graph: exemption::SourceGraph = collect_source_graph(&sources, &targets, &root)?;
+    if options.report && !graph.unresolved_sources.is_empty() {
+        println!(
+            "SOURCE AUTHORITY: {} unresolved sources; contextual-only test exemptions remain capped",
+            graph.unresolved_sources.len()
+        );
+    }
+    let gates = graph.gates;
+    let declarations = graph.declarations;
+    for (relative, metrics) in &rows {
+        let named_test = excluded_test_file(Path::new(relative));
+        if named_test {
+            exemptions.record(relative.clone(), *metrics);
+        }
+        if named_test && exemption::resolved_gate(&gates, relative) == ExemptionGate::TestGated {
             continue;
         }
-
         if options.report {
-            rows.push((
-                relative.clone(),
-                metrics,
-                child_modules(&relative, &declarations, &scanned),
-            ));
+            let children = child_modules(relative, &declarations, &scanned);
+            let attribution = sibling_attribution(&root, &children, &gates, &mut measured);
+            println!("{}", report_row(relative, *metrics, attribution));
         }
 
         let production_over = metrics.production_lines > PRODUCTION_LINE_LIMIT;
@@ -157,12 +169,12 @@ pub(crate) fn run(args: impl Iterator<Item = String>) -> Result<(), String> {
             continue;
         }
 
-        if let Some(issue) = allowlist.get(&relative) {
+        if let Some(issue) = allowlist.get(relative) {
             println!(
                 "ALLOWLISTED: {relative} production={} inline_test={} issue={issue}",
                 metrics.production_lines, metrics.inline_test_lines
             );
-            used_allowlist_entries.insert(relative);
+            used_allowlist_entries.insert(relative.clone());
             continue;
         }
 
@@ -180,21 +192,7 @@ pub(crate) fn run(args: impl Iterator<Item = String>) -> Result<(), String> {
         }
     }
 
-    // Issue #997: an exempt-named file is reported and classified instead of
-    // being silently dropped, and issue #998: a parent row states the test mass
-    // of the children it declares. Both read one resolved gate set, computed
-    // once the whole declaration graph is known.
-    //
-    // Exempt-named files deliberately stay out of the allowlist bookkeeping: an
-    // exception counts as used only when it excuses a cap violation the gate
-    // enforces, and the gate enforces no cap on a file its name exempts. A
-    // listed exempt-named file is therefore stale, however large it measures.
-    let gates = resolve_gates(&intrinsic_gates, &declarations);
     if options.report {
-        for (relative, metrics, children) in &rows {
-            let attribution = sibling_attribution(&root, children, &gates, &mut measured);
-            println!("{}", report_row(relative, *metrics, attribution));
-        }
         print!("{}", exemptions.report(&gates));
     }
 
@@ -601,86 +599,15 @@ fn cfg_attributes(attributes: &[Attribute]) -> Vec<Attribute> {
     attributes
         .iter()
         .filter(|attribute| {
-            attribute.path().is_ident("cfg") || attribute.path().is_ident("cfg_attr")
+            attributes::is_ident(attribute.path(), "cfg")
+                || attributes::is_ident(attribute.path(), "cfg_attr")
         })
         .cloned()
         .collect()
 }
 
-// Each of these typed nodes owns outer attributes and an exact syntax span.
-macro_rules! visit_attributed_nodes {
-    ($($method:ident: $node:ident),* $(,)?) => {$ (
-        fn $method(&mut self, node: &'ast syn::$node) {
-            self.descend(&node.attrs, node.span(), |visitor| visit::$method(visitor, node));
-        }
-    )*};
-}
-
 impl<'ast> Visit<'ast> for TestSpanVisitor {
-    visit_attributed_nodes! {
-        visit_field: Field,
-        visit_variant: Variant,
-        visit_local: Local,
-        visit_stmt_macro: StmtMacro,
-        visit_arm: Arm,
-        visit_field_value: FieldValue,
-        visit_expr_array: ExprArray,
-        visit_expr_assign: ExprAssign,
-        visit_expr_async: ExprAsync,
-        visit_expr_await: ExprAwait,
-        visit_expr_binary: ExprBinary,
-        visit_expr_block: ExprBlock,
-        visit_expr_break: ExprBreak,
-        visit_expr_call: ExprCall,
-        visit_expr_cast: ExprCast,
-        visit_expr_closure: ExprClosure,
-        visit_expr_const: ExprConst,
-        visit_expr_continue: ExprContinue,
-        visit_expr_field: ExprField,
-        visit_expr_for_loop: ExprForLoop,
-        visit_expr_group: ExprGroup,
-        visit_expr_if: ExprIf,
-        visit_expr_index: ExprIndex,
-        visit_expr_infer: ExprInfer,
-        visit_expr_let: ExprLet,
-        visit_expr_lit: ExprLit,
-        visit_expr_loop: ExprLoop,
-        visit_expr_macro: ExprMacro,
-        visit_expr_match: ExprMatch,
-        visit_expr_method_call: ExprMethodCall,
-        visit_expr_paren: ExprParen,
-        visit_expr_path: ExprPath,
-        visit_expr_range: ExprRange,
-        visit_expr_raw_addr: ExprRawAddr,
-        visit_expr_reference: ExprReference,
-        visit_expr_repeat: ExprRepeat,
-        visit_expr_return: ExprReturn,
-        visit_expr_struct: ExprStruct,
-        visit_expr_try: ExprTry,
-        visit_expr_try_block: ExprTryBlock,
-        visit_expr_tuple: ExprTuple,
-        visit_expr_unary: ExprUnary,
-        visit_expr_unsafe: ExprUnsafe,
-        visit_expr_while: ExprWhile,
-        visit_expr_yield: ExprYield,
-        visit_pat_ident: PatIdent,
-        visit_pat_or: PatOr,
-        visit_pat_paren: PatParen,
-        visit_pat_reference: PatReference,
-        visit_pat_rest: PatRest,
-        visit_pat_slice: PatSlice,
-        visit_pat_struct: PatStruct,
-        visit_pat_tuple: PatTuple,
-        visit_pat_tuple_struct: PatTupleStruct,
-        visit_pat_type: PatType,
-        visit_pat_wild: PatWild,
-        visit_field_pat: FieldPat,
-        visit_receiver: Receiver,
-        visit_variadic: Variadic,
-        visit_type_param: TypeParam,
-        visit_const_param: ConstParam,
-        visit_lifetime_param: LifetimeParam,
-    }
+    visit_attributed_nodes!();
 
     fn visit_item(&mut self, item: &'ast Item) {
         self.descend(item_attributes(item), item.span(), |visitor| {

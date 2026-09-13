@@ -1,4 +1,6 @@
 // apps/remi/src/server/routes/mcp/tests.rs
+
+#![cfg(test)]
 //! External admin MCP endpoint tests.
 
 use axum::body::Body;

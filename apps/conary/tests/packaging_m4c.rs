@@ -1,5 +1,7 @@
 // apps/conary/tests/packaging_m4c.rs
 
+#![cfg(test)]
+
 use axum::body::{Body, to_bytes};
 use axum::extract::Request;
 use axum::http::{Method, StatusCode};

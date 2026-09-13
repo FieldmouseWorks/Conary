@@ -1,5 +1,7 @@
 // crates/conary-core/src/repository/catalog/bundle/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::repository::catalog::{
     CatalogArtifactV1, CatalogCandidateWriter, CatalogContentV1, CatalogPackageOriginV1,

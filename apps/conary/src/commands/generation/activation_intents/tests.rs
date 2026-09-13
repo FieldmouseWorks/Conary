@@ -1,5 +1,7 @@
 // apps/conary/src/commands/generation/activation_intents/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use clap::Parser;
 use conary_core::activation::{

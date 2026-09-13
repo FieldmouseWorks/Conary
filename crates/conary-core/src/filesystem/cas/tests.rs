@@ -1,5 +1,7 @@
 // crates/conary-core/src/filesystem/cas/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use tempfile::TempDir;
 

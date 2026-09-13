@@ -1,5 +1,7 @@
 // apps/conary-test/src/config/tests/native_corpus/rejection.rs
 
+#![cfg(test)]
+
 use super::conary_fixture_path;
 
 fn authority_digest(database: &std::path::Path) -> String {

@@ -1,5 +1,7 @@
 // apps/conary/src/commands/install/native_events/debian_runtime/admin_projection/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use conary_core::ccs::native_lifecycle::{
     DebMaintainerMetadata, DebTriggerMetadata, NATIVE_LIFECYCLE_SCHEMA_REVISION,

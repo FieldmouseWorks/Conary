@@ -1,5 +1,7 @@
 // crates/conary-core/src/model/remote/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::db::testing::create_test_db;
 use crate::model::signing::sign_collection;

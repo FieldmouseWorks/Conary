@@ -1,5 +1,7 @@
 // crates/conary-core/src/trust/verify/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::ccs::signing::SigningKeyPair;
 use crate::trust::keys::{sign_tuf_metadata, signing_keypair_to_tuf_key};
