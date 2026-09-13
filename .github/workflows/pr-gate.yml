@@ -405,8 +405,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
           toolchain: 1.98.0
-      - name: Verify retained resolvo diagnostic patch
-        run: cargo test --locked --manifest-path third_party/resolvo-0.12.1-patched/Cargo.toml --lib conflict_graph_discards_learned_branches_unreachable_from_root
+      - name: Verify retained resolvo patches
+        run: cargo test --locked --manifest-path third_party/resolvo-0.12.1-patched/Cargo.toml --lib conary_tests
 
   gnu-compiler-cache:
     name: gnu-compiler-cache

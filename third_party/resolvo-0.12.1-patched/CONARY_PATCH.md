@@ -1,10 +1,16 @@
 # Conary resolvo patch
 
 This directory vendors crates.io `resolvo` 0.12.1 under its BSD-3-Clause
-license. Conary carries one diagnostic-only change in `src/conflict.rs`:
-retain only conflict-graph nodes reachable from the synthetic request root
-before rendering an unsatisfiable result. SAT decisions and provider semantics
-remain upstream-owned; there is no persisted schema or public API change.
+license. Conary carries two scoped fixes:
+
+- `src/conflict.rs` retains only conflict-graph nodes reachable from the synthetic
+  request root before rendering an unsatisfiable result.
+- `src/solver/encoding.rs` groups forbid-multiple clauses by each provider's
+  concrete name when a virtual capability has mixed-name candidates. This is
+  backported from [upstream PR #293](https://github.com/prefix-dev/resolvo/pull/293),
+  commit `dfb403fce20c989a150ef5bbf89c2d2c1e2b3199`, still a draft at review time.
+
+There is no persisted schema or public API change.
 
 Resolvo's conflict evidence can include a clause for a candidate rejected before
 the final root conflict. That node is not necessarily connected to the request's
@@ -44,8 +50,23 @@ assertion `left == right` failed
  right: 3
 ```
 
-The baseline therefore advances to 0.12.1 with the diagnostic fix retained.
-The upstream release's runtime optimizations and dependency updates are kept.
+The first Conary resolver run with only that patch passed 149 tests, ignored one,
+and failed `root_with_and_without_require_same_provider_facts` at
+`src/solver/encoding.rs:441`: `all candidates in a version set must have the same
+package name`. Upstream PR #293 confirms virtual providers are valid and corrects
+this new 0.12.1 assumption. In release builds the same bug puts unrelated
+packages in one at-most-one bucket, incorrectly rejecting valid selections.
+
+`src/solver/conary_tests.rs` backports upstream's regression through its public
+snapshot provider. It requires a virtual capability and both concrete providers.
+To test a future upstream release, copy this file and append
+`#[cfg(test)] mod conary_tests;` to `src/solver/mod.rs`, alongside the conflict
+test wiring above. Run both library modules with `cargo test --manifest-path
+<crate>/Cargo.toml --lib conary_tests`, and repeat with `--release` to cover SAT
+correctness with debug assertions disabled.
+
+The baseline therefore advances to 0.12.1 with both fixes retained. The remaining
+upstream runtime optimizations and dependency updates are kept.
 Every newer non-yanked release still trips the inventory's exit gate. Remove
-this vendor patch only after that release passes the regression without the
-production patch and Conary's resolver and candidate-survey proofs pass.
+this vendor patch only after that release passes both regressions without the
+production patches and Conary's resolver and candidate-survey proofs pass.

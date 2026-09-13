@@ -1839,3 +1839,6 @@ impl<D: DependencyProvider> SolverState<D> {
             .sum()
     }
 }
+
+#[cfg(test)]
+mod conary_tests;
