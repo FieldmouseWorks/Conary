@@ -320,12 +320,9 @@ impl ProvideEntry {
         Ok(provides)
     }
 
-    /// Find all provides for a trove in persisted insertion order.
+    /// Find all provides for a trove
     pub fn find_by_trove(conn: &Connection, trove_id: i64) -> Result<Vec<Self>> {
-        let sql = format!(
-            "SELECT {} FROM provides WHERE trove_id = ?1 ORDER BY id ASC",
-            Self::COLUMNS
-        );
+        let sql = format!("SELECT {} FROM provides WHERE trove_id = ?1", Self::COLUMNS);
         let mut stmt = conn.prepare(&sql)?;
         let provides = stmt
             .query_map([trove_id], Self::from_row)?
