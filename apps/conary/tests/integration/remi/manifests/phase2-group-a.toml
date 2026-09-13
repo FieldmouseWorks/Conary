@@ -187,9 +187,9 @@ group = "A"
 depends_on = ["T44"]
 
 # Get history and extract the most recent changeset ID, then rollback.
-# The shell pipeline extracts the first [N] pattern from history output.
+# The shell pipeline extracts the first Changeset N: heading from history output.
 [[test.step]]
-run = "CS_ID=$(${CONARY_BIN} system history --db-path ${DB_PATH} | grep -oP '\\[\\K\\d+(?=\\])' | head -1) && ${CONARY_BIN} system state rollback $CS_ID --yes --db-path ${DB_PATH}"
+run = "CS_ID=$(${CONARY_BIN} system history --db-path ${DB_PATH} | sed -n 's/^Changeset \\([0-9][0-9]*\\):$/\\1/p' | head -1) && ${CONARY_BIN} system state rollback $CS_ID --yes --db-path ${DB_PATH}"
 
 [test.step.assert]
 exit_code = 0

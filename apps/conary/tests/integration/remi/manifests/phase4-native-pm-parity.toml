@@ -454,7 +454,7 @@ conary = "system history"
 
 [test.step.assert]
 exit_code = 0
-stdout_contains_all = ["Install phase4-runtime-fixture-${native_fixture_version}", "Upgrade phase4-runtime-fixture from ${native_fixture_version} to ${native_update_version}", "Remove phase4-runtime-fixture-${native_update_version}", "Applied"]
+stdout_contains_all = ["Install phase4-runtime-fixture-${native_fixture_version}", "Upgrade phase4-runtime-fixture from ${native_fixture_version} to ${native_update_version}", "Remove phase4-runtime-fixture-${native_update_version}", "  Status: applied"]
 
 # --------------------------------------------------------------------------
 # TNPM09: forced deferred follow-up
@@ -494,7 +494,7 @@ conary = "system history"
 
 [test.step.assert]
 exit_code = 0
-stdout_contains_all = ["Install phase4-runtime-fixture-${native_fixture_version}", "[deferred]", "generation_publication"]
+stdout_contains_all = ["Install phase4-runtime-fixture-${native_fixture_version}", "Deferred work (1):", "  Kind: generation_publication"]
 
 # --------------------------------------------------------------------------
 # TNPM10: repository install and daily query surface

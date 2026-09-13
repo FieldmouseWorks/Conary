@@ -1,248 +1,130 @@
 // apps/conary/src/commands/query/history.rs
 
-//! Changeset history commands
-//!
-//! Functions for displaying changeset/transaction history.
+//! Read changeset evidence and prepare command-scoped recovery guidance for UI rendering.
 
 use super::super::open_db;
-use crate::ui::println;
+use crate::ui::history::{self, HistoryFollowUp};
 use anyhow::Result;
+use conary_core::db::models::{Changeset, GenerationPublication, LifecycleEvent};
 
-fn format_changeset_line(
-    changeset: &conary_core::db::models::Changeset,
-    publications: &[conary_core::db::models::GenerationPublication],
-) -> Result<String> {
-    let timestamp = changeset
-        .applied_at
-        .as_ref()
-        .or(changeset.rolled_back_at.as_ref())
-        .or(changeset.created_at.as_ref())
-        .map(|s| s.as_str())
-        .unwrap_or("pending");
-    let id = changeset
-        .id
-        .map(|i| i.to_string())
-        .unwrap_or_else(|| "?".to_string());
-    let deferred = crate::commands::deferred_follow_up(changeset.metadata.as_deref())?;
-    let deferred_marker = if deferred.is_empty() {
-        ""
-    } else {
-        " [deferred]"
-    };
-    let publication_marker = publication_marker_for_changeset(publications, changeset.id);
-    Ok(format!(
-        "  [{}] {} - {} ({:?}){}{}",
-        id, timestamp, changeset.description, changeset.status, deferred_marker, publication_marker
-    ))
-}
-
-fn format_deferred_follow_up_lines(
-    changeset: &conary_core::db::models::Changeset,
-    db_path: &str,
-) -> Result<Vec<String>> {
+fn history_follow_ups(changeset: &Changeset, db_path: &str) -> Result<Vec<HistoryFollowUp>> {
     Ok(
         crate::commands::deferred_follow_up(changeset.metadata.as_deref())?
             .into_iter()
             .map(|follow_up| {
-                let retry = deferred_retry_hint(&follow_up, db_path);
-                format!(
-                    "      deferred {} {}: {}{}",
-                    follow_up.kind, follow_up.status, follow_up.message, retry
-                )
+                let retry_command = match crate::commands::classify_deferred_follow_up_kind(
+                    &follow_up,
+                ) {
+                    crate::commands::DeferredFollowUpKind::GenerationPublication => Some(
+                        crate::commands::generation::publication::PublicationOutcome::retry_command(
+                            db_path,
+                        ),
+                    ),
+                    crate::commands::DeferredFollowUpKind::Other => follow_up.retry_command,
+                };
+                HistoryFollowUp {
+                    kind: follow_up.kind,
+                    status: follow_up.status,
+                    message: follow_up.message,
+                    retry_command,
+                }
             })
             .collect(),
     )
 }
 
-fn deferred_retry_hint(follow_up: &crate::commands::DeferredFollowUp, db_path: &str) -> String {
-    let kind = crate::commands::classify_deferred_follow_up_kind(follow_up);
-    match kind {
-        crate::commands::DeferredFollowUpKind::GenerationPublication => {
-            format!(
-                " Retry: {}",
-                crate::commands::generation::publication::PublicationOutcome::retry_command(
-                    db_path
-                )
-            )
-        }
-        crate::commands::DeferredFollowUpKind::Other => follow_up
-            .retry_command
-            .as_ref()
-            .map(|command| format!(" Retry: {command}"))
-            .unwrap_or_default(),
-    }
-}
-
-fn publication_marker_for_changeset(
-    publications: &[conary_core::db::models::GenerationPublication],
-    changeset_id: Option<i64>,
-) -> &'static str {
-    let Some(changeset_id) = changeset_id else {
-        return "";
-    };
-    publications
-        .iter()
-        .find(|publication| publication.trigger_changeset_id == Some(changeset_id))
-        .map(|publication| match publication.status {
-            conary_core::db::models::GenerationPublicationStatus::Failed => " [publication-failed]",
-            conary_core::db::models::GenerationPublicationStatus::Pending
-            | conary_core::db::models::GenerationPublicationStatus::Running => {
-                " [publication-pending]"
-            }
-            conary_core::db::models::GenerationPublicationStatus::Complete
-            | conary_core::db::models::GenerationPublicationStatus::Abandoned => "",
-        })
-        .unwrap_or("")
-}
-
-fn format_lifecycle_event_line(event: &conary_core::db::models::LifecycleEvent) -> String {
-    let details = format!(
-        "lifecycle failure {} {} {} ({}) phase={} sandbox={} effective={}: {}",
-        event.source_package,
-        event.source_version,
-        event.source_entry,
-        event.failure_kind.as_str(),
-        event.phase,
-        event.requested_sandbox_mode.as_str(),
-        event.effective_sandbox.as_str(),
-        event.message,
-    );
-    crate::ui::row_line(crate::ui::Status::Warn, &[&details])
-}
-
-/// Show changeset history
+/// Show changeset history without changing recorded state or publication authority.
 pub fn cmd_history(db_path: &str) -> Result<()> {
     let conn = open_db(db_path)?;
-    let changesets = conary_core::db::models::Changeset::list_all(&conn)?;
-    let publications = conary_core::db::models::GenerationPublication::pending_recoverable(&conn)?;
+    let changesets = Changeset::list_all(&conn)?;
+    let publications = GenerationPublication::pending_recoverable(&conn)?;
 
     if changesets.is_empty() {
-        println!("No changeset history.");
-    } else {
-        println!("Changeset history:");
-        for changeset in &changesets {
-            println!("{}", format_changeset_line(changeset, &publications)?);
-            for line in format_deferred_follow_up_lines(changeset, db_path)? {
-                println!("{line}");
-            }
-            if let Some(changeset_id) = changeset.id {
-                for event in conary_core::db::models::LifecycleEvent::list_for_changeset(
-                    &conn,
-                    changeset_id,
-                )? {
-                    println!("      {}", format_lifecycle_event_line(&event));
-                }
-            }
-        }
-        println!("\nTotal: {} changeset(s)", changesets.len());
+        history::empty();
+        return Ok(());
     }
-
+    history::heading();
+    for changeset in &changesets {
+        let deferred = history_follow_ups(changeset, db_path)?;
+        let publication = changeset.id.and_then(|id| {
+            publications
+                .iter()
+                .find(|publication| publication.trigger_changeset_id == Some(id))
+        });
+        let events = changeset
+            .id
+            .map(|id| LifecycleEvent::list_for_changeset(&conn, id))
+            .transpose()?
+            .unwrap_or_default();
+        history::entry(changeset, publication, &deferred, &events);
+    }
+    history::finish(changesets.len());
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use conary_core::db::models::{Changeset, ChangesetStatus};
-    use conary_core::scriptlet::{EffectiveSandbox, SandboxMode, ScriptletFailureKind};
+    use crate::commands::{DeferredFollowUp, metadata_with_deferred_follow_up};
 
     #[test]
-    fn clean_applied_changeset_has_no_deferred_marker() {
-        let mut changeset = Changeset::new("Install fixture-1.0.0".to_string());
-        changeset.id = Some(7);
-        changeset.status = ChangesetStatus::Applied;
-        changeset.applied_at = Some("2026-05-14 12:00:00".to_string());
-
-        assert_eq!(
-            format_changeset_line(&changeset, &[]).unwrap(),
-            "  [7] 2026-05-14 12:00:00 - Install fixture-1.0.0 (Applied)"
+    fn publication_retry_uses_current_database_and_other_guidance_stays_recorded() {
+        let mut changeset = Changeset::new("fixture".into());
+        changeset.metadata = Some(
+            metadata_with_deferred_follow_up(
+                Vec::new(),
+                vec![
+                    DeferredFollowUp {
+                        kind: "generation_publication".into(),
+                        status: "failed".into(),
+                        message: "retry publication".into(),
+                        retry_command: Some("stale database command".into()),
+                    },
+                    DeferredFollowUp {
+                        kind: "other".into(),
+                        status: "pending".into(),
+                        message: "retained guidance".into(),
+                        retry_command: Some("recorded command".into()),
+                    },
+                    DeferredFollowUp {
+                        kind: "other".into(),
+                        status: "pending".into(),
+                        message: "no recorded remedy".into(),
+                        retry_command: None,
+                    },
+                ],
+            )
+            .unwrap(),
         );
+        let records = history_follow_ups(&changeset, "/tmp/operator's history.db").unwrap();
+        assert_eq!(records.len(), 3);
+        assert_eq!(
+            records[0].retry_command.as_deref(),
+            Some(
+                "conary system generation publish --yes --db-path='/tmp/operator'\"'\"'s history.db'"
+            )
+        );
+        assert_eq!(
+            records[1].retry_command.as_deref(),
+            Some("recorded command")
+        );
+        assert_eq!(records[2].retry_command, None);
+    }
+
+    #[test]
+    fn missing_metadata_has_no_follow_up_and_obsolete_metadata_still_refuses() {
+        let mut changeset = Changeset::new("fixture".into());
         assert!(
-            format_deferred_follow_up_lines(&changeset, "/tmp/history.db")
+            history_follow_ups(&changeset, "/tmp/history.db")
                 .unwrap()
                 .is_empty()
         );
-    }
-
-    #[test]
-    fn applied_changeset_with_deferred_metadata_is_marked() {
-        let warning = crate::commands::DeferredFollowUp {
-            kind: "generation_publication".to_string(),
-            status: "failed".to_string(),
-            message: "root is not self-contained".to_string(),
-            retry_command: Some("ignored stale command".to_string()),
-        };
-        let mut changeset = Changeset::new("Install fixture-1.0.0".to_string());
-        changeset.id = Some(8);
-        changeset.status = ChangesetStatus::Applied;
-        changeset.applied_at = Some("2026-05-14 12:01:00".to_string());
-        changeset.metadata = Some(
-            crate::commands::metadata_with_deferred_follow_up(Vec::new(), vec![warning]).unwrap(),
+        changeset.metadata = Some(r#"{"schema":"conary.changeset.metadata.v5"}"#.into());
+        let error = history_follow_ups(&changeset, "/tmp/history.db").unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("Unsupported changeset metadata schema")
         );
-
-        assert_eq!(
-            format_changeset_line(&changeset, &[]).unwrap(),
-            "  [8] 2026-05-14 12:01:00 - Install fixture-1.0.0 (Applied) [deferred]"
-        );
-        let details = format_deferred_follow_up_lines(&changeset, "/tmp/history.db").unwrap();
-        assert_eq!(details.len(), 1);
-        assert!(details[0].contains("deferred generation_publication failed"));
-        assert!(details[0].contains("Retry: conary system generation publish --yes"));
-        assert!(details[0].ends_with("--db-path='/tmp/history.db'"));
-        assert!(!details[0].contains("ignored stale command"));
-    }
-
-    #[test]
-    fn publication_marker_marks_failed_debt() {
-        let publication = conary_core::db::models::GenerationPublication {
-            id: Some(1),
-            trigger_changeset_id: Some(8),
-            published_through_changeset_id: None,
-            tx_uuid: None,
-            selected_root_snapshot_id: None,
-            db_path: "/tmp/db".to_string(),
-            runtime_root: "/tmp/root".to_string(),
-            phase: conary_core::db::models::GenerationPublicationPhase::PendingBuild,
-            status: conary_core::db::models::GenerationPublicationStatus::Failed,
-            state_number: None,
-            generation_number: None,
-            summary: "fixture".to_string(),
-            config_transaction: Default::default(),
-            last_error: Some("forced".to_string()),
-            retry_count: 1,
-            recoverable: true,
-            created_at: None,
-            updated_at: None,
-            completed_at: None,
-        };
-        assert_eq!(
-            publication_marker_for_changeset(&[publication], Some(8)),
-            " [publication-failed]"
-        );
-    }
-
-    #[test]
-    fn lifecycle_failure_history_line_uses_warn_vocabulary_and_typed_fields() {
-        let event = conary_core::db::models::LifecycleEvent {
-            id: 1,
-            changeset_id: 8,
-            sequence: 0,
-            source_package: "fixture".to_string(),
-            source_version: "1.0.0".to_string(),
-            source_entry: "rpm:%post".to_string(),
-            failure_kind: ScriptletFailureKind::ScriptExited,
-            requested_sandbox_mode: SandboxMode::Always,
-            effective_sandbox: EffectiveSandbox::TargetRoot,
-            phase: "post-install".to_string(),
-            message: "script returned 42".to_string(),
-            created_at: "2026-08-09 12:00:00".to_string(),
-        };
-
-        let line = format_lifecycle_event_line(&event);
-        assert!(line.starts_with(&crate::ui::tag(crate::ui::Status::Warn)));
-        assert!(line.contains("fixture 1.0.0 rpm:%post"));
-        assert!(line.contains("ScriptExited"));
-        assert!(line.contains("phase=post-install"));
-        assert!(line.contains("script returned 42"));
     }
 }
