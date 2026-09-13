@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-13
-revision: 101
+revision: 102
 summary: Share launch-aware Remi completion and enforce a measured repopulation deadline while retaining deployment fencing and serialized queues
 ---
 
@@ -263,7 +263,10 @@ workflow.
   any wait between attempts. It kills and reaps the complete operation process
   group at timeout and retains the last valid inspection. Its `repopulation_wait`
   record contains the budget, actual elapsed milliseconds, outcome/reason, and
-  each inspection/ingress duration, exit status, and timeout flag. Failure after
+  each inspection/ingress duration, exit status, and timeout flag. Only a complete
+  typed inspection can report ordinary repopulation lag; missing or malformed
+  fields fail immediately, including when the inspection command exits nonzero.
+  Failure after
   this deadline never starts another unbounded catalog inspection. The recorded
   duration includes timeout cleanup and may show scheduling/cleanup overhead;
   successful completion must be within the deadline. The one-hour ceiling

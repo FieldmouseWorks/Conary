@@ -2583,6 +2583,7 @@ wait_remi_repopulation() {
     helper_path="$(realpath -- "$0")" || die "cannot resolve helper path: $0"
     python3 - "$budget" "$helper_path" <<'PY'
 import json
+import math
 import os
 import signal
 import subprocess
@@ -2701,7 +2702,33 @@ class RepopulationWait:
             parsed = json.loads(text)
         except ValueError:
             return None
-        return parsed if isinstance(parsed, dict) else None
+        if not isinstance(parsed, dict) or not isinstance(parsed.get("schema_epoch"), str):
+            return None
+
+        def number(value):
+            return type(value) is int or (type(value) is float and math.isfinite(value))
+
+        # Match the deployment inspection boundary before classifying a nonzero
+        # result as ordinary repopulation lag. A JSON object alone is not proof
+        # that the binary still implements this inspection contract.
+        for field in ("schema_revision", "configured_profiles", "populated_profiles",
+                      "candidate_profiles"):
+            if not number(parsed.get(field)):
+                return None
+        if not all(isinstance(parsed.get(field), list) for field in ("profiles", "candidates")):
+            return None
+        verification = parsed.get("candidate_verification")
+        if not isinstance(verification, dict):
+            return None
+        if verification.get("mode") not in ("full_reopen", "publication_attested"):
+            return None
+        if verification.get("completed_after") is not None and not number(verification["completed_after"]):
+            return None
+        for field in ("elapsed_micros", "catalog_files_reopened", "catalog_bytes_hashed",
+                      "catalog_bytes_integrity_checked"):
+            if not number(verification.get(field)):
+                return None
+        return parsed
 
     def run(self):
         while True:
