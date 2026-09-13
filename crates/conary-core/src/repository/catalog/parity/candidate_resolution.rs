@@ -800,7 +800,7 @@ mod tests {
         crate::db::init(&database).unwrap();
         let connection = crate::db::open(&database).unwrap();
         initialize_projection_keys(&connection).unwrap();
-        let repository_id = Repository::new("arch", "https://example.test")
+        let repository_id = Repository::new("arch".to_string(), "https://example.test".to_string())
             .insert(&connection)
             .unwrap();
         let clause = crate::repository::requirement::parse_native_requirement(
