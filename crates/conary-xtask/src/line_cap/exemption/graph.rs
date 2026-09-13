@@ -86,10 +86,17 @@ pub(crate) fn collect_source_graph(
                 &mut sites,
                 &context.directory(),
             );
-            if let Err(error) =
-                collect_includes_with_authority(syntax, Path::new(&context.file), &mut sites)
-            {
-                unresolved_sources.insert(context.file.clone(), error);
+            match collect_includes_with_authority(syntax, Path::new(&context.file), &mut sites) {
+                Ok(false) => {}
+                Ok(true) => {
+                    unresolved_sources.insert(
+                        context.file.clone(),
+                        "production macro invocation requires compiler name resolution and expansion".to_owned(),
+                    );
+                }
+                Err(error) => {
+                    unresolved_sources.insert(context.file.clone(), error);
+                }
             }
             for (file, entries) in sites {
                 for site in entries {

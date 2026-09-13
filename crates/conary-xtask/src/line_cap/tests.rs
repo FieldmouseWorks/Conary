@@ -2474,3 +2474,34 @@ fn test_only_expansions_do_not_introduce_production_uncertainty() {
         .unwrap_or_else(|error| panic!("{source}: {error}"));
     }
 }
+
+#[test]
+fn apparent_builtin_calls_cannot_certify_the_extern_prelude() {
+    for call in [
+        r#"include!("ignored.rs");"#,
+        r#"std::include!("ignored.rs");"#,
+        r#"core::include!("ignored.rs");"#,
+    ] {
+        let sources = BTreeMap::from([
+            (
+                "crates/x/src/lib.rs".to_owned(),
+                syn::parse_file(&format!("{call} #[cfg(test)] mod tests;")).unwrap(),
+            ),
+            (
+                "crates/x/src/tests.rs".to_owned(),
+                syn::parse_file("fn helper() {}").unwrap(),
+            ),
+        ]);
+        let graph = collect_source_graph(
+            &sources,
+            &fixture_targets(sources.keys().map(String::as_str)),
+        )
+        .unwrap();
+        assert!(!graph.unresolved_sources.is_empty(), "{call}");
+        assert_eq!(
+            graph.gates["crates/x/src/tests.rs"],
+            ExemptionGate::Unknown,
+            "{call}"
+        );
+    }
+}

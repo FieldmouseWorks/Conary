@@ -339,14 +339,14 @@ pub(crate) fn collect_include_declarations(
     relative: &Path,
     declarations: &mut BTreeMap<String, Vec<ModuleDeclaration>>,
 ) -> Result<(), String> {
-    collect_includes_with_authority(syntax, relative, declarations)
+    collect_includes_with_authority(syntax, relative, declarations).map(|_| ())
 }
 
 fn collect_includes_with_authority(
     syntax: &syn::File,
     relative: &Path,
     declarations: &mut BTreeMap<String, Vec<ModuleDeclaration>>,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let mut visitor = IncludeVisitor {
         declaring_file: path_text(relative),
         // The included path shares `#[path]`'s base: the containing file's
@@ -357,6 +357,7 @@ fn collect_includes_with_authority(
             .to_path_buf(),
         inherited: syntax.attrs.clone(),
         unresolved: None,
+        production_macro: false,
         declarations,
     };
     if macros::attributes_require_expansion(&syntax.attrs, &syntax.attrs) {
@@ -370,7 +371,7 @@ fn collect_includes_with_authority(
             failure.reason()
         ))
     } else {
-        Ok(())
+        Ok(visitor.production_macro)
     }
 }
 
@@ -456,6 +457,7 @@ pub(crate) struct IncludeVisitor<'a> {
     file_dir: PathBuf,
     inherited: Vec<Attribute>,
     unresolved: Option<SourceAuthorityFailure>,
+    production_macro: bool,
     declarations: &'a mut BTreeMap<String, Vec<ModuleDeclaration>>,
 }
 
@@ -484,6 +486,10 @@ impl IncludeVisitor<'_> {
     }
 
     fn record(&mut self, mac: &syn::Macro) {
+        // Even std/core can be rebound through the compiler's extern prelude.
+        // Literal paths remain useful declaration evidence, but their spelling
+        // cannot certify that expansion adds no other production load sites.
+        self.production_macro |= cfg::can_compile_without_test(&self.inherited);
         if !cfg::can_compile(&self.inherited) {
             return;
         }

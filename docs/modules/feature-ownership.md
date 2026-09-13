@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-13
-revision: 109
+revision: 110
 summary: Route features to owned paths and proof, including context-aware test-file caps, Cargo target evidence, and live exception ownership.
 ---
 
@@ -1298,12 +1298,13 @@ the source; conventional flat modules load children below the file stem. A file
 loaded in multiple contexts keeps separate child gates before file-level caps
 aggregate production reachability. Builtin includes and literal concat paths
 accept the unqualified, `std::`, and `core::` forms and an optional trailing comma.
-Opaque production macro invocations, unresolved include paths, shadowing imports,
+Production macro invocations, unresolved include paths, shadowing imports,
 and transformation attributes invalidate context-only test exemptions. The graph
 records these sources explicitly and retains normal caps for unknown files.
 `crates/conary-xtask/src/line_cap/exemption/macros.rs` owns conditional external
 imports and attribute uncertainty; macro tokens are never interpreted as expansion
-proof. Intrinsic `#![cfg(test)]` guards remain authoritative even in an opaque
+proof. Apparent std/core builtins also need compiler name resolution because the
+extern prelude can replace those namespaces. Intrinsic `#![cfg(test)]` guards remain authoritative even in an opaque
 graph, so extracted test files carry their own compiler-enforced boundary as well
 as the parent gate. Test-only or impossible expansions cannot introduce production
 uncertainty. Raw identifiers retain the same module, macro, attribute, and
