@@ -12,5 +12,7 @@ member of the authenticated Arch `extra.db` used by the protected resolution
 The `%DEPENDS%` block declares `rustup` twice. The parser test preserves both
 native declarations. Candidate-resolution tests separately prove that repeated
 canonical groups retain package-fact multiplicity and yield the same exact
-closure and unresolved-group evidence across worker counts. The fixture is
-metadata only; no package payload is installed.
+closure and unresolved-group evidence across worker counts. A direct projection
+test additionally verifies six distinct stored group IDs across two packages
+sharing the same group digest, with every occurrence mapped to its exact owner.
+The fixture is metadata only; no package payload is installed.

@@ -887,7 +887,9 @@ mod tests {
             6
         );
         assert_eq!(expected[0].1, expected[1].1);
-        for ((package_key, digest), occurrences) in expected.iter().zip(rows.chunks_exact(3)) {
+        let (occurrences, remainder) = rows.as_chunks::<3>();
+        assert!(remainder.is_empty());
+        for ((package_key, digest), occurrences) in expected.iter().zip(occurrences) {
             for (_, stored_package_id, mapped_package_id, mapped_key, mapped_digest) in occurrences
             {
                 assert_eq!(stored_package_id, mapped_package_id);
