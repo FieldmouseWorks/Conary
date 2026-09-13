@@ -628,6 +628,44 @@ sizes describe the builder's payload records, not a compressed archive or an
 installed disk delta. Native export's returned archive size remains a separate
 field beside its written path.
 
+The former summary rendered `Package: summary-build v2.0.0`, omitted its CCS
+release field, and labeled payload bytes `Total size`. The same fixture now
+renders:
+
+```text
+Package build summary:
+  Package: summary-build
+  Version: 2.0.0
+  CCS release: 7
+  Architecture: noarch
+  File records: 2
+  Payload size: 8 bytes
+  Payload sources: 1 regular file
+
+Chunking:
+  Chunked files: 0
+  Whole files: 1
+  Total chunks: 0
+  Unique chunks: 0
+
+Components:
+  Component  File records  Payload size
+  runtime    2             8 bytes
+```
+
+Its preview is:
+
+```text
+Planned package build:
+  Package: summary-build
+  Version: 2.0.0
+  CCS release: 7
+
+Planned artifacts:
+  ccs: <fixture>/preview/summary-build-2.0.0-7.ccs
+note: Dry run: no package artifacts were written.
+```
+
 Components appear in sorted name order; chunk counts and intra-package savings
 come from the builder's optional chunking statistics. Conversion notes retain
 their typed unsupported-feature, hook, and dependency categories. Dynamic
