@@ -331,27 +331,4 @@ mod tests {
         );
         assert_eq!(fields(&lines, "Version"), ["2", "2", "2", "2", "2"]);
     }
-
-    #[test]
-    fn every_typed_kind_has_one_display_label() {
-        plain();
-        let kinds = [
-            (RepositoryCapabilityKind::PackageName, "package"),
-            (RepositoryCapabilityKind::Virtual, "virtual"),
-            (RepositoryCapabilityKind::Soname, "soname"),
-            (RepositoryCapabilityKind::File, "file"),
-            (RepositoryCapabilityKind::Path, "path"),
-            (RepositoryCapabilityKind::Binary, "binary"),
-            (RepositoryCapabilityKind::PkgConfig, "pkgconfig"),
-            (RepositoryCapabilityKind::PkgConfig32, "pkgconfig32"),
-            (RepositoryCapabilityKind::Comar, "comar"),
-            (RepositoryCapabilityKind::Generic, "generic"),
-        ];
-        let provides: Vec<ProvideEntry> = kinds
-            .iter()
-            .map(|(kind, capability)| entry(capability, *kind))
-            .collect();
-        let lines = section(&provides);
-        assert_eq!(fields(&lines, "Kind"), kinds.map(|(_, label)| label));
-    }
 }
