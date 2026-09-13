@@ -1,4 +1,6 @@
 // crates/conary-core/src/db/schema/tests.rs
+
+#![cfg(test)]
 use super::*;
 
 #[test]

@@ -1,5 +1,7 @@
 // crates/conary-core/src/derivation/pipeline/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::derivation::compose::{ComposeError, erofs_image_hash};
 use crate::derivation::id::DerivationInputs;

@@ -1,5 +1,7 @@
 // crates/conary-core/src/db/generation_snapshot/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 
 struct UnsupportedProvider {

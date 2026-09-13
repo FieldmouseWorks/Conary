@@ -1,5 +1,7 @@
 // apps/conary/tests/packaged_onboarding.rs
 
+#![cfg(test)]
+
 use std::fs;
 use std::path::{Path, PathBuf};
 

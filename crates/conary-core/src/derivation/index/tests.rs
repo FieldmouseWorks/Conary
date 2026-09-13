@@ -1,5 +1,7 @@
 // crates/conary-core/src/derivation/index/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::db::schema::ensure_current;
 

@@ -1,5 +1,7 @@
 // apps/conary/src/commands/install/native_events/tests/provider_projection.rs
 
+#![cfg(test)]
+
 use super::*;
 
 #[test]

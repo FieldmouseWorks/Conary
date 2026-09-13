@@ -1,5 +1,7 @@
 // crates/conary-core/src/resolver/sat/tests/formal_dependencies.rs
 
+#![cfg(test)]
+
 use super::*;
 fn insert_native_trove(
     conn: &Connection,

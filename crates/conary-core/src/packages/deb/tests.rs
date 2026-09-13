@@ -1,5 +1,7 @@
 // crates/conary-core/src/packages/deb/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::packages::traits::{
     DebMaintainerMode, DebTriggerAwaitMode, DebTriggerDirective, NativeArgumentValue,

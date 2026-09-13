@@ -1,5 +1,7 @@
 // apps/conary/src/ui/update_summary/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 
 fn entry(target: &str, status: CollectionUpdateStatus) -> CollectionUpdateEntry {

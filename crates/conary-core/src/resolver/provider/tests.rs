@@ -1,5 +1,7 @@
 // crates/conary-core/src/resolver/provider/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::db;
 use crate::db::models::{

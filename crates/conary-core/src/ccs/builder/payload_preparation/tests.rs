@@ -1,5 +1,7 @@
 // crates/conary-core/src/ccs/builder/payload_preparation/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::packages::payload::ReopenablePayload;
 use std::sync::Arc;

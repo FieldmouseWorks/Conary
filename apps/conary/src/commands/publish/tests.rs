@@ -1,5 +1,7 @@
 // apps/conary/src/commands/publish/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use std::ffi::OsString;
 use std::process::Command;

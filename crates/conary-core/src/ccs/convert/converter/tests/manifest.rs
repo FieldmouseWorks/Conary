@@ -1,5 +1,7 @@
 // crates/conary-core/src/ccs/convert/converter/tests/manifest.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::repository::dependency_model::ProvidedCapability;
 use crate::repository::dependency_model::RepositoryCapabilityKind;

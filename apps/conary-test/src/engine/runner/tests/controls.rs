@@ -1,5 +1,7 @@
 // apps/conary-test/src/engine/runner/tests/controls.rs
 
+#![cfg(test)]
+
 use super::*;
 
 #[test]

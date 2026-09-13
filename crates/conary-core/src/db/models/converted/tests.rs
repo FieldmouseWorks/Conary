@@ -1,5 +1,7 @@
 // crates/conary-core/src/db/models/converted/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::ccs::convert::ScriptletBundleSummary;
 use crate::db::models::{

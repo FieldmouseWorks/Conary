@@ -1,5 +1,7 @@
 // apps/conary/src/commands/install/conversion/tests/capabilities.rs
 
+#![cfg(test)]
+
 use super::*;
 
 #[tokio::test]

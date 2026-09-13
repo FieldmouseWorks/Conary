@@ -1,5 +1,7 @@
 // apps/conary/tests/cli_daily_ux.rs
 
+#![cfg(test)]
+
 pub mod common;
 
 use conary_core::db::models::{

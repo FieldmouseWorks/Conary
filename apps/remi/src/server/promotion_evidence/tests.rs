@@ -1,5 +1,7 @@
 // apps/remi/src/server/promotion_evidence/tests.rs
 
+#![cfg(test)]
+
 use std::collections::BTreeMap;
 
 use conary_core::canonical::{

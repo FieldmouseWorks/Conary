@@ -1,5 +1,7 @@
 // apps/conary/src/commands/cook/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use conary_core::ccs::verify::verify_package;
 use conary_core::ccs::{CcsPackage, SigningKeyPair, TrustPolicy};

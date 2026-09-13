@@ -121,7 +121,7 @@ pub(super) fn is_test_only(attributes: &[Attribute]) -> bool {
     // annotation whose condition can be false leaves an ordinary production item.
     let annotations = attributes
         .iter()
-        .filter_map(|attribute| test_annotation(&attribute.meta))
+        .filter_map(|attribute| test_annotation(&attribute.meta, false))
         .collect();
     let retains_production = Predicate::All(vec![
         predicate,
@@ -155,12 +155,13 @@ fn effective_cfg(meta: &Meta) -> Option<Predicate> {
     Some(Predicate::All(Vec::new()))
 }
 
-fn test_annotation(meta: &Meta) -> Option<Predicate> {
+fn test_annotation(meta: &Meta, builtin_only: bool) -> Option<Predicate> {
     if meta
         .path()
         .segments
         .last()
         .is_some_and(|segment| segment.ident.unraw() == "test")
+        && (!builtin_only || super::attributes::is_ident(meta.path(), "test"))
     {
         return Some(Predicate::All(Vec::new()));
     }
@@ -176,7 +177,7 @@ fn test_annotation(meta: &Meta) -> Option<Predicate> {
         .into_iter();
     let condition = Predicate::parse(arguments.next()?)?;
     let annotations = arguments
-        .filter_map(|meta| test_annotation(&meta))
+        .filter_map(|meta| test_annotation(&meta, builtin_only))
         .collect();
     Some(Predicate::All(vec![condition, Predicate::Any(annotations)]))
 }
@@ -191,4 +192,24 @@ pub(super) fn can_compile(attributes: &[Attribute]) -> bool {
         return true;
     };
     Predicate::All(predicates).satisfiable(&mut BTreeMap::new())
+}
+
+/// Expansion outside test builds can introduce production source declarations.
+pub(super) fn can_compile_without_test(attributes: &[Attribute]) -> bool {
+    let Some(predicates) = attributes
+        .iter()
+        .map(|attribute| effective_cfg(&attribute.meta))
+        .collect::<Option<Vec<_>>>()
+    else {
+        return true;
+    };
+    let annotations = attributes
+        .iter()
+        .filter_map(|attribute| test_annotation(&attribute.meta, true))
+        .collect();
+    Predicate::All(vec![
+        Predicate::All(predicates),
+        Predicate::Not(Box::new(Predicate::Any(annotations))),
+    ])
+    .satisfiable(&mut BTreeMap::from([("test".to_owned(), false)]))
 }

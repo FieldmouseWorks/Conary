@@ -48,7 +48,6 @@ use super::{
     path_text, trait_item_attributes,
 };
 pub(crate) use graph::{SourceGraph, collect_source_graph};
-use macros::MacroAuthority;
 
 /// How an exempt-named file is compiled, as far as the declaration graph can
 /// establish it.
@@ -340,15 +339,13 @@ pub(crate) fn collect_include_declarations(
     relative: &Path,
     declarations: &mut BTreeMap<String, Vec<ModuleDeclaration>>,
 ) -> Result<(), String> {
-    let authority = MacroAuthority::collect([syntax]);
-    collect_includes_with_authority(syntax, relative, declarations, &authority)
+    collect_includes_with_authority(syntax, relative, declarations)
 }
 
 fn collect_includes_with_authority(
     syntax: &syn::File,
     relative: &Path,
     declarations: &mut BTreeMap<String, Vec<ModuleDeclaration>>,
-    authority: &MacroAuthority,
 ) -> Result<(), String> {
     let mut visitor = IncludeVisitor {
         declaring_file: path_text(relative),
@@ -360,9 +357,11 @@ fn collect_includes_with_authority(
             .to_path_buf(),
         inherited: syntax.attrs.clone(),
         unresolved: None,
-        authority,
         declarations,
     };
+    if macros::attributes_require_expansion(&syntax.attrs, &syntax.attrs) {
+        visitor.note(SourceAuthorityFailure::Expansion);
+    }
     visitor.visit_file(syntax);
     if let Some(failure) = visitor.unresolved {
         Err(format!(
@@ -432,7 +431,7 @@ fn include_import_failure(
             &name.ident.unraw().to_string(),
             &name.ident.unraw().to_string(),
         ),
-        syn::UseTree::Glob(_) => None,
+        syn::UseTree::Glob(_) => Some(SourceAuthorityFailure::Shadow),
     }
 }
 
@@ -441,6 +440,9 @@ fn builtin_import_failure(
     original: &str,
     binding: &str,
 ) -> Option<SourceAuthorityFailure> {
+    if binding == "std" || binding == "core" {
+        return Some(SourceAuthorityFailure::Shadow);
+    }
     if binding != "include" && binding != "concat" {
         return None;
     }
@@ -454,11 +456,16 @@ pub(crate) struct IncludeVisitor<'a> {
     file_dir: PathBuf,
     inherited: Vec<Attribute>,
     unresolved: Option<SourceAuthorityFailure>,
-    authority: &'a MacroAuthority,
     declarations: &'a mut BTreeMap<String, Vec<ModuleDeclaration>>,
 }
 
 impl IncludeVisitor<'_> {
+    fn note(&mut self, failure: SourceAuthorityFailure) {
+        if cfg::can_compile_without_test(&self.inherited) {
+            self.unresolved.get_or_insert(failure);
+        }
+    }
+
     fn descend(
         &mut self,
         attributes: &[Attribute],
@@ -468,6 +475,9 @@ impl IncludeVisitor<'_> {
         let depth = self.inherited.len();
         self.inherited.extend_from_slice(attributes);
         if cfg::can_compile(&self.inherited) {
+            if macros::attributes_require_expansion(attributes, &self.inherited) {
+                self.note(SourceAuthorityFailure::Expansion);
+            }
             visit(self);
         }
         self.inherited.truncate(depth);
@@ -477,22 +487,17 @@ impl IncludeVisitor<'_> {
         if !cfg::can_compile(&self.inherited) {
             return;
         }
-        if self.authority.requires_expansion(mac) {
-            self.unresolved
-                .get_or_insert(SourceAuthorityFailure::Expansion);
-            return;
-        }
         if !mac
             .path
             .segments
             .last()
             .is_some_and(|segment| segment.ident.unraw() == "include")
-            || !cfg::can_compile(&self.inherited)
         {
+            self.note(SourceAuthorityFailure::Expansion);
             return;
         }
         if !builtin_macro_path(&mac.path, "include") {
-            self.unresolved.get_or_insert(SourceAuthorityFailure::Path);
+            self.note(SourceAuthorityFailure::Path);
             return;
         }
         use syn::parse::Parser;
@@ -504,9 +509,9 @@ impl IncludeVisitor<'_> {
             .and_then(|mut arguments| arguments.pop())
             .and_then(|argument| include_path(argument.into_value()))
         else {
-            // An opaque include may reach any scanned file. Fail the scan
-            // rather than certifying exemptions from an incomplete graph.
-            self.unresolved.get_or_insert(SourceAuthorityFailure::Path);
+            // An opaque include may reach any scanned file, so contextual
+            // exemptions cannot be certified from this incomplete graph.
+            self.note(SourceAuthorityFailure::Path);
             return;
         };
         let target = normalize(&self.file_dir.join(path));
@@ -601,11 +606,10 @@ impl<'ast> Visit<'ast> for IncludeVisitor<'_> {
                 .as_ref()
                 .is_some_and(|ident| ident.unraw() == "include" || ident.unraw() == "concat")
             {
-                self.unresolved
-                    .get_or_insert(SourceAuthorityFailure::Shadow);
+                self.note(SourceAuthorityFailure::Shadow);
             }
-            // Definitions are indexed separately; only an invocation expands
-            // their tokens into the surrounding source context.
+            // A definition does not expand until called. Every opaque call
+            // requires compiler authority, regardless of its token spelling.
             return;
         }
         visit::visit_item_macro(self, node);
@@ -613,14 +617,20 @@ impl<'ast> Visit<'ast> for IncludeVisitor<'_> {
 
     fn visit_item_use(&mut self, node: &'ast syn::ItemUse) {
         if let Some(failure) = include_import_failure(&node.tree, &[]) {
-            self.unresolved.get_or_insert(failure);
+            self.note(failure);
         }
     }
 
     fn visit_item_extern_crate(&mut self, node: &'ast syn::ItemExternCrate) {
+        if node
+            .rename
+            .as_ref()
+            .is_some_and(|(_, name)| name.unraw() == "std" || name.unraw() == "core")
+        {
+            self.note(SourceAuthorityFailure::Shadow);
+        }
         if macros::reachable_external_import(&node.attrs, &self.inherited) {
-            self.unresolved
-                .get_or_insert(SourceAuthorityFailure::ExternalImport);
+            self.note(SourceAuthorityFailure::ExternalImport);
         }
     }
 

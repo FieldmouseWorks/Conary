@@ -1,5 +1,7 @@
 // crates/conary-core/src/ccs/hooks/capabilities/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::ccs::manifest::{Service, ServiceAction};
 use crate::ccs::native_lifecycle::SourceFormat;

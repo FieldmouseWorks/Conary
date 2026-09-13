@@ -1,5 +1,7 @@
 // apps/conary/src/commands/adopt/system/captured_root/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use conary_core::db::models::{Changeset, ChangesetStatus};
 use conary_core::filesystem::CasStore;

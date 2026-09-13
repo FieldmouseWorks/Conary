@@ -1,4 +1,6 @@
 // apps/conary/tests/installed_release_update.rs
+
+#![cfg(test)]
 #![cfg(feature = "test-hooks")]
 
 // The production update path runs with the explicit test-only mount boundary,

@@ -1,5 +1,7 @@
 // apps/remi/src/deployment/tests/fixtures.rs
 
+#![cfg(test)]
+
 use crate::deployment::PrepareOptions;
 use std::fs;
 use std::os::unix::fs::DirBuilderExt;

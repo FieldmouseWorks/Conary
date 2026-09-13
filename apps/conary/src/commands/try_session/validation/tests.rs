@@ -1,5 +1,7 @@
 // apps/conary/src/commands/try_session/validation/tests.rs
 
+#![cfg(test)]
+
 use std::collections::HashMap;
 
 use super::*;

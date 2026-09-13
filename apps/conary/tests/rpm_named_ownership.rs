@@ -1,4 +1,6 @@
 // apps/conary/tests/rpm_named_ownership.rs
+
+#![cfg(test)]
 #![cfg(feature = "test-hooks")]
 
 //! End-to-end proof that RPM header names remain source authority while the

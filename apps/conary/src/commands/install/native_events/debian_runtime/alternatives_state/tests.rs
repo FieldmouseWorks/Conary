@@ -1,5 +1,7 @@
 // apps/conary/src/commands/install/native_events/debian_runtime/alternatives_state/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use std::os::unix::fs::symlink;
 use std::process::Command;

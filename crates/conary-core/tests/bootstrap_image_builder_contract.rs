@@ -1,5 +1,7 @@
 // crates/conary-core/tests/bootstrap_image_builder_contract.rs
 
+#![cfg(test)]
+
 use std::fs;
 use std::path::{Path, PathBuf};
 

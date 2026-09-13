@@ -1,5 +1,7 @@
 // crates/conary-core/src/repository/catalog/parity/debian/tests/sibling_conflict.rs
 
+#![cfg(test)]
+
 use super::*;
 
 #[test]

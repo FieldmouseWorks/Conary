@@ -1,5 +1,7 @@
 // crates/conary-core/src/repository/static_repo/sync/tests.rs
 
+#![cfg(test)]
+
 use super::fetch_static_sync_snapshot;
 use crate::ccs::signing::SigningKeyPair;
 use crate::db::models::{Repository, RepositoryPackageKeyStatus};

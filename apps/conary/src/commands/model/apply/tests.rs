@@ -1,5 +1,7 @@
 // apps/conary/src/commands/model/apply/tests.rs
 
+#![cfg(test)]
+
 use super::super::test_support::{
     ReplatformMetadataFailpointReset, build_test_ccs_package,
     build_test_ccs_package_with_payloads_and_relations, insert_test_repository_package_resolution,

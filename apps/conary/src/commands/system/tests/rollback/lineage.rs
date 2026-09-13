@@ -1,5 +1,7 @@
 // apps/conary/src/commands/system/tests/rollback/lineage.rs
 
+#![cfg(test)]
+
 use super::*;
 use conary_core::db::models::{ChangesetKind, GenerationPublication};
 #[cfg(feature = "test-hooks")]

@@ -1,5 +1,7 @@
 // crates/conary-core/src/flavor/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 
 // === FlavorOp tests ===

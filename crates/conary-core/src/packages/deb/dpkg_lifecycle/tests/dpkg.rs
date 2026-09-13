@@ -1,5 +1,7 @@
 // crates/conary-core/src/packages/deb/dpkg_lifecycle/tests/dpkg.rs
 
+#![cfg(test)]
+
 use super::*;
 
 fn round_trip_owned(values: Vec<Vec<u8>>) -> DpkgInvocation {

@@ -1,5 +1,7 @@
 // crates/conary-core/src/ccs/native_transaction/tests/debian/lifecycle.rs
 
+#![cfg(test)]
+
 use super::*;
 
 mod basic;

@@ -1,5 +1,7 @@
 // crates/conary-core/src/recipe/hermetic/plan/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::recipe::format::{
     BuildSection, LocalSourceSection, PackageSection, Recipe, SourceSection,

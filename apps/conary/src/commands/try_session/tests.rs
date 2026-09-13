@@ -1,5 +1,7 @@
 // apps/conary/src/commands/try_session/tests.rs
 
+#![cfg(test)]
+
 use std::path::PathBuf;
 
 use conary_core::db::models::TrySessionMode;

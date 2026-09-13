@@ -1,5 +1,7 @@
 // apps/conary/src/commands/update/package/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::commands::test_helpers::{
     create_test_db, insert_test_static_ccs_repository, seed_test_bootable_runtime,

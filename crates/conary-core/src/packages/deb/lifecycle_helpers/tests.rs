@@ -1,5 +1,7 @@
 // crates/conary-core/src/packages/deb/lifecycle_helpers/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 
 fn argv(arguments: &[&str]) -> Vec<String> {

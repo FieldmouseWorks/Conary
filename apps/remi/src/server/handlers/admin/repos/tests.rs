@@ -1,5 +1,7 @@
 // apps/remi/src/server/handlers/admin/repos/tests.rs
 
+#![cfg(test)]
+
 use axum::http::StatusCode;
 use tower::ServiceExt;
 

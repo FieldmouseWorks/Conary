@@ -1,5 +1,7 @@
 // crates/conary-core/src/repository/static_repo/publish/tests.rs
 
+#![cfg(test)]
+
 use super::{
     ForcedRefreshForTest, StaticPublishOptions, prepare_static_key_dir, publish_static_repo,
     publish_static_repo_with_forced_refresh_for_test, try_acquire_publish_lock_for_test,

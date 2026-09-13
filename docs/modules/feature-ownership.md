@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-13
-revision: 108
+revision: 109
 summary: Route features to owned paths and proof, including context-aware test-file caps, Cargo target evidence, and live exception ownership.
 ---
 
@@ -1297,21 +1297,19 @@ and context gates: Cargo roots, explicit paths, and includes load children besid
 the source; conventional flat modules load children below the file stem. A file
 loaded in multiple contexts keeps separate child gates before file-level caps
 aggregate production reachability. Builtin includes and literal concat paths
-accept the unqualified, `std::`, and `core::` forms; unresolved include authority
-fails the scan. Renamed include imports are explicit unresolved authority because
-the syntax gate does not perform macro name resolution. Local definitions or
-imports that shadow builtin include/concat names also fail as unresolved authority.
-Reachable `macro_use` extern-crate imports require external macro name resolution
-and expansion, so they fail explicitly before any imported call is trusted.
-Nested conditional attributes retain their predicates; impossible imports are ignored.
-Raw identifiers retain the same module, macro, attribute, and cfg-predicate identity
-as their ordinary Rust spelling.
-`crates/conary-xtask/src/line_cap/exemption/macros.rs` indexes local macro
-definitions and import aliases. Invoked local macros with source-declaration tokens,
-chains or callbacks to such macros, or source-declaration arguments fail as
-unresolved expansion. Source-declaration arguments to opaque macros also fail;
-opaque nested macro inputs are not assumed to be data.
-Literal include arguments accept one expression and an optional trailing comma.
+accept the unqualified, `std::`, and `core::` forms and an optional trailing comma.
+Opaque production macro invocations, unresolved include paths, shadowing imports,
+and transformation attributes invalidate context-only test exemptions. The graph
+records these sources explicitly and retains normal caps for unknown files.
+`crates/conary-xtask/src/line_cap/exemption/macros.rs` owns conditional external
+imports and attribute uncertainty; macro tokens are never interpreted as expansion
+proof. Intrinsic `#![cfg(test)]` guards remain authoritative even in an opaque
+graph, so extracted test files carry their own compiler-enforced boundary as well
+as the parent gate. Test-only or impossible expansions cannot introduce production
+uncertainty. Raw identifiers retain the same module, macro, attribute, and
+cfg-predicate identity as their ordinary Rust spelling.
+The repository resolution and sync test suites use ordinary sibling modules;
+sync's native cases belong to its `tests::native` child module.
 Attributes whose final path segment is `test`, including conditional annotations
 enabled by `cfg_attr` in a test build, also mark inline tests.
 Files with more than 300 total test-only lines fail. Files named `tests.rs`

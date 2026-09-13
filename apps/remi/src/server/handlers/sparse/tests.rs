@@ -1,5 +1,7 @@
 // apps/remi/src/server/handlers/sparse/tests.rs
 
+#![cfg(test)]
+
 //! Sparse serving proofs for immutable profile catalogs.
 
 use super::*;

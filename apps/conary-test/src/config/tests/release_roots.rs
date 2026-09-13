@@ -1,5 +1,7 @@
 // apps/conary-test/src/config/tests/release_roots.rs
 
+#![cfg(test)]
+
 use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};

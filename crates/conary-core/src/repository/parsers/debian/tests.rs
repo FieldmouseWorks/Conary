@@ -1,5 +1,7 @@
 // crates/conary-core/src/repository/parsers/debian/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::repository::RepositoryTrustPolicy;
 use crate::repository::dependency_model::RepositoryCapabilityKind;

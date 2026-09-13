@@ -1,5 +1,7 @@
 // crates/conary-core/src/ccs/native_lifecycle/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::packages::native_abi::RpmScriptletSlot;
 use crate::scriptlet::ScriptletFailureKind;

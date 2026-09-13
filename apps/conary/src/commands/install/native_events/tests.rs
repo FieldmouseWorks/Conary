@@ -1,5 +1,7 @@
 // apps/conary/src/commands/install/native_events/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use conary_core::ccs::native_lifecycle::{
     ArchHookActionMetadata, ArchHookMetadata, ArchHookOperation, ArchHookTriggerMetadata,

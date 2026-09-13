@@ -1,5 +1,7 @@
 // apps/conary/tests/database.rs
 
+#![cfg(test)]
+
 //! Database initialization, transactions, and core model tests.
 
 pub mod common;

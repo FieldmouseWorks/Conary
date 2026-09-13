@@ -1,5 +1,7 @@
 // apps/conary/tests/packaging_m3a.rs
 
+#![cfg(test)]
+
 use std::path::Path;
 use std::process::{Command, Output};
 

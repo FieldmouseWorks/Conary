@@ -1,5 +1,7 @@
 // crates/conary-core/src/filesystem/vfs/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 
 #[test]

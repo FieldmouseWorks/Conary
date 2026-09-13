@@ -847,4 +847,5 @@ fn build_download_options(conn: &Connection, repo: &Repository) -> Result<Downlo
 }
 
 #[cfg(test)]
-include!("resolution/tests.rs");
+#[path = "resolution/tests.rs"]
+mod tests;

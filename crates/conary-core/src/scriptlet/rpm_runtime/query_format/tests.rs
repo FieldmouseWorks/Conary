@@ -1,5 +1,7 @@
 // crates/conary-core/src/scriptlet/rpm_runtime/query_format/tests.rs
 
+#![cfg(test)]
+
 use super::format;
 use crate::ccs::native_lifecycle::{
     RpmHeaderContext, RpmHeaderFact, RpmHeaderFactSource, RpmHeaderValue, RpmMacroContext,

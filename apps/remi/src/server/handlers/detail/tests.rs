@@ -1,5 +1,7 @@
 // apps/remi/src/server/handlers/detail/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::server::catalog_authority::test_support::{
     ActiveCatalogFixture, package as catalog_package,

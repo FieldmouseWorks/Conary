@@ -1,5 +1,7 @@
 // apps/conary/src/commands/install/conversion/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use conary_core::capability::{
     CapabilityDeclaration, FilesystemCapabilities, NetworkCapabilities, SyscallCapabilities,

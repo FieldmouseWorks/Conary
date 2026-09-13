@@ -1,5 +1,7 @@
 // apps/conary-test/src/config/tests/workflow.rs
 
+#![cfg(test)]
+
 use serde::Deserialize;
 use std::{
     collections::BTreeMap,

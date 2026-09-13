@@ -1,5 +1,7 @@
 // apps/conary-test/src/config/tests/native_corpus/performance.rs
 
+#![cfg(test)]
+
 use super::super::conary_fixture_path;
 use sha2::{Digest, Sha256};
 use std::process::Command;

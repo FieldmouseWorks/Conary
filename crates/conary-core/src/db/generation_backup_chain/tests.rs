@@ -1,5 +1,7 @@
 // crates/conary-core/src/db/generation_backup_chain/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::db::generation_delta::{
     GenerationDbDeltaCapture, GenerationDbDeltaRecorder, create_mutation_epoch_triggers,

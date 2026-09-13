@@ -1,5 +1,7 @@
 // apps/conary/tests/release_ccs_manifest.rs
 
+#![cfg(test)]
+
 use conary_core::ccs::CcsManifest;
 use std::path::PathBuf;
 

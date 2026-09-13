@@ -1,5 +1,7 @@
 // crates/conary-core/src/db/generation_delta/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use rusqlite::session::ConflictAction;
 

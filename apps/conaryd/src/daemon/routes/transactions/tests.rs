@@ -1,4 +1,6 @@
 // apps/conaryd/src/daemon/routes/transactions/tests.rs
+
+#![cfg(test)]
 //! Tests for daemon transaction and package-operation routes.
 
 use super::super::test_support::{

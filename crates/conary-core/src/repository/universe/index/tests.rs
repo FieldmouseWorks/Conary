@@ -1,5 +1,7 @@
 // crates/conary-core/src/repository/universe/index/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::canonical::{CanonicalMapEntry, CanonicalMapSnapshot};
 use crate::db::models::{Repository, RepositoryPackage, RepositoryProvide};

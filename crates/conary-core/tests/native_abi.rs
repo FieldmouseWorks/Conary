@@ -1,5 +1,7 @@
 // crates/conary-core/tests/native_abi.rs
 
+#![cfg(test)]
+
 use conary_core::ccs::convert::ForeignConversionInput;
 use conary_core::ccs::{
     SigningKeyPair, TrustPolicy,

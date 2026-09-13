@@ -1,4 +1,6 @@
 // apps/conary/tests/cli_repository_discovery.rs
+
+#![cfg(test)]
 //! Disposable repository discovery journey and terminal/pipe presentation proof.
 
 use conary_core::db::models::Repository;

@@ -1,5 +1,7 @@
 // crates/conary-core/tests/generation_composefs_runtime_contract.rs
 
+#![cfg(test)]
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;

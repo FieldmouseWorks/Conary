@@ -1,5 +1,7 @@
 // crates/conary-core/src/db/models/package_payload_ownership/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::db::models::{PayloadClaimAnchorPolicy, TroveType};
 use crate::db::testing::create_test_db;

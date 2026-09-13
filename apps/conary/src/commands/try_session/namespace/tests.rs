@@ -1,4 +1,6 @@
 // apps/conary/src/commands/try_session/namespace/tests.rs
+
+#![cfg(test)]
 //! Tests for try-session namespace materialization and declarative hooks.
 
 use std::path::Path;

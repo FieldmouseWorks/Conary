@@ -1,5 +1,7 @@
 // crates/conary-core/src/scriptlet/rpm_runtime/macro_expand/tests.rs
 
+#![cfg(test)]
+
 use super::RpmMacroEngine;
 use crate::ccs::native_lifecycle::{
     RpmCriticality, RpmHeaderContext, RpmMacroContext, RpmMacroDefinition,

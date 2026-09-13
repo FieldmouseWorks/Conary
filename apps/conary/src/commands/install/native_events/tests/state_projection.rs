@@ -1,5 +1,7 @@
 // apps/conary/src/commands/install/native_events/tests/state_projection.rs
 
+#![cfg(test)]
+
 //! Typed selection and scaling proof for native transaction state projection.
 
 use super::*;

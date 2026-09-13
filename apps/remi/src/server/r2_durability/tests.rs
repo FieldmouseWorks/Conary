@@ -1,5 +1,7 @@
 // apps/remi/src/server/r2_durability/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use conary_core::ccs::{CcsTransportEnvelopeV1, CcsTransportObjectV1};
 use conary_core::db::models::{

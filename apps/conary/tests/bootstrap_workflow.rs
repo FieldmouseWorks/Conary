@@ -1,5 +1,7 @@
 // apps/conary/tests/bootstrap_workflow.rs
 
+#![cfg(test)]
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 

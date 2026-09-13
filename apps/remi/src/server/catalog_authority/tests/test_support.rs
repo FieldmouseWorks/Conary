@@ -1,5 +1,7 @@
 // apps/remi/src/server/catalog_authority/tests/test_support.rs
 
+#![cfg(test)]
+
 //! Current-schema immutable catalog fixtures shared by Remi reader tests.
 
 use std::path::{Path, PathBuf};

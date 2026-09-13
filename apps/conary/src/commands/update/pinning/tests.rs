@@ -1,5 +1,7 @@
 // apps/conary/src/commands/update/pinning/tests.rs
 
+#![cfg(test)]
+
 //! Pin and unpin must select their target on the mutation lock's far side.
 //!
 //! Issue #976: both handlers selected and wrote pin state without acquiring the

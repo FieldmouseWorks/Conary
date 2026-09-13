@@ -1,5 +1,7 @@
 // apps/remi/src/server/native_oracle_input/tests.rs
 
+#![cfg(test)]
+
 use std::fs;
 
 use super::*;

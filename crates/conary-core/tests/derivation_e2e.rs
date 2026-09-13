@@ -1,5 +1,7 @@
 // crates/conary-core/tests/derivation_e2e.rs
 
+#![cfg(test)]
+
 //! End-to-end integration tests for the derivation pipeline.
 //!
 //! Exercises the full derivation chain: recipe loading, derivation ID

@@ -1,5 +1,7 @@
 // crates/conary-core/src/resolver/canonical/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::db::models::{CanonicalMappingAuthority, CanonicalPackage, PackageImplementation};
 use crate::db::testing::create_test_db;

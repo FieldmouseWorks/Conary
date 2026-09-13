@@ -1,5 +1,7 @@
 // crates/conary-core/src/ccs/archive_emitter/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use std::io::Cursor;
 use std::path::PathBuf;

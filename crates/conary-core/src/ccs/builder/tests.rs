@@ -1,5 +1,7 @@
 // crates/conary-core/src/ccs/builder/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::payload::PayloadNodeKind;
 use std::io::Write;

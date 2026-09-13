@@ -1,5 +1,7 @@
 // apps/remi/src/server/promotion_tests/tests.rs
 
+#![cfg(test)]
+
 use std::fs;
 use std::os::unix::fs::DirBuilderExt;
 

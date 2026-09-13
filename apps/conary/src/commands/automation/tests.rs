@@ -1,5 +1,7 @@
 // apps/conary/src/commands/automation/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::commands::composefs_ops::test_mount_skip_guard;
 use crate::commands::test_helpers::{create_active_test_generation, setup_command_test_db};

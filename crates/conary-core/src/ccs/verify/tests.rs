@@ -1,5 +1,7 @@
 // crates/conary-core/src/ccs/verify/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::ccs::builder::write_v3_ccs_package_from_bounded_memory_for_tests;
 use crate::ccs::signing::SigningKeyPair;

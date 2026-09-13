@@ -1,5 +1,7 @@
 // crates/conary-core/src/packages/rpm/payload/tests.rs
 
+#![cfg(test)]
+
 use super::digest::{ComputedFileDigest, ComputedRegularContent};
 use super::header::DeclaredDigest;
 use super::stream::{PayloadMember, RegularPayloadEvidence};

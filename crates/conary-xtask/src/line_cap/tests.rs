@@ -1,5 +1,7 @@
 // crates/conary-xtask/src/line_cap/tests.rs
 
+#![cfg(test)]
+
 use super::exemption::*;
 use super::issue_state::*;
 use super::siblings::*;
@@ -2230,6 +2232,8 @@ fn local_source_generating_macros_fail_as_unresolved_authority() {
         r#"macro_rules! load { () => { mod tests; } } #[cfg(not(test))] load!(); #[cfg(test)] mod tests;"#,
         r#"macro_rules! load { () => { include!("tests.rs"); } } load!();"#,
         r#"macro_rules! load { ($name:ident) => { mod $name; } } load!(tests);"#,
+        r#"macro_rules! inline { () => { mod tests {} } } inline!();"#,
+        r#"fn run() { macro_rules! ordinary { () => { let r#mod = (); }; } ordinary!(); }"#,
         r#"macro_rules! forward { ($item:item) => { $item } } forward!(mod tests;);"#,
         r#"macro_rules! load { () => { mod tests; } } use load as alias; alias!();"#,
         r#"macro_rules! load { () => { mod tests; } } macro_rules! outer { () => { load!(); } } outer!();"#,
@@ -2251,8 +2255,6 @@ fn local_source_generating_macros_fail_as_unresolved_authority() {
     for source in [
         r#"macro_rules! unused { () => { mod tests; } }"#,
         r#"macro_rules! load { () => { mod tests; } } #[cfg(any())] load!();"#,
-        r#"macro_rules! inline { () => { mod tests {} } } inline!();"#,
-        r#"fn run() { macro_rules! ordinary { () => { let r#mod = (); }; } ordinary!(); }"#,
     ] {
         let syntax = syn::parse_file(source).unwrap();
         collect_include_declarations(
@@ -2304,11 +2306,9 @@ fn source_macro_exports_and_aliases_are_checked_across_files() {
         &sources,
         &fixture_targets(sources.keys().map(String::as_str)),
     );
-    let error = match result {
-        Err(error) => error,
-        Ok(_) => panic!("source macro authority was ignored"),
-    };
-    assert!(error.contains("macro expansion may introduce source declarations"));
+    let graph = result.unwrap();
+    assert!(!graph.unresolved_sources.is_empty());
+    assert_eq!(graph.gates["crates/x/src/tests.rs"], ExemptionGate::Unknown);
 }
 
 #[test]
@@ -2339,7 +2339,7 @@ fn external_macro_use_imports_require_name_resolution_and_expansion() {
         r#"#[macro_use(concat)] extern crate dep; std::include!(concat!("ignored.rs"));"#,
         r#"#[r#macro_use(r#include)] extern crate dep as renamed; r#include!("ignored.rs");"#,
         "#[cfg_attr(feature = \"external\", macro_use)] extern crate dep;",
-        "#[cfg_attr(test, cfg_attr(feature = \"external\", macro_use(include)))] extern crate dep;",
+        "#[cfg_attr(not(test), cfg_attr(feature = \"external\", macro_use(include)))] extern crate dep;",
         "#[macro_use] extern crate dep;",
     ] {
         let syntax = syn::parse_file(source).unwrap();
@@ -2397,12 +2397,80 @@ fn external_macro_use_cannot_certify_a_test_file_across_sources() {
         &sources,
         &fixture_targets(sources.keys().map(String::as_str)),
     );
-    let error = match result {
-        Err(error) => error,
-        Ok(_) => panic!("external macro import authority was ignored"),
-    };
-    assert!(
-        error
-            .contains("macro_use extern crate imports require macro name resolution and expansion")
+    let graph = result.unwrap();
+    assert!(!graph.unresolved_sources.is_empty());
+    assert_eq!(
+        graph.gates["crates/x/src/implementation/tests.rs"],
+        ExemptionGate::Unknown
     );
+}
+
+#[test]
+fn opaque_expansions_cannot_certify_contextual_test_exemptions() {
+    for source in [
+        "use dep::emit; #[cfg(not(test))] emit!();",
+        "#[cfg(not(test))] dep::emit!();",
+        "use dep::emit as renamed; #[cfg(not(test))] renamed!();",
+        "#[dep::emit] struct Input;",
+        "#[derive(dep::Emit)] struct Input;",
+        "#[cfg_attr(not(test), dep::emit)] struct Input;",
+        "#[dep::test] fn input() {}",
+        "use dep::*;",
+        r#"use dep as std; #[cfg(not(test))] std::include!("ignored.rs");"#,
+    ] {
+        for intrinsic in [false, true] {
+            let mut sources = BTreeMap::from([
+                (
+                    "crates/x/src/lib.rs".to_owned(),
+                    syn::parse_file(&format!("{source} #[cfg(test)] mod tests;")).unwrap(),
+                ),
+                (
+                    "crates/x/src/tests.rs".to_owned(),
+                    syn::parse_file("fn helper() {} ").unwrap(),
+                ),
+            ]);
+            if intrinsic {
+                sources
+                    .get_mut("crates/x/src/tests.rs")
+                    .unwrap()
+                    .attrs
+                    .push(syn::parse_quote!(#![cfg(test)]));
+            }
+            let graph = collect_source_graph(
+                &sources,
+                &fixture_targets(sources.keys().map(String::as_str)),
+            )
+            .unwrap();
+            assert!(!graph.unresolved_sources.is_empty(), "{source}");
+            assert_eq!(
+                graph.gates["crates/x/src/tests.rs"],
+                if intrinsic {
+                    ExemptionGate::TestGated
+                } else {
+                    ExemptionGate::Unknown
+                },
+                "{source} (intrinsic={intrinsic})"
+            );
+        }
+    }
+}
+
+#[test]
+fn test_only_expansions_do_not_introduce_production_uncertainty() {
+    for source in [
+        "#[cfg(test)] dep::emit!();",
+        "#[test] fn example() { dep::emit!(); }",
+        "#[cfg_attr(all(), test)] fn example() { dep::emit!(); }",
+        "#[cfg_attr(test, dep::emit)] struct Input;",
+        "#[cfg_attr(test, macro_use)] extern crate dep;",
+        "#[cfg(any())] dep::emit!();",
+    ] {
+        let syntax = syn::parse_file(source).unwrap();
+        collect_include_declarations(
+            &syntax,
+            Path::new("crates/x/src/lib.rs"),
+            &mut BTreeMap::new(),
+        )
+        .unwrap_or_else(|error| panic!("{source}: {error}"));
+    }
 }

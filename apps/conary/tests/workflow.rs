@@ -1,4 +1,6 @@
 // apps/conary/tests/workflow.rs
+
+#![cfg(test)]
 #![cfg(feature = "test-hooks")]
 
 //! Package install, remove, and rollback workflow tests.

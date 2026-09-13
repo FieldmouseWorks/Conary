@@ -1,5 +1,7 @@
 // apps/conary/src/ui/diagnostics/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use std::borrow::Cow;
 use std::process::Command;

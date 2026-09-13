@@ -1,5 +1,7 @@
 // crates/conary-core/src/version/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 
 #[test]

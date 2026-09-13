@@ -1,5 +1,7 @@
 // crates/conary-core/src/repository/catalog/parity/tests/rpm_requirements.rs
 
+#![cfg(test)]
+
 use super::*;
 
 #[test]

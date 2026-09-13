@@ -1,4 +1,6 @@
 // apps/conary/tests/test_hook_ownership.rs
+
+#![cfg(test)]
 //! Test-hook ownership and startup fencing regression tests.
 
 use std::path::Path;

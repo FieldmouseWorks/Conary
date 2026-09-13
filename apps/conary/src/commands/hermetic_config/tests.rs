@@ -1,5 +1,7 @@
 // apps/conary/src/commands/hermetic_config/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use conary_core::recipe::parse_recipe;
 use std::ffi::OsString;

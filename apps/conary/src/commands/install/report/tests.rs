@@ -1,5 +1,7 @@
 // apps/conary/src/commands/install/report/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::commands::{InstallOptions, SandboxMode, test_helpers};
 use conary_core::ccs::builder::{CcsBuilder, write_signed_current_ccs_package};

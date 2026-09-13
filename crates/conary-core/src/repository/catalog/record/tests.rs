@@ -1,5 +1,7 @@
 // crates/conary-core/src/repository/catalog/record/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::repository::dependency_model::{
     RepositoryRequirementClause, RepositoryRequirementExpression,

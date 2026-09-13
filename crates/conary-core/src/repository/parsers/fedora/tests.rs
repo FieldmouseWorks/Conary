@@ -1,5 +1,7 @@
 // crates/conary-core/src/repository/parsers/fedora/tests.rs
 
+#![cfg(test)]
+
 use super::metadata::authenticated_repomd_snapshot;
 use super::repomd::{RepoMdIndex, RepoMdRecord};
 use super::*;

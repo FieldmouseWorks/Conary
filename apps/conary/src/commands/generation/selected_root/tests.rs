@@ -1,5 +1,7 @@
 // apps/conary/src/commands/generation/selected_root/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use conary_core::db::models::{FileEntry, GenerationPublicationStatus, Trove, TroveType};
 use conary_core::payload::{

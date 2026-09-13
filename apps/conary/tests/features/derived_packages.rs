@@ -1,5 +1,7 @@
 // apps/conary/tests/features/derived_packages.rs
 
+#![cfg(test)]
+
 use super::*;
 
 // =============================================================================

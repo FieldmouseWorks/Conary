@@ -1,5 +1,7 @@
 // apps/conary/tests/target_root.rs
 
+#![cfg(test)]
+
 //! Integration tests for target root (bootstrap) functionality.
 //!
 //! These tests verify that Conary can properly work with target root

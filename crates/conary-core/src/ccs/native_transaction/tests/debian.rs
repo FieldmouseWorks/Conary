@@ -1,5 +1,7 @@
 // crates/conary-core/src/ccs/native_transaction/tests/debian.rs
 
+#![cfg(test)]
+
 //! Debian transaction tests grouped by native ownership boundary.
 
 use super::*;

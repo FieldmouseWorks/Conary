@@ -1,5 +1,7 @@
 // apps/conary/src/commands/system/tests.rs
 
+#![cfg(test)]
+
 use super::{
     cmd_init, cmd_rebuild_database, cmd_rollback, cmd_rollback_with_forced_precommit_failure,
     configure_current_database, paths_refer_to_same_location, restore_snapshot,

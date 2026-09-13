@@ -1,5 +1,7 @@
 // apps/remi/src/federation/router/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::federation::config::PeerTier;
 

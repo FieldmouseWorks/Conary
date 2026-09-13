@@ -1,5 +1,9 @@
 // crates/conary-core/src/repository/sync/tests/native.rs
 
+#![cfg(test)]
+
+use super::*;
+
 #[path = "native/source_config.rs"]
 mod source_config;
 
@@ -584,9 +588,7 @@ fn json_contract_authorized_repo_requires_advisory_source() {
 
     let error = json_repository_sync_snapshot(&repo, metadata).unwrap_err();
     assert!(
-        error
-            .to_string()
-            .contains("security advisory source"),
+        error.to_string().contains("security advisory source"),
         "{error}"
     );
 }
@@ -701,10 +703,7 @@ fn test_sync_persists_debian_origin_metadata() {
 
     let stored = RepositoryPackage::find_by_repository(&conn, repo_id).unwrap();
     assert_eq!(stored.len(), 1);
-    assert_eq!(
-        stored[0].source_profile.as_deref(),
-        Some("ubuntu-26.04")
-    );
+    assert_eq!(stored[0].source_profile.as_deref(), Some("ubuntu-26.04"));
     assert_eq!(stored[0].version_scheme, VersionScheme::Debian);
 }
 

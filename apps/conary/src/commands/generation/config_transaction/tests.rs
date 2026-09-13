@@ -1,4 +1,6 @@
 // apps/conary/src/commands/generation/config_transaction/tests.rs
+
+#![cfg(test)]
 //! Exact generation config capture, planning, and materialization tests.
 
 use super::*;

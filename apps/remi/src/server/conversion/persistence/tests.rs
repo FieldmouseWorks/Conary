@@ -1,5 +1,7 @@
 // apps/remi/src/server/conversion/persistence/tests.rs
 
+#![cfg(test)]
+
 use super::super::test_support::create_test_db;
 use super::*;
 use crate::server::catalog_authority::test_support::{ActiveCatalogFixture, package};

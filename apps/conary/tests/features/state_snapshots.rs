@@ -1,5 +1,7 @@
 // apps/conary/tests/features/state_snapshots.rs
 
+#![cfg(test)]
+
 use super::*;
 
 // =============================================================================

@@ -1,5 +1,7 @@
 // crates/conary-core/src/db/models/trove/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 
 fn setup_test_db() -> (tempfile::TempDir, Connection) {

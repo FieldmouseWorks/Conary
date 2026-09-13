@@ -1,5 +1,7 @@
 // apps/conary/src/commands/install/conversion/tests/authority.rs
 
+#![cfg(test)]
+
 use super::*;
 
 fn add_bootable_init(package: &mut FakeNativePackage) {

@@ -1,5 +1,7 @@
 // apps/conary/src/commands/system/tests/rollback/directories.rs
 
+#![cfg(test)]
+
 use super::*;
 use conary_core::db::models::{
     ExistingDirectoryMaterialization, PayloadClaim, PayloadClaimAnchorPolicy,

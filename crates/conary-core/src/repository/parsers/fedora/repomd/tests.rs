@@ -1,5 +1,7 @@
 // crates/conary-core/src/repository/parsers/fedora/repomd/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 
 const PRIMARY_SHA: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";

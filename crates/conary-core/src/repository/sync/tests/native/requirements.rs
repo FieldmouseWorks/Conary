@@ -1,5 +1,7 @@
 // crates/conary-core/src/repository/sync/tests/native/requirements.rs
 
+#![cfg(test)]
+
 use super::*;
 
 #[test]

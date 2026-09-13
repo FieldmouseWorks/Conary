@@ -1,5 +1,7 @@
 // apps/remi/src/server/catalog_refresh/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use conary_core::db::models::{
     NativeSourceEcosystem, NativeSourceStream, RemiCatalogResource, RepositoryPolicyScope,

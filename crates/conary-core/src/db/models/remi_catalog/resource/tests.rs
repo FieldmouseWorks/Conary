@@ -1,5 +1,7 @@
 // crates/conary-core/src/db/models/remi_catalog/resource/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::db::schema::ensure_current;
 use crate::repository::catalog::{

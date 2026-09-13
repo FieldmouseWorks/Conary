@@ -1,5 +1,7 @@
 // crates/conary-core/src/repository/catalog/portable_vfs/tests.rs
 
+#![cfg(test)]
+
 use std::fs::{self, File, OpenOptions};
 #[cfg(unix)]
 use std::os::unix::fs::FileExt;

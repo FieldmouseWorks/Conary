@@ -1,5 +1,7 @@
 // apps/conary-test/src/engine/qemu/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 
 #[test]

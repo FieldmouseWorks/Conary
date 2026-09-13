@@ -1,5 +1,7 @@
 // apps/conary/src/commands/state/tests.rs
 
+#![cfg(test)]
+
 use super::{execute_restore_plan_with_root, find_installed_trove_for_member};
 use conary_core::ccs::native_lifecycle::{
     LifecyclePath, NATIVE_LIFECYCLE_SCHEMA_V1, NativeInvocation, NativeLifecycleBundle,

@@ -1,5 +1,7 @@
 // crates/conary-core/src/resolver/sat/tests/root_requirements.rs
 
+#![cfg(test)]
+
 use super::formal_dependencies::insert_repo_pkg_with_reqs;
 use super::*;
 use crate::db::models::RepositoryProvide;

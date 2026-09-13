@@ -1,5 +1,7 @@
 // crates/conary-core/src/db/models/repository/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 
 use crate::Error;

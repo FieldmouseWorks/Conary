@@ -1,5 +1,7 @@
 // crates/conary-core/src/repository/substituter/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::db::schema;
 use crate::hash::sha256;

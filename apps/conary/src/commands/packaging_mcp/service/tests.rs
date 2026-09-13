@@ -1,5 +1,7 @@
 // apps/conary/src/commands/packaging_mcp/service/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::commands::packaging_mcp::types::{
     PublishApplyInput, PublishModeInput, PublishPlanInput,

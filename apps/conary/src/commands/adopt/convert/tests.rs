@@ -1,5 +1,7 @@
 // apps/conary/src/commands/adopt/convert/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use conary_core::db::models::{
     NativeSourceEcosystem, NativeSourceStream, PackagePayloadEntry, RepositoryPolicyScope,

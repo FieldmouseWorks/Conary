@@ -1,4 +1,6 @@
 // apps/conary/tests/conversion_integration.rs
+
+#![cfg(test)]
 //! Integration tests for native package to CCS conversion
 //!
 //! These tests validate the end-to-end conversion process from RPM/DEB/Arch

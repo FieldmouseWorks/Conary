@@ -1,5 +1,7 @@
 // crates/conary-core/src/resolver/provides_index/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::db::models::{ProvideEntry, RepositoryProvide};
 use crate::db::testing::create_test_db;

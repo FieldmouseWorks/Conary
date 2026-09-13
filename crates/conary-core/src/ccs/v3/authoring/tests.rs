@@ -1,5 +1,7 @@
 // crates/conary-core/src/ccs/v3/authoring/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::ccs::builder::test_support;
 use crate::repository::dependency_model::{

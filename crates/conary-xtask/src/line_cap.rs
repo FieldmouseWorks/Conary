@@ -141,6 +141,12 @@ pub(crate) fn run(args: impl Iterator<Item = String>) -> Result<(), String> {
     // Resolve the complete graph before deciding whether a filename exemption
     // applies. Unknown and production-reachable files retain both caps.
     let graph: exemption::SourceGraph = collect_source_graph(&sources, &targets)?;
+    if options.report && !graph.unresolved_sources.is_empty() {
+        println!(
+            "SOURCE AUTHORITY: {} unresolved sources; contextual-only test exemptions remain capped",
+            graph.unresolved_sources.len()
+        );
+    }
     let gates = graph.gates;
     let declarations = graph.declarations;
     for (relative, metrics) in &rows {

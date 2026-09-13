@@ -1,5 +1,7 @@
 // apps/conary-test/src/config/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use std::path::PathBuf;
 

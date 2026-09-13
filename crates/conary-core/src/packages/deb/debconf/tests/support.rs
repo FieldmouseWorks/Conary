@@ -1,5 +1,7 @@
 // crates/conary-core/src/packages/deb/debconf/tests/support.rs
 
+#![cfg(test)]
+
 use super::super::*;
 use crate::packages::native_abi::{DebconfTemplateField, DebconfTemplateRecord};
 use std::collections::VecDeque;

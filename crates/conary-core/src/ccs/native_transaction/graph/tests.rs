@@ -1,5 +1,7 @@
 // crates/conary-core/src/ccs/native_transaction/graph/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::ccs::native_transaction::NativeTransactionOperation;
 

@@ -1,5 +1,7 @@
 // apps/conary/src/commands/ccs/install/command_metadata_tests/tests.rs
 
+#![cfg(test)]
+
 use std::collections::HashMap;
 
 use super::command::cmd_ccs_install;

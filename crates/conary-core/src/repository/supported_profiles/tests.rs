@@ -1,5 +1,7 @@
 // crates/conary-core/src/repository/supported_profiles/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::repository::versioning::VersionScheme;
 

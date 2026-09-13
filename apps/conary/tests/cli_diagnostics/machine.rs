@@ -1,5 +1,7 @@
 // apps/conary/tests/cli_diagnostics/machine.rs
 
+#![cfg(test)]
+
 use conary_agent_contract::{CcsVerificationCause, CcsVerificationOutcome, CcsVerificationReport};
 use std::path::Path;
 use std::process::Command;

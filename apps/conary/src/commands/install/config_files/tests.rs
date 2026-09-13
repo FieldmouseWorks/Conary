@@ -1,5 +1,7 @@
 // apps/conary/src/commands/install/config_files/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use conary_core::payload::{
     PayloadIdentity, PayloadNode, PayloadNodeKind, PayloadTimestamp, ResolvedPayloadNode,

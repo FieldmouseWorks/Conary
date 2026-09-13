@@ -1,5 +1,7 @@
 // apps/conary/src/commands/repo_static/tests.rs
 
+#![cfg(test)]
+
 use std::collections::BTreeSet;
 use std::future::Future;
 use std::path::Path;

@@ -1,5 +1,7 @@
 // crates/conary-core/src/repository/architecture/tests.rs
 
+#![cfg(test)]
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::*;

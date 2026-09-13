@@ -1,5 +1,7 @@
 // apps/conary/src/commands/try_session/tests/test_support.rs
 
+#![cfg(test)]
+
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};

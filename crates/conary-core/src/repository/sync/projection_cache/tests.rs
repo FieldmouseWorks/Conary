@@ -1,5 +1,7 @@
 // crates/conary-core/src/repository/sync/projection_cache/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::repository::catalog::{
     CatalogCandidateWriter, CatalogFinalizationScratchV2, CatalogMetadataScratchV1,

@@ -1,5 +1,7 @@
 // crates/conary-core/src/packages/deb/dpkg_lifecycle/tests/alternatives.rs
 
+#![cfg(test)]
+
 use super::*;
 
 fn round_trip(values: &[&[u8]]) -> AlternativesInvocation {

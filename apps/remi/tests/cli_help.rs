@@ -1,5 +1,7 @@
 // apps/remi/tests/cli_help.rs
 
+#![cfg(test)]
+
 use std::process::{Command, Output};
 
 fn run_remi(args: &[&str]) -> Output {

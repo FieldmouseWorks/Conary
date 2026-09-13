@@ -1,5 +1,7 @@
 // crates/conary-core/src/bootstrap/system_config/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 
 fn seed_minimal_boot_inputs(root: &Path) {

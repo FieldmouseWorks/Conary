@@ -1,5 +1,7 @@
 // crates/conary-core/src/ccs/native_transaction/tests/debian/lifecycle/basic.rs
 
+#![cfg(test)]
+
 //! Debian happy-path install and upgrade invocation coverage.
 
 use super::*;

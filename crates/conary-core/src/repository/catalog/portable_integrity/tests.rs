@@ -1,5 +1,7 @@
 // crates/conary-core/src/repository/catalog/portable_integrity/tests.rs
 
+#![cfg(test)]
+
 use std::io::{Seek, SeekFrom};
 
 use super::*;

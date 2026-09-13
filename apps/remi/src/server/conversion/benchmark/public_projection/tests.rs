@@ -1,4 +1,6 @@
 // apps/remi/src/server/conversion/benchmark/public_projection/tests.rs
+
+#![cfg(test)]
 use super::*;
 use crate::server::conversion::{
     CONVERSION_BENCHMARK_SCHEMA_V8, ConversionBenchmarkCatalogAuthority,

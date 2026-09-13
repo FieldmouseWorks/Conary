@@ -1,5 +1,7 @@
 // apps/conary/src/commands/rollback_system_authority/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use base64::Engine;
 use conary_core::ccs::native_lifecycle::{

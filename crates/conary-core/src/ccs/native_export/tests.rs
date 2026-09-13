@@ -1,5 +1,7 @@
 // crates/conary-core/src/ccs/native_export/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::packages::PackageFormat;
 use crate::packages::config_authority::{

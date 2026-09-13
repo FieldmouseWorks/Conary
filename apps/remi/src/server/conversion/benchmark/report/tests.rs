@@ -1,4 +1,6 @@
 // apps/remi/src/server/conversion/benchmark/report/tests.rs
+
+#![cfg(test)]
 use super::*;
 use crate::server::conversion::{
     ConversionBenchmarkAuthority, ConversionBenchmarkCatalogQuery, ConversionBenchmarkEnvironment,

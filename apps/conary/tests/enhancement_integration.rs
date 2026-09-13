@@ -1,4 +1,6 @@
 // apps/conary/tests/enhancement_integration.rs
+
+#![cfg(test)]
 //! Integration proof that retroactive enrichment records exact provenance only.
 
 use conary_core::ccs::enhancement::{

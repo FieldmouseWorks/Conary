@@ -1,5 +1,7 @@
 // crates/conary-core/src/db/models/repository_package_key/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::db::models::Repository;
 use crate::db::testing::create_test_db;

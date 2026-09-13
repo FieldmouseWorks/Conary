@@ -1,5 +1,7 @@
 // apps/conary/src/commands/install/batch/tests/preview_native.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::commands::install::preview::PreviewDatabase;
 use conary_core::ccs::native_lifecycle::{

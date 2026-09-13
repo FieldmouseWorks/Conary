@@ -1,5 +1,7 @@
 // crates/conary-core/src/resolver/sat/tests/relations.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::repository::dependency_model::RepositoryRequirementKind;
 use crate::repository::package_relation::parse_native_relation;

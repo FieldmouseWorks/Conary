@@ -1,5 +1,7 @@
 // apps/conary/tests/common/update_ccs.rs
 
+#![cfg(test)]
+
 //! Signed RPM update artifacts shared by collection and CLI preview tests.
 
 use conary_core::ccs::SigningKeyPair;

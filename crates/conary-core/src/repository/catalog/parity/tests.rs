@@ -1,5 +1,7 @@
 // crates/conary-core/src/repository/catalog/parity/tests.rs
 
+#![cfg(test)]
+
 use std::fs;
 
 use super::*;

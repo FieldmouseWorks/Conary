@@ -1,4 +1,6 @@
 // apps/conary/tests/cli_progress.rs
+
+#![cfg(test)]
 //! Real terminal and pipe captures of the package progress adapters.
 
 use conary::commands::progress::{AdoptProgress, InstallProgress, RemoveProgress, UpdateProgress};

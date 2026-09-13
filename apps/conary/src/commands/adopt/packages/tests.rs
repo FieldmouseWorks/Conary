@@ -1,5 +1,7 @@
 // apps/conary/src/commands/adopt/packages/tests.rs
 
+#![cfg(test)]
+
 use std::fs;
 use std::path::PathBuf;
 

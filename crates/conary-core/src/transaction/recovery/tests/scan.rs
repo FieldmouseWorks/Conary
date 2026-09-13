@@ -1,5 +1,7 @@
 // crates/conary-core/src/transaction/recovery/tests/scan.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::generation::metadata::GenerationMetadata;
 use crate::generation::mount::{GenerationMountOutcome, MountOptions};

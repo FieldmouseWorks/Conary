@@ -1,5 +1,7 @@
 // apps/conaryd/src/daemon/package_ops/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::daemon::{DaemonConfig, SystemLock};
 use conary_core::db::models::{FileEntry, InstallSource, Trove, TroveType};

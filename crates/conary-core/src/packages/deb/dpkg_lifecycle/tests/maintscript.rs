@@ -1,5 +1,7 @@
 // crates/conary-core/src/packages/deb/dpkg_lifecycle/tests/maintscript.rs
 
+#![cfg(test)]
+
 use super::*;
 
 fn round_trip(values: &[&[u8]]) -> DpkgMaintscriptHelperInvocation {

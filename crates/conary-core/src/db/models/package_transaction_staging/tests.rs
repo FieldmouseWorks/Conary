@@ -1,5 +1,7 @@
 // crates/conary-core/src/db/models/package_transaction_staging/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::db::models::{Changeset, Trove, TroveType};
 use crate::db::testing::create_test_db;

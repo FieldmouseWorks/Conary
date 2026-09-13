@@ -1,5 +1,7 @@
 // crates/conary-core/src/ccs/convert/native_provenance/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 
 #[test]

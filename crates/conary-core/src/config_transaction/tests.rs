@@ -1,5 +1,7 @@
 // crates/conary-core/src/config_transaction/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::payload::{PayloadIdentity, PayloadNode, PayloadTimestamp};
 use std::collections::BTreeMap;

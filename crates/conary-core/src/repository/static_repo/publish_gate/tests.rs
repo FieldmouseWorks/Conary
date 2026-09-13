@@ -1,5 +1,7 @@
 // crates/conary-core/src/repository/static_repo/publish_gate/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::ccs::attestation::{
     BUILD_ATTESTATION_SCHEMA_V1, BuildAttestationPayload, FOREIGN_CONVERSION_BOUNDARY_SCHEMA_V1,

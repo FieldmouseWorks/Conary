@@ -1,5 +1,7 @@
 // crates/conary-core/src/bootstrap/image/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::generation::metadata::GENERATION_FORMAT;
 

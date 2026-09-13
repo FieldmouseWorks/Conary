@@ -1,5 +1,7 @@
 // crates/conary-core/src/repository/dependency_model/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use std::collections::BTreeSet;
 

@@ -1,5 +1,7 @@
 // crates/conary-core/src/packages/arch/payload/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::packages::{ExtractedFile, PackagePayload};
 use std::io::Cursor;

@@ -1,5 +1,7 @@
 // crates/conary-core/src/repository/catalog/parity/tests/rpm_epochs.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::repository::dependency_model::RepositoryRequirementKind;
 use crate::repository::rpm_dependency::parse_source_rpm_dependency;

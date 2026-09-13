@@ -1,5 +1,7 @@
 // crates/conary-core/src/resolver/provider/tests/installed_preference.rs
 
+#![cfg(test)]
+
 use super::*;
 
 fn with_provide(mut identity: PackageIdentity, name: &str) -> PackageIdentity {

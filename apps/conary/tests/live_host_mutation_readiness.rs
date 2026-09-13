@@ -1,5 +1,7 @@
 // apps/conary/tests/live_host_mutation_readiness.rs
 
+#![cfg(test)]
+
 pub mod common;
 
 use std::process::Command;

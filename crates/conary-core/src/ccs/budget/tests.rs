@@ -1,5 +1,7 @@
 // crates/conary-core/src/ccs/budget/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::ccs::manifest::FileCapability;
 use crate::ccs::v3::schema::{

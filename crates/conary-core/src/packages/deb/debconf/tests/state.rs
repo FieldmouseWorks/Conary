@@ -1,5 +1,7 @@
 // crates/conary-core/src/packages/deb/debconf/tests/state.rs
 
+#![cfg(test)]
+
 use super::super::*;
 use super::support::*;
 

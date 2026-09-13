@@ -1,5 +1,7 @@
 // crates/conary-core/tests/db_backup.rs
 
+#![cfg(test)]
+
 use conary_core::db;
 use conary_core::db::backup::{
     CheckpointReason, GenerationDbRecoveryOptions, RecoveryOptions, backup_dir_for_db_path,

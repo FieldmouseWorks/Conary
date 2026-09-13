@@ -1,5 +1,7 @@
 // crates/conary-core/src/db/models/trigger/tests.rs
 
+#![cfg(test)]
+
 use super::super::persisted_value::PersistedValueCorruption;
 use super::super::trigger_engine::TriggerEngine;
 use super::*;

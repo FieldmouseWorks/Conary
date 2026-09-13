@@ -1,5 +1,7 @@
 // apps/remi/src/deployment/tests/ownership.rs
 
+#![cfg(test)]
+
 use super::fixtures::arrange;
 use crate::deployment::{prepare, rollback};
 use crate::server::runtime_lock::{RuntimeRootLock, RuntimeRootLockError};

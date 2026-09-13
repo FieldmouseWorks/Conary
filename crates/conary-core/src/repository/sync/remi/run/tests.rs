@@ -1,5 +1,7 @@
 // crates/conary-core/src/repository/sync/remi/run/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::db::models::Repository;
 use crate::db::schema::ensure_current;

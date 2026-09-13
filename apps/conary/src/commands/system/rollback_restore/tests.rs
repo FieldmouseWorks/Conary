@@ -1,5 +1,7 @@
 // apps/conary/src/commands/system/rollback_restore/tests.rs
 
+#![cfg(test)]
+
 use super::{restore_snapshot, restore_snapshots};
 use crate::commands::installed_authority_snapshot::{
     DirectoryAnchorSnapshot, PayloadClaimSnapshot, ProvideSnapshot, TroveSnapshot,

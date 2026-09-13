@@ -1,5 +1,7 @@
 // crates/conary-core/src/transaction/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::generation::artifact::{
     ArtifactWriteInputs, BootAssetSources, CasObjectRef, CasObjectVerification, stage_boot_assets,

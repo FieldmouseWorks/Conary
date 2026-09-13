@@ -1,5 +1,7 @@
 // crates/conary-core/src/repository/catalog/parity/resolution_survey/tests.rs
 
+#![cfg(test)]
+
 use std::collections::BTreeMap;
 
 use super::*;

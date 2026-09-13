@@ -1,5 +1,7 @@
 // crates/conary-core/src/resolver/provider/tests/installed_and_canonical.rs
 
+#![cfg(test)]
+
 use super::*;
 
 #[test]

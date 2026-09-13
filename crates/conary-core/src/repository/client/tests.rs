@@ -1,5 +1,7 @@
 // crates/conary-core/src/repository/client/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 
 #[tokio::test]

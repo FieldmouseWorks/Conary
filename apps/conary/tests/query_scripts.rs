@@ -1,5 +1,7 @@
 // apps/conary/tests/query_scripts.rs
 
+#![cfg(test)]
+
 pub mod common;
 
 use clap::Parser;

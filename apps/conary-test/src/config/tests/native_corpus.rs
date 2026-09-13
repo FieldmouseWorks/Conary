@@ -1,5 +1,7 @@
 // apps/conary-test/src/config/tests/native_corpus.rs
 
+#![cfg(test)]
+
 use super::{conary_fixture_path, load_manifest, remi_manifest_path};
 
 mod daily_driver;

@@ -1,5 +1,7 @@
 // crates/conary-core/src/repository/download/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::db::models::RepositoryPackage;
 use crate::hash::sha256;

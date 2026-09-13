@@ -1,5 +1,7 @@
 // apps/conary/src/commands/install/repository_batch/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::commands::test_helpers::native_artifact::{pgp_authority, signed_rpm_bytes};
 use conary_core::db::models::{

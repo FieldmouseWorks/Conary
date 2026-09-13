@@ -1,5 +1,7 @@
 // apps/conary/tests/packaging_m4d.rs
 
+#![cfg(test)]
+
 pub mod common;
 
 use std::process::Command;

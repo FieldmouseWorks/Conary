@@ -1,5 +1,7 @@
 // apps/conary/tests/features.rs
 
+#![cfg(test)]
+
 //! Feature-specific tests: install reasons, collections, config files, and system state.
 
 pub mod common;

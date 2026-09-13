@@ -1,4 +1,6 @@
 // apps/remi/src/server/chunk_gc/tests.rs
+
+#![cfg(test)]
 use super::*;
 use conary_core::db::models::{ConvertedPackage, RemiCatalogResource, RemiCatalogResourceKind};
 

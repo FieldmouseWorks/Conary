@@ -1,5 +1,7 @@
 // apps/remi/src/server/search/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::server::catalog_authority::test_support::{ActiveCatalogFixture, package};
 use crate::server::native_publish::test_support::seed_native_publication;

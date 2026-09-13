@@ -1,5 +1,7 @@
 // crates/conary-core/src/generation/artifact/cas/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::generation::artifact::{
     ARTIFACT_MANIFEST_FILE, ArtifactWriteInputs, BOOT_ASSETS_DIR, BootAssetsManifest,

@@ -1,4 +1,6 @@
 // crates/conary-core/tests/bootstrap_python_recipe_contract.rs
+
+#![cfg(test)]
 use std::path::{Path, PathBuf};
 
 use conary_core::recipe::parse_recipe_file;

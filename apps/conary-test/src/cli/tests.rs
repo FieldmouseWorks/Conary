@@ -1,5 +1,7 @@
 // apps/conary-test/src/cli/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};

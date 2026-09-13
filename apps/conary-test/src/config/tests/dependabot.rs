@@ -1,5 +1,7 @@
 // apps/conary-test/src/config/tests/dependabot.rs
 
+#![cfg(test)]
+
 use serde::Deserialize;
 use std::{
     collections::{BTreeMap, BTreeSet},

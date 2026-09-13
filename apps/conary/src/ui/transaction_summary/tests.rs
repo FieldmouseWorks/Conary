@@ -1,5 +1,7 @@
 // apps/conary/src/ui/transaction_summary/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use conary_core::db::models::TroveType;
 use conary_core::repository::versioning::VersionScheme;

@@ -1,4 +1,6 @@
 // apps/conary/tests/model_apply.rs
+
+#![cfg(test)]
 #![cfg(feature = "test-hooks")]
 
 pub mod common;

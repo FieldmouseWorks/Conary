@@ -1,5 +1,7 @@
 // crates/conary-core/src/repository/catalog/parity/rpm/tests.rs
 
+#![cfg(test)]
+
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};

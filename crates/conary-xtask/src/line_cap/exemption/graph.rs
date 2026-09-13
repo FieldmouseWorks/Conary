@@ -35,13 +35,14 @@ impl LoadContext {
 pub(crate) struct SourceGraph {
     pub(crate) declarations: BTreeMap<String, Vec<ModuleDeclaration>>,
     pub(crate) gates: BTreeMap<String, ExemptionGate>,
+    pub(crate) unresolved_sources: BTreeMap<String, String>,
 }
 
 pub(crate) fn collect_source_graph(
     sources: &BTreeMap<String, syn::File>,
     targets: &TargetRoots,
 ) -> Result<SourceGraph, String> {
-    let authority = MacroAuthority::collect(sources.values());
+    let mut unresolved_sources = BTreeMap::new();
     let mut roots = BTreeMap::new();
     for file in sources.keys() {
         let target = targets.get(file).copied();
@@ -85,12 +86,11 @@ pub(crate) fn collect_source_graph(
                 &mut sites,
                 &context.directory(),
             );
-            collect_includes_with_authority(
-                syntax,
-                Path::new(&context.file),
-                &mut sites,
-                &authority,
-            )?;
+            if let Err(error) =
+                collect_includes_with_authority(syntax, Path::new(&context.file), &mut sites)
+            {
+                unresolved_sources.insert(context.file.clone(), error);
+            }
             for (file, entries) in sites {
                 for site in entries {
                     let target = LoadContext {
@@ -159,8 +159,19 @@ pub(crate) fn collect_source_graph(
             })
             .or_insert(gate);
     }
+    if !unresolved_sources.is_empty() {
+        // An opaque expansion can introduce another production load site. It
+        // invalidates contextual test-only proof, but cannot remove a cfg guard
+        // carried by the loaded source itself. Preserve known production sites.
+        for (file, gate) in &mut gates {
+            if *gate == ExemptionGate::TestGated && !cfg::is_test_only(&sources[file].attrs) {
+                *gate = ExemptionGate::Unknown;
+            }
+        }
+    }
     Ok(SourceGraph {
         declarations,
         gates,
+        unresolved_sources,
     })
 }

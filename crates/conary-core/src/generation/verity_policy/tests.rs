@@ -1,5 +1,7 @@
 // crates/conary-core/src/generation/verity_policy/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use crate::generation::mount::COMPOSEFS_VERITY_OPTION;
 

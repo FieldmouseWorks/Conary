@@ -1,5 +1,7 @@
 // crates/conary-core/src/repository/catalog/store/tests.rs
 
+#![cfg(test)]
+
 use std::io::{Read, Seek, SeekFrom, Write};
 
 use super::*;

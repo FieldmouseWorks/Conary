@@ -1,5 +1,7 @@
 // apps/conary/src/cli/tests.rs
 
+#![cfg(test)]
+
 use super::{
     CcsCommands, Cli, CliSandboxMode, Commands, GenerationCommands, McpCommands,
     NativePackageManager, QueryCommands, RepoCommands, SystemCommands,

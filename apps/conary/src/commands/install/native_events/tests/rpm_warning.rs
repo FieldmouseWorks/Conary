@@ -1,5 +1,7 @@
 // apps/conary/src/commands/install/native_events/tests/rpm_warning.rs
 
+#![cfg(test)]
+
 //! RPM per-scriptlet-class lifecycle failure posture coverage.
 
 use super::*;

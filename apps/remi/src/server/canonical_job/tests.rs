@@ -1,5 +1,7 @@
 // apps/remi/src/server/canonical_job/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use conary_core::db::schema;
 use rusqlite::Connection;

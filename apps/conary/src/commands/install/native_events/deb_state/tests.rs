@@ -1,5 +1,7 @@
 // apps/conary/src/commands/install/native_events/deb_state/tests.rs
 
+#![cfg(test)]
+
 use super::*;
 use conary_core::ccs::native_lifecycle::{
     NATIVE_LIFECYCLE_SCHEMA_REVISION, NATIVE_LIFECYCLE_SCHEMA_V1, ScriptletFidelity, VersionScheme,

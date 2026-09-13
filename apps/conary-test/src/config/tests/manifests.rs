@@ -1,5 +1,7 @@
 // apps/conary-test/src/config/tests/manifests.rs
 
+#![cfg(test)]
+
 use super::*;
 
 #[test]

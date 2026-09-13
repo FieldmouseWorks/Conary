@@ -1,5 +1,7 @@
 // apps/conary/tests/logging_verbosity.rs
 
+#![cfg(test)]
+
 use std::process::{Command, Output};
 
 fn run_with_env(args: &[&str], rust_log: Option<&str>) -> Output {

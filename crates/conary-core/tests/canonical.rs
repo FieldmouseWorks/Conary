@@ -1,5 +1,7 @@
 // crates/conary-core/tests/canonical.rs
 
+#![cfg(test)]
+
 //! Integration tests for canonical package identity system
 //!
 //! These tests exercise the full pipeline: schema setup, canonical package
