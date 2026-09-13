@@ -924,7 +924,7 @@ fn test_history_reports_persisted_lifecycle_failure() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("[warn]"), "{stdout}");
     assert!(
-        stdout.contains("lifecycle-fixture 1.0.0 rpm:%post"),
+        stdout.contains("  Package: lifecycle-fixture\n  Version: 1.0.0\n  Entry: rpm:%post"),
         "{stdout}"
     );
     assert!(stdout.contains("ScriptExited"), "{stdout}");

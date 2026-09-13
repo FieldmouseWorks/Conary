@@ -3,6 +3,7 @@
 
 pub(crate) mod ccs_build;
 pub(crate) mod diagnostics;
+pub(crate) mod history;
 pub(crate) mod progress;
 pub(crate) mod repository;
 pub(crate) mod transaction_summary;

@@ -563,7 +563,7 @@ fn selected_generation_remove_deletes_file_and_records_applied_history() {
     );
     let stdout = String::from_utf8_lossy(&history.stdout);
     assert!(stdout.contains("Remove fixture-1.0.0"), "{stdout}");
-    assert!(stdout.contains("Applied"), "{stdout}");
+    assert!(stdout.contains("  Status: applied"), "{stdout}");
 }
 
 #[test]

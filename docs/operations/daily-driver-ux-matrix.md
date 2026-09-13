@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-09-13
-revision: 38
-summary: Daily-driver CLI identity fields, source formats, grouped transaction and build results, scoped recovery, and typed native refusals
+revision: 39
+summary: Daily-driver CLI source identities, grouped package results, changeset history fields, scoped recovery, and typed native refusals
 ---
 
 # Daily-Driver UX Matrix
@@ -27,6 +27,7 @@ takeover, generation activation, or conaryd, the CLI should say that directly.
 | `autoremove` | Removes Conary-owned orphaned dependency packages | Adopted orphaned packages remain native-PM owned | Native package-manager authority is preserved for adopted orphans | Existing `cargo test -p conary --test native_pm_daily_driver autoremove_dry_run_lists_conary_owned_orphans_and_skips_adopted` |
 | `pin <pkg>` | Pins a selected installed variant | Ambiguous installed variants | Use `--version`, `--release`, and `--arch` to pin the intended variant | Existing `cargo test -p conary --test query pin_and_unpin_use_same_variant_selector` |
 | `unpin <pkg>` | Releases a selected installed variant | Ambiguous installed variants | Use `--version`, `--release`, and `--arch` to unpin the intended variant | Existing `cargo test -p conary --test query pin_and_unpin_use_same_variant_selector` |
+| `system history` | Recorded changeset fields, rollback relationships, continued lifecycle failures, and deferred recovery guidance | Obsolete changeset metadata keeps its existing refusal | Publication retries use the selected database; history does not decide rollback eligibility | `cargo test -p conary --test cli_history` |
 
 ## Installed Variant Selection
 
@@ -633,6 +634,32 @@ evidence plus `cargo test -p conary --test output_vocabulary_guard` and
 6. **Structured refusal layout** — Keep the live-host refusal routes from this
    matrix, presented as a short cause plus `note:` next steps. Update
    `live_host_mutation_safety` expectations in the same slice.
+
+## Changeset History
+
+`apps/conary/src/commands/query/history.rs` reads recorded changesets,
+recoverable publication observations, and ordered lifecycle events. It parses
+each changeset's metadata once and classifies deferred work through the existing
+command-owned contract. Generation-publication retry guidance is regenerated
+with the selected `--db-path`; other follow-ups retain their recorded guidance.
+`apps/conary/src/ui/history.rs` owns the shared headings, fields, and warning
+rows. Rendering performs no lookups or recovery decisions.
+
+Each record has a `Changeset N:` heading, `Description`, typed `Kind`, and typed
+`Status`. `Created`, `Applied`, and `Rolled back` appear only when their recorded
+timestamps exist. `Reverses changeset` and `Reversed by changeset` report exact
+stored relationships. A matching recoverable publication adds its recorded
+status; absence supplies no publication-success claim. Deferred records retain
+their order and multiplicity, with one retry note per supplied command.
+Continued lifecycle failures use the shared `[warn]` row and retain package,
+version, entry, failure kind, phase, requested/effective sandbox, and reason.
+Control characters in recorded text are escaped inside their fields.
+
+The footer reports `Total changesets: N`. Empty history is exactly
+`No changeset history.`. This is a hard cut of the human display: old `[N]`,
+`[deferred]`, and publication suffix markers are removed. Repository rollback
+fixtures extract the numeric `Changeset N:` heading. No persisted schema or
+rollback eligibility contract changes.
 
 ## Package Build Results
 
