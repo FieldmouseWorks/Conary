@@ -293,14 +293,20 @@ READINESS_CLOCK=""
 READINESS_CURL=curl
 READINESS_JOURNAL=journalctl
 
-readiness_seconds() {
+readiness_uptime() {
     if [[ -n "$READINESS_CLOCK" ]]; then
         "$READINESS_CLOCK"
     else
         local uptime rest
         read -r uptime rest </proc/uptime
-        printf '%s\n' "${uptime%%.*}"
+        printf '%s\n' "$uptime"
     fi
+}
+
+readiness_seconds() {
+    local uptime
+    uptime="$(readiness_uptime)"
+    printf '%s\n' "${uptime%%.*}"
 }
 
 configure_readiness() {
