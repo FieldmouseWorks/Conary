@@ -6,6 +6,7 @@ use crate::commands::generation::publication::PublicationOutcome;
 use anyhow::{Context, Result};
 use conary_core::db::models::Trove;
 use conary_core::packages::PackageFormat;
+use conary_core::repository::dependency_model::SourcePackageFormat;
 use conary_core::transaction::PackageRelationPlan;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -49,25 +50,69 @@ impl PackageIdentity {
     }
 }
 
+/// Presentation facts remain separate from identities used for selection and counts.
+#[derive(Debug, Clone)]
+pub(crate) struct ObservedPackage {
+    pub identity: PackageIdentity,
+    pub source_format: Option<SourcePackageFormat>,
+}
+
+impl ObservedPackage {
+    pub(crate) fn package(pkg: &dyn PackageFormat, semantics: super::InstallSemantics) -> Self {
+        Self::prepared(PackageIdentity::package(pkg), semantics)
+    }
+
+    fn prepared(identity: PackageIdentity, semantics: super::InstallSemantics) -> Self {
+        use super::semantics::PreparedSourceKind;
+        use conary_core::packages::PackageFormatType;
+
+        // The prepared source was classified from the artifact and its lifecycle
+        // contract. A CCS package's version grammar alone does not name its source.
+        let source_format = match semantics.source {
+            PreparedSourceKind::Ccs => SourcePackageFormat::Ccs,
+            PreparedSourceKind::NativePackage { format } => match format {
+                PackageFormatType::Rpm => SourcePackageFormat::Rpm,
+                PackageFormatType::Deb => SourcePackageFormat::Debian,
+                PackageFormatType::Arch => SourcePackageFormat::Alpm,
+                PackageFormatType::Eopkg => SourcePackageFormat::Eopkg,
+            },
+        };
+        Self {
+            identity,
+            source_format: Some(source_format),
+        }
+    }
+
+    fn trove(trove: &Trove) -> Self {
+        Self {
+            identity: PackageIdentity::trove(trove),
+            source_format: trove
+                .native_package_identity
+                .as_ref()
+                .map(conary_core::packages::InstalledPackageIdentity::source_package_format),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) enum InstallChange {
-    Install(PackageIdentity),
+    Install(ObservedPackage),
     Update {
-        before: PackageIdentity,
-        after: PackageIdentity,
+        before: ObservedPackage,
+        after: ObservedPackage,
     },
     Remove(
-        PackageIdentity,
+        ObservedPackage,
         conary_core::repository::dependency_model::RepositoryRequirementKind,
     ),
-    Deconfigure(PackageIdentity),
+    Deconfigure(ObservedPackage),
 }
 
 impl InstallChange {
-    pub(crate) fn incoming(after: PackageIdentity, before: Option<&Trove>) -> Self {
+    pub(crate) fn incoming(after: ObservedPackage, before: Option<&Trove>) -> Self {
         match before {
             Some(before) => Self::Update {
-                before: PackageIdentity::trove(before),
+                before: ObservedPackage::trove(before),
                 after,
             },
             None => Self::Install(after),
@@ -80,7 +125,7 @@ pub(crate) fn relation_changes(
     plan: &PackageRelationPlan,
 ) -> Result<Vec<InstallChange>> {
     let identity = |id| -> Result<_> {
-        Ok(PackageIdentity::trove(
+        Ok(ObservedPackage::trove(
             &Trove::find_by_id(conn, id)?.context("planned relation package disappeared")?,
         ))
     };
@@ -130,17 +175,17 @@ impl InstallReport {
             .filter_map(|change| match change {
                 InstallChange::Install(after) | InstallChange::Update { after, .. }
                     if targets.iter().any(|target| {
-                        target.name == after.name
-                            && target.version == after.version
-                            && target.version_scheme == after.version_scheme
-                            && target.architecture == after.architecture
+                        target.name == after.identity.name
+                            && target.version == after.identity.version
+                            && target.version_scheme == after.identity.version_scheme
+                            && target.architecture == after.identity.architecture
                             && super::conversion::selected_ccs_release_matches(
-                                after.release.as_deref(),
+                                after.identity.release.as_deref(),
                                 target.release.as_deref(),
                             )
                     }) =>
                 {
-                    Some(after)
+                    Some(&after.identity)
                 }
                 _ => None,
             })
@@ -174,13 +219,16 @@ pub(super) fn batch_changes(
             .map(|id| Trove::find_by_id(conn, id)?.context("planned upgrade package disappeared"))
             .transpose()?;
         changes.push(InstallChange::incoming(
-            PackageIdentity {
-                name: package.name.clone(),
-                version: package.version.clone(),
-                version_scheme: package.semantics.version_scheme,
-                release: package.package_release.clone(),
-                architecture: package.architecture.clone(),
-            },
+            ObservedPackage::prepared(
+                PackageIdentity {
+                    name: package.name.clone(),
+                    version: package.version.clone(),
+                    version_scheme: package.semantics.version_scheme,
+                    release: package.package_release.clone(),
+                    architecture: package.architecture.clone(),
+                },
+                package.semantics,
+            ),
             before.as_ref(),
         ));
         let plan = PackageRelationPlan {
@@ -227,8 +275,19 @@ mod identity_tests {
             planned: Vec::new(),
             commits: vec![InstallCommit {
                 changes: vec![
-                    InstallChange::Install(installed.clone()),
-                    InstallChange::Install(dependency),
+                    InstallChange::Install(ObservedPackage {
+                        identity: installed.clone(),
+                        source_format: Some(SourcePackageFormat::Ccs),
+                    }),
+                    // More observations of one identity must not inflate the count.
+                    InstallChange::Install(ObservedPackage {
+                        identity: installed.clone(),
+                        source_format: None,
+                    }),
+                    InstallChange::Install(ObservedPackage {
+                        identity: dependency,
+                        source_format: Some(SourcePackageFormat::Ccs),
+                    }),
                 ],
                 changeset_id: 42,
                 file_records: 0,
@@ -253,5 +312,73 @@ mod identity_tests {
                 expected
             );
         }
+    }
+
+    #[test]
+    fn source_observation_uses_prepared_kind_without_changing_identity() {
+        use conary_core::packages::PackageFormatType;
+
+        for (format, source) in [
+            (PackageFormatType::Rpm, SourcePackageFormat::Rpm),
+            (PackageFormatType::Deb, SourcePackageFormat::Debian),
+            (PackageFormatType::Arch, SourcePackageFormat::Alpm),
+            (PackageFormatType::Eopkg, SourcePackageFormat::Eopkg),
+        ] {
+            let semantics = super::super::InstallSemantics::native_package(format);
+            let identity = PackageIdentity {
+                name: "typed-source".into(),
+                version: "1.0".into(),
+                version_scheme: semantics.version_scheme,
+                release: Some("1".into()),
+                architecture: Some("x86_64".into()),
+            };
+            let native = ObservedPackage::prepared(identity.clone(), semantics);
+            let ccs = ObservedPackage::prepared(
+                identity.clone(),
+                super::super::InstallSemantics::ccs(semantics.version_scheme),
+            );
+            assert_eq!(native.source_format, Some(source));
+            assert_eq!(ccs.source_format, Some(SourcePackageFormat::Ccs));
+            assert_eq!(native.identity, identity);
+            assert_eq!(ccs.identity, identity);
+        }
+    }
+
+    #[test]
+    fn stored_identity_does_not_infer_a_source_observation() {
+        let trove = Trove::new(
+            "ccs-rpm-named-package".into(),
+            "1.0".into(),
+            conary_core::db::models::TroveType::Package,
+            VersionScheme::Rpm,
+        );
+        let observed = ObservedPackage::trove(&trove);
+        assert_eq!(observed.source_format, None);
+        assert_eq!(observed.identity, PackageIdentity::trove(&trove));
+    }
+
+    #[test]
+    fn stored_exact_native_identity_retains_its_source_observation() {
+        let mut trove = Trove::new(
+            "native-package".into(),
+            "1.0-1".into(),
+            conary_core::db::models::TroveType::Package,
+            VersionScheme::Rpm,
+        );
+        trove.architecture = Some("x86_64".into());
+        trove.native_package_identity = Some(
+            conary_core::packages::InstalledPackageIdentity::rpm(
+                "native-package-1.0-1.x86_64",
+                "native-package",
+                None,
+                "1.0",
+                "1",
+                "x86_64",
+            )
+            .unwrap(),
+        );
+        let observed = ObservedPackage::trove(&trove);
+        assert_eq!(observed.source_format, Some(SourcePackageFormat::Rpm));
+        assert_eq!(observed.identity, PackageIdentity::trove(&trove));
     }
 }

@@ -4,64 +4,88 @@
 use super::*;
 use crate::commands::install_report::{InstallChange, InstallReport};
 
-fn install_lines(changes: &[InstallChange], preview: bool) -> Vec<String> {
-    let rows: Vec<_> = changes
-        .iter()
-        .map(|change| {
-            let (kind, identity, before) = match change {
-                InstallChange::Install(identity) => (Change::Install, identity, None),
-                InstallChange::Update { before, after } => (Change::Update, after, Some(before)),
-                InstallChange::Remove(identity, _) => (Change::Remove, identity, None),
-                InstallChange::Deconfigure(identity) => (Change::Deconfigure, identity, None),
-            };
-            let transition = |old: Option<&str>, new: Option<&str>| {
-                format!("{} -> {}", old.unwrap_or("-"), new.unwrap_or("-"))
-            };
-            let version = before.map_or_else(
-                || identity.version.clone(),
-                |old| transition(Some(&old.version), Some(&identity.version)),
-            );
-            let release = before.map_or_else(
-                || identity.release.clone(),
-                |old| {
+/// One observed change as owned row values, before the shared renderer borrows
+/// them for a single table.
+struct Row {
+    change: Change,
+    name: String,
+    version: String,
+    release: Option<String>,
+    architecture: Option<String>,
+    source_format: Option<SourcePackageFormat>,
+    reason: Option<&'static str>,
+}
+
+impl Row {
+    /// Version, release, and architecture keep their transition form for
+    /// updates. The source format cell reports the incoming observation alone:
+    /// the ecosystem the incoming package was observed in, never a reading of
+    /// the replaced package, its version grammar, or its name.
+    fn observed(change: &InstallChange) -> Self {
+        let (group, observed, before) = match change {
+            InstallChange::Install(observed) => (Change::Install, observed, None),
+            InstallChange::Update { before, after } => (Change::Update, after, Some(before)),
+            InstallChange::Remove(observed, _) => (Change::Remove, observed, None),
+            InstallChange::Deconfigure(observed) => (Change::Deconfigure, observed, None),
+        };
+        let transition = |old: Option<&str>, new: Option<&str>| {
+            format!("{} -> {}", old.unwrap_or("-"), new.unwrap_or("-"))
+        };
+        let identity = &observed.identity;
+        let version = before.map_or_else(
+            || identity.version.clone(),
+            |old| transition(Some(&old.identity.version), Some(&identity.version)),
+        );
+        let release = before.map_or_else(
+            || identity.release.clone(),
+            |old| {
+                Some(transition(
+                    old.identity.release.as_deref(),
+                    identity.release.as_deref(),
+                ))
+            },
+        );
+        let architecture = before.map_or_else(
+            || identity.architecture.clone(),
+            |old| {
+                if old.identity.architecture == identity.architecture {
+                    identity.architecture.clone()
+                } else {
                     Some(transition(
-                        old.release.as_deref(),
-                        identity.release.as_deref(),
+                        old.identity.architecture.as_deref(),
+                        identity.architecture.as_deref(),
                     ))
-                },
-            );
-            let architecture = before.map_or_else(
-                || identity.architecture.clone(),
-                |old| {
-                    if old.architecture == identity.architecture {
-                        identity.architecture.clone()
-                    } else {
-                        Some(transition(
-                            old.architecture.as_deref(),
-                            identity.architecture.as_deref(),
-                        ))
-                    }
-                },
-            );
-            let reason = match change {
+                }
+            },
+        );
+        Self {
+            change: group,
+            name: identity.name.clone(),
+            version,
+            release,
+            architecture,
+            source_format: observed.source_format,
+            reason: match change {
                 InstallChange::Remove(_, kind) => Some(kind.as_str()),
                 _ => None,
-            };
-            (kind, &identity.name, version, release, architecture, reason)
-        })
-        .collect();
+            },
+        }
+    }
+}
+
+fn install_lines(changes: &[InstallChange], preview: bool) -> Vec<String> {
+    let rows: Vec<Row> = changes.iter().map(Row::observed).collect();
     let rows: Vec<_> = rows
         .iter()
-        .map(
-            |(change, name, version, release, architecture, reason)| PackageChange {
-                change: *change,
-                name,
-                version,
-                release: release.as_deref(),
-                architecture: architecture.as_deref(),
-                reason: *reason,
-            },
-        )
+        .map(|row| PackageChange {
+            change: row.change,
+            name: &row.name,
+            version: &row.version,
+            release: row.release.as_deref(),
+            architecture: row.architecture.as_deref(),
+            source_format: row.source_format,
+            reason: row.reason,
+        })
         .collect();
     change_lines_with_heading(&rows, preview)
 }
@@ -167,23 +191,29 @@ pub(crate) fn install_rollback_route(report: &InstallReport, db_path: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::install_report::PackageIdentity;
+    use crate::commands::install_report::{ObservedPackage, PackageIdentity};
     use conary_core::repository::versioning::VersionScheme;
 
     #[test]
     fn shared_preview_retains_version_release_and_architecture_transitions() {
-        let before = PackageIdentity {
-            name: "demo".into(),
-            version: "1.0.0".into(),
-            version_scheme: VersionScheme::Conary,
-            release: Some("7".into()),
-            architecture: Some("aarch64".into()),
+        let before = ObservedPackage {
+            identity: PackageIdentity {
+                name: "demo".into(),
+                version: "1.0.0".into(),
+                version_scheme: VersionScheme::Conary,
+                release: Some("7".into()),
+                architecture: Some("aarch64".into()),
+            },
+            source_format: Some(SourcePackageFormat::Rpm),
         };
-        let after = PackageIdentity {
-            version: "2.0.0".into(),
-            release: Some("8".into()),
-            architecture: Some("x86_64".into()),
-            ..before.clone()
+        let after = ObservedPackage {
+            identity: PackageIdentity {
+                version: "2.0.0".into(),
+                release: Some("8".into()),
+                architecture: Some("x86_64".into()),
+                ..before.identity.clone()
+            },
+            source_format: Some(SourcePackageFormat::Ccs),
         };
         let rows = [
             InstallChange::Update {
@@ -208,10 +238,75 @@ mod tests {
             "Reason",
             "obsolete",
             "Deconfigure (1):",
+            "Source format",
         ] {
             assert!(text.contains(expected), "{text}");
         }
+        // An update reports the incoming observation, not a format transition.
+        assert!(text.contains("ccs"), "{text}");
+        assert!(!text.contains("rpm -> ccs"), "{text}");
         assert!(!text.contains("Applied"));
         assert!(!text.contains("Generation"));
+    }
+
+    #[test]
+    fn every_change_kind_reports_only_its_observed_source_format() {
+        let observed = |name: &str, version_scheme, source_format| ObservedPackage {
+            identity: PackageIdentity {
+                name: name.into(),
+                version_scheme,
+                version: "1.0.0".into(),
+                release: None,
+                architecture: Some("x86_64".into()),
+            },
+            source_format,
+        };
+        let rows = [
+            InstallChange::Install(observed(
+                "installed",
+                VersionScheme::Conary,
+                Some(SourcePackageFormat::Debian),
+            )),
+            InstallChange::Remove(
+                observed(
+                    "removed",
+                    VersionScheme::Conary,
+                    Some(SourcePackageFormat::Eopkg),
+                ),
+                conary_core::repository::dependency_model::RepositoryRequirementKind::Obsolete,
+            ),
+            InstallChange::Deconfigure(observed("unobserved", VersionScheme::Conary, None)),
+            // Neither observation may be read off the version grammar: an
+            // RPM-shaped version observed as a CCS source stays ccs, and a
+            // Conary grammar observed as an RPM source stays rpm.
+            InstallChange::Deconfigure(observed(
+                "grammar-mismatch",
+                VersionScheme::Rpm,
+                Some(SourcePackageFormat::Ccs),
+            )),
+            InstallChange::Deconfigure(observed(
+                "grammar-opposite",
+                VersionScheme::Conary,
+                Some(SourcePackageFormat::Rpm),
+            )),
+        ];
+        let text = console::strip_ansi_codes(&install_lines(&rows, false).join("\n"));
+        // Cells after the name: version, CCS release, architecture, source
+        // format, then the reason column that only removals carry.
+        let row = |name: &str| {
+            text.lines()
+                .find(|line| line.trim_start().starts_with(&format!("{name} ")))
+                .unwrap_or_else(|| panic!("no row for {name} in {text}"))
+                .split_whitespace()
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(row("installed")[4], "deb");
+        assert_eq!(row("removed")[4], "eopkg");
+        // The removal keeps its relation reason beside the format cell.
+        assert_eq!(row("removed")[5], "obsolete");
+        assert_eq!(row("unobserved")[4], "-");
+        assert_eq!(row("grammar-mismatch")[4], "ccs");
+        assert_eq!(row("grammar-opposite")[4], "rpm");
     }
 }
