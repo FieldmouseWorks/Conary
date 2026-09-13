@@ -125,7 +125,7 @@ fn selected_package_facts_survive_terminal_pipe_and_no_color_without_mutation() 
             "  Selection reason: explicitly selected fixture\n  Install reason: explicit\n  Pinned: yes\n",
             "  File records: 6\n  Payload size: 1026048 bytes\n",
             "Dependencies (1):\n",
-            "Provides (2):\n  Capability: nginx\n  Kind: package\n  Version: 1.24.0\n  Version relation: =\n  Version scheme: conary\n  Architecture qualifier: implicit\n  Provenance: exact-identity\n\n  Capability: webserver\n  Kind: package\n  Version: -\n  Version relation: -\n  Version scheme: conary\n  Architecture qualifier: implicit\n  Provenance: exact-identity\n",
+            "Provides (2):\n  Capability: nginx\n  Kind: package\n  Capability version: 1.24.0\n  Capability version relation: =\n  Capability version scheme: conary\n  Architecture qualifier: implicit\n  Provenance: exact-identity\n\n  Capability: webserver\n  Kind: package\n  Capability version: -\n  Capability version relation: -\n  Capability version scheme: conary\n  Architecture qualifier: implicit\n  Provenance: exact-identity\n",
             "Components (2):\n  Component: :config\n  Installed: no\n  Component: :runtime\n  Installed: yes\n",
         ] {
             assert!(text.contains(expected), "missing {expected:?}: {text}");
@@ -285,12 +285,12 @@ fn provide_contracts_keep_versions_qualifiers_and_provenance_in_every_output_mod
         }
         assert!(text.contains("Provides (6):\n"));
         for expected in [
-            "  Capability: nginx\n  Kind: package\n  Version: 1.24.0\n  Version relation: =\n  Version scheme: conary\n  Architecture qualifier: implicit\n  Provenance: exact-identity\n",
-            "  Capability: abi-virtual\n  Kind: virtual\n  Version: 2:1.0-3\n  Version relation: =\n  Version scheme: debian\n  Architecture qualifier: exact\n  Architecture: native\n  Provenance: source-declared\n  Source format: deb\n  Source record index: 7\n",
-            "  Capability: wildcard-abi\n  Kind: virtual\n  Version: -\n  Version relation: -\n  Version scheme: debian\n  Architecture qualifier: any\n  Provenance: source-declared\n  Source format: deb\n  Source record index: 0\n",
-            "  Capability: /usr/bin/fixture\n  Kind: file\n  Version: -\n  Version relation: -\n  Version scheme: rpm\n  Architecture qualifier: implicit\n  Provenance: source-derived-file\n  Source format: rpm\n",
-            "  Capability: /run/fixture\n  Kind: file\n  Version: -\n  Version relation: -\n  Version scheme: rpm\n  Architecture qualifier: implicit\n  Provenance: source-promised-path\n  Source format: rpm\n",
-            "  Capability: control\\ncap\\u{1b}[31m\n  Kind: generic\n  Version: 2:3.0~rc1-4\n  Version relation: >=\n  Version scheme: rpm\n  Architecture qualifier: implicit\n  Provenance: author-declared\n",
+            "  Capability: nginx\n  Kind: package\n  Capability version: 1.24.0\n  Capability version relation: =\n  Capability version scheme: conary\n  Architecture qualifier: implicit\n  Provenance: exact-identity\n",
+            "  Capability: abi-virtual\n  Kind: virtual\n  Capability version: 2:1.0-3\n  Capability version relation: =\n  Capability version scheme: debian\n  Architecture qualifier: exact\n  Capability architecture: native\n  Provenance: source-declared\n  Source format: deb\n  Source record index: 7\n",
+            "  Capability: wildcard-abi\n  Kind: virtual\n  Capability version: -\n  Capability version relation: -\n  Capability version scheme: debian\n  Architecture qualifier: any\n  Provenance: source-declared\n  Source format: deb\n  Source record index: 0\n",
+            "  Capability: /usr/bin/fixture\n  Kind: file\n  Capability version: -\n  Capability version relation: -\n  Capability version scheme: rpm\n  Architecture qualifier: implicit\n  Provenance: source-derived-file\n  Source format: rpm\n",
+            "  Capability: /run/fixture\n  Kind: file\n  Capability version: -\n  Capability version relation: -\n  Capability version scheme: rpm\n  Architecture qualifier: implicit\n  Provenance: source-promised-path\n  Source format: rpm\n",
+            "  Capability: control\\ncap\\u{1b}[31m\n  Kind: generic\n  Capability version: 2:3.0~rc1-4\n  Capability version relation: >=\n  Capability version scheme: rpm\n  Architecture qualifier: implicit\n  Provenance: author-declared\n",
         ] {
             assert!(text.contains(expected), "missing {expected:?}: {text}");
         }

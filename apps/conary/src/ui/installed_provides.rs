@@ -41,7 +41,7 @@ fn record_lines(provide: &ProvideEntry) -> Vec<String> {
         field_line("Kind", capability_kind_label(provide.kind)),
     ];
     lines.push(field_line(
-        "Version",
+        "Capability version",
         &provide
             .version
             .as_deref()
@@ -49,11 +49,11 @@ fn record_lines(provide: &ProvideEntry) -> Vec<String> {
             .unwrap_or_else(|| "-".to_owned()),
     ));
     lines.push(field_line(
-        "Version relation",
+        "Capability version relation",
         version_relation_label(provide.version_relation),
     ));
     lines.push(field_line(
-        "Version scheme",
+        "Capability version scheme",
         provide.version_scheme.as_str(),
     ));
     lines.push(field_line(
@@ -61,7 +61,10 @@ fn record_lines(provide: &ProvideEntry) -> Vec<String> {
         architecture_qualifier_label(&provide.architecture_qualifier),
     ));
     if let ProvideArchitectureQualifier::Exact(architecture) = &provide.architecture_qualifier {
-        lines.push(field_line("Architecture", &visible(architecture)));
+        lines.push(field_line(
+            "Capability architecture",
+            &visible(architecture),
+        ));
     }
     lines.extend(provenance_lines(&provide.provenance));
     lines
@@ -189,6 +192,8 @@ mod tests {
         assert_eq!(lines[1], "Provides (3):");
         assert_eq!(fields(&lines, "Capability"), ["zlib", "libz.so.1", "zlib"]);
         assert_eq!(fields(&lines, "Kind"), ["package", "soname", "package"]);
+        assert!(fields(&lines, "Version").is_empty());
+        assert!(fields(&lines, "Version scheme").is_empty());
         assert_eq!(lines.iter().filter(|line| line.is_empty()).count(), 3);
         assert!(!lines.last().unwrap().is_empty());
     }
@@ -204,9 +209,9 @@ mod tests {
                 "Provides (1):",
                 "  Capability: virtual-abi",
                 "  Kind: virtual",
-                "  Version: -",
-                "  Version relation: -",
-                "  Version scheme: rpm",
+                "  Capability version: -",
+                "  Capability version relation: -",
+                "  Capability version scheme: rpm",
                 "  Architecture qualifier: implicit",
                 "  Provenance: author-declared",
             ]
@@ -219,9 +224,9 @@ mod tests {
         let mut provide = entry("existence-only", RepositoryCapabilityKind::PackageName);
         provide.version_scheme = VersionScheme::Debian;
         let lines = section(&[provide]);
-        assert_eq!(fields(&lines, "Version"), ["-"]);
-        assert_eq!(fields(&lines, "Version relation"), ["-"]);
-        assert_eq!(fields(&lines, "Version scheme"), ["debian"]);
+        assert_eq!(fields(&lines, "Capability version"), ["-"]);
+        assert_eq!(fields(&lines, "Capability version relation"), ["-"]);
+        assert_eq!(fields(&lines, "Capability version scheme"), ["debian"]);
     }
 
     #[test]
@@ -233,8 +238,8 @@ mod tests {
         provide.architecture_qualifier = ProvideArchitectureQualifier::Exact("x86\t64".to_owned());
         let lines = section(&[provide]);
         assert_eq!(fields(&lines, "Capability"), ["lib\\tx\\n7"]);
-        assert_eq!(fields(&lines, "Version"), ["1\\u{1}2"]);
-        assert_eq!(fields(&lines, "Architecture"), ["x86\\t64"]);
+        assert_eq!(fields(&lines, "Capability version"), ["1\\u{1}2"]);
+        assert_eq!(fields(&lines, "Capability architecture"), ["x86\\t64"]);
     }
 
     #[test]
@@ -253,7 +258,8 @@ mod tests {
             fields(&lines, "Architecture qualifier"),
             ["implicit", "any", "exact"]
         );
-        assert_eq!(fields(&lines, "Architecture"), ["native"]);
+        assert_eq!(fields(&lines, "Capability architecture"), ["native"]);
+        assert!(fields(&lines, "Architecture").is_empty());
     }
 
     #[test]
@@ -326,9 +332,12 @@ mod tests {
         }
         let lines = section(&provides);
         assert_eq!(
-            fields(&lines, "Version relation"),
+            fields(&lines, "Capability version relation"),
             ["<", "<=", "=", ">=", ">"]
         );
-        assert_eq!(fields(&lines, "Version"), ["2", "2", "2", "2", "2"]);
+        assert_eq!(
+            fields(&lines, "Capability version"),
+            ["2", "2", "2", "2", "2"]
+        );
     }
 }
