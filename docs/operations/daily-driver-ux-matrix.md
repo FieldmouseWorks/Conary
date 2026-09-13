@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-09-13
-revision: 40
-summary: Daily-driver CLI source identities, installed package details, grouped results, changeset history, scoped recovery, and typed native refusals
+revision: 41
+summary: Daily-driver CLI source identities, fallible file-owner queries, installed details, grouped results, history, and typed native refusals
 ---
 
 # Daily-Driver UX Matrix
@@ -634,6 +634,20 @@ evidence plus `cargo test -p conary --test output_vocabulary_guard` and
 6. **Structured refusal layout** — Keep the live-host refusal routes from this
    matrix, presented as a short cause plus `note:` next steps. Update
    `live_host_mutation_safety` expectations in the same slice.
+
+## File Ownership Query Failures
+
+`list --path <PATH>` preserves errors from the file and owner readers. An
+exact-path owner-read failure does not fall through to pattern search. A
+pattern-query owner-read failure is not silently omitted from a successful
+answer: the command exits nonzero with the original error. Valid absence,
+exact matches, grouped pattern matches, and exact-path `--info` keep their
+existing selection behavior. These queries do not change stored state.
+
+`cargo test -p conary --test cli_path_query` establishes a valid file record
+and failed typed owner read before invoking the actual CLI. Invalid owner type
+and version grammar exercise both paths; separate valid-query controls and
+database snapshots prove existing read-only behavior.
 
 ## Installed Package Details
 
