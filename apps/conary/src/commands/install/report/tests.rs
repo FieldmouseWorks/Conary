@@ -107,18 +107,34 @@ async fn install_summary_capture_child() {
         );
     }
     let ccs = scenario.contains("ccs");
+    let converted = scenario.contains("converted");
     let preview = scenario.contains("preview");
     let failed = scenario.contains("failed");
     let canceled = scenario == "canceled_native";
     let dependency_relation = scenario.starts_with("dependency_relation");
-    let package = artifact(
+    let mut package = artifact(
         temp.path(),
         "summary-incoming",
         "2.0.0",
-        ccs,
+        ccs && !converted,
         canceled || dependency_relation,
         scenario.contains("relation"),
     );
+    if converted {
+        let format = conary_core::packages::PackageFormatType::Rpm;
+        let parsed = super::super::prepare::parse_package(&package, format).unwrap();
+        let pending = super::super::conversion::convert_native_package_to_ccs(
+            parsed.as_ref(),
+            &package,
+            format,
+            None,
+        )
+        .unwrap();
+        let output = pending.unverified_ccs_path().to_path_buf();
+        let (_verified, _artifact_guard) = pending.verify().unwrap();
+        package = temp.path().join("converted-package.ccs");
+        std::fs::copy(output, &package).unwrap();
+    }
     let preflight = matches!(scenario.as_str(), "preflight_native" | "batch_preflight");
     if preflight {
         let mut builder = rpm::PackageBuilder::new(
@@ -359,7 +375,14 @@ async fn install_summary_capture_child() {
     } else {
         let installed = Trove::find_by_name(&conn, "summary-incoming").unwrap();
         assert_eq!(installed.len(), 1);
-        assert_eq!(installed[0].version, if ccs { "2.0.0" } else { "2.0.0-1" });
+        assert_eq!(
+            installed[0].version,
+            if ccs && !converted {
+                "2.0.0"
+            } else {
+                "2.0.0-1"
+            }
+        );
         let pending =
             conary_core::db::models::GenerationPublication::pending_recoverable(&conn).unwrap();
         assert_eq!(!pending.is_empty(), scenario.contains("pending"));
@@ -379,6 +402,8 @@ fn install_summary_commands_in_terminal_pipe_and_no_color() {
             "batch_preflight",
             "ccs",
             "preview_ccs",
+            "converted_ccs",
+            "converted_preview_ccs",
             "upgrade_ccs",
             "pending_ccs",
             "failed_ccs",
@@ -388,6 +413,8 @@ fn install_summary_commands_in_terminal_pipe_and_no_color() {
             "canceled_native",
             "relation_native",
             "relation_preview_native",
+            "relation_ccs",
+            "relation_preview_ccs",
             "dependency_relation_preview_native",
             "dependency_relation_native",
         ] {
@@ -486,16 +513,33 @@ fn install_summary_commands_in_terminal_pipe_and_no_color() {
                 "Applied package changes:"
             };
             assert_eq!(frame.matches(heading).count(), 1, "{frame}");
+            let table = frame.split_once(heading).unwrap().1;
             for field in [
                 "Package",
                 "Version",
                 "CCS release",
                 "Architecture",
+                "Source format",
                 "summary-incoming",
                 "x86_64",
             ] {
                 assert!(frame.contains(field), "{frame}");
             }
+            let incoming = table
+                .lines()
+                .find(|line| line.split_whitespace().next() == Some("summary-incoming"))
+                .unwrap();
+            assert_eq!(
+                incoming.split_whitespace().last(),
+                Some(
+                    if scenario.contains("ccs") && !scenario.contains("converted") {
+                        "ccs"
+                    } else {
+                        "rpm"
+                    }
+                ),
+                "{frame}"
+            );
             if scenario.contains("upgrade") {
                 assert!(frame.contains(" -> "), "{frame}");
                 assert!(frame.contains("Updated (1):"), "{frame}");
@@ -510,6 +554,11 @@ fn install_summary_commands_in_terminal_pipe_and_no_color() {
                     "{frame}"
                 );
                 assert!(frame.contains("summary-dependency"), "{frame}");
+                let dependency = table
+                    .lines()
+                    .find(|line| line.split_whitespace().next() == Some("summary-dependency"))
+                    .unwrap();
+                assert_eq!(dependency.split_whitespace().last(), Some("ccs"), "{frame}");
             }
             if scenario.contains("relation") {
                 assert!(frame.contains("summary-obsolete"), "{frame}");

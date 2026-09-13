@@ -36,13 +36,67 @@ fn grouped_changes_preserve_versions_releases_and_variants() {
         concat!(
             "Applied package changes:\n",
             "  Removed (1):\n",
-            "    Package  Version  CCS release  Architecture\n",
-            "    demo     1:3.0-1  -            x86_64\n",
+            "    Package  Version  CCS release  Architecture  Source format\n",
+            "    demo     1:3.0-1  -            x86_64        -\n",
             "  Restored (1):\n",
-            "    Package  Version  CCS release  Architecture\n",
-            "    demo     1:2.0-3  4            aarch64"
+            "    Package  Version  CCS release  Architecture  Source format\n",
+            "    demo     1:2.0-3  4            aarch64       -"
         )
     );
+}
+
+#[test]
+fn source_format_column_labels_every_ecosystem_and_an_absent_observation() {
+    // The enum is closed, so an absent observation is the only case that is
+    // not a named source ecosystem.
+    for (observed, expected) in [
+        (Some(SourcePackageFormat::Rpm), "rpm"),
+        (Some(SourcePackageFormat::Debian), "deb"),
+        (Some(SourcePackageFormat::Alpm), "arch"),
+        (Some(SourcePackageFormat::Eopkg), "eopkg"),
+        (Some(SourcePackageFormat::Ccs), "ccs"),
+        (None, "-"),
+    ] {
+        assert_eq!(source_format_label(observed), expected);
+    }
+}
+
+#[test]
+fn removal_and_restore_render_exact_retained_native_identity() {
+    let native = conary_core::packages::InstalledPackageIdentity::rpm(
+        "native-package-1.0-1.x86_64",
+        "native-package",
+        None,
+        "1.0",
+        "1",
+        "x86_64",
+    )
+    .unwrap();
+    let mut removed = Trove::new(
+        "native-package".into(),
+        "1.0-1".into(),
+        TroveType::Package,
+        VersionScheme::Rpm,
+    );
+    removed.architecture = Some("x86_64".into());
+    removed.native_package_identity = Some(native.clone());
+    let mut restored = TroveSnapshot::test_package("native-package", "1.0-1", Vec::new());
+    restored.version_scheme = VersionScheme::Rpm;
+    restored.architecture = Some("x86_64".into());
+    restored.native_package_identity = Some(native);
+    let output = change_lines(&[
+        PackageChange::removed(&removed),
+        PackageChange::restored(&restored),
+    ])
+    .join("\n");
+    let rows: Vec<_> = output
+        .lines()
+        .filter(|line| line.split_whitespace().next() == Some("native-package"))
+        .collect();
+    assert_eq!(rows.len(), 2);
+    for row in rows {
+        assert_eq!(row.split_whitespace().last(), Some("rpm"), "{output}");
+    }
 }
 
 #[test]
@@ -53,6 +107,8 @@ fn displayed_identity_cannot_inject_rows_or_terminal_controls() {
         version: "2\x1b[2J",
         release: None,
         architecture: Some("x\t64"),
+        // No command queried a source ecosystem for this identity.
+        source_format: None,
         reason: None,
     };
     let lines = change_lines(&[entry]).join("\n");

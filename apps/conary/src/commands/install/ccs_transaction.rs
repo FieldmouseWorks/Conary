@@ -479,7 +479,7 @@ fn install_ccs_package_transactionally_inner(
     }
 
     let mut changes = vec![super::report::InstallChange::incoming(
-        super::report::PackageIdentity::package(pkg),
+        super::report::ObservedPackage::package(pkg, semantics),
         old_trove,
     )];
     changes.extend(super::report::relation_changes(
