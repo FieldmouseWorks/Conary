@@ -434,23 +434,7 @@ impl CandidateResolutionProjection {
         let database = scratch.path().join("candidate.sqlite3");
         crate::db::init(&database)?;
         let mut connection = crate::db::open(&database)?;
-        connection.execute_batch(
-            "CREATE TABLE candidate_resolution_package_keys (
-                 repository_package_id INTEGER PRIMARY KEY
-                     REFERENCES repository_packages(id) ON DELETE CASCADE,
-                 package_key_sha256 TEXT NOT NULL UNIQUE
-                     CHECK(length(package_key_sha256) = 64)
-             ) STRICT;
-             CREATE TABLE candidate_resolution_group_keys (
-                 repository_requirement_group_id INTEGER PRIMARY KEY
-                     REFERENCES repository_requirement_groups(id) ON DELETE CASCADE,
-                 repository_package_id INTEGER NOT NULL
-                     REFERENCES repository_packages(id) ON DELETE CASCADE,
-                 requirement_group_sha256 TEXT NOT NULL
-                     CHECK(length(requirement_group_sha256) = 64),
-                 UNIQUE(repository_package_id, requirement_group_sha256)
-             ) STRICT;",
-        )?;
+        initialize_projection_keys(&connection)?;
         let mut repository = Repository::new(
             format!("candidate-{}", profile.profile),
             "file:///conary-candidate-resolution".to_string(),
@@ -687,6 +671,30 @@ fn root_failure(
     })
 }
 
+fn initialize_projection_keys(connection: &Connection) -> Result<()> {
+    // Native metadata can repeat an identical requirement declaration.
+    // Preserve each stored group ID even when canonical group digests match;
+    // unresolved read-back binds that ID to its exact package before forming
+    // the canonical set of package/digest evidence pairs.
+    connection.execute_batch(
+        "CREATE TABLE candidate_resolution_package_keys (
+             repository_package_id INTEGER PRIMARY KEY
+                 REFERENCES repository_packages(id) ON DELETE CASCADE,
+             package_key_sha256 TEXT NOT NULL UNIQUE
+                 CHECK(length(package_key_sha256) = 64)
+         ) STRICT;
+         CREATE TABLE candidate_resolution_group_keys (
+             repository_requirement_group_id INTEGER PRIMARY KEY
+                 REFERENCES repository_requirement_groups(id) ON DELETE CASCADE,
+             repository_package_id INTEGER NOT NULL
+                 REFERENCES repository_packages(id) ON DELETE CASCADE,
+             requirement_group_sha256 TEXT NOT NULL
+                 CHECK(length(requirement_group_sha256) = 64)
+         ) STRICT;",
+    )?;
+    Ok(())
+}
+
 fn insert_catalog_package(
     connection: &Connection,
     repository_id: i64,
@@ -776,4 +784,118 @@ fn insert_catalog_package(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::repository::catalog::CatalogPackageOriginV1;
+    use crate::repository::dependency_model::RepositoryRequirementKind;
+    use crate::repository::versioning::VersionScheme;
+
+    #[test]
+    fn projection_retains_every_group_id_and_exact_package_binding() {
+        let scratch = tempfile::tempdir().unwrap();
+        let database = scratch.path().join("candidate.sqlite3");
+        crate::db::init(&database).unwrap();
+        let connection = crate::db::open(&database).unwrap();
+        initialize_projection_keys(&connection).unwrap();
+        let repository_id = Repository::new("arch".to_string(), "https://example.test".to_string())
+            .insert(&connection)
+            .unwrap();
+        let clause = crate::repository::requirement::parse_native_requirement(
+            RepositoryRequirementKind::Depends,
+            VersionScheme::Arch,
+            "rustup",
+        )
+        .unwrap();
+        let group = RepositoryRequirementGroup::new(
+            0,
+            "depends".to_string(),
+            "hard".to_string(),
+            serde_json::to_string(&clause.expression).unwrap(),
+        );
+        let atom = RepositoryRequirement::new(
+            0,
+            0,
+            "rustup".to_string(),
+            None,
+            "package".to_string(),
+            "runtime".to_string(),
+            Some("rustup".to_string()),
+        );
+        let mut expected = Vec::new();
+        for name in ["cargo-msrv", "another-package"] {
+            let mut package = RepositoryPackage::new(
+                repository_id,
+                name.to_string(),
+                "0.19.3-2".to_string(),
+                VersionScheme::Arch,
+                "a".repeat(64),
+                1,
+                format!("https://example.test/{name}.pkg.tar.zst"),
+            );
+            package.source_profile = Some("arch".to_string());
+            package.architecture = Some("x86_64".to_string());
+            let record = CatalogPackageRecordV1::from_repository_projection(
+                package,
+                vec![],
+                vec![group.clone(); 3],
+                vec![vec![atom.clone()]; 3],
+                CatalogPackageOriginV1::Profile {
+                    member_ordinal: 0,
+                    source_identity: "archlinux".to_string(),
+                    repository_identity: "arch-extra-x86_64".to_string(),
+                    source_snapshot_sha256: "b".repeat(64),
+                },
+            )
+            .unwrap();
+            expected.push((
+                record.package_key_sha256.clone(),
+                native_requirement_group_sha256(&record.requirement_groups[0]).unwrap(),
+            ));
+            insert_catalog_package(&connection, repository_id, record).unwrap();
+        }
+        let rows = connection
+            .prepare(
+                "SELECT groups.id, groups.repository_package_id,
+                        keys.repository_package_id, package.package_key_sha256,
+                        keys.requirement_group_sha256
+                 FROM repository_requirement_groups groups
+                 LEFT JOIN candidate_resolution_group_keys keys
+                   ON keys.repository_requirement_group_id = groups.id
+                 LEFT JOIN candidate_resolution_package_keys package
+                   ON package.repository_package_id = keys.repository_package_id
+                 ORDER BY groups.id",
+            )
+            .unwrap()
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                ))
+            })
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        assert_eq!(rows.len(), 6);
+        assert_eq!(
+            rows.iter().map(|row| row.0).collect::<BTreeSet<_>>().len(),
+            6
+        );
+        assert_eq!(expected[0].1, expected[1].1);
+        let (occurrences, remainder) = rows.as_chunks::<3>();
+        assert!(remainder.is_empty());
+        for ((package_key, digest), occurrences) in expected.iter().zip(occurrences) {
+            for (_, stored_package_id, mapped_package_id, mapped_key, mapped_digest) in occurrences
+            {
+                assert_eq!(stored_package_id, mapped_package_id);
+                assert_eq!(mapped_key, package_key);
+                assert_eq!(mapped_digest, digest);
+            }
+        }
+    }
 }

@@ -1,8 +1,8 @@
 ---
 title: Remi native full-catalog parity oracle
 summary: Define single-walk producer-bound strict native parity lanes with live progress and independent diagnostic retention, bounded native ALPM provider probing, selective same-export assembly, and deterministic bounded-parallel private collect-all resolution surveys for one complete immutable profile candidate
-last_updated: 2026-09-07
-revision: 86
+last_updated: 2026-09-13
+revision: 87
 status: active
 ---
 
@@ -273,6 +273,16 @@ uses the pinned ALPM grammar's soname classification as semantic authority.
 Soname-v2 identities remain atomic by the same rule. Ordinary package and
 virtual relations continue to require exact normalized libalpm name and version
 agreement, so this distinction adds no permissive fallback.
+
+Repeated ALPM requirement declarations retain their multiplicity in package-fact
+catalogs and the ephemeral candidate resolver projection. The projection maps
+each stored requirement-group ID to its exact package and canonical group
+digest; equal digests do not reject distinct declaration occurrences. Unresolved
+result lookup binds both the stored group ID and package ID before collecting
+the canonical set of requiring-package/group-digest pairs. The projection is
+rebuilt privately for each run, so this mapping correction changes neither a
+persisted catalog schema nor an oracle wire schema. The retained Arch descriptor
+and repeated-group resolution proofs are owned by #956.
 
 RPM package-fact evidence is produced only with the explicit
 `native-rpm-oracle` feature and pinned libsolv 0.7.36 runtime. Ordinary Conary
