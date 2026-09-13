@@ -283,17 +283,19 @@ fn provide_contracts_keep_versions_qualifiers_and_provenance_in_every_output_mod
         if let Some(reference) = &reference {
             assert_eq!(&text, reference);
         }
-        assert!(text.contains("Provides (6):\n"));
-        for expected in [
+        let expected_records = [
             "  Capability: nginx\n  Kind: package\n  Capability version: 1.24.0\n  Capability version relation: =\n  Capability version scheme: conary\n  Architecture qualifier: implicit\n  Provenance: exact-identity\n",
             "  Capability: abi-virtual\n  Kind: virtual\n  Capability version: 2:1.0-3\n  Capability version relation: =\n  Capability version scheme: debian\n  Architecture qualifier: exact\n  Capability architecture: native\n  Provenance: source-declared\n  Source format: deb\n  Source record index: 7\n",
             "  Capability: wildcard-abi\n  Kind: virtual\n  Capability version: -\n  Capability version relation: -\n  Capability version scheme: debian\n  Architecture qualifier: any\n  Provenance: source-declared\n  Source format: deb\n  Source record index: 0\n",
             "  Capability: /usr/bin/fixture\n  Kind: file\n  Capability version: -\n  Capability version relation: -\n  Capability version scheme: rpm\n  Architecture qualifier: implicit\n  Provenance: source-derived-file\n  Source format: rpm\n",
             "  Capability: /run/fixture\n  Kind: file\n  Capability version: -\n  Capability version relation: -\n  Capability version scheme: rpm\n  Architecture qualifier: implicit\n  Provenance: source-promised-path\n  Source format: rpm\n",
             "  Capability: control\\ncap\\u{1b}[31m\n  Kind: generic\n  Capability version: 2:3.0~rc1-4\n  Capability version relation: >=\n  Capability version scheme: rpm\n  Architecture qualifier: implicit\n  Provenance: author-declared\n",
-        ] {
-            assert!(text.contains(expected), "missing {expected:?}: {text}");
-        }
+        ];
+        let expected_section = format!("Provides (6):\n{}", expected_records.join("\n"));
+        assert!(
+            text.contains(&expected_section),
+            "provide records differ from persisted insertion order: {text}"
+        );
         assert_eq!(common::database_snapshot(&db_path), before);
         retain(
             &format!("installed-provides-tty-{tty}-no-color-{no_color}.txt"),
