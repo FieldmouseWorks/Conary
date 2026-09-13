@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-13
-revision: 115
+revision: 116
 summary: Route features to owned paths and proof, including context-aware test-file caps, Cargo target evidence, and live exception ownership.
 ---
 
@@ -1298,6 +1298,11 @@ the source; conventional flat modules load children below the file stem. A file
 loaded in multiple contexts keeps separate child gates before file-level caps
 aggregate production reachability. Builtin includes and literal concat paths
 accept the unqualified, `std::`, and `core::` forms and an optional trailing comma.
+`crates/conary-xtask/src/line_cap/exemption/include_paths.rs` owns the pinned
+compiler grammar for concat strings, characters, booleans, integers, floats,
+and negative numeric literals. Integers render in decimal; float exponent
+spelling is preserved without separators or suffixes. Bytes and C strings
+cannot establish a concat string path.
 Production macro invocations, unresolved include paths, shadowing imports,
 and transformation attributes invalidate context-only test exemptions. The graph
 records these sources explicitly and retains normal caps for unknown files.
@@ -1305,7 +1310,8 @@ records these sources explicitly and retains normal caps for unknown files.
 imports and attribute uncertainty. Source reachability uses configuration
 predicates alone: even an apparent builtin test annotation can resolve to an
 imported procedural attribute, so it cannot suppress earlier or later expansion
-uncertainty. The established annotation-based span measurement remains separate; macro tokens are never interpreted as expansion
+uncertainty. The established annotation-based span measurement remains separate;
+macro tokens are never interpreted as expansion
 proof. Apparent std/core builtins also need compiler name resolution because the
 extern prelude can replace those namespaces. Loads outside the scanned roots
 and unscanned Cargo production roots also retain uncertainty. Path normalization
