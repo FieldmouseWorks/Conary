@@ -5,8 +5,8 @@
 //! Commands for building CCS packages from manifests,
 //! including native package export.
 
-mod render;
-
+use crate::ui::transaction_summary::visible;
+use crate::ui::{self, ccs_build as render, println};
 use anyhow::{Context, Result};
 use conary_core::ccs::{CcsBuilder, CcsInstallPrefix, CcsManifest, builder, native_export};
 use std::path::Path;
@@ -43,7 +43,7 @@ pub fn cmd_ccs_build(options: CcsBuildOptions) -> Result<()> {
 
     if !manifest_path.exists() {
         anyhow::bail!(
-            "No ccs.toml found at {}. Run 'conary ccs-init' first.",
+            "No ccs.toml found at {}. Run 'conary ccs init' first.",
             manifest_path.display()
         );
     }
@@ -52,10 +52,14 @@ pub fn cmd_ccs_build(options: CcsBuildOptions) -> Result<()> {
     println!("Parsing manifest...");
     let manifest = CcsManifest::from_file(&manifest_path).context("Failed to parse ccs.toml")?;
 
-    println!(
-        "Building {} v{}",
-        manifest.package.name, manifest.package.version
-    );
+    if options.dry_run {
+        ui::heading("Planned package build:");
+        ui::field("Package", &visible(&manifest.package.name));
+        ui::field("Version", &visible(&manifest.package.version));
+        ui::field("CCS release", &visible(&manifest.package.release));
+    } else {
+        ui::status("Building", &visible(&manifest.package.name));
+    }
 
     // Determine source directory
     let source_dir = match options.source.as_ref() {
@@ -116,14 +120,17 @@ pub fn cmd_ccs_build(options: CcsBuildOptions) -> Result<()> {
 
     // Build the package data (needed for all targets)
     let build_result = if !options.dry_run {
-        println!("Scanning source directory: {}", source_dir.display());
+        ui::field(
+            "Source directory",
+            &visible(&source_dir.display().to_string()),
+        );
 
         let file_count = walkdir::WalkDir::new(&source_dir)
             .into_iter()
             .filter_map(|e| e.ok())
             .filter(|e| e.file_type().is_file())
             .count();
-        println!("Scanning {} files...", file_count);
+        ui::field("Files to scan", &file_count.to_string());
 
         let mut builder_instance = CcsBuilder::new(manifest.clone(), &source_dir)
             .context("Invalid CCS build policy configuration")?
@@ -131,10 +138,10 @@ pub fn cmd_ccs_build(options: CcsBuildOptions) -> Result<()> {
         if options.chunked {
             builder_instance = builder_instance.with_chunking();
         } else {
-            println!("CDC chunking disabled (use default for delta-efficient updates)");
+            ui::field("Chunking", "disabled");
         }
 
-        println!("Compressing...");
+        println!("Preparing payload...");
         let result = builder_instance
             .build()
             .context("Failed to build package")?;
@@ -147,7 +154,7 @@ pub fn cmd_ccs_build(options: CcsBuildOptions) -> Result<()> {
 
     if options.dry_run {
         println!();
-        println!("[DRY RUN] Would build:");
+        ui::heading("Planned artifacts:");
     }
 
     for t in &targets {
@@ -179,7 +186,7 @@ pub fn cmd_ccs_build(options: CcsBuildOptions) -> Result<()> {
         let output_path = output_dir.join(&filename);
 
         if options.dry_run {
-            println!("  {} -> {}", t, output_path.display());
+            ui::field(t, &visible(&output_path.display().to_string()));
         } else {
             let result = build_result.as_ref().unwrap();
 
@@ -219,22 +226,19 @@ pub fn cmd_ccs_build(options: CcsBuildOptions) -> Result<()> {
                     )
                     .context("Failed to write CCS v3 package")?;
                     if options.local_dev {
-                        println!(
-                            "  Signed with local-dev CCS key; release publish will reject this artifact."
+                        ui::note(
+                            "Signed with a local-dev CCS key; release publish will reject this artifact.",
                         );
                     }
-                    println!("  Created: {}", output_path.display());
+                    ui::field("Created", &visible(&output_path.display().to_string()));
                 }
                 "deb" => {
                     println!();
                     println!("Generating DEB package...");
                     let gen_result = native_export::deb::generate(result, &output_path)
                         .context("Failed to generate DEB package")?;
-                    println!(
-                        "  Created: {} ({} bytes)",
-                        output_path.display(),
-                        gen_result.size
-                    );
+                    ui::field("Created", &visible(&output_path.display().to_string()));
+                    ui::field("Archive size", &format!("{} bytes", gen_result.size));
                     render::print_loss_report(&gen_result.loss_report, "DEB");
                 }
                 "rpm" => {
@@ -242,11 +246,8 @@ pub fn cmd_ccs_build(options: CcsBuildOptions) -> Result<()> {
                     println!("Generating RPM package...");
                     let gen_result = native_export::rpm::generate(result, &output_path)
                         .context("Failed to generate RPM package")?;
-                    println!(
-                        "  Created: {} ({} bytes)",
-                        output_path.display(),
-                        gen_result.size
-                    );
+                    ui::field("Created", &visible(&output_path.display().to_string()));
+                    ui::field("Archive size", &format!("{} bytes", gen_result.size));
                     render::print_loss_report(&gen_result.loss_report, "RPM");
                 }
                 "arch" => {
@@ -254,11 +255,8 @@ pub fn cmd_ccs_build(options: CcsBuildOptions) -> Result<()> {
                     println!("Generating Arch package...");
                     let gen_result = native_export::arch::generate(result, &output_path)
                         .context("Failed to generate Arch package")?;
-                    println!(
-                        "  Created: {} ({} bytes)",
-                        output_path.display(),
-                        gen_result.size
-                    );
+                    ui::field("Created", &visible(&output_path.display().to_string()));
+                    ui::field("Archive size", &format!("{} bytes", gen_result.size));
                     render::print_loss_report(&gen_result.loss_report, "Arch");
                 }
                 _ => {}
@@ -268,7 +266,9 @@ pub fn cmd_ccs_build(options: CcsBuildOptions) -> Result<()> {
 
     if !options.dry_run {
         println!();
-        println!("Build complete!");
+        ui::status("Built", &visible(&manifest.package.name));
+    } else {
+        ui::note("Dry run: no package artifacts were written.");
     }
 
     Ok(())

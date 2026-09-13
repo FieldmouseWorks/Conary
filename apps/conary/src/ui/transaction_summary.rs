@@ -58,7 +58,7 @@ impl<'a> PackageChange<'a> {
     }
 }
 
-pub(super) fn visible(value: &str) -> String {
+pub(crate) fn visible(value: &str) -> String {
     value
         .chars()
         .flat_map(|character| {

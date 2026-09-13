@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-09-09
-revision: 78
+last_updated: 2026-09-13
+revision: 79
 summary: Preserve lossless foreign package authority, authenticated payload staging, exact archive emission, typed lifecycle execution and refusal facts, and native export contracts
 ---
 
@@ -37,7 +37,7 @@ report lives in `conary-agent-contract`; the [report contract](../specs/ccs-veri
 owns its fields, exit behavior, and observation-only authority boundary.
 
 CLI presentation belongs to `apps/conary/src/commands/ccs/inspect/render.rs`,
-`apps/conary/src/commands/ccs/build/render.rs`, and the owning verification and
+`apps/conary/src/ui/ccs_build.rs`, and the owning verification and
 export commands. Inspection JSON is a CLI projection of untrusted facts;
 rendering does not grant package trust or mutation authority.
 

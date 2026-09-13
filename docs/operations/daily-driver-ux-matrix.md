@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-09-13
-revision: 37
-summary: Daily-driver CLI routes, exact installed CCS release selectors, observed transaction source formats, grouped results, scoped recovery, and typed native refusals
+revision: 38
+summary: Daily-driver CLI identity fields, source formats, grouped transaction and build results, scoped recovery, and typed native refusals
 ---
 
 # Daily-Driver UX Matrix
@@ -633,6 +633,76 @@ evidence plus `cargo test -p conary --test output_vocabulary_guard` and
 6. **Structured refusal layout** — Keep the live-host refusal routes from this
    matrix, presented as a short cause plus `note:` next steps. Update
    `live_host_mutation_safety` expectations in the same slice.
+
+## Package Build Results
+
+`apps/conary/src/ui/ccs_build.rs` renders the core-owned `BuildResult` and
+`LossReport`. The build summary uses shared headings and fields, separates the
+exact `Version` from `CCS release`, and reports the manifest architecture only
+when present. `File records` includes every recorded payload node; `Payload
+sources` counts regular-file content descriptors. `Payload size` and component
+sizes describe the builder's payload records, not a compressed archive or an
+installed disk delta. Native export's returned archive size remains a separate
+field beside its written path.
+
+The former summary rendered `Package: summary-build v2.0.0`, omitted its CCS
+release field, and labeled payload bytes `Total size`. The same fixture now
+renders:
+
+```text
+Package build summary:
+  Package: summary-build
+  Version: 2.0.0
+  CCS release: 7
+  Architecture: noarch
+  File records: 2
+  Payload size: 8 bytes
+  Payload sources: 1 regular file
+
+Chunking:
+  Chunked files: 0
+  Whole files: 1
+  Total chunks: 0
+  Unique chunks: 0
+
+Components:
+  Component  File records  Payload size
+  runtime    2             8 bytes
+```
+
+Its preview is:
+
+```text
+Planned package build:
+  Package: summary-build
+  Version: 2.0.0
+  CCS release: 7
+
+Planned artifacts:
+  ccs: <fixture>/preview/summary-build-2.0.0-7.ccs
+note: Dry run: no package artifacts were written.
+```
+
+Components appear in sorted name order; chunk counts and intra-package savings
+come from the builder's optional chunking statistics. Conversion notes retain
+their typed unsupported-feature, hook, and dependency categories. Dynamic
+identity, component, note, and path values escape terminal controls.
+
+A dry run shows `Planned package build` and `Planned artifacts`, followed by
+`Dry run: no package artifacts were written.` It does not print a completed
+build summary, claim payload measurements, create its output directory, or
+initialize a signing key. A completed command reports each created path after
+its writer returns and ends with `Built <package>`. Local-development signing
+retains its release-publish restriction as one note. These frames do not change
+authoring admission, signing, native export, or publication behavior.
+
+`cargo test -p conary --test cli_ccs_build` captures real build and dry-run
+commands in terminal, pipe, and `NO_COLOR` modes, with chunking enabled and
+disabled. It checks exact version/release fields, reopens the written CCS to
+compare file counts, and proves that previews and missing-manifest refusals
+leave output and key state absent. The missing-manifest next step uses the
+current `conary ccs init` command. Build and verification behavior retains the
+`packaging_m4b` and `packaging_m4e` proofs.
 
 ## Release Honesty
 
