@@ -354,7 +354,7 @@ conary = "list ${TEST_PACKAGE_1} --info"
 
 [test.step.assert]
 exit_code = 0
-stdout_contains = "Pinned      : yes"
+stdout_contains = "  Pinned: yes"
 
 # --------------------------------------------------------------------------
 # T23: Unpin Package
@@ -378,7 +378,7 @@ conary = "list ${TEST_PACKAGE_1} --info"
 
 [test.step.assert]
 exit_code = 0
-stdout_contains = "Pinned      : no"
+stdout_contains = "  Pinned: no"
 
 # --------------------------------------------------------------------------
 # T24: Changeset History
