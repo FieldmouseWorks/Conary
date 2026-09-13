@@ -166,7 +166,10 @@ pub(crate) fn collect_source_graph(
             })
             .or_insert(gate);
     }
-    if !unresolved_sources.is_empty() {
+    if unresolved_sources
+        .keys()
+        .any(|file| gates.get(file) != Some(&ExemptionGate::TestGated))
+    {
         // An opaque expansion can introduce another production load site. It
         // invalidates contextual test-only proof, but cannot remove a cfg guard
         // carried by the loaded source itself. Preserve known production sites.
@@ -176,6 +179,10 @@ pub(crate) fn collect_source_graph(
             }
         }
     }
+    // A macro in a source reached only through test contexts cannot seed a
+    // production load. If another production expansion made that context
+    // uncertain above, its diagnostic remains in the incomplete graph.
+    unresolved_sources.retain(|file, _| gates.get(file) != Some(&ExemptionGate::TestGated));
     Ok(SourceGraph {
         declarations,
         gates,

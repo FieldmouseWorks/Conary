@@ -2505,3 +2505,42 @@ fn apparent_builtin_calls_cannot_certify_the_extern_prelude() {
         );
     }
 }
+
+#[test]
+fn test_context_expansions_cannot_seed_a_production_load() {
+    for production in [false, true] {
+        let sources = BTreeMap::from([
+            (
+                "crates/x/src/lib.rs".to_owned(),
+                syn::parse_file(if production {
+                    "dep::emit!(); #[cfg(test)] mod helper;"
+                } else {
+                    "#[cfg(test)] mod helper;"
+                })
+                .unwrap(),
+            ),
+            (
+                "crates/x/src/helper.rs".to_owned(),
+                syn::parse_file("dep::emit!(); mod tests;").unwrap(),
+            ),
+            (
+                "crates/x/src/helper/tests.rs".to_owned(),
+                syn::parse_file("fn helper() {}").unwrap(),
+            ),
+        ]);
+        let graph = collect_source_graph(
+            &sources,
+            &fixture_targets(sources.keys().map(String::as_str)),
+        )
+        .unwrap();
+        assert_eq!(graph.unresolved_sources.is_empty(), !production);
+        assert_eq!(
+            graph.gates["crates/x/src/helper/tests.rs"],
+            if production {
+                ExemptionGate::Unknown
+            } else {
+                ExemptionGate::TestGated
+            }
+        );
+    }
+}
