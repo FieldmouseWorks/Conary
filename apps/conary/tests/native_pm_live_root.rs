@@ -760,7 +760,7 @@ fn selected_generation_update_installs_signed_repository_ccs() {
     ]);
     assert_success(&list);
     let stdout = String::from_utf8_lossy(&list.stdout);
-    assert!(stdout.contains("Version     : 2.0.0"), "{stdout}");
+    assert!(stdout.contains("  Version: 2.0.0"), "{stdout}");
     assert!(stdout.contains("Files       : 5"), "{stdout}");
 }
 

@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-09-13
-revision: 39
-summary: Daily-driver CLI source identities, grouped package results, changeset history fields, scoped recovery, and typed native refusals
+revision: 40
+summary: Daily-driver CLI source identities, installed package details, grouped results, changeset history, scoped recovery, and typed native refusals
 ---
 
 # Daily-Driver UX Matrix
@@ -634,6 +634,31 @@ evidence plus `cargo test -p conary --test output_vocabulary_guard` and
 6. **Structured refusal layout** — Keep the live-host refusal routes from this
    matrix, presented as a short cause plus `note:` next steps. Update
    `live_host_mutation_safety` expectations in the same slice.
+
+## Installed Package Details
+
+`apps/conary/src/commands/query/package.rs::show_package_info` resolves the
+selected trove, prepared authority label, repository name, payload ownership,
+typed dependency/provide entries, and components before emitting any detail
+output. A failed observation returns its existing error without a partial
+package frame. `apps/conary/src/ui/installed_info.rs` owns the resulting
+`Installed package:` frame and performs no lookups or classification.
+
+`Name`, `Version`, and `CCS release` stay separate; an absent CCS release is
+`-`. `Install source` identifies the recorded installation origin, while
+`Version scheme` reports the recorded grammar; neither is inferred to be a
+source package format. Optional architecture, source profile, repository,
+description, installation timestamp, and selection reason appear only when
+observed. Type and install reason use their typed labels. `File records` counts
+the selected payload ownership entries; `Payload size` sums their recorded
+content bytes, without claiming a compressed size or physical disk usage.
+Typed dependencies, provides, and component observations retain their input
+order and multiplicity. Component installation state uses explicit yes/no
+fields. Recorded controls are escaped inside fields and relation lines.
+
+This hard-cuts the former hand-padded detail labels and debug enum output.
+Installed-list and file-list layouts, installed variant selection, repository
+fallback, and persisted authority are unchanged.
 
 ## Changeset History
 

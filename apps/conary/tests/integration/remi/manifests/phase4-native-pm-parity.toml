@@ -281,7 +281,7 @@ conary = "list phase4-runtime-fixture --info"
 
 [test.step.assert]
 exit_code = 0
-stdout_contains_all = ["Name        : phase4-runtime-fixture", "Version     : ${native_fixture_version}", "Authority   : conary-owned", "Source      : file", "Install Type: Explicit", "Pinned      : no"]
+stdout_contains_all = ["  Name: phase4-runtime-fixture", "  Version: ${native_fixture_version}", "  Authority: conary-owned", "  Install source: file", "  Install reason: explicit", "  Pinned: no"]
 
 [[test.step]]
 conary = "list phase4-runtime-fixture --files"
@@ -414,7 +414,7 @@ conary = "list phase4-runtime-fixture --info"
 
 [test.step.assert]
 exit_code = 0
-stdout_contains = "Version     : ${native_update_version}"
+stdout_contains = "  Version: ${native_update_version}"
 
 # --------------------------------------------------------------------------
 # TNPM08: remove and history
@@ -533,7 +533,7 @@ conary = "list ${repo_install_pkg} --info"
 
 [test.step.assert]
 exit_code = 0
-stdout_contains_all = ["Name        : ${repo_install_pkg}", "Authority   : conary-owned", "Repository  : ${REPO_NAME}"]
+stdout_contains_all = ["  Name: ${repo_install_pkg}", "  Authority: conary-owned", "  Repository: ${REPO_NAME}"]
 
 [[test.step]]
 conary = "list ${repo_install_pkg} --files"

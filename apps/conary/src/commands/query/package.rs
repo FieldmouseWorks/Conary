@@ -170,95 +170,31 @@ fn show_package_info(
 ) -> Result<()> {
     let trove_id = trove.id.ok_or_else(|| anyhow::anyhow!("Trove has no ID"))?;
 
-    println!("Name        : {}", trove.name);
-    println!("Version     : {}", trove.version);
-    crate::ui::field("Release", installed_release_label(trove));
-    println!("Type        : {:?}", trove.trove_type);
-    println!(
-        "Authority   : {}",
-        package_authority_label(trove.install_source.clone())
-    );
-    println!("Source      : {}", trove.install_source.as_str());
-
-    if let Some(source_profile) = &trove.source_profile {
-        println!("Profile     : {}", source_profile);
-    }
-
-    println!("Versioning  : {}", trove.version_scheme.as_str());
-
-    if let Some(repository_id) = trove.installed_from_repository_id {
-        println!(
-            "Repository  : {}",
-            repository_display_name(conn, repository_id)?
-        );
-    }
-
-    if let Some(arch) = &trove.architecture {
-        println!("Architecture: {}", arch);
-    }
-
-    if let Some(desc) = &trove.description {
-        println!("Description : {}", desc);
-    }
-
-    if let Some(installed) = &trove.installed_at {
-        println!("Installed   : {}", installed);
-    }
-
-    if let Some(reason) = &trove.selection_reason {
-        println!("Reason      : {}", reason);
-    }
-
-    // Show install reason
-    println!("Install Type: {:?}", trove.install_reason);
-    println!("Pinned      : {}", if trove.pinned { "yes" } else { "no" });
-
-    // Count files
+    // Resolve every fallible observation before emitting the detail frame.
+    let repository = trove
+        .installed_from_repository_id
+        .map(|id| repository_display_name(conn, id))
+        .transpose()?;
     let payload = conary_core::db::models::PackagePayloadOwnership::load(conn, trove_id)?;
-    println!("Files       : {}", payload.entries().len());
-
-    // Calculate total size
-    let total_size: u64 = payload
+    let dependencies =
+        conary_core::db::models::InstalledRequirementAtom::find_by_trove(conn, trove_id)?;
+    let provides = conary_core::db::models::ProvideEntry::find_by_trove(conn, trove_id)?;
+    let components = conary_core::db::models::Component::find_by_trove(conn, trove_id)?;
+    let payload_bytes = payload
         .entries()
         .iter()
         .filter_map(|file| file.content.as_ref().map(|content| content.size))
         .sum();
-    println!(
-        "Size        : {}",
-        crate::commands::format_bytes(total_size)
-    );
-
-    // Dependencies
-    let deps = conary_core::db::models::InstalledRequirementAtom::find_by_trove(conn, trove_id)?;
-    if !deps.is_empty() {
-        println!("\nDependencies ({}):", deps.len());
-        for dep in &deps {
-            println!("  {}", dep.to_typed_string());
-        }
-    }
-
-    // Provides
-    let provides = conary_core::db::models::ProvideEntry::find_by_trove(conn, trove_id)?;
-    if !provides.is_empty() {
-        println!("\nProvides ({}):", provides.len());
-        for p in &provides {
-            println!("  {}", p.to_typed_string());
-        }
-    }
-
-    // Components
-    let components = conary_core::db::models::Component::find_by_trove(conn, trove_id)?;
-    if !components.is_empty() {
-        println!("\nComponents ({}):", components.len());
-        for comp in &components {
-            let installed = if comp.is_installed {
-                ""
-            } else {
-                " [not installed]"
-            };
-            println!("  :{}{}", comp.name, installed);
-        }
-    }
+    crate::ui::installed_info::details(&crate::ui::installed_info::InstalledPackageInfo {
+        trove,
+        authority: package_authority_label(trove.install_source.clone()),
+        repository: repository.as_deref(),
+        file_records: payload.entries().len(),
+        payload_bytes,
+        dependencies: &dependencies,
+        provides: &provides,
+        components: &components,
+    });
 
     Ok(())
 }
