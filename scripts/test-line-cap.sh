@@ -100,6 +100,10 @@ echo '}'
 } | write_fixture "$fixture_root/crates/fixture/src/inline_tests_at_cap.rs"
 write_lines "$fixture_root/crates/fixture/src/tests.rs" 1200
 write_lines "$fixture_root/crates/fixture/src/tests/helper.rs" 1200
+# The measurement fixtures below include an opaque test attribute. These two
+# large sources carry their own compiler-enforced test boundary in that graph.
+sed -i '2i#![cfg(test)]' "$fixture_root/crates/fixture/src/tests.rs" \
+    "$fixture_root/crates/fixture/src/tests/helper.rs"
 # A large sibling is exempt only with an actual test gate.
 write_fixture "$fixture_root/crates/fixture/src/lib.rs" <<'EOF'
 #[cfg(test)]
@@ -188,6 +192,9 @@ grep -q $'standalone_tests.rs\ttotal=7\tproduction=3\tinline_test=4' <<<"$report
 grep -q $'inner_cfg_test.rs\ttotal=4\tproduction=0\tinline_test=4' <<<"$report"
 grep -q $'enclosing_cfg.rs\ttotal=7\tproduction=5\tinline_test=2' <<<"$report"
 grep -q $'cfg_attr_gating.rs\ttotal=5\tproduction=3\tinline_test=2' <<<"$report"
+# That fixture proves span measurement, not the expansion of tokio::test.
+# Later contextual-exemption fixtures need a complete source graph of their own.
+rm "$fixture_root/crates/fixture/src/standalone_tests.rs"
 
 for header_kind in missing legacy; do
     header_path="$fixture_root/crates/fixture/src/invalid_header.rs"
@@ -704,5 +711,27 @@ if run_checker >"$fixture_root/malformed.out" 2>&1; then
     exit 1
 fi
 grep -q 'failed to parse crates/fixture/src/malformed.rs' "$fixture_root/malformed.out"
+
+# An opaque dependency call can add a production load even with empty input.
+# Only the source's own guard restores its exemption in this incomplete graph.
+rm -rf "$fixture_root/crates/fixture/src"
+mkdir -p "$fixture_root/crates/fixture/src"
+write_fixture "$fixture_root/crates/fixture/src/lib.rs" <<'EOF'
+use dep::emit;
+#[cfg(not(test))]
+emit!();
+#[cfg(test)]
+mod tests;
+EOF
+write_lines "$fixture_root/crates/fixture/src/tests.rs" 1200
+if opaque_report="$(run_checker --report 2> "$fixture_root/opaque-error.out")"; then
+    echo 'ERROR: opaque dependency expansion certified a context-only exemption' >&2
+    exit 1
+fi
+grep -q 'tests.rs has 1200 non-test lines' "$fixture_root/opaque-error.out"
+grep -q $'tests.rs\ttotal=1200\tproduction=1200\tinline_test=0\tgate=unknown' <<<"$opaque_report"
+sed -i '2i#![cfg(test)]' "$fixture_root/crates/fixture/src/tests.rs"
+guarded_report="$(run_checker --report)"
+grep -q $'tests.rs\ttotal=1201\tproduction=0\tinline_test=1201\tgate=test-gated' <<<"$guarded_report"
 
 echo "line-cap tests passed."
