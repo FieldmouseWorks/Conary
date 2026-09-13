@@ -4,6 +4,7 @@
 use crate::commands::generation::publication::PublicationOutcome;
 use crate::commands::{LiveRootStats, TroveSnapshot};
 use conary_core::db::models::Trove;
+use conary_core::repository::dependency_model::SourcePackageFormat;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Change {
@@ -20,6 +21,8 @@ struct PackageChange<'a> {
     version: &'a str,
     release: Option<&'a str>,
     architecture: Option<&'a str>,
+    /// Source kind supplied by prepared semantics or an exact native identity.
+    source_format: Option<SourcePackageFormat>,
     reason: Option<&'a str>,
 }
 
@@ -31,6 +34,10 @@ impl<'a> PackageChange<'a> {
             version: &trove.version,
             release: trove.package_release.as_deref(),
             architecture: trove.architecture.as_deref(),
+            source_format: trove
+                .native_package_identity
+                .as_ref()
+                .map(conary_core::packages::InstalledPackageIdentity::source_package_format),
             reason: None,
         }
     }
@@ -42,6 +49,10 @@ impl<'a> PackageChange<'a> {
             version: &snapshot.version,
             release: snapshot.package_release.as_deref(),
             architecture: snapshot.architecture.as_deref(),
+            source_format: snapshot
+                .native_package_identity
+                .as_ref()
+                .map(conary_core::packages::InstalledPackageIdentity::source_package_format),
             reason: None,
         }
     }
@@ -58,6 +69,21 @@ pub(super) fn visible(value: &str) -> String {
             }
         })
         .collect()
+}
+
+/// Display label for the source ecosystem a command observed. The observation is
+/// the sole authority for this column; an absent observation stays visibly
+/// distinct from every real format.
+fn source_format_label(observed: Option<SourcePackageFormat>) -> String {
+    match observed {
+        Some(SourcePackageFormat::Rpm) => "rpm",
+        Some(SourcePackageFormat::Debian) => "deb",
+        Some(SourcePackageFormat::Alpm) => "arch",
+        Some(SourcePackageFormat::Eopkg) => "eopkg",
+        Some(SourcePackageFormat::Ccs) => "ccs",
+        None => "-",
+    }
+    .to_owned()
 }
 
 /// A copyable POSIX-shell command scoped to the same database as the operation.
@@ -106,6 +132,7 @@ fn change_lines_with_heading(changes: &[PackageChange<'_>], preview: bool) -> Ve
                         .architecture
                         .map(visible)
                         .unwrap_or_else(|| "-".into()),
+                    source_format_label(entry.source_format),
                 ];
                 if has_reason {
                     row.push(entry.reason.map(visible).unwrap_or_else(|| "-".into()));
@@ -128,7 +155,13 @@ fn change_lines_with_heading(changes: &[PackageChange<'_>], preview: bool) -> Ve
             label
         };
         lines.push(super::heading_line(&format!("  {label} ({}):", rows.len())));
-        let mut headings = vec!["Package", "Version", "CCS release", "Architecture"];
+        let mut headings = vec![
+            "Package",
+            "Version",
+            "CCS release",
+            "Architecture",
+            "Source format",
+        ];
         if has_reason {
             headings.push("Reason");
         }

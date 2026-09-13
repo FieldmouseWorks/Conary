@@ -227,7 +227,7 @@ fn command_results_in_terminal_pipe_and_no_color() {
                 .unwrap();
             assert_eq!(
                 row.split_whitespace().collect::<Vec<_>>(),
-                ["summary-fixture", "2.0.0", "7", "x86_64"]
+                ["summary-fixture", "2.0.0", "7", "x86_64", "-"]
             );
             assert!(
                 frame.contains("Inspect history: conary system history --db-path='"),

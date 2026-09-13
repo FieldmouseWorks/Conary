@@ -488,12 +488,22 @@ fn update_summaries_in_terminal_pipe_and_no_color() {
                 "Version",
                 "CCS release",
                 "Architecture",
+                "Source format",
                 "a-summary-update",
                 "1.0.0 -> 2.0.0",
                 "x86_64",
             ] {
                 assert!(frame.contains(field), "{frame}");
             }
+            let incoming = frame
+                .split_once("Planned package changes:")
+                .unwrap()
+                .1
+                .lines()
+                .find(|line| line.split_whitespace().next() == Some("a-summary-update"))
+                .unwrap();
+            // The CCS fixture retains its RPM native lifecycle source.
+            assert_eq!(incoming.split_whitespace().last(), Some("rpm"), "{frame}");
             if scenario.starts_with("advertised_delta_") {
                 let planned = frame
                     .split_once("Planned package changes:")

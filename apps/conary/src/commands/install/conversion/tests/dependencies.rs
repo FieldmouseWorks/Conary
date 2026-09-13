@@ -473,7 +473,9 @@ async fn repository_ccs_closure_runs_root_pretransaction_before_dependency_paylo
         .planned
         .iter()
         .map(|change| match change {
-            super::super::super::report::InstallChange::Install(identity) => identity.name.as_str(),
+            super::super::super::report::InstallChange::Install(observed) => {
+                observed.identity.name.as_str()
+            }
             other => {
                 panic!("fresh dependency closure preview contains unexpected change: {other:?}")
             }

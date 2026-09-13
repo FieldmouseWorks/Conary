@@ -288,7 +288,7 @@ async fn cmd_install_with_intent(
         | UpgradeCheck::Replatform(trove) => Some(trove),
     };
     let mut changes = vec![super::report::InstallChange::incoming(
-        super::report::PackageIdentity::package(pkg.as_ref()),
+        super::report::ObservedPackage::package(pkg.as_ref(), semantics),
         old_trove_to_upgrade.as_deref(),
     )];
     changes.extend(super::report::relation_changes(&conn, &relation_plan)?);
