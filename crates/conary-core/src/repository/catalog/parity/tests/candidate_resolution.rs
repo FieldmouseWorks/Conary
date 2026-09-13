@@ -266,6 +266,13 @@ fn repeated_requirement_groups_preserve_exact_resolution_and_native_evidence() {
         let mut baseline = None;
         for copies in [1, 2, 3] {
             let candidate = candidate_fixture_with(ecosystem, |_, packages| {
+                // Match the repeated native clause in the retained cargo-msrv
+                // descriptor; the fixture's dependency supplies that exact name.
+                packages[0].provides[0].capability = "rustup".to_string();
+                let mut runtime = requirement("depends", "rustup");
+                runtime.description = None;
+                packages[1].requirement_groups[0] = runtime;
+                packages[2].requirement_groups = vec![requirement("depends", "absent")];
                 for package in packages {
                     let original = package.requirement_groups.clone();
                     for _ in 1..copies {

@@ -10,6 +10,10 @@ fn retained_cargo_msrv_preserves_repeated_native_requirements() {
         env!("CARGO_MANIFEST_DIR"),
         "/tests/fixtures/arch/duplicate-requirements/cargo-msrv-0.19.3-2.desc"
     ));
+    assert_eq!(
+        crate::hash::sha256(desc.as_bytes()),
+        "22d7551323b780ccbab3aa4b2cf9fb641f445281598503f30ff591f2caab599a"
+    );
     let parser = parser();
     let fields = parser.parse_desc_file(desc).unwrap();
     let package = parser
