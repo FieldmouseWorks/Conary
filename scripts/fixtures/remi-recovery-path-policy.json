@@ -216,5 +216,29 @@
   {
     "value": "file\\u003aprivate",
     "reason": "private_string"
+  },
+  {
+    "value": "%25",
+    "reason": "redaction_unproven"
+  },
+  {
+    "value": "%2525",
+    "reason": "redaction_unproven"
+  },
+  {
+    "value": "%2f%",
+    "reason": "redaction_unproven"
+  },
+  {
+    "value": "prefix\u0000/private",
+    "reason": "private_host_path"
+  },
+  {
+    "value": "prefix\u0000file:private",
+    "reason": "private_host_path"
+  },
+  {
+    "value": "prefix\u0000%2fprivate",
+    "reason": "private_host_path"
   }
 ]
