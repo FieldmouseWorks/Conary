@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-09-09
-revision: 36
-summary: Daily-driver CLI routes, exact installed CCS release selectors, serialized pin state, repository details, grouped transaction results, scoped recovery, and typed native refusals
+last_updated: 2026-09-13
+revision: 37
+summary: Daily-driver CLI routes, exact installed CCS release selectors, observed transaction source formats, grouped results, scoped recovery, and typed native refusals
 ---
 
 # Daily-Driver UX Matrix
@@ -469,8 +469,8 @@ The update selection preview is:
 ```text
 Planned package changes:
   Update (1):
-    Package           Version         CCS release  Architecture
-    a-summary-update  1.0.0 -> 2.0.0  - -> 1       x86_64
+    Package           Version         CCS release  Architecture  Source format
+    a-summary-update  1.0.0 -> 2.0.0  - -> 1       x86_64        rpm
 note: Dry run: no updates were applied.
 ```
 
@@ -479,8 +479,8 @@ A committed CCS upgrade renders:
 ```text
 Applied package changes:
   Updated (1):
-    Package           Version         CCS release  Architecture
-    summary-incoming  1.0.0 -> 2.0.0  1 -> 1       x86_64
+    Package           Version         CCS release  Architecture  Source format
+    summary-incoming  1.0.0 -> 2.0.0  1 -> 1       x86_64        ccs
   Installed file records: 4
   Changeset: 1
   Generation: 0 published
@@ -525,14 +525,31 @@ proves that its batch preview includes the same two package identities without
 changing database state. Cross-source lifecycle fixtures assert exact grouped
 preview rows before their existing payload, native lifecycle, and rollback proof.
 
-Broader source-format, size, disk-delta, and first-use fields remain under #132
-and #644; the transaction table does not infer values the operation did not return.
+The `Source format` column reports the prepared package's source kind: `rpm`,
+`deb`, `arch`, `eopkg`, or `ccs`. A converted CCS retains its native lifecycle
+source kind. A CCS package without a native lifecycle bundle reports `ccs`,
+including when its package version uses a native grammar. Version grammar,
+file extensions, package names, repository names, and distro names do not supply
+this observation. Update rows describe the incoming source kind.
+
+`ObservedPackage` in `apps/conary/src/commands/install/report.rs` carries that
+optional fact separately from `PackageIdentity`; applied-target matching and
+deduplication retain their existing exact identity rules. Stored native package
+identities supply an observed format when available. Other stored rows display
+`-`; the presentation path does not add a source lookup or invent a default.
+The capture proof includes actual RPM-to-CCS conversion and native-free CCS with
+RPM version grammar. Reporting and renderer tests cover known and absent
+stored-native observations.
+
+Per-package artifact size, disk-delta, and other first-use fields remain under
+#132 and #644; the table does not infer values the operation did not return.
 
 ## Removal And Changeset Rollback Results
 
 `apps/conary/src/ui/transaction_summary.rs` groups committed removals and
 restores into one table. Each row preserves package name, version, separate CCS
-release, and architecture; absent optional identity fields use `-`. Displayed
+release, architecture, and any exact retained native source format; absent optional
+identity fields and source observations use `-`. Displayed
 identity values escape control characters. Removal statistics describe selected-root
 file and directory changes, including Debian’s separate conffile purge stage, while rollback's restored file count describes database
 records, not physical writes or recovered disk space.
@@ -545,8 +562,8 @@ the compensating changeset and reports only the returned publication outcome:
 ```text
 Applied package changes:
   Restored (1):
-    Package          Version  CCS release  Architecture
-    summary-fixture  2.0.0    7            x86_64
+    Package          Version  CCS release  Architecture  Source format
+    summary-fixture  2.0.0    7            x86_64        -
   Reversed changeset: 1
   Restored file records: 0
   Changeset: 2
