@@ -379,6 +379,7 @@ enum SourceAuthorityFailure {
     Path,
     Alias,
     Shadow,
+    ExternalImport,
     Expansion,
 }
 
@@ -390,6 +391,9 @@ impl SourceAuthorityFailure {
             }
             Self::Alias => "aliased include! imports require macro name resolution",
             Self::Shadow => "local bindings shadow builtin include!/concat! macro authority",
+            Self::ExternalImport => {
+                "macro_use extern crate imports require macro name resolution and expansion"
+            }
             Self::Expansion => "macro expansion may introduce source declarations",
         }
     }
@@ -610,6 +614,13 @@ impl<'ast> Visit<'ast> for IncludeVisitor<'_> {
     fn visit_item_use(&mut self, node: &'ast syn::ItemUse) {
         if let Some(failure) = include_import_failure(&node.tree, &[]) {
             self.unresolved.get_or_insert(failure);
+        }
+    }
+
+    fn visit_item_extern_crate(&mut self, node: &'ast syn::ItemExternCrate) {
+        if macros::reachable_external_import(&node.attrs, &self.inherited) {
+            self.unresolved
+                .get_or_insert(SourceAuthorityFailure::ExternalImport);
         }
     }
 

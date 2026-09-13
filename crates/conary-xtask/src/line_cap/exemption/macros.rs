@@ -9,6 +9,42 @@ use std::collections::{BTreeMap, BTreeSet};
 use syn::ext::IdentExt;
 use syn::visit::{self, Visit};
 
+/// External macro-use imports can replace prelude builtins and emit source that
+/// is absent from this syntax graph. Keep them unresolved even before a call:
+/// resolving their exported names and expansions requires compiler authority.
+pub(super) fn reachable_external_import(
+    attributes: &[syn::Attribute],
+    inherited: &[syn::Attribute],
+) -> bool {
+    fn reachable(meta: &syn::Meta, conditions: &[syn::Attribute]) -> bool {
+        if super::super::attributes::is_ident(meta.path(), "macro_use") {
+            return super::super::cfg::can_compile(conditions);
+        }
+        let syn::Meta::List(list) = meta else {
+            return false;
+        };
+        if !super::super::attributes::is_ident(&list.path, "cfg_attr") {
+            return false;
+        }
+        use syn::parse::Parser;
+        let Ok(items) = syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated
+            .parse2(list.tokens.clone())
+        else {
+            return true;
+        };
+        let mut items = items.into_iter();
+        let Some(condition) = items.next() else {
+            return true;
+        };
+        let mut nested = conditions.to_vec();
+        nested.push(syn::parse_quote!(#[cfg(#condition)]));
+        items.any(|meta| reachable(&meta, &nested))
+    }
+    attributes
+        .iter()
+        .any(|attribute| reachable(&attribute.meta, inherited))
+}
+
 #[derive(Default)]
 pub(super) struct MacroAuthority {
     definitions: BTreeMap<String, Vec<TokenStream>>,

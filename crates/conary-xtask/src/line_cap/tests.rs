@@ -2331,3 +2331,78 @@ fn opaque_macro_source_arguments_require_expansion() {
         );
     }
 }
+
+#[test]
+fn external_macro_use_imports_require_name_resolution_and_expansion() {
+    for source in [
+        r#"#[macro_use] extern crate dep; #[cfg(not(test))] include!("ignored.rs"); #[cfg(test)] mod tests;"#,
+        r#"#[macro_use(concat)] extern crate dep; std::include!(concat!("ignored.rs"));"#,
+        r#"#[r#macro_use(r#include)] extern crate dep as renamed; r#include!("ignored.rs");"#,
+        "#[cfg_attr(feature = \"external\", macro_use)] extern crate dep;",
+        "#[cfg_attr(test, cfg_attr(feature = \"external\", macro_use(include)))] extern crate dep;",
+        "#[macro_use] extern crate dep;",
+    ] {
+        let syntax = syn::parse_file(source).unwrap();
+        let error = collect_include_declarations(
+            &syntax,
+            Path::new("crates/x/src/lib.rs"),
+            &mut BTreeMap::new(),
+        )
+        .unwrap_err();
+        assert!(
+            error.contains(
+                "macro_use extern crate imports require macro name resolution and expansion"
+            ),
+            "{source}: {error}"
+        );
+    }
+}
+
+#[test]
+fn impossible_macro_use_imports_do_not_block_builtin_includes() {
+    for import in [
+        "extern crate dep;",
+        "#[cfg(any())] #[macro_use] extern crate dep;",
+        "#[cfg_attr(any(), macro_use)] extern crate dep;",
+        "#[cfg(not(test))] #[cfg_attr(test, macro_use)] extern crate dep;",
+        "#[cfg_attr(test, cfg_attr(not(test), macro_use))] extern crate dep;",
+        "#[cfg(any())] mod dead { #[macro_use] extern crate dep; }",
+    ] {
+        let syntax = syn::parse_file(&format!("{import} include!(\"tests.rs\");")).unwrap();
+        let mut declarations = BTreeMap::new();
+        collect_include_declarations(&syntax, Path::new("crates/x/src/lib.rs"), &mut declarations)
+            .unwrap_or_else(|error| panic!("{import}: {error}"));
+        assert_eq!(declarations["crates/x/src/tests.rs"].len(), 1, "{import}");
+    }
+}
+
+#[test]
+fn external_macro_use_cannot_certify_a_test_file_across_sources() {
+    let sources = BTreeMap::from([
+        (
+            "crates/x/src/lib.rs".to_string(),
+            syn::parse_file("#[macro_use] extern crate dep; mod implementation;").unwrap(),
+        ),
+        (
+            "crates/x/src/implementation.rs".to_string(),
+            syn::parse_file(r#"#[cfg(not(test))] include!("ignored.rs"); #[cfg(test)] mod tests;"#)
+                .unwrap(),
+        ),
+        (
+            "crates/x/src/implementation/tests.rs".to_string(),
+            syn::parse_file("fn helper() {}").unwrap(),
+        ),
+    ]);
+    let result = collect_source_graph(
+        &sources,
+        &fixture_targets(sources.keys().map(String::as_str)),
+    );
+    let error = match result {
+        Err(error) => error,
+        Ok(_) => panic!("external macro import authority was ignored"),
+    };
+    assert!(
+        error
+            .contains("macro_use extern crate imports require macro name resolution and expansion")
+    );
+}

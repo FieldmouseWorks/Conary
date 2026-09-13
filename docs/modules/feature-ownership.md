@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-13
-revision: 107
+revision: 108
 summary: Route features to owned paths and proof, including context-aware test-file caps, Cargo target evidence, and live exception ownership.
 ---
 
@@ -1301,6 +1301,9 @@ accept the unqualified, `std::`, and `core::` forms; unresolved include authorit
 fails the scan. Renamed include imports are explicit unresolved authority because
 the syntax gate does not perform macro name resolution. Local definitions or
 imports that shadow builtin include/concat names also fail as unresolved authority.
+Reachable `macro_use` extern-crate imports require external macro name resolution
+and expansion, so they fail explicitly before any imported call is trusted.
+Nested conditional attributes retain their predicates; impossible imports are ignored.
 Raw identifiers retain the same module, macro, attribute, and cfg-predicate identity
 as their ordinary Rust spelling.
 `crates/conary-xtask/src/line_cap/exemption/macros.rs` indexes local macro
