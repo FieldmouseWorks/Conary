@@ -333,7 +333,7 @@ const SOURCE_ROOTS: &[SourceRoot] = &[
     SourceRoot {
         name: "third_party",
         policy: RootPolicy::VendorExcluded {
-            reason: "vendored aws-creds, rust-s3, and resolvo patched by path through [patch.crates-io] in Cargo.toml",
+            reason: "vendored aws-creds, rust-s3, resolvo, and tantivy patched by path through [patch.crates-io] in Cargo.toml",
         },
     },
 ];
