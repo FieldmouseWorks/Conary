@@ -67,6 +67,23 @@ exit_type = "crates-io-newer-release"
 exit_condition = "Evaluate every newer non-yanked resolvo release; drop the patch only when the conflict-graph and mixed-name-provider regressions passes against that release."
 exit_test = "cargo test --manifest-path third_party/resolvo-0.12.1-patched/Cargo.toml --lib conary_tests"
 
+[[dependency]]
+id = "tantivy-lru"
+cargo_name = "tantivy"
+kind = "crates-io-patch"
+declaration = "Cargo.toml:[patch.crates-io].tantivy"
+path = "third_party/tantivy-0.26.2-patched"
+baseline = "0.26.2"
+upstream = "https://crates.io/crates/tantivy"
+upstream_index = "ta/nt/tantivy"
+divergence = "Raises the normal lru dependency from 0.16.3 to 0.18.2 in the normalized Cargo.toml, matching upstream PR #3034 (5ca39332002c2c87fb5d2abc707cf527b3319d42), and updates the standalone test lockfile to lru 0.18.4; all other files are the crates.io 0.26.2 release (archive SHA-256 861facfabd71044968f364837f9a083b56464ba5a59079f88706ee5c451ca069)."
+reason = "Avoid shipping lru releases covered by RUSTSEC-2026-0253 through Remi search; tracked in #1019."
+exit_type = "crates-io-dependency-floor"
+exit_dependency = "lru"
+exit_requirement = ">=0.18.2"
+exit_condition = "Drop the patch when a newer non-yanked Tantivy release requires lru >=0.18.2 and Remi passes its package tests without the override."
+exit_test = "cargo test -p remi"
+
 ```
 <!-- conary-third-party-divergence:end -->
 

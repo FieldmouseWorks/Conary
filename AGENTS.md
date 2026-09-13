@@ -127,7 +127,7 @@ essential operation available only through ad hoc shell or free-form output.
 - The line-cap gate scans the declared top-level Rust source roots (`apps/`,
   `crates/`) and prints each root's file count under `--report`. `third_party/`
   is deliberately excluded as vendored upstream source (aws-creds, rust-s3,
-  resolvo) patched into the build by path from `Cargo.toml`, so it is neither
+  resolvo, tantivy) patched into the build by path from `Cargo.toml`, so it is neither
   measured nor allowlist-eligible. Adding a new top-level Rust source root fails
   the gate until its policy is recorded in `SOURCE_ROOTS` in
   `crates/conary-xtask/src/line_cap.rs`.
