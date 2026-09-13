@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-13
-revision: 113
+revision: 114
 summary: Route features to owned paths and proof, including context-aware test-file caps, Cargo target evidence, and live exception ownership.
 ---
 
@@ -1302,9 +1302,10 @@ Production macro invocations, unresolved include paths, shadowing imports,
 and transformation attributes invalidate context-only test exemptions. The graph
 records these sources explicitly and retains normal caps for unknown files.
 `crates/conary-xtask/src/line_cap/exemption/macros.rs` owns conditional external
-imports and ordered attribute uncertainty. Transformations before a builtin test
-annotation retain production reachability, including nested conditional attribute
-lists; enclosing test contexts and impossible configuration remain excluded; macro tokens are never interpreted as expansion
+imports and attribute uncertainty. Source reachability uses configuration
+predicates alone: even an apparent builtin test annotation can resolve to an
+imported procedural attribute, so it cannot suppress earlier or later expansion
+uncertainty. The established annotation-based span measurement remains separate; macro tokens are never interpreted as expansion
 proof. Apparent std/core builtins also need compiler name resolution because the
 extern prelude can replace those namespaces. Loads outside the scanned roots
 and unscanned Cargo production roots also retain uncertainty. Path normalization

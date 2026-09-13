@@ -210,7 +210,7 @@ impl DeclarationCollector<'_> {
                 if !cfg::can_compile(&branch) {
                     continue;
                 }
-                let test_gated = cfg::is_test_only(&branch);
+                let test_gated = cfg::configuration_is_test_only(&branch);
                 if let Some((_, items)) = &item_module.content {
                     let nested_dir = match variant.path {
                         Some(path) => path_base.join(path),
@@ -487,8 +487,8 @@ impl IncludeVisitor<'_> {
     ) {
         let depth = self.inherited.len();
         if macros::attributes_require_expansion(attributes, &self.inherited) {
-            // The ordered check already proves expansion reachability. A later
-            // test annotation must not erase an earlier transformation here.
+            // Configuration alone proves source reachability. Attribute names
+            // require compiler resolution, including an apparent builtin test.
             self.unresolved
                 .get_or_insert(SourceAuthorityFailure::Expansion);
         }
@@ -543,7 +543,7 @@ impl IncludeVisitor<'_> {
                 name: None,
                 kind: DeclarationKind::Exact,
                 depth: 0,
-                test_gated: cfg::is_test_only(&self.inherited),
+                test_gated: cfg::configuration_is_test_only(&self.inherited),
                 is_module: false,
             });
     }

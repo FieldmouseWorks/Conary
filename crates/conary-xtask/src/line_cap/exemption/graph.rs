@@ -75,7 +75,7 @@ pub(crate) fn collect_source_graph(
             if !seen.insert(context.clone()) {
                 continue;
             }
-            let gate = if cfg::is_test_only(&syntax.attrs) {
+            let gate = if cfg::configuration_is_test_only(&syntax.attrs) {
                 ExemptionGate::TestGated
             } else if roots.get(&context) == Some(&CargoTarget::Other) {
                 ExemptionGate::Ungated
@@ -187,7 +187,9 @@ pub(crate) fn collect_source_graph(
         // invalidates contextual test-only proof, but cannot remove a cfg guard
         // carried by the loaded source itself. Preserve known production sites.
         for (file, gate) in &mut gates {
-            if *gate == ExemptionGate::TestGated && !cfg::is_test_only(&sources[file].attrs) {
+            if *gate == ExemptionGate::TestGated
+                && !cfg::configuration_is_test_only(&sources[file].attrs)
+            {
                 *gate = ExemptionGate::Unknown;
             }
         }

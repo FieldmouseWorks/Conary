@@ -367,8 +367,8 @@ fn opaque_expansions_cannot_certify_contextual_test_exemptions() {
 fn test_only_expansions_do_not_introduce_production_uncertainty() {
     for source in [
         "#[cfg(test)] dep::emit!();",
-        "#[test] fn example() { dep::emit!(); }",
-        "#[cfg_attr(all(), test)] fn example() { dep::emit!(); }",
+        "#[cfg(test)] #[test] fn example() { dep::emit!(); }",
+        "#[cfg_attr(all(), cfg(test), test)] fn example() { dep::emit!(); }",
         "#[cfg_attr(test, dep::emit)] struct Input;",
         "#[cfg_attr(test, macro_use)] extern crate dep;",
         "#[cfg(any())] dep::emit!();",
@@ -737,19 +737,19 @@ fn external_load_suffixes_cannot_alias_scanned_sources() {
 }
 
 #[test]
-fn transformation_reachability_preserves_test_attribute_order() {
+fn test_attribute_names_cannot_suppress_transformation_reachability() {
     for (source, unresolved) in [
         ("#[dep::emit] #[test] fn sample() {}", true),
-        ("#[test] #[dep::emit] fn sample() {}", false),
+        ("#[test] #[dep::emit] fn sample() {}", true),
         ("#[cfg_attr(all(), dep::emit, test)] fn sample() {}", true),
-        ("#[cfg_attr(all(), test, dep::emit)] fn sample() {}", false),
+        ("#[cfg_attr(all(), test, dep::emit)] fn sample() {}", true),
         (
             "#[cfg_attr(feature = \"x\", test)] #[dep::emit] fn sample() {}",
             true,
         ),
         (
             "#[cfg_attr(not(test), test)] #[dep::emit] fn sample() {}",
-            false,
+            true,
         ),
         (
             "#[cfg_attr(all(), cfg_attr(all(), dep::emit), test)] fn sample() {}",
@@ -757,11 +757,11 @@ fn transformation_reachability_preserves_test_attribute_order() {
         ),
         (
             "#[cfg_attr(all(), cfg_attr(all(), test), dep::emit)] fn sample() {}",
-            false,
+            true,
         ),
         ("#[dep::emit] #[cfg(test)] fn sample() {}", false),
         ("#[dep::emit] #[cfg(any())] fn sample() {}", false),
-        ("#[test] fn outer() { #[dep::emit] fn inner() {} }", false),
+        ("#[test] fn outer() { #[dep::emit] fn inner() {} }", true),
     ] {
         for intrinsic in [false, true] {
             let sources = BTreeMap::from([
@@ -796,4 +796,20 @@ fn transformation_reachability_preserves_test_attribute_order() {
             );
         }
     }
+}
+
+#[test]
+fn source_configuration_does_not_inherit_annotation_measurement_policy() {
+    for attributes in [
+        vec![syn::parse_quote!(#[test])],
+        vec![syn::parse_quote!(#[dep::test])],
+        vec![syn::parse_quote!(#[cfg_attr(all(), test)])],
+    ] {
+        assert!(cfg::is_test_only(&attributes));
+        assert!(!cfg::configuration_is_test_only(&attributes));
+        assert!(cfg::can_compile_without_test(&attributes));
+    }
+    let attributes = vec![syn::parse_quote!(#[cfg_attr(all(), cfg(test))])];
+    assert!(cfg::configuration_is_test_only(&attributes));
+    assert!(!cfg::can_compile_without_test(&attributes));
 }

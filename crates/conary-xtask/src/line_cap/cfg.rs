@@ -121,7 +121,7 @@ pub(super) fn is_test_only(attributes: &[Attribute]) -> bool {
     // annotation whose condition can be false leaves an ordinary production item.
     let annotations = attributes
         .iter()
-        .filter_map(|attribute| test_annotation(&attribute.meta, false))
+        .filter_map(|attribute| test_annotation(&attribute.meta))
         .collect();
     let retains_production = Predicate::All(vec![
         predicate,
@@ -155,13 +155,12 @@ fn effective_cfg(meta: &Meta) -> Option<Predicate> {
     Some(Predicate::All(Vec::new()))
 }
 
-fn test_annotation(meta: &Meta, builtin_only: bool) -> Option<Predicate> {
+fn test_annotation(meta: &Meta) -> Option<Predicate> {
     if meta
         .path()
         .segments
         .last()
         .is_some_and(|segment| segment.ident.unraw() == "test")
-        && (!builtin_only || super::attributes::is_ident(meta.path(), "test"))
     {
         return Some(Predicate::All(Vec::new()));
     }
@@ -177,7 +176,7 @@ fn test_annotation(meta: &Meta, builtin_only: bool) -> Option<Predicate> {
         .into_iter();
     let condition = Predicate::parse(arguments.next()?)?;
     let annotations = arguments
-        .filter_map(|meta| test_annotation(&meta, builtin_only))
+        .filter_map(|meta| test_annotation(&meta))
         .collect();
     Some(Predicate::All(vec![condition, Predicate::Any(annotations)]))
 }
@@ -194,31 +193,30 @@ pub(super) fn can_compile(attributes: &[Attribute]) -> bool {
     Predicate::All(predicates).satisfiable(&mut BTreeMap::new())
 }
 
-/// Expansion outside test builds can introduce production source declarations.
+/// Source authority follows cfg predicates alone. An apparent builtin test
+/// annotation can be an imported procedural attribute and requires resolution.
 pub(super) fn can_compile_without_test(attributes: &[Attribute]) -> bool {
-    can_expand_without_test(attributes, attributes)
-}
-
-/// Configuration removes an item before expansion, but only preceding test
-/// annotations can remove it before the next procedural attribute expands.
-pub(super) fn can_expand_without_test(
-    configuration: &[Attribute],
-    preceding: &[Attribute],
-) -> bool {
-    let Some(predicates) = configuration
+    let Some(predicates) = attributes
         .iter()
         .map(|attribute| effective_cfg(&attribute.meta))
         .collect::<Option<Vec<_>>>()
     else {
         return true;
     };
-    let annotations = preceding
+    Predicate::All(predicates).satisfiable(&mut BTreeMap::from([("test".to_owned(), false)]))
+}
+
+/// Unlike span measurement's annotation convention, source exemption requires
+/// a compiler configuration gate that an opaque attribute cannot replace.
+pub(super) fn configuration_is_test_only(attributes: &[Attribute]) -> bool {
+    let Some(predicates) = attributes
         .iter()
-        .filter_map(|attribute| test_annotation(&attribute.meta, true))
-        .collect();
-    Predicate::All(vec![
-        Predicate::All(predicates),
-        Predicate::Not(Box::new(Predicate::Any(annotations))),
-    ])
-    .satisfiable(&mut BTreeMap::from([("test".to_owned(), false)]))
+        .map(|attribute| effective_cfg(&attribute.meta))
+        .collect::<Option<Vec<_>>>()
+    else {
+        return false;
+    };
+    let predicate = Predicate::All(predicates);
+    !predicate.satisfiable(&mut BTreeMap::from([("test".to_owned(), false)]))
+        && predicate.satisfiable(&mut BTreeMap::from([("test".to_owned(), true)]))
 }
