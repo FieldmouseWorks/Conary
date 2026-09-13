@@ -660,6 +660,84 @@ This hard-cuts the former hand-padded detail labels and debug enum output.
 Installed-list and file-list layouts, installed variant selection, repository
 fallback, and persisted authority are unchanged.
 
+The frames below are captured from actual `list --info` executables against the
+same disposable database fixture, with a fixed recorded installation timestamp.
+
+Before:
+
+```text
+Name        : nginx
+Version     : 1.24.0
+  Release: 7
+Type        : Package
+Authority   : conary-owned
+Source      : repository
+Profile     : fedora-44
+Versioning  : rpm
+Repository  : recorded-repository
+Architecture: x86_64
+Description : High performance web server
+Installed   : 2026-01-01 00:00:00
+Reason      : explicitly selected fixture
+Install Type: Explicit
+Pinned      : yes
+Files       : 6
+Size        : 1002.00 KB
+
+Dependencies (1):
+  openssl>= 3.0.0
+
+Provides (2):
+  nginx
+  webserver
+
+Components (2):
+  :config [not installed]
+  :runtime
+```
+
+After:
+
+```text
+Installed package:
+  Name: nginx
+  Version: 1.24.0
+  CCS release: 7
+  Type: package
+  Authority: conary-owned
+  Install source: repository
+  Source profile: fedora-44
+  Version scheme: rpm
+  Repository: recorded-repository
+  Architecture: x86_64
+  Description: High performance web server
+  Installed: 2026-01-01 00:00:00
+  Selection reason: explicitly selected fixture
+  Install reason: explicit
+  Pinned: yes
+  File records: 6
+  Payload size: 1026048 bytes
+
+Dependencies (1):
+  openssl>= 3.0.0
+
+Provides (2):
+  nginx
+  webserver
+
+Components (2):
+  Component: :config
+  Installed: no
+  Component: :runtime
+  Installed: yes
+```
+
+`cargo test -p conary --test cli_installed_info` checks actual TTY/pipe and
+color/`NO_COLOR` output, optional observations, escaped controls, unchanged
+database snapshots, and a late component-read failure without partial output.
+Installed-release selector tests continue to prove exact selection and
+ambiguity refusal.
+
 ## Changeset History
 
 `apps/conary/src/commands/query/history.rs` reads recorded changesets,
