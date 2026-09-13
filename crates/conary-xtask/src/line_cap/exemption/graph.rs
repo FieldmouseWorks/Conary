@@ -41,6 +41,7 @@ pub(crate) fn collect_source_graph(
     sources: &BTreeMap<String, syn::File>,
     targets: &TargetRoots,
 ) -> Result<SourceGraph, String> {
+    let authority = MacroAuthority::collect(sources.values());
     let mut roots = BTreeMap::new();
     for file in sources.keys() {
         let target = targets.get(file).copied();
@@ -84,7 +85,12 @@ pub(crate) fn collect_source_graph(
                 &mut sites,
                 &context.directory(),
             );
-            collect_include_declarations(syntax, Path::new(&context.file), &mut sites)?;
+            collect_includes_with_authority(
+                syntax,
+                Path::new(&context.file),
+                &mut sites,
+                &authority,
+            )?;
             for (file, entries) in sites {
                 for site in entries {
                     let target = LoadContext {

@@ -2223,3 +2223,111 @@ fn raw_cfg_identifiers_have_the_same_predicate_identity() {
         );
     }
 }
+
+#[test]
+fn local_source_generating_macros_fail_as_unresolved_authority() {
+    for source in [
+        r#"macro_rules! load { () => { mod tests; } } #[cfg(not(test))] load!(); #[cfg(test)] mod tests;"#,
+        r#"macro_rules! load { () => { include!("tests.rs"); } } load!();"#,
+        r#"macro_rules! load { ($name:ident) => { mod $name; } } load!(tests);"#,
+        r#"macro_rules! forward { ($item:item) => { $item } } forward!(mod tests;);"#,
+        r#"macro_rules! load { () => { mod tests; } } use load as alias; alias!();"#,
+        r#"macro_rules! load { () => { mod tests; } } macro_rules! outer { () => { load!(); } } outer!();"#,
+        r#"macro_rules! ast { () => { syn::parse_quote!(mod tests;) } } ast!();"#,
+        r#"macro_rules! load { () => { mod tests; } } macro_rules! call { ($callback:ident) => { $callback!(); } } call!(load);"#,
+    ] {
+        let syntax = syn::parse_file(source).unwrap();
+        let error = collect_include_declarations(
+            &syntax,
+            Path::new("crates/x/src/lib.rs"),
+            &mut BTreeMap::new(),
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("macro expansion may introduce source declarations"),
+            "{source}: {error}"
+        );
+    }
+    for source in [
+        r#"macro_rules! unused { () => { mod tests; } }"#,
+        r#"macro_rules! load { () => { mod tests; } } #[cfg(any())] load!();"#,
+        r#"macro_rules! inline { () => { mod tests {} } } inline!();"#,
+        r#"fn run() { macro_rules! ordinary { () => { let r#mod = (); }; } ordinary!(); }"#,
+    ] {
+        let syntax = syn::parse_file(source).unwrap();
+        collect_include_declarations(
+            &syntax,
+            Path::new("crates/x/src/lib.rs"),
+            &mut BTreeMap::new(),
+        )
+        .unwrap();
+    }
+}
+
+#[test]
+fn include_arguments_accept_one_expression_and_an_optional_comma() {
+    for load in [
+        r#"include!("tests.rs",);"#,
+        r#"std::include!(concat!("tests", ".rs"),);"#,
+    ] {
+        let source = format!("#[cfg(test)] mod tests;\n{load}");
+        let classified = classify(&[
+            ("crates/x/src/lib.rs", &source),
+            ("crates/x/src/tests.rs", "fn helper() {}\n"),
+        ]);
+        assert_eq!(
+            gate(&classified, "crates/x/src/tests.rs"),
+            ExemptionGate::Ungated
+        );
+    }
+    for source in ["include!();", r#"include!("tests.rs", "extra");"#] {
+        let syntax = syn::parse_file(source).unwrap();
+        assert!(
+            collect_include_declarations(
+                &syntax,
+                Path::new("crates/x/src/lib.rs"),
+                &mut BTreeMap::new()
+            )
+            .is_err()
+        );
+    }
+}
+
+#[test]
+fn source_macro_exports_and_aliases_are_checked_across_files() {
+    let sources = BTreeMap::from([
+        ("crates/x/src/lib.rs".to_string(), syn::parse_file(r#"mod macros; use crate::load as renamed; #[cfg(not(test))] renamed!(); #[cfg(test)] mod tests;"#).unwrap()),
+        ("crates/x/src/macros.rs".to_string(), syn::parse_file(r#"#[macro_export] macro_rules! load { () => { mod tests; } }"#).unwrap()),
+        ("crates/x/src/tests.rs".to_string(), syn::parse_file("fn helper() {}").unwrap()),
+    ]);
+    let result = collect_source_graph(
+        &sources,
+        &fixture_targets(sources.keys().map(String::as_str)),
+    );
+    let error = match result {
+        Err(error) => error,
+        Ok(_) => panic!("source macro authority was ignored"),
+    };
+    assert!(error.contains("macro expansion may introduce source declarations"));
+}
+
+#[test]
+fn opaque_macro_source_arguments_require_expansion() {
+    for source in [
+        "external::emit!(mod tests;);",
+        r#"fn run() { std::assert!({ #[path = "tests.rs"] mod tests; true }); }"#,
+        "syn::parse_quote!(mod tests;);",
+    ] {
+        let syntax = syn::parse_file(source).unwrap();
+        let error = collect_include_declarations(
+            &syntax,
+            Path::new("crates/x/src/lib.rs"),
+            &mut BTreeMap::new(),
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("macro expansion may introduce source declarations"),
+            "{source}: {error}"
+        );
+    }
+}

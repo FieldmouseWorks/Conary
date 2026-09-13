@@ -40,6 +40,7 @@ use super::attributes::{visit_attributed_nodes, visit_nodes};
 use super::cfg;
 
 mod graph;
+mod macros;
 use super::paths::module_paths;
 use super::targets::TargetRoots;
 use super::{
@@ -47,6 +48,7 @@ use super::{
     path_text, trait_item_attributes,
 };
 pub(crate) use graph::{SourceGraph, collect_source_graph};
+use macros::MacroAuthority;
 
 /// How an exempt-named file is compiled, as far as the declaration graph can
 /// establish it.
@@ -332,10 +334,21 @@ impl<'ast> Visit<'ast> for NestedModuleVisitor<'_, '_> {
 /// This is how `crates/conary-core/src/repository/sync/tests.rs` and its
 /// `tests/native.rs` chain are compiled: `sync.rs` ends with
 /// `#[cfg(test)] include!("sync/tests.rs");`.
+#[cfg(test)]
 pub(crate) fn collect_include_declarations(
     syntax: &syn::File,
     relative: &Path,
     declarations: &mut BTreeMap<String, Vec<ModuleDeclaration>>,
+) -> Result<(), String> {
+    let authority = MacroAuthority::collect([syntax]);
+    collect_includes_with_authority(syntax, relative, declarations, &authority)
+}
+
+fn collect_includes_with_authority(
+    syntax: &syn::File,
+    relative: &Path,
+    declarations: &mut BTreeMap<String, Vec<ModuleDeclaration>>,
+    authority: &MacroAuthority,
 ) -> Result<(), String> {
     let mut visitor = IncludeVisitor {
         declaring_file: path_text(relative),
@@ -347,12 +360,13 @@ pub(crate) fn collect_include_declarations(
             .to_path_buf(),
         inherited: syntax.attrs.clone(),
         unresolved: None,
+        authority,
         declarations,
     };
     visitor.visit_file(syntax);
     if let Some(failure) = visitor.unresolved {
         Err(format!(
-            "cannot resolve include! source authority in {}: {}",
+            "cannot resolve Rust source authority in {}: {}",
             relative.display(),
             failure.reason()
         ))
@@ -361,13 +375,14 @@ pub(crate) fn collect_include_declarations(
     }
 }
 
-enum IncludeAuthorityFailure {
+enum SourceAuthorityFailure {
     Path,
     Alias,
     Shadow,
+    Expansion,
 }
 
-impl IncludeAuthorityFailure {
+impl SourceAuthorityFailure {
     fn reason(&self) -> &'static str {
         match self {
             Self::Path => {
@@ -375,6 +390,7 @@ impl IncludeAuthorityFailure {
             }
             Self::Alias => "aliased include! imports require macro name resolution",
             Self::Shadow => "local bindings shadow builtin include!/concat! macro authority",
+            Self::Expansion => "macro expansion may introduce source declarations",
         }
     }
 }
@@ -382,7 +398,7 @@ impl IncludeAuthorityFailure {
 fn include_import_failure(
     tree: &syn::UseTree,
     prefix: &[String],
-) -> Option<IncludeAuthorityFailure> {
+) -> Option<SourceAuthorityFailure> {
     match tree {
         syn::UseTree::Path(path) => {
             let mut nested = prefix.to_vec();
@@ -398,7 +414,7 @@ fn include_import_failure(
                 && rename.rename.unraw() != "include"
                 && rename.rename.unraw() != "_"
             {
-                Some(IncludeAuthorityFailure::Alias)
+                Some(SourceAuthorityFailure::Alias)
             } else {
                 builtin_import_failure(
                     prefix,
@@ -420,20 +436,21 @@ fn builtin_import_failure(
     prefix: &[String],
     original: &str,
     binding: &str,
-) -> Option<IncludeAuthorityFailure> {
+) -> Option<SourceAuthorityFailure> {
     if binding != "include" && binding != "concat" {
         return None;
     }
     let builtin_namespace = prefix.is_empty()
         || matches!(prefix, [namespace] if namespace == "std" || namespace == "core");
-    (!builtin_namespace || original != binding).then_some(IncludeAuthorityFailure::Shadow)
+    (!builtin_namespace || original != binding).then_some(SourceAuthorityFailure::Shadow)
 }
 
 pub(crate) struct IncludeVisitor<'a> {
     declaring_file: String,
     file_dir: PathBuf,
     inherited: Vec<Attribute>,
-    unresolved: Option<IncludeAuthorityFailure>,
+    unresolved: Option<SourceAuthorityFailure>,
+    authority: &'a MacroAuthority,
     declarations: &'a mut BTreeMap<String, Vec<ModuleDeclaration>>,
 }
 
@@ -453,6 +470,14 @@ impl IncludeVisitor<'_> {
     }
 
     fn record(&mut self, mac: &syn::Macro) {
+        if !cfg::can_compile(&self.inherited) {
+            return;
+        }
+        if self.authority.requires_expansion(mac) {
+            self.unresolved
+                .get_or_insert(SourceAuthorityFailure::Expansion);
+            return;
+        }
         if !mac
             .path
             .segments
@@ -463,16 +488,21 @@ impl IncludeVisitor<'_> {
             return;
         }
         if !builtin_macro_path(&mac.path, "include") {
-            self.unresolved = Some(IncludeAuthorityFailure::Path);
+            self.unresolved.get_or_insert(SourceAuthorityFailure::Path);
             return;
         }
-        let Some(path) = syn::parse2::<syn::Expr>(mac.tokens.clone())
+        use syn::parse::Parser;
+        let parser = syn::punctuated::Punctuated::<Expr, syn::Token![,]>::parse_terminated;
+        let Some(path) = parser
+            .parse2(mac.tokens.clone())
             .ok()
-            .and_then(include_path)
+            .filter(|arguments| arguments.len() == 1)
+            .and_then(|mut arguments| arguments.pop())
+            .and_then(|argument| include_path(argument.into_value()))
         else {
             // An opaque include may reach any scanned file. Fail the scan
             // rather than certifying exemptions from an incomplete graph.
-            self.unresolved = Some(IncludeAuthorityFailure::Path);
+            self.unresolved.get_or_insert(SourceAuthorityFailure::Path);
             return;
         };
         let target = normalize(&self.file_dir.join(path));
@@ -561,21 +591,25 @@ impl<'ast> Visit<'ast> for IncludeVisitor<'_> {
     }
 
     fn visit_item_macro(&mut self, node: &'ast syn::ItemMacro) {
-        if super::attributes::is_ident(&node.mac.path, "macro_rules")
-            && node
+        if super::attributes::is_ident(&node.mac.path, "macro_rules") {
+            if node
                 .ident
                 .as_ref()
                 .is_some_and(|ident| ident.unraw() == "include" || ident.unraw() == "concat")
-        {
-            self.unresolved = Some(IncludeAuthorityFailure::Shadow);
-        } else {
-            visit::visit_item_macro(self, node);
+            {
+                self.unresolved
+                    .get_or_insert(SourceAuthorityFailure::Shadow);
+            }
+            // Definitions are indexed separately; only an invocation expands
+            // their tokens into the surrounding source context.
+            return;
         }
+        visit::visit_item_macro(self, node);
     }
 
     fn visit_item_use(&mut self, node: &'ast syn::ItemUse) {
         if let Some(failure) = include_import_failure(&node.tree, &[]) {
-            self.unresolved = Some(failure);
+            self.unresolved.get_or_insert(failure);
         }
     }
 

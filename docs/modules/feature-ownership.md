@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-13
-revision: 106
+revision: 107
 summary: Route features to owned paths and proof, including context-aware test-file caps, Cargo target evidence, and live exception ownership.
 ---
 
@@ -1303,6 +1303,12 @@ the syntax gate does not perform macro name resolution. Local definitions or
 imports that shadow builtin include/concat names also fail as unresolved authority.
 Raw identifiers retain the same module, macro, attribute, and cfg-predicate identity
 as their ordinary Rust spelling.
+`crates/conary-xtask/src/line_cap/exemption/macros.rs` indexes local macro
+definitions and import aliases. Invoked local macros with source-declaration tokens,
+chains or callbacks to such macros, or source-declaration arguments fail as
+unresolved expansion. Source-declaration arguments to opaque macros also fail;
+opaque nested macro inputs are not assumed to be data.
+Literal include arguments accept one expression and an optional trailing comma.
 Attributes whose final path segment is `test`, including conditional annotations
 enabled by `cfg_attr` in a test build, also mark inline tests.
 Files with more than 300 total test-only lines fail. Files named `tests.rs`
