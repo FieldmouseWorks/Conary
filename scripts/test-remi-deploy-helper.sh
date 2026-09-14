@@ -2850,22 +2850,23 @@ test_recovery_path_uri_policy() (
     source "$helper"
     local fake_root="${tmpdir}/uri-policy-root"
     local retained="$fake_root/conary/evidence/.remi-operator-staging/completed-resolution-survey-uri-policy"
-    local value key reason member="${tmpdir}/uri-policy-member.json" archive="${tmpdir}/uri-policy.tar"
+    local row reason member="${tmpdir}/uri-policy-member.json" archive="${tmpdir}/uri-policy.tar"
     mkdir -p "$retained"
     chmod 0700 "$retained"
     for name in helper outcome restore; do
         printf '{}\n' >"$retained/$name.json"
         chmod 0600 "$retained/$name.json"
     done
-    while IFS=$'\t' read -r value key reason; do
-        jq -cn --arg value "$value" --arg key "$key" '{($key):$value}' >"$member"
-        [[ "$(survey_recovery_path_reason "$member")" == "$reason" ]] || fail "URI policy classification drifted"
+    while IFS= read -r row; do
+        reason="$(jq -r .reason <<<"$row")"
+        jq -c '{(.key // "message"):.value}' <<<"$row" >"$member"
+        [[ "$(survey_recovery_path_reason "$member")" == "$reason" ]] || fail "URI policy classification drifted for $row"
         if [[ "$reason" == safe ]]; then
-            survey_sanitize_json <"$member" | jq -e --arg value "$value" --arg key "$key" '.[$key] == $value' >/dev/null
+            survey_sanitize_json <"$member" | jq -e --argjson row "$row" '.[$row.key // "message"] == $row.value' >/dev/null
         else
-            survey_sanitize_json <"$member" | jq -e --arg key "$key" --arg reason "$reason" \
-                '.[$key] == ("<redacted:" + $reason + ">")' >/dev/null
-            jq -cn --arg value "$value" '{($value):"ready"}' | survey_sanitize_json \
+            survey_sanitize_json <"$member" | jq -e --argjson row "$row" --arg reason "$reason" \
+                '.[$row.key // "message"] == ("<redacted:" + $reason + ">")' >/dev/null
+            jq -c '{(.value):"ready"}' <<<"$row" | survey_sanitize_json \
                 | jq -e 'to_entries | all(.[]; (.key | startswith("<redacted:")) and .value == "<redacted:unknown_key>")' >/dev/null
         fi
         install -m 0600 "$member" "$retained/manifest.json"
@@ -2878,7 +2879,7 @@ test_recovery_path_uri_policy() (
         for name in helper outcome restore; do
             tar -xOf "$archive" "$name.json" | cmp - "$retained/$name.json"
         done
-    done < <(jq -r '.[] | [.value,(.key // "message"),.reason] | @tsv' scripts/fixtures/remi-recovery-path-policy.json)
+    done < <(jq -c '.[]' scripts/fixtures/remi-recovery-path-policy.json)
 )
 
 test_recovery_typed_policy() (

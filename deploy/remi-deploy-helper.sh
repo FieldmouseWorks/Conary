@@ -1156,9 +1156,14 @@ survey_recovery_path_policy() {
                 | if $decoded == . then . else $decoded | percent_decode($budget - 1) end
             end;
         def recovery_path_reason:
-            percent_decode(8) as $decoded
+            # Decoding is identity without '%'; every path-rule match contains
+            # '/' or ':'. These guards avoid regex work without changing the
+            # decoder, residual-percent rejection, or accepted path language.
+            # index searches the full string, including after embedded NUL.
+            (if index("%") != null then percent_decode(8) else . end) as $decoded
             | if $decoded | contains("%") then "redaction_unproven"
-              elif $decoded | test("(^|[^A-Za-z0-9_./-])/(?!/)|^/|(file|ssh|scp|sftp):"; "i")
+              elif ($decoded | index("/") != null or index(":") != null)
+                and ($decoded | test("(^|[^A-Za-z0-9_./-])/(?!/)|^/|(file|ssh|scp|sftp):"; "i"))
               then "private_host_path" else null end;
         def recovery_string_reason($contract; $is_key):
             (if $is_key then recovery_known_key else recovery_safe_value($contract) end) as $safe

@@ -180,5 +180,65 @@
     "key": "message",
     "value": "completed_resolution_survey",
     "reason": "private_string"
+  },
+  {
+    "value": "",
+    "reason": "private_string"
+  },
+  {
+    "value": "plain \u03c0 \u6587\u672c",
+    "reason": "private_string"
+  },
+  {
+    "value": "%61",
+    "reason": "private_string"
+  },
+  {
+    "value": "%3a",
+    "reason": "private_string"
+  },
+  {
+    "value": "%2f",
+    "reason": "private_host_path"
+  },
+  {
+    "value": "%",
+    "reason": "redaction_unproven"
+  },
+  {
+    "value": "FiLe:private",
+    "reason": "private_host_path"
+  },
+  {
+    "value": "ordinary:message",
+    "reason": "private_string"
+  },
+  {
+    "value": "file\\u003aprivate",
+    "reason": "private_string"
+  },
+  {
+    "value": "%25",
+    "reason": "redaction_unproven"
+  },
+  {
+    "value": "%2525",
+    "reason": "redaction_unproven"
+  },
+  {
+    "value": "%2f%",
+    "reason": "redaction_unproven"
+  },
+  {
+    "value": "prefix\u0000/private",
+    "reason": "private_host_path"
+  },
+  {
+    "value": "prefix\u0000file:private",
+    "reason": "private_host_path"
+  },
+  {
+    "value": "prefix\u0000%2fprivate",
+    "reason": "private_host_path"
   }
 ]

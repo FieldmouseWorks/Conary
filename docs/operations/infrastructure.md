@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-09-13
-revision: 103
-summary: Enforce precise monotonic Remi readiness intervals and shared launch-aware completion while retaining deployment fencing and serialized queues
+revision: 104
+summary: Avoid unnecessary recovery regex work and enforce precise monotonic Remi readiness intervals while retaining deployment fencing and serialized queues
 ---
 
 # Infrastructure Overview
@@ -443,7 +443,10 @@ workflow.
   output, outcome, and restore documents. The schema-1 recovery manifest binds
   each allowlisted file by digest/size and, when retained, the exact authenticated
   input manifest. `verify-recovery` checks those bindings and privacy before
-  exposing the diagnostic files to upload. Missing retained evidence and failed
+  exposing the diagnostic files to upload. Recovery keeps its bounded-memory
+  stream and skips decoding or path matching only when the characters required
+  by those operations are absent; the typed grammar and privacy rules still
+  govern every value. Missing retained evidence and failed
   retrieval are explicit states. Recovery has `diagnostic_only` authority and
   never substitutes for normal `verify-output` validation or its oracle,
   deployment, implementation, and comparison bindings. The returned
