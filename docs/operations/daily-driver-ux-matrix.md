@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-09-13
-revision: 44
-summary: Daily-driver CLI source identities, typed installed capability details, fallible file-owner queries, grouped results, history, and native refusals
+last_updated: 2026-09-14
+revision: 46
+summary: Daily-driver CLI initialization and recovery guidance, source identities, typed installed details, grouped results, history, and native refusals
 ---
 
 # Daily-Driver UX Matrix
@@ -18,6 +18,7 @@ takeover, generation activation, or conaryd, the CLI should say that directly.
 
 | Command | Success Route | Refusal Or Unsupported Route | Operator Guidance Phrase | Focused Test Target |
 |---|---|---|---|---|
+| `system init` | Initializes the selected database and configures built-in source feeds and typed host interfaces | Database initialization failure or typed obsolete-schema refusal | Sync the same selected database; rebuild disposable retired state only with explicit discard and apply flags | `cargo test -p conary --test cli_initialization` |
 | `install <pkg>` | Conary-owned package install or dry-run plan | Adopted package already belongs to native authority | `conary system adopt --refresh` before retry; `conary install <pkg> --ownership takeover --yes` for explicit package takeover; `conary system takeover --yes` for generation-level takeover | `cargo test -p conary --test cli_daily_ux adopted_install_refusal_routes_to_refresh_and_takeover` |
 | `install <pkg> --dry-run` | Reports a would-be dependency-to-explicit promotion without changing installed state, even with `--yes` | Ambiguous installed variants require exact selection | Use `--version` and `--arch` to select the intended installed variant | `cargo test -p conary --lib commands::install::command::tests` |
 | `remove <pkg>` | Conary-owned package removal; Debian residual conffiles are preserved | Adopted package removal without `--purge` | Use `--purge` to delete residual config state or externally owned adopted files; use `conary system unadopt <pkg> --yes` to stop adopted tracking without deleting files | `cargo test -p conary --test cli_daily_ux adopted_remove_refusal_routes_to_unadopt_or_purge` |
@@ -208,6 +209,67 @@ The renderer now shows one phase row, erases it, and leaves the command summary
 on its own line. Tests assert row count, phase text, retained diagnostics,
 nested cleanup, and no redraw after return. Concurrent fetching remains #535.
 First-use diagnostic rendering is covered below.
+
+## Database Initialization And Recovery
+
+`system init` renders the selected database as an escaped `Database` field.
+Its follow-up metadata command retains `--db-path` for custom databases,
+including paths with spaces or single quotes. The same configuration summary
+follows an explicit `system rebuild-db`. For example:
+
+```text
+Initialized Conary database
+  Database: <fixture>/state/conary.db
+```
+
+After source enrollment and typed host-interface discovery, the action is:
+
+```text
+note: Download metadata from every enabled Remi feed:
+note: Run: conary repo sync --db-path='<fixture>/state/conary.db'
+```
+
+Initialization keeps the original core error and typed database/runtime-root
+context through both the command and its earlier try-session database preflight.
+The existing initialization target validation runs before preflight opens the
+database. Non-canonical system aliases retain their canonical-path refusal,
+even when the underlying system database has a retired schema; they never
+receive a rebuild command that the same validation would reject.
+The UI selects rebuild guidance from `SchemaRebuildRequired` and retains its
+observed schema, supported epoch, and revision as separate facts:
+
+```text
+error: Database initialization requires a schema rebuild.
+  Database: <fixture>/state/conary.db
+  Database parent: <fixture>/state
+  Runtime root: <fixture>/state
+  Observed schema: retired migration-chain schema version 66
+  Supported epoch: conary-current-v1
+  Supported revision: <current revision>
+note: Rebuilding replaces active Conary state after preserving a snapshot. Use it only when this state is disposable.
+note: Run: conary system rebuild-db --discard-state --yes --db-path='<fixture>/state/conary.db'
+```
+
+Other database failures include the same location fields and the core `Cause`.
+Bare relative database filenames identify the parent and runtime root as `.`.
+Displayed paths escape terminal controls; command hints for such paths use
+`--db-path <PATH> (use the same database path)` rather than silently changing
+the argument. Rebuild success names the selected database and escaped retired
+snapshot path. Rendering does not skip try-session, privilege, or discard/apply
+gates and does not change schema or rebuild authority.
+
+`cargo test -p conary --test cli_initialization` captures initialization success,
+unusable-parent and retired-schema refusals in real TTY, pipe, and both
+`NO_COLOR` modes. It checks quoted/control-character paths, retained refusal
+state, and the printed rebuild action on disposable state with its retired
+snapshot preserved. Command unit tests retain downcastable core errors through
+additional context. The rest of the first-use walkthrough remains under #132
+and #644.
+
+The system-alias regression creates a retired system database on private
+`/var/lib` tmpfs in a separate mount namespace, then proves all four refusal
+frames and byte-preserved database state. It requires usable user/mount
+namespaces or an isolated privileged invocation of that exact test.
 
 ## First-Use Diagnostic Contract
 

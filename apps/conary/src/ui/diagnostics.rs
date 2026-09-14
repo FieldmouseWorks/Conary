@@ -2,6 +2,7 @@
 //! Human diagnostics derived from typed failures and publication facts.
 
 mod ccs;
+mod initialization;
 mod package;
 mod verification;
 pub(crate) use verification::{verification_failure, write_verification_report};
@@ -83,6 +84,9 @@ pub(crate) fn report_error(error: &anyhow::Error) {
 }
 
 fn from_error(error: &anyhow::Error) -> Diagnostic {
+    if let Some(diagnostic) = initialization::from_error(error) {
+        return diagnostic;
+    }
     if let Some(diagnostic) = package::from_error(error) {
         return diagnostic;
     }

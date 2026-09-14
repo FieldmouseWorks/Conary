@@ -4,6 +4,7 @@
 pub(crate) mod ccs_build;
 pub(crate) mod diagnostics;
 pub(crate) mod history;
+pub(crate) mod initialization;
 pub(crate) mod installed_info;
 mod installed_provides;
 pub(crate) mod progress;

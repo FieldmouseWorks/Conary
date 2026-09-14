@@ -41,7 +41,7 @@ use std::path::{Path, PathBuf};
 mod rollback;
 
 #[tokio::test]
-async fn init_retired_schema_refusal_names_exact_rebuild_command_without_mutating() {
+async fn init_retired_schema_refusal_retains_typed_context_without_mutating() {
     let temp_dir = tempfile::tempdir().unwrap();
     let db_path = temp_dir.path().join("conary.db");
     let db_path_str = db_path.to_str().unwrap();
@@ -56,12 +56,19 @@ async fn init_retired_schema_refusal_names_exact_rebuild_command_without_mutatin
     .unwrap();
     drop(conn);
 
-    let error = cmd_init(db_path_str).unwrap_err().to_string();
-
-    assert!(
-        error.contains("conary system rebuild-db --discard-state --yes"),
-        "{error}"
-    );
+    let error = cmd_init(db_path_str)
+        .unwrap_err()
+        .context("additional caller context");
+    let location = error
+        .downcast_ref::<super::DatabaseInitializationContext>()
+        .unwrap();
+    assert_eq!(location.database, db_path);
+    assert_eq!(location.runtime_root, temp_dir.path());
+    assert!(matches!(error.downcast_ref::<conary_core::Error>(), Some(
+        conary_core::Error::SchemaRebuildRequired { observed, supported_epoch, supported_revision }
+    ) if observed == "retired migration-chain schema version 66"
+        && supported_epoch == conary_core::db::schema::SCHEMA_EPOCH
+        && *supported_revision == conary_core::db::schema::SCHEMA_VERSION));
     assert_eq!(
         conary_core::db::schema::inspect(&db_path).unwrap(),
         conary_core::db::schema::SchemaCompatibility::RebuildRequired {
@@ -540,8 +547,18 @@ async fn init_error_names_unusable_database_parent() {
     let db_path = parent_file.join("conary.db");
     let db_path_str = db_path.to_str().unwrap();
 
-    let err = cmd_init(db_path_str).unwrap_err().to_string();
-
-    assert!(err.contains(&parent_file.display().to_string()));
-    assert!(err.contains("safe next step"));
+    let err = cmd_init(db_path_str)
+        .unwrap_err()
+        .context("additional caller context");
+    let location = err
+        .downcast_ref::<super::DatabaseInitializationContext>()
+        .unwrap();
+    assert_eq!(location.database, db_path);
+    assert_eq!(location.runtime_root, parent_file);
+    assert!(matches!(
+        err.downcast_ref::<conary_core::Error>(),
+        Some(conary_core::Error::InitError(_))
+    ));
+    assert_eq!(std::fs::read(&parent_file).unwrap(), b"not a directory");
+    assert!(!db_path.exists());
 }

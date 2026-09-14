@@ -191,10 +191,20 @@ fn run_try_session_preflight_inner(cli: &crate::cli::Cli, interactive: bool) -> 
     }
 
     let db_path = selected_db_path(command);
+    if matches!(command, Commands::System(cli::SystemCommands::Init { .. })) {
+        // A rejected system alias must not reach database inspection or gain a
+        // rebuild action that the same target validation would refuse.
+        commands::require_init_privileges(Path::new(db_path))?;
+    }
     let live_conn = match conary_core::db::open(db_path) {
         Ok(conn) => conn,
         Err(conary_core::Error::DatabaseNotFound(_)) => return Ok(()),
         Err(error) => {
+            if matches!(command, Commands::System(cli::SystemCommands::Init { .. })) {
+                return Err(error).context(commands::DatabaseInitializationContext::new(
+                    Path::new(db_path),
+                ));
+            }
             return Err(error).with_context(|| format!("failed to open Conary DB {db_path}"));
         }
     };

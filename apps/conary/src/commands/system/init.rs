@@ -7,15 +7,32 @@ use rusqlite::OptionalExtension;
 
 const MAX_INIT_SYMLINK_DEPTH: usize = 40;
 
+/// Location facts attached without erasing the database's typed failure.
+#[derive(Debug, thiserror::Error)]
+#[error("could not initialize Conary database")]
+pub(crate) struct DatabaseInitializationContext {
+    pub database: PathBuf,
+    pub runtime_root: PathBuf,
+}
+
+impl DatabaseInitializationContext {
+    pub(crate) fn new(db_path: &Path) -> Self {
+        Self {
+            database: db_path.to_path_buf(),
+            runtime_root: ConaryRuntimeRoot::from_db_path(db_path)
+                .root()
+                .to_path_buf(),
+        }
+    }
+}
+
 /// Initialize the Conary database and add default repositories
 pub fn cmd_init(db_path: &str) -> Result<()> {
     info!("Initializing Conary database at: {}", db_path);
     let db_path_ref = Path::new(db_path);
-    let runtime_root = ConaryRuntimeRoot::from_db_path(db_path_ref.to_path_buf());
     require_init_privileges(db_path_ref)?;
-    conary_core::db::init(db_path)
-        .map_err(|err| init_failure_context(db_path_ref, &runtime_root, err))?;
-    crate::ui::status("Initialized", &format!("database at {db_path}"));
+    conary_core::db::init(db_path).context(DatabaseInitializationContext::new(db_path_ref))?;
+    crate::ui::initialization::database_initialized(db_path);
 
     configure_current_database(db_path)
 }
@@ -49,17 +66,11 @@ pub(super) fn configure_current_database(db_path: &str) -> Result<()> {
         }
     }
 
-    crate::ui::status("Configured", "built-in Remi package source feeds");
-    crate::ui::status(
-        "Discovered",
-        "typed host lifecycle interfaces (service manager, sysusers, tmpfiles, sysctl, ldconfig)",
-    );
-    crate::ui::note("Run 'conary repo sync' to download metadata from every enabled Remi feed.");
-    crate::ui::note("Enroll native sources with exact trust, identity, stream, and update policy.");
+    crate::ui::initialization::configuration_complete(db_path);
     Ok(())
 }
 
-pub(super) fn require_init_privileges(db_path: &Path) -> Result<()> {
+pub(crate) fn require_init_privileges(db_path: &Path) -> Result<()> {
     #[cfg(unix)]
     {
         validate_init_privileges(db_path, nix::unistd::Uid::effective().is_root())?;
@@ -358,28 +369,4 @@ fn canonical_remi_authority_rows(
             synced_at: None,
         })
         .collect())
-}
-
-fn init_failure_context(
-    db_path: &Path,
-    runtime_root: &ConaryRuntimeRoot,
-    source: conary_core::Error,
-) -> anyhow::Error {
-    let parent = db_path.parent().unwrap_or_else(|| Path::new("."));
-    let safe_next_step = if matches!(&source, conary_core::Error::SchemaRebuildRequired { .. }) {
-        "run `conary system rebuild-db --discard-state --yes` with the same --db-path to preserve a retired snapshot and replace the active database; do not run it unless the active Conary state is disposable"
-    } else {
-        "verify the database parent is a writable directory, or pass --db-path to a writable test location; do not remove existing Conary runtime state unless you have confirmed it is disposable"
-    };
-    anyhow!(
-        "could not initialize Conary database at {}: {}\n\
-         database parent: {}\n\
-         runtime root: {}\n\
-         safe next step: {}",
-        db_path.display(),
-        source,
-        parent.display(),
-        runtime_root.root().display(),
-        safe_next_step
-    )
 }

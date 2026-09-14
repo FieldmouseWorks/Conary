@@ -12,15 +12,7 @@ pub fn cmd_rebuild_database(db_path: &str) -> Result<()> {
     info!(database = %db_path.display(), "Rebuilding retired Conary database");
 
     let outcome = conary_core::db::rebuild::rebuild_discarding_state(db_path)?;
-    crate::ui::status(
-        "Rebuilt",
-        &format!("database at {} with the current schema", db_path.display()),
-    );
-    crate::ui::field("Retired schema", &outcome.observed_schema);
-    crate::ui::field(
-        "Retired snapshot",
-        &outcome.retired_snapshot_path.display().to_string(),
-    );
+    crate::ui::initialization::database_rebuilt(&db_path.to_string_lossy(), &outcome);
     configure_current_database(db_path.to_string_lossy().as_ref())?;
     crate::ui::note(
         "Repository metadata and installed-package state were discarded; resync repositories and explicitly re-adopt any native packages that Conary should track.",
