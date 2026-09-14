@@ -155,8 +155,7 @@ async fn repo_add_rejects_canonical_universe_root_override_without_mutation() {
     let error = cmd_repo_add(options).await.unwrap_err();
 
     assert!(
-        error
-            .to_string()
+        format!("{error:#}")
             .contains("cannot override release-tracked canonical Remi universe authority"),
         "{error:#}"
     );
@@ -194,9 +193,7 @@ async fn repo_add_requires_independent_universe_root_for_self_hosted_remi_withou
     let error = cmd_repo_add(options).await.unwrap_err();
 
     assert!(
-        error
-            .to_string()
-            .contains("required for a self-hosted Remi endpoint"),
+        format!("{error:#}").contains("required for a self-hosted Remi endpoint"),
         "{error:#}"
     );
     let conn = conary_core::db::open(&db_path).unwrap();
@@ -223,7 +220,10 @@ async fn repo_add_requires_explicit_authority_for_self_hosted_remi_without_mutat
     .await
     .unwrap_err();
 
-    assert!(error.to_string().contains("--ccs-package-key"), "{error:#}");
+    assert!(
+        format!("{error:#}").contains("--ccs-package-key"),
+        "{error:#}"
+    );
     let conn = conary_core::db::open(&db_path).unwrap();
     assert!(
         Repository::find_by_name(&conn, "self-hosted")
@@ -255,9 +255,7 @@ async fn repo_add_rejects_canonical_authority_override_without_mutation() {
     .unwrap_err();
 
     assert!(
-        error
-            .to_string()
-            .contains("cannot override release-tracked CCS package authority"),
+        format!("{error:#}").contains("cannot override release-tracked CCS package authority"),
         "{error:#}"
     );
     let conn = conary_core::db::open(&db_path).unwrap();
@@ -296,9 +294,7 @@ async fn repo_add_rolls_back_repository_when_authority_persistence_fails() {
     .unwrap_err();
 
     assert!(
-        error
-            .to_string()
-            .contains("persist verified CCS package authority"),
+        format!("{error:#}").contains("persist verified CCS package authority"),
         "{error:#}"
     );
     let conn = conary_core::db::open(&db_path).unwrap();
@@ -331,7 +327,7 @@ async fn repo_add_persists_explicit_self_hosted_authority_and_rejects_duplicates
     .await
     .unwrap_err();
     assert!(
-        duplicate_error.to_string().contains("repeats public key"),
+        format!("{duplicate_error:#}").contains("repeats public key"),
         "{duplicate_error:#}"
     );
     {

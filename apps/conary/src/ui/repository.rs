@@ -2,7 +2,14 @@
 //! Discovery frames from repository records and the core sync policy.
 //! These facts do not establish package compatibility or install readiness.
 
+mod enrollment;
+mod static_enrollment;
 mod sync;
+mod trust_display;
+pub(crate) use enrollment::{added, operation_complete};
+pub(crate) use static_enrollment::{
+    added_static, ask_static_trust, static_trust_prompt, static_trust_reset,
+};
 pub(crate) use sync::{SyncProgress, sync_empty, sync_not_due, sync_results};
 
 use super::transaction_summary::{database_command, visible};

@@ -130,33 +130,18 @@ pub fn success(db: &Path, args: &[&str]) -> Capture {
 }
 
 pub fn add(db: &Path, server: &Server, name: &str, route: &str) {
-    // Enrollment output's raw control handling is tracked separately in #644.
-    // Rename the enrolled source through the registered model to isolate sync.
-    let enrolled_name = if name.chars().any(char::is_control) {
-        "control-fixture"
-    } else {
-        name
-    };
     success(
         db,
         &[
             "repo",
             "add",
-            enrolled_name,
+            name,
             &format!("{}{route}", server.url),
             "--package-format",
             "json",
             "--yes",
         ],
     );
-    if enrolled_name != name {
-        let conn = conary_core::db::open(db).unwrap();
-        let mut repo = Repository::find_by_name(&conn, enrolled_name)
-            .unwrap()
-            .unwrap();
-        repo.name = name.into();
-        repo.update(&conn).unwrap();
-    }
 }
 
 pub fn stale(db: &Path, name: &str) {

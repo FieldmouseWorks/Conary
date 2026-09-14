@@ -4,10 +4,11 @@
 mod authority;
 #[cfg(test)]
 mod authority_tests;
+mod operation;
 mod options;
 mod sync;
-mod trust_display;
 
+pub(crate) use operation::{RepositoryCommandContext, RepositoryOperation};
 pub use options::RepoAddOptions;
 pub(crate) use sync::RepositorySyncError;
 pub use sync::cmd_repo_sync;
@@ -27,7 +28,13 @@ use tracing::info;
 use authority::resolve_ccs_package_authority;
 
 /// Add a new repository
-pub async fn cmd_repo_add(mut opts: RepoAddOptions) -> Result<()> {
+pub async fn cmd_repo_add(opts: RepoAddOptions) -> Result<()> {
+    let context =
+        RepositoryCommandContext::new(RepositoryOperation::Add, &opts.name, &opts.db_path);
+    add_repository(opts).await.context(context)
+}
+
+async fn add_repository(mut opts: RepoAddOptions) -> Result<()> {
     info!("Adding repository: {} ({})", opts.name, opts.url);
 
     // Validate Remi strategy configuration before any static-repository probe.
@@ -252,21 +259,7 @@ pub async fn cmd_repo_add(mut opts: RepoAddOptions) -> Result<()> {
         conary_core::db::models::Repository::delete(&tx, existing_id)?;
     }
 
-    if let Err(error) = repo.insert(&tx) {
-        if matches!(&error, conary_core::Error::ConflictError(_)) {
-            return Err(anyhow::Error::new(conary_core::Error::ConflictError(
-                format!(
-                    "Repository '{}' already exists.\nUse 'conary repo list' to see configured repositories.",
-                    repo.name
-                ),
-            )));
-        }
-        return Err(anyhow::anyhow!(
-            "Failed to add repository '{}': {}",
-            repo.name,
-            error
-        ));
-    }
+    repo.insert(&tx).context("persist repository enrollment")?;
     let repository_id = repo
         .id
         .context("new repository has no ID after successful insertion")?;
@@ -290,47 +283,7 @@ pub async fn cmd_repo_add(mut opts: RepoAddOptions) -> Result<()> {
     }
     tx.commit()?;
 
-    println!("Added repository: {}", repo.name);
-    println!("  Metadata URL: {}", repo.url);
-    if let Some(ref content) = repo.content_url {
-        println!("  Content URL: {} (reference mirror)", content);
-    }
-    println!("  Enabled: {}", repo.enabled);
-    println!("  Priority: {}", repo.priority);
-    if let Some(source_profile) = repo.source_profile.as_deref() {
-        println!("  Source Profile: {source_profile}");
-    }
-    if let (Some(policy), Some(repository_identity)) = (
-        repo.source_policy.as_ref(),
-        repo.repository_identity.as_deref(),
-    ) {
-        println!("  Source Identity: {}", policy.source_identity);
-        println!("  Repository Identity: {repository_identity}");
-        println!("  Update Policy: {}", policy.update_mode.as_str());
-    }
-    if let Some(policy) = repo.trust_policy.as_ref() {
-        println!("  Repository Trust: {}", trust_display::describe(policy));
-    } else if !package_authority_rows.is_empty() {
-        println!(
-            "  Repository Trust: {} pinned CCS package key(s)",
-            package_authority_rows.len()
-        );
-    } else {
-        println!("  Repository Trust: typed JSON/Remi authority");
-    }
-    println!(
-        "  Security Advisories: {}",
-        repo.security_advisory_support.as_str()
-    );
-    // Show default strategy if configured
-    if let Some(ref strategy) = repo.default_strategy {
-        println!("  Default Strategy: {}", strategy);
-        if strategy == "remi"
-            && let Some(ref endpoint) = repo.default_strategy_endpoint
-        {
-            println!("  Remi Endpoint: {}", endpoint);
-        }
-    }
+    crate::ui::repository::added(&repo, &db_path, package_authority_rows.len());
 
     Ok(())
 }
@@ -582,9 +535,17 @@ pub fn cmd_repo_list(db_path: &str, all: bool) -> Result<()> {
 /// Remove a repository
 pub fn cmd_repo_remove(name: &str, db_path: &str) -> Result<()> {
     info!("Removing repository: {}", name);
-    let conn = open_db(db_path)?;
-    conary_core::repository::remove_repository(&conn, name)?;
-    println!("Removed repository: {}", name);
+    (|| -> Result<()> {
+        let conn = open_db(db_path)?;
+        conary_core::repository::remove_repository(&conn, name)?;
+        Ok(())
+    })()
+    .context(RepositoryCommandContext::new(
+        RepositoryOperation::Remove,
+        name,
+        db_path,
+    ))?;
+    crate::ui::repository::operation_complete(RepositoryOperation::Remove, name, db_path);
     Ok(())
 }
 
@@ -601,10 +562,18 @@ pub fn cmd_repo_disable(name: &str, db_path: &str) -> Result<()> {
 fn set_repo_enabled(name: &str, db_path: &str, enabled: bool) -> Result<()> {
     let action = if enabled { "Enabling" } else { "Disabling" };
     info!("{} repository: {}", action, name);
-    let conn = open_db(db_path)?;
-    conary_core::repository::set_repository_enabled(&conn, name, enabled)?;
-    let past = if enabled { "Enabled" } else { "Disabled" };
-    println!("{} repository: {}", past, name);
+    let operation = if enabled {
+        RepositoryOperation::Enable
+    } else {
+        RepositoryOperation::Disable
+    };
+    (|| -> Result<()> {
+        let conn = open_db(db_path)?;
+        conary_core::repository::set_repository_enabled(&conn, name, enabled)?;
+        Ok(())
+    })()
+    .context(RepositoryCommandContext::new(operation, name, db_path))?;
+    crate::ui::repository::operation_complete(operation, name, db_path);
     Ok(())
 }
 
@@ -642,7 +611,7 @@ mod tests {
         .await
         .unwrap_err();
 
-        assert!(err.to_string().contains("unsupported source profile"));
+        assert!(format!("{err:#}").contains("unsupported source profile"));
     }
 
     #[tokio::test]
@@ -747,10 +716,6 @@ mod tests {
         .await
         .unwrap_err();
 
-        assert!(
-            error
-                .to_string()
-                .contains("explicit rpm, deb, arch, or eopkg")
-        );
+        assert!(format!("{error:#}").contains("explicit rpm, deb, arch, or eopkg"));
     }
 }

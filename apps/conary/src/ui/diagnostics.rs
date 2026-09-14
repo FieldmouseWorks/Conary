@@ -105,21 +105,11 @@ fn from_error(error: &anyhow::Error) -> Diagnostic {
     }
     if let Some(error) = error.downcast_ref::<conary_core::Error>() {
         return match error {
-            conary_core::Error::DatabaseNotFound(path)
-                if std::path::Path::new(path)
-                    == conary_core::runtime_root::ConaryRuntimeRoot::default().db_path() =>
-            {
-                Diagnostic::new("Database not initialized.")
-                    .note("Run 'sudo conary system init' to set up the system database and all built-in source feeds.")
-            }
-            conary_core::Error::DatabaseNotFound(path) => {
-                Diagnostic::new("Custom database not initialized.")
-                    .fact("Database", path)
-                    .note("Run 'conary system init --db-path <PATH>' with the same custom path.")
-            }
+            conary_core::Error::DatabaseNotFound(path) => missing_database(path),
             conary_core::Error::NotFound(detail) => Diagnostic::new(detail),
-            conary_core::Error::ConflictError(detail) => Diagnostic::new("Conflict.")
-                .fact("Detail", detail),
+            conary_core::Error::ConflictError(detail) => {
+                Diagnostic::new("Conflict.").fact("Detail", detail)
+            }
             conary_core::Error::PathTraversal(detail) => Diagnostic::new("Path safety violation.")
                 .fact("Path", detail)
                 .note("This may indicate a malicious or corrupt package."),
@@ -133,6 +123,20 @@ fn from_error(error: &anyhow::Error) -> Diagnostic {
         diagnostic = diagnostic.fact("Cause", cause.to_string());
     }
     diagnostic
+}
+
+fn missing_database(path: &str) -> Diagnostic {
+    if std::path::Path::new(path)
+        == conary_core::runtime_root::ConaryRuntimeRoot::default().db_path()
+    {
+        Diagnostic::new("Database not initialized.")
+            .fact("Database", path)
+            .note("Run 'sudo conary system init' to set up the system database and all built-in source feeds.")
+    } else {
+        Diagnostic::new("Custom database not initialized.")
+            .fact("Database", path)
+            .note("Run 'conary system init --db-path <PATH>' with the same custom path.")
+    }
 }
 
 /// Plain fallback for library consumers, including persisted daemon job errors.
