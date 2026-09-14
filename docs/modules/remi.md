@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-09-14
-revision: 172
-summary: Describe Remi catalog and serving authority, durable export-owned native-oracle retention across refresh, diagnostic selection and explicit release, deployment, and readiness.
+revision: 173
+summary: Describe Remi catalog and serving authority, durable export-owned native-oracle retention across refresh, diagnostic selection and explicit release, deployment, readiness, and diagnostics-only recovery of a retained failed survey.
 ---
 
 # Remi
@@ -875,6 +875,13 @@ That specification defines the pinned ALPM, libsolv, and apt-pkg producers,
 schema hard cuts, bounded surveys, comparison rules, and production transport.
 Remi consumes only independently reopened artifacts bound to the selected
 private profile candidates; survey output never authorizes promotion.
+The request grammar lives in `scripts/remi-survey-request.py`;
+`.github/workflows/survey-remi-resolution.yml` authenticates its artifact chain
+and adapts it to the fixed helper. Its `recover` operation retrieves retained
+evidence for one exact original failed or cancelled survey attempt under the
+original chain commit. That retrieval is diagnostics only, its request and
+operator receipt are schema 1, and it changes no persisted schema or rebuild
+state; it is never a fresh survey.
 
 Native resolution producer orchestration lives in
 `crates/conary-core/src/repository/catalog/parity/resolution_producer.rs`:

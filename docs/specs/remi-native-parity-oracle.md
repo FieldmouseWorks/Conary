@@ -1,8 +1,8 @@
 ---
 title: Remi native full-catalog parity oracle
-summary: Define exact native parity lanes and diagnostic surveys bound to durable export-owned catalogs across refresh, with strict producer, worker, and outcome contracts
+summary: Define exact native parity lanes plus fresh surveys and retained diagnostic recovery bound to durable export-owned catalogs across refresh, with strict producer, worker, and outcome contracts
 last_updated: 2026-09-14
-revision: 88
+revision: 89
 status: active
 ---
 
@@ -721,6 +721,45 @@ cargo run -p conary-core --features native-rpm-oracle \
 The Debian and ALPM binaries use the same `--survey <FILE>` alternative with
 their existing `--packages` and `--database` member inputs respectively.
 
+### Retained diagnostic survey recovery
+
+The protected production consumer accepts `operation: recover` to retrieve
+one exact original failed or cancelled survey attempt. Dispatch supplies its
+`oracle_run_id`, `retained_survey_run_id`, and `retained_survey_run_attempt`
+(default `1`). `scripts/remi-survey-request.py` validates the original attempt
+from GitHub run metadata: exact run and attempt IDs, repository and head
+repository, `workflow_dispatch`, completed `failure` or `cancelled`, branch
+`main`, and path `.github/workflows/survey-remi-resolution.yml`. Duplicate
+JSON keys, nonfinite constants, malformed identities, and nonregular or
+oversized metadata are rejected before SSH access.
+
+The workflow reconstructs the original survey identity and input manifest
+from the full authenticated native/export/deployment artifacts. The original
+run's `head_sha` binds the oracle chain and must remain an ancestor of current
+protected `main`. The recovery dispatch itself still requires its own exact
+current-main workflow revision, verifier, and helper bytes. No caller-supplied
+digest or retained file can replace that independent input authentication;
+the failed survey need not have uploaded an artifact.
+
+Recovery installs the current fixed helper and reuses
+`conary-remi-deploy export-resolution-survey-evidence <survey-id> <export-id> <input-manifest-sha256>`
+and `verify-recovery` from the ordinary failure path. Success requires retained
+evidence with verified input binding and diagnostic-only authority. It publishes
+a separate artifact with a schema-1 request, recovery verification, timing
+record, and operator receipt. The receipt has
+`kind: retained_resolution_survey_recovery`, `authority: diagnostic_only`,
+`service_operation: none`, and `original_survey_outcome: unchanged`. Timing
+separates export over pinned SSH from independent verification; GitHub retains
+the complete job wall time under the unchanged 360-minute budget.
+
+Recovery never uploads the reconstructed input transport, invokes
+`survey-resolution`, or stops or starts Remi. Remote cleanup removes only its
+own staged helper while SSH credentials remain available; original survey
+transports remain intact. The original run keeps its failed or cancelled
+conclusion. Recovery and fresh survey output confer no promotion, activation,
+or publication authority. Request and operator receipt schemas are version 1;
+no persisted schema or rebuild state changes.
+
 ### Candidate-resolution and comparison surveys
 
 `ConaryResolutionSurveyV1` schema 2 is the diagnostics-only Conary counterpart
@@ -814,9 +853,14 @@ files also carry no private paths, credentials, environment data, or host
 identity.
 
 The protected production consumer is `.github/workflows/survey-remi-resolution.yml`.
-Its single `oracle_run_id` selects one successful three-lane
-`produce-remi-native-oracles` run. The workflow authenticates that run's
-head as its own exact current protected-main operator commit, then authenticates
+Its `operation` input dispatches either a fresh survey or the diagnostics-only
+recovery above, and its single `oracle_run_id` selects one successful
+three-lane `produce-remi-native-oracles` run. A fresh survey authenticates that
+run's head as its own exact current protected-main operator commit;
+recovery instead binds the same head to the original retained chain commit and
+requires that commit to remain an ancestor of freshly fetched protected `main`,
+while the recovery dispatch itself still requires its own exact current-main
+workflow revision and current-main helper bytes. The workflow then authenticates
 the assembled three-lane artifact and derives and reopens the exact export and
 deployment runs, then verifies the API metadata, successful producer job, and
 archive digest for each referenced strict lane. Retained same-export lanes from
