@@ -100,3 +100,6 @@ mod verification;
 
 #[path = "cli_diagnostics/machine.rs"]
 mod machine;
+
+#[path = "cli_diagnostics/database_preflight.rs"]
+mod database_preflight;

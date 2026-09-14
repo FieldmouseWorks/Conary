@@ -2,6 +2,7 @@
 //! Human diagnostics derived from typed failures and publication facts.
 
 mod ccs;
+mod database_preflight;
 mod initialization;
 mod package;
 mod repository;
@@ -85,6 +86,9 @@ pub(crate) fn report_error(error: &anyhow::Error) {
 }
 
 fn from_error(error: &anyhow::Error) -> Diagnostic {
+    if let Some(diagnostic) = database_preflight::from_error(error) {
+        return diagnostic;
+    }
     if let Some(diagnostic) = repository::from_error(error) {
         return diagnostic;
     }

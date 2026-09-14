@@ -205,7 +205,9 @@ fn run_try_session_preflight_inner(cli: &crate::cli::Cli, interactive: bool) -> 
                     Path::new(db_path),
                 ));
             }
-            return Err(error).with_context(|| format!("failed to open Conary DB {db_path}"));
+            return Err(error).context(crate::dispatch::DatabasePreflightContext {
+                database: db_path.into(),
+            });
         }
     };
     let Some(session) = TrySession::find_active_or_orphaned(&live_conn)? else {
