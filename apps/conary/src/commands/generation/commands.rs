@@ -467,31 +467,7 @@ fn pending_publication_error(
 pub fn cmd_generation_pending(db_path: &str) -> Result<()> {
     let conn = crate::commands::open_db(db_path)?;
     let debts = conary_core::db::models::GenerationPublication::pending_recoverable(&conn)?;
-    if debts.is_empty() {
-        crate::ui::println!("No pending generation publication debt.");
-        return Ok(());
-    }
-
-    crate::ui::println!("Pending generation publication debt:");
-    for debt in debts {
-        let id = debt.id.unwrap_or_default();
-        let changeset = debt
-            .trigger_changeset_id
-            .map(|id| id.to_string())
-            .unwrap_or_else(|| "-".to_string());
-        crate::ui::println!(
-            "  [{id}] changeset={changeset} status={} phase={} generation={} state={} retry=\"{}\"",
-            debt.status.as_str(),
-            debt.phase.as_str(),
-            debt.generation_number
-                .map(|n| n.to_string())
-                .unwrap_or_else(|| "-".to_string()),
-            debt.state_number
-                .map(|n| n.to_string())
-                .unwrap_or_else(|| "-".to_string()),
-            crate::commands::generation::publication::PublicationOutcome::retry_command(db_path)
-        );
-    }
+    crate::ui::generation_pending::render(db_path, &debts);
     Ok(())
 }
 

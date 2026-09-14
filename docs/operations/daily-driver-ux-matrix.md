@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-09-14
-revision: 55
-summary: Daily-driver CLI installed-list records, database preflight, repository readiness, typed details, and grouped results
+revision: 56
+summary: Daily-driver CLI publication debt, installed records, database preflight, repository readiness, typed details, and grouped results
 ---
 
 # Daily-Driver UX Matrix
@@ -32,6 +32,51 @@ takeover, generation activation, or conaryd, the CLI should say that directly.
 | `pin <pkg>` | Pins a selected installed variant | Ambiguous installed variants | Use `--version`, `--release`, and `--arch` to pin the intended variant | Existing `cargo test -p conary --test query pin_and_unpin_use_same_variant_selector` |
 | `unpin <pkg>` | Releases a selected installed variant | Ambiguous installed variants | Use `--version`, `--release`, and `--arch` to unpin the intended variant | Existing `cargo test -p conary --test query pin_and_unpin_use_same_variant_selector` |
 | `system history` | Recorded changeset fields, rollback relationships, continued lifecycle failures, and deferred recovery guidance | Obsolete changeset metadata keeps its existing refusal | Publication retries use the selected database; history does not decide rollback eligibility | `cargo test -p conary --test cli_history` |
+
+## Pending Generation Publication
+
+`system generation pending --db-path <database>` renders the selected database
+and exact count from the existing `pending_recoverable` query through
+`ui/generation_pending.rs`. Each record retains its typed status and phase,
+changeset/generation/state identities, recorded database and runtime root,
+summary, retry count, and last recorded error. Absent optional identities and
+errors use `-`; recorded controls remain visible escaped data. Pending and
+running records use `[pending]`, while failed records use `[fail]`. These labels
+report stored publication state and do not establish a selected or booted
+generation.
+
+```text
+Pending generation publication debt:
+  Database: /selected/conary.db
+  Records: 1
+[fail]     Publication debt  3
+  Status: failed
+  Phase: artifact_ready
+  Changeset: 7
+  Generation: 2
+  State: 2
+  Recorded database: /selected/conary.db
+  Runtime root: /selected
+  Summary: Install demo
+  Retry count: 1
+  Last error: recorded publication failure
+note: Retry pending publication: conary system generation publish --yes --db-path='/selected/conary.db'
+```
+
+The former one-line record omitted the recorded cause, retry count, and path
+fields. The replacement prints one retry note after all returned records,
+using the database queried rather than a recorded path from an individual debt.
+Ordinary paths retain the shared POSIX-shell quoting. Control-containing paths
+receive instructions to use the same original `--db-path` value, without an
+executable placeholder. The retry owner and mutation checks remain unchanged.
+
+The empty result retains `No pending generation publication debt.` as its own
+line for the supported-host publication fixture, with the database and zero
+records above it. `cargo test -p conary --test cli_generation_pending` covers
+failed cause details, typed pending/running/failed selection, excluded terminal
+and nonrecoverable records, order, empty output, all terminal/pipe/`NO_COLOR`
+modes, and unchanged complete database snapshots. The quoted retry is exercised
+with `--help` to verify its parser and shell arguments without applying it.
 
 ## Ordinary Installed Lists
 
@@ -823,7 +868,9 @@ follow-ups use the same scoped retry renderer. History regenerates publication
 guidance for the database it opened, ignoring obsolete stored retry text;
 `system generation pending` uses that same context. Retry and history
 commands retain the selected database, with shell quoting for ordinary paths;
-control-containing paths require the original path in an explicit placeholder.
+control-containing paths in history require the original path in an explicit placeholder.
+The pending-debt frame instead gives same-path instructions without an executable
+placeholder, as described above.
 Top-level CLI removal also gives the changeset-rollback request, after publication
 when pending. Nested removals used by autoremove, model apply, and automation
 retain their result and history link but leave final rollback guidance to the

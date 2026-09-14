@@ -28,7 +28,6 @@ const ALLOWED_INTERPOLATED_DATA: &[&str] = &[
     "[{}] Running scheduled automation check...",
     "[{}] {} - {} ({})",
     "[{}] env={} ({} derivations)",
-    "[{id}] changeset={changeset} status={} phase={} generation={} state={} retry=\"{}\"",
     "[{}/{}] Storing files in CAS: {} {}",
 ];
 

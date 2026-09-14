@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-09-14
-revision: 122
-summary: Route features to owned paths and proof, including installed-list and repository presentation, retained-survey requests, and workflow recovery.
+revision: 123
+summary: Route features to owned paths and proof, including installed-list, publication-debt, and repository presentation, retained-survey requests, and workflow recovery.
 ---
 
 # Feature Ownership And Interaction Gates
@@ -165,7 +165,7 @@ command summaries; tracing diagnostics.
 `apps/conary/src/commands/repo/sync.rs`;
 `apps/conary/src/commands/repo/operation.rs`;
 `apps/conary/tests/cli_repository_enrollment.rs`;
-`apps/conary/tests/cli_installed_list.rs`;
+`apps/conary/tests/cli_installed_list.rs`, `apps/conary/tests/cli_generation_pending.rs`;
 `apps/conary/tests/cli_repository_sync.rs`; `apps/conary/tests/cli_repository_sync/*`;
 `apps/conary/tests/cli_progress.rs`; `apps/conary/tests/cli_diagnostics.rs`;
 `apps/conary/tests/cli_output_snapshots.rs`;
@@ -178,7 +178,7 @@ command summaries; tracing diagnostics.
 `cargo test -p conary --test cli_daily_ux`;
 `cargo test -p conary --test cli_repository_sync`;
 `cargo test -p conary --test cli_repository_enrollment`;
-`cargo test -p conary --test cli_installed_list`;
+`cargo test -p conary --test cli_installed_list`; `cargo test -p conary --test cli_generation_pending`;
 `cargo test -p conary --test cli_output_snapshots`.
 
 **Interaction gate:** `cargo test -p conary` when package command adapters or
