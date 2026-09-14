@@ -327,23 +327,34 @@ make_fake_survey_remi() {
 #!/usr/bin/env bash
 set -euo pipefail
 if [[ "${1:-}" == "deployment" && "${2:-}" == "inspect" ]]; then
-    [[ "$(cat "$CONARY_FAKE_SERVICE_STATE")" == "stopped" ]]
+    # A newer background refresh must never become survey input selection.
+    printf 'current-candidate-inspection\n' >>"$CONARY_FAKE_SERVICE_LOG"
+    exit 79
+fi
+if [[ "${1:-}" == "native-oracle-retention" && "${2:-}" == "inspect" ]]; then
+    [[ "$(cat "$CONARY_FAKE_SERVICE_STATE")" == "active" ]]
+    [[ $# -eq 10 && "$3" == --db && "$5" == --catalog-dir && "$7" == --input-dir && "$9" == --export-id ]]
+    fake_root="${CONARY_FAKE_SERVICE_STATE%/service-state}"
+    [[ "$4" == "$fake_root/conary/metadata/conary.db" && "$6" == "$fake_root/conary/catalogs" ]]
+    [[ "$8" == "$fake_root/conary/evidence/native-oracle-inputs/${10}" ]]
+    [[ "${10}" == "$(cat "$fake_root/export-id")" ]]
     printf 'inspect\n' >>"$CONARY_FAKE_SERVICE_LOG"
     if [[ -n "${CONARY_FAKE_SURVEY_INSPECT_STATUS:-}" ]]; then
         printf '%s\n' "${CONARY_FAKE_SURVEY_INSPECT_DIAGNOSTIC:-unexpected inspection failure}" >&2
         exit "$CONARY_FAKE_SURVEY_INSPECT_STATUS"
     fi
-    jq -cn '
-      {
-        configured_profiles: 3,
-        candidate_profiles: 3,
-        candidates: [
-          {profile:"fedora-44",profile_revision_sha256:("a" * 64),packages:1},
-          {profile:"ubuntu-26.04",profile_revision_sha256:("b" * 64),packages:1},
-          {profile:"arch",profile_revision_sha256:("c" * 64),packages:1}
-        ]
-      }
-    '
+    if [[ -f "$fake_root/retention-override.json" ]]; then
+        cat "$fake_root/retention-override.json"
+    else
+        jq -cn --arg export_id "${10}" '{
+          schema_version:1, export_id:$export_id, input_manifest_sha256:("f" * 64),
+          profiles:[
+            {profile:"fedora-44",profile_revision_sha256:("a" * 64),packages:1},
+            {profile:"ubuntu-26.04",profile_revision_sha256:("b" * 64),packages:1},
+            {profile:"arch",profile_revision_sha256:("c" * 64),packages:1}
+          ]
+        }'
+    fi
     exit 0
 fi
 [[ "${1:-}" == "resolution-survey" ]]
@@ -352,6 +363,8 @@ printf 'survey\n' >>"$CONARY_FAKE_SERVICE_LOG"
 printf '%s\n' "$@" >"$CONARY_FAKE_SURVEY_ARGS"
 shift
 output=""
+input_dir=""
+export_id=""
 declare -a candidates=() packages=() resolutions=() architectures=()
 while (( $# > 0 )); do
     case "$1" in
@@ -360,6 +373,8 @@ while (( $# > 0 )); do
         --package-oracle) packages+=("$2"); shift 2 ;;
         --native-resolution) resolutions+=("$2"); shift 2 ;;
         --architecture) architectures+=("$2"); shift 2 ;;
+        --native-oracle-input-dir) input_dir="$2"; shift 2 ;;
+        --export-id) export_id="$2"; shift 2 ;;
         --output-dir) output="$2"; shift 2 ;;
         *) exit 2 ;;
     esac
@@ -367,6 +382,9 @@ done
 [[ "${candidates[*]}" == \
     "fedora-44=$(printf 'a%.0s' {1..64}) ubuntu-26.04=$(printf 'b%.0s' {1..64}) arch=$(printf 'c%.0s' {1..64})" ]]
 [[ "${architectures[*]}" == "fedora-44=x86_64 ubuntu-26.04=amd64 arch=x86_64" ]]
+fake_root="${CONARY_FAKE_SERVICE_STATE%/service-state}"
+[[ "$export_id" == "$(cat "$fake_root/export-id")" ]]
+[[ "$input_dir" == "$fake_root/conary/evidence/native-oracle-inputs/$export_id" ]]
 mkdir -m 0700 "$output"
 if [[ "${CONARY_FAKE_SURVEY_EARLY_FAILURE:-0}" == 1 ]]; then
     echo 'survey producer failed before writing its outcome' >&2
@@ -1399,6 +1417,8 @@ test_export_native_oracle_inputs_uses_exact_public_candidates() {
     test -f "$transport"
     mkdir "$unpacked"
     tar -xf "$transport" -C "$unpacked"
+    grep -Fx -- --export-id "$unpacked/$export_id/command-args" >/dev/null
+    grep -Fx -- "$export_id" "$unpacked/$export_id/command-args" >/dev/null
     grep -Fx -- "fedora-44=${fedora_sha}" \
         "$unpacked/$export_id/command-args" >/dev/null
     grep -Fx -- "ubuntu-26.04=${ubuntu_sha}" \
@@ -1414,11 +1434,44 @@ test_export_native_oracle_inputs_uses_exact_public_candidates() {
     rm -f "$transport"
 }
 
+test_release_native_oracle_inputs_uses_exact_owner_without_service_mutation() {
+    local fake_root="${tmpdir}/root-release-native-input"
+    local digest output
+    digest="$(printf 'f%.0s' {1..64})"
+    write_config "$fake_root"
+    mkdir -p "$fake_root/usr/local/bin"
+    : >"$fake_root/service-log"
+    cat >"$fake_root/usr/local/bin/remi" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ $# -eq 8 && "$1" == native-oracle-retention && "$2" == release ]]
+[[ "$3" == --db && "$4" == "$CONARY_REMI_DEPLOY_ROOT/conary/metadata/conary.db" ]]
+[[ "$5" == --export-id && "$7" == --input-manifest-sha256 ]]
+printf '%s\n' "$@" >"$CONARY_REMI_DEPLOY_ROOT/release-args"
+jq -cn --arg export_id "$6" --arg digest "$8" \
+    '{schema_version:1,export_id:$export_id,input_manifest_sha256:$digest,released_profiles:3}'
+EOF
+    chmod 0755 "$fake_root/usr/local/bin/remi"
+    output="$(run_helper "$fake_root" release-native-oracle-inputs release-one "$digest")"
+    jq -e --arg digest "$digest" '.schema_version == 1 and .export_id == "release-one"
+        and .input_manifest_sha256 == $digest and .released_profiles == 3' <<<"$output" >/dev/null
+    [[ ! -s "$fake_root/service-log" ]]
+    rm "$fake_root/release-args"
+    expect_fail "release rejects unsafe export identity" \
+        run_helper "$fake_root" release-native-oracle-inputs '../escape' "$digest"
+    expect_fail "release rejects noncanonical manifest identity" \
+        run_helper "$fake_root" release-native-oracle-inputs release-one "${digest^^}"
+    expect_fail "release requires the manifest identity" \
+        run_helper "$fake_root" release-native-oracle-inputs release-one
+    [[ ! -e "$fake_root/release-args" && ! -s "$fake_root/service-log" ]]
+}
+
 make_survey_fixture() {
     local fake_root="$1"
     local survey_id="$2"
     local export_id="$3"
     write_config "$fake_root"
+    printf '%s\n' "$export_id" >"$fake_root/export-id"
     chmod 0644 "$fake_root/etc/conary/remi.toml"
     make_fake_survey_remi "$fake_root"
     make_fake_benchmark_systemctl "$fake_root"
@@ -1469,7 +1522,7 @@ test_resolution_survey_uses_stopped_runtime_and_sanitized_transport() {
     transport="/tmp/remi-resolution-survey-${survey_id}.tar"
     [[ "$output" =~ ^Resolution\ survey:\ survey=${survey_id}\ export=${export_id}\ transport=${transport}\ sha256=[0-9a-f]{64}\ bytes=[1-9][0-9]*\ candidate_failures=0\ comparison_mismatches=0\ restore_outcome=restored\ restore_sha256=[0-9a-f]{64}$ ]] ||
         fail "resolution survey returned an unexpected publication line: $output"
-    [[ "$(cat "$fake_root/service-log")" == $'is-active --quiet remi\nstop remi\ninspect\nsurvey\nstart remi' ]] ||
+    [[ "$(cat "$fake_root/service-log")" == $'is-active --quiet remi\ninspect\nstop remi\nsurvey\nstart remi' ]] ||
         fail "resolution survey service ordering drifted: $(cat "$fake_root/service-log")"
     [[ "$(cat "$fake_root/service-state")" == "active" ]]
     [[ -f "$transport" && ! -L "$transport" && "$(stat -c '%a' "$transport")" == "600" ]]
@@ -1522,7 +1575,7 @@ test_resolution_survey_findings_restart_and_succeed() {
     transport="/tmp/remi-resolution-survey-${survey_id}.tar"
     [[ "$output" =~ candidate_failures=3\ comparison_mismatches=0\ restore_outcome=restored\ restore_sha256=[0-9a-f]{64}$ ]] ||
         fail "survey findings were not reported as a successful helper outcome"
-    [[ "$(cat "$fake_root/service-log")" == $'is-active --quiet remi\nstop remi\ninspect\nsurvey\nstart remi' ]] ||
+    [[ "$(cat "$fake_root/service-log")" == $'is-active --quiet remi\ninspect\nstop remi\nsurvey\nstart remi' ]] ||
         fail "survey findings did not restore Remi in order"
     [[ "$(cat "$fake_root/service-state")" == "active" ]]
     verification="${tmpdir}/${survey_id}-verification.json"
@@ -1784,7 +1837,7 @@ PYCODE
             if $outcome == "restored" then .last_ready_duration_seconds == $elapsed
             else .restart_to_ready_seconds == null end
         ' "$fake_root/var/lib/conary-remi-deploy/readiness.json" >/dev/null
-        [[ "$(cat "$fake_root/service-log")" == $'is-active --quiet remi\nstop remi\ninspect\nsurvey\nstart remi' ]] ||
+        [[ "$(cat "$fake_root/service-log")" == $'is-active --quiet remi\ninspect\nstop remi\nsurvey\nstart remi' ]] ||
             fail "$name repeated restoration or changed service ordering"
         if [[ "$expected_outcome" == restore_failed ]]; then
             grep -F "${reason}: systemctl status" "$stderr_file" >/dev/null
@@ -2178,7 +2231,7 @@ test_resolution_survey_accepts_manifest_bound_sparse_transport_beyond_old_cap() 
 
     run_survey_helper "$fake_root" \
         "$survey_id" "$export_id" "$transport" >/dev/null
-    [[ "$(cat "$fake_root/service-log")" == $'is-active --quiet remi\nstop remi\ninspect\nsurvey\nstart remi' ]] ||
+    [[ "$(cat "$fake_root/service-log")" == $'is-active --quiet remi\ninspect\nstop remi\nsurvey\nstart remi' ]] ||
         fail "manifest-bound sparse survey transport did not complete in order"
     [[ "$(cat "$fake_root/service-state")" == "active" ]]
 }
@@ -2208,7 +2261,7 @@ test_resolution_survey_failure_sanitizes_diagnostic() {
     if grep -F "$private_diagnostic" "$stdout_file" "$stderr_file" >/dev/null; then
         fail "unexpected survey failure leaked raw Remi diagnostics"
     fi
-    [[ "$(cat "$fake_root/service-log")" == $'is-active --quiet remi\nstop remi\ninspect\nsurvey\nstart remi' ]] ||
+    [[ "$(cat "$fake_root/service-log")" == $'is-active --quiet remi\ninspect\nstop remi\nsurvey\nstart remi' ]] ||
         fail "unexpected survey failure did not restore Remi in order"
     [[ "$(cat "$fake_root/service-state")" == "active" ]]
     [[ ! -e "/tmp/remi-resolution-survey-${survey_id}.tar" ]]
@@ -2234,13 +2287,13 @@ test_resolution_survey_inspection_failure_sanitizes_diagnostic() {
     set -e
 
     [[ "$status" -ne 0 ]] || fail "unexpected survey inspection failure succeeded"
-    grep -F 'could not inspect exact stopped-runtime candidate pointers' "$stderr_file" >/dev/null ||
+    grep -F 'could not inspect durable export-owned native-oracle retention' "$stderr_file" >/dev/null ||
         fail "survey inspection failure lost its typed public diagnostic"
     if grep -F "$private_diagnostic" "$stdout_file" "$stderr_file" >/dev/null; then
         fail "survey inspection failure leaked raw Remi diagnostics"
     fi
-    [[ "$(cat "$fake_root/service-log")" == $'is-active --quiet remi\nstop remi\ninspect\nstart remi' ]] ||
-        fail "survey inspection failure did not restore Remi in order"
+    [[ "$(cat "$fake_root/service-log")" == $'is-active --quiet remi\ninspect' ]] ||
+        fail "survey inspection failure caused service mutation"
     [[ "$(cat "$fake_root/service-state")" == "active" ]]
     [[ ! -e "/tmp/remi-resolution-survey-${survey_id}.tar" ]]
 }
@@ -2261,6 +2314,41 @@ test_resolution_survey_preflight_failure_cleans_staging() {
     fi
     [[ ! -s "$fake_root/service-log" ]] ||
         fail "survey preflight failure caused downtime"
+}
+
+test_resolution_survey_rejects_invalid_retention_before_downtime() {
+    local mutation survey_id export_id fake_root response filter
+    for mutation in partial released wrong-export wrong-revision wrong-manifest extra-field reordered fractional-count schema; do
+        survey_id="survey-retention-${mutation}-$$"
+        export_id="slice6-export-$$"
+        fake_root="${tmpdir}/root-${survey_id}"
+        make_survey_fixture "$fake_root" "$survey_id" "$export_id"
+        case "$mutation" in
+            partial) filter='del(.profiles[1])' ;;
+            released) filter='.profiles = []' ;;
+            wrong-export) filter='.export_id = "another-export"' ;;
+            wrong-revision) filter='.profiles[0].profile_revision_sha256 = ("9" * 64)' ;;
+            wrong-manifest) filter='.input_manifest_sha256 = ("e" * 64)' ;;
+            extra-field) filter='.unexpected = true' ;;
+            reordered) filter='.profiles |= reverse' ;;
+            fractional-count) filter='.profiles[0].packages = 0.5' ;;
+            schema) filter='.schema_version = 2' ;;
+        esac
+        response="$(jq -cn --arg export_id "$export_id" '{
+          schema_version:1,export_id:$export_id,input_manifest_sha256:("f" * 64),
+          profiles:[
+            {profile:"fedora-44",profile_revision_sha256:("a" * 64),packages:1},
+            {profile:"ubuntu-26.04",profile_revision_sha256:("b" * 64),packages:1},
+            {profile:"arch",profile_revision_sha256:("c" * 64),packages:1}
+          ]}')"
+        jq -c "$filter" <<<"$response" >"$fake_root/retention-override.json"
+        expect_fail "invalid retained export: $mutation" run_survey_helper "$fake_root" \
+            "$survey_id" "$export_id" "/tmp/remi-resolution-survey-oracles-${survey_id}.tar"
+        [[ "$(cat "$fake_root/service-log")" == $'is-active --quiet remi\ninspect' ]] ||
+            fail "$mutation retention caused service mutation"
+        [[ "$(cat "$fake_root/service-state")" == active && ! -e "$fake_root/survey-args" ]]
+        [[ ! -e "$fake_root/conary/evidence/resolution-surveys/$survey_id" ]]
+    done
 }
 
 test_resolution_survey_rejects_obsolete_input_before_downtime() {
@@ -3000,6 +3088,7 @@ main() {
     test_deploy_remi_rejects_malformed_authority_root
     test_inspect_remi_storage_reports_bounded_numeric_evidence
     test_export_native_oracle_inputs_uses_exact_public_candidates
+    test_release_native_oracle_inputs_uses_exact_owner_without_service_mutation
     test_resolution_survey_uses_stopped_runtime_and_sanitized_transport
     test_resolution_survey_findings_restart_and_succeed
     test_resolution_survey_restore_outcomes_and_measured_budgets
@@ -3009,6 +3098,7 @@ main() {
     test_resolution_survey_accepts_manifest_bound_sparse_transport_beyond_old_cap
     test_resolution_survey_failure_sanitizes_diagnostic
     test_resolution_survey_inspection_failure_sanitizes_diagnostic
+    test_resolution_survey_rejects_invalid_retention_before_downtime
     test_resolution_survey_preflight_failure_cleans_staging
     test_resolution_survey_rejects_invalid_requests_before_downtime
     test_resolution_survey_rejects_obsolete_input_before_downtime

@@ -29,6 +29,7 @@ usage:
   conary-remi-deploy inspect-remi-candidate-baseline <version> <sha256> <bundle.tar.gz>
   conary-remi-deploy inspect-remi-storage
   conary-remi-deploy export-native-oracle-inputs <export-id> <fedora-sha256> <ubuntu-sha256> <arch-sha256>
+  conary-remi-deploy release-native-oracle-inputs <export-id> <input-manifest-sha256>
   conary-remi-deploy survey-resolution <survey-id> <export-id> <oracle-transport-path>
   conary-remi-deploy export-resolution-survey-evidence <survey-id> <export-id> <input-manifest-sha256>
   conary-remi-deploy benchmark-remi-conversion <run-id> <installed-binary-sha256> <profile> <revision-sha256> <package-key-sha256> <source-sha256> <source-size>
@@ -980,6 +981,7 @@ export_native_oracle_inputs() {
         "$bin" native-oracle-input
         --db "$(root_path /conary/metadata/conary.db)"
         --catalog-dir "$(root_path /conary/catalogs)"
+        --export-id "$export_id"
         --candidate "fedora-44=${fedora_sha256}"
         --candidate "ubuntu-26.04=${ubuntu_sha256}"
         --candidate "arch=${arch_sha256}"
@@ -1007,6 +1009,30 @@ export_native_oracle_inputs() {
     trap - EXIT
     printf 'Native oracle inputs: export=%s transport=%s sha256=%s\n' \
         "$export_id" "$transport" "$(sha256sum "$transport" | cut -d ' ' -f 1)"
+}
+
+release_native_oracle_inputs() {
+    [[ $# -eq 2 ]] || usage
+    local export_id="$1"
+    local input_manifest_sha256="$2"
+    validate_identity "native-oracle export" "$export_id"
+    validate_sha256 "$input_manifest_sha256"
+    require_shared_conary_root
+
+    local bin
+    bin="$(root_path /usr/local/bin/remi)"
+    [[ -f "$bin" && ! -L "$bin" ]] || die "Remi binary is not a plain file: $bin"
+    local command=(
+        "$bin" native-oracle-retention release
+        --db "$(root_path /conary/metadata/conary.db)"
+        --export-id "$export_id"
+        --input-manifest-sha256 "$input_manifest_sha256"
+    )
+    if [[ -z "$ROOT" ]]; then
+        runuser -u conary -- "${command[@]}"
+    else
+        "${command[@]}"
+    fi
 }
 
 SURVEY_REMI_STOPPED=0
@@ -1830,33 +1856,51 @@ survey_resolution() {
     mkdir -m 0700 "$retained" || die "resolution survey retained target already exists"
     SURVEY_RETAINED="$retained"
     install -m 0600 "$input_manifest" "$retained/input-manifest.json"
+
+    # Durable export-owned Work pins, not live current pointers, are the
+    # authority for the survey's retained revisions. Prove the entire retained
+    # set while Remi is still active so every refusal happens before downtime.
+    local native_oracle_input_dir="${evidence_root}/native-oracle-inputs/${export_id}"
+    local retention="${SURVEY_STAGING}/native-oracle-retention.json"
+    local inspect_command=(
+        "$bin" native-oracle-retention inspect
+        --db "$(root_path /conary/metadata/conary.db)"
+        --catalog-dir "$(root_path /conary/catalogs)"
+        --input-dir "$native_oracle_input_dir"
+        --export-id "$export_id"
+    )
+    if [[ -z "$ROOT" ]]; then
+        runuser -u conary -- "${inspect_command[@]}" >"$retention" 2>>"$diagnostic" ||
+            die "could not inspect durable export-owned native-oracle retention"
+    else
+        "${inspect_command[@]}" >"$retention" 2>>"$diagnostic" ||
+            die "could not inspect durable export-owned native-oracle retention"
+    fi
+    jq -e --slurpfile input "$input_manifest" --arg export_id "$export_id" '
+        (keys | sort) == ["export_id", "input_manifest_sha256", "profiles", "schema_version"]
+        and .schema_version == 1
+        and .export_id == $export_id
+        and (.input_manifest_sha256 | type == "string" and test("^[0-9a-f]{64}$"))
+        and (.input_manifest_sha256 as $digest
+          | all($input[0].profiles[]; .input_manifest_sha256 == $digest))
+        and ([.profiles[].profile] == ["fedora-44", "ubuntu-26.04", "arch"])
+        and all(.profiles[];
+          ((keys | sort) == ["packages", "profile", "profile_revision_sha256"])
+          and (.packages | type == "number" and . > 0 and . == floor)
+          and (.profile_revision_sha256 | type == "string" and test("^[0-9a-f]{64}$")))
+        and ([.profiles[].profile_revision_sha256]
+          == [$input[0].profiles[].profile_revision_sha256])
+    ' "$retention" >/dev/null ||
+        die "durable export-owned native-oracle retention does not prove three exact retained revisions"
+
     SURVEY_REMI_STOPPED=1
     remi_systemctl stop remi || die "failed to stop Remi for resolution survey"
-
-    local inspection="${SURVEY_STAGING}/candidate-inspection.json"
-    "$bin" deployment inspect --config "$config" --require-private-candidates \
-        >"$inspection" 2>>"$diagnostic" ||
-        die "could not inspect exact stopped-runtime candidate pointers"
-    jq -e '
-        .configured_profiles == 3
-        and .candidate_profiles == 3
-        and ([.candidates[].profile] == ["fedora-44", "ubuntu-26.04", "arch"])
-        and all(.candidates[];
-          (.profile_revision_sha256 | type == "string" and test("^[0-9a-f]{64}$"))
-          and (.packages | type == "number" and . > 0))
-    ' "$inspection" >/dev/null ||
-        die "stopped-runtime inspection does not prove three exact private candidates"
-    jq -e --slurpfile inspection "$inspection" '
-        [.profiles[].profile_revision_sha256]
-        == [$inspection[0].candidates[].profile_revision_sha256]
-    ' "$input_manifest" >/dev/null ||
-        die "current candidate pointers differ from the authenticated oracle revisions"
 
     local command=("$bin" resolution-survey --config "$config")
     local profile revision architecture
     while IFS=$'\t' read -r profile revision; do
         command+=(--candidate "${profile}=${revision}")
-    done < <(jq -r '.candidates[] | [.profile, .profile_revision_sha256] | @tsv' "$inspection")
+    done < <(jq -r '.profiles[] | [.profile, .profile_revision_sha256] | @tsv' "$input_manifest")
     while IFS=$'\t' read -r profile revision architecture; do
         command+=(
             --package-oracle "${profile}=${oracle_root}/${profile}/package-oracle"
@@ -1864,6 +1908,7 @@ survey_resolution() {
             --architecture "${profile}=${architecture}"
         )
     done < <(jq -r '.profiles[] | [.profile, .profile_revision_sha256, .target_architecture] | @tsv' "$input_manifest")
+    command+=(--native-oracle-input-dir "$native_oracle_input_dir" --export-id "$export_id")
     command+=(--output-dir "$output")
 
     local outcome="${SURVEY_STAGING}/outcome.json"
@@ -2864,6 +2909,10 @@ case "${1:-}" in
     export-native-oracle-inputs)
         [[ $# -eq 5 ]] || usage
         export_native_oracle_inputs "$2" "$3" "$4" "$5"
+        ;;
+    release-native-oracle-inputs)
+        [[ $# -eq 3 ]] || usage
+        release_native_oracle_inputs "$2" "$3"
         ;;
     survey-resolution)
         shift
