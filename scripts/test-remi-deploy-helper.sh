@@ -1635,6 +1635,7 @@ test_resolution_survey_recovers_after_transport_failure() {
 set -euo pipefail
 SURVEY_ID="$1" EXPORT_ID="$2" fixture_root="$3" source_report="$4" source_status="$5" failed_copy="$6"
 helper_source="$7"
+OPERATION=survey
 RUNNER_TEMP="$PWD" GITHUB_OUTPUT="$PWD/outputs"
 key="$PWD/key" known_hosts="$PWD/known-hosts"
 helper="$PWD/helper" current_helper="$PWD/current-helper"
@@ -1694,7 +1695,10 @@ PY
         (cd "$runner" && bash "$script" "$survey_id" "$export_id" "$fake_root" "$report" \
             "$helper_status" "$failed_copy" "$helper_source") \
             >"$runner/workflow.stdout" 2>"$runner/workflow.stderr" || status=$?
-        [[ "$status" == 255 ]] || fail "post-helper copy failure lost its original exit status"
+        if [[ "$status" != 255 ]]; then
+            cat "$runner/workflow.stderr" >&2
+            fail "post-helper copy failure lost its original exit status: expected 255, got $status"
+        fi
         [[ "$(cat "$runner/events")" == "$(printf 'helper_completed\n%s_copy_failed\nrecovery_reconnected' "$failed_copy")" ]] ||
             fail "recovery did not reconnect after the completed helper's copy failure"
         if [[ "$failed_copy" == restore ]]; then
@@ -1920,6 +1924,7 @@ test_resolution_survey_workflow_recovers_without_a_report() {
 #!/usr/bin/env bash
 set -euo pipefail
 SURVEY_ID="$1" EXPORT_ID="$2" source_recovery="$3" export_status="$4" fixture_root="$5"
+OPERATION=survey
 RUNNER_TEMP="$PWD" GITHUB_OUTPUT="$PWD/outputs"
 REMI_SSH_KEY_PATH="$PWD/key" REMI_SSH_KNOWN_HOSTS_PATH="$PWD/known-hosts"
 REMI_SSH_CONFIG="$PWD/config"
@@ -1997,7 +2002,10 @@ PY
             [[ ! -s "$runner/workflow.stderr" ]] || fail "empty failure stderr fabricated a diagnostic"
         fi
         [[ "$status" == 1 ]] || fail "workflow recovery changed original failure status"
-        [[ ! -e "$runner/key" && ! -e "$runner/known-hosts" ]]
+        if [[ -e "$runner/key" || -e "$runner/known-hosts" ]]; then
+            cat "$runner/workflow.stderr" >&2
+            fail "workflow recovery left SSH credentials after cleanup"
+        fi
         jq -e '.outcome == "helper_failed" and .workflow_status == 1
             and ((.message // "") | contains("/private/") | not)' "$runner/resolution-survey-helper.json" >/dev/null
         if [[ "$diagnostic" == empty || "$diagnostic" == missing || "$diagnostic" == malformed ]]; then

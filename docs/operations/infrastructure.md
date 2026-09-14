@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-09-14
-revision: 105
-summary: Retain exact export-owned catalogs across background refresh and verify diagnostic selection before service stop, preserving protected deployment and restoration contracts
+revision: 106
+summary: Retain exact export-owned catalogs across background refresh and verify diagnostic selection before service stop, preserving protected deployment and restoration contracts plus diagnostics-only recovery of a retained failed survey
 ---
 
 # Infrastructure Overview
@@ -366,9 +366,10 @@ workflow.
   missing lanes, digest drift, and survey substitution fail closed.
 - The protected `survey-remi-resolution` workflow consumes one successful
   `produce-remi-native-oracles` run and resolves its export and deployment
-  runs from its canonical assembled three-lane evidence. The oracle run head
-  must equal the survey's own exact current protected-main operator commit, so
-  a historical producer rerun is not admissible. It independently
+  runs from its canonical assembled three-lane evidence. A fresh survey
+  requires the oracle run head to equal the survey's own exact current
+  protected-main operator commit, so a historical producer rerun is not
+  admissible outside retained recovery. It independently
   authenticates the assembled artifact archive and every referenced strict lane
   archive, including a retained same-export lane from an earlier successful
   producer run, before reopening every package and resolution oracle. Their
@@ -389,8 +390,10 @@ workflow.
   installs only those root-fetched bytes after matching the requested digest.
   The SSH caller's staged file is comparison input, never installation authority.
   Historical reruns and any concurrent main advance therefore fail before host
-  mutation instead of using stale workflow, verifier, or helper authority. The
-  workflow then calls the new action. The
+  mutation instead of using stale workflow, verifier, or helper authority.
+  Retained recovery is the one admitted older chain commit, and it never
+  revives stale dispatch authority: its own workflow revision and helper bytes
+  are still exact current main. A fresh survey then calls the new action. The
   helper arms cleanup as soon as private root-owned staging exists,
   authenticates every archive member there,
   verifies the export-owned retained input set with `native-oracle-retention
@@ -511,6 +514,37 @@ workflow.
   authenticated artifact ZIP is removed after extraction and each extracted
   lane member is removed after it enters the transport. The workflow has no refresh,
   conversion, proof, promotion, activation, or publication authority.
+  The same workflow dispatches `operation: recover` with
+  `retained_survey_run_id` and `retained_survey_run_attempt` (default `1`) to
+  retrieve already-retained evidence for one exact original survey attempt
+  instead of producing a survey. The retained binding is the completed
+  original `workflow_dispatch` failure or `cancelled` survey run itself, at
+  that exact attempt, dispatched from `main` with this workflow's path and
+  repository. The request validator rejects repeated JSON keys, nonfinite
+  constants, symlinks, oversized metadata, and identity, state, branch, path,
+  or repository mismatches before SSH access. An attempt that never reached
+  retained input is not recoverable. Recovery reconstructs the original
+  survey identity and manifest from the full authenticated
+  native/export/deployment artifacts using the original run's `head_sha` as
+  the chain commit that the oracle run head must equal; that chain commit must
+  itself remain an ancestor of freshly fetched protected `main`. Recovery
+  stages the same fixed helper bytes and reuses the fixed
+  evidence-export action above and `verify-recovery` reader, then
+  publishes a separate recovery artifact, timing record, and schema-1 operator
+  receipt (`kind: retained_resolution_survey_recovery`,
+  `authority: diagnostic_only`, `service_operation: none`,
+  `original_survey_outcome: unchanged`) rather than a survey transport.
+  Recovery never uploads the input transport, never invokes
+  `survey-resolution`, and never stops or starts Remi; its cleanup removes
+  only its own staged helper and leaves the original run's retained
+  transport paths in place. Absent or unbound retained input is rejected
+  rather than reported as a successful recovery, and the original failed
+  conclusion is preserved rather than retried.
+  Recovery requests and receipts are schema 1 with no persisted schema or
+  rebuild change. Recovered evidence keeps diagnostic-only authority and never
+  substitutes for a fresh survey, `verify-output`, or promotion validation;
+  hosted recovery replay is not yet production proof; production remains
+  pinned to `f1413498` while the native and survey chain runs.
 - Production conversion measurements use the protected
   `remi-conversion-benchmark` workflow. Dispatch names one successful
   `deploy-remi-candidate` run, a public profile, an immutable package key, and

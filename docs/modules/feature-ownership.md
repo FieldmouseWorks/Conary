@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-09-13
-revision: 117
-summary: Route features to owned paths and proof, including shared Remi deployment completion and bounded repopulation evidence.
+last_updated: 2026-09-14
+revision: 118
+summary: Route features to owned paths and proof, including authenticated retained-survey requests and workflow recovery.
 ---
 
 # Feature Ownership And Interaction Gates
@@ -503,6 +503,9 @@ release schema bindings.
 `scripts/test-native-oracle-input-transport.py`;
 `scripts/remi-resolution-survey-transport.py`;
 `scripts/test-remi-resolution-survey-transport.py`;
+`scripts/remi-survey-request.py`;
+`scripts/test-remi-survey-request.py`;
+`scripts/test-remi-survey-workflow.py`;
 `.github/workflows/export-remi-native-oracle-inputs.yml`;
 `.github/workflows/produce-remi-native-oracles.yml`;
 `.github/workflows/survey-remi-resolution.yml`;
@@ -520,6 +523,8 @@ release schema bindings.
 `python3 scripts/test-verify-native-oracle-producer.py`;
 `python3 scripts/test-produce-native-oracle-lane.py`;
 `python3 scripts/test-remi-resolution-survey-transport.py`;
+`python3 scripts/test-remi-survey-request.py`;
+`python3 scripts/test-remi-survey-workflow.py`;
 `bash scripts/check-release-matrix.sh`.
 
 **Interaction gate:** `cargo test -p remi promotion` when promotion-proof or
