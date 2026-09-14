@@ -85,6 +85,7 @@ pub async fn materialize_native_oracle_inputs(
     config: &NativeOracleInputConfig,
 ) -> Result<NativeOracleInputOutcome> {
     retention::validate_export_id(&config.export_id)?;
+    retention::require_unused_export(&config.db_path, &config.export_id)?;
     validate_candidate_selections(&config.candidates)?;
     let initial_candidates = capture_current_candidates(&config.db_path, &config.candidates)?;
 

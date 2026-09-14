@@ -328,3 +328,49 @@ fn export_identity_is_a_bounded_storage_component() {
     assert!(validate_export_id(&"a".repeat(129)).is_err());
     validate_export_id("slice6-100-200-1").unwrap();
 }
+
+#[tokio::test]
+async fn release_uses_the_stored_set_cardinality_instead_of_current_public_profiles() {
+    let fixture = ActiveCatalogFixture::new();
+    let temp = tempfile::tempdir().unwrap();
+    let input = temp.path().join("input");
+    let retained = export(&fixture, &input, "current").await;
+    let conn = fixture.connection();
+    // A retained set from a different public-profile catalog still has an
+    // exhaustive, immutable owner count and exactly derived member pin IDs.
+    let manifest_sha256 = "e".repeat(64);
+    for profile in &retained.profiles[..2] {
+        let mut pin = RemiProfileRevisionPin::find(&conn, &pin_id("current", &profile.profile))
+            .unwrap()
+            .unwrap();
+        pin.pin_id = pin_id("historical", &profile.profile);
+        pin.owner_identity = owner("historical", &manifest_sha256, 2).unwrap();
+        pin.insert(&conn).unwrap();
+    }
+    let released =
+        release_native_oracle_input_retention(fixture.db_path(), "historical", &manifest_sha256)
+            .unwrap();
+    assert_eq!(released.released_profiles, 2);
+    require_pin_set(&conn, &retained).unwrap();
+}
+
+#[tokio::test]
+async fn duplicate_export_identity_is_refused_before_any_new_bundle() {
+    let fixture = ActiveCatalogFixture::new();
+    let temp = tempfile::tempdir().unwrap();
+    let input = temp.path().join("input");
+    let retained = export(&fixture, &input, "export-one").await;
+    let new_output = temp.path().join("must-not-exist");
+    let error = materialize_native_oracle_inputs(&NativeOracleInputConfig {
+        export_id: "export-one".to_string(),
+        db_path: fixture.db_path().to_path_buf(),
+        catalog_dir: fixture.catalog_dir().to_path_buf(),
+        candidates: retained.selections(),
+        output_dir: new_output.clone(),
+    })
+    .await
+    .unwrap_err();
+    assert!(error.to_string().contains("already owns retained catalogs"));
+    assert!(!new_output.exists());
+    require_pin_set(&fixture.connection(), &retained).unwrap();
+}

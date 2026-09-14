@@ -800,7 +800,10 @@ candidate recheck must match the initial candidate records before success. The
 required `--export-id` owns one complete set of durable `Work` revision pins,
 inserted in the same immediate transaction as that final check before reader
 pins are released. Pin ownership binds the export identity and canonical input
-manifest digest. A conflict rolls back the entire set. Runtime-session recovery
+manifest digest and complete set size. Release validates the stored set even
+if a later binary changes its public profile catalog. An already-retained export
+identity is refused before new output. A conflict rolls back the entire set.
+Runtime-session recovery
 preserves work pins, and ordinary refresh can supersede the current candidates
 without allowing GC to remove the exported profile/source closure. The existing
 metadata bundle and operational SQLite schemas are unchanged.
@@ -821,7 +824,10 @@ requires no artifact bytes, so damaged or lost exports can still be explicitly
 cleaned up. It deletes no evidence or catalog files and changes no active or
 current-candidate pointer; ordinary typed GC determines later reachability.
 No elapsed-time guess expires these pins. Operators must explicitly release
-abandoned exports as well as completed ones.
+abandoned exports as well as completed ones. If the final candidate fence fails
+after the metadata bundle was written, that create-only bundle remains failure
+evidence without retained authority. Inspection refuses it; a new attempt uses
+a new export identity and directory.
 
 This bundle supplies input bytes only. It does not produce or compare
 `NativeParityOracleV1` or `NativeResolutionOracleV1`, run conversion, or grant

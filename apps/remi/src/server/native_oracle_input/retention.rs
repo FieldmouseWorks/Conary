@@ -55,12 +55,40 @@ pub(super) fn validate_export_id(export_id: &str) -> Result<()> {
     Ok(())
 }
 
-fn owner(export_id: &str, manifest_sha256: &str) -> Result<String> {
+fn owner_prefix(export_id: &str, manifest_sha256: &str) -> Result<String> {
     validate_export_id(export_id)?;
     super::validate_sha256(manifest_sha256)?;
     Ok(format!(
-        "native-oracle-input-v1:{export_id}:{manifest_sha256}"
+        "native-oracle-input-v1:{export_id}:{manifest_sha256}:"
     ))
+}
+
+fn owner(export_id: &str, manifest_sha256: &str, profiles: usize) -> Result<String> {
+    ensure!(
+        profiles > 0,
+        "native-oracle retention set must not be empty"
+    );
+    let profiles =
+        u32::try_from(profiles).context("native-oracle retention profile count overflow")?;
+    Ok(format!(
+        "{}{profiles}",
+        owner_prefix(export_id, manifest_sha256)?
+    ))
+}
+
+pub(super) fn require_unused_export(db_path: &Path, export_id: &str) -> Result<()> {
+    validate_export_id(export_id)?;
+    let conn = open_runtime_db(db_path)?;
+    let owned = RemiProfileRevisionPin::discover_owner_prefix(
+        &conn,
+        RemiRevisionPinKind::Work,
+        &format!("native-oracle-input-v1:{export_id}:"),
+    )?;
+    ensure!(
+        owned.is_empty(),
+        "native-oracle export identity already owns retained catalogs; use a new export identity"
+    );
+    Ok(())
 }
 
 fn pin_id(export_id: &str, profile: &str) -> String {
@@ -99,7 +127,11 @@ pub(super) fn retain_export(
     initial: &[conary_core::repository::ProfileSyncCandidate],
 ) -> Result<NativeOracleInputRetention> {
     let retained = receipt(export_id, manifest)?;
-    let owner_identity = owner(export_id, &retained.input_manifest_sha256)?;
+    let owner_identity = owner(
+        export_id,
+        &retained.input_manifest_sha256,
+        retained.profiles.len(),
+    )?;
     let selections = retained.selections();
     let pinned_at = i64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs())?;
     let conn = open_runtime_db(db_path)?;
@@ -138,7 +170,11 @@ impl NativeOracleInputRetention {
 }
 
 fn require_pin_set(conn: &Connection, retained: &NativeOracleInputRetention) -> Result<()> {
-    let owner_identity = owner(&retained.export_id, &retained.input_manifest_sha256)?;
+    let owner_identity = owner(
+        &retained.export_id,
+        &retained.input_manifest_sha256,
+        retained.profiles.len(),
+    )?;
     for profile in &retained.profiles {
         let pin =
             RemiProfileRevisionPin::find(conn, &pin_id(&retained.export_id, &profile.profile))?
@@ -202,23 +238,37 @@ pub fn release_native_oracle_input_retention(
     export_id: &str,
     input_manifest_sha256: &str,
 ) -> Result<NativeOracleInputRelease> {
-    let owner_identity = owner(export_id, input_manifest_sha256)?;
+    let prefix = owner_prefix(export_id, input_manifest_sha256)?;
     let conn = open_runtime_db(db_path)?;
     let tx = Transaction::new_unchecked(&conn, TransactionBehavior::Immediate)?;
-    let profiles = conary_core::repository::supported_profiles::public_profiles();
-    for profile in profiles {
-        let id = pin_id(export_id, profile.id());
-        let pin = RemiProfileRevisionPin::find(&tx, &id)?
-            .context("native-oracle export retention is absent, partial, or already released")?;
+    let pins =
+        RemiProfileRevisionPin::discover_owner_prefix(&tx, RemiRevisionPinKind::Work, &prefix)?;
+    let first = pins
+        .first()
+        .context("native-oracle export retention is absent, partial, or already released")?;
+    let count = first
+        .owner_identity
+        .strip_prefix(&prefix)
+        .context("native-oracle retention owner namespace changed")?
+        .parse::<u32>()
+        .context("invalid native-oracle retention set count")?;
+    let owner_identity = owner(export_id, input_manifest_sha256, usize::try_from(count)?)?;
+    ensure!(
+        pins.len() == usize::try_from(count)?,
+        "native-oracle export retention is partial or has unexpected members"
+    );
+    let mut profiles = std::collections::BTreeSet::new();
+    for pin in &pins {
         ensure!(
-            pin.source_profile == profile.id()
+            pin.pin_id == pin_id(export_id, &pin.source_profile)
                 && pin.owner_kind == RemiRevisionPinKind::Work
                 && pin.owner_identity == owner_identity
-                && pin.runtime_session_id.is_none(),
+                && pin.runtime_session_id.is_none()
+                && profiles.insert(pin.source_profile.clone()),
             "native-oracle release does not match its exact export owner"
         );
         ensure!(
-            RemiProfileRevisionPin::release(&tx, &id)?,
+            RemiProfileRevisionPin::release(&tx, &pin.pin_id)?,
             "native-oracle pin disappeared during release"
         );
     }
@@ -228,7 +278,7 @@ pub fn release_native_oracle_input_retention(
         schema_version: 1,
         export_id: export_id.to_string(),
         input_manifest_sha256: input_manifest_sha256.to_string(),
-        released_profiles: profiles.len(),
+        released_profiles: pins.len(),
     })
 }
 
