@@ -7,11 +7,21 @@ pub mod common;
 
 use conary_core::db::{
     self,
-    models::{Trove, TroveType},
+    models::{ProvideEntry, Trove, TroveType},
+};
+use conary_core::repository::dependency_model::{
+    CapabilityProvenance, ProvideArchitectureQualifier, ProvideVersionRelation, ProvidedCapability,
+    RepositoryCapabilityKind, SourcePackageFormat,
 };
 use conary_core::repository::versioning::VersionScheme;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+
+fn tested_binary() -> PathBuf {
+    std::env::var_os("CONARY_INFO_TEST_BINARY")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_BIN_EXE_conary")))
+}
 
 fn capture(binary: &Path, db_path: &str, package: &str, tty: bool, no_color: bool) -> Output {
     let mut command = if tty {
@@ -100,13 +110,7 @@ fn selected_package_facts_survive_terminal_pipe_and_no_color_without_mutation() 
     let mut reference = None;
     for (tty, no_color) in [(false, false), (false, true), (true, false), (true, true)] {
         let text = frame(
-            &capture(
-                Path::new(env!("CARGO_BIN_EXE_conary")),
-                &db_path,
-                "nginx",
-                tty,
-                no_color,
-            ),
+            &capture(&tested_binary(), &db_path, "nginx", tty, no_color),
             tty,
             no_color,
         );
@@ -121,7 +125,7 @@ fn selected_package_facts_survive_terminal_pipe_and_no_color_without_mutation() 
             "  Selection reason: explicitly selected fixture\n  Install reason: explicit\n  Pinned: yes\n",
             "  File records: 6\n  Payload size: 1026048 bytes\n",
             "Dependencies (1):\n",
-            "Provides (2):\n",
+            "Provides (2):\n  Capability: nginx\n  Kind: package\n  Capability version: 1.24.0\n  Capability version relation: =\n  Capability version scheme: conary\n  Architecture qualifier: implicit\n  Provenance: exact-identity\n\n  Capability: webserver\n  Kind: package\n  Capability version: -\n  Capability version relation: -\n  Capability version scheme: conary\n  Architecture qualifier: implicit\n  Provenance: exact-identity\n",
             "Components (2):\n  Component: :config\n  Installed: no\n  Component: :runtime\n  Installed: yes\n",
         ] {
             assert!(text.contains(expected), "missing {expected:?}: {text}");
@@ -132,9 +136,6 @@ fn selected_package_facts_survive_terminal_pipe_and_no_color_without_mutation() 
             conary_core::db::models::InstalledRequirementAtom::find_by_trove(&conn, id).unwrap()
         {
             assert!(text.contains(&format!("  {}\n", dependency.to_typed_string())));
-        }
-        for provide in conary_core::db::models::ProvideEntry::find_by_trove(&conn, id).unwrap() {
-            assert!(text.contains(&format!("  {}\n", provide.to_typed_string())));
         }
         drop(conn);
         assert_eq!(common::database_snapshot(&db_path), before);
@@ -163,13 +164,7 @@ fn missing_observations_and_recorded_controls_remain_explicit() {
     let before = common::database_snapshot(&db_path);
     for (tty, no_color) in [(false, false), (false, true), (true, false), (true, true)] {
         let text = frame(
-            &capture(
-                Path::new(env!("CARGO_BIN_EXE_conary")),
-                &db_path,
-                "minimal-info",
-                tty,
-                no_color,
-            ),
+            &capture(&tested_binary(), &db_path, "minimal-info", tty, no_color),
             tty,
             no_color,
         );
@@ -206,13 +201,7 @@ fn late_component_read_failure_emits_no_partial_detail_frame() {
     conn.execute_batch("PRAGMA ignore_check_constraints = ON; UPDATE components SET is_installed = 'invalid-boolean' WHERE name = 'config';").unwrap();
     drop(conn);
     let before = common::database_snapshot(&db_path);
-    let output = capture(
-        Path::new(env!("CARGO_BIN_EXE_conary")),
-        &db_path,
-        "nginx",
-        false,
-        true,
-    );
+    let output = capture(&tested_binary(), &db_path, "nginx", false, true);
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("is_installed"), "{stderr}");
@@ -222,4 +211,97 @@ fn late_component_read_failure_emits_no_partial_detail_frame() {
         String::from_utf8_lossy(&output.stdout)
     );
     assert_eq!(common::database_snapshot(&db_path), before);
+}
+
+#[test]
+fn provide_contracts_keep_versions_qualifiers_and_provenance_in_every_output_mode() {
+    let (_temp, db_path) = common::setup_command_test_db();
+    let conn = db::open(&db_path).unwrap();
+    let id = Trove::find_by_name(&conn, "nginx").unwrap()[0].id.unwrap();
+    ProvideEntry::delete_by_trove(&conn, id).unwrap();
+    let provides = [
+        ProvidedCapability {
+            kind: RepositoryCapabilityKind::PackageName,
+            name: "nginx".into(),
+            version: Some("1.24.0".into()),
+            version_relation: Some(ProvideVersionRelation::Equal),
+            version_scheme: VersionScheme::Conary,
+            architecture_qualifier: ProvideArchitectureQualifier::Implicit,
+            provenance: CapabilityProvenance::ExactIdentity,
+        },
+        ProvidedCapability {
+            kind: RepositoryCapabilityKind::Virtual,
+            name: "abi-virtual".into(),
+            version: Some("2:1.0-3".into()),
+            version_relation: Some(ProvideVersionRelation::Equal),
+            version_scheme: VersionScheme::Debian,
+            architecture_qualifier: ProvideArchitectureQualifier::Exact("native".into()),
+            provenance: CapabilityProvenance::SourceDeclared {
+                format: SourcePackageFormat::Debian,
+                record_index: 7,
+            },
+        },
+        ProvidedCapability {
+            kind: RepositoryCapabilityKind::Virtual,
+            name: "wildcard-abi".into(),
+            version: None,
+            version_relation: None,
+            version_scheme: VersionScheme::Debian,
+            architecture_qualifier: ProvideArchitectureQualifier::Any,
+            provenance: CapabilityProvenance::SourceDeclared {
+                format: SourcePackageFormat::Debian,
+                record_index: 0,
+            },
+        },
+        ProvidedCapability::payload_file(SourcePackageFormat::Rpm, "/usr/bin/fixture"),
+        ProvidedCapability::promised_path(SourcePackageFormat::Rpm, "/run/fixture"),
+        ProvidedCapability {
+            kind: RepositoryCapabilityKind::Generic,
+            name: "control\ncap\u{1b}[31m".into(),
+            version: Some("2:3.0~rc1-4".into()),
+            version_relation: Some(ProvideVersionRelation::GreaterOrEqual),
+            version_scheme: VersionScheme::Rpm,
+            architecture_qualifier: ProvideArchitectureQualifier::Implicit,
+            provenance: CapabilityProvenance::AuthorDeclared,
+        },
+    ];
+    for provide in &provides {
+        provide.validate().unwrap();
+        ProvideEntry::from_declared(id, provide)
+            .insert(&conn)
+            .unwrap();
+    }
+    drop(conn);
+    let before = common::database_snapshot(&db_path);
+    let mut reference = None;
+    for (tty, no_color) in [(false, false), (false, true), (true, false), (true, true)] {
+        let text = frame(
+            &capture(&tested_binary(), &db_path, "nginx", tty, no_color),
+            tty,
+            no_color,
+        );
+        if let Some(reference) = &reference {
+            assert_eq!(&text, reference);
+        }
+        let expected_records = [
+            "  Capability: nginx\n  Kind: package\n  Capability version: 1.24.0\n  Capability version relation: =\n  Capability version scheme: conary\n  Architecture qualifier: implicit\n  Provenance: exact-identity\n",
+            "  Capability: abi-virtual\n  Kind: virtual\n  Capability version: 2:1.0-3\n  Capability version relation: =\n  Capability version scheme: debian\n  Architecture qualifier: exact\n  Capability architecture: native\n  Provenance: source-declared\n  Source format: deb\n  Source record index: 7\n",
+            "  Capability: wildcard-abi\n  Kind: virtual\n  Capability version: -\n  Capability version relation: -\n  Capability version scheme: debian\n  Architecture qualifier: any\n  Provenance: source-declared\n  Source format: deb\n  Source record index: 0\n",
+            "  Capability: /usr/bin/fixture\n  Kind: file\n  Capability version: -\n  Capability version relation: -\n  Capability version scheme: rpm\n  Architecture qualifier: implicit\n  Provenance: source-derived-file\n  Source format: rpm\n",
+            "  Capability: /run/fixture\n  Kind: file\n  Capability version: -\n  Capability version relation: -\n  Capability version scheme: rpm\n  Architecture qualifier: implicit\n  Provenance: source-promised-path\n  Source format: rpm\n",
+            "  Capability: control\\ncap\\u{1b}[31m\n  Kind: generic\n  Capability version: 2:3.0~rc1-4\n  Capability version relation: >=\n  Capability version scheme: rpm\n  Architecture qualifier: implicit\n  Provenance: author-declared\n",
+        ];
+        let expected_section = format!("Provides (6):\n{}", expected_records.join("\n"));
+        assert!(
+            text.contains(&expected_section),
+            "provide records differ from persisted insertion order: {text}"
+        );
+        assert_eq!(common::database_snapshot(&db_path), before);
+        retain(
+            &format!("installed-provides-tty-{tty}-no-color-{no_color}.txt"),
+            &text,
+            &db_path,
+        );
+        reference = Some(text);
+    }
 }

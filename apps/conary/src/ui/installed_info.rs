@@ -121,12 +121,7 @@ fn detail_lines(info: &InstalledPackageInfo<'_>) -> Vec<String> {
         .map(InstalledRequirementAtom::to_typed_string)
         .collect();
     lines.extend(relation_section("Dependencies", &dependencies));
-    let provides: Vec<String> = info
-        .provides
-        .iter()
-        .map(ProvideEntry::to_typed_string)
-        .collect();
-    lines.extend(relation_section("Provides", &provides));
+    lines.extend(super::installed_provides::section(info.provides));
     lines.extend(component_section(info.components));
     lines
 }
@@ -277,10 +272,13 @@ mod tests {
             section("Dependencies (2):")[..2],
             ["  libc6>= 2.36", "  libc6>= 2.36"]
         );
-        assert_eq!(
-            section("Provides (2):")[..2],
-            ["  nginx", "  virtual(httpd)"]
-        );
+        let provides = section("Provides (2):");
+        assert_eq!(provides[..2], ["  Capability: nginx", "  Kind: package"]);
+        let second = provides
+            .iter()
+            .position(|line| line == "  Capability: httpd")
+            .unwrap();
+        assert_eq!(provides[second + 1], "  Kind: virtual");
         assert_eq!(
             section("Components (2):")[..4],
             [

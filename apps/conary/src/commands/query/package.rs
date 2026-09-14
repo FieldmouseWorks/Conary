@@ -178,7 +178,9 @@ fn show_package_info(
     let payload = conary_core::db::models::PackagePayloadOwnership::load(conn, trove_id)?;
     let dependencies =
         conary_core::db::models::InstalledRequirementAtom::find_by_trove(conn, trove_id)?;
-    let provides = conary_core::db::models::ProvideEntry::find_by_trove(conn, trove_id)?;
+    let mut provides = conary_core::db::models::ProvideEntry::find_by_trove(conn, trove_id)?;
+    // Persisted IDs establish display order without sorting shared resolver reads.
+    provides.sort_by_key(|provide| provide.id);
     let components = conary_core::db::models::Component::find_by_trove(conn, trove_id)?;
     let payload_bytes = payload
         .entries()

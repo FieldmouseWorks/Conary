@@ -74,7 +74,7 @@ pub(crate) fn visible(value: &str) -> String {
 /// Display label for the source ecosystem a command observed. The observation is
 /// the sole authority for this column; an absent observation stays visibly
 /// distinct from every real format.
-fn source_format_label(observed: Option<SourcePackageFormat>) -> String {
+pub(super) fn source_format_label(observed: Option<SourcePackageFormat>) -> String {
     match observed {
         Some(SourcePackageFormat::Rpm) => "rpm",
         Some(SourcePackageFormat::Debian) => "deb",

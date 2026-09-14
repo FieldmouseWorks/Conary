@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-09-13
-revision: 41
-summary: Daily-driver CLI source identities, fallible file-owner queries, installed details, grouped results, history, and typed native refusals
+revision: 44
+summary: Daily-driver CLI source identities, typed installed capability details, fallible file-owner queries, grouped results, history, and native refusals
 ---
 
 # Daily-Driver UX Matrix
@@ -670,33 +670,59 @@ Typed dependencies, provides, and component observations retain their input
 order and multiplicity. Component installation state uses explicit yes/no
 fields. Recorded controls are escaped inside fields and relation lines.
 
+The `Provides` section is owned by `apps/conary/src/ui/installed_provides.rs`.
+Each record reports its exact capability name and typed kind, separate provider
+version and relation (`-` when absent), version grammar, architecture qualifier,
+and provenance. Capability-specific version, grammar, and architecture labels
+keep these observations separate from the package fields. An exact qualifier keeps its literal architecture token: an
+exact `native` token is distinct from implicit and wildcard qualifiers. Source
+provenance reports its recorded source format and, for a declaration, its exact
+source record index. Rendering does not infer a source format from the package
+or capability version grammar, renumber source records, or turn promised paths
+into shipped-file observations. The installed-info command orders its loaded
+records by ascending persisted ID before rendering; shared provides queries
+retain their existing read behavior. The renderer preserves that insertion
+order and multiplicity without sorting by capability or source record index.
+
+`cargo test -p conary --lib ui::installed_provides` proves field preservation,
+controls, missing observations, qualifier distinctions, and provenance.
+`cargo test -p conary --test cli_installed_info` captures literal versioned,
+unversioned, qualified, declared, derived-file, and promised-path records in
+TTY, pipe, and `NO_COLOR` modes while proving the database remains unchanged.
+Its complete-section assertion checks the relative order of all six records
+against insertion order, including capability names and source record indexes
+that would sort differently.
+
 This hard-cuts the former hand-padded detail labels and debug enum output.
 Installed-list and file-list layouts, installed variant selection, repository
 fallback, and persisted authority are unchanged.
 
 The frames below are captured from actual `list --info` executables against the
 same disposable database fixture, with a fixed recorded installation timestamp.
+They compare the preceding installed-info layout with the complete recorded
+capability fields.
 
 Before:
 
 ```text
-Name        : nginx
-Version     : 1.24.0
-  Release: 7
-Type        : Package
-Authority   : conary-owned
-Source      : repository
-Profile     : fedora-44
-Versioning  : rpm
-Repository  : recorded-repository
-Architecture: x86_64
-Description : High performance web server
-Installed   : 2026-01-01 00:00:00
-Reason      : explicitly selected fixture
-Install Type: Explicit
-Pinned      : yes
-Files       : 6
-Size        : 1002.00 KB
+Installed package:
+  Name: nginx
+  Version: 1.24.0
+  CCS release: 7
+  Type: package
+  Authority: conary-owned
+  Install source: repository
+  Source profile: fedora-44
+  Version scheme: rpm
+  Repository: recorded-repository
+  Architecture: x86_64
+  Description: High performance web server
+  Installed: 2026-01-01 00:00:00
+  Selection reason: explicitly selected fixture
+  Install reason: explicit
+  Pinned: yes
+  File records: 6
+  Payload size: 1026048 bytes
 
 Dependencies (1):
   openssl>= 3.0.0
@@ -706,8 +732,10 @@ Provides (2):
   webserver
 
 Components (2):
-  :config [not installed]
-  :runtime
+  Component: :config
+  Installed: no
+  Component: :runtime
+  Installed: yes
 ```
 
 After:
@@ -736,8 +764,21 @@ Dependencies (1):
   openssl>= 3.0.0
 
 Provides (2):
-  nginx
-  webserver
+  Capability: nginx
+  Kind: package
+  Capability version: 1.24.0
+  Capability version relation: =
+  Capability version scheme: conary
+  Architecture qualifier: implicit
+  Provenance: exact-identity
+
+  Capability: webserver
+  Kind: package
+  Capability version: -
+  Capability version relation: -
+  Capability version scheme: conary
+  Architecture qualifier: implicit
+  Provenance: exact-identity
 
 Components (2):
   Component: :config
