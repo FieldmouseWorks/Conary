@@ -41,7 +41,7 @@ commands = [
     "conary system repository-takeover --rollback --yes",
     "test \"$(sha256sum /var/lib/eopkg/info/repos | awk '{print $1}')\" = \"$(cat /tmp/repos-before)\"",
     "conary system repository-takeover --manifest /tmp/solus-polaris-takeover.json --preview-sha256 8f1d5c9d99a6cafe94a1299e466a0bdaa0edda1da3d42f238b1128f67e0fdcec --yes",
-    "conary repo sync solus-polaris --force | grep -Fq 'Synchronized 11907 packages'",
+    "conary repo sync solus-polaris --force | grep -Fq 'Package records synchronized: 11907'",
     "eopkg --yes install jq",
     "conary system adopt jq --package-manager eopkg --full --dry-run | grep -Fq 'jq 1.8.2-13 [x86_64]'",
     "conary system adopt jq --package-manager eopkg --full",

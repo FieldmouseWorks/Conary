@@ -126,7 +126,7 @@ conary = "repo sync ${REPO_NAME} --force"
 
 [test.step.assert]
 exit_code = 0
-stdout_contains_any = ["[ok]", "Synchronized", "packages"]
+stdout_contains = "Package records synchronized:"
 
 [[test.step]]
 conary = "search ${repo_install_pkg}"
