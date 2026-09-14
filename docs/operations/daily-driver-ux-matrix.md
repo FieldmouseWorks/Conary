@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-09-14
-revision: 46
-summary: Daily-driver CLI initialization and recovery guidance, source identities, typed installed details, grouped results, history, and native refusals
+revision: 48
+summary: Daily-driver CLI initialization, per-source synchronization and retry guidance, source identities, typed details, grouped results, and native refusals
 ---
 
 # Daily-Driver UX Matrix
@@ -19,6 +19,7 @@ takeover, generation activation, or conaryd, the CLI should say that directly.
 | Command | Success Route | Refusal Or Unsupported Route | Operator Guidance Phrase | Focused Test Target |
 |---|---|---|---|---|
 | `system init` | Initializes the selected database and configures built-in source feeds and typed host interfaces | Database initialization failure or typed obsolete-schema refusal | Sync the same selected database; rebuild disposable retired state only with explicit discard and apply flags | `cargo test -p conary --test cli_initialization` |
+| `repo sync [name]` | Reports each attempted source and its synchronized package-record count; preserves successful sources in a partial failure | Retains typed causes per failed source; unknown source names identify the selected database | Resolve the reported causes, then retry only failed sources against the same database | `cargo test -p conary --test cli_repository_sync` |
 | `install <pkg>` | Conary-owned package install or dry-run plan | Adopted package already belongs to native authority | `conary system adopt --refresh` before retry; `conary install <pkg> --ownership takeover --yes` for explicit package takeover; `conary system takeover --yes` for generation-level takeover | `cargo test -p conary --test cli_daily_ux adopted_install_refusal_routes_to_refresh_and_takeover` |
 | `install <pkg> --dry-run` | Reports a would-be dependency-to-explicit promotion without changing installed state, even with `--yes` | Ambiguous installed variants require exact selection | Use `--version` and `--arch` to select the intended installed variant | `cargo test -p conary --lib commands::install::command::tests` |
 | `remove <pkg>` | Conary-owned package removal; Debian residual conffiles are preserved | Adopted package removal without `--purge` | Use `--purge` to delete residual config state or externally owned adopted files; use `conary system unadopt <pkg> --yes` to stop adopted tracking without deleting files | `cargo test -p conary --test cli_daily_ux adopted_remove_refusal_routes_to_unadopt_or_purge` |
@@ -270,6 +271,55 @@ The system-alias regression creates a retired system database on private
 `/var/lib` tmpfs in a separate mount namespace, then proves all four refusal
 frames and byte-preserved database state. It requires usable user/mount
 namespaces or an isolated privileged invocation of that exact test.
+
+## Repository Synchronization
+
+`commands/repo/sync.rs` owns source selection and the sequential sync attempts.
+`ui/repository/sync.rs` owns the shared transient progress adapter and durable
+result frame; `ui/diagnostics/repository.rs` renders retained typed failures.
+The command keeps every original core error and completed result, including
+when a later attempt cannot open the database. Core repository code remains
+the authority for refresh age, trust, metadata validation, and publication.
+
+Durable results stay on stdout. A partial failure still reports successful
+sources and returns a nonzero exit status; its cause and retry guidance stay
+on stderr:
+
+```text
+Repository synchronization:
+  Database: <fixture>/conary.db
+[fail]     unavailable
+[ok]       available
+  Package records synchronized: 1
+error: Repository metadata synchronization failed.
+  Database: <fixture>/conary.db
+  Repository: unavailable
+  HTTP status: 404
+  Metadata URL: http://127.0.0.1:<port>/unavailable/metadata.json
+note: After resolving the reported causes, retry the failed repositories:
+note: Run: conary repo sync --force --db-path='<fixture>/conary.db' -- 'unavailable'
+```
+
+Retry commands preserve the selected database and source, including quoted or
+option-like names. Control-containing values are escaped for display and get
+instructions to reuse the same values instead of an altered executable path.
+`--force` bypasses the refresh-age check; all existing trust and publication
+checks still apply. The UI does not claim that a retry repairs the cause.
+
+If core policy says no selected source is due, the frame says
+`No repository metadata checks are due.` With no enabled sources it says
+`No enabled repositories to sync.` and offers the existing enrollment or
+enable guidance. An explicitly named disabled source remains selectable.
+An unknown name reports the database and source and offers `repo list --all`
+against that database.
+
+`cargo test -p conary --test cli_repository_sync` exercises successful and mixed
+refreshes, multiple failures, preserved failed-source cache, freshness and
+enabled-source selection, unknown names, escaped controls, and actual execution
+of printed recovery commands. Each journey uses a disposable database and local
+HTTP metadata, captured in a real terminal and pipe with and without `NO_COLOR`.
+Progress uses the existing shared terminal coordinator and ends before durable
+results print.
 
 ## First-Use Diagnostic Contract
 
