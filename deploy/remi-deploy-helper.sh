@@ -293,14 +293,26 @@ READINESS_CLOCK=""
 READINESS_CURL=curl
 READINESS_JOURNAL=journalctl
 
-readiness_seconds() {
+readiness_uptime() {
     if [[ -n "$READINESS_CLOCK" ]]; then
         "$READINESS_CLOCK"
     else
         local uptime rest
         read -r uptime rest </proc/uptime
-        printf '%s\n' "${uptime%%.*}"
+        printf '%s\n' "$uptime"
     fi
+}
+
+readiness_milliseconds() {
+    local uptime seconds fraction
+    uptime="$(readiness_uptime)"
+    seconds="${uptime%%.*}"
+    fraction=0
+    [[ "$uptime" != *.* ]] || fraction="${uptime#*.}"
+    fraction="${fraction}000"
+    # /proc/uptime has subsecond precision. Subtract precise samples before
+    # rounding the completed duration for the integer-second evidence schema.
+    printf '%s\n' "$((10#$seconds * 1000 + 10#${fraction:0:3}))"
 }
 
 configure_readiness() {
@@ -349,37 +361,45 @@ start_and_probe() {
     # Twice the last successful duration, at least one second, at most two hours.
     local budget=$(( (basis > 0 ? basis : 1) * 2 ))
     (( budget <= 7200 )) || budget=7200
-    local started now elapsed remaining probe_timeout systemctl_status=0
+    local budget_ms=$((budget * 1000))
+    local started now elapsed elapsed_ms remaining_ms probe_ms probe_timeout pause_ms pause_timeout
+    local systemctl_status=0
     local outcome=restore_failed reason=readiness_timeout ready=null
-    started="$(readiness_seconds)"
+    started="$(readiness_milliseconds)"
     timeout "$budget" "$REMI_SYSTEMCTL" start remi >/dev/null 2>&1 || systemctl_status=$?
     if (( systemctl_status == 0 )); then
         while true; do
-            now="$(readiness_seconds)"
-            elapsed=$((now - started))
-            remaining=$((budget - elapsed))
-            (( remaining > 0 )) || break
-            probe_timeout=$((remaining < 2 ? remaining : 2))
+            now="$(readiness_milliseconds)"
+            elapsed_ms=$((now - started))
+            remaining_ms=$((budget_ms - elapsed_ms))
+            (( remaining_ms > 0 )) || break
+            probe_ms=$((remaining_ms < 2000 ? remaining_ms : 2000))
+            printf -v probe_timeout '%d.%03d' "$((probe_ms / 1000))" "$((probe_ms % 1000))"
             if "$READINESS_CURL" -fsS --max-time "$probe_timeout" "$HEALTH_URL" >/dev/null 2>&1; then
-                now="$(readiness_seconds)"
-                if (( now - started <= budget )); then
+                now="$(readiness_milliseconds)"
+                if (( now - started <= budget_ms )); then
                     outcome=restored
                     reason=ready
-                    ready=$((now - started))
+                    ready=$(((now - started + 999) / 1000))
                     previous="$ready"
                 fi
                 break
             fi
             if [[ -z "$READINESS_CLOCK" ]]; then
-                now="$(readiness_seconds)"
-                (( now - started < budget )) && sleep 1
+                now="$(readiness_milliseconds)"
+                remaining_ms=$((budget_ms - (now - started)))
+                if (( remaining_ms > 0 )); then
+                    pause_ms=$((remaining_ms < 1000 ? remaining_ms : 1000))
+                    printf -v pause_timeout '%d.%03d' "$((pause_ms / 1000))" "$((pause_ms % 1000))"
+                    sleep "$pause_timeout"
+                fi
             fi
         done
     else
         reason=systemctl_failed
     fi
-    now="$(readiness_seconds)"
-    elapsed=$((now - started))
+    now="$(readiness_milliseconds)"
+    elapsed=$(((now - started + 999) / 1000))
     if [[ "$outcome" == restored ]]; then
         elapsed="$ready"
     fi
