@@ -106,8 +106,10 @@ pub use metrics::{MetricsSnapshot, ServerMetrics};
 pub use native_oracle_input::{
     NATIVE_ORACLE_INPUT_MANIFEST_FILE, NATIVE_ORACLE_INPUT_OBJECT_DIRECTORY,
     NATIVE_ORACLE_INPUT_SCHEMA_V1, NativeOracleInputConfig, NativeOracleInputObjectV1,
-    NativeOracleInputOutcome, NativeOracleInputProfileV1, NativeOracleInputSetV1,
-    materialize_native_oracle_inputs, reopen_native_oracle_input_bundle,
+    NativeOracleInputOutcome, NativeOracleInputProfileV1, NativeOracleInputRelease,
+    NativeOracleInputRetainedProfile, NativeOracleInputRetention, NativeOracleInputSetV1,
+    inspect_native_oracle_input_retention, materialize_native_oracle_inputs,
+    release_native_oracle_input_retention, reopen_native_oracle_input_bundle,
 };
 pub use negative_cache::NegativeCache;
 pub(crate) use operator::acquire_existing_runtime_storage;

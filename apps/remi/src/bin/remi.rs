@@ -5,6 +5,8 @@
 mod deployment_command;
 #[path = "remi/native_oracle_input_command.rs"]
 mod native_oracle_input_command;
+#[path = "remi/native_oracle_retention_command.rs"]
+mod native_oracle_retention_command;
 
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
@@ -48,6 +50,11 @@ enum Command {
     ResolutionSurvey(ResolutionSurveyArgs),
     /// Materialize exact native metadata for the ordered private candidates.
     NativeOracleInput(native_oracle_input_command::CommandArgs),
+    /// Inspect or release export-owned immutable diagnostic catalogs.
+    NativeOracleRetention {
+        #[command(subcommand)]
+        command: native_oracle_retention_command::Command,
+    },
     /// Record reproducible conversion latency and work evidence.
     ConversionBenchmark(ConversionBenchmarkArgs),
     /// Remi-owned trust admin commands.
@@ -254,6 +261,14 @@ struct PromotionProveArgs {
 
 #[derive(Args)]
 struct ResolutionSurveyArgs {
+    /// Exact exported metadata bundle whose durable pins own this survey's inputs.
+    #[arg(long)]
+    native_oracle_input_dir: PathBuf,
+
+    /// Export identity owning the complete retained catalog set.
+    #[arg(long)]
+    export_id: String,
+
     /// Current Remi service configuration; the runtime must be stopped.
     #[arg(long, default_value = "/etc/conary/remi.toml")]
     config: PathBuf,
@@ -389,6 +404,9 @@ fn main() {
         Some(Command::PromotionActivate(args)) => run_promotion_activate_command(args),
         Some(Command::PromotionProve(args)) => run_promotion_prove_command(args),
         Some(Command::ResolutionSurvey(args)) => run_resolution_survey_command(args),
+        Some(Command::NativeOracleRetention { command }) => {
+            native_oracle_retention_command::run(command)
+        }
         Some(Command::NativeOracleInput(args)) => native_oracle_input_command::run(args),
         Some(Command::ConversionBenchmark(args)) => run_conversion_benchmark_command(args),
         Some(Command::Trust { command }) => run_trust_command(command),
@@ -649,7 +667,14 @@ fn run_resolution_survey_command(args: ResolutionSurveyArgs) -> Result<()> {
         conary_core::repository::catalog::ResolutionWorkerRequest::Automatic,
         conary_core::repository::catalog::ResolutionWorkerRequest::explicit,
     );
-    let outcome = run_resolution_surveys_from_config(&config, args.output_dir, profiles, workers)?;
+    let outcome = run_resolution_surveys_from_config(
+        &config,
+        args.output_dir,
+        profiles,
+        workers,
+        args.native_oracle_input_dir,
+        args.export_id,
+    )?;
     println!("{}", serde_json::to_string_pretty(&outcome)?);
     anyhow::ensure!(
         outcome.candidate_failures == 0 && outcome.comparison_mismatches == 0,

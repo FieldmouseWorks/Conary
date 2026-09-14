@@ -131,6 +131,8 @@ fn resolution_survey_mirrors_stopped_runtime_proof_bindings() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     for required in [
         "--config",
+        "--native-oracle-input-dir",
+        "--export-id",
         "--candidate",
         "--package-oracle",
         "--native-resolution",
@@ -153,7 +155,13 @@ fn native_oracle_input_accepts_only_exact_candidate_and_output_bindings() {
 
     assert!(output.status.success(), "{}", output_text(&output));
     let stdout = String::from_utf8_lossy(&output.stdout);
-    for required in ["--db", "--catalog-dir", "--candidate", "--output-dir"] {
+    for required in [
+        "--db",
+        "--catalog-dir",
+        "--candidate",
+        "--output-dir",
+        "--export-id",
+    ] {
         assert!(stdout.contains(required), "missing {required}: {stdout}");
     }
     for forbidden in [
@@ -169,6 +177,29 @@ fn native_oracle_input_accepts_only_exact_candidate_and_output_bindings() {
             "forbidden {forbidden}: {stdout}"
         );
     }
+}
+
+#[test]
+fn native_oracle_retention_release_requires_explicit_export_manifest_identity() {
+    let help = run_remi(&["native-oracle-retention", "inspect", "--help"]);
+    assert!(help.status.success(), "{}", output_text(&help));
+    let text = output_text(&help);
+    for required in ["--db", "--catalog-dir", "--input-dir", "--export-id"] {
+        assert!(text.contains(required), "missing {required}: {text}");
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let db = temp.path().join("must-not-exist.db");
+    let output = run_remi(&[
+        "native-oracle-retention",
+        "release",
+        "--db",
+        db.to_str().unwrap(),
+        "--export-id",
+        "export-one",
+    ]);
+    assert!(!output.status.success());
+    assert!(output_text(&output).contains("--input-manifest-sha256"));
+    assert!(!db.exists());
 }
 
 #[test]

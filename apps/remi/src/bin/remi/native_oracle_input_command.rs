@@ -11,6 +11,10 @@ use std::path::PathBuf;
 
 #[derive(Args)]
 pub(crate) struct CommandArgs {
+    /// Unique identity owning durable catalog retention until explicit release.
+    #[arg(long)]
+    export_id: String,
+
     /// Current Remi operational database.
     #[arg(long, default_value = "/conary/metadata/conary.db")]
     db: PathBuf,
@@ -35,6 +39,7 @@ pub(crate) struct CommandArgs {
 
 pub(crate) fn run(args: CommandArgs) -> Result<()> {
     let config = NativeOracleInputConfig {
+        export_id: args.export_id,
         db_path: args.db,
         catalog_dir: args.catalog_dir,
         candidates: args.candidates,

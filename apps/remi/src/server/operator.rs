@@ -137,10 +137,26 @@ pub fn run_resolution_surveys_from_config(
     output_dir: PathBuf,
     profiles: Vec<RemiPromotionProofProfileInput>,
     workers: conary_core::repository::catalog::ResolutionWorkerRequest,
+    native_oracle_input_dir: PathBuf,
+    export_id: String,
 ) -> Result<RemiResolutionSurveyOutcome> {
     remi_config.validate()?;
     let server_config = remi_config.to_server_config()?;
     let _runtime_lock = acquire_existing_runtime_storage(remi_config, &server_config)?;
+    let retained = inspect_native_oracle_input_retention(
+        &server_config.db_path,
+        &server_config.catalog_dir,
+        &native_oracle_input_dir,
+        &export_id,
+    )?;
+    anyhow::ensure!(
+        retained.selections()
+            == profiles
+                .iter()
+                .map(|profile| profile.selection.clone())
+                .collect::<Vec<_>>(),
+        "resolution-survey selections differ from the exact retained native-oracle export"
+    );
     let authority = catalog_authority::CatalogAuthority::from_paths(
         server_config.db_path,
         server_config.catalog_dir,

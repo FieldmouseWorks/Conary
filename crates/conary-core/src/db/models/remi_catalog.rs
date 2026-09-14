@@ -300,6 +300,27 @@ impl RemiProfileRevisionPin {
         Ok(pins)
     }
 
+    /// Discover pins in an owner's namespace. A prefix is not mutation
+    /// authority: callers must validate their complete versioned owner binding
+    /// and exact pin identities before acting on the returned rows.
+    pub fn discover_owner_prefix(
+        conn: &Connection,
+        owner_kind: RemiRevisionPinKind,
+        owner_prefix: &str,
+    ) -> Result<Vec<Self>> {
+        validate_identity(owner_prefix, "profile revision pin owner prefix")?;
+        let sql = format!(
+            "SELECT {PIN_COLUMNS} FROM remi_profile_revision_pins
+             WHERE owner_kind = ?1 AND substr(owner_identity, 1, length(?2)) = ?2
+             ORDER BY pin_id"
+        );
+        let mut statement = conn.prepare(&sql)?;
+        let pins = statement
+            .query_map(params![owner_kind.as_str(), owner_prefix], Self::from_row)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(pins)
+    }
+
     pub fn release(conn: &Connection, pin_id: &str) -> Result<bool> {
         validate_identity(pin_id, "profile revision pin ID")?;
         Ok(conn.execute(

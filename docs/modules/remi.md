@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-09-06
-revision: 171
-summary: Describe Remi repository ingestion, immutable catalog publication, conversion and benchmark boundaries, shared native parity producer ownership, typed conflicting-closure parity handoff, deployment, readiness, storage, and operator-facing serving contracts.
+last_updated: 2026-09-14
+revision: 172
+summary: Describe Remi catalog and serving authority, durable export-owned native-oracle retention across refresh, diagnostic selection and explicit release, deployment, and readiness.
 ---
 
 # Remi
@@ -773,7 +773,7 @@ distribution-sized package-name set.
 
 ### Native Oracle Input Materialization
 
-`remi native-oracle-input` is the read-only handoff from production
+`remi native-oracle-input` is the exact metadata handoff from production
 private candidates to the pinned native package-manager producers. It requires
 exact `PROFILE=SHA256` bindings in canonical Fedora 44, Ubuntu 26.04, and Arch
 order. Before network or output mutation it reproves each current fenced run,
@@ -796,7 +796,38 @@ source manifests, and digest-sorted deduplicated object inventory. Its atomic
 directory contains canonical `manifest.json` and digest-named files under
 `objects/`. The independent reopener rejects unknown or missing entries,
 symlinks, noncanonical JSON, size drift, and byte tamper. A final fenced
-candidate recheck must match the initial candidate records before success.
+candidate recheck must match the initial candidate records before success. The
+required `--export-id` owns one complete set of durable `Work` revision pins,
+inserted in the same immediate transaction as that final check before reader
+pins are released. Pin ownership binds the export identity and canonical input
+manifest digest and complete set size. Release validates the stored set even
+if a later binary changes its public profile catalog. An already-retained export
+identity is refused before new output. A conflict rolls back the entire set.
+Runtime-session recovery
+preserves work pins, and ordinary refresh can supersede the current candidates
+without allowing GC to remove the exported profile/source closure. The existing
+metadata bundle and operational SQLite schemas are unchanged.
+
+`remi native-oracle-retention inspect --db <database> --catalog-dir <catalogs>
+--input-dir <export-directory> --export-id <identity>` independently authenticates
+the bundle, exact pin owners, complete registered profile catalogs and ordered
+source identities. It returns schema-1 JSON binding the export, input manifest
+digest, and canonical three-profile revision/count set. Old exports without
+retention, partial or released pin sets, owner/revision drift, and invalid
+registered catalogs fail closed. Inspection never substitutes current candidates.
+
+After the dependent proof and retained evidence have been accepted,
+`remi native-oracle-retention release --db <database> --export-id <identity>
+--input-manifest-sha256 <digest>` transactionally releases only that complete
+export-owned set. Wrong or partial ownership leaves every pin unchanged. Release
+requires no artifact bytes, so damaged or lost exports can still be explicitly
+cleaned up. It deletes no evidence or catalog files and changes no active or
+current-candidate pointer; ordinary typed GC determines later reachability.
+No elapsed-time guess expires these pins. Operators must explicitly release
+abandoned exports as well as completed ones. If the final candidate fence fails
+after the metadata bundle was written, that create-only bundle remains failure
+evidence without retained authority. Inspection refuses it; a new attempt uses
+a new export identity and directory.
 
 This bundle supplies input bytes only. It does not produce or compare
 `NativeParityOracleV1` or `NativeResolutionOracleV1`, run conversion, or grant
@@ -826,6 +857,7 @@ retained-lane subset production can resume.
 
 ```text
 remi native-oracle-input \
+  --export-id <new-export-id> \
   --db /conary/metadata/conary.db \
   --catalog-dir /conary/catalogs \
   --candidate fedora-44=<profile-revision-sha256> \
