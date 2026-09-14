@@ -8,6 +8,9 @@ use conary_core::db::schema::{self, SCHEMA_EPOCH, SCHEMA_VERSION, SchemaCompatib
 use std::path::Path;
 use std::process::Command;
 
+#[path = "cli_initialization/system_alias.rs"]
+mod system_alias;
+
 #[derive(Clone, Copy, Debug)]
 struct Mode {
     tty: bool,

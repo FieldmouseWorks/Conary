@@ -70,7 +70,7 @@ pub(super) fn configure_current_database(db_path: &str) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn require_init_privileges(db_path: &Path) -> Result<()> {
+pub(crate) fn require_init_privileges(db_path: &Path) -> Result<()> {
     #[cfg(unix)]
     {
         validate_init_privileges(db_path, nix::unistd::Uid::effective().is_root())?;

@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-14
-revision: 45
+revision: 46
 summary: Daily-driver CLI initialization and recovery guidance, source identities, typed installed details, grouped results, history, and native refusals
 ---
 
@@ -231,6 +231,10 @@ note: Run: conary repo sync --db-path='<fixture>/state/conary.db'
 
 Initialization keeps the original core error and typed database/runtime-root
 context through both the command and its earlier try-session database preflight.
+The existing initialization target validation runs before preflight opens the
+database. Non-canonical system aliases retain their canonical-path refusal,
+even when the underlying system database has a retired schema; they never
+receive a rebuild command that the same validation would reject.
 The UI selects rebuild guidance from `SchemaRebuildRequired` and retains its
 observed schema, supported epoch, and revision as separate facts:
 
@@ -261,6 +265,11 @@ state, and the printed rebuild action on disposable state with its retired
 snapshot preserved. Command unit tests retain downcastable core errors through
 additional context. The rest of the first-use walkthrough remains under #132
 and #644.
+
+The system-alias regression creates a retired system database on private
+`/var/lib` tmpfs in a separate mount namespace, then proves all four refusal
+frames and byte-preserved database state. It requires usable user/mount
+namespaces or an isolated privileged invocation of that exact test.
 
 ## First-Use Diagnostic Contract
 
