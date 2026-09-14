@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-14
-revision: 49
+revision: 50
 summary: Daily-driver CLI initialization, repository enrollment and trust recovery, per-source synchronization, typed details, grouped results, and native refusals
 ---
 
@@ -283,6 +283,11 @@ inserts no longer flatten their causes into strings. Static enrollment uses
 its TUF fields; JSON/Remi and native enrollment retain their respective trust,
 source, strategy, and advisory fields. Repository trust descriptions now live
 under `ui/repository/trust_display.rs`.
+
+Static duplicate enrollment and missing-source trust reset use the same typed
+conflict/not-found cases and database-scoped inspection guidance as the other
+repository operations. Sync control-value fixtures now enroll their source
+through the actual CLI instead of renaming it after enrollment.
 
 ```text
 Repository added:

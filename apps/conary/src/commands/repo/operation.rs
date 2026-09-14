@@ -33,7 +33,9 @@ impl RepositoryCommandContext {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::{cmd_repo_disable, cmd_repo_enable, cmd_repo_remove};
+    use crate::commands::{
+        cmd_repo_disable, cmd_repo_enable, cmd_repo_remove, cmd_repo_reset_trust,
+    };
 
     #[test]
     fn failed_state_commands_retain_core_cause_and_exact_operation_context() {
@@ -47,6 +49,7 @@ mod tests {
             ),
             (cmd_repo_disable, RepositoryOperation::Disable),
             (cmd_repo_remove, RepositoryOperation::Remove),
+            (cmd_repo_reset_trust, RepositoryOperation::ResetTrust),
         ] {
             let error = command("unknown\nsource", database.to_str().unwrap())
                 .unwrap_err()

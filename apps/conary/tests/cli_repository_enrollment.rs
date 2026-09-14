@@ -420,6 +420,11 @@ fn static_enrollment_and_trust_reset_render_the_exact_source_and_preserve_trust_
         // Reset does not silently establish trust on a repeated enrollment.
         let duplicate = run(mode, &args);
         assert_ne!(duplicate.code, 0);
+        inspect_action(&duplicate, &db);
+        let missing = state(mode, &db, "missing static source", "reset-trust");
+        assert_ne!(missing.code, 0);
+        assert!(missing.text.contains("Repository: missing static source"));
+        inspect_action(&missing, &db);
         assert_eq!(roots(), 0);
         assert!(!find(&db, name).unwrap().enabled);
     }

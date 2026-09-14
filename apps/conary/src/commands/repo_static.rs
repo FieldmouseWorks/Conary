@@ -109,7 +109,7 @@ pub fn cmd_repo_reset_trust(name: &str, db_path: &str) -> Result<()> {
 fn reset_trust(name: &str, db_path: &str) -> Result<()> {
     let conn = open_db(db_path)?;
     let mut repo = Repository::find_by_name(&conn, name)?
-        .ok_or_else(|| anyhow!("Repository '{}' not found", name))?;
+        .ok_or_else(|| conary_core::Error::NotFound(format!("Repository '{name}' not found")))?;
     let repo_id = repo
         .id
         .ok_or_else(|| anyhow!("Repository '{}' has no database ID", name))?;
@@ -143,12 +143,11 @@ fn persist_static_repository(
     let existing = Repository::find_by_name(&conn, &opts.name)?;
 
     if existing.is_some() && !opts.replace {
-        bail!(
-            "Repository '{}' already exists.\nUse 'conary repo add {} {} --fingerprint <root-key-id> --replace' to re-pin static trust.",
-            opts.name,
-            opts.name,
-            normalized_base
-        );
+        return Err(conary_core::Error::ConflictError(format!(
+            "Repository '{}' already exists",
+            opts.name
+        ))
+        .into());
     }
 
     let metadata_url = static_metadata_url(normalized_base);
