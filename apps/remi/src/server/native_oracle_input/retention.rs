@@ -170,6 +170,15 @@ impl NativeOracleInputRetention {
 }
 
 fn require_pin_set(conn: &Connection, retained: &NativeOracleInputRetention) -> Result<()> {
+    let discovered = RemiProfileRevisionPin::discover_owner_prefix(
+        conn,
+        RemiRevisionPinKind::Work,
+        &owner_prefix(&retained.export_id, &retained.input_manifest_sha256)?,
+    )?;
+    ensure!(
+        discovered.len() == retained.profiles.len(),
+        "native-oracle export retention is absent or released, partial, or has unexpected members; rebuild the export"
+    );
     let owner_identity = owner(
         &retained.export_id,
         &retained.input_manifest_sha256,
