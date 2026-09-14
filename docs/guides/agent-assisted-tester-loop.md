@@ -1,8 +1,8 @@
 ---
-last_updated: 2026-09-10
-revision: 20
+last_updated: 2026-09-14
+revision: 21
 status: paused
-summary: Align the paused tester-loop commands with published v0.17.2 while signed-universe, daily-driver, and synchronized-release gates complete
+summary: Keep the tester loop paused pending launch gates and sync every initialized Remi source feed
 ---
 
 # Agent-Assisted Tester Loop
@@ -195,13 +195,14 @@ conary --help | sed -n '1,80p'
 ```
 
 The package post-install step initializes one source-independent system
-database and configures Remi plus the built-in RPM, Debian, and Arch source
-feeds. The host distribution does not constrain source selection. Do not rerun
-`system init`; inspect the configured sources and sync Remi instead:
+database and configures the built-in Remi source feeds for RPM, Debian, and
+Arch packages. The feeds are named `remi-<profile>`; there is no repository
+named `remi`. The host distribution does not constrain source selection. Do not
+rerun `system init`; inspect the configured sources and sync every enabled feed:
 
 ```bash
 sudo conary repo list
-sudo conary repo sync remi
+sudo conary repo sync
 ```
 
 ## Run The Tester Loop
