@@ -1,8 +1,8 @@
 ---
 title: Remi native full-catalog parity oracle
-summary: Define single-walk producer-bound strict native parity lanes with live progress and independent diagnostic retention, bounded native ALPM provider probing, selective same-export assembly, and deterministic bounded-parallel private collect-all resolution surveys for one complete immutable profile candidate
-last_updated: 2026-09-13
-revision: 87
+summary: Define exact native parity lanes and diagnostic surveys bound to durable export-owned catalogs across refresh, with strict producer, worker, and outcome contracts
+last_updated: 2026-09-14
+revision: 88
 status: active
 ---
 
@@ -757,10 +757,19 @@ canonical histogram by native/candidate outcome-kind pair, and explicit
 truncation. Strict comparison still aborts on its first mismatch.
 
 `remi resolution-survey` owns both surveys under the normal exclusive
-stopped-runtime lock and mirrors `promotion-prove`'s ordered private bindings:
+stopped-runtime lock. Its ordered revision bindings must match one complete
+export-owned retained input set, independently revalidated before output.
+Ordinary refresh may replace current candidates while native production runs;
+the diagnostic command continues to require the exact retained export. This
+retention cannot satisfy promotion's separate current-candidate predicate. See
+[Native Oracle Input Materialization](../modules/remi.md#native-oracle-input-materialization)
+for acquisition, inspection, and explicit release.
+
 
 ```text
 remi resolution-survey \
+  --export-id <export-id> \
+  --native-oracle-input-dir <retained-export-directory> \
   --config /etc/conary/remi.toml \
   --candidate fedora-44=<profile-revision-sha256> \
   --candidate ubuntu-26.04=<profile-revision-sha256> \
@@ -825,14 +834,16 @@ through GitHub's HTTPS API, fetches that exact commit's helper, matches its
 digest, and installs those root-fetched bytes rather than caller-staged code.
 The workflow then calls the three-argument
 `conary-remi-deploy survey-resolution` action with the survey identity, export
-identity, and typed oracle transport path. The root-owned helper reads the exact
-candidate revisions from the stopped deployment's own pointers, uses the
+identity, and typed oracle transport path. Before stopping Remi, the root-owned
+helper authenticates the exact export-owned retained catalog set and matches
+its canonical revision bindings to the authenticated oracles. The command
+revalidates that ownership under the exclusive stopped-runtime lock, uses the
 profile-bound architectures, and freezes the survey JSON under root ownership
 before restarting. Cleanup owns every exit from the instant root staging is
-created, and deployment-inspection and survey stderr remain in one mode-`0600`
+created, and retention-inspection and survey stderr remain in one mode-`0600`
 staging diagnostic that is never transported or logged. It accepts status `101`
 only when the typed outcome records
-at least one finding, polls `/health/ready` to a bounded successful result
+at least one finding, attempts bounded restoration through `/health`
 regardless of those findings, and returns only survey JSON
 and separate resolution-walk implementation JSON plus a digest, size,
 deployment, candidate, and oracle binding manifest. Survey transport manifest

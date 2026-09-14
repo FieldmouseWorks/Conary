@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-09-13
-revision: 104
-summary: Avoid unnecessary recovery regex work and enforce precise monotonic Remi readiness intervals while retaining deployment fencing and serialized queues
+last_updated: 2026-09-14
+revision: 105
+summary: Retain exact export-owned catalogs across background refresh and verify diagnostic selection before service stop, preserving protected deployment and restoration contracts
 ---
 
 # Infrastructure Overview
@@ -279,7 +279,7 @@ workflow.
 - Production native-oracle inputs use the root-owned helper operation
   `export-native-oracle-inputs <export-id> <fedora-sha256> <ubuntu-sha256>
   <arch-sha256>`. The helper fixes canonical public-profile order, invokes the
-  typed `remi native-oracle-input` command as the service user, retains the
+  typed `remi native-oracle-input --export-id <export-id>` command as the service user, retains the
   durable independently reopened directory below
   `/conary/evidence/native-oracle-inputs/`, and stages a mode-0600 transport tar
   under `/tmp` for the authenticated caller. The typed command copies only
@@ -296,7 +296,11 @@ workflow.
   candidate replacement cannot race the multi-profile pin/export window. The
   typed operator also inserts reader pins for the complete three-profile set in
   one operational transaction before it reopens any catalog bytes, so a slow
-  earlier reopen cannot expose a later selected resource to concurrent GC. The
+  earlier reopen cannot expose a later selected resource to concurrent GC. Its
+  final candidate check atomically installs durable export-owned work pins before
+  those reader pins are dropped. These pins retain the exact profile/source set
+  across background refresh and runtime restart; they grant diagnostic input
+  ownership, not promotion currentness. The
   workflow invokes the fixed helper operation through a production SSH boundary
   authenticated by the protected `REMI_SSH_KNOWN_HOSTS` pin; live host-key
   discovery is forbidden. Its workflow commit must equal freshly fetched
@@ -312,6 +316,13 @@ workflow.
   public-sanitized verification record, operator attestation, and source
   deployment inspection; it grants no native-oracle production, conversion,
   proof, or activation authority.
+- Once a proof or abandoned chain no longer needs its retained catalogs, the
+  typed helper operation `release-native-oracle-inputs <export-id>
+  <input-manifest-sha256>` releases only that export's complete work-pin set.
+  Use the manifest digest from the authenticated export evidence. Release runs
+  as the service user, is transactional, does not stop Remi, deletes no evidence
+  files, and preserves every other owner and current/active pointer. No automatic
+  age-based cleanup or survey exit trap releases catalog ownership.
 - The required `producer_commit` input to `produce-remi-native-oracles` is one
   full lowercase 40-hex SHA. Pass the deployed commit by default; name a newer
   producer only deliberately. Authorization fetches `origin/main`, requires
@@ -382,8 +393,13 @@ workflow.
   workflow then calls the new action. The
   helper arms cleanup as soon as private root-owned staging exists,
   authenticates every archive member there,
-  stops Remi, reads the exact candidate revisions from the stopped deployment's
-  own candidate pointers, runs `remi resolution-survey` as `conary`, freezes its
+  verifies the export-owned retained input set with `native-oracle-retention
+  inspect` while Remi is still active, and requires all three revisions to equal
+  the authenticated oracle transport. Missing, partial, released, mismatched,
+  or invalid retained authority fails before service stop. It then stops Remi,
+  passes the exact export identity, retained input directory, and authenticated
+  revision bindings to `remi resolution-survey` as `conary`, revalidates them
+  under the command's exclusive runtime lock before output, freezes its
   output while Remi remains stopped, and retains that root-owned snapshot at
   `/conary/evidence/.remi-operator-staging/completed-resolution-survey-<survey-id>/survey-output`.
   <!-- repo-path: hypothetical -->

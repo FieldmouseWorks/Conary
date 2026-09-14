@@ -15,6 +15,12 @@ use url::Url;
 use super::catalog_authority::{CatalogAuthority, ProfileRevisionSelection};
 use super::open_runtime_db;
 
+mod retention;
+pub use retention::{
+    NativeOracleInputRelease, NativeOracleInputRetainedProfile, NativeOracleInputRetention,
+    inspect_native_oracle_input_retention, release_native_oracle_input_retention,
+};
+
 pub const NATIVE_ORACLE_INPUT_SCHEMA_V1: u32 = 1;
 pub const NATIVE_ORACLE_INPUT_MANIFEST_FILE: &str = "manifest.json";
 pub const NATIVE_ORACLE_INPUT_OBJECT_DIRECTORY: &str = "objects";
@@ -22,6 +28,7 @@ const MAX_MANIFEST_BYTES: u64 = 16 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct NativeOracleInputConfig {
+    pub export_id: String,
     pub db_path: PathBuf,
     pub catalog_dir: PathBuf,
     pub candidates: Vec<ProfileRevisionSelection>,
@@ -59,6 +66,7 @@ pub struct NativeOracleInputOutcome {
     pub sources: usize,
     pub objects: usize,
     pub object_bytes: u64,
+    pub retention: NativeOracleInputRetention,
 }
 
 struct ObjectSource {
@@ -70,10 +78,13 @@ struct ObjectSource {
 ///
 /// The candidate set is proved before any network or output mutation and again
 /// after the durable bundle has been independently reopened. Persisted reader
-/// pins keep the selected immutable profile catalogs alive while downloads run.
+/// pins keep the selected immutable profile catalogs alive during materialization.
+/// Success transfers reachability to durable export-owned work pins in the same
+/// transaction as the final current-candidate check; explicit release ends it.
 pub async fn materialize_native_oracle_inputs(
     config: &NativeOracleInputConfig,
 ) -> Result<NativeOracleInputOutcome> {
+    retention::validate_export_id(&config.export_id)?;
     validate_candidate_selections(&config.candidates)?;
     let initial_candidates = capture_current_candidates(&config.db_path, &config.candidates)?;
 
@@ -148,10 +159,6 @@ pub async fn materialize_native_oracle_inputs(
         "published native-oracle input bundle changed during reopen"
     );
 
-    let final_candidates = capture_current_candidates(&config.db_path, &config.candidates)?;
-    require_unchanged_candidates(&initial_candidates, &final_candidates)?;
-    drop(pins);
-
     let manifest_path = config.output_dir.join(NATIVE_ORACLE_INPUT_MANIFEST_FILE);
     let manifest_bytes = fs::read(&manifest_path).context("reopen native-oracle manifest bytes")?;
     let sources = reopened
@@ -164,6 +171,13 @@ pub async fn materialize_native_oracle_inputs(
             .checked_add(object.size)
             .context("native-oracle input byte count overflow")
     })?;
+    let retention = retention::retain_export(
+        &config.db_path,
+        &config.export_id,
+        &reopened,
+        &initial_candidates,
+    )?;
+    drop(pins);
     Ok(NativeOracleInputOutcome {
         output_dir: config.output_dir.clone(),
         manifest_sha256: conary_core::hash::sha256(&manifest_bytes),
@@ -171,6 +185,7 @@ pub async fn materialize_native_oracle_inputs(
         sources,
         objects: reopened.objects.len(),
         object_bytes,
+        retention,
     })
 }
 
@@ -209,11 +224,18 @@ fn capture_current_candidates(
     selections: &[ProfileRevisionSelection],
 ) -> Result<Vec<conary_core::repository::ProfileSyncCandidate>> {
     let conn = open_runtime_db(db_path).context("open Remi database for private candidates")?;
+    capture_candidates_from_connection(&conn, selections)
+}
+
+fn capture_candidates_from_connection(
+    conn: &rusqlite::Connection,
+    selections: &[ProfileRevisionSelection],
+) -> Result<Vec<conary_core::repository::ProfileSyncCandidate>> {
     selections
         .iter()
         .map(|selection| {
             let candidate = conary_core::repository::current_profile_sync_candidate(
-                &conn,
+                conn,
                 &selection.source_profile,
             )?
             .with_context(|| {
@@ -229,7 +251,7 @@ fn capture_current_candidates(
                 selection.profile_revision_sha256
             );
             conary_core::db::models::verify_private_profile_candidate_authority(
-                &conn,
+                conn,
                 &candidate.source_profile,
                 &candidate.profile_revision_sha256,
                 &candidate.run_id,

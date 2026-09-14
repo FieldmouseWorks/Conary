@@ -131,6 +131,8 @@ fn resolution_survey_mirrors_stopped_runtime_proof_bindings() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     for required in [
         "--config",
+        "--native-oracle-input-dir",
+        "--export-id",
         "--candidate",
         "--package-oracle",
         "--native-resolution",
@@ -153,7 +155,13 @@ fn native_oracle_input_accepts_only_exact_candidate_and_output_bindings() {
 
     assert!(output.status.success(), "{}", output_text(&output));
     let stdout = String::from_utf8_lossy(&output.stdout);
-    for required in ["--db", "--catalog-dir", "--candidate", "--output-dir"] {
+    for required in [
+        "--db",
+        "--catalog-dir",
+        "--candidate",
+        "--output-dir",
+        "--export-id",
+    ] {
         assert!(stdout.contains(required), "missing {required}: {stdout}");
     }
     for forbidden in [
