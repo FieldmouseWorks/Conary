@@ -3,9 +3,27 @@ name: survey-remi-resolution
 on:
   workflow_dispatch:
     inputs:
+      operation:
+        description: Produce a new survey or recover an already-retained failed survey.
+        required: true
+        default: survey
+        type: choice
+        options:
+          - survey
+          - recover
       oracle_run_id:
         description: Successful produce-remi-native-oracles run owning an exact assembled three-lane set
         required: true
+        type: string
+
+      retained_survey_run_id:
+        description: Original failed or cancelled survey run, required only for recovery.
+        required: false
+        type: string
+      retained_survey_run_attempt:
+        description: Exact original survey attempt to recover.
+        required: false
+        default: '1'
         type: string
 
 permissions:
@@ -62,6 +80,49 @@ jobs:
             echo "resolution-survey operator checkout is dirty" >&2
             exit 1
           }
+
+      - name: Bind the exact survey or retained recovery request
+        id: request
+        env:
+          OPERATION: ${{ inputs.operation }}
+          ORACLE_RUN_ID: ${{ inputs.oracle_run_id }}
+          RETAINED_SURVEY_RUN_ID: ${{ inputs.retained_survey_run_id }}
+          RETAINED_SURVEY_RUN_ATTEMPT: ${{ inputs.retained_survey_run_attempt }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_args=()
+          if [[ "$OPERATION" == recover ]]; then
+            [[ "$RETAINED_SURVEY_RUN_ID" =~ ^[1-9][0-9]*$ \
+              && "$RETAINED_SURVEY_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]] || {
+              echo "recovery requires canonical original run and attempt identities" >&2
+              exit 1
+            }
+            gh api -H 'X-GitHub-Api-Version: 2026-03-10' \
+              "repos/${GITHUB_REPOSITORY}/actions/runs/${RETAINED_SURVEY_RUN_ID}/attempts/${RETAINED_SURVEY_RUN_ATTEMPT}" \
+              > retained-survey-run.json
+            source_args+=(--retained-run retained-survey-run.json)
+          fi
+          python3 scripts/remi-survey-request.py \
+            --operation "$OPERATION" --repository "$GITHUB_REPOSITORY" \
+            --workflow-commit "$WORKFLOW_SHA" \
+            --workflow-run-id "$GITHUB_RUN_ID" --workflow-run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --oracle-run-id "$ORACLE_RUN_ID" \
+            --retained-survey-run-id "$RETAINED_SURVEY_RUN_ID" \
+            --retained-survey-run-attempt "$RETAINED_SURVEY_RUN_ATTEMPT" \
+            "${source_args[@]}" --output resolution-survey-request.json
+          chain_workflow_commit="$(jq -er .chain_workflow_commit_sha resolution-survey-request.json)"
+          git merge-base --is-ancestor "$chain_workflow_commit" origin/main || {
+            echo "original survey operator must remain merged into protected main" >&2
+            exit 1
+          }
+          {
+            echo "operation=$(jq -r .operation resolution-survey-request.json)"
+            echo "survey_id=$(jq -r .survey_id resolution-survey-request.json)"
+            echo "chain_workflow_commit=$chain_workflow_commit"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Resolve and download exact assembled oracle lanes
         id: source
@@ -264,17 +325,18 @@ jobs:
           DEPLOYMENT_RUN_ID: ${{ steps.source.outputs.deployment_run_id }}
           EXPORT_RUN_ID: ${{ steps.source.outputs.export_run_id }}
           ORACLE_RUN_ID: ${{ inputs.oracle_run_id }}
-          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          CHAIN_WORKFLOW_SHA: ${{ steps.request.outputs.chain_workflow_commit }}
+          REQUEST_SURVEY_ID: ${{ steps.request.outputs.survey_id }}
         shell: bash
         run: |
           set -euo pipefail
-          survey_id="survey-${ORACLE_RUN_ID}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          survey_id="$REQUEST_SURVEY_ID"
           transport="remi-resolution-survey-oracles-${survey_id}.tar"
           python3 scripts/remi-resolution-survey-transport.py build-input \
             --survey-id "$survey_id" \
             --repository "$GITHUB_REPOSITORY" \
             --oracle-run-id "$ORACLE_RUN_ID" \
-            --workflow-commit "$WORKFLOW_SHA" \
+            --workflow-commit "$CHAIN_WORKFLOW_SHA" \
             --oracle-run oracle-run.json \
             --oracle-artifacts oracle-artifacts.json \
             --assembly-evidence "$RUNNER_TEMP/oracle-set/evidence.json" \
@@ -337,6 +399,7 @@ jobs:
           SURVEY_ID: ${{ steps.input.outputs.survey_id }}
           EXPORT_ID: ${{ steps.input.outputs.export_id }}
           WORKFLOW_SHA: ${{ github.workflow_sha }}
+          OPERATION: ${{ steps.request.outputs.operation }}
         shell: bash
         run: |
           set -euo pipefail
@@ -344,7 +407,7 @@ jobs:
           remote_input="/tmp/remi-resolution-survey-oracles-${SURVEY_ID}.tar"
           remote_output="/tmp/remi-resolution-survey-${SURVEY_ID}.tar"
           remote_restore="/tmp/remi-resolution-survey-${SURVEY_ID}.restore.json"
-          remote_helper="/tmp/remi-resolution-survey-helper-${SURVEY_ID}"
+          remote_helper="/tmp/remi-resolution-survey-helper-${SURVEY_ID}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           local_output="remi-resolution-survey-${SURVEY_ID}.tar"
           helper="${RUNNER_TEMP}/remi-resolution-survey-helper-${SURVEY_ID}"
           current_helper="${helper}.protected-main"
@@ -391,9 +454,10 @@ jobs:
               fi
             fi
           }
-          recover_helper_failure() {
-            local workflow_status="$1" recovery_state=fetch_failed
-            local observed_status="${helper_status:-$workflow_status}"
+          fetch_verified_recovery() {
+            recovery_state=fetch_failed
+            local started_ns exported_ns finished_ns
+            started_ns="$(date -u +%s%N)"
             local recovery_archive="$RUNNER_TEMP/resolution-survey-recovery.tar"
             local recovery_stderr="$RUNNER_TEMP/resolution-survey-recovery.stderr"
             : >"$recovery_stderr"
@@ -404,6 +468,7 @@ jobs:
             if ssh "${ssh_opts[@]}" "$target" \
               "sudo -n /usr/local/sbin/conary-remi-deploy export-resolution-survey-evidence '$SURVEY_ID' '$EXPORT_ID' '$expected_input_sha256'" \
               >"$recovery_archive" 2>"$recovery_stderr"; then
+              exported_ns="$(date -u +%s%N)"
               recovery_state=validation_failed
               if python3 scripts/remi-resolution-survey-transport.py verify-recovery \
                 --survey-id "$SURVEY_ID" --export-id "$EXPORT_ID" \
@@ -414,27 +479,45 @@ jobs:
             else
               echo 'resolution survey recovery: fetch_failed (retained evidence export failed)' >&2
             fi
+            finished_ns="$(date -u +%s%N)"
+            jq -cnS --arg outcome "$recovery_state" \
+              --argjson elapsed_ms "$(( (finished_ns - started_ns) / 1000000 ))" \
+              --argjson export_ms "$(( (${exported_ns:-$finished_ns} - started_ns) / 1000000 ))" '
+              {schema_version:1,outcome:$outcome,elapsed_ms:$elapsed_ms,
+               export_over_ssh_ms:$export_ms,independent_verification_ms:($elapsed_ms-$export_ms)}
+            ' > resolution-survey-recovery-timing.json
             rm -f -- "$recovery_archive" "$recovery_stderr"
+            [[ "$recovery_state" == retrieved ]]
+          }
+          recover_helper_failure() {
+            local workflow_status="$1"
+            local observed_status="${helper_status:-$workflow_status}"
+            fetch_verified_recovery || true
             record_helper_evidence "$observed_status" "$workflow_status" "$recovery_state"
             echo "helper_outcome=helper_failed" >> "$GITHUB_OUTPUT"
           }
           cleanup() {
             status=$?
-            if (( helper_invoked == 1 )) && (( status != 0 || ${helper_status:-0} != 0 )); then
+            if [[ "$OPERATION" == survey ]] && (( helper_invoked == 1 )) && (( status != 0 || ${helper_status:-0} != 0 )); then
               # Recovery must run before SSH credentials or remote transport are removed.
               set +e
               recover_helper_failure "$status"
               set -e
             fi
-            rm -f -- "$key" "$known_hosts" "$helper" "$current_helper"
             if (( remote_possible == 1 )); then
               set +e
               # Every interpolated remote value is typed above.
               # shellcheck disable=SC2029
-              ssh "${ssh_opts[@]}" "$target" \
-                "rm -f -- '$remote_input' '$remote_output' '$remote_restore' '$remote_helper'" >/dev/null 2>&1
+              if [[ "$OPERATION" == recover ]]; then
+                ssh "${ssh_opts[@]}" "$target" \
+                  "rm -f -- '$remote_helper'" >/dev/null 2>&1
+              else
+                ssh "${ssh_opts[@]}" "$target" \
+                  "rm -f -- '$remote_input' '$remote_output' '$remote_restore' '$remote_helper'" >/dev/null 2>&1
+              fi
               set -e
             fi
+            rm -f -- "$key" "$known_hosts" "$helper" "$current_helper"
             return "$status"
           }
           trap cleanup EXIT
@@ -468,7 +551,9 @@ jobs:
           chmod 0600 "$INPUT_TRANSPORT"
           ssh_opts=(-F "$REMI_SSH_CONFIG")
 
-          helper_invoked=1
+          if [[ "$OPERATION" == survey ]]; then
+            helper_invoked=1
+          fi
           ssh "${ssh_opts[@]}" "$target" \
             "sudo -n /usr/local/sbin/conary-remi-deploy verify-access" 2>"$helper_stderr"
           remote_possible=1
@@ -488,6 +573,27 @@ jobs:
           # shellcheck disable=SC2029
           ssh "${ssh_opts[@]}" "$target" \
             "sudo -n /usr/local/sbin/conary-remi-deploy install-helper '$helper_sha256' '$remote_helper'" 2>"$helper_stderr"
+          if [[ "$OPERATION" == recover ]]; then
+            # The original input was reconstructed from authenticated artifacts.
+            # Recovery never uploads that transport or invokes a new survey.
+            fetch_verified_recovery
+            jq -e '.authority == "diagnostic_only" and .availability == "retained"
+              and .input_binding == "verified"' \
+              resolution-survey-recovery/recovery-verification.json >/dev/null
+            jq -cnS --slurpfile request resolution-survey-request.json \
+              --slurpfile verification resolution-survey-recovery/recovery-verification.json \
+              --slurpfile timing resolution-survey-recovery-timing.json \
+              --arg helper_sha256 "$helper_sha256" \
+              --arg input_manifest_sha256 "$expected_input_sha256" '
+              {schema_version:1,kind:"retained_resolution_survey_recovery",
+               authority:"diagnostic_only",request:$request[0],verification:$verification[0],
+               timing:$timing[0],helper_sha256:$helper_sha256,
+               input_manifest_sha256:$input_manifest_sha256,
+               service_operation:"none",original_survey_outcome:"unchanged"}
+            ' > resolution-survey-recovery-operator.json
+            echo "recovery_outcome=retrieved" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           scp "${ssh_opts[@]}" "$INPUT_TRANSPORT" "${target}:${remote_input}"
           helper_status=0
           report="$({
@@ -576,6 +682,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Independently reopen sanitized survey transport
+        if: steps.request.outputs.operation == 'survey'
         env:
           CANDIDATE_FAILURES: ${{ steps.survey.outputs.candidate_failures }}
           COMPARISON_MISMATCHES: ${{ steps.survey.outputs.comparison_mismatches }}
@@ -610,6 +717,7 @@ jobs:
           ' resolution-survey-verification.json >/dev/null
 
       - name: Upload exact resolution survey
+        if: steps.request.outputs.operation == 'survey'
         id: upload
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
@@ -638,7 +746,41 @@ jobs:
           compression-level: 0
           retention-days: 7
 
+      - name: Upload independently recovered retained survey
+        if: steps.request.outputs.operation == 'recover' && steps.survey.outputs.recovery_outcome == 'retrieved'
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: remi-resolution-survey-recovery-${{ inputs.retained_survey_run_id }}-${{ inputs.retained_survey_run_attempt }}-${{ github.run_id }}
+          path: |
+            resolution-survey-recovery-operator.json
+            resolution-survey-recovery-timing.json
+            resolution-survey-request.json
+            resolution-survey-input-verification.json
+            resolution-survey-oracle-set.json
+            resolution-survey-recovery/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+      - name: Record retained recovery result
+        if: steps.request.outputs.operation == 'recover'
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -r '
+            "### Retained survey recovery",
+            "- original survey: `\(.request.survey_id)`",
+            "- original run outcome: `\(.request.retained_survey.conclusion)` (unchanged)",
+            "- recovery authority: `\(.authority)`",
+            "- export over pinned SSH: \(.timing.export_over_ssh_ms) ms",
+            "- independent verification: \(.timing.independent_verification_ms) ms",
+            "- recovery operations total: \(.timing.elapsed_ms) ms",
+            "- complete job budget: 360 minutes; final wall time is retained by GitHub Actions",
+            "- service operation: `\(.service_operation)`"
+          ' resolution-survey-recovery-operator.json >> "$GITHUB_STEP_SUMMARY"
+
       - name: Record resolution survey counts and histograms
+        if: steps.request.outputs.operation == 'survey'
         env:
           ARTIFACT_DIGEST: ${{ steps.upload.outputs.artifact-digest }}
           ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
@@ -681,6 +823,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Require successful Remi restoration after survey upload
+        if: steps.request.outputs.operation == 'survey'
         env:
           RESTORE_OUTCOME: ${{ steps.survey.outputs.restore_outcome }}
         shell: bash

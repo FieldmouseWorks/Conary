@@ -304,6 +304,11 @@ test_native_oracle_lane_contract() {
     python3 "$REPO_ROOT/scripts/test-produce-native-oracle-lane.py"
 }
 
+test_resolution_survey_request_contract() {
+    python3 "$REPO_ROOT/scripts/test-remi-survey-request.py"
+    python3 "$REPO_ROOT/scripts/test-remi-survey-workflow.py"
+}
+
 test_resolution_survey_transport_contract() {
     python3 "$REPO_ROOT/scripts/test-remi-resolution-survey-transport.py"
 }
@@ -859,6 +864,8 @@ cases = (
     ('test_check_release_matrix_rejects_survey_recovery_input_binding', 'replace', '.github/workflows/survey-remi-resolution.yml', '\n                --input-evidence resolution-survey-input-verification.json \\', '\n                # recovery input binding removed', 'resolution survey recovery invocation preserves authenticated input binding'),
     ('test_check_release_matrix_rejects_survey_outcome_document_count', 'replace', 'deploy/remi-deploy-helper.sh', 'clause("outcome.document_count"; length == 1)', 'clause("outcome.document_count"; length >= 0)', 'resolution survey validates named clauses against one outcome document and reports sanitized evidence'),
     ('test_check_release_matrix_rejects_survey_outcome_rust_fixture', 'replace', 'apps/remi/src/server/resolution_survey.rs', 'serde_json::to_string_pretty(&outcome)', 'serde_json::to_string_pretty(&"hard-coded-shape")', 'resolution survey Rust serialization writes fixtures consumed by the exact helper predicate'),
+    ('test_check_release_matrix_rejects_unmerged_recovery_source', 'replace', '.github/workflows/survey-remi-resolution.yml', 'git merge-base --is-ancestor "$chain_workflow_commit" origin/main', 'git merge-base --is-ancestor "$WORKFLOW_SHA" origin/main', 'resolution survey exact original attempt and authenticated request handoff'),
+    ('test_check_release_matrix_rejects_unbound_recovery_success', 'replace', '.github/workflows/survey-remi-resolution.yml', 'and .input_binding == "verified"', 'and .input_binding == "unavailable"', 'resolution survey recovery requires verified retained input and exits before survey staging'),
     ('test_check_release_matrix_rejects_survey_failure_recovery', 'replace', '.github/workflows/survey-remi-resolution.yml', '              recover_helper_failure "$status"', '              true', 'resolution survey recovers any helper failure before SSH cleanup independently of its report'),
     ('test_check_release_matrix_rejects_survey_failure_upload', 'replace', '.github/workflows/survey-remi-resolution.yml', "if: ${{ always() && steps.survey.outputs.helper_outcome == 'helper_failed' }}", 'if: ${{ success() }}', 'resolution survey uploads typed helper failures and retained output on failure'),
     ('test_check_release_matrix_rejects_survey_recovery_authority', 'replace', 'scripts/remi-resolution-survey-transport.py', 'or manifest["authority"] != "diagnostic_only"', 'or manifest["authority"] != "verified"', 'resolution survey recovery checks exact identities digests and input binding without survey authority'),
@@ -2066,6 +2073,7 @@ main() {
         test_native_oracle_transport_contract
         test_native_oracle_lane_contract
         test_resolution_survey_transport_contract
+        test_resolution_survey_request_contract
         test_native_oracle_assembly_contract
         test_native_oracle_lane_selection_contract
         test_native_oracle_producer_verification_contract
