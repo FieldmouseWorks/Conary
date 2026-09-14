@@ -1876,6 +1876,8 @@ survey_resolution() {
         "${inspect_command[@]}" >"$retention" 2>>"$diagnostic" ||
             die "could not inspect durable export-owned native-oracle retention"
     fi
+    jq -es 'length == 1' "$retention" >/dev/null 2>>"$diagnostic" ||
+        die "native-oracle retention inspection must emit one typed document"
     jq -e --slurpfile input "$input_manifest" --arg export_id "$export_id" '
         (keys | sort) == ["export_id", "input_manifest_sha256", "profiles", "schema_version"]
         and .schema_version == 1
@@ -1883,6 +1885,7 @@ survey_resolution() {
         and (.input_manifest_sha256 | type == "string" and test("^[0-9a-f]{64}$"))
         and (.input_manifest_sha256 as $digest
           | all($input[0].profiles[]; .input_manifest_sha256 == $digest))
+        and (.profiles | type == "array" and length == 3)
         and ([.profiles[].profile] == ["fedora-44", "ubuntu-26.04", "arch"])
         and all(.profiles[];
           ((keys | sort) == ["packages", "profile", "profile_revision_sha256"])

@@ -2318,7 +2318,7 @@ test_resolution_survey_preflight_failure_cleans_staging() {
 
 test_resolution_survey_rejects_invalid_retention_before_downtime() {
     local mutation survey_id export_id fake_root response filter
-    for mutation in partial released wrong-export wrong-revision wrong-manifest extra-field reordered fractional-count schema; do
+    for mutation in partial released wrong-export wrong-revision wrong-manifest extra-field reordered fractional-count schema object-profiles multiple-documents; do
         survey_id="survey-retention-${mutation}-$$"
         export_id="slice6-export-$$"
         fake_root="${tmpdir}/root-${survey_id}"
@@ -2333,6 +2333,8 @@ test_resolution_survey_rejects_invalid_retention_before_downtime() {
             reordered) filter='.profiles |= reverse' ;;
             fractional-count) filter='.profiles[0].packages = 0.5' ;;
             schema) filter='.schema_version = 2' ;;
+            object-profiles) filter='.profiles = {a:.profiles[0],b:.profiles[1],c:.profiles[2]}' ;;
+            multiple-documents) filter='., .' ;;
         esac
         response="$(jq -cn --arg export_id "$export_id" '{
           schema_version:1,export_id:$export_id,input_manifest_sha256:("f" * 64),
