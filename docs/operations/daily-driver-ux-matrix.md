@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-14
-revision: 47
+revision: 48
 summary: Daily-driver CLI initialization, per-source synchronization and retry guidance, source identities, typed details, grouped results, and native refusals
 ---
 
@@ -288,8 +288,8 @@ on stderr:
 ```text
 Repository synchronization:
   Database: <fixture>/conary.db
-[fail] unavailable
-[ok] available
+[fail]     unavailable
+[ok]       available
   Package records synchronized: 1
 error: Repository metadata synchronization failed.
   Database: <fixture>/conary.db
