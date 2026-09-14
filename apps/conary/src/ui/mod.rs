@@ -3,6 +3,7 @@
 
 pub(crate) mod ccs_build;
 pub(crate) mod diagnostics;
+pub(crate) mod generation_pending;
 pub(crate) mod history;
 pub(crate) mod initialization;
 pub(crate) mod installed_info;

@@ -275,7 +275,7 @@ fn command_results_in_terminal_pipe_and_no_color() {
                     "{recovery}"
                 );
                 assert!(
-                    recovery.contains("retry=\"conary system generation publish --yes --db-path='"),
+                    recovery.contains("Retry pending publication: conary system generation publish --yes --db-path='"),
                     "{recovery}"
                 );
                 assert!(!recovery.contains("publish --yes."), "{recovery}");
