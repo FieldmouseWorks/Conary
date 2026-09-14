@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-14
-revision: 120
+revision: 121
 summary: Route features to owned paths and proof, including repository enrollment and sync presentation, retained-survey requests, and workflow recovery.
 ---
 
@@ -158,11 +158,12 @@ one terminal coordinator while preserving command-owned phases and results.
 `docs/operations/daily-driver-ux-matrix.md`.
 
 **Neighbor systems:** install, update, remove, adoption, and repository command output;
+static enrollment and trust acceptance in `apps/conary/src/commands/repo_static.rs`;
 command summaries; tracing diagnostics.
 
 **Paths:** `apps/conary/src/ui/*`; `apps/conary/src/commands/progress.rs`;
 `apps/conary/src/commands/repo/sync.rs`;
-`apps/conary/src/commands/repo/operation.rs`; `apps/conary/src/commands/repo_static.rs`;
+`apps/conary/src/commands/repo/operation.rs`;
 `apps/conary/tests/cli_repository_enrollment.rs`;
 `apps/conary/tests/cli_repository_sync.rs`; `apps/conary/tests/cli_repository_sync/*`;
 `apps/conary/tests/cli_progress.rs`; `apps/conary/tests/cli_diagnostics.rs`;
