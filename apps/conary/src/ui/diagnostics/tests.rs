@@ -68,6 +68,45 @@ fn missing_database_notes_preserve_default_and_custom_routes() {
 }
 
 #[test]
+fn database_preflight_schema_facts_preserve_typed_data_and_escape_display() {
+    let observed = "retired epoch\nSupported revision: forged\x1b[2J";
+    let error = anyhow::Error::new(conary_core::Error::SchemaRebuildRequired {
+        observed: observed.into(),
+        supported_epoch: "fixture-current".into(),
+        supported_revision: 42,
+    })
+    .context(crate::dispatch::DatabasePreflightContext {
+        database: "/fixture/selected\npath.db".into(),
+    })
+    .context("outer caller context");
+    let diagnostic = from_error(&error);
+    assert_eq!(diagnostic.message, "Database requires a schema rebuild.");
+    assert_eq!(
+        diagnostic.facts,
+        [
+            ("Database", "/fixture/selected\\npath.db".into()),
+            (
+                "Observed schema",
+                "retired epoch\\nSupported revision: forged\\u{1b}[2J".into()
+            ),
+            ("Supported epoch", "fixture-current".into()),
+            ("Supported revision", "42".into()),
+        ]
+    );
+    assert!(matches!(
+        error.downcast_ref::<conary_core::Error>(),
+        Some(conary_core::Error::SchemaRebuildRequired { observed: retained, .. })
+            if retained == observed
+    ));
+    assert!(
+        diagnostic
+            .notes
+            .contains(&"Run: conary system rebuild-db --help".into())
+    );
+    assert!(!diagnostic.notes.iter().any(|note| note.contains("--yes")));
+}
+
+#[test]
 fn unclassified_errors_keep_each_cause_without_inventing_remedies() {
     let error = anyhow::anyhow!("leaf failure")
         .context("inner context")

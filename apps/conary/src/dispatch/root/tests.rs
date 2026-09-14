@@ -724,6 +724,36 @@ fn database_not_found_is_no_active_try_session() {
 }
 
 #[test]
+fn database_preflight_retains_selected_path_and_typed_open_failure() {
+    let temp = tempfile::tempdir().unwrap();
+    let database = temp.path().join("selected database.db");
+    std::fs::write(&database, b"not a SQLite database").unwrap();
+    let cli = parse_cli([
+        "conary",
+        "repo",
+        "sync",
+        "--db-path",
+        database.to_str().unwrap(),
+    ]);
+    let error = run_try_session_preflight_for_test(&cli, false)
+        .unwrap_err()
+        .context("outer caller context");
+    assert_eq!(
+        error
+            .downcast_ref::<crate::dispatch::DatabasePreflightContext>()
+            .unwrap()
+            .database,
+        database
+    );
+    assert!(matches!(
+        error.downcast_ref::<conary_core::Error>(),
+        Some(conary_core::Error::Database(rusqlite::Error::SqliteFailure(code, _)))
+            if code.code == rusqlite::ErrorCode::NotADatabase
+    ));
+    assert_eq!(std::fs::read(database).unwrap(), b"not a SQLite database");
+}
+
+#[test]
 fn package_named_try_action_requires_explicit_path_prefix() {
     let fixture = TryPreflightFixture::new();
     for package in ["./status", "./rollback", "./keep"] {

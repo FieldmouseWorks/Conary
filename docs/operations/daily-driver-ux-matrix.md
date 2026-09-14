@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-09-14
-revision: 52
-summary: Daily-driver CLI initialization, repository enrollment and trust recovery, per-source synchronization, typed details, grouped results, and native refusals
+revision: 53
+summary: Daily-driver CLI database preflight, initialization, repository enrollment and trust recovery, synchronization, typed details, and grouped results
 ---
 
 # Daily-Driver UX Matrix
@@ -273,6 +273,41 @@ The system-alias regression creates a retired system database on private
 `/var/lib` tmpfs in a separate mount namespace, then proves all four refusal
 frames and byte-preserved database state. It requires usable user/mount
 namespaces or an isolated privileged invocation of that exact test.
+
+## Common Database Preflight
+
+Common try-session preflight retains the selected database when opening it
+fails before command dispatch. Repository, package, query, and system commands
+therefore name the same `Database` field. Corrupt or inaccessible database errors
+retain their original causes as escaped fields, without guessing a repair from
+their text. An obsolete schema previously appeared as one long error sentence
+with no database path. It now has a structured frame:
+
+```text
+error: Database requires a schema rebuild.
+  Database: /selected/conary.db
+  Observed schema: retired migration-chain schema version 66
+  Supported epoch: conary-current-v1
+  Supported revision: 56
+note: Preserve existing Conary runtime state unless you have confirmed it is disposable.
+note: Run: conary system rebuild-db --help
+note: Any rebuild must select this same database with --db-path and satisfy the command's target and privilege checks.
+```
+
+The suggested command only displays help. Common preflight has not validated
+rebuild privileges or canonical database aliases, so it does not supply an apply
+command. Initialization retains its own earlier target checks and recovery
+adapter. Missing-database pass-through, try-session checks, command risk checks,
+and typed schema classification keep their existing order and behavior.
+
+`cargo test -p conary --test cli_diagnostics database_preflight` captures the
+repository, install-preview, history, and list entrypoints in terminal, pipe,
+and `NO_COLOR` modes. It proves selected-path and schema-control escaping,
+unchanged corrupt bytes, retained obsolete schema and rows, and executable
+read-only help. Core database open still configures SQLite WAL before rejecting
+an obsolete schema; these captures do not claim that the database file's bytes
+remain identical in that case. The dispatch unit test also retains the original
+typed SQLite error through additional caller context.
 
 ## Repository Enrollment And State Changes
 

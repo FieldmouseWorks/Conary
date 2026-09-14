@@ -28,6 +28,8 @@ mod system_update_channel;
 mod trust;
 mod verify_derivation;
 
+pub(crate) use context::DatabasePreflightContext;
+
 use crate::cli::Cli;
 use crate::command_risk;
 use anyhow::Result;
