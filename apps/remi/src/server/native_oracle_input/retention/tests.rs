@@ -171,11 +171,10 @@ async fn release_checks_all_owners_atomically_and_preserves_other_pins() {
     let conn = fixture.connection();
     let id = pin_id("export-one", "ubuntu-26.04");
     let original = RemiProfileRevisionPin::find(&conn, &id).unwrap().unwrap();
-    conn.execute(
-        "UPDATE remi_profile_revision_pins SET owner_identity = 'other-work' WHERE pin_id = ?1",
-        [&id],
-    )
-    .unwrap();
+    RemiProfileRevisionPin::release(&conn, &id).unwrap();
+    let mut replacement = original.clone();
+    replacement.owner_identity = "other-work".to_string();
+    replacement.insert(&conn).unwrap();
     assert!(
         release_native_oracle_input_retention(
             fixture.db_path(),
@@ -198,11 +197,8 @@ async fn release_checks_all_owners_atomically_and_preserves_other_pins() {
         )
         .is_err()
     );
-    conn.execute(
-        "UPDATE remi_profile_revision_pins SET owner_identity = ?1 WHERE pin_id = ?2",
-        [&original.owner_identity, &id],
-    )
-    .unwrap();
+    RemiProfileRevisionPin::release(&conn, &id).unwrap();
+    original.insert(&conn).unwrap();
     let mut other = original.clone();
     other.pin_id = "unrelated-conversion".to_string();
     other.owner_kind = RemiRevisionPinKind::Conversion;
@@ -293,7 +289,19 @@ async fn wrong_export_partial_pins_and_tampered_input_are_refused() {
 
 #[test]
 fn export_identity_is_a_bounded_storage_component() {
-    for id in ["", ".", "..", "../export", "a:b", "space here", "é", "a\n"] {
+    for id in [
+        "",
+        ".",
+        "..",
+        ".export",
+        "Export",
+        "aB",
+        "../export",
+        "a:b",
+        "space here",
+        "é",
+        "a\n",
+    ] {
         assert!(validate_export_id(id).is_err(), "{id:?}");
     }
     assert!(validate_export_id(&"a".repeat(129)).is_err());

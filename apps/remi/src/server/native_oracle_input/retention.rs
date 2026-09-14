@@ -45,11 +45,11 @@ pub(super) fn validate_export_id(export_id: &str) -> Result<()> {
     ensure!(
         !export_id.is_empty()
             && export_id.len() <= 128
-            && export_id
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte))
-            && export_id != "."
-            && export_id != "..",
+            && (export_id.as_bytes()[0].is_ascii_lowercase()
+                || export_id.as_bytes()[0].is_ascii_digit())
+            && export_id.bytes().all(|byte| byte.is_ascii_lowercase()
+                || byte.is_ascii_digit()
+                || b"._-".contains(&byte)),
         "native-oracle export ID must be a bounded plain identity"
     );
     Ok(())
