@@ -199,11 +199,27 @@ async fn release_checks_all_owners_atomically_and_preserves_other_pins() {
     );
     RemiProfileRevisionPin::release(&conn, &id).unwrap();
     original.insert(&conn).unwrap();
-    let mut other = original.clone();
-    other.pin_id = "unrelated-conversion".to_string();
-    other.owner_kind = RemiRevisionPinKind::Conversion;
-    other.owner_identity = "conversion-result".to_string();
-    other.insert(&conn).unwrap();
+    let others = [
+        RemiRevisionPinKind::Conversion,
+        RemiRevisionPinKind::Work,
+        RemiRevisionPinKind::Reader,
+    ]
+    .into_iter()
+    .map(|kind| {
+        let mut pin = original.clone();
+        pin.pin_id = format!("unrelated-{}", kind.as_str());
+        pin.owner_kind = kind;
+        pin.owner_identity = format!("other-{}-owner", kind.as_str());
+        pin.runtime_session_id = (kind == RemiRevisionPinKind::Reader).then(|| {
+            RemiRuntimeSession::current(&conn)
+                .unwrap()
+                .unwrap()
+                .session_id
+        });
+        pin.insert(&conn).unwrap();
+        pin
+    })
+    .collect::<Vec<_>>();
     assert!(
         release_native_oracle_input_retention(fixture.db_path(), "export-one", &"a".repeat(64))
             .is_err()
@@ -215,11 +231,16 @@ async fn release_checks_all_owners_atomically_and_preserves_other_pins() {
     )
     .unwrap();
     assert_eq!(result.released_profiles, 3);
-    assert_eq!(
-        RemiProfileRevisionPin::find(&conn, &other.pin_id)
-            .unwrap()
-            .unwrap(),
-        other
+    for other in others {
+        assert_eq!(
+            RemiProfileRevisionPin::find(&conn, &other.pin_id)
+                .unwrap()
+                .unwrap(),
+            other
+        );
+    }
+    assert!(
+        super::super::capture_current_candidates(fixture.db_path(), &retained.selections()).is_ok()
     );
     assert!(
         release_native_oracle_input_retention(
