@@ -439,6 +439,17 @@ fn static_enrollment_and_trust_reset_render_the_exact_source_and_preserve_trust_
         };
         assert_eq!(roots(), 1);
         let reset = state(mode, &db, name, "reset-trust");
+        assert!(reset.stderr.is_empty(), "{}", reset.stderr);
+        assert!(
+            reset
+                .stdout
+                .contains("Repository is disabled until trust is re-established.")
+        );
+        assert!(
+            reset
+                .stdout
+                .contains("root-key fingerprints verified out of band")
+        );
         assert_eq!(reset.code, 0, "{}", reset.text);
         assert!(reset.text.starts_with("Repository trust reset:"));
         assert!(reset.text.contains(&format!("Database: {}", db.display())));

@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-14
-revision: 51
+revision: 52
 summary: Daily-driver CLI initialization, repository enrollment and trust recovery, per-source synchronization, typed details, grouped results, and native refusals
 ---
 
@@ -303,8 +303,9 @@ Repository added:
   Security advisories: unknown
 ```
 
-Successful results stay on stdout and failures stay on stderr. A conflicting
-enrollment keeps the existing source intact and reports, for example:
+Successful results, including trust-reset recovery notes, stay on stdout;
+failures stay on stderr. A conflicting enrollment keeps the existing source
+intact and reports, for example:
 
 ```text
 error: Repository enrollment failed.

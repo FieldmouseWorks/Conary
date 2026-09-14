@@ -3,7 +3,7 @@
 
 use crate::commands::RepositoryOperation;
 use crate::ui::transaction_summary::visible;
-use crate::ui::{field, message, note};
+use crate::ui::{field, message, note_line};
 use conary_core::db::models::Repository;
 use conary_core::repository::static_repo::RepoIdentity;
 use std::collections::BTreeSet;
@@ -29,10 +29,12 @@ pub(crate) fn static_trust_reset(repo: &Repository, database: &str) {
     super::operation_complete(RepositoryOperation::ResetTrust, &repo.name, database);
     field("Metadata URL", &visible(&repo.url));
     field("Enabled", &repo.enabled.to_string());
-    note("Repository is disabled until trust is re-established.");
-    note(
+    message(&note_line(
+        "Repository is disabled until trust is re-established.",
+    ));
+    message(&note_line(
         "Use 'conary repo add' with this repository name and URL, --replace, the same database path, and root-key fingerprints verified out of band.",
-    );
+    ));
 }
 
 pub(crate) fn static_trust_prompt(
