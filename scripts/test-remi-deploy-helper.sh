@@ -1924,6 +1924,7 @@ test_resolution_survey_workflow_recovers_without_a_report() {
 #!/usr/bin/env bash
 set -euo pipefail
 SURVEY_ID="$1" EXPORT_ID="$2" source_recovery="$3" export_status="$4" fixture_root="$5"
+OPERATION=survey
 RUNNER_TEMP="$PWD" GITHUB_OUTPUT="$PWD/outputs"
 REMI_SSH_KEY_PATH="$PWD/key" REMI_SSH_KNOWN_HOSTS_PATH="$PWD/known-hosts"
 REMI_SSH_CONFIG="$PWD/config"
@@ -2001,7 +2002,10 @@ PY
             [[ ! -s "$runner/workflow.stderr" ]] || fail "empty failure stderr fabricated a diagnostic"
         fi
         [[ "$status" == 1 ]] || fail "workflow recovery changed original failure status"
-        [[ ! -e "$runner/key" && ! -e "$runner/known-hosts" ]]
+        if [[ -e "$runner/key" || -e "$runner/known-hosts" ]]; then
+            cat "$runner/workflow.stderr" >&2
+            fail "workflow recovery left SSH credentials after cleanup"
+        fi
         jq -e '.outcome == "helper_failed" and .workflow_status == 1
             and ((.message // "") | contains("/private/") | not)' "$runner/resolution-survey-helper.json" >/dev/null
         if [[ "$diagnostic" == empty || "$diagnostic" == missing || "$diagnostic" == malformed ]]; then
