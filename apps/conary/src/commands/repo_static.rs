@@ -2,7 +2,7 @@
 //! Static repository trust establishment commands.
 
 use std::collections::BTreeSet;
-use std::io::{self, IsTerminal, Write};
+use std::io::{self, IsTerminal};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -99,6 +99,14 @@ pub(crate) async fn try_cmd_repo_add_static(opts: &RepoAddOptions) -> Result<boo
 }
 
 pub fn cmd_repo_reset_trust(name: &str, db_path: &str) -> Result<()> {
+    reset_trust(name, db_path).context(super::RepositoryCommandContext::new(
+        super::RepositoryOperation::ResetTrust,
+        name,
+        db_path,
+    ))
+}
+
+fn reset_trust(name: &str, db_path: &str) -> Result<()> {
     let conn = open_db(db_path)?;
     let mut repo = Repository::find_by_name(&conn, name)?
         .ok_or_else(|| anyhow!("Repository '{}' not found", name))?;
@@ -121,12 +129,7 @@ pub fn cmd_repo_reset_trust(name: &str, db_path: &str) -> Result<()> {
     repo.update(&tx)?;
     tx.commit()?;
 
-    println!("Reset static repository trust: {}", repo.name);
-    println!("  Repository disabled until trust is re-established.");
-    println!(
-        "  Re-pin with: conary repo add {} {} --fingerprint <new-root-key-id> --replace",
-        repo.name, repo.url
-    );
+    crate::ui::repository::static_trust_reset(&repo, db_path);
 
     Ok(())
 }
@@ -173,19 +176,7 @@ fn persist_static_repository(
 
     tx.commit()?;
 
-    println!("Added static repository: {}", repo.name);
-    println!("  Metadata URL: {}", repo.url);
-    println!("  TUF Metadata URL: {}", metadata_url);
-    println!("  Enabled: {}", repo.enabled);
-    println!("  Priority: {}", repo.priority);
-    println!("  Default Strategy: static");
-    if let Some(source_profile) = repo.source_profile.as_deref() {
-        println!("  Source Profile: {source_profile}");
-    }
-    println!(
-        "  Security Advisories: {}",
-        repo.security_advisory_support.as_str()
-    );
+    crate::ui::repository::added_static(&repo, &opts.db_path, &metadata_url);
 
     Ok(())
 }
@@ -312,29 +303,12 @@ fn confirm_static_tofu(
         return Ok(());
     }
 
-    let prompt = tofu_prompt_text(identity, root_key_ids);
+    let prompt = crate::ui::repository::static_trust_prompt(identity, root_key_ids);
     if prompt_for_tofu_acceptance(&prompt)? {
         Ok(())
     } else {
         bail!("Static repository trust was not confirmed")
     }
-}
-
-fn tofu_prompt_text(identity: &RepoIdentity, root_key_ids: &BTreeSet<String>) -> String {
-    let description = identity
-        .repo
-        .description
-        .as_deref()
-        .unwrap_or("no description");
-    format!(
-        "Static repository: {}\nDescription: {}\nRoot key IDs: {}\n\n\
-TOFU cannot detect a replayed old root whose keys were later rotated or compromised; \
-an on-path attacker can pin a stale identity. Use --fingerprint from an out-of-band \
-source for production trust establishment.",
-        identity.repo.name,
-        description,
-        format_key_set(root_key_ids)
-    )
 }
 
 fn prompt_for_tofu_acceptance(prompt: &str) -> Result<bool> {
@@ -343,9 +317,7 @@ fn prompt_for_tofu_acceptance(prompt: &str) -> Result<bool> {
         return Ok(accept);
     }
 
-    println!("{prompt}");
-    print!("Trust this static repository root? Type 'yes' to continue: ");
-    io::stdout().flush()?;
+    crate::ui::repository::ask_static_trust(prompt)?;
 
     let mut input = String::new();
     io::stdin().read_line(&mut input)?;

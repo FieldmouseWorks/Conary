@@ -177,6 +177,7 @@ pub use repo::{
     RepoAddOptions, cmd_repo_add, cmd_repo_disable, cmd_repo_enable, cmd_repo_list,
     cmd_repo_remove, cmd_repo_sync, cmd_search,
 };
+pub(crate) use repo::{RepositoryCommandContext, RepositoryOperation};
 pub use repo_static::cmd_repo_reset_trust;
 pub use repository_takeover::cmd_repository_takeover;
 pub use restore::{cmd_restore, cmd_restore_all};

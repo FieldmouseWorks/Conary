@@ -1,4 +1,4 @@
-// apps/conary/src/commands/repo/trust_display.rs
+// apps/conary/src/ui/repository/trust_display.rs
 
 //! Human-readable projection of typed repository trust policies.
 

@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-09-14
-revision: 48
-summary: Daily-driver CLI initialization, per-source synchronization and retry guidance, source identities, typed details, grouped results, and native refusals
+revision: 49
+summary: Daily-driver CLI initialization, repository enrollment and trust recovery, per-source synchronization, typed details, grouped results, and native refusals
 ---
 
 # Daily-Driver UX Matrix
@@ -20,6 +20,8 @@ takeover, generation activation, or conaryd, the CLI should say that directly.
 |---|---|---|---|---|
 | `system init` | Initializes the selected database and configures built-in source feeds and typed host interfaces | Database initialization failure or typed obsolete-schema refusal | Sync the same selected database; rebuild disposable retired state only with explicit discard and apply flags | `cargo test -p conary --test cli_initialization` |
 | `repo sync [name]` | Reports each attempted source and its synchronized package-record count; preserves successful sources in a partial failure | Retains typed causes per failed source; unknown source names identify the selected database | Resolve the reported causes, then retry only failed sources against the same database | `cargo test -p conary --test cli_repository_sync` |
+| `repo add`, `enable`, `disable`, `remove` | Reports the completed operation, selected database, and escaped source identity through the shared UI | Retains requested operation, source, database, and original error causes; failed enrollment preserves existing state | Inspect configured repositories in the same database for missing or conflicting sources | `cargo test -p conary --test cli_repository_enrollment` |
+| `repo reset-trust` | Reports static trust reset and the disabled source | Existing static-only and mutation checks remain command-owned | Re-establish trust for the same source and database using root fingerprints verified out of band | `cargo test -p conary --lib commands::repo_static`; `cargo test -p conary --test cli_repository_enrollment` |
 | `install <pkg>` | Conary-owned package install or dry-run plan | Adopted package already belongs to native authority | `conary system adopt --refresh` before retry; `conary install <pkg> --ownership takeover --yes` for explicit package takeover; `conary system takeover --yes` for generation-level takeover | `cargo test -p conary --test cli_daily_ux adopted_install_refusal_routes_to_refresh_and_takeover` |
 | `install <pkg> --dry-run` | Reports a would-be dependency-to-explicit promotion without changing installed state, even with `--yes` | Ambiguous installed variants require exact selection | Use `--version` and `--arch` to select the intended installed variant | `cargo test -p conary --lib commands::install::command::tests` |
 | `remove <pkg>` | Conary-owned package removal; Debian residual conffiles are preserved | Adopted package removal without `--purge` | Use `--purge` to delete residual config state or externally owned adopted files; use `conary system unadopt <pkg> --yes` to stop adopted tracking without deleting files | `cargo test -p conary --test cli_daily_ux adopted_remove_refusal_routes_to_unadopt_or_purge` |
@@ -271,6 +273,56 @@ The system-alias regression creates a retired system database on private
 `/var/lib` tmpfs in a separate mount namespace, then proves all four refusal
 frames and byte-preserved database state. It requires usable user/mount
 namespaces or an isolated privileged invocation of that exact test.
+
+## Repository Enrollment And State Changes
+
+Repository enrollment, enable, disable, remove, and static trust reset results
+use `ui/repository/`. The requested operation, exact source name, and selected
+database remain typed context around the original error. Failed database
+inserts no longer flatten their causes into strings. Static enrollment uses
+its TUF fields; JSON/Remi and native enrollment retain their respective trust,
+source, strategy, and advisory fields. Repository trust descriptions now live
+under `ui/repository/trust_display.rs`.
+
+```text
+Repository added:
+  Database: <fixture>/conary.db
+[ok]       source
+  Metadata URL: https://example.invalid/metadata
+  Enabled: true
+  Priority: 50
+  Repository trust: typed JSON/Remi authority
+  Security advisories: unknown
+```
+
+Successful results stay on stdout and failures stay on stderr. A conflicting
+enrollment keeps the existing source intact and reports, for example:
+
+```text
+error: Repository enrollment failed.
+  Database: <fixture>/conary.db
+  Repository: source
+  Cause: persist repository enrollment
+  Cause: Conflict: repository 'source' already exists
+note: Inspect the configured repositories:
+note: Run: conary repo list --all --db-path='<fixture>/conary.db'
+```
+
+All displayed source names, metadata, descriptions, and paths escape terminal
+control characters. Inspection commands quote the same selected database;
+control-containing paths get instructions to reuse the exact path. Static
+trust prompts keep the verified root-key set distinct from the displayed
+description and retain the existing stale-root warning and explicit acceptance
+question. Reset-trust recovery names the same source and database and requires
+out-of-band root fingerprints before explicit re-enrollment; rendering does not
+approve trust or enable the repository.
+
+`cli_repository_enrollment` captures actual add/enable/disable/remove journeys,
+duplicate and missing-source failures, quoted and option-like names, control
+paths, static fingerprint enrollment, and trust reset in TTY/pipe with and
+without `NO_COLOR`. It executes the printed inspection command and checks
+persisted source/trust state. Command tests retain downcastable core errors,
+prove insertion rollback, and preserve existing authority/refusal proofs.
 
 ## Repository Synchronization
 

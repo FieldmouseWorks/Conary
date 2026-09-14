@@ -415,7 +415,7 @@ async fn fingerprint_mismatch_fails_before_insert() {
         .await
         .unwrap_err();
 
-    assert!(err.to_string().contains("fingerprint"));
+    assert!(format!("{err:#}").contains("fingerprint"));
     assert_no_repo(&db.conn(), "acme");
 }
 
@@ -458,7 +458,7 @@ async fn fingerprint_subset_fails_when_root_role_has_extra_key_ids() {
         .await
         .unwrap_err();
 
-    assert!(err.to_string().contains("fingerprint"));
+    assert!(format!("{err:#}").contains("fingerprint"));
     assert_no_repo(&db.conn(), "acme");
 }
 
@@ -473,7 +473,7 @@ async fn fingerprint_superset_fails_when_supplied_set_contains_unserved_key_id()
         .await
         .unwrap_err();
 
-    assert!(err.to_string().contains("fingerprint"));
+    assert!(format!("{err:#}").contains("fingerprint"));
     assert_no_repo(&db.conn(), "acme");
 }
 
@@ -488,7 +488,7 @@ async fn duplicate_fingerprints_after_normalization_fail_as_ambiguous_input() {
         .await
         .unwrap_err();
 
-    assert!(err.to_string().contains("duplicate"));
+    assert!(format!("{err:#}").contains("duplicate"));
     assert_no_repo(&db.conn(), "acme");
 }
 
@@ -544,7 +544,7 @@ async fn static_repo_add_rejects_native_trust_flags_after_probe_without_fingerpr
         .await
         .unwrap_err();
 
-    assert!(err.to_string().contains("native repository trust flags"));
+    assert!(format!("{err:#}").contains("native repository trust flags"));
     assert_no_repo(&db.conn(), "acme");
 }
 
@@ -608,7 +608,7 @@ async fn non_interactive_tofu_fails_when_no_fingerprint_is_supplied() {
     .await;
 
     let err = result.unwrap_err();
-    assert!(err.to_string().contains("non-interactive"));
+    assert!(format!("{err:#}").contains("non-interactive"));
     assert_no_repo(&db.conn(), "acme");
 }
 
@@ -684,7 +684,7 @@ async fn reset_trust_rejects_non_static_repositories_without_changing_visibility
 
     let conn = db.conn();
     let repo = repo(&conn);
-    assert!(err.to_string().contains("static repositories"));
+    assert!(format!("{err:#}").contains("static repositories"));
     assert!(repo.enabled);
     assert_eq!(repo.default_strategy.as_deref(), Some("binary"));
     assert_eq!(
@@ -714,7 +714,7 @@ async fn duplicate_name_without_replace_preserves_existing_trust() {
         .unwrap_err();
 
     let conn = db.conn();
-    assert!(err.to_string().contains("already exists"));
+    assert!(format!("{err:#}").contains("already exists"));
     assert_eq!(stored_tuf_key_ids(&conn, repo_id), before);
 }
 
@@ -799,7 +799,7 @@ async fn identity_root_key_mismatch_fails_before_insert() {
         .await
         .unwrap_err();
 
-    assert!(err.to_string().contains("conary-repo.toml"));
+    assert!(format!("{err:#}").contains("conary-repo.toml"));
     assert_no_repo(&db.conn(), "acme");
 }
 
@@ -812,7 +812,7 @@ async fn relabelled_root_key_id_fails_before_insert() {
         .await
         .unwrap_err();
 
-    assert!(err.to_string().contains("Root key ID"));
+    assert!(format!("{err:#}").contains("Root key ID"));
     assert_no_repo(&db.conn(), "acme");
 }
 
@@ -825,7 +825,7 @@ async fn zero_root_threshold_fails_before_insert() {
         .await
         .unwrap_err();
 
-    assert!(err.to_string().contains("threshold"));
+    assert!(format!("{err:#}").contains("threshold"));
     assert_no_repo(&db.conn(), "acme");
 }
 
@@ -882,7 +882,7 @@ async fn static_identity_probe_error_does_not_fall_back_to_native_add() {
     .await;
 
     let err = result.unwrap_err();
-    assert!(err.to_string().contains("probe static repository identity"));
+    assert!(format!("{err:#}").contains("probe static repository identity"));
     assert_no_repo(&db.conn(), "acme");
 }
 
