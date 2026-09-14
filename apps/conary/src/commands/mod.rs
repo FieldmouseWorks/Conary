@@ -172,6 +172,7 @@ pub use redirect::{
 };
 pub(crate) use remove::cmd_remove_cli;
 pub use remove::{cmd_autoremove, cmd_remove};
+pub(crate) use repo::RepositorySyncError;
 pub use repo::{
     RepoAddOptions, cmd_repo_add, cmd_repo_disable, cmd_repo_enable, cmd_repo_list,
     cmd_repo_remove, cmd_repo_sync, cmd_search,

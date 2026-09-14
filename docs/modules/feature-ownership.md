@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-09-14
-revision: 118
-summary: Route features to owned paths and proof, including authenticated retained-survey requests and workflow recovery.
+revision: 119
+summary: Route features to owned paths and proof, including repository sync presentation, retained-survey requests, and workflow recovery.
 ---
 
 # Feature Ownership And Interaction Gates
@@ -150,17 +150,19 @@ proof.
 
 **Slug:** cli-ui
 
-**Capability:** render durable CLI messages and transient package progress through
+**Capability:** render durable CLI messages and transient package and repository progress through
 one terminal coordinator while preserving command-owned phases and results.
 
 **Start here:** `apps/conary/src/ui/mod.rs`;
 `apps/conary/src/ui/diagnostics.rs`; `apps/conary/src/ui/progress.rs`; `apps/conary/src/commands/progress.rs`;
 `docs/operations/daily-driver-ux-matrix.md`.
 
-**Neighbor systems:** install, update, remove, and adoption command output;
+**Neighbor systems:** install, update, remove, adoption, and repository sync command output;
 command summaries; tracing diagnostics.
 
 **Paths:** `apps/conary/src/ui/*`; `apps/conary/src/commands/progress.rs`;
+`apps/conary/src/commands/repo/sync.rs`;
+`apps/conary/tests/cli_repository_sync.rs`; `apps/conary/tests/cli_repository_sync/*`;
 `apps/conary/tests/cli_progress.rs`; `apps/conary/tests/cli_diagnostics.rs`;
 `apps/conary/tests/cli_output_snapshots.rs`;
 `apps/conary/tests/output_vocabulary_guard.rs`.
@@ -170,6 +172,7 @@ command summaries; tracing diagnostics.
 `cargo test -p conary --test cli_progress`;
 `cargo test -p conary --test output_vocabulary_guard`;
 `cargo test -p conary --test cli_daily_ux`;
+`cargo test -p conary --test cli_repository_sync`;
 `cargo test -p conary --test cli_output_snapshots`.
 
 **Interaction gate:** `cargo test -p conary` when package command adapters or

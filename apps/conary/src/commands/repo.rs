@@ -9,6 +9,7 @@ mod sync;
 mod trust_display;
 
 pub use options::RepoAddOptions;
+pub(crate) use sync::RepositorySyncError;
 pub use sync::cmd_repo_sync;
 
 use super::open_db;

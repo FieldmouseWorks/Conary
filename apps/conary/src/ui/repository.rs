@@ -2,6 +2,9 @@
 //! Discovery frames from repository records and the core sync policy.
 //! These facts do not establish package compatibility or install readiness.
 
+mod sync;
+pub(crate) use sync::{SyncProgress, sync_empty, sync_not_due, sync_results};
+
 use super::transaction_summary::{database_command, visible};
 use super::{Status, field, heading, message, note, row};
 use conary_core::db::models::{Repository, RepositoryPackage, RepositoryRequirementGroup, Trove};
