@@ -247,6 +247,7 @@ note: Run: conary system rebuild-db --discard-state --yes --db-path='<fixture>/s
 ```
 
 Other database failures include the same location fields and the core `Cause`.
+Bare relative database filenames identify the parent and runtime root as `.`.
 Displayed paths escape terminal controls; command hints for such paths use
 `--db-path <PATH> (use the same database path)` rather than silently changing
 the argument. Rebuild success names the selected database and escaped retired

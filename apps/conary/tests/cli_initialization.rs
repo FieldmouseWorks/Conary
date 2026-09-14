@@ -40,6 +40,10 @@ struct Capture {
 }
 
 fn run(mode: Mode, args: &[&str]) -> Capture {
+    run_at(mode, args, None)
+}
+
+fn run_at(mode: Mode, args: &[&str], directory: Option<&Path>) -> Capture {
     let mut command = if mode.tty {
         let arguments = (0..args.len())
             .map(|index| format!("\"$CONARY_INITIALIZATION_ARG_{index}\""))
@@ -73,6 +77,9 @@ fn run(mode: Mode, args: &[&str]) -> Capture {
         .env_remove("CLICOLOR_FORCE");
     if mode.no_color {
         command.env("NO_COLOR", "1");
+    }
+    if let Some(directory) = directory {
+        command.current_dir(directory);
     }
     let output = command
         .output()
@@ -125,8 +132,9 @@ fn printed_arguments(capture: &Capture) -> Vec<String> {
     assert!(output.stderr.is_empty());
     output
         .stdout
+        .strip_suffix(&[0])
+        .expect("shell argument terminator")
         .split(|byte| *byte == 0)
-        .filter(|arg| !arg.is_empty())
         .map(|arg| String::from_utf8(arg.to_vec()).unwrap())
         .collect()
 }
@@ -235,6 +243,26 @@ fn unusable_parent_refusal_retains_location_and_preserves_the_file() {
         assert_eq!(std::fs::read(&parent).unwrap(), b"keep this file");
         assert!(!db.exists());
         assert_eq!(std::fs::read_dir(temp.path()).unwrap().count(), 1);
+    }
+}
+
+#[test]
+fn relative_database_refusal_names_the_current_directory() {
+    for mode in MODES {
+        let temp = tempfile::tempdir().unwrap();
+        let directory = temp.path().join("conary.db");
+        std::fs::create_dir(&directory).unwrap();
+        let refusal = run_at(
+            mode,
+            &["system", "init", "--db-path", "conary.db"],
+            Some(temp.path()),
+        );
+        assert_eq!(refusal.code, 1);
+        assert!(refusal.text.starts_with(
+            "error: Database initialization failed.\n  Database: conary.db\n  Database parent: .\n  Runtime root: .\n  Cause: "
+        ), "{}", refusal.text);
+        assert_eq!(std::fs::read_dir(temp.path()).unwrap().count(), 1);
+        assert_eq!(std::fs::read_dir(directory).unwrap().count(), 0);
     }
 }
 

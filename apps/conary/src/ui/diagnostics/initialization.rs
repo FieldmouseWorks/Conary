@@ -12,13 +12,22 @@ pub(super) fn from_error(error: &anyhow::Error) -> Option<Diagnostic> {
     let source = error.downcast_ref::<Error>()?;
     let database = context.database.to_string_lossy();
     let parent = context.database.parent().unwrap_or_else(|| Path::new("."));
+    // An empty parent is the current directory for a bare relative filename.
+    // Keep the stored path intact and make that location explicit in the UI.
+    let directory = |path: &Path| {
+        if path.as_os_str().is_empty() {
+            ".".to_string()
+        } else {
+            path.to_string_lossy().into_owned()
+        }
+    };
     let diagnostic = Diagnostic::new(match source {
         Error::SchemaRebuildRequired { .. } => "Database initialization requires a schema rebuild.",
         _ => "Database initialization failed.",
     })
     .fact("Database", database.as_ref())
-    .fact("Database parent", parent.to_string_lossy())
-    .fact("Runtime root", context.runtime_root.to_string_lossy());
+    .fact("Database parent", directory(parent))
+    .fact("Runtime root", directory(&context.runtime_root));
     Some(match source {
         Error::SchemaRebuildRequired {
             observed,
