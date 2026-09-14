@@ -121,7 +121,7 @@ fn corrupt_database_failure_names_selected_path_across_first_use_commands() {
                 assert_eq!(
                     text,
                     format!(
-                        "error: Database preflight failed.\n  Database: {}\n  Cause: Database error: file is not a database\n  Cause: file is not a database\nnote: Check the selected database path and reported cause. Preserve existing Conary runtime state before attempting recovery.\n",
+                        "error: Database preflight failed.\n  Database: {}\n  Cause: Database error: file is not a database\n  Cause: file is not a database\n  Cause: Error code 26: file is not a database\nnote: Check the selected database path and reported cause. Preserve existing Conary runtime state before attempting recovery.\n",
                         visible(db.to_str().unwrap())
                     )
                 );
