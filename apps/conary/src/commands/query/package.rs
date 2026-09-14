@@ -116,7 +116,7 @@ fn query_by_path(
     let file = conary_core::db::models::FileEntry::find_by_path(conn, file_path)?;
 
     if let Some(file) = file
-        && let Ok(Some(trove)) = conary_core::db::models::Trove::find_by_id(conn, file.trove_id)
+        && let Some(trove) = conary_core::db::models::Trove::find_by_id(conn, file.trove_id)?
     {
         if options.info {
             return show_package_info(conn, &trove, options);
@@ -151,7 +151,7 @@ fn query_by_path(
 
     println!("Packages owning files matching '{}':", file_path);
     for (trove_id, paths) in &trove_files {
-        if let Ok(Some(trove)) = conary_core::db::models::Trove::find_by_id(conn, *trove_id) {
+        if let Some(trove) = conary_core::db::models::Trove::find_by_id(conn, *trove_id)? {
             println!("\n{} {}:", trove.name, trove.version);
             for path in paths {
                 println!("  {}", path);
