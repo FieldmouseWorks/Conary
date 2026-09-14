@@ -6,6 +6,7 @@ pub(crate) mod diagnostics;
 pub(crate) mod history;
 pub(crate) mod initialization;
 pub(crate) mod installed_info;
+pub(crate) mod installed_list;
 mod installed_provides;
 pub(crate) mod progress;
 pub(crate) mod repository;

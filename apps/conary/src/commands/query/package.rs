@@ -56,7 +56,7 @@ pub fn cmd_query(pattern: Option<&str>, db_path: &str, options: QueryOptions) ->
         )
         .with_release(options.release.clone());
         let resolved = resolve_installed_package(&conn, &selector)?;
-        print_installed_packages(&[resolved.trove]);
+        crate::ui::installed_list::list(&[resolved.trove], Some(package_name), db_path);
         return Ok(());
     }
 
@@ -66,44 +66,13 @@ pub fn cmd_query(pattern: Option<&str>, db_path: &str, options: QueryOptions) ->
         conary_core::db::models::Trove::list_all(&conn)?
     };
 
-    if troves.is_empty() {
-        println!("No packages found.");
-        return Ok(());
-    }
-
-    print_installed_packages(&troves);
+    crate::ui::installed_list::list(&troves, pattern, db_path);
 
     Ok(())
 }
 
-fn print_installed_packages(troves: &[conary_core::db::models::Trove]) {
-    crate::ui::heading("Installed packages:");
-    for trove in troves {
-        print!(
-            "  {} {} ({}) release={}",
-            trove.name,
-            trove.version,
-            trove_type_label(&trove.trove_type),
-            installed_release_label(trove)
-        );
-        if let Some(arch) = &trove.architecture {
-            print!(" [{}]", arch);
-        }
-        println!();
-    }
-    println!("\nTotal: {} package(s)", troves.len());
-}
-
 fn installed_release_label(trove: &conary_core::db::models::Trove) -> &str {
     trove.package_release.as_deref().unwrap_or("Unspecified")
-}
-
-fn trove_type_label(trove_type: &conary_core::db::models::TroveType) -> &'static str {
-    match trove_type {
-        conary_core::db::models::TroveType::Package => "Package",
-        conary_core::db::models::TroveType::Component => "Component",
-        conary_core::db::models::TroveType::Collection => "Collection",
-    }
 }
 
 /// Query package by file path

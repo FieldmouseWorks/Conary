@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-09-14
-revision: 53
-summary: Daily-driver CLI database preflight, initialization, repository enrollment and trust recovery, synchronization, typed details, and grouped results
+revision: 54
+summary: Daily-driver CLI installed-list records, database preflight, repository readiness, typed details, and grouped results
 ---
 
 # Daily-Driver UX Matrix
@@ -32,6 +32,43 @@ takeover, generation activation, or conaryd, the CLI should say that directly.
 | `pin <pkg>` | Pins a selected installed variant | Ambiguous installed variants | Use `--version`, `--release`, and `--arch` to pin the intended variant | Existing `cargo test -p conary --test query pin_and_unpin_use_same_variant_selector` |
 | `unpin <pkg>` | Releases a selected installed variant | Ambiguous installed variants | Use `--version`, `--release`, and `--arch` to unpin the intended variant | Existing `cargo test -p conary --test query pin_and_unpin_use_same_variant_selector` |
 | `system history` | Recorded changeset fields, rollback relationships, continued lifecycle failures, and deferred recovery guidance | Obsolete changeset metadata keeps its existing refusal | Publication retries use the selected database; history does not decide rollback eligibility | `cargo test -p conary --test cli_history` |
+
+## Ordinary Installed Lists
+
+Ordinary `list`, name-filtered lists, and successful explicit-selector lists
+render through `ui/installed_list.rs`. Rows retain the exact version, separate
+CCS release, architecture, and record type. Each stays on one visible line;
+recorded controls are escaped. Absent release and architecture are `Unspecified`,
+which does not establish identity equivalence or imply `noarch`.
+
+The query still returns package, component, and collection records in its
+existing order. The former closing `Total: N package(s)` counted every record as
+a package. The replacement separates the total from the typed counts:
+
+```text
+Installed records:
+  Database: /selected/conary.db
+[info]     nginx  1.27.2  Type: package  Release: 1  Architecture: x86_64
+[info]     nginx:runtime  1.27.2  Type: component  Release: Unspecified  Architecture: Unspecified
+  Records: 2
+  Packages: 1
+  Components: 1
+  Collections: 0
+```
+
+A requested name appears in a `Name` field even when no record matches. Empty
+lists say `No installed records.`; empty name-filtered results say
+`No matching installed records.` Both retain the selected database and zero
+counts. A displayed requested name is not an installed result row. The two
+post-unadoption `list curl` manifest assertions therefore check the empty
+result and record count.
+
+`cargo test -p conary --test cli_installed_list` proves mixed record types,
+exact release variants and selectors, absent architecture, escaped names and
+paths, empty results, and unchanged full database snapshots in terminal, pipe,
+and `NO_COLOR` modes. Fixtures use the registered core connection and `Trove`
+model. Query selection and mutation authority stay with their existing owners;
+detail, file, path-owner, and pinned modes keep their own presentation paths.
 
 ## Installed Variant Selection
 
