@@ -6,6 +6,7 @@ mod rebuild_database;
 mod rollback_command;
 mod rollback_restore;
 
+pub(crate) use init::DatabaseInitializationContext;
 pub use init::cmd_init;
 #[cfg(test)]
 use init::{configure_current_database, paths_refer_to_same_location, validate_init_privileges};

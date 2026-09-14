@@ -195,6 +195,11 @@ fn run_try_session_preflight_inner(cli: &crate::cli::Cli, interactive: bool) -> 
         Ok(conn) => conn,
         Err(conary_core::Error::DatabaseNotFound(_)) => return Ok(()),
         Err(error) => {
+            if matches!(command, Commands::System(cli::SystemCommands::Init { .. })) {
+                return Err(error).context(commands::DatabaseInitializationContext::new(
+                    Path::new(db_path),
+                ));
+            }
             return Err(error).with_context(|| format!("failed to open Conary DB {db_path}"));
         }
     };
