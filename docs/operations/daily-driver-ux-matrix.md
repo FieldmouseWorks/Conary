@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-14
-revision: 54
+revision: 55
 summary: Daily-driver CLI installed-list records, database preflight, repository readiness, typed details, and grouped results
 ---
 
@@ -48,8 +48,8 @@ a package. The replacement separates the total from the typed counts:
 ```text
 Installed records:
   Database: /selected/conary.db
-[info]     nginx  1.27.2  Type: package  Release: 1  Architecture: x86_64
-[info]     nginx:runtime  1.27.2  Type: component  Release: Unspecified  Architecture: Unspecified
+[info]     nginx  1.27.2  Type: package  CCS release: 1  Architecture: x86_64
+[info]     nginx:runtime  1.27.2  Type: component  CCS release: Unspecified  Architecture: Unspecified
   Records: 2
   Packages: 1
   Components: 1

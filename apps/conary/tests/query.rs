@@ -275,9 +275,12 @@ fn list_info_refuses_ambiguous_variants_until_selector_is_given() {
     ]);
     assert!(filtered.status.success(), "{}", output_text(&filtered));
     let stdout = String::from_utf8_lossy(&filtered.stdout);
-    assert!(stdout.contains("variant-demo 1.0.0"), "{stdout}");
-    assert!(stdout.contains("[aarch64]"), "{stdout}");
-    assert!(!stdout.contains("[x86_64]"), "{stdout}");
+    assert!(
+        stdout.contains("[info]     variant-demo  1.0.0  Type: package  CCS release: Unspecified  Architecture: aarch64"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("  Records: 1"), "{stdout}");
+    assert!(!stdout.contains("Architecture: x86_64"), "{stdout}");
 }
 
 #[test]

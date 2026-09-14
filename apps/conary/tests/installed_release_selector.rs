@@ -121,7 +121,11 @@ fn omitted_release_is_ambiguous_and_names_every_release() {
     let output = run(&f.db, &["list", "demo"]);
     assert!(output.status.success(), "{}", stderr(&output));
     let text = stdout(&output);
-    for expected in ["Release: 1", "Release: 2", "Release: Unspecified"] {
+    for expected in [
+        "CCS release: 1",
+        "CCS release: 2",
+        "CCS release: Unspecified",
+    ] {
         assert!(text.contains(expected), "missing {expected}: {text}");
     }
     assert!(text.contains("  Records: 3\n  Packages: 3\n"), "{text}");

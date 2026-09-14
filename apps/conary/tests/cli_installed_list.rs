@@ -100,9 +100,9 @@ fn list_distinguishes_record_types_and_escapes_record_and_database_fields() {
                 format!(
                     concat!(
                         "Installed records:\n  Database: {}/selected '\\n\\u{{1b}}[2J.db\n",
-                        "[info]     alpha:runtime  1.0.0  Type: component  Release: Unspecified  Architecture: Unspecified\n",
-                        "[info]     bravo\\n[ok] forged\\u{{1b}}[2J  1.0.0  Type: package  Release: 7  Architecture: x86_64\n",
-                        "[info]     zeta-group  1.0.0  Type: collection  Release: Unspecified  Architecture: arch\\n[off] forged\\u{{1b}}[2J\n",
+                        "[info]     alpha:runtime  1.0.0  Type: component  CCS release: Unspecified  Architecture: Unspecified\n",
+                        "[info]     bravo\\n[ok] forged\\u{{1b}}[2J  1.0.0  Type: package  CCS release: 7  Architecture: x86_64\n",
+                        "[info]     zeta-group  1.0.0  Type: collection  CCS release: Unspecified  Architecture: arch\\n[off] forged\\u{{1b}}[2J\n",
                         "  Records: 3\n  Packages: 1\n  Components: 1\n  Collections: 1\n"
                     ),
                     temp.path().display()
@@ -142,9 +142,9 @@ fn name_and_release_selection_retain_each_exact_installed_record() {
             assert_eq!(
                 rows,
                 [
-                    "[info]     demo  1.0.0  Type: package  Release: 1  Architecture: x86_64",
-                    "[info]     demo  1.0.0  Type: package  Release: 2  Architecture: x86_64",
-                    "[info]     demo  1.0.0  Type: package  Release: Unspecified  Architecture: x86_64",
+                    "[info]     demo  1.0.0  Type: package  CCS release: 1  Architecture: x86_64",
+                    "[info]     demo  1.0.0  Type: package  CCS release: 2  Architecture: x86_64",
+                    "[info]     demo  1.0.0  Type: package  CCS release: Unspecified  Architecture: x86_64",
                 ]
             );
             assert!(
@@ -167,7 +167,7 @@ fn name_and_release_selection_retain_each_exact_installed_record() {
                         no_color
                     ),
                     format!(
-                        "Installed records:\n  Database: {db}\n  Name: demo\n[info]     demo  1.0.0  Type: package  Release: {displayed}  Architecture: x86_64\n  Records: 1\n  Packages: 1\n  Components: 0\n  Collections: 0\n"
+                        "Installed records:\n  Database: {db}\n  Name: demo\n[info]     demo  1.0.0  Type: package  CCS release: {displayed}  Architecture: x86_64\n  Records: 1\n  Packages: 1\n  Components: 0\n  Collections: 0\n"
                     )
                 );
                 assert_eq!(common::database_snapshot(&db), before);

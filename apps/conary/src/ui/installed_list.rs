@@ -30,7 +30,7 @@ pub(crate) fn list(troves: &[Trove], selected_name: Option<&str>, database: &str
         let version = visible(&trove.version);
         let kind = format!("Type: {}", trove.trove_type.as_str());
         let release = format!(
-            "Release: {}",
+            "CCS release: {}",
             exact_or_unspecified(trove.package_release.as_deref())
         );
         let architecture = format!(
