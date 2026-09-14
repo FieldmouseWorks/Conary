@@ -349,6 +349,41 @@ fn control_database_paths_get_same_path_instructions_without_runnable_placeholde
 }
 
 #[test]
+fn missing_database_keeps_initialization_guidance_for_repository_operations() {
+    for mode in MODES {
+        let temp = tempfile::tempdir().unwrap();
+        let db = temp.path().join("missing ' database.db");
+        for operation in ["add", "enable", "disable", "remove", "reset-trust"] {
+            let capture = if operation == "add" {
+                enroll(mode, &db, "source", &[])
+            } else {
+                state(mode, &db, "source", operation)
+            };
+            assert_ne!(capture.code, 0);
+            assert!(
+                capture
+                    .text
+                    .starts_with("error: Custom database not initialized."),
+                "{}",
+                capture.text
+            );
+            assert!(
+                capture
+                    .text
+                    .contains(&format!("Database: {}", db.display()))
+            );
+            assert!(capture.text.contains("Repository: source"));
+            assert!(
+                capture.text.contains(
+                    "Run 'conary system init --db-path <PATH>' with the same custom path."
+                )
+            );
+            assert!(!db.exists());
+        }
+    }
+}
+
+#[test]
 fn static_enrollment_and_trust_reset_render_the_exact_source_and_preserve_trust_gates() {
     for mode in MODES {
         let temp = tempfile::tempdir().unwrap();

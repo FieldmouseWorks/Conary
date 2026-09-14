@@ -46,8 +46,9 @@ fn missing_database_notes_preserve_default_and_custom_routes() {
         .db_path()
         .display()
         .to_string();
-    let diagnostic = from_error(&conary_core::Error::DatabaseNotFound(default).into());
+    let diagnostic = from_error(&conary_core::Error::DatabaseNotFound(default.clone()).into());
     assert_eq!(diagnostic.message, "Database not initialized.");
+    assert_eq!(diagnostic.facts, [("Database", default)]);
     assert_eq!(
         diagnostic.notes,
         [

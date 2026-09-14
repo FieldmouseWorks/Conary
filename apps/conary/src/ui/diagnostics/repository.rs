@@ -62,6 +62,9 @@ pub(super) fn from_error(error: &anyhow::Error) -> Option<Diagnostic> {
 }
 
 fn operation_failure(error: &anyhow::Error, context: &RepositoryCommandContext) -> Diagnostic {
+    if let Some(Error::DatabaseNotFound(path)) = error.downcast_ref::<Error>() {
+        return super::missing_database(path).fact("Repository", &context.name);
+    }
     let database = context.database.to_string_lossy();
     let mut diagnostic = Diagnostic::new(match context.operation {
         RepositoryOperation::Add => "Repository enrollment failed.",

@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-14
-revision: 50
+revision: 51
 summary: Daily-driver CLI initialization, repository enrollment and trust recovery, per-source synchronization, typed details, grouped results, and native refusals
 ---
 
@@ -288,6 +288,9 @@ Static duplicate enrollment and missing-source trust reset use the same typed
 conflict/not-found cases and database-scoped inspection guidance as the other
 repository operations. Sync control-value fixtures now enroll their source
 through the actual CLI instead of renaming it after enrollment.
+Missing-database failures retain the shared initialization guidance and add the
+affected repository identity; the selected database is named for both default
+and custom paths.
 
 ```text
 Repository added:
