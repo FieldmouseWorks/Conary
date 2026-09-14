@@ -28,7 +28,9 @@ fn list_empty() {
     let (_tmp, db, _conn) = common::create_test_db();
     assert_eq!(
         stdout_of(&["list", "--db-path", &db]),
-        "No packages found.\n"
+        format!(
+            "Installed records:\n  Database: {db}\nNo installed records.\n  Records: 0\n  Packages: 0\n  Components: 0\n  Collections: 0\n"
+        )
     );
 }
 
@@ -55,6 +57,8 @@ fn list_one_package() {
 
     assert_eq!(
         stdout_of(&["list", "--db-path", &db]),
-        "Installed packages:\n  nginx 1.27.2 (Package) release=Unspecified [x86_64]\n\nTotal: 1 package(s)\n"
+        format!(
+            "Installed records:\n  Database: {db}\n[info]     nginx  1.27.2  Type: package  CCS release: Unspecified  Architecture: x86_64\n  Records: 1\n  Packages: 1\n  Components: 0\n  Collections: 0\n"
+        )
     );
 }

@@ -286,7 +286,7 @@ conary = "list curl"
 
 [test.step.assert]
 exit_code = 0
-stdout_not_contains = "curl"
+stdout_contains_all = ["No matching installed records.", "  Records: 0"]
 
 # --------------------------------------------------------------------------
 # T21c: Unadopt All
@@ -330,7 +330,7 @@ conary = "list curl"
 
 [test.step.assert]
 exit_code = 0
-stdout_not_contains = "curl"
+stdout_contains_all = ["No matching installed records.", "  Records: 0"]
 
 # --------------------------------------------------------------------------
 # T22: Pin Package
