@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-19
-revision: 71
+revision: 72
 summary: Document bounded fixture exploration and replay, read-only repository onboarding assertions, typed change-scope matrix skips, local security-advisory authority, trusted-main compiler seeds, isolated hosted-Ubuntu CI package bootstrap, attributable daily-driver same-name provides, configuration upgrade, payload topology, typed corpus coverage, and native lifecycle gates
 ---
 
@@ -86,15 +86,19 @@ repository sync, production service, or cloud provisioning occurs in this
 command. Container limits are two CPUs, 512 MiB memory, 128 processes, a read-only
 image, and at most 256 MiB scratch plus 16 MiB temporary storage. Scratch must
 be a separate ext4 mount with `nodev,nosuid`, verified UUID and size; tmpfs
-cannot satisfy Conary's indexed OverlayFS hardlink probe. Each episode creates
+is not the registered storage profile. Each episode creates
 a private empty directory on that guest filesystem and binds only that directory
 at `/work`. The exact bind source and destination are rechecked before dispatch;
 container removal precedes directory removal. No working-host directory or device
 is exposed. The container grants
 exactly `CAP_SYS_ADMIN`, `CAP_DAC_OVERRIDE`, and `CAP_MKNOD` for the selected-root
 OverlayFS transaction: mounting, accessing the kernel's mode-000 work directory,
-and creating whiteouts. These permissions support the inert root-owned fixtures;
-they are not a general package lifecycle profile. Its
+and creating whiteouts. This profile is currently **blocked** for real package
+execution: the indexed OverlayFS probe also needs `CAP_DAC_READ_SEARCH`, which
+is not yet granted. Linux's
+[file-handle capability check](https://github.com/torvalds/linux/blob/v7.0/fs/overlayfs/util.c#L74-L84)
+disables the index without it. Issue #1050 tracks completing and verifying the
+guest profile; a successful empty baseline is not installation proof. Its
 AppArmor profile is unconfined inside the disposable guest. The runtime seccomp
 filter and no-new-privileges remain enabled. Actual effective, permitted and
 bounding capabilities plus those two restrictions are checked through
