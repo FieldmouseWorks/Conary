@@ -21,6 +21,7 @@ fn empty() -> Facts {
         packages: BTreeMap::new(),
         owners: BTreeMap::new(),
         payloads: BTreeMap::new(),
+        publication: None,
         complete: true,
     }
 }
@@ -416,6 +417,7 @@ fn guest_registration_and_evidence_fail_closed() {
         version: 1,
         approved_disposable: true,
         boot_id: "00000000-0000-0000-0000-000000000000".into(),
+        scratch_uuid: "11111111-1111-1111-1111-111111111111".into(),
         source_revision: "a".repeat(40),
         conary_sha256: "b".repeat(64),
         image: format!("sha256:{}", "c".repeat(64)),
@@ -639,4 +641,68 @@ fn runtime_process_guard_requires_exact_mount_authority_without_privilege_growth
     ] {
         assert!(super::sandbox::verify_process_restrictions(&invalid).is_err());
     }
+}
+
+#[test]
+fn scratch_guard_rejects_wrong_identity_unbounded_storage_and_unsafe_mounts() {
+    let valid = serde_json::json!({"filesystems": [{"target": sandbox::SCRATCH_MOUNT,
+        "fstype": "ext4", "uuid": "registered", "size": 234594304,
+        "options": "rw,nosuid,nodev,relatime"}]});
+    let check = |value: &serde_json::Value| {
+        sandbox::verify_scratch_mount(&serde_json::to_vec(value).unwrap(), "registered")
+    };
+    assert!(check(&valid).is_ok());
+    for (field, value) in [
+        ("fstype", serde_json::json!("tmpfs")),
+        ("uuid", serde_json::json!("another")),
+        ("target", serde_json::json!("/")),
+        ("size", serde_json::json!(1024 * 1024 * 1024)),
+        ("options", serde_json::json!("rw,relatime")),
+    ] {
+        let mut invalid = valid.clone();
+        invalid["filesystems"][0][field] = value;
+        assert!(check(&invalid).is_err());
+    }
+}
+
+#[test]
+fn selected_state_observer_checks_snapshot_bytes_and_exposes_pending_publication() {
+    use conary_core::{db, filesystem::CasStore, generation::root_manifest::*};
+    let temp = tempfile::tempdir().unwrap();
+    let runtime = temp.path().join("runtime");
+    let db_path = runtime.join("conary.db");
+    db::init(&db_path).unwrap();
+    let mut facts = empty();
+    selected_state::observe(&runtime, &mut facts).unwrap();
+    assert!(facts.publication.is_none());
+    let root = temp.path().join("fixture-root");
+    let payload = root.join(Package::App.path().trim_start_matches('/'));
+    std::fs::create_dir_all(payload.parent().unwrap()).unwrap();
+    std::fs::write(&payload, Fixture::AppV1.payload()).unwrap();
+    let cas = CasStore::new(runtime.join("objects")).unwrap();
+    let captured = scan_selected_root(&root, &cas).unwrap();
+    let conn = db::open(&db_path).unwrap();
+    let snapshot = SelectedRootSnapshot::capture(&conn, &captured).unwrap();
+    let publication = db::models::GenerationPublication::create_pending(
+        &conn,
+        None,
+        None,
+        db_path.to_str().unwrap(),
+        runtime.to_str().unwrap(),
+        "unit selected-root fixture",
+        &Default::default(),
+    )
+    .unwrap();
+    publication
+        .bind_selected_root_snapshot(&conn, snapshot.id())
+        .unwrap();
+    selected_state::observe(&runtime, &mut facts).unwrap();
+    let expected = hex::encode(Sha256::digest(Fixture::AppV1.payload()));
+    assert_eq!(facts.payloads[&Package::App], expected);
+    assert_eq!(facts.publication.unwrap().status, "pending");
+    // An intact database/manifest must not hide changed stored bytes.
+    let object =
+        conary_core::filesystem::cas::object_path(&runtime.join("objects"), &expected).unwrap();
+    std::fs::write(object, "x".repeat(Fixture::AppV1.payload().len())).unwrap();
+    assert!(selected_state::observe(&runtime, &mut empty()).is_err());
 }

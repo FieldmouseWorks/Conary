@@ -36,6 +36,7 @@ pub struct IsolationInspection {
     pub image: String,
     pub privileged: bool,
     pub host_mounts: usize,
+    pub binds: Vec<VolumeMount>,
     pub cpu_nanos: i64,
     pub pids_limit: i64,
     pub read_only: bool,
@@ -51,7 +52,7 @@ pub struct ImageInfo {
 }
 
 /// A host-to-container volume mount.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VolumeMount {
     pub host_path: String,
     pub container_path: String,

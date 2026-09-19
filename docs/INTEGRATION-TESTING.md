@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-19
-revision: 70
+revision: 71
 summary: Document bounded fixture exploration and replay, read-only repository onboarding assertions, typed change-scope matrix skips, local security-advisory authority, trusted-main compiler seeds, isolated hosted-Ubuntu CI package bootstrap, attributable daily-driver same-name provides, configuration upgrade, payload topology, typed corpus coverage, and native lifecycle gates
 ---
 
@@ -47,7 +47,12 @@ unchanged.
 
 The initial inert signed CCS v3 corpus contains two application versions and an
 independent companion package. It checks fixture version, file ownership, and
-actual payload digests separately. `negative_control` deliberately supplies a
+actual payload digests separately. The observer opens the product database
+read-only, reads the existing selected-root snapshot authority, and hashes
+the referenced CAS bytes independently of install output and expected bytes.
+Publication phase, status and error remain visible in observations and the
+report. This inert corpus checks selected-root package mutations; it does not
+provide a bootable OS or prove generation activation. `negative_control` deliberately supplies a
 wrong expected checksum without changing package bytes. It is a checker
 calibration, **not reproduction of #917**, dependency-resolution proof, or a
 new bug. The #917 path still needs a previously missing repository dependency
@@ -66,11 +71,12 @@ These paths are examples inside an operator-approved disposable VM. The guest
 registration is an operator input, never a model output. It contains
 `version: 1`, `approved_disposable: true`, the current guest `boot_id`, a local
 immutable container `image` (`sha256:...`), exact `source_revision`, and
-`conary_sha256`. Register it only after inspecting the VM's mounts, staged
+`conary_sha256`, plus `scratch_uuid` for a dedicated ext4 filesystem mounted
+at `/var/lib/redshirt-fixtures`. Register it only after inspecting the VM's mounts, staged
 image, guest-local container runtime, isolation, outer resource limits and
 cleanup. A virtualization probe and registration do not establish those
 operator approvals by themselves. The adapter rejects another boot, mutable
-image tags, endpoint overrides, host mounts, privileged containers, exposed
+image tags, endpoint overrides, unregistered mounts, privileged containers, exposed
 networking, and missing runtime limits.
 
 The approved image must already contain the exact Conary binary, `sqlite3`,
@@ -78,7 +84,13 @@ The approved image must already contain the exact Conary binary, `sqlite3`,
 and the runtime libraries required by Conary. No image build, download,
 repository sync, production service, or cloud provisioning occurs in this
 command. Container limits are two CPUs, 512 MiB memory, 128 processes, a read-only
-image, and 256 MiB scratch plus 16 MiB temporary storage. The container grants
+image, and at most 256 MiB scratch plus 16 MiB temporary storage. Scratch must
+be a separate ext4 mount with `nodev,nosuid`, verified UUID and size; tmpfs
+cannot satisfy Conary's indexed OverlayFS hardlink probe. Each episode creates
+a private empty directory on that guest filesystem and binds only that directory
+at `/work`. The exact bind source and destination are rechecked before dispatch;
+container removal precedes directory removal. No working-host directory or device
+is exposed. The container grants
 exactly `CAP_SYS_ADMIN`, `CAP_DAC_OVERRIDE`, and `CAP_MKNOD` for the selected-root
 OverlayFS transaction: mounting, accessing the kernel's mode-000 work directory,
 and creating whiteouts. These permissions support the inert root-owned fixtures;

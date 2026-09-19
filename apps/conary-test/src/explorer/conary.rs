@@ -2,7 +2,7 @@
 
 use super::{contract::*, controller::Environment, fixtures, sandbox::GuestApproval};
 use crate::config::manifest::Assertion;
-use crate::container::{ContainerBackend, ContainerConfig};
+use crate::container::{ContainerBackend, ContainerConfig, VolumeMount};
 use crate::engine::assertions::evaluate_assertion;
 use anyhow::{Result, ensure};
 use async_trait::async_trait;
@@ -21,6 +21,7 @@ pub struct ConaryEnvironment<'a> {
     pub fixtures: PathBuf,
     pub fixture_hashes: BTreeMap<String, String>,
     container: Option<String>,
+    scratch: Option<tempfile::TempDir>,
     epoch: u64,
     revision: u64,
     submitted: BTreeSet<String>,
@@ -39,6 +40,7 @@ impl<'a> ConaryEnvironment<'a> {
             fixtures,
             fixture_hashes,
             container: None,
+            scratch: None,
             epoch: 0,
             revision: 0,
             submitted: BTreeSet::new(),
@@ -48,6 +50,21 @@ impl<'a> ConaryEnvironment<'a> {
         self.container
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("environment is not prepared"))
+    }
+    fn scratch_bind(&self) -> Result<VolumeMount> {
+        let scratch = self
+            .scratch
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("scratch not prepared"))?;
+        Ok(VolumeMount {
+            host_path: scratch
+                .path()
+                .to_str()
+                .ok_or_else(|| anyhow::anyhow!("invalid scratch path"))?
+                .into(),
+            container_path: "/work".into(),
+            read_only: false,
+        })
     }
     async fn command(&self, argv: &[&str]) -> Result<crate::container::ExecResult> {
         let result = self
@@ -86,16 +103,18 @@ impl Environment for ConaryEnvironment<'_> {
             fixtures::hashes(&self.fixtures)? == self.fixture_hashes,
             "fixture bytes changed"
         );
+        self.scratch = Some(
+            tempfile::Builder::new()
+                .prefix("episode-")
+                .tempdir_in(super::sandbox::SCRATCH_MOUNT)?,
+        );
         let config = ContainerConfig {
             image: self.approval.image.clone(),
             env: HashMap::new(),
-            volumes: Vec::new(),
+            volumes: vec![self.scratch_bind()?],
             privileged: false,
             network_mode: "none".into(),
-            tmpfs: HashMap::from([
-                ("/work".into(), "size=256m,mode=0700".into()),
-                ("/tmp".into(), "size=16m,mode=1777".into()),
-            ]),
+            tmpfs: HashMap::from([("/tmp".into(), "size=16m,mode=1777".into())]),
             memory_limit: Some(512 * 1024 * 1024),
             experiment: true,
         };
@@ -135,7 +154,10 @@ impl Environment for ConaryEnvironment<'_> {
             "environment identity/running state mismatch"
         );
         ensure!(
-            !isolation.privileged && isolation.host_mounts == 0 && isolation.read_only,
+            !isolation.privileged
+                && isolation.host_mounts == 1
+                && isolation.read_only
+                && isolation.binds == vec![self.scratch_bind()?],
             "experiment exposes host mounts or writable image/privileges"
         );
         ensure!(
@@ -146,10 +168,10 @@ impl Environment for ConaryEnvironment<'_> {
             "resource/network guard failed"
         );
         ensure!(
-            inspect.tmpfs.get("/work").is_some_and(|v| v
+            inspect.tmpfs.get("/tmp").is_some_and(|v| v
                 .split(',')
-                .any(|p| p == "size=256m" || p == "size=268435456")),
-            "scratch storage limit missing"
+                .any(|p| p == "size=16m" || p == "size=16777216")),
+            "temporary storage limit missing"
         );
         let process = self.checked(&["cat", "/proc/self/status"]).await?;
         super::sandbox::verify_process_restrictions(&process)?;
@@ -160,6 +182,7 @@ impl Environment for ConaryEnvironment<'_> {
             packages: BTreeMap::new(),
             owners: BTreeMap::new(),
             payloads: BTreeMap::new(),
+            publication: None,
             complete: true,
         };
         for package in [Package::App, Package::Companion] {
@@ -179,22 +202,12 @@ impl Environment for ConaryEnvironment<'_> {
             if !owner.trim().is_empty() {
                 facts.owners.insert(package, owner.trim().into());
             }
-            let path = format!("{ROOT}{}", package.path());
-            let exists = self.command(&["test", "-e", &path]).await?;
-            match exists.exit_code {
-                0 => {
-                    let output = self.checked(&["sha256sum", "--", &path]).await?;
-                    let hash = output.split_whitespace().next().unwrap_or_default();
-                    ensure!(
-                        hash.len() == 64 && hash.bytes().all(|b| b.is_ascii_hexdigit()),
-                        "invalid payload digest"
-                    );
-                    facts.payloads.insert(package, hash.into());
-                }
-                1 => {}
-                _ => facts.complete = false,
-            }
         }
+        let scratch = self
+            .scratch
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("scratch not prepared"))?;
+        super::selected_state::observe(&scratch.path().join("root/var/lib/conary"), &mut facts)?;
         Ok(Observation {
             version: VERSION,
             environment: self.id()?.clone(),
@@ -262,6 +275,9 @@ impl Environment for ConaryEnvironment<'_> {
             self.backend.remove(id).await?;
         }
         self.container = None;
+        if let Some(scratch) = self.scratch.take() {
+            scratch.close()?;
+        }
         Ok(())
     }
 }

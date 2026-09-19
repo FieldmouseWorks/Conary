@@ -102,10 +102,21 @@ pub struct Facts {
     pub packages: BTreeMap<Package, String>,
     /// Independently queried SQLite file owners.
     pub owners: BTreeMap<Package, String>,
-    /// SHA-256 of actual deployed bytes; absent files have no entry.
+    /// SHA-256 of actual CAS bytes referenced by the selected-root snapshot.
     pub payloads: BTreeMap<Package, String>,
+    /// Publication is observed separately; this fixture slice does not prove boot activation.
+    pub publication: Option<PublicationFact>,
     /// Missing observations must never become a passing empty state.
     pub complete: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PublicationFact {
+    pub snapshot_id: i64,
+    pub status: String,
+    pub phase: String,
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

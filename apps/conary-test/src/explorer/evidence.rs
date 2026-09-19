@@ -54,6 +54,7 @@ pub struct RunReport {
     pub stop_reason: String,
     pub cleanup: String,
     pub reset_verified: bool,
+    pub final_publication: Option<PublicationFact>,
     pub reproduces_recorded_predicate: Option<bool>,
     pub attempted_actions_total: u32,
     pub elapsed_ms: u64,
@@ -176,6 +177,10 @@ impl Evidence {
         summary.push_str(&format!(
             "\nChecks by classification: {counts:?}\n\nRecorded predicate reproduced: {:?}\n",
             report.reproduces_recorded_predicate
+        ));
+        summary.push_str(&format!(
+            "\nSelected-root publication: {:?}\n\nPayload checks cover snapshot-referenced CAS bytes. Bootable generation publication and activation are not validated by this inert fixture corpus.\n",
+            report.final_publication
         ));
         let files = [
             ("report.json", serde_json::to_vec_pretty(report)?),

@@ -318,7 +318,11 @@ impl ContainerBackend for BollardBackend {
         host_config.network_mode = Some(config.network_mode.clone());
         if config.experiment {
             anyhow::ensure!(
-                !config.privileged && config.volumes.is_empty() && config.network_mode == "none",
+                !config.privileged
+                    && config.volumes.len() == 1
+                    && config.volumes[0].container_path == "/work"
+                    && !config.volumes[0].read_only
+                    && config.network_mode == "none",
                 "unsafe experiment container configuration"
             );
             host_config.nano_cpus = Some(2_000_000_000);
@@ -817,6 +821,18 @@ impl ContainerBackend for BollardBackend {
                             .count()
                     })
                     .unwrap_or(0),
+                binds: info
+                    .mounts
+                    .as_ref()
+                    .into_iter()
+                    .flatten()
+                    .filter(|mount| mount.typ.as_deref() == Some("bind"))
+                    .map(|mount| super::backend::VolumeMount {
+                        host_path: mount.source.clone().unwrap_or_default(),
+                        container_path: mount.destination.clone().unwrap_or_default(),
+                        read_only: !mount.rw.unwrap_or(false),
+                    })
+                    .collect(),
                 cpu_nanos: host_config.and_then(|h| h.nano_cpus).unwrap_or(0),
                 pids_limit: host_config.and_then(|h| h.pids_limit).unwrap_or(0),
                 read_only: host_config.and_then(|h| h.readonly_rootfs).unwrap_or(false),

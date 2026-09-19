@@ -6,6 +6,8 @@ use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
+pub const SCRATCH_MOUNT: &str = "/var/lib/redshirt-fixtures";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GuestApproval {
@@ -15,6 +17,7 @@ pub struct GuestApproval {
     pub image: String,
     pub source_revision: String,
     pub conary_sha256: String,
+    pub scratch_uuid: String,
 }
 impl GuestApproval {
     pub fn load(path: &Path) -> Result<Self> {
@@ -46,6 +49,14 @@ impl GuestApproval {
                     .all(|c| c.is_ascii_hexdigit() || c == '-'),
             "invalid boot identity"
         );
+        ensure!(
+            self.scratch_uuid.len() == 36
+                && self
+                    .scratch_uuid
+                    .chars()
+                    .all(|c| c.is_ascii_hexdigit() || c == '-'),
+            "invalid scratch filesystem identity"
+        );
         Ok(())
     }
     pub fn verify_here(&self) -> Result<()> {
@@ -73,8 +84,52 @@ impl GuestApproval {
                 "container endpoint overrides forbidden in explorer"
             );
         }
+        let mount = std::process::Command::new("findmnt")
+            .args([
+                "--json",
+                "--bytes",
+                "--mountpoint",
+                SCRATCH_MOUNT,
+                "--output",
+                "TARGET,FSTYPE,UUID,SIZE,OPTIONS",
+            ])
+            .output()?;
+        ensure!(mount.status.success(), "registered scratch mount missing");
+        verify_scratch_mount(&mount.stdout, &self.scratch_uuid)?;
+        ensure!(
+            Path::new(SCRATCH_MOUNT).canonicalize()? == Path::new(SCRATCH_MOUNT),
+            "scratch mount is a symlink"
+        );
         Ok(())
     }
+}
+
+pub fn verify_scratch_mount(bytes: &[u8], uuid: &str) -> Result<()> {
+    let value: serde_json::Value = serde_json::from_slice(bytes)?;
+    let mounts = value["filesystems"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("missing mount evidence"))?;
+    ensure!(mounts.len() == 1, "ambiguous scratch mount");
+    let mount = &mounts[0];
+    let size = mount["size"]
+        .as_u64()
+        .or_else(|| mount["size"].as_str()?.parse().ok());
+    let options = mount["options"]
+        .as_str()
+        .unwrap_or("")
+        .split(',')
+        .collect::<Vec<_>>();
+    ensure!(
+        mount["target"] == SCRATCH_MOUNT
+            && mount["fstype"] == "ext4"
+            && mount["uuid"] == uuid
+            && size.is_some_and(|size| (16 * 1024 * 1024..=256 * 1024 * 1024).contains(&size))
+            && ["rw", "nosuid", "nodev"]
+                .iter()
+                .all(|option| options.contains(option)),
+        "scratch must be the registered bounded ext4 filesystem"
+    );
+    Ok(())
 }
 fn valid_hex(value: &str, len: usize) -> bool {
     value.len() == len && value.bytes().all(|c| c.is_ascii_hexdigit())

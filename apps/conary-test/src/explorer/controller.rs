@@ -137,6 +137,7 @@ pub async fn run(
         stop_reason: "not_started".into(),
         cleanup: "pending".into(),
         reset_verified: false,
+        final_publication: None,
         reproduces_recorded_predicate: None,
         attempted_actions_total: campaign.attempted,
         elapsed_ms: 0,
@@ -297,6 +298,7 @@ pub async fn run(
     // This is unconditional, including Stop, failed guards and exhausted budgets.
     match tokio::time::timeout(campaign.timeout(), environment.observe()).await {
         Ok(Ok(observation)) if report.reset_verified => {
+            report.final_publication = observation.facts.publication.clone();
             let checks = oracle.evaluate(&observation.facts, false);
             let _ = evidence.event("required_final_checks", &(&observation, &checks));
             report.evaluations.extend(checks);

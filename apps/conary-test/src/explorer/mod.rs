@@ -11,6 +11,7 @@ pub mod fixtures;
 pub mod jev;
 pub mod reducer;
 pub mod sandbox;
+mod selected_state;
 pub mod selector;
 
 #[cfg(test)]
