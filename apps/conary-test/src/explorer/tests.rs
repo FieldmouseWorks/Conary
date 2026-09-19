@@ -321,7 +321,10 @@ async fn concrete_replay_and_bounded_reduction_preserve_negative_control() {
     assert!(original.reset_verified);
     assert_eq!(original.cleanup, "removed");
     assert_eq!(original.signatures().len(), 1);
-    let replay = Replay::load(&tmp.path().join("original/replay.json")).unwrap();
+    let replay_path = std::env::var_os("CONARY_EXPLORER_REPLAY_INPUT")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| tmp.path().join("original/replay.json"));
+    let replay = Replay::load(&replay_path).unwrap();
     let repeated = controller::run(
         &mut fake,
         None,
@@ -570,4 +573,54 @@ async fn unexpected_acceptance_of_a_required_refusal_is_a_product_failure() {
             }
         );
     }
+}
+
+#[tokio::test]
+async fn seeded_controller_reobserves_between_concrete_operations() {
+    let tmp = tempfile::tempdir().unwrap();
+    let output = std::env::var_os("CONARY_EXPLORER_SEEDED_EVIDENCE")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| tmp.path().join("seeded"));
+    let mut fake = Fake::default();
+    let mut selected = Seeded::new(7);
+    let mut campaign = Campaign::new(Limits {
+        actions: 12,
+        ..Default::default()
+    })
+    .unwrap();
+    let report = controller::run(
+        &mut fake,
+        Some(&mut selected),
+        &mut campaign,
+        Episode {
+            mode: Mode::Exploration,
+            identity: identity(),
+            replay: None,
+            output: &output,
+            cancel: &AtomicBool::new(false),
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(report.mode, Mode::Exploration);
+    assert_eq!(report.selector_configuration["seed"], 7);
+    assert_eq!(report.attempted_actions_total, 12);
+    assert!(fake.dispatched > 1);
+    let events = std::fs::read_to_string(output.join("events.jsonl")).unwrap();
+    let requests = events
+        .lines()
+        .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
+        .filter(|v| v["event"] == "decision_request")
+        .collect::<Vec<_>>();
+    assert!(
+        requests
+            .windows(2)
+            .any(|w| w[0]["data"]["candidates"] != w[1]["data"]["candidates"]
+                && w[0]["data"]["observation"]["facts"] != w[1]["data"]["observation"]["facts"])
+    );
+    std::fs::write(
+        output.join("MOCK-ONLY.txt"),
+        "Seeded controller test double; not real Conary integration or a live model trial.\n",
+    )
+    .unwrap();
 }
