@@ -51,6 +51,7 @@ struct Fake {
     fail_cleanup: bool,
     fail_execute: bool,
     incomplete: bool,
+    accept_absent_removal: bool,
 }
 impl Default for Fake {
     fn default() -> Self {
@@ -62,6 +63,7 @@ impl Default for Fake {
             fail_cleanup: false,
             fail_execute: false,
             incomplete: false,
+            accept_absent_removal: false,
         }
     }
 }
@@ -103,7 +105,7 @@ impl Environment for Fake {
             }
             Action::Remove(p) => {
                 if self.current.facts.packages.remove(p).is_none() {
-                    exit_code = 1;
+                    exit_code = if self.accept_absent_removal { 0 } else { 1 };
                 }
                 self.current.facts.owners.remove(p);
                 self.current.facts.payloads.remove(p);
@@ -527,4 +529,45 @@ fn saved_fixture_bundle_contains_exact_bytes_and_fails_on_substitution() {
     std::fs::write(source.join("app-v2.ccs"), b"different").unwrap();
     let mut another = evidence::Evidence::create(&tmp.path().join("another"), 1024 * 1024).unwrap();
     assert!(another.include_fixtures(&source, &hashes).is_err());
+}
+
+#[tokio::test]
+async fn unexpected_acceptance_of_a_required_refusal_is_a_product_failure() {
+    let tmp = tempfile::tempdir().unwrap();
+    for invalid_acceptance in [false, true] {
+        let mut fake = Fake {
+            accept_absent_removal: invalid_acceptance,
+            ..Default::default()
+        };
+        let mut selected = Scripted(vec![Action::Remove(Package::App), Action::Stop]);
+        let mut campaign = Campaign::new(Limits::default()).unwrap();
+        let report = controller::run(
+            &mut fake,
+            Some(&mut selected),
+            &mut campaign,
+            Episode {
+                mode: Mode::Calibration,
+                identity: identity(),
+                replay: None,
+                output: &tmp.path().join(format!("refusal-{invalid_acceptance}")),
+                cancel: &AtomicBool::new(false),
+            },
+        )
+        .await
+        .unwrap();
+        let outcome = report
+            .evaluations
+            .iter()
+            .find(|e| e.criterion == "operation.refusal_or_success")
+            .unwrap();
+        assert_eq!(outcome.passed, Some(!invalid_acceptance));
+        assert_eq!(
+            outcome.classification,
+            if invalid_acceptance {
+                Classification::ProductFailure
+            } else {
+                Classification::ExpectedRefusal
+            }
+        );
+    }
 }
