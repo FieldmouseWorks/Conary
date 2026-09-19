@@ -776,9 +776,9 @@ fn selected_state_observer_checks_snapshot_bytes_and_exposes_pending_publication
     let runtime = temp.path().join("runtime");
     let db_path = runtime.join("conary.db");
     db::init(&db_path).unwrap();
-    let mut facts = empty();
-    selected_state::observe(&runtime, &mut facts).unwrap();
+    let facts = selected_state::observe(&runtime).unwrap();
     assert!(facts.publication.is_none());
+    assert!(facts.complete && facts.packages.is_empty() && facts.owners.is_empty());
     let root = temp.path().join("fixture-root");
     let payload = root.join(Package::App.path().trim_start_matches('/'));
     std::fs::create_dir_all(payload.parent().unwrap()).unwrap();
@@ -800,12 +800,29 @@ fn selected_state_observer_checks_snapshot_bytes_and_exposes_pending_publication
     publication
         .bind_selected_root_snapshot(&conn, snapshot.id())
         .unwrap();
-    selected_state::observe(&runtime, &mut facts).unwrap();
+    let mut trove = db::models::Trove::new(
+        Package::App.name().into(),
+        Fixture::AppV1.version().into(),
+        db::models::TroveType::Package,
+        conary_core::repository::versioning::VersionScheme::Conary,
+    );
+    let trove_id = trove.insert(&conn).unwrap();
+    let entry = snapshot
+        .entry(&conn, &Package::App.path())
+        .unwrap()
+        .unwrap();
+    db::models::FileEntry::new(Package::App.path(), entry.node, entry.content, trove_id)
+        .insert(&conn)
+        .unwrap();
+    let facts = selected_state::observe(&runtime).unwrap();
+    assert_eq!(facts.packages[&Package::App], "1.0.0");
+    assert_eq!(facts.owners[&Package::App], "redshirt-app");
+    assert!(facts.complete);
     let expected = hex::encode(Sha256::digest(Fixture::AppV1.payload()));
     assert_eq!(facts.payloads[&Package::App], expected);
     assert_eq!(facts.publication.unwrap().status, "pending");
     // An intact database/manifest must not hide changed stored bytes.
     let object = conary_core::filesystem::object_path(&runtime.join("objects"), &expected).unwrap();
     std::fs::write(object, "x".repeat(Fixture::AppV1.payload().len())).unwrap();
-    assert!(selected_state::observe(&runtime, &mut empty()).is_err());
+    assert!(selected_state::observe(&runtime).is_err());
 }

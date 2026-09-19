@@ -10,19 +10,56 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension};
 use sha2::{Digest, Sha256};
 use std::path::Path;
 
-pub fn observe(runtime: &Path, facts: &mut Facts) -> Result<()> {
-    let conn =
+pub fn observe(runtime: &Path) -> Result<Facts> {
+    let mut connection =
         Connection::open_with_flags(runtime.join("conary.db"), OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    // One read transaction pins package, ownership and snapshot observations to
+    // the same database state, without repeated container exec/API round trips.
+    let conn = connection.transaction()?;
+    let mut facts = Facts {
+        packages: Default::default(),
+        owners: Default::default(),
+        payloads: Default::default(),
+        publication: None,
+        complete: false,
+    };
+    for package in [Package::App, Package::Companion] {
+        for (sql, parameter, target) in [
+            (
+                "SELECT version FROM troves WHERE type='package' AND name=?1 LIMIT 2",
+                package.name().to_owned(),
+                &mut facts.packages,
+            ),
+            (
+                "SELECT t.name FROM files f JOIN troves t ON t.id=f.trove_id WHERE f.path=?1 LIMIT 2",
+                package.path(),
+                &mut facts.owners,
+            ),
+        ] {
+            let mut statement = conn.prepare(sql)?;
+            let values = statement
+                .query_map([parameter], |row| row.get::<_, String>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            ensure!(
+                values.len() <= 1,
+                "ambiguous fixture package/owner evidence"
+            );
+            if let Some(value) = values.into_iter().next() {
+                target.insert(package, value);
+            }
+        }
+    }
     let id = conn.query_row(
         "SELECT id FROM generation_publications WHERE status != 'abandoned' ORDER BY id DESC LIMIT 1",
         [], |row| row.get::<_, i64>(0),
     ).optional()?;
     let Some(id) = id else {
         ensure!(
-            facts.packages.is_empty(),
+            facts.packages.is_empty() && facts.owners.is_empty(),
             "package state lacks selected-root publication authority"
         );
-        return Ok(());
+        facts.complete = true;
+        return Ok(facts);
     };
     let publication = GenerationPublication::find_by_id(&conn, id)?
         .ok_or_else(|| anyhow::anyhow!("missing publication"))?;
@@ -63,5 +100,6 @@ pub fn observe(runtime: &Path, facts: &mut Facts) -> Result<()> {
             facts.payloads.insert(package, actual);
         }
     }
-    Ok(())
+    facts.complete = true;
+    Ok(facts)
 }

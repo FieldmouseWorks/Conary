@@ -178,36 +178,11 @@ impl Environment for ConaryEnvironment<'_> {
         Ok(())
     }
     async fn observe(&mut self) -> Result<Observation> {
-        let mut facts = Facts {
-            packages: BTreeMap::new(),
-            owners: BTreeMap::new(),
-            payloads: BTreeMap::new(),
-            publication: None,
-            complete: true,
-        };
-        for package in [Package::App, Package::Companion] {
-            let sql = format!(
-                "SELECT version FROM troves WHERE type='package' AND name='{}';",
-                package.name()
-            );
-            let version = self.checked(&["sqlite3", "-readonly", DB, &sql]).await?;
-            if !version.trim().is_empty() {
-                facts.packages.insert(package, version.trim().into());
-            }
-            let sql = format!(
-                "SELECT t.name FROM files f JOIN troves t ON t.id=f.trove_id WHERE f.path='{}';",
-                package.path()
-            );
-            let owner = self.checked(&["sqlite3", "-readonly", DB, &sql]).await?;
-            if !owner.trim().is_empty() {
-                facts.owners.insert(package, owner.trim().into());
-            }
-        }
         let scratch = self
             .scratch
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("scratch not prepared"))?;
-        super::selected_state::observe(&scratch.path().join("root/var/lib/conary"), &mut facts)?;
+        let facts = super::selected_state::observe(&scratch.path().join("root/var/lib/conary"))?;
         Ok(Observation {
             version: VERSION,
             environment: self.id()?.clone(),

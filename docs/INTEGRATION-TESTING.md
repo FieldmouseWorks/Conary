@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-19
-revision: 74
+revision: 75
 summary: Document bounded fixture exploration and replay, read-only repository onboarding assertions, typed change-scope matrix skips, local security-advisory authority, trusted-main compiler seeds, isolated hosted-Ubuntu CI package bootstrap, attributable daily-driver same-name provides, configuration upgrade, payload topology, typed corpus coverage, and native lifecycle gates
 ---
 
@@ -48,8 +48,11 @@ unchanged.
 The initial inert signed CCS v3 corpus contains two application versions and an
 independent companion package. It checks fixture version, file ownership, and
 actual payload digests separately. The observer opens the product database
-read-only, reads the existing selected-root snapshot authority, and hashes
+read-only in one transaction for package versions, owners and the existing
+selected-root snapshot authority, and hashes
 the referenced CAS bytes independently of install output and expected bytes.
+It reads only the registered episode directory inside the guest; state
+collection does not spawn SQLite CLI processes through the container API.
 Publication phase, status and error remain visible in observations and the
 report. This inert corpus checks selected-root package mutations; it does not
 provide a bootable OS or prove generation activation. `negative_control` deliberately supplies a
@@ -79,7 +82,7 @@ operator approvals by themselves. The adapter rejects another boot, mutable
 image tags, endpoint overrides, unregistered mounts, privileged containers, exposed
 networking, and missing runtime limits.
 
-The approved image must already contain the exact Conary binary, `sqlite3`,
+The approved image must already contain the exact Conary binary,
 `sha256sum`, `cat`, shell/core utilities required by the existing exec supervisor,
 and the runtime libraries required by Conary. No image build, download,
 repository sync, production service, or cloud provisioning occurs in this
