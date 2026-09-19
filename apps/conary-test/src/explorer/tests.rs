@@ -53,6 +53,7 @@ struct Fake {
     fail_execute: bool,
     incomplete: bool,
     accept_absent_removal: bool,
+    refuse_install: bool,
 }
 impl Default for Fake {
     fn default() -> Self {
@@ -65,6 +66,7 @@ impl Default for Fake {
             fail_execute: false,
             incomplete: false,
             accept_absent_removal: false,
+            refuse_install: false,
         }
     }
 }
@@ -90,6 +92,9 @@ impl Environment for Fake {
         anyhow::ensure!(!self.fail_execute, "injected unknown execution outcome");
         let mut exit_code = 0;
         match action {
+            Action::Install(_) | Action::Update(_) if self.refuse_install => {
+                exit_code = 1;
+            }
             Action::Install(f) | Action::Update(f) => {
                 self.current
                     .facts
@@ -284,6 +289,12 @@ async fn stop_guard_failure_unknown_outcome_and_cleanup_always_collect_checks() 
         assert!(!report.evaluations.is_empty());
         if case == 1 {
             assert_eq!(fake.dispatched, 0);
+            assert!(
+                report
+                    .evaluations
+                    .iter()
+                    .any(|e| e.classification == Classification::EnvironmentFailure)
+            );
         }
         if case == 2 {
             assert!(report.cleanup.starts_with("failed"));
@@ -291,11 +302,103 @@ async fn stop_guard_failure_unknown_outcome_and_cleanup_always_collect_checks() 
         if case == 3 {
             assert_eq!(report.operations, vec![Action::Inspect]);
             assert!(report.stop_reason.contains("unknown execution outcome"));
+            assert!(
+                report
+                    .evaluations
+                    .iter()
+                    .any(|e| e.classification == Classification::Inconclusive)
+            );
         }
         if case == 4 {
             assert!(report.evaluations.iter().any(|e| e.passed.is_none()));
         }
     }
+}
+
+#[tokio::test]
+async fn unexplained_nonzero_exit_is_inconclusive_and_cannot_confirm_replay() {
+    let tmp = tempfile::tempdir().unwrap();
+    let replay = Replay {
+        version: VERSION,
+        identity: identity(),
+        operations: vec![Action::Install(Fixture::AppV1)],
+        failure_signatures: vec![],
+    };
+    let mut fake = Fake {
+        refuse_install: true,
+        ..Default::default()
+    };
+    let report = controller::run(
+        &mut fake,
+        None,
+        &mut Campaign::new(Limits::default()).unwrap(),
+        Episode {
+            mode: Mode::Replay,
+            identity: identity(),
+            replay: Some(&replay),
+            output: &tmp.path().join("refusal"),
+            cancel: &AtomicBool::new(false),
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(fake.dispatched, 1);
+    assert_eq!(report.reproduces_recorded_predicate, Some(false));
+    assert_eq!(report.cleanup, "removed");
+    assert!(
+        report
+            .evaluations
+            .iter()
+            .any(|e| e.criterion == "operation.refusal_or_success"
+                && e.classification == Classification::Inconclusive
+                && e.passed.is_none())
+    );
+    assert!(
+        !report
+            .evaluations
+            .iter()
+            .any(|e| e.classification == Classification::ProductFailure)
+    );
+    let events = std::fs::read_to_string(tmp.path().join("refusal/events.jsonl")).unwrap();
+    assert!(events.contains("execution_receipt") && events.contains("required_final_checks"));
+}
+
+#[tokio::test]
+async fn cancellation_during_selection_still_checks_and_cleans_without_dispatch() {
+    struct Cancel<'a>(&'a AtomicBool);
+    #[async_trait]
+    impl Selector for Cancel<'_> {
+        fn identity(&self) -> &'static str {
+            "cancel-test"
+        }
+        async fn select(&mut self, _: &DecisionRequest) -> Result<Decision> {
+            self.0.store(true, Ordering::SeqCst);
+            anyhow::bail!("selector interrupted")
+        }
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let cancel = AtomicBool::new(false);
+    let mut fake = Fake::default();
+    let report = controller::run(
+        &mut fake,
+        Some(&mut Cancel(&cancel)),
+        &mut Campaign::new(Limits::default()).unwrap(),
+        Episode {
+            mode: Mode::Exploration,
+            identity: identity(),
+            replay: None,
+            output: &tmp.path().join("cancel"),
+            cancel: &cancel,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(fake.dispatched, 0);
+    assert_eq!(report.stop_reason, "cancelled");
+    assert_eq!(report.cleanup, "removed");
+    assert!(report.reset_verified);
+    assert_eq!(report.evaluations.len(), 6);
+    assert!(report.evaluations.iter().all(|e| e.passed == Some(true)));
 }
 
 #[tokio::test]

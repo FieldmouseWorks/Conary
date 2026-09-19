@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-19
-revision: 73
+revision: 74
 summary: Document bounded fixture exploration and replay, read-only repository onboarding assertions, typed change-scope matrix skips, local security-advisory authority, trusted-main compiler seeds, isolated hosted-Ubuntu CI package bootstrap, attributable daily-driver same-name provides, configuration upgrade, payload topology, typed corpus coverage, and native lifecycle gates
 ---
 
@@ -112,9 +112,15 @@ observation and uses a seeded least-visited action policy. Replay dispatches
 saved concrete typed operations after rechecking their current preconditions;
 it never asks a selector to repeat its choices. Fresh container creation and
 an independent empty-state check provide the baseline reset. Reports retain
-product failures, labelled negative controls, incomplete evidence and harness
-errors. Required final checks run after stop or error, and cleanup failure is
-reported separately. A lost receipt is not automatically retried.
+product failures, expected refusals, labelled negative controls, incomplete
+evidence and harness errors. Environment setup/guard failures have a separate
+classification. An unexplained nonzero command exit or missing execution
+receipt is inconclusive: neither diagnostic text nor an exit status alone
+establishes product fault. Independent state violations and acceptance of a
+required refusal remain product failures. Inconclusive evidence cannot confirm
+a replay or reduction predicate. Required final checks run after stop, error
+or cancellation, and cleanup failure is reported separately. A lost receipt
+is not automatically retried.
 
 Each run writes flushed `events.jsonl`, `report.json`, readable `report.md`, <!-- repo-path: hypothetical -->
 concrete `replay.json`, pinned fixture bytes, and `artifacts.json`. <!-- repo-path: hypothetical --> Keep the

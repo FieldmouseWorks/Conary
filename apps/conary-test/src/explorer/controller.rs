@@ -142,6 +142,9 @@ pub async fn run(
         attempted_actions_total: campaign.attempted,
         elapsed_ms: 0,
     };
+    // Classify failures by the controller boundary that supplied the evidence.
+    // Diagnostic strings and a nonzero CLI exit cannot establish product fault.
+    let mut failure_class = Classification::HarnessFailure;
     let outcome: Result<()> = async {
         ensure!(
             episode.mode == Mode::Replay || episode.replay.is_none(),
@@ -165,7 +168,9 @@ pub async fn run(
             evidence.include_fixtures(source, &report.identity.fixtures)?;
         }
         evidence.event("started", &report)?;
+        failure_class = Classification::EnvironmentFailure;
         let baseline = tokio::time::timeout(campaign.timeout(), environment.reset()).await??;
+        failure_class = Classification::HarnessFailure;
         let checks = oracle.evaluate(&baseline.facts, false);
         ensure!(
             checks.iter().all(|e| e.passed == Some(true)),
@@ -187,8 +192,10 @@ pub async fn run(
                 break;
             }
             campaign.admit(episode.cancel)?;
+            failure_class = Classification::Inconclusive;
             let observed =
                 tokio::time::timeout(campaign.timeout(), environment.observe()).await??;
+            failure_class = Classification::HarnessFailure;
             ensure!(
                 observed.environment == baseline.environment && observed.epoch == baseline.epoch,
                 "environment changed during episode"
@@ -214,20 +221,25 @@ pub async fn run(
                 let result =
                     tokio::time::timeout(campaign.timeout(), selected.select(&request)).await;
                 evidence.event("selector_receipts", &selected.take_evidence())?;
+                if episode.cancel.load(Ordering::SeqCst) {
+                    return Err(ControlStop::Cancelled.into());
+                }
                 result??
             };
             evidence.event("decision", &decision)?;
-            ensure!(
-                !episode.cancel.load(Ordering::SeqCst),
-                "cancelled before dispatch"
-            );
+            if episode.cancel.load(Ordering::SeqCst) {
+                return Err(ControlStop::Cancelled.into());
+            }
             ensure!(
                 campaign.started.elapsed().as_secs() + campaign.limits.cleanup_seconds
                     < campaign.limits.seconds,
                 "deadline before dispatch"
             );
+            failure_class = Classification::EnvironmentFailure;
             tokio::time::timeout(campaign.timeout(), environment.verify()).await??;
+            failure_class = Classification::Inconclusive;
             let current = tokio::time::timeout(campaign.timeout(), environment.observe()).await??;
+            failure_class = Classification::HarnessFailure;
             campaign.revalidate_dispatch(episode.cancel)?;
             let action = request.authorize(&decision, &current)?;
             let operation_id = format!(
@@ -247,11 +259,13 @@ pub async fn run(
             // Record concrete intent even if the receipt is lost: never silently retry it.
             campaign.revalidate_dispatch(episode.cancel)?;
             report.operations.push(action.clone());
+            failure_class = Classification::Inconclusive;
             let receipt = tokio::time::timeout(
                 campaign.timeout(),
                 environment.execute(&operation_id, &action),
             )
             .await??;
+            failure_class = Classification::HarnessFailure;
             ensure!(
                 receipt.operation_id == operation_id && receipt.action == action,
                 "receipt binding mismatch"
@@ -261,18 +275,27 @@ pub async fn run(
                 "operation output limit exceeded"
             );
             evidence.event("execution_receipt", &receipt)?;
+            failure_class = Classification::Inconclusive;
             let after = tokio::time::timeout(campaign.timeout(), environment.observe()).await??;
+            failure_class = Classification::HarnessFailure;
             let negative_request = oracle.expects_refusal(&action);
             if negative_request || receipt.exit_code != 0 {
                 // The criterion is deliberately narrow: refusal with unchanged
                 // independently observed fixture state. Diagnostic prose is not authority.
                 let expected_refusal = negative_request && receipt.exit_code == 1
                     && current.facts.complete && after.facts.complete && current.facts == after.facts;
+                let classification = if expected_refusal {
+                    Classification::ExpectedRefusal
+                } else if negative_request && receipt.exit_code == 0 {
+                    Classification::ProductFailure
+                } else {
+                    Classification::Inconclusive
+                };
                 report.evaluations.push(Evaluation {
                     criterion: "operation.refusal_or_success".into(), checker: CHECKER.into(),
-                    classification: if expected_refusal { Classification::ExpectedRefusal } else { Classification::ProductFailure },
-                    passed: Some(expected_refusal),
-                    detail: format!("exit {}; expected refusal checks unchanged fixture state, not diagnostic cause", receipt.exit_code),
+                    classification,
+                    passed: (classification != Classification::Inconclusive).then_some(expected_refusal),
+                    detail: format!("exit {}; required refusal checks unchanged fixture state; an unexplained nonzero exit has no established product/environment cause", receipt.exit_code),
                 });
             }
             if !negative_request { oracle.accept(&receipt); }
@@ -287,9 +310,14 @@ pub async fn run(
         report.stop_reason = error.to_string();
         if error.downcast_ref::<ControlStop>().is_none() {
             report.evaluations.push(Evaluation {
-                criterion: "harness.execution".into(),
+                criterion: match failure_class {
+                    Classification::EnvironmentFailure => "environment.preflight",
+                    Classification::Inconclusive => "operation.evidence",
+                    _ => "harness.execution",
+                }
+                .into(),
                 checker: CHECKER.into(),
-                classification: Classification::HarnessFailure,
+                classification: failure_class,
                 passed: None,
                 detail: format!("{error:#}"),
             });
