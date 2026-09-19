@@ -406,7 +406,19 @@ async fn mock_receives_actual_checked_history_and_coverage_before_next_choice() 
     assert_eq!(report.evaluations.len(), 18);
     assert!(report.evaluations.iter().all(|e| e.passed == Some(true)));
     let events = std::fs::read_to_string(tmp.path().join("history/events.jsonl")).unwrap();
-    assert_eq!(events.matches("\"kind\":\"decision_context\"").count(), 3);
+    let contexts = events
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .filter(|event| event["event"] == "decision_context")
+        .collect::<Vec<_>>();
+    assert_eq!(contexts.len(), 3);
+    assert_eq!(
+        contexts[2]["data"]["recent_steps"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
 }
 
 #[tokio::test]
