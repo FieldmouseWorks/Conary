@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-19
-revision: 75
+revision: 76
 summary: Document bounded fixture exploration and replay, read-only repository onboarding assertions, typed change-scope matrix skips, local security-advisory authority, trusted-main compiler seeds, isolated hosted-Ubuntu CI package bootstrap, attributable daily-driver same-name provides, configuration upgrade, payload topology, typed corpus coverage, and native lifecycle gates
 ---
 
@@ -149,6 +149,10 @@ Live use requires the explicit `--jev-live` option and `TYPESAFE_API_KEY`.
 It pins `https://api.typesafe.ai/v1/systemone`, disables redirects and proxies,
 and accepts `--jev-max-requests 1..8` (default 8), including retries. It cannot
 be combined with calibration or the mock selector. Replay has no live option.
+After a valid selection consumes the final allowance, the controller records
+an ordinary provider-budget stop and still performs final checks and cleanup.
+An unsuccessful final HTTP attempt remains a provider error. A one-request
+allowance makes no retries.
 Credentials are sensitive HTTP headers, never request state or trace fields;
 any exact credential echoed by a response is redacted. Usage is recorded as
 numeric input/output tokens, with a separately labelled charge estimate;

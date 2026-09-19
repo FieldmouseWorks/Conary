@@ -114,6 +114,69 @@ async fn server(
 }
 
 #[tokio::test]
+async fn one_request_budget_stops_cleanly_without_another_call_or_dispatch() {
+    let (url, server) = server(vec![200], "valid").await;
+    let cancel = Arc::new(AtomicBool::new(false));
+    let mut selector =
+        crate::explorer::jev::Jev::mock(&url, 1, 2, Duration::from_secs(1), cancel.clone())
+            .unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let mut environment = Fake::default();
+    let report = controller::run(
+        &mut environment,
+        Some(&mut selector),
+        &mut Campaign::new(Limits::default()).unwrap(),
+        Episode {
+            mode: Mode::Exploration,
+            identity: identity(),
+            replay: None,
+            output: &tmp.path().join("one-request"),
+            cancel: &cancel,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(server.await.unwrap(), 1);
+    assert_eq!(environment.dispatched, 1);
+    assert_eq!(report.operations, vec![Action::Inspect]);
+    assert_eq!(report.stop_reason, "provider request budget exhausted");
+    assert_eq!(report.cleanup, "removed");
+    assert!(report.reset_verified);
+    assert_eq!(report.evaluations.len(), 12);
+    assert!(
+        report
+            .evaluations
+            .iter()
+            .all(|e| e.classification == Classification::Pass)
+    );
+}
+
+#[tokio::test]
+async fn last_allowed_rate_limit_failure_is_not_a_successful_budget_stop() {
+    let (url, server) = server(vec![429], "valid").await;
+    let mut selector = crate::explorer::jev::Jev::mock(
+        &url,
+        1,
+        2,
+        Duration::from_secs(1),
+        Arc::new(AtomicBool::new(false)),
+    )
+    .unwrap();
+    let error = selector
+        .select(&DecisionRequest::new(observation(), 10).unwrap())
+        .await
+        .unwrap_err();
+    assert!(
+        error
+            .downcast_ref::<selector::RequestBudgetExhausted>()
+            .is_none()
+    );
+    assert!(error.to_string().contains("HTTP 429"));
+    assert_eq!(server.await.unwrap(), 1);
+    assert_eq!(selector.take_evidence().len(), 1);
+}
+
+#[tokio::test]
 async fn provider_mock_valid_malformed_stale_auth_rate_overload_timeout_and_cancel() {
     for (statuses, variant, valid, expected) in [
         (vec![200], "valid", true, 1),

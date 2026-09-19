@@ -91,6 +91,7 @@ impl Jev {
         selector.endpoint = reqwest::Url::parse("https://api.typesafe.ai/v1/systemone")?;
         selector.authorization = Some(authorization);
         selector.live = true;
+        selector.max_attempts = selector.max_attempts.min(requests);
         Ok(selector)
     }
     fn authorization(key: &str) -> Result<reqwest::header::HeaderValue> {
@@ -185,10 +186,9 @@ impl Selector for Jev {
         let body = Self::request(request)?;
         for attempt in 0..self.max_attempts {
             ensure!(!self.cancel.load(Ordering::SeqCst), "provider cancelled");
-            ensure!(
-                self.remaining_requests > 0,
-                "provider request budget exhausted"
-            );
+            if self.remaining_requests == 0 {
+                return Err(super::selector::RequestBudgetExhausted.into());
+            }
             self.remaining_requests -= 1;
             let start = Instant::now();
             let mut pending = self.client.post(self.endpoint.clone()).json(&body);
@@ -234,7 +234,10 @@ impl Selector for Jev {
             receipt["response"] = json!(self.redact(&String::from_utf8_lossy(&bytes)));
             receipt["latency_ms"] = json!(start.elapsed().as_millis());
             self.receipts.push(receipt);
-            if (status == 429 || status == 529) && attempt + 1 < self.max_attempts {
+            if (status == 429 || status == 529)
+                && attempt + 1 < self.max_attempts
+                && self.remaining_requests > 0
+            {
                 tokio::time::sleep(Duration::from_millis(100 * (1 << attempt))).await;
                 continue;
             }

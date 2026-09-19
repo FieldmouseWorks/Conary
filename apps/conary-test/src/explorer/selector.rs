@@ -5,6 +5,11 @@ use anyhow::{Result, ensure};
 use async_trait::async_trait;
 use std::collections::BTreeMap;
 
+/// Exhausting an operator-configured provider allowance is a normal stop.
+#[derive(Debug, thiserror::Error)]
+#[error("provider request budget exhausted")]
+pub struct RequestBudgetExhausted;
+
 #[async_trait]
 pub trait Selector: Send {
     fn configuration(&self) -> serde_json::Value {

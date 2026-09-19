@@ -308,7 +308,11 @@ pub async fn run(
     .await;
     if let Err(error) = outcome {
         report.stop_reason = error.to_string();
-        if error.downcast_ref::<ControlStop>().is_none() {
+        if error.downcast_ref::<ControlStop>().is_none()
+            && error
+                .downcast_ref::<super::selector::RequestBudgetExhausted>()
+                .is_none()
+        {
             report.evaluations.push(Evaluation {
                 criterion: match failure_class {
                     Classification::EnvironmentFailure => "environment.preflight",
