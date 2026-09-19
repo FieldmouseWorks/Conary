@@ -164,6 +164,10 @@ impl Evidence {
             report.attempted_actions_total,
             report.signatures()
         );
+        summary.push_str(&format!(
+            "\nSelector configuration:\n\n```json\n{}\n```\n",
+            serde_json::to_string_pretty(&report.selector_configuration)?
+        ));
         summary.push_str("\n| Step | Concrete operation |\n|---|---|\n");
         for (index, action) in report.operations.iter().enumerate() {
             summary.push_str(&format!("| {} | {:?} |\n", index + 1, action));

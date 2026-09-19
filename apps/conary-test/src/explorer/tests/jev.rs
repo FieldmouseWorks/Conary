@@ -81,6 +81,16 @@ async fn server(
                 .cloned()
                 .collect::<Vec<_>>();
             let mut selected = ids[0].clone();
+            if variant == "approximate_install" {
+                selected = question["criteria"]
+                    .as_object()
+                    .unwrap()
+                    .iter()
+                    .find(|(_, v)| v["action"] == json!({"kind":"install","fixture":"app_v1"}))
+                    .unwrap()
+                    .0
+                    .clone();
+            }
             if variant == "history" {
                 let state = &request["state"];
                 assert_eq!(state["coverage"]["distinct_package_states"], calls);
@@ -119,13 +129,13 @@ async fn server(
                         .is_empty()
                 );
             }
-            let probabilities = ids
+            let mut probabilities = ids
                 .iter()
                 .map(|id| {
                     (
                         id.clone(),
                         if *id == selected {
-                            if variant == "probability_sum" {
+                            if matches!(variant, "probability_sum" | "approximate_install") {
                                 0.99
                             } else {
                                 1.0
@@ -136,6 +146,23 @@ async fn server(
                     )
                 })
                 .collect::<BTreeMap<_, _>>();
+            match variant {
+                "probability_sum_outside" => {
+                    probabilities.insert(selected.clone(), 0.98);
+                }
+                "nonmaximum" => {
+                    probabilities.insert(selected.clone(), 0.4);
+                    probabilities.insert(ids[1].clone(), 0.6);
+                }
+                "missing_probability" => {
+                    probabilities.remove(&ids[1]);
+                }
+                "negative_probability" => {
+                    probabilities.insert(selected.clone(), 1.01);
+                    probabilities.insert(ids[1].clone(), -0.01);
+                }
+                _ => {}
+            }
             let key = if variant == "stale" {
                 "next_action_old"
             } else {
@@ -242,7 +269,11 @@ async fn provider_mock_valid_malformed_stale_auth_rate_overload_timeout_and_canc
         (vec![200], "malformed", false, 1),
         (vec![200], "stale", false, 1),
         (vec![200], "unknown", false, 1),
-        (vec![200], "probability_sum", false, 1),
+        (vec![200], "probability_sum", true, 1),
+        (vec![200], "probability_sum_outside", false, 1),
+        (vec![200], "nonmaximum", false, 1),
+        (vec![200], "missing_probability", false, 1),
+        (vec![200], "negative_probability", false, 1),
         (vec![401], "valid", false, 1),
         (vec![422], "valid", false, 1),
         (vec![429, 200], "valid", true, 2),
@@ -439,4 +470,89 @@ async fn stale_or_rebound_context_is_rejected_before_http() {
     context.candidates.get_mut("c0").unwrap().action = Action::Stop;
     assert!(selector.select(&request, &context).await.is_err());
     assert!(selector.take_evidence().is_empty());
+}
+
+#[tokio::test]
+async fn choice_contract_is_audited_and_invalid_maps_never_dispatch_or_retry() {
+    for (variant, expected_outcome, dispatches) in [
+        ("approximate_install", "accepted_approximate", 1),
+        ("probability_sum_outside", "rejected_total", 0),
+        ("nonmaximum", "rejected_choice_not_maximum", 0),
+        ("missing_probability", "rejected_candidate_keys", 0),
+        ("negative_probability", "rejected_probability_value", 0),
+    ] {
+        let (url, server) = server(vec![200], variant).await;
+        let cancel = Arc::new(AtomicBool::new(false));
+        let mut selector =
+            crate::explorer::jev::Jev::mock(&url, 1, 2, Duration::from_secs(1), cancel.clone())
+                .unwrap();
+        let mut environment = Fake::default();
+        let tmp = tempfile::tempdir().unwrap();
+        let output = tmp.path().join(variant);
+        let report = controller::run(
+            &mut environment,
+            Some(&mut selector),
+            &mut Campaign::new(Limits::default()).unwrap(),
+            Episode {
+                mode: Mode::Exploration,
+                identity: identity(),
+                replay: None,
+                output: &output,
+                cancel: &cancel,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(server.await.unwrap(), 1, "{variant}");
+        assert_eq!(environment.dispatched, dispatches, "{variant}");
+        assert!(report.reset_verified);
+        assert_eq!(report.cleanup, "removed");
+        let events = std::fs::read_to_string(output.join("events.jsonl")).unwrap();
+        let events = events
+            .lines()
+            .map(|l| serde_json::from_str::<Value>(l).unwrap())
+            .collect::<Vec<_>>();
+        let finals = events
+            .iter()
+            .filter(|e| e["event"] == "required_final_checks")
+            .collect::<Vec<_>>();
+        assert_eq!(finals.len(), 1);
+        assert_eq!(finals[0]["data"][1].as_array().unwrap().len(), 6);
+        let receipts = events
+            .iter()
+            .filter(|e| e["event"] == "selector_receipts")
+            .flat_map(|e| e["data"].as_array().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(receipts.len(), 1);
+        let audit = &receipts[0]["choice_validation"];
+        assert_eq!(audit["outcome"], expected_outcome);
+        assert_eq!(audit["policy"], "choice-approximate-total-v1");
+        assert_eq!(audit["total_tolerance"], 0.01);
+        if dispatches == 1 {
+            assert_eq!(report.operations, vec![Action::Install(Fixture::AppV1)]);
+            assert_eq!(report.stop_reason, "provider request budget exhausted");
+            assert!(report.evaluations.iter().all(|e| e.passed == Some(true)));
+            let raw: Value =
+                serde_json::from_str(receipts[0]["response"].as_str().unwrap()).unwrap();
+            let answer = raw["answers"].as_object().unwrap().values().next().unwrap();
+            assert_eq!(
+                answer["probabilities"][answer["choice"].as_str().unwrap()],
+                0.99
+            );
+            assert_eq!(audit["raw_total"], 0.99);
+        } else {
+            assert!(report.operations.is_empty());
+            assert!(
+                report
+                    .evaluations
+                    .iter()
+                    .any(|e| e.classification == Classification::HarnessFailure)
+            );
+        }
+        assert!(
+            std::fs::read_to_string(output.join("report.md"))
+                .unwrap()
+                .contains("choice-approximate-total-v1")
+        );
+    }
 }

@@ -19,6 +19,8 @@ use std::sync::{
 use std::time::{Duration, Instant};
 
 pub const MODEL: &str = "jev-1.13.0";
+pub(crate) mod choice;
+use choice::Answer;
 
 pub struct Jev {
     authorization: Option<reqwest::header::HeaderValue>,
@@ -166,15 +168,6 @@ struct Usage {
     input_tokens: u64,
     output_tokens: u64,
 }
-#[derive(Deserialize)]
-struct Answer {
-    #[serde(rename = "type")]
-    kind: String,
-    choice: String,
-    probabilities: BTreeMap<String, f64>,
-    confidence: f64,
-}
-
 #[async_trait]
 impl Selector for Jev {
     fn identity(&self) -> &'static str {
@@ -187,6 +180,9 @@ impl Selector for Jev {
     fn configuration(&self) -> Value {
         json!({"model": MODEL, "transport": if self.live { "live_https" } else { "local_mock" },
             "decision_policy": POLICY,
+            "choice_validation": {"policy": choice::POLICY, "total_tolerance": choice::TOTAL_TOLERANCE,
+                "floating_arithmetic_slack": choice::FLOAT_SLACK, "normalizes_probabilities": false,
+                "requires_maximum_probability_choice": true},
             "request_limit": self.request_limit, "retries_share_request_limit": true,
             "reserved_input_tokens_per_request": if self.live { Some(65536) } else { None },
             "price_usd_per_million_input_tokens": if self.live { Some(0.042) } else { None },
@@ -286,20 +282,14 @@ impl Selector for Jev {
                 .answers
                 .get(&key)
                 .ok_or_else(|| anyhow::anyhow!("stale/mismatched provider response"))?;
+            let assessment = answer.assess(request);
+            if let Some(last) = self.receipts.last_mut() {
+                last["choice_validation"] = json!(assessment);
+            }
             ensure!(
-                answer.kind == "choice"
-                    && answer.confidence.is_finite()
-                    && (0.0..=1.0).contains(&answer.confidence),
-                "invalid choice response"
-            );
-            ensure!(
-                answer.probabilities.len() == request.candidates.len()
-                    && request.candidates.iter().all(|c| answer
-                        .probabilities
-                        .get(&c.id)
-                        .is_some_and(|p| p.is_finite() && (0.0..=1.0).contains(p)))
-                    && (answer.probabilities.values().sum::<f64>() - 1.0).abs() < 0.00001,
-                "invalid probability map"
+                assessment.accepted(),
+                "Jev choice contract: {:?}",
+                assessment.outcome
             );
             let decision = Decision {
                 candidate_id: answer.choice.clone(),

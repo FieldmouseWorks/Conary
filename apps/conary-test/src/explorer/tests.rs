@@ -18,6 +18,7 @@ use std::{
 #[path = "tests/context.rs"]
 mod context_tests;
 mod jev;
+mod jev_choice;
 
 fn empty() -> Facts {
     Facts {

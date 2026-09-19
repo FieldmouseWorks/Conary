@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-19
-revision: 78
+revision: 79
 summary: Document bounded fixture exploration and replay, read-only repository onboarding assertions, typed change-scope matrix skips, local security-advisory authority, trusted-main compiler seeds, isolated hosted-Ubuntu CI package bootstrap, attributable daily-driver same-name provides, configuration upgrade, payload topology, typed corpus coverage, and native lifecycle gates
 ---
 
@@ -148,6 +148,27 @@ and [Choice](https://docs.typesafe.ai/primitives/choice) documentation checked
 question ID to the observation/candidate digest; actual responses, unknown
 usage, and bounded attempts remain inspectable. Errors stop selection without
 a baseline fallback. Mock receipts do not prove a live trial or model advantage.
+
+Choice validation uses policy `choice-approximate-total-v1`. The public guide
+says probabilities sum to one; the official generated
+[SDK schema](https://github.com/typesafe-ai/typesafe-sdk-python/blob/2ce5c65f13646cab6e6f782328194c9d85f3300a/src/typesafe_sdk/_schemas/models.py#L11-L29)
+says approximately one and specifies no numeric tolerance. The adapter chooses
+an explicit absolute total error limit of 0.01, with 1e-12 floating arithmetic
+slack. This is a consumer policy, not an upstream rounding guarantee. It never
+normalizes the map or changes the provider's selected ID. Every candidate must
+have exactly one finite probability in [0,1], confidence must be finite and in
+[0,1], and the chosen ID must attain the reported maximum (ties allowed).
+Missing/extra keys, invalid values, an excessive total error or a nonmaximum
+choice stop selection without retry or fallback. Model and request binding plus
+controller freshness, permission and budget checks remain required.
+
+Each parsed Choice receipt includes the validation policy, raw total, absolute
+error, limit and a typed exact/approximate/rejected outcome. Raw responses stay
+preserved, including approximate totals and rejections. Selector configuration
+records the policy in JSON and the readable report. Previous trials retain
+their original validation failures; changing this policy does not make them
+successful retrospectively. Probability/confidence values are advisory provider
+data, never independent correctness checks or execution permission.
 
 All selectors receive the same controller-owned decision context from
 `explorer/context.rs`. Policy `fixture-coverage-v2` asks for distinct observed

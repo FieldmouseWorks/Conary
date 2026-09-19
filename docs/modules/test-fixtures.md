@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-19
-revision: 63
+revision: 64
 summary: Map fixture ownership, including the bounded local explorer corpus, native refusals, repository discovery, command captures, typed boot-tool interfaces, and the refreshed Tumbleweed lifecycle snapshot
 ---
 
@@ -881,6 +881,7 @@ CAS. Update cancellation captures cover both native and CCS root packages.
 - **Owner:** `apps/conary-test/src/explorer/fixtures.rs` and its independent checker; `explorer/context.rs` owns the fixture coverage goal and observed decision history.
 - **Purpose:** Build signed inert CCS v3 application versions plus a companion; compare real payload hashes and ownership with fixture expectations.
 - **Consumes:** `conary-test explorer` calibration, seeded exploration and concrete-operation replay.
+- **Provider contract proof:** `explorer/tests/jev_choice.rs` covers approximation boundaries and preserved numerical maps; the local transport mock checks audit receipts, rejection before dispatch and unconditional finalization.
 - **Fast proof:** `cargo test -p conary-test explorer`.
 - **Medium proof:** `cargo test -p conary-test`; `cargo run -p conary-test -- list`.
 - **Slow proof:** Approved disposable-VM commands in `docs/INTEGRATION-TESTING.md`.
