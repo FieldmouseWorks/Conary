@@ -187,6 +187,12 @@ class RetentionTests(unittest.TestCase):
             self.assertEqual(len(receipt['blobs']), 2)
             self.assertFalse(staged.exists())
             self.assertFalse(self.layout.exists())
+            # A healthy origin must not become an implicit fallback when the
+            # retained authority is unavailable.
+            image.copy_image(f'dir:{self.root / "cold-read"}', f'docker://{origin}/source:reviewed',
+                             ['--dest-authfile', str(auth), '--dest-tls-verify=false'])
+            with urllib.request.urlopen(url, timeout=5) as response:
+                self.assertEqual(response.status, 200)
             retained_url = f'http://{retained}/v2/retained/manifests/sha256:{digest}'
             with urllib.request.urlopen(urllib.request.Request(retained_url, method='DELETE'), timeout=5):
                 pass

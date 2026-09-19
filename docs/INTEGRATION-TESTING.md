@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-19
-revision: 69
+revision: 70
 summary: Document exact base-image retention, anonymous registry acquisition, cold-cache origin-deletion proof, and existing attributable integration gates
 ---
 
@@ -794,8 +794,9 @@ repository-snapshot and signing-root bindings are unchanged. This catalog
 does not authorize a new snapshot or infer authority from a cache name.
 
 The `cache-base-image` action may restore cached layers, but every run must
-successfully pull the configured registry reference by digest and inspect that
-digest before building. Docker verifies the manifest, config and layers on
+successfully pull the configured registry reference anonymously by digest and
+inspect that digest before building. The pull uses an empty Docker credential
+directory. Docker verifies the manifest, config and layers on
 acquisition. The action resolves its policy helper from its own checkout so
 release-proof workflows retain the selected workflow authority. There is no
 mutable-tag or upstream fallback when a retained image is missing.
@@ -839,7 +840,8 @@ claim that every other distro's upstream image has already been retained.
 `python3 scripts/test-ci-base-image.py -v` runs corruption/binding refusals and
 two disposable loopback Distribution registries. It deletes the original
 manifest and both local image copies, then proves a cold anonymous retained
-pull; deleting the retained manifest must fail. The proof runs in the
+pull; deleting the retained manifest must fail even after restoring a healthy
+origin. The proof runs in the
 protected `conary-test-crate` job with Skopeo and `docker-registry`. It executes
 no image or package workload and uses no host container store. Plain HTTP is
 available only through an explicit literal-loopback fixture flag; production

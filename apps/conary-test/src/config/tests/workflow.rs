@@ -305,6 +305,7 @@ docker() {
     printf '%s\n' "$1" >> "$CALLS"
     if [[ "$1" == pull ]]; then
         [[ "$2" == "$BASE_IMAGE_REF" ]] || return 66
+        [[ -d "$DOCKER_CONFIG" && ! -e "$DOCKER_CONFIG/config.json" ]] || return 68
         return "$PULL_EXIT"
     fi
     [[ "$1 $2" == 'image inspect' ]] || return 67
@@ -322,6 +323,9 @@ sleep() { :; }
     ] {
         let tmp = tempfile::tempdir().unwrap();
         let calls = tmp.path().join("calls");
+        let authenticated = tmp.path().join("authenticated");
+        std::fs::create_dir(&authenticated).unwrap();
+        std::fs::write(authenticated.join("config.json"), r#"{"auths":{}}"#).unwrap();
         let status = Command::new("bash")
             .args([
                 "-euo",
@@ -333,6 +337,7 @@ sleep() { :; }
             .env("PULL_EXIT", pull_exit)
             .env("INSPECT_RESULT", inspection)
             .env("CALLS", &calls)
+            .env("DOCKER_CONFIG", &authenticated)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()

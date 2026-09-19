@@ -1,6 +1,6 @@
 name: cache-base-image
 description: >-
-  Restore optional cached layers, then require a registry pull by the reviewed
+  Restore optional cached layers, then require an anonymous registry pull by the reviewed
   digest on every run. Registered retained images use their project-owned
   registry; cache names never establish image authority. Docker verifies the
   manifest/config/layer content while pulling the pinned reference.
@@ -56,9 +56,11 @@ runs:
       run: |
         set -euo pipefail
 
+        pull_config="$(mktemp -d)"
+        trap 'rm -rf -- "$pull_config"' EXIT
         max_attempts=3
         attempt=1
-        until docker pull "$BASE_IMAGE_REF"; do
+        until DOCKER_CONFIG="$pull_config" docker pull "$BASE_IMAGE_REF"; do
           if (( attempt >= max_attempts )); then
             echo "failed to pull $BASE_IMAGE_REF after $max_attempts attempts" >&2
             exit 1
