@@ -174,10 +174,14 @@ class RetentionTests(unittest.TestCase):
             image.fetch(entry, staged, origin=True, allow_http=True)
             self.assertTrue(image.publish(entry, staged, auth, allow_http=True)['anonymous_read_verified'])
             url = f'http://{origin}/v2/source/manifests/sha256:{digest}'
+            manifest_request = urllib.request.Request(
+                url, headers={'Accept': 'application/vnd.oci.image.manifest.v1+json'})
+            with urllib.request.urlopen(manifest_request, timeout=5) as response:
+                self.assertEqual(response.status, 200)
             with urllib.request.urlopen(urllib.request.Request(url, method='DELETE'), timeout=5) as response:
                 self.assertEqual(response.status, 202)
             with self.assertRaises(urllib.error.HTTPError) as failure:
-                urllib.request.urlopen(url, timeout=5)
+                urllib.request.urlopen(manifest_request, timeout=5)
             self.assertEqual(failure.exception.code, 404)
             failure.exception.close()
             shutil.rmtree(staged)
@@ -191,7 +195,7 @@ class RetentionTests(unittest.TestCase):
             # retained authority is unavailable.
             image.copy_image(f'dir:{self.root / "cold-read"}', f'docker://{origin}/source:reviewed',
                              ['--dest-authfile', str(auth), '--dest-tls-verify=false'])
-            with urllib.request.urlopen(url, timeout=5) as response:
+            with urllib.request.urlopen(manifest_request, timeout=5) as response:
                 self.assertEqual(response.status, 200)
             retained_url = f'http://{retained}/v2/retained/manifests/sha256:{digest}'
             with urllib.request.urlopen(urllib.request.Request(retained_url, method='DELETE'), timeout=5):
