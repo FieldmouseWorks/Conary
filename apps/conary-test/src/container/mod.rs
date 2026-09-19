@@ -16,6 +16,11 @@ pub use backend::{
 pub use image::{build_distro_image, build_distro_image_from_native_package};
 pub use lifecycle::BollardBackend;
 
+// Guest-only fixture profile: mount OverlayFS, access its mode-000 workdir,
+// and create whiteouts. No workload runs with these permissions on the host.
+pub(crate) const EXPERIMENT_CAPABILITIES: [&str; 3] = ["SYS_ADMIN", "DAC_OVERRIDE", "MKNOD"];
+pub(crate) const EXPERIMENT_CAPABILITY_MASK: u64 = (1 << 21) | (1 << 1) | (1 << 27);
+
 #[cfg(test)]
 mod tests {
     use super::*;

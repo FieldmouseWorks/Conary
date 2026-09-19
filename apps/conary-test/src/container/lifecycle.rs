@@ -328,7 +328,12 @@ impl ContainerBackend for BollardBackend {
             // Conary's selected-root transaction performs a functional OverlayFS
             // mount probe. The explorer may use this profile only inside its
             // separately registered disposable VM; it never grants host authority.
-            host_config.cap_add = Some(vec!["SYS_ADMIN".into()]);
+            host_config.cap_add = Some(
+                super::EXPERIMENT_CAPABILITIES
+                    .into_iter()
+                    .map(str::to_owned)
+                    .collect(),
+            );
             host_config.security_opt = Some(vec![
                 "no-new-privileges".into(),
                 "apparmor=unconfined".into(),

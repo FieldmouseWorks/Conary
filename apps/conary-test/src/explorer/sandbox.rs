@@ -81,7 +81,7 @@ fn valid_hex(value: &str, len: usize) -> bool {
 }
 
 /// Read actual kernel process restrictions, not only runtime configuration.
-/// The sole capability permits Conary's selected-root OverlayFS transaction.
+/// The fixed mount/file capabilities permit the selected-root OverlayFS probe.
 pub fn verify_process_restrictions(status: &str) -> Result<()> {
     let fields = status
         .lines()
@@ -93,8 +93,8 @@ pub fn verify_process_restrictions(status: &str) -> Result<()> {
             .get(key)
             .ok_or_else(|| anyhow::anyhow!("missing process capability evidence"))?;
         ensure!(
-            u64::from_str_radix(value, 16)? == (1 << 21),
-            "experiment requires exactly CAP_SYS_ADMIN for selected-root mounts"
+            u64::from_str_radix(value, 16)? == crate::container::EXPERIMENT_CAPABILITY_MASK,
+            "experiment requires exactly the registered mount/file capability set"
         );
     }
     ensure!(

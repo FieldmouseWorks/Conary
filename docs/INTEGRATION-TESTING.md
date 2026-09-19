@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-19
-revision: 69
+revision: 70
 summary: Document bounded fixture exploration and replay, read-only repository onboarding assertions, typed change-scope matrix skips, local security-advisory authority, trusted-main compiler seeds, isolated hosted-Ubuntu CI package bootstrap, attributable daily-driver same-name provides, configuration upgrade, payload topology, typed corpus coverage, and native lifecycle gates
 ---
 
@@ -79,7 +79,10 @@ and the runtime libraries required by Conary. No image build, download,
 repository sync, production service, or cloud provisioning occurs in this
 command. Container limits are two CPUs, 512 MiB memory, 128 processes, a read-only
 image, and 256 MiB scratch plus 16 MiB temporary storage. The container grants
-exactly `CAP_SYS_ADMIN` for the selected-root OverlayFS transaction; its
+exactly `CAP_SYS_ADMIN`, `CAP_DAC_OVERRIDE`, and `CAP_MKNOD` for the selected-root
+OverlayFS transaction: mounting, accessing the kernel's mode-000 work directory,
+and creating whiteouts. These permissions support the inert root-owned fixtures;
+they are not a general package lifecycle profile. Its
 AppArmor profile is unconfined inside the disposable guest. The runtime seccomp
 filter and no-new-privileges remain enabled. Actual effective, permitted and
 bounding capabilities plus those two restrictions are checked through
