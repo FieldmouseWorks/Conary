@@ -110,6 +110,10 @@ pub async fn reduce(
         } else {
             index += 1;
         }
+        if report.cleanup != "removed" {
+            result.reason = "cleanup failed; environment quarantined".into();
+            break;
+        }
     }
     let summary = serde_json::to_vec_pretty(&result)?;
     let replay_bytes = serde_json::to_vec_pretty(&result.reduced)?;

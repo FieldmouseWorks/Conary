@@ -65,12 +65,30 @@ impl Campaign {
         self.attempted += 1;
         Ok(())
     }
+    fn revalidate_dispatch(&self, cancel: &AtomicBool) -> Result<()> {
+        if cancel.load(Ordering::SeqCst) {
+            return Err(ControlStop::Cancelled.into());
+        }
+        if self.attempted > self.limits.actions {
+            return Err(ControlStop::Actions.into());
+        }
+        // Reserve both an operation and the mandatory post-state check, plus cleanup.
+        if self.started.elapsed().as_secs()
+            + 2 * self.limits.operation_seconds
+            + self.limits.cleanup_seconds
+            >= self.limits.seconds
+        {
+            return Err(ControlStop::Time.into());
+        }
+        Ok(())
+    }
     fn timeout(&self) -> Duration {
         Duration::from_secs(
             self.limits.operation_seconds.min(
                 self.limits
                     .seconds
-                    .saturating_sub(self.started.elapsed().as_secs()),
+                    .saturating_sub(self.started.elapsed().as_secs())
+                    .saturating_sub(self.limits.cleanup_seconds),
             ),
         )
     }
@@ -101,6 +119,11 @@ pub async fn run(
     let mut report = RunReport {
         version: VERSION,
         mode: episode.mode,
+        harness_revision: crate::build_info::BuildInfo::current().git_commit,
+        selector_configuration: selector
+            .as_ref()
+            .map(|s| s.configuration())
+            .unwrap_or(serde_json::Value::Null),
         selector: if episode.mode == Mode::Replay {
             "none-recorded-operations"
         } else {
@@ -204,6 +227,7 @@ pub async fn run(
             );
             tokio::time::timeout(campaign.timeout(), environment.verify()).await??;
             let current = tokio::time::timeout(campaign.timeout(), environment.observe()).await??;
+            campaign.revalidate_dispatch(episode.cancel)?;
             let action = request.authorize(&decision, &current)?;
             let operation_id = format!(
                 "{}:{}:{}",
@@ -220,6 +244,7 @@ pub async fn run(
                 break;
             }
             // Record concrete intent even if the receipt is lost: never silently retry it.
+            campaign.revalidate_dispatch(episode.cancel)?;
             report.operations.push(action.clone());
             let receipt = tokio::time::timeout(
                 campaign.timeout(),

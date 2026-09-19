@@ -91,8 +91,8 @@ product failures, labelled negative controls, incomplete evidence and harness
 errors. Required final checks run after stop or error, and cleanup failure is
 reported separately. A lost receipt is not automatically retried.
 
-Each run writes flushed `events.jsonl`, `report.json`, readable `report.md`,
-concrete `replay.json`, pinned fixture bytes, and `artifacts.json`. Keep the
+Each run writes flushed `events.jsonl`, `report.json`, readable `report.md`, <!-- repo-path: hypothetical -->
+concrete `replay.json`, pinned fixture bytes, and `artifacts.json`. <!-- repo-path: hypothetical --> Keep the
 original bundle. Reduction writes every attempted replay, `reduction.json`,
 and `reduced-replay.json`; acceptance requires the same failed criteria and
 classification with a verified baseline and successful cleanup. The bounded

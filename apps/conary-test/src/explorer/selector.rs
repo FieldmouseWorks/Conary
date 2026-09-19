@@ -7,6 +7,9 @@ use std::collections::BTreeMap;
 
 #[async_trait]
 pub trait Selector: Send {
+    fn configuration(&self) -> serde_json::Value {
+        serde_json::Value::Null
+    }
     fn take_evidence(&mut self) -> Vec<serde_json::Value> {
         Vec::new()
     }
@@ -30,6 +33,9 @@ impl Seeded {
 }
 #[async_trait]
 impl Selector for Seeded {
+    fn configuration(&self) -> serde_json::Value {
+        serde_json::json!({"seed": self.state})
+    }
     fn identity(&self) -> &'static str {
         "seeded-v1"
     }

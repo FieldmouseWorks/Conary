@@ -45,6 +45,8 @@ pub struct RunReport {
     pub version: u32,
     pub mode: Mode,
     pub selector: String,
+    pub selector_configuration: serde_json::Value,
+    pub harness_revision: String,
     pub identity: Identity,
     pub limits: Limits,
     pub operations: Vec<Action>,
@@ -136,7 +138,8 @@ impl Evidence {
         bytes.push(b'\n');
         // Reserve bounded room for the final report and cleanup receipt.
         ensure!(
-            self.bytes + bytes.len() as u64 <= self.limit.saturating_sub(32768),
+            self.bytes + bytes.len() as u64
+                <= self.limit.saturating_sub((self.limit / 2).min(262144)),
             "evidence budget exhausted"
         );
         self.events.write_all(&bytes)?;
@@ -150,7 +153,7 @@ impl Evidence {
     }
     pub fn finish(&mut self, report: &RunReport) -> Result<()> {
         let replay = report.replay();
-        let summary = format!(
+        let mut summary = format!(
             "# Conary explorer\n\nMode: {:?}; selector: {}\n\nStop: {}\n\nBaseline verified: {}; cleanup: {}\n\nAttempted actions (campaign): {}\n\nFailure predicates: {:?}\n\nFull choices, intent, receipts and independent checks: events.jsonl\nReplay input: replay.json (concrete operations; no selector).\n\nThis fixture corpus does not reproduce #917. Negative controls are checker calibration only.\n",
             report.mode,
             report.selector,
@@ -160,10 +163,38 @@ impl Evidence {
             report.attempted_actions_total,
             report.signatures()
         );
+        summary.push_str("\n| Step | Concrete operation |\n|---|---|\n");
+        for (index, action) in report.operations.iter().enumerate() {
+            summary.push_str(&format!("| {} | {:?} |\n", index + 1, action));
+        }
+        let mut counts = std::collections::BTreeMap::new();
+        for evaluation in &report.evaluations {
+            *counts
+                .entry(format!("{:?}", evaluation.classification))
+                .or_insert(0usize) += 1;
+        }
+        summary.push_str(&format!(
+            "\nChecks by classification: {counts:?}\n\nRecorded predicate reproduced: {:?}\n",
+            report.reproduces_recorded_predicate
+        ));
         let files = [
             ("report.json", serde_json::to_vec_pretty(report)?),
             ("replay.json", serde_json::to_vec_pretty(&replay)?),
             ("report.md", summary.into_bytes()),
+            (
+                "repair-candidate.json",
+                serde_json::to_vec_pretty(&serde_json::json!({
+                    "version": VERSION,
+                    "source_revision": report.identity.source_revision,
+                    "criteria": report.signatures(),
+                    "operations": report.operations,
+                    "supporting_evidence": "artifacts.json",
+                    "suggested_owner": "apps/conary-test/src/explorer",
+                    "suggested_check": "cargo test -p conary-test explorer",
+                    "automatic_repair_authorized": false,
+                    "calibration_only": report.evaluations.iter().filter(|e| e.passed == Some(false)).all(|e| e.classification == Classification::NegativeControl),
+                }))?,
+            ),
         ];
         let total = files.iter().map(|(_, b)| b.len() as u64).sum::<u64>();
         ensure!(
@@ -174,7 +205,13 @@ impl Evidence {
             std::fs::write(self.directory.join(name), bytes)?;
         }
         let mut manifest = std::collections::BTreeMap::new();
-        for name in ["events.jsonl", "report.json", "replay.json", "report.md"] {
+        for name in [
+            "events.jsonl",
+            "report.json",
+            "replay.json",
+            "report.md",
+            "repair-candidate.json",
+        ] {
             let bytes = std::fs::read(self.directory.join(name))?;
             use sha2::Digest;
             manifest.insert(name.to_owned(), serde_json::json!({"sha256": hex::encode(sha2::Sha256::digest(&bytes)), "bytes": bytes.len()}));
