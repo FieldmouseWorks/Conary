@@ -261,9 +261,8 @@ pub async fn run(
             );
             evidence.event("execution_receipt", &receipt)?;
             let after = tokio::time::timeout(campaign.timeout(), environment.observe()).await??;
-            let negative_request = matches!(action, Action::Remove(package) if !oracle.0.contains_key(&package))
-                || matches!(action, Action::Update(Fixture::AppV1) if oracle.0.get(&Package::App) == Some(&Fixture::AppV2));
-            if receipt.exit_code != 0 {
+            let negative_request = oracle.expects_refusal(&action);
+            if negative_request || receipt.exit_code != 0 {
                 // The criterion is deliberately narrow: refusal with unchanged
                 // independently observed fixture state. Diagnostic prose is not authority.
                 let expected_refusal = negative_request && receipt.exit_code == 1
@@ -275,7 +274,7 @@ pub async fn run(
                     detail: format!("exit {}; expected refusal checks unchanged fixture state, not diagnostic cause", receipt.exit_code),
                 });
             }
-            oracle.accept(&receipt);
+            if !negative_request { oracle.accept(&receipt); }
             let checks = oracle.evaluate(&after.facts, action == Action::NegativeControl);
             evidence.event("checked", &(&after, &checks))?;
             report.evaluations.extend(checks);

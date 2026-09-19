@@ -9,6 +9,11 @@ use std::collections::BTreeMap;
 pub struct Oracle(pub BTreeMap<Package, Fixture>);
 
 impl Oracle {
+    pub fn expects_refusal(&self, action: &Action) -> bool {
+        matches!(action, Action::Remove(package) if !self.0.contains_key(package))
+            || matches!(action, Action::Update(Fixture::AppV1) if self.0.get(&Package::App) == Some(&Fixture::AppV2))
+    }
+
     pub fn accept(&mut self, receipt: &Receipt) {
         if receipt.exit_code != 0 {
             return;
