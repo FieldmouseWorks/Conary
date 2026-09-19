@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-09-09
-revision: 68
-summary: Document read-only repository onboarding assertions, typed change-scope matrix skips, local security-advisory authority, trusted-main compiler seeds, isolated hosted-Ubuntu CI package bootstrap, attributable daily-driver same-name provides, configuration upgrade, payload topology, typed corpus coverage, and native lifecycle gates
+last_updated: 2026-09-19
+revision: 69
+summary: Document bounded fixture exploration and replay, read-only repository onboarding assertions, typed change-scope matrix skips, local security-advisory authority, trusted-main compiler seeds, isolated hosted-Ubuntu CI package bootstrap, attributable daily-driver same-name provides, configuration upgrade, payload topology, typed corpus coverage, and native lifecycle gates
 ---
 
 # Integration Testing
@@ -34,6 +34,89 @@ repository directly with read-only SQLite queries. The configured images carry
 state evidence. A missing or disabled selected source fails before sync. Focused
 proof is `cargo test -p conary-test container_setup` and
 `bash scripts/bootstrap-vm/test-guest-validate.sh`.
+
+## Bounded fixture explorer
+
+`conary-test explorer` adds a version 1 local experiment contract under
+`apps/conary-test/src/explorer/`. The controller owns action admission,
+freshness, cancellation, shared attempt/time/evidence budgets, required final
+checks, and cleanup reporting. Selectors return candidate IDs only. The Conary
+adapter uses the existing `ContainerBackend` argv executor and assertion
+checker; package semantics remain in the product. Existing TOML manifests are
+unchanged.
+
+The initial inert signed CCS v3 corpus contains two application versions and an
+independent companion package. It checks fixture version, file ownership, and
+actual payload digests separately. `negative_control` deliberately supplies a
+wrong expected checksum without changing package bytes. It is a checker
+calibration, **not reproduction of #917**, dependency-resolution proof, or a
+new bug. The #917 path still needs a previously missing repository dependency
+and a phase-qualified requested-package lifecycle failure; direct CCS fixtures
+do not establish that evidence.
+
+```bash
+cargo run -p conary-test -- explorer fixtures --output /scratch/fixtures
+cargo run -p conary-test -- explorer run --approved-guest /scratch/guest.json --fixtures /scratch/fixtures --output /scratch/calibration --calibration
+cargo run -p conary-test -- explorer run --approved-guest /scratch/guest.json --fixtures /scratch/fixtures --output /scratch/exploration --seed 7
+cargo run -p conary-test -- explorer replay --approved-guest /scratch/guest.json --fixtures /scratch/calibration/fixtures --input /scratch/calibration/replay.json --output /scratch/replay
+cargo run -p conary-test -- explorer reduce --approved-guest /scratch/guest.json --fixtures /scratch/calibration/fixtures --input /scratch/calibration/replay.json --output /scratch/reduction
+```
+
+These paths are examples inside an operator-approved disposable VM. The guest
+registration is an operator input, never a model output. It contains
+`version: 1`, `approved_disposable: true`, the current guest `boot_id`, a local
+immutable container `image` (`sha256:...`), exact `source_revision`, and
+`conary_sha256`. Register it only after inspecting the VM's mounts, staged
+image, guest-local container runtime, isolation, outer resource limits and
+cleanup. A virtualization probe and registration do not establish those
+operator approvals by themselves. The adapter rejects another boot, mutable
+image tags, endpoint overrides, host mounts, privileged containers, exposed
+networking, and missing runtime limits.
+
+The approved image must already contain the exact Conary binary, `sqlite3`,
+`sha256sum`, shell/core utilities required by the existing exec supervisor,
+and the runtime libraries required by Conary. No image build, download,
+repository sync, production service, or cloud provisioning occurs in this
+command. Container limits are two CPUs, 512 MiB memory, 128 processes, a read-only
+image, and 256 MiB scratch plus 16 MiB temporary storage. The CLI must itself
+run inside the approved VM. Merely having sudo or a rootless runtime on a
+working host does not satisfy this integration prerequisite.
+
+Calibration is scripted. Exploration rebuilds candidates from each current
+observation and uses a seeded least-visited action policy. Replay dispatches
+saved concrete typed operations after rechecking their current preconditions;
+it never asks a selector to repeat its choices. Fresh container creation and
+an independent empty-state check provide the baseline reset. Reports retain
+product failures, labelled negative controls, incomplete evidence and harness
+errors. Required final checks run after stop or error, and cleanup failure is
+reported separately. A lost receipt is not automatically retried.
+
+Each run writes flushed `events.jsonl`, `report.json`, readable `report.md`,
+concrete `replay.json`, pinned fixture bytes, and `artifacts.json`. Keep the
+original bundle. Reduction writes every attempted replay, `reduction.json`,
+and `reduced-replay.json`; acceptance requires the same failed criteria and
+classification with a verified baseline and successful cleanup. The bounded
+single-deletion search does not claim global minimality. Attempts within one
+campaign share 64 actions, 900 seconds, 8 MiB evidence and at most six
+reductions; operations get at most 30 seconds and cleanup 20 seconds. An
+explicit separate CLI invocation starts a separate bounded campaign.
+
+The optional `--jev-mock http://127.0.0.1:PORT/v1/systemone` selector uses a
+loopback-only HTTP transport, no credential, redirects, or proxy. Its request
+and response shape follows the official [TypeSafe API](https://docs.typesafe.ai/api)
+and [Choice](https://docs.typesafe.ai/primitives/choice) documentation checked
+2026-09-19. The pinned mock identity is `jev-1.13.0` from the
+[model documentation](https://docs.typesafe.ai/models). Requests bind their
+question ID to the observation/candidate digest; actual responses, unknown
+usage, and bounded attempts remain inspectable. Errors stop selection without
+a baseline fallback. No live provider entrypoint or spend authorization is
+included; mock receipts do not prove a live trial or model advantage.
+
+Focused verification: `cargo test -p conary-test explorer`, then the owning
+package tests and manifest inventory. Tests use an explicitly labelled fake
+environment and a local TCP mock. They do not establish real Conary integration
+or live model use. The initial review must keep A02/A09 blocked until an
+approved guest demonstrates actual multi-action execution, reset, and replay.
 
 ## Running Tests
 

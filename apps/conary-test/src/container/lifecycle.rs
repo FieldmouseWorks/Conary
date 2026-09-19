@@ -316,6 +316,17 @@ impl ContainerBackend for BollardBackend {
             host_config.memory = Some(mem);
         }
         host_config.network_mode = Some(config.network_mode.clone());
+        if config.experiment {
+            anyhow::ensure!(
+                !config.privileged && config.volumes.is_empty() && config.network_mode == "none",
+                "unsafe experiment container configuration"
+            );
+            host_config.nano_cpus = Some(2_000_000_000);
+            host_config.pids_limit = Some(128);
+            host_config.readonly_rootfs = Some(true);
+            host_config.cap_drop = Some(vec!["ALL".into()]);
+            host_config.security_opt = Some(vec!["no-new-privileges".into()]);
+        }
 
         let container_config = ContainerCreateBody {
             image: Some(config.image.clone()),
@@ -781,6 +792,24 @@ impl ContainerBackend for BollardBackend {
             memory_limit,
             tmpfs,
             network_mode,
+            isolation: Some(super::backend::IsolationInspection {
+                id: info.id.unwrap_or_default(),
+                image: info.image.unwrap_or_default(),
+                privileged: host_config.and_then(|h| h.privileged).unwrap_or(true),
+                host_mounts: info
+                    .mounts
+                    .as_ref()
+                    .map(|m| {
+                        m.iter()
+                            .filter(|m| m.typ.as_deref() != Some("tmpfs"))
+                            .count()
+                    })
+                    .unwrap_or(0),
+                cpu_nanos: host_config.and_then(|h| h.nano_cpus).unwrap_or(0),
+                pids_limit: host_config.and_then(|h| h.pids_limit).unwrap_or(0),
+                read_only: host_config.and_then(|h| h.readonly_rootfs).unwrap_or(false),
+                running: info.state.and_then(|s| s.running).unwrap_or(false),
+            }),
         })
     }
 

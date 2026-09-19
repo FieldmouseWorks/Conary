@@ -56,6 +56,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Bounded local fixture exploration, calibration and model-free replay
+    Explorer {
+        #[command(subcommand)]
+        command: conary_test::explorer::cli::ExplorerCommands,
+    },
     /// Run a test suite
     Run {
         /// Distro to test against
@@ -700,6 +705,9 @@ fn main() -> Result<()> {
     let json = cli.json;
 
     match cli.command {
+        Commands::Explorer { command } => {
+            tokio::runtime::Runtime::new()?.block_on(command.execute())
+        }
         Commands::Run {
             distro,
             phase,

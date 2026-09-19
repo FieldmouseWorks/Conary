@@ -213,6 +213,7 @@ mod tests {
             memory_limit: Some(512 * 1024 * 1024),
             tmpfs: std::collections::HashMap::new(),
             network_mode: Some("none".to_string()),
+            ..Default::default()
         };
         let mock = MockBackend::new(vec![])
             .with_id_prefix("coord-ctr")

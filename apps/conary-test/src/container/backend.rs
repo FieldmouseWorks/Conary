@@ -25,6 +25,21 @@ pub struct ContainerInspection {
     pub memory_limit: Option<i64>,
     pub tmpfs: HashMap<String, String>,
     pub network_mode: Option<String>,
+    /// Full runtime facts used by the opt-in experiment guard.
+    pub isolation: Option<IsolationInspection>,
+}
+
+/// Runtime facts, not assertions supplied by a selector.
+#[derive(Debug, Clone, Default)]
+pub struct IsolationInspection {
+    pub id: String,
+    pub image: String,
+    pub privileged: bool,
+    pub host_mounts: usize,
+    pub cpu_nanos: i64,
+    pub pids_limit: i64,
+    pub read_only: bool,
+    pub running: bool,
 }
 
 /// Metadata for a container image.
@@ -53,6 +68,8 @@ pub struct ContainerConfig {
     pub network_mode: String,
     pub tmpfs: HashMap<String, String>,
     pub memory_limit: Option<i64>,
+    /// Opt-in constrained experiments; ordinary manifest behavior is unchanged.
+    pub experiment: bool,
 }
 
 impl Default for ContainerConfig {
@@ -65,6 +82,7 @@ impl Default for ContainerConfig {
             network_mode: "bridge".to_string(),
             tmpfs: HashMap::new(),
             memory_limit: None,
+            experiment: false,
         }
     }
 }

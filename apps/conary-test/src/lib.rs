@@ -7,6 +7,7 @@ pub mod container;
 pub mod deploy;
 pub mod engine;
 pub mod error;
+pub mod explorer;
 pub mod paths;
 pub mod remi_client;
 pub mod remi_stream;

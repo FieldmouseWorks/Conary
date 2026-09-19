@@ -53,6 +53,7 @@ mod tests {
             network_mode: "host".to_string(),
             tmpfs: HashMap::from([("/var/lib/conary".to_string(), "size=50m".to_string())]),
             memory_limit: Some(512 * 1024 * 1024),
+            experiment: false,
         };
 
         assert_eq!(cfg.image, "alpine:latest");

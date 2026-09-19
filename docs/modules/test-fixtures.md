@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-09-09
-revision: 61
-summary: Map fixture ownership, including native refusals, repository discovery, command captures, typed boot-tool interfaces, and the refreshed Tumbleweed lifecycle snapshot
+last_updated: 2026-09-19
+revision: 62
+summary: Map fixture ownership, including the bounded local explorer corpus, native refusals, repository discovery, command captures, typed boot-tool interfaces, and the refreshed Tumbleweed lifecycle snapshot
 ---
 
 # Test Fixtures And Proof Maps
@@ -875,3 +875,14 @@ results.
 service-hook refusals on direct roots, roots with dependencies, and dependency
 packages while preserving all database tables, the selected root, and permanent
 CAS. Update cancellation captures cover both native and CCS root packages.
+
+### bounded-explorer-ccs
+
+- **Owner:** `apps/conary-test/src/explorer/fixtures.rs` and its independent checker.
+- **Purpose:** Build signed inert CCS v3 application versions plus a companion; compare real payload hashes and ownership with fixture expectations.
+- **Consumes:** `conary-test explorer` calibration, seeded exploration and concrete-operation replay.
+- **Fast proof:** `cargo test -p conary-test explorer`.
+- **Medium proof:** `cargo test -p conary-test`; `cargo run -p conary-test -- list`.
+- **Slow proof:** Approved disposable-VM commands in `docs/INTEGRATION-TESTING.md`.
+- **Regeneration:** `cargo run -p conary-test -- explorer fixtures --output <new-directory>`; replay retains the generated signed bytes and public policy.
+- **Safety notes:** No host signing material, repositories, package state or credentials are used. Package mutation is guest-only. The labelled checksum negative control does not reproduce #917 or establish dependency/lifecycle coverage.
