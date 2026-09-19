@@ -622,6 +622,10 @@ jobs:
           compiler-cache: reader
       - name: Test conary-test
         run: cargo test -p conary-test --verbose
+      - name: Prove retained base images survive origin deletion
+        run: |
+          bash scripts/ci-install-ubuntu-packages.sh skopeo docker-registry
+          python3 scripts/test-ci-base-image.py -v
       - name: Retain conary-test compiler-cache evidence
         if: ${{ always() }}
         uses: ./.github/actions/summarize-rust-cache

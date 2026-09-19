@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-09-09
-revision: 61
-summary: Map fixture ownership, including native refusals, repository discovery, command captures, typed boot-tool interfaces, and the refreshed Tumbleweed lifecycle snapshot
+last_updated: 2026-09-19
+revision: 62
+summary: Map fixture ownership, including exact retained base images, cold-cache origin-deletion proof, native refusals, and authenticated Tumbleweed snapshots
 ---
 
 # Test Fixtures And Proof Maps
@@ -465,9 +465,15 @@ Each fixture family should record:
   declarations but are disabled because they have no release-matched history
   authority and are not inputs to the lifecycle proof. The current snapshot is
   `20260908`, observed from the digest-pinned amd64 image; repository declaration
-  hashes are measured after the snapshot rewrite. Upstream retention is not
-  guaranteed by a digest pin; #971 owns durable preservation of reviewed image
-  bytes after the recurring retired-manifest failures. `fedora44` is the existing
+  hashes are measured after the snapshot rewrite. Its retained GHCR reference
+  has the same manifest digest as the original upstream image, with the source
+  binding in `scripts/ci-base-images.json`. `scripts/ci-base-image.py` verifies
+  complete image bytes before publication and requires anonymous read-back;
+  `python3 scripts/test-ci-base-image.py -v` proves cold acquisition after
+  deleting the original manifest. Cache hits still require a pinned registry
+  pull. #971 owns rollout and broader reviewed-image retention. Publication,
+  public-read and refresh policy live in `docs/INTEGRATION-TESTING.md`.
+  `fedora44` is the existing
   `conary-test` runner distro key; public CCS target IDs remain
   `fedora-44`, `ubuntu-26.04`, and `arch`; `solus` remains a separate candidate
   and conformance-fixture identity.
