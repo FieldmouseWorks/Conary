@@ -1,13 +1,9 @@
 name: cache-base-image
 description: >-
-  Load a lifecycle test image's digest-pinned base image from an
-  actions/cache entry keyed on that digest, so the upstream registry
-  (registry.fedoraproject.org or docker.io) is off the CI hot path on every
-  cache hit. On a cache miss the base image is pulled once, with bounded
-  retry, and the cache is populated for the next run. Because the cache key
-  is the digest baked into the Containerfile's FROM line, a stale cache is
-  impossible by construction: an upstream tag bump only takes effect once the
-  Containerfile is deliberately re-pinned (issue #323).
+  Restore optional cached layers, then require a registry pull by the reviewed
+  digest on every run. Registered retained images use their project-owned
+  registry; cache names never establish image authority. Docker verifies the
+  manifest/config/layer content while pulling the pinned reference.
 inputs:
   distro:
     description: Test distro slug from the typed conary-test configuration.
@@ -36,6 +32,7 @@ runs:
           exit 1
         }
 
+        ref="$(python3 "$GITHUB_ACTION_PATH/../../../scripts/ci-base-image.py" resolve "$ref")"
         digest="${ref##*@sha256:}"
         echo "ref=$ref" >> "$GITHUB_OUTPUT"
         echo "digest=$digest" >> "$GITHUB_OUTPUT"
@@ -45,15 +42,14 @@ runs:
       uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
       with:
         path: ~/.cache/conary-base-images/${{ inputs.distro }}.tar
-        key: conary-base-image-${{ inputs.distro }}-${{ steps.base-image.outputs.digest }}
+        key: conary-base-image-v2-${{ inputs.distro }}-${{ steps.base-image.outputs.digest }}
 
     - name: Load the cached base image
       if: steps.cache.outputs.cache-hit == 'true'
       shell: bash
       run: docker load --input ~/.cache/conary-base-images/${{ inputs.distro }}.tar
 
-    - name: Pull the base image by digest (cache miss)
-      if: steps.cache.outputs.cache-hit != 'true'
+    - name: Require the reviewed registry image by digest
       shell: bash
       env:
         BASE_IMAGE_REF: ${{ steps.base-image.outputs.ref }}
@@ -72,6 +68,9 @@ runs:
           sleep "$sleep_for"
           attempt=$(( attempt + 1 ))
         done
+
+        docker image inspect "$BASE_IMAGE_REF" --format '{{json .RepoDigests}}' \
+          | python3 -c 'import json,sys; expected=sys.argv[1].rsplit("@",1)[1]; assert any(ref.rsplit("@",1)[-1] == expected for ref in json.load(sys.stdin)), "pulled image lacks its required manifest digest"' "$BASE_IMAGE_REF"
 
     - name: Save the pulled base image into the cache
       if: steps.cache.outputs.cache-hit != 'true'
