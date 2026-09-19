@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-19
-revision: 76
+revision: 77
 summary: Document bounded fixture exploration and replay, read-only repository onboarding assertions, typed change-scope matrix skips, local security-advisory authority, trusted-main compiler seeds, isolated hosted-Ubuntu CI package bootstrap, attributable daily-driver same-name provides, configuration upgrade, payload topology, typed corpus coverage, and native lifecycle gates
 ---
 
@@ -113,7 +113,11 @@ working host does not satisfy this integration prerequisite.
 Calibration is scripted. Exploration rebuilds candidates from each current
 observation and uses a seeded least-visited action policy. Replay dispatches
 saved concrete typed operations after rechecking their current preconditions;
-it never asks a selector to repeat its choices. Fresh container creation and
+it never asks a selector to repeat its choices. Run accepts `--max-actions 1..64`
+(default 64) to give seeded and Jev episodes the same attempted-action ceiling.
+Stop choices consume that allowance; early stopping still runs required checks
+and cleanup. Replay and reduction retain their existing 64-action campaign cap.
+Fresh container creation and
 an independent empty-state check provide the baseline reset. Reports retain
 product failures, expected refusals, labelled negative controls, incomplete
 evidence and harness errors. Environment setup/guard failures have a separate

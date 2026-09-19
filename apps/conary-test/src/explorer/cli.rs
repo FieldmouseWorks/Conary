@@ -30,6 +30,9 @@ pub enum ExplorerCommands {
         calibration: bool,
         #[arg(long, default_value_t = 7)]
         seed: u64,
+        /// Attempted-action ceiling for this episode (1..=64), including stop choices
+        #[arg(long, default_value_t = 64, value_parser = clap::value_parser!(u32).range(1..=64))]
+        max_actions: u32,
         /// Optional local mock transport; never contacts a live model
         #[arg(long, conflicts_with = "calibration")]
         jev_mock: Option<String>,
@@ -79,6 +82,7 @@ impl ExplorerCommands {
             output,
             calibration,
             seed,
+            max_actions,
             jev_mock,
             jev_live,
             jev_max_requests,
@@ -91,6 +95,7 @@ impl ExplorerCommands {
                 output,
                 calibration,
                 seed,
+                max_actions,
                 jev_mock,
                 jev_live,
                 jev_max_requests,
@@ -100,6 +105,7 @@ impl ExplorerCommands {
                 output,
                 calibration,
                 seed,
+                max_actions,
                 jev_mock,
                 jev_live,
                 jev_max_requests,
@@ -117,6 +123,7 @@ impl ExplorerCommands {
                 output,
                 false,
                 0,
+                64,
                 None,
                 false,
                 0,
@@ -134,6 +141,7 @@ impl ExplorerCommands {
                 output,
                 false,
                 0,
+                64,
                 None,
                 false,
                 0,
@@ -160,7 +168,10 @@ impl ExplorerCommands {
                 "replay artifact identity mismatch"
             );
         }
-        let mut campaign = Campaign::new(Limits::default())?;
+        let mut campaign = Campaign::new(Limits {
+            actions: max_actions,
+            ..Limits::default()
+        })?;
         let cancel = Arc::new(AtomicBool::new(false));
         let flag = cancel.clone();
         let signal = tokio::spawn(async move {

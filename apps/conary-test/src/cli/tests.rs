@@ -99,6 +99,41 @@ fn images_base_ref_accepts_a_derivative_lane() {
 }
 
 #[test]
+fn explorer_action_budget_is_bounded_before_environment_access() {
+    use conary_test::explorer::cli::ExplorerCommands;
+
+    let argv = [
+        "conary-test",
+        "explorer",
+        "run",
+        "--approved-guest",
+        "absent-guest.json",
+        "--fixtures",
+        "absent-fixtures",
+        "--output",
+        "absent-output",
+    ];
+    for (limit, expected) in [(None, 64), (Some("1"), 1), (Some("8"), 8), (Some("64"), 64)] {
+        let mut args = argv.to_vec();
+        if let Some(limit) = limit {
+            args.extend(["--max-actions", limit]);
+        }
+        let cli = Cli::try_parse_from(args).unwrap();
+        match cli.command {
+            Commands::Explorer {
+                command: ExplorerCommands::Run { max_actions, .. },
+            } => assert_eq!(max_actions, expected),
+            _ => panic!("unexpected command"),
+        }
+    }
+    for limit in ["0", "65", "-1", "invalid"] {
+        let mut args = argv.to_vec();
+        args.extend(["--max-actions", limit]);
+        assert!(Cli::try_parse_from(args).is_err());
+    }
+}
+
+#[test]
 fn deploy_status_and_health_have_no_server_port() {
     let cli = Cli::try_parse_from(["conary-test", "deploy", "status"]).unwrap();
     match cli.command {
