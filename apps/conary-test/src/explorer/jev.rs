@@ -1,11 +1,11 @@
 // apps/conary-test/src/explorer/jev.rs
 
 //! TypeSafe Choice transport, verified against official API docs 2026-09-19.
-//! This first slice exposes loopback mock transport only; no live-call CLI.
+//! Live use is explicit, pins the official HTTPS endpoint, and reserves a bounded call budget.
 use super::{contract::*, selector::Selector};
 use anyhow::{Result, ensure};
 use async_trait::async_trait;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::sync::{
@@ -16,7 +16,10 @@ use std::time::{Duration, Instant};
 
 pub const MODEL: &str = "jev-1.13.0";
 
-pub struct JevMock {
+pub struct Jev {
+    authorization: Option<reqwest::header::HeaderValue>,
+    live: bool,
+    request_limit: u32,
     client: reqwest::Client,
     endpoint: reqwest::Url,
     remaining_requests: u32,
@@ -24,8 +27,8 @@ pub struct JevMock {
     cancel: Arc<AtomicBool>,
     receipts: Vec<Value>,
 }
-impl JevMock {
-    pub fn new(
+impl Jev {
+    pub fn mock(
         endpoint: &str,
         requests: u32,
         attempts: u32,
@@ -59,6 +62,9 @@ impl JevMock {
             .timeout(timeout)
             .build()?;
         Ok(Self {
+            authorization: None,
+            live: false,
+            request_limit: requests,
             client,
             endpoint,
             remaining_requests: requests,
@@ -66,6 +72,57 @@ impl JevMock {
             cancel,
             receipts: Vec::new(),
         })
+    }
+    /// Creating this selector enables paid requests; callers must opt in explicitly.
+    /// A full 64 Ki-token context is reserved per attempt, including retries.
+    pub fn live(key: &str, requests: u32, cancel: Arc<AtomicBool>) -> Result<Self> {
+        ensure!(
+            (1..=8).contains(&requests),
+            "live Jev allows 1..=8 requests including retries"
+        );
+        let authorization = Self::authorization(key)?;
+        let mut selector = Self::mock(
+            "http://127.0.0.1:1/v1/systemone",
+            requests,
+            2,
+            Duration::from_secs(5),
+            cancel,
+        )?;
+        selector.endpoint = reqwest::Url::parse("https://api.typesafe.ai/v1/systemone")?;
+        selector.authorization = Some(authorization);
+        selector.live = true;
+        Ok(selector)
+    }
+    fn authorization(key: &str) -> Result<reqwest::header::HeaderValue> {
+        ensure!(
+            !key.is_empty() && key.len() <= 8192 && key.trim() == key,
+            "missing or invalid TYPESAFE_API_KEY"
+        );
+        let mut value = reqwest::header::HeaderValue::from_str(&format!("Bearer {key}"))
+            .map_err(|_| anyhow::anyhow!("invalid TYPESAFE_API_KEY header"))?;
+        value.set_sensitive(true);
+        Ok(value)
+    }
+    #[cfg(test)]
+    pub(crate) fn authenticated_mock(endpoint: &str, key: &str, requests: u32) -> Result<Self> {
+        let mut selector = Self::mock(
+            endpoint,
+            requests,
+            2,
+            Duration::from_secs(1),
+            Arc::new(AtomicBool::new(false)),
+        )?;
+        selector.authorization = Some(Self::authorization(key)?);
+        Ok(selector)
+    }
+    fn redact(&self, value: &str) -> String {
+        match self.authorization.as_ref().and_then(|h| h.to_str().ok()) {
+            Some(header) => value.replace(
+                header.strip_prefix("Bearer ").unwrap_or(header),
+                "[REDACTED]",
+            ),
+            None => value.to_owned(),
+        }
     }
     pub fn request(request: &DecisionRequest) -> Result<Value> {
         let criteria = request
@@ -89,7 +146,12 @@ struct Response {
     model: String,
     answers: BTreeMap<String, Answer>,
     #[serde(default)]
-    usage: Option<Value>,
+    usage: Option<Usage>,
+}
+#[derive(Deserialize, Serialize)]
+struct Usage {
+    input_tokens: u64,
+    output_tokens: u64,
 }
 #[derive(Deserialize)]
 struct Answer {
@@ -101,9 +163,20 @@ struct Answer {
 }
 
 #[async_trait]
-impl Selector for JevMock {
+impl Selector for Jev {
     fn identity(&self) -> &'static str {
-        "jev-local-mock (no live model)"
+        if self.live {
+            "jev-live"
+        } else {
+            "jev-local-mock (no live model)"
+        }
+    }
+    fn configuration(&self) -> Value {
+        json!({"model": MODEL, "transport": if self.live { "live_https" } else { "local_mock" },
+            "request_limit": self.request_limit, "retries_share_request_limit": true,
+            "reserved_input_tokens_per_request": if self.live { Some(65536) } else { None },
+            "price_usd_per_million_input_tokens": if self.live { Some(0.042) } else { None },
+            "price_source": "https://docs.typesafe.ai/models", "price_checked": "2026-09-19"})
     }
     fn take_evidence(&mut self) -> Vec<Value> {
         std::mem::take(&mut self.receipts)
@@ -118,13 +191,12 @@ impl Selector for JevMock {
             );
             self.remaining_requests -= 1;
             let start = Instant::now();
-            let sent = self
-                .client
-                .post(self.endpoint.clone())
-                .json(&body)
-                .send()
-                .await;
-            let mut receipt = json!({"transport": "local_mock", "request": body, "attempt": attempt + 1,
+            let mut pending = self.client.post(self.endpoint.clone()).json(&body);
+            if let Some(authorization) = &self.authorization {
+                pending = pending.header(reqwest::header::AUTHORIZATION, authorization.clone());
+            }
+            let sent = pending.send().await;
+            let mut receipt = json!({"transport": if self.live { "live_https" } else { "local_mock" }, "request": body, "attempt": attempt + 1,
                 "latency_ms": start.elapsed().as_millis(), "usage": null, "billed_cost": null});
             let mut response = match sent {
                 Ok(response) => response,
@@ -136,13 +208,22 @@ impl Selector for JevMock {
                         "transport"
                     });
                     self.receipts.push(receipt);
-                    anyhow::bail!("Jev mock transport failure; no selector fallback");
+                    anyhow::bail!("Jev transport failure; no selector fallback");
                 }
             };
             let status = response.status().as_u16();
             receipt["status"] = json!(status);
             let mut bytes = Vec::new();
-            while let Some(chunk) = response.chunk().await? {
+            loop {
+                let chunk = match response.chunk().await {
+                    Ok(Some(chunk)) => chunk,
+                    Ok(None) => break,
+                    Err(_) => {
+                        receipt["error"] = json!("response_transport");
+                        self.receipts.push(receipt);
+                        anyhow::bail!("Jev response transport failure; no selector fallback");
+                    }
+                };
                 if bytes.len() + chunk.len() > 16384 {
                     receipt["error"] = json!("response_size");
                     self.receipts.push(receipt);
@@ -150,20 +231,33 @@ impl Selector for JevMock {
                 }
                 bytes.extend_from_slice(&chunk);
             }
-            receipt["response"] = json!(String::from_utf8_lossy(&bytes));
+            receipt["response"] = json!(self.redact(&String::from_utf8_lossy(&bytes)));
             receipt["latency_ms"] = json!(start.elapsed().as_millis());
             self.receipts.push(receipt);
             if (status == 429 || status == 529) && attempt + 1 < self.max_attempts {
                 tokio::time::sleep(Duration::from_millis(100 * (1 << attempt))).await;
                 continue;
             }
-            ensure!(
-                status == 200,
-                "Jev mock HTTP {status}; no selector fallback"
-            );
-            let parsed: Response = serde_json::from_slice(&bytes)?;
+            ensure!(status == 200, "Jev HTTP {status}; no selector fallback");
+            let parsed: Response = serde_json::from_slice(&bytes)
+                .map_err(|_| anyhow::anyhow!("malformed Jev response"))?;
             if let Some(last) = self.receipts.last_mut() {
                 last["usage"] = json!(parsed.usage);
+            }
+            if self.live {
+                let usage = parsed
+                    .usage
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("live provider response lacks token usage"))?;
+                ensure!(
+                    usage.input_tokens <= 65536,
+                    "provider usage exceeds per-request reservation"
+                );
+                if let Some(last) = self.receipts.last_mut() {
+                    last["estimated_charge_usd"] =
+                        json!(usage.input_tokens as f64 * 0.042 / 1_000_000.0);
+                    last["reserved_input_tokens"] = json!(65536);
+                }
             }
             ensure!(parsed.model == MODEL, "unexpected returned provider model");
             let key = format!("next_action_{}", request.binding);

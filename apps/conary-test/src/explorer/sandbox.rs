@@ -79,3 +79,27 @@ impl GuestApproval {
 fn valid_hex(value: &str, len: usize) -> bool {
     value.len() == len && value.bytes().all(|c| c.is_ascii_hexdigit())
 }
+
+/// Read actual kernel process restrictions, not only runtime configuration.
+/// The sole capability permits Conary's selected-root OverlayFS transaction.
+pub fn verify_process_restrictions(status: &str) -> Result<()> {
+    let fields = status
+        .lines()
+        .filter_map(|line| line.split_once(':'))
+        .map(|(key, value)| (key, value.trim()))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    for key in ["CapEff", "CapPrm", "CapBnd"] {
+        let value = fields
+            .get(key)
+            .ok_or_else(|| anyhow::anyhow!("missing process capability evidence"))?;
+        ensure!(
+            u64::from_str_radix(value, 16)? == (1 << 21),
+            "experiment requires exactly CAP_SYS_ADMIN for selected-root mounts"
+        );
+    }
+    ensure!(
+        fields.get("NoNewPrivs") == Some(&"1") && fields.get("Seccomp") == Some(&"2"),
+        "experiment requires no-new-privileges and runtime seccomp"
+    );
+    Ok(())
+}

@@ -151,6 +151,8 @@ impl Environment for ConaryEnvironment<'_> {
                 .any(|p| p == "size=256m" || p == "size=268435456")),
             "scratch storage limit missing"
         );
+        let process = self.checked(&["cat", "/proc/self/status"]).await?;
+        super::sandbox::verify_process_restrictions(&process)?;
         Ok(())
     }
     async fn observe(&mut self) -> Result<Observation> {

@@ -325,7 +325,14 @@ impl ContainerBackend for BollardBackend {
             host_config.pids_limit = Some(128);
             host_config.readonly_rootfs = Some(true);
             host_config.cap_drop = Some(vec!["ALL".into()]);
-            host_config.security_opt = Some(vec!["no-new-privileges".into()]);
+            // Conary's selected-root transaction performs a functional OverlayFS
+            // mount probe. The explorer may use this profile only inside its
+            // separately registered disposable VM; it never grants host authority.
+            host_config.cap_add = Some(vec!["SYS_ADMIN".into()]);
+            host_config.security_opt = Some(vec![
+                "no-new-privileges".into(),
+                "apparmor=unconfined".into(),
+            ]);
         }
 
         let container_config = ContainerCreateBody {

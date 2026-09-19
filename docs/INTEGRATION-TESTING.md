@@ -74,11 +74,18 @@ image tags, endpoint overrides, host mounts, privileged containers, exposed
 networking, and missing runtime limits.
 
 The approved image must already contain the exact Conary binary, `sqlite3`,
-`sha256sum`, shell/core utilities required by the existing exec supervisor,
+`sha256sum`, `cat`, shell/core utilities required by the existing exec supervisor,
 and the runtime libraries required by Conary. No image build, download,
 repository sync, production service, or cloud provisioning occurs in this
 command. Container limits are two CPUs, 512 MiB memory, 128 processes, a read-only
-image, and 256 MiB scratch plus 16 MiB temporary storage. The CLI must itself
+image, and 256 MiB scratch plus 16 MiB temporary storage. The container grants
+exactly `CAP_SYS_ADMIN` for the selected-root OverlayFS transaction; its
+AppArmor profile is unconfined inside the disposable guest. The runtime seccomp
+filter and no-new-privileges remain enabled. Actual effective, permitted and
+bounding capabilities plus those two restrictions are checked through
+`/proc/self/status` before dispatch. All other capabilities remain dropped.
+This permission belongs to the registered guest controller, never a selector.
+The CLI must itself
 run inside the approved VM. Merely having sudo or a rootless runtime on a
 working host does not satisfy this integration prerequisite.
 
@@ -105,12 +112,30 @@ The optional `--jev-mock http://127.0.0.1:PORT/v1/systemone` selector uses a
 loopback-only HTTP transport, no credential, redirects, or proxy. Its request
 and response shape follows the official [TypeSafe API](https://docs.typesafe.ai/api)
 and [Choice](https://docs.typesafe.ai/primitives/choice) documentation checked
-2026-09-19. The pinned mock identity is `jev-1.13.0` from the
+2026-09-19. The pinned model identity is `jev-1.13.0` from the
 [model documentation](https://docs.typesafe.ai/models). Requests bind their
 question ID to the observation/candidate digest; actual responses, unknown
 usage, and bounded attempts remain inspectable. Errors stop selection without
-a baseline fallback. No live provider entrypoint or spend authorization is
-included; mock receipts do not prove a live trial or model advantage.
+a baseline fallback. Mock receipts do not prove a live trial or model advantage.
+
+Live use requires the explicit `--jev-live` option and `TYPESAFE_API_KEY`.
+It pins `https://api.typesafe.ai/v1/systemone`, disables redirects and proxies,
+and accepts `--jev-max-requests 1..8` (default 8), including retries. It cannot
+be combined with calibration or the mock selector. Replay has no live option.
+Credentials are sensitive HTTP headers, never request state or trace fields;
+any exact credential echoed by a response is redacted. Usage is recorded as
+numeric input/output tokens, with a separately labelled charge estimate;
+missing live usage fails selection and billed cost remains unknown.
+
+Each request reserves a conservative 65,536-input-token window. At the
+published 2026-09-19 rate of $0.042 per million input tokens (output is free),
+eight full-window requests estimate $0.0221. This is a dated price assumption,
+not a billing guarantee; verify the account's current terms and obtain the
+operator's call/spend approval before live use. Supply the key through a
+protected environment source, not a command argument or report. The disposable
+guest also needs an explicitly reviewed provider egress route. Ordinary tests,
+CI, seeded exploration and replay require neither credentials nor external
+model calls.
 
 Focused verification: `cargo test -p conary-test explorer`, then the owning
 package tests and manifest inventory. Tests use an explicitly labelled fake

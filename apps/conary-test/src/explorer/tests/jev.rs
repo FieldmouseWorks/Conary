@@ -36,7 +36,15 @@ async fn server(
                 }
             }
             let headers = String::from_utf8_lossy(&bytes[..header_end]);
-            assert!(!headers.to_lowercase().contains("authorization:"));
+            if variant == "authenticated" {
+                assert!(
+                    headers
+                        .to_lowercase()
+                        .contains("authorization: bearer redshirt-test-credential")
+                );
+            } else {
+                assert!(!headers.to_lowercase().contains("authorization:"));
+            }
             let size: usize = headers
                 .lines()
                 .find_map(|l| {
@@ -83,6 +91,11 @@ async fn server(
                 &ids[0]
             };
             let mut body = json!({"model": crate::explorer::jev::MODEL, "answers": {key: {"type": "choice", "choice": choice, "probabilities": probabilities, "confidence": 1.0}}, "usage": {"input_tokens": 20, "output_tokens": 4}}).to_string();
+            if variant == "authenticated" {
+                let mut value: Value = serde_json::from_str(&body).unwrap();
+                value["debug_echo"] = json!("redshirt-test-credential");
+                body = value.to_string();
+            }
             if variant == "malformed" {
                 body = "{bad".into();
             }
@@ -115,7 +128,7 @@ async fn provider_mock_valid_malformed_stale_auth_rate_overload_timeout_and_canc
         (vec![200], "timeout", false, 1),
     ] {
         let (url, server) = server(statuses, variant).await;
-        let mut selector = crate::explorer::jev::JevMock::new(
+        let mut selector = crate::explorer::jev::Jev::mock(
             &url,
             2,
             2,
@@ -133,7 +146,7 @@ async fn provider_mock_valid_malformed_stale_auth_rate_overload_timeout_and_canc
         assert_eq!(server.await.unwrap(), expected);
     }
     let cancel = Arc::new(AtomicBool::new(true));
-    let mut selector = crate::explorer::jev::JevMock::new(
+    let mut selector = crate::explorer::jev::Jev::mock(
         "http://127.0.0.1:1/v1/systemone",
         1,
         1,
@@ -159,7 +172,7 @@ fn provider_rejects_external_endpoints_and_disabled_limits() {
         "http://127.0.0.1/wrong",
     ] {
         assert!(
-            crate::explorer::jev::JevMock::new(
+            crate::explorer::jev::Jev::mock(
                 url,
                 2,
                 1,
@@ -169,4 +182,46 @@ fn provider_rejects_external_endpoints_and_disabled_limits() {
             .is_err()
         );
     }
+}
+
+#[tokio::test]
+async fn authenticated_transport_redacts_credentials_and_respects_shared_call_budget() {
+    let (url, server) = server(vec![200], "authenticated").await;
+    let mut selector =
+        crate::explorer::jev::Jev::authenticated_mock(&url, "redshirt-test-credential", 1).unwrap();
+    let request = DecisionRequest::new(observation(), 10).unwrap();
+    assert!(selector.select(&request).await.is_ok());
+    assert!(selector.select(&request).await.is_err());
+    assert_eq!(server.await.unwrap(), 1);
+    let records = selector.take_evidence();
+    assert_eq!(records.len(), 1);
+    assert!(
+        !serde_json::to_string(&records)
+            .unwrap()
+            .contains("redshirt-test-credential")
+    );
+    assert!(
+        records[0]["response"]
+            .as_str()
+            .unwrap()
+            .contains("[REDACTED]")
+    );
+    assert_eq!(selector.identity(), "jev-local-mock (no live model)");
+}
+
+#[test]
+fn live_selector_requires_valid_credential_and_bounded_explicit_budget() {
+    use crate::explorer::jev::Jev;
+    for (key, requests) in [("", 1), ("test\r\nsecret", 1), ("test", 0), ("test", 9)] {
+        assert!(Jev::live(key, requests, Arc::new(AtomicBool::new(false))).is_err());
+    }
+    let live = Jev::live("synthetic-test-only", 1, Arc::new(AtomicBool::new(false))).unwrap();
+    assert_eq!(live.identity(), "jev-live");
+    assert_eq!(live.configuration()["request_limit"], 1);
+    assert!(
+        !live
+            .configuration()
+            .to_string()
+            .contains("synthetic-test-only")
+    );
 }

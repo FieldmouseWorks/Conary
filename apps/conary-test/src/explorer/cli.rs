@@ -33,6 +33,12 @@ pub enum ExplorerCommands {
         /// Optional local mock transport; never contacts a live model
         #[arg(long, conflicts_with = "calibration")]
         jev_mock: Option<String>,
+        /// Contact the live TypeSafe API (paid); requires TYPESAFE_API_KEY
+        #[arg(long, conflicts_with_all = ["calibration", "jev_mock"])]
+        jev_live: bool,
+        /// Live HTTP request limit including retries (1..=8)
+        #[arg(long, default_value_t = 8, requires = "jev_live")]
+        jev_max_requests: u32,
     },
     /// Execute saved concrete operations, without a selector
     Replay {
@@ -67,57 +73,75 @@ impl ExplorerCommands {
             );
             return Ok(());
         }
-        let (approved_guest, fixtures, output, calibration, seed, jev_mock, input, reduce) =
-            match self {
-                Self::Run {
-                    approved_guest,
-                    fixtures,
-                    output,
-                    calibration,
-                    seed,
-                    jev_mock,
-                } => (
-                    approved_guest,
-                    fixtures,
-                    output,
-                    calibration,
-                    seed,
-                    jev_mock,
-                    None,
-                    false,
-                ),
-                Self::Replay {
-                    approved_guest,
-                    fixtures,
-                    input,
-                    output,
-                } => (
-                    approved_guest,
-                    fixtures,
-                    output,
-                    false,
-                    0,
-                    None,
-                    Some(input),
-                    false,
-                ),
-                Self::Reduce {
-                    approved_guest,
-                    fixtures,
-                    input,
-                    output,
-                } => (
-                    approved_guest,
-                    fixtures,
-                    output,
-                    false,
-                    0,
-                    None,
-                    Some(input),
-                    true,
-                ),
-                Self::Fixtures { .. } => unreachable!(),
-            };
+        let (
+            approved_guest,
+            fixtures,
+            output,
+            calibration,
+            seed,
+            jev_mock,
+            jev_live,
+            jev_max_requests,
+            input,
+            reduce,
+        ) = match self {
+            Self::Run {
+                approved_guest,
+                fixtures,
+                output,
+                calibration,
+                seed,
+                jev_mock,
+                jev_live,
+                jev_max_requests,
+            } => (
+                approved_guest,
+                fixtures,
+                output,
+                calibration,
+                seed,
+                jev_mock,
+                jev_live,
+                jev_max_requests,
+                None,
+                false,
+            ),
+            Self::Replay {
+                approved_guest,
+                fixtures,
+                input,
+                output,
+            } => (
+                approved_guest,
+                fixtures,
+                output,
+                false,
+                0,
+                None,
+                false,
+                0,
+                Some(input),
+                false,
+            ),
+            Self::Reduce {
+                approved_guest,
+                fixtures,
+                input,
+                output,
+            } => (
+                approved_guest,
+                fixtures,
+                output,
+                false,
+                0,
+                None,
+                false,
+                0,
+                Some(input),
+                true,
+            ),
+            Self::Fixtures { .. } => unreachable!(),
+        };
         let approval = super::sandbox::GuestApproval::load(&approved_guest)?;
         approval.verify_here()?;
         let backend = crate::container::BollardBackend::new()?;
@@ -165,11 +189,19 @@ impl ExplorerCommands {
                 Mode::Exploration
             };
             let mut selector: Box<dyn Selector> = if let Some(url) = jev_mock {
-                Box::new(super::jev::JevMock::new(
+                Box::new(super::jev::Jev::mock(
                     &url,
                     64,
                     2,
                     std::time::Duration::from_secs(3),
+                    cancel.clone(),
+                )?)
+            } else if jev_live {
+                let key = std::env::var("TYPESAFE_API_KEY")
+                    .map_err(|_| anyhow::anyhow!("live Jev requires TYPESAFE_API_KEY"))?;
+                Box::new(super::jev::Jev::live(
+                    &key,
+                    jev_max_requests,
                     cancel.clone(),
                 )?)
             } else if calibration {
