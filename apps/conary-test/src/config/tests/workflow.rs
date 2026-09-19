@@ -285,6 +285,84 @@ fn load_native_compiler_cache_action() -> CompositeAction {
         .unwrap_or_else(|error| panic!("parse {} as typed YAML: {error}", path.display()))
 }
 
+#[test]
+fn base_image_cache_never_bypasses_registry_identity() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../.github/actions/cache-base-image/action.yml");
+    let action: CompositeAction =
+        serde_yaml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let pull = named_step(
+        &action.runs.steps,
+        "Require the reviewed registry image by digest",
+    );
+    assert!(
+        pull.condition.is_none(),
+        "a cache hit must still verify the registry identity"
+    );
+    assert!(!pull.continue_on_error);
+    let fixture = r#"
+docker() {
+    printf '%s\n' "$1" >> "$CALLS"
+    if [[ "$1" == pull ]]; then
+        [[ "$2" == "$BASE_IMAGE_REF" ]] || return 66
+        return "$PULL_EXIT"
+    fi
+    [[ "$1 $2" == 'image inspect' ]] || return 67
+    printf '%s\n' "$INSPECT_RESULT"
+}
+sleep() { :; }
+"#;
+    let digest = "0".repeat(64);
+    let reference = format!("registry.example/image@sha256:{digest}");
+    let correct = format!(r#"["registry.example/image@sha256:{digest}"]"#);
+    for (pull_exit, inspection, success, attempts) in [
+        ("0", correct.as_str(), true, 1),
+        ("1", correct.as_str(), false, 3),
+        ("0", "[]", false, 1),
+    ] {
+        let tmp = tempfile::tempdir().unwrap();
+        let calls = tmp.path().join("calls");
+        let status = Command::new("bash")
+            .args([
+                "-euo",
+                "pipefail",
+                "-c",
+                &format!("{fixture}\n{}", pull.run.as_ref().unwrap()),
+            ])
+            .env("BASE_IMAGE_REF", &reference)
+            .env("PULL_EXIT", pull_exit)
+            .env("INSPECT_RESULT", inspection)
+            .env("CALLS", &calls)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .unwrap();
+        assert_eq!(status.success(), success);
+        assert_eq!(
+            std::fs::read_to_string(calls)
+                .unwrap()
+                .lines()
+                .filter(|line| *line == "pull")
+                .count(),
+            attempts
+        );
+    }
+    let workflow = load_workflow();
+    let job: WorkspaceTestJob = parse_job(&workflow, "conary-test-crate");
+    let proof = named_step(
+        &job.steps,
+        "Prove retained base images survive origin deletion",
+    );
+    assert!(proof.condition.is_none() && !proof.continue_on_error);
+    assert!(
+        proof
+            .run
+            .as_ref()
+            .unwrap()
+            .contains("python3 scripts/test-ci-base-image.py -v")
+    );
+}
+
 fn release_artifact_workflow_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../.github/workflows/release-artifact-proof.yml")
