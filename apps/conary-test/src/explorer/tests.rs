@@ -701,8 +701,7 @@ fn selected_state_observer_checks_snapshot_bytes_and_exposes_pending_publication
     assert_eq!(facts.payloads[&Package::App], expected);
     assert_eq!(facts.publication.unwrap().status, "pending");
     // An intact database/manifest must not hide changed stored bytes.
-    let object =
-        conary_core::filesystem::cas::object_path(&runtime.join("objects"), &expected).unwrap();
+    let object = conary_core::filesystem::object_path(&runtime.join("objects"), &expected).unwrap();
     std::fs::write(object, "x".repeat(Fixture::AppV1.payload().len())).unwrap();
     assert!(selected_state::observe(&runtime, &mut empty()).is_err());
 }

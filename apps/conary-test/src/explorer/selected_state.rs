@@ -47,10 +47,8 @@ pub fn observe(runtime: &Path, facts: &mut Facts) -> Result<()> {
                 content.size <= 65536,
                 "fixture content exceeds observation limit"
             );
-            let path = conary_core::filesystem::cas::object_path(
-                &runtime.join("objects"),
-                &content.sha256,
-            )?;
+            let path =
+                conary_core::filesystem::object_path(&runtime.join("objects"), &content.sha256)?;
             let metadata = std::fs::symlink_metadata(&path)?;
             ensure!(
                 metadata.is_file() && metadata.len() == content.size,
