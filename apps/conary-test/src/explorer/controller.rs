@@ -1,6 +1,8 @@
 // apps/conary-test/src/explorer/controller.rs
 
-use super::{checker::Oracle, contract::*, evidence::*, selector::Selector};
+use super::{
+    checker::Oracle, context::EpisodeMemory, contract::*, evidence::*, selector::Selector,
+};
 use anyhow::{Result, ensure};
 use async_trait::async_trait;
 use std::collections::BTreeSet;
@@ -182,6 +184,7 @@ pub async fn run(
         );
         report.reset_verified = true;
         evidence.event("baseline", &baseline)?;
+        let mut memory = EpisodeMemory::new(&baseline);
         let mut operation_ids = BTreeSet::new();
         loop {
             if episode
@@ -215,11 +218,13 @@ pub async fn run(
                     binding: request.binding.clone(),
                 }
             } else {
+                let context = memory.context(&request);
+                evidence.event("decision_context", &context)?;
                 let selected = selector
                     .as_deref_mut()
                     .ok_or_else(|| anyhow::anyhow!("missing selector"))?;
                 let result =
-                    tokio::time::timeout(campaign.timeout(), selected.select(&request)).await;
+                    tokio::time::timeout(campaign.timeout(), selected.select(&request, &context)).await;
                 evidence.event("selector_receipts", &selected.take_evidence())?;
                 if episode.cancel.load(Ordering::SeqCst) {
                     return Err(ControlStop::Cancelled.into());
@@ -279,6 +284,7 @@ pub async fn run(
             let after = tokio::time::timeout(campaign.timeout(), environment.observe()).await??;
             failure_class = Classification::HarnessFailure;
             let negative_request = oracle.expects_refusal(&action);
+            let evaluation_start = report.evaluations.len();
             if negative_request || receipt.exit_code != 0 {
                 // The criterion is deliberately narrow: refusal with unchanged
                 // independently observed fixture state. Diagnostic prose is not authority.
@@ -302,6 +308,7 @@ pub async fn run(
             let checks = oracle.evaluate(&after.facts, action == Action::NegativeControl);
             evidence.event("checked", &(&after, &checks))?;
             report.evaluations.extend(checks);
+            memory.record(&current, &receipt, &after, &report.evaluations[evaluation_start..]);
         }
         Ok(())
     }

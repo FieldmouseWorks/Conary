@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-19
-revision: 77
+revision: 78
 summary: Document bounded fixture exploration and replay, read-only repository onboarding assertions, typed change-scope matrix skips, local security-advisory authority, trusted-main compiler seeds, isolated hosted-Ubuntu CI package bootstrap, attributable daily-driver same-name provides, configuration upgrade, payload topology, typed corpus coverage, and native lifecycle gates
 ---
 
@@ -148,6 +148,23 @@ and [Choice](https://docs.typesafe.ai/primitives/choice) documentation checked
 question ID to the observation/candidate digest; actual responses, unknown
 usage, and bounded attempts remain inspectable. Errors stop selection without
 a baseline fallback. Mock receipts do not prove a live trial or model advantage.
+
+All selectors receive the same controller-owned decision context from
+`explorer/context.rs`. Policy `fixture-coverage-v2` asks for distinct observed
+package/version combinations, then novel state-changing transitions within the
+action budget. It includes visited states, per-candidate attempt counts, typed
+action descriptions, and at most eight recent completed operations with exit
+status and independent check classifications. Missing observations stay unknown;
+revision and publication identifiers do not inflate package-state coverage.
+Context resets at each episode, is bound to the current decision request, and
+is preserved as `decision_context` events. It carries no execution authority.
+The Jev Choice question uses this goal and evidence; seeded selection retains
+its existing least-used-action algorithm. Checks still run after every action
+and on stop, so repeating Check does not advance the coverage goal. The context
+has its own version 1 and does not change the version 1 concrete replay format;
+replay never invokes a selector or reconstructs its decisions from this policy.
+This fixture-specific goal and state projection remain Conary-owned. The shared
+selector boundary can later move to Redshirt without moving package semantics.
 
 Live use requires the explicit `--jev-live` option and `TYPESAFE_API_KEY`.
 It pins `https://api.typesafe.ai/v1/systemone`, disables redirects and proxies,

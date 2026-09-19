@@ -4,6 +4,7 @@
 use super::*;
 use anyhow::Result;
 use async_trait::async_trait;
+use context::{DecisionContext, EpisodeMemory};
 use contract::*;
 use controller::{Campaign, Environment, Episode};
 use evidence::{Identity, Replay};
@@ -14,6 +15,8 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
 };
 
+#[path = "tests/context.rs"]
+mod context_tests;
 mod jev;
 
 fn empty() -> Facts {
@@ -215,7 +218,13 @@ async fn observations_change_seeded_choices_and_preserve_negative_candidates() {
     );
     for seed in 0..32 {
         let mut selector = Seeded::new(seed);
-        let decision = selector.select(&after).await.unwrap();
+        let decision = selector
+            .select(
+                &after,
+                &EpisodeMemory::new(&after.observation).context(&after),
+            )
+            .await
+            .unwrap();
         assert!(after.authorize(&decision, &after.observation).is_ok());
     }
 }
@@ -371,7 +380,7 @@ async fn cancellation_during_selection_still_checks_and_cleans_without_dispatch(
         fn identity(&self) -> &'static str {
             "cancel-test"
         }
-        async fn select(&mut self, _: &DecisionRequest) -> Result<Decision> {
+        async fn select(&mut self, _: &DecisionRequest, _: &DecisionContext) -> Result<Decision> {
             self.0.store(true, Ordering::SeqCst);
             anyhow::bail!("selector interrupted")
         }

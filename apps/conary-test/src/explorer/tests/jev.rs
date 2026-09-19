@@ -6,6 +6,11 @@ use serde_json::{Value, json};
 use std::{sync::Arc, time::Duration};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+fn initial_context(remaining: u32) -> DecisionContext {
+    EpisodeMemory::new(&observation())
+        .context(&DecisionRequest::new(observation(), remaining).unwrap())
+}
+
 async fn server(
     statuses: Vec<u16>,
     variant: &'static str,
@@ -75,10 +80,61 @@ async fn server(
                 .keys()
                 .cloned()
                 .collect::<Vec<_>>();
+            let mut selected = ids[0].clone();
+            if variant == "history" {
+                let state = &request["state"];
+                assert_eq!(state["coverage"]["distinct_package_states"], calls);
+                assert_eq!(state["coverage"]["state_changing_operations"], calls - 1);
+                assert_eq!(state["recent_steps"].as_array().unwrap().len(), calls - 1);
+                assert!(
+                    state["goal"]
+                        .as_str()
+                        .unwrap()
+                        .contains("Maximize distinct")
+                );
+                if calls > 1 {
+                    let step = &state["recent_steps"][calls - 2];
+                    assert_eq!(step["exit_code"], 0);
+                    assert_eq!(step["checks_passed"], 6);
+                    assert_eq!(step["classifications"], json!(["pass"]));
+                    assert_ne!(step["before"], step["after"]);
+                }
+                let action = match calls {
+                    1 => json!({"kind":"install","fixture":"app_v1"}),
+                    2 => json!({"kind":"update","fixture":"app_v2"}),
+                    _ => json!({"kind":"stop"}),
+                };
+                selected = question["criteria"]
+                    .as_object()
+                    .unwrap()
+                    .iter()
+                    .find(|(_, value)| value["action"] == action)
+                    .unwrap()
+                    .0
+                    .clone();
+                assert!(
+                    !question["criteria"][&selected]["effect"]
+                        .as_str()
+                        .unwrap()
+                        .is_empty()
+                );
+            }
             let probabilities = ids
                 .iter()
-                .enumerate()
-                .map(|(i, id)| (id.clone(), if i == 0 { 1.0 } else { 0.0 }))
+                .map(|id| {
+                    (
+                        id.clone(),
+                        if *id == selected {
+                            if variant == "probability_sum" {
+                                0.99
+                            } else {
+                                1.0
+                            }
+                        } else {
+                            0.0
+                        },
+                    )
+                })
                 .collect::<BTreeMap<_, _>>();
             let key = if variant == "stale" {
                 "next_action_old"
@@ -88,7 +144,7 @@ async fn server(
             let choice = if variant == "unknown" {
                 "c999"
             } else {
-                &ids[0]
+                &selected
             };
             let mut body = json!({"model": crate::explorer::jev::MODEL, "answers": {key: {"type": "choice", "choice": choice, "probabilities": probabilities, "confidence": 1.0}}, "usage": {"input_tokens": 20, "output_tokens": 4}}).to_string();
             if variant == "authenticated" {
@@ -163,7 +219,10 @@ async fn last_allowed_rate_limit_failure_is_not_a_successful_budget_stop() {
     )
     .unwrap();
     let error = selector
-        .select(&DecisionRequest::new(observation(), 10).unwrap())
+        .select(
+            &DecisionRequest::new(observation(), 10).unwrap(),
+            &initial_context(10),
+        )
         .await
         .unwrap_err();
     assert!(
@@ -183,6 +242,7 @@ async fn provider_mock_valid_malformed_stale_auth_rate_overload_timeout_and_canc
         (vec![200], "malformed", false, 1),
         (vec![200], "stale", false, 1),
         (vec![200], "unknown", false, 1),
+        (vec![200], "probability_sum", false, 1),
         (vec![401], "valid", false, 1),
         (vec![422], "valid", false, 1),
         (vec![429, 200], "valid", true, 2),
@@ -204,7 +264,14 @@ async fn provider_mock_valid_malformed_stale_auth_rate_overload_timeout_and_canc
         )
         .unwrap();
         let request = DecisionRequest::new(observation(), 10).unwrap();
-        assert_eq!(selector.select(&request).await.is_ok(), valid, "{variant}");
+        assert_eq!(
+            selector
+                .select(&request, &initial_context(10))
+                .await
+                .is_ok(),
+            valid,
+            "{variant}"
+        );
         assert_eq!(selector.take_evidence().len(), expected);
         assert_eq!(server.await.unwrap(), expected);
     }
@@ -219,7 +286,10 @@ async fn provider_mock_valid_malformed_stale_auth_rate_overload_timeout_and_canc
     .unwrap();
     assert!(
         selector
-            .select(&DecisionRequest::new(observation(), 1).unwrap())
+            .select(
+                &DecisionRequest::new(observation(), 1).unwrap(),
+                &initial_context(1)
+            )
             .await
             .is_err()
     );
@@ -253,8 +323,18 @@ async fn authenticated_transport_redacts_credentials_and_respects_shared_call_bu
     let mut selector =
         crate::explorer::jev::Jev::authenticated_mock(&url, "redshirt-test-credential", 1).unwrap();
     let request = DecisionRequest::new(observation(), 10).unwrap();
-    assert!(selector.select(&request).await.is_ok());
-    assert!(selector.select(&request).await.is_err());
+    assert!(
+        selector
+            .select(&request, &initial_context(10))
+            .await
+            .is_ok()
+    );
+    assert!(
+        selector
+            .select(&request, &initial_context(10))
+            .await
+            .is_err()
+    );
     assert_eq!(server.await.unwrap(), 1);
     let records = selector.take_evidence();
     assert_eq!(records.len(), 1);
@@ -287,4 +367,64 @@ fn live_selector_requires_valid_credential_and_bounded_explicit_budget() {
             .to_string()
             .contains("synthetic-test-only")
     );
+}
+
+#[tokio::test]
+async fn mock_receives_actual_checked_history_and_coverage_before_next_choice() {
+    let (url, server) = server(vec![200; 3], "history").await;
+    let cancel = Arc::new(AtomicBool::new(false));
+    let mut selector =
+        crate::explorer::jev::Jev::mock(&url, 3, 1, Duration::from_secs(1), cancel.clone())
+            .unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let mut environment = Fake::default();
+    let report = controller::run(
+        &mut environment,
+        Some(&mut selector),
+        &mut Campaign::new(Limits::default()).unwrap(),
+        Episode {
+            mode: Mode::Exploration,
+            identity: identity(),
+            replay: None,
+            output: &tmp.path().join("history"),
+            cancel: &cancel,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(server.await.unwrap(), 3);
+    assert_eq!(
+        report.operations,
+        vec![
+            Action::Install(Fixture::AppV1),
+            Action::Update(Fixture::AppV2),
+            Action::Stop
+        ]
+    );
+    assert_eq!(report.stop_reason, "selector_stop");
+    assert_eq!(report.cleanup, "removed");
+    assert_eq!(report.evaluations.len(), 18);
+    assert!(report.evaluations.iter().all(|e| e.passed == Some(true)));
+    let events = std::fs::read_to_string(tmp.path().join("history/events.jsonl")).unwrap();
+    assert_eq!(events.matches("\"kind\":\"decision_context\"").count(), 3);
+}
+
+#[tokio::test]
+async fn stale_or_rebound_context_is_rejected_before_http() {
+    let mut selector = crate::explorer::jev::Jev::mock(
+        "http://127.0.0.1:1/v1/systemone",
+        1,
+        1,
+        Duration::from_millis(50),
+        Arc::new(AtomicBool::new(false)),
+    )
+    .unwrap();
+    let request = DecisionRequest::new(observation(), 8).unwrap();
+    let mut context = initial_context(7);
+    let error = selector.select(&request, &context).await.unwrap_err();
+    assert!(error.to_string().contains("context binding mismatch"));
+    context = initial_context(8);
+    context.candidates.get_mut("c0").unwrap().action = Action::Stop;
+    assert!(selector.select(&request, &context).await.is_err());
+    assert!(selector.take_evidence().is_empty());
 }

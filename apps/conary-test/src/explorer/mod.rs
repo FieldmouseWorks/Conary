@@ -4,6 +4,7 @@
 pub mod checker;
 pub mod cli;
 pub mod conary;
+pub mod context;
 pub mod contract;
 pub mod controller;
 pub mod evidence;

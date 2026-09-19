@@ -1,5 +1,6 @@
 // apps/conary-test/src/explorer/selector.rs
 
+use super::context::DecisionContext;
 use super::contract::*;
 use anyhow::{Result, ensure};
 use async_trait::async_trait;
@@ -19,7 +20,11 @@ pub trait Selector: Send {
         Vec::new()
     }
     fn identity(&self) -> &'static str;
-    async fn select(&mut self, request: &DecisionRequest) -> Result<Decision>;
+    async fn select(
+        &mut self,
+        request: &DecisionRequest,
+        context: &DecisionContext,
+    ) -> Result<Decision>;
 }
 
 /// Visit least-used transitions first, with a reproducible seeded tie-break.
@@ -44,7 +49,7 @@ impl Selector for Seeded {
     fn identity(&self) -> &'static str {
         "seeded-v1"
     }
-    async fn select(&mut self, request: &DecisionRequest) -> Result<Decision> {
+    async fn select(&mut self, request: &DecisionRequest, _: &DecisionContext) -> Result<Decision> {
         let available = request
             .candidates
             .iter()
@@ -79,7 +84,7 @@ impl Selector for Scripted {
     fn identity(&self) -> &'static str {
         "scripted-calibration-v1"
     }
-    async fn select(&mut self, request: &DecisionRequest) -> Result<Decision> {
+    async fn select(&mut self, request: &DecisionRequest, _: &DecisionContext) -> Result<Decision> {
         let action = if self.0.is_empty() {
             Action::Stop
         } else {

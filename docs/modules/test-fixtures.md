@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-19
-revision: 62
+revision: 63
 summary: Map fixture ownership, including the bounded local explorer corpus, native refusals, repository discovery, command captures, typed boot-tool interfaces, and the refreshed Tumbleweed lifecycle snapshot
 ---
 
@@ -878,7 +878,7 @@ CAS. Update cancellation captures cover both native and CCS root packages.
 
 ### bounded-explorer-ccs
 
-- **Owner:** `apps/conary-test/src/explorer/fixtures.rs` and its independent checker.
+- **Owner:** `apps/conary-test/src/explorer/fixtures.rs` and its independent checker; `explorer/context.rs` owns the fixture coverage goal and observed decision history.
 - **Purpose:** Build signed inert CCS v3 application versions plus a companion; compare real payload hashes and ownership with fixture expectations.
 - **Consumes:** `conary-test explorer` calibration, seeded exploration and concrete-operation replay.
 - **Fast proof:** `cargo test -p conary-test explorer`.
