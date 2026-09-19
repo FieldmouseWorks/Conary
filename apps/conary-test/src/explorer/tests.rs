@@ -629,12 +629,13 @@ async fn seeded_controller_reobserves_between_concrete_operations() {
 
 #[test]
 fn runtime_process_guard_requires_exact_mount_authority_without_privilege_growth() {
-    let valid = "CapEff:\t0000000008200002\nCapPrm:\t0000000008200002\nCapBnd:\t0000000008200002\nNoNewPrivs:\t1\nSeccomp:\t2\n";
+    let valid = "CapEff:\t0000000008200006\nCapPrm:\t0000000008200006\nCapBnd:\t0000000008200006\nNoNewPrivs:\t1\nSeccomp:\t2\n";
     assert!(super::sandbox::verify_process_restrictions(valid).is_ok());
     for invalid in [
-        valid.replace("8200002", "8200003"),
-        valid.replace("8200002", "0200000"),
-        valid.replace("8200002", "0000000"),
+        valid.replace("8200006", "8200007"),
+        valid.replace("8200006", "8200002"),
+        valid.replace("8200006", "0200000"),
+        valid.replace("8200006", "0000000"),
         valid.replace("NoNewPrivs:\t1", "NoNewPrivs:\t0"),
         valid.replace("Seccomp:\t2", "Seccomp:\t0"),
         String::new(),

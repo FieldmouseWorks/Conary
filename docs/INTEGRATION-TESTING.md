@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-19
-revision: 72
+revision: 73
 summary: Document bounded fixture exploration and replay, read-only repository onboarding assertions, typed change-scope matrix skips, local security-advisory authority, trusted-main compiler seeds, isolated hosted-Ubuntu CI package bootstrap, attributable daily-driver same-name provides, configuration upgrade, payload topology, typed corpus coverage, and native lifecycle gates
 ---
 
@@ -91,14 +91,13 @@ a private empty directory on that guest filesystem and binds only that directory
 at `/work`. The exact bind source and destination are rechecked before dispatch;
 container removal precedes directory removal. No working-host directory or device
 is exposed. The container grants
-exactly `CAP_SYS_ADMIN`, `CAP_DAC_OVERRIDE`, and `CAP_MKNOD` for the selected-root
+exactly `CAP_SYS_ADMIN`, `CAP_DAC_OVERRIDE`, `CAP_DAC_READ_SEARCH`, and `CAP_MKNOD` for the selected-root
 OverlayFS transaction: mounting, accessing the kernel's mode-000 work directory,
-and creating whiteouts. This profile is currently **blocked** for real package
-execution: the indexed OverlayFS probe also needs `CAP_DAC_READ_SEARCH`, which
-is not yet granted. Linux's
+decoding indexed file handles, and creating whiteouts. Linux's
 [file-handle capability check](https://github.com/torvalds/linux/blob/v7.0/fs/overlayfs/util.c#L74-L84)
-disables the index without it. Issue #1050 tracks completing and verifying the
-guest profile; a successful empty baseline is not installation proof. Its
+disables the index without `CAP_DAC_READ_SEARCH`. The exact capability guard
+rejects a profile missing that capability; a successful empty baseline alone
+is not installation proof. Its
 AppArmor profile is unconfined inside the disposable guest. The runtime seccomp
 filter and no-new-privileges remain enabled. Actual effective, permitted and
 bounding capabilities plus those two restrictions are checked through
