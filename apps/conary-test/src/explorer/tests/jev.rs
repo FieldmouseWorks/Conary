@@ -483,9 +483,16 @@ async fn choice_contract_is_audited_and_invalid_maps_never_dispatch_or_retry() {
     ] {
         let (url, server) = server(vec![200], variant).await;
         let cancel = Arc::new(AtomicBool::new(false));
-        let mut selector =
-            crate::explorer::jev::Jev::mock(&url, 1, 2, Duration::from_secs(1), cancel.clone())
-                .unwrap();
+        // Invalid responses must stop even when a second HTTP attempt is available.
+        let requests = if dispatches == 1 { 1 } else { 2 };
+        let mut selector = crate::explorer::jev::Jev::mock(
+            &url,
+            requests,
+            2,
+            Duration::from_secs(1),
+            cancel.clone(),
+        )
+        .unwrap();
         let mut environment = Fake::default();
         let tmp = tempfile::tempdir().unwrap();
         let output = tmp.path().join(variant);
