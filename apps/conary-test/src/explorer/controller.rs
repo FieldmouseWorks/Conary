@@ -114,6 +114,7 @@ pub async fn run(
         stop_reason: "not_started".into(),
         cleanup: "pending".into(),
         reset_verified: false,
+        reproduces_recorded_predicate: None,
         attempted_actions_total: campaign.attempted,
         elapsed_ms: 0,
     };
@@ -295,6 +296,16 @@ pub async fn run(
         Ok(Err(e)) => format!("failed; quarantine environment: {e:#}"),
         Err(_) => "timed out; quarantine environment".into(),
     };
+    report.reproduces_recorded_predicate = episode.replay.map(|r| {
+        report.reset_verified
+            && report.cleanup == "removed"
+            && matches!(
+                report.stop_reason.as_str(),
+                "recorded_trace_complete" | "selector_stop"
+            )
+            && report.evaluations.iter().all(|e| e.passed.is_some())
+            && report.signatures() == r.failure_signatures
+    });
     report.attempted_actions_total = campaign.attempted;
     report.elapsed_ms = campaign.started.elapsed().as_millis() as u64;
     let finished = evidence.finish(&report);

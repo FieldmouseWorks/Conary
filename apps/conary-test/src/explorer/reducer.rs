@@ -15,6 +15,7 @@ pub struct Reduction {
     pub version: u32,
     pub original: Replay,
     pub reduced: Replay,
+    pub original_reproduced: bool,
     pub attempts: Vec<ReductionAttempt>,
     pub reason: String,
 }
@@ -42,11 +43,30 @@ pub async fn reduce(
         version: VERSION,
         original: original.clone(),
         reduced: original.clone(),
+        original_reproduced: false,
         attempts: Vec::new(),
         reason: "bounded single-deletion search".into(),
     };
+    let verification = controller::run(
+        environment,
+        None,
+        campaign,
+        Episode {
+            mode: Mode::Replay,
+            identity: original.identity.clone(),
+            replay: Some(original),
+            output: &directory.join("original-verification"),
+            cancel,
+        },
+    )
+    .await?;
+    result.original_reproduced = verification.reproduces_recorded_predicate == Some(true);
+    if !result.original_reproduced {
+        result.reason = "original predicate did not reproduce; no reduction attempted".into();
+    }
     let mut index = 0;
-    while index < result.reduced.operations.len()
+    while result.original_reproduced
+        && index < result.reduced.operations.len()
         && campaign.reductions < campaign.limits.reductions
     {
         if campaign.attempted >= campaign.limits.actions
@@ -92,15 +112,14 @@ pub async fn reduce(
         }
     }
     let summary = serde_json::to_vec_pretty(&result)?;
+    let replay_bytes = serde_json::to_vec_pretty(&result.reduced)?;
     ensure!(
-        campaign.evidence_bytes + summary.len() as u64 <= campaign.limits.evidence_bytes,
+        campaign.evidence_bytes + summary.len() as u64 + replay_bytes.len() as u64
+            <= campaign.limits.evidence_bytes,
         "reducer evidence budget exhausted"
     );
-    campaign.evidence_bytes += summary.len() as u64;
+    campaign.evidence_bytes += summary.len() as u64 + replay_bytes.len() as u64;
     std::fs::write(directory.join("reduction.json"), summary)?;
-    std::fs::write(
-        directory.join("reduced-replay.json"),
-        serde_json::to_vec_pretty(&result.reduced)?,
-    )?;
+    std::fs::write(directory.join("reduced-replay.json"), replay_bytes)?;
     Ok(result)
 }

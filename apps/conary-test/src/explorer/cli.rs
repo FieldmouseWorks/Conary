@@ -196,7 +196,8 @@ impl ExplorerCommands {
             .await?;
             println!("{}", serde_json::to_string_pretty(&report)?);
             ensure!(
-                report.cleanup == "removed"
+                report.reproduces_recorded_predicate != Some(false)
+                    && report.cleanup == "removed"
                     && report.reset_verified
                     && !report.evaluations.iter().any(|e| matches!(
                         e.classification,

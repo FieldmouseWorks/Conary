@@ -52,6 +52,7 @@ pub struct RunReport {
     pub stop_reason: String,
     pub cleanup: String,
     pub reset_verified: bool,
+    pub reproduces_recorded_predicate: Option<bool>,
     pub attempted_actions_total: u32,
     pub elapsed_ms: u64,
 }
@@ -176,7 +177,7 @@ impl Evidence {
         for name in ["events.jsonl", "report.json", "replay.json", "report.md"] {
             let bytes = std::fs::read(self.directory.join(name))?;
             use sha2::Digest;
-            manifest.insert(name, serde_json::json!({"sha256": hex::encode(sha2::Sha256::digest(&bytes)), "bytes": bytes.len()}));
+            manifest.insert(name.to_owned(), serde_json::json!({"sha256": hex::encode(sha2::Sha256::digest(&bytes)), "bytes": bytes.len()}));
         }
         for name in super::fixtures::MEMBERS {
             let path = self.directory.join("fixtures").join(name);

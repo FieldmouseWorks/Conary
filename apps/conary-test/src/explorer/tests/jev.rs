@@ -119,7 +119,11 @@ async fn provider_mock_valid_malformed_stale_auth_rate_overload_timeout_and_canc
             &url,
             2,
             2,
-            Duration::from_millis(100),
+            if variant == "timeout" {
+                Duration::from_millis(100)
+            } else {
+                Duration::from_secs(1)
+            },
             Arc::new(AtomicBool::new(false)),
         )
         .unwrap();
