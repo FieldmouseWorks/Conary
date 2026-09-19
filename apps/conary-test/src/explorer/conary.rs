@@ -208,7 +208,7 @@ impl Environment for ConaryEnvironment<'_> {
             "duplicate operation refused"
         );
         let result = match action {
-            Action::Install(fixture) => {
+            Action::Install(fixture) | Action::Update(fixture) => {
                 self.command(&[
                     "/usr/bin/conary",
                     "ccs",

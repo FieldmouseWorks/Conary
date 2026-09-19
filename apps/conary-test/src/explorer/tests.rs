@@ -87,7 +87,7 @@ impl Environment for Fake {
         anyhow::ensure!(!self.fail_execute, "injected unknown execution outcome");
         let mut exit_code = 0;
         match action {
-            Action::Install(f) => {
+            Action::Install(f) | Action::Update(f) => {
                 self.current
                     .facts
                     .packages
@@ -445,4 +445,86 @@ fn fixture_builder_produces_pinned_verified_current_packages() {
     }
     std::fs::write(directory.join("app-v1.ccs"), b"tampered").unwrap();
     assert_ne!(hashes, fixtures::hashes(&directory).unwrap());
+}
+
+#[tokio::test]
+async fn deadline_and_replay_mismatch_remain_visible_without_dispatch() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut fake = Fake::default();
+    let mut selector = Seeded::new(1);
+    let mut campaign = Campaign::new(Limits {
+        seconds: 1,
+        ..Default::default()
+    })
+    .unwrap();
+    let report = controller::run(
+        &mut fake,
+        Some(&mut selector),
+        &mut campaign,
+        Episode {
+            mode: Mode::Exploration,
+            identity: identity(),
+            replay: None,
+            output: &tmp.path().join("deadline"),
+            cancel: &AtomicBool::new(false),
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(fake.dispatched, 0);
+    assert!(report.stop_reason.contains("wall-time budget"));
+    assert!(report.evaluations.iter().all(|e| e.passed == Some(true)));
+    let mut replay = Replay {
+        version: VERSION,
+        identity: identity(),
+        operations: vec![Action::Stop],
+        failure_signatures: vec!["not-reproduced".into()],
+    };
+    let mut campaign = Campaign::new(Limits::default()).unwrap();
+    let report = controller::run(
+        &mut fake,
+        None,
+        &mut campaign,
+        Episode {
+            mode: Mode::Replay,
+            identity: identity(),
+            replay: Some(&replay),
+            output: &tmp.path().join("predicate-mismatch"),
+            cancel: &AtomicBool::new(false),
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(report.reproduces_recorded_predicate, Some(false));
+    replay.identity.source_revision = "d".repeat(40);
+    let report = controller::run(
+        &mut fake,
+        None,
+        &mut campaign,
+        Episode {
+            mode: Mode::Replay,
+            identity: identity(),
+            replay: Some(&replay),
+            output: &tmp.path().join("identity-mismatch"),
+            cancel: &AtomicBool::new(false),
+        },
+    )
+    .await
+    .unwrap();
+    assert!(!report.reset_verified);
+    assert_eq!(fake.dispatched, 0);
+}
+
+#[test]
+fn saved_fixture_bundle_contains_exact_bytes_and_fails_on_substitution() {
+    let tmp = tempfile::tempdir().unwrap();
+    let source = tmp.path().join("fixtures");
+    let hashes = fixtures::build(&source).unwrap();
+    let output = tmp.path().join("bundle");
+    let mut sink = evidence::Evidence::create(&output, 1024 * 1024).unwrap();
+    sink.include_fixtures(&source, &hashes).unwrap();
+    assert_eq!(hashes, fixtures::hashes(&output.join("fixtures")).unwrap());
+    std::fs::write(source.join("app-v2.ccs"), b"different").unwrap();
+    let mut another = evidence::Evidence::create(&tmp.path().join("another"), 1024 * 1024).unwrap();
+    assert!(another.include_fixtures(&source, &hashes).is_err());
 }

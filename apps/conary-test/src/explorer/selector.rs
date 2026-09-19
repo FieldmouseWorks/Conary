@@ -91,7 +91,7 @@ pub fn calibration() -> Vec<Action> {
         Action::Install(Fixture::Companion),
         Action::Install(Fixture::AppV1),
         Action::Inspect,
-        Action::Install(Fixture::AppV2),
+        Action::Update(Fixture::AppV2),
         Action::Check,
         Action::NegativeControl,
         Action::Remove(Package::App),

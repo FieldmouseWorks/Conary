@@ -235,23 +235,22 @@ pub async fn run(
                 "operation output limit exceeded"
             );
             evidence.event("execution_receipt", &receipt)?;
-            let expected_refusal =
-                matches!(action, Action::Remove(package) if !oracle.0.contains_key(&package));
+            let after = tokio::time::timeout(campaign.timeout(), environment.observe()).await??;
+            let negative_request = matches!(action, Action::Remove(package) if !oracle.0.contains_key(&package))
+                || matches!(action, Action::Update(Fixture::AppV1) if oracle.0.get(&Package::App) == Some(&Fixture::AppV2));
             if receipt.exit_code != 0 {
+                // The criterion is deliberately narrow: refusal with unchanged
+                // independently observed fixture state. Diagnostic prose is not authority.
+                let expected_refusal = negative_request && receipt.exit_code == 1
+                    && current.facts.complete && after.facts.complete && current.facts == after.facts;
                 report.evaluations.push(Evaluation {
-                    criterion: "operation.exit".into(),
-                    checker: CHECKER.into(),
-                    classification: if expected_refusal {
-                        Classification::ExpectedRefusal
-                    } else {
-                        Classification::ProductFailure
-                    },
+                    criterion: "operation.refusal_or_success".into(), checker: CHECKER.into(),
+                    classification: if expected_refusal { Classification::ExpectedRefusal } else { Classification::ProductFailure },
                     passed: Some(expected_refusal),
-                    detail: format!("exit {}", receipt.exit_code),
+                    detail: format!("exit {}; expected refusal checks unchanged fixture state, not diagnostic cause", receipt.exit_code),
                 });
             }
             oracle.accept(&receipt);
-            let after = tokio::time::timeout(campaign.timeout(), environment.observe()).await??;
             let checks = oracle.evaluate(&after.facts, action == Action::NegativeControl);
             evidence.event("checked", &(&after, &checks))?;
             report.evaluations.extend(checks);

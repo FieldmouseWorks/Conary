@@ -32,6 +32,7 @@ pub enum Mode {
 )]
 pub enum Action {
     Install(Fixture),
+    Update(Fixture),
     Remove(Package),
     Inspect,
     Check,
@@ -150,7 +151,13 @@ impl DecisionRequest {
                     .map(String::as_str)
                     != Some(fixture.version())
                 {
-                    actions.push(Action::Install(fixture));
+                    actions.push(
+                        if observation.facts.packages.contains_key(&fixture.package()) {
+                            Action::Update(fixture)
+                        } else {
+                            Action::Install(fixture)
+                        },
+                    );
                 }
             }
             for package in [Package::App, Package::Companion] {

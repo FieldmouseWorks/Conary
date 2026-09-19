@@ -14,7 +14,7 @@ impl Oracle {
             return;
         }
         match receipt.action {
-            Action::Install(fixture) => {
+            Action::Install(fixture) | Action::Update(fixture) => {
                 self.0.insert(fixture.package(), fixture);
             }
             Action::Remove(package) => {
