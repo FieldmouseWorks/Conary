@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-09-03
-revision: 21
-summary: Lean vendor-neutral assistant routing into canonical Conary owners, task-sized proof packets, and a shared compiler cache with isolated worktree targets
+last_updated: 2026-09-21
+revision: 22
+summary: Route assistants into canonical Conary owners, task-sized proof packets, and the Redshirt ownership and cross-project workflow
 ---
 
 # Conary For Coding Assistants
@@ -57,6 +57,7 @@ This keeps startup guidance small while retaining precise, on-demand context.
 | Architecture question | `docs/ARCHITECTURE.md`, then the owning `docs/modules/*.md` |
 | Package semantic or persisted contract | The owning file under `docs/specs/` |
 | Integration test or fixture | `docs/INTEGRATION-TESTING.md` and `docs/modules/test-fixtures.md` |
+| Redshirt or shared experiment tooling | [Ownership and integration contract](../INTEGRATION-TESTING.md#redshirt-relationship), then [cross-project workflow](../../CONTRIBUTING.md#working-with-redshirt) |
 | Deploy, MCP, release, or host work | `docs/operations/infrastructure.md` plus the owner packet |
 | Current priority or blocker | `docs/roadmaps/development-roadmap.md` and live issue/PR state |
 | Public or assistant-doc change | The proof floor below plus the affected behavior owner |
