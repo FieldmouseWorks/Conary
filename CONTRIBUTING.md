@@ -513,6 +513,34 @@ Merge through GitHub, then let GitHub delete the head branch. Confirm that the
 issue closed when the PR used `Closes`; otherwise update the open issue with
 what landed, what remains, and the next acceptance boundary.
 
+### Working With Redshirt
+
+For work that crosses Conary and
+[Redshirt](https://github.com/FieldmouseWorks/redshirt), start with the
+[ownership and integration contract](docs/INTEGRATION-TESTING.md#redshirt-relationship)
+and Redshirt's [consumer workflow](https://github.com/FieldmouseWorks/redshirt/blob/main/docs/ARCHITECTURE.md#consumer-driven-work).
+Concrete Conary outcomes can drive shared improvements:
+
+1. Name the package outcome and acceptance check in the Conary issue. Keep
+   package semantics, fixtures, permitted actions, and independent evaluators
+   here; reusable controller, provider, and evidence behavior belongs in
+   Redshirt's Rust core.
+2. Search Redshirt's issues before opening a shared follow-up. Record the
+   observed limitation, generic contract, sanitized reproducer, acceptance
+   check, and whether the Conary outcome depends on it. Label hypotheses as
+   hypotheses; keep credentials and host-local evidence out of public issues.
+3. A required shared change gets its own Redshirt issue, branch, and PR, paired
+   with the Conary integration PR. Link both directions and record the exact
+   verified Redshirt revision and interface requirements. Preserve licensing
+   and provenance when moving demonstrated common code.
+4. Queue nonblocking shared opportunities in Redshirt while Conary continues
+   its selected outcome. Do not copy a shared controller into Conary or make
+   speculative platform work a prerequisite for package work.
+5. Prove the generic boundary in Redshirt and the actual package integration
+   in Conary. Keep those results separate from provider usefulness claims,
+   update both work records, and preserve each repository's review and merge
+   gates.
+
 ## Issue Reporting
 
 ### Bug Reports
