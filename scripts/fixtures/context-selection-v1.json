@@ -1,0 +1,293 @@
+{
+  "version": 1,
+  "source_revision": "180bd662516080b7523c9cee069396ae14b0f064",
+  "limits": {
+    "context_bytes": 30000,
+    "selected_chunks": 2,
+    "request_bytes": 32768,
+    "max_calls": 12,
+    "max_reserved_usd": 0.04
+  },
+  "cases": [
+    {
+      "id": "c1",
+      "split": "calibration",
+      "route_path": "apps/conary/src/dispatch/root/try_preflight.rs",
+      "task": "A read-only conary list command selects a disposable custom database through --db-path. That file contains non-SQLite bytes. The command fails before listing packages. Which diagnosis and next inspection are supported? Treat this as a read-only diagnostic question; do not execute recovery.",
+      "chunks": [
+        {
+          "id": "s1",
+          "path": "apps/conary/src/dispatch.rs",
+          "start": 32,
+          "end": 41,
+          "sha256": "033daf205ca5669e2d7517a5255564a25a927a54d5b4f6cb504dfb04f768732f"
+        },
+        {
+          "id": "s2",
+          "path": "apps/conary/src/app.rs",
+          "start": 1,
+          "end": 27,
+          "sha256": "4ea71250cc2bcade1dff9d01647fd8a07ae794ca8a51390e273760e5f5331cc6"
+        },
+        {
+          "id": "s3",
+          "path": "apps/conary/src/dispatch/root/try_preflight.rs",
+          "start": 193,
+          "end": 213,
+          "sha256": "15884fb20db08b151878723502cf43b648658d18a04de68134dd10b213151c39"
+        },
+        {
+          "id": "s4",
+          "path": "apps/conary/src/ui/diagnostics/database_preflight.rs",
+          "start": 8,
+          "end": 36,
+          "sha256": "2da51f06ea6cb1fc5899db525c78b31903ae12264871b2bd9865c210414014da"
+        },
+        {
+          "id": "s5",
+          "path": "crates/conary-core/src/db/schema.rs",
+          "start": 50,
+          "end": 94,
+          "sha256": "2f5081de23040a2dadb0efd3856a708fc4f5247cbf8b6212976c75aa04c51304"
+        },
+        {
+          "id": "s6",
+          "path": "apps/conary/src/test_hooks.rs",
+          "start": 139,
+          "end": 170,
+          "sha256": "8e09553f03b9e27938c2ed5821f76b4a5fe23575e034cdb320f5741d7796b09a"
+        }
+      ],
+      "diagnoses": {
+        "d1": "The CLI retries the default database; inspect only the default path.",
+        "d2": "Opening the selected database failed during common preflight; preserve its bytes and inspect the selected path and underlying database cause.",
+        "d3": "A repository signing failure is relabeled as a database error; replace repository trust configuration.",
+        "insufficient": "The supplied context does not establish which diagnosis is correct."
+      },
+      "expected": "d2",
+      "essential": [
+        "s3",
+        "s4"
+      ],
+      "proof_sources": [
+        {
+          "path": "apps/conary/tests/cli_diagnostics/database_preflight.rs",
+          "function": "corrupt_database_failure_names_selected_path_across_first_use_commands"
+        }
+      ],
+      "proof_commands": [
+        "cargo test --locked -p conary --test cli_diagnostics database_preflight::corrupt_database_failure_names_selected_path_across_first_use_commands"
+      ]
+    },
+    {
+      "id": "c2",
+      "split": "calibration",
+      "route_path": "apps/conary/src/commands/install/command.rs",
+      "task": "One exact package record is installed as a dependency. A subsequent install request selects that same version and architecture, uses --dry-run and --yes, and supplies a new selection reason. The call succeeds, but the stored install reason and selection reason remain unchanged. Which explanation fits the implementation?",
+      "chunks": [
+        {
+          "id": "s1",
+          "path": "apps/conary/src/commands/install/command.rs",
+          "start": 160,
+          "end": 174,
+          "sha256": "7491e2b27c23a1d64712e9d35dffa89a454297e807f9e956a04537001c6b0b8a"
+        },
+        {
+          "id": "s2",
+          "path": "apps/conary/src/commands/install/mod.rs",
+          "start": 1,
+          "end": 58,
+          "sha256": "f46745fc4a7d48908e957b62ee9c44ae4d599ed2d8656a4cea8bb72620046ea8"
+        },
+        {
+          "id": "s3",
+          "path": "apps/conary/src/commands/install/validation.rs",
+          "start": 85,
+          "end": 150,
+          "sha256": "36056ade76fcb0c4d2cc537230f20a70235252582f0c19284068070ee57a0116"
+        },
+        {
+          "id": "s4",
+          "path": "apps/conary/src/commands/install/options.rs",
+          "start": 26,
+          "end": 62,
+          "sha256": "8c8a04796e178d65162e6fb2193e1e737e2222d72e9271fc0efb770ce69f409d"
+        },
+        {
+          "id": "s5",
+          "path": "apps/conary/src/command_risk.rs",
+          "start": 30,
+          "end": 50,
+          "sha256": "9f114cc344deb4846f25a1653491cf22b0d9332182692aaeb2dd5c16d15e718f"
+        },
+        {
+          "id": "s6",
+          "path": "apps/conary/src/dispatch/context.rs",
+          "start": 17,
+          "end": 30,
+          "sha256": "84e83718d54667015860db031b0cd37924ae73917c39c4157638e5db8148b789"
+        }
+      ],
+      "diagnoses": {
+        "d1": "Dependency promotion is only reported during a dry run; --yes does not turn the preview into a database write.",
+        "d2": "--yes requires promotion to explicit even during a dry run, so unchanged fields prove a failed write.",
+        "d3": "Promotion always chooses the first installed package regardless of version and architecture, so the selected record was ignored.",
+        "insufficient": "The supplied context does not establish which diagnosis is correct."
+      },
+      "expected": "d1",
+      "essential": [
+        "s1",
+        "s3"
+      ],
+      "proof_sources": [
+        {
+          "path": "apps/conary/src/commands/install/command/tests.rs",
+          "function": "dry_run_preserves_dependency_promotion_state_even_with_yes"
+        }
+      ],
+      "proof_commands": [
+        "cargo test --locked -p conary --lib commands::install::command::tests::dry_run_preserves_dependency_promotion_state_even_with_yes"
+      ]
+    },
+    {
+      "id": "c3",
+      "split": "held_out",
+      "route_path": "apps/conary/src/dispatch/root/try_preflight.rs",
+      "task": "A selected custom database contains schema_version 66 and retained package-state tables, with no current schema identity. A normal command reports that a schema rebuild is required and shows rebuild-db help rather than performing a rebuild. Which diagnosis and authority boundary explain this result?",
+      "chunks": [
+        {
+          "id": "s1",
+          "path": "apps/conary/src/dispatch.rs",
+          "start": 32,
+          "end": 41,
+          "sha256": "033daf205ca5669e2d7517a5255564a25a927a54d5b4f6cb504dfb04f768732f"
+        },
+        {
+          "id": "s2",
+          "path": "apps/conary/src/app.rs",
+          "start": 1,
+          "end": 27,
+          "sha256": "4ea71250cc2bcade1dff9d01647fd8a07ae794ca8a51390e273760e5f5331cc6"
+        },
+        {
+          "id": "s3",
+          "path": "apps/conary/src/dispatch/root/try_preflight.rs",
+          "start": 193,
+          "end": 213,
+          "sha256": "15884fb20db08b151878723502cf43b648658d18a04de68134dd10b213151c39"
+        },
+        {
+          "id": "s4",
+          "path": "apps/conary/src/ui/diagnostics/database_preflight.rs",
+          "start": 8,
+          "end": 36,
+          "sha256": "2da51f06ea6cb1fc5899db525c78b31903ae12264871b2bd9865c210414014da"
+        },
+        {
+          "id": "s5",
+          "path": "crates/conary-core/src/db/schema.rs",
+          "start": 50,
+          "end": 94,
+          "sha256": "2f5081de23040a2dadb0efd3856a708fc4f5247cbf8b6212976c75aa04c51304"
+        },
+        {
+          "id": "s6",
+          "path": "apps/conary/src/test_hooks.rs",
+          "start": 139,
+          "end": 170,
+          "sha256": "8e09553f03b9e27938c2ed5821f76b4a5fe23575e034cdb320f5741d7796b09a"
+        }
+      ],
+      "diagnoses": {
+        "d1": "The database is fresh because it has no current schema identity; initialization should silently replace the retained tables.",
+        "d2": "The command has already validated rebuild privileges and the target; the help message authorizes an immediate destructive rebuild.",
+        "d3": "The persisted schema is obsolete. Preserve retained state; common preflight offers help while an explicit rebuild must separately validate the same database, target, and privileges.",
+        "insufficient": "The supplied context does not establish which diagnosis is correct."
+      },
+      "expected": "d3",
+      "essential": [
+        "s4",
+        "s5"
+      ],
+      "proof_sources": [
+        {
+          "path": "apps/conary/tests/cli_diagnostics/database_preflight.rs",
+          "function": "obsolete_schema_failure_retains_facts_and_only_offers_rebuild_help"
+        }
+      ],
+      "proof_commands": [
+        "cargo test --locked -p conary --test cli_diagnostics database_preflight::obsolete_schema_failure_retains_facts_and_only_offers_rebuild_help"
+      ]
+    },
+    {
+      "id": "c4",
+      "split": "held_out",
+      "route_path": "apps/conary/src/test_hooks.rs",
+      "task": "An ordinary Conary binary was built without the non-default test-hooks feature. Its environment contains CONARY_TEST_BOOT_ID=probe. Even conary --version exits with a test-hook-environment error instead of printing the version. Which mechanism explains the early failure?",
+      "chunks": [
+        {
+          "id": "s1",
+          "path": "apps/conary/src/dispatch.rs",
+          "start": 32,
+          "end": 41,
+          "sha256": "033daf205ca5669e2d7517a5255564a25a927a54d5b4f6cb504dfb04f768732f"
+        },
+        {
+          "id": "s2",
+          "path": "apps/conary/src/app.rs",
+          "start": 1,
+          "end": 27,
+          "sha256": "4ea71250cc2bcade1dff9d01647fd8a07ae794ca8a51390e273760e5f5331cc6"
+        },
+        {
+          "id": "s3",
+          "path": "apps/conary/src/dispatch/root/try_preflight.rs",
+          "start": 193,
+          "end": 213,
+          "sha256": "15884fb20db08b151878723502cf43b648658d18a04de68134dd10b213151c39"
+        },
+        {
+          "id": "s4",
+          "path": "apps/conary/src/ui/diagnostics/database_preflight.rs",
+          "start": 8,
+          "end": 36,
+          "sha256": "2da51f06ea6cb1fc5899db525c78b31903ae12264871b2bd9865c210414014da"
+        },
+        {
+          "id": "s5",
+          "path": "crates/conary-core/src/db/schema.rs",
+          "start": 50,
+          "end": 94,
+          "sha256": "2f5081de23040a2dadb0efd3856a708fc4f5247cbf8b6212976c75aa04c51304"
+        },
+        {
+          "id": "s6",
+          "path": "apps/conary/src/test_hooks.rs",
+          "start": 139,
+          "end": 170,
+          "sha256": "8e09553f03b9e27938c2ed5821f76b4a5fe23575e034cdb320f5741d7796b09a"
+        }
+      ],
+      "diagnoses": {
+        "d1": "Clap rejects --version whenever any environment variable is set.",
+        "d2": "The application initializes test-hook policy before parsing CLI arguments; a build without test-hooks refuses the test-hook environment at startup.",
+        "d3": "Version output requires a writable package database, and the database-open error was relabeled.",
+        "insufficient": "The supplied context does not establish which diagnosis is correct."
+      },
+      "expected": "d2",
+      "essential": [
+        "s2",
+        "s6"
+      ],
+      "proof_sources": [
+        {
+          "path": "apps/conary/tests/test_hook_ownership.rs",
+          "function": "ordinary_binary_rejects_test_hook_environment_before_clap_exit"
+        }
+      ],
+      "proof_commands": [
+        "cargo test --locked -p conary --test test_hook_ownership ordinary_binary_rejects_test_hook_environment_before_clap_exit"
+      ]
+    }
+  ]
+}

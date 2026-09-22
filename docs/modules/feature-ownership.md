@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-09-14
-revision: 123
-summary: Route features to owned paths and proof, including installed-list, publication-debt, and repository presentation, retained-survey requests, and workflow recovery.
+last_updated: 2026-09-22
+revision: 124
+summary: Route features to owned paths and proof, including the source-pinned Conary diagnostic context corpus and its independent regression checks.
 ---
 
 # Feature Ownership And Interaction Gates
@@ -1185,6 +1185,36 @@ Dry-run artifact proof is not publication or production proof. Release signing
 secrets must never be logged or persisted in artifacts. A successful workflow
 dispatch is not deployment proof: wait for terminal CI, then verify installed
 binaries, served artifacts, signatures, and live health independently.
+
+## Diagnostic Context Corpus
+
+**Slug:** context-corpus
+
+**Capability:** export source-pinned read-only diagnostic cases and independent
+labels for the external Redshirt context comparison.
+
+**Start here:** `scripts/context-selection-corpus.py`;
+`scripts/fixtures/context-selection-v1.json`; `docs/modules/context-selection.md`.
+
+**Neighbor systems:** CLI diagnostics, install promotion, test-hook startup,
+assistant owner packets, and the separately owned Redshirt Rust runner.
+
+**Paths:** `scripts/context-selection-corpus.py`;
+`scripts/fixtures/context-selection-v1.json`; `docs/modules/context-selection.md`.
+
+**Focused proof:** `python3 scripts/context-selection-corpus.py --check`;
+`cargo test --locked -p conary --test cli_diagnostics`;
+`cargo test --locked -p conary --test test_hook_ownership`;
+`cargo test --locked -p conary --lib commands::install::command::tests::dry_run_preserves_dependency_promotion_state_even_with_yes`.
+
+**Interaction gate:** use the affected runtime owner's proof when source behavior
+changes; this exporter does not mutate package state or integration images.
+
+**Docs to update:** `docs/modules/context-selection.md`.
+
+**Safety notes:** retain mandatory policy and owner packets, keep independent
+labels out of requests, freeze source identity and selection policy before live
+collection, and preserve separate bounded live allowances and zero-model replay.
 
 ## conary-test Integration Execution
 

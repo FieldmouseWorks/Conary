@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-09-21
-revision: 69
-summary: Define the Redshirt shared Rust tooling boundary, Conary-owned package checks, and integration cutover requirements alongside the existing integration proof contracts
+last_updated: 2026-09-22
+revision: 70
+summary: Link the read-only diagnostic context pilot while preserving the Redshirt ownership boundary and package-runtime cutover requirements
 ---
 
 # Integration Testing
@@ -41,7 +41,10 @@ accounting, mandatory final checks, cleanup, and evidence limits. Default runs
 and concrete replay remain model-free; a live-provider comparison requires its
 own explicit, bounded allowance and independently checked outcomes.
 
-Conary does not yet depend on the external Redshirt runtime. The proposed
+Conary's package runtime and suite runner do not yet depend on the external
+Redshirt runtime. The [diagnostic context pilot](modules/context-selection.md)
+uses its separate experimental runner without changing package or suite execution.
+The proposed
 bounded fixture explorer is tracked in [#1050](https://github.com/FieldmouseWorks/Conary/issues/1050);
 its issue and linked PRs own current implementation status and exact proof.
 Before replacing its local controller, prove the shared Rust path with bounded
