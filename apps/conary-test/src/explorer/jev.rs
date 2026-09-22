@@ -81,7 +81,7 @@ impl Jev {
     }
     /// Creating this selector enables paid requests; callers must opt in explicitly.
     /// A full 64 Ki-token context is reserved per attempt, including retries.
-    pub fn live(key: &str, requests: u32, cancel: Arc<AtomicBool>) -> Result<Self> {
+    pub fn live(key: &str, requests: u32, attempts: u32, cancel: Arc<AtomicBool>) -> Result<Self> {
         ensure!(
             (1..=8).contains(&requests),
             "live Jev allows 1..=8 requests including retries"
@@ -90,7 +90,7 @@ impl Jev {
         let mut selector = Self::mock(
             "http://127.0.0.1:1/v1/systemone",
             requests,
-            2,
+            attempts,
             Duration::from_secs(5),
             cancel,
         )?;
@@ -184,6 +184,7 @@ impl Selector for Jev {
                 "floating_arithmetic_slack": choice::FLOAT_SLACK, "normalizes_probabilities": false,
                 "requires_maximum_probability_choice": true},
             "request_limit": self.request_limit, "retries_share_request_limit": true,
+            "max_attempts_per_decision": self.max_attempts,
             "reserved_input_tokens_per_request": if self.live { Some(65536) } else { None },
             "price_usd_per_million_input_tokens": if self.live { Some(0.042) } else { None },
             "price_source": "https://docs.typesafe.ai/models", "price_checked": "2026-09-19"})

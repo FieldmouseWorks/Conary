@@ -387,11 +387,29 @@ async fn authenticated_transport_redacts_credentials_and_respects_shared_call_bu
 fn live_selector_requires_valid_credential_and_bounded_explicit_budget() {
     use crate::explorer::jev::Jev;
     for (key, requests) in [("", 1), ("test\r\nsecret", 1), ("test", 0), ("test", 9)] {
-        assert!(Jev::live(key, requests, Arc::new(AtomicBool::new(false))).is_err());
+        assert!(Jev::live(key, requests, 2, Arc::new(AtomicBool::new(false))).is_err());
     }
-    let live = Jev::live("synthetic-test-only", 1, Arc::new(AtomicBool::new(false))).unwrap();
+    let live = Jev::live(
+        "synthetic-test-only",
+        1,
+        1,
+        Arc::new(AtomicBool::new(false)),
+    )
+    .unwrap();
     assert_eq!(live.identity(), "jev-live");
     assert_eq!(live.configuration()["request_limit"], 1);
+    assert_eq!(live.configuration()["max_attempts_per_decision"], 1);
+    for attempts in [0, 4] {
+        assert!(
+            Jev::live(
+                "synthetic-test-only",
+                8,
+                attempts,
+                Arc::new(AtomicBool::new(false))
+            )
+            .is_err()
+        );
+    }
     assert!(
         !live
             .configuration()
@@ -561,5 +579,30 @@ async fn choice_contract_is_audited_and_invalid_maps_never_dispatch_or_retry() {
                 .unwrap()
                 .contains("choice-approximate-total-v1")
         );
+    }
+}
+
+#[tokio::test]
+async fn one_attempt_stops_on_throttling_even_with_unused_request_budget() {
+    for status in [429, 529] {
+        let (url, server) = server(vec![status], "valid").await;
+        let mut selector = crate::explorer::jev::Jev::mock(
+            &url,
+            8,
+            1,
+            Duration::from_secs(1),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+        let request = DecisionRequest::new(observation(), 8).unwrap();
+        assert!(
+            selector
+                .select(&request, &initial_context(8))
+                .await
+                .is_err()
+        );
+        assert_eq!(selector.configuration()["max_attempts_per_decision"], 1);
+        assert_eq!(selector.take_evidence().len(), 1);
+        assert_eq!(server.await.unwrap(), 1);
     }
 }

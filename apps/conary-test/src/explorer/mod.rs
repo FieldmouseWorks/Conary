@@ -7,6 +7,7 @@ pub mod conary;
 pub mod context;
 pub mod contract;
 pub mod controller;
+pub mod coverage;
 pub mod evidence;
 pub mod fixtures;
 pub mod jev;

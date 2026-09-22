@@ -186,3 +186,62 @@ fn bootstrap_smoke_exit_code_reflects_contract_status() {
     assert_eq!(bootstrap_smoke_exit_code(OperationStatus::Failed), 1);
     assert_eq!(bootstrap_smoke_exit_code(OperationStatus::Partial), 1);
 }
+
+#[test]
+fn explorer_coverage_and_live_attempt_options_are_explicit_and_exclusive() {
+    use conary_test::explorer::cli::ExplorerCommands;
+    let argv = [
+        "conary-test",
+        "explorer",
+        "run",
+        "--approved-guest",
+        "absent.json",
+        "--fixtures",
+        "absent-fixtures",
+        "--output",
+        "absent-output",
+    ];
+    let cli = Cli::try_parse_from(argv.into_iter().chain(["--coverage-greedy"])).unwrap();
+    assert!(matches!(
+        cli.command,
+        Commands::Explorer {
+            command: ExplorerCommands::Run {
+                coverage_greedy: true,
+                ..
+            }
+        }
+    ));
+    for extra in [
+        vec!["--calibration"],
+        vec!["--seed", "7"],
+        vec!["--jev-live"],
+        vec!["--jev-mock", "http://127.0.0.1:1/v1/systemone"],
+    ] {
+        assert!(
+            Cli::try_parse_from(argv.into_iter().chain(["--coverage-greedy"]).chain(extra))
+                .is_err()
+        );
+    }
+    for limit in ["1", "2", "3"] {
+        let cli = Cli::try_parse_from(argv.into_iter().chain([
+            "--jev-live",
+            "--jev-max-attempts",
+            limit,
+        ]))
+        .unwrap();
+        assert!(matches!(cli.command, Commands::Explorer {
+            command: ExplorerCommands::Run { jev_max_attempts, .. } if jev_max_attempts == limit.parse::<u32>().unwrap()
+        }));
+    }
+    for limit in ["0", "4", "invalid"] {
+        assert!(
+            Cli::try_parse_from(argv.into_iter().chain([
+                "--jev-live",
+                "--jev-max-attempts",
+                limit
+            ]))
+            .is_err()
+        );
+    }
+    assert!(Cli::try_parse_from(argv.into_iter().chain(["--jev-max-attempts", "1"])).is_err());
+}

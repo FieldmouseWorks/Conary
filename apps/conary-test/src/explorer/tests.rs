@@ -17,6 +17,7 @@ use std::{
 
 #[path = "tests/context.rs"]
 mod context_tests;
+mod coverage;
 mod jev;
 mod jev_choice;
 
@@ -58,6 +59,7 @@ struct Fake {
     incomplete: bool,
     accept_absent_removal: bool,
     refuse_install: bool,
+    refuse_downgrade: bool,
 }
 impl Default for Fake {
     fn default() -> Self {
@@ -71,6 +73,7 @@ impl Default for Fake {
             incomplete: false,
             accept_absent_removal: false,
             refuse_install: false,
+            refuse_downgrade: false,
         }
     }
 }
@@ -96,6 +99,13 @@ impl Environment for Fake {
         anyhow::ensure!(!self.fail_execute, "injected unknown execution outcome");
         let mut exit_code = 0;
         match action {
+            Action::Update(Fixture::AppV1)
+                if self.refuse_downgrade
+                    && self.current.facts.packages.get(&Package::App)
+                        == Some(&Fixture::AppV2.version().to_owned()) =>
+            {
+                exit_code = 1;
+            }
             Action::Install(_) | Action::Update(_) if self.refuse_install => {
                 exit_code = 1;
             }

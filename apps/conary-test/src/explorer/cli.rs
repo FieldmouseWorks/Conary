@@ -28,6 +28,9 @@ pub enum ExplorerCommands {
         output: PathBuf,
         #[arg(long)]
         calibration: bool,
+        /// Seek unvisited package states using deterministic typed action projections
+        #[arg(long, conflicts_with_all = ["calibration", "seed", "jev_mock", "jev_live"])]
+        coverage_greedy: bool,
         #[arg(long, default_value_t = 7)]
         seed: u64,
         /// Attempted-action ceiling for this episode (1..=64), including stop choices
@@ -42,6 +45,9 @@ pub enum ExplorerCommands {
         /// Live HTTP request limit including retries (1..=8)
         #[arg(long, default_value_t = 8, requires = "jev_live")]
         jev_max_requests: u32,
+        /// HTTP attempts per decision, still within the total request limit (1..=3)
+        #[arg(long, default_value_t = 2, requires = "jev_live", value_parser = clap::value_parser!(u32).range(1..=3))]
+        jev_max_attempts: u32,
     },
     /// Execute saved concrete operations, without a selector
     Replay {
@@ -81,11 +87,13 @@ impl ExplorerCommands {
             fixtures,
             output,
             calibration,
+            coverage_greedy,
             seed,
             max_actions,
             jev_mock,
             jev_live,
             jev_max_requests,
+            jev_max_attempts,
             input,
             reduce,
         ) = match self {
@@ -94,21 +102,25 @@ impl ExplorerCommands {
                 fixtures,
                 output,
                 calibration,
+                coverage_greedy,
                 seed,
                 max_actions,
                 jev_mock,
                 jev_live,
                 jev_max_requests,
+                jev_max_attempts,
             } => (
                 approved_guest,
                 fixtures,
                 output,
                 calibration,
+                coverage_greedy,
                 seed,
                 max_actions,
                 jev_mock,
                 jev_live,
                 jev_max_requests,
+                jev_max_attempts,
                 None,
                 false,
             ),
@@ -122,11 +134,13 @@ impl ExplorerCommands {
                 fixtures,
                 output,
                 false,
+                false,
                 0,
                 64,
                 None,
                 false,
                 0,
+                1,
                 Some(input),
                 false,
             ),
@@ -140,11 +154,13 @@ impl ExplorerCommands {
                 fixtures,
                 output,
                 false,
+                false,
                 0,
                 64,
                 None,
                 false,
                 0,
+                1,
                 Some(input),
                 true,
             ),
@@ -213,10 +229,13 @@ impl ExplorerCommands {
                 Box::new(super::jev::Jev::live(
                     &key,
                     jev_max_requests,
+                    jev_max_attempts,
                     cancel.clone(),
                 )?)
             } else if calibration {
                 Box::new(Scripted(super::selector::calibration()))
+            } else if coverage_greedy {
+                Box::new(super::coverage::CoverageGreedy)
             } else {
                 Box::new(Seeded::new(seed))
             };

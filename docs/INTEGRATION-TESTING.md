@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-09-19
+last_updated: 2026-09-22
 revision: 79
 summary: Document bounded fixture exploration and replay, read-only repository onboarding assertions, typed change-scope matrix skips, local security-advisory authority, trusted-main compiler seeds, isolated hosted-Ubuntu CI package bootstrap, attributable daily-driver same-name provides, configuration upgrade, payload topology, typed corpus coverage, and native lifecycle gates
 ---
@@ -187,10 +187,25 @@ replay never invokes a selector or reconstructs its decisions from this policy.
 This fixture-specific goal and state projection remain Conary-owned. The shared
 selector boundary can later move to Redshirt without moving package semantics.
 
+`--coverage-greedy` selects the deterministic Rust `coverage-greedy-v1`
+baseline in `explorer/coverage.rs`. It considers only typed install/update/remove
+candidates whose intended package effect changes the complete current state.
+It ranks untried actions from this state first, then unvisited projected states,
+then fewer attempts from this state, fewer total attempts and original candidate
+order. Trying an action does not count its predicted outcome as observed
+coverage. Prior attempts rank behind untried alternatives even if a refused
+projection remains unseen. Incomplete facts or no state-changing candidate
+select Stop. This policy has no lookahead, private state, provider calls, or
+hardcoded successful sequence; the controller still owns checks and authority.
+The flag conflicts with calibration, an explicit seed and either Jev selector.
+
 Live use requires the explicit `--jev-live` option and `TYPESAFE_API_KEY`.
 It pins `https://api.typesafe.ai/v1/systemone`, disables redirects and proxies,
 and accepts `--jev-max-requests 1..8` (default 8), including retries. It cannot
-be combined with calibration or the mock selector. Replay has no live option.
+be combined with calibration, coverage-greedy or the mock selector.
+`--jev-max-attempts 1..3` (default 2) caps HTTP attempts per decision within that
+request limit; use 1 to disable throttling retries. The effective ceiling is
+recorded in selector configuration. Replay has no live option.
 After a valid selection consumes the final allowance, the controller records
 an ordinary provider-budget stop and still performs final checks and cleanup.
 An unsuccessful final HTTP attempt remains a provider error. A one-request
