@@ -40,8 +40,11 @@ def export(spec, profile=None):
         raise ValueError("version 2 requires a frozen coding-model profile; version 1 excludes it")
     revision = spec["source_revision"]
     policy = source(revision, "AGENTS.md")
-    subprocess.run(["git", "diff", "--quiet", revision, "--", "apps", "crates",
-                    "Cargo.toml", "Cargo.lock", "third_party"], cwd=ROOT, check=True)
+    product_paths = ["apps", "crates", "Cargo.toml", "Cargo.lock", "third_party"]
+    if spec["version"] == 2:
+        product_paths.append("packaging")  # Included by the boot-policy proof.
+    subprocess.run(["git", "diff", "--quiet", revision, "--", *product_paths],
+                   cwd=ROOT, check=True)
     manifest = {"version": spec["version"], "source_revision": revision,
                 "required": [chunk("project_policy", f"{revision}:AGENTS.md", policy)],
                 "limits": spec["limits"], "cases": []}
