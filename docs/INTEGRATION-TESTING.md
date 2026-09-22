@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-22
-revision: 80
+revision: 81
 summary: Document deterministic fixture coverage selection and bounded Jev retries alongside exploration, replay, typed integration assertions and native lifecycle gates
 ---
 
@@ -230,6 +230,80 @@ package tests and manifest inventory. Tests use an explicitly labelled fake
 environment and a local TCP mock. They do not establish real Conary integration
 or live model use. The initial review must keep A02/A09 blocked until an
 approved guest demonstrates actual multi-action execution, reset, and replay.
+
+
+### Greedy coverage comparison (2026-09-22)
+
+[Issue #1061](https://github.com/FieldmouseWorks/Conary/issues/1061) and
+[PR #1062](https://github.com/FieldmouseWorks/Conary/pull/1062) compare
+`coverage-greedy-v1` with pinned `jev-1.13.0` at harness revision
+`bc6824b9d2c9aba6debbe115573b583160408e38`. The frozen plan allowed three
+repetitions per policy, eight actions per episode, at most 24 HTTP requests,
+one attempt per decision, a USD0.07 conservative ceiling, 30 minutes in the
+approved disposable VM and 96 MiB of evidence. The order was greedy-1, Jev-1,
+Jev-2, greedy-2, greedy-3, Jev-3; the first failed episode stops the campaign.
+There are six possible package states in this one inert corpus. Repetitions
+would not constitute independent held-out cases.
+
+The same empty baseline, fixture bytes, product image/binary, checked history,
+Jev question, candidates, controller and independent checker were retained from
+`4278a9202f2bc87f58d54547f5c03e37cf14d26f`. The product remained at source
+`baa7b36ef690751f6a35d6b3ae8a763950ca8d01`, separately from the harness.
+
+| Episode | Outcome | Completed operations | Observed states | Actions to all six states | Episode time |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Greedy 1 | Complete | 8 | 6 | 6 | 20.551 s |
+| Jev 1 | Complete | 8 | 6 | 7 | 23.000 s |
+| Jev 2 | Provider contract rejection | 6 | 5 | Not reached | 20.858 s |
+
+The completed pair each made seven state changes and seven distinct changing
+transitions. Both encountered one expected downgrade refusal. Coverage including
+the initial state was `1,2,3,4,4,5,6,6,6` for greedy and
+`1,2,3,4,4,5,5,6,6` for Jev-1. No new Conary product defect was found.
+
+Jev-2's seventh response selected `c4` with probability 0.41 while `c5` had 0.42;
+the total was exactly 1.0. The existing maximum-choice requirement rejected it
+before dispatch, without normalization, substitution or retry. The
+[official Choice answer contract](https://docs.typesafe.ai/api#choice-answer)
+defines the choice as the highest-probability option. The server-side cause is
+unknown; [Redshirt #26](https://github.com/FieldmouseWorks/redshirt/issues/26)
+records the nonblocking provider follow-up. The remaining three original
+episodes were not run. **The planned three-by-three comparison is incomplete.**
+Do not treat the interrupted episode's latency as a full-budget result or infer
+a general model failure rate from this sample.
+
+All 22 completed operations replayed without a model using their saved fixture
+bytes, with matching package states and independent package checks. The two
+complete originals also match their full classifications. Jev-2's replay proves
+only its six-operation prefix: it does not reproduce the provider rejection or
+its `harness_failure` classification. All three originals and three replays
+verified reset, mandatory final checks and cleanup. Offline audit verified 54
+artifact hashes and 23 decision contexts. Provider access was removed before
+replay; containers and episode scratch were removed, scratch was unmounted and
+the VM was powered off.
+
+Usage was 15 HTTP requests, zero retries, 27,829 input tokens and 2,023 output
+tokens, with 4.635 s summed provider latency. The estimate is **USD0.001168818**
+at the [published input price](https://docs.typesafe.ai/models), checked
+2026-09-22; billed cost is unknown. Unused allowance was closed. A local operator
+script initially used a mismatched configuration key after greedy-1, before
+any live request or reservation. That failure was preserved; a guarded
+continuation ran only never-started episodes. No completed episode was replaced,
+and the Rust policy and measurements remained frozen.
+
+This completed pair supports choosing `--coverage-greedy` for this fixture
+coverage task. It establishes no added Jev value over that baseline, no held-out
+advantage and no bug-finding advantage. Shared Redshirt controller/provider work
+remains Rust-owned; this package-specific selector stays in Conary's retained
+Rust pilot, with no controller migration required by the comparison.
+
+Self-review at the runtime revision: 376 library and 16 CLI tests passed, with
+two existing ignored tests; manifest inventory, workspace all-target Clippy,
+formatting, documentation truth, line caps and the harness build passed. The
+initial CLI test compile error was corrected in a new commit before rerunning.
+This stacked PR's hosted main-targeted gates still depend on its parent #1051;
+no current-head hosted success or repair of the separate #971 image issue is
+claimed.
 
 ## Running Tests
 
