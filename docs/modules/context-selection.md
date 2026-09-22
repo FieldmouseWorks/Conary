@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-09-22
-revision: 3
-summary: Own both source-pinned diagnostic corpora, the completed first pilot, and the fresh lexical-baseline comparison with a fixed coding model
+revision: 4
+summary: Record both completed context comparisons, independent checks, fixed-model follow-up results, and the held-out evidence-completeness limitation
 ---
 
 # Diagnostic Context Selection Corpus
@@ -44,7 +44,7 @@ cargo test --locked -p conary-core --lib trust::client::tests::
 
 A v2 self-check without output uses a synthetic profile and makes zero provider
 calls. Live export requires a real frozen profile; local executable/catalog and
-ambient host captures remain outside Git. The planned allowance is one campaign,
+ambient host captures remain outside Git. The completed allowance was one campaign,
 at most four Jev selector calls (USD0.012 conservative ceiling) and eight Codex
 diagnostic turns (60 seconds each). Both arms request `gpt-6-astra` at low effort
 through the same pinned CLI binary/catalog. Codex uses existing authentication;
@@ -53,6 +53,69 @@ from Jev estimates. CLI turns are not a measurement of internal HTTP attempts.
 No retries, replacements or continuation after failure are permitted. These
 diagnoses do not execute tools or modify the product. Results cannot establish
 general coding-agent performance or justify changing production routing alone.
+
+## 2026-09-22 Fixed-Model Follow-Up Result
+
+One frozen campaign completed four Jev selection calls and eight Codex diagnostic
+turns, without retries, replacement, fallback, unexpected tool events or failure.
+Redshirt runtime/test revision was `9e9a5ed4eb15027a5510ea08bfc0b6b1e83faebe`;
+Conary exporter/corpus revision was `79ce07ed20718e5b971b258c3b45ebc242b1a89b`.
+Both arms requested `gpt-6-astra`, low effort, through CLI `0.154.0` with the same
+frozen executable/catalog. This pins the request configuration, not an immutable
+backend snapshot. Actual model prompts also include CLI/global instructions;
+only their offline capture was audited, and temporary path/session fields vary.
+
+| Metric | Rust BM25 baseline | Jev-selected context |
+| --- | ---: | ---: |
+| Resolved against frozen answer key | 2/4 | 3/4 |
+| Calibration resolved | 1/2 | 2/2 |
+| Held-out resolved | 1/2 | 1/2 |
+| Insufficient-evidence answers | 2 | 1 |
+| Declared essential excerpts retained | 6/8 | 8/8 |
+| Mean encoded context bytes | 19,978.75 | 19,778 |
+| Codex input / output tokens | 27,648 / 97 | 27,461 / 136 |
+| Codex cached-input tokens | 0 | 0 |
+| Median case elapsed time, including selection | 5.057 s | 4.832 s |
+| Total observed provider time | 20.627 s | 22.290 s |
+
+Jev added 30,739 input and 328 output tokens over four selector calls, estimated
+at USD0.001291038. Its conservative reservation was USD0.011010048 under the
+USD0.012 ceiling. Codex subscription billing and combined dollar cost remain
+unknown. Campaign wall time was 43.871 s. Median latency fell slightly while
+total provider time rose; four observations with uncontrolled service/startup
+variation do not establish a latency or cache advantage.
+
+The gain was c5: BM25 chose the resolver and a query caller; Jev selected the
+resolver and release-matching implementation, changing insufficient evidence to
+the correct diagnosis. Both arms selected identical actual packets for c6/c7
+and resolved them. Both abstained on c8. Post-run review found that c8's frozen
+`essential` list names b/e but omits c, the strict version-increase helper needed
+to establish Generic equal-version behavior. The treatment packet therefore
+still relies on an unshown helper despite meeting the declared evidence label.
+This limits the fixture and the interpretation of 8/8 retention; the experiment
+does not identify the model's internal reason for abstaining. No labels, cases
+or grades were changed after collection. A fresh completeness audit is required
+before another campaign, tracked in [#1060](https://github.com/FieldmouseWorks/Conary/issues/1060).
+Jev remains experimental; there is no held-out gain
+here and no production routing change.
+
+The exact manifest SHA-256 was
+`0e260354d3eca545c109af6e5a624ad1b369e6e718710f7e63de5a7d19eb6626`;
+oracle `2ab5ea86b09c18684016c2ae3206ec74957f52b3a8b94dadcb976574aa2cb7e4`;
+coding profile `80dc6800f2a2b5f1bca767d87fb0d04abba290782437e938879478e54b87e5ca`;
+live report `af21ea01a85762c2d56742ba12a91181867f97ea885099140d55cfa749a44cb9`.
+Raw host/CLI artifacts remain local. Rust replay and a separate Python audit
+verified request binding, selections, mandatory policy, answers, grades, tokens
+and reservations with zero model calls. The live allowance is closed.
+
+Self-review: 41 all-feature and 39 default Redshirt tests, both clippy modes,
+fmt/build, v1 live/mock replay, v2 mock replay, both exporter self-checks, router
+tests and documentation truth passed. Fresh consumer backing proofs passed
+11 selector, 17 capability, 2 boot-policy and 16 trust tests. Those product tests
+ran in the preceding corpus checkout, whose app/core/packaging/Cargo/vendor
+sources were verified identical to the pinned source and this checkout.
+No delegated coding worker was used; the child CLI only supplied benchmark
+diagnoses. Review and protected integration remain owned by the stacked PRs.
 
 ## First Pilot
 
