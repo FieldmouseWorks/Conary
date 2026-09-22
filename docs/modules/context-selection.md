@@ -1,10 +1,60 @@
 ---
 last_updated: 2026-09-22
-revision: 2
-summary: Own the frozen diagnostic corpus and record the completed context-selection pilot with independent evidence, cost, latency, and limitations
+revision: 3
+summary: Own both source-pinned diagnostic corpora, the completed first pilot, and the fresh lexical-baseline comparison with a fixed coding model
 ---
 
 # Diagnostic Context Selection Corpus
+
+The fresh follow-up is owned by [#1057](https://github.com/FieldmouseWorks/Conary/issues/1057)
+and [Redshirt #24](https://github.com/FieldmouseWorks/redshirt/issues/24).
+`scripts/fixtures/context-selection-v2.json` pins four new cases at the same
+product revision as v1. The shared Rust runner owns BM25 task/identifier retrieval,
+Jev selection, fixed-model diagnostics, budgets, receipts and replay. Conary
+continues to own only corpus export and independent product checks.
+
+| Fresh case | Split | Independent behavior |
+| --- | --- | --- |
+| c5 | calibration | Absent, unspecified and exact installed-release selectors have distinct resolution results. |
+| c6 | calibration | Repeated promised-path claims deduplicate, cannot witness content, and conflict with shipped ownership. |
+| c7 | held-out | Exact command-line prefixes, presence and argument order agree between Rust boot policy and the shell adapter. |
+| c8 | held-out | Equal timestamps differ between static and generic trust modes; cached children remain hash checked. |
+
+Each case offers six production excerpts and five diagnosis choices, including
+insufficient evidence. Both arms retain the full pinned root policy and actual
+router output, then select at most two excerpts under the same byte cap. The
+pinned router has no owner-card match for c5's `package_target.rs`; its real
+fallback is preserved verbatim in both arms. No owner packet is invented.
+The separate routing repair is tracked in [#1058](https://github.com/FieldmouseWorks/Conary/issues/1058).
+Cases, labels, ordering, prompt and baseline are frozen before any live call.
+The first pilot's cases are unchanged and excluded from this follow-up.
+
+Export v2 using a host-frozen Codex profile supplied to Redshirt's documented
+version-2 contract:
+
+```sh
+python3 scripts/context-selection-corpus.py --check --spec scripts/fixtures/context-selection-v2.json
+python3 scripts/context-selection-corpus.py --spec scripts/fixtures/context-selection-v2.json \
+  --codex-profile /path/to/frozen-profile.json --output /path/to/new-inputs
+cargo test --locked -p conary --lib commands::package_target::tests::selector_
+cargo test --locked -p conary-core --lib repository::dependency_model::tests::
+cargo test --locked -p conary-core --lib generation::verity_policy::tests::
+cargo test --locked -p conary-core --lib trust::client::tests::
+```
+
+A v2 self-check without output uses a synthetic profile and makes zero provider
+calls. Live export requires a real frozen profile; local executable/catalog and
+ambient host captures remain outside Git. The planned allowance is one campaign,
+at most four Jev selector calls (USD0.012 conservative ceiling) and eight Codex
+diagnostic turns (60 seconds each). Both arms request `gpt-6-astra` at low effort
+through the same pinned CLI binary/catalog. Codex uses existing authentication;
+subscription billing is unknown and its token/cache usage is reported separately
+from Jev estimates. CLI turns are not a measurement of internal HTTP attempts.
+No retries, replacements or continuation after failure are permitted. These
+diagnoses do not execute tools or modify the product. Results cannot establish
+general coding-agent performance or justify changing production routing alone.
+
+## First Pilot
 
 Conary supplies four read-only diagnostic cases to the external Redshirt Rust
 context comparison. This does not change production assistant routing, package

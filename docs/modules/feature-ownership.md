@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-09-22
-revision: 124
-summary: Route features to owned paths and proof, including the source-pinned Conary diagnostic context corpus and its independent regression checks.
+revision: 125
+summary: Route features to owned paths and proof, including both diagnostic corpora and fresh checks for installed selection, promised files, boot policy, and trust metadata.
 ---
 
 # Feature Ownership And Interaction Gates
@@ -1194,15 +1194,23 @@ binaries, served artifacts, signatures, and live health independently.
 labels for the external Redshirt context comparison.
 
 **Start here:** `scripts/context-selection-corpus.py`;
-`scripts/fixtures/context-selection-v1.json`; `docs/modules/context-selection.md`.
+`scripts/fixtures/context-selection-v1.json`; `scripts/fixtures/context-selection-v2.json`;
+`docs/modules/context-selection.md`.
 
-**Neighbor systems:** CLI diagnostics, install promotion, test-hook startup,
+**Neighbor systems:** CLI diagnostics and installed selectors, install promotion,
+test-hook startup, repository capabilities, boot policy, trust metadata,
 assistant owner packets, and the separately owned Redshirt Rust runner.
 
 **Paths:** `scripts/context-selection-corpus.py`;
-`scripts/fixtures/context-selection-v1.json`; `docs/modules/context-selection.md`.
+`scripts/fixtures/context-selection-v1.json`; `scripts/fixtures/context-selection-v2.json`;
+`docs/modules/context-selection.md`.
 
 **Focused proof:** `python3 scripts/context-selection-corpus.py --check`;
+`python3 scripts/context-selection-corpus.py --check --spec scripts/fixtures/context-selection-v2.json`;
+`cargo test --locked -p conary --lib commands::package_target::tests::selector_`;
+`cargo test --locked -p conary-core --lib repository::dependency_model::tests::`;
+`cargo test --locked -p conary-core --lib generation::verity_policy::tests::`;
+`cargo test --locked -p conary-core --lib trust::client::tests::`;
 `cargo test --locked -p conary --test cli_diagnostics`;
 `cargo test --locked -p conary --test test_hook_ownership`;
 `cargo test --locked -p conary --lib commands::install::command::tests::dry_run_preserves_dependency_promotion_state_even_with_yes`.

@@ -1,0 +1,325 @@
+{
+  "version": 2,
+  "source_revision": "180bd662516080b7523c9cee069396ae14b0f064",
+  "limits": {
+    "context_bytes": 30000,
+    "selected_chunks": 2,
+    "request_bytes": 32768,
+    "max_calls": 12,
+    "max_reserved_usd": 0.012
+  },
+  "cases": [
+    {
+      "id": "c5",
+      "split": "calibration",
+      "route_path": "apps/conary/src/commands/package_target.rs",
+      "task": "Three installed package troves named demo have version 1.0.0, architecture x86_64 and distinct valid database IDs. Their package_release values are Some(\"1\"), Some(\"2\") and None. Call resolve_installed_package with the same name/version/architecture and, separately, release=None, Some(InstalledRelease::Unspecified), and Some(InstalledRelease::Exact(\"2\")). Determine the result of each call, in that order.",
+      "diagnoses": {
+        "d1": "Ambiguity error; resolves the trove without a release; resolves release 2.",
+        "d2": "Resolves the trove without a release; ambiguity error; resolves release 2.",
+        "d3": "Resolves release 2 as newest; resolves the trove without a release; resolves release 2.",
+        "d4": "Ambiguity error; no matching package error; ambiguity error.",
+        "insufficient": "The supplied excerpts do not establish all requested outcomes."
+      },
+      "expected": "d1",
+      "essential": [
+        "b",
+        "c"
+      ],
+      "chunks": [
+        {
+          "id": "a",
+          "path": "apps/conary/src/commands/package_target.rs",
+          "start": 10,
+          "end": 38,
+          "sha256": "64a893c772a955ae02f78c88f67277d1d7d0a8d030637b661e3786fa0976791e"
+        },
+        {
+          "id": "b",
+          "path": "apps/conary/src/commands/package_target.rs",
+          "start": 40,
+          "end": 100,
+          "sha256": "0262283289f3574863aa42a25faa42283df7dbd22bace12323af91e157a4a577"
+        },
+        {
+          "id": "c",
+          "path": "apps/conary/src/commands/package_target.rs",
+          "start": 102,
+          "end": 136,
+          "sha256": "2392e88ddb67acde85ff5f8f2e82694556bf9d5de9296923dcde9589ff23cec0"
+        },
+        {
+          "id": "d",
+          "path": "apps/conary/src/commands/package_target.rs",
+          "start": 138,
+          "end": 155,
+          "sha256": "e5f7a4c783a865e595556fae43f9b992a72f82c918df5d2f75d2cbb12010e530"
+        },
+        {
+          "id": "e",
+          "path": "apps/conary/src/commands/query/package.rs",
+          "start": 48,
+          "end": 77,
+          "sha256": "dd40aba1ebc90fc814662cf16b34819f873292357c0d39ce25ec1db028f30f5d"
+        },
+        {
+          "id": "f",
+          "path": "apps/conary/src/commands/package_target/release.rs",
+          "start": 1,
+          "end": 28,
+          "sha256": "78bb720c038d5669c6ac03ef3cfcbc816caa26ce4af5c8ba2385e1972d5c7e85"
+        }
+      ],
+      "proof_sources": [
+        {
+          "path": "apps/conary/src/commands/package_target.rs",
+          "function": "selector_resolves_exact_release"
+        },
+        {
+          "path": "apps/conary/src/commands/package_target.rs",
+          "function": "selector_resolves_unspecified_release"
+        },
+        {
+          "path": "apps/conary/src/commands/package_target.rs",
+          "function": "selector_without_release_filter_refuses_release_ambiguity"
+        }
+      ],
+      "proof_commands": [
+        "cargo test --locked -p conary --lib commands::package_target::tests::selector_"
+      ]
+    },
+    {
+      "id": "c6",
+      "split": "calibration",
+      "route_path": "crates/conary-core/src/repository/dependency_model.rs",
+      "task": "Starting from an empty RPM ProvidedCapability vector, call extend_promised_path_provides twice with the absolute path /etc/pam.d/system-auth. Inspect the number and kind of providers and witnesses_installed_content on the result. Then call extend_materialized_file_provides for the same path on a clone of that vector. Determine the duplicate-call outcome, content-witness result, and final materialized-call outcome.",
+      "diagnoses": {
+        "d1": "One File provider; content witness true; the materialized call upgrades the existing provider.",
+        "d2": "Two File providers; content witness false; the materialized call appends a third provider.",
+        "d3": "One File provider; content witness false; the materialized call returns a contradiction error.",
+        "d4": "The second promised-path call returns a contradiction error; content witness false; materialization replaces the promise.",
+        "insufficient": "The supplied excerpts do not establish all requested outcomes."
+      },
+      "expected": "d3",
+      "essential": [
+        "c",
+        "d"
+      ],
+      "chunks": [
+        {
+          "id": "a",
+          "path": "crates/conary-core/src/repository/dependency_model.rs",
+          "start": 217,
+          "end": 264,
+          "sha256": "7ad5bb8e8a15f9d365e46c67cf2f34501f89c1c462680313fbc33c020ac5b1bb"
+        },
+        {
+          "id": "b",
+          "path": "crates/conary-core/src/repository/dependency_model.rs",
+          "start": 265,
+          "end": 307,
+          "sha256": "a0d34d863d72345caff7852513aa92ef2b7d6972db0f2b018353bd428c58781d"
+        },
+        {
+          "id": "c",
+          "path": "crates/conary-core/src/repository/dependency_model.rs",
+          "start": 309,
+          "end": 357,
+          "sha256": "8354a9eda95d1bf007b40fb9c3d9e4c2ba38deaa2d1b9e2111fde2e8f203efac"
+        },
+        {
+          "id": "d",
+          "path": "crates/conary-core/src/repository/dependency_model.rs",
+          "start": 359,
+          "end": 432,
+          "sha256": "4ae966dc709314a0653db3e68124fc84e2df2a13e822cca9d627b99098a42d3b"
+        },
+        {
+          "id": "e",
+          "path": "crates/conary-core/src/repository/dependency_model.rs",
+          "start": 434,
+          "end": 458,
+          "sha256": "2d012eaa93405ec9e13f363397926903f9a5502fbd13b801ebd7afdd6c6229e7"
+        },
+        {
+          "id": "f",
+          "path": "crates/conary-core/src/repository/dependency_model.rs",
+          "start": 460,
+          "end": 482,
+          "sha256": "892526b9567700e825e925da3463e35b565064d5e0c35f4a6c26f0fd8d534c92"
+        }
+      ],
+      "proof_sources": [
+        {
+          "path": "crates/conary-core/src/repository/dependency_model/tests.rs",
+          "function": "a_promised_path_is_a_provider_but_never_content"
+        },
+        {
+          "path": "crates/conary-core/src/repository/dependency_model/tests.rs",
+          "function": "one_package_cannot_both_ship_and_promise_a_path"
+        },
+        {
+          "path": "crates/conary-core/src/repository/dependency_model/tests.rs",
+          "function": "repeating_the_same_ownership_claim_is_not_a_contradiction"
+        }
+      ],
+      "proof_commands": [
+        "cargo test --locked -p conary-core --lib repository::dependency_model::tests::"
+      ]
+    },
+    {
+      "id": "c7",
+      "split": "held_out",
+      "route_path": "crates/conary-core/src/generation/verity_policy.rs",
+      "task": "Evaluate two readable kernel command lines using VerityPolicy::from_kernel_cmdline plus requires_verification, and using conary_read_verity followed by conary_composefs_options with basedir /conary/objects. A is \"conary.verity=off\\tconary.verity=\\n\"; B is \"conary.verity=on\\tother.conary.verity=off\\n\" (\\t and \\n denote tab and newline). Determine the Rust result and the shell exit/stdout behavior for A and B.",
+      "diagnoses": {
+        "d1": "A disables verification and succeeds with plain basedir options; B disables verification and succeeds with plain basedir options.",
+        "d2": "A requires verification and succeeds with verity options; B requires verification and succeeds with verity options.",
+        "d3": "A disables verification and succeeds with plain basedir options; B requires verification and succeeds with verity options.",
+        "d4": "A returns an invalid-argument error, and the shell fails without option output; B requires verification, and the shell succeeds with basedir=/conary/objects,verity.",
+        "insufficient": "The supplied excerpts do not establish all requested outcomes."
+      },
+      "expected": "d4",
+      "essential": [
+        "b",
+        "d"
+      ],
+      "chunks": [
+        {
+          "id": "a",
+          "path": "crates/conary-core/src/generation/verity_policy.rs",
+          "start": 1,
+          "end": 25,
+          "sha256": "633389096cbc21c7dd8e645d8ca89653cca15ccdc0ead6672689ec4f8088fd60"
+        },
+        {
+          "id": "b",
+          "path": "crates/conary-core/src/generation/verity_policy.rs",
+          "start": 27,
+          "end": 55,
+          "sha256": "b4ed5167a5607bfb71b0f47a8ef1422c0a66ef982b9a551b111c9ed5b03fbdbb"
+        },
+        {
+          "id": "c",
+          "path": "crates/conary-core/src/generation/verity_policy.rs",
+          "start": 57,
+          "end": 85,
+          "sha256": "0643eea37f62a5482c2a7e6b024dd84c2d308083561d14eaac237b6ced221ee5"
+        },
+        {
+          "id": "d",
+          "path": "packaging/dracut/90conary/conary-verity.sh",
+          "start": 1,
+          "end": 52,
+          "sha256": "bdf35a387fd2c421b07100f4f752d2231a75d26dd77344254bd025643efebe14"
+        },
+        {
+          "id": "e",
+          "path": "crates/conary-core/src/generation/mount.rs",
+          "start": 19,
+          "end": 89,
+          "sha256": "4f372bc2832874c4b751131320d02e4f1f25cfbcb93fef128580d73f7b99b7c7"
+        },
+        {
+          "id": "f",
+          "path": "crates/conary-core/src/generation/metadata.rs",
+          "start": 49,
+          "end": 79,
+          "sha256": "aca315668c48b6e71d7aa927c2c85f8643693b815901c677ebb75ac492a2325d"
+        }
+      ],
+      "proof_sources": [
+        {
+          "path": "crates/conary-core/src/generation/verity_policy/tests.rs",
+          "function": "presence_and_last_exact_argument_control_policy"
+        },
+        {
+          "path": "crates/conary-core/src/generation/verity_policy/tests.rs",
+          "function": "binary_free_initramfs_adapter_conforms_to_rust_policy"
+        }
+      ],
+      "proof_commands": [
+        "cargo test --locked -p conary-core --lib generation::verity_policy::tests::"
+      ]
+    },
+    {
+      "id": "c8",
+      "split": "held_out",
+      "route_path": "crates/conary-core/src/trust/client.rs",
+      "task": "Three isolated TufClient updates already have stored version-1 timestamp/snapshot/targets metadata. All relevant metadata is unexpired; root rotation is unchanged; timestamp signatures are valid. Each offered timestamp has the same version and persistence hash as the stored timestamp. A uses StaticRepo and unchanged valid cached children. B uses Generic with the same unchanged cached children. C uses StaticRepo but cached targets have different content with the same version while the snapshot reference still pins the original hash. Determine the outcome for A, B and C.",
+      "diagnoses": {
+        "d1": "A, B and C all reject the timestamp as rollback because its version did not increase.",
+        "d2": "A succeeds without changed children; B rejects equal-version timestamp as rollback; C rejects the cached targets hash mismatch.",
+        "d3": "A and B succeed without changed children; C rejects the cached targets hash mismatch.",
+        "d4": "A and C succeed without changed children because the timestamp hash matches; B rejects equal-version timestamp as rollback.",
+        "insufficient": "The supplied excerpts do not establish all requested outcomes."
+      },
+      "expected": "d2",
+      "essential": [
+        "b",
+        "e"
+      ],
+      "chunks": [
+        {
+          "id": "a",
+          "path": "crates/conary-core/src/trust/client.rs",
+          "start": 73,
+          "end": 105,
+          "sha256": "db92d71cd1345658b957f8e81a3b47caaca0a671486f4cffa832133fcdddaf3d"
+        },
+        {
+          "id": "b",
+          "path": "crates/conary-core/src/trust/client.rs",
+          "start": 179,
+          "end": 264,
+          "sha256": "120436ad6ff46350120a669d801b8c00bc9d592cee88c003cb9deb0dc2bdc86c"
+        },
+        {
+          "id": "c",
+          "path": "crates/conary-core/src/trust/verify.rs",
+          "start": 103,
+          "end": 120,
+          "sha256": "b4120eaf3c4bd3e08509d4b93b91aa5c340176b9723ee5ae459709dc11458ddb"
+        },
+        {
+          "id": "d",
+          "path": "crates/conary-core/src/trust/verify.rs",
+          "start": 167,
+          "end": 201,
+          "sha256": "10f2f963646122d1c84ef350a9e1b609c24992071a65f758467c5bfd37e6b2f6"
+        },
+        {
+          "id": "e",
+          "path": "crates/conary-core/src/trust/client.rs",
+          "start": 554,
+          "end": 570,
+          "sha256": "0a8df2d0a609ffb763cc0a51c6958606b20bd4245c5cc3af47abb21f435bbf21"
+        },
+        {
+          "id": "f",
+          "path": "crates/conary-core/src/trust/client.rs",
+          "start": 266,
+          "end": 310,
+          "sha256": "43c5a2c5fb5eb46f743a9b78e2baaea0f9c193d08e0a788c9ce8a89895f3e812"
+        }
+      ],
+      "proof_sources": [
+        {
+          "path": "crates/conary-core/src/trust/client/tests.rs",
+          "function": "static_file_repo_update_accepts_identical_timestamp_bytes_without_rollback"
+        },
+        {
+          "path": "crates/conary-core/src/trust/client/tests.rs",
+          "function": "generic_equal_timestamp_version_remains_rollback_even_when_hash_matches"
+        },
+        {
+          "path": "crates/conary-core/src/trust/client/tests.rs",
+          "function": "static_equal_timestamp_rejects_altered_cached_targets_hash"
+        }
+      ],
+      "proof_commands": [
+        "cargo test --locked -p conary-core --lib trust::client::tests::"
+      ]
+    }
+  ]
+}
