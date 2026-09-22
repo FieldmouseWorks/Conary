@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-09-22
-revision: 1
-summary: Own the frozen Conary diagnostic corpus, deterministic context baseline, independent labels, and proof for the bounded Redshirt context-selection pilot
+revision: 2
+summary: Own the frozen diagnostic corpus and record the completed context-selection pilot with independent evidence, cost, latency, and limitations
 ---
 
 # Diagnostic Context Selection Corpus
@@ -66,4 +66,82 @@ scoring: at most 12 calls and a $0.04 conservative reservation, with no retry or
 replacement. These are protocol ceilings, not reusable authorization for future
 campaigns. Redshirt records selector plus diagnostic cost/latency, reservations,
 unknown usage, incomplete cases, and zero-provider replay. Its CLI contract is
-documented in the shared [context comparison](https://github.com/FieldmouseWorks/redshirt/blob/main/docs/CONTEXT-COMPARISON.md).
+documented in the verified shared [context comparison](https://github.com/FieldmouseWorks/redshirt/blob/51ccd7b4b0ce059d2bf0bb5bcbf7bf0e3abe149c/docs/CONTEXT-COMPARISON.md).
+
+## 2026-09-22 Pilot Result
+
+One frozen campaign completed all 12 calls, with no failure, retry, replacement,
+fallback, or tuning. Redshirt runtime/test revision was
+`51ccd7b4b0ce059d2bf0bb5bcbf7bf0e3abe149c`; the Conary exporter/corpus revision was
+`9564efd458cdb8f039bb3209dd8162e71f5ba77b`. Public source remained pinned to
+`180bd662516080b7523c9cee069396ae14b0f064`. Paired reviews are
+[Redshirt #23](https://github.com/FieldmouseWorks/redshirt/pull/23) and
+[Conary #1056](https://github.com/FieldmouseWorks/Conary/pull/1056).
+
+| Measurement | Deterministic baseline | Jev selection plus diagnosis |
+| --- | ---: | ---: |
+| Calibration correct | 1/2 | 2/2 |
+| Held-out correct | 2/2 | 2/2 |
+| Insufficient-evidence answers | 1 | 0 |
+| Labelled essential excerpts retained | 3/8 | 8/8 |
+| Calls | 4 | 8 |
+| Reported input tokens | 18,839 | 47,095 |
+| Estimated provider cost, USD | 0.000791238 | 0.001977990 |
+| Sum of provider time | 1.680 s | 2.264 s |
+| Median provider time per case | 303.3 ms | 572.8 ms |
+| Mean encoded diagnosis context | 16,193.5 bytes | 17,249 bytes |
+
+Treatment cost and time include all four relevance calls. The entire campaign
+took 4.675 s including local evidence processing and writes. The selector took
+1.195 s in total; its downstream diagnoses took 1.069 s. Total reported usage was
+65,934 input and 786 output tokens. At the published pinned-model
+[input price](https://docs.typesafe.ai/models), the estimate is USD0.002769228;
+actual billing and cache usage are unknown. The conservative reservation remains
+USD0.033030144. All usage was known, all 32 typed answers passed validation, and
+all probability totals were classified exact without normalization.
+
+| Case | Baseline selection; answer | Jev selection; answer | Encoded bytes, baseline / Jev |
+| --- | --- | --- | ---: |
+| c1 | s3, s1; d2, correct | s3, s4; d2, correct | 14,834 / 16,190 |
+| c2 | s1, s2; insufficient | s3, s1; d1, correct | 20,371 / 20,800 |
+| c3 | s3, s1; d3, correct | s4, s5; d3, correct | 14,844 / 16,882 |
+| c4 | s6, s1; d2, correct | s6, s2; d2, correct | 14,725 / 15,124 |
+
+The extra correct diagnosis was c2, a calibration case: selected evidence added
+the implementation that returns from dependency promotion without writing during
+a dry run. Held-out accuracy tied. The selection arm retained every predeclared
+essential excerpt, while the baseline omitted five. Required policy/owner packet
+hashes matched across all three stages of every case, and excerpt hashes remained
+valid. Rust replay re-rendered every request and reproduced selections, grades,
+usage and reservations with zero provider calls; a separate offline calculation
+confirmed the aggregate answers, evidence retention, token counts and costs.
+
+Self-review proof before collection: eight CLI diagnostic tests, two test-hook
+ownership tests and the dry-run promotion test passed. Export/source/label
+checks, all 22 ownership cards, router self-tests and documentation truth checks
+passed. Redshirt's all-feature suite passed 35 tests, with fmt/clippy passing;
+injected tests exercised failures, interruption and evidence tampering. The
+issue and PR retain exact commands and hosted-CI status separately.
+
+The result supports a further controlled comparison. It does not establish a
+general accuracy advantage: four hand-picked cases are too few, two share a
+subsystem, the downstream model is Jev, and correct answers were sometimes
+possible without all labelled evidence. The identical budget admitted about
+6.5% more actual bytes in the treatment. Treatment cost was 2.5 times baseline
+and median latency was higher. The first call was a baseline request;
+connection/startup effects were not measured separately. No cache or causal
+latency benefit is established.
+Production routing is unchanged. A next experiment should use fresh cases,
+a stronger deterministic baseline, and a fixed downstream coding model with its
+own bounded allowance. This campaign's allowance is closed.
+
+Raw receipts remain in consumer-owned local evidence. These SHA-256 identities
+bind the retained artifacts without publishing host-local paths or credentials:
+
+| Artifact | SHA-256 |
+| --- | --- |
+| Frozen manifest | `7b2e8c529c4b8138f739f6772c29f5b05f5e9ee895f2fc57313220bc548ed6e4` |
+| Independent oracle | `8b173ea90221dd6b6a7a7815cea1fe9e58cd378b543fa4d92260001d1300fd89` |
+| Exact call receipts | `5bd78e5952dd928fc66ff0b46cade50cee573a75d0d4ecb92c127b0bab3b7a7d` |
+| Campaign report | `fefc8af873e51db54aae032693f2b1a0a63e556fcd8e110f58c7d7a7140ffb63` |
+| Offline replay report | `1af5434d2b0525bc7bab190616dffd80e856cfae8e11808d7f578dbedd211365` |
