@@ -230,8 +230,8 @@ fn explorer_coverage_and_live_attempt_options_are_explicit_and_exclusive() {
         ]))
         .unwrap();
         assert!(matches!(cli.command, Commands::Explorer {
-            command: ExplorerCommands::Run { jev_max_attempts, .. } if jev_max_attempts == limit.parse::<u32>().unwrap()
-        }));
+            command: ExplorerCommands::Run { jev_max_attempts, .. }
+        } if jev_max_attempts == limit.parse::<u32>().unwrap()));
     }
     for limit in ["0", "4", "invalid"] {
         assert!(

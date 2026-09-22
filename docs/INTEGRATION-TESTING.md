@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-09-22
-revision: 79
-summary: Document bounded fixture exploration and replay, read-only repository onboarding assertions, typed change-scope matrix skips, local security-advisory authority, trusted-main compiler seeds, isolated hosted-Ubuntu CI package bootstrap, attributable daily-driver same-name provides, configuration upgrade, payload topology, typed corpus coverage, and native lifecycle gates
+revision: 80
+summary: Document deterministic fixture coverage selection and bounded Jev retries alongside exploration, replay, typed integration assertions and native lifecycle gates
 ---
 
 # Integration Testing
