@@ -31,7 +31,9 @@ the separate cached-history and venue checks. The machine-readable
 tester-pin state; release publication alone does not assign tester authority.
 
 Detailed maturity, workstream status, proof, blockers, and longer horizons live
-in the [development roadmap](docs/roadmaps/development-roadmap.md).
+in the [development roadmap](docs/roadmaps/development-roadmap.md). Current
+execution status and proof stay in the selected issue and PR; the
+[agent workflow](docs/llms/agent-workflow.md) defines that handoff.
 
 ## Current Preview Caveats
 

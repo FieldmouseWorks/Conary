@@ -1,84 +1,86 @@
 # Repository Guidelines
 
-## Start With The Smallest Useful Context
+## Orientation And Proof
 
-Conary is a virtual Rust workspace. The package-manager CLI is in
-`apps/conary/`, core package behavior in `crates/conary-core/`, Remi in
-`apps/remi/`, conaryd in `apps/conaryd/`, and the integration harness in
-`apps/conary-test/`. Shared bootstrap, agent-contract, and MCP helpers live
-under `crates/`; packaging and deployment assets live under `packaging/` and
-`deploy/`.
+Conary is a virtual Rust workspace: CLI in `apps/conary/`, package behavior in
+`crates/conary-core/`, Remi in `apps/remi/`, conaryd in `apps/conaryd/`, and
+integration harness in `apps/conary-test/`. Shared bootstrap, agent-contract,
+and MCP helpers live under `crates/`; packaging and deployment assets live in
+`packaging/` and `deploy/`.
 
-Before feature-scoped work, run one routing command:
+Before feature work, route once with:
 
 ```bash
 bash scripts/agent-context.sh --feature <slug>
 bash scripts/agent-context.sh --path <file>
 ```
 
-Use `--list` to discover slugs and `--brief` for a one-line route. Read the
-packet's start-here files and only the canonical docs relevant to the task.
-Do not preload the complete feature-ownership map or broad subsystem docs for
-ordinary scoped work. Use `--run focused` for the card's narrow proof and
-`--run gate` only when its stated interaction condition applies.
+Read the selected packet's start-here files and canonical owners; do not preload
+the full feature map or broad subsystem docs.
+Use `--run focused` for its narrow proof and `--run gate` only when its stated
+interaction condition applies. `docs/llms/README.md` is the assistant entrypoint.
 
-Canonical orientation begins at `docs/llms/README.md`. Detailed roadmap state
-lives under `docs/roadmaps/`; durable architecture and behavior live in
-`docs/ARCHITECTURE.md`, `docs/modules/`, and `docs/specs/`.
+Build or test the owning package (`conary`, `conary-core`, `remi`, `conaryd`, or
+`conary-test`) before broadening proof. Repository gates are:
 
-## Build And Verification
+```bash
+cargo fmt --check
+cargo clippy --workspace --all-targets -- -D warnings
+```
 
-- `cargo build -p conary`, `-p remi`, `-p conaryd`, or `-p conary-test` builds
-  one product boundary.
-- `cargo test -p conary`, `-p conary-core`, `-p remi`, or `-p conaryd` runs the
-  owning package tests.
-- `cargo run -p conary-test -- list` validates integration manifests and suite
-  inventory.
-- `cargo fmt --check` and
-  `cargo clippy --workspace --all-targets -- -D warnings` are repository gates.
+Verification means the exact command ran. Preserve failure evidence, identify
+the causal leaf, and create a new head before rerunning an unchanged failed
+gate.
 
-Verification means the reported command actually ran. Preserve exact failure
-evidence, explain the causal leaf failure, and make a new head before rerunning
-an unchanged failed gate. Prefer the focused proof first; add broader tests only
-when the owner card's interaction boundary or the changed behavior requires it.
+## Issues, Branches, And Assistant Work
 
-## Issue, Branch, And Pull-Request Workflow
+Follow `CONTRIBUTING.md` for issue, branch, PR, review, and closeout. Non-trivial
+work uses one primary GitHub issue and issue-linked branch; never push directly
+to `main`. Open substantial changes as draft PRs, resolve review threads, and
+use the protected merge path. Use `Closes #...` only when acceptance is met;
+otherwise use `Refs #...`. Report security issues privately. Preserve unrelated
+dirty work and avoid destructive Git commands in shared worktrees.
 
-Follow `CONTRIBUTING.md`. Non-trivial implementation, bug, refactor,
-documentation, operations, and maintenance work uses one primary GitHub issue,
-an issue-linked branch, and a pull request; never push repository changes
-directly to `main`. Search existing issues first. Open substantial work as a
-draft PR early, keep verification current there, resolve review conversations,
-and merge only through the protected GitHub path.
+Use [the agent workflow](docs/llms/agent-workflow.md) for multi-step execution,
+delegation, evidence, authorization, repair limits, interruption, and closeout.
+For substantive work, keep one live graph in its primary issue or established
+handoff; unlock dependent work only after the parent verifies its artifact and
+acceptance evidence. Finish only after authorized integration, evidence
+read-back, and cleanup of resources owned by the task. Default model roles,
+when available, are `gpt-6-astra` at `max` as primary conversation owner for
+architecture, planning, task selection, review, and integration; `gpt-6-sol`
+at `max` for complex implementation, refactoring, and debugging; `gpt-6-luna` at `max`
+for bounded exploration, documentation, tests, and routine edits. Request the
+role and effort explicitly when dispatching useful work, name its inputs,
+acceptance check, and file ownership, and protect concurrent edits. If the
+requested model is unavailable, report that fact without silent substitution.
+These are defaults for the available agent environment, not a contribution
+requirement; other tools and human contributors remain welcome. Codex-specific
+session controls are described in `docs/llms/openai-codex.md`.
 
-Read-only scoping remains read-only until a change is requested. Security
-reports use private advisories. `Closes #...` means the PR satisfies the
-issue's acceptance criteria; otherwise use `Refs #...` and leave the larger
-issue open. Preserve unrelated dirty work and avoid destructive Git commands in
-shared worktrees.
+Read-only scoping remains read-only until a change is requested.
 
 ## Product And Authority Contract
 
 Conary is pre-alpha until a durable roadmap milestone says otherwise. Make
-issue-backed hard cuts: replace the current schema or interface, state the
-rebuild impact, and remove superseded migrations, adapters, routes, flags, and
-compatibility paths in the same slice. Do not run old and new authorities in
-parallel. When a persisted schema changes, every reader of stored data must
-classify the obsolete form as typed non-authority (rebuild or fencing state),
-never through a compatibility deserializer and never as an error that blocks
-the rebuild path.
+issue-backed hard cuts: replace the current schema or interface, state rebuild
+impact, and remove superseded migrations, adapters, routes, flags, and
+compatibility paths in the same slice. Never run old and new authorities in
+parallel. Every reader of persisted data must classify an obsolete form as
+typed non-authority (rebuild or fencing state), never deserialize it for
+compatibility or block the rebuild path with an error.
 
-Cross-distribution package installation is the primary product path. The
-source package format owns lifecycle ABI, dependencies, versions, payload, and
-configuration semantics; Conary owns install, update, remove, rollback, and
-generation publication; the target supplies typed capabilities. Runtime
-conversion must not invoke the source package manager or its database.
-Adoption/takeover is the sole migration-continuity exception. The canonical
-contract is `docs/specs/foreign-package-lifecycle-contracts.md`.
+Cross-distribution package installation is the primary path. The source format
+owns lifecycle ABI, dependencies, versions, payload, and configuration;
+Conary owns install, update, remove, rollback, and generation publication; the
+target supplies typed capabilities. Runtime conversion must not invoke the
+source package manager or its database. Adoption/takeover is the sole
+migration-continuity exception; see
+`docs/specs/foreign-package-lifecycle-contracts.md`.
 
 Derive package behavior from pinned upstream documentation and source, then
 encode it as typed grammars, state machines, and conformance tests. Heuristics,
-regexes, substring matching, curated token lists, distro-name gates, and silent
+regexes, substring matching, curated tokens, distro-name gates, and silent
 defaults may aid diagnostics, redaction, discovery, or prioritization; they may
 not establish compatibility, mutation, publication, security, or event
 authority. A typed preflight failure is a defect to engineer, not a permanent
@@ -86,92 +88,50 @@ unsupported class or human-review queue.
 
 Agent operations use versioned, typed, inspectable resources and plan/apply
 results through `conary-agent-contract`; MCP adapts that contract and is never
-a second authority. Do not weaken trust or approvals for agents or make an
+a second authority. Do not weaken agent trust or approvals, or make an
 essential operation available only through ad hoc shell or free-form output.
+Redshirt owns reusable experiment tooling in Rust; Conary owns package rules
+and independent checks. Follow the
+[Redshirt workflow](CONTRIBUTING.md#working-with-redshirt).
 
-Redshirt owns reusable experiment tooling in Rust; Conary owns package rules and
-independent checks. Follow [the Redshirt workflow](CONTRIBUTING.md#working-with-redshirt).
+## Defects And Maintainability
 
-## Defect And Maintainability Discipline
+Fix defects, duplicated authority, and half-implementations found in scope; if
+the defect belongs elsewhere, file an exact-evidence issue rather than routing
+around it. Prove the cause and contract. Treat intermittent or unexplained
+failures as defects.
 
-- Fix a defect, duplicated authority, or half-implementation found in scope.
-  File an exact-evidence issue when it belongs elsewhere; do not silently route
-  around it.
-- Fix causes and prove the contract or property, not only the observed input.
-- Treat intermittent or unexplained failures as evidence of a defect, not as a
-  reason to retry until green.
-- `scripts/check-line-cap.sh` enforces a 1,000 non-test-line cap for Rust source
-  files; each checked-in exception names the open issue that owns its
-  decomposition, and every citation is validated against
-  `scripts/line-cap-issue-state.txt`, the checked-in snapshot that
-  `scripts/refresh-line-cap-issue-state.sh` regenerates. The snapshot records
-  the state of each cited issue *and* the canonical allowlist entries those
-  states were read for; the gate compares that recorded entry set against the
-  allowlist, so an allowlist edit fails until the snapshot is refreshed, while
-  an unchanged allowlist passes however the files reached the working tree. The
-  gate is intentionally hermetic (no network I/O), so the snapshot records
-  issue state as of its refresh. The PR gate and
-  `.github/workflows/line-cap-issue-state.yml` run the separate networked
-  `scripts/refresh-line-cap-issue-state.sh --check` against
-  `github.com/FieldmouseWorks/Conary` to detect later closures without rewriting
-  the snapshot. The workflow runs on issue closure/reopening/deletion, every
-  six hours, and by manual dispatch; lookup failures fail the check.
-  Files named `tests.rs` or below `tests/` are exempt only when their file or
-  complete declaring graph establishes test-only compilation. Production macro
-  invocations or opaque attributes invalidate context-only exemptions; extracted test files
-  carry `#![cfg(test)]` so the compiler enforces their boundary. Unknown and
-  production-reachable files keep both caps and may use an owned exception. Offline Cargo
-  metadata supplies target membership; filename conventions do not.
-  Once a Rust source file carries more than 300 inline unit-test lines, its unit
-  tests live in a sibling `<file>/tests.rs`. A sibling extraction must reduce
-  the parent, with that reduction stated in the commit. Thin dispatch,
-  registration, and re-export wiring may remain in a large hub only through an
-  issue-linked exception.
-- The line-cap gate scans the declared top-level Rust source roots (`apps/`,
-  `crates/`) and prints each root's file count under `--report`. `third_party/`
-  is deliberately excluded as vendored upstream source (aws-creds, rust-s3,
-  resolvo, tantivy) patched into the build by path from `Cargo.toml`, so it is neither
-  measured nor allowlist-eligible. Adding a new top-level Rust source root fails
-  the gate until its policy is recorded in `SOURCE_ROOTS` in
-  `crates/conary-xtask/src/line_cap.rs`.
-- Before changing behavior in a Rust file over 1,500 lines, name the ownership
-  boundary being preserved or improved. Files over 2,500 lines need a reviewed
-  decomposition path before major feature work unless the fix is urgent.
-- Refactors name what moves, its new owner, persisted/public impact, and the
-  focused proof. Update the subsystem map or owning module doc when the
-  look-here-first path changes.
-- Meta-layer work is allowed only for factual drift, a touched path, or a
-  failing gate and remains capped at one meta slice per four product slices
-  until the first external tester milestone.
+Rust source files have a 1,000 non-test-line cap and 300 inline test-line cap.
+The ownership, exception, extraction, and source-root policy lives in
+[`CONTRIBUTING.md`'s maintainability section](CONTRIBUTING.md#maintainability-slices).
+Refactors name what moves, its new owner, persisted/public impact, and focused
+proof. Update the subsystem map or module doc when the look-here-first path
+changes. Meta work remains limited to factual drift, a touched path, or a
+failing gate and one meta slice per four product slices until the first
+external tester milestone.
 
-## Rust And CLI Conventions
+## Rust, CLI, And Documentation
 
 Use standard Rust formatting and naming, four-space indentation, `thiserror`
-for library errors, and `anyhow` at application boundaries. Keep modules
-focused; each Rust file begins with its repo-relative path comment. Use short
-imperative Conventional Commit subjects such as
-`security(federation): pin https peer identity`.
+for library errors, and `anyhow` at application boundaries. Every Rust source
+file starts with its repo-relative path comment. Use short imperative
+Conventional Commit subjects such as `security(federation): pin https peer identity`.
 
-For `apps/conary`, route user-facing status through `apps/conary/src/ui/`.
-Never hand-roll status prefixes. `Status` renders the guarded lowercase ASCII
-tags `[ok]`, `[fail]`, `[warn]`, `[skip]`, `[info]`, `[off]`, `[missing]`, and
-`[pending]`; `apps/conary/tests/output_vocabulary_guard.rs` enforces them.
-Internal `tracing` logs are not primary user output. Logging defaults to
-`warn`; top-level `--verbose`, `--quiet`, and `RUST_LOG` retain their documented
-precedence.
+For `apps/conary`, route user-facing status through `apps/conary/src/ui/`; do
+not hand-roll status prefixes. `apps/conary/tests/output_vocabulary_guard.rs`
+enforces the guarded tags `[ok]`, `[fail]`, `[warn]`, `[skip]`, `[info]`,
+`[off]`, `[missing]`, and `[pending]`. Internal tracing is not primary user
+output. Logging defaults to `warn`; top-level `--verbose`, `--quiet`, and
+`RUST_LOG` keep their documented precedence.
 
-## Documentation And Safety
-
-`AGENTS.md` is the concise repo-wide contract; `CONTRIBUTING.md` owns the full
-contribution lifecycle; `docs/llms/README.md` routes assistants; feature cards
-own exact paths and proof. Tool entrypoints stay thin and point back to these
-owners. Add nested `AGENTS.md` only for genuinely different subtree rules.
-
-Update canonical truth and YAML frontmatter when behavior changes. Run
-`bash scripts/check-doc-truth.sh` plus the owning feature proof when changing a
-public claim, command help, route, or agent surface. Remove completed or
-superseded planning after its truth and resume facts move to canonical owners;
-Git history is the archive.
+`AGENTS.md` is concise repo policy; `CONTRIBUTING.md` owns contribution
+lifecycle; `docs/llms/README.md` routes assistants; feature cards own paths and
+proof. Add nested `AGENTS.md` only for genuinely different subtree rules.
+Update canonical truth and YAML frontmatter when behavior changes. For public
+claims, command help, routes, or agent surfaces, run
+`bash scripts/check-doc-truth.sh` plus the owning feature proof. Remove
+superseded planning after truth and resume facts move to canonical owners; Git
+history is the archive.
 
 Keep credentials, private paths, raw review artifacts, host-local state, and
 personal notes out of tracked guidance and public evidence. Use ignored files

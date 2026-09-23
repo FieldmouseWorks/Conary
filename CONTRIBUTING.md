@@ -90,6 +90,11 @@ Tool-specific files such as `CLAUDE.md`, `.agents/rules/conary.md`, and
 canonical docs over copied instructions or stale local lore. Google agent work
 uses Antigravity/`agy`.
 
+For multi-step assisted work, use the
+[agent execution workflow](docs/llms/agent-workflow.md) for task graphs,
+delegation, authorization, evidence, interruption, and closeout. This guide
+remains the owner of issue, branch, PR, review, and merge lifecycle.
+
 ## Building from Source
 
 ```bash
@@ -224,42 +229,60 @@ expressions all participate. It caps the non-test portion at 1,000 lines and
 the total inline test-only spans at 300 lines. A file named `tests.rs` or below
 `tests/` is exempt only when its file-level gate, declaring contexts, or Cargo
 integration-test target membership establish test-only compilation. Production
-imports override test-target membership. Production macro invocations or opaque attribute
-expansion make context-only exemptions unknown; unknown files retain both caps.
-Extracted test files carry `#![cfg(test)]`, which the compiler enforces even when
-another declaring site loads the file. Sanctioned parent gates remain in place.
-The gate reads offline Cargo metadata v1, honoring custom targets and disabled
-auto-discovery. A custom tree without a manifest has no Cargo target evidence.
-Literal and literal-concatenated `include!` paths participate in the graph;
-even apparently builtin include calls need compiler name resolution, so they
-also invalidate context-only exemptions. The report
-states how many source files have unresolved expansion authority. Loads outside
-the scanned roots retain uncertainty; inert compiler-owned attributes from the
-pinned Rust catalog preserve complete contextual proof.
-`--report` shows every test filename as `TEST FILE:` with its measured content
-and context; cap-checked files also receive the ordinary row. An over-cap
-production file under a test filename can use an owned allowlist exception.
-Names ending in `_tests.rs` retain their existing measurement rules.
-Parent rows attribute proven test-only siblings as `attributed_test_lines`;
-compare reports from the base and head to establish an extraction's actual
-reduction. Current sibling size alone is not a historical delta. Attributes whose final path segment is `test` also
+imports override test-target membership. Production macro invocations or
+opaque attribute expansion make context-only exemptions unknown; unknown files
+retain both caps. Extracted test files carry `#![cfg(test)]`, which the
+compiler enforces even when another declaring site loads the file. Sanctioned
+parent gates remain in place. The gate reads offline Cargo metadata v1,
+honoring custom targets and disabled auto-discovery. A custom tree without a
+manifest has no Cargo target evidence. Literal and literal-concatenated
+`include!` paths participate in the graph; even apparently builtin include
+calls need compiler name resolution, so they also invalidate context-only
+exemptions. Loads outside scanned roots retain uncertainty; inert
+compiler-owned attributes from the pinned Rust catalog preserve complete
+contextual proof.
+
+The declared production roots are the top-level `apps/` and `crates/` trees.
+`third_party/` is excluded as vendored upstream source (aws-creds, rust-s3,
+resolvo, and tantivy) patched into the build by path from `Cargo.toml`; it is
+neither measured nor allowlist-eligible. Adding a top-level Rust source root
+fails until its policy is recorded in `SOURCE_ROOTS` in
+`crates/conary-xtask/src/line_cap.rs`. Under `--report`, the gate prints each
+root's file count, every test filename as `TEST FILE:` with measured content
+and context, and the number of files with unresolved expansion authority.
+Cap-checked files also receive the ordinary row. Names ending in `_tests.rs`
+retain their existing measurement rules; an over-cap production file under a
+test filename still needs an owned allowlist exception. Parent rows attribute
+proven test-only siblings as `attributed_test_lines`; compare base and head
+reports to prove extraction reduced the parent. Current sibling size alone is
+not a historical delta. Attributes whose final path segment is `test` also
 mark inline tests, including those enabled by `cfg_attr` in a test build.
-Every checked-in exception names the open issue that
-owns its decomposition. The cited issue's state comes from the checked-in
-`scripts/line-cap-issue-state.txt` snapshot, so refresh it with
-`scripts/refresh-line-cap-issue-state.sh` whenever the allowlist changes; the
-gate itself performs no network I/O. The PR gate separately runs
-`scripts/refresh-line-cap-issue-state.sh --check` against the canonical GitHub
-repository, as does the `line-cap-issue-state` workflow on issue-state events,
-every six hours, and by manual dispatch. Live lookup errors or closed owners
-fail that check without rewriting the snapshot. Add behavior to an over-cap file only through the
-ownership-based reorganization named by that issue. Thin registration,
-dispatch, and re-export wiring may remain in the large hub only through an
-issue-linked exception.
+
+Once a Rust source file has more than 300 inline unit-test lines, move those
+tests to sibling `<file>/tests.rs` behind `#[cfg(test)] mod tests;`. The
+extraction must reduce the parent, and the commit states that reduction. Every
+checked-in exception names the open issue that owns its decomposition. The
+checked-in `scripts/line-cap-issue-state.txt` snapshot records each cited
+issue's state and the canonical allowlist entries those states were read for;
+the hermetic gate compares that entry set with the allowlist. Refresh the
+snapshot with `scripts/refresh-line-cap-issue-state.sh` after any allowlist
+edit. The gate performs no network I/O; the PR gate and
+`.github/workflows/line-cap-issue-state.yml` run
+`scripts/refresh-line-cap-issue-state.sh --check` against
+`github.com/FieldmouseWorks/Conary`. That workflow runs on issue
+closure, reopening, and deletion, every six hours, and by manual dispatch.
+Lookup failures and closed owners fail without rewriting the snapshot. Add
+behavior to an over-cap file only through the issue's ownership-based
+reorganization. Thin registration, dispatch, and re-export wiring may remain
+in a large hub only through an issue-linked exception.
 
 Custom scans through `scripts/check-line-cap.sh` that override `--root` or
 `--allowlist` must also supply `--issue-state`. An omitted snapshot is a usage
 error; the wrapper never substitutes repository state for a custom scan.
+
+Before changing behavior in a Rust file over 1,500 lines, name the ownership
+boundary being preserved or improved. Files over 2,500 lines need a reviewed
+decomposition path before major feature work unless the fix is urgent.
 
 Large files are review signals. Use `scripts/line-count-report.sh` to refresh
 the current hotspot list when planning broad maintenance work. Do not split a

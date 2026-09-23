@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-09-21
-revision: 22
-summary: Route assistants into canonical Conary owners, task-sized proof packets, and the Redshirt ownership and cross-project workflow
+last_updated: 2026-09-23
+revision: 23
+summary: Route assistants to canonical owners, focused proof, and the shared execution workflow
 ---
 
 # Conary For Coding Assistants
@@ -36,8 +36,8 @@ worktrees without sharing their Cargo target directories.
   setup. `agent-context` extracts only the selected card.
 - Do not preload `docs/llms/subsystem-map.md` for a known file or feature. Use
   it only for architecture questions or when no owner is known yet.
-- Open `docs/roadmaps/development-roadmap.md` for project status, ordering, or
-  blocker decisions—not as default implementation context.
+- Start with `ROADMAP.md` for concise project status; follow its detailed
+  roadmap for ordering or blockers, not as default implementation context.
 - Read the canonical module, specification, testing, or operations document
   named by the task packet; avoid neighboring deep dives unless the change
   crosses that boundary.
@@ -59,7 +59,8 @@ This keeps startup guidance small while retaining precise, on-demand context.
 | Integration test or fixture | `docs/INTEGRATION-TESTING.md` and `docs/modules/test-fixtures.md` |
 | Redshirt or shared experiment tooling | [Ownership and integration contract](../INTEGRATION-TESTING.md#redshirt-relationship), then [cross-project workflow](../../CONTRIBUTING.md#working-with-redshirt) |
 | Deploy, MCP, release, or host work | `docs/operations/infrastructure.md` plus the owner packet |
-| Current priority or blocker | `docs/roadmaps/development-roadmap.md` and live issue/PR state |
+| Current project status | [Concise status](../../ROADMAP.md), then [detailed roadmap](../roadmaps/development-roadmap.md) and live issue/PR state |
+| Multi-step assisted execution | [Agent execution workflow](agent-workflow.md) |
 | Public or assistant-doc change | The proof floor below plus the affected behavior owner |
 
 ## Truth Owners
@@ -71,7 +72,10 @@ This keeps startup guidance small while retaining precise, on-demand context.
 4. Architecture, module, specification, integration-testing, and operations
    docs own current subsystem behavior and contracts.
 5. `docs/roadmaps/` owns ordering, maturity, blockers, and milestone state.
-6. Issues and draft PRs own bounded execution status and exact current proof.
+6. [The agent workflow](agent-workflow.md) owns graph structure, delegation,
+   evidence, permission handling, resumption, and task closeout records.
+7. Issues and draft PRs own bounded execution status and exact current proof;
+   `CONTRIBUTING.md` owns contribution lifecycle, review, and merge rules.
 
 One rule has one owner. Link to it rather than restating it. Completed or
 superseded planning is removed after its durable truth and resume facts move to
@@ -95,6 +99,8 @@ stay in ignored local files.
 
 - Use one primary issue and one issue-linked branch for each non-trivial slice;
   follow `CONTRIBUTING.md` for linkage and merge semantics.
+- Put a multi-step task's live graph in its primary issue or established
+  handoff; use the workflow page for graph and evidence rules.
 - Host-local container names, mount paths, and retained diagnostic inputs for native-feature proof belong in ignored `docs/operations/LOCAL_ACCESS.md`, <!-- repo-path: local --> never in tracked docs.
 - Prefer structured Conary operation surfaces over ad hoc SSH or curl when the
   typed MCP, HTTP, or CLI contract covers the workflow.
