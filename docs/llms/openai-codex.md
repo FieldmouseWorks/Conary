@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-23
-revision: 4
+revision: 5
 summary: OpenAI-specific notes for Codex context, session controls, and the Conary agent workflow
 ---
 
@@ -24,9 +24,9 @@ only the selected card's sources and canonical docs.
 
 Check global instructions and the project chain through the session's working
 directory; inspect applicable subtree instructions before editing below it.
-Global `AGENTS.override.md` takes precedence over `AGENTS.md`;
+Global `AGENTS.override.md` takes precedence over `AGENTS.md`; <!-- repo-path: hypothetical -->
 per project directory, Codex selects at most one file in this order:
-`AGENTS.override.md`, `AGENTS.md`, then configured fallback filenames. The
+`AGENTS.override.md`, `AGENTS.md`, then configured fallback filenames. The <!-- repo-path: hypothetical -->
 default aggregate instruction limit is 32 KiB. See the official
 [instruction discovery rules](https://learn.chatgpt.com/docs/agent-configuration/agents-md)
 for host configuration details. Keep host-local paths and instruction contents
