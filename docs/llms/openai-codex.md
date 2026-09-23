@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-23
-revision: 3
+revision: 4
 summary: OpenAI-specific notes for Codex context, session controls, and the Conary agent workflow
 ---
 
@@ -22,10 +22,26 @@ Codex loads `AGENTS.md` automatically. Do not tell it to reread that file or
 preload the full ownership map. Route a task through `agent-context`, then open
 only the selected card's sources and canonical docs.
 
+Check global instructions and the project chain through the session's working
+directory; inspect applicable subtree instructions before editing below it.
+Global `AGENTS.override.md` takes precedence over `AGENTS.md`;
+per project directory, Codex selects at most one file in this order:
+`AGENTS.override.md`, `AGENTS.md`, then configured fallback filenames. The
+default aggregate instruction limit is 32 KiB. See the official
+[instruction discovery rules](https://learn.chatgpt.com/docs/agent-configuration/agents-md)
+for host configuration details. Keep host-local paths and instruction contents
+in private notes or receipts, never tracked guidance.
+
+After setting up or changing instructions, verify the effective chain in a
+fresh read-only session when the host permits it. If it does not, report that
+verification as unavailable or unverified instead of assuming it succeeded.
+
 State each durable rule once. Remove repeated instructions, examples, and tool
 descriptions unless they encode a measured project requirement. Track both
 startup context and growing conversation context; compare prompt changes on
 representative Conary tasks rather than assuming more instruction is better.
+A linked Markdown page is not loaded automatically merely because it is linked;
+open `docs/llms/agent-workflow.md` when the task needs its execution procedure.
 
 ## Prompt The Outcome
 
@@ -42,14 +58,15 @@ in the current issue, PR, or prompt rather than durable docs. Ask for findings,
 decisions, concise rationale, and observed verification—not hidden
 chain-of-thought.
 
-Conary's standing requested model roles and delegation rules are in `AGENTS.md`.
-When dispatching work, request the named model and effort through the available
-harness controls; if the model is unavailable, report it without substitution.
-Only report the selected model and effort when the harness exposes them. A
-repository instruction edit cannot change or attest the running parent
-session's model or effort. OpenAI's [Agents API session configuration guide](https://developers.openai.com/api/docs/guides/agents-api/configuration#update-settings-for-an-existing-session)
-documents settings changes for API-managed sessions; Codex's host harness owns
-the controls available in a particular session.
+Conary's requested model roles and delegation choices are in `AGENTS.md`; they
+are project workflow choices, not universal rankings or availability
+guarantees. Request model and effort through the available host controls, and
+preserve the host's permission boundaries. If a model is unavailable, report
+that without substitution. Report selected model and effort only when the
+harness exposes them: editing repository instructions cannot change or attest
+the running parent session. OpenAI's [Agents API session configuration guide](https://developers.openai.com/api/docs/guides/agents-api/configuration#update-settings-for-an-existing-session)
+documents settings changes for API-managed sessions; the host owns controls
+available in each session.
 
 If using an optional supervised helper, including DeepSeek, follow the
 [shared agent workflow](agent-workflow.md) and the active session's

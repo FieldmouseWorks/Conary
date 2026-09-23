@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-23
-revision: 1
+revision: 2
 summary: Define scoped agent execution, task graphs, evidence, authorization, resumption, and closeout for Conary work
 ---
 
@@ -23,6 +23,12 @@ instructions, routed owner packet, current issue/PR or handoff, current goal,
 branch and dirty work, and required CI or proof rules. Preserve other people's
 changes. Do not copy live status or raw output into durable orientation docs.
 
+Record the continuation boundary: setup only, this assigned outcome, or a
+specific explicitly authorized queue. Continue ready, authorized nodes inside
+it without re-asking, then stop when that boundary is complete. Child nodes may
+inherit common inputs and the sourced effort policy from their parent graph;
+record those references instead of copying them.
+
 A simple, independent task gets a short plan. Substantive work with dependent
 steps uses one canonical graph in its primary issue body; if an established
 handoff already owns that graph, keep it there and link it from the issue and
@@ -41,9 +47,10 @@ Each graph node records:
 - input references and an observable acceptance check;
 - state, evidence locator, and bounded effort or repair policy.
 
-Use these states consistently: **ready** means dependencies are verified and
-the node can start; **working** means one named owner is doing it; **blocked**
-means a specific missing condition prevents progress; **verified** means the
+Use these states consistently: **pending** means dependencies are not yet
+verified; **ready** means dependencies are verified and the node can start;
+**working** means one named owner is doing it; **blocked** names specific
+missing evidence, authority, or another condition; **verified** means the
 parent reviewed the actual artifact and acceptance evidence. A worker's
 completion claim is a pointer to review, not verification. Do not unlock a
 dependent node until its parent verifies the dependency. On batch failure,
