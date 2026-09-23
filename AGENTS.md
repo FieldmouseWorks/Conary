@@ -42,7 +42,7 @@ otherwise use `Refs #...`. Report security issues privately. Preserve unrelated
 dirty work and avoid destructive Git commands in shared worktrees.
 
 Use [the agent workflow](docs/llms/agent-workflow.md) for multi-step execution,
-delegation, evidence, authorization, repair limits, interruption, and closeout.
+delegation, evidence, authorization, repair policy, interruption, and closeout.
 For substantive work, keep one live graph in its primary issue or established
 handoff; unlock dependent work only after the parent verifies its artifact and
 acceptance evidence. Finish only after authorized integration, evidence

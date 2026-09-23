@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-23
-revision: 2
+revision: 3
 summary: Define scoped agent execution, task graphs, evidence, authorization, resumption, and closeout for Conary work
 ---
 
@@ -37,15 +37,17 @@ Graph changes and ready-task selection remain with the primary integrator,
 using the `gpt-6-astra` role when available.
 
 The [workflow setup issue](https://github.com/FieldmouseWorks/Conary/issues/1063)
-provides a worked graph with its own authorization, effort policy, and evidence.
-Use closed work as historical evidence; each new outcome records its own scope.
+provides a worked graph with its authorization, effort policy, and evidence.
+The completed setup graph is historical evidence; each new outcome records its
+current scope and effort policy. Historical effort limits do not carry forward.
 
 Each graph node records:
 
 - stable ID and concrete outcome;
 - dependencies, model/effort, accountable owner, and file or task ownership;
 - input references and an observable acceptance check;
-- state, evidence locator, and bounded effort or repair policy.
+- state, evidence locator, and applicable effort or repair policy, including
+  any explicit user or harness budget or waiver.
 
 Use these states consistently: **pending** means dependencies are not yet
 verified; **ready** means dependencies are verified and the node can start;
@@ -90,15 +92,15 @@ or changes to protected inputs or secrets.
 Use the existing focused proof first. For a new correctness check, record the
 concrete observed defect or property and a meaningful negative control that
 would distinguish failure from success; do not add checks that only mirror the
-implementation. Routine bounded work defaults to at most two scoped repair
-attempts per causal defect. After the second attempt, the parent reassesses
-evidence, acceptance, and remaining scope, then records the next decision in
-the same task record. Diagnose before repairing; do not repeat a failed command
-against the same candidate and inputs. After a causal repair changes the
-candidate or relevant inputs, rerun the affected proof and record a new receipt.
-Do not reset the effort limit. User or harness limits take precedence. A
-blocker names the missing condition and one next action; it does not silently
-expand scope, effort, or authority.
+implementation. There is no default numeric repair-attempt limit. Continue
+evidence-driven repairs within the authorized outcome until acceptance is
+verified or a specific blocker prevents progress. After failures, review the
+evidence and adjust the approach. Diagnose before repairing; do not repeat a
+failed command against the same candidate and inputs. After a causal repair
+changes the candidate or relevant inputs, rerun affected proof and record a
+new receipt. Honor explicit user or harness limits without resetting them;
+scope and permission boundaries remain fixed. A blocker names the missing
+condition and one next action; it does not silently expand scope or authority.
 
 ## Work, Evidence, And Feedback
 
