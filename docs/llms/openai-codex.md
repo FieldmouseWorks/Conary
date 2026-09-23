@@ -1,13 +1,13 @@
 ---
-last_updated: 2026-08-20
-revision: 2
-summary: Current OpenAI-specific notes for lean Codex context, task prompts, and verification
+last_updated: 2026-09-23
+revision: 3
+summary: OpenAI-specific notes for Codex context, session controls, and the Conary agent workflow
 ---
 
 # OpenAI/Codex Notes
 
-Conary's durable assistant contract stays vendor-neutral in `AGENTS.md` and
-`docs/llms/README.md`. Keep only OpenAI-specific behavior here.
+Conary's shared assistant contract lives in `AGENTS.md` and
+`docs/llms/README.md`; this page records OpenAI- and Codex-specific controls.
 
 Verify time-sensitive behavior against current official documentation:
 
@@ -42,9 +42,19 @@ in the current issue, PR, or prompt rather than durable docs. Ask for findings,
 decisions, concise rationale, and observed verification—not hidden
 chain-of-thought.
 
-Use harness controls for reasoning effort and response verbosity. Reserve
-high-cost modes for tasks whose measured quality benefit justifies them; do not
-encode model aliases, pricing, or a dated default in repository policy.
+Conary's standing requested model roles and delegation rules are in `AGENTS.md`.
+When dispatching work, request the named model and effort through the available
+harness controls; if the model is unavailable, report it without substitution.
+Only report the selected model and effort when the harness exposes them. A
+repository instruction edit cannot change or attest the running parent
+session's model or effort. OpenAI's [Agents API session configuration guide](https://developers.openai.com/api/docs/guides/agents-api/configuration#update-settings-for-an-existing-session)
+documents settings changes for API-managed sessions; Codex's host harness owns
+the controls available in a particular session.
+
+If using an optional supervised helper, including DeepSeek, follow the
+[shared agent workflow](agent-workflow.md) and the active session's
+authorization. Conary's default roles do not require contributors to use
+OpenAI tools.
 
 ## Long Work
 
