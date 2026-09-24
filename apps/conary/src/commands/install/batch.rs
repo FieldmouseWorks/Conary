@@ -24,7 +24,7 @@ mod promises;
 mod relations;
 mod witness_universe;
 
-use super::ccs_hook_interpreter::{HookInterpreterLedger, HookPhase};
+use super::ccs_hook_interpreter::{element_plan, preflight_post_install_interpreters};
 use super::ccs_removal_hooks::CcsRemovalHookPlan;
 use super::inner;
 use super::native_events::{NativeInstallInput, PreparedNativeTransaction};
@@ -510,56 +510,26 @@ impl<'a> BatchInstaller<'a> {
         // post-install hook runs (`execution.rs`: `drive_graph`, then hooks in
         // `packages` order). Mirror that boundary: record every element first,
         // then require each hook's interpreter, all before the first mutation.
-        let mut hook_interpreter_ledger = HookInterpreterLedger::new(&selected_path);
-        for package in &packages {
-            let mut removed_old_paths = Vec::new();
-            if let Some(trove_id) = package.old_trove.as_deref().and_then(|trove| trove.id) {
-                removed_old_paths.extend(
-                    conary_core::db::models::FileEntry::find_by_trove(&preflight_state, trove_id)?
-                        .into_iter()
-                        .map(|file| file.path),
-                );
-            }
-            for removal in &package.relation_removals {
-                removed_old_paths.extend(
-                    conary_core::db::models::FileEntry::find_by_trove(
-                        &preflight_state,
-                        removal.trove_id,
-                    )?
-                    .into_iter()
-                    .map(|file| file.path),
-                );
-            }
-            let introduced_paths = package
-                .extracted_files
-                .iter()
-                .map(|file| file.path.clone())
-                .chain(
-                    package
-                        .provides
-                        .iter()
-                        .filter(|capability| {
-                            capability.kind
-                                == conary_core::repository::dependency_model::RepositoryCapabilityKind::File
-                        })
-                        .map(|capability| capability.name.clone()),
-                );
-            hook_interpreter_ledger.apply_element(removed_old_paths, introduced_paths);
-        }
-        for package in &packages {
-            if let Some(hook) = package
-                .ccs
-                .as_ref()
-                .and_then(|ccs| ccs.hooks.post_install.as_ref())
-            {
-                hook_interpreter_ledger.require(
+        let elements = packages
+            .iter()
+            .map(|package| {
+                element_plan(
+                    &preflight_state,
                     &package.name,
                     &package.version,
-                    HookPhase::PostInstall,
-                    &hook.interpreter,
-                )?;
-            }
-        }
+                    package.old_trove.as_deref(),
+                    &package.relation_removals,
+                    &package.extracted_files,
+                    &package.provides,
+                    package
+                        .ccs
+                        .as_ref()
+                        .and_then(|ccs| ccs.hooks.post_install.as_ref())
+                        .map(|hook| hook.interpreter.clone()),
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
+        preflight_post_install_interpreters(&selected_path, &elements)?;
 
         preflight_state.commit()?;
 

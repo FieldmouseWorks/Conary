@@ -1049,6 +1049,73 @@ async fn converted_ccs_install_rejects_child_before_package_symlink() {
     assert_eq!(persisted, 0);
 }
 
+#[tokio::test]
+async fn converted_ccs_dry_run_previews_unavailable_interpreter_without_mutation() {
+    let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
+    let temp_dir = tempfile::tempdir().unwrap();
+    let install_root = temp_dir.path().join("root");
+    let db_path = temp_dir.path().join("conary.db");
+    let db_path_str = db_path.to_str().unwrap();
+
+    std::fs::create_dir_all(&install_root).unwrap();
+    conary_core::db::init(db_path_str).unwrap();
+    stage_test_boot_assets(temp_dir.path());
+
+    let mut manifest = CcsManifest::new_minimal("converted-dry-run-interpreter", "1.0.0");
+    manifest.hooks.post_install = Some(ScriptHook {
+        script: ":".to_string(),
+        interpreter: "/bin/sh".to_string(),
+        reversible: None,
+    });
+    let package_path = temp_dir.path().join("converted-dry-run-interpreter.ccs");
+    let result = BuildResult {
+        manifest,
+        components: HashMap::new(),
+        files: Vec::new(),
+        payloads: Vec::new(),
+        total_size: 0,
+        chunked: false,
+        chunk_stats: None,
+    };
+    let signing_key = crate::commands::ccs::load_or_create_local_dev_key().unwrap();
+    write_signed_current_ccs_package(&result, &package_path, &signing_key, true).unwrap();
+
+    // Positive control on the same fixture: enforcing mode refuses with the
+    // typed interpreter-availability error before any mutation.
+    let error = install_ccs_artifact(converted_install_options(
+        &package_path,
+        db_path_str,
+        &install_root,
+        None,
+    ))
+    .await
+    .unwrap_err();
+    assert!(
+        error
+            .downcast_ref::<super::super::ccs_hook_interpreter::CcsHookInterpreterUnavailable>()
+            .is_some(),
+        "the enforcing control must refuse the missing interpreter: {error:#}"
+    );
+
+    let mut dry_run_options =
+        converted_install_options(&package_path, db_path_str, &install_root, None);
+    dry_run_options.dry_run = true;
+    install_ccs_artifact(dry_run_options)
+        .await
+        .expect("a dry run must preview an unavailable hook interpreter without failing");
+
+    let conn = conary_core::db::open(db_path_str).unwrap();
+    let changesets: i64 = conn
+        .query_row("SELECT COUNT(*) FROM changesets", [], |row| row.get(0))
+        .unwrap();
+    let troves: i64 = conn
+        .query_row("SELECT COUNT(*) FROM troves", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(changesets, 0, "a dry run must not commit a changeset");
+    assert_eq!(troves, 0, "a dry run must not persist a trove");
+    assert!(!install_root.join("usr/sbin/init").exists());
+}
+
 mod authority;
 mod capabilities;
 mod dependencies;

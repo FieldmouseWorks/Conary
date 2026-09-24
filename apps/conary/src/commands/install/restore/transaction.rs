@@ -1,6 +1,9 @@
 // apps/conary/src/commands/install/restore/transaction.rs
 //! One durable transaction for an exact system-state restore.
 
+use super::super::ccs_hook_interpreter::{
+    ElementPlan, element_plan, preflight_post_install_interpreters, removal_element_plan,
+};
 use super::super::inner;
 use super::super::native_events::{
     NativeInstallInput, NativeRemoveInput, PreparedNativeTransaction, deb_identity_for_trove,
@@ -84,6 +87,33 @@ pub(crate) fn execute_state_restore_transaction(
         .collect::<Result<Vec<_>>>()?;
     let mut ccs_hook_executors =
         prepare_ccs_hook_executors(conn, &selected_path, &prepared_installs)?;
+
+    // Record every restored element's payload boundary, then require each
+    // post-install interpreter, all before the restore's first mutation.
+    // Troves the restore removes leave the projected state first, so a
+    // removed interpreter provider cannot authorize a restored hook.
+    let mut restore_elements = vec![removal_element_plan(conn, removal_troves)?];
+    let installed_elements = prepared_installs
+        .iter()
+        .map(|prepared| -> Result<ElementPlan> {
+            element_plan(
+                conn,
+                prepared.pkg.name(),
+                prepared.pkg.version(),
+                prepared.old_trove_to_upgrade.as_ref(),
+                &[],
+                &prepared.extraction.extracted_files,
+                &prepared.pkg.resolution_capabilities()?,
+                prepared
+                    .ccs_contract
+                    .as_ref()
+                    .and_then(|contract| contract.hooks.post_install.as_ref())
+                    .map(|hook| hook.interpreter.clone()),
+            )
+        })
+        .collect::<Result<Vec<_>>>()?;
+    restore_elements.extend(installed_elements);
+    preflight_post_install_interpreters(&selected_path, &restore_elements)?;
 
     let cas = selected_root.cas().clone();
     execute_locked_restore(
@@ -966,4 +996,147 @@ fn finalize_restore_installs(
         )?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::commands::install::{
+        ExtractionResult, InstallSemantics, NativeLifecycleInstallState, PackageFormatType,
+    };
+    use conary_core::ccs::manifest::{Hooks, ScriptHook};
+    use conary_core::db::models::{Trove, TroveType};
+    use conary_core::packages::traits::{PackageFile, PackageFormat};
+    use conary_core::repository::dependency_model::RepositoryRequirementGroup;
+    use conary_core::repository::versioning::VersionScheme;
+
+    struct FakeCcsPackage;
+
+    impl PackageFormat for FakeCcsPackage {
+        fn parse(_path: &str) -> conary_core::Result<Self> {
+            unreachable!("test constructs the package directly")
+        }
+
+        fn name(&self) -> &str {
+            "restore-hook-interpreter"
+        }
+
+        fn version(&self) -> &str {
+            "1.0.0"
+        }
+
+        fn version_scheme(&self) -> VersionScheme {
+            VersionScheme::Conary
+        }
+
+        fn architecture(&self) -> Option<&str> {
+            Some("x86_64")
+        }
+
+        fn description(&self) -> Option<&str> {
+            None
+        }
+
+        fn files(&self) -> &[PackageFile] {
+            &[]
+        }
+
+        fn requirements(&self) -> &[RepositoryRequirementGroup] {
+            &[]
+        }
+
+        fn package_payload(&self) -> conary_core::Result<conary_core::packages::PackagePayload> {
+            Ok(conary_core::packages::PackagePayload::default())
+        }
+
+        fn to_trove(&self) -> Trove {
+            Trove::new(
+                self.name().to_string(),
+                self.version().to_string(),
+                TroveType::Package,
+                VersionScheme::Conary,
+            )
+        }
+    }
+
+    fn prepared_ccs_install() -> PreparedInstall {
+        PreparedInstall {
+            pkg: Box::new(FakeCcsPackage),
+            extraction: ExtractionResult {
+                extracted_files: Vec::new(),
+                classified: std::collections::HashMap::new(),
+                component_names_by_path: None,
+                installed_component_names: None,
+                ccs_remove_hook: None,
+                installed_component_types: Vec::new(),
+                skipped_components: Vec::new(),
+                language_provides: Vec::new(),
+            },
+            selection_reason: None,
+            old_trove_to_upgrade: None,
+            semantics: InstallSemantics::native_package(PackageFormatType::Rpm),
+            _temp_dir: None,
+            native_lifecycle_state: NativeLifecycleInstallState::default(),
+            ccs_removal_hook_plan:
+                crate::commands::install::ccs_removal_hooks::CcsRemovalHookPlan::default(),
+            repository_provenance: None,
+            ccs_contract: Some(super::super::PreparedCcsInstallContract {
+                capabilities: None,
+                file_capabilities: Vec::new(),
+                hooks: Hooks {
+                    post_install: Some(ScriptHook {
+                        script: ":".to_string(),
+                        interpreter: "/bin/sh".to_string(),
+                        reversible: None,
+                    }),
+                    ..Hooks::default()
+                },
+            }),
+        }
+    }
+
+    #[test]
+    fn restore_refuses_unavailable_post_install_interpreter_before_mutation() {
+        let _mount_guard = crate::commands::composefs_ops::test_mount_skip_clear_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("root");
+        let db_path = temp.path().join("conary.db");
+        std::fs::create_dir_all(&root).unwrap();
+        conary_core::db::init(&db_path).unwrap();
+        let mut conn = conary_core::db::open(&db_path).unwrap();
+        let prepared = prepared_ccs_install();
+        let db_path_string = db_path.to_string_lossy().into_owned();
+        let root_string = root.to_string_lossy().into_owned();
+
+        let error = execute_state_restore_transaction(
+            &mut conn,
+            &db_path_string,
+            &root_string,
+            1,
+            0,
+            &[],
+            vec![prepared],
+        )
+        .expect_err("a restored package with an unavailable interpreter must be refused");
+
+        let unavailable = error
+            .downcast_ref::<crate::commands::install::ccs_hook_interpreter::CcsHookInterpreterUnavailable>()
+            .expect("the refusal must be the typed interpreter-availability error");
+        assert_eq!(unavailable.package, "restore-hook-interpreter");
+        assert_eq!(unavailable.version, "1.0.0");
+        assert_eq!(
+            unavailable.phase,
+            crate::commands::install::ccs_hook_interpreter::HookPhase::PostInstall
+        );
+        assert_eq!(unavailable.interpreter, "/bin/sh");
+
+        let changesets: i64 = conn
+            .query_row("SELECT COUNT(*) FROM changesets", [], |row| row.get(0))
+            .unwrap();
+        let troves: i64 = conn
+            .query_row("SELECT COUNT(*) FROM troves", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(changesets, 0, "refusal must not commit a changeset");
+        assert_eq!(troves, 0, "refusal must not persist a trove");
+    }
 }

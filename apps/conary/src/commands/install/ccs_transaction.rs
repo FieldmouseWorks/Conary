@@ -5,7 +5,7 @@
 //! manifest selection, hook-status, and capability-gate helpers. Shared install
 //! transaction mechanics stay in `install/mod.rs`.
 
-use super::ccs_hook_interpreter::{HookInterpreterLedger, HookPhase};
+use super::ccs_hook_interpreter::{element_plan, preflight_post_install_interpreters};
 use super::ccs_removal_hooks::CcsRemovalHookPlan;
 use super::native_events::{NativeInstallInput, PreparedNativeTransaction};
 use super::{
@@ -316,6 +316,15 @@ fn show_ccs_lifecycle_dry_run(manifest: &conary_core::ccs::manifest::CcsManifest
     crate::ui::field("Lifecycle", &summary);
 }
 
+/// Report the post-install interpreter a dry run would require. Enforcement
+/// is deferred because a preview may legitimately precede the provider.
+fn show_ccs_hook_interpreter_requirement(interpreter: &str) {
+    crate::ui::field(
+        "Hook interpreter",
+        &format!("{interpreter} must be provided before the post-install hook runs"),
+    );
+}
+
 pub(super) fn enforce_ccs_scriptlet_capability_gate(
     pkg: &conary_core::ccs::CcsPackage,
 ) -> Result<()> {
@@ -485,45 +494,27 @@ fn install_ccs_package_transactionally_inner(
             .context("CCS lifecycle host capability preflight failed")?;
     }
     if let Some(hook) = hooks.post_install.as_ref() {
-        let mut ledger = HookInterpreterLedger::new(Path::new(&transaction_root));
-        let mut removed_old_paths = Vec::new();
-        if let Some(trove_id) = old_trove.and_then(|trove| trove.id) {
-            removed_old_paths.extend(
-                conary_core::db::models::FileEntry::find_by_trove(&preflight_state, trove_id)?
-                    .into_iter()
-                    .map(|file| file.path),
-            );
+        if opts.dry_run {
+            // A dry run previews the plan; it must not fail because the
+            // interpreter is not materialized yet. Name the requirement and
+            // continue.
+            show_ccs_hook_interpreter_requirement(&hook.interpreter);
+        } else {
+            let element = element_plan(
+                &preflight_state,
+                pkg.name(),
+                pkg.version(),
+                old_trove,
+                &relation_plan.removals,
+                &extraction.extracted_files,
+                &resolution_capabilities,
+                Some(hook.interpreter.clone()),
+            )?;
+            preflight_post_install_interpreters(
+                Path::new(&transaction_root),
+                std::slice::from_ref(&element),
+            )?;
         }
-        for removal in &relation_plan.removals {
-            removed_old_paths.extend(
-                conary_core::db::models::FileEntry::find_by_trove(
-                    &preflight_state,
-                    removal.trove_id,
-                )?
-                .into_iter()
-                .map(|file| file.path),
-            );
-        }
-        let introduced_paths = extraction
-            .extracted_files
-            .iter()
-            .map(|file| file.path.clone())
-            .chain(
-                resolution_capabilities
-                    .iter()
-                    .filter(|capability| {
-                        capability.kind
-                            == conary_core::repository::dependency_model::RepositoryCapabilityKind::File
-                    })
-                    .map(|capability| capability.name.clone()),
-            );
-        ledger.apply_element(removed_old_paths, introduced_paths);
-        ledger.require(
-            pkg.name(),
-            pkg.version(),
-            HookPhase::PostInstall,
-            &hook.interpreter,
-        )?;
     }
 
     let mut changes = vec![super::report::InstallChange::incoming(

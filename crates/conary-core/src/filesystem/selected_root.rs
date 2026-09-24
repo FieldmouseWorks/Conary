@@ -9,7 +9,10 @@ use std::ffi::OsString;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
-const MAX_SELECTED_ROOT_SYMLINK_DEPTH: usize = 40;
+/// Maximum number of symlink redirects the selected-root resolver follows
+/// while resolving one package path. Callers that follow projected symlinks
+/// use the same bound so a payload cannot exceed it before materialization.
+pub const MAX_SELECTED_ROOT_SYMLINK_DEPTH: usize = 40;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SelectedRootSymlinkTarget {
