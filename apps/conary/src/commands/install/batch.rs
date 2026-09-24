@@ -861,8 +861,13 @@ impl<'a> BatchInstaller<'a> {
                     format!("Failed to persist CCS file capabilities for {}", pkg.name)
                 })?;
             if let Some(hook) = ccs.hooks.pre_remove.as_ref() {
-                InstalledCcsRemoveHook::new(trove_id, hook.script.clone(), hook.reversible)
-                    .insert_or_replace(tx)?;
+                InstalledCcsRemoveHook::new(
+                    trove_id,
+                    hook.interpreter.clone(),
+                    hook.script.clone(),
+                    hook.reversible,
+                )
+                .insert_or_replace(tx)?;
             }
             if let Some(capabilities) = ccs.capabilities.as_ref() {
                 conary_core::capability::store_capabilities(tx, trove_id, capabilities)?;

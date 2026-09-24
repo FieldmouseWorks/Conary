@@ -475,10 +475,12 @@ fn test_hook_converter_preserves_script_hooks() {
     let hooks = Hooks {
         post_install: Some(crate::ccs::manifest::ScriptHook {
             script: "echo installed > /var/lib/myapp/installed".to_string(),
+            interpreter: "/bin/sh".to_string(),
             reversible: None,
         }),
         pre_remove: Some(crate::ccs::manifest::ScriptHook {
             script: "echo removed > /var/lib/myapp/removed".to_string(),
+            interpreter: "/bin/sh".to_string(),
             reversible: None,
         }),
         ..Default::default()

@@ -800,6 +800,22 @@ impl RepositoryRequirementGroup {
         }
     }
 
+    /// Whether this group is exactly a hard pre-install requirement on the
+    /// absolute `path`: one `Path` atom with no alternatives. Only this form
+    /// guarantees a provider of `path`, so it alone authorizes a lifecycle
+    /// interpreter; an OR group naming the path among alternatives does not.
+    #[must_use]
+    pub fn is_hard_pre_install_path(&self, path: &str) -> bool {
+        self.kind == RepositoryRequirementKind::PreDepends
+            && self.behavior == ConditionalRequirementBehavior::Hard
+            && matches!(
+                &self.expression,
+                RepositoryRequirementExpression::Atom(clause)
+                    if clause.capability_kind == Some(RepositoryCapabilityKind::Path)
+                        && clause.name == path
+            )
+    }
+
     /// Create a group with alternatives.
     #[must_use]
     pub fn alternatives(

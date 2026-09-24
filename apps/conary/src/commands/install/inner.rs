@@ -423,8 +423,13 @@ pub(super) fn install_inner_with_stored_files(
         )?;
 
         if let Some(hook) = extraction.ccs_remove_hook.as_ref() {
-            InstalledCcsRemoveHook::new(trove_id, hook.script.clone(), hook.reversible)
-                .insert_or_replace(tx)?;
+            InstalledCcsRemoveHook::new(
+                trove_id,
+                hook.interpreter.clone(),
+                hook.script.clone(),
+                hook.reversible,
+            )
+            .insert_or_replace(tx)?;
         }
 
         super::transaction::persist_package_provides(

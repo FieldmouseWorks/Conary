@@ -12,7 +12,7 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use std::path::Path;
 use tracing::info;
 
-/// Revision 56 of the current-only schema epoch.
+/// Revision 57 of the current-only schema epoch.
 ///
 /// Revision 45 makes registered Remi profile membership immutable and journals
 /// exact catalog filesystem deletions before resource metadata disappears.
@@ -42,9 +42,11 @@ use tracing::info;
 /// records explicit operator authorization, while feed-authored trust claims
 /// are diagnostic only. Revision 55 values predate that authority meaning and
 /// are therefore fenced behind a rebuild.
+/// Revision 57 stores the declared interpreter on each installed CCS remove
+/// hook so installed authority names the exact program that runs the script.
 /// Earlier pre-alpha databases must be rebuilt; no compatibility migration is
 /// provided.
-pub const SCHEMA_VERSION: i32 = 56;
+pub const SCHEMA_VERSION: i32 = 57;
 /// Stable identity that distinguishes this epoch from retired schema revisions.
 pub const SCHEMA_EPOCH: &str = "conary-current-v1";
 

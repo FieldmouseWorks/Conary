@@ -78,7 +78,7 @@ impl ScriptletExecutor {
     ) -> ScriptletOutcome {
         self.execute_impl_with_outcome(
             "pre-remove",
-            "/bin/sh",
+            &hook.interpreter,
             &hook.script,
             None,
             &ExecutionMode::Remove,
@@ -86,10 +86,10 @@ impl ScriptletExecutor {
     }
 
     /// Execute an exact signed CCS post-install hook in the selected root.
-    pub(crate) fn execute_ccs_install_hook(&self, script: &str) -> Result<()> {
+    pub(crate) fn execute_ccs_install_hook(&self, interpreter: &str, script: &str) -> Result<()> {
         self.execute_impl_with_outcome(
             "post-install",
-            "/bin/sh",
+            interpreter,
             script,
             None,
             &ExecutionMode::Install,
@@ -101,7 +101,7 @@ impl ScriptletExecutor {
     pub fn preflight_ccs_remove_hook(&self, hook: &InstalledCcsRemoveHook) -> Result<()> {
         self.preflight_impl(
             "pre-remove",
-            "/bin/sh",
+            &hook.interpreter,
             &hook.script,
             &ExecutionMode::Remove,
         )

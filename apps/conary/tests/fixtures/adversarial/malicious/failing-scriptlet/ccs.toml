@@ -22,6 +22,7 @@ default = ["runtime"]
 [hooks]
 
 [hooks.post_install]
+interpreter = "/bin/sh"
 script = """
 echo "failing-scriptlet: intentional failure" >&2
 exit 1

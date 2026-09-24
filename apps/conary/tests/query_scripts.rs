@@ -367,6 +367,7 @@ fn install_scriptlet_query_fixture() -> (TempDir, String) {
 
         InstalledCcsRemoveHook::new(
             trove_id,
+            "/bin/sh".to_string(),
             "echo CCS remove hook body must stay hidden\n".to_string(),
             Some(true),
         )

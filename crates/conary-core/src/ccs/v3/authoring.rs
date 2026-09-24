@@ -3,7 +3,10 @@
 use super::schema::*;
 use crate::ccs::builder::BuildResult;
 use crate::ccs::v3::PackageKindTagV3;
-use crate::repository::dependency_model::RepositoryRequirementGroup;
+use crate::repository::dependency_model::{
+    RepositoryCapabilityKind, RepositoryRequirementClause, RepositoryRequirementGroup,
+    RepositoryRequirementKind,
+};
 use crate::repository::versioning::VersionScheme;
 use anyhow::{Result, bail};
 use std::collections::{BTreeMap, BTreeSet};
@@ -325,12 +328,59 @@ pub(super) fn project_requirements(
     manifest: &crate::ccs::manifest::CcsManifest,
 ) -> Vec<RepositoryRequirementGroup> {
     let mut keyed = BTreeMap::new();
-    for requirement in manifest.requirements.clone() {
+    for requirement in manifest
+        .requirements
+        .clone()
+        .into_iter()
+        .chain(derived_hook_interpreter_requirements(manifest))
+    {
         let key = serde_json::to_string(&requirement)
             .expect("typed CCS requirement is JSON serializable");
         keyed.entry(key).or_insert(requirement);
     }
     keyed.into_values().collect()
+}
+
+/// Derive the pre-install `Path` requirements that authorize each distinct
+/// lifecycle hook interpreter.
+///
+/// `docs/specs/foreign-package-lifecycle-contracts.md` lines 50-56, 395-400,
+/// and 537-550 require a lifecycle program's interpreter to be satisfied
+/// through a declared dependency; no parser or builder may guess one. The
+/// derived group is hard and versionless, and an author-declared equivalent is
+/// left untouched so the signed set never gains a duplicate.
+fn derived_hook_interpreter_requirements(
+    manifest: &crate::ccs::manifest::CcsManifest,
+) -> Vec<RepositoryRequirementGroup> {
+    let mut interpreters = BTreeSet::new();
+    for hook in [
+        manifest.hooks.post_install.as_ref(),
+        manifest.hooks.pre_remove.as_ref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        interpreters.insert(hook.interpreter.as_str());
+    }
+    interpreters
+        .into_iter()
+        .filter(|interpreter| !declares_interpreter_path_requirement(manifest, interpreter))
+        .map(|interpreter| {
+            let mut clause = RepositoryRequirementClause::name_only(interpreter.to_string());
+            clause.capability_kind = Some(RepositoryCapabilityKind::Path);
+            RepositoryRequirementGroup::simple(RepositoryRequirementKind::PreDepends, clause)
+        })
+        .collect()
+}
+
+fn declares_interpreter_path_requirement(
+    manifest: &crate::ccs::manifest::CcsManifest,
+    interpreter: &str,
+) -> bool {
+    manifest
+        .requirements
+        .iter()
+        .any(|group| group.is_hard_pre_install_path(interpreter))
 }
 
 fn provided_capability(

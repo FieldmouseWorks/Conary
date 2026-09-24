@@ -398,6 +398,11 @@ pub const LINUX_FILE_CAPABILITY_NAMES: &[&str] = &[
 pub struct ScriptHook {
     pub script: String,
 
+    /// Absolute path of the program that runs `script`. The package must
+    /// declare a pre-install `Path` requirement on it; the v3 builder derives
+    /// that requirement from this field rather than guessing an interpreter.
+    pub interpreter: String,
+
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reversible: Option<bool>,
 }

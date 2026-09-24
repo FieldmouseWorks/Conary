@@ -26,6 +26,7 @@ default = ["runtime"]
 [hooks]
 
 [hooks.post_install]
+interpreter = "/bin/sh"
 script = '''
 trace_dir=/var/lib/conary-native-lifecycle-parity
 mkdir -p "$trace_dir"
@@ -40,6 +41,7 @@ printf '%s\n' "v2-post|argc=$#|argv=${argv}|stdin=none|payload=${payload}" >> "$
 '''
 
 [hooks.pre_remove]
+interpreter = "/bin/sh"
 script = '''
 trace_dir=/var/lib/conary-native-lifecycle-parity
 mkdir -p "$trace_dir"

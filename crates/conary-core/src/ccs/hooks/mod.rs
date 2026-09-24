@@ -465,7 +465,7 @@ impl HookExecutor {
     }
 
     /// Execute an exact signed CCS post-install script in the selected root.
-    pub fn execute_script(&self, label: &str, script: &str) -> Result<()> {
+    pub fn execute_script(&self, label: &str, interpreter: &str, script: &str) -> Result<()> {
         self.require_selected_root()?;
         if label != "post_install" {
             anyhow::bail!("unsupported CCS install hook phase '{label}'");
@@ -477,7 +477,7 @@ impl HookExecutor {
             crate::scriptlet::PackageFormat::Conary,
         );
         executor
-            .execute_ccs_install_hook(script)
+            .execute_ccs_install_hook(interpreter, script)
             .map_err(anyhow::Error::from)?;
         self.activation_invocations.borrow_mut().extend(
             executor
@@ -611,7 +611,7 @@ impl HookExecutor {
         // Post-install script
         if let Some(ref hook) = hooks.post_install {
             let hook_start = Instant::now();
-            let result = self.execute_script("post_install", &hook.script);
+            let result = self.execute_script("post_install", &hook.interpreter, &hook.script);
             if let Err(ref e) = result {
                 warn!("Post-install script failed: {}", e);
             }
@@ -780,7 +780,7 @@ mod tests {
         let script = format!("printf sandboxed > {marker}");
 
         let _ = std::fs::remove_file(&marker);
-        let result = executor.execute_script("post_install", &script);
+        let result = executor.execute_script("post_install", "/bin/sh", &script);
 
         let error = result.unwrap_err().to_string();
         assert!(error.contains("host root '/' is not an execution target"));

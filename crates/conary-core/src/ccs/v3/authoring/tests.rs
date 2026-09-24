@@ -508,6 +508,7 @@ fn lint_manifest_allows_script_lifecycle_with_signed_execution_contract() {
     manifest.package.kind = crate::ccs::v3::PackageKindTagV3::Package;
     manifest.hooks.post_install = Some(crate::ccs::manifest::ScriptHook {
         script: "echo configured".to_string(),
+        interpreter: "/bin/sh".to_string(),
         reversible: None,
     });
 
@@ -571,6 +572,7 @@ fn projection_maps_declarative_lifecycle_hooks_to_signed_authority() {
     );
     build.manifest.hooks.post_install = Some(crate::ccs::manifest::ScriptHook {
         script: "printf configured".to_string(),
+        interpreter: "/bin/sh".to_string(),
         reversible: Some(false),
     });
     build
@@ -749,4 +751,71 @@ fn projection_carries_typed_requires_and_provides_without_distro_gates() {
                 .any(|entry| entry.kind == kind && entry.name == name)
         );
     }
+}
+
+fn script_hook(script: &str, interpreter: &str) -> crate::ccs::manifest::ScriptHook {
+    crate::ccs::manifest::ScriptHook {
+        script: script.to_string(),
+        interpreter: interpreter.to_string(),
+        reversible: None,
+    }
+}
+
+fn pre_depends_path_names(requirements: &[RepositoryRequirementGroup]) -> Vec<&str> {
+    requirements
+        .iter()
+        .filter(|group| group.kind == RepositoryRequirementKind::PreDepends)
+        .flat_map(|group| group.expression.atoms())
+        .filter(|clause| clause.capability_kind == Some(RepositoryCapabilityKind::Path))
+        .map(|clause| clause.name.as_str())
+        .collect()
+}
+
+fn declared_pre_depends_path(interpreter: &str) -> RepositoryRequirementGroup {
+    let mut clause = RepositoryRequirementClause::name_only(interpreter.to_string());
+    clause.capability_kind = Some(RepositoryCapabilityKind::Path);
+    RepositoryRequirementGroup::simple(RepositoryRequirementKind::PreDepends, clause)
+}
+
+#[test]
+fn projection_derives_hook_interpreter_path_requirement() {
+    let mut build = test_support::minimal_file_build_result("hook-derive", "0.1.0", b"hook\n");
+    build.manifest.hooks.post_install = Some(script_hook("true", "/bin/sh"));
+
+    let requirements = project_requirements(&build.manifest);
+
+    assert_eq!(pre_depends_path_names(&requirements), vec!["/bin/sh"]);
+    assert!(requirements.iter().any(|group| {
+        group.kind == RepositoryRequirementKind::PreDepends
+            && group.expression.atoms().iter().any(|clause| {
+                clause.capability_kind == Some(RepositoryCapabilityKind::Path)
+                    && clause.name == "/bin/sh"
+                    && clause.version_constraint.is_none()
+            })
+    }));
+}
+
+#[test]
+fn projection_does_not_duplicate_an_author_declared_interpreter_path_requirement() {
+    let mut build = test_support::minimal_file_build_result("hook-declared", "0.1.0", b"hook\n");
+    build.manifest.hooks.post_install = Some(script_hook("true", "/bin/sh"));
+    build
+        .manifest
+        .requirements
+        .push(declared_pre_depends_path("/bin/sh"));
+
+    let requirements = project_requirements(&build.manifest);
+
+    assert_eq!(pre_depends_path_names(&requirements), vec!["/bin/sh"]);
+}
+
+#[test]
+fn projection_deduplicates_a_shared_hook_interpreter_path_requirement() {
+    let mut build = test_support::minimal_file_build_result("hook-shared", "0.1.0", b"hook\n");
+    build.manifest.hooks.post_install = Some(script_hook("true", "/bin/sh"));
+    build.manifest.hooks.pre_remove = Some(script_hook("false", "/bin/sh"));
+
+    let requirements = project_requirements(&build.manifest);
+
+    assert_eq!(pre_depends_path_names(&requirements), vec!["/bin/sh"]);
 }
