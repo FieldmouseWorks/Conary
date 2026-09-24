@@ -14,7 +14,7 @@ use std::path::{Component as PathComponent, Path, PathBuf};
 
 const MAX_EXISTING_SYMLINK_DEPTH: usize = 40;
 
-pub(super) fn sanitize_package_relative_path(path: &str) -> Result<PathBuf> {
+pub(crate) fn sanitize_package_relative_path(path: &str) -> Result<PathBuf> {
     let candidate = path.strip_prefix('/').unwrap_or(path);
     let mut normalized = PathBuf::new();
 

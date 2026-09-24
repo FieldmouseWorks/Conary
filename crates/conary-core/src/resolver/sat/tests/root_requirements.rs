@@ -9,7 +9,8 @@ use crate::packages::traits::PackageFile;
 use crate::packages::{PackageFormat, PackagePayload};
 use crate::repository::dependency_model::{
     CapabilityProvenance, ProvideArchitectureQualifier, ProvideVersionRelation, ProvidedCapability,
-    RepositoryCapabilityKind, RepositoryRequirementKind, SourcePackageFormat,
+    RepositoryCapabilityKind, RepositoryRequirementClause, RepositoryRequirementGroup,
+    RepositoryRequirementKind, SourcePackageFormat,
 };
 use crate::repository::requirement::parse_native_requirement;
 
@@ -329,4 +330,64 @@ fn root_with_and_without_require_same_provider_facts() {
     let without_names = selected_names(&without_result);
     assert!(without_names.contains(&"left-only") || without_names.contains(&"split-a"));
     assert!(!without_names.contains(&"combined"));
+}
+
+#[test]
+fn package_solver_provides_view_governs_file_pre_depends_self_satisfaction() {
+    let (_temp, conn) = setup_test_db();
+    let requirement = RepositoryRequirementGroup::simple(
+        RepositoryRequirementKind::PreDepends,
+        RepositoryRequirementClause {
+            name: "/bin/sh".to_string(),
+            capability_kind: Some(RepositoryCapabilityKind::File),
+            version_constraint: None,
+            architecture_qualifier: Default::default(),
+            native_text: Some("/bin/sh".to_string()),
+        },
+    );
+    let file_provide = ProvidedCapability {
+        kind: RepositoryCapabilityKind::File,
+        name: "/bin/sh".to_string(),
+        version: None,
+        version_relation: None,
+        version_scheme: VersionScheme::Rpm,
+        architecture_qualifier: ProvideArchitectureQualifier::Implicit,
+        provenance: CapabilityProvenance::SourceDerivedFile {
+            format: SourcePackageFormat::Rpm,
+        },
+    };
+    let package = IncomingPackage {
+        requirements: vec![requirement],
+        capabilities: vec![file_provide.clone()],
+    };
+    let policy = ResolutionPolicy::new()
+        .with_mixing(crate::repository::resolution_policy::DependencyMixingPolicy::Permissive);
+
+    // Positive control: the passed File provide discharges the package's own
+    // hard PreDepends, so the solve needs nothing external against an empty DB.
+    let self_satisfied = solve_package_requirements_with_provides_and_policy(
+        &conn,
+        &package,
+        vec![file_provide],
+        &policy,
+    )
+    .unwrap();
+    assert!(
+        self_satisfied.conflict_message.is_none(),
+        "{self_satisfied:?}"
+    );
+    assert!(
+        self_satisfied.install_order.is_empty(),
+        "{self_satisfied:?}"
+    );
+    assert!(self_satisfied.remove_order.is_empty(), "{self_satisfied:?}");
+
+    // Negative: without that File provide in the passed view the requirement is
+    // external, and the empty DB has no provider for it.
+    let unresolved =
+        solve_package_requirements_with_provides_and_policy(&conn, &package, Vec::new(), &policy)
+            .unwrap();
+    assert!(unresolved.conflict_message.is_some(), "{unresolved:?}");
+    assert!(unresolved.install_order.is_empty(), "{unresolved:?}");
+    assert!(unresolved.remove_order.is_empty(), "{unresolved:?}");
 }

@@ -146,10 +146,15 @@ pub fn cmd_ccs_install(
     // The validator and the transaction must reason about the same exact
     // outgoing identities. Upgrade selection is architecture-slot based for a
     // CCS install; relation removals are already planned by exact trove ID.
-    let relation_plan = conary_core::transaction::plan_package_relations(
+    let selected_capabilities = crate::commands::ccs::selected_ccs_resolution_capabilities(
+        &ccs_pkg,
+        &selected_components.names,
+    )?;
+    let relation_plan = conary_core::transaction::plan_package_relations_with_provides(
         &conn,
         &ccs_pkg,
         ccs_pkg.manifest().package.version_scheme,
+        &selected_capabilities,
     )?;
     let mut outgoing_trove_ids = relation_plan
         .removals
@@ -168,7 +173,7 @@ pub fn cmd_ccs_install(
         })?;
         outgoing_trove_ids.push(trove_id);
     }
-    let incoming_identity = incoming_package_identity(&ccs_pkg)?;
+    let incoming_identity = incoming_package_identity(&ccs_pkg, selected_capabilities.clone())?;
     validate_incoming_version_against_dependents(&conn, &outgoing_trove_ids, &incoming_identity)?;
 
     // Step 4: Check dependencies
@@ -180,11 +185,13 @@ pub fn cmd_ccs_install(
             &conn,
             conary_core::repository::resolution_policy::RequestScope::Any,
         )?;
-        let resolution = conary_core::resolver::solve_package_requirements_with_policy(
-            &conn,
-            &ccs_pkg,
-            &effective_policy.resolution,
-        )?;
+        let resolution =
+            conary_core::resolver::solve_package_requirements_with_provides_and_policy(
+                &conn,
+                &ccs_pkg,
+                selected_capabilities,
+                &effective_policy.resolution,
+            )?;
         if let Some(conflict) = resolution.conflict_message {
             if dry_run {
                 println!("  Dependency conflict (would fail): {conflict}");
