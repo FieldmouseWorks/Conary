@@ -63,7 +63,11 @@ fn command_capture_child() {
     let before = test_helpers::database_rows(&conn);
     println!("FRAME_BEGIN");
     let result = if scenario == "autoremove" {
-        crate::commands::cmd_autoremove(&db_path, false, crate::commands::SandboxMode::Always)
+        crate::commands::cmd_autoremove(
+            &db_path,
+            crate::commands::AutoremoveMode::Apply,
+            crate::commands::SandboxMode::Always,
+        )
     } else if rollback {
         crate::commands::cmd_rollback(
             if scenario == "failed_rollback" {

@@ -70,6 +70,77 @@ fn autoremove_plan_uses_recorded_ownership_and_pin_state() {
     );
 }
 
+#[test]
+fn autoremove_plan_json_projects_removable_and_typed_skips() {
+    let owned = Trove::new_with_source(
+        "owned-orphan".to_string(),
+        "1.0.0".to_string(),
+        TroveType::Package,
+        InstallSource::Repository,
+        conary_core::repository::versioning::VersionScheme::Conary,
+    );
+    let adopted = Trove::new_with_source(
+        "adopted-orphan".to_string(),
+        "1.0.0".to_string(),
+        TroveType::Package,
+        InstallSource::AdoptedTrack,
+        conary_core::repository::versioning::VersionScheme::Conary,
+    );
+    let mut pinned = Trove::new_with_source(
+        "pinned-orphan".to_string(),
+        "1.0.0".to_string(),
+        TroveType::Package,
+        InstallSource::Repository,
+        conary_core::repository::versioning::VersionScheme::Conary,
+    );
+    pinned.pinned = true;
+
+    let plan = plan_autoremove(vec![owned, adopted, pinned]);
+    let data = AutoremovePlanData::from_plan(&plan);
+    let value = serde_json::to_value(plan_result(&data).unwrap()).unwrap();
+
+    assert_eq!(value["operation"], "package.autoremove.plan");
+    assert_eq!(value["status"], "planned");
+    assert_eq!(value["risk"], "destructive");
+    assert_eq!(value["data"]["schema_version"], 1);
+    assert_eq!(
+        value["data"]["removable"],
+        serde_json::json!([{
+            "name": "owned-orphan",
+            "version": "1.0.0",
+            "architecture": null,
+        }])
+    );
+    assert_eq!(
+        value["data"]["skipped"],
+        serde_json::json!([
+            {
+                "name": "adopted-orphan",
+                "version": "1.0.0",
+                "architecture": null,
+                "reason": "adopted_native_authority",
+            },
+            {
+                "name": "pinned-orphan",
+                "version": "1.0.0",
+                "architecture": null,
+                "reason": "pinned",
+            }
+        ])
+    );
+}
+
+#[test]
+fn autoremove_plan_json_empty_plan_is_read_only() {
+    let plan = plan_autoremove(Vec::new());
+    let data = AutoremovePlanData::from_plan(&plan);
+    let value = serde_json::to_value(plan_result(&data).unwrap()).unwrap();
+
+    assert_eq!(value["risk"], "read_only");
+    assert_eq!(value["data"]["removable"], serde_json::json!([]));
+    assert_eq!(value["data"]["skipped"], serde_json::json!([]));
+}
+
 #[tokio::test]
 #[cfg(feature = "test-hooks")]
 async fn autoremove_automatically_replays_native_remove_lifecycle() {
@@ -98,7 +169,7 @@ async fn autoremove_automatically_replays_native_remove_lifecycle() {
 
     cmd_autoremove(
         db_path.to_string_lossy().as_ref(),
-        false,
+        AutoremoveMode::Apply,
         SandboxMode::Always,
     )
     .unwrap();

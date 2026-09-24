@@ -6,37 +6,56 @@ use conary_core::scriptlet::ExecutionMode;
 use std::collections::HashSet;
 use tracing::info;
 
+use self::plan_output::{AutoremovePlanData, AutoremoveSkipReason, plan_result};
 use super::types::RemoveLifecycleOptions;
 use crate::commands::{SandboxMode, open_db};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum AutoremoveSkipReason {
-    AdoptedNativeAuthority,
-    Pinned,
+#[derive(Debug, Clone)]
+pub(super) struct AutoremovePlan {
+    pub(super) removable: Vec<Trove>,
+    pub(super) skipped: Vec<(Trove, AutoremoveSkipReason)>,
 }
 
-#[derive(Debug, Clone)]
-struct AutoremovePlan {
-    removable: Vec<Trove>,
-    skipped: Vec<(Trove, AutoremoveSkipReason)>,
+/// What `cmd_autoremove` does with the orphan plan.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AutoremoveMode {
+    /// Remove the planned orphans.
+    Apply,
+    /// Print the plan as human-readable text without removing anything.
+    PreviewText,
+    /// Print the plan as a typed JSON document without removing anything.
+    PreviewJson,
 }
 
 /// Remove orphaned packages (installed as dependencies but no longer needed)
 ///
 /// Finds packages that were installed as dependencies of other packages,
 /// but are no longer required by any installed package.
-pub fn cmd_autoremove(db_path: &str, dry_run: bool, sandbox_mode: SandboxMode) -> Result<()> {
+pub fn cmd_autoremove(
+    db_path: &str,
+    mode: AutoremoveMode,
+    sandbox_mode: SandboxMode,
+) -> Result<()> {
     info!("Finding orphaned packages...");
 
     let conn = open_db(db_path)?;
 
     let orphans = conary_core::db::models::Trove::find_orphans(&conn)?;
-    if orphans.is_empty() {
+    let orphans_empty = orphans.is_empty();
+    let plan = plan_autoremove(orphans);
+
+    if mode == AutoremoveMode::PreviewJson {
+        let data = AutoremovePlanData::from_plan(&plan);
+        let result = plan_result(&data)?;
+        println!("{}", serde_json::to_string_pretty(&result)?);
+        return Ok(());
+    }
+
+    if orphans_empty {
         println!("No orphaned packages found.");
         return Ok(());
     }
 
-    let plan = plan_autoremove(orphans);
     if plan.removable.is_empty() {
         println!("No Conary-owned orphaned packages can be autoremoved.");
         print_autoremove_skips(&plan.skipped);
@@ -45,7 +64,7 @@ pub fn cmd_autoremove(db_path: &str, dry_run: bool, sandbox_mode: SandboxMode) -
     print_autoremove_candidates("Found", &plan.removable);
     print_autoremove_skips(&plan.skipped);
 
-    if dry_run {
+    if mode == AutoremoveMode::PreviewText {
         println!("\nDry run - no packages will be removed.");
         println!("Run without --dry-run to remove these packages.");
         return Ok(());
@@ -275,6 +294,9 @@ fn autoremove_identity(trove: &Trove) -> (String, String, Option<String>) {
         trove.architecture.clone(),
     )
 }
+
+#[path = "autoremove/plan_output.rs"]
+mod plan_output;
 
 #[cfg(test)]
 #[path = "autoremove/tests.rs"]

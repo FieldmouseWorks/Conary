@@ -11,7 +11,7 @@ pub(super) mod test_support;
 mod transaction;
 mod types;
 
-pub use autoremove::cmd_autoremove;
+pub use autoremove::{AutoremoveMode, cmd_autoremove};
 pub(crate) use ccs_hook::{
     execute_preflighted_ccs_remove_hook, load_ccs_remove_hook, preflight_ccs_remove_hook,
     preflight_loaded_ccs_remove_hook,

@@ -763,4 +763,19 @@ fn update_ownership_help_is_model_derived() {
     );
 }
 
+#[test]
+fn autoremove_json_requires_dry_run() {
+    assert!(parse_cli(["conary", "autoremove", "--json"]).is_err());
+
+    let cli = parse_cli(["conary", "autoremove", "--dry-run", "--json"]).unwrap();
+    match cli.command {
+        Some(Commands::Autoremove {
+            dry_run: true,
+            json: true,
+            ..
+        }) => {}
+        other => panic!("unexpected command: {other:?}"),
+    }
+}
+
 mod installed;
