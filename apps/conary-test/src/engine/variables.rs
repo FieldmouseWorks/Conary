@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use crate::config::corpus::{CorpusCaseDef, CorpusTargetDef};
 use crate::config::distro::GlobalConfig;
 use crate::config::manifest::{
-    Assertion, FileChecksum, JsonAssertion, QemuBoot, QemuGuestCopy, TestManifest,
+    Assertion, FileChecksum, JsonAssertion, JsonExpectation, QemuBoot, QemuGuestCopy, TestManifest,
 };
 
 /// Build the base variable map from global config and distro selection.
@@ -223,7 +223,12 @@ pub fn expand_assertion(assertion: &Assertion, vars: &HashMap<String, String>) -
                 .iter()
                 .map(|check| JsonAssertion {
                     pointer: expand_variables(&check.pointer, vars),
-                    equals: expand_toml_value(&check.equals, vars),
+                    expected: match &check.expected {
+                        JsonExpectation::Equals(value) => {
+                            JsonExpectation::Equals(expand_toml_value(value, vars))
+                        }
+                        JsonExpectation::Null => JsonExpectation::Null,
+                    },
                 })
                 .collect()
         }),

@@ -1,6 +1,6 @@
 // apps/conary-test/src/engine/assertions.rs
 
-use crate::config::manifest::{Assertion, JsonAssertion};
+use crate::config::manifest::{Assertion, JsonAssertion, JsonExpectation};
 use anyhow::{Result, bail};
 use serde_json::Value as JsonValue;
 
@@ -85,14 +85,27 @@ fn evaluate_stdout_json(checks: &[JsonAssertion], stdout: &str) -> Result<()> {
         let Some(actual) = document.pointer(&check.pointer) else {
             bail!("stdout JSON has no value at pointer \"{}\"", check.pointer);
         };
-        let expected = toml_to_json(&check.equals)?;
-        if !json_values_equal(&expected, actual) {
-            bail!(
-                "stdout JSON at pointer \"{}\" did not match expected value\nexpected: {}\nactual: {}",
-                check.pointer,
-                serde_json::to_string_pretty(&expected)?,
-                serde_json::to_string_pretty(actual)?,
-            );
+        match &check.expected {
+            JsonExpectation::Equals(expected) => {
+                let expected = toml_to_json(expected)?;
+                if !json_values_equal(&expected, actual) {
+                    bail!(
+                        "stdout JSON at pointer \"{}\" did not match expected value\nexpected: {}\nactual: {}",
+                        check.pointer,
+                        serde_json::to_string_pretty(&expected)?,
+                        serde_json::to_string_pretty(actual)?,
+                    );
+                }
+            }
+            JsonExpectation::Null => {
+                if !actual.is_null() {
+                    bail!(
+                        "stdout JSON at pointer \"{}\" is not null\nactual: {}",
+                        check.pointer,
+                        serde_json::to_string_pretty(actual)?,
+                    );
+                }
+            }
         }
     }
     Ok(())

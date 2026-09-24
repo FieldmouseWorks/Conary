@@ -1306,8 +1306,11 @@ Current JSON semantics:
 Prove behavior with typed output. When a command emits JSON, assert on it with
 `stdout_json`: stdout must parse as one JSON document, each RFC 6901 `pointer`
 must resolve, and the resolved value must equal `equals` exactly (objects by
-key set, arrays in order, integers and floats never cross-match). String
-leaves and pointers receive `${VAR}` expansion.
+key set, arrays in order, integers and floats never cross-match). An entry may
+instead set `null = true` to require JSON null at the pointer. TOML has no
+null literal, so a null nested inside an `equals` object or array cannot be
+expressed; assert such fields individually by pointer. String leaves and
+pointers receive `${VAR}` expansion.
 
 ```toml
 [test.step.assert]
@@ -1315,6 +1318,7 @@ exit_code = 0
 stdout_json = [
   { pointer = "/status", equals = "planned" },
   { pointer = "/data/skipped", equals = [] },
+  { pointer = "/data/removable/0/package_release", null = true },
 ]
 ```
 

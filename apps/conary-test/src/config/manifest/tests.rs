@@ -95,14 +95,96 @@ fn stdout_json_assertion_parses_pointer_and_value() {
     let checks = assertion.stdout_json.as_ref().unwrap();
     assert_eq!(checks.len(), 3);
     assert_eq!(checks[0].pointer, "/status");
-    assert_eq!(checks[0].equals, toml::Value::String("planned".to_string()));
+    assert_eq!(
+        checks[0].expected,
+        JsonExpectation::Equals(toml::Value::String("planned".to_string()))
+    );
     assert_eq!(checks[1].pointer, "/data/removable");
     assert_eq!(
-        checks[1].equals,
-        toml_value(r#"v = [{ name = "dep-app", version = "1.0.0", architecture = "x86_64" }]"#)
+        checks[1].expected,
+        JsonExpectation::Equals(toml_value(
+            r#"v = [{ name = "dep-app", version = "1.0.0", architecture = "x86_64" }]"#
+        ))
     );
     assert_eq!(checks[2].pointer, "/data/skipped");
-    assert_eq!(checks[2].equals, toml::Value::Array(Vec::new()));
+    assert_eq!(
+        checks[2].expected,
+        JsonExpectation::Equals(toml::Value::Array(Vec::new()))
+    );
+}
+
+#[test]
+fn stdout_json_assertion_parses_null() {
+    let manifest: TestManifest = toml::from_str(
+        r#"
+        [suite]
+        name = "stdout-json"
+        phase = 4
+
+        [[test]]
+        id = "TJSON03"
+        name = "null stdout json"
+        description = "parses a null stdout_json check"
+        timeout = 10
+
+        [[test.step]]
+        run = "true"
+
+        [test.step.assert]
+        stdout_json = [{ pointer = "/x", null = true }]
+        "#,
+    )
+    .unwrap();
+
+    let checks = manifest.test[0].step[0]
+        .assert
+        .as_ref()
+        .unwrap()
+        .stdout_json
+        .as_ref()
+        .unwrap();
+    assert_eq!(checks[0].pointer, "/x");
+    assert_eq!(checks[0].expected, JsonExpectation::Null);
+}
+
+/// Parse a `stdout_json` entry, asserting the manifest is rejected.
+fn stdout_json_entry_is_rejected(entry: &str) {
+    let source = format!(
+        r#"
+        [suite]
+        name = "stdout-json"
+        phase = 4
+
+        [[test]]
+        id = "TJSON04"
+        name = "bad stdout json"
+        description = "rejects an invalid stdout_json entry"
+        timeout = 10
+
+        [[test.step]]
+        run = "true"
+
+        [test.step.assert]
+        stdout_json = [{entry}]
+        "#
+    );
+
+    assert!(toml::from_str::<TestManifest>(&source).is_err());
+}
+
+#[test]
+fn stdout_json_rejects_null_false() {
+    stdout_json_entry_is_rejected(r#"pointer = "/x", null = false"#);
+}
+
+#[test]
+fn stdout_json_rejects_both_equals_and_null() {
+    stdout_json_entry_is_rejected(r#"pointer = "/x", equals = "y", null = true"#);
+}
+
+#[test]
+fn stdout_json_rejects_neither_equals_nor_null() {
+    stdout_json_entry_is_rejected(r#"pointer = "/x""#);
 }
 
 #[test]

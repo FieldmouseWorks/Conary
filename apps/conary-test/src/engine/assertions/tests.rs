@@ -12,7 +12,17 @@ fn json_assertion(pointer: &str, equals: toml::Value) -> Assertion {
     Assertion {
         stdout_json: Some(vec![JsonAssertion {
             pointer: pointer.to_string(),
-            equals,
+            expected: JsonExpectation::Equals(equals),
+        }]),
+        ..Assertion::default()
+    }
+}
+
+fn json_null_assertion(pointer: &str) -> Assertion {
+    Assertion {
+        stdout_json: Some(vec![JsonAssertion {
+            pointer: pointer.to_string(),
+            expected: JsonExpectation::Null,
         }]),
         ..Assertion::default()
     }
@@ -163,4 +173,30 @@ fn stdout_json_empty_pointer_compares_whole_document() {
 
     assert!(evaluate_assertion(&assertion, 0, r#"{"status":"planned"}"#, "").is_ok());
     assert!(evaluate_assertion(&assertion, 0, r#"{"status":"other"}"#, "").is_err());
+}
+
+#[test]
+fn stdout_json_null_matches_json_null() {
+    let assertion = json_null_assertion("/x");
+
+    assert!(evaluate_assertion(&assertion, 0, r#"{"x":null}"#, "").is_ok());
+}
+
+#[test]
+fn stdout_json_null_rejects_non_null_values() {
+    let assertion = json_null_assertion("/x");
+
+    for stdout in [r#"{"x":0}"#, r#"{"x":""}"#, r#"{"x":false}"#] {
+        assert!(
+            evaluate_assertion(&assertion, 0, stdout, "").is_err(),
+            "null assertion unexpectedly accepted {stdout}"
+        );
+    }
+}
+
+#[test]
+fn stdout_json_null_reports_missing_pointer() {
+    let assertion = json_null_assertion("/x");
+
+    assert!(evaluate_assertion(&assertion, 0, r#"{}"#, "").is_err());
 }

@@ -317,12 +317,60 @@ pub struct Assertion {
 
 /// One typed check against stdout parsed as a single JSON document.
 #[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(try_from = "RawJsonAssertion")]
 pub struct JsonAssertion {
     /// RFC 6901 JSON pointer into the parsed stdout document ("" is the whole document).
     pub pointer: String,
-    /// Expected value; compared for exact equality after conversion to JSON.
-    pub equals: toml::Value,
+    /// Expected value at the pointer.
+    pub expected: JsonExpectation,
+}
+
+/// Expected value for a `stdout_json` pointer.
+#[derive(Debug, Clone, PartialEq)]
+pub enum JsonExpectation {
+    /// Resolved value equals this TOML value converted to JSON.
+    Equals(toml::Value),
+    /// Resolved value is JSON null.
+    ///
+    /// TOML has no null literal, so JSON nulls nested inside an `equals`
+    /// object or array cannot be expressed; assert such fields individually by
+    /// pointer.
+    Null,
+}
+
+/// Raw TOML shape for a `stdout_json` entry, validated into a `JsonAssertion`.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawJsonAssertion {
+    pointer: String,
+    #[serde(default)]
+    equals: Option<toml::Value>,
+    #[serde(default)]
+    null: Option<bool>,
+}
+
+impl TryFrom<RawJsonAssertion> for JsonAssertion {
+    type Error = String;
+
+    fn try_from(raw: RawJsonAssertion) -> std::result::Result<Self, Self::Error> {
+        let expected = match (raw.equals, raw.null) {
+            (Some(value), None) => JsonExpectation::Equals(value),
+            (None, Some(true)) => JsonExpectation::Null,
+            (None, Some(false)) => {
+                return Err("`null = false` is not an assertion; use `equals`".to_string());
+            }
+            (Some(_), Some(_)) => {
+                return Err("set exactly one of `equals` or `null`".to_string());
+            }
+            (None, None) => {
+                return Err("set one of `equals` or `null = true`".to_string());
+            }
+        };
+        Ok(Self {
+            pointer: raw.pointer,
+            expected,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

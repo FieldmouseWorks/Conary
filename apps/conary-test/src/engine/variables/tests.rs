@@ -272,7 +272,9 @@ fn test_expand_assertion_expands_stdout_json() {
     let assertion = Assertion {
         stdout_json: Some(vec![JsonAssertion {
             pointer: "/data/${FOO}".to_string(),
-            equals: toml_value(r#"v = ["${FOO}", { nested = "${FOO}" }]"#),
+            expected: JsonExpectation::Equals(toml_value(
+                r#"v = ["${FOO}", { nested = "${FOO}" }]"#,
+            )),
         }]),
         ..Assertion::default()
     };
@@ -281,9 +283,28 @@ fn test_expand_assertion_expands_stdout_json() {
     let checks = expanded.stdout_json.as_ref().unwrap();
     assert_eq!(checks[0].pointer, "/data/bar");
     assert_eq!(
-        checks[0].equals,
-        toml_value(r#"v = ["bar", { nested = "bar" }]"#)
+        checks[0].expected,
+        JsonExpectation::Equals(toml_value(r#"v = ["bar", { nested = "bar" }]"#))
     );
+}
+
+#[test]
+fn test_expand_assertion_expands_null_stdout_json_pointer() {
+    let mut vars = HashMap::new();
+    vars.insert("FOO".to_string(), "bar".to_string());
+
+    let assertion = Assertion {
+        stdout_json: Some(vec![JsonAssertion {
+            pointer: "/data/${FOO}".to_string(),
+            expected: JsonExpectation::Null,
+        }]),
+        ..Assertion::default()
+    };
+
+    let expanded = expand_assertion(&assertion, &vars);
+    let checks = expanded.stdout_json.as_ref().unwrap();
+    assert_eq!(checks[0].pointer, "/data/bar");
+    assert_eq!(checks[0].expected, JsonExpectation::Null);
 }
 
 #[test]
