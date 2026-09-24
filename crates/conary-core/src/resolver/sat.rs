@@ -21,7 +21,9 @@ use petgraph::visit::EdgeRef;
 
 use crate::error::{Error, Result};
 use crate::packages::PackageFormat;
-use crate::repository::dependency_model::{RepositoryRequirementGroup, RepositoryRequirementKind};
+use crate::repository::dependency_model::{
+    ProvidedCapability, RepositoryRequirementGroup, RepositoryRequirementKind,
+};
 use crate::repository::resolution_policy::ResolutionPolicy;
 use crate::repository::versioning::VersionScheme;
 use crate::resolver::identity::PackageIdentity;
@@ -591,13 +593,15 @@ pub fn positive_requirement_group_satisfied_by_package(
 }
 
 /// Solve one parsed package's external requirements after discharging exact
-/// positive requirements that the incoming package itself provides.
+/// positive requirements that the given provided capabilities cover.
 ///
-/// All install entrypoints use this boundary so a converted CCS archive and
-/// its source-native package receive identical dependency semantics.
-pub fn solve_package_requirements_with_policy(
+/// Callers that have already reduced `package.resolution_capabilities()` to the
+/// exact set their selection installs pass that view here, so a requirement is
+/// never discharged against a provide the selected payload does not ship.
+pub fn solve_package_requirements_with_provides_and_policy(
     conn: &Connection,
     package: &dyn PackageFormat,
+    provided_capabilities: Vec<ProvidedCapability>,
     policy: &ResolutionPolicy,
 ) -> Result<SatResolution> {
     let incoming = PackageIdentity {
@@ -616,7 +620,7 @@ pub fn solve_package_requirements_with_policy(
         canonical_name: None,
         installed_trove_id: None,
         installed_pinned: false,
-        provided_capabilities: package.resolution_capabilities()?,
+        provided_capabilities,
     };
     let mut external_requirements = Vec::new();
     for requirement in package.requirements() {
@@ -639,6 +643,25 @@ pub fn solve_package_requirements_with_policy(
         &external_requirements,
         package.version_scheme(),
         &depending_architecture,
+        policy,
+    )
+}
+
+/// Solve one parsed package's external requirements after discharging exact
+/// positive requirements that the incoming package itself provides.
+///
+/// All install entrypoints without a component selection use this boundary so a
+/// converted CCS archive and its source-native package receive identical
+/// dependency semantics.
+pub fn solve_package_requirements_with_policy(
+    conn: &Connection,
+    package: &dyn PackageFormat,
+    policy: &ResolutionPolicy,
+) -> Result<SatResolution> {
+    solve_package_requirements_with_provides_and_policy(
+        conn,
+        package,
+        package.resolution_capabilities()?,
         policy,
     )
 }

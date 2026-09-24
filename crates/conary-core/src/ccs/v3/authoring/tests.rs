@@ -508,6 +508,7 @@ fn lint_manifest_allows_script_lifecycle_with_signed_execution_contract() {
     manifest.package.kind = crate::ccs::v3::PackageKindTagV3::Package;
     manifest.hooks.post_install = Some(crate::ccs::manifest::ScriptHook {
         script: "echo configured".to_string(),
+        interpreter: "/bin/sh".to_string(),
         reversible: None,
     });
 
@@ -571,6 +572,7 @@ fn projection_maps_declarative_lifecycle_hooks_to_signed_authority() {
     );
     build.manifest.hooks.post_install = Some(crate::ccs::manifest::ScriptHook {
         script: "printf configured".to_string(),
+        interpreter: "/bin/sh".to_string(),
         reversible: Some(false),
     });
     build
@@ -749,4 +751,266 @@ fn projection_carries_typed_requires_and_provides_without_distro_gates() {
                 .any(|entry| entry.kind == kind && entry.name == name)
         );
     }
+}
+
+fn script_hook(script: &str, interpreter: &str) -> crate::ccs::manifest::ScriptHook {
+    crate::ccs::manifest::ScriptHook {
+        script: script.to_string(),
+        interpreter: interpreter.to_string(),
+        reversible: None,
+    }
+}
+
+fn pre_depends_file_names(requirements: &[RepositoryRequirementGroup]) -> Vec<&str> {
+    requirements
+        .iter()
+        .filter(|group| group.kind == RepositoryRequirementKind::PreDepends)
+        .flat_map(|group| group.expression.atoms())
+        .filter(|clause| clause.capability_kind == Some(RepositoryCapabilityKind::File))
+        .map(|clause| clause.name.as_str())
+        .collect()
+}
+
+fn declared_pre_depends_file(interpreter: &str) -> RepositoryRequirementGroup {
+    let mut clause = RepositoryRequirementClause::name_only(interpreter.to_string());
+    clause.capability_kind = Some(RepositoryCapabilityKind::File);
+    RepositoryRequirementGroup::simple(RepositoryRequirementKind::PreDepends, clause)
+}
+
+#[test]
+fn projection_derives_hook_interpreter_file_requirement() {
+    let mut build = test_support::minimal_file_build_result("hook-derive", "0.1.0", b"hook\n");
+    build.manifest.hooks.post_install = Some(script_hook("true", "/bin/sh"));
+
+    let requirements = project_requirements(&build.manifest);
+
+    assert_eq!(pre_depends_file_names(&requirements), vec!["/bin/sh"]);
+    let pre_depends = requirements
+        .iter()
+        .filter(|group| group.kind == RepositoryRequirementKind::PreDepends)
+        .collect::<Vec<_>>();
+    assert_eq!(pre_depends.len(), 1);
+    let atoms = pre_depends[0].expression.atoms();
+    assert_eq!(atoms.len(), 1);
+    assert_eq!(
+        atoms[0].capability_kind,
+        Some(RepositoryCapabilityKind::File)
+    );
+    assert_eq!(atoms[0].name, "/bin/sh");
+    assert!(atoms[0].version_constraint.is_none());
+}
+
+#[test]
+fn projection_does_not_duplicate_an_author_declared_interpreter_file_requirement() {
+    let mut build = test_support::minimal_file_build_result("hook-declared", "0.1.0", b"hook\n");
+    build.manifest.hooks.post_install = Some(script_hook("true", "/bin/sh"));
+    build
+        .manifest
+        .requirements
+        .push(declared_pre_depends_file("/bin/sh"));
+
+    let requirements = project_requirements(&build.manifest);
+
+    assert_eq!(pre_depends_file_names(&requirements), vec!["/bin/sh"]);
+    assert_eq!(
+        requirements
+            .iter()
+            .filter(|group| group.kind == RepositoryRequirementKind::PreDepends)
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn projection_deduplicates_a_shared_hook_interpreter_file_requirement() {
+    let mut build = test_support::minimal_file_build_result("hook-shared", "0.1.0", b"hook\n");
+    build.manifest.hooks.post_install = Some(script_hook("true", "/bin/sh"));
+    build.manifest.hooks.pre_remove = Some(script_hook("false", "/bin/sh"));
+
+    let requirements = project_requirements(&build.manifest);
+
+    assert_eq!(pre_depends_file_names(&requirements), vec!["/bin/sh"]);
+}
+
+#[test]
+fn projection_emits_file_provide_for_declared_shipped_path() {
+    let mut build = test_support::single_file_build_result_at(
+        "shell-provider",
+        "0.1.0",
+        "/bin/sh",
+        b"#!/bin/sh\n",
+    );
+    build.manifest.provides.files = vec!["/bin/sh".to_string()];
+
+    let projected = project_build_result_to_v3(V3AuthoringInput {
+        build: &build,
+        local_dev: true,
+        debug_toml: None,
+    })
+    .unwrap();
+
+    assert!(
+        projected
+            .authority
+            .provided_capabilities
+            .iter()
+            .any(|entry| { entry.kind == DependencyKindV3::File && entry.name == "/bin/sh" })
+    );
+}
+
+#[test]
+fn projection_keeps_an_unshipped_file_provide_as_a_declaration() {
+    // usr-merged layout: the payload ships /usr/bin/sh and declares /bin/sh,
+    // exactly as RPM bash does.
+    let mut build = test_support::single_file_build_result_at(
+        "shell-provider",
+        "0.1.0",
+        "/usr/bin/sh",
+        b"#!/bin/sh\n",
+    );
+    build.manifest.provides.files = vec!["/bin/sh".to_string()];
+
+    let authority = project_build_result_to_v3(V3AuthoringInput {
+        build: &build,
+        local_dev: true,
+        debug_toml: None,
+    })
+    .unwrap();
+
+    assert!(
+        authority
+            .authority
+            .provided_capabilities
+            .iter()
+            .any(|capability| {
+                capability.kind == DependencyKindV3::File && capability.name == "/bin/sh"
+            })
+    );
+}
+
+#[test]
+fn projection_accepts_file_provide_for_a_shipped_symlink() {
+    let mut build = test_support::single_file_build_result_at(
+        "shell-provider",
+        "0.1.0",
+        "/usr/bin/sh-link",
+        b"#!/bin/sh\n",
+    );
+    let mut symlink_node = crate::payload::PayloadNode::regular(0o777);
+    symlink_node.kind = crate::payload::PayloadNodeKind::Symlink {
+        target: "/bin/sh".to_string(),
+    };
+    symlink_node.mode = libc::S_IFLNK | 0o777;
+    build.files[0].node = symlink_node.clone();
+    build.files[0].content = None;
+    build.components.get_mut("runtime").unwrap().files[0].node = symlink_node.clone();
+    build.components.get_mut("runtime").unwrap().files[0].content = None;
+    build.components.get_mut("runtime").unwrap().size = 0;
+    build.payloads[0] = crate::packages::payload::PackagePayloadFile::new(
+        "/usr/bin/sh-link".to_string(),
+        symlink_node,
+        None,
+        None,
+    )
+    .unwrap();
+    build.total_size = 0;
+    build.manifest.provides.files = vec!["/usr/bin/sh-link".to_string()];
+
+    let projected = project_build_result_to_v3(V3AuthoringInput {
+        build: &build,
+        local_dev: true,
+        debug_toml: None,
+    })
+    .unwrap();
+
+    assert!(
+        projected
+            .authority
+            .provided_capabilities
+            .iter()
+            .any(|entry| {
+                entry.kind == DependencyKindV3::File && entry.name == "/usr/bin/sh-link"
+            })
+    );
+}
+
+/// A `/bin/sh` file provide whose payload lives in `component`, with both
+/// `runtime` (the manifest default) and `extras` present in the build component
+/// map. Only the named component carries the file, so the fixture is internally
+/// consistent for either assignment.
+fn file_provide_build_in_component(component: &str) -> crate::ccs::builder::BuildResult {
+    use crate::ccs::builder::ComponentData;
+    use std::collections::HashMap;
+
+    let mut build = test_support::single_file_build_result_at(
+        "shell-provider",
+        "0.1.0",
+        "/bin/sh",
+        b"#!/bin/sh\n",
+    );
+    build.manifest.provides.files = vec!["/bin/sh".to_string()];
+    build.files[0].component = component.to_string();
+    let file = build.files[0].clone();
+    let mut components = HashMap::from([
+        (
+            "runtime".to_string(),
+            ComponentData {
+                name: "runtime".to_string(),
+                files: Vec::new(),
+                hash: "runtime".to_string(),
+                size: 0,
+            },
+        ),
+        (
+            "extras".to_string(),
+            ComponentData {
+                name: "extras".to_string(),
+                files: Vec::new(),
+                hash: "extras".to_string(),
+                size: 0,
+            },
+        ),
+    ]);
+    let target = components.get_mut(component).unwrap();
+    target.files = vec![file.clone()];
+    target.size = file.content.as_ref().map_or(0, |content| content.size);
+    build.components = components;
+    build
+}
+
+#[test]
+fn projection_accepts_file_provide_from_default_component() {
+    let build = file_provide_build_in_component("runtime");
+
+    let projected = project_build_result_to_v3(V3AuthoringInput {
+        build: &build,
+        local_dev: true,
+        debug_toml: None,
+    })
+    .unwrap();
+
+    assert!(
+        projected
+            .authority
+            .provided_capabilities
+            .iter()
+            .any(|entry| { entry.kind == DependencyKindV3::File && entry.name == "/bin/sh" })
+    );
+}
+
+#[test]
+fn projection_rejects_file_provide_from_optional_component() {
+    let build = file_provide_build_in_component("extras");
+
+    let error = project_build_result_to_v3(V3AuthoringInput {
+        build: &build,
+        local_dev: true,
+        debug_toml: None,
+    })
+    .unwrap_err();
+
+    assert_eq!(
+        error.to_string(),
+        "declared file provide /bin/sh belongs to optional component extras; file provides must be shipped by an always-installed component"
+    );
 }

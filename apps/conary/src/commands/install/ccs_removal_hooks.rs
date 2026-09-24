@@ -134,9 +134,14 @@ mod tests {
             conary_core::repository::versioning::VersionScheme::Conary,
         );
         let trove_id = trove.insert(conn).unwrap();
-        InstalledCcsRemoveHook::new(trove_id, script.to_string(), Some(false))
-            .insert_or_replace(conn)
-            .unwrap();
+        InstalledCcsRemoveHook::new(
+            trove_id,
+            "/bin/sh".to_string(),
+            script.to_string(),
+            Some(false),
+        )
+        .insert_or_replace(conn)
+        .unwrap();
         (trove, trove_id)
     }
 

@@ -327,6 +327,7 @@ pub fn generate(result: &BuildResult, output_path: &Path) -> Result<GenerationRe
     }
 
     // Add scriptlets
+    CommonHookGenerator::validate_script_interpreters(&manifest.hooks)?;
     let hook_converter = RpmHookConverter;
 
     if let Some(script) = hook_converter.pre_install(&manifest.hooks) {

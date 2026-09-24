@@ -436,6 +436,24 @@ impl TroveSnapshot {
                 )?;
             }
         }
+        if let Some(hook) = &self.ccs_remove_hook {
+            if !hook.interpreter.starts_with('/') {
+                bail!(
+                    "rollback snapshot '{}' ccs_remove_hook interpreter must be an absolute path: {}",
+                    self.name,
+                    hook.interpreter
+                );
+            }
+            conary_core::filesystem::path::sanitize_path(&hook.interpreter).map_err(|error| {
+                anyhow::anyhow!(
+                    "rollback snapshot '{}' ccs_remove_hook interpreter is not normalized: {} ({error})",
+                    self.name,
+                    hook.interpreter
+                )
+            })?;
+            conary_core::ccs::manifest::validate_ccs_hook_interpreter(&hook.interpreter)
+                .map_err(anyhow::Error::msg)?;
+        }
         Ok(())
     }
 
@@ -735,6 +753,7 @@ pub(crate) struct NativeLifecycleSnapshot {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct CcsRemoveHookSnapshot {
+    pub interpreter: String,
     pub script: String,
     pub reversible: Option<bool>,
 }

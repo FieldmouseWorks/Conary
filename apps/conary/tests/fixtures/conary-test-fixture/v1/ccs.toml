@@ -30,7 +30,9 @@ path = "/var/lib/conary-test"
 mode = "0755"
 
 [hooks.post_install]
+interpreter = "/bin/sh"
 script = "touch /var/lib/conary-test/installed"
 
 [hooks.pre_remove]
+interpreter = "/bin/sh"
 script = "rm -f /var/lib/conary-test/installed"
