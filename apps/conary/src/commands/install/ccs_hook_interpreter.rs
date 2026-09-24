@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 /// Transaction-ordered availability of CCS hook interpreters in one selected root.
 pub(super) struct HookInterpreterLedger {
     root: PathBuf,
-    /// Normalized absolute paths and `Path` capabilities introduced by
+    /// Normalized absolute paths and `File` capabilities introduced by
     /// transaction elements already applied in execution order.
     introduced: BTreeSet<String>,
     /// Normalized absolute paths whose final provider an earlier element removed.
@@ -26,7 +26,7 @@ impl HookInterpreterLedger {
     }
 
     /// Record one element's payload boundary: paths it removes (old-only
-    /// paths of an upgrade/removal) then paths and Path capabilities it installs.
+    /// paths of an upgrade/removal) then paths and File capabilities it installs.
     pub(super) fn apply_element(
         &mut self,
         removed_paths: impl IntoIterator<Item = String>,
@@ -87,7 +87,7 @@ impl HookInterpreterLedger {
 
 /// Normalize one package path spelling to the absolute form used as ledger
 /// keys. Manifest parsing already validated lifecycle interpreters with
-/// `sanitize_path`; payload paths and `Path` capabilities are absolute package
+/// `sanitize_path`; payload paths and `File` capabilities are absolute package
 /// spellings. A spelling that authority rejects cannot name an executable
 /// provider, so it normalizes to `None`.
 fn normalized_absolute_path(path: &str) -> Option<String> {
@@ -199,7 +199,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let mut ledger = HookInterpreterLedger::new(root.path());
 
-        // The typed provider arrives as this element's Path capability.
+        // The typed provider arrives as this element's File capability.
         ledger.apply_element(Vec::new(), vec!["/usr/bin/sh".to_string()]);
         ledger
             .require(
@@ -208,7 +208,7 @@ mod tests {
                 HookPhase::PostInstall,
                 "/usr/bin/sh",
             )
-            .expect("an earlier element's Path capability authorizes the interpreter");
+            .expect("an earlier element's File capability authorizes the interpreter");
     }
 
     #[test]

@@ -540,7 +540,7 @@ impl<'a> BatchInstaller<'a> {
                         .iter()
                         .filter(|capability| {
                             capability.kind
-                                == conary_core::repository::dependency_model::RepositoryCapabilityKind::Path
+                                == conary_core::repository::dependency_model::RepositoryCapabilityKind::File
                         })
                         .map(|capability| capability.name.clone()),
                 );
