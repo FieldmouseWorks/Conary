@@ -465,6 +465,8 @@ fn rejects_script_contract_the_hook_executor_cannot_honor() {
     let error = validate_authority(&authority).unwrap_err();
     assert!(error.diagnostics.iter().any(|diagnostic| {
         diagnostic.field.as_deref() == Some("lifecycle.post_install.interpreter")
+            && diagnostic.message
+                == "CCS hook interpreter /usr/bin/python3 is not implemented (supported: /bin/sh)"
     }));
 }
 

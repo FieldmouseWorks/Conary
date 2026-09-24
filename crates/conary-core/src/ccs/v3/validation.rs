@@ -8,6 +8,7 @@ mod identity;
 use super::diagnostics::{V3Diagnostic, V3DiagnosticCode, V3ValidationError};
 use super::schema::*;
 use crate::ccs::budget::{AuthorityCensus, CCS_BUDGET};
+use crate::ccs::manifest::validate_ccs_hook_interpreter;
 use config::{validate_config_authority, validate_package_policy};
 use content_layout::validate_file_content_layout;
 use file_capabilities::validate_file_capabilities;
@@ -533,14 +534,8 @@ fn validate_lifecycle(
         let Some(script) = script else {
             continue;
         };
-        if script.interpreter != "/bin/sh" {
-            invalid(
-                &format!("{field}.interpreter"),
-                format!(
-                    "lifecycle script interpreter {} is not implemented by the CCS hook executor",
-                    script.interpreter
-                ),
-            );
+        if let Err(error) = validate_ccs_hook_interpreter(&script.interpreter) {
+            invalid(&format!("{field}.interpreter"), error);
         }
         if !has_pre_depends_path_requirement(requirements, &script.interpreter) {
             invalid(

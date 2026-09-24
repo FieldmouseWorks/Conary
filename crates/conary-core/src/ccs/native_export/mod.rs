@@ -203,6 +203,16 @@ impl CommonHookGenerator {
             })
             .collect()
     }
+
+    /// Refuse a script hook whose interpreter no native exporter implements,
+    /// rather than wrapping the body in a shell it was not written for.
+    pub fn validate_script_interpreters(hooks: &Hooks) -> anyhow::Result<()> {
+        for hook in hooks.post_install.iter().chain(hooks.pre_remove.iter()) {
+            crate::ccs::manifest::validate_ccs_hook_interpreter(&hook.interpreter)
+                .map_err(anyhow::Error::msg)?;
+        }
+        Ok(())
+    }
 }
 
 pub fn shell_escape(value: &str) -> String {

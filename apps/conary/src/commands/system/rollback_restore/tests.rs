@@ -4,7 +4,8 @@
 
 use super::{restore_snapshot, restore_snapshots};
 use crate::commands::installed_authority_snapshot::{
-    DirectoryAnchorSnapshot, PayloadClaimSnapshot, ProvideSnapshot, TroveSnapshot,
+    CcsRemoveHookSnapshot, DirectoryAnchorSnapshot, PayloadClaimSnapshot, ProvideSnapshot,
+    TroveSnapshot,
 };
 use crate::commands::remove::snapshot_trove;
 use conary_core::capability::{CapabilityDeclaration, store_capabilities};
@@ -880,6 +881,39 @@ fn exact_installed_authority_round_trips_and_rejects_broken_relations() {
         )
         .unwrap()
         .is_none()
+    );
+}
+
+#[test]
+fn rollback_snapshot_validates_the_ccs_remove_hook_interpreter() {
+    let mut snapshot = TroveSnapshot::test_package("remove-hook", "1", Vec::new());
+    snapshot.ccs_remove_hook = Some(CcsRemoveHookSnapshot {
+        interpreter: "/bin/sh".to_string(),
+        script: "echo removed".to_string(),
+        reversible: None,
+    });
+
+    // Positive control: the implemented, absolute, normalized interpreter
+    // validates, so each rejection below comes from the interpreter rules.
+    snapshot.validate().unwrap();
+
+    snapshot.ccs_remove_hook.as_mut().unwrap().interpreter = "/usr/bin/python3".to_string();
+    assert_eq!(
+        snapshot.validate().unwrap_err().to_string(),
+        "CCS hook interpreter /usr/bin/python3 is not implemented (supported: /bin/sh)"
+    );
+
+    snapshot.ccs_remove_hook.as_mut().unwrap().interpreter = "bin/sh".to_string();
+    assert_eq!(
+        snapshot.validate().unwrap_err().to_string(),
+        "rollback snapshot 'remove-hook' ccs_remove_hook interpreter must be an absolute path: bin/sh"
+    );
+
+    snapshot.ccs_remove_hook.as_mut().unwrap().interpreter = "/usr/../bin/sh".to_string();
+    let error = snapshot.validate().unwrap_err().to_string();
+    assert_eq!(
+        error,
+        "rollback snapshot 'remove-hook' ccs_remove_hook interpreter is not normalized: /usr/../bin/sh (Path traversal detected: path contains a parent-directory component: /usr/../bin/sh)"
     );
 }
 
