@@ -3,6 +3,8 @@
 #![cfg(test)]
 
 use super::*;
+use std::collections::BTreeSet;
+
 #[cfg(feature = "test-hooks")]
 use conary_core::ccs::native_lifecycle::{
     LifecyclePath, NATIVE_LIFECYCLE_SCHEMA_V1, NativeInvocation, NativeLifecycleBundle,
@@ -254,6 +256,44 @@ fn joint_round_keeps_one_of_two_substitutable_providers() {
 }
 
 #[test]
+fn find_orphans_reports_every_substitutable_provider() {
+    let tmp = TempDir::new().unwrap();
+    let db_path = tmp.path().join("conary.db");
+    conary_core::db::init(&db_path).unwrap();
+    let conn = conary_core::db::open(&db_path).unwrap();
+
+    let app_id = seed_fixture_trove(&conn, "app", InstallReason::Explicit, false);
+    let lower_id = seed_fixture_trove(&conn, "prov-b", InstallReason::Dependency, false);
+    let higher_id = seed_fixture_trove(&conn, "prov-a", InstallReason::Dependency, false);
+    assert!(lower_id < higher_id, "fixture ids must order by creation");
+    seed_capability_requires(&conn, app_id, "libx", RepositoryCapabilityKind::Virtual);
+    seed_provide(&conn, lower_id, "libx", RepositoryCapabilityKind::Virtual);
+    seed_provide(&conn, higher_id, "libx", RepositoryCapabilityKind::Virtual);
+
+    let discovered = Trove::find_orphans(&conn).unwrap();
+    let mut discovered_names = Vec::new();
+    for trove in &discovered {
+        discovered_names.push(trove.name.as_str());
+    }
+    assert_eq!(
+        discovered_names,
+        vec!["prov-a", "prov-b"],
+        "independent discovery must report both substitutable providers"
+    );
+
+    let round = Trove::find_orphan_round(&conn, &BTreeSet::new()).unwrap();
+    let mut removable_names = Vec::new();
+    for trove in &round.removable {
+        removable_names.push(trove.name.as_str());
+    }
+    assert_eq!(
+        removable_names,
+        vec!["prov-b"],
+        "the jointly safe round admits only the lower-id substitutable provider"
+    );
+}
+
+#[test]
 fn plan_converges_on_the_final_allowed_round() {
     let two_round_plan = {
         let tmp = TempDir::new().unwrap();
@@ -279,6 +319,51 @@ fn plan_converges_on_the_final_allowed_round() {
     assert!(
         plan_autoremove_fixed_point_with_limit(&conn, 2).is_err(),
         "a chain needing a third round must exceed the two-round bound"
+    );
+}
+
+#[tokio::test]
+async fn apply_removes_exact_release_when_name_version_arch_collide() {
+    let _mount_skip = crate::commands::composefs_ops::test_mount_skip_guard();
+    let tmp = TempDir::new().unwrap();
+    let db_path = tmp.path().join("conary.db");
+    conary_core::db::init(&db_path).unwrap();
+    crate::commands::test_helpers::seed_test_bootable_runtime(&db_path);
+
+    let conn = conary_core::db::open(&db_path).unwrap();
+    seed_colliding_release_trove(&conn, "1");
+    seed_colliding_release_trove(&conn, "2");
+
+    // Positive control: the fixed-point preview must list both colliding
+    // releases before apply is asked to remove them.
+    let preview = plan_autoremove_fixed_point(&conn).unwrap();
+    let mut planned = Vec::new();
+    for round in &preview.rounds {
+        for trove in &round.removable {
+            planned.push(trove);
+        }
+    }
+    assert_eq!(planned.len(), 2, "both colliding releases must be planned");
+    assert!(planned.iter().all(|trove| trove.name.as_str() == "collide"));
+    let mut releases = Vec::new();
+    for trove in &planned {
+        releases.push(trove.package_release.clone());
+    }
+    releases.sort();
+    assert_eq!(releases, vec![Some("1".to_string()), Some("2".to_string())]);
+    drop(conn);
+
+    cmd_autoremove(
+        db_path.to_string_lossy().as_ref(),
+        AutoremoveMode::Apply,
+        SandboxMode::Always,
+    )
+    .unwrap();
+
+    let conn = conary_core::db::open(&db_path).unwrap();
+    assert!(
+        Trove::find_by_name(&conn, "collide").unwrap().is_empty(),
+        "apply must remove both colliding releases through the exact path"
     );
 }
 
@@ -442,6 +527,23 @@ fn seed_dependency_trove(
     trove.architecture = Some("x86_64".to_string());
     trove.install_reason = InstallReason::Dependency;
     trove.selection_reason = Some("Required by fixture-root".to_string());
+    trove.insert(conn).unwrap()
+}
+
+/// Seed a dependency-installed orphan that collides with its sibling on
+/// name/version/architecture and is distinguished only by package release.
+fn seed_colliding_release_trove(conn: &rusqlite::Connection, release: &str) -> i64 {
+    let mut trove = Trove::new_with_source(
+        "collide".to_string(),
+        "1.0.0".to_string(),
+        TroveType::Package,
+        InstallSource::Repository,
+        conary_core::repository::versioning::VersionScheme::Conary,
+    );
+    trove.architecture = Some("x86_64".to_string());
+    trove.install_reason = InstallReason::Dependency;
+    trove.selection_reason = Some("Required by fixture-root".to_string());
+    trove.package_release = Some(release.to_string());
     trove.insert(conn).unwrap()
 }
 

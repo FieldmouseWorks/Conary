@@ -292,15 +292,38 @@ impl Trove {
         Ok(troves)
     }
 
-    /// Find orphaned packages (installed as dependency, no longer needed).
+    /// Find every orphaned package (installed as dependency, no longer needed).
     ///
-    /// Returns every orphan: the jointly safe removable set plus the pinned or
-    /// adopted orphans. Callers that remove packages must use
-    /// [`Self::find_orphan_round`] and honor its `protected` split.
+    /// Complete independent discovery: each dependency-installed trove is judged
+    /// on its own against the currently installed set with nothing removed, so
+    /// two troves that substitute for each other are both reported. Pinned and
+    /// adopted orphans are included. Callers that remove packages must use
+    /// [`Self::find_orphan_round`], which returns a jointly safe set and is what
+    /// autoremove apply and preview rely on.
     pub fn find_orphans(conn: &Connection) -> Result<Vec<Self>> {
-        let round = Self::find_orphan_round(conn, &BTreeSet::new())?;
-        let mut orphans = round.removable;
-        orphans.extend(round.protected);
+        let installed = crate::resolver::requirements::load_installed_package_identities(conn)?;
+        let requirements =
+            super::installed_requirement_group::InstalledRequirementGroup::list_all(conn)?;
+        let native_architecture = crate::repository::registry::detect_system_arch()?;
+
+        let candidates = Self::list_packages(conn)?
+            .into_iter()
+            .filter(|trove| trove.install_reason == InstallReason::Dependency);
+        let mut orphans = Vec::new();
+        for trove in candidates {
+            let Some(trove_id) = trove.id else {
+                continue;
+            };
+            if Self::orphan_candidate(
+                trove_id,
+                &installed,
+                &requirements,
+                &native_architecture,
+                &BTreeSet::new(),
+            )? {
+                orphans.push(trove);
+            }
+        }
         orphans.sort_by(Self::compare_orphan_order);
         Ok(orphans)
     }

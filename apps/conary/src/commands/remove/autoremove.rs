@@ -102,9 +102,11 @@ pub fn cmd_autoremove(
             let conn = open_db(db_path)?;
             let round = Trove::find_orphan_round(&conn, &BTreeSet::new())?;
             current_plan = plan_autoremove(round.removable, round.protected);
-            current_plan
-                .removable
-                .retain(|trove| !failed_orphans.contains(&autoremove_identity(trove)));
+            current_plan.removable.retain(|trove| {
+                trove
+                    .id
+                    .is_none_or(|trove_id| !failed_orphans.contains(&trove_id))
+            });
             if current_plan.removable.is_empty() {
                 if !current_plan.skipped.is_empty() {
                     println!("\nNo additional Conary-owned orphaned packages can be autoremoved.");
@@ -138,20 +140,15 @@ pub fn cmd_autoremove(
         let mut round_removed = 0;
         for trove in &current_plan.removable {
             println!("\nRemoving {} {}...", trove.name, trove.version);
-            match super::cmd_remove(
-                &trove.name,
-                db_path,
-                Some(trove.version.clone()),
-                trove.architecture.clone(),
-                sandbox_mode,
-                false,
-            ) {
+            match super::cmd_remove_exact(trove, db_path, sandbox_mode, false) {
                 Ok(()) => {
                     round_removed += 1;
                 }
                 Err(e) => {
                     eprintln!("  Failed to remove {}: {}", trove.name, e);
-                    failed_orphans.insert(autoremove_identity(trove));
+                    if let Some(trove_id) = trove.id {
+                        failed_orphans.insert(trove_id);
+                    }
                     total_failed += 1;
                 }
             }
@@ -421,14 +418,6 @@ fn print_autoremove_trove(trove: &Trove) {
         print!(" [{}]", arch);
     }
     println!();
-}
-
-fn autoremove_identity(trove: &Trove) -> (String, String, Option<String>) {
-    (
-        trove.name.clone(),
-        trove.version.clone(),
-        trove.architecture.clone(),
-    )
 }
 
 #[path = "autoremove/plan_output.rs"]

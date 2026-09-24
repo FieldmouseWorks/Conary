@@ -4,6 +4,7 @@ use std::io::Write;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use conary_core::db::models::Trove;
 use tracing::info;
 
 use super::types::RemoveLifecycleOptions;
@@ -49,6 +50,20 @@ pub(crate) fn cmd_remove_cli(
     )
 }
 
+/// Remove an already-resolved installed trove.
+///
+/// Autoremove selects the exact planned trove from its typed plan. Resolving it
+/// again by name, version, and architecture would reject co-installed troves
+/// that share those fields but differ by package release as ambiguous.
+pub(crate) fn cmd_remove_exact(
+    trove: &Trove,
+    db_path: &str,
+    sandbox_mode: SandboxMode,
+    purge: bool,
+) -> Result<()> {
+    remove_resolved_trove(trove, db_path, sandbox_mode, purge, RemovalOutput::Nested)
+}
+
 fn remove_with_output(
     selector: InstalledPackageSelector,
     db_path: &str,
@@ -56,7 +71,24 @@ fn remove_with_output(
     purge: bool,
     output: RemovalOutput,
 ) -> Result<()> {
-    let package_name = selector.name.as_str();
+    let package_name = selector.name.clone();
+    let resolved = {
+        let conn = open_db(db_path)?;
+        resolve_installed_package(&conn, &selector)
+            .with_context(|| format!("Failed to select package '{}'", package_name))?
+    };
+    remove_resolved_trove(&resolved.trove, db_path, sandbox_mode, purge, output)
+}
+
+/// Shared removal body for selector-resolved and exact-trove callers.
+fn remove_resolved_trove(
+    trove: &Trove,
+    db_path: &str,
+    sandbox_mode: SandboxMode,
+    purge: bool,
+    output: RemovalOutput,
+) -> Result<()> {
+    let package_name = trove.name.as_str();
     info!("Removing package: {}", package_name);
     crate::ui::println!("Removing package: {}", package_name);
     std::io::stdout().flush()?;
@@ -67,9 +99,6 @@ fn remove_with_output(
     }
 
     let conn = open_db(db_path)?;
-    let resolved = resolve_installed_package(&conn, &selector)
-        .with_context(|| format!("Failed to select package '{}'", package_name))?;
-    let trove = resolved.trove;
     // Check if package is pinned
     if trove.pinned {
         return Err(anyhow::anyhow!(
@@ -123,7 +152,7 @@ fn remove_with_output(
     let progress = RemoveProgress::new(package_name);
     let graph_result = super::native_graph::execute_installed_trove_remove_graph(
         &conn,
-        &trove,
+        trove,
         db_path,
         package_name,
         lifecycle_options,
