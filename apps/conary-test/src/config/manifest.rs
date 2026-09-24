@@ -350,13 +350,25 @@ struct RawJsonAssertion {
     null: Option<bool>,
 }
 
+/// Whether `input` contains a manifest `${NAME}` variable reference.
+///
+/// This is the single owner of the template marker; variable expansion and
+/// deferred validation both use it.
+pub(crate) fn contains_variable_reference(input: &str) -> bool {
+    input.contains("${")
+}
+
 /// Validate the syntax of an RFC 6901 JSON pointer.
 ///
 /// The empty string addresses the whole document. Otherwise the pointer must
 /// begin with `/`, and every `~` must introduce the escape `~0` or `~1`. The
 /// `~` character carries no other meaning, so `${VAR}` references are plain
 /// characters for this check.
-fn validate_json_pointer(pointer: &str) -> std::result::Result<(), String> {
+///
+/// A pointer containing `${` is a template: the substituted value can change
+/// whether the pointer is valid. Load-time validation therefore skips it and
+/// the runner re-checks the expanded pointer before a test's first step.
+pub(crate) fn validate_json_pointer(pointer: &str) -> std::result::Result<(), String> {
     if pointer.is_empty() {
         return Ok(());
     }
@@ -393,7 +405,11 @@ impl TryFrom<RawJsonAssertion> for JsonAssertion {
     type Error = String;
 
     fn try_from(raw: RawJsonAssertion) -> std::result::Result<Self, Self::Error> {
-        validate_json_pointer(&raw.pointer)?;
+        // A templated pointer is validated after substitution, before the
+        // test's first step runs.
+        if !contains_variable_reference(&raw.pointer) {
+            validate_json_pointer(&raw.pointer)?;
+        }
         let expected = match (raw.equals, raw.null) {
             (Some(value), None) => {
                 let value = toml_to_json(&value).map_err(|error| error.to_string())?;

@@ -206,6 +206,14 @@ fn stdout_json_accepts_valid_rfc6901_pointers() {
 }
 
 #[test]
+fn stdout_json_defers_pointer_validation_for_variable_templates() {
+    assert_eq!(
+        stdout_json_pointer(r#"pointer = "${JSON_POINTER}", equals = 1"#),
+        "${JSON_POINTER}"
+    );
+}
+
+#[test]
 fn stdout_json_equals_converts_toml_values_to_json() {
     let cases = [
         (r#"pointer = "/x", equals = 42"#, serde_json::json!(42)),

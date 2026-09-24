@@ -509,3 +509,201 @@ async fn test_concurrent_runs_independent() {
     assert_eq!(suite_a.results[0].id, "T-A1");
     assert_eq!(suite_b.results[0].id, "T-B1");
 }
+
+/// A one-step test whose only assertion checks `pointer` via `stdout_json`.
+fn stdout_json_test(id: &str, pointer: &str) -> TestDef {
+    TestDef {
+        id: id.to_string(),
+        name: "stdout_json_preflight".to_string(),
+        description: "stdout_json pointer preflight".to_string(),
+        timeout: 30,
+        flaky: None,
+        retries: None,
+        retry_delay_ms: None,
+        step: vec![TestStep {
+            run: Some("echo ok".to_string()),
+            assert: Some(Assertion {
+                stdout_json: Some(vec![JsonAssertion {
+                    pointer: pointer.to_string(),
+                    expected: JsonExpectation::Equals(serde_json::json!(1)),
+                }]),
+                ..Assertion::default()
+            }),
+            ..TestStep::default()
+        }],
+        resources: None,
+        depends_on: None,
+        fatal: None,
+        group: None,
+        skip: None,
+        requires: Vec::new(),
+        corpus: None,
+    }
+}
+
+#[test]
+fn preflight_accepts_pointer_substituted_from_a_variable() {
+    let test = stdout_json_test("TJSON-PREFLIGHT-OK", "${JSON_POINTER}");
+    let vars = HashMap::from([("JSON_POINTER".to_string(), "/status".to_string())]);
+
+    assert!(preflight_stdout_json_pointers(&test, &vars).is_ok());
+}
+
+#[test]
+fn preflight_rejects_invalid_pointer_after_substitution() {
+    let test = stdout_json_test("TJSON-PREFLIGHT-BAD", "/data/${KEY}");
+
+    // Positive control: the same test and template pass with a valid value, so
+    // the rejection below can only come from the expanded pointer rule.
+    let valid = HashMap::from([("KEY".to_string(), "value".to_string())]);
+    assert!(preflight_stdout_json_pointers(&test, &valid).is_ok());
+
+    let invalid = HashMap::from([("KEY".to_string(), "a~2b".to_string())]);
+    let error = preflight_stdout_json_pointers(&test, &invalid)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("/data/a~2b"),
+        "error should name the expanded pointer: {error}"
+    );
+}
+
+#[tokio::test]
+async fn invalid_expanded_stdout_json_pointer_fails_before_any_step() {
+    let test = stdout_json_test("TJSON-PREFLIGHT", "/data/${KEY}");
+
+    // Positive control: with a valid substituted value the same fixture passes
+    // and its step executes.
+    let mut valid_manifest = make_manifest(vec![test.clone()]);
+    valid_manifest.distro_overrides.insert(
+        "fedora44".to_string(),
+        HashMap::from([("KEY".to_string(), "value".to_string())]),
+    );
+    let valid_backend = MockBackend::new(vec![ExecResult {
+        exit_code: 0,
+        stdout: r#"{"data": {"value": 1}}"#.to_string(),
+        stderr: String::new(),
+    }]);
+    let mut valid_runner = TestRunner::new(test_config(), "fedora44".to_string());
+    let valid_suite = valid_runner
+        .run(
+            &valid_manifest,
+            &valid_backend,
+            &"ctr-preflight-ok".to_string(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(valid_suite.passed(), 1, "positive control should pass");
+    assert_eq!(valid_backend.exec_calls().len(), 1);
+
+    // Negative: `a~2b` is not a valid pointer escape, so the test must fail
+    // before its step executes.
+    let mut invalid_manifest = make_manifest(vec![test]);
+    invalid_manifest.distro_overrides.insert(
+        "fedora44".to_string(),
+        HashMap::from([("KEY".to_string(), "a~2b".to_string())]),
+    );
+    let invalid_backend = MockBackend::new(Vec::new());
+    let mut invalid_runner = TestRunner::new(test_config(), "fedora44".to_string());
+    let invalid_suite = invalid_runner
+        .run(
+            &invalid_manifest,
+            &invalid_backend,
+            &"ctr-preflight-bad".to_string(),
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(invalid_suite.failed(), 1, "misconfigured test should fail");
+    assert_eq!(invalid_suite.passed(), 0);
+    assert!(
+        invalid_backend.exec_calls().is_empty(),
+        "no step should execute before the pointer preflight"
+    );
+    let message = invalid_suite.results[0]
+        .message
+        .as_deref()
+        .unwrap_or_default();
+    assert!(
+        message.contains("/data/a~2b"),
+        "failure should name the expanded pointer: {message}"
+    );
+}
+
+#[test]
+fn preflight_rejects_unresolved_pointer_variable() {
+    let test = stdout_json_test("TJSON-PREFLIGHT-UNRESOLVED", "/data/${KEY}");
+
+    // Positive control: the same template resolves and passes when KEY exists.
+    let resolved = HashMap::from([("KEY".to_string(), "value".to_string())]);
+    assert!(preflight_stdout_json_pointers(&test, &resolved).is_ok());
+
+    // `/data/${TYPO}` is syntactically a valid pointer, so only the unresolved
+    // reference rule can reject it.
+    let missing = HashMap::from([("OTHER".to_string(), "value".to_string())]);
+    let error = preflight_stdout_json_pointers(&test, &missing)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("unresolved variable reference"),
+        "error should report the unresolved reference: {error}"
+    );
+}
+
+#[tokio::test]
+async fn invalid_setup_stdout_json_pointer_fails_before_any_setup_step() {
+    let setup_manifest = |key: &str| {
+        let mut manifest = TestManifest {
+            suite: SuiteDef {
+                name: "setup-pointer-preflight".to_string(),
+                phase: 4,
+                setup: stdout_json_test("SETUP", "/data/${KEY}").step,
+                mock_server: None,
+                timeout: None,
+                corpus: None,
+            },
+            test: Vec::new(),
+            distro_overrides: HashMap::new(),
+        };
+        manifest.distro_overrides.insert(
+            "fedora44".to_string(),
+            HashMap::from([("KEY".to_string(), key.to_string())]),
+        );
+        manifest
+    };
+
+    // Positive control: a valid substituted pointer lets the setup step run.
+    let valid_backend = MockBackend::new(vec![ExecResult {
+        exit_code: 0,
+        stdout: r#"{"data": {"value": 1}}"#.to_string(),
+        stderr: String::new(),
+    }]);
+    TestRunner::new(test_config(), "fedora44".to_string())
+        .run(
+            &setup_manifest("value"),
+            &valid_backend,
+            &"ctr-setup-ok".to_string(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(valid_backend.exec_calls().len(), 1);
+
+    // Negative: the expanded setup pointer is invalid, so setup fails before
+    // its step executes.
+    let invalid_backend = MockBackend::new(Vec::new());
+    let error = TestRunner::new(test_config(), "fedora44".to_string())
+        .run(
+            &setup_manifest("a~2b"),
+            &invalid_backend,
+            &"ctr-setup-bad".to_string(),
+            None,
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("configuration error"), "{error}");
+    assert!(invalid_backend.exec_calls().is_empty());
+}

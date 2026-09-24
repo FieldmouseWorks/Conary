@@ -10,7 +10,9 @@ use tokio::time::Instant;
 use tracing::{debug, info, warn};
 
 use crate::config::distro::GlobalConfig;
-use crate::config::manifest::{Assertion, ResourceConstraints, TestDef, TestManifest};
+use crate::config::manifest::{
+    Assertion, ResourceConstraints, TestDef, TestManifest, validate_json_pointer,
+};
 use crate::container::backend::{ContainerBackend, ContainerConfig, ContainerId, ExecResult};
 use crate::engine::assertions::evaluate_assertion;
 use crate::engine::container_coordinator::ContainerCoordinator;
@@ -339,6 +341,37 @@ impl TestRunner {
                 });
             }
 
+            // Deferred `stdout_json` templates are validated before the test's
+            // first step so a malformed expanded pointer cannot run steps.
+            if let Err(error) = preflight_stdout_json_pointers(test_def, &self.vars) {
+                let message = format!("configuration error: {error}");
+                warn!("[{}] {message}", test_def.id);
+                suite.record(TestResult {
+                    id: test_def.id.clone(),
+                    name: test_def.name.clone(),
+                    status: TestStatus::Failed,
+                    duration_ms: 0,
+                    message: Some(message.clone()),
+                    stdout: None,
+                    stderr: None,
+                    attempts: Vec::new(),
+                });
+                self.record_unrun_corpus(&mut suite, test_def, &message);
+                if let Some((run_id, ref tx)) = event_tx {
+                    let _ = tx.send(TestEvent::TestFailed {
+                        run_id,
+                        test_id: test_def.id.clone(),
+                        message,
+                        stdout: None,
+                    });
+                }
+                if test_def.fatal.unwrap_or(false) {
+                    warn!("[{}] fatal test failed, stopping suite", test_def.id);
+                    break;
+                }
+                continue;
+            }
+
             let (status, message, elapsed, last_exec) = if test_def.resources.is_some() {
                 let Some(base_container_config) = base_container_config else {
                     bail!(
@@ -488,6 +521,8 @@ impl TestRunner {
             db_path: &self.config.paths.db,
         };
 
+        preflight_stdout_json_pointers_in_steps("suite setup", &manifest.suite.setup, &self.vars)
+            .map_err(|err| anyhow::anyhow!("suite setup failed: configuration error: {err}"))?;
         for step in &manifest.suite.setup {
             let action = StepAction::from_step(step, &self.vars).ok_or_else(|| {
                 anyhow::anyhow!("suite setup failed: suite setup step has no recognized type")
@@ -752,6 +787,48 @@ impl TestRunner {
     fn expand_assertion(&self, assertion: &Assertion) -> Assertion {
         variables::expand_assertion(assertion, &self.vars)
     }
+}
+
+/// Validate every `stdout_json` pointer in `test` after variable expansion.
+///
+/// Load-time validation defers templated pointers because substitution can
+/// change their validity. Re-expanding here, with the same variable map the
+/// runner uses, catches a malformed or unresolved expanded pointer before any
+/// of the test's steps execute.
+pub(crate) fn preflight_stdout_json_pointers(
+    test: &TestDef,
+    vars: &HashMap<String, String>,
+) -> Result<()> {
+    preflight_stdout_json_pointers_in_steps(&format!("test {}", test.id), &test.step, vars)
+}
+
+/// Validate expanded `stdout_json` pointers for an ordered list of steps.
+fn preflight_stdout_json_pointers_in_steps(
+    owner: &str,
+    steps: &[crate::config::manifest::TestStep],
+    vars: &HashMap<String, String>,
+) -> Result<()> {
+    for (step_index, step) in steps.iter().enumerate() {
+        let Some(assertion) = step.assert.as_ref() else {
+            continue;
+        };
+        let expanded = variables::expand_assertion(assertion, vars);
+        let Some(checks) = expanded.stdout_json.as_ref() else {
+            continue;
+        };
+        for check in checks {
+            if crate::config::manifest::contains_variable_reference(&check.pointer) {
+                bail!(
+                    "{owner} step {}: stdout_json pointer {:?} has an unresolved variable reference",
+                    step_index + 1,
+                    check.pointer
+                );
+            }
+            validate_json_pointer(&check.pointer)
+                .map_err(|error| anyhow::anyhow!("{owner} step {}: {error}", step_index + 1))?;
+        }
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

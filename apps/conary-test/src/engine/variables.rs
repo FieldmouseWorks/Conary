@@ -118,7 +118,7 @@ pub fn load_manifest_overrides(
 /// Variables that are not present in the map are left as-is (the `${VAR}`
 /// placeholder remains in the output).
 pub fn expand_variables(input: &str, vars: &HashMap<String, String>) -> String {
-    if !input.contains("${") {
+    if !crate::config::manifest::contains_variable_reference(input) {
         return input.to_string();
     }
     let mut result = input.to_string();
