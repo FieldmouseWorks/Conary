@@ -5,7 +5,6 @@ use conary_core::ccs::{CcsPackage, TrustPolicy, verify};
 use conary_core::packages::traits::PackageFormat;
 use std::path::Path;
 
-use super::super::payload_paths::validate_ccs_payload_paths;
 use super::capability_declaration::validate_ccs_capability_declaration;
 use super::component_selection::select_ccs_components;
 use super::dependency::{incoming_package_identity, validate_incoming_version_against_dependents};
@@ -238,8 +237,6 @@ pub fn cmd_ccs_install(
         )?;
         return Ok(());
     }
-
-    validate_ccs_payload_paths(Path::new(root), &ccs_pkg, &selected_components.names)?;
 
     let tx_result = install_ccs_package_transactionally(
         &mut conn,
