@@ -518,6 +518,11 @@ fn file_capability_authority_for_manifest(
     Ok(canonical)
 }
 
+/// A declared file provide the package ships must come from an
+/// always-installed component. A declared path the package does not ship is a
+/// source-style declaration (as RPM `Provides: /bin/sh` is for a payload that
+/// carries `/usr/bin/sh` on a usr-merged layout); hook execution still requires
+/// the interpreter preflight to prove an executable in the projected root.
 fn validate_file_provides_are_shipped(build: &BuildResult) -> Result<()> {
     let shipped = build
         .files
@@ -531,7 +536,7 @@ fn validate_file_provides_are_shipped(build: &BuildResult) -> Result<()> {
         .collect::<BTreeSet<_>>();
     for path in &build.manifest.provides.files {
         let Some(component) = shipped.get(path.as_str()) else {
-            bail!("declared file provide {path} is not shipped by this package");
+            continue;
         };
         if !always_installed.contains(*component) {
             bail!(

@@ -859,25 +859,32 @@ fn projection_emits_file_provide_for_declared_shipped_path() {
 }
 
 #[test]
-fn projection_rejects_file_provide_absent_from_payload() {
+fn projection_keeps_an_unshipped_file_provide_as_a_declaration() {
+    // usr-merged layout: the payload ships /usr/bin/sh and declares /bin/sh,
+    // exactly as RPM bash does.
     let mut build = test_support::single_file_build_result_at(
         "shell-provider",
         "0.1.0",
-        "/usr/bin/other",
+        "/usr/bin/sh",
         b"#!/bin/sh\n",
     );
     build.manifest.provides.files = vec!["/bin/sh".to_string()];
 
-    let error = project_build_result_to_v3(V3AuthoringInput {
+    let authority = project_build_result_to_v3(V3AuthoringInput {
         build: &build,
         local_dev: true,
         debug_toml: None,
     })
-    .unwrap_err();
+    .unwrap();
 
-    assert_eq!(
-        error.to_string(),
-        "declared file provide /bin/sh is not shipped by this package"
+    assert!(
+        authority
+            .authority
+            .provided_capabilities
+            .iter()
+            .any(|capability| {
+                capability.kind == DependencyKindV3::File && capability.name == "/bin/sh"
+            })
     );
 }
 
