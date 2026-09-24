@@ -350,10 +350,50 @@ struct RawJsonAssertion {
     null: Option<bool>,
 }
 
+/// Validate the syntax of an RFC 6901 JSON pointer.
+///
+/// The empty string addresses the whole document. Otherwise the pointer must
+/// begin with `/`, and every `~` must introduce the escape `~0` or `~1`. The
+/// `~` character carries no other meaning, so `${VAR}` references are plain
+/// characters for this check.
+fn validate_json_pointer(pointer: &str) -> std::result::Result<(), String> {
+    if pointer.is_empty() {
+        return Ok(());
+    }
+    if !pointer.starts_with('/') {
+        return Err(format!(
+            "stdout_json pointer {pointer:?} is not an RFC 6901 JSON pointer: \
+             it must be empty or begin with '/'"
+        ));
+    }
+    let mut chars = pointer.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '~' {
+            match chars.next() {
+                Some('0' | '1') => {}
+                Some(escape) => {
+                    return Err(format!(
+                        "stdout_json pointer {pointer:?} is not an RFC 6901 JSON pointer: \
+                         '~' must be followed by '0' or '1', not {escape:?}"
+                    ));
+                }
+                None => {
+                    return Err(format!(
+                        "stdout_json pointer {pointer:?} is not an RFC 6901 JSON pointer: \
+                         a trailing '~' is not a valid escape"
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 impl TryFrom<RawJsonAssertion> for JsonAssertion {
     type Error = String;
 
     fn try_from(raw: RawJsonAssertion) -> std::result::Result<Self, Self::Error> {
+        validate_json_pointer(&raw.pointer)?;
         let expected = match (raw.equals, raw.null) {
             (Some(value), None) => {
                 let value = toml_to_json(&value).map_err(|error| error.to_string())?;

@@ -177,6 +177,34 @@ fn stdout_json_expectation(entry: &str) -> JsonExpectation {
         .clone()
 }
 
+/// Parse a single-entry `stdout_json` manifest and return its pointer.
+fn stdout_json_pointer(entry: &str) -> String {
+    let manifest: TestManifest = toml::from_str(&stdout_json_manifest_source(entry)).unwrap();
+    manifest.test[0].step[0]
+        .assert
+        .as_ref()
+        .unwrap()
+        .stdout_json
+        .as_ref()
+        .unwrap()[0]
+        .pointer
+        .clone()
+}
+
+#[test]
+fn stdout_json_accepts_valid_rfc6901_pointers() {
+    let cases = [
+        (r#"pointer = "", equals = 1"#, ""),
+        (r#"pointer = "/", equals = 1"#, "/"),
+        (r#"pointer = "/a~0b/c~1d", equals = 1"#, "/a~0b/c~1d"),
+        (r#"pointer = "/data/${VAR}", equals = 1"#, "/data/${VAR}"),
+    ];
+
+    for (entry, expected) in cases {
+        assert_eq!(stdout_json_pointer(entry), expected, "entry: {entry}");
+    }
+}
+
 #[test]
 fn stdout_json_equals_converts_toml_values_to_json() {
     let cases = [
@@ -256,6 +284,21 @@ fn stdout_json_rejects_both_equals_and_null() {
 #[test]
 fn stdout_json_rejects_neither_equals_nor_null() {
     stdout_json_entry_is_rejected(r#"pointer = "/x""#);
+}
+
+#[test]
+fn stdout_json_rejects_pointer_without_leading_slash() {
+    stdout_json_entry_is_rejected(r#"pointer = "status", equals = 1"#);
+}
+
+#[test]
+fn stdout_json_rejects_pointer_with_invalid_escape() {
+    stdout_json_entry_is_rejected(r#"pointer = "/a~2b", equals = 1"#);
+}
+
+#[test]
+fn stdout_json_rejects_pointer_with_trailing_tilde() {
+    stdout_json_entry_is_rejected(r#"pointer = "/a~", equals = 1"#);
 }
 
 #[test]
