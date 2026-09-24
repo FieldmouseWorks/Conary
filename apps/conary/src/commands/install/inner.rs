@@ -432,11 +432,16 @@ pub(super) fn install_inner_with_stored_files(
             .insert_or_replace(tx)?;
         }
 
+        let mut incoming_provides = match ctx.selected_resolution_capabilities {
+            Some(selected) => selected.to_vec(),
+            None => pkg.resolution_capabilities()?,
+        };
         super::transaction::persist_package_provides(
             tx,
             trove_id,
             pkg,
             ctx.semantics,
+            &mut incoming_provides,
             &extraction.extracted_files,
         )?;
 
