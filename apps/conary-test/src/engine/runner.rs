@@ -1,6 +1,6 @@
 // apps/conary-test/src/engine/runner.rs
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -838,6 +838,11 @@ fn preflight_stdout_json_pointers_in_steps(
         let Some(checks) = expanded.stdout_json.as_ref() else {
             continue;
         };
+        // RFC 6901 gives every token a single spelling (`~0` for `~`, `~1` for
+        // `/`), so among pointers that passed `validate_json_pointer`, string
+        // equality is pointer equality. Each pointer may appear at most once
+        // per step; a single entry already expresses any expectation.
+        let mut seen: HashSet<&str> = HashSet::new();
         for check in checks {
             if crate::config::manifest::contains_variable_reference(&check.pointer) {
                 bail!(
@@ -848,6 +853,13 @@ fn preflight_stdout_json_pointers_in_steps(
             }
             validate_json_pointer(&check.pointer)
                 .map_err(|error| anyhow::anyhow!("{owner} step {}: {error}", step_index + 1))?;
+            if !seen.insert(check.pointer.as_str()) {
+                bail!(
+                    "{owner} step {}: duplicate stdout_json pointer {:?}",
+                    step_index + 1,
+                    check.pointer
+                );
+            }
         }
     }
     Ok(())

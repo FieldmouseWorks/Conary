@@ -352,3 +352,78 @@ fn stdout_json_unknown_key_is_rejected() {
     let error = toml::from_str::<TestManifest>(source).unwrap_err();
     assert!(error.to_string().contains("pointr"));
 }
+
+/// Parse a manifest whose single step asserts the given `stdout_json` array
+/// entries. The entries string is the body of the `stdout_json` array.
+fn stdout_json_checks_manifest(entries: &str) -> TestManifest {
+    let source = format!(
+        r#"
+        [suite]
+        name = "stdout-json"
+        phase = 4
+
+        [[test]]
+        id = "TJSON06"
+        name = "duplicate stdout json"
+        description = "rejects duplicate stdout_json pointers"
+        timeout = 10
+
+        [[test.step]]
+        run = "true"
+
+        [test.step.assert]
+        stdout_json = [{entries}]
+        "#
+    );
+
+    toml::from_str(&source).unwrap()
+}
+
+#[test]
+fn stdout_json_distinct_pointers_load() {
+    let manifest = stdout_json_checks_manifest(
+        r#"{ pointer = "/status", equals = 1 }, { pointer = "/data/value", equals = 2 }"#,
+    );
+
+    assert!(manifest.validate().is_ok());
+}
+
+#[test]
+fn stdout_json_rejects_duplicate_pointers() {
+    // Positive control: the same step with a distinct second pointer loads.
+    assert!(
+        stdout_json_checks_manifest(
+            r#"{ pointer = "/status", equals = 1 }, { pointer = "/data/value", equals = 2 }"#,
+        )
+        .validate()
+        .is_ok()
+    );
+
+    // Negative: only the second pointer changes, duplicating `/status` with a
+    // contradictory expectation no document can satisfy.
+    let manifest = stdout_json_checks_manifest(
+        r#"{ pointer = "/status", equals = 1 }, { pointer = "/status", equals = 2 }"#,
+    );
+
+    assert!(manifest.validate().is_err());
+}
+
+#[test]
+fn stdout_json_rejects_duplicate_pointers_with_identical_expectations() {
+    // Positive control: the same step with a distinct second pointer loads.
+    assert!(
+        stdout_json_checks_manifest(
+            r#"{ pointer = "/status", equals = 1 }, { pointer = "/data/value", equals = 1 }"#,
+        )
+        .validate()
+        .is_ok()
+    );
+
+    // Negative: only the second pointer changes, duplicating `/status` even
+    // though both expectations are identical.
+    let manifest = stdout_json_checks_manifest(
+        r#"{ pointer = "/status", equals = 1 }, { pointer = "/status", equals = 1 }"#,
+    );
+
+    assert!(manifest.validate().is_err());
+}

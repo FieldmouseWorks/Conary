@@ -541,6 +541,44 @@ fn stdout_json_test(id: &str, pointer: &str) -> TestDef {
     }
 }
 
+/// A one-step test whose only assertion checks each of `pointers` via
+/// `stdout_json`, in order.
+fn stdout_json_checks_test(id: &str, pointers: &[&str]) -> TestDef {
+    TestDef {
+        id: id.to_string(),
+        name: "stdout_json_preflight".to_string(),
+        description: "stdout_json pointer preflight".to_string(),
+        timeout: 30,
+        flaky: None,
+        retries: None,
+        retry_delay_ms: None,
+        step: vec![TestStep {
+            run: Some("echo ok".to_string()),
+            assert: Some(Assertion {
+                stdout_json: Some(
+                    pointers
+                        .iter()
+                        .enumerate()
+                        .map(|(index, pointer)| JsonAssertion {
+                            pointer: pointer.to_string(),
+                            expected: JsonExpectation::Equals(serde_json::json!(index as u64)),
+                        })
+                        .collect(),
+                ),
+                ..Assertion::default()
+            }),
+            ..TestStep::default()
+        }],
+        resources: None,
+        depends_on: None,
+        fatal: None,
+        group: None,
+        skip: None,
+        requires: Vec::new(),
+        corpus: None,
+    }
+}
+
 #[test]
 fn preflight_accepts_pointer_substituted_from_a_variable() {
     let test = stdout_json_test("TJSON-PREFLIGHT-OK", "${JSON_POINTER}");
@@ -803,5 +841,42 @@ fn early_preflight_rejects_invalid_pointer_for_a_later_distro() {
     assert!(
         error.contains("/data/a~2b"),
         "error should name the expanded pointer: {error}"
+    );
+}
+
+#[test]
+fn early_preflight_rejects_duplicate_expanded_stdout_json_pointers() {
+    let manifest_with_key = |key: &str| {
+        let checks = stdout_json_checks_test("TJSON-DUP", &["/data/${KEY}", "/data/value"]);
+        let mut manifest = make_manifest(vec![checks]);
+        manifest.distro_overrides.insert(
+            "fedora44".to_string(),
+            HashMap::from([("KEY".to_string(), key.to_string())]),
+        );
+        manifest
+    };
+    let vars = |manifest: &TestManifest| {
+        variables::build_manifest_variables(&test_config(), "fedora44", manifest)
+    };
+
+    // Positive control: KEY="other" expands the template onto a distinct
+    // pointer, so the same step passes.
+    let distinct = manifest_with_key("other");
+    assert!(preflight_manifest_stdout_json_pointers(&distinct, &vars(&distinct)).is_ok());
+
+    // Negative: KEY="value" expands `/data/${KEY}` onto the literal
+    // `/data/value`, so the step asserts one pointer twice.
+    let duplicate = manifest_with_key("value");
+    let error = preflight_manifest_stdout_json_pointers(&duplicate, &vars(&duplicate))
+        .unwrap_err()
+        .to_string();
+
+    assert!(
+        error.contains("duplicate"),
+        "error should report the duplicate: {error}"
+    );
+    assert!(
+        error.contains("/data/value"),
+        "error should name the duplicated pointer: {error}"
     );
 }

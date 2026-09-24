@@ -535,6 +535,28 @@ impl Assertion {
             );
         }
 
+        // Each stdout_json pointer may appear at most once per step: a single
+        // entry already expresses any expectation. RFC 6901 gives every token a
+        // single spelling (`~0` for `~`, `~1` for `/`), so among pointers that
+        // passed `validate_json_pointer`, string equality is pointer equality.
+        // Templated pointers are deferred to the expanded preflight, as the
+        // load-time pointer validation already does.
+        if let Some(checks) = &self.stdout_json {
+            let mut seen = HashSet::new();
+            for check in checks {
+                if contains_variable_reference(&check.pointer) {
+                    continue;
+                }
+                if !seen.insert(check.pointer.as_str()) {
+                    bail!(
+                        "{}: duplicate stdout_json pointer {:?}",
+                        ctx(),
+                        check.pointer
+                    );
+                }
+            }
+        }
+
         Ok(())
     }
 }
