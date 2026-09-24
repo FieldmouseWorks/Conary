@@ -91,6 +91,58 @@ fn test_load_phase2_group_a_manifest() {
         // Verify T48 depends on T47
         let t48 = manifest.test.iter().find(|t| t.id == "T48").unwrap();
         assert_eq!(t48.depends_on.as_ref().unwrap(), &["T47"]);
+
+        // Verify T50 replaces the no-op orphan listing with the supported
+        // autoremove --dry-run preview and asserts every executable step.
+        let t50 = manifest.test.iter().find(|t| t.id == "T50").unwrap();
+        assert!(
+            t50.step.iter().all(|step| {
+                step.conary
+                    .as_deref()
+                    .is_none_or(|command| !command.contains("--orphans"))
+                    && step
+                        .run
+                        .as_deref()
+                        .is_none_or(|command| !command.contains("--orphans"))
+            }),
+            "T50 must not use the unsupported --orphans flag"
+        );
+        assert!(
+            t50.step
+                .iter()
+                .filter(|step| step.conary.is_some() || step.run.is_some())
+                .all(|step| step.assert.is_some()),
+            "T50 must assert every conary/run step instead of the old no-op path"
+        );
+        let t50_dry_run = t50
+            .step
+            .iter()
+            .find(|step| {
+                step.conary
+                    .as_deref()
+                    .is_some_and(|command| command.contains("autoremove --dry-run"))
+            })
+            .expect("T50 should preview orphans with autoremove --dry-run");
+        let t50_preview = t50_dry_run
+            .assert
+            .as_ref()
+            .and_then(|assertion| assertion.stdout_contains_all.as_ref())
+            .expect("T50 dry-run step should assert its preview text");
+        assert!(
+            t50_preview.contains(&"Found 1 orphaned package(s):".to_string())
+                && t50_preview.contains(&"  dep-app 1.0.0".to_string()),
+            "T50 should assert the exact orphan preview"
+        );
+        assert!(
+            t50.step.iter().any(|step| {
+                step.conary.as_deref().is_some_and(|command| {
+                    command.contains("model apply")
+                        && command.contains("--no-autoremove")
+                        && command.contains("--strict")
+                })
+            }),
+            "T50 should establish dependency reasons with a strict model apply"
+        );
     }
 }
 

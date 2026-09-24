@@ -255,21 +255,107 @@ exit_code = 0
 stdout_contains = "  Pinned: no"
 
 # --------------------------------------------------------------------------
-# T50: Orphan detection
+# T50: Orphan detection preview
 # --------------------------------------------------------------------------
 
 [[test]]
 id = "T50"
-name = "orphan_detection"
-description = "Remove fixture and verify orphan detection does not crash"
-timeout = 60
+name = "orphan_detection_preview"
+description = "Demote dependency-reason packages with a strict model and preview the sole orphan via autoremove --dry-run"
+timeout = 180
 group = "A"
-depends_on = ["T43"]
+depends_on = ["T49"]
 
-# Remove the package (may already be removed, check=False equivalent)
+# Remove the base fixture so the strict model cannot demote it.
 [[test.step]]
 conary = "remove ${FIXTURE_PKG_NAME} --sandbox always --yes"
 
-# List orphans -- just verify no crash
+[test.step.assert]
+exit_code = 0
+
+# Install the fixture dependency graph. Plain ccs install marks every
+# package as explicit, so the model apply below supplies dependency reasons.
 [[test.step]]
-conary = "list --orphans"
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-base-v1/output/dep-base-1.0.0-1.ccs --policy ${FIXTURE_CCS_POLICY} --sandbox always --yes"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-liba-v1/output/dep-liba-1.0.0-1.ccs --policy ${FIXTURE_CCS_POLICY} --sandbox always --yes"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-libb-v1/output/dep-libb-1.0.0-1.ccs --policy ${FIXTURE_CCS_POLICY} --sandbox always --yes"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-app-v1/output/dep-app-1.0.0-1.ccs --policy ${FIXTURE_CCS_POLICY} --sandbox always --yes"
+
+[test.step.assert]
+exit_code = 0
+
+# A strict model demotes every explicit package absent from install[] to a
+# dependency reason; that is the supported path to dependency-reason records.
+[[test.step]]
+run = "printf '[model]\\nversion = 1\\ninstall = [\"dep-liba\"]\\n' > /tmp/t50-system.toml"
+
+[test.step.assert]
+exit_code = 0
+
+# --no-autoremove is required because model apply runs autoremove by default,
+# which would remove the very orphans this test previews. Strict mode is what
+# performs the explicit-to-dependency demotion.
+[[test.step]]
+conary = "model apply --model /tmp/t50-system.toml --strict --no-autoremove --offline --yes"
+
+[test.step.assert]
+exit_code = 0
+
+# dep-app, dep-libb, and dep-base were demoted; dep-liba stayed explicit.
+[[test.step]]
+conary = "query reason dependency"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains_all = ["dep-app", "dep-libb", "dep-base"]
+
+[[test.step]]
+conary = "query reason explicit"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "dep-liba"
+
+# Only dep-app is an orphan: dep-libb and dep-base are still required, and
+# dep-liba is explicit, so dep-lib must not appear in the preview at all.
+[[test.step]]
+conary = "autoremove --dry-run"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains_all = ["Found 1 orphaned package(s):", "  dep-app 1.0.0", "Dry run - no packages will be removed."]
+stdout_not_contains = "dep-lib"
+
+# The assert holds only one not-contains string, so check dep-base separately.
+[[test.step]]
+conary = "autoremove --dry-run"
+
+[test.step.assert]
+exit_code = 0
+stdout_not_contains = "dep-base"
+
+# The dry run must not have removed or re-labelled anything.
+[[test.step]]
+conary = "query reason dependency"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains_all = ["dep-app", "dep-libb", "dep-base"]
+
+[[test.step]]
+file_exists = "/usr/bin/dep-app-v1"
