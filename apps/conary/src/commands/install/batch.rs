@@ -24,7 +24,7 @@ mod promises;
 mod relations;
 mod witness_universe;
 
-use super::ccs_hook_interpreter::{element_plan, preflight_post_install_interpreters};
+use super::ccs_hook_interpreter::{element_plan, hook_interpreters, preflight_hook_interpreters};
 use super::ccs_removal_hooks::CcsRemovalHookPlan;
 use super::inner;
 use super::native_events::{NativeInstallInput, PreparedNativeTransaction};
@@ -523,12 +523,12 @@ impl<'a> BatchInstaller<'a> {
                     package
                         .ccs
                         .as_ref()
-                        .and_then(|ccs| ccs.hooks.post_install.as_ref())
-                        .map(|hook| hook.interpreter.clone()),
+                        .map(|ccs| hook_interpreters(&ccs.hooks))
+                        .unwrap_or_default(),
                 )
             })
             .collect::<Result<Vec<_>>>()?;
-        preflight_post_install_interpreters(&preflight_state, &selected_path, &elements)?;
+        preflight_hook_interpreters(&preflight_state, &selected_path, &elements)?;
 
         preflight_state.commit()?;
 
