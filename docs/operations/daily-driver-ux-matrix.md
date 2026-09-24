@@ -29,7 +29,7 @@ takeover, generation activation, or conaryd, the CLI should say that directly.
 | `search <pattern>` | Repository search results from synced metadata | Empty or stale repository metadata | Run `conary repo sync` before assuming a package is unavailable | Existing query/search tests plus `cargo run -p conary -- search --help` |
 | `list [pkg]` | Installed package identity, files, path owner, pinned state | Ambiguous installed package variants | Use `--version`, `--release`, and `--arch` to select a specific installed variant | Existing `cargo test -p conary --test query list_info_refuses_ambiguous_variants_until_selector_is_given` |
 | `autoremove` | Removes Conary-owned orphaned dependency packages | Adopted orphaned packages remain native-PM owned | Native package-manager authority is preserved for adopted orphans | Existing `cargo test -p conary --test native_pm_daily_driver autoremove_dry_run_lists_conary_owned_orphans_and_skips_adopted` |
-| `autoremove --dry-run [--json]` | Previews exactly what apply would remove, round by round, without mutating; `--json` prints a typed `package.autoremove.plan` result (see [Autoremove Preview](#autoremove-preview)) | `--json` without `--dry-run` is rejected before any work | Run without `--dry-run` to apply the same plan | `cargo test -p conary --lib autoremove`; `cargo test -p conary --lib cli::tests::autoremove_json_requires_dry_run` |
+| `autoremove --dry-run [--json]` | Previews what apply would remove from the current installed state, round by round, without mutating; `--json` prints a typed `package.autoremove.plan` result (see [Autoremove Preview](#autoremove-preview)) | `--json` without `--dry-run` is rejected before any work; apply does not consume the preview | Apply recomputes from the installed state at apply time; rerun the preview right before applying (plan-bound apply: #1093) | `cargo test -p conary --lib autoremove`; `cargo test -p conary --lib cli::tests::autoremove_json_requires_dry_run` |
 | `pin <pkg>` | Pins a selected installed variant | Ambiguous installed variants | Use `--version`, `--release`, and `--arch` to pin the intended variant | Existing `cargo test -p conary --test query pin_and_unpin_use_same_variant_selector` |
 | `unpin <pkg>` | Releases a selected installed variant | Ambiguous installed variants | Use `--version`, `--release`, and `--arch` to unpin the intended variant | Existing `cargo test -p conary --test query pin_and_unpin_use_same_variant_selector` |
 | `system history` | Recorded changeset fields, rollback relationships, continued lifecycle failures, and deferred recovery guidance | Obsolete changeset metadata keeps its existing refusal | Publication retries use the selected database; history does not decide rollback eligibility | `cargo test -p conary --test cli_history` |
@@ -59,6 +59,12 @@ Absent release or architecture values serialize as `null`. Apply removes
 each planned package by its exact trove identity and checks dependency
 breakage against that exact trove, so co-installed releases of one name
 are never conflated.
+
+The preview is a snapshot of the installed state when it ran; the plan
+carries no identity or fingerprint, and apply does not consume it. Apply
+recomputes the fixed point from the installed state at apply time, so a
+change in between (for example, a newly orphaned dependency) changes what
+apply removes. Binding apply to a reviewed plan is tracked in #1093.
 
 ## Pending Generation Publication
 
