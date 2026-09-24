@@ -332,8 +332,9 @@ impl Trove {
     ///
     /// Candidates are considered in ascending trove id order; each is admitted
     /// only if it is still an orphan with `removed` plus every previously
-    /// admitted candidate treated as uninstalled. The result can be removed
-    /// together without breaking any remaining requirement. Pinned and adopted
+    /// admitted candidate treated as uninstalled. `removable` is returned in
+    /// that admission order, and removing it in exactly that order never breaks
+    /// a remaining requirement at any step. Pinned and adopted
     /// orphans are returned as `protected`; they stay installed and are never
     /// admitted into the removed set.
     pub fn find_orphan_round(conn: &Connection, removed: &BTreeSet<i64>) -> Result<OrphanRound> {
@@ -402,7 +403,9 @@ impl Trove {
             }
         }
 
-        removable.sort_by(Self::compare_orphan_order);
+        // `removable` stays in admission order: every prefix of it was checked
+        // for safety, so callers must remove in exactly this order. Rich
+        // dependencies make safety non-monotonic across other orders.
         protected.sort_by(Self::compare_orphan_order);
         Ok(OrphanRound {
             removable,

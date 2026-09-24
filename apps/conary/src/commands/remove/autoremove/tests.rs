@@ -16,7 +16,8 @@ use conary_core::db::models::InstalledNativeLifecycleBundle;
 use conary_core::db::models::{InstallReason, InstallSource, ProvideEntry, TroveType};
 use conary_core::repository::dependency_model::{
     ProvideArchitectureQualifier, RepositoryCapabilityKind, RepositoryRequirementClause,
-    RepositoryRequirementGroup, RepositoryRequirementKind, RequirementArchitectureQualifier,
+    RepositoryRequirementExpression, RepositoryRequirementGroup, RepositoryRequirementKind,
+    RequirementArchitectureQualifier,
 };
 use tempfile::TempDir;
 
@@ -842,4 +843,97 @@ fn changeset_metadata_by_description(
         .expect("changeset metadata");
     serde_json::from_str(&raw.expect("changeset metadata should be present"))
         .expect("changeset metadata is JSON")
+}
+
+fn package_clause(name: &str) -> RepositoryRequirementClause {
+    RepositoryRequirementClause {
+        name: name.to_string(),
+        capability_kind: Some(RepositoryCapabilityKind::PackageName),
+        version_constraint: None,
+        architecture_qualifier: RequirementArchitectureQualifier::Unqualified,
+        native_text: None,
+    }
+}
+
+#[test]
+fn joint_round_is_returned_in_its_checked_admission_order() {
+    // A retained package requires `(b or c) if a`. Every prefix of the
+    // admission order a, b, c keeps it satisfied, but the name order b, c, a
+    // does not: removing b and then c while `a` remains breaks it. The round
+    // must therefore come back in admission (trove-id) order, not name order.
+    let tmp = TempDir::new().unwrap();
+    let db_path = tmp.path().join("conary.db");
+    conary_core::db::init(&db_path).unwrap();
+    let conn = conary_core::db::open(&db_path).unwrap();
+
+    let app_id = seed_fixture_trove(&conn, "app", InstallReason::Explicit, false);
+    let a_id = seed_fixture_trove(&conn, "zz-cond-a", InstallReason::Dependency, false);
+    let b_id = seed_fixture_trove(&conn, "aa-alt-b", InstallReason::Dependency, false);
+    let c_id = seed_fixture_trove(&conn, "bb-alt-c", InstallReason::Dependency, false);
+    assert!(
+        a_id < b_id && b_id < c_id,
+        "fixture ids must order by creation"
+    );
+
+    let expression = RepositoryRequirementExpression::If {
+        requirement: Box::new(RepositoryRequirementExpression::Or(vec![
+            RepositoryRequirementExpression::Atom(package_clause("aa-alt-b")),
+            RepositoryRequirementExpression::Atom(package_clause("bb-alt-c")),
+        ])),
+        condition: Box::new(RepositoryRequirementExpression::Atom(package_clause(
+            "zz-cond-a",
+        ))),
+        otherwise: None,
+    };
+    // The clause index must list exactly the expression's atoms.
+    let alternatives = expression.atoms().into_iter().cloned().collect();
+    let group = RepositoryRequirementGroup {
+        kind: RepositoryRequirementKind::Depends,
+        behavior:
+            conary_core::repository::dependency_model::ConditionalRequirementBehavior::Conditional,
+        expression,
+        alternatives,
+        description: None,
+        native_text: None,
+    };
+    conary_core::db::models::InstalledRequirementGroup::insert_groups(
+        &conn,
+        app_id,
+        conary_core::repository::versioning::VersionScheme::Conary,
+        &[group],
+    )
+    .unwrap();
+
+    let round = Trove::find_orphan_round(&conn, &std::collections::BTreeSet::new()).unwrap();
+    let order = round
+        .removable
+        .iter()
+        .map(|trove| trove.id.unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        order,
+        vec![a_id, b_id, c_id],
+        "round must keep admission order"
+    );
+
+    // The hazard is real: the name-sorted prefix b, c (with `a` still
+    // installed) breaks the retained requirement.
+    let name_order_prefix =
+        conary_core::resolver::solve_removal_troves(&conn, &[b_id, c_id]).unwrap();
+    assert_eq!(name_order_prefix, vec!["app".to_string()]);
+
+    // Removing in that exact order is safe at every step.
+    let mut removed = std::collections::BTreeSet::new();
+    for trove_id in order {
+        removed.insert(trove_id);
+        let still_needed = conary_core::resolver::solve_removal_troves(
+            &conn,
+            &removed.iter().copied().collect::<Vec<_>>(),
+        )
+        .unwrap();
+        assert!(
+            still_needed.is_empty(),
+            "prefix {removed:?} broke {still_needed:?}"
+        );
+    }
 }
