@@ -982,3 +982,41 @@ fn typed_positive_requirements_round_trip_through_manifest_toml() {
         crate::repository::versioning::VersionScheme::Rpm
     );
 }
+
+fn provides_files_manifest(files: &str) -> String {
+    format!(
+        r#"
+[package]
+name = "file-provider"
+version = "1.0.0"
+version_scheme = "conary"
+release = "1"
+kind = "package"
+description = "File provide validation fixture"
+
+[provides]
+files = [{files}]
+"#
+    )
+}
+
+#[test]
+fn provides_files_accepts_absolute_normalized_paths() {
+    let manifest = CcsManifest::parse(&provides_files_manifest("\"/bin/sh\"")).unwrap();
+
+    assert_eq!(manifest.provides.files, vec!["/bin/sh"]);
+}
+
+#[test]
+fn provides_files_rejects_relative_and_traversing_paths() {
+    // Positive control: the identical fixture with an absolute, normalized
+    // path parses, so each rejection below comes from the path rule.
+    CcsManifest::parse(&provides_files_manifest("\"/bin/sh\"")).unwrap();
+    for path in ["bin/sh", "/usr/../bin/sh", "/bin//sh", "/bin/./sh"] {
+        let encoded = provides_files_manifest(&format!("\"{path}\""));
+        match CcsManifest::parse(&encoded).unwrap_err() {
+            ManifestError::Invalid(_) => {}
+            other => panic!("expected an invalid-manifest error for {path}, got {other:?}"),
+        }
+    }
+}

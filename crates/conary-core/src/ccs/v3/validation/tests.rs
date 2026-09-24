@@ -446,7 +446,7 @@ fn lifecycle_authority_is_source_independent_structural_data() {
     });
     authority
         .requirements
-        .push(pre_depends_path_requirement("/bin/sh"));
+        .push(pre_depends_file_requirement("/bin/sh"));
 
     validate_authority(&authority).unwrap();
 }
@@ -470,6 +470,12 @@ fn rejects_script_contract_the_hook_executor_cannot_honor() {
     }));
 }
 
+fn pre_depends_file_requirement(interpreter: &str) -> RepositoryRequirementGroup {
+    let mut clause = RepositoryRequirementClause::name_only(interpreter.to_string());
+    clause.capability_kind = Some(RepositoryCapabilityKind::File);
+    RepositoryRequirementGroup::simple(RepositoryRequirementKind::PreDepends, clause)
+}
+
 fn pre_depends_path_requirement(interpreter: &str) -> RepositoryRequirementGroup {
     let mut clause = RepositoryRequirementClause::name_only(interpreter.to_string());
     clause.capability_kind = Some(RepositoryCapabilityKind::Path);
@@ -487,7 +493,7 @@ fn lifecycle_script(interpreter: &str) -> LifecycleScriptV3 {
 }
 
 #[test]
-fn rejects_lifecycle_script_without_declared_interpreter_path_requirement() {
+fn rejects_lifecycle_script_without_declared_interpreter_file_requirement() {
     let mut authority = AuthorityDocumentV3::package_for_tests("lifecycle");
     authority.lifecycle.post_install = Some(lifecycle_script("/bin/sh"));
 
@@ -495,27 +501,52 @@ fn rejects_lifecycle_script_without_declared_interpreter_path_requirement() {
     assert!(error.diagnostics.iter().any(|diagnostic| {
         diagnostic.field.as_deref() == Some("lifecycle.post_install.interpreter")
             && diagnostic.message
-                == "lifecycle script interpreter /bin/sh has no declared pre-install Path requirement"
+                == "lifecycle script interpreter /bin/sh has no declared pre-install File requirement"
     }));
 }
 
 #[test]
-fn accepts_lifecycle_script_with_pre_depends_path_requirement() {
+fn accepts_lifecycle_script_with_pre_depends_file_requirement() {
+    let mut authority = AuthorityDocumentV3::package_for_tests("lifecycle");
+    authority.lifecycle.post_install = Some(lifecycle_script("/bin/sh"));
+    authority
+        .requirements
+        .push(pre_depends_file_requirement("/bin/sh"));
+
+    validate_authority(&authority).unwrap();
+}
+
+#[test]
+fn path_kind_pre_depends_does_not_authorize_interpreter() {
+    // Positive control: the identical group with a File kind validates, so the
+    // rejection below is the capability-kind rule rather than a fixture defect.
+    let mut accepted = AuthorityDocumentV3::package_for_tests("lifecycle");
+    accepted.lifecycle.post_install = Some(lifecycle_script("/bin/sh"));
+    accepted
+        .requirements
+        .push(pre_depends_file_requirement("/bin/sh"));
+    validate_authority(&accepted).unwrap();
+
     let mut authority = AuthorityDocumentV3::package_for_tests("lifecycle");
     authority.lifecycle.post_install = Some(lifecycle_script("/bin/sh"));
     authority
         .requirements
         .push(pre_depends_path_requirement("/bin/sh"));
 
-    validate_authority(&authority).unwrap();
+    let error = validate_authority(&authority).unwrap_err();
+    assert!(error.diagnostics.iter().any(|diagnostic| {
+        diagnostic.field.as_deref() == Some("lifecycle.post_install.interpreter")
+            && diagnostic.message
+                == "lifecycle script interpreter /bin/sh has no declared pre-install File requirement"
+    }));
 }
 
 #[test]
-fn depends_path_requirement_does_not_authorize_interpreter() {
+fn depends_file_requirement_does_not_authorize_interpreter() {
     let mut authority = AuthorityDocumentV3::package_for_tests("lifecycle");
     authority.lifecycle.post_install = Some(lifecycle_script("/bin/sh"));
     let mut clause = RepositoryRequirementClause::name_only("/bin/sh".to_string());
-    clause.capability_kind = Some(RepositoryCapabilityKind::Path);
+    clause.capability_kind = Some(RepositoryCapabilityKind::File);
     authority
         .requirements
         .push(RepositoryRequirementGroup::simple(
@@ -527,18 +558,18 @@ fn depends_path_requirement_does_not_authorize_interpreter() {
     assert!(error.diagnostics.iter().any(|diagnostic| {
         diagnostic.field.as_deref() == Some("lifecycle.post_install.interpreter")
             && diagnostic.message
-                == "lifecycle script interpreter /bin/sh has no declared pre-install Path requirement"
+                == "lifecycle script interpreter /bin/sh has no declared pre-install File requirement"
     }));
 }
 
 #[test]
-fn alternative_path_requirement_does_not_authorize_interpreter() {
+fn alternative_file_requirement_does_not_authorize_interpreter() {
     // An OR group can be satisfied by the other alternative, so it never
     // guarantees an interpreter provider.
     let mut authority = AuthorityDocumentV3::package_for_tests("lifecycle");
     authority.lifecycle.post_install = Some(lifecycle_script("/bin/sh"));
     let mut shell = RepositoryRequirementClause::name_only("/bin/sh".to_string());
-    shell.capability_kind = Some(RepositoryCapabilityKind::Path);
+    shell.capability_kind = Some(RepositoryCapabilityKind::File);
     let other = RepositoryRequirementClause::name_only("busybox".to_string());
     authority
         .requirements
@@ -551,6 +582,6 @@ fn alternative_path_requirement_does_not_authorize_interpreter() {
     assert!(error.diagnostics.iter().any(|diagnostic| {
         diagnostic.field.as_deref() == Some("lifecycle.post_install.interpreter")
             && diagnostic.message
-                == "lifecycle script interpreter /bin/sh has no declared pre-install Path requirement"
+                == "lifecycle script interpreter /bin/sh has no declared pre-install File requirement"
     }));
 }

@@ -53,8 +53,11 @@ compatibility implementation, or a complete typed lowering. It must not assume
 that the target happens to provide the source distribution's package manager or
 helper behavior. A CCS author script hook names its interpreter explicitly;
 `ccs build` derives one hard `PreDepends` requirement whose expression is a
-single `Path` atom on that interpreter, and signed-authority validation rejects
-a hook whose interpreter lacks that exact requirement. An alternative group
+single `File` atom on that interpreter, and signed-authority validation rejects
+a hook whose interpreter lacks that exact requirement. `File` is the capability
+kind RPM file provides such as `/bin/sh` carry, so a converted distro shell
+satisfies it; an authored CCS package provides a shipped path through
+`[provides] files`. An alternative group
 naming the path never qualifies, because another alternative can satisfy it. Every documented RPM, Debian, ALPM, and eopkg lifecycle semantic in
 this specification is required implementation for the supported-format
 contract.

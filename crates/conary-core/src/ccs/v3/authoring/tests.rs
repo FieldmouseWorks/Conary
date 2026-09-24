@@ -761,61 +761,168 @@ fn script_hook(script: &str, interpreter: &str) -> crate::ccs::manifest::ScriptH
     }
 }
 
-fn pre_depends_path_names(requirements: &[RepositoryRequirementGroup]) -> Vec<&str> {
+fn pre_depends_file_names(requirements: &[RepositoryRequirementGroup]) -> Vec<&str> {
     requirements
         .iter()
         .filter(|group| group.kind == RepositoryRequirementKind::PreDepends)
         .flat_map(|group| group.expression.atoms())
-        .filter(|clause| clause.capability_kind == Some(RepositoryCapabilityKind::Path))
+        .filter(|clause| clause.capability_kind == Some(RepositoryCapabilityKind::File))
         .map(|clause| clause.name.as_str())
         .collect()
 }
 
-fn declared_pre_depends_path(interpreter: &str) -> RepositoryRequirementGroup {
+fn declared_pre_depends_file(interpreter: &str) -> RepositoryRequirementGroup {
     let mut clause = RepositoryRequirementClause::name_only(interpreter.to_string());
-    clause.capability_kind = Some(RepositoryCapabilityKind::Path);
+    clause.capability_kind = Some(RepositoryCapabilityKind::File);
     RepositoryRequirementGroup::simple(RepositoryRequirementKind::PreDepends, clause)
 }
 
 #[test]
-fn projection_derives_hook_interpreter_path_requirement() {
+fn projection_derives_hook_interpreter_file_requirement() {
     let mut build = test_support::minimal_file_build_result("hook-derive", "0.1.0", b"hook\n");
     build.manifest.hooks.post_install = Some(script_hook("true", "/bin/sh"));
 
     let requirements = project_requirements(&build.manifest);
 
-    assert_eq!(pre_depends_path_names(&requirements), vec!["/bin/sh"]);
-    assert!(requirements.iter().any(|group| {
-        group.kind == RepositoryRequirementKind::PreDepends
-            && group.expression.atoms().iter().any(|clause| {
-                clause.capability_kind == Some(RepositoryCapabilityKind::Path)
-                    && clause.name == "/bin/sh"
-                    && clause.version_constraint.is_none()
-            })
-    }));
+    assert_eq!(pre_depends_file_names(&requirements), vec!["/bin/sh"]);
+    let pre_depends = requirements
+        .iter()
+        .filter(|group| group.kind == RepositoryRequirementKind::PreDepends)
+        .collect::<Vec<_>>();
+    assert_eq!(pre_depends.len(), 1);
+    let atoms = pre_depends[0].expression.atoms();
+    assert_eq!(atoms.len(), 1);
+    assert_eq!(
+        atoms[0].capability_kind,
+        Some(RepositoryCapabilityKind::File)
+    );
+    assert_eq!(atoms[0].name, "/bin/sh");
+    assert!(atoms[0].version_constraint.is_none());
 }
 
 #[test]
-fn projection_does_not_duplicate_an_author_declared_interpreter_path_requirement() {
+fn projection_does_not_duplicate_an_author_declared_interpreter_file_requirement() {
     let mut build = test_support::minimal_file_build_result("hook-declared", "0.1.0", b"hook\n");
     build.manifest.hooks.post_install = Some(script_hook("true", "/bin/sh"));
     build
         .manifest
         .requirements
-        .push(declared_pre_depends_path("/bin/sh"));
+        .push(declared_pre_depends_file("/bin/sh"));
 
     let requirements = project_requirements(&build.manifest);
 
-    assert_eq!(pre_depends_path_names(&requirements), vec!["/bin/sh"]);
+    assert_eq!(pre_depends_file_names(&requirements), vec!["/bin/sh"]);
+    assert_eq!(
+        requirements
+            .iter()
+            .filter(|group| group.kind == RepositoryRequirementKind::PreDepends)
+            .count(),
+        1
+    );
 }
 
 #[test]
-fn projection_deduplicates_a_shared_hook_interpreter_path_requirement() {
+fn projection_deduplicates_a_shared_hook_interpreter_file_requirement() {
     let mut build = test_support::minimal_file_build_result("hook-shared", "0.1.0", b"hook\n");
     build.manifest.hooks.post_install = Some(script_hook("true", "/bin/sh"));
     build.manifest.hooks.pre_remove = Some(script_hook("false", "/bin/sh"));
 
     let requirements = project_requirements(&build.manifest);
 
-    assert_eq!(pre_depends_path_names(&requirements), vec!["/bin/sh"]);
+    assert_eq!(pre_depends_file_names(&requirements), vec!["/bin/sh"]);
+}
+
+#[test]
+fn projection_emits_file_provide_for_declared_shipped_path() {
+    let mut build = test_support::single_file_build_result_at(
+        "shell-provider",
+        "0.1.0",
+        "/bin/sh",
+        b"#!/bin/sh\n",
+    );
+    build.manifest.provides.files = vec!["/bin/sh".to_string()];
+
+    let projected = project_build_result_to_v3(V3AuthoringInput {
+        build: &build,
+        local_dev: true,
+        debug_toml: None,
+    })
+    .unwrap();
+
+    assert!(
+        projected
+            .authority
+            .provided_capabilities
+            .iter()
+            .any(|entry| { entry.kind == DependencyKindV3::File && entry.name == "/bin/sh" })
+    );
+}
+
+#[test]
+fn projection_rejects_file_provide_absent_from_payload() {
+    let mut build = test_support::single_file_build_result_at(
+        "shell-provider",
+        "0.1.0",
+        "/usr/bin/other",
+        b"#!/bin/sh\n",
+    );
+    build.manifest.provides.files = vec!["/bin/sh".to_string()];
+
+    let error = project_build_result_to_v3(V3AuthoringInput {
+        build: &build,
+        local_dev: true,
+        debug_toml: None,
+    })
+    .unwrap_err();
+
+    assert_eq!(
+        error.to_string(),
+        "declared file provide /bin/sh is not shipped by this package"
+    );
+}
+
+#[test]
+fn projection_accepts_file_provide_for_a_shipped_symlink() {
+    let mut build = test_support::single_file_build_result_at(
+        "shell-provider",
+        "0.1.0",
+        "/usr/bin/sh-link",
+        b"#!/bin/sh\n",
+    );
+    let mut symlink_node = crate::payload::PayloadNode::regular(0o777);
+    symlink_node.kind = crate::payload::PayloadNodeKind::Symlink {
+        target: "/bin/sh".to_string(),
+    };
+    symlink_node.mode = libc::S_IFLNK | 0o777;
+    build.files[0].node = symlink_node.clone();
+    build.files[0].content = None;
+    build.components.get_mut("runtime").unwrap().files[0].node = symlink_node.clone();
+    build.components.get_mut("runtime").unwrap().files[0].content = None;
+    build.components.get_mut("runtime").unwrap().size = 0;
+    build.payloads[0] = crate::packages::payload::PackagePayloadFile::new(
+        "/usr/bin/sh-link".to_string(),
+        symlink_node,
+        None,
+        None,
+    )
+    .unwrap();
+    build.total_size = 0;
+    build.manifest.provides.files = vec!["/usr/bin/sh-link".to_string()];
+
+    let projected = project_build_result_to_v3(V3AuthoringInput {
+        build: &build,
+        local_dev: true,
+        debug_toml: None,
+    })
+    .unwrap();
+
+    assert!(
+        projected
+            .authority
+            .provided_capabilities
+            .iter()
+            .any(|entry| {
+                entry.kind == DependencyKindV3::File && entry.name == "/usr/bin/sh-link"
+            })
+    );
 }

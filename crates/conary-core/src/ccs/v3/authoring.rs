@@ -145,6 +145,7 @@ pub fn project_build_result_authority_to_v3(
     let config_authority = config_authority_for_manifest(&input.build.manifest, input.build)?;
     let file_capabilities =
         file_capability_authority_for_manifest(&input.build.manifest, input.build)?;
+    validate_file_provides_are_shipped(input.build)?;
     let files = input
         .build
         .files
@@ -321,6 +322,13 @@ fn project_manifest_capabilities(
             .iter()
             .map(|name| provided_capability(DependencyKindV3::PkgConfig, name, None, scheme)),
     );
+    entries.extend(
+        manifest
+            .provides
+            .files
+            .iter()
+            .map(|name| provided_capability(DependencyKindV3::File, name, None, scheme)),
+    );
     sort_and_deduplicate_capabilities(entries)
 }
 
@@ -341,7 +349,7 @@ pub(super) fn project_requirements(
     keyed.into_values().collect()
 }
 
-/// Derive the pre-install `Path` requirements that authorize each distinct
+/// Derive the pre-install `File` requirements that authorize each distinct
 /// lifecycle hook interpreter.
 ///
 /// `docs/specs/foreign-package-lifecycle-contracts.md` lines 50-56, 395-400,
@@ -364,23 +372,23 @@ fn derived_hook_interpreter_requirements(
     }
     interpreters
         .into_iter()
-        .filter(|interpreter| !declares_interpreter_path_requirement(manifest, interpreter))
+        .filter(|interpreter| !declares_interpreter_file_requirement(manifest, interpreter))
         .map(|interpreter| {
             let mut clause = RepositoryRequirementClause::name_only(interpreter.to_string());
-            clause.capability_kind = Some(RepositoryCapabilityKind::Path);
+            clause.capability_kind = Some(RepositoryCapabilityKind::File);
             RepositoryRequirementGroup::simple(RepositoryRequirementKind::PreDepends, clause)
         })
         .collect()
 }
 
-fn declares_interpreter_path_requirement(
+fn declares_interpreter_file_requirement(
     manifest: &crate::ccs::manifest::CcsManifest,
     interpreter: &str,
 ) -> bool {
     manifest
         .requirements
         .iter()
-        .any(|group| group.is_hard_pre_install_path(interpreter))
+        .any(|group| group.is_hard_pre_install_file(interpreter))
 }
 
 fn provided_capability(
@@ -508,6 +516,21 @@ fn file_capability_authority_for_manifest(
         }
     }
     Ok(canonical)
+}
+
+fn validate_file_provides_are_shipped(build: &BuildResult) -> Result<()> {
+    let shipped = build
+        .files
+        .iter()
+        .filter(|file| file.node.kind.is_regular() || file.node.kind.is_symlink())
+        .map(|file| file.path.as_str())
+        .collect::<BTreeSet<_>>();
+    for path in &build.manifest.provides.files {
+        if !shipped.contains(path.as_str()) {
+            bail!("declared file provide {path} is not shipped by this package");
+        }
+    }
+    Ok(())
 }
 
 fn select_default_component(build: &BuildResult) -> Result<String> {
