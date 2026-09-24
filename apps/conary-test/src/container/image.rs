@@ -135,7 +135,7 @@ fn is_executable_regular_file(path: &Path) -> bool {
     }
 }
 
-/// Locate the static shell the `conary-test-shell` fixture stages as `/usr/bin/sh` (declared as `/bin/sh`).
+/// Locate the static shell the `conary-test-shell` fixture stages as `/bin/sh`.
 ///
 /// An explicit `CONARY_TEST_STATIC_SHELL` wins. Otherwise the first executable
 /// `busybox` on `PATH` is used. The binary contents are deliberately not
@@ -282,7 +282,7 @@ fn build_test_shell_fixture(
         fs::remove_dir_all(&stage)
             .with_context(|| format!("failed to reset {}", stage.display()))?;
     }
-    let staged_shell = stage.join("usr/bin/sh");
+    let staged_shell = stage.join("bin/sh");
     let staged_parent = staged_shell
         .parent()
         .expect("staged shell path always has a parent");
