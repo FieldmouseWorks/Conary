@@ -10,6 +10,13 @@
 name = "Phase 4 Group C: CCS Ops, Query, Repo Management"
 phase = 4
 
+# Provides /bin/sh for the fixture's post-install hook (#1080).
+[[suite.setup]]
+conary = "ccs install ${FIXTURE_SHELL_CCS} --policy ${FIXTURE_CCS_POLICY} --sandbox always --yes"
+
+[suite.setup.assert]
+exit_code = 0
+
 # ==========================================================================
 #  CCS NON-INSTALL OPERATIONS (T196-T204)
 # ==========================================================================

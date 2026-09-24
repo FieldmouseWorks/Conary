@@ -589,7 +589,7 @@ fn test_load_phase3_group_m_manifest_installs_local_fixture_ccs() {
             .step
             .iter()
             .filter_map(|step| step.conary.as_deref())
-            .find(|command| command.contains("install "))
+            .find(|command| command.contains("${FIXTURE_V1_CCS}"))
             .expect("T138 should install the local fixture CCS");
         assert!(
             install_step.contains("ccs install ${FIXTURE_V1_CCS}"),
@@ -647,7 +647,7 @@ fn test_load_phase3_group_m_manifest_installs_local_fixture_ccs() {
                 .step
                 .iter()
                 .filter_map(|step| step.conary.as_deref())
-                .find(|command| command.contains("install "))
+                .find(|command| command.contains("${FIXTURE_V1_CCS}"))
                 .expect("fixture lifecycle test should install the fixture");
             assert!(
                 install_step.contains("ccs install ${FIXTURE_V1_CCS}"),
@@ -689,4 +689,58 @@ fn test_load_phase3_group_m_manifest_installs_local_fixture_ccs() {
             );
         }
     }
+}
+
+/// Every manifest that installs the local fixture must first install the
+/// hermetic `/bin/sh` provider so the fixture hooks can run (#1080).
+#[test]
+fn fixture_installing_manifests_install_the_shell_provider() {
+    let manifest_dir = remi_manifest_path("");
+    if !manifest_dir.exists() {
+        return;
+    }
+
+    let mut checked = Vec::new();
+    for entry in std::fs::read_dir(&manifest_dir).expect("read manifests directory") {
+        let path = entry.expect("manifest directory entry").path();
+        if path.extension().and_then(|extension| extension.to_str()) != Some("toml") {
+            continue;
+        }
+
+        let manifest = load_manifest(&path).expect("load manifest");
+        let installs_fixture = manifest
+            .suite
+            .setup
+            .iter()
+            .chain(manifest.test.iter().flat_map(|test| &test.step))
+            .any(|step| {
+                let Some(command) = step.conary.as_deref().or(step.run.as_deref()) else {
+                    return false;
+                };
+                command.contains("ccs install")
+                    && (command.contains("${FIXTURE_V1_CCS}")
+                        || command.contains("${FIXTURE_V2_CCS}")
+                        || command.contains("conary-test-fixture/v1/output"))
+            });
+        if !installs_fixture {
+            continue;
+        }
+
+        let installs_shell = manifest.suite.setup.iter().any(|step| {
+            step.conary
+                .as_deref()
+                .is_some_and(|command| command.contains("ccs install ${FIXTURE_SHELL_CCS}"))
+        });
+        assert!(
+            installs_shell,
+            "{} installs the local fixture but has no suite setup installing ${{FIXTURE_SHELL_CCS}}",
+            path.display()
+        );
+        checked.push(path);
+    }
+
+    assert!(
+        !checked.is_empty(),
+        "expected at least one manifest to install the local fixture"
+    );
 }

@@ -112,104 +112,246 @@ fn copy_dir_filtered(src: &Path, dst: &Path, skip_names: &[&str]) -> Result<()> 
     Ok(())
 }
 
-fn ensure_phase2_fixture_outputs(fixtures_root: &Path, conary_bin: &Path) -> Result<()> {
-    let fixture_root = fixtures_root.join("conary-test-fixture");
+const STATIC_TEST_SHELL_ENV: &str = "CONARY_TEST_STATIC_SHELL";
+
+/// Return true when `path` is a regular file with an execute bit set.
+fn is_executable_regular_file(path: &Path) -> bool {
+    let Ok(metadata) = fs::metadata(path) else {
+        return false;
+    };
+    if !metadata.is_file() {
+        return false;
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        metadata.permissions().mode() & 0o111 != 0
+    }
+
+    #[cfg(not(unix))]
+    {
+        true
+    }
+}
+
+/// Locate the static shell the `conary-test-shell` fixture stages as `/bin/sh`.
+///
+/// An explicit `CONARY_TEST_STATIC_SHELL` wins. Otherwise the first executable
+/// `busybox` on `PATH` is used. The binary contents are deliberately not
+/// inspected: the fixture hook that runs through this interpreter is the
+/// functional proof that it can serve as `/bin/sh`.
+fn resolve_static_test_shell() -> Result<PathBuf> {
+    if let Some(explicit) = std::env::var_os(STATIC_TEST_SHELL_ENV) {
+        let path = PathBuf::from(explicit);
+        if !is_executable_regular_file(&path) {
+            bail!(
+                "{STATIC_TEST_SHELL_ENV} must name an existing executable regular file, got {}",
+                path.display()
+            );
+        }
+        return Ok(path);
+    }
+
+    if let Some(path_var) = std::env::var_os("PATH") {
+        for directory in std::env::split_paths(&path_var) {
+            let candidate = directory.join("busybox");
+            if is_executable_regular_file(&candidate) {
+                return Ok(candidate);
+            }
+        }
+    }
+
+    bail!(
+        "integration fixture conary-test-shell needs a statically linked shell: install busybox (static) or set CONARY_TEST_STATIC_SHELL=<path>"
+    )
+}
+
+/// Build one signed fixture package and verify it under the fixture trust
+/// policy, returning the single artifact it emitted.
+fn build_signed_fixture(
+    conary_bin: &Path,
+    manifest: &Path,
+    source: &Path,
+    output_dir: &Path,
+    signing_key: &Path,
+    trust_policy: &Path,
+) -> Result<PathBuf> {
+    if output_dir.exists() {
+        fs::remove_dir_all(output_dir)
+            .with_context(|| format!("failed to reset {}", output_dir.display()))?;
+    }
+    fs::create_dir_all(output_dir)
+        .with_context(|| format!("failed to create {}", output_dir.display()))?;
+
+    let output = std::process::Command::new(conary_bin)
+        .args(["ccs", "build"])
+        .arg(manifest)
+        .arg("--source")
+        .arg(source)
+        .arg("--output")
+        .arg(output_dir)
+        .arg("--key")
+        .arg(signing_key)
+        .output()
+        .with_context(|| {
+            format!(
+                "failed to build fixture {} with {}",
+                manifest.display(),
+                conary_bin.display()
+            )
+        })?;
+
+    if !output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!(
+            "failed to build fixture {}\nstdout:\n{}\nstderr:\n{}",
+            manifest.display(),
+            stdout.trim_end(),
+            stderr.trim_end()
+        );
+    }
+
+    let packages = fs::read_dir(output_dir)
+        .with_context(|| format!("failed to read {}", output_dir.display()))?
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| path.extension().is_some_and(|extension| extension == "ccs"))
+        .collect::<Vec<_>>();
+    if packages.len() != 1 {
+        bail!(
+            "expected one signed fixture in {}, found {}",
+            output_dir.display(),
+            packages.len()
+        );
+    }
+    let package = packages.into_iter().next().expect("one package");
+
+    let verify = std::process::Command::new(conary_bin)
+        .args(["ccs", "verify"])
+        .arg(&package)
+        .arg("--policy")
+        .arg(trust_policy)
+        .output()
+        .with_context(|| {
+            format!(
+                "failed to verify fixture {} with {}",
+                package.display(),
+                conary_bin.display()
+            )
+        })?;
+    if !verify.status.success() {
+        let stdout = String::from_utf8_lossy(&verify.stdout);
+        let stderr = String::from_utf8_lossy(&verify.stderr);
+        bail!(
+            "fixture {} did not verify under {}\nstdout:\n{}\nstderr:\n{}",
+            package.display(),
+            trust_policy.display(),
+            stdout.trim_end(),
+            stderr.trim_end()
+        );
+    }
+
+    Ok(package)
+}
+
+/// Stage the static shell source into the `conary-test-shell` fixture and build
+/// the signed provider. A missing fixture directory means this workspace has no
+/// shell provider to build, matching how the v1/v2 fixtures are skipped.
+fn build_test_shell_fixture(
+    fixtures_root: &Path,
+    conary_bin: &Path,
+    signing_key: &Path,
+    trust_policy: &Path,
+) -> Result<()> {
+    let fixture_root = fixtures_root.join("conary-test-shell");
     if !fixture_root.is_dir() {
         return Ok(());
     }
+    let manifest = fixture_root.join("ccs.toml");
+    if !manifest.is_file() {
+        bail!(
+            "integration fixture conary-test-shell is missing {}",
+            manifest.display()
+        );
+    }
+
+    let source = resolve_static_test_shell()?;
+    let stage = fixture_root.join("stage");
+    if stage.exists() {
+        fs::remove_dir_all(&stage)
+            .with_context(|| format!("failed to reset {}", stage.display()))?;
+    }
+    let staged_shell = stage.join("bin/sh");
+    let staged_parent = staged_shell
+        .parent()
+        .expect("staged shell path always has a parent");
+    fs::create_dir_all(staged_parent)
+        .with_context(|| format!("failed to create {}", staged_parent.display()))?;
+    fs::copy(&source, &staged_shell).with_context(|| {
+        format!(
+            "failed to stage static shell {} as {}",
+            source.display(),
+            staged_shell.display()
+        )
+    })?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&staged_shell, fs::Permissions::from_mode(0o755))
+            .with_context(|| format!("failed to make {} executable", staged_shell.display()))?;
+    }
+
+    build_signed_fixture(
+        conary_bin,
+        &manifest,
+        &stage,
+        &fixture_root.join("output"),
+        signing_key,
+        trust_policy,
+    )?;
+    Ok(())
+}
+
+fn ensure_phase2_fixture_outputs(fixtures_root: &Path, conary_bin: &Path) -> Result<()> {
+    let fixture_root = fixtures_root.join("conary-test-fixture");
+    let shell_root = fixtures_root.join("conary-test-shell");
+    if !fixture_root.is_dir() && !shell_root.is_dir() {
+        return Ok(());
+    }
+
     let signing_key = crate::paths::fixture_ccs_key_path_for(fixtures_root);
     let trust_policy = crate::paths::fixture_ccs_policy_path_for(fixtures_root);
     for authority_path in [&signing_key, &trust_policy] {
         if !authority_path.is_file() {
             bail!(
-                "Phase 2 fixture authority is missing {}; regenerate apps/conary/tests/fixtures/ccs-test-authority",
+                "fixture authority is missing {}; regenerate apps/conary/tests/fixtures/ccs-test-authority",
                 authority_path.display()
             );
         }
     }
 
-    for version in ["v1", "v2"] {
-        let version_root = fixture_root.join(version);
-        let manifest = version_root.join("ccs.toml");
-        let source = version_root.join("stage");
-        if !manifest.is_file() || !source.is_dir() {
-            continue;
-        }
+    if fixture_root.is_dir() {
+        for version in ["v1", "v2"] {
+            let version_root = fixture_root.join(version);
+            let manifest = version_root.join("ccs.toml");
+            let source = version_root.join("stage");
+            if !manifest.is_file() || !source.is_dir() {
+                continue;
+            }
 
-        let output_dir = version_root.join("output");
-        if output_dir.exists() {
-            fs::remove_dir_all(&output_dir)
-                .with_context(|| format!("failed to reset {}", output_dir.display()))?;
-        }
-        fs::create_dir_all(&output_dir)
-            .with_context(|| format!("failed to create {}", output_dir.display()))?;
-
-        let output = std::process::Command::new(conary_bin)
-            .args(["ccs", "build"])
-            .arg(&manifest)
-            .arg("--source")
-            .arg(&source)
-            .arg("--output")
-            .arg(&output_dir)
-            .arg("--key")
-            .arg(&signing_key)
-            .output()
-            .with_context(|| {
-                format!(
-                    "failed to build Phase 2 fixture {} with {}",
-                    manifest.display(),
-                    conary_bin.display()
-                )
-            })?;
-
-        if !output.status.success() {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            bail!(
-                "failed to build Phase 2 fixture {}\nstdout:\n{}\nstderr:\n{}",
-                manifest.display(),
-                stdout.trim_end(),
-                stderr.trim_end()
-            );
-        }
-
-        let packages = fs::read_dir(&output_dir)
-            .with_context(|| format!("failed to read {}", output_dir.display()))?
-            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-            .filter(|path| path.extension().is_some_and(|extension| extension == "ccs"))
-            .collect::<Vec<_>>();
-        if packages.len() != 1 {
-            bail!(
-                "expected one signed Phase 2 fixture in {}, found {}",
-                output_dir.display(),
-                packages.len()
-            );
-        }
-        let verify = std::process::Command::new(conary_bin)
-            .args(["ccs", "verify"])
-            .arg(&packages[0])
-            .arg("--policy")
-            .arg(&trust_policy)
-            .output()
-            .with_context(|| {
-                format!(
-                    "failed to verify Phase 2 fixture {} with {}",
-                    packages[0].display(),
-                    conary_bin.display()
-                )
-            })?;
-        if !verify.status.success() {
-            let stdout = String::from_utf8_lossy(&verify.stdout);
-            let stderr = String::from_utf8_lossy(&verify.stderr);
-            bail!(
-                "Phase 2 fixture {} did not verify under {}\nstdout:\n{}\nstderr:\n{}",
-                packages[0].display(),
-                trust_policy.display(),
-                stdout.trim_end(),
-                stderr.trim_end()
-            );
+            build_signed_fixture(
+                conary_bin,
+                &manifest,
+                &source,
+                &version_root.join("output"),
+                &signing_key,
+                &trust_policy,
+            )?;
         }
     }
+
+    build_test_shell_fixture(fixtures_root, conary_bin, &signing_key, &trust_policy)?;
 
     Ok(())
 }

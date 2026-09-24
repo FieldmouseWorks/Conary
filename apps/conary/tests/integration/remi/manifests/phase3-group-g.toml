@@ -9,6 +9,13 @@
 name = "Phase 3 Group G: Data Integrity"
 phase = 3
 
+# Provides /bin/sh for the fixture's post-install hook (#1080).
+[[suite.setup]]
+conary = "ccs install ${FIXTURE_SHELL_CCS} --policy ${FIXTURE_CCS_POLICY} --sandbox always --yes"
+
+[suite.setup.assert]
+exit_code = 0
+
 [distro_overrides.fedora44]
 NATIVE_CORRUPTED_PKG = "/opt/remi-tests/fixtures/adversarial/corrupted/native/output/native-package-corrupted.rpm"
 

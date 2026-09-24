@@ -3,8 +3,8 @@
 #![cfg(test)]
 
 use super::{
-    NativePackageArtifact, find_project_root, resolve_stage_source, stage_build_context,
-    stage_native_package,
+    NativePackageArtifact, STATIC_TEST_SHELL_ENV, find_project_root, resolve_stage_source,
+    resolve_static_test_shell, stage_build_context, stage_native_package,
 };
 use crate::config::DistroBuildContext;
 use conary_core::repository::supported_profiles::ProfilePackageFormat;
@@ -13,7 +13,118 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[cfg(unix)]
+use std::ffi::OsString;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+#[cfg(unix)]
+use std::sync::MutexGuard;
+
+/// Serialize process-environment mutation with the rest of the crate and
+/// restore every touched variable when the guard drops.
+#[cfg(unix)]
+struct EnvGuard {
+    _lock: MutexGuard<'static, ()>,
+    values: Vec<(&'static str, Option<OsString>)>,
+}
+
+#[cfg(unix)]
+impl EnvGuard {
+    fn new(names: &[&'static str]) -> Self {
+        let lock = crate::test_support::lock_env();
+        let values = names
+            .iter()
+            .map(|name| (*name, std::env::var_os(name)))
+            .collect();
+        Self {
+            _lock: lock,
+            values,
+        }
+    }
+
+    fn set(&self, name: &str, value: &std::ffi::OsStr) {
+        // SAFETY: environment mutation is serialized by the crate-wide test lock.
+        unsafe {
+            std::env::set_var(name, value);
+        }
+    }
+
+    fn clear(&self, name: &str) {
+        // SAFETY: environment mutation is serialized by the crate-wide test lock.
+        unsafe {
+            std::env::remove_var(name);
+        }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for EnvGuard {
+    fn drop(&mut self) {
+        for (name, value) in &self.values {
+            // SAFETY: the lock is still held while the original values are restored.
+            unsafe {
+                match value {
+                    Some(value) => std::env::set_var(name, value),
+                    None => std::env::remove_var(name),
+                }
+            }
+        }
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn resolve_static_test_shell_uses_explicit_executable_path() {
+    let env = EnvGuard::new(&[STATIC_TEST_SHELL_ENV]);
+    let directory = tempfile::tempdir().expect("create temp directory");
+    let shell = directory.path().join("static-sh");
+    fs::write(&shell, "#!/bin/sh\n").expect("write shell");
+    fs::set_permissions(&shell, fs::Permissions::from_mode(0o755)).expect("make shell executable");
+    env.set(STATIC_TEST_SHELL_ENV, shell.as_os_str());
+
+    assert_eq!(
+        resolve_static_test_shell().expect("explicit executable must be selected"),
+        shell
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn resolve_static_test_shell_rejects_missing_explicit_path() {
+    let env = EnvGuard::new(&[STATIC_TEST_SHELL_ENV]);
+    let directory = tempfile::tempdir().expect("create temp directory");
+    let missing = directory.path().join("absent-shell");
+    env.set(STATIC_TEST_SHELL_ENV, missing.as_os_str());
+
+    let error = resolve_static_test_shell().expect_err("missing explicit path must be rejected");
+    assert!(
+        error.to_string().contains(STATIC_TEST_SHELL_ENV),
+        "error must name the environment variable: {error}"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn resolve_static_test_shell_finds_busybox_first_on_path() {
+    let env = EnvGuard::new(&[STATIC_TEST_SHELL_ENV, "PATH"]);
+    env.clear(STATIC_TEST_SHELL_ENV);
+
+    let directory = tempfile::tempdir().expect("create temp directory");
+    let busybox = directory.path().join("busybox");
+    fs::write(&busybox, "#!/bin/sh\n").expect("write busybox");
+    fs::set_permissions(&busybox, fs::Permissions::from_mode(0o755))
+        .expect("make busybox executable");
+
+    let original = std::env::var_os("PATH").unwrap_or_default();
+    let mut entries = vec![directory.path().to_path_buf()];
+    entries.extend(std::env::split_paths(&original));
+    let controlled = std::env::join_paths(entries).expect("join controlled PATH");
+    env.set("PATH", controlled.as_os_str());
+
+    assert_eq!(
+        resolve_static_test_shell().expect("busybox on PATH must be selected"),
+        busybox
+    );
+}
 
 #[cfg(unix)]
 #[test]
@@ -176,6 +287,7 @@ fn stage_build_context_generates_missing_phase2_fixture_outputs() {
     let project_root = std::env::temp_dir().join(format!("conary-test-phase2-fixtures-{unique}"));
     let remi_root = project_root.join("apps/conary/tests/integration/remi");
     let fixture_root = project_root.join("apps/conary/tests/fixtures/conary-test-fixture");
+    let shell_fixture_root = project_root.join("apps/conary/tests/fixtures/conary-test-shell");
     let authority_root = project_root.join("apps/conary/tests/fixtures/ccs-test-authority");
     let containerfile = remi_root.join("containers/Containerfile.arch");
     let conary = project_root.join("conary");
@@ -185,6 +297,7 @@ fn stage_build_context_generates_missing_phase2_fixture_outputs() {
         .expect("create v1 fixture source");
     fs::create_dir_all(fixture_root.join("v2/stage/usr/share/conary-test"))
         .expect("create v2 fixture source");
+    fs::create_dir_all(&shell_fixture_root).expect("create shell fixture directory");
     fs::create_dir_all(&authority_root).expect("create fixture authority");
     fs::write(
         project_root.join("Cargo.toml"),
@@ -195,6 +308,11 @@ fn stage_build_context_generates_missing_phase2_fixture_outputs() {
     fs::write(remi_root.join("config.toml"), "[paths]\n").expect("write config");
     fs::write(fixture_root.join("v1/ccs.toml"), "[package]\n").expect("write v1 ccs");
     fs::write(fixture_root.join("v2/ccs.toml"), "[package]\n").expect("write v2 ccs");
+    fs::write(
+        shell_fixture_root.join("ccs.toml"),
+        "[package]\nname = \"conary-test-shell\"\n",
+    )
+    .expect("write shell ccs");
     fs::write(
         fixture_root.join("v1/stage/usr/share/conary-test/hello.txt"),
         "hello v1\n",
@@ -234,6 +352,7 @@ done
 case "$manifest" in
   */v1/ccs.toml) file="conary-test-fixture-1.0.0-1.ccs" ;;
   */v2/ccs.toml) file="conary-test-fixture-2.0.0-1.ccs" ;;
+  */conary-test-shell/ccs.toml) file="conary-test-shell-1.0.0-1.ccs" ;;
   *) echo "unexpected manifest: $manifest" >&2; exit 2 ;;
 esac
 [[ -n "$output" ]]
@@ -247,6 +366,13 @@ printf 'fixture\n' > "$output/$file"
         .permissions();
     permissions.set_mode(0o755);
     fs::set_permissions(&conary, permissions).expect("make fake conary executable");
+
+    let static_shell = project_root.join("static-shell");
+    fs::write(&static_shell, "#!/bin/sh\n").expect("write static shell");
+    fs::set_permissions(&static_shell, fs::Permissions::from_mode(0o755))
+        .expect("make static shell executable");
+    let env = EnvGuard::new(&[STATIC_TEST_SHELL_ENV]);
+    env.set(STATIC_TEST_SHELL_ENV, static_shell.as_os_str());
 
     let staged = stage_build_context(&containerfile, "arch", DistroBuildContext::Binary, None)
         .expect("stage build context");
@@ -262,6 +388,13 @@ printf 'fixture\n' > "$output/$file"
             .root
             .join("fixtures/conary-test-fixture/v2/output/conary-test-fixture-2.0.0-1.ccs")
             .is_file()
+    );
+    assert!(
+        staged
+            .root
+            .join("fixtures/conary-test-shell/output/conary-test-shell-1.0.0-1.ccs")
+            .is_file(),
+        "the shell provider fixture must be built and staged for the image"
     );
 
     drop(staged);
