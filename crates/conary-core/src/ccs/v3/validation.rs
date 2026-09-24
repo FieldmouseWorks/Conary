@@ -537,11 +537,11 @@ fn validate_lifecycle(
         if let Err(error) = validate_ccs_hook_interpreter(&script.interpreter) {
             invalid(&format!("{field}.interpreter"), error);
         }
-        if !has_pre_depends_path_requirement(requirements, &script.interpreter) {
+        if !has_pre_depends_file_requirement(requirements, &script.interpreter) {
             invalid(
                 &format!("{field}.interpreter"),
                 format!(
-                    "lifecycle script interpreter {} has no declared pre-install Path requirement",
+                    "lifecycle script interpreter {} has no declared pre-install File requirement",
                     script.interpreter
                 ),
             );
@@ -568,13 +568,13 @@ fn validate_lifecycle(
     }
 }
 
-fn has_pre_depends_path_requirement(
+fn has_pre_depends_file_requirement(
     requirements: &[crate::repository::dependency_model::RepositoryRequirementGroup],
     interpreter: &str,
 ) -> bool {
     requirements
         .iter()
-        .any(|group| group.is_hard_pre_install_path(interpreter))
+        .any(|group| group.is_hard_pre_install_file(interpreter))
 }
 
 fn validate_script_capabilities(
