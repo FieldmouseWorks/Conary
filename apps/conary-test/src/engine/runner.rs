@@ -1,6 +1,6 @@
 // apps/conary-test/src/engine/runner.rs
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -12,7 +12,7 @@ use tracing::{debug, info, warn};
 
 use crate::config::distro::GlobalConfig;
 use crate::config::manifest::{
-    Assertion, ResourceConstraints, TestDef, TestManifest, validate_json_pointer,
+    Assertion, ResourceConstraints, TestDef, TestManifest, pointers_overlap, validate_json_pointer,
 };
 use crate::container::backend::{ContainerBackend, ContainerConfig, ContainerId, ExecResult};
 use crate::engine::assertions::evaluate_assertion;
@@ -838,11 +838,6 @@ fn preflight_stdout_json_pointers_in_steps(
         let Some(checks) = expanded.stdout_json.as_ref() else {
             continue;
         };
-        // RFC 6901 gives every token a single spelling (`~0` for `~`, `~1` for
-        // `/`), so among pointers that passed `validate_json_pointer`, string
-        // equality is pointer equality. Each pointer may appear at most once
-        // per step; a single entry already expresses any expectation.
-        let mut seen: HashSet<&str> = HashSet::new();
         for check in checks {
             if crate::config::manifest::contains_variable_reference(&check.pointer) {
                 bail!(
@@ -853,12 +848,23 @@ fn preflight_stdout_json_pointers_in_steps(
             }
             validate_json_pointer(&check.pointer)
                 .map_err(|error| anyhow::anyhow!("{owner} step {}: {error}", step_index + 1))?;
-            if !seen.insert(check.pointer.as_str()) {
-                bail!(
-                    "{owner} step {}: duplicate stdout_json pointer {:?}",
-                    step_index + 1,
-                    check.pointer
-                );
+        }
+        // A pointer determines the value at and under it, so a second check
+        // that equals or descends from it is redundant or contradictory.
+        // Compare RFC 6901 tokens rather than string prefixes, so `/ab` and
+        // `/a` do not overlap.
+        for (index, check) in checks.iter().enumerate() {
+            for other in checks.iter().skip(index + 1) {
+                if pointers_overlap(&check.pointer, &other.pointer) {
+                    bail!(
+                        "{owner} step {}: overlapping stdout_json pointers {:?} and {:?}: \
+                         a check on an ancestor already determines its descendants, \
+                         so the second check is redundant or contradictory",
+                        step_index + 1,
+                        check.pointer,
+                        other.pointer
+                    );
+                }
             }
         }
     }

@@ -865,18 +865,55 @@ fn early_preflight_rejects_duplicate_expanded_stdout_json_pointers() {
     assert!(preflight_manifest_stdout_json_pointers(&distinct, &vars(&distinct)).is_ok());
 
     // Negative: KEY="value" expands `/data/${KEY}` onto the literal
-    // `/data/value`, so the step asserts one pointer twice.
+    // `/data/value`, so the step checks one pointer twice.
     let duplicate = manifest_with_key("value");
     let error = preflight_manifest_stdout_json_pointers(&duplicate, &vars(&duplicate))
         .unwrap_err()
         .to_string();
 
     assert!(
-        error.contains("duplicate"),
-        "error should report the duplicate: {error}"
+        error.contains("overlapping"),
+        "error should report the overlap: {error}"
     );
     assert!(
         error.contains("/data/value"),
-        "error should name the duplicated pointer: {error}"
+        "error should name the overlapping pointer: {error}"
+    );
+}
+
+#[test]
+fn early_preflight_rejects_ancestor_expanded_stdout_json_pointers() {
+    let manifest_with_literal = |literal: &str| {
+        let checks = stdout_json_checks_test("TJSON-ANCESTOR", &["/data/${KEY}", literal]);
+        let mut manifest = make_manifest(vec![checks]);
+        manifest.distro_overrides.insert(
+            "fedora44".to_string(),
+            HashMap::from([("KEY".to_string(), "x".to_string())]),
+        );
+        manifest
+    };
+    let vars = |manifest: &TestManifest| {
+        variables::build_manifest_variables(&test_config(), "fedora44", manifest)
+    };
+
+    // Positive control: the same template and KEY pass when the literal
+    // constrains a separate subtree.
+    let separate = manifest_with_literal("/other");
+    assert!(preflight_manifest_stdout_json_pointers(&separate, &vars(&separate)).is_ok());
+
+    // Negative: the literal `/data` is an ancestor of the expanded `/data/x`,
+    // so the two checks determine the same value.
+    let ancestor = manifest_with_literal("/data");
+    let error = preflight_manifest_stdout_json_pointers(&ancestor, &vars(&ancestor))
+        .unwrap_err()
+        .to_string();
+
+    assert!(
+        error.contains("overlapping"),
+        "error should report the overlap: {error}"
+    );
+    assert!(
+        error.contains("\"/data\"") && error.contains("\"/data/x\""),
+        "error should name both pointers: {error}"
     );
 }

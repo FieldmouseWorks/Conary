@@ -401,6 +401,31 @@ pub(crate) fn validate_json_pointer(pointer: &str) -> std::result::Result<(), St
     Ok(())
 }
 
+/// Split a validated RFC 6901 JSON pointer into its escaped reference tokens.
+///
+/// The root pointer (`""`) has no tokens; otherwise the leading `/` introduces
+/// the first token. Tokens keep their `~0`/`~1` escapes, which RFC 6901 spells
+/// uniquely, so token equality is pointer equality. Callers pass only pointers
+/// that already passed `validate_json_pointer`.
+pub(crate) fn json_pointer_tokens(pointer: &str) -> Vec<&str> {
+    let Some(rest) = pointer.strip_prefix('/') else {
+        return Vec::new();
+    };
+    rest.split('/').collect()
+}
+
+/// Whether two validated RFC 6901 pointers address overlapping values.
+///
+/// Pointers overlap when one equals the other or is a proper ancestor of it,
+/// because a check at a pointer fully determines the value at and under it.
+/// Comparing tokens rather than string prefixes keeps `/a` and `/ab` distinct.
+pub(crate) fn pointers_overlap(a: &str, b: &str) -> bool {
+    let a = json_pointer_tokens(a);
+    let b = json_pointer_tokens(b);
+    let shared = a.len().min(b.len());
+    a[..shared] == b[..shared]
+}
+
 impl TryFrom<RawJsonAssertion> for JsonAssertion {
     type Error = String;
 
@@ -535,24 +560,28 @@ impl Assertion {
             );
         }
 
-        // Each stdout_json pointer may appear at most once per step: a single
-        // entry already expresses any expectation. RFC 6901 gives every token a
-        // single spelling (`~0` for `~`, `~1` for `/`), so among pointers that
-        // passed `validate_json_pointer`, string equality is pointer equality.
-        // Templated pointers are deferred to the expanded preflight, as the
-        // load-time pointer validation already does.
+        // A non-templated pointer determines the value at and under it, so a
+        // second check that equals or descends from it is redundant or
+        // contradictory. Compare RFC 6901 tokens rather than string prefixes,
+        // so `/ab` and `/a` do not overlap. Templated pointers are deferred to
+        // the expanded preflight, as the load-time pointer validation already
+        // does.
         if let Some(checks) = &self.stdout_json {
-            let mut seen = HashSet::new();
-            for check in checks {
-                if contains_variable_reference(&check.pointer) {
-                    continue;
-                }
-                if !seen.insert(check.pointer.as_str()) {
-                    bail!(
-                        "{}: duplicate stdout_json pointer {:?}",
-                        ctx(),
-                        check.pointer
-                    );
+            let concrete: Vec<&str> = checks
+                .iter()
+                .map(|check| check.pointer.as_str())
+                .filter(|pointer| !contains_variable_reference(pointer))
+                .collect();
+            for (index, pointer) in concrete.iter().copied().enumerate() {
+                for other in concrete[index + 1..].iter().copied() {
+                    if pointers_overlap(pointer, other) {
+                        bail!(
+                            "{}: overlapping stdout_json pointers {pointer:?} and {other:?}: \
+                             a check on an ancestor already determines its descendants, \
+                             so the second check is redundant or contradictory",
+                            ctx()
+                        );
+                    }
                 }
             }
         }

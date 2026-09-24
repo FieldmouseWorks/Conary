@@ -364,8 +364,8 @@ fn stdout_json_checks_manifest(entries: &str) -> TestManifest {
 
         [[test]]
         id = "TJSON06"
-        name = "duplicate stdout json"
-        description = "rejects duplicate stdout_json pointers"
+        name = "overlapping stdout json"
+        description = "rejects overlapping stdout_json pointers"
         timeout = 10
 
         [[test.step]]
@@ -380,12 +380,111 @@ fn stdout_json_checks_manifest(entries: &str) -> TestManifest {
 }
 
 #[test]
+fn json_pointer_tokens_splits_reference_tokens() {
+    assert_eq!(json_pointer_tokens(""), Vec::<&str>::new());
+    assert_eq!(json_pointer_tokens("/"), vec![""]);
+    assert_eq!(json_pointer_tokens("/a"), vec!["a"]);
+    assert_eq!(json_pointer_tokens("/a/b"), vec!["a", "b"]);
+    assert_eq!(json_pointer_tokens("/a~0b/c~1d"), vec!["a~0b", "c~1d"]);
+}
+
+#[test]
+fn pointers_overlap_compares_reference_tokens() {
+    let cases = [
+        // Equal pointers.
+        ("/a", "/a", true),
+        // Proper ancestor and its descendant, in both orders.
+        ("/a", "/a/b", true),
+        ("/a/b", "/a", true),
+        // Siblings constrain separate subtrees.
+        ("/a/b", "/a/c", false),
+        // A string prefix of a token is not an ancestor.
+        ("/ab", "/a", false),
+        ("/a", "/ab", false),
+        // The root pointer is an ancestor of every other pointer.
+        ("", "/status", true),
+        ("", "", true),
+        // Escaped tokens compare as tokens, so `~1` is not a separator.
+        ("/a~1b", "/a/b", false),
+    ];
+
+    for (a, b, expected) in cases {
+        assert_eq!(pointers_overlap(a, b), expected, "{a:?} vs {b:?}");
+    }
+}
+
+#[test]
 fn stdout_json_distinct_pointers_load() {
     let manifest = stdout_json_checks_manifest(
         r#"{ pointer = "/status", equals = 1 }, { pointer = "/data/value", equals = 2 }"#,
     );
 
     assert!(manifest.validate().is_ok());
+}
+
+#[test]
+fn stdout_json_allows_non_overlapping_pointers_under_a_shared_parent() {
+    // Positive: siblings constrain separate subtrees.
+    let manifest = stdout_json_checks_manifest(
+        r#"{ pointer = "/data/a", equals = 1 }, { pointer = "/data/b", equals = 2 }"#,
+    );
+
+    assert!(manifest.validate().is_ok());
+}
+
+#[test]
+fn stdout_json_allows_pointer_that_is_a_string_prefix_only() {
+    // Positive: `/ab` is a string prefix of `/a`, but neither pointer is an
+    // ancestor of the other.
+    let manifest = stdout_json_checks_manifest(
+        r#"{ pointer = "/ab", equals = 1 }, { pointer = "/a", equals = 2 }"#,
+    );
+
+    assert!(manifest.validate().is_ok());
+}
+
+#[test]
+fn stdout_json_rejects_ancestor_and_descendant_pointers() {
+    // Positive control: the same helper and manifest shape load when the two
+    // pointers constrain separate subtrees.
+    assert!(
+        stdout_json_checks_manifest(
+            r#"{ pointer = "/data", equals = 1 }, { pointer = "/other/status", equals = 2 }"#,
+        )
+        .validate()
+        .is_ok()
+    );
+
+    // Negative: `/data` is an ancestor of `/data/status`, so the ancestor
+    // check already determines the descendant.
+    let ancestor = stdout_json_checks_manifest(
+        r#"{ pointer = "/data", equals = { status = "planned" } }, { pointer = "/data/status", equals = "failed" }"#,
+    );
+    assert!(ancestor.validate().is_err());
+
+    // The reverse order is the same overlap.
+    let descendant = stdout_json_checks_manifest(
+        r#"{ pointer = "/data/status", equals = "failed" }, { pointer = "/data", equals = { status = "planned" } }"#,
+    );
+    assert!(descendant.validate().is_err());
+}
+
+#[test]
+fn stdout_json_rejects_root_pointer_with_any_other() {
+    // Positive control: the root pointer alone loads.
+    assert!(
+        stdout_json_checks_manifest(r#"{ pointer = "", equals = 1 }"#)
+            .validate()
+            .is_ok()
+    );
+
+    // Negative: the root pointer addresses the whole document, so it is an
+    // ancestor of every other pointer.
+    let manifest = stdout_json_checks_manifest(
+        r#"{ pointer = "", equals = 1 }, { pointer = "/status", equals = 2 }"#,
+    );
+
+    assert!(manifest.validate().is_err());
 }
 
 #[test]
@@ -399,8 +498,7 @@ fn stdout_json_rejects_duplicate_pointers() {
         .is_ok()
     );
 
-    // Negative: only the second pointer changes, duplicating `/status` with a
-    // contradictory expectation no document can satisfy.
+    // Negative: a duplicate is the overlap case where the pointers are equal.
     let manifest = stdout_json_checks_manifest(
         r#"{ pointer = "/status", equals = 1 }, { pointer = "/status", equals = 2 }"#,
     );
@@ -419,8 +517,7 @@ fn stdout_json_rejects_duplicate_pointers_with_identical_expectations() {
         .is_ok()
     );
 
-    // Negative: only the second pointer changes, duplicating `/status` even
-    // though both expectations are identical.
+    // Negative: equal pointers overlap even though both expectations agree.
     let manifest = stdout_json_checks_manifest(
         r#"{ pointer = "/status", equals = 1 }, { pointer = "/status", equals = 1 }"#,
     );
