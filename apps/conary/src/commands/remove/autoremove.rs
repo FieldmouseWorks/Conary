@@ -3,17 +3,39 @@
 use anyhow::{Context, Result};
 use conary_core::db::models::{PackagePayloadOwnership, Trove};
 use conary_core::scriptlet::ExecutionMode;
-use std::collections::HashSet;
+use rusqlite::Connection;
+use std::collections::{BTreeSet, HashSet};
 use tracing::info;
 
 use self::plan_output::{AutoremovePlanData, AutoremoveSkipReason, plan_result};
 use super::types::RemoveLifecycleOptions;
 use crate::commands::{SandboxMode, open_db};
 
+/// Maximum fixed-point rounds apply mode and the preview planner run.
+const MAX_AUTOREMOVE_ITERATIONS: usize = 100;
+
 #[derive(Debug, Clone)]
 pub(super) struct AutoremovePlan {
     pub(super) removable: Vec<Trove>,
     pub(super) skipped: Vec<(Trove, AutoremoveSkipReason)>,
+}
+
+/// One round of the fixed-point preview plan.
+#[derive(Debug, Clone)]
+struct AutoremoveFixedPointRound {
+    /// 1-based round number.
+    round: u32,
+    removable: Vec<Trove>,
+}
+
+/// The fixed point apply mode would reach, computed without mutating anything.
+///
+/// Every recorded round has at least one removable trove, so the rounds are
+/// numbered `1..=rounds.len()` without gaps.
+#[derive(Debug, Clone)]
+pub(super) struct AutoremoveFixedPointPlan {
+    rounds: Vec<AutoremoveFixedPointRound>,
+    skipped: Vec<(Trove, AutoremoveSkipReason)>,
 }
 
 /// What `cmd_autoremove` does with the orphan plan.
@@ -40,16 +62,16 @@ pub fn cmd_autoremove(
 
     let conn = open_db(db_path)?;
 
-    let orphans = conary_core::db::models::Trove::find_orphans(&conn)?;
+    if mode != AutoremoveMode::Apply {
+        let plan = plan_autoremove_fixed_point(&conn)?;
+        return preview_autoremove(&plan, mode);
+    }
+
+    // Apply mode reflects real removal outcomes, so it re-queries after every
+    // round instead of using the simulated fixed point.
+    let orphans = Trove::find_orphans(&conn)?;
     let orphans_empty = orphans.is_empty();
     let plan = plan_autoremove(orphans);
-
-    if mode == AutoremoveMode::PreviewJson {
-        let data = AutoremovePlanData::from_plan(&plan);
-        let result = plan_result(&data)?;
-        println!("{}", serde_json::to_string_pretty(&result)?);
-        return Ok(());
-    }
 
     if orphans_empty {
         println!("No orphaned packages found.");
@@ -64,25 +86,18 @@ pub fn cmd_autoremove(
     print_autoremove_candidates("Found", &plan.removable);
     print_autoremove_skips(&plan.skipped);
 
-    if mode == AutoremoveMode::PreviewText {
-        println!("\nDry run - no packages will be removed.");
-        println!("Run without --dry-run to remove these packages.");
-        return Ok(());
-    }
-
     // Fixed-point iteration: removing orphans may expose new orphans (transitive chains).
     // Re-query after each round until no more orphans are found.
-    const MAX_ITERATIONS: usize = 100;
     let mut total_removed = 0;
     let mut total_failed = 0;
     let mut current_plan = plan;
     let mut failed_orphans = HashSet::new();
 
-    for iteration in 0..MAX_ITERATIONS {
+    for iteration in 0..MAX_AUTOREMOVE_ITERATIONS {
         if iteration > 0 {
             // Re-query orphans after previous round of removals
             let conn = open_db(db_path)?;
-            let current_orphans = conary_core::db::models::Trove::find_orphans(&conn)?;
+            let current_orphans = Trove::find_orphans(&conn)?;
             if current_orphans.is_empty() {
                 break;
             }
@@ -153,6 +168,83 @@ pub fn cmd_autoremove(
     }
 
     Ok(())
+}
+
+/// Print a preview plan without mutating anything.
+fn preview_autoremove(plan: &AutoremoveFixedPointPlan, mode: AutoremoveMode) -> Result<()> {
+    if mode == AutoremoveMode::PreviewJson {
+        let data = AutoremovePlanData::from_fixed_point(plan);
+        let result = plan_result(&data)?;
+        println!("{}", serde_json::to_string_pretty(&result)?);
+        return Ok(());
+    }
+
+    if plan.rounds.is_empty() {
+        if plan.skipped.is_empty() {
+            println!("No orphaned packages found.");
+        } else {
+            println!("No Conary-owned orphaned packages can be autoremoved.");
+            print_autoremove_skips(&plan.skipped);
+        }
+        return Ok(());
+    }
+
+    for (index, round) in plan.rounds.iter().enumerate() {
+        let prefix = if index == 0 {
+            "Found"
+        } else {
+            "Found additional"
+        };
+        print_autoremove_candidates(prefix, &round.removable);
+    }
+    print_autoremove_skips(&plan.skipped);
+    println!("\nDry run - no packages will be removed.");
+    println!("Run without --dry-run to remove these packages.");
+
+    Ok(())
+}
+
+/// Simulate apply's fixed point without mutating anything.
+fn plan_autoremove_fixed_point(conn: &Connection) -> Result<AutoremoveFixedPointPlan> {
+    let mut removed: BTreeSet<i64> = BTreeSet::new();
+    let mut skipped: Vec<(Trove, AutoremoveSkipReason)> = Vec::new();
+    let mut skipped_ids: BTreeSet<i64> = BTreeSet::new();
+    let mut rounds: Vec<AutoremoveFixedPointRound> = Vec::new();
+
+    for iteration in 0..MAX_AUTOREMOVE_ITERATIONS {
+        let orphans = Trove::find_orphans_after_removing(conn, &removed)?
+            .into_iter()
+            .filter(|trove| {
+                trove
+                    .id
+                    .is_none_or(|trove_id| !skipped_ids.contains(&trove_id))
+            })
+            .collect::<Vec<_>>();
+        let AutoremovePlan {
+            removable,
+            skipped: round_skipped,
+        } = plan_autoremove(orphans);
+
+        for (trove, reason) in round_skipped {
+            if let Some(trove_id) = trove.id {
+                skipped_ids.insert(trove_id);
+            }
+            skipped.push((trove, reason));
+        }
+
+        if removable.is_empty() {
+            return Ok(AutoremoveFixedPointPlan { rounds, skipped });
+        }
+
+        let round = u32::try_from(iteration + 1)
+            .map_err(|_| anyhow::anyhow!("autoremove round number exceeded u32"))?;
+        removed.extend(removable.iter().filter_map(|trove| trove.id));
+        rounds.push(AutoremoveFixedPointRound { round, removable });
+    }
+
+    anyhow::bail!(
+        "autoremove plan did not reach a fixed point after {MAX_AUTOREMOVE_ITERATIONS} iterations"
+    )
 }
 
 fn preflight_autoremove_round(

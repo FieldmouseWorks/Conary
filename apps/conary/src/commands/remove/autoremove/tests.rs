@@ -72,13 +72,14 @@ fn autoremove_plan_uses_recorded_ownership_and_pin_state() {
 
 #[test]
 fn autoremove_plan_json_projects_removable_and_typed_skips() {
-    let owned = Trove::new_with_source(
+    let mut owned = Trove::new_with_source(
         "owned-orphan".to_string(),
         "1.0.0".to_string(),
         TroveType::Package,
         InstallSource::Repository,
         conary_core::repository::versioning::VersionScheme::Conary,
     );
+    owned.package_release = Some("1".to_string());
     let adopted = Trove::new_with_source(
         "adopted-orphan".to_string(),
         "1.0.0".to_string(),
@@ -96,19 +97,25 @@ fn autoremove_plan_json_projects_removable_and_typed_skips() {
     pinned.pinned = true;
 
     let plan = plan_autoremove(vec![owned, adopted, pinned]);
-    let data = AutoremovePlanData::from_plan(&plan);
+    let data = AutoremovePlanData::from_fixed_point(&fixed_point_from_plan(plan));
     let value = serde_json::to_value(plan_result(&data).unwrap()).unwrap();
 
     assert_eq!(value["operation"], "package.autoremove.plan");
     assert_eq!(value["status"], "planned");
     assert_eq!(value["risk"], "destructive");
-    assert_eq!(value["data"]["schema_version"], 1);
+    assert_eq!(
+        value["summary"],
+        "1 orphaned package(s) would be removed in 1 round(s); 2 skipped"
+    );
+    assert_eq!(value["data"]["schema_version"], 2);
     assert_eq!(
         value["data"]["removable"],
         serde_json::json!([{
             "name": "owned-orphan",
             "version": "1.0.0",
+            "package_release": "1",
             "architecture": null,
+            "round": 1,
         }])
     );
     assert_eq!(
@@ -117,12 +124,14 @@ fn autoremove_plan_json_projects_removable_and_typed_skips() {
             {
                 "name": "adopted-orphan",
                 "version": "1.0.0",
+                "package_release": null,
                 "architecture": null,
                 "reason": "adopted_native_authority",
             },
             {
                 "name": "pinned-orphan",
                 "version": "1.0.0",
+                "package_release": null,
                 "architecture": null,
                 "reason": "pinned",
             }
@@ -133,12 +142,72 @@ fn autoremove_plan_json_projects_removable_and_typed_skips() {
 #[test]
 fn autoremove_plan_json_empty_plan_is_read_only() {
     let plan = plan_autoremove(Vec::new());
-    let data = AutoremovePlanData::from_plan(&plan);
+    let data = AutoremovePlanData::from_fixed_point(&fixed_point_from_plan(plan));
     let value = serde_json::to_value(plan_result(&data).unwrap()).unwrap();
 
     assert_eq!(value["risk"], "read_only");
+    assert_eq!(
+        value["summary"],
+        "0 orphaned package(s) would be removed in 0 round(s); 0 skipped"
+    );
     assert_eq!(value["data"]["removable"], serde_json::json!([]));
     assert_eq!(value["data"]["skipped"], serde_json::json!([]));
+}
+
+#[test]
+fn fixed_point_preview_includes_packages_orphaned_by_earlier_rounds() {
+    let tmp = TempDir::new().unwrap();
+    let db_path = tmp.path().join("conary.db");
+    conary_core::db::init(&db_path).unwrap();
+    let conn = conary_core::db::open(&db_path).unwrap();
+
+    let app_id = seed_fixture_trove(&conn, "app", InstallReason::Dependency, false);
+    seed_fixture_trove(&conn, "lib", InstallReason::Dependency, false);
+    seed_fixture_trove(&conn, "base", InstallReason::Explicit, false);
+    seed_requires(&conn, app_id, "lib");
+
+    let before = installed_identities(&conn);
+    let plan = plan_autoremove_fixed_point(&conn).unwrap();
+    let after = installed_identities(&conn);
+
+    let mut planned = Vec::new();
+    for round in &plan.rounds {
+        for trove in &round.removable {
+            planned.push((trove.name.as_str(), round.round));
+        }
+    }
+    assert_eq!(planned, vec![("app", 1), ("lib", 2)]);
+    assert!(plan.skipped.is_empty());
+    assert_eq!(before, after, "preview mutated the installed trove set");
+}
+
+#[test]
+fn fixed_point_preview_keeps_dependencies_of_skipped_orphans() {
+    let tmp = TempDir::new().unwrap();
+    let db_path = tmp.path().join("conary.db");
+    conary_core::db::init(&db_path).unwrap();
+    let conn = conary_core::db::open(&db_path).unwrap();
+
+    let pinned_app_id = seed_fixture_trove(&conn, "pinned-app", InstallReason::Dependency, true);
+    seed_fixture_trove(&conn, "lib", InstallReason::Dependency, false);
+    seed_requires(&conn, pinned_app_id, "lib");
+
+    let plan = plan_autoremove_fixed_point(&conn).unwrap();
+
+    let mut removable = Vec::new();
+    for round in &plan.rounds {
+        for trove in &round.removable {
+            removable.push(trove.name.as_str());
+        }
+    }
+    assert!(removable.is_empty());
+    assert_eq!(plan.skipped.len(), 1);
+    assert_eq!(plan.skipped[0].0.name, "pinned-app");
+    assert_eq!(plan.skipped[0].1, AutoremoveSkipReason::Pinned);
+    assert!(
+        !removable.contains(&"lib"),
+        "a pinned orphan's dependency must stay required"
+    );
 }
 
 #[tokio::test]
@@ -302,6 +371,66 @@ fn seed_dependency_trove(
     trove.install_reason = InstallReason::Dependency;
     trove.selection_reason = Some("Required by fixture-root".to_string());
     trove.insert(conn).unwrap()
+}
+
+fn fixed_point_from_plan(plan: AutoremovePlan) -> AutoremoveFixedPointPlan {
+    let rounds = if plan.removable.is_empty() {
+        Vec::new()
+    } else {
+        vec![AutoremoveFixedPointRound {
+            round: 1,
+            removable: plan.removable,
+        }]
+    };
+    AutoremoveFixedPointPlan {
+        rounds,
+        skipped: plan.skipped,
+    }
+}
+
+fn seed_fixture_trove(
+    conn: &rusqlite::Connection,
+    name: &str,
+    install_reason: InstallReason,
+    pinned: bool,
+) -> i64 {
+    let mut trove = Trove::new_with_source(
+        name.to_string(),
+        "1.0.0".to_string(),
+        TroveType::Package,
+        InstallSource::Repository,
+        conary_core::repository::versioning::VersionScheme::Conary,
+    );
+    trove.architecture = Some("x86_64".to_string());
+    trove.install_reason = install_reason;
+    trove.pinned = pinned;
+    trove.insert(conn).unwrap()
+}
+
+fn seed_requires(conn: &rusqlite::Connection, trove_id: i64, dependency: &str) {
+    let requirement = conary_core::repository::requirement::parse_native_requirement(
+        conary_core::repository::dependency_model::RepositoryRequirementKind::Depends,
+        conary_core::repository::versioning::VersionScheme::Conary,
+        dependency,
+    )
+    .unwrap();
+    conary_core::db::models::InstalledRequirementGroup::insert_groups(
+        conn,
+        trove_id,
+        conary_core::repository::versioning::VersionScheme::Conary,
+        &[requirement],
+    )
+    .unwrap();
+}
+
+fn installed_identities(conn: &rusqlite::Connection) -> Vec<(String, String)> {
+    let mut identities = Trove::list_all(conn)
+        .unwrap()
+        .into_iter()
+        .map(|trove| (trove.name, trove.version))
+        .collect::<Vec<_>>();
+    identities.sort();
+    identities
 }
 
 #[cfg(feature = "test-hooks")]

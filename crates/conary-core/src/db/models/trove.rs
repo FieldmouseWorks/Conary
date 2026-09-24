@@ -9,6 +9,7 @@ use crate::repository::dependency_model::DebianMultiArch;
 use crate::repository::versioning::VersionScheme;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 use strum_macros::{AsRefStr, Display, EnumString};
 
 use super::repository::version_scheme_from_row;
@@ -282,7 +283,25 @@ impl Trove {
 
     /// Find orphaned packages (installed as dependency, no longer needed)
     pub fn find_orphans(conn: &Connection) -> Result<Vec<Self>> {
-        let installed = crate::resolver::requirements::load_installed_package_identities(conn)?;
+        Self::find_orphans_after_removing(conn, &BTreeSet::new())
+    }
+
+    /// Find orphans as if the troves in `removed` were already uninstalled.
+    ///
+    /// Removed troves neither count as installed providers nor contribute
+    /// requirement groups. `find_orphans` is this with an empty set.
+    pub fn find_orphans_after_removing(
+        conn: &Connection,
+        removed: &BTreeSet<i64>,
+    ) -> Result<Vec<Self>> {
+        let installed = crate::resolver::requirements::load_installed_package_identities(conn)?
+            .into_iter()
+            .filter(|package| {
+                package
+                    .installed_trove_id
+                    .is_none_or(|trove_id| !removed.contains(&trove_id))
+            })
+            .collect::<Vec<_>>();
         let requirements =
             super::installed_requirement_group::InstalledRequirementGroup::list_all(conn)?;
         let native_architecture = crate::repository::registry::detect_system_arch()?;
@@ -295,6 +314,9 @@ impl Trove {
             let Some(trove_id) = trove.id else {
                 continue;
             };
+            if removed.contains(&trove_id) {
+                continue;
+            }
             let remaining = installed
                 .iter()
                 .filter(|package| package.installed_trove_id != Some(trove_id))
@@ -304,6 +326,7 @@ impl Trove {
 
             for group in requirements.iter().filter(|group| {
                 group.trove_id != trove_id
+                    && !removed.contains(&group.trove_id)
                     && matches!(
                         group.kind,
                         crate::repository::dependency_model::RepositoryRequirementKind::Depends
