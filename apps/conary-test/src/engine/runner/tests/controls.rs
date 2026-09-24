@@ -599,14 +599,18 @@ async fn invalid_expanded_stdout_json_pointer_fails_before_any_step() {
 
     // Negative: `a~2b` is not a valid pointer escape, so the test must fail
     // before its step executes.
-    let mut invalid_manifest = make_manifest(vec![test]);
+    // Negative: a valid first test followed by a later test whose expanded
+    // pointer is invalid. The whole run must refuse before the first test (or
+    // any suite work) executes.
+    let first = stdout_json_test("TJSON-FIRST", "/data/value");
+    let mut invalid_manifest = make_manifest(vec![first, test]);
     invalid_manifest.distro_overrides.insert(
         "fedora44".to_string(),
         HashMap::from([("KEY".to_string(), "a~2b".to_string())]),
     );
     let invalid_backend = MockBackend::new(Vec::new());
     let mut invalid_runner = TestRunner::new(test_config(), "fedora44".to_string());
-    let invalid_suite = invalid_runner
+    let error = invalid_runner
         .run(
             &invalid_manifest,
             &invalid_backend,
@@ -614,21 +618,17 @@ async fn invalid_expanded_stdout_json_pointer_fails_before_any_step() {
             None,
         )
         .await
-        .unwrap();
+        .unwrap_err()
+        .to_string();
 
-    assert_eq!(invalid_suite.failed(), 1, "misconfigured test should fail");
-    assert_eq!(invalid_suite.passed(), 0);
     assert!(
         invalid_backend.exec_calls().is_empty(),
-        "no step should execute before the pointer preflight"
+        "no suite work may execute before the pointer preflight"
     );
-    let message = invalid_suite.results[0]
-        .message
-        .as_deref()
-        .unwrap_or_default();
+    assert!(error.contains("configuration error"), "{error}");
     assert!(
-        message.contains("/data/a~2b"),
-        "failure should name the expanded pointer: {message}"
+        error.contains("/data/a~2b"),
+        "error should name the expanded pointer: {error}"
     );
 }
 

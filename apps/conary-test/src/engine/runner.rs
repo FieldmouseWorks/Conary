@@ -176,6 +176,12 @@ impl TestRunner {
     ) -> Result<TestSuite> {
         self.load_manifest_vars(manifest);
 
+        // Validate every templated stdout_json pointer (suite setup and all
+        // tests) before any suite work: no mock server, setup step, or test
+        // may run under persisted configuration that is invalid.
+        preflight_manifest_stdout_json_pointers(manifest, &self.vars)
+            .map_err(|err| anyhow::anyhow!("configuration error: {err}"))?;
+
         if let Some(mock_server) = &manifest.suite.mock_server {
             start_mock_server(backend, container_id, mock_server).await?;
         }
@@ -341,37 +347,6 @@ impl TestRunner {
                 });
             }
 
-            // Deferred `stdout_json` templates are validated before the test's
-            // first step so a malformed expanded pointer cannot run steps.
-            if let Err(error) = preflight_stdout_json_pointers(test_def, &self.vars) {
-                let message = format!("configuration error: {error}");
-                warn!("[{}] {message}", test_def.id);
-                suite.record(TestResult {
-                    id: test_def.id.clone(),
-                    name: test_def.name.clone(),
-                    status: TestStatus::Failed,
-                    duration_ms: 0,
-                    message: Some(message.clone()),
-                    stdout: None,
-                    stderr: None,
-                    attempts: Vec::new(),
-                });
-                self.record_unrun_corpus(&mut suite, test_def, &message);
-                if let Some((run_id, ref tx)) = event_tx {
-                    let _ = tx.send(TestEvent::TestFailed {
-                        run_id,
-                        test_id: test_def.id.clone(),
-                        message,
-                        stdout: None,
-                    });
-                }
-                if test_def.fatal.unwrap_or(false) {
-                    warn!("[{}] fatal test failed, stopping suite", test_def.id);
-                    break;
-                }
-                continue;
-            }
-
             let (status, message, elapsed, last_exec) = if test_def.resources.is_some() {
                 let Some(base_container_config) = base_container_config else {
                     bail!(
@@ -521,8 +496,6 @@ impl TestRunner {
             db_path: &self.config.paths.db,
         };
 
-        preflight_stdout_json_pointers_in_steps("suite setup", &manifest.suite.setup, &self.vars)
-            .map_err(|err| anyhow::anyhow!("suite setup failed: configuration error: {err}"))?;
         for step in &manifest.suite.setup {
             let action = StepAction::from_step(step, &self.vars).ok_or_else(|| {
                 anyhow::anyhow!("suite setup failed: suite setup step has no recognized type")
@@ -787,6 +760,19 @@ impl TestRunner {
     fn expand_assertion(&self, assertion: &Assertion) -> Assertion {
         variables::expand_assertion(assertion, &self.vars)
     }
+}
+
+/// Validate every expanded `stdout_json` pointer in a manifest's suite setup
+/// and tests.
+pub(crate) fn preflight_manifest_stdout_json_pointers(
+    manifest: &TestManifest,
+    vars: &HashMap<String, String>,
+) -> Result<()> {
+    preflight_stdout_json_pointers_in_steps("suite setup", &manifest.suite.setup, vars)?;
+    for test in &manifest.test {
+        preflight_stdout_json_pointers(test, vars)?;
+    }
+    Ok(())
 }
 
 /// Validate every `stdout_json` pointer in `test` after variable expansion.
