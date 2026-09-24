@@ -767,25 +767,33 @@ impl TestRunner {
     }
 }
 
-/// Preflight every loaded manifest's expanded `stdout_json` pointers.
+/// Preflight every loaded manifest's expanded `stdout_json` pointers for every
+/// selected distro.
 ///
-/// Multi-manifest entry points call this once after loading their manifests
-/// and before any image build, container creation, or initialization. Each
-/// manifest's variable map comes from [`variables::build_manifest_variables`],
-/// the same authority `TestRunner` uses, so a pointer rejected here would only
-/// otherwise be rejected inside the runner after all earlier container work.
+/// Run entry points call this once after loading their manifests and before
+/// any image build, container creation, or initialization for any distro.
+/// Each variable map comes from [`variables::build_manifest_variables`], the
+/// same authority `TestRunner` uses, so a pointer rejected here would only
+/// otherwise be rejected inside the runner after earlier container work,
+/// including whole runs for earlier distros.
 ///
 /// The first failure aborts with
-/// `configuration error: <manifest path>: <error>`.
+/// `configuration error: <manifest path>: distro <distro>: <error>`.
 pub fn preflight_loaded_manifests_stdout_json_pointers(
     manifests: &[(PathBuf, TestManifest)],
     config: &GlobalConfig,
-    distro: &str,
+    distros: &[String],
 ) -> Result<()> {
-    for (path, manifest) in manifests {
-        let vars = variables::build_manifest_variables(config, distro, manifest);
-        preflight_manifest_stdout_json_pointers(manifest, &vars)
-            .map_err(|error| anyhow::anyhow!("configuration error: {}: {error}", path.display()))?;
+    for distro in distros {
+        for (path, manifest) in manifests {
+            let vars = variables::build_manifest_variables(config, distro, manifest);
+            preflight_manifest_stdout_json_pointers(manifest, &vars).map_err(|error| {
+                anyhow::anyhow!(
+                    "configuration error: {}: distro {distro}: {error}",
+                    path.display()
+                )
+            })?;
+        }
     }
     Ok(())
 }

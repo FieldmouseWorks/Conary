@@ -736,7 +736,7 @@ fn early_preflight_rejects_invalid_pointer_in_a_later_manifest() {
         preflight_loaded_manifests_stdout_json_pointers(
             &loaded(manifest_with_pointer("value")),
             &test_config(),
-            "fedora44",
+            &["fedora44".to_string()],
         )
         .is_ok()
     );
@@ -746,14 +746,59 @@ fn early_preflight_rejects_invalid_pointer_in_a_later_manifest() {
     let error = preflight_loaded_manifests_stdout_json_pointers(
         &loaded(manifest_with_pointer("a~2b")),
         &test_config(),
-        "fedora44",
+        &["fedora44".to_string()],
     )
     .unwrap_err()
     .to_string();
 
     assert!(
-        error.starts_with("configuration error: /manifests/second.toml:"),
+        error.starts_with("configuration error: /manifests/second.toml: distro fedora44:"),
         "error should name the failing manifest: {error}"
+    );
+    assert!(
+        error.contains("/data/a~2b"),
+        "error should name the expanded pointer: {error}"
+    );
+}
+
+#[test]
+fn early_preflight_rejects_invalid_pointer_for_a_later_distro() {
+    use std::path::PathBuf;
+
+    // One manifest whose templated pointer expands validly for `alpha` and
+    // malformed for `omega`, the distro an `--all-distros` run reaches last.
+    let mut manifest = make_manifest(vec![stdout_json_test("TJSON-DISTRO", "/data/${KEY}")]);
+    for (distro, key) in [("alpha", "value"), ("omega", "a~2b")] {
+        manifest.distro_overrides.insert(
+            distro.to_string(),
+            HashMap::from([("KEY".to_string(), key.to_string())]),
+        );
+    }
+    let loaded = vec![(PathBuf::from("/manifests/only.toml"), manifest)];
+
+    // Positive control: the earlier distro alone passes.
+    assert!(
+        preflight_loaded_manifests_stdout_json_pointers(
+            &loaded,
+            &test_config(),
+            &["alpha".to_string()],
+        )
+        .is_ok()
+    );
+
+    // Negative: selecting both distros fails on the later distro's expansion,
+    // before any distro's run can start.
+    let error = preflight_loaded_manifests_stdout_json_pointers(
+        &loaded,
+        &test_config(),
+        &["alpha".to_string(), "omega".to_string()],
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(
+        error.starts_with("configuration error: /manifests/only.toml: distro omega:"),
+        "error should name the failing manifest and distro: {error}"
     );
     assert!(
         error.contains("/data/a~2b"),
