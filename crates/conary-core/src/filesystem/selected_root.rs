@@ -108,6 +108,35 @@ pub fn selected_root_symlink_targets_directory(
     Ok(Some(SelectedRootSymlinkTarget { package_path, node }))
 }
 
+/// Resolve `path` (absolute, package spelling) entirely inside `root`,
+/// following every symlink — including the leaf — as root-relative, and
+/// return the resolved root-relative path when it names a regular file with
+/// at least one execute bit. `Ok(None)` when any component is absent.
+/// Absolute symlink targets resolve against `root`, never the host.
+pub fn selected_root_executable(root: &Path, path: &str) -> Result<Option<PathBuf>> {
+    validate_selected_root(root)?;
+    let relative = root_relative_package_path(path)?;
+    let resolved = match resolve_existing_root_relative_path(root, &relative, path) {
+        Ok(resolved) => resolved,
+        Err(Error::NotFound(_)) => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    let candidate = root.join(&resolved);
+    let metadata = match fs::metadata(&candidate) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(Error::Io(error)),
+    };
+    if !metadata.file_type().is_file() {
+        return Ok(None);
+    }
+    use std::os::unix::fs::PermissionsExt;
+    if metadata.permissions().mode() & 0o111 == 0 {
+        return Ok(None);
+    }
+    Ok(Some(resolved))
+}
+
 fn resolve_leaf_without_following(
     root: &Path,
     relative: &Path,
@@ -299,7 +328,19 @@ mod tests {
     use super::*;
     use std::ffi::OsString;
     use std::os::unix::ffi::OsStringExt;
+    use std::os::unix::fs::PermissionsExt;
     use std::os::unix::fs::symlink;
+
+    fn write_executable(root: &Path, relative: &str) {
+        let path = root.join(relative);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(&path, b"#!/bin/sh\nexit 0\n").unwrap();
+        let mut permissions = fs::metadata(&path).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&path, permissions).unwrap();
+    }
 
     #[test]
     fn absolute_symlink_targets_are_resolved_inside_the_selected_root() {
@@ -428,5 +469,97 @@ mod tests {
 
         let error = selected_root_symlink_targets_directory(root.path(), "/link").unwrap_err();
         assert!(matches!(error, Error::InvalidPath(_)), "{error}");
+    }
+
+    #[test]
+    fn selected_root_executable_finds_a_regular_executable_file() {
+        let root = tempfile::tempdir().unwrap();
+        write_executable(root.path(), "usr/bin/tool");
+
+        assert_eq!(
+            selected_root_executable(root.path(), "/usr/bin/tool").unwrap(),
+            Some(PathBuf::from("usr/bin/tool"))
+        );
+    }
+
+    #[test]
+    fn selected_root_executable_missing_component_is_none() {
+        let root = tempfile::tempdir().unwrap();
+        write_executable(root.path(), "usr/bin/present");
+
+        // Positive control: the same fixture is a present executable.
+        assert_eq!(
+            selected_root_executable(root.path(), "/usr/bin/present").unwrap(),
+            Some(PathBuf::from("usr/bin/present"))
+        );
+        assert_eq!(
+            selected_root_executable(root.path(), "/usr/bin/missing").unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn selected_root_executable_follows_relative_symlink_chains() {
+        let root = tempfile::tempdir().unwrap();
+        write_executable(root.path(), "usr/bin/bash");
+        symlink("usr/bin", root.path().join("bin")).unwrap();
+        symlink("bash", root.path().join("usr/bin/sh")).unwrap();
+
+        assert_eq!(
+            selected_root_executable(root.path(), "/bin/sh").unwrap(),
+            Some(PathBuf::from("usr/bin/bash"))
+        );
+    }
+
+    #[test]
+    fn selected_root_executable_resolves_absolute_symlinks_inside_root() {
+        let root = tempfile::tempdir().unwrap();
+        write_executable(root.path(), "usr/bin/bash");
+        fs::create_dir_all(root.path().join("bin")).unwrap();
+        symlink("/usr/bin/bash", root.path().join("bin/sh")).unwrap();
+
+        assert_eq!(
+            selected_root_executable(root.path(), "/bin/sh").unwrap(),
+            Some(PathBuf::from("usr/bin/bash"))
+        );
+    }
+
+    #[test]
+    fn selected_root_executable_absolute_symlink_does_not_escape_to_host() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir_all(root.path().join("bin")).unwrap();
+        symlink("/usr/bin/env", root.path().join("bin/sh")).unwrap();
+
+        // The host provides the absolute target; the selected root must not
+        // borrow it. If the host lacks the fixture the no-escape proof is moot.
+        assert!(
+            Path::new("/usr/bin/env").exists(),
+            "host fixture /usr/bin/env must exist for the no-escape proof"
+        );
+        assert_eq!(
+            selected_root_executable(root.path(), "/bin/sh").unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn selected_root_executable_requires_an_execute_bit() {
+        let root = tempfile::tempdir().unwrap();
+        // Positive control: the same shape with an execute bit is found.
+        write_executable(root.path(), "usr/bin/runnable");
+        assert!(
+            selected_root_executable(root.path(), "/usr/bin/runnable")
+                .unwrap()
+                .is_some()
+        );
+
+        let data = root.path().join("usr/share/data");
+        fs::create_dir_all(data.parent().unwrap()).unwrap();
+        fs::write(&data, b"data").unwrap();
+        fs::set_permissions(&data, fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(
+            selected_root_executable(root.path(), "/usr/share/data").unwrap(),
+            None
+        );
     }
 }

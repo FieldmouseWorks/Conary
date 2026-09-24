@@ -5,6 +5,7 @@
 //! manifest selection, hook-status, and capability-gate helpers. Shared install
 //! transaction mechanics stay in `install/mod.rs`.
 
+use super::ccs_hook_interpreter::{HookInterpreterLedger, HookPhase};
 use super::ccs_removal_hooks::CcsRemovalHookPlan;
 use super::native_events::{NativeInstallInput, PreparedNativeTransaction};
 use super::{
@@ -283,11 +284,17 @@ fn ccs_lifecycle_dry_run_entries(
             .iter()
             .map(|hook| format!("alternative:{}:{}", hook.name, hook.path)),
     );
-    if hooks.post_install.is_some() {
-        entries.push("post-install:/bin/sh:sandboxed-target-root:planned".to_string());
+    if let Some(hook) = hooks.post_install.as_ref() {
+        entries.push(format!(
+            "post-install:{}:sandboxed-target-root:planned",
+            hook.interpreter
+        ));
     }
-    if hooks.pre_remove.is_some() {
-        entries.push("pre-remove:/bin/sh:sandboxed-target-root:persisted".to_string());
+    if let Some(hook) = hooks.pre_remove.as_ref() {
+        entries.push(format!(
+            "pre-remove:{}:sandboxed-target-root:persisted",
+            hook.interpreter
+        ));
     }
     entries.extend(
         manifest
@@ -476,6 +483,47 @@ fn install_ccs_package_transactionally_inner(
         hook_executor
             .preflight_hooks(hooks)
             .context("CCS lifecycle host capability preflight failed")?;
+    }
+    if let Some(hook) = hooks.post_install.as_ref() {
+        let mut ledger = HookInterpreterLedger::new(Path::new(&transaction_root));
+        let mut removed_old_paths = Vec::new();
+        if let Some(trove_id) = old_trove.and_then(|trove| trove.id) {
+            removed_old_paths.extend(
+                conary_core::db::models::FileEntry::find_by_trove(&preflight_state, trove_id)?
+                    .into_iter()
+                    .map(|file| file.path),
+            );
+        }
+        for removal in &relation_plan.removals {
+            removed_old_paths.extend(
+                conary_core::db::models::FileEntry::find_by_trove(
+                    &preflight_state,
+                    removal.trove_id,
+                )?
+                .into_iter()
+                .map(|file| file.path),
+            );
+        }
+        let introduced_paths = extraction
+            .extracted_files
+            .iter()
+            .map(|file| file.path.clone())
+            .chain(
+                resolution_capabilities
+                    .iter()
+                    .filter(|capability| {
+                        capability.kind
+                            == conary_core::repository::dependency_model::RepositoryCapabilityKind::Path
+                    })
+                    .map(|capability| capability.name.clone()),
+            );
+        ledger.apply_element(removed_old_paths, introduced_paths);
+        ledger.require(
+            pkg.name(),
+            pkg.version(),
+            HookPhase::PostInstall,
+            &hook.interpreter,
+        )?;
     }
 
     let mut changes = vec![super::report::InstallChange::incoming(
