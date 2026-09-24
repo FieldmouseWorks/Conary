@@ -2,369 +2,200 @@
 
 #![cfg(test)]
 
-use super::*;
-use crate::commands::ccs::cmd_ccs_install;
-use conary_core::db::models::{ProvideEntry, Trove, TroveType};
-use conary_core::packages::payload::{PackagePayload, PackagePayloadFile};
-use conary_core::packages::traits::{PackageFile, PackageFormat};
-use conary_core::payload::{PayloadIdentity, PayloadNode, PayloadNodeKind, PayloadTimestamp};
-use conary_core::repository::dependency_model::{
-    CapabilityProvenance, ProvideArchitectureQualifier, ProvideVersionRelation, ProvidedCapability,
-    RepositoryCapabilityKind, SourcePackageFormat,
-};
-use conary_core::repository::versioning::VersionScheme;
+use crate::commands::ccs::selected_ccs_resolution_capabilities;
+use conary_core::ccs::{BuildResult, CcsManifest, ComponentData};
+use conary_core::repository::dependency_model::{ProvidedCapability, RepositoryCapabilityKind};
 use std::collections::HashMap;
 
-/// Minimal `PackageFormat` for exercising declared-provide persistence without a
-/// native archive on disk.
-struct DeclaredProvideTestPackage {
-    name: &'static str,
-    version: &'static str,
-    version_scheme: VersionScheme,
-    payload_files: Vec<PackageFile>,
-    declared_provides: Vec<ProvidedCapability>,
+fn selected_names(names: &[&str]) -> Vec<String> {
+    names.iter().map(|name| (*name).to_string()).collect()
 }
 
-impl PackageFormat for DeclaredProvideTestPackage {
-    fn parse(_path: &str) -> conary_core::Result<Self> {
-        Err(conary_core::Error::ParseError(
-            "declared-provide test package is constructed directly".to_string(),
-        ))
-    }
-
-    fn name(&self) -> &str {
-        self.name
-    }
-
-    fn version(&self) -> &str {
-        self.version
-    }
-
-    fn version_scheme(&self) -> VersionScheme {
-        self.version_scheme
-    }
-
-    fn architecture(&self) -> Option<&str> {
-        None
-    }
-
-    fn description(&self) -> Option<&str> {
-        None
-    }
-
-    fn files(&self) -> &[PackageFile] {
-        &self.payload_files
-    }
-
-    fn requirements(
-        &self,
-    ) -> &[conary_core::repository::dependency_model::RepositoryRequirementGroup] {
-        &[]
-    }
-
-    fn resolution_capabilities(&self) -> conary_core::Result<Vec<ProvidedCapability>> {
-        Ok(self.declared_provides.clone())
-    }
-
-    fn package_payload(&self) -> conary_core::Result<PackagePayload> {
-        Ok(PackagePayload::default())
-    }
-
-    fn to_trove(&self) -> Trove {
-        Trove::new(
-            self.name.to_string(),
-            self.version.to_string(),
-            TroveType::Package,
-            self.version_scheme,
-        )
-    }
+fn file_provide_names(capabilities: &[ProvidedCapability]) -> Vec<&str> {
+    capabilities
+        .iter()
+        .filter(|capability| capability.kind == RepositoryCapabilityKind::File)
+        .map(|capability| capability.name.as_str())
+        .collect()
 }
 
-fn package_self_provide(name: &str, version: &str, scheme: VersionScheme) -> ProvidedCapability {
-    ProvidedCapability {
-        kind: RepositoryCapabilityKind::PackageName,
-        name: name.to_string(),
-        version: Some(version.to_string()),
-        version_relation: Some(ProvideVersionRelation::Equal),
-        version_scheme: scheme,
-        architecture_qualifier: ProvideArchitectureQualifier::Implicit,
-        provenance: CapabilityProvenance::ExactIdentity,
-    }
-}
+/// Sign a CCS fixture and return its verified parsed package.
+fn verified_ccs_package(
+    temp_dir: &std::path::Path,
+    name: &str,
+    entries: &[(&str, &str)],
+    declared_file_provides: &[&str],
+    declared_capabilities: &[&str],
+) -> conary_core::ccs::CcsPackage {
+    let mut manifest = CcsManifest::new_minimal(name, "1.0.0");
+    manifest.provides.files = declared_file_provides
+        .iter()
+        .map(|path| (*path).to_string())
+        .collect();
+    manifest.provides.capabilities = declared_capabilities
+        .iter()
+        .map(|capability| (*capability).to_string())
+        .collect();
 
-fn declared_file_provide(name: &str, scheme: VersionScheme) -> ProvidedCapability {
-    ProvidedCapability {
-        kind: RepositoryCapabilityKind::File,
-        name: name.to_string(),
-        version: None,
-        version_relation: None,
-        version_scheme: scheme,
-        architecture_qualifier: ProvideArchitectureQualifier::Implicit,
-        provenance: CapabilityProvenance::SourceDeclared {
-            format: SourcePackageFormat::for_version_scheme(scheme),
-            record_index: 0,
-        },
+    let mut files = Vec::new();
+    let mut blobs = HashMap::new();
+    let mut component_files: HashMap<String, Vec<conary_core::ccs::FileEntry>> = HashMap::new();
+    let mut total_size = 0;
+    for (path, component) in entries {
+        let content = format!("payload for {path}").into_bytes();
+        let sha256 = conary_core::hash::sha256(&content);
+        let size = content.len() as u64;
+        total_size += size;
+        let file = ccs_regular_file(
+            (*path).to_string(),
+            sha256.clone(),
+            size,
+            0o100755,
+            (*component).to_string(),
+        );
+        component_files
+            .entry((*component).to_string())
+            .or_default()
+            .push(file.clone());
+        blobs.insert(sha256, content);
+        files.push(file);
     }
-}
+    let components = component_files
+        .into_iter()
+        .map(|(name, files)| {
+            let size = files
+                .iter()
+                .map(|file| file.content.as_ref().map_or(0, |content| content.size))
+                .sum();
+            (
+                name.clone(),
+                ComponentData {
+                    name,
+                    files,
+                    hash: "test-component".to_string(),
+                    size,
+                },
+            )
+        })
+        .collect();
 
-fn payload_file(path: &str) -> PackageFile {
-    PackageFile {
-        path: path.to_string(),
-        node: PayloadNode::regular(0o755),
-        content: None,
-    }
-}
-
-fn extracted_symlink(path: &str, target: &str) -> PackagePayloadFile {
-    let node = PayloadNode {
-        kind: PayloadNodeKind::Symlink {
-            target: target.to_string(),
-        },
-        mode: libc::S_IFLNK | 0o777,
-        user: PayloadIdentity::Numeric { id: 0 },
-        group: PayloadIdentity::Numeric { id: 0 },
-        mtime: PayloadTimestamp::UNIX_EPOCH,
-        xattrs: Default::default(),
+    let result = BuildResult {
+        manifest,
+        components,
+        files: files.clone(),
+        payloads: conary_core::ccs::builder::payloads_from_bounded_memory_for_tests(&files, blobs)
+            .unwrap(),
+        total_size,
+        chunked: false,
+        chunk_stats: None,
     };
-    PackagePayloadFile::new(path.to_string(), node, None, None).unwrap()
-}
-
-fn persist_and_read_file_provides(
-    package: &dyn PackageFormat,
-    extracted_files: &[PackagePayloadFile],
-) -> Vec<ProvideEntry> {
-    let temp_dir = tempfile::tempdir().unwrap();
-    let db_path = temp_dir.path().join("conary.db");
-    let db_path_str = db_path.to_str().unwrap();
-    conary_core::db::init(db_path_str).unwrap();
-    let mut conn = conary_core::db::open(db_path_str).unwrap();
-    let trove_id = {
-        let tx = conn.transaction().unwrap();
-        let mut trove = package.to_trove();
-        let trove_id = trove.insert(&tx).unwrap();
-        persist_package_provides(
-            &tx,
-            trove_id,
-            package,
-            InstallSemantics::ccs(package.version_scheme()),
-            extracted_files,
-        )
-        .unwrap();
-        tx.commit().unwrap();
-        trove_id
-    };
-    ProvideEntry::find_by_trove_and_kind(&conn, trove_id, RepositoryCapabilityKind::File).unwrap()
+    let package_path = temp_dir.join(format!("{name}.ccs"));
+    let trust_policy_path = write_signed_test_package(&result, &package_path);
+    let policy = conary_core::ccs::TrustPolicy::from_file(&trust_policy_path).unwrap();
+    let verified = conary_core::ccs::verify::verify_package(&package_path, &policy).unwrap();
+    conary_core::ccs::CcsPackage::from_verified_archive(package_path.to_str().unwrap(), &verified)
+        .unwrap()
 }
 
 #[test]
-fn declared_file_provide_matching_uninstalled_payload_path_is_dropped() {
-    let scheme = VersionScheme::Conary;
-    let package = DeclaredProvideTestPackage {
-        name: "component-selection-fixture",
-        version: "1.0.0",
-        version_scheme: scheme,
-        payload_files: vec![
-            payload_file("/bin/sh"),
-            payload_file("/usr/share/doc/component-selection-fixture/README"),
-        ],
-        declared_provides: vec![
-            package_self_provide("component-selection-fixture", "1.0.0", scheme),
-            declared_file_provide("/bin/sh", scheme),
-        ],
-    };
-
-    let docs_only = persist_and_read_file_provides(
-        &package,
-        &[extracted_symlink(
-            "/usr/share/doc/component-selection-fixture/README",
-            "README",
-        )],
-    );
-    assert!(
-        docs_only
-            .iter()
-            .all(|provide| provide.capability != "/bin/sh"),
-        "a declared File provide for a shipped payload path the selected components skipped must not persist"
+fn selected_component_keeps_shipped_file_provide() {
+    let temp = tempfile::tempdir().unwrap();
+    let package = verified_ccs_package(
+        temp.path(),
+        "selected-shipped",
+        &[("/bin/sh", "runtime")],
+        &["/bin/sh"],
+        &[],
     );
 
-    let runtime_installed =
-        persist_and_read_file_provides(&package, &[extracted_symlink("/bin/sh", "dash")]);
-    assert!(
-        runtime_installed
-            .iter()
-            .any(|provide| provide.capability == "/bin/sh"),
-        "installing the component that ships the provided path must persist the declared File provide"
+    let capabilities =
+        selected_ccs_resolution_capabilities(&package, &selected_names(&["runtime"])).unwrap();
+
+    assert!(file_provide_names(&capabilities).contains(&"/bin/sh"));
+}
+
+#[test]
+fn unselected_component_drops_shipped_file_provide() {
+    let temp = tempfile::tempdir().unwrap();
+    let package = verified_ccs_package(
+        temp.path(),
+        "unselected-shipped",
+        &[("/bin/sh", "runtime")],
+        &["/bin/sh"],
+        &[],
     );
+
+    let unselected =
+        selected_ccs_resolution_capabilities(&package, &selected_names(&["docs"])).unwrap();
+    assert!(!file_provide_names(&unselected).contains(&"/bin/sh"));
+
+    // Positive control: the same fixture keeps the provide once the shipping
+    // component is selected.
+    let selected =
+        selected_ccs_resolution_capabilities(&package, &selected_names(&["runtime"])).unwrap();
+    assert!(file_provide_names(&selected).contains(&"/bin/sh"));
 }
 
 #[test]
 fn declared_file_provide_absent_from_payload_is_retained() {
-    let scheme = VersionScheme::Rpm;
-    let package = DeclaredProvideTestPackage {
-        name: "rpm-like-bash",
-        version: "5.2.26-1",
-        version_scheme: scheme,
-        // An RPM header may declare a path the payload materializes elsewhere.
-        payload_files: vec![payload_file("/usr/bin/sh")],
-        declared_provides: vec![
-            package_self_provide("rpm-like-bash", "5.2.26-1", scheme),
-            declared_file_provide("/bin/sh", scheme),
-        ],
-    };
+    let temp = tempfile::tempdir().unwrap();
+    let package = verified_ccs_package(
+        temp.path(),
+        "unshipped-declared",
+        &[("/usr/bin/sh", "runtime")],
+        &["/bin/sh"],
+        &[],
+    );
 
-    let provides =
-        persist_and_read_file_provides(&package, &[extracted_symlink("/usr/bin/sh", "bash")]);
+    let capabilities =
+        selected_ccs_resolution_capabilities(&package, &selected_names(&["docs"])).unwrap();
+
     assert!(
-        provides
-            .iter()
-            .any(|provide| provide.capability == "/bin/sh"),
-        "a source-format File provide for a path the package does not ship must survive install"
+        file_provide_names(&capabilities).contains(&"/bin/sh"),
+        "a source-format declared path the package does not ship must survive selection"
     );
 }
 
-// ---------------------------------------------------------------------------
-// End-to-end CCS component selection.
-// ---------------------------------------------------------------------------
-
-struct InstallFixtureRoot {
-    db_path: std::path::PathBuf,
-    install_root: std::path::PathBuf,
-}
-
-fn install_fixture_root(base: &std::path::Path, name: &str) -> InstallFixtureRoot {
-    let dir = base.join(format!("{name}-root"));
-    std::fs::create_dir_all(&dir).unwrap();
-    let db_path = dir.join("conary.db");
-    let install_root = dir.join("root");
-    std::fs::create_dir_all(&install_root).unwrap();
-    let db_path_str = db_path.to_str().unwrap();
-    conary_core::db::init(db_path_str).unwrap();
-    stage_test_boot_assets(&dir);
-    seed_test_init_trove(db_path_str, &dir);
-    InstallFixtureRoot {
-        db_path,
-        install_root,
-    }
-}
-
-fn installed_file_provides(db_path: &str) -> Vec<ProvideEntry> {
-    let conn = conary_core::db::open(db_path).unwrap();
-    let troves = Trove::find_by_name(&conn, "file-provide-selection").unwrap();
-    assert_eq!(troves.len(), 1, "fixture trove must be installed once");
-    let trove_id = troves[0].id.expect("installed trove has a database id");
-    ProvideEntry::find_by_trove_and_kind(&conn, trove_id, RepositoryCapabilityKind::File).unwrap()
-}
-
-#[tokio::test]
-async fn ccs_component_selection_does_not_persist_uninstalled_declared_file_provide() {
-    use conary_core::ccs::{BuildResult, CcsManifest, ComponentData};
-    use conary_core::hash;
-
-    let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
-    let temp_dir = tempfile::tempdir().unwrap();
-    let package_path = temp_dir.path().join("file-provide-selection.ccs");
-
-    let sh_content = b"#!/bin/sh\nexec true\n".to_vec();
-    let sh_hash = hash::sha256(&sh_content);
-    let readme_content = b"component selection fixture\n".to_vec();
-    let readme_hash = hash::sha256(&readme_content);
-
-    let runtime_file = ccs_regular_file(
-        "/bin/sh".to_string(),
-        sh_hash.clone(),
-        sh_content.len() as u64,
-        0o100755,
-        "runtime".to_string(),
+#[test]
+fn non_file_capabilities_are_never_filtered() {
+    let temp = tempfile::tempdir().unwrap();
+    let package = verified_ccs_package(
+        temp.path(),
+        "non-file-capability",
+        &[("/bin/sh", "runtime")],
+        &["/bin/sh"],
+        &["virtual-api"],
     );
-    let docs_file = ccs_regular_file(
-        "/usr/share/doc/file-provide-selection/README".to_string(),
-        readme_hash.clone(),
-        readme_content.len() as u64,
-        0o100644,
-        "docs".to_string(),
-    );
-    let files = vec![runtime_file.clone(), docs_file.clone()];
 
-    let mut manifest = CcsManifest::new_minimal("file-provide-selection", "1.0.0");
-    manifest.components.default = vec!["runtime".to_string()];
-    manifest.provides.files = vec!["/bin/sh".to_string()];
+    let capabilities =
+        selected_ccs_resolution_capabilities(&package, &selected_names(&["docs"])).unwrap();
 
-    let result = BuildResult {
-        manifest,
-        components: HashMap::from([
-            (
-                "runtime".to_string(),
-                ComponentData {
-                    name: "runtime".to_string(),
-                    files: vec![runtime_file],
-                    hash: "runtime".to_string(),
-                    size: sh_content.len() as u64,
-                },
-            ),
-            (
-                "docs".to_string(),
-                ComponentData {
-                    name: "docs".to_string(),
-                    files: vec![docs_file],
-                    hash: "docs".to_string(),
-                    size: readme_content.len() as u64,
-                },
-            ),
-        ]),
-        files: files.clone(),
-        payloads: conary_core::ccs::builder::payloads_from_bounded_memory_for_tests(
-            &files,
-            HashMap::from([(sh_hash, sh_content), (readme_hash, readme_content)]),
-        )
-        .unwrap(),
-        total_size: 0,
-        chunked: false,
-        chunk_stats: None,
-    };
-    let trust_policy_path = write_signed_test_package(&result, &package_path);
-    let trust_policy = trust_policy_path.to_string_lossy().into_owned();
-
-    let docs_root = install_fixture_root(temp_dir.path(), "docs");
-    cmd_ccs_install(
-        package_path.to_str().unwrap(),
-        docs_root.db_path.to_str().unwrap(),
-        docs_root.install_root.to_str().unwrap(),
-        false,
-        Some(trust_policy.clone()),
-        Some(vec!["docs".to_string()]),
-        crate::commands::SandboxMode::Always,
-        true,
-        false,
-    )
-    .unwrap();
-    let docs_provides = installed_file_provides(docs_root.db_path.to_str().unwrap());
     assert!(
-        docs_provides
-            .iter()
-            .all(|provide| provide.capability != "/bin/sh"),
-        "installing only the docs component must not persist a File provide for the runtime-only payload path"
+        capabilities.iter().any(|capability| {
+            capability.kind == RepositoryCapabilityKind::Virtual && capability.name == "virtual-api"
+        }),
+        "non-File capabilities must survive a selection that drops a File provide"
+    );
+}
+
+#[test]
+fn file_provide_and_entry_path_match_through_the_lexical_parser() {
+    let temp = tempfile::tempdir().unwrap();
+    let package = verified_ccs_package(
+        temp.path(),
+        "parser-match",
+        &[("bin/sh", "runtime")],
+        &["/bin/sh"],
+        &[],
     );
 
-    let runtime_root = install_fixture_root(temp_dir.path(), "runtime");
-    cmd_ccs_install(
-        package_path.to_str().unwrap(),
-        runtime_root.db_path.to_str().unwrap(),
-        runtime_root.install_root.to_str().unwrap(),
-        false,
-        Some(trust_policy),
-        Some(vec!["runtime".to_string()]),
-        crate::commands::SandboxMode::Always,
-        true,
-        false,
-    )
-    .unwrap();
-    let runtime_provides = installed_file_provides(runtime_root.db_path.to_str().unwrap());
-    assert!(
-        runtime_provides
-            .iter()
-            .any(|provide| provide.capability == "/bin/sh"),
-        "installing the component that ships the provided path must persist the declared File provide"
-    );
+    let selected =
+        selected_ccs_resolution_capabilities(&package, &selected_names(&["runtime"])).unwrap();
+    assert!(file_provide_names(&selected).contains(&"/bin/sh"));
+
+    let unselected =
+        selected_ccs_resolution_capabilities(&package, &selected_names(&["docs"])).unwrap();
+    assert!(!file_provide_names(&unselected).contains(&"/bin/sh"));
 }
 
 fn write_signed_test_package(
@@ -416,123 +247,4 @@ fn ccs_regular_file(
         component: component.into(),
         chunks: None,
     }
-}
-
-fn stage_test_boot_assets(root: &std::path::Path) {
-    let conn = conary_core::db::open(root.join("conary.db")).unwrap();
-    crate::commands::test_helpers::persist_test_host_capabilities(&conn);
-    drop(conn);
-
-    let kernel_version = "test-kernel";
-    let boot_root = root.join("boot");
-    std::fs::create_dir_all(boot_root.join("EFI/BOOT")).unwrap();
-    std::fs::write(
-        boot_root.join(format!("vmlinuz-{kernel_version}")),
-        b"test-kernel",
-    )
-    .unwrap();
-    std::fs::write(
-        boot_root.join(format!("initramfs-{kernel_version}.img")),
-        b"test-initramfs",
-    )
-    .unwrap();
-    std::fs::write(boot_root.join("EFI/BOOT/BOOTX64.EFI"), b"test-efi").unwrap();
-}
-
-fn seed_test_init_trove(db_path: &str, db_dir: &std::path::Path) {
-    use conary_core::db::models::{
-        Changeset, ChangesetStatus, Component, FileEntry, ProvideEntry, Trove, TroveType,
-    };
-    use conary_core::payload::{
-        PayloadContentAuthority, PayloadIdentity, PayloadNode, PayloadNodeKind, PayloadTimestamp,
-        ResolvedPayloadNode,
-    };
-
-    let cas = conary_core::filesystem::CasStore::new(db_dir.join("objects")).unwrap();
-    let init_content = b"#!/bin/sh\nexec true\n";
-    let init_hash = cas.store(init_content).unwrap();
-    let init_size = i64::try_from(init_content.len()).unwrap();
-    let mut conn = conary_core::db::open(db_path).unwrap();
-
-    conary_core::db::transaction(&mut conn, |tx| {
-        let mut changeset = Changeset::new("Install test-init-1.0.0".to_string());
-        let changeset_id = changeset.insert(tx)?;
-
-        let mut trove = Trove::new(
-            "test-init".to_string(),
-            "1.0.0".to_string(),
-            TroveType::Package,
-            conary_core::repository::versioning::VersionScheme::Conary,
-        );
-        trove.architecture =
-            Some(conary_core::ccs::manifest::DEFAULT_CONARY_ARCHITECTURE.to_string());
-        trove.installed_by_changeset_id = Some(changeset_id);
-        let trove_id = trove.insert(tx)?;
-
-        let mut component = Component::new(trove_id, "runtime".to_string());
-        let component_id = component.insert(tx)?;
-
-        tx.execute(
-            "INSERT OR IGNORE INTO file_contents (sha256_hash, content_path, size) VALUES (?1, ?2, ?3)",
-            rusqlite::params![
-                &init_hash,
-                format!("objects/{}/{}", &init_hash[0..2], &init_hash[2..]),
-                init_size
-            ],
-        )?;
-
-        let current_identity = || {
-            PayloadNode {
-                kind: PayloadNodeKind::Directory,
-                mode: libc::S_IFDIR | 0o755,
-                user: PayloadIdentity::Numeric {
-                    id: u64::from(unsafe { libc::geteuid() }),
-                },
-                group: PayloadIdentity::Numeric {
-                    id: u64::from(unsafe { libc::getegid() }),
-                },
-                mtime: PayloadTimestamp::UNIX_EPOCH,
-                xattrs: Default::default(),
-            }
-        };
-        let mut sbin = FileEntry::new(
-            "/sbin".to_string(),
-            ResolvedPayloadNode::from_numeric_source(current_identity()).unwrap(),
-            None,
-            trove_id,
-        );
-        sbin.component_id = Some(component_id);
-        sbin.insert(tx)?;
-
-        let mut init_node = PayloadNode::regular(0o755);
-        init_node.user = PayloadIdentity::Numeric {
-            id: u64::from(unsafe { libc::geteuid() }),
-        };
-        init_node.group = PayloadIdentity::Numeric {
-            id: u64::from(unsafe { libc::getegid() }),
-        };
-        let mut init = FileEntry::new(
-            "/sbin/init".to_string(),
-            ResolvedPayloadNode::from_numeric_source(init_node).unwrap(),
-            Some(PayloadContentAuthority {
-                sha256: init_hash,
-                size: init_content.len() as u64,
-            }),
-            trove_id,
-        );
-        init.component_id = Some(component_id);
-        init.insert(tx)?;
-
-        let mut provide = ProvideEntry::new(
-            trove_id,
-            "test-init".to_string(),
-            Some("1.0.0".to_string()),
-            conary_core::repository::versioning::VersionScheme::Conary,
-        );
-        provide.insert(tx)?;
-        changeset.update_status(tx, ChangesetStatus::Applied)?;
-
-        Ok(())
-    })
-    .unwrap();
 }

@@ -911,6 +911,7 @@ fn restore_transaction_context<'a>(
             .as_ref()
             .and_then(|contract| contract.capabilities.as_ref()),
         file_capabilities,
+        selected_resolution_capabilities: None,
         defer_generation: false,
         repository_provenance: prepared.repository_provenance.clone(),
         requested_source_identity: None,

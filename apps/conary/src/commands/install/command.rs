@@ -394,6 +394,7 @@ async fn cmd_install_with_intent(
         old_trove_to_upgrade: old_trove_to_upgrade.as_deref(),
         ccs_capabilities: None,
         file_capabilities: Some(&file_capabilities),
+        selected_resolution_capabilities: None,
         defer_generation: false,
         repository_provenance,
         requested_source_identity: from_source.as_deref(),
