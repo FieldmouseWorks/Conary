@@ -409,38 +409,35 @@ fn install_ccs_package_transactionally_inner(
         || opts.root.to_string(),
         |session| session.selected_root().to_string_lossy().into_owned(),
     );
+    let selected_component_names = match opts.selected_manifest_components.as_ref() {
+        Some(selected) => selected.clone(),
+        None => {
+            let mut names: Vec<String> = pkg.components().keys().cloned().collect();
+            names.sort();
+            names
+        }
+    };
 
-    let mut extraction =
-        if let Some(selected_manifest_components) = opts.selected_manifest_components.as_deref() {
-            extract_and_classify_ccs_manifest_files(
-                pkg,
-                selected_manifest_components,
-                Path::new(&transaction_root),
-                &progress,
-            )?
-        } else {
-            let mut selected_manifest_components: Vec<String> =
-                pkg.components().keys().cloned().collect();
-            selected_manifest_components.sort();
-            extract_and_classify_ccs_manifest_files(
-                pkg,
-                &selected_manifest_components,
-                Path::new(&transaction_root),
-                &progress,
-            )?
-        };
+    let mut extraction = extract_and_classify_ccs_manifest_files(
+        pkg,
+        &selected_component_names,
+        Path::new(&transaction_root),
+        &progress,
+    )?;
     extraction.ccs_remove_hook = pkg.manifest().hooks.pre_remove.clone();
 
-    let relation_plan = conary_core::transaction::plan_package_relations(
+    let selected_capabilities =
+        crate::commands::ccs::selected_ccs_resolution_capabilities(pkg, &selected_component_names)?;
+    let relation_plan = conary_core::transaction::plan_package_relations_with_provides(
         &preflight_state,
         pkg,
         semantics.version_scheme,
+        &selected_capabilities,
     )
     .context("Failed to plan CCS package conflicts and replacements")?;
     conary_core::transaction::validate_package_relation_plan(&preflight_state, &relation_plan)
         .context("CCS package conflicts and replacements cannot be applied")?;
     let native_lifecycle_bundle = pkg.manifest().native_lifecycle.as_ref();
-    let resolution_capabilities = pkg.resolution_capabilities()?;
     let native_transaction = PreparedNativeTransaction::prepare_batch_with_declared_paths(
         &preflight_state,
         &[NativeInstallInput {
@@ -448,7 +445,7 @@ fn install_ccs_package_transactionally_inner(
             package_version: pkg.version(),
             package_arch: pkg.architecture(),
             version_scheme: semantics.version_scheme,
-            provides: &resolution_capabilities,
+            provides: &selected_capabilities,
             new_bundle: native_lifecycle_bundle,
             old_trove,
             relation_removals: &relation_plan.removals,
@@ -508,14 +505,6 @@ fn install_ccs_package_transactionally_inner(
     let ccs_removal_hook_plan =
         CcsRemovalHookPlan::prepare(&preflight_state, old_trove, relation_plan.removals.iter())?;
 
-    let selected_component_names =
-        if let Some(selected) = opts.selected_manifest_components.as_ref() {
-            selected.clone()
-        } else {
-            let mut names: Vec<String> = pkg.components().keys().cloned().collect();
-            names.sort();
-            names
-        };
     crate::commands::ccs::validate_ccs_payload_paths(
         Path::new(&transaction_root),
         pkg,
@@ -547,6 +536,7 @@ fn install_ccs_package_transactionally_inner(
         old_trove_to_upgrade: old_trove,
         ccs_capabilities: pkg.manifest().capabilities.as_ref(),
         file_capabilities: Some(&normalized_file_capabilities),
+        selected_resolution_capabilities: Some(selected_capabilities.as_slice()),
         // Deferral is an ownership contract for try sessions: that caller
         // captures the exact root after this transaction. Normal installs
         // always persist and publish their selected-root authority here.
@@ -815,6 +805,7 @@ mod tests {
         });
         manifest.hooks.post_install = Some(ScriptHook {
             script: "this body is deliberately not classified".to_string(),
+            interpreter: "/bin/sh".to_string(),
             reversible: Some(false),
         });
 

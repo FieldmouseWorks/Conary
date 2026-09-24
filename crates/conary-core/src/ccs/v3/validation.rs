@@ -8,6 +8,7 @@ mod identity;
 use super::diagnostics::{V3Diagnostic, V3DiagnosticCode, V3ValidationError};
 use super::schema::*;
 use crate::ccs::budget::{AuthorityCensus, CCS_BUDGET};
+use crate::ccs::manifest::validate_ccs_hook_interpreter;
 use config::{validate_config_authority, validate_package_policy};
 use content_layout::validate_file_content_layout;
 use file_capabilities::validate_file_capabilities;
@@ -121,7 +122,11 @@ fn validate_authority_common(
             validate_file_capabilities(data, &authority.file_capabilities, &mut diagnostics);
             validate_config_authority(data, authority, &mut diagnostics);
             validate_component_totals(data, authority, &mut diagnostics);
-            validate_lifecycle(&authority.lifecycle, &mut diagnostics);
+            validate_lifecycle(
+                &authority.lifecycle,
+                &authority.requirements,
+                &mut diagnostics,
+            );
             validate_repository_enrollment_files(data, authority, &mut diagnostics);
         }
         (PackageKindTagV3::Group, PackageKindV3::Group(data)) => {
@@ -346,7 +351,11 @@ fn validate_component_totals(
     }
 }
 
-fn validate_lifecycle(lifecycle: &LifecycleAuthorityV3, diagnostics: &mut Vec<V3Diagnostic>) {
+fn validate_lifecycle(
+    lifecycle: &LifecycleAuthorityV3,
+    requirements: &[crate::repository::dependency_model::RepositoryRequirementGroup],
+    diagnostics: &mut Vec<V3Diagnostic>,
+) {
     use crate::ccs::hooks::{
         is_denied_sysctl_key, is_safe_declarative_unit_name, validate_shell, validate_sysctl_key,
         validate_sysctl_value, validate_tmpfiles_fields, validate_username,
@@ -525,11 +534,14 @@ fn validate_lifecycle(lifecycle: &LifecycleAuthorityV3, diagnostics: &mut Vec<V3
         let Some(script) = script else {
             continue;
         };
-        if script.interpreter != "/bin/sh" {
+        if let Err(error) = validate_ccs_hook_interpreter(&script.interpreter) {
+            invalid(&format!("{field}.interpreter"), error);
+        }
+        if !has_pre_depends_file_requirement(requirements, &script.interpreter) {
             invalid(
                 &format!("{field}.interpreter"),
                 format!(
-                    "lifecycle script interpreter {} is not implemented by the CCS hook executor",
+                    "lifecycle script interpreter {} has no declared pre-install File requirement",
                     script.interpreter
                 ),
             );
@@ -554,6 +566,15 @@ fn validate_lifecycle(lifecycle: &LifecycleAuthorityV3, diagnostics: &mut Vec<V3
             );
         }
     }
+}
+
+fn has_pre_depends_file_requirement(
+    requirements: &[crate::repository::dependency_model::RepositoryRequirementGroup],
+    interpreter: &str,
+) -> bool {
+    requirements
+        .iter()
+        .any(|group| group.is_hard_pre_install_file(interpreter))
 }
 
 fn validate_script_capabilities(

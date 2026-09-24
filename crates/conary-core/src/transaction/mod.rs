@@ -34,8 +34,8 @@ pub use package_relations::{
     IncomingPackageRelations, PackageRelationDeconfiguration, PackageRelationDeconfigurationCause,
     PackageRelationIncomingIdentity, PackageRelationInstalledIdentity, PackageRelationPlan,
     PackageRelationRemoval, plan_package_relation_batch_facts, plan_package_relation_facts,
-    plan_package_relations, validate_package_relation_plan, validate_package_relation_removals,
-    validate_package_relation_transitions,
+    plan_package_relations, plan_package_relations_with_provides, validate_package_relation_plan,
+    validate_package_relation_removals, validate_package_relation_transitions,
 };
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File, OpenOptions};

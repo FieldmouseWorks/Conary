@@ -116,7 +116,8 @@ pub(crate) fn prepare_ccs_package_for_batch(
     // A converted artifact declares only its source header capabilities, so the
     // payload it is about to install is the only authority for the file
     // providers that satisfy path dependencies.
-    let mut provides = package.resolution_capabilities()?;
+    let mut provides =
+        crate::commands::ccs::selected_ccs_resolution_capabilities(package, &component_names)?;
     super::super::transaction::extend_materialized_payload_provides(
         &mut provides,
         semantics,

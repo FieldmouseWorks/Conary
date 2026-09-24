@@ -72,23 +72,10 @@ pub(super) fn select_ccs_components(
             selected
         }
     } else {
-        let mut defaults = Vec::new();
-        for component in &ccs_pkg.manifest().components.default {
-            let normalized = component.trim().to_ascii_lowercase();
-            if available
-                .iter()
-                .any(|available_name| available_name == &normalized)
-                && !defaults.iter().any(|name| name == &normalized)
-            {
-                defaults.push(normalized);
-            }
-        }
-
-        if defaults.is_empty() {
-            available.clone()
-        } else {
-            defaults
-        }
+        conary_core::ccs::v3::authoring::always_installed_component_names(
+            &ccs_pkg.manifest().components,
+            &available,
+        )
     };
 
     Ok(SelectedCcsComponents { names })

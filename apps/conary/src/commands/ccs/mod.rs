@@ -14,6 +14,7 @@ mod install;
 mod lint;
 mod local_dev;
 mod payload_paths;
+mod selected_capabilities;
 mod signing;
 mod templates;
 mod test;
@@ -34,6 +35,7 @@ pub(crate) use payload_paths::{
     normalize_ccs_file_capabilities, normalize_ccs_package_path, normalize_ccs_payload_files,
     validate_ccs_payload_paths,
 };
+pub(crate) use selected_capabilities::selected_ccs_resolution_capabilities;
 pub use signing::{cmd_ccs_keygen, cmd_ccs_sign};
 pub use test::cmd_ccs_test;
 pub use verification::cmd_ccs_verify;

@@ -245,6 +245,7 @@ pub(super) async fn dispatch_command(command: Option<Commands>) -> Result<()> {
         Some(Commands::Autoremove {
             common,
             dry_run,
+            json,
             yes,
             sandbox,
         }) => {
@@ -254,7 +255,14 @@ pub(super) async fn dispatch_command(command: Option<Commands>) -> Result<()> {
                 LiveMutationClass::CurrentlyLiveEvenWithRootArguments,
                 dry_run,
             )?;
-            commands::cmd_autoremove(&common.db.db_path, dry_run, sandbox.into())
+            // clap enforces `--json requires --dry-run`.
+            let mode = match (dry_run, json) {
+                (true, true) => commands::AutoremoveMode::PreviewJson,
+                (true, false) => commands::AutoremoveMode::PreviewText,
+                (false, false) => commands::AutoremoveMode::Apply,
+                (false, true) => anyhow::bail!("conary autoremove --json requires --dry-run"),
+            };
+            commands::cmd_autoremove(&common.db.db_path, mode, sandbox.into())
         }
 
         Some(Commands::Pin {

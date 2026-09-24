@@ -262,6 +262,22 @@ impl CcsManifest {
             }
         }
 
+        for (field, hook) in [
+            ("hooks.post_install", self.hooks.post_install.as_ref()),
+            ("hooks.pre_remove", self.hooks.pre_remove.as_ref()),
+        ] {
+            let Some(hook) = hook else {
+                continue;
+            };
+            validate_absolute_normalized_path(&format!("{field}.interpreter"), &hook.interpreter)?;
+            validate_ccs_hook_interpreter(&hook.interpreter)
+                .map_err(|error| ManifestError::Invalid(format!("{field}.interpreter: {error}")))?;
+        }
+
+        for path in &self.provides.files {
+            validate_absolute_normalized_path("provides.files", path)?;
+        }
+
         for unit in &self.hooks.systemd {
             if !is_safe_declarative_unit_name(&unit.unit) {
                 return Err(ManifestError::Invalid(format!(
@@ -473,6 +489,11 @@ pub struct Provides {
     /// Exact pkg-config capabilities declared by package metadata.
     #[serde(default)]
     pub pkgconfig: Vec<String>,
+
+    /// Exact absolute paths this package ships and provides as `File`
+    /// capabilities (e.g. `/bin/sh`).
+    #[serde(default)]
+    pub files: Vec<String>,
 }
 
 /// Optional/suggested dependencies
@@ -751,6 +772,28 @@ pub struct RedirectSplit {
     /// Explanation of the split
     #[serde(default)]
     pub message: Option<String>,
+}
+
+/// Validate one author-declared absolute path field.
+///
+/// Absolute and normalized are the only accepted forms; hook interpreters and
+/// `provides.files` share the same path grammar so a signed `File` provide can
+/// always name a path the package could ship.
+fn validate_absolute_normalized_path(field: &str, path: &str) -> Result<(), ManifestError> {
+    if !path.starts_with('/') {
+        return Err(ManifestError::Invalid(format!(
+            "relative path not allowed in {field}: {path}"
+        )));
+    }
+    let canonical = sanitize_path(path)
+        .map_err(|error| ManifestError::Invalid(format!("invalid {field} '{path}': {error}")))?;
+    let canonical = format!("/{}", canonical.display());
+    if canonical != path {
+        return Err(ManifestError::Invalid(format!(
+            "{field} must use its canonical spelling {canonical}, not {path}"
+        )));
+    }
+    Ok(())
 }
 
 /// Parse an octal mode string (e.g., "0755", "0o755", or "755") to a `u32`.
