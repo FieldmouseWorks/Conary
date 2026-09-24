@@ -436,7 +436,8 @@ impl NativeResolutionSurveyErrorVariantV1 {
             Error::ResolutionError(_) => Self::ResolutionError,
             Error::NotImplemented(_) => Self::NotImplemented,
             Error::Json(_) => Self::Json,
-            Error::Capability(_) => Self::Capability,
+            // No scratch placement proved the host's OverlayFS capability.
+            Error::Capability(_) | Error::SelectedRootOverlayUnsupported(_) => Self::Capability,
             Error::Federation(_) => Self::Federation,
             Error::Cancelled(_) => Self::Cancelled,
             Error::InternalError(_) => Self::InternalError,

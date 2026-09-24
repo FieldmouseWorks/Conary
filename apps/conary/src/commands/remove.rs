@@ -11,13 +11,13 @@ pub(super) mod test_support;
 mod transaction;
 mod types;
 
-pub use autoremove::cmd_autoremove;
+pub use autoremove::{AutoremoveMode, cmd_autoremove};
 pub(crate) use ccs_hook::{
     execute_preflighted_ccs_remove_hook, load_ccs_remove_hook, preflight_ccs_remove_hook,
     preflight_loaded_ccs_remove_hook,
 };
 pub use command::cmd_remove;
-pub(crate) use command::cmd_remove_cli;
+pub(crate) use command::{cmd_remove_cli, cmd_remove_exact};
 pub(crate) use payload_ownership::PackagePayloadOwnership;
 pub(crate) use transaction::{commit_remove_db, prepare_remove_for_state_restore, snapshot_trove};
 pub(crate) use types::RemoveLifecycleOptions;

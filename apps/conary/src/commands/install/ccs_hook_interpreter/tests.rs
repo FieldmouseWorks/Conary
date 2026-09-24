@@ -26,6 +26,20 @@ fn executable(path: &str) -> IntroducedNode {
     }
 }
 
+fn post_install(interpreter: &str) -> HookInterpreter {
+    HookInterpreter {
+        phase: HookPhase::PostInstall,
+        interpreter: interpreter.to_string(),
+    }
+}
+
+fn pre_remove(interpreter: &str) -> HookInterpreter {
+    HookInterpreter {
+        phase: HookPhase::PreRemove,
+        interpreter: interpreter.to_string(),
+    }
+}
+
 fn non_executable(path: &str) -> IntroducedNode {
     IntroducedNode {
         path: path.to_string(),
@@ -535,7 +549,7 @@ fn preflight_records_every_element_before_requiring_any_interpreter() {
             removed_paths: Vec::new(),
             introduced_nodes: Vec::new(),
             declared_file_capabilities: Vec::new(),
-            post_install_interpreter: Some("/bin/sh".to_string()),
+            hook_interpreters: vec![post_install("/bin/sh")],
         },
         ElementPlan {
             package: "provider".to_string(),
@@ -544,11 +558,86 @@ fn preflight_records_every_element_before_requiring_any_interpreter() {
             removed_paths: Vec::new(),
             introduced_nodes: vec![executable("/bin/sh")],
             declared_file_capabilities: Vec::new(),
-            post_install_interpreter: None,
+            hook_interpreters: Vec::new(),
         },
     ];
-    preflight_post_install_interpreters(&test_conn().1, root.path(), &elements)
+    preflight_hook_interpreters(&test_conn().1, root.path(), &elements)
         .expect("a later element's payload authorizes an earlier element's interpreter");
+}
+
+#[test]
+fn pre_remove_only_declared_file_capability_is_refused() {
+    let root = tempfile::tempdir().unwrap();
+    let consumer = ElementPlan {
+        package: "consumer".to_string(),
+        version: "1.0.0".to_string(),
+        removed_trove_ids: Vec::new(),
+        removed_paths: Vec::new(),
+        introduced_nodes: Vec::new(),
+        declared_file_capabilities: vec!["/bin/sh".to_string()],
+        hook_interpreters: vec![pre_remove("/bin/sh")],
+    };
+
+    let error =
+        preflight_hook_interpreters(&test_conn().1, root.path(), std::slice::from_ref(&consumer))
+            .map_err(typed)
+            .expect_err("a declared File capability alone cannot run a pre-remove hook");
+    assert_eq!(error.package, "consumer");
+    assert_eq!(error.version, "1.0.0");
+    assert_eq!(error.phase, HookPhase::PreRemove);
+    assert_eq!(error.interpreter, "/bin/sh");
+}
+
+#[test]
+fn pre_remove_declared_file_capability_backed_by_payload_is_available() {
+    let root = tempfile::tempdir().unwrap();
+    let consumer = ElementPlan {
+        package: "consumer".to_string(),
+        version: "1.0.0".to_string(),
+        removed_trove_ids: Vec::new(),
+        removed_paths: Vec::new(),
+        introduced_nodes: vec![executable("/bin/sh")],
+        declared_file_capabilities: vec!["/bin/sh".to_string()],
+        hook_interpreters: vec![pre_remove("/bin/sh")],
+    };
+
+    preflight_hook_interpreters(&test_conn().1, root.path(), std::slice::from_ref(&consumer))
+        .expect("the same declaration backed by an executable payload authorizes the hook");
+}
+
+#[test]
+fn post_install_availability_does_not_authorize_a_different_pre_remove_interpreter() {
+    let root = tempfile::tempdir().unwrap();
+    let consumer = ElementPlan {
+        package: "consumer".to_string(),
+        version: "1.0.0".to_string(),
+        removed_trove_ids: Vec::new(),
+        removed_paths: Vec::new(),
+        introduced_nodes: vec![executable("/usr/bin/post-install-sh")],
+        declared_file_capabilities: Vec::new(),
+        hook_interpreters: vec![
+            post_install("/usr/bin/post-install-sh"),
+            pre_remove("/bin/sh"),
+        ],
+    };
+
+    let error =
+        preflight_hook_interpreters(&test_conn().1, root.path(), std::slice::from_ref(&consumer))
+            .map_err(typed)
+            .expect_err("the post-install interpreter must not authorize the pre-remove one");
+    assert_eq!(error.phase, HookPhase::PreRemove);
+    assert_eq!(error.interpreter, "/bin/sh");
+
+    // Positive control on the same fixture: introducing the pre-remove
+    // interpreter satisfies both hooks.
+    let mut satisfied = consumer.clone();
+    satisfied.introduced_nodes.push(executable("/bin/sh"));
+    preflight_hook_interpreters(
+        &test_conn().1,
+        root.path(),
+        std::slice::from_ref(&satisfied),
+    )
+    .expect("an element introducing both interpreters satisfies both phases");
 }
 
 /// A fresh database; element plans without removed troves never query it.
@@ -621,14 +710,10 @@ fn restore_removal_element_removes_a_root_provider_before_installs() {
         removed_paths: Vec::new(),
         introduced_nodes: Vec::new(),
         declared_file_capabilities: Vec::new(),
-        post_install_interpreter: Some(PRESENT.to_string()),
+        hook_interpreters: vec![post_install(PRESENT)],
     };
-    preflight_post_install_interpreters(
-        &test_conn().1,
-        &root_path,
-        std::slice::from_ref(&consumer),
-    )
-    .expect("the root interpreter is available without a removal");
+    preflight_hook_interpreters(&test_conn().1, &root_path, std::slice::from_ref(&consumer))
+        .expect("the root interpreter is available without a removal");
 
     // A removal-only element that owns the interpreter path precedes the install.
     let removal = ElementPlan {
@@ -638,12 +723,11 @@ fn restore_removal_element_removes_a_root_provider_before_installs() {
         removed_paths: vec![PRESENT.to_string()],
         introduced_nodes: Vec::new(),
         declared_file_capabilities: Vec::new(),
-        post_install_interpreter: None,
+        hook_interpreters: Vec::new(),
     };
-    let error =
-        preflight_post_install_interpreters(&test_conn().1, &root_path, &[removal, consumer])
-            .map_err(typed)
-            .expect_err("a removed provider cannot authorize a restored hook");
+    let error = preflight_hook_interpreters(&test_conn().1, &root_path, &[removal, consumer])
+        .map_err(typed)
+        .expect_err("a removed provider cannot authorize a restored hook");
     assert_eq!(error.package, "consumer");
     assert_eq!(error.interpreter, PRESENT);
 }

@@ -47,6 +47,8 @@ async fn ccs_install_persists_pre_remove_hook() {
     let file_hash = hash::sha256(&content);
     let init_content = b"#!/bin/sh\nexec true\n".to_vec();
     let init_hash = hash::sha256(&init_content);
+    let shell_content = b"#!/bin/sh\nexit 0\n".to_vec();
+    let shell_hash = hash::sha256(&shell_content);
     let files = vec![
         ccs_regular_file(
             "/usr/bin/hooked".to_string(),
@@ -62,8 +64,19 @@ async fn ccs_install_persists_pre_remove_hook() {
             0o100755,
             "runtime".to_string(),
         ),
+        // Positive control for the pre-remove interpreter preflight: the
+        // package ships the executable its declared `/bin/sh` File provide
+        // names, so the selected root can run the persisted hook.
+        ccs_regular_file(
+            "/bin/sh".to_string(),
+            shell_hash.clone(),
+            shell_content.len() as u64,
+            0o100755,
+            "runtime".to_string(),
+        ),
     ];
     let mut manifest = CcsManifest::new_minimal("pre-remove", "1.0.0");
+    manifest.provides.files = vec!["/bin/sh".to_string()];
     manifest.hooks.pre_remove = Some(ScriptHook {
         script: "echo removing pre-remove".to_string(),
         interpreter: "/bin/sh".to_string(),
@@ -77,13 +90,17 @@ async fn ccs_install_persists_pre_remove_hook() {
                 name: "runtime".to_string(),
                 files: files.clone(),
                 hash: "runtime".to_string(),
-                size: (content.len() + init_content.len()) as u64,
+                size: (content.len() + init_content.len() + shell_content.len()) as u64,
             },
         )]),
         files: files.clone(),
         payloads: conary_core::ccs::builder::payloads_from_bounded_memory_for_tests(
             &files,
-            HashMap::from([(file_hash, content), (init_hash, init_content)]),
+            HashMap::from([
+                (file_hash, content),
+                (init_hash, init_content),
+                (shell_hash, shell_content),
+            ]),
         )
         .unwrap(),
         total_size: 0,

@@ -1,6 +1,10 @@
 // apps/conary/src/commands/generation/selected_root/overlay_session.rs
 
 //! Transaction-owned OverlayFS lifetime for a selected-root session.
+//!
+//! The merged mount and every immutable lower stay under the session directory.
+//! The writable `upper` and `work` directories live wherever the functional
+//! scratch probe proved an OverlayFS upper can live for this runtime root.
 
 use crate::commands::DeferredOverlayDurability;
 use anyhow::{Context, Result};
@@ -8,11 +12,11 @@ use conary_core::filesystem::CasStore;
 use conary_core::generation::artifact::GenerationArtifact;
 use conary_core::generation::mount::{MountOptions, mount_generation};
 use conary_core::generation::root_manifest::{
-    CapturedSelectedRoot, MountedSelectedRootOverlay, SelectedRootManifestDelta,
-    SelectedRootOverlayCapabilities, SelectedRootOverlayProfile, SelectedRootSnapshot,
-    apply_resolved_payload_metadata, decode_selected_root_overlay_upper_indexed,
-    encode_selected_root_overlay_upper_node, materialize_state_root,
-    probe_selected_root_overlay_profile,
+    CapturedSelectedRoot, MountedScratchTmpfs, MountedSelectedRootOverlay, OverlayScratchPlacement,
+    SelectedRootManifestDelta, SelectedRootOverlayCapabilities, SelectedRootOverlayProfile,
+    SelectedRootOverlayScratch, SelectedRootSnapshot, apply_resolved_payload_metadata,
+    decode_selected_root_overlay_upper_indexed, encode_selected_root_overlay_upper_node,
+    materialize_state_root, select_selected_root_overlay_scratch,
 };
 use nix::mount::{MntFlags, umount2};
 use std::fs;
@@ -25,6 +29,7 @@ pub(super) struct SelectedRootOverlaySession {
     mounted: Option<MountedSelectedRootOverlay>,
     generation_lower: Option<MountedGenerationLower>,
     capabilities: SelectedRootOverlayCapabilities,
+    scratch_tmpfs: Option<MountedScratchTmpfs>,
 }
 
 /// One composefs generation mounted only for the lifetime of a transaction.
@@ -36,11 +41,11 @@ struct MountedGenerationLower {
 impl SelectedRootOverlaySession {
     /// Functionally prove the exact transaction OverlayFS profile before any
     /// selected-root snapshot or package authority can be mutated.
-    pub(super) fn preflight(session_dir: &Path) -> Result<SelectedRootOverlayCapabilities> {
+    pub(super) fn preflight(session_dir: &Path) -> Result<SelectedRootOverlayScratch> {
         let profile = SelectedRootOverlayProfile::trusted();
-        probe_selected_root_overlay_profile(session_dir, &profile).with_context(|| {
+        select_selected_root_overlay_scratch(session_dir, &profile).with_context(|| {
             format!(
-                "selected-root OverlayFS capability preflight failed on {}; recovery: boot a kernel with OverlayFS support and run Conary with mount and trusted-xattr privileges on a compatible workspace filesystem",
+                "selected-root OverlayFS capability preflight failed on {}; recovery: boot a kernel with OverlayFS support and run Conary with mount and trusted-xattr privileges on a compatible workspace filesystem or with permission to mount a private tmpfs",
                 session_dir.display()
             )
         })
@@ -51,14 +56,14 @@ impl SelectedRootOverlaySession {
     pub(super) fn begin_materialized(
         session_dir: &Path,
         prior: &CapturedSelectedRoot,
-        capabilities: SelectedRootOverlayCapabilities,
+        scratch: SelectedRootOverlayScratch,
     ) -> Result<Self> {
         Self::begin_with_lowers(
             session_dir,
             prior,
             &[session_dir.join("lower")],
             None,
-            capabilities,
+            scratch,
         )
     }
 
@@ -69,7 +74,7 @@ impl SelectedRootOverlaySession {
         prior: &CapturedSelectedRoot,
         artifact: &GenerationArtifact,
         cas: &CasStore,
-        capabilities: SelectedRootOverlayCapabilities,
+        scratch: SelectedRootOverlayScratch,
     ) -> Result<Self> {
         fs::create_dir_all(session_dir)?;
         let state_lower = session_dir.join("lower-state");
@@ -105,7 +110,7 @@ impl SelectedRootOverlaySession {
             prior,
             &[state_lower, generation_lower.mount_point.clone()],
             Some(generation_lower),
-            capabilities,
+            scratch,
         )
     }
 
@@ -114,8 +119,9 @@ impl SelectedRootOverlaySession {
         prior: &CapturedSelectedRoot,
         lowers: &[PathBuf],
         generation_lower: Option<MountedGenerationLower>,
-        capabilities: SelectedRootOverlayCapabilities,
+        scratch: SelectedRootOverlayScratch,
     ) -> Result<Self> {
+        let (capabilities, scratch_directory, scratch_tmpfs) = scratch.into_parts();
         fs::create_dir_all(session_dir).with_context(|| {
             format!(
                 "failed to create selected-root overlay workspace {}",
@@ -124,8 +130,8 @@ impl SelectedRootOverlaySession {
         })?;
         let profile = SelectedRootOverlayProfile::trusted();
 
-        let upper = session_dir.join("upper");
-        let work = session_dir.join("work");
+        let upper = scratch_directory.join("upper");
+        let work = scratch_directory.join("work");
         let selected_root = session_dir.join("root");
         for lower in lowers {
             if !lower.is_dir() {
@@ -159,17 +165,27 @@ impl SelectedRootOverlaySession {
         )
         .context("failed to mount selected-root OverlayFS session")?;
 
-        Ok(Self {
+        let session = Self {
             selected_root,
             upper,
             mounted: Some(mounted),
             generation_lower,
             capabilities,
-        })
+            scratch_tmpfs,
+        };
+        tracing::info!(
+            scratch_placement = ?session.scratch_placement(),
+            "mounted selected-root OverlayFS session"
+        );
+        Ok(session)
     }
 
     pub(super) fn selected_root(&self) -> &Path {
         &self.selected_root
+    }
+
+    pub(super) fn scratch_placement(&self) -> OverlayScratchPlacement {
+        self.capabilities.scratch_placement
     }
 
     /// Freeze the upper with a strict unmount, then decode changed paths only.
@@ -193,26 +209,38 @@ impl SelectedRootOverlaySession {
             "froze deferred selected-root mutation authority"
         );
         self.unmount_generation_lower()?;
-        decode_selected_root_overlay_upper_indexed(
+        let delta = decode_selected_root_overlay_upper_indexed(
             &self.upper,
             conn,
             prior,
             cas,
             &self.capabilities.profile,
         )
-        .context("failed to decode selected-root OverlayFS upper")
+        .context("failed to decode selected-root OverlayFS upper")?;
+        if let Some(tmpfs) = self.scratch_tmpfs.take() {
+            tmpfs
+                .unmount()
+                .context("failed to unmount selected-root scratch tmpfs")?;
+        }
+        Ok(delta)
     }
 
     /// Strictly unmount without decoding; the caller then discards the
     /// transaction directory and the prior manifest remains authoritative.
     pub(super) fn unmount_for_discard(&mut self) -> Result<()> {
-        if let Some(mounted) = self.mounted.take() {
+        // Attempt every unmount in stacking order, then report the first failure.
+        let overlay = self.mounted.take().map_or(Ok(()), |mounted| {
             mounted
                 .unmount()
-                .context("failed to unmount discarded selected-root OverlayFS session")?;
-        }
-        self.unmount_generation_lower()?;
-        Ok(())
+                .context("failed to unmount discarded selected-root OverlayFS session")
+        });
+        let generation_lower = self.unmount_generation_lower();
+        let scratch = self.scratch_tmpfs.take().map_or(Ok(()), |tmpfs| {
+            tmpfs
+                .unmount()
+                .context("failed to unmount discarded selected-root scratch tmpfs")
+        });
+        overlay.and(generation_lower).and(scratch)
     }
 
     fn unmount_generation_lower(&mut self) -> Result<()> {

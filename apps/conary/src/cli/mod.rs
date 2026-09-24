@@ -367,6 +367,10 @@ pub enum Commands {
         #[arg(long)]
         dry_run: bool,
 
+        /// Print the dry-run plan as a typed JSON document (requires --dry-run)
+        #[arg(long, requires = "dry_run")]
+        json: bool,
+
         /// Confirm applying this command's active-system changes
         #[arg(short = 'y', long)]
         yes: bool,

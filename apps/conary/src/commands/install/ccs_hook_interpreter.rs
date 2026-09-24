@@ -2,6 +2,7 @@
 //! Transaction-ordered availability of CCS hook interpreters.
 
 use anyhow::Context;
+use conary_core::ccs::manifest::Hooks;
 use conary_core::db::models::{PackagePayloadOwnership, PayloadClaim, Trove};
 use conary_core::filesystem::selected_root::MAX_SELECTED_ROOT_SYMLINK_DEPTH;
 use conary_core::packages::payload::PackagePayloadFile;
@@ -80,7 +81,7 @@ enum Resolved {
     RootFile { executable: bool },
 }
 
-/// One transaction element's payload boundary and post-install interpreter.
+/// One transaction element's payload boundary and hook interpreters.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ElementPlan {
     package: String,
@@ -93,7 +94,7 @@ pub(super) struct ElementPlan {
     removed_paths: Vec<String>,
     introduced_nodes: Vec<IntroducedNode>,
     declared_file_capabilities: Vec<String>,
-    post_install_interpreter: Option<String>,
+    hook_interpreters: Vec<HookInterpreter>,
 }
 
 /// Build one element plan, resolving the removed paths of the installed state
@@ -107,7 +108,7 @@ pub(super) fn element_plan(
     relation_removals: &[PackageRelationRemoval],
     extracted_files: &[PackagePayloadFile],
     provides: &[ProvidedCapability],
-    post_install_interpreter: Option<String>,
+    hook_interpreters: Vec<HookInterpreter>,
 ) -> anyhow::Result<ElementPlan> {
     let removed_trove_ids = old_trove
         .and_then(|trove| trove.id)
@@ -128,7 +129,7 @@ pub(super) fn element_plan(
             .filter(|capability| capability.kind == RepositoryCapabilityKind::File)
             .map(|capability| capability.name.clone())
             .collect(),
-        post_install_interpreter,
+        hook_interpreters,
     })
 }
 
@@ -142,13 +143,14 @@ pub(super) fn removal_element_plan(troves: &[Trove]) -> ElementPlan {
         removed_paths: Vec::new(),
         introduced_nodes: Vec::new(),
         declared_file_capabilities: Vec::new(),
-        post_install_interpreter: None,
+        hook_interpreters: Vec::new(),
     }
 }
 
-/// Record every element's payload boundary, then require each element's
-/// post-install interpreter. Both passes complete before the caller mutates.
-pub(super) fn preflight_post_install_interpreters(
+/// Record every element's payload boundary, then require every element's hook
+/// interpreters, each against the transaction's final projected state. Both
+/// passes complete before the caller mutates.
+pub(super) fn preflight_hook_interpreters(
     conn: &Connection,
     root: &Path,
     elements: &[ElementPlan],
@@ -180,12 +182,12 @@ pub(super) fn preflight_post_install_interpreters(
         )?;
     }
     for element in elements {
-        if let Some(interpreter) = element.post_install_interpreter.as_deref() {
+        for hook in &element.hook_interpreters {
             ledger.require(
                 &element.package,
                 &element.version,
-                HookPhase::PostInstall,
-                interpreter,
+                hook.phase,
+                &hook.interpreter,
             )?;
         }
     }
@@ -550,14 +552,44 @@ fn normalized_absolute_path(path: &str) -> Option<String> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum HookPhase {
     PostInstall,
+    PreRemove,
 }
 
 impl std::fmt::Display for HookPhase {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(match self {
             Self::PostInstall => "post-install",
+            Self::PreRemove => "pre-remove",
         })
     }
+}
+
+/// One lifecycle hook interpreter an element must be able to run, tagged with
+/// the phase that runs it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct HookInterpreter {
+    pub phase: HookPhase,
+    pub interpreter: String,
+}
+
+/// Collect the interpreters a manifest's hooks need, in phase order: the
+/// post-install hook runs now, and the pre-remove hook runs against the same
+/// final projected state once this install completes.
+pub(super) fn hook_interpreters(hooks: &Hooks) -> Vec<HookInterpreter> {
+    let mut interpreters = Vec::new();
+    if let Some(hook) = hooks.post_install.as_ref() {
+        interpreters.push(HookInterpreter {
+            phase: HookPhase::PostInstall,
+            interpreter: hook.interpreter.clone(),
+        });
+    }
+    if let Some(hook) = hooks.pre_remove.as_ref() {
+        interpreters.push(HookInterpreter {
+            phase: HookPhase::PreRemove,
+            interpreter: hook.interpreter.clone(),
+        });
+    }
+    interpreters
 }
 
 #[derive(Debug, thiserror::Error)]

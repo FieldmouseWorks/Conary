@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-09-14
-revision: 56
+last_updated: 2026-09-24
+revision: 57
 summary: Daily-driver CLI publication debt, installed records, database preflight, repository readiness, typed details, and grouped results
 ---
 
@@ -29,9 +29,42 @@ takeover, generation activation, or conaryd, the CLI should say that directly.
 | `search <pattern>` | Repository search results from synced metadata | Empty or stale repository metadata | Run `conary repo sync` before assuming a package is unavailable | Existing query/search tests plus `cargo run -p conary -- search --help` |
 | `list [pkg]` | Installed package identity, files, path owner, pinned state | Ambiguous installed package variants | Use `--version`, `--release`, and `--arch` to select a specific installed variant | Existing `cargo test -p conary --test query list_info_refuses_ambiguous_variants_until_selector_is_given` |
 | `autoremove` | Removes Conary-owned orphaned dependency packages | Adopted orphaned packages remain native-PM owned | Native package-manager authority is preserved for adopted orphans | Existing `cargo test -p conary --test native_pm_daily_driver autoremove_dry_run_lists_conary_owned_orphans_and_skips_adopted` |
+| `autoremove --dry-run [--json]` | Previews what apply would remove from the current installed state, round by round, without mutating; `--json` prints a typed `package.autoremove.plan` result (see [Autoremove Preview](#autoremove-preview)) | `--json` without `--dry-run` is rejected before any work; apply does not consume the preview | Apply recomputes from the installed state at apply time; rerun the preview right before applying (plan-bound apply: #1093) | `cargo test -p conary --lib autoremove`; `cargo test -p conary --lib cli::tests::autoremove_json_requires_dry_run` |
 | `pin <pkg>` | Pins a selected installed variant | Ambiguous installed variants | Use `--version`, `--release`, and `--arch` to pin the intended variant | Existing `cargo test -p conary --test query pin_and_unpin_use_same_variant_selector` |
 | `unpin <pkg>` | Releases a selected installed variant | Ambiguous installed variants | Use `--version`, `--release`, and `--arch` to unpin the intended variant | Existing `cargo test -p conary --test query pin_and_unpin_use_same_variant_selector` |
 | `system history` | Recorded changeset fields, rollback relationships, continued lifecycle failures, and deferred recovery guidance | Obsolete changeset metadata keeps its existing refusal | Publication retries use the selected database; history does not decide rollback eligibility | `cargo test -p conary --test cli_history` |
+
+## Autoremove Preview
+
+`conary autoremove --dry-run` simulates apply's fixed point without mutating:
+each round is the jointly safe orphan set from `Trove::find_orphan_round`
+with every earlier round treated as removed, and the rounds repeat until no
+removable orphan remains. Within a round, packages keep their checked
+admission order (trove id), and apply removes them in that same order, so the
+preview never lists a removal that apply would refuse. Pinned and adopted
+orphans are skipped, and they keep their own dependencies required. A plan
+that would need more than the apply loop's round limit fails instead of
+being truncated.
+
+`--dry-run --json` prints only a `conary-agent-contract` `PlanResult` with
+operation `package.autoremove.plan`, status `planned`, and risk `destructive`
+when anything would be removed, otherwise `read_only`. Its `data` is:
+
+- `schema_version`: `2`
+- `removable[]`: `name`, `version`, `package_release`, `architecture`, `round`
+- `skipped[]`: `name`, `version`, `package_release`, `architecture`, `reason`
+  (`adopted_native_authority` or `pinned`)
+
+Absent release or architecture values serialize as `null`. Apply removes
+each planned package by its exact trove identity and checks dependency
+breakage against that exact trove, so co-installed releases of one name
+are never conflated.
+
+The preview is a snapshot of the installed state when it ran; the plan
+carries no identity or fingerprint, and apply does not consume it. Apply
+recomputes the fixed point from the installed state at apply time, so a
+change in between (for example, a newly orphaned dependency) changes what
+apply removes. Binding apply to a reviewed plan is tracked in #1093.
 
 ## Pending Generation Publication
 

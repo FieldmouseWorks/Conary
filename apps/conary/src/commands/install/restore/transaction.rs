@@ -2,7 +2,7 @@
 //! One durable transaction for an exact system-state restore.
 
 use super::super::ccs_hook_interpreter::{
-    ElementPlan, element_plan, preflight_post_install_interpreters, removal_element_plan,
+    ElementPlan, element_plan, hook_interpreters, preflight_hook_interpreters, removal_element_plan,
 };
 use super::super::inner;
 use super::super::native_events::{
@@ -88,10 +88,10 @@ pub(crate) fn execute_state_restore_transaction(
     let mut ccs_hook_executors =
         prepare_ccs_hook_executors(conn, &selected_path, &prepared_installs)?;
 
-    // Record every restored element's payload boundary, then require each
-    // post-install interpreter, all before the restore's first mutation.
-    // Troves the restore removes leave the projected state first, so a
-    // removed interpreter provider cannot authorize a restored hook.
+    // Record every restored element's payload boundary, then require every
+    // hook interpreter, all before the restore's first mutation. Troves the
+    // restore removes leave the projected state first, so a removed interpreter
+    // provider cannot authorize a restored hook.
     let mut restore_elements = vec![removal_element_plan(removal_troves)];
     let installed_elements = prepared_installs
         .iter()
@@ -106,13 +106,13 @@ pub(crate) fn execute_state_restore_transaction(
                 prepared
                     .ccs_contract
                     .as_ref()
-                    .and_then(|contract| contract.hooks.post_install.as_ref())
-                    .map(|hook| hook.interpreter.clone()),
+                    .map(|contract| hook_interpreters(&contract.hooks))
+                    .unwrap_or_default(),
             )
         })
         .collect::<Result<Vec<_>>>()?;
     restore_elements.extend(installed_elements);
-    preflight_post_install_interpreters(conn, &selected_path, &restore_elements)?;
+    preflight_hook_interpreters(conn, &selected_path, &restore_elements)?;
 
     let cas = selected_root.cas().clone();
     execute_locked_restore(
@@ -940,6 +940,7 @@ fn restore_transaction_context<'a>(
             .as_ref()
             .and_then(|contract| contract.capabilities.as_ref()),
         file_capabilities,
+        selected_resolution_capabilities: None,
         defer_generation: false,
         repository_provenance: prepared.repository_provenance.clone(),
         requested_source_identity: None,

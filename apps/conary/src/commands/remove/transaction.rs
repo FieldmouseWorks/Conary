@@ -59,8 +59,7 @@ fn prepare_remove_with_dependency_validation(
     let ccs_remove_hook =
         preflight_ccs_remove_hook(conn, trove, root, lifecycle_options.sandbox_mode)?;
     if validate_dependencies {
-        let breaking_now =
-            conary_core::resolver::solve_removal(conn, std::slice::from_ref(&trove.name))?;
+        let breaking_now = conary_core::resolver::solve_removal_troves(conn, &[trove_id])?;
         if !breaking_now.is_empty() {
             return Err(conary_core::Error::IoError(format!(
                 "Concurrent change: '{}' now required by: {}",
