@@ -86,9 +86,6 @@ Agent operations use versioned, typed, inspectable resources and plan/apply
 results through `conary-agent-contract`; MCP adapts that contract and is never
 a second authority. Do not weaken agent trust or approvals, or make an
 essential operation available only through ad hoc shell or free-form output.
-Redshirt owns reusable experiment tooling in Rust; Conary owns package rules
-and independent checks. Follow the
-[Redshirt workflow](CONTRIBUTING.md#working-with-redshirt).
 
 ## Defects And Maintainability
 
