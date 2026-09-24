@@ -3,15 +3,15 @@
 
 use anyhow::Context;
 use conary_core::db::models::{PackagePayloadOwnership, PayloadClaim, Trove};
-use conary_core::filesystem::selected_root::{
-    MAX_SELECTED_ROOT_SYMLINK_DEPTH, selected_root_effective_package_path, selected_root_executable,
-};
+use conary_core::filesystem::selected_root::MAX_SELECTED_ROOT_SYMLINK_DEPTH;
 use conary_core::packages::payload::PackagePayloadFile;
 use conary_core::payload::PayloadNodeKind;
 use conary_core::repository::dependency_model::{ProvidedCapability, RepositoryCapabilityKind};
 use conary_core::transaction::PackageRelationRemoval;
 use rusqlite::Connection;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Component, Path, PathBuf};
 
 /// One payload path an element introduces, with the node it will materialize.
@@ -39,6 +39,7 @@ impl IntroducedNode {
             PayloadNodeKind::Hardlink { target, .. } => IntroducedNodeKind::Hardlink {
                 target: target.clone(),
             },
+            PayloadNodeKind::Directory => IntroducedNodeKind::Directory,
             _ => IntroducedNodeKind::NonExecutable,
         };
         Self {
@@ -52,6 +53,13 @@ impl IntroducedNode {
 enum IntroducedNodeKind {
     Executable,
     NonExecutable,
+    /// An explicit payload directory node.
+    Directory,
+    /// A missing parent the payload's materialization creates for an
+    /// introduced descendant. It is a directory only where the selected root
+    /// has no node at that path; an existing root node (for example a
+    /// `/bin -> usr/bin` symlink) is written through, never replaced.
+    ImpliedDirectory,
     Symlink {
         target: String,
     },
@@ -59,6 +67,17 @@ enum IntroducedNodeKind {
     Hardlink {
         target: String,
     },
+}
+
+/// The projected-state outcome of resolving one package path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Resolved {
+    /// No component chain reaches a node in the projected state.
+    Missing,
+    /// The final component is a payload node the transaction materializes.
+    Introduced(IntroducedNodeKind),
+    /// The final component is a pre-transaction file in the selected root.
+    RootFile { executable: bool },
 }
 
 /// One transaction element's payload boundary and post-install interpreter.
@@ -173,15 +192,24 @@ pub(super) fn preflight_post_install_interpreters(
     Ok(())
 }
 
-/// Transaction-ordered availability of CCS hook interpreters in one selected root.
+/// Transaction-ordered availability of CCS hook interpreters in one selected
+/// root.
+///
+/// Ledger keys are the literal normalized absolute package spellings payload
+/// and removal records use. Alias resolution happens in
+/// [`HookInterpreterLedger::resolve_projected`], never while recording a key,
+/// so a transaction that removes an ancestor symlink cannot be redirected
+/// through the pre-transaction root.
 struct HookInterpreterLedger {
     root: PathBuf,
-    /// Effective absolute path -> payload node the transaction will materialize.
+    /// Normalized absolute package path -> payload node the transaction will
+    /// materialize.
     introduced: BTreeMap<String, IntroducedNodeKind>,
-    /// Effective absolute paths declared as `File` capabilities. A declaration
-    /// is a claim, not materialized payload authority.
+    /// Normalized absolute paths declared as `File` capabilities. A
+    /// declaration is a claim, not materialized payload authority.
     declared_file_capabilities: BTreeSet<String>,
-    /// Effective absolute paths whose final provider an earlier element removed.
+    /// Normalized absolute paths whose final provider an earlier element
+    /// removed.
     removed: BTreeSet<String>,
 }
 
@@ -198,6 +226,10 @@ impl HookInterpreterLedger {
     /// Record one element's payload boundary: paths it removes (old-only
     /// paths of an upgrade/removal), payload nodes, and declared `File`
     /// capabilities it installs.
+    ///
+    /// Every key keeps its literal package spelling; only syntax is
+    /// normalized. Resolving a recorded path through the pre-transaction root
+    /// here is the defect this ledger exists to avoid.
     fn apply_element(
         &mut self,
         removed_paths: impl IntoIterator<Item = String>,
@@ -205,21 +237,22 @@ impl HookInterpreterLedger {
         declared_file_capabilities: impl IntoIterator<Item = String>,
     ) -> anyhow::Result<()> {
         for path in removed_paths {
-            let Some(path) = self.effective_path(&path)? else {
+            let Some(path) = normalized_absolute_path(&path) else {
                 continue;
             };
             self.introduced.remove(&path);
             self.removed.insert(path);
         }
         for node in introduced_nodes {
-            let Some(path) = self.effective_path(&node.path)? else {
+            let Some(path) = normalized_absolute_path(&node.path) else {
                 continue;
             };
+            self.record_implied_parents(&path);
             self.removed.remove(&path);
             self.introduced.insert(path, node.kind);
         }
         for path in declared_file_capabilities {
-            let Some(path) = self.effective_path(&path)? else {
+            let Some(path) = normalized_absolute_path(&path) else {
                 continue;
             };
             self.declared_file_capabilities.insert(path);
@@ -230,7 +263,7 @@ impl HookInterpreterLedger {
     /// Require `interpreter` to be available at this point in the transaction.
     ///
     /// Unavailability is the typed [`CcsHookInterpreterUnavailable`]; a
-    /// selected-root resolution failure (for example a symlink loop) is
+    /// projected resolution failure (for example a symlink loop) is
     /// propagated rather than reported as a missing interpreter.
     fn require(
         &self,
@@ -256,131 +289,251 @@ impl HookInterpreterLedger {
         .into())
     }
 
-    /// Resolve `interpreter` against the projected state first and the
-    /// selected root second.
+    /// Whether `interpreter` reaches an executable node in the projected
+    /// state.
     fn available(&self, interpreter: &str) -> anyhow::Result<bool> {
-        let Some(path) = self.effective_path(interpreter)? else {
+        let Some(path) = normalized_absolute_path(interpreter) else {
             return Ok(false);
         };
-        self.projected_available(&path, 0)
-    }
-
-    fn projected_available(&self, path: &str, depth: usize) -> anyhow::Result<bool> {
-        // A declared `File` capability only authorizes when the projected
-        // payload actually materializes an executable node at that path.
-        if self.declared_file_capabilities.contains(path) && self.introduced_executable(path)? {
+        let resolved = self.resolve_projected(&path)?;
+        // A declared `File` capability is a claim, not payload authority: it
+        // authorizes only when the projected payload also materializes an
+        // executable node at the same path. A declaration alone never does.
+        if self.declared_file_capabilities.contains(&path)
+            && self.resolved_introduced_executable(&resolved)?
+        {
             return Ok(true);
         }
-        match self.introduced.get(path) {
-            Some(IntroducedNodeKind::Executable) => Ok(true),
-            Some(IntroducedNodeKind::NonExecutable) => Ok(false),
-            Some(IntroducedNodeKind::Hardlink { .. }) => self.introduced_executable(path),
-            Some(IntroducedNodeKind::Symlink { target }) => {
-                if depth >= MAX_SELECTED_ROOT_SYMLINK_DEPTH {
-                    anyhow::bail!(
-                        "package path {path} exceeds {MAX_SELECTED_ROOT_SYMLINK_DEPTH} projected selected-root symlinks"
-                    );
-                }
-                let Some(target_path) = self.effective_link_target(path, target)? else {
-                    return Ok(false);
-                };
-                if self.introduced.contains_key(&target_path) || self.removed.contains(&target_path)
-                {
-                    self.projected_available(&target_path, depth + 1)
-                } else {
-                    Ok(selected_root_executable(&self.root, &target_path)
-                        .with_context(|| {
-                            format!("failed to resolve projected symlink target {target_path}")
-                        })?
-                        .is_some())
-                }
+        Ok(match resolved {
+            Resolved::Introduced(IntroducedNodeKind::Executable) => true,
+            Resolved::Introduced(IntroducedNodeKind::Hardlink { target }) => {
+                self.hardlink_target_is_introduced_executable(&target)?
             }
-            None if self.removed.contains(path) => Ok(false),
-            None => Ok(selected_root_executable(&self.root, path)
-                .with_context(|| format!("failed to inspect selected-root path {path}"))?
-                .is_some()),
+            Resolved::RootFile { executable } => executable,
+            Resolved::Missing | Resolved::Introduced(_) => false,
+        })
+    }
+
+    /// Resolve one normalized absolute package spelling against the projected
+    /// state, consulting the pre-transaction root one component at a time.
+    ///
+    /// A prefix an earlier element removed is unreachable even when the
+    /// pre-transaction root still has it. An introduced symlink is spliced
+    /// lexically (an absolute target is root-relative, a relative target
+    /// resolves against the link's parent) and the walk restarts so every
+    /// redirected prefix is re-checked. Symlink-depth overflow is a resolution
+    /// error, never unavailability.
+    /// Record the parents materialization creates for an introduced path.
+    ///
+    /// A parent removed earlier in the transaction is recreated as a real
+    /// directory; any other missing parent is implied and defers to an
+    /// existing root node at resolution time.
+    fn record_implied_parents(&mut self, path: &str) {
+        let components = path_components(path).into_iter().collect::<Vec<_>>();
+        for depth in 1..components.len() {
+            let ancestor = absolute_spelling(&components[..depth]);
+            if self.introduced.contains_key(&ancestor) {
+                continue;
+            }
+            let kind = if self.removed.remove(&ancestor) {
+                IntroducedNodeKind::Directory
+            } else {
+                IntroducedNodeKind::ImpliedDirectory
+            };
+            self.introduced.insert(ancestor, kind);
         }
     }
 
-    /// Whether the projected payload materializes an executable regular node at
-    /// `path`. A hardlink shares its target's inode, so it is executable exactly
-    /// when its target payload node is; it never resolves into the existing root.
-    fn introduced_executable(&self, path: &str) -> anyhow::Result<bool> {
-        match self.introduced.get(path) {
-            Some(IntroducedNodeKind::Executable) => Ok(true),
-            Some(IntroducedNodeKind::Hardlink { target }) => {
-                let Some(target) = self.effective_path(target)? else {
-                    return Ok(false);
-                };
-                Ok(matches!(
-                    self.introduced.get(&target),
-                    Some(IntroducedNodeKind::Executable)
-                ))
+    /// Whether the pre-transaction selected root has any node at `path`,
+    /// without following it.
+    fn root_has_node(&self, path: &str) -> anyhow::Result<bool> {
+        match fs::symlink_metadata(self.root.join(path.trim_start_matches('/'))) {
+            Ok(_) => Ok(true),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(error) => {
+                Err(error).with_context(|| format!("failed to inspect selected-root path {path}"))
             }
-            _ => Ok(false),
         }
     }
 
-    /// Resolve one package spelling to the selected-root effective path before
-    /// any ledger comparison. Payload normalization uses this same authority.
-    fn effective_path(&self, path: &str) -> anyhow::Result<Option<String>> {
-        let Some(normalized) = normalized_absolute_path(path) else {
-            return Ok(None);
-        };
-        let effective = selected_root_effective_package_path(&self.root, &normalized)
-            .with_context(|| format!("failed to resolve selected-root path {path}"))?;
-        Ok(Some(effective))
+    fn resolve_projected(&self, path: &str) -> anyhow::Result<Resolved> {
+        let mut pending: VecDeque<String> = path_components(path);
+        let mut prefix: Vec<String> = Vec::new();
+        let mut symlink_depth = 0usize;
+
+        while let Some(component) = pending.pop_front() {
+            prefix.push(component);
+            let prefix_path = absolute_spelling(&prefix);
+            let is_final = pending.is_empty();
+
+            if self.removed.contains(&prefix_path) && !self.introduced.contains_key(&prefix_path) {
+                return Ok(Resolved::Missing);
+            }
+
+            if let Some(kind) = self.introduced.get(&prefix_path) {
+                if let IntroducedNodeKind::Symlink { target } = kind {
+                    symlink_depth += 1;
+                    check_symlink_depth(symlink_depth, path)?;
+                    pending = splice_symlink_target(&prefix_path, target, pending, path)?;
+                    prefix.clear();
+                    continue;
+                }
+                match kind {
+                    // An implied parent defers to any existing root node.
+                    IntroducedNodeKind::ImpliedDirectory if self.root_has_node(&prefix_path)? => {}
+                    IntroducedNodeKind::Directory | IntroducedNodeKind::ImpliedDirectory => {
+                        if is_final {
+                            return Ok(Resolved::Missing);
+                        }
+                        continue;
+                    }
+                    _ if is_final => return Ok(Resolved::Introduced(kind.clone())),
+                    _ => return Ok(Resolved::Missing),
+                }
+            }
+
+            // No projected node and not removed: consult the pre-transaction
+            // root for this one component without following it through the
+            // host.
+            let candidate = self.root.join(prefix_path.trim_start_matches('/'));
+            let metadata = match fs::symlink_metadata(&candidate) {
+                Ok(metadata) => metadata,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    return Ok(Resolved::Missing);
+                }
+                Err(error) => {
+                    return Err(error).with_context(|| {
+                        format!("failed to inspect selected-root path {prefix_path}")
+                    });
+                }
+            };
+            let file_type = metadata.file_type();
+            if file_type.is_symlink() {
+                symlink_depth += 1;
+                check_symlink_depth(symlink_depth, path)?;
+                let target = fs::read_link(&candidate).with_context(|| {
+                    format!("failed to read selected-root symlink {prefix_path}")
+                })?;
+                let target = target.to_str().ok_or_else(|| {
+                    conary_core::Error::InvalidPath(format!(
+                        "selected-root symlink {prefix_path} target is not UTF-8"
+                    ))
+                })?;
+                pending = splice_symlink_target(&prefix_path, target, pending, path)?;
+                prefix.clear();
+                continue;
+            }
+            if file_type.is_dir() {
+                continue;
+            }
+            if is_final && file_type.is_file() {
+                return Ok(Resolved::RootFile {
+                    executable: metadata.permissions().mode() & 0o111 != 0,
+                });
+            }
+            // A non-directory root node cannot have children, and an
+            // intermediate missing ancestor was handled above.
+            return Ok(Resolved::Missing);
+        }
+
+        // The walk consumed a directory leaf: it is not an executable.
+        Ok(Resolved::Missing)
     }
 
-    /// Follow a projected symlink target through the selected-root alias
-    /// authority so both sides of the next comparison use one spelling.
-    fn effective_link_target(&self, link: &str, target: &str) -> anyhow::Result<Option<String>> {
-        let Some(joined) = join_symlink_target(link, target) else {
-            return Ok(None);
+    /// Whether the resolver landed on a node the projected payload
+    /// materializes and that can execute.
+    fn resolved_introduced_executable(&self, resolved: &Resolved) -> anyhow::Result<bool> {
+        Ok(match resolved {
+            Resolved::Introduced(IntroducedNodeKind::Executable) => true,
+            Resolved::Introduced(IntroducedNodeKind::Hardlink { target }) => {
+                self.hardlink_target_is_introduced_executable(target)?
+            }
+            _ => false,
+        })
+    }
+
+    /// Whether a hardlink's target resolves, through the same projected
+    /// resolver, to an introduced executable. A hardlink shares its target's
+    /// inode, so it never resolves into the pre-transaction root.
+    fn hardlink_target_is_introduced_executable(&self, target: &str) -> anyhow::Result<bool> {
+        let Some(target) = normalized_absolute_path(target) else {
+            return Ok(false);
         };
-        let Some(normalized) = normalized_absolute_path(&joined) else {
-            return Ok(None);
-        };
-        let effective = selected_root_effective_package_path(&self.root, &normalized)
-            .with_context(|| format!("failed to resolve symlink target {joined} for {link}"))?;
-        Ok(Some(effective))
+        Ok(matches!(
+            self.resolve_projected(&target)?,
+            Resolved::Introduced(IntroducedNodeKind::Executable)
+        ))
     }
 }
 
-/// Lexically resolve a symlink target against the link's effective path.
-/// `None` when the target escapes the selected root or is empty.
-fn join_symlink_target(link: &str, target: &str) -> Option<String> {
-    let mut components: Vec<String> = if target.starts_with('/') {
+/// Splice a symlink target into the remaining walk. An absolute target is
+/// root-relative; a relative target resolves against the link's parent. The
+/// walk restarts from the root so every spliced prefix is re-checked against
+/// the projected state.
+fn splice_symlink_target(
+    link: &str,
+    target: &str,
+    remaining: VecDeque<String>,
+    package_path: &str,
+) -> anyhow::Result<VecDeque<String>> {
+    let mut resolved: Vec<String> = if target.starts_with('/') {
         Vec::new()
     } else {
-        Path::new(link)
-            .parent()
-            .unwrap_or_else(|| Path::new("/"))
-            .components()
-            .filter_map(normal_component)
-            .collect()
+        let mut parent = path_components(link);
+        parent.pop_back();
+        parent.into()
     };
     for component in Path::new(target).components() {
         match component {
             Component::RootDir | Component::CurDir => {}
-            Component::Normal(part) => components.push(part.to_string_lossy().into_owned()),
+            Component::Normal(part) => resolved.push(part.to_string_lossy().into_owned()),
             Component::ParentDir => {
-                components.pop()?;
+                if resolved.pop().is_none() {
+                    let error = conary_core::Error::PathTraversal(format!(
+                        "package path {package_path} escapes the selected root through symlink {link} -> {target}"
+                    ));
+                    return Err(error.into());
+                }
             }
-            Component::Prefix(_) => return None,
+            Component::Prefix(_) => {
+                let error = conary_core::Error::PathTraversal(format!(
+                    "package path {package_path} has unsupported symlink target {target}"
+                ));
+                return Err(error.into());
+            }
         }
     }
-    if components.is_empty() {
-        return None;
-    }
-    Some(format!("/{}", components.join("/")))
+    let mut spliced: VecDeque<String> = resolved.into();
+    spliced.extend(remaining);
+    Ok(spliced)
 }
 
-fn normal_component(component: Component<'_>) -> Option<String> {
-    match component {
-        Component::Normal(part) => Some(part.to_string_lossy().into_owned()),
-        _ => None,
+/// Split one normalized absolute package spelling into its components.
+fn path_components(path: &str) -> VecDeque<String> {
+    Path::new(path)
+        .components()
+        .filter_map(|component| match component {
+            Component::Normal(part) => Some(part.to_string_lossy().into_owned()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Render one component prefix as its normalized absolute spelling.
+fn absolute_spelling(components: &[String]) -> String {
+    format!("/{}", components.join("/"))
+}
+
+/// Bound projected symlink redirects the same way the selected-root resolver
+/// does; overflow is a resolution error, never unavailability.
+fn check_symlink_depth(depth: usize, path: &str) -> anyhow::Result<()> {
+    if depth > MAX_SELECTED_ROOT_SYMLINK_DEPTH {
+        let error = conary_core::Error::PathTraversal(format!(
+            "package path {path} exceeds {MAX_SELECTED_ROOT_SYMLINK_DEPTH} projected selected-root symlinks"
+        ));
+        return Err(error.into());
     }
+    Ok(())
 }
 
 /// Normalize one package path spelling to the absolute form used as ledger

@@ -215,7 +215,7 @@ fn introduced_node_classification_uses_kind_and_mode() {
             libc::S_IFDIR | 0o755
         ))
         .kind,
-        IntroducedNodeKind::NonExecutable
+        IntroducedNodeKind::Directory
     );
     assert_eq!(
         classify(payload_node(
@@ -285,6 +285,32 @@ fn introduced_directory_at_the_interpreter_path_is_unavailable() {
     executable_ledger
         .require("pkg", "1.0.0", HookPhase::PostInstall, "/usr/bin/sh")
         .expect("the same fixture with an executable regular node authorizes");
+}
+
+#[test]
+fn introduced_directory_nodes_are_traversed_to_reach_a_child_executable() {
+    let root = tempfile::tempdir().unwrap();
+    let mut ledger = HookInterpreterLedger::new(root.path());
+    let directory = |path: &str| {
+        IntroducedNode::from_payload_file(&payload_file(
+            path,
+            payload_node(PayloadNodeKind::Directory, libc::S_IFDIR | 0o755),
+        ))
+    };
+    ledger
+        .apply_element(
+            Vec::new(),
+            vec![
+                directory("/usr"),
+                directory("/usr/bin"),
+                executable("/usr/bin/sh"),
+            ],
+            Vec::new(),
+        )
+        .unwrap();
+    ledger
+        .require("pkg", "1.0.0", HookPhase::PostInstall, "/usr/bin/sh")
+        .expect("payload directory nodes must be traversed to reach the interpreter");
 }
 
 #[test]
@@ -410,6 +436,95 @@ fn selected_root_alias_normalizes_both_payload_and_interpreter() {
 }
 
 #[test]
+fn removed_ancestor_symlink_makes_the_interpreter_unreachable() {
+    let root = tempfile::tempdir().unwrap();
+    fs::create_dir_all(root.path().join("usr/bin")).unwrap();
+    std::os::unix::fs::symlink("usr/bin", root.path().join("bin")).unwrap();
+    let installed = root.path().join("usr/bin/sh");
+    fs::write(&installed, b"#!/bin/sh\nexit 0\n").unwrap();
+    fs::set_permissions(&installed, fs::Permissions::from_mode(0o755)).unwrap();
+    let mut ledger = HookInterpreterLedger::new(root.path());
+
+    // Positive control on the same fixture: the root alias reaches the
+    // executable before any removal.
+    ledger
+        .require("pkg", "1.0.0", HookPhase::PostInstall, "/bin/sh")
+        .expect("the root alias reaches the executable before removal");
+
+    ledger
+        .apply_element(vec!["/bin".to_string()], Vec::new(), Vec::new())
+        .unwrap();
+    let error = ledger
+        .require("pkg", "1.0.0", HookPhase::PostInstall, "/bin/sh")
+        .map_err(typed)
+        .expect_err("a removed ancestor symlink must make the alias unreachable");
+    assert_eq!(error.interpreter, "/bin/sh");
+}
+
+#[test]
+fn introduced_ancestor_symlink_reaches_an_introduced_executable() {
+    let root = tempfile::tempdir().unwrap();
+    let mut ledger = HookInterpreterLedger::new(root.path());
+    ledger
+        .apply_element(
+            Vec::new(),
+            vec![
+                projected_symlink("/bin", "usr/bin"),
+                executable("/usr/bin/sh"),
+            ],
+            Vec::new(),
+        )
+        .unwrap();
+    ledger
+        .require("pkg", "1.0.0", HookPhase::PostInstall, "/bin/sh")
+        .expect("an introduced ancestor symlink reaches the introduced executable");
+
+    // Negative control on the same fixture: without the introduced symlink the
+    // root has no /bin to resolve the interpreter through.
+    let mut without_alias = HookInterpreterLedger::new(root.path());
+    without_alias
+        .apply_element(Vec::new(), vec![executable("/usr/bin/sh")], Vec::new())
+        .unwrap();
+    let error = without_alias
+        .require("pkg", "1.0.0", HookPhase::PostInstall, "/bin/sh")
+        .map_err(typed)
+        .expect_err("without the projected symlink the interpreter path is unreachable");
+    assert_eq!(error.interpreter, "/bin/sh");
+}
+
+#[test]
+fn projected_and_root_symlink_loop_is_a_resolution_error() {
+    let root = tempfile::tempdir().unwrap();
+    fs::create_dir_all(root.path().join("usr")).unwrap();
+    std::os::unix::fs::symlink("usr/bin", root.path().join("bin")).unwrap();
+    let mut ledger = HookInterpreterLedger::new(root.path());
+    ledger
+        .apply_element(
+            Vec::new(),
+            vec![projected_symlink("/usr/bin", "/bin")],
+            Vec::new(),
+        )
+        .unwrap();
+
+    let error = ledger
+        .require("pkg", "1.0.0", HookPhase::PostInstall, "/bin/sh")
+        .expect_err("a projected/root symlink loop must fail resolution");
+    assert!(
+        error
+            .downcast_ref::<CcsHookInterpreterUnavailable>()
+            .is_none(),
+        "a symlink loop is a resolution error, not the typed unavailability"
+    );
+    assert!(
+        matches!(
+            error.downcast_ref::<conary_core::Error>(),
+            Some(conary_core::Error::PathTraversal(_))
+        ),
+        "the loop must surface as a typed selected-root path traversal: {error:?}"
+    );
+}
+
+#[test]
 fn preflight_records_every_element_before_requiring_any_interpreter() {
     let root = tempfile::tempdir().unwrap();
     let elements = vec![
@@ -531,4 +646,58 @@ fn restore_removal_element_removes_a_root_provider_before_installs() {
             .expect_err("a removed provider cannot authorize a restored hook");
     assert_eq!(error.package, "consumer");
     assert_eq!(error.interpreter, PRESENT);
+}
+
+#[test]
+fn implied_parent_defers_to_an_existing_root_symlink() {
+    // Root: `/bin -> usr/bin` with an executable `/usr/bin/sh`. An element
+    // introduces an unrelated `/bin/tool`; materialization writes through the
+    // existing symlink, so `/bin` must not become a shadowing directory.
+    let root = tempfile::tempdir().unwrap();
+    let sh = root.path().join("usr/bin/sh");
+    fs::create_dir_all(sh.parent().unwrap()).unwrap();
+    fs::write(&sh, b"#!/bin/sh\n").unwrap();
+    fs::set_permissions(&sh, fs::Permissions::from_mode(0o755)).unwrap();
+    std::os::unix::fs::symlink("usr/bin", root.path().join("bin")).unwrap();
+    let mut ledger = HookInterpreterLedger::new(root.path());
+
+    // Positive control: before any element, `/bin/sh` resolves through root.
+    ledger
+        .require("pkg", "1.0.0", HookPhase::PostInstall, "/bin/sh")
+        .expect("root alias resolves the interpreter");
+
+    ledger
+        .apply_element(Vec::new(), vec![executable("/bin/tool")], Vec::new())
+        .unwrap();
+    ledger
+        .require("pkg", "1.0.0", HookPhase::PostInstall, "/bin/sh")
+        .expect("an implied /bin parent must not shadow the root symlink");
+}
+
+#[test]
+fn removed_parent_recreated_by_payload_is_a_real_directory() {
+    // Root: `/bin -> usr/bin`, no `/usr/bin/sh`. The transaction removes the
+    // `/bin` symlink, then a payload ships `/bin/sh` itself: materialization
+    // recreates `/bin` as a directory holding the new executable.
+    let root = tempfile::tempdir().unwrap();
+    fs::create_dir_all(root.path().join("usr/bin")).unwrap();
+    std::os::unix::fs::symlink("usr/bin", root.path().join("bin")).unwrap();
+    let mut ledger = HookInterpreterLedger::new(root.path());
+
+    ledger
+        .apply_element(vec!["/bin".to_string()], Vec::new(), Vec::new())
+        .unwrap();
+    // Negative control: with `/bin` removed and nothing shipped, unreachable.
+    let error = ledger
+        .require("pkg", "1.0.0", HookPhase::PostInstall, "/bin/sh")
+        .map_err(typed)
+        .expect_err("a removed ancestor makes the interpreter unreachable");
+    assert_eq!(error.interpreter, "/bin/sh");
+
+    ledger
+        .apply_element(Vec::new(), vec![executable("/bin/sh")], Vec::new())
+        .unwrap();
+    ledger
+        .require("pkg", "1.0.0", HookPhase::PostInstall, "/bin/sh")
+        .expect("the payload recreates /bin as a directory with an executable sh");
 }
