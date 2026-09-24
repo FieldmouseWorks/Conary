@@ -207,6 +207,7 @@ pub fn generate(result: &BuildResult, output_path: &Path) -> Result<GenerationRe
     fs::write(pkg_root.join(".PKGINFO"), &pkginfo)?;
 
     // Generate .INSTALL script if we have hooks
+    CommonHookGenerator::validate_script_interpreters(&manifest.hooks)?;
     let hook_converter = ArchHookConverter;
     let install_script = generate_install_script(&hook_converter, &manifest.hooks);
     if let Some(script) = &install_script {
@@ -539,10 +540,12 @@ mod tests {
         let hooks = Hooks {
             post_install: Some(crate::ccs::manifest::ScriptHook {
                 script: "echo installed > /var/lib/myapp/installed".to_string(),
+                interpreter: "/bin/sh".to_string(),
                 reversible: None,
             }),
             pre_remove: Some(crate::ccs::manifest::ScriptHook {
                 script: "echo removed > /var/lib/myapp/removed".to_string(),
+                interpreter: "/bin/sh".to_string(),
                 reversible: None,
             }),
             ..Default::default()
@@ -564,5 +567,35 @@ mod tests {
         let release = "7";
         let pkgver = format!("{}-{release}", version.replace('-', "_"));
         assert_eq!(pkgver, "1.0.0_beta-7");
+    }
+
+    #[test]
+    fn arch_export_refuses_a_script_hook_interpreter_it_cannot_execute() {
+        let mut result = create_test_build_result();
+        result.manifest.hooks.post_install = Some(crate::ccs::manifest::ScriptHook {
+            script: "print('installed')".to_string(),
+            interpreter: "/usr/bin/python3".to_string(),
+            reversible: None,
+        });
+        let temp_dir = TempDir::new().unwrap();
+
+        let error = generate(&result, &temp_dir.path().join("python.pkg.tar.zst")).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "CCS hook interpreter /usr/bin/python3 is not implemented (supported: /bin/sh)"
+        );
+
+        // Positive control: the same fixture exports once the hook declares the
+        // implemented interpreter.
+        result
+            .manifest
+            .hooks
+            .post_install
+            .as_mut()
+            .unwrap()
+            .interpreter = "/bin/sh".to_string();
+        let output_path = temp_dir.path().join("shell.pkg.tar.zst");
+        generate(&result, &output_path).unwrap();
+        assert!(output_path.exists());
     }
 }

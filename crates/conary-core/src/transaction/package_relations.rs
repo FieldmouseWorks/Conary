@@ -122,6 +122,21 @@ pub fn plan_package_relations(
     incoming_scheme: VersionScheme,
 ) -> Result<PackageRelationPlan> {
     let provides = incoming.resolution_capabilities()?;
+    plan_package_relations_with_provides(conn, incoming, incoming_scheme, &provides)
+}
+
+/// Plan native conflict and replacement effects with the exact incoming
+/// capability view the caller selected.
+///
+/// CCS callers project a component-filtered capability set and pass it here.
+/// Native callers keep [`plan_package_relations`], which passes the package's
+/// complete `resolution_capabilities()` unchanged.
+pub fn plan_package_relations_with_provides(
+    conn: &Connection,
+    incoming: &dyn PackageFormat,
+    incoming_scheme: VersionScheme,
+    provides: &[ProvidedCapability],
+) -> Result<PackageRelationPlan> {
     plan_package_relation_facts(
         conn,
         IncomingPackageRelations {
@@ -129,7 +144,7 @@ pub fn plan_package_relations(
             version: incoming.version(),
             architecture: incoming.architecture(),
             version_scheme: incoming_scheme,
-            provides: &provides,
+            provides,
             relations: incoming.relations(),
         },
     )

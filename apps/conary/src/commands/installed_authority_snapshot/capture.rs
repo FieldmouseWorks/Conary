@@ -197,6 +197,7 @@ pub(crate) fn capture_trove_snapshot(
         payload_claims,
         native_lifecycle: capture_native_lifecycle(conn, trove_id)?,
         ccs_remove_hook: ccs_remove_hook.map(|hook| CcsRemoveHookSnapshot {
+            interpreter: hook.interpreter.clone(),
             script: hook.script.clone(),
             reversible: hook.reversible,
         }),

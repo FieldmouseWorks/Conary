@@ -88,6 +88,7 @@ fn manifest_with_post_install_script() -> CcsManifest {
     let mut manifest = CcsManifest::new_minimal("script-post", "1.0.0");
     manifest.hooks.post_install = Some(ScriptHook {
         script: "echo post-install".to_string(),
+        interpreter: "/bin/sh".to_string(),
         reversible: None,
     });
     manifest
@@ -97,6 +98,7 @@ fn manifest_with_pre_remove_script() -> CcsManifest {
     let mut manifest = CcsManifest::new_minimal("script-pre", "1.0.0");
     manifest.hooks.pre_remove = Some(ScriptHook {
         script: "echo pre-remove".to_string(),
+        interpreter: "/bin/sh".to_string(),
         reversible: None,
     });
     manifest

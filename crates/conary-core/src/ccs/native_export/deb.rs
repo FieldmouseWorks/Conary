@@ -201,6 +201,7 @@ pub fn generate(result: &BuildResult, output_path: &Path) -> Result<GenerationRe
     }
 
     // Generate and write maintainer scripts
+    CommonHookGenerator::validate_script_interpreters(&manifest.hooks)?;
     let hook_converter = DebHookConverter;
 
     if let Some(script) = hook_converter.pre_install(&manifest.hooks) {
@@ -531,10 +532,12 @@ mod tests {
         let hooks = Hooks {
             post_install: Some(crate::ccs::manifest::ScriptHook {
                 script: "echo installed > /var/lib/myapp/installed".to_string(),
+                interpreter: "/bin/sh".to_string(),
                 reversible: None,
             }),
             pre_remove: Some(crate::ccs::manifest::ScriptHook {
                 script: "echo removed > /var/lib/myapp/removed".to_string(),
+                interpreter: "/bin/sh".to_string(),
                 reversible: None,
             }),
             ..Default::default()
@@ -546,5 +549,35 @@ mod tests {
 
         assert!(post.contains("echo installed > /var/lib/myapp/installed"));
         assert!(pre_remove.contains("echo removed > /var/lib/myapp/removed"));
+    }
+
+    #[test]
+    fn deb_export_refuses_a_script_hook_interpreter_it_cannot_execute() {
+        let mut result = create_test_build_result();
+        result.manifest.hooks.post_install = Some(crate::ccs::manifest::ScriptHook {
+            script: "print('installed')".to_string(),
+            interpreter: "/usr/bin/python3".to_string(),
+            reversible: None,
+        });
+        let temp_dir = TempDir::new().unwrap();
+
+        let error = generate(&result, &temp_dir.path().join("python.deb")).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "CCS hook interpreter /usr/bin/python3 is not implemented (supported: /bin/sh)"
+        );
+
+        // Positive control: the same fixture exports once the hook declares the
+        // implemented interpreter.
+        result
+            .manifest
+            .hooks
+            .post_install
+            .as_mut()
+            .unwrap()
+            .interpreter = "/bin/sh".to_string();
+        let output_path = temp_dir.path().join("shell.deb");
+        generate(&result, &output_path).unwrap();
+        assert!(output_path.exists());
     }
 }

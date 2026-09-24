@@ -103,10 +103,12 @@ fn lifecycle_build_result(version: &str) -> BuildResult {
     });
     manifest.hooks.post_install = Some(ScriptHook {
         script: ":".to_string(),
+        interpreter: "/bin/sh".to_string(),
         reversible: None,
     });
     manifest.hooks.pre_remove = Some(ScriptHook {
         script: ":".to_string(),
+        interpreter: "/bin/sh".to_string(),
         reversible: None,
     });
     BuildResult {

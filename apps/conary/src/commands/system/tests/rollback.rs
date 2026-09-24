@@ -898,6 +898,7 @@ fn rollback_snapshot_restores_exact_ccs_remove_hook() {
     let changeset_id = changeset.insert(&conn).unwrap();
     let mut snapshot = TroveSnapshot::test_package("ccs-hook-fixture", "1.0.0", Vec::new());
     snapshot.ccs_remove_hook = Some(crate::commands::CcsRemoveHookSnapshot {
+        interpreter: "/bin/sh".to_string(),
         script: "echo removing\n".to_string(),
         reversible: Some(true),
     });

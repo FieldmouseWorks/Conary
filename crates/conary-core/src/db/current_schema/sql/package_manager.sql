@@ -371,6 +371,7 @@ CREATE INDEX idx_package_requirement_groups_kind
     ON package_requirement_groups(kind);
 CREATE TABLE installed_ccs_remove_hooks (
             trove_id INTEGER PRIMARY KEY REFERENCES troves(id) ON DELETE CASCADE,
+            interpreter TEXT NOT NULL,
             script TEXT NOT NULL,
             reversible INTEGER
                 CHECK (reversible IS NULL OR reversible IN (0, 1))

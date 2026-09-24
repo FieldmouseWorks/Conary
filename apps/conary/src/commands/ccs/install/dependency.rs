@@ -5,11 +5,18 @@
 use anyhow::Result;
 use conary_core::db::models::InstalledRequirementGroup;
 use conary_core::packages::traits::PackageFormat;
-use conary_core::repository::dependency_model::RepositoryRequirementKind;
+use conary_core::repository::dependency_model::{ProvidedCapability, RepositoryRequirementKind};
 use conary_core::resolver::identity::PackageIdentity;
 
 /// Project the signed/source package facts used by the end-state validator.
-pub(super) fn incoming_package_identity(incoming: &dyn PackageFormat) -> Result<PackageIdentity> {
+///
+/// `provided_capabilities` is the exact selected capability view the install
+/// will persist; the identity must never project a provide the selected
+/// payload does not ship.
+pub(super) fn incoming_package_identity(
+    incoming: &dyn PackageFormat,
+    provided_capabilities: Vec<ProvidedCapability>,
+) -> Result<PackageIdentity> {
     Ok(PackageIdentity {
         repo_package_id: None,
         name: incoming.name().to_string(),
@@ -26,7 +33,7 @@ pub(super) fn incoming_package_identity(incoming: &dyn PackageFormat) -> Result<
         canonical_name: None,
         installed_trove_id: None,
         installed_pinned: false,
-        provided_capabilities: incoming.resolution_capabilities()?,
+        provided_capabilities,
     })
 }
 

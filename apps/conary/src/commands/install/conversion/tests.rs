@@ -693,6 +693,7 @@ async fn converted_ccs_install_rolls_back_post_hook_failure() {
     let mut manifest = CcsManifest::new_minimal("converted-post-hook-fails", "1.0.0");
     manifest.hooks.post_install = Some(ScriptHook {
         script: "exit 31".to_string(),
+        interpreter: "/bin/sh".to_string(),
         reversible: None,
     });
     let package_path =
