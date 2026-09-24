@@ -5,6 +5,7 @@
 mod config_state;
 mod indexed;
 mod probe;
+mod scratch;
 
 pub use config_state::decode_config_state_upper_indexed;
 pub use indexed::decode_selected_root_overlay_upper_indexed;
@@ -13,6 +14,10 @@ pub use probe::{
     OverlayMetadataCopyUp, OverlayOpaqueDirectory, OverlayWhiteoutEncoding,
     SELECTED_ROOT_OVERLAY_CAPABILITIES_VERSION, SelectedRootOverlayCapabilities,
     probe_selected_root_overlay_profile,
+};
+pub use scratch::{
+    MountedScratchTmpfs, OverlayScratchCandidateFailure, OverlayScratchPlacement,
+    SelectedRootOverlayScratch, select_selected_root_overlay_scratch,
 };
 
 #[cfg(test)]

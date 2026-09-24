@@ -23,12 +23,14 @@ pub use materialize::{
     overlay_payload_entries,
 };
 pub use overlay::{
-    MountedSelectedRootOverlay, OverlayHardlinkCopyUp, OverlayLowerDirectoryRename,
-    OverlayMetadataCopyUp, OverlayOpaqueDirectory, OverlayWhiteoutEncoding, OverlayXattrNamespace,
-    SELECTED_ROOT_OVERLAY_CAPABILITIES_VERSION, SELECTED_ROOT_OVERLAY_PROFILE_VERSION,
-    SelectedRootOverlayCapabilities, SelectedRootOverlayProfile, decode_config_state_upper_indexed,
+    MountedScratchTmpfs, MountedSelectedRootOverlay, OverlayHardlinkCopyUp,
+    OverlayLowerDirectoryRename, OverlayMetadataCopyUp, OverlayOpaqueDirectory,
+    OverlayScratchCandidateFailure, OverlayScratchPlacement, OverlayWhiteoutEncoding,
+    OverlayXattrNamespace, SELECTED_ROOT_OVERLAY_CAPABILITIES_VERSION,
+    SELECTED_ROOT_OVERLAY_PROFILE_VERSION, SelectedRootOverlayCapabilities,
+    SelectedRootOverlayProfile, SelectedRootOverlayScratch, decode_config_state_upper_indexed,
     decode_selected_root_overlay_upper_indexed, encode_selected_root_overlay_upper_node,
-    probe_selected_root_overlay_profile,
+    probe_selected_root_overlay_profile, select_selected_root_overlay_scratch,
 };
 pub use scan::{
     SelectedRootCaptureExclusions, SelectedRootScanWork, capture_existing_payload_node,
