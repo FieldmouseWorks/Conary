@@ -300,6 +300,9 @@ pub struct Assertion {
     /// Non-zero exit is silently accepted (no assertion failure).
     #[serde(default)]
     pub stdout_contains_any_if_success: Option<Vec<String>>,
+    /// Typed checks against stdout parsed as a single JSON document.
+    #[serde(default)]
+    pub stdout_json: Option<Vec<JsonAssertion>>,
     #[serde(default)]
     pub stderr_contains: Option<String>,
     #[serde(default)]
@@ -310,6 +313,16 @@ pub struct Assertion {
     pub file_not_exists: Option<String>,
     #[serde(default)]
     pub file_checksum: Option<FileChecksum>,
+}
+
+/// One typed check against stdout parsed as a single JSON document.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct JsonAssertion {
+    /// RFC 6901 JSON pointer into the parsed stdout document ("" is the whole document).
+    pub pointer: String,
+    /// Expected value; compared for exact equality after conversion to JSON.
+    pub equals: toml::Value,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

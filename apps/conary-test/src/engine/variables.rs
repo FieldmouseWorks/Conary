@@ -4,7 +4,9 @@ use std::collections::HashMap;
 
 use crate::config::corpus::{CorpusCaseDef, CorpusTargetDef};
 use crate::config::distro::GlobalConfig;
-use crate::config::manifest::{Assertion, FileChecksum, QemuBoot, QemuGuestCopy, TestManifest};
+use crate::config::manifest::{
+    Assertion, FileChecksum, JsonAssertion, QemuBoot, QemuGuestCopy, TestManifest,
+};
 
 /// Build the base variable map from global config and distro selection.
 ///
@@ -216,6 +218,37 @@ pub fn expand_assertion(assertion: &Assertion, vars: &HashMap<String, String>) -
                 path: expand_variables(&checksum.path, vars),
                 sha256: expand_variables(&checksum.sha256, vars),
             }),
+        stdout_json: assertion.stdout_json.as_ref().map(|checks| {
+            checks
+                .iter()
+                .map(|check| JsonAssertion {
+                    pointer: expand_variables(&check.pointer, vars),
+                    equals: expand_toml_value(&check.equals, vars),
+                })
+                .collect()
+        }),
+    }
+}
+
+/// Expand `${VAR}` references in every string leaf of a TOML value.
+///
+/// Table keys are structural and are not expanded.
+fn expand_toml_value(value: &toml::Value, vars: &HashMap<String, String>) -> toml::Value {
+    match value {
+        toml::Value::String(value) => toml::Value::String(expand_variables(value, vars)),
+        toml::Value::Array(values) => toml::Value::Array(
+            values
+                .iter()
+                .map(|value| expand_toml_value(value, vars))
+                .collect(),
+        ),
+        toml::Value::Table(table) => toml::Value::Table(
+            table
+                .iter()
+                .map(|(key, value)| (key.clone(), expand_toml_value(value, vars)))
+                .collect(),
+        ),
+        other => other.clone(),
     }
 }
 

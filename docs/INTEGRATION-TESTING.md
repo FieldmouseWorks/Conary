@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-09-21
-revision: 69
+last_updated: 2026-09-24
+revision: 70
 summary: Define the Redshirt shared Rust tooling boundary, Conary-owned package checks, and integration cutover requirements alongside the existing integration proof contracts
 ---
 
@@ -1302,6 +1302,25 @@ Current JSON semantics:
 2. Define test steps using the manifest schema (run, assert, mock_server, etc.)
 3. For a local proof, run `cargo run -p conary-test -- list`
 4. For deeper manual debugging, run `cargo run -p conary-test -- run --suite <manifest> --distro <distro> --phase <N>`
+
+Prove behavior with typed output. When a command emits JSON, assert on it with
+`stdout_json`: stdout must parse as one JSON document, each RFC 6901 `pointer`
+must resolve, and the resolved value must equal `equals` exactly (objects by
+key set, arrays in order, integers and floats never cross-match). String
+leaves and pointers receive `${VAR}` expansion.
+
+```toml
+[test.step.assert]
+exit_code = 0
+stdout_json = [
+  { pointer = "/status", equals = "planned" },
+  { pointer = "/data/skipped", equals = [] },
+]
+```
+
+The substring assertions (`stdout_contains*`, `stderr_contains`) remain for
+unmigrated suites; they must not be the proof for new tests where a typed
+surface exists. See issue #1070 for the migration.
 
 ## Adding Distros
 
