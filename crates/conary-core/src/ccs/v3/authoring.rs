@@ -523,14 +523,50 @@ fn validate_file_provides_are_shipped(build: &BuildResult) -> Result<()> {
         .files
         .iter()
         .filter(|file| file.node.kind.is_regular() || file.node.kind.is_symlink())
-        .map(|file| file.path.as_str())
+        .map(|file| (file.path.as_str(), file.component.as_str()))
+        .collect::<BTreeMap<_, _>>();
+    let available = build.components.keys().cloned().collect::<Vec<_>>();
+    let always_installed = always_installed_component_names(&build.manifest.components, &available)
+        .into_iter()
         .collect::<BTreeSet<_>>();
     for path in &build.manifest.provides.files {
-        if !shipped.contains(path.as_str()) {
+        let Some(component) = shipped.get(path.as_str()) else {
             bail!("declared file provide {path} is not shipped by this package");
+        };
+        if !always_installed.contains(*component) {
+            bail!(
+                "declared file provide {path} belongs to optional component {component}; file provides must be shipped by an always-installed component"
+            );
         }
     }
     Ok(())
+}
+
+/// Component names that install when the caller requests no optional
+/// components.
+///
+/// This is the shared authority for the "always installed" rule used by
+/// build-time file-provide validation and install-time component selection:
+/// normalized, de-duplicated `components.default` names that exist in
+/// `available`, or every available component when no declared default
+/// resolves. Callers supply `available` because a build manifest and a signed
+/// component map are separate typed sources.
+pub fn always_installed_component_names(
+    components: &crate::ccs::manifest::Components,
+    available: &[String],
+) -> Vec<String> {
+    let mut defaults = Vec::new();
+    for component in &components.default {
+        let normalized = component.trim().to_ascii_lowercase();
+        if available.contains(&normalized) && !defaults.contains(&normalized) {
+            defaults.push(normalized);
+        }
+    }
+    if defaults.is_empty() {
+        available.to_vec()
+    } else {
+        defaults
+    }
 }
 
 fn select_default_component(build: &BuildResult) -> Result<String> {

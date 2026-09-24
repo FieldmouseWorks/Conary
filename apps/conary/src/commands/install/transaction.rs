@@ -4,10 +4,16 @@ use super::{ExtractionResult, InstallSemantics, RepositoryInstallProvenance};
 use anyhow::{Context, Result};
 use conary_core::db::models::{ConfigFile, ConfigSource, ProvideEntry};
 use conary_core::packages::PackageFormat;
+use conary_core::repository::dependency_model::RepositoryCapabilityKind;
 use conary_core::transaction::{PackageRelationDeconfiguration, PackageRelationRemoval};
+use std::collections::HashSet;
 
 #[path = "transaction/selected_root.rs"]
 mod selected_root;
+
+#[cfg(test)]
+#[path = "transaction/tests.rs"]
+mod tests;
 
 pub(super) use selected_root::{
     execute_install_transaction_in_selected_root,
@@ -164,6 +170,7 @@ pub(super) fn persist_package_provides(
     extracted_files: &[conary_core::packages::payload::PackagePayloadFile],
 ) -> Result<()> {
     let mut provides = package.resolution_capabilities()?;
+    drop_uninstalled_declared_file_provides(&mut provides, package, extracted_files);
     extend_materialized_payload_provides(&mut provides, semantics, extracted_files)?;
     persist_declared_provides(
         tx,
@@ -173,6 +180,37 @@ pub(super) fn persist_package_provides(
         package.version_scheme(),
         &provides,
     )
+}
+
+/// Drop declared `File` provides whose path the package ships but the selected
+/// install did not extract.
+///
+/// A declared `File` provide comes in two shapes. When its path is part of the
+/// package's complete payload it is authority over that payload entry, so a
+/// component selection that skipped the owning component must not persist it.
+/// When the package does not ship the path at all -- for example an RPM
+/// `Provides: /bin/sh` whose payload carries `/usr/bin/sh` -- the path is a
+/// source-format declaration, not payload authority, and component selection
+/// must leave it unchanged.
+fn drop_uninstalled_declared_file_provides(
+    provides: &mut Vec<conary_core::repository::dependency_model::ProvidedCapability>,
+    package: &dyn PackageFormat,
+    extracted_files: &[conary_core::packages::payload::PackagePayloadFile],
+) {
+    let full_payload_paths: HashSet<&str> = package
+        .files()
+        .iter()
+        .map(|file| file.path.as_str())
+        .collect();
+    let extracted_paths: HashSet<&str> = extracted_files
+        .iter()
+        .map(|file| file.path.as_str())
+        .collect();
+    provides.retain(|provide| {
+        provide.kind != RepositoryCapabilityKind::File
+            || !full_payload_paths.contains(provide.name.as_str())
+            || extracted_paths.contains(provide.name.as_str())
+    });
 }
 
 pub(super) fn extend_materialized_payload_provides(

@@ -926,3 +926,84 @@ fn projection_accepts_file_provide_for_a_shipped_symlink() {
             })
     );
 }
+
+/// A `/bin/sh` file provide whose payload lives in `component`, with both
+/// `runtime` (the manifest default) and `extras` present in the build component
+/// map. Only the named component carries the file, so the fixture is internally
+/// consistent for either assignment.
+fn file_provide_build_in_component(component: &str) -> crate::ccs::builder::BuildResult {
+    use crate::ccs::builder::ComponentData;
+    use std::collections::HashMap;
+
+    let mut build = test_support::single_file_build_result_at(
+        "shell-provider",
+        "0.1.0",
+        "/bin/sh",
+        b"#!/bin/sh\n",
+    );
+    build.manifest.provides.files = vec!["/bin/sh".to_string()];
+    build.files[0].component = component.to_string();
+    let file = build.files[0].clone();
+    let mut components = HashMap::from([
+        (
+            "runtime".to_string(),
+            ComponentData {
+                name: "runtime".to_string(),
+                files: Vec::new(),
+                hash: "runtime".to_string(),
+                size: 0,
+            },
+        ),
+        (
+            "extras".to_string(),
+            ComponentData {
+                name: "extras".to_string(),
+                files: Vec::new(),
+                hash: "extras".to_string(),
+                size: 0,
+            },
+        ),
+    ]);
+    let target = components.get_mut(component).unwrap();
+    target.files = vec![file.clone()];
+    target.size = file.content.as_ref().map_or(0, |content| content.size);
+    build.components = components;
+    build
+}
+
+#[test]
+fn projection_accepts_file_provide_from_default_component() {
+    let build = file_provide_build_in_component("runtime");
+
+    let projected = project_build_result_to_v3(V3AuthoringInput {
+        build: &build,
+        local_dev: true,
+        debug_toml: None,
+    })
+    .unwrap();
+
+    assert!(
+        projected
+            .authority
+            .provided_capabilities
+            .iter()
+            .any(|entry| { entry.kind == DependencyKindV3::File && entry.name == "/bin/sh" })
+    );
+}
+
+#[test]
+fn projection_rejects_file_provide_from_optional_component() {
+    let build = file_provide_build_in_component("extras");
+
+    let error = project_build_result_to_v3(V3AuthoringInput {
+        build: &build,
+        local_dev: true,
+        debug_toml: None,
+    })
+    .unwrap_err();
+
+    assert_eq!(
+        error.to_string(),
+        "declared file provide /bin/sh belongs to optional component extras; file provides must be shipped by an always-installed component"
+    );
+}
