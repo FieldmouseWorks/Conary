@@ -11,7 +11,11 @@ use conary_core::ccs::native_lifecycle::{
 };
 #[cfg(feature = "test-hooks")]
 use conary_core::db::models::InstalledNativeLifecycleBundle;
-use conary_core::db::models::{InstallReason, InstallSource, TroveType};
+use conary_core::db::models::{InstallReason, InstallSource, ProvideEntry, TroveType};
+use conary_core::repository::dependency_model::{
+    ProvideArchitectureQualifier, RepositoryCapabilityKind, RepositoryRequirementClause,
+    RepositoryRequirementGroup, RepositoryRequirementKind, RequirementArchitectureQualifier,
+};
 use tempfile::TempDir;
 
 #[test]
@@ -46,7 +50,7 @@ fn autoremove_plan_uses_recorded_ownership_and_pin_state() {
         conary_core::repository::versioning::VersionScheme::Conary,
     );
 
-    let plan = plan_autoremove(vec![owned, adopted, pinned, ordinary_named_bash]);
+    let plan = plan_autoremove(vec![owned, ordinary_named_bash], vec![adopted, pinned]);
 
     assert_eq!(
         plan.removable
@@ -96,7 +100,7 @@ fn autoremove_plan_json_projects_removable_and_typed_skips() {
     );
     pinned.pinned = true;
 
-    let plan = plan_autoremove(vec![owned, adopted, pinned]);
+    let plan = plan_autoremove(vec![owned], vec![adopted, pinned]);
     let data = AutoremovePlanData::from_fixed_point(&fixed_point_from_plan(plan));
     let value = serde_json::to_value(plan_result(&data).unwrap()).unwrap();
 
@@ -141,7 +145,7 @@ fn autoremove_plan_json_projects_removable_and_typed_skips() {
 
 #[test]
 fn autoremove_plan_json_empty_plan_is_read_only() {
-    let plan = plan_autoremove(Vec::new());
+    let plan = plan_autoremove(Vec::new(), Vec::new());
     let data = AutoremovePlanData::from_fixed_point(&fixed_point_from_plan(plan));
     let value = serde_json::to_value(plan_result(&data).unwrap()).unwrap();
 
@@ -207,6 +211,74 @@ fn fixed_point_preview_keeps_dependencies_of_skipped_orphans() {
     assert!(
         !removable.contains(&"lib"),
         "a pinned orphan's dependency must stay required"
+    );
+}
+
+#[test]
+fn joint_round_keeps_one_of_two_substitutable_providers() {
+    let tmp = TempDir::new().unwrap();
+    let db_path = tmp.path().join("conary.db");
+    conary_core::db::init(&db_path).unwrap();
+    let conn = conary_core::db::open(&db_path).unwrap();
+
+    let app_id = seed_fixture_trove(&conn, "app", InstallReason::Explicit, false);
+    let lower_id = seed_fixture_trove(&conn, "prov-b", InstallReason::Dependency, false);
+    let higher_id = seed_fixture_trove(&conn, "prov-a", InstallReason::Dependency, false);
+    assert!(lower_id < higher_id, "fixture ids must order by creation");
+    seed_capability_requires(&conn, app_id, "libx", RepositoryCapabilityKind::Virtual);
+    seed_provide(&conn, lower_id, "libx", RepositoryCapabilityKind::Virtual);
+    seed_provide(&conn, higher_id, "libx", RepositoryCapabilityKind::Virtual);
+
+    let plan = plan_autoremove_fixed_point(&conn).unwrap();
+
+    let removable = plan
+        .rounds
+        .iter()
+        .flat_map(|round| round.removable.iter())
+        .map(|trove| trove.name.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        removable,
+        vec!["prov-b"],
+        "only the lower-id substitutable provider may be removable"
+    );
+    assert_eq!(plan.rounds.len(), 1);
+    assert!(plan.skipped.is_empty());
+    assert!(
+        !plan
+            .rounds
+            .iter()
+            .any(|round| round.removable.iter().any(|trove| trove.name == "prov-a")),
+        "the retained provider must never be removed"
+    );
+}
+
+#[test]
+fn plan_converges_on_the_final_allowed_round() {
+    let two_round_plan = {
+        let tmp = TempDir::new().unwrap();
+        let db_path = tmp.path().join("conary.db");
+        conary_core::db::init(&db_path).unwrap();
+        let conn = conary_core::db::open(&db_path).unwrap();
+        let head = seed_fixture_trove(&conn, "app", InstallReason::Dependency, false);
+        seed_fixture_trove(&conn, "lib", InstallReason::Dependency, false);
+        seed_requires(&conn, head, "lib");
+        plan_autoremove_fixed_point_with_limit(&conn, 2).unwrap()
+    };
+    assert_eq!(two_round_plan.rounds.len(), 2);
+
+    let tmp = TempDir::new().unwrap();
+    let db_path = tmp.path().join("conary.db");
+    conary_core::db::init(&db_path).unwrap();
+    let conn = conary_core::db::open(&db_path).unwrap();
+    let head = seed_fixture_trove(&conn, "app", InstallReason::Dependency, false);
+    let mid = seed_fixture_trove(&conn, "mid", InstallReason::Dependency, false);
+    seed_fixture_trove(&conn, "leaf", InstallReason::Dependency, false);
+    seed_requires(&conn, head, "mid");
+    seed_requires(&conn, mid, "leaf");
+    assert!(
+        plan_autoremove_fixed_point_with_limit(&conn, 2).is_err(),
+        "a chain needing a third round must exceed the two-round bound"
     );
 }
 
@@ -421,6 +493,46 @@ fn seed_requires(conn: &rusqlite::Connection, trove_id: i64, dependency: &str) {
         &[requirement],
     )
     .unwrap();
+}
+
+fn seed_capability_requires(
+    conn: &rusqlite::Connection,
+    trove_id: i64,
+    capability: &str,
+    kind: RepositoryCapabilityKind,
+) {
+    let clause = RepositoryRequirementClause {
+        name: capability.to_string(),
+        capability_kind: Some(kind),
+        version_constraint: None,
+        architecture_qualifier: RequirementArchitectureQualifier::Unqualified,
+        native_text: None,
+    };
+    let group = RepositoryRequirementGroup::simple(RepositoryRequirementKind::Depends, clause);
+    conary_core::db::models::InstalledRequirementGroup::insert_groups(
+        conn,
+        trove_id,
+        conary_core::repository::versioning::VersionScheme::Conary,
+        &[group],
+    )
+    .unwrap();
+}
+
+fn seed_provide(
+    conn: &rusqlite::Connection,
+    trove_id: i64,
+    capability: &str,
+    kind: RepositoryCapabilityKind,
+) {
+    let mut provide = ProvideEntry::new_typed(
+        trove_id,
+        kind,
+        capability.to_string(),
+        None,
+        conary_core::repository::versioning::VersionScheme::Conary,
+        ProvideArchitectureQualifier::Implicit,
+    );
+    provide.insert(conn).unwrap();
 }
 
 fn installed_identities(conn: &rusqlite::Connection) -> Vec<(String, String)> {

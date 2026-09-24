@@ -147,6 +147,17 @@ pub struct Trove {
     pub installed_from_repository_id: Option<i64>,
 }
 
+/// One jointly safe orphan round.
+///
+/// `removable` may be removed together without breaking any remaining
+/// requirement. `protected` holds orphaned troves that autoremove never removes
+/// because they are pinned or under native package-manager authority; they stay
+/// installed and are never admitted into the round's removed set.
+pub struct OrphanRound {
+    pub removable: Vec<Trove>,
+    pub protected: Vec<Trove>,
+}
+
 impl Trove {
     /// Column list for SELECT queries.
     pub(crate) const COLUMNS: &'static str = "id, name, version, package_release, type, architecture, description, \
@@ -281,19 +292,28 @@ impl Trove {
         Ok(troves)
     }
 
-    /// Find orphaned packages (installed as dependency, no longer needed)
+    /// Find orphaned packages (installed as dependency, no longer needed).
+    ///
+    /// Returns every orphan: the jointly safe removable set plus the pinned or
+    /// adopted orphans. Callers that remove packages must use
+    /// [`Self::find_orphan_round`] and honor its `protected` split.
     pub fn find_orphans(conn: &Connection) -> Result<Vec<Self>> {
-        Self::find_orphans_after_removing(conn, &BTreeSet::new())
+        let round = Self::find_orphan_round(conn, &BTreeSet::new())?;
+        let mut orphans = round.removable;
+        orphans.extend(round.protected);
+        orphans.sort_by(Self::compare_orphan_order);
+        Ok(orphans)
     }
 
-    /// Find orphans as if the troves in `removed` were already uninstalled.
+    /// One jointly safe orphan round given troves already removed.
     ///
-    /// Removed troves neither count as installed providers nor contribute
-    /// requirement groups. `find_orphans` is this with an empty set.
-    pub fn find_orphans_after_removing(
-        conn: &Connection,
-        removed: &BTreeSet<i64>,
-    ) -> Result<Vec<Self>> {
+    /// Candidates are considered in ascending trove id order; each is admitted
+    /// only if it is still an orphan with `removed` plus every previously
+    /// admitted candidate treated as uninstalled. The result can be removed
+    /// together without breaking any remaining requirement. Pinned and adopted
+    /// orphans are returned as `protected`; they stay installed and are never
+    /// admitted into the removed set.
+    pub fn find_orphan_round(conn: &Connection, removed: &BTreeSet<i64>) -> Result<OrphanRound> {
         let installed = crate::resolver::requirements::load_installed_package_identities(conn)?
             .into_iter()
             .filter(|package| {
@@ -305,89 +325,145 @@ impl Trove {
         let requirements =
             super::installed_requirement_group::InstalledRequirementGroup::list_all(conn)?;
         let native_architecture = crate::repository::registry::detect_system_arch()?;
-        let mut orphans = Vec::new();
 
-        for trove in Self::list_packages(conn)?
+        let mut candidates = Self::list_packages(conn)?
             .into_iter()
             .filter(|trove| trove.install_reason == InstallReason::Dependency)
-        {
+            .filter(|trove| {
+                trove
+                    .id
+                    .is_some_and(|trove_id| !removed.contains(&trove_id))
+            })
+            .collect::<Vec<_>>();
+        candidates.sort_by_key(|trove| trove.id);
+
+        let mut admitted: BTreeSet<i64> = BTreeSet::new();
+        let mut removable = Vec::new();
+        let mut protected = Vec::new();
+
+        for trove in candidates {
             let Some(trove_id) = trove.id else {
                 continue;
             };
-            if removed.contains(&trove_id) {
+            // A candidate joins the round only if it is already an orphan
+            // without help from this round's other admissions. Requiring the
+            // independent classification keeps transitive chains in later
+            // rounds instead of collapsing them into one.
+            if !Self::orphan_candidate(
+                trove_id,
+                &installed,
+                &requirements,
+                &native_architecture,
+                removed,
+            )? {
                 continue;
             }
-            let remaining = installed
-                .iter()
-                .filter(|package| package.installed_trove_id != Some(trove_id))
-                .cloned()
-                .collect::<Vec<_>>();
-            let mut required = false;
-
-            for group in requirements.iter().filter(|group| {
-                group.trove_id != trove_id
-                    && !removed.contains(&group.trove_id)
-                    && matches!(
-                        group.kind,
-                        crate::repository::dependency_model::RepositoryRequirementKind::Depends
-                            | crate::repository::dependency_model::RepositoryRequirementKind::PreDepends
-                    )
-            }) {
-                let dependent = installed
-                    .iter()
-                    .find(|package| package.installed_trove_id == Some(group.trove_id))
-                    .ok_or_else(|| {
-                        crate::error::Error::ConfigError(format!(
-                            "installed requirement group {} references missing trove {}",
-                            group
-                                .id
-                                .map_or_else(|| "<unpersisted>".to_string(), |id| id.to_string()),
-                            group.trove_id
-                        ))
-                    })?;
-                let depending_architecture = dependent
-                    .architecture
-                    .as_deref()
-                    .filter(|architecture| !architecture.is_empty())
-                    .ok_or_else(|| {
-                        crate::error::Error::ConfigError(format!(
-                            "installed dependent '{}' has no architecture authority",
-                            dependent.name
-                        ))
-                    })?;
-                let satisfied_before =
-                    crate::resolver::requirements::requirement_expression_satisfied(
-                        &group.requirement.expression,
-                        group.version_scheme,
-                        depending_architecture,
-                        &native_architecture,
-                        &installed,
-                    )?;
-                let satisfied_after =
-                    crate::resolver::requirements::requirement_expression_satisfied(
-                        &group.requirement.expression,
-                        group.version_scheme,
-                        depending_architecture,
-                        &native_architecture,
-                        &remaining,
-                    )?;
-                if satisfied_before && !satisfied_after {
-                    required = true;
-                    break;
-                }
+            if trove.pinned || trove.install_source.is_adopted() {
+                protected.push(trove);
+                continue;
             }
-
-            if !required {
-                orphans.push(trove);
+            // Joint safety: earlier admissions in this round are treated as
+            // uninstalled, so two candidates that only substitute for each
+            // other cannot both be removed.
+            let mut effective = removed.clone();
+            effective.extend(admitted.iter().copied());
+            if Self::orphan_candidate(
+                trove_id,
+                &installed,
+                &requirements,
+                &native_architecture,
+                &effective,
+            )? {
+                removable.push(trove);
+                admitted.insert(trove_id);
             }
         }
 
-        orphans.sort_by(|left, right| {
-            left.name
-                .cmp(&right.name)
-                .then_with(|| left.version.cmp(&right.version))
-        });
-        Ok(orphans)
+        removable.sort_by(Self::compare_orphan_order);
+        protected.sort_by(Self::compare_orphan_order);
+        Ok(OrphanRound {
+            removable,
+            protected,
+        })
+    }
+
+    /// Whether one dependency-installed candidate is still an orphan with
+    /// every trove in `removed` treated as uninstalled.
+    fn orphan_candidate(
+        trove_id: i64,
+        installed: &[crate::resolver::identity::PackageIdentity],
+        requirements: &[super::installed_requirement_group::InstalledRequirementGroup],
+        native_architecture: &str,
+        removed: &BTreeSet<i64>,
+    ) -> Result<bool> {
+        let remaining = installed
+            .iter()
+            .filter(|package| {
+                package.installed_trove_id != Some(trove_id)
+                    && package
+                        .installed_trove_id
+                        .is_none_or(|package_id| !removed.contains(&package_id))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+
+        for group in requirements.iter().filter(|group| {
+            group.trove_id != trove_id
+                && !removed.contains(&group.trove_id)
+                && matches!(
+                    group.kind,
+                    crate::repository::dependency_model::RepositoryRequirementKind::Depends
+                        | crate::repository::dependency_model::RepositoryRequirementKind::PreDepends
+                )
+        }) {
+            let dependent = installed
+                .iter()
+                .find(|package| package.installed_trove_id == Some(group.trove_id))
+                .ok_or_else(|| {
+                    Error::ConfigError(format!(
+                        "installed requirement group {} references missing trove {}",
+                        group
+                            .id
+                            .map_or_else(|| "<unpersisted>".to_string(), |id| id.to_string()),
+                        group.trove_id
+                    ))
+                })?;
+            let depending_architecture = dependent
+                .architecture
+                .as_deref()
+                .filter(|architecture| !architecture.is_empty())
+                .ok_or_else(|| {
+                    Error::ConfigError(format!(
+                        "installed dependent '{}' has no architecture authority",
+                        dependent.name
+                    ))
+                })?;
+            let satisfied_before = crate::resolver::requirements::requirement_expression_satisfied(
+                &group.requirement.expression,
+                group.version_scheme,
+                depending_architecture,
+                native_architecture,
+                installed,
+            )?;
+            let satisfied_after = crate::resolver::requirements::requirement_expression_satisfied(
+                &group.requirement.expression,
+                group.version_scheme,
+                depending_architecture,
+                native_architecture,
+                &remaining,
+            )?;
+            if satisfied_before && !satisfied_after {
+                return Ok(false);
+            }
+        }
+
+        Ok(true)
+    }
+
+    fn compare_orphan_order(left: &Self, right: &Self) -> std::cmp::Ordering {
+        left.name
+            .cmp(&right.name)
+            .then_with(|| left.version.cmp(&right.version))
     }
 
     /// Delete a trove by ID
