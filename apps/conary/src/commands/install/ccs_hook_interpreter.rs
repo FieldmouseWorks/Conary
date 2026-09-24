@@ -2,7 +2,7 @@
 //! Transaction-ordered availability of CCS hook interpreters.
 
 use anyhow::Context;
-use conary_core::db::models::{FileEntry, Trove};
+use conary_core::db::models::{PackagePayloadOwnership, PayloadClaim, Trove};
 use conary_core::filesystem::selected_root::{
     MAX_SELECTED_ROOT_SYMLINK_DEPTH, selected_root_effective_package_path, selected_root_executable,
 };
@@ -66,6 +66,11 @@ enum IntroducedNodeKind {
 pub(super) struct ElementPlan {
     package: String,
     version: String,
+    /// Installed troves this element removes (old version, relation
+    /// removals, or restore removals). Their paths are resolved claim-aware at
+    /// preflight, against every trove the whole transaction removes.
+    removed_trove_ids: Vec<i64>,
+    /// Paths this element removes that are already resolved.
     removed_paths: Vec<String>,
     introduced_nodes: Vec<IntroducedNode>,
     declared_file_capabilities: Vec<String>,
@@ -77,7 +82,6 @@ pub(super) struct ElementPlan {
 /// never payload authority.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn element_plan(
-    conn: &Connection,
     package: &str,
     version: &str,
     old_trove: Option<&Trove>,
@@ -86,25 +90,16 @@ pub(super) fn element_plan(
     provides: &[ProvidedCapability],
     post_install_interpreter: Option<String>,
 ) -> anyhow::Result<ElementPlan> {
-    let mut removed_paths = Vec::new();
-    if let Some(trove_id) = old_trove.and_then(|trove| trove.id) {
-        removed_paths.extend(
-            FileEntry::find_by_trove(conn, trove_id)?
-                .into_iter()
-                .map(|file| file.path),
-        );
-    }
-    for removal in relation_removals {
-        removed_paths.extend(
-            FileEntry::find_by_trove(conn, removal.trove_id)?
-                .into_iter()
-                .map(|file| file.path),
-        );
-    }
+    let removed_trove_ids = old_trove
+        .and_then(|trove| trove.id)
+        .into_iter()
+        .chain(relation_removals.iter().map(|removal| removal.trove_id))
+        .collect();
     Ok(ElementPlan {
         package: package.to_string(),
         version: version.to_string(),
-        removed_paths,
+        removed_trove_ids,
+        removed_paths: Vec::new(),
         introduced_nodes: extracted_files
             .iter()
             .map(IntroducedNode::from_payload_file)
@@ -120,38 +115,47 @@ pub(super) fn element_plan(
 
 /// One removal-only element: every path the removed troves own leaves the
 /// projected state before later elements are recorded.
-pub(super) fn removal_element_plan(
-    conn: &Connection,
-    troves: &[Trove],
-) -> anyhow::Result<ElementPlan> {
-    let mut removed_paths = Vec::new();
-    for trove_id in troves.iter().filter_map(|trove| trove.id) {
-        removed_paths.extend(
-            FileEntry::find_by_trove(conn, trove_id)?
-                .into_iter()
-                .map(|file| file.path),
-        );
-    }
-    Ok(ElementPlan {
+pub(super) fn removal_element_plan(troves: &[Trove]) -> ElementPlan {
+    ElementPlan {
         package: String::new(),
         version: String::new(),
-        removed_paths,
+        removed_trove_ids: troves.iter().filter_map(|trove| trove.id).collect(),
+        removed_paths: Vec::new(),
         introduced_nodes: Vec::new(),
         declared_file_capabilities: Vec::new(),
         post_install_interpreter: None,
-    })
+    }
 }
 
 /// Record every element's payload boundary, then require each element's
 /// post-install interpreter. Both passes complete before the caller mutates.
 pub(super) fn preflight_post_install_interpreters(
+    conn: &Connection,
     root: &Path,
     elements: &[ElementPlan],
 ) -> anyhow::Result<()> {
+    let transaction_removed = elements
+        .iter()
+        .flat_map(|element| element.removed_trove_ids.iter().copied())
+        .collect::<BTreeSet<_>>();
+    let claims = if transaction_removed.is_empty() {
+        None
+    } else {
+        Some(PayloadClaim::index_all(conn)?)
+    };
     let mut ledger = HookInterpreterLedger::new(root);
     for element in elements {
+        let mut removed_paths = element.removed_paths.clone();
+        if let Some(claims) = claims.as_ref() {
+            removed_paths.extend(PackagePayloadOwnership::released_paths(
+                conn,
+                claims,
+                &element.removed_trove_ids,
+                &transaction_removed,
+            )?);
+        }
         ledger.apply_element(
-            element.removed_paths.iter().cloned(),
+            removed_paths,
             element.introduced_nodes.iter().cloned(),
             element.declared_file_capabilities.iter().cloned(),
         )?;

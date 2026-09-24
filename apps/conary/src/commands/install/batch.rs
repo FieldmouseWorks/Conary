@@ -514,7 +514,6 @@ impl<'a> BatchInstaller<'a> {
             .iter()
             .map(|package| {
                 element_plan(
-                    &preflight_state,
                     &package.name,
                     &package.version,
                     package.old_trove.as_deref(),
@@ -529,7 +528,7 @@ impl<'a> BatchInstaller<'a> {
                 )
             })
             .collect::<Result<Vec<_>>>()?;
-        preflight_post_install_interpreters(&selected_path, &elements)?;
+        preflight_post_install_interpreters(&preflight_state, &selected_path, &elements)?;
 
         preflight_state.commit()?;
 

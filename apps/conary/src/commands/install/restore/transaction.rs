@@ -92,12 +92,11 @@ pub(crate) fn execute_state_restore_transaction(
     // post-install interpreter, all before the restore's first mutation.
     // Troves the restore removes leave the projected state first, so a
     // removed interpreter provider cannot authorize a restored hook.
-    let mut restore_elements = vec![removal_element_plan(conn, removal_troves)?];
+    let mut restore_elements = vec![removal_element_plan(removal_troves)];
     let installed_elements = prepared_installs
         .iter()
         .map(|prepared| -> Result<ElementPlan> {
             element_plan(
-                conn,
                 prepared.pkg.name(),
                 prepared.pkg.version(),
                 prepared.old_trove_to_upgrade.as_ref(),
@@ -113,7 +112,7 @@ pub(crate) fn execute_state_restore_transaction(
         })
         .collect::<Result<Vec<_>>>()?;
     restore_elements.extend(installed_elements);
-    preflight_post_install_interpreters(&selected_path, &restore_elements)?;
+    preflight_post_install_interpreters(conn, &selected_path, &restore_elements)?;
 
     let cas = selected_root.cas().clone();
     execute_locked_restore(

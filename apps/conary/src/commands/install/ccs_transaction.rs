@@ -501,7 +501,6 @@ fn install_ccs_package_transactionally_inner(
             show_ccs_hook_interpreter_requirement(&hook.interpreter);
         } else {
             let element = element_plan(
-                &preflight_state,
                 pkg.name(),
                 pkg.version(),
                 old_trove,
@@ -511,6 +510,7 @@ fn install_ccs_package_transactionally_inner(
                 Some(hook.interpreter.clone()),
             )?;
             preflight_post_install_interpreters(
+                &preflight_state,
                 Path::new(&transaction_root),
                 std::slice::from_ref(&element),
             )?;

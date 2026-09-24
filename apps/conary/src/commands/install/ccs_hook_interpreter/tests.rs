@@ -416,6 +416,7 @@ fn preflight_records_every_element_before_requiring_any_interpreter() {
         ElementPlan {
             package: "consumer".to_string(),
             version: "1.0.0".to_string(),
+            removed_trove_ids: Vec::new(),
             removed_paths: Vec::new(),
             introduced_nodes: Vec::new(),
             declared_file_capabilities: Vec::new(),
@@ -424,14 +425,24 @@ fn preflight_records_every_element_before_requiring_any_interpreter() {
         ElementPlan {
             package: "provider".to_string(),
             version: "1.0.0".to_string(),
+            removed_trove_ids: Vec::new(),
             removed_paths: Vec::new(),
             introduced_nodes: vec![executable("/bin/sh")],
             declared_file_capabilities: Vec::new(),
             post_install_interpreter: None,
         },
     ];
-    preflight_post_install_interpreters(root.path(), &elements)
+    preflight_post_install_interpreters(&test_conn().1, root.path(), &elements)
         .expect("a later element's payload authorizes an earlier element's interpreter");
+}
+
+/// A fresh database; element plans without removed troves never query it.
+fn test_conn() -> (tempfile::TempDir, rusqlite::Connection) {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("conary.db");
+    conary_core::db::init(path.to_str().unwrap()).unwrap();
+    let conn = conary_core::db::open(path.to_str().unwrap()).unwrap();
+    (temp, conn)
 }
 
 fn projected_hardlink(path: &str, target: &str) -> IntroducedNode {
@@ -491,26 +502,33 @@ fn restore_removal_element_removes_a_root_provider_before_installs() {
     let consumer = ElementPlan {
         package: "consumer".to_string(),
         version: "1.0.0".to_string(),
+        removed_trove_ids: Vec::new(),
         removed_paths: Vec::new(),
         introduced_nodes: Vec::new(),
         declared_file_capabilities: Vec::new(),
         post_install_interpreter: Some(PRESENT.to_string()),
     };
-    preflight_post_install_interpreters(&root_path, std::slice::from_ref(&consumer))
-        .expect("the root interpreter is available without a removal");
+    preflight_post_install_interpreters(
+        &test_conn().1,
+        &root_path,
+        std::slice::from_ref(&consumer),
+    )
+    .expect("the root interpreter is available without a removal");
 
     // A removal-only element that owns the interpreter path precedes the install.
     let removal = ElementPlan {
         package: String::new(),
         version: String::new(),
+        removed_trove_ids: Vec::new(),
         removed_paths: vec![PRESENT.to_string()],
         introduced_nodes: Vec::new(),
         declared_file_capabilities: Vec::new(),
         post_install_interpreter: None,
     };
-    let error = preflight_post_install_interpreters(&root_path, &[removal, consumer])
-        .map_err(typed)
-        .expect_err("a removed provider cannot authorize a restored hook");
+    let error =
+        preflight_post_install_interpreters(&test_conn().1, &root_path, &[removal, consumer])
+            .map_err(typed)
+            .expect_err("a removed provider cannot authorize a restored hook");
     assert_eq!(error.package, "consumer");
     assert_eq!(error.interpreter, PRESENT);
 }
