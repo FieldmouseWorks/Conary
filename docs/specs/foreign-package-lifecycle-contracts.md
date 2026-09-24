@@ -54,11 +54,16 @@ that the target happens to provide the source distribution's package manager or
 helper behavior. A CCS author script hook names its interpreter explicitly;
 `ccs build` derives one hard `PreDepends` requirement whose expression is a
 single `File` atom on that interpreter, and signed-authority validation rejects
-a hook whose interpreter lacks that exact requirement. `File` is the capability
-kind RPM file provides such as `/bin/sh` carry, so a converted distro shell
-satisfies it; an authored CCS package provides a shipped path through
-`[provides] files`. An alternative group
-naming the path never qualifies, because another alternative can satisfy it. Every documented RPM, Debian, ALPM, and eopkg lifecycle semantic in
+a hook whose interpreter lacks that exact requirement. An alternative group
+naming the path never qualifies, because another alternative can satisfy it.
+`File` is the capability kind RPM file provides such as `/bin/sh` carry, so a
+converted distro shell satisfies it. An authored CCS package declares file
+provides through `[provides] files`: a declared path it ships must come from an
+always-installed component, and a declared path it does not ship is a
+declaration, as RPM `Provides: /bin/sh` is for a usr-merged payload carrying
+`/usr/bin/sh`. A declaration never proves availability; the interpreter
+preflight must still find an executable in the projected selected root before
+any hook runs. Every documented RPM, Debian, ALPM, and eopkg lifecycle semantic in
 this specification is required implementation for the supported-format
 contract.
 
