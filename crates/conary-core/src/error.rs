@@ -264,6 +264,15 @@ pub enum Error {
     #[error("Not implemented: {0}")]
     NotImplemented(String),
 
+    /// No selected-root OverlayFS scratch placement passed the functional probe.
+    #[error(
+        "selected-root OverlayFS is unsupported on every scratch placement: {}",
+        format_overlay_scratch_failures(.0)
+    )]
+    SelectedRootOverlayUnsupported(
+        Vec<crate::generation::root_manifest::OverlayScratchCandidateFailure>,
+    ),
+
     /// JSON serialization/deserialization error
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
@@ -291,6 +300,21 @@ pub enum Error {
     /// Resolver pool overflow (too many interned items for u32 index)
     #[error("Resolver pool overflow: {0}")]
     PoolOverflow(String),
+}
+
+/// Join every failed scratch candidate as `placement: error`.
+fn format_overlay_scratch_failures(
+    failures: &[crate::generation::root_manifest::OverlayScratchCandidateFailure],
+) -> String {
+    use std::fmt::Write;
+    let mut out = String::new();
+    for (index, failure) in failures.iter().enumerate() {
+        if index > 0 {
+            write!(out, "; ").expect("string write infallible");
+        }
+        write!(out, "{:?}: {}", failure.placement, failure.error).expect("string write infallible");
+    }
+    out
 }
 
 /// Result type alias using Conary's Error type
