@@ -4,7 +4,7 @@
 
 use super::*;
 use crate::ccs::builder::FileEntry;
-use crate::ccs::manifest::{CcsManifest, FileCapability, NativeExport, RpmExport};
+use crate::ccs::manifest::{CcsManifest, FileCapability, NativeExport, RpmExport, ScriptHook};
 use crate::packages::PackageFormat;
 use crate::payload::{PayloadContentAuthority, PayloadIdentity, PayloadNode, PayloadTimestamp};
 use std::collections::HashMap;
@@ -492,4 +492,34 @@ fn test_hook_converter_preserves_script_hooks() {
 
     assert!(post.contains("echo installed > /var/lib/myapp/installed"));
     assert!(pre_remove.contains("echo removed > /var/lib/myapp/removed"));
+}
+
+#[test]
+fn rpm_export_refuses_a_script_hook_interpreter_it_cannot_execute() {
+    let mut result = create_test_build_result();
+    result.manifest.hooks.post_install = Some(ScriptHook {
+        script: "print('installed')".to_string(),
+        interpreter: "/usr/bin/python3".to_string(),
+        reversible: None,
+    });
+    let temp_dir = TempDir::new().unwrap();
+
+    let error = generate(&result, &temp_dir.path().join("python.rpm")).unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "CCS hook interpreter /usr/bin/python3 is not implemented (supported: /bin/sh)"
+    );
+
+    // Positive control: the same fixture exports once the hook declares the
+    // implemented interpreter.
+    result
+        .manifest
+        .hooks
+        .post_install
+        .as_mut()
+        .unwrap()
+        .interpreter = "/bin/sh".to_string();
+    let output_path = temp_dir.path().join("shell.rpm");
+    generate(&result, &output_path).unwrap();
+    assert!(output_path.exists());
 }

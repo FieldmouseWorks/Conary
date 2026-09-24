@@ -407,6 +407,21 @@ pub struct ScriptHook {
     pub reversible: Option<bool>,
 }
 
+/// Interpreters the CCS hook executor and native exporters implement.
+pub const SUPPORTED_CCS_HOOK_INTERPRETERS: &[&str] = &["/bin/sh"];
+
+/// Validate a CCS script-hook interpreter against the implemented set.
+pub fn validate_ccs_hook_interpreter(interpreter: &str) -> Result<(), String> {
+    if SUPPORTED_CCS_HOOK_INTERPRETERS.contains(&interpreter) {
+        Ok(())
+    } else {
+        Err(format!(
+            "CCS hook interpreter {interpreter} is not implemented (supported: {})",
+            SUPPORTED_CCS_HOOK_INTERPRETERS.join(", ")
+        ))
+    }
+}
+
 pub type User = UserHook;
 pub type Group = GroupHook;
 

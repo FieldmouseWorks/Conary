@@ -171,3 +171,18 @@ fn script_hook_rejects_relative_and_traversing_interpreters() {
         );
     }
 }
+
+#[test]
+fn script_hook_rejects_an_interpreter_no_executor_implements() {
+    // Positive control: the same fixture with the implemented interpreter
+    // parses, so the rejection below comes from the implemented-set rule.
+    CcsManifest::parse(&interpreter_manifest("/bin/sh")).unwrap();
+
+    match CcsManifest::parse(&interpreter_manifest("/usr/bin/python3")).unwrap_err() {
+        ManifestError::Invalid(message) => assert_eq!(
+            message,
+            "hooks.post_install.interpreter: CCS hook interpreter /usr/bin/python3 is not implemented (supported: /bin/sh)"
+        ),
+        other => panic!("expected an invalid-manifest error, got {other:?}"),
+    }
+}

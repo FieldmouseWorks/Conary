@@ -281,6 +281,8 @@ impl CcsManifest {
                     hook.interpreter, error
                 ))
             })?;
+            validate_ccs_hook_interpreter(&hook.interpreter)
+                .map_err(|error| ManifestError::Invalid(format!("{field}.interpreter: {error}")))?;
         }
 
         for unit in &self.hooks.systemd {
