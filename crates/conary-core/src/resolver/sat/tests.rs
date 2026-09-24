@@ -1509,3 +1509,5 @@ mod formal_dependencies;
 mod relations;
 #[path = "tests/root_requirements.rs"]
 mod root_requirements;
+#[path = "tests/strict_installed.rs"]
+mod strict_installed;

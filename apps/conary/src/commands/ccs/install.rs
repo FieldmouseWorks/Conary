@@ -26,6 +26,8 @@ mod command_payload_tests;
 #[path = "install/command_reinstall_tests/tests.rs"]
 mod command_reinstall_tests;
 #[cfg(test)]
+mod command_strict_installed_tests;
+#[cfg(test)]
 mod test_support;
 
 pub(crate) use capability_declaration::validate_ccs_capability_declaration;

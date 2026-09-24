@@ -25,6 +25,7 @@ use crate::repository::dependency_model::{RepositoryRequirementGroup, Repository
 use crate::repository::resolution_policy::ResolutionPolicy;
 use crate::repository::versioning::VersionScheme;
 use crate::resolver::identity::PackageIdentity;
+use crate::resolver::provider::SolverExpression;
 use crate::version::VersionConstraint;
 
 const MAX_LOADED_NAMES: usize = 50_000;
@@ -414,9 +415,20 @@ fn solve_requirement_groups_for_architecture_with_policy(
             conflict_message: None,
         });
     }
+
+    // A malformed source identity is always a hard error; installed
+    // satisfaction never repairs an invalid policy.
     policy
-        .validate_for_dependency_resolution()
+        .validate_source_identities()
         .map_err(Error::ConfigError)?;
+    if let Err(validation_message) = policy.validate_for_dependency_resolution() {
+        return solve_requirement_groups_from_installed(
+            conn,
+            &expressions,
+            policy,
+            validation_message,
+        );
+    }
 
     let mut provider =
         install::build_provider_for_requirement_expressions(conn, &expressions, policy)?;
@@ -442,6 +454,38 @@ fn solve_requirement_groups_for_architecture_with_policy(
             remove_order: Vec::new(),
             conflict_message: Some(conflict.display_user_friendly(&solver).to_string()),
         }),
+        Err(UnsolvableOrCancelled::Cancelled(_)) => Err(Error::InitError(
+            "Dependency resolution was cancelled".to_string(),
+        )),
+    }
+}
+
+/// Solve positive requirement expressions against installed packages only.
+///
+/// Called when strict mixing provides no transaction source identity, so no
+/// repository has candidate authority. The installed-only provider never loads
+/// repository rows, so `ConaryProvider::get_candidates` can only offer
+/// installed solvables. A request that needs a repository candidate is refused
+/// with the policy's validation message, preserving the repository-needed
+/// refusal.
+fn solve_requirement_groups_from_installed(
+    conn: &Connection,
+    expressions: &[SolverExpression],
+    policy: &ResolutionPolicy,
+    validation_message: String,
+) -> Result<SatResolution> {
+    let mut provider =
+        install::build_installed_provider_for_requirement_expressions(conn, expressions, policy)?;
+    let requirements = install::build_expression_requirements(&mut provider, expressions)?;
+    let problem = Problem::new().requirements(requirements);
+    let mut solver = Solver::new(provider);
+    match solver.solve(problem) {
+        Ok(_) => Ok(SatResolution {
+            install_order: Vec::new(),
+            remove_order: Vec::new(),
+            conflict_message: None,
+        }),
+        Err(UnsolvableOrCancelled::Unsolvable(_)) => Err(Error::ConfigError(validation_message)),
         Err(UnsolvableOrCancelled::Cancelled(_)) => Err(Error::InitError(
             "Dependency resolution was cancelled".to_string(),
         )),

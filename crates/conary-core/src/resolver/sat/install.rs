@@ -81,6 +81,34 @@ pub(super) fn build_provider_for_requirement_expressions<'conn>(
     Ok(provider)
 }
 
+/// Build a provider that admits only already-installed packages.
+///
+/// Strict mixing with no transaction source identity gives no repository any
+/// candidate authority. This builder omits `load_transitive_repo_packages`, so
+/// the only possible repository admission path is never taken and
+/// `ConaryProvider::get_candidates` can only return installed solvables.
+pub(super) fn build_installed_provider_for_requirement_expressions<'conn>(
+    conn: &'conn Connection,
+    expressions: &[SolverExpression],
+    policy: &ResolutionPolicy,
+) -> Result<ConaryProvider<'conn>> {
+    let phase = timing::start(None, timing::Phase::Initialization);
+    let mut provider = ConaryProvider::new_with_policy(conn, policy.clone())?;
+    drop(phase);
+    provider.set_root_request_names(requirement_names(expressions));
+    let phase = timing::start(None, timing::Phase::Installed);
+    provider.load_installed_packages()?;
+    drop(phase);
+    let phase = timing::start(None, timing::Phase::Canonical);
+    provider.load_canonical_index()?;
+    provider.expand_root_request_names_with_canonical_equivalents();
+    drop(phase);
+    let phase = timing::start(None, timing::Phase::Compilation);
+    provider.intern_all_dependency_version_sets()?;
+    drop(phase);
+    Ok(provider)
+}
+
 fn load_transitive_repo_packages(
     provider: &mut ConaryProvider<'_>,
     mut loaded_names: HashSet<String>,
