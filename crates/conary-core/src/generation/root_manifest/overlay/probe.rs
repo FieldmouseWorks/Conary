@@ -2,6 +2,7 @@
 
 //! Functional host/filesystem preflight for the selected-root OverlayFS profile.
 
+use super::scratch::OverlayScratchPlacement;
 use super::{OverlayXattrNamespace, SelectedRootOverlayProfile};
 use nix::mount::{MntFlags, MsFlags, mount, umount2};
 use serde::{Deserialize, Serialize};
@@ -10,7 +11,7 @@ use std::os::fd::AsRawFd;
 use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
-pub const SELECTED_ROOT_OVERLAY_CAPABILITIES_VERSION: u32 = 1;
+pub const SELECTED_ROOT_OVERLAY_CAPABILITIES_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -54,6 +55,9 @@ pub struct SelectedRootOverlayCapabilities {
     pub hardlink_copy_up: OverlayHardlinkCopyUp,
     pub lower_directory_rename: OverlayLowerDirectoryRename,
     pub metadata_copy_up: OverlayMetadataCopyUp,
+    /// Placement the caller proved. The probe defaults to `SessionDirectory`;
+    /// selection overwrites this with the candidate whose full probe passed.
+    pub scratch_placement: OverlayScratchPlacement,
 }
 
 /// Functionally prove the selected-root profile on `workspace`'s filesystem.
@@ -100,7 +104,7 @@ pub fn probe_selected_root_overlay_profile(
         Some(options.as_str()),
     )
     .map_err(|error| {
-        crate::Error::NotImplemented(format!(
+        crate::Error::IoError(format!(
             "selected-root OverlayFS profile mount failed on {}: {error}",
             workspace.display()
         ))
@@ -122,6 +126,7 @@ pub fn probe_selected_root_overlay_profile(
         hardlink_copy_up: OverlayHardlinkCopyUp::Preserved,
         lower_directory_rename: OverlayLowerDirectoryRename::CrossDevice,
         metadata_copy_up: OverlayMetadataCopyUp::CompleteData,
+        scratch_placement: OverlayScratchPlacement::SessionDirectory,
     })
 }
 
@@ -222,7 +227,7 @@ impl MountedSelectedRootOverlay {
             Some(options.as_str()),
         )
         .map_err(|error| {
-            crate::Error::NotImplemented(format!(
+            crate::Error::IoError(format!(
                 "selected-root OverlayFS mount failed at {}: {error}",
                 target.display()
             ))
