@@ -436,7 +436,16 @@ fn run_single_distro(
             }
             None => manifests_for_phase(phase)?,
         };
-        let _loaded_manifest_entries = load_manifest_entries(&manifest_paths)?;
+        let loaded_manifest_entries = load_manifest_entries(&manifest_paths)?;
+
+        // Validate every manifest's expanded stdout_json pointers before any
+        // image build, container creation, or initialization. A malformed
+        // pointer in a later manifest must abort before earlier container work.
+        conary_test::engine::runner::preflight_loaded_manifests_stdout_json_pointers(
+            &loaded_manifest_entries,
+            config,
+            distro,
+        )?;
 
         // Check if all manifests contain only QEMU boot steps — if so,
         // skip container setup entirely (QEMU tests boot their own VMs).

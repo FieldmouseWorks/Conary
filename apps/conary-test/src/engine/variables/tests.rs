@@ -213,6 +213,33 @@ fn test_distro_override_precedence() {
 }
 
 #[test]
+fn build_manifest_variables_merges_distro_overrides_over_base_variables() {
+    let config = test_config();
+    let mut manifest = TestManifest {
+        suite: crate::config::manifest::SuiteDef {
+            name: "test".to_string(),
+            phase: 1,
+            setup: Vec::new(),
+            mock_server: None,
+            timeout: None,
+            corpus: None,
+        },
+        test: Vec::new(),
+        distro_overrides: HashMap::new(),
+    };
+    manifest.distro_overrides.insert(
+        "fedora44".to_string(),
+        HashMap::from([("REMI_ENDPOINT".to_string(), "http://override".to_string())]),
+    );
+
+    let vars = build_manifest_variables(&config, "fedora44", &manifest);
+
+    assert_eq!(vars["DISTRO"], "fedora44");
+    assert_eq!(vars["REMI_DISTRO"], "fedora-44");
+    assert_eq!(vars["REMI_ENDPOINT"], "http://override");
+}
+
+#[test]
 fn test_expand_assertion_substitutes_vars() {
     let mut vars = HashMap::new();
     vars.insert("PKG".to_string(), "conary-test-fixture".to_string());

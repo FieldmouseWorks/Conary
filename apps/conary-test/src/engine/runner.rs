@@ -1,6 +1,7 @@
 // apps/conary-test/src/engine/runner.rs
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -127,8 +128,12 @@ impl TestRunner {
     }
 
     /// Load distro-specific manifest variables into the runner variable map.
+    ///
+    /// Recomputed from [`variables::build_manifest_variables`], the single
+    /// authority the CLI early preflight also uses.
     pub fn load_manifest_vars(&mut self, manifest: &TestManifest) {
-        variables::load_manifest_overrides(&mut self.vars, manifest, &self.distro);
+        let vars = variables::build_manifest_variables(&self.config, &self.distro, manifest);
+        self.vars = vars;
     }
 
     /// Run all tests in the manifest against the given container.
@@ -760,6 +765,29 @@ impl TestRunner {
     fn expand_assertion(&self, assertion: &Assertion) -> Assertion {
         variables::expand_assertion(assertion, &self.vars)
     }
+}
+
+/// Preflight every loaded manifest's expanded `stdout_json` pointers.
+///
+/// Multi-manifest entry points call this once after loading their manifests
+/// and before any image build, container creation, or initialization. Each
+/// manifest's variable map comes from [`variables::build_manifest_variables`],
+/// the same authority `TestRunner` uses, so a pointer rejected here would only
+/// otherwise be rejected inside the runner after all earlier container work.
+///
+/// The first failure aborts with
+/// `configuration error: <manifest path>: <error>`.
+pub fn preflight_loaded_manifests_stdout_json_pointers(
+    manifests: &[(PathBuf, TestManifest)],
+    config: &GlobalConfig,
+    distro: &str,
+) -> Result<()> {
+    for (path, manifest) in manifests {
+        let vars = variables::build_manifest_variables(config, distro, manifest);
+        preflight_manifest_stdout_json_pointers(manifest, &vars)
+            .map_err(|error| anyhow::anyhow!("configuration error: {}: {error}", path.display()))?;
+    }
+    Ok(())
 }
 
 /// Validate every expanded `stdout_json` pointer in a manifest's suite setup

@@ -707,3 +707,56 @@ async fn invalid_setup_stdout_json_pointer_fails_before_any_setup_step() {
     assert!(error.contains("configuration error"), "{error}");
     assert!(invalid_backend.exec_calls().is_empty());
 }
+
+#[test]
+fn early_preflight_rejects_invalid_pointer_in_a_later_manifest() {
+    use std::path::PathBuf;
+
+    let manifest_with_pointer = |key: &str| {
+        let mut manifest = make_manifest(vec![stdout_json_test("TJSON-EARLY", "/data/${KEY}")]);
+        manifest.distro_overrides.insert(
+            "fedora44".to_string(),
+            HashMap::from([("KEY".to_string(), key.to_string())]),
+        );
+        manifest
+    };
+    let loaded = |second: TestManifest| {
+        vec![
+            (
+                PathBuf::from("/manifests/first.toml"),
+                make_manifest(vec![stdout_json_test("TJSON-FIRST", "/status")]),
+            ),
+            (PathBuf::from("/manifests/second.toml"), second),
+        ]
+    };
+
+    // Positive control: the same two manifests pass when the second manifest's
+    // override substitutes a valid pointer.
+    assert!(
+        preflight_loaded_manifests_stdout_json_pointers(
+            &loaded(manifest_with_pointer("value")),
+            &test_config(),
+            "fedora44",
+        )
+        .is_ok()
+    );
+
+    // Negative: only the second manifest's `a~2b` substitution is invalid, so
+    // the error can only come from that pointer rule.
+    let error = preflight_loaded_manifests_stdout_json_pointers(
+        &loaded(manifest_with_pointer("a~2b")),
+        &test_config(),
+        "fedora44",
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(
+        error.starts_with("configuration error: /manifests/second.toml:"),
+        "error should name the failing manifest: {error}"
+    );
+    assert!(
+        error.contains("/data/a~2b"),
+        "error should name the expanded pointer: {error}"
+    );
+}

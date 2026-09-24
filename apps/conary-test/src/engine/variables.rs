@@ -113,6 +113,22 @@ pub fn load_manifest_overrides(
     }
 }
 
+/// Build the complete variable map the runner uses for `manifest` on `distro`.
+///
+/// This is the single authority for manifest variables: it starts from the
+/// base config and distro variables and merges the manifest's
+/// `distro_overrides` for `distro`. The runner and the early pointer preflight
+/// both compute variables here, so they cannot drift.
+pub fn build_manifest_variables(
+    config: &GlobalConfig,
+    distro: &str,
+    manifest: &TestManifest,
+) -> HashMap<String, String> {
+    let mut vars = build_variables(config, distro);
+    load_manifest_overrides(&mut vars, manifest, distro);
+    vars
+}
+
 /// Replace `${VAR}` patterns in a string with values from the variable map.
 ///
 /// Variables that are not present in the map are left as-is (the `${VAR}`
