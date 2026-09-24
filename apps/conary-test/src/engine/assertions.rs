@@ -87,12 +87,11 @@ fn evaluate_stdout_json(checks: &[JsonAssertion], stdout: &str) -> Result<()> {
         };
         match &check.expected {
             JsonExpectation::Equals(expected) => {
-                let expected = toml_to_json(expected)?;
-                if !json_values_equal(&expected, actual) {
+                if !json_values_equal(expected, actual) {
                     bail!(
                         "stdout JSON at pointer \"{}\" did not match expected value\nexpected: {}\nactual: {}",
                         check.pointer,
-                        serde_json::to_string_pretty(&expected)?,
+                        serde_json::to_string_pretty(expected)?,
                         serde_json::to_string_pretty(actual)?,
                     );
                 }
@@ -109,37 +108,6 @@ fn evaluate_stdout_json(checks: &[JsonAssertion], stdout: &str) -> Result<()> {
         }
     }
     Ok(())
-}
-
-/// Convert a TOML value into its JSON equivalent for typed comparison.
-fn toml_to_json(value: &toml::Value) -> Result<JsonValue> {
-    Ok(match value {
-        toml::Value::String(value) => JsonValue::String(value.clone()),
-        toml::Value::Integer(value) => JsonValue::from(*value),
-        toml::Value::Float(value) => {
-            let number = serde_json::Number::from_f64(*value).ok_or_else(|| {
-                anyhow::anyhow!("non-finite float {value} cannot be represented in JSON")
-            })?;
-            JsonValue::Number(number)
-        }
-        toml::Value::Boolean(value) => JsonValue::Bool(*value),
-        toml::Value::Datetime(_) => {
-            bail!("datetime values are not supported in stdout_json")
-        }
-        toml::Value::Array(values) => JsonValue::Array(
-            values
-                .iter()
-                .map(toml_to_json)
-                .collect::<Result<Vec<_>>>()?,
-        ),
-        toml::Value::Table(table) => {
-            let mut object = serde_json::Map::new();
-            for (key, value) in table {
-                object.insert(key.clone(), toml_to_json(value)?);
-            }
-            JsonValue::Object(object)
-        }
-    })
 }
 
 /// Compare two JSON values structurally, treating integers and floats by value.

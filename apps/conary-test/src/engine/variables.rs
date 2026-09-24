@@ -225,7 +225,7 @@ pub fn expand_assertion(assertion: &Assertion, vars: &HashMap<String, String>) -
                     pointer: expand_variables(&check.pointer, vars),
                     expected: match &check.expected {
                         JsonExpectation::Equals(value) => {
-                            JsonExpectation::Equals(expand_toml_value(value, vars))
+                            JsonExpectation::Equals(expand_json_value(value, vars))
                         }
                         JsonExpectation::Null => JsonExpectation::Null,
                     },
@@ -235,22 +235,27 @@ pub fn expand_assertion(assertion: &Assertion, vars: &HashMap<String, String>) -
     }
 }
 
-/// Expand `${VAR}` references in every string leaf of a TOML value.
+/// Expand `${VAR}` references in every string leaf of a JSON value.
 ///
-/// Table keys are structural and are not expanded.
-fn expand_toml_value(value: &toml::Value, vars: &HashMap<String, String>) -> toml::Value {
+/// Object keys are structural and are not expanded.
+fn expand_json_value(
+    value: &serde_json::Value,
+    vars: &HashMap<String, String>,
+) -> serde_json::Value {
     match value {
-        toml::Value::String(value) => toml::Value::String(expand_variables(value, vars)),
-        toml::Value::Array(values) => toml::Value::Array(
+        serde_json::Value::String(value) => {
+            serde_json::Value::String(expand_variables(value, vars))
+        }
+        serde_json::Value::Array(values) => serde_json::Value::Array(
             values
                 .iter()
-                .map(|value| expand_toml_value(value, vars))
+                .map(|value| expand_json_value(value, vars))
                 .collect(),
         ),
-        toml::Value::Table(table) => toml::Value::Table(
-            table
+        serde_json::Value::Object(object) => serde_json::Value::Object(
+            object
                 .iter()
-                .map(|(key, value)| (key.clone(), expand_toml_value(value, vars)))
+                .map(|(key, value)| (key.clone(), expand_json_value(value, vars)))
                 .collect(),
         ),
         other => other.clone(),

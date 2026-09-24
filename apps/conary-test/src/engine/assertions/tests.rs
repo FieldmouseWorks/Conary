@@ -8,7 +8,7 @@ fn base_assertion() -> Assertion {
     Assertion::default()
 }
 
-fn json_assertion(pointer: &str, equals: toml::Value) -> Assertion {
+fn json_assertion(pointer: &str, equals: serde_json::Value) -> Assertion {
     Assertion {
         stdout_json: Some(vec![JsonAssertion {
             pointer: pointer.to_string(),
@@ -26,12 +26,6 @@ fn json_null_assertion(pointer: &str) -> Assertion {
         }]),
         ..Assertion::default()
     }
-}
-
-/// Parse a single-key TOML snippet (`v = ...`) into its value.
-fn toml_value(source: &str) -> toml::Value {
-    let table: toml::Table = toml::from_str(source).unwrap();
-    table["v"].clone()
 }
 
 #[test]
@@ -107,11 +101,10 @@ fn test_stderr_not_contains_rejects_forbidden_text() {
 fn stdout_json_matches_nested_document() {
     let assertion = json_assertion(
         "/data",
-        toml_value(
-            r#"
-            v = { removable = [{ name = "dep-app", version = "1.0.0", architecture = "x86_64" }], skipped = [] }
-            "#,
-        ),
+        serde_json::json!({
+            "removable": [{ "name": "dep-app", "version": "1.0.0", "architecture": "x86_64" }],
+            "skipped": [],
+        }),
     );
     let stdout = r#"{"data":{"removable":[{"name":"dep-app","version":"1.0.0","architecture":"x86_64"}],"skipped":[]}}"#;
 
@@ -120,14 +113,14 @@ fn stdout_json_matches_nested_document() {
 
 #[test]
 fn stdout_json_rejects_non_json_stdout() {
-    let assertion = json_assertion("/status", toml_value(r#"v = "planned""#));
+    let assertion = json_assertion("/status", serde_json::json!("planned"));
 
     assert!(evaluate_assertion(&assertion, 0, "not json", "").is_err());
 }
 
 #[test]
 fn stdout_json_reports_missing_pointer() {
-    let assertion = json_assertion("/data/missing", toml_value(r#"v = true"#));
+    let assertion = json_assertion("/data/missing", serde_json::json!(true));
 
     let error = evaluate_assertion(&assertion, 0, r#"{"data":{}}"#, "").unwrap_err();
     assert!(error.to_string().contains("/data/missing"));
@@ -135,7 +128,7 @@ fn stdout_json_reports_missing_pointer() {
 
 #[test]
 fn stdout_json_reports_value_mismatch() {
-    let assertion = json_assertion("/status", toml_value(r#"v = "planned""#));
+    let assertion = json_assertion("/status", serde_json::json!("planned"));
 
     let error = evaluate_assertion(&assertion, 0, r#"{"status":"running"}"#, "").unwrap_err();
     assert!(error.to_string().contains("/status"));
@@ -143,7 +136,7 @@ fn stdout_json_reports_value_mismatch() {
 
 #[test]
 fn stdout_json_array_order_matters() {
-    let assertion = json_assertion("/items", toml_value("v = [1, 2]"));
+    let assertion = json_assertion("/items", serde_json::json!([1, 2]));
 
     assert!(evaluate_assertion(&assertion, 0, r#"{"items":[1,2]}"#, "").is_ok());
     assert!(evaluate_assertion(&assertion, 0, r#"{"items":[2,1]}"#, "").is_err());
@@ -151,25 +144,25 @@ fn stdout_json_array_order_matters() {
 
 #[test]
 fn stdout_json_numbers_compare_by_typed_value() {
-    let integer = json_assertion("/value", toml_value("v = 1"));
+    let integer = json_assertion("/value", serde_json::json!(1));
     assert!(evaluate_assertion(&integer, 0, r#"{"value":1}"#, "").is_ok());
 
-    let float = json_assertion("/value", toml_value("v = 1.5"));
+    let float = json_assertion("/value", serde_json::json!(1.5));
     assert!(evaluate_assertion(&float, 0, r#"{"value":1.5}"#, "").is_ok());
 
-    let string = json_assertion("/value", toml_value("v = 1"));
+    let string = json_assertion("/value", serde_json::json!(1));
     assert!(evaluate_assertion(&string, 0, r#"{"value":"1"}"#, "").is_err());
 
-    let integer_vs_float = json_assertion("/value", toml_value("v = 1"));
+    let integer_vs_float = json_assertion("/value", serde_json::json!(1));
     assert!(evaluate_assertion(&integer_vs_float, 0, r#"{"value":1.0}"#, "").is_err());
 
-    let float_vs_integer = json_assertion("/value", toml_value("v = 1.0"));
+    let float_vs_integer = json_assertion("/value", serde_json::json!(1.0));
     assert!(evaluate_assertion(&float_vs_integer, 0, r#"{"value":1}"#, "").is_err());
 }
 
 #[test]
 fn stdout_json_empty_pointer_compares_whole_document() {
-    let assertion = json_assertion("", toml_value(r#"v = { status = "planned" }"#));
+    let assertion = json_assertion("", serde_json::json!({ "status": "planned" }));
 
     assert!(evaluate_assertion(&assertion, 0, r#"{"status":"planned"}"#, "").is_ok());
     assert!(evaluate_assertion(&assertion, 0, r#"{"status":"other"}"#, "").is_err());

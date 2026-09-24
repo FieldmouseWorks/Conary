@@ -2,6 +2,7 @@
 
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
+use serde_json::Value as JsonValue;
 use std::collections::{HashMap, HashSet};
 
 /// Top-level test manifest (one TOML file = one suite).
@@ -328,8 +329,8 @@ pub struct JsonAssertion {
 /// Expected value for a `stdout_json` pointer.
 #[derive(Debug, Clone, PartialEq)]
 pub enum JsonExpectation {
-    /// Resolved value equals this TOML value converted to JSON.
-    Equals(toml::Value),
+    /// Resolved value equals this JSON value.
+    Equals(JsonValue),
     /// Resolved value is JSON null.
     ///
     /// TOML has no null literal, so JSON nulls nested inside an `equals`
@@ -354,7 +355,10 @@ impl TryFrom<RawJsonAssertion> for JsonAssertion {
 
     fn try_from(raw: RawJsonAssertion) -> std::result::Result<Self, Self::Error> {
         let expected = match (raw.equals, raw.null) {
-            (Some(value), None) => JsonExpectation::Equals(value),
+            (Some(value), None) => {
+                let value = toml_to_json(&value).map_err(|error| error.to_string())?;
+                JsonExpectation::Equals(value)
+            }
             (None, Some(true)) => JsonExpectation::Null,
             (None, Some(false)) => {
                 return Err("`null = false` is not an assertion; use `equals`".to_string());
@@ -371,6 +375,40 @@ impl TryFrom<RawJsonAssertion> for JsonAssertion {
             expected,
         })
     }
+}
+
+/// Convert a TOML value into its JSON equivalent for typed comparison.
+///
+/// Datetimes and non-finite floats have no JSON representation and are
+/// rejected before a manifest is accepted.
+fn toml_to_json(value: &toml::Value) -> Result<JsonValue> {
+    Ok(match value {
+        toml::Value::String(value) => JsonValue::String(value.clone()),
+        toml::Value::Integer(value) => JsonValue::from(*value),
+        toml::Value::Float(value) => {
+            let number = serde_json::Number::from_f64(*value).ok_or_else(|| {
+                anyhow::anyhow!("non-finite float {value} cannot be represented in JSON")
+            })?;
+            JsonValue::Number(number)
+        }
+        toml::Value::Boolean(value) => JsonValue::Bool(*value),
+        toml::Value::Datetime(_) => {
+            bail!("datetime values are not supported in stdout_json")
+        }
+        toml::Value::Array(values) => JsonValue::Array(
+            values
+                .iter()
+                .map(toml_to_json)
+                .collect::<Result<Vec<_>>>()?,
+        ),
+        toml::Value::Table(table) => {
+            let mut object = serde_json::Map::new();
+            for (key, value) in table {
+                object.insert(key.clone(), toml_to_json(value)?);
+            }
+            JsonValue::Object(object)
+        }
+    })
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

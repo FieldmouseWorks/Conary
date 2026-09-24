@@ -258,23 +258,21 @@ fn test_expand_assertion_substitutes_vars() {
     );
 }
 
-/// Parse a single-key TOML snippet (`v = ...`) into its value.
-fn toml_value(source: &str) -> toml::Value {
-    let table: toml::Table = toml::from_str(source).unwrap();
-    table["v"].clone()
-}
-
 #[test]
-fn test_expand_assertion_expands_stdout_json() {
+fn test_expand_assertion_expands_stdout_json_string_leaves() {
     let mut vars = HashMap::new();
     vars.insert("FOO".to_string(), "bar".to_string());
 
     let assertion = Assertion {
         stdout_json: Some(vec![JsonAssertion {
             pointer: "/data/${FOO}".to_string(),
-            expected: JsonExpectation::Equals(toml_value(
-                r#"v = ["${FOO}", { nested = "${FOO}" }]"#,
-            )),
+            expected: JsonExpectation::Equals(serde_json::json!({
+                "${FOO}": "${FOO}",
+                "nested": ["${FOO}", { "leaf": "${FOO}" }],
+                "number": 1,
+                "flag": true,
+                "nothing": null,
+            })),
         }]),
         ..Assertion::default()
     };
@@ -284,7 +282,13 @@ fn test_expand_assertion_expands_stdout_json() {
     assert_eq!(checks[0].pointer, "/data/bar");
     assert_eq!(
         checks[0].expected,
-        JsonExpectation::Equals(toml_value(r#"v = ["bar", { nested = "bar" }]"#))
+        JsonExpectation::Equals(serde_json::json!({
+            "${FOO}": "bar",
+            "nested": ["bar", { "leaf": "bar" }],
+            "number": 1,
+            "flag": true,
+            "nothing": null,
+        }))
     );
 }
 
