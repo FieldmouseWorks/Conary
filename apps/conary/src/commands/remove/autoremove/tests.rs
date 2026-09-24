@@ -331,8 +331,8 @@ async fn apply_removes_exact_release_when_name_version_arch_collide() {
     crate::commands::test_helpers::seed_test_bootable_runtime(&db_path);
 
     let conn = conary_core::db::open(&db_path).unwrap();
-    seed_colliding_release_trove(&conn, "1");
-    seed_colliding_release_trove(&conn, "2");
+    seed_release_trove(&conn, "collide", "1");
+    seed_release_trove(&conn, "collide", "2");
 
     // Positive control: the fixed-point preview must list both colliding
     // releases before apply is asked to remove them.
@@ -364,6 +364,86 @@ async fn apply_removes_exact_release_when_name_version_arch_collide() {
     assert!(
         Trove::find_by_name(&conn, "collide").unwrap().is_empty(),
         "apply must remove both colliding releases through the exact path"
+    );
+}
+
+#[tokio::test]
+async fn exact_removal_keeps_dependent_satisfied_by_co_installed_release() {
+    let _mount_skip = crate::commands::composefs_ops::test_mount_skip_guard();
+    let tmp = TempDir::new().unwrap();
+    let db_path = tmp.path().join("conary.db");
+    conary_core::db::init(&db_path).unwrap();
+    crate::commands::test_helpers::seed_test_bootable_runtime(&db_path);
+
+    let conn = conary_core::db::open(&db_path).unwrap();
+    let app_id = seed_fixture_trove(&conn, "app", InstallReason::Explicit, false);
+    seed_requires(&conn, app_id, "libx");
+    let first_id = seed_release_trove(&conn, "libx", "1");
+    let second_id = seed_release_trove(&conn, "libx", "2");
+    assert!(first_id < second_id, "fixture ids must order by creation");
+
+    // Positive control: the fixed-point preview plans exactly the lower-id
+    // release because the higher-id release still satisfies app.
+    let preview = plan_autoremove_fixed_point(&conn).unwrap();
+    let planned = preview
+        .rounds
+        .iter()
+        .flat_map(|round| round.removable.iter())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        planned.len(),
+        1,
+        "exactly one co-installed release is removable"
+    );
+    assert_eq!(planned[0].id, Some(first_id));
+    assert_eq!(planned[0].package_release.as_deref(), Some("1"));
+    // Removing both exact troves together would take the last provider.
+    let both = conary_core::resolver::solve_removal_troves(&conn, &[first_id, second_id]).unwrap();
+    assert_eq!(both, vec!["app".to_string()]);
+    drop(conn);
+
+    cmd_autoremove(
+        db_path.to_string_lossy().as_ref(),
+        AutoremoveMode::Apply,
+        SandboxMode::Always,
+    )
+    .unwrap();
+
+    let conn = conary_core::db::open(&db_path).unwrap();
+    let remaining = Trove::find_by_name(&conn, "libx").unwrap();
+    assert_eq!(
+        remaining.len(),
+        1,
+        "apply must leave exactly one libx release installed"
+    );
+    assert_eq!(remaining[0].id, Some(second_id));
+    assert!(
+        Trove::find_one_by_name(&conn, "app").unwrap().is_some(),
+        "app must remain installed while a co-installed release satisfies it"
+    );
+    // Removing the retained release would take the last provider, so the exact
+    // removal path must still refuse it.
+    let breaking = conary_core::resolver::solve_removal_troves(&conn, &[second_id]).unwrap();
+    assert_eq!(breaking, vec!["app".to_string()]);
+    drop(conn);
+
+    let err = super::super::cmd_remove_exact(
+        &remaining[0],
+        db_path.to_string_lossy().as_ref(),
+        SandboxMode::Always,
+        false,
+    )
+    .unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "Cannot remove 'libx': 1 packages depend on it"
+    );
+
+    let conn = conary_core::db::open(&db_path).unwrap();
+    assert_eq!(
+        Trove::find_by_name(&conn, "libx").unwrap().len(),
+        1,
+        "a refused removal must not remove the retained release"
     );
 }
 
@@ -530,11 +610,11 @@ fn seed_dependency_trove(
     trove.insert(conn).unwrap()
 }
 
-/// Seed a dependency-installed orphan that collides with its sibling on
-/// name/version/architecture and is distinguished only by package release.
-fn seed_colliding_release_trove(conn: &rusqlite::Connection, release: &str) -> i64 {
+/// Seed a dependency-installed trove whose identity is distinguished only by
+/// package release from another release of the same name.
+fn seed_release_trove(conn: &rusqlite::Connection, name: &str, release: &str) -> i64 {
     let mut trove = Trove::new_with_source(
-        "collide".to_string(),
+        name.to_string(),
         "1.0.0".to_string(),
         TroveType::Package,
         InstallSource::Repository,

@@ -113,7 +113,12 @@ pub fn cmd_whatbreaks(
         has_preflight_blocker = true;
     }
 
-    let breaking = conary_core::resolver::solve_removal(&conn, std::slice::from_ref(&trove.name))?;
+    // Judge the exact selected trove so a co-installed release of the same
+    // name that still satisfies dependents is not counted as removed.
+    let trove_id = trove
+        .id
+        .ok_or_else(|| anyhow::anyhow!("installed package '{}' has no trove id", trove.name))?;
+    let breaking = conary_core::resolver::solve_removal_troves(&conn, &[trove_id])?;
 
     if breaking.is_empty() {
         if has_preflight_blocker {

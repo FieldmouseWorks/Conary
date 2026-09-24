@@ -119,8 +119,16 @@ fn remove_resolved_trove(
         );
     }
 
-    // Check dependency breakage BEFORE any removal (including adopted packages)
-    let breaking = conary_core::resolver::solve_removal(&conn, &[package_name.to_string()])?;
+    // Check dependency breakage BEFORE any removal (including adopted packages).
+    // Judge the exact trove id so a co-installed release that still satisfies
+    // dependents is not counted as removed.
+    let Some(trove_id) = trove.id else {
+        anyhow::bail!(
+            "Cannot remove '{}': trove has no installed id",
+            package_name
+        );
+    };
+    let breaking = conary_core::resolver::solve_removal_troves(&conn, &[trove_id])?;
 
     if !breaking.is_empty() {
         crate::ui::warn(&format!(
