@@ -294,7 +294,7 @@ mod tests {
         let sentinel = dir.path().join("past-the-buffer");
         let script = format!(
             "i=0; while [ $i -lt 256 ]; do printf '%1024d' 0; i=$((i+1)); done; \
-             : > {}; sleep 30",
+             : > {}; exec sleep 30",
             sentinel.display()
         );
 
