@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-09-03
-revision: 52
+last_updated: 2026-09-24
+revision: 53
 summary: Define source-independent lifecycle, exact adopted-artifact conversion, source-authority handoff, manifest-scoped Remi catalog resources, generation activation, and configuration transactions for RPM, Debian, Arch, and eopkg packages
 ---
 
@@ -51,7 +51,11 @@ The program body may require an interpreter or helper runtime. Conary must
 satisfy that requirement through declared dependencies, a Conary-owned
 compatibility implementation, or a complete typed lowering. It must not assume
 that the target happens to provide the source distribution's package manager or
-helper behavior. Every documented RPM, Debian, ALPM, and eopkg lifecycle semantic in
+helper behavior. A CCS author script hook names its interpreter explicitly;
+`ccs build` derives one hard `PreDepends` requirement whose expression is a
+single `Path` atom on that interpreter, and signed-authority validation rejects
+a hook whose interpreter lacks that exact requirement. An alternative group
+naming the path never qualifies, because another alternative can satisfy it. Every documented RPM, Debian, ALPM, and eopkg lifecycle semantic in
 this specification is required implementation for the supported-format
 contract.
 
@@ -271,7 +275,7 @@ and message. It does not synthesize an exit-code or stderr column absent from
 `ScriptletFailureOutcome`; `conary system history` is the read surface.
 Security-policy and boot-runtime requests also retain the exact invoked path,
 canonical path, and executable SHA-256 observed inside that selected root.
-Current-only database schema revision 56 retains the tagged
+Current-only database schema revision 57 retains the tagged
 systemd/OpenRC/SELinux/AppArmor and boot-runtime mutation union, durable
 repository synchronization fencing, and exact profile-revision conversion
 pins, artifact-level Remi conversion proof, and per-revision proof bindings

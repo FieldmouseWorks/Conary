@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-09-05
-revision: 69
+last_updated: 2026-09-24
+revision: 70
 summary: Describe workspace ownership, release boundaries, package transactions, source and trust contracts, immutable catalogs, generation state, service boundaries, and operator surfaces.
 ---
 
@@ -758,8 +758,10 @@ The operational schema is split by ownership under
 `crates/conary-core/src/db/current_schema/sql/`: local package-manager state,
 repository/service state, and Remi conversion/administration state.
 
-Schema revision 56 is a rebuild-only hard cut. Repository
-`security_advisory_support = supported` now means explicit operator
+Schema revision 57 is a rebuild-only hard cut. Installed CCS remove hooks and
+their rollback snapshots persist the hook's typed interpreter; revision 56
+rows carry none and are rebuilt rather than defaulted. Repository
+`security_advisory_support = supported` means explicit operator
 authorization to classify feed advisories as security updates; feed-authored
 `trust` and `source_trust` strings remain diagnostic only. Revision 55
 repository values predate that authority meaning and are rejected as typed
@@ -845,7 +847,7 @@ portable fallback, and a full copy only when both faster providers are
 unavailable. Normal generation publication instead records a SQLite session
 changeset from before the package transaction through terminal publication.
 
-Schema revision 56 retains the immutable Remi source/profile resource graph and
+Schema revision 57 retains the immutable Remi source/profile resource graph and
 exact input-revision conversion pins, removes the false one-artifact-to-one-
 manifest constraint, binds each exact catalog to its host-local physical
 attestation, and keeps check/change/validation/publication facts separate.

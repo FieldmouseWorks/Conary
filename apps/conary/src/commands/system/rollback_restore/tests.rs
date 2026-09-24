@@ -669,9 +669,14 @@ fn exact_installed_authority_round_trips_and_rejects_broken_relations() {
         params![INSTALLED_AT, trove_id],
     )
     .unwrap();
-    InstalledCcsRemoveHook::new(trove_id, "echo exact\n".to_string(), Some(true))
-        .insert_or_replace(&conn)
-        .unwrap();
+    InstalledCcsRemoveHook::new(
+        trove_id,
+        "/bin/sh".to_string(),
+        "echo exact\n".to_string(),
+        Some(true),
+    )
+    .insert_or_replace(&conn)
+    .unwrap();
 
     conn.execute(
         "INSERT INTO provenance (

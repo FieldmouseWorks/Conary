@@ -7,23 +7,30 @@ use rusqlite::{Connection, OptionalExtension, Row, params};
 
 /// The CCS-authored hook that must run before its owning trove is removed.
 ///
-/// CCS defines this hook as a POSIX shell script. Native RPM, Debian, Arch, and eopkg
-/// lifecycle entries are persisted separately in
-/// `installed_native_lifecycle_bundles` and must never be projected into this
-/// model.
+/// CCS defines this hook as a POSIX shell script run by an explicitly declared
+/// interpreter. Native RPM, Debian, Arch, and eopkg lifecycle entries are
+/// persisted separately in `installed_native_lifecycle_bundles` and must never
+/// be projected into this model.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstalledCcsRemoveHook {
     pub trove_id: i64,
+    pub interpreter: String,
     pub script: String,
     pub reversible: Option<bool>,
 }
 
 impl InstalledCcsRemoveHook {
-    const COLUMNS: &'static str = "trove_id, script, reversible";
+    const COLUMNS: &'static str = "trove_id, interpreter, script, reversible";
 
-    pub fn new(trove_id: i64, script: String, reversible: Option<bool>) -> Self {
+    pub fn new(
+        trove_id: i64,
+        interpreter: String,
+        script: String,
+        reversible: Option<bool>,
+    ) -> Self {
         Self {
             trove_id,
+            interpreter,
             script,
             reversible,
         }
@@ -32,12 +39,18 @@ impl InstalledCcsRemoveHook {
     /// Persist the one CCS remove hook owned by this trove.
     pub fn insert_or_replace(&self, conn: &Connection) -> Result<()> {
         conn.execute(
-            "INSERT INTO installed_ccs_remove_hooks (trove_id, script, reversible)
-             VALUES (?1, ?2, ?3)
+            "INSERT INTO installed_ccs_remove_hooks (trove_id, interpreter, script, reversible)
+             VALUES (?1, ?2, ?3, ?4)
              ON CONFLICT(trove_id) DO UPDATE SET
+                 interpreter = excluded.interpreter,
                  script = excluded.script,
                  reversible = excluded.reversible",
-            params![self.trove_id, self.script, self.reversible],
+            params![
+                self.trove_id,
+                self.interpreter,
+                self.script,
+                self.reversible
+            ],
         )?;
         Ok(())
     }
@@ -55,8 +68,9 @@ impl InstalledCcsRemoveHook {
     fn from_row(row: &Row<'_>) -> rusqlite::Result<Self> {
         Ok(Self {
             trove_id: row.get(0)?,
-            script: row.get(1)?,
-            reversible: row.get(2)?,
+            interpreter: row.get(1)?,
+            script: row.get(2)?,
+            reversible: row.get(3)?,
         })
     }
 }
@@ -78,7 +92,12 @@ mod tests {
         )
         .insert(&conn)
         .unwrap();
-        let hook = InstalledCcsRemoveHook::new(trove_id, "echo removing\n".to_string(), Some(true));
+        let hook = InstalledCcsRemoveHook::new(
+            trove_id,
+            "/bin/sh".to_string(),
+            "echo removing\n".to_string(),
+            Some(true),
+        );
 
         hook.insert_or_replace(&conn).unwrap();
 

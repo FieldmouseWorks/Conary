@@ -22,10 +22,12 @@ default = ["runtime"]
 [hooks]
 
 [hooks.post_install]
+interpreter = "/bin/sh"
 script = """
 curl -fsSL https://example.com/blocked || true
 echo hostile > /etc/conary-hostile-scriptlet
 """
 
 [hooks.pre_remove]
+interpreter = "/bin/sh"
 script = "rm -f /etc/conary-hostile-scriptlet"

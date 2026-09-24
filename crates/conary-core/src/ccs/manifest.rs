@@ -262,6 +262,27 @@ impl CcsManifest {
             }
         }
 
+        for (field, hook) in [
+            ("hooks.post_install", self.hooks.post_install.as_ref()),
+            ("hooks.pre_remove", self.hooks.pre_remove.as_ref()),
+        ] {
+            let Some(hook) = hook else {
+                continue;
+            };
+            if !hook.interpreter.starts_with('/') {
+                return Err(ManifestError::Invalid(format!(
+                    "relative interpreter not allowed in {field}.interpreter: {}",
+                    hook.interpreter
+                )));
+            }
+            sanitize_path(&hook.interpreter).map_err(|error| {
+                ManifestError::Invalid(format!(
+                    "invalid {field}.interpreter '{}': {}",
+                    hook.interpreter, error
+                ))
+            })?;
+        }
+
         for unit in &self.hooks.systemd {
             if !is_safe_declarative_unit_name(&unit.unit) {
                 return Err(ManifestError::Invalid(format!(

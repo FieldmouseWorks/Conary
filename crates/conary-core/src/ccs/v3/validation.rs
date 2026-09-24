@@ -121,7 +121,11 @@ fn validate_authority_common(
             validate_file_capabilities(data, &authority.file_capabilities, &mut diagnostics);
             validate_config_authority(data, authority, &mut diagnostics);
             validate_component_totals(data, authority, &mut diagnostics);
-            validate_lifecycle(&authority.lifecycle, &mut diagnostics);
+            validate_lifecycle(
+                &authority.lifecycle,
+                &authority.requirements,
+                &mut diagnostics,
+            );
             validate_repository_enrollment_files(data, authority, &mut diagnostics);
         }
         (PackageKindTagV3::Group, PackageKindV3::Group(data)) => {
@@ -346,7 +350,11 @@ fn validate_component_totals(
     }
 }
 
-fn validate_lifecycle(lifecycle: &LifecycleAuthorityV3, diagnostics: &mut Vec<V3Diagnostic>) {
+fn validate_lifecycle(
+    lifecycle: &LifecycleAuthorityV3,
+    requirements: &[crate::repository::dependency_model::RepositoryRequirementGroup],
+    diagnostics: &mut Vec<V3Diagnostic>,
+) {
     use crate::ccs::hooks::{
         is_denied_sysctl_key, is_safe_declarative_unit_name, validate_shell, validate_sysctl_key,
         validate_sysctl_value, validate_tmpfiles_fields, validate_username,
@@ -534,6 +542,15 @@ fn validate_lifecycle(lifecycle: &LifecycleAuthorityV3, diagnostics: &mut Vec<V3
                 ),
             );
         }
+        if !has_pre_depends_path_requirement(requirements, &script.interpreter) {
+            invalid(
+                &format!("{field}.interpreter"),
+                format!(
+                    "lifecycle script interpreter {} has no declared pre-install Path requirement",
+                    script.interpreter
+                ),
+            );
+        }
         if script.body.trim().is_empty() {
             invalid(
                 &format!("{field}.body"),
@@ -554,6 +571,15 @@ fn validate_lifecycle(lifecycle: &LifecycleAuthorityV3, diagnostics: &mut Vec<V3
             );
         }
     }
+}
+
+fn has_pre_depends_path_requirement(
+    requirements: &[crate::repository::dependency_model::RepositoryRequirementGroup],
+    interpreter: &str,
+) -> bool {
+    requirements
+        .iter()
+        .any(|group| group.is_hard_pre_install_path(interpreter))
 }
 
 fn validate_script_capabilities(

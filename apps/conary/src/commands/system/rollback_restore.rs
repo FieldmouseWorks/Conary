@@ -733,8 +733,13 @@ fn restore_ccs_remove_hook(
     snapshot: &TroveSnapshot,
 ) -> conary_core::Result<()> {
     if let Some(hook) = &snapshot.ccs_remove_hook {
-        InstalledCcsRemoveHook::new(trove_id, hook.script.clone(), hook.reversible)
-            .insert_or_replace(tx)?;
+        InstalledCcsRemoveHook::new(
+            trove_id,
+            hook.interpreter.clone(),
+            hook.script.clone(),
+            hook.reversible,
+        )
+        .insert_or_replace(tx)?;
     }
     Ok(())
 }

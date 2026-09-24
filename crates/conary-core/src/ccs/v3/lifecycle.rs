@@ -267,7 +267,7 @@ fn script_from_manifest(
     capabilities: &[LifecycleScriptCapabilityV3],
 ) -> LifecycleScriptV3 {
     LifecycleScriptV3 {
-        interpreter: "/bin/sh".to_string(),
+        interpreter: hook.interpreter.clone(),
         body: hook.script.clone(),
         capabilities: capabilities.to_vec(),
         reversible: hook.reversible,
@@ -278,6 +278,7 @@ fn script_from_manifest(
 fn script_to_manifest(hook: &LifecycleScriptV3) -> ScriptHook {
     ScriptHook {
         script: hook.body.clone(),
+        interpreter: hook.interpreter.clone(),
         reversible: hook.reversible,
     }
 }
@@ -367,10 +368,12 @@ mod tests {
             });
         manifest.hooks.post_install = Some(ScriptHook {
             script: "printf installed".to_string(),
+            interpreter: "/bin/sh".to_string(),
             reversible: Some(false),
         });
         manifest.hooks.pre_remove = Some(ScriptHook {
             script: "printf removing".to_string(),
+            interpreter: "/bin/sh".to_string(),
             reversible: Some(true),
         });
 
@@ -392,6 +395,35 @@ mod tests {
         assert_eq!(
             decoded.post_install.as_ref().unwrap().execution,
             LifecycleScriptExecutionV3::SandboxedTargetRoot
+        );
+    }
+
+    #[test]
+    fn declared_interpreter_survives_v3_to_manifest_and_back() {
+        // The projection is faithful for any declared interpreter; the signed
+        // authority validator separately restricts which programs may execute.
+        let authority = LifecycleAuthorityV3 {
+            post_install: Some(LifecycleScriptV3 {
+                interpreter: "/usr/bin/python3".to_string(),
+                body: "print('installed')".to_string(),
+                capabilities: Vec::new(),
+                reversible: Some(false),
+                execution: LifecycleScriptExecutionV3::SandboxedTargetRoot,
+            }),
+            ..LifecycleAuthorityV3::default()
+        };
+        let mut manifest = CcsManifest::new_minimal("lifecycle", "1.0.0");
+
+        apply_authority_to_manifest(&authority, &mut manifest).unwrap();
+        assert_eq!(
+            manifest.hooks.post_install.as_ref().unwrap().interpreter,
+            "/usr/bin/python3"
+        );
+
+        let projected = authority_from_manifest(&manifest);
+        assert_eq!(
+            projected.post_install.as_ref().unwrap().interpreter,
+            "/usr/bin/python3"
         );
     }
 }

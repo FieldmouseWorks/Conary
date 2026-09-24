@@ -815,6 +815,7 @@ mod tests {
         });
         manifest.hooks.post_install = Some(ScriptHook {
             script: "this body is deliberately not classified".to_string(),
+            interpreter: "/bin/sh".to_string(),
             reversible: Some(false),
         });
 

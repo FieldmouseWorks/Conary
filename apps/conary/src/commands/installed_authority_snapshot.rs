@@ -735,6 +735,7 @@ pub(crate) struct NativeLifecycleSnapshot {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct CcsRemoveHookSnapshot {
+    pub interpreter: String,
     pub script: String,
     pub reversible: Option<bool>,
 }
