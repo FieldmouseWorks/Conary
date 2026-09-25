@@ -94,6 +94,21 @@ the defect belongs elsewhere, file an exact-evidence issue rather than routing
 around it. Prove the cause and contract. Treat intermittent or unexplained
 failures as defects.
 
+**Correction ladder.** Fix a recurring class, not the instance, at the strongest
+rung that applies: (1) make it unrepresentable with types, exhaustive matches,
+and one owning API; (2) enforce it statically with the compiler, clippy, or a
+repo guard such as `apps/conary/tests/output_vocabulary_guard.rs`,
+`scripts/check-line-cap.sh`, or `scripts/check-doc-truth.sh`; (3) write
+guidance; (4) rely on review alone only when nothing stronger applies. Name the
+rung in the PR; detail lives in
+[`CONTRIBUTING.md`'s maintainability section](CONTRIBUTING.md#fix-the-class-not-the-instance).
+
+**The codebase is memory.** Contributors and agents extend the patterns they
+read, so keep one paved path per concern. A workaround, duplicate path, or
+justifying comment is a defect, and a known gap is an issue link. Comments state
+contracts and invariants; when an anti-pattern cannot be removed now, first add
+a guard that stops new instances, then file the cleanup.
+
 Rust source files have a 1,000 non-test-line cap and 300 inline test-line cap.
 The ownership, exception, extraction, and source-root policy lives in
 [`CONTRIBUTING.md`'s maintainability section](CONTRIBUTING.md#maintainability-slices).

@@ -138,8 +138,11 @@ EROFS support uses `composefs-rs` directly in `crates/conary-core`.
 ## Running Tests
 
 ```bash
-# CLI + core
-cargo test -p conary
+# conary CLI, matching CI's conary shard in .github/workflows/pr-gate.yml
+cargo test -p conary --no-default-features --test test_hook_ownership --verbose
+cargo test -p conary --features test-hooks --verbose
+
+# Core library
 cargo test -p conary-core
 
 # Service-owned code
@@ -168,7 +171,8 @@ All tests must pass before submitting a PR. At minimum, run the verification pat
 
 1. `cargo fmt --check` -- formatting
 2. `cargo clippy --workspace --all-targets -- -D warnings` -- workspace lint gate
-3. `cargo test -p conary` -- CLI tests
+3. `cargo test -p conary --no-default-features --test test_hook_ownership --verbose` and
+   `cargo test -p conary --features test-hooks --verbose` -- the conary CLI shard CI runs
 4. `cargo test -p remi` -- when touching Remi/server/federation code
 5. `cargo test -p conaryd` -- when touching daemon code
 
@@ -177,7 +181,8 @@ Run these locally before pushing to save CI round-trips:
 ```bash
 cargo fmt --check
 cargo clippy --workspace --all-targets -- -D warnings
-cargo test -p conary
+cargo test -p conary --no-default-features --test test_hook_ownership --verbose
+cargo test -p conary --features test-hooks --verbose
 ```
 
 If your change touches Remi, daemon code, federation, or service-owned shared types, also run:
@@ -295,6 +300,28 @@ Before a broad refactor or cleanup PR, run
 owner hints, focused proof commands, documentation-truth health, and current
 Rust hotspots. Treat its output as review guidance, not as a substitute for
 the feature card or the tests you actually ran.
+
+### Fix The Class, Not The Instance
+
+When a defect, review finding, or correction exposes a recurring class, fix the
+class at the strongest rung that applies instead of patching only the reported
+instance:
+
+1. **Make it unrepresentable.** Prefer types, exhaustive matches without
+   catch-alls, and one owning API. An exhaustive destructure that makes a new
+   field fail to compile, or a typed enum instead of a boolean flag, is stronger
+   than a check a future editor can forget.
+2. **Enforce it statically.** Use the compiler, clippy, or a repository guard
+   such as `apps/conary/tests/output_vocabulary_guard.rs`,
+   `scripts/check-line-cap.sh`, or `scripts/check-doc-truth.sh`.
+3. **Write guidance.** Put the rule in the affected feature card, module doc, or
+   `AGENTS.md` when it cannot be enforced mechanically.
+4. **Review alone.** Rely on review only when nothing stronger applies.
+
+State which rung the change used in the PR. When an anti-pattern cannot be
+removed in the current slice, add a guard that stops new instances first, then
+file the cleanup. Comments state contracts and invariants; a comment that
+justifies a deviation is a defect, not documentation.
 
 ### Feature Ownership And Verification
 
@@ -501,11 +528,23 @@ feature card. Broad changes should also run the full local CI path:
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace --exclude conary-test --verbose
+cargo test -p conary --no-default-features --test test_hook_ownership --verbose
+cargo test -p conary --features test-hooks --verbose
 cargo test -p conary-test --verbose
 ```
 
 Add `cargo test -p remi` and `cargo test -p conaryd` when the change touches
 service-owned code.
+
+Hosted `pr-gate` (`.github/workflows/pr-gate.yml`) runs only for pull requests
+targeting `main` (`on: pull_request: branches: [main]`, plus
+`workflow_dispatch`). A stacked PR based on another branch therefore gets no
+hosted checks; its proof is the full local gate above, which includes the conary
+shard's `test-hooks` and `test_hook_ownership` runs, or a `workflow_dispatch`
+run on its branch. When a non-required matrix cell fails, compare its failing
+test ID and error against the known cause before treating it as pre-existing: a
+suite stops at its first fatal failure, so a known-red cell can mask a new
+regression behind it.
 
 Every non-trivial PR names one primary issue:
 

@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-09-24
-revision: 4
+last_updated: 2026-09-25
+revision: 5
 summary: Define scoped agent execution, task graphs, evidence, authorization, resumption, and closeout for Conary work
 ---
 
@@ -110,6 +110,14 @@ databases, and other mutable state. Keep Cargo targets isolated per worktree;
 the shared development-build guidance in `CONTRIBUTING.md` explains which
 compiler outputs may be reused.
 
+Verify through repository entry points: `scripts/*` (for example
+`scripts/dev-build.sh` or `scripts/agent-context.sh --feature <slug> --run
+focused`), `conary-test` suites, and package tests. Do not use ad-hoc scripts
+written for one session. A check needed twice belongs in `scripts/` or a test
+with its own proof, so every later session runs the same verification. Local
+proof must use the same commands, features, and flags CI runs; see the
+[Running Tests section](../../CONTRIBUTING.md#running-tests).
+
 Before expensive gates, freeze the exact reviewed candidate revision or tree.
 Capture receipts from actual artifacts: command, commit/tree identity or
 relevant input hash, timing when available, exit status, and output locator.
@@ -146,7 +154,10 @@ protected PR policy in `CONTRIBUTING.md`. This workflow adds no bypass
 authority or relaxation of required gates; any exception follows that policy
 and retains its reason and replacement proof. Verify the exact merged revision
 on `main`, read back the issue/PR evidence from its owner, and clean up only
-branches, processes, and temporary resources owned by this task.
+branches, processes, and temporary resources owned by this task. The stash
+stack is shared by every worktree of a repository; do not use `git stash` to
+set work aside in a linked worktree. Commit to the task branch or use a separate
+worktree.
 If a merge, publication, or cleanup action is outside recorded authorization,
 leave it as a concrete pending action and ask for that specific authority.
 
