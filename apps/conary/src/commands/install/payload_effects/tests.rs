@@ -376,6 +376,82 @@ fn preserved_hardlink_chain_plan_agrees_before_and_after_cas() {
     assert_forms_agree(&fixture, semantics, &[], &extracted);
 }
 
+/// A representative batch element carrying every payload kind execution must
+/// apply: a directory, a regular file, a declared config, and a preserved
+/// hardlink. Batch `apply_payload` consumes the stored-form plan; batch
+/// preflight consumes the extraction-form plan. Both must be the same typed
+/// effect, or the one planner is not the authority.
+#[test]
+fn representative_batch_element_plan_agrees_before_and_after_cas() {
+    let fixture = fixture();
+    std::fs::create_dir_all(fixture.root.join("etc")).unwrap();
+    std::fs::create_dir_all(fixture.root.join("usr/share")).unwrap();
+
+    let target = "/usr/share/anchor";
+    let content = b"shared";
+    let authority = PayloadContentAuthority {
+        sha256: conary_core::hash::sha256(content),
+        size: content.len() as u64,
+    };
+    std::fs::write(fixture.root.join(target.trim_start_matches('/')), content).unwrap();
+    let anchor_owner = insert_trove(&fixture.conn, "anchor-owner");
+    let mut anchor = FileEntry::new(
+        target.to_string(),
+        ResolvedPayloadNode::from_numeric_source(regular_node(0o644)).unwrap(),
+        Some(authority),
+        anchor_owner,
+    )
+    .with_claim_policy(PayloadSharingPolicy::Rpm);
+    anchor.insert(&fixture.conn).unwrap();
+
+    let declarations = vec![SourceConfigDeclaration::Rpm(
+        conary_core::packages::rpm::authority::RpmConfigDeclaration {
+            header_index: 0,
+            path: "/etc/batch-demo.conf".to_string(),
+            noreplace: false,
+            ghost: false,
+            missing_ok: false,
+            payload: ConfigPayloadAssociation::Matched,
+        },
+    )];
+    let extracted = vec![
+        directory_payload("/opt/demo", 0o755),
+        regular_payload("/opt/demo/tool", b"tool", 0o755),
+        regular_payload("/etc/batch-demo.conf", b"managed=true\n", 0o644),
+        regular_payload(target, content, 0o644),
+        hardlink_payload("/usr/share/edge", target, "chain:1", 0o644),
+    ];
+    let semantics = InstallSemantics::native_package(PackageFormatType::Rpm);
+    let plan = plan_extracted_for(&fixture, semantics, &declarations, &extracted);
+
+    assert!(
+        plan.directory_plan.path("/opt/demo").is_some(),
+        "the batch element must exercise a directory payload"
+    );
+    assert!(
+        plan.install_files
+            .iter()
+            .any(|file| file.path == "/opt/demo/tool"),
+        "the batch element must exercise a regular payload"
+    );
+    assert_eq!(
+        plan.config_decisions
+            .iter()
+            .map(|record| record.path.as_str())
+            .collect::<Vec<_>>(),
+        vec!["/etc/batch-demo.conf"],
+        "the batch element must exercise a declared config"
+    );
+    assert!(
+        plan.hardlink_references
+            .iter()
+            .any(|file| file.path == target),
+        "the batch element must exercise a preserved hardlink reference"
+    );
+
+    assert_forms_agree(&fixture, semantics, &declarations, &extracted);
+}
+
 #[test]
 fn preserved_directory_alias_plan_agrees_before_and_after_cas() {
     let fixture = fixture();
