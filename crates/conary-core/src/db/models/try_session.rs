@@ -137,6 +137,27 @@ impl TrySession {
             .map_err(Into::into)
     }
 
+    /// Find the newest try session that recorded `generation`, in any status.
+    ///
+    /// Unlike [`Self::find_active_or_orphaned`] this does not filter by status,
+    /// so a caller that must account for a terminal session ([`TrySessionStatus::Kept`]
+    /// or [`TrySessionStatus::RolledBack`]) sees it too. `try_generation_id` is
+    /// not unique across the table's lifetime, so the newest `updated_at` wins;
+    /// the single-open index still permits at most one active or orphaned row.
+    pub fn find_by_try_generation(conn: &Connection, generation: i64) -> Result<Option<Self>> {
+        let sql = format!(
+            "SELECT {} FROM try_sessions
+             WHERE try_generation_id = ?1
+             ORDER BY updated_at DESC, started_at DESC, id DESC
+             LIMIT 1",
+            Self::COLUMNS
+        );
+        conn.prepare(&sql)?
+            .query_row([generation], Self::from_row)
+            .optional()
+            .map_err(Into::into)
+    }
+
     pub fn set_try_generation(&self, conn: &Connection, try_generation_id: i64) -> Result<()> {
         let affected = conn.execute(
             "UPDATE try_sessions

@@ -191,6 +191,51 @@ pub fn open_read_only(path: impl AsRef<Path>) -> Result<Connection> {
     Ok(conn)
 }
 
+/// Open and validate a live current-schema database without mutation.
+///
+/// This is the live counterpart to [`open_read_only`]. It opens the file with
+/// plain read-only flags, so a WAL-mode reader takes normal shared locks on the
+/// committed frames and SQLite detects changes made by concurrent writers. It
+/// therefore opens while a `-wal` sidecar still holds active frames, the normal
+/// state on a running system. [`open_read_only`] instead opens with
+/// `immutable=1`, which disables locking and change detection, and refuses that
+/// same state.
+///
+/// Like `open_read_only` it validates the current schema with
+/// [`schema::require_current`] and sets `query_only`, so an empty, fresh, or
+/// retired-schema file is the existing typed refusal and nothing is created.
+/// It also validates the `-wal` sidecar header first, so a truncated or invalid
+/// header is the same typed corruption refusal the other openers return instead
+/// of SQLite silently ignoring it and serving the older checkpointed database.
+/// It reuses `READ_ONLY_CONNECTION_PRAGMAS` (`foreign_keys`, `busy_timeout`),
+/// neither of which writes or requires immutability.
+///
+/// Unlike `open_read_only` it does not attach the active Remi universe index:
+/// the root-inspection read path never reads those tables, so attaching them
+/// would only add a failure mode. A caller that needs the universe views must
+/// open with [`open_read_only`] or attach the index itself.
+pub fn open_live_read_only(path: impl AsRef<Path>) -> Result<Connection> {
+    let path = path.as_ref();
+    if !path.exists() {
+        return Err(Error::DatabaseNotFound(path.to_string_lossy().to_string()));
+    }
+
+    // The live opener takes shared locks on the committed WAL frames, so prove
+    // the sidecar header is well formed first. Otherwise SQLite may ignore a
+    // corrupt `-wal` and serve the older checkpointed database, reporting stale
+    // state as the exact committed root.
+    validate_wal_file(path)?;
+
+    let conn = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    conn.execute_batch(READ_ONLY_CONNECTION_PRAGMAS)?;
+    schema::require_current(&conn)?;
+    conn.execute_batch("PRAGMA query_only = ON;")?;
+    Ok(conn)
+}
+
 /// Open an existing Conary database without revalidating its schema epoch.
 ///
 /// This is identical to [`open`] but skips [`schema::ensure_current`], making
@@ -337,6 +382,84 @@ mod tests {
         assert_eq!(directory_snapshot(directory.path()), before);
         drop(conn);
         assert_eq!(directory_snapshot(directory.path()), before);
+    }
+
+    #[test]
+    fn open_live_read_only_reports_a_missing_database() {
+        let error = open_live_read_only("/nonexistent/path/db.sqlite").unwrap_err();
+        assert!(
+            matches!(error, Error::DatabaseNotFound(_)),
+            "a missing database must keep the typed not-found error, got {error}"
+        );
+    }
+
+    #[test]
+    fn open_live_read_only_reads_uncheckpointed_wal_frames() {
+        let directory = tempfile::tempdir().unwrap();
+        let db_path = directory.path().join("conary.db");
+        init(&db_path).unwrap();
+        let writer = open(&db_path).unwrap();
+        writer
+            .execute(
+                "INSERT INTO changesets (description, status) VALUES ('live wal', 'applied')",
+                [],
+            )
+            .unwrap();
+
+        // The writer stays open, so the commit remains in the -wal with active
+        // frames rather than being checkpointed into the database file.
+        let wal_path = database_wal_path(&db_path);
+        assert!(
+            wal_path.metadata().unwrap().len() > 0,
+            "the committed change must remain in the WAL, not be checkpointed"
+        );
+
+        let reader = open_live_read_only(&db_path).unwrap();
+        let description: String = reader
+            .query_row(
+                "SELECT description FROM changesets ORDER BY id DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            description, "live wal",
+            "the live reader must see frames committed after the database file"
+        );
+
+        // Control: the offline immutable opener refuses the same live WAL with
+        // its typed active-frame ConflictError, which the live reader above
+        // must not share.
+        let refusal = open_read_only(&db_path).unwrap_err();
+        assert!(
+            matches!(refusal, Error::ConflictError(_)),
+            "the offline opener must refuse active WAL frames, got {refusal}"
+        );
+    }
+
+    #[test]
+    fn open_live_read_only_rejects_corrupt_wal_sidecar() {
+        let directory = tempfile::tempdir().unwrap();
+        let db_path = directory.path().join("conary.db");
+        init(&db_path).unwrap();
+
+        // A full-size header with the wrong magic is a corrupt WAL that SQLite
+        // could otherwise ignore in favor of the older checkpointed database.
+        std::fs::write(
+            database_wal_path(&db_path),
+            [0_u8; SQLITE_WAL_HEADER_SIZE as usize],
+        )
+        .unwrap();
+
+        let error = open_live_read_only(&db_path).unwrap_err();
+        assert!(
+            matches!(error, Error::InitError(_)),
+            "a corrupt WAL must keep the typed corruption error, got {error}"
+        );
+        assert!(
+            error.to_string().contains("WAL appears corrupted"),
+            "the refusal must name the corrupt WAL, got {error}"
+        );
     }
 
     #[test]

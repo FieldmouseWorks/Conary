@@ -1,0 +1,110 @@
+// apps/conary/src/ui/root_inspect.rs
+//! Read-only committed selected-root node frame.
+
+use super::transaction_summary::visible;
+use super::{Status, field, heading, message, row};
+use crate::commands::{RootInspectData, RootInspectSource, RootManifestKind, RootNodeKind};
+
+pub(crate) fn render(data: &RootInspectData) {
+    heading("Committed selected root:");
+    field("Path", &visible(&data.path));
+    field("Source", source_label(data.source));
+    field("Snapshot", &optional_i64(data.snapshot_id));
+    field("Changeset", &optional_i64(data.changeset_id));
+    field(
+        "Recovered without state",
+        recovered_label(data.recovered_without_state),
+    );
+
+    if !data.present {
+        row(
+            Status::Missing,
+            &["path", "not present in the committed selected root"],
+        );
+        return;
+    }
+
+    row(Status::Ok, &["present", kind_label(data.kind)]);
+    field("Manifest", manifest_label(data.manifest));
+    field("Metadata", data.metadata_label());
+    field("Mode", &optional_mode(data.mode));
+    let mtime = match data.mtime {
+        Some(mtime) => format!("{}.{:09}", mtime.seconds, mtime.nanoseconds),
+        None => "-".to_string(),
+    };
+    field("Mtime", &mtime);
+    if matches!(
+        data.kind,
+        Some(RootNodeKind::BlockDevice | RootNodeKind::CharacterDevice)
+    ) {
+        field(
+            "Device",
+            &device_label(data.device_major, data.device_minor),
+        );
+    }
+    field("UID", &optional_u64(data.uid));
+    field("GID", &optional_u64(data.gid));
+    field("User", &optional_text(data.user.as_deref()));
+    field("Group", &optional_text(data.group.as_deref()));
+    field("SHA-256", &optional_text(data.sha256.as_deref()));
+    field("Size", &optional_u64(data.size));
+    field(
+        "Symlink target",
+        &optional_text(data.symlink_target.as_deref()),
+    );
+    field(
+        "Hardlink target",
+        &optional_text(data.hardlink_target.as_deref()),
+    );
+    if let Some(identity) = data.hardlink_identity.as_deref() {
+        field("Hardlink identity", &visible(identity));
+    }
+    if let Some(xattrs) = data.xattrs.as_deref() {
+        for xattr in xattrs {
+            message(&format!(
+                "  Xattr  {} ({} bytes)",
+                visible(&xattr.name),
+                xattr.value_len()
+            ));
+        }
+    }
+}
+
+fn source_label(source: RootInspectSource) -> &'static str {
+    source.as_str()
+}
+
+fn kind_label(kind: Option<RootNodeKind>) -> &'static str {
+    kind.map_or("unknown", RootNodeKind::as_str)
+}
+
+fn manifest_label(manifest: Option<RootManifestKind>) -> &'static str {
+    manifest.map_or("-", RootManifestKind::as_str)
+}
+
+fn recovered_label(recovered_without_state: bool) -> &'static str {
+    if recovered_without_state { "yes" } else { "no" }
+}
+
+fn optional_i64(value: Option<i64>) -> String {
+    value.map_or_else(|| "-".to_string(), |value| value.to_string())
+}
+
+fn optional_u64(value: Option<u64>) -> String {
+    value.map_or_else(|| "-".to_string(), |value| value.to_string())
+}
+
+fn optional_text(value: Option<&str>) -> String {
+    value.map_or_else(|| "-".to_string(), visible)
+}
+
+fn optional_mode(value: Option<u32>) -> String {
+    value.map_or_else(|| "-".to_string(), |mode| format!("{mode:04o}"))
+}
+
+fn device_label(major: Option<u64>, minor: Option<u64>) -> String {
+    match (major, minor) {
+        (Some(major), Some(minor)) => format!("{major}:{minor}"),
+        _ => "-".to_string(),
+    }
+}

@@ -45,16 +45,32 @@ pub(crate) fn persist_captured_publication_snapshot(
     Ok(snapshot)
 }
 
+/// The newest committed selected-root snapshot with its exact baseline.
+///
+/// The recoverable publication lineage is the authority for what the next
+/// generation will publish. A snapshot that is only referenced by a rollback
+/// changeset is deliberately excluded: preparation never selects it, and it is
+/// not the committed root.
+pub(super) struct PendingSelectedRootSnapshot {
+    pub(super) snapshot: SelectedRootSnapshot,
+    pub(super) captured: CapturedSelectedRoot,
+    pub(super) changeset_id: Option<i64>,
+}
+
 pub(super) fn latest_selected_root_snapshot(
     conn: &rusqlite::Connection,
-) -> Result<Option<(SelectedRootSnapshot, CapturedSelectedRoot)>> {
+) -> Result<Option<PendingSelectedRootSnapshot>> {
     let debts = GenerationPublication::pending_recoverable(conn)?;
     let Some(latest) = debts.last() else {
         return Ok(None);
     };
     let snapshot = load_publication_snapshot(conn, latest)?;
     let captured = snapshot.materialize(conn)?;
-    Ok(Some((snapshot, captured)))
+    Ok(Some(PendingSelectedRootSnapshot {
+        snapshot,
+        captured,
+        changeset_id: latest.trigger_changeset_id,
+    }))
 }
 
 pub(crate) fn persist_publication_snapshot(
