@@ -74,13 +74,15 @@ fn prepare_ccs_dry_run_baseline(
     let temp_dir = tempfile::TempDir::new()
         .context("failed to create the CCS dry-run selected-root skeleton")?;
     // The database projection reads an empty directory in place of the real
-    // session destination, so the skeleton lives in a sibling subdirectory and
-    // keeps that input empty.
-    let empty_root = temp_dir.path();
+    // session destination. Create it with the same helper the real destination
+    // uses, inside the private temp parent, and keep the skeleton in a sibling
+    // subdirectory.
+    let empty_root =
+        crate::commands::generation::selected_root::create_selected_root_stand_in(temp_dir.path())?;
     let captured = crate::commands::generation::selected_root::read_selected_root_baseline(
         conn,
         &runtime_root,
-        empty_root,
+        &empty_root,
     )?;
     let root = temp_dir.path().join("root");
     conary_core::generation::root_manifest::materialize_selected_root_layout_skeleton(

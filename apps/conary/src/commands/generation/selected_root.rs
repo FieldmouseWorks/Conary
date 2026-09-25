@@ -575,7 +575,40 @@ pub(crate) fn read_selected_root_baseline(
 ///
 /// The source is the typed selection result, not a recomputation from package
 /// rows, so reporting and preparation cannot disagree about the authority.
+///
+/// Selection and collection run inside one deferred read transaction. Without
+/// it, a concurrent install that commits between the selecting query and the
+/// collecting queries can produce a source that disagrees with its capture:
+/// `NoCommittedRoot` with a nonempty capture, or `DatabaseProjection` with an
+/// empty one. WAL mode pins one snapshot at the transaction's first read.
 pub(crate) fn read_selected_root_baseline_with_source(
+    conn: &rusqlite::Connection,
+    runtime_root: &ConaryRuntimeRoot,
+    empty_root: &Path,
+) -> Result<(SelectedRootSource, CapturedSelectedRoot)> {
+    // A caller may already hold a transaction or savepoint. Reuse that
+    // snapshot rather than attempting a nested BEGIN, which SQLite rejects.
+    let transaction = conn
+        .is_autocommit()
+        .then(|| conn.unchecked_transaction())
+        .transpose()?;
+    let baseline = match &transaction {
+        Some(transaction) => {
+            read_selected_root_baseline_from_snapshot(transaction, runtime_root, empty_root)
+        }
+        None => read_selected_root_baseline_from_snapshot(conn, runtime_root, empty_root),
+    };
+    // Commit only a completed read so a failed read keeps its original error
+    // instead of a masked commit failure.
+    if baseline.is_ok()
+        && let Some(transaction) = transaction
+    {
+        transaction.commit()?;
+    }
+    baseline
+}
+
+fn read_selected_root_baseline_from_snapshot(
     conn: &rusqlite::Connection,
     runtime_root: &ConaryRuntimeRoot,
     empty_root: &Path,
@@ -586,6 +619,7 @@ pub(crate) fn read_selected_root_baseline_with_source(
         use_materialized_selected_root_backing(),
         conary_core::generation::composefs::probe_composefs_mount_runtime,
     )?;
+    run_between_selection_and_collection_hook();
     match selection {
         SelectedRootSelection::PendingPublication {
             snapshot,
@@ -634,6 +668,33 @@ pub(crate) fn read_selected_root_baseline_with_source(
         }
     }
 }
+
+// Test-only seam between the selecting query and the collecting reads.
+//
+// A test arms this to commit on another connection exactly where an
+// autocommit implementation would open a second snapshot, then proves the
+// capture still reflects the selection's snapshot.
+#[cfg(test)]
+thread_local! {
+    static BETWEEN_SELECTION_AND_COLLECTION: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        std::cell::RefCell::new(None);
+}
+
+#[cfg(test)]
+pub(crate) fn set_between_selection_and_collection_hook(hook: impl FnOnce() + 'static) {
+    BETWEEN_SELECTION_AND_COLLECTION.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
+}
+
+#[cfg(test)]
+fn run_between_selection_and_collection_hook() {
+    let hook = BETWEEN_SELECTION_AND_COLLECTION.with(|slot| slot.borrow_mut().take());
+    if let Some(hook) = hook {
+        hook();
+    }
+}
+
+#[cfg(not(test))]
+fn run_between_selection_and_collection_hook() {}
 
 fn prepare_current_root_with_probe(
     conn: &rusqlite::Connection,
@@ -720,12 +781,32 @@ fn selected_root_materialization_destination(
     } else {
         session_dir.join("lower")
     };
-    fs::create_dir_all(&destination).with_context(|| {
+    create_selected_root_destination(&destination)?;
+    Ok(destination)
+}
+
+/// Create one selected-root materialization destination.
+///
+/// `create_dir_all` is the ownership and mode contract every real preparation
+/// gets. A read-only preview reuses this exact step for its stand-in so the
+/// projection cannot capture a private temp parent's `0700` mode instead.
+pub(crate) fn create_selected_root_destination(destination: &Path) -> Result<()> {
+    fs::create_dir_all(destination).with_context(|| {
         format!(
             "failed to create selected-root materialization destination {}",
             destination.display()
         )
-    })?;
+    })
+}
+
+/// Create an empty private stand-in for the selected-root materialization
+/// destination inside `parent`.
+///
+/// The caller owns `parent` and keeps it alive; only the returned destination
+/// is ever read, so the parent's own mode never reaches a capture.
+pub(crate) fn create_selected_root_stand_in(parent: &Path) -> Result<PathBuf> {
+    let destination = parent.join("selected-root-stand-in");
+    create_selected_root_destination(&destination)?;
     Ok(destination)
 }
 

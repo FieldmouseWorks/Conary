@@ -18,7 +18,7 @@ use conary_core::runtime_root::ConaryRuntimeRoot;
 use serde::{Deserialize, Serialize};
 
 use crate::commands::generation::selected_root::{
-    SelectedRootSource, read_selected_root_baseline_with_source,
+    SelectedRootSource, create_selected_root_stand_in, read_selected_root_baseline_with_source,
 };
 
 pub(crate) const ROOT_INSPECT_SCHEMA_VERSION: u32 = 1;
@@ -135,11 +135,14 @@ pub(crate) fn root_inspect_data(
     // The read-only baseline is the same typed selection a real install makes.
     // The private empty directory stands in for the empty materialization
     // destination a first-generation projection reads for root metadata and
-    // package-unclaimed parent closure.
-    let empty_root = tempfile::TempDir::new()
+    // package-unclaimed parent closure. It is created by the same helper the
+    // real destination uses, inside a private temp parent, so the captured `/`
+    // node carries the destination contract rather than the parent's mode.
+    let empty_root_parent = tempfile::TempDir::new()
         .context("failed to create the private selected-root inspection directory")?;
+    let empty_root = create_selected_root_stand_in(empty_root_parent.path())?;
     let (source, captured) =
-        read_selected_root_baseline_with_source(conn, runtime_root, empty_root.path())?;
+        read_selected_root_baseline_with_source(conn, runtime_root, &empty_root)?;
     let (source, snapshot_id, changeset_id) = report_source(source);
 
     let mut data = RootInspectData {
