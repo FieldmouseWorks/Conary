@@ -6,7 +6,7 @@ use super::{NativeBundleOwner, debian_runtime};
 use anyhow::{Context, Result};
 use conary_core::ccs::native_lifecycle::{NativeLifecycleEntry, RPM_SCRIPTLET_FLAG_CRITICAL};
 use conary_core::scriptlet::{
-    ExecutionMode, FailurePosture, LifecycleFailureClass, NativeInterpreterAvailability,
+    ExecutionMode, FailurePosture, LifecycleFailureClass, NativeInterpreterResolution,
     NativeInvocationRuntime, NativeLifecycleExecution, ScriptletExecutor, ScriptletFailureOutcome,
     ScriptletOutcome,
 };
@@ -120,7 +120,7 @@ pub(super) fn preflight_entry(
     owner: &NativeBundleOwner,
     executor: &ScriptletExecutor,
     invocation: EntryInvocation<'_>,
-    interpreter_availability: NativeInterpreterAvailability,
+    interpreter: NativeInterpreterResolution,
 ) -> Result<()> {
     let entry = bundle_entry_for_event(owner, invocation.entry_id)?;
     let context = entry_runtime_context(owner, entry, invocation.deb_package_refcount)?;
@@ -132,14 +132,9 @@ pub(super) fn preflight_entry(
         invocation.stdin,
     );
     if let Some(rpm) = &entry.rpm_runtime {
-        executor.preflight_rpm_native_lifecycle_entry(
-            &execution,
-            &runtime,
-            rpm,
-            interpreter_availability,
-        )
+        executor.preflight_rpm_native_lifecycle_entry(&execution, &runtime, rpm, interpreter)
     } else {
-        executor.preflight_native_lifecycle_entry(&execution, &runtime, interpreter_availability)
+        executor.preflight_native_lifecycle_entry(&execution, &runtime, interpreter)
     }
 }
 

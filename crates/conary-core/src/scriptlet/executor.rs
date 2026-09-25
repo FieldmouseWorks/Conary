@@ -196,21 +196,33 @@ impl ScriptletExecutor {
 
         let interpreter_path = interpreter.to_string();
 
-        let interpreter_check_path = self.root.join(interpreter_path.trim_start_matches('/'));
-
-        if !interpreter_check_path.exists() {
-            return self.failure_outcome(
-                phase,
-                ScriptletFailureKind::ProgramUnavailable,
-                requested_sandbox_mode,
-                effective_sandbox,
-                format!(
-                    "Interpreter {} not found in target root {}; cannot execute {} scriptlet",
-                    interpreter_path,
-                    self.root.display(),
-                    phase
-                ),
-            );
+        match crate::filesystem::selected_root::selected_root_executable(
+            &self.root,
+            &interpreter_path,
+        ) {
+            Ok(Some(_)) => {}
+            Ok(None) => {
+                return self.failure_outcome(
+                    phase,
+                    ScriptletFailureKind::ProgramUnavailable,
+                    requested_sandbox_mode,
+                    effective_sandbox,
+                    format!(
+                        "Interpreter {} not found in target root {}; cannot execute {} scriptlet",
+                        interpreter_path,
+                        self.root.display(),
+                        phase
+                    ),
+                );
+            }
+            Err(error) => {
+                return self.failure_from_error(
+                    phase,
+                    requested_sandbox_mode,
+                    effective_sandbox,
+                    error,
+                );
+            }
         }
 
         // Prepare arguments based on distro, mode, and phase
@@ -276,18 +288,24 @@ impl ScriptletExecutor {
     ) -> Result<()> {
         self.require_target_root()?;
         let interpreter_path = interpreter.to_string();
-        let interpreter_check_path = self.root.join(interpreter_path.trim_start_matches('/'));
 
-        if !interpreter_check_path.exists() {
-            return Err(Error::scriptlet(
-                ScriptletFailureKind::ProgramUnavailable,
-                format!(
-                    "Interpreter {} not found in target root {}; cannot execute {} scriptlet",
-                    interpreter_path,
-                    self.root.display(),
-                    phase
-                ),
-            ));
+        match crate::filesystem::selected_root::selected_root_executable(
+            &self.root,
+            &interpreter_path,
+        ) {
+            Ok(Some(_)) => {}
+            Ok(None) => {
+                return Err(Error::scriptlet(
+                    ScriptletFailureKind::ProgramUnavailable,
+                    format!(
+                        "Interpreter {} not found in target root {}; cannot execute {} scriptlet",
+                        interpreter_path,
+                        self.root.display(),
+                        phase
+                    ),
+                ));
+            }
+            Err(error) => return Err(error),
         }
         if !nix::unistd::geteuid().is_root() {
             return Err(Error::scriptlet(

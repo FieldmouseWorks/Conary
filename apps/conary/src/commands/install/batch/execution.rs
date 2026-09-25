@@ -3,6 +3,7 @@
 //! Graph-driven batch payload execution.
 
 use super::super::native_events::{PreparedNativeTransaction, deb_identity_for_trove};
+use super::super::payload_identity::PlanIdentityMode;
 use super::{BatchDbRows, BatchInstaller, PreparedPackage, inner};
 use anyhow::{Context, Result};
 use conary_core::ccs::native_lifecycle::SourceFormat;
@@ -321,25 +322,22 @@ where
                 .stored_files_by_pkg
                 .get(change_index)
                 .context("batch payload has no stored-file input")?;
-            let semantics = package.semantics;
-            let resolved_files =
-                inner::resolve_stored_install_files(self.selected_root, stored_files, semantics)?;
-            let directory_plan = inner::preflight_resolved_file_ownership(
+            let effects = super::super::payload_effects::plan_element_payload_effects(
                 self.tx,
                 self.selected_root,
-                &resolved_files,
-                &package.name,
-                &package.relation_removals,
-                semantics,
+                super::super::payload_effects::ElementPayloadEffectInput {
+                    semantics: package.semantics,
+                    package_name: &package.name,
+                    relation_removals: &package.relation_removals,
+                    replacing_trove_id: old_trove_id,
+                    config_declarations: &package.config_declarations,
+                    files: super::super::payload_effects::PayloadEffectFiles::Stored {
+                        cas: self.cas,
+                        files: stored_files,
+                    },
+                    identity_mode: PlanIdentityMode::Authoritative,
+                },
             )?;
-            let all_package_files =
-                super::super::live_root_files_from_stored_files(self.cas, &resolved_files)?;
-            let package_files = all_package_files
-                .iter()
-                .filter(|file| !directory_plan.preserves_leaf(&file.path))
-                .cloned()
-                .collect::<Vec<_>>();
-            let through_symlink_files = directory_plan.through_symlink_root_files(&resolved_files);
             let retain_for_lifecycle = self
                 .retain_for_lifecycle_by_pkg
                 .get(change_index)
@@ -357,7 +355,7 @@ where
                 crate::commands::generation::config_transaction::ConfigInstallCapture {
                     source: super::super::config_files::source_for_semantics(package.semantics),
                     declared: &package.config_declarations,
-                    incoming: &package_files,
+                    incoming: &effects.config_candidates,
                     replacing_trove_id: old_trove_id,
                     replaced_trove_ids: &immediately_replaced,
                 },
@@ -365,37 +363,21 @@ where
             self.config_transaction
                 .entries
                 .append(&mut captured.entries);
-            let mut plan = super::super::config_files::prepare_config_install(
-                self.tx,
-                self.selected_root,
-                super::super::config_files::source_for_semantics(package.semantics),
-                &package.config_declarations,
-                old_trove_id,
-                package_files,
-            )?;
-            let hardlink_references = super::super::execute::prepare_preserved_hardlink_references(
-                self.tx,
-                &directory_plan,
-                &all_package_files,
-                &mut plan.files,
+            self.root_mutation.apply_install_files_with_references(
+                &effects.install_files,
+                &effects.hardlink_references,
             )?;
             self.root_mutation
-                .apply_install_files_with_references(&plan.files, &hardlink_references)?;
+                .apply_install_files(&effects.through_symlink_files)?;
             self.root_mutation
-                .apply_install_files(&through_symlink_files)?;
-            self.root_mutation.apply_remove_paths(&plan.remove_paths)?;
+                .apply_remove_paths(&effects.remove_paths)?;
             if let Some(ccs) = package.ccs.as_ref() {
                 super::super::file_capabilities::apply_selected_file_capabilities(
                     self.selected_root,
                     &ccs.file_capabilities,
-                    plan.files.iter(),
+                    effects.install_files.iter(),
                 )?;
             }
-            let retain_for_lifecycle = self
-                .retain_for_lifecycle_by_pkg
-                .get(change_index)
-                .copied()
-                .context("batch payload has no retention decision")?;
             if !retain_for_lifecycle && let Some(old_id) = old_trove_id {
                 Trove::delete(self.tx, old_id)?;
             }
@@ -408,8 +390,8 @@ where
                     .trove_ids
                     .get(change_index)
                     .context("batch payload has no installed trove identity")?,
-                &resolved_files,
-                &directory_plan,
+                &effects.resolved_files,
+                &effects.directory_plan,
             )?;
             conary_core::repository::enrollment::transaction::apply_transition(
                 self.tx,

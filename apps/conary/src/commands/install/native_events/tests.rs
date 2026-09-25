@@ -29,6 +29,8 @@ use std::os::unix::fs::{PermissionsExt, symlink};
 mod arch;
 #[path = "tests/deconfiguration.rs"]
 mod deconfiguration;
+#[path = "tests/payload_effects_projection.rs"]
+mod payload_effects_projection;
 #[path = "tests/provider_projection.rs"]
 mod provider_projection;
 #[path = "tests/rpm_warning.rs"]
@@ -434,6 +436,7 @@ fn relation_removal_is_a_first_class_native_remove_event() {
             relation_removals: &removals,
             relation_deconfigurations: &[],
             paths: Vec::new(),
+            new_path_nodes: Default::default(),
         },
     )
     .unwrap();
@@ -507,6 +510,7 @@ fn debian_disappearance_requires_one_exact_overwriter_for_every_non_conffile_pat
             relation_removals: &[],
             relation_deconfigurations: &[],
             paths: new_a_paths,
+            new_path_nodes: Default::default(),
         },
         NativeInstallInput {
             package_name: "new-b",
@@ -519,6 +523,7 @@ fn debian_disappearance_requires_one_exact_overwriter_for_every_non_conffile_pat
             relation_removals: &[],
             relation_deconfigurations: &[],
             paths: new_b_paths,
+            new_path_nodes: Default::default(),
         },
     ];
 
@@ -541,6 +546,7 @@ fn debian_disappearance_requires_one_exact_overwriter_for_every_non_conffile_pat
             relation_removals: &[],
             relation_deconfigurations: &[],
             paths: vec!["/usr/bin/tool".to_string()],
+            new_path_nodes: Default::default(),
         },
         NativeInstallInput {
             package_name: "new-b",
@@ -553,6 +559,7 @@ fn debian_disappearance_requires_one_exact_overwriter_for_every_non_conffile_pat
             relation_removals: &[],
             relation_deconfigurations: &[],
             paths: vec!["/usr/share/tool.data".to_string()],
+            new_path_nodes: Default::default(),
         },
     ];
     assert_eq!(
@@ -571,6 +578,11 @@ fn transaction_preflight_walks_debian_recovery_branches() {
     let selected_root = temp.path().join("selected-root");
     std::fs::create_dir_all(selected_root.join("bin")).unwrap();
     std::fs::write(selected_root.join("bin/sh"), b"test interpreter").unwrap();
+    let mut interpreter_permissions = std::fs::metadata(selected_root.join("bin/sh"))
+        .unwrap()
+        .permissions();
+    interpreter_permissions.set_mode(0o755);
+    std::fs::set_permissions(selected_root.join("bin/sh"), interpreter_permissions).unwrap();
     conary_core::db::init(&db_path).unwrap();
     let conn = conary_core::db::open(&db_path).unwrap();
     let mut trove = Trove::new(
@@ -778,12 +790,8 @@ fn post_payload_preflight_rejects_removed_interpreter() {
         bundle,
         event,
         NativeEventPathProjection::Projected {
-            introduced_paths: BTreeSet::new(),
-            explicitly_removed_paths: BTreeSet::from([interpreter
-                .trim_start_matches('/')
-                .to_string()]),
-            introduced_path_capabilities: BTreeSet::new(),
-            explicitly_removed_path_capabilities: BTreeSet::new(),
+            introduced: BTreeMap::new(),
+            explicitly_removed: BTreeSet::from([interpreter.trim_start_matches('/').to_string()]),
         },
     );
     let target_root = tempfile::tempdir().unwrap();
@@ -794,10 +802,15 @@ fn post_payload_preflight_rejects_removed_interpreter() {
     let error = prepared
         .preflight(target_root.path(), &ExecutionMode::Remove)
         .expect_err("post-payload preflight must reject an explicitly removed interpreter");
-    let error_chain = format!("{error:#}");
     assert!(
-        error_chain.contains("Interpreter not found"),
-        "unexpected error: {error_chain}"
+        matches!(
+            error.downcast_ref::<conary_core::scriptlet::NativeLifecyclePreflightError>(),
+            Some(conary_core::scriptlet::NativeLifecyclePreflightError::MissingInterpreter {
+                interpreter: actual,
+                ..
+            }) if actual == interpreter
+        ),
+        "unexpected error: {error:#}"
     );
 }
 

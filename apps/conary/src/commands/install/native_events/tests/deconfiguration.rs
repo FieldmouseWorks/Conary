@@ -156,6 +156,7 @@ fn relation_deconfiguration_prepares_exact_debian_operation_event_and_state() {
             relation_removals: &[],
             relation_deconfigurations: &deconfigurations,
             paths: Vec::new(),
+            new_path_nodes: Default::default(),
         },
     )
     .unwrap();

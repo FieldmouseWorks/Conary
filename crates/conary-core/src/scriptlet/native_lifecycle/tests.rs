@@ -5,13 +5,27 @@
 use super::super::{
     ExecutionMode, PackageFormat, SandboxMode, ScriptletExecutor, ScriptletOutcome,
 };
-use super::{NativeInterpreterAvailability, NativeInvocationRuntime, NativeLifecycleExecution};
+use super::{NativeInterpreterResolution, NativeInvocationRuntime, NativeLifecycleExecution};
 use crate::ccs::native_lifecycle::{
     RpmBodyTransform, RpmCriticality, RpmHeaderContext, RpmHeaderFact, RpmHeaderFactSource,
     RpmHeaderValue, RpmMacroContext, RpmProgram, RpmRuntimeMetadata,
 };
+use crate::filesystem::ProjectedExecutable;
 use crate::scriptlet::test_support::materialized_root;
 use std::path::Path;
+
+fn resolved(executable: ProjectedExecutable) -> NativeInterpreterResolution {
+    NativeInterpreterResolution {
+        executable,
+        projected: true,
+    }
+}
+
+fn executable_interpreter() -> NativeInterpreterResolution {
+    resolved(ProjectedExecutable::Executable {
+        resolved: "/bin/sh".to_string(),
+    })
+}
 
 fn native_lifecycle_execution_with_contracts(
     native_args: &[String],
@@ -189,11 +203,7 @@ fn native_lifecycle_preflight_refuses_unsupported_invocation_fields() {
 
     for execution in cases {
         let error = executor
-            .preflight_native_lifecycle_entry(
-                &execution,
-                &runtime,
-                NativeInterpreterAvailability::CurrentRoot,
-            )
+            .preflight_native_lifecycle_entry(&execution, &runtime, executable_interpreter())
             .expect_err("unsupported invocation field should refuse");
         let message = error.to_string();
         assert!(
@@ -231,11 +241,7 @@ fn native_lifecycle_preflight_rejects_body_hash_mismatch() {
     };
 
     let error = executor
-        .preflight_native_lifecycle_entry(
-            &execution,
-            &runtime,
-            NativeInterpreterAvailability::CurrentRoot,
-        )
+        .preflight_native_lifecycle_entry(&execution, &runtime, executable_interpreter())
         .expect_err("body hash mismatch should refuse");
 
     assert!(
@@ -315,11 +321,7 @@ fn debian_binary_maintainer_body_executes_as_exact_bytes() {
     };
 
     executor
-        .preflight_native_lifecycle_entry(
-            &execution,
-            &runtime,
-            NativeInterpreterAvailability::CurrentRoot,
-        )
+        .preflight_native_lifecycle_entry(&execution, &runtime, executable_interpreter())
         .expect("non-UTF-8 Debian body is valid external-interpreter input");
     let outcome = executor.execute_native_lifecycle_entry_with_outcome(&execution, &runtime);
     assert!(
@@ -441,29 +443,27 @@ fn native_preflight_requirements_are_typed_and_do_not_stage_files() {
     let mode = ExecutionMode::Install;
     let runtime = upgrade_runtime(&mode);
     let execution = native_lifecycle_execution_with_contracts(&[]);
-    for (availability, projected) in [
-        (NativeInterpreterAvailability::CurrentRoot, false),
-        (NativeInterpreterAvailability::ProjectedMissing, true),
+    for interpreter in [
+        resolved(ProjectedExecutable::Missing),
+        resolved(ProjectedExecutable::NotExecutable {
+            resolved: "/bin/sh".to_string(),
+        }),
     ] {
         let error = executor
-            .preflight_native_lifecycle_entry(&execution, &runtime, availability)
+            .preflight_native_lifecycle_entry(&execution, &runtime, interpreter)
             .unwrap_err();
         assert_eq!(
             error.downcast_ref::<NativeLifecyclePreflightError>(),
             Some(&NativeLifecyclePreflightError::MissingInterpreter {
                 interpreter: "/bin/sh".into(),
                 entry_id: execution.entry_id.into(),
-                projected,
+                projected: true,
             })
         );
         assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
     }
     executor
-        .preflight_native_lifecycle_entry(
-            &execution,
-            &runtime,
-            NativeInterpreterAvailability::ProjectedPresent,
-        )
+        .preflight_native_lifecycle_entry(&execution, &runtime, executable_interpreter())
         .unwrap();
     for timeout_ms in [999, 300_001] {
         let invalid = NativeLifecycleExecution {
@@ -471,11 +471,7 @@ fn native_preflight_requirements_are_typed_and_do_not_stage_files() {
             ..native_lifecycle_execution_with_contracts(&[])
         };
         let error = executor
-            .preflight_native_lifecycle_entry(
-                &invalid,
-                &runtime,
-                NativeInterpreterAvailability::ProjectedPresent,
-            )
+            .preflight_native_lifecycle_entry(&invalid, &runtime, executable_interpreter())
             .unwrap_err();
         assert!(
             matches!(error.downcast_ref::<NativeLifecyclePreflightError>(), Some(NativeLifecyclePreflightError::TimeoutOutOfRange { timeout_ms: actual, minimum_ms: 1000, maximum_ms: 300_000, .. }) if *actual == timeout_ms)
@@ -484,11 +480,7 @@ fn native_preflight_requirements_are_typed_and_do_not_stage_files() {
     for path in [Path::new("/"), Path::new("relative-root")] {
         let executor = ScriptletExecutor::new(path, "typed-runtime", "2", PackageFormat::Rpm);
         let error = executor
-            .preflight_native_lifecycle_entry(
-                &execution,
-                &runtime,
-                NativeInterpreterAvailability::ProjectedPresent,
-            )
+            .preflight_native_lifecycle_entry(&execution, &runtime, executable_interpreter())
             .unwrap_err();
         assert_eq!(
             error.downcast_ref::<NativeLifecyclePreflightError>(),

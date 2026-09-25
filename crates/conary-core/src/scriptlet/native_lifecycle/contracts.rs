@@ -2,6 +2,7 @@
 
 //! Executor-facing native lifecycle invocation contracts.
 
+use crate::filesystem::ProjectedExecutable;
 use crate::scriptlet::ExecutionMode;
 use anyhow::{Result, bail};
 
@@ -14,6 +15,19 @@ const DANGEROUS_NATIVE_ENV_KEYS: [&str; 6] = [
     "PYTHONPATH",
     "PATH",
 ];
+
+/// The typed selected-root resolution of a native lifecycle interpreter.
+///
+/// Transaction-wide preflight supplies the event's projected state; execution
+/// resolves the live selected root. `projected` records which one a missing
+/// interpreter was checked against.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeInterpreterResolution {
+    /// The interpreter's projected selected-root state.
+    pub executable: ProjectedExecutable,
+    /// Whether the resolution replayed a transaction payload projection.
+    pub projected: bool,
+}
 
 /// Executor-facing view of a native lifecycle bundle entry.
 pub struct NativeLifecycleExecution<'a> {
@@ -42,21 +56,6 @@ pub struct NativeInvocationRuntime<'a> {
     pub resolved_native_args: Option<&'a [String]>,
     /// Exact package-manager standard input, such as trigger paths.
     pub stdin: &'a [u8],
-}
-
-/// Filesystem fact used when preflighting a native lifecycle interpreter.
-///
-/// Transaction-wide preflight can run before an incoming payload exists on
-/// disk. The transaction planner must therefore supply the exact projected
-/// interpreter state for events that run after that payload boundary.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NativeInterpreterAvailability {
-    /// Validate the interpreter against the filesystem as it exists now.
-    CurrentRoot,
-    /// The transaction's final path projection contains the interpreter.
-    ProjectedPresent,
-    /// The transaction's final path projection does not contain the interpreter.
-    ProjectedMissing,
 }
 
 pub(super) fn validate_stdin_contract(execution: &NativeLifecycleExecution<'_>) -> Result<()> {

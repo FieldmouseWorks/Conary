@@ -13,7 +13,8 @@ pub enum NativeLifecyclePreflightError {
     MissingInterpreter {
         interpreter: String,
         entry_id: String,
-        /// The missing path was checked in the current root or its event projection.
+        /// The missing path was resolved against a transaction payload
+        /// projection rather than the current selected root alone.
         projected: bool,
     },
     #[error(

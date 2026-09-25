@@ -3,6 +3,7 @@
 //! Lexical package-path resolution for live and selected roots.
 
 use anyhow::{Result, bail};
+use conary_core::filesystem::SelectedRootProjection;
 use std::path::{Component, Path, PathBuf};
 
 pub(crate) fn target_path(root: &Path, package_path: &str) -> Result<PathBuf> {
@@ -29,9 +30,16 @@ pub(crate) fn target_path(root: &Path, package_path: &str) -> Result<PathBuf> {
 }
 
 pub(super) fn selected_root_target_path(root: &Path, package_path: &str) -> Result<PathBuf> {
-    let effective = conary_core::filesystem::selected_root::selected_root_effective_package_path(
-        root,
-        package_path,
-    )?;
-    target_path(root, &effective)
+    let projection = SelectedRootProjection::new(root);
+    projection_target_path(&projection, package_path)
+}
+
+/// The on-disk target for one package path, resolved through `projection` in
+/// the same effective-path domain execution's aliases use.
+pub(super) fn projection_target_path(
+    projection: &SelectedRootProjection<'_>,
+    package_path: &str,
+) -> Result<PathBuf> {
+    let effective = projection.effective_package_path(package_path)?;
+    target_path(projection.root(), &effective)
 }

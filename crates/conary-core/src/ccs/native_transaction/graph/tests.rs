@@ -4,6 +4,7 @@
 
 use super::*;
 use crate::ccs::native_transaction::NativeTransactionOperation;
+use crate::filesystem::ProjectedNode;
 
 fn change(
     package_name: &str,
@@ -31,6 +32,13 @@ fn change(
     }
 }
 
+fn regular_node(path: &str) -> (String, ProjectedNode) {
+    (
+        path.to_string(),
+        ProjectedNode::Regular { executable: false },
+    )
+}
+
 #[test]
 fn path_projection_removes_then_reintroduces_a_future_ownership_transfer() {
     let changes = [
@@ -49,34 +57,34 @@ fn path_projection_removes_then_reintroduces_a_future_ownership_transfer() {
         ],
     };
 
-    let path_capabilities = vec![NativeTransactionPathCapabilities::default(); changes.len()];
+    let new_path_nodes = [
+        BTreeMap::new(),
+        BTreeMap::from([regular_node("/usr/bin/tool")]),
+    ];
     let projections = graph
         .path_projections(
             3,
             &changes,
+            &new_path_nodes,
             &BTreeSet::from(["usr/bin/tool".to_string()]),
-            &path_capabilities,
-            &BTreeSet::new(),
         )
         .unwrap();
     let NativeEventPathProjection::Projected {
-        explicitly_removed_paths,
-        ..
+        explicitly_removed, ..
     } = projections[0].as_ref().unwrap()
     else {
         panic!("event after removal must use a projected root");
     };
-    assert!(explicitly_removed_paths.contains("usr/bin/tool"));
+    assert!(explicitly_removed.contains("usr/bin/tool"));
     let NativeEventPathProjection::Projected {
-        introduced_paths,
-        explicitly_removed_paths,
-        ..
+        introduced,
+        explicitly_removed,
     } = projections[2].as_ref().unwrap()
     else {
         panic!("event after replacement must use a projected root");
     };
-    assert!(introduced_paths.contains("usr/bin/tool"));
-    assert!(!explicitly_removed_paths.contains("usr/bin/tool"));
+    assert!(introduced.contains_key("usr/bin/tool"));
+    assert!(!explicitly_removed.contains("usr/bin/tool"));
 }
 
 #[test]
@@ -95,72 +103,77 @@ fn path_projection_preserves_an_already_applied_ownership_transfer() {
         ],
     };
 
-    let path_capabilities = vec![NativeTransactionPathCapabilities::default(); changes.len()];
+    let new_path_nodes = [
+        BTreeMap::from([regular_node("usr/bin/tool")]),
+        BTreeMap::new(),
+    ];
     let projections = graph
         .path_projections(
             1,
             &changes,
+            &new_path_nodes,
             &BTreeSet::from(["usr/bin/tool".to_string()]),
-            &path_capabilities,
-            &BTreeSet::new(),
         )
         .unwrap();
     let NativeEventPathProjection::Projected {
-        introduced_paths,
-        explicitly_removed_paths,
-        ..
+        introduced,
+        explicitly_removed,
     } = projections[0].as_ref().unwrap()
     else {
         panic!("event after transfer must use a projected root");
     };
-    assert!(introduced_paths.contains("usr/bin/tool"));
-    assert!(!explicitly_removed_paths.contains("usr/bin/tool"));
+    assert!(introduced.contains_key("usr/bin/tool"));
+    assert!(!explicitly_removed.contains("usr/bin/tool"));
 }
 
 #[test]
-fn path_capability_projection_obeys_payload_and_finalization_boundaries() {
+fn path_node_projection_obeys_payload_and_finalization_boundaries() {
+    let executable = ProjectedNode::Regular { executable: true };
     let install_changes = [change("shell-provider", &[], &["usr/bin/sh"], 0)];
-    let install_capabilities = [NativeTransactionPathCapabilities {
-        old_paths: BTreeSet::new(),
-        new_paths: BTreeSet::from(["/bin/sh".to_string()]),
-    }];
+    let install_nodes = [BTreeMap::from([(
+        "usr/bin/sh".to_string(),
+        executable.clone(),
+    )])];
     let install_graph = NativeTransactionGraph {
         steps: vec![
             NativeTransactionStep::RunEvent { event_index: 0 },
             NativeTransactionStep::ApplyPayload { change_index: 0 },
             NativeTransactionStep::RunEvent { event_index: 1 },
             NativeTransactionStep::FinalizeOldPayload { change_index: 0 },
+            NativeTransactionStep::RunEvent { event_index: 2 },
         ],
     };
 
     let projections = install_graph
         .path_projections(
-            2,
+            3,
             &install_changes,
+            &install_nodes,
             &BTreeSet::from(["usr/bin/sh".to_string()]),
-            &install_capabilities,
-            &BTreeSet::from(["bin/sh".to_string()]),
         )
         .unwrap();
     assert_eq!(projections[0], Some(NativeEventPathProjection::CurrentRoot));
     let NativeEventPathProjection::Projected {
-        introduced_paths,
-        introduced_path_capabilities,
-        explicitly_removed_path_capabilities,
-        ..
+        introduced,
+        explicitly_removed,
     } = projections[1].as_ref().unwrap()
     else {
         panic!("event after provider payload must use a projected root");
     };
-    assert!(introduced_paths.contains("usr/bin/sh"));
-    assert!(introduced_path_capabilities.contains("bin/sh"));
-    assert!(explicitly_removed_path_capabilities.is_empty());
+    assert_eq!(introduced.get("usr/bin/sh"), Some(&executable));
+    assert!(explicitly_removed.is_empty());
+    let NativeEventPathProjection::Projected {
+        introduced,
+        explicitly_removed,
+    } = projections[2].as_ref().unwrap()
+    else {
+        panic!("event after finalization must use a projected root");
+    };
+    assert_eq!(introduced.get("usr/bin/sh"), Some(&executable));
+    assert!(explicitly_removed.is_empty());
 
     let remove_changes = [change("shell-provider", &["usr/bin/sh"], &[], 0)];
-    let remove_capabilities = [NativeTransactionPathCapabilities {
-        old_paths: BTreeSet::from(["/bin/sh".to_string()]),
-        new_paths: BTreeSet::new(),
-    }];
+    let remove_nodes = [BTreeMap::new()];
     let remove_graph = NativeTransactionGraph {
         steps: vec![
             NativeTransactionStep::ApplyPayload { change_index: 0 },
@@ -170,24 +183,17 @@ fn path_capability_projection_obeys_payload_and_finalization_boundaries() {
     };
 
     let projections = remove_graph
-        .path_projections(
-            1,
-            &remove_changes,
-            &BTreeSet::new(),
-            &remove_capabilities,
-            &BTreeSet::new(),
-        )
+        .path_projections(1, &remove_changes, &remove_nodes, &BTreeSet::new())
         .unwrap();
     let NativeEventPathProjection::Projected {
-        introduced_path_capabilities,
-        explicitly_removed_path_capabilities,
-        ..
+        introduced,
+        explicitly_removed,
     } = projections[0].as_ref().unwrap()
     else {
         panic!("event after provider removal must use a projected root");
     };
-    assert!(introduced_path_capabilities.is_empty());
-    assert!(explicitly_removed_path_capabilities.contains("bin/sh"));
+    assert!(introduced.is_empty());
+    assert!(explicitly_removed.contains("usr/bin/sh"));
 }
 
 #[test]

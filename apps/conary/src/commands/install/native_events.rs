@@ -8,13 +8,13 @@ use conary_core::ccs::native_lifecycle::NativeLifecycleBundle;
 use conary_core::ccs::native_transaction::{
     DebPackageState, NativeBundleRole, NativeBundleView, NativeInstalledCapability,
     NativePackageIdentity, NativeTransactionChange, NativeTransactionOperation,
-    NativeTransactionPathCapabilities, NativeTransactionPlan, NativeTransactionState,
-    plan_native_transaction,
+    NativeTransactionPlan, NativeTransactionState, plan_native_transaction,
 };
 use conary_core::db::models::{
     ConfigFile, InstalledNativeLifecycleBundle, NativeLifecycleResidualState,
     PackagePayloadOwnership, Trove,
 };
+use conary_core::filesystem::ProjectedNode;
 use conary_core::repository::dependency_model::PackageRelationRemovalMode;
 use conary_core::repository::versioning::VersionScheme;
 use conary_core::scriptlet::{SandboxMode, ScriptletExecutor};
@@ -23,7 +23,7 @@ use conary_core::transaction::{
     validate_package_relation_transitions,
 };
 use std::cell::RefCell;
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt;
 use std::path::Path;
 
@@ -50,8 +50,7 @@ pub(super) use identity::deb_identity_for_trove;
 use identity::owner_identity;
 use preflight::NativePathProjection;
 use transaction_state::{
-    declared_capabilities_excluding, declared_path_capabilities_for_trove,
-    installed_instance_count, installed_packages_before, path_capabilities,
+    declared_capabilities_excluding, installed_instance_count, installed_packages_before,
     sort_and_deduplicate_capabilities,
 };
 
@@ -66,6 +65,10 @@ pub(super) struct NativeInstallInput<'a> {
     pub relation_removals: &'a [PackageRelationRemoval],
     pub relation_deconfigurations: &'a [PackageRelationDeconfiguration],
     pub paths: Vec<String>,
+    /// Typed nodes at their effective paths, from the element's payload-effect
+    /// plan. The event-time projection overlays these so native and CCS share
+    /// one derivation.
+    pub new_path_nodes: BTreeMap<String, ProjectedNode>,
 }
 
 pub(crate) struct NativeRemoveInput<'a> {
@@ -203,7 +206,7 @@ impl PreparedNativeTransaction {
         let mut removed_trove_ids = HashSet::new();
         let mut counts_after = HashMap::<String, u32>::new();
         let mut changes = Vec::with_capacity(inputs.len());
-        let mut path_capability_changes = Vec::with_capacity(inputs.len());
+        let mut new_path_nodes = Vec::with_capacity(inputs.len());
         let mut deb_change_indices = BTreeSet::new();
         let mut arch_transaction = false;
         for (transaction_index, input) in inputs.iter().enumerate() {
@@ -254,7 +257,6 @@ impl PreparedNativeTransaction {
                 )
             })?;
             counts_after.insert(input.trove.name.clone(), instances_after);
-            let old_path_capabilities = declared_path_capabilities_for_trove(conn, trove_id)?;
             changes.push(NativeTransactionChange {
                 package_name: input.trove.name.clone(),
                 old_arch: InstalledNativeLifecycleBundle::find_by_trove(conn, trove_id)?
@@ -270,10 +272,7 @@ impl PreparedNativeTransaction {
                 instances_after,
                 transaction_index,
             });
-            path_capability_changes.push(NativeTransactionPathCapabilities {
-                old_paths: old_path_capabilities,
-                new_paths: BTreeSet::new(),
-            });
+            new_path_nodes.push(BTreeMap::new());
         }
 
         let mut owners = Vec::new();
@@ -312,7 +311,7 @@ impl PreparedNativeTransaction {
             arch_transaction,
             &deb_change_indices,
         )? && let Some(prepared) =
-            Self::prepare_without_global_native_state(&changes, &path_capability_changes, false)?
+            Self::prepare_without_global_native_state(&changes, &new_path_nodes, false)?
         {
             return Ok(prepared);
         }
@@ -329,11 +328,6 @@ impl PreparedNativeTransaction {
             .collect::<Vec<_>>();
         let installed_capabilities_after =
             declared_capabilities_excluding(conn, &removed_trove_ids)?;
-        let installed_path_capabilities_after = path_capabilities(
-            installed_capabilities_after
-                .iter()
-                .map(|capability| capability.name.as_str()),
-        );
         let installed_paths_after =
             PackagePayloadOwnership::installed_paths_excluding(conn, &removed_trove_ids)?;
         let arch_ldconfig_required_after =
@@ -350,9 +344,8 @@ impl PreparedNativeTransaction {
         let path_projection = NativePathProjection::from_transaction(
             &plan,
             &changes,
+            &new_path_nodes,
             &installed_paths_after,
-            &path_capability_changes,
-            &installed_path_capabilities_after,
         )?;
         Ok(Self {
             owners,
@@ -381,7 +374,7 @@ impl PreparedNativeTransaction {
     /// the complete projection path rather than silently losing its inputs.
     fn prepare_without_global_native_state(
         changes: &[NativeTransactionChange],
-        path_capability_changes: &[NativeTransactionPathCapabilities],
+        new_path_nodes: &[BTreeMap<String, ProjectedNode>],
         requires_upgrade_payload_boundary: bool,
     ) -> Result<Option<Self>> {
         let transaction_state = NativeTransactionState::default();
@@ -390,13 +383,8 @@ impl PreparedNativeTransaction {
             return Ok(None);
         }
         let empty_paths = BTreeSet::new();
-        let path_projection = NativePathProjection::from_transaction(
-            &plan,
-            changes,
-            &empty_paths,
-            path_capability_changes,
-            &empty_paths,
-        )?;
+        let path_projection =
+            NativePathProjection::from_transaction(&plan, changes, new_path_nodes, &empty_paths)?;
         Ok(Some(Self {
             owners: Vec::new(),
             plan,

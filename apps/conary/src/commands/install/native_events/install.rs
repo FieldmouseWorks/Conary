@@ -96,7 +96,7 @@ impl PreparedNativeTransaction {
         let mut changes = Vec::with_capacity(
             inputs.len() + relation_removal_troves.len() + relation_deconfiguration_troves.len(),
         );
-        let mut path_capability_changes = Vec::with_capacity(
+        let mut new_path_nodes = Vec::with_capacity(
             inputs.len() + relation_removal_troves.len() + relation_deconfiguration_troves.len(),
         );
         let mut deb_change_indices = BTreeSet::new();
@@ -141,12 +141,6 @@ impl PreparedNativeTransaction {
                 .new_bundle
                 .and_then(|bundle| bundle.source_arch.clone())
                 .or_else(|| input.package_arch.map(str::to_string));
-            let old_path_capabilities = old_trove_id
-                .map(|trove_id| declared_path_capabilities_for_trove(conn, trove_id))
-                .transpose()?
-                .unwrap_or_default();
-            let new_path_capabilities =
-                path_capabilities(input.provides.iter().map(|provide| provide.name.as_str()));
             changes.push(NativeTransactionChange {
                 package_name: input.package_name.to_string(),
                 old_arch,
@@ -164,10 +158,7 @@ impl PreparedNativeTransaction {
                 instances_after,
                 transaction_index,
             });
-            path_capability_changes.push(NativeTransactionPathCapabilities {
-                old_paths: old_path_capabilities,
-                new_paths: new_path_capabilities,
-            });
+            new_path_nodes.push(input.new_path_nodes.clone());
         }
         for (offset, (removal, trove)) in relation_removal_troves.iter().enumerate() {
             let trove_id = removal.trove_id;
@@ -192,7 +183,6 @@ impl PreparedNativeTransaction {
             } else {
                 NativeTransactionOperation::Remove
             };
-            let old_path_capabilities = declared_path_capabilities_for_trove(conn, trove_id)?;
             changes.push(NativeTransactionChange {
                 package_name: trove.name.clone(),
                 old_arch: installed_bundles
@@ -210,10 +200,7 @@ impl PreparedNativeTransaction {
                 instances_after,
                 transaction_index,
             });
-            path_capability_changes.push(NativeTransactionPathCapabilities {
-                old_paths: old_path_capabilities,
-                new_paths: BTreeSet::new(),
-            });
+            new_path_nodes.push(BTreeMap::new());
         }
         let deconfigured_trove_ids = relation_deconfiguration_troves
             .iter()
@@ -298,7 +285,6 @@ impl PreparedNativeTransaction {
                 .source_arch
                 .clone()
                 .or_else(|| trove.architecture.clone());
-            let retained_path_capabilities = declared_path_capabilities_for_trove(conn, trove_id)?;
             deb_change_indices.insert(transaction_index);
             changes.push(NativeTransactionChange {
                 package_name: trove.name.clone(),
@@ -316,10 +302,7 @@ impl PreparedNativeTransaction {
                 instances_after: instances,
                 transaction_index,
             });
-            path_capability_changes.push(NativeTransactionPathCapabilities {
-                old_paths: retained_path_capabilities.clone(),
-                new_paths: retained_path_capabilities,
-            });
+            new_path_nodes.push(BTreeMap::new());
         }
 
         let mut owners = Vec::new();
@@ -374,7 +357,7 @@ impl PreparedNativeTransaction {
             &deb_change_indices,
         )? && let Some(prepared) = Self::prepare_without_global_native_state(
             &changes,
-            &path_capability_changes,
+            &new_path_nodes,
             requires_upgrade_payload_boundary,
         )? {
             return Ok(prepared);
@@ -409,11 +392,6 @@ impl PreparedNativeTransaction {
             }));
         }
         sort_and_deduplicate_capabilities(&mut installed_capabilities_after);
-        let installed_path_capabilities_after = path_capabilities(
-            installed_capabilities_after
-                .iter()
-                .map(|capability| capability.name.as_str()),
-        );
         let mut installed_paths_after =
             declared_paths.installed_paths_excluding(conn, &replaced_trove_ids)?;
         for input in inputs {
@@ -433,9 +411,8 @@ impl PreparedNativeTransaction {
         let path_projection = NativePathProjection::from_transaction(
             &plan,
             &changes,
+            &new_path_nodes,
             &installed_paths_after,
-            &path_capability_changes,
-            &installed_path_capabilities_after,
         )?;
         Ok(Self {
             owners,

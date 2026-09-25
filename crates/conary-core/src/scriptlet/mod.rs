@@ -56,7 +56,7 @@ pub use lifecycle_bridge::{
     executable_bridge_shim, lifecycle_bridge_shell_library,
 };
 pub use native_lifecycle::{
-    NativeInterpreterAvailability, NativeInvocationRuntime, NativeLifecycleExecution,
+    NativeInterpreterResolution, NativeInvocationRuntime, NativeLifecycleExecution,
     NativeLifecyclePreflightError,
 };
 pub use outcome::{ScriptletFailureKind, ScriptletFailureOutcome, ScriptletOutcome};

@@ -7,7 +7,7 @@ use crate::db::models::{PayloadClaimAnchorPolicy, TroveType};
 use crate::db::testing::create_test_db;
 use crate::payload::{PayloadIdentity, PayloadNode, PayloadTimestamp};
 use crate::repository::versioning::VersionScheme;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 fn insert_trove(conn: &Connection, name: &str) -> i64 {
     Trove::new(
@@ -226,14 +226,55 @@ fn released_paths_keep_a_path_a_surviving_claimant_retains() {
     // Removing only the owner: `/shared` survives through the second claimant,
     // while the unshared `/solo` (the positive control) is released.
     let only_owner = std::collections::BTreeSet::from([owner]);
-    let released =
-        PackagePayloadOwnership::released_paths(&conn, &claims, &[owner], &only_owner).unwrap();
+    let released = PackagePayloadOwnership::released_paths(
+        &conn,
+        &claims,
+        &[owner],
+        &only_owner,
+        &BTreeSet::new(),
+    )
+    .unwrap();
     assert_eq!(released, vec!["/solo".to_string()]);
 
     // Removing both claimants in one transaction releases `/shared` too.
     let both = std::collections::BTreeSet::from([owner, claimant]);
     let mut released =
-        PackagePayloadOwnership::released_paths(&conn, &claims, &[owner], &both).unwrap();
+        PackagePayloadOwnership::released_paths(&conn, &claims, &[owner], &both, &BTreeSet::new())
+            .unwrap();
     released.sort();
     assert_eq!(released, vec!["/shared".to_string(), "/solo".to_string()]);
+}
+
+#[test]
+fn released_paths_keep_a_path_the_final_incoming_payload_reintroduces() {
+    let (_temp, conn) = create_test_db();
+    let owner = insert_trove(&conn, "anchor-owner");
+    insert_anchor(&conn, "/shared", symlink("/real"), owner);
+    insert_anchor(&conn, "/solo", symlink("/solo-target"), owner);
+    let claims = PayloadClaim::index_all(&conn).unwrap();
+    let only_owner = std::collections::BTreeSet::from([owner]);
+
+    // Control through the same fixture: without an incoming claim both paths
+    // are released.
+    let mut released = PackagePayloadOwnership::released_paths(
+        &conn,
+        &claims,
+        &[owner],
+        &only_owner,
+        &BTreeSet::new(),
+    )
+    .unwrap();
+    released.sort();
+    assert_eq!(released, vec!["/shared".to_string(), "/solo".to_string()]);
+
+    let final_incoming = BTreeSet::from(["shared".to_string()]);
+    let released = PackagePayloadOwnership::released_paths(
+        &conn,
+        &claims,
+        &[owner],
+        &only_owner,
+        &final_incoming,
+    )
+    .unwrap();
+    assert_eq!(released, vec!["/solo".to_string()]);
 }

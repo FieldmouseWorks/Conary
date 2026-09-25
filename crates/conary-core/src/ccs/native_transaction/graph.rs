@@ -5,6 +5,7 @@
 use super::{
     NativeEventPlacement, NativeEventStage, NativeTransactionChange, NativeTransactionEvent,
 };
+use crate::filesystem::ProjectedNode;
 use anyhow::{Result, bail};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -44,23 +45,17 @@ pub enum NativeTransactionStep {
 }
 
 /// Package paths visible to one event after replaying preceding graph nodes.
+///
+/// The projection is a typed overlay: the nodes introduced before the event and
+/// the paths tombstoned before it. It is consumed by the selected-root resolver
+/// together with the on-disk selected root.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NativeEventPathProjection {
     CurrentRoot,
     Projected {
-        introduced_paths: BTreeSet<String>,
-        explicitly_removed_paths: BTreeSet<String>,
-        introduced_path_capabilities: BTreeSet<String>,
-        explicitly_removed_path_capabilities: BTreeSet<String>,
+        introduced: BTreeMap<String, ProjectedNode>,
+        explicitly_removed: BTreeSet<String>,
     },
-}
-
-/// Exact source-declared absolute path capabilities before and after one
-/// transaction element.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct NativeTransactionPathCapabilities {
-    pub old_paths: BTreeSet<String>,
-    pub new_paths: BTreeSet<String>,
 }
 
 /// Exact transaction execution order, including filesystem visibility changes.
@@ -70,35 +65,33 @@ pub struct NativeTransactionGraph {
 }
 
 impl NativeTransactionGraph {
-    /// Replay exact payload boundaries into one path projection per event.
+    /// Replay exact payload boundaries into one typed overlay per event.
     ///
     /// Paths are returned in normalized archive form without a leading slash.
-    /// An ownership transfer only preserves a path when the new owner has
-    /// already crossed its `ApplyPayload` boundary.
+    /// `new_path_nodes` carries the typed node for each change's introduced
+    /// paths; a path without a node is resolved against the on-disk selected
+    /// root instead of overlaid. An ownership transfer only preserves a path
+    /// when the new owner has already crossed its `ApplyPayload` boundary.
     pub fn path_projections(
         &self,
         events_len: usize,
         changes: &[NativeTransactionChange],
+        new_path_nodes: &[BTreeMap<String, ProjectedNode>],
         final_owned_paths: &BTreeSet<String>,
-        path_capabilities: &[NativeTransactionPathCapabilities],
-        final_path_capabilities: &BTreeSet<String>,
     ) -> Result<Vec<Option<NativeEventPathProjection>>> {
-        if path_capabilities.len() != changes.len() {
+        if new_path_nodes.len() != changes.len() {
             bail!(
-                "native transaction path-capability changes have length {}, expected {}",
-                path_capabilities.len(),
+                "native transaction node projections have length {}, expected {}",
+                new_path_nodes.len(),
                 changes.len()
             );
         }
         let final_owned_paths = normalize_paths(final_owned_paths)?;
-        let final_path_capabilities = normalize_paths(final_path_capabilities)?;
         let mut projections = vec![None; events_len];
         let mut introduced_paths = BTreeSet::new();
+        let mut introduced_nodes = BTreeMap::<String, ProjectedNode>::new();
         let mut explicitly_removed_paths = BTreeSet::new();
         let mut applied_new_owners = BTreeMap::<String, BTreeSet<usize>>::new();
-        let mut introduced_path_capabilities = BTreeSet::new();
-        let mut explicitly_removed_path_capabilities = BTreeSet::new();
-        let mut applied_new_capability_owners = BTreeMap::<String, BTreeSet<usize>>::new();
         let mut payload_boundary_crossed = false;
         let mut finalized_changes = 0usize;
         let payload_change_count = changes
@@ -124,11 +117,8 @@ impl NativeTransactionGraph {
                     }
                     *projection = Some(if payload_boundary_crossed {
                         NativeEventPathProjection::Projected {
-                            introduced_paths: introduced_paths.clone(),
-                            explicitly_removed_paths: explicitly_removed_paths.clone(),
-                            introduced_path_capabilities: introduced_path_capabilities.clone(),
-                            explicitly_removed_path_capabilities:
-                                explicitly_removed_path_capabilities.clone(),
+                            introduced: introduced_nodes.clone(),
+                            explicitly_removed: explicitly_removed_paths.clone(),
                         }
                     } else {
                         NativeEventPathProjection::CurrentRoot
@@ -157,20 +147,20 @@ impl NativeTransactionGraph {
                             "native transaction graph refers to missing payload change {change_index}"
                         )
                     })?;
+                    let new_paths = normalize_paths(&change.new_paths)?;
+                    let nodes = normalize_node_map(&new_path_nodes[change_index])?;
                     apply_visible_paths(
-                        normalize_paths(&change.new_paths)?,
+                        new_paths.clone(),
                         change_index,
                         &mut introduced_paths,
                         &mut explicitly_removed_paths,
                         &mut applied_new_owners,
                     );
-                    apply_visible_paths(
-                        normalize_paths(&path_capabilities[change_index].new_paths)?,
-                        change_index,
-                        &mut introduced_path_capabilities,
-                        &mut explicitly_removed_path_capabilities,
-                        &mut applied_new_capability_owners,
-                    );
+                    for path in new_paths {
+                        if let Some(node) = nodes.get(&path) {
+                            introduced_nodes.insert(path, node.clone());
+                        }
+                    }
                     payload_boundary_crossed = true;
                 }
                 NativeTransactionStep::FinalizeOldPayload { change_index } => {
@@ -183,24 +173,15 @@ impl NativeTransactionGraph {
                         normalize_paths(&change.old_paths)?,
                         normalize_paths(&change.new_paths)?,
                         &mut introduced_paths,
+                        &mut introduced_nodes,
                         &mut explicitly_removed_paths,
                         &applied_new_owners,
-                    );
-                    finalize_visible_paths(
-                        normalize_paths(&path_capabilities[change_index].old_paths)?,
-                        normalize_paths(&path_capabilities[change_index].new_paths)?,
-                        &mut introduced_path_capabilities,
-                        &mut explicitly_removed_path_capabilities,
-                        &applied_new_capability_owners,
                     );
                     finalized_changes += 1;
                     if finalized_changes == payload_change_count {
                         introduced_paths.retain(|path| final_owned_paths.contains(path));
+                        introduced_nodes.retain(|path, _| final_owned_paths.contains(path));
                         explicitly_removed_paths.retain(|path| !final_owned_paths.contains(path));
-                        introduced_path_capabilities
-                            .retain(|path| final_path_capabilities.contains(path));
-                        explicitly_removed_path_capabilities
-                            .retain(|path| !final_path_capabilities.contains(path));
                     }
                     payload_boundary_crossed = true;
                 }
@@ -248,6 +229,7 @@ fn finalize_visible_paths(
     old_paths: BTreeSet<String>,
     new_paths: BTreeSet<String>,
     introduced: &mut BTreeSet<String>,
+    introduced_nodes: &mut BTreeMap<String, ProjectedNode>,
     explicitly_removed: &mut BTreeSet<String>,
     applied_new_owners: &BTreeMap<String, BTreeSet<usize>>,
 ) {
@@ -259,8 +241,18 @@ fn finalize_visible_paths(
             continue;
         }
         introduced.remove(path);
+        introduced_nodes.remove(path);
         explicitly_removed.insert(path.clone());
     }
+}
+
+fn normalize_node_map(
+    nodes: &BTreeMap<String, ProjectedNode>,
+) -> Result<BTreeMap<String, ProjectedNode>> {
+    nodes
+        .iter()
+        .map(|(path, node)| Ok((normalize_path(path)?, node.clone())))
+        .collect()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

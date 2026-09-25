@@ -125,6 +125,7 @@ fn lifecycle_free_preparation_with_unrelated_claims(
             relation_removals: &[],
             relation_deconfigurations: &[],
             paths: vec!["usr/bin/bridge-tool".to_string()],
+            new_path_nodes: Default::default(),
         },
     )
     .unwrap();
@@ -223,6 +224,7 @@ fn incoming_and_installed_native_owners_keep_the_complete_state_path() {
                 relation_removals: &[],
                 relation_deconfigurations: &[],
                 paths: vec![path.clone()],
+                new_path_nodes: Default::default(),
             },
         )
         .unwrap();
@@ -276,6 +278,7 @@ fn incoming_and_installed_native_owners_keep_the_complete_state_path() {
                 relation_removals: &[],
                 relation_deconfigurations: &[],
                 paths: vec!["usr/bin/bridge-tool".to_string()],
+                new_path_nodes: Default::default(),
             },
         )
         .unwrap();
@@ -365,6 +368,7 @@ fn residual_debian_state_and_arch_implicit_behavior_reject_the_compact_path() {
             relation_removals: &[],
             relation_deconfigurations: &[],
             paths: vec!["usr/bin/bridge-tool".to_string()],
+            new_path_nodes: Default::default(),
         },
     )
     .unwrap();
@@ -394,6 +398,7 @@ fn residual_debian_state_and_arch_implicit_behavior_reject_the_compact_path() {
             relation_removals: &[],
             relation_deconfigurations: &[],
             paths: vec!["etc/ld.so.conf".to_string()],
+            new_path_nodes: Default::default(),
         },
     )
     .unwrap();

@@ -110,21 +110,30 @@ impl PackagePayloadOwnership {
     }
 
     /// Paths the given troves claim that no claimant outside
-    /// `transaction_removed` retains.
+    /// `transaction_removed` retains and that the transaction's final incoming
+    /// payload does not re-introduce.
     ///
     /// Removal re-anchors a shared path to a surviving claimant, so a path any
     /// claimant outside the transaction's removed set still retains stays in
     /// the final root. Judging against the whole removed set (not one trove)
-    /// means paths shared only among removed troves are released.
+    /// means paths shared only among removed troves are released. A path in
+    /// `final_incoming_paths` (the transaction's final incoming claim set in
+    /// normalized archive spelling) is kept even when every existing claimant
+    /// leaves, because execution compares old-payload removals against that
+    /// same set.
     pub fn released_paths(
         conn: &Connection,
         claims: &super::PayloadClaimIndex,
         trove_ids: &[i64],
         transaction_removed: &std::collections::BTreeSet<i64>,
+        final_incoming_paths: &std::collections::BTreeSet<String>,
     ) -> Result<Vec<String>> {
         let mut released = Vec::new();
         for &trove_id in trove_ids {
             for claim in PayloadClaim::find_by_trove(conn, trove_id)? {
+                if final_incoming_paths.contains(&archive_path_key(&claim.path)) {
+                    continue;
+                }
                 if claims
                     .retaining(&claim.path)
                     .iter()
@@ -225,6 +234,15 @@ impl PackagePayloadOwnership {
     pub fn materialized_removal_paths(&self) -> &[String] {
         &self.materialized_removal_paths
     }
+}
+
+/// Normalize one absolute package path to the archive spelling the
+/// transaction's final incoming claim set uses.
+fn archive_path_key(path: &str) -> String {
+    path.split('/')
+        .filter(|component| !component.is_empty() && *component != ".")
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 #[cfg(test)]
