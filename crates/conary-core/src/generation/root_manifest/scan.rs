@@ -2,9 +2,11 @@
 
 //! Exact selected-root scanner and CAS capture.
 
+use super::overlay::OverlayWhiteoutClassifier;
 use super::{
     CapturedSelectedRoot, GENERATION_ROOT_MANIFEST_VERSION, GenerationRootEntry,
-    GenerationRootManifest, MutableStateManifest, RootPathDomain, classify_root_path,
+    GenerationRootManifest, MutableStateManifest, RootPathDomain, SelectedRootOverlayProfile,
+    classify_root_path,
 };
 #[cfg(test)]
 use crate::filesystem::CasStore;
@@ -106,7 +108,7 @@ pub fn scan_selected_root_with_exclusions_and_work(
     exclusions: &SelectedRootCaptureExclusions,
 ) -> crate::Result<(CapturedSelectedRoot, SelectedRootScanWork)> {
     let (root_node, candidates, work) =
-        capture_payload_tree(root, cas, false, "selected-root", exclusions)?;
+        capture_payload_tree(root, cas, false, "selected-root", exclusions, None)?;
 
     let mut immutable = Vec::new();
     let mut state = Vec::new();
@@ -153,6 +155,7 @@ pub fn scan_payload_tree(
         true,
         hardlink_namespace,
         &SelectedRootCaptureExclusions::empty(),
+        None,
     )?;
     let entries = candidates
         .into_iter()
@@ -171,13 +174,16 @@ pub(super) fn scan_selected_root_overlay_upper(
     root: &Path,
     cas: &dyn PrivateCasWriter,
     hardlink_namespace: &str,
+    profile: &SelectedRootOverlayProfile,
 ) -> crate::Result<(ResolvedPayloadNode, Vec<GenerationRootEntry>)> {
+    let whiteouts = OverlayWhiteoutClassifier::for_profile(profile);
     let (root_node, candidates, _work) = capture_payload_tree(
         root,
         cas,
         false,
         hardlink_namespace,
         &SelectedRootCaptureExclusions::empty(),
+        Some(&whiteouts),
     )?;
     let entries = candidates
         .into_iter()
@@ -192,6 +198,7 @@ fn capture_payload_tree(
     include_ephemeral: bool,
     hardlink_namespace: &str,
     exclusions: &SelectedRootCaptureExclusions,
+    whiteout_classifier: Option<&OverlayWhiteoutClassifier>,
 ) -> crate::Result<(
     ResolvedPayloadNode,
     Vec<CapturedCandidate>,
@@ -260,6 +267,7 @@ fn capture_payload_tree(
             domain,
             cas,
             known_regular_inode,
+            whiteout_classifier,
         )?;
         if matches!(
             candidate.entry.node.source.kind,
@@ -280,7 +288,7 @@ fn capture_payload_tree(
     }
     candidates.sort_by(|left, right| left.entry.path.cmp(&right.entry.path));
 
-    assign_hardlinks(&mut candidates, hardlink_namespace)?;
+    assign_hardlinks(&mut candidates, hardlink_namespace, whiteout_classifier)?;
     work.unique_regular_inodes = u64::try_from(captured_regular_inodes.len()).map_err(|_| {
         crate::Error::InternalError("selected-root unique-inode count does not fit u64".to_string())
     })?;
@@ -322,10 +330,18 @@ pub fn capture_existing_payload_node(path: &Path) -> crate::Result<ResolvedPaylo
 fn assign_hardlinks(
     candidates: &mut [CapturedCandidate],
     hardlink_namespace: &str,
+    whiteout_classifier: Option<&OverlayWhiteoutClassifier>,
 ) -> crate::Result<()> {
     let mut inode_members = BTreeMap::<FilesystemIdentity, Vec<usize>>::new();
     for (index, candidate) in candidates.iter().enumerate() {
         if matches!(candidate.entry.node.source.kind, PayloadNodeKind::Directory) {
+            continue;
+        }
+        // Whiteouts are deletion markers, not payload nodes. A shared OverlayFS
+        // whiteout inode is hard-linked across the upper, so grouping them as
+        // payload hardlinks would cross publication domains or report a
+        // non-regular group.
+        if whiteout_classifier.is_some_and(|classifier| classifier.is_whiteout(&candidate.entry)) {
             continue;
         }
         inode_members
@@ -400,6 +416,7 @@ fn capture_path_stably_with_known_inode(
     domain: RootPathDomain,
     cas: &dyn PrivateCasWriter,
     known_regular_inode: Option<FilesystemIdentity>,
+    whiteout_classifier: Option<&OverlayWhiteoutClassifier>,
 ) -> crate::Result<CapturedCandidate> {
     capture_path_stably_with_observer(
         path,
@@ -407,6 +424,7 @@ fn capture_path_stably_with_known_inode(
         domain,
         cas,
         known_regular_inode,
+        whiteout_classifier,
         &mut |_, _| {},
     )
 }
@@ -417,6 +435,7 @@ fn capture_path_stably_with_observer(
     domain: RootPathDomain,
     cas: &dyn PrivateCasWriter,
     known_regular_inode: Option<FilesystemIdentity>,
+    whiteout_classifier: Option<&OverlayWhiteoutClassifier>,
     observer: &mut impl FnMut(usize, &Path),
 ) -> crate::Result<CapturedCandidate> {
     for attempt in 1..=STABLE_NODE_CAPTURE_ATTEMPTS {
@@ -429,7 +448,14 @@ fn capture_path_stably_with_observer(
         let captured = if before.file_type().is_file()
             && known_regular_inode == Some(filesystem_identity(&before))
         {
-            capture_regular_alias_attempt(&filesystem_path, &before, attempt, observer)?
+            capture_regular_alias_attempt(
+                &filesystem_path,
+                &before,
+                attempt,
+                cas,
+                whiteout_classifier,
+                observer,
+            )?
         } else if before.file_type().is_file() {
             capture_regular_attempt(&filesystem_path, &before, cas, attempt, observer)?
         } else {
@@ -459,6 +485,8 @@ fn capture_regular_alias_attempt(
     path: &Path,
     discovered: &std::fs::Metadata,
     attempt: usize,
+    cas: &dyn PrivateCasWriter,
+    whiteout_classifier: Option<&OverlayWhiteoutClassifier>,
     observer: &mut impl FnMut(usize, &Path),
 ) -> crate::Result<Option<CapturedNodeSnapshot>> {
     let file = match OpenOptions::new()
@@ -490,6 +518,16 @@ fn capture_regular_alias_attempt(
     }
     let xattrs = read_xattrs_from_fd(&file, path)?;
     observer(attempt, path);
+    // A shared OverlayFS whiteout inode is hard-linked across the upper. Keep
+    // its complete zero-size content authority even on an alias so the decoder
+    // still classifies it as a whiteout after hardlink grouping is skipped.
+    let whiteout_content = match whiteout_classifier {
+        Some(classifier) if before.len() == 0 && classifier.has_xattr_marker(&xattrs) => {
+            let sha256 = cas.store_private_copy(&[])?;
+            Some(PayloadContentAuthority { sha256, size: 0 })
+        }
+        _ => None,
+    };
     let after = file.metadata().map_err(|error| {
         crate::Error::IoError(format!(
             "failed to re-inspect selected-root hardlink alias {}: {error}",
@@ -513,7 +551,7 @@ fn capture_regular_alias_attempt(
             },
             xattrs,
         )?,
-        content: None,
+        content: whiteout_content,
         identity: filesystem_identity(&before),
     }))
 }
@@ -900,6 +938,7 @@ mod tests {
             path,
             RootPathDomain::MutableState,
             &cas,
+            None,
             None,
             &mut |attempt, path| {
                 attempts += 1;

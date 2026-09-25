@@ -5,7 +5,10 @@
 use super::*;
 use crate::filesystem::CasStore;
 use crate::payload::{PayloadContentAuthority, PayloadIdentity, PayloadNode};
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::os::unix::process::CommandExt;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 
 /// Capture and decode one frozen transaction upper without reading unchanged
 /// lower content.
@@ -22,7 +25,8 @@ fn decode_selected_root_overlay_upper(
     profile.validate()?;
     prior.generation.validate()?;
     prior.state.validate()?;
-    let (root, entries) = scan_selected_root_overlay_upper(upper, cas, "selected-root-overlay-v1")?;
+    let (root, entries) =
+        scan_selected_root_overlay_upper(upper, cas, "selected-root-overlay-v1", profile)?;
     decode_captured_upper(root, entries, prior, profile)
 }
 
@@ -627,6 +631,260 @@ fn filesystem_decoder_reads_only_upper_content() {
                 .is_some_and(|content| content.size == 12)
     }));
     assert!(entry(&delta.apply(&prior).unwrap(), "/usr/bin/unchanged").is_some());
+}
+
+/// A hand-built upper whose shared whiteout inode is hard-linked across two
+/// publication domains, matching the OverlayFS shared-whiteout encoding. This
+/// is the unprivileged regression proof for the real mount tests below.
+#[test]
+fn upper_scan_excludes_shared_xattr_whiteouts_from_hardlink_grouping() {
+    let temp = tempfile::tempdir().unwrap();
+    let upper = temp.path().join("upper");
+    std::fs::create_dir_all(upper.join("usr/bin")).unwrap();
+    std::fs::create_dir_all(upper.join("var/lib")).unwrap();
+    let whiteout = upper.join("usr/bin/removed");
+    std::fs::write(&whiteout, b"").unwrap();
+    xattr::set(&whiteout, "user.overlay.whiteout", b"").unwrap();
+    std::fs::hard_link(&whiteout, upper.join("var/lib/removed")).unwrap();
+    let cas = CasStore::new(temp.path().join("objects")).unwrap();
+    let profile = user_profile();
+
+    let (root, entries) =
+        scan_selected_root_overlay_upper(&upper, &cas, "overlay-whiteout-test", &profile).unwrap();
+    let decoded = decode_upper_operations(root, entries, &profile, |_| Ok(false)).unwrap();
+
+    assert_eq!(decoded.removals, ["/usr/bin/removed", "/var/lib/removed"]);
+}
+
+#[test]
+fn overlay_upper_scan_assigns_same_domain_regular_hardlinks() {
+    let temp = tempfile::tempdir().unwrap();
+    let upper = temp.path().join("upper");
+    std::fs::create_dir_all(upper.join("usr/bin")).unwrap();
+    std::fs::write(upper.join("usr/bin/primary"), b"shared").unwrap();
+    std::fs::hard_link(upper.join("usr/bin/primary"), upper.join("usr/bin/alias")).unwrap();
+    let cas = CasStore::new(temp.path().join("objects")).unwrap();
+    let profile = user_profile();
+
+    let (_, entries) =
+        scan_selected_root_overlay_upper(&upper, &cas, "overlay-hardlink-test", &profile).unwrap();
+    let grouped = entries
+        .iter()
+        .filter(|entry| entry_hardlink_identity(entry).is_some())
+        .count();
+    assert_eq!(grouped, 2);
+    assert_eq!(
+        entries
+            .iter()
+            .filter_map(entry_hardlink_identity)
+            .collect::<BTreeSet<_>>()
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn overlay_upper_scan_refuses_genuine_cross_domain_regular_hardlinks() {
+    let temp = tempfile::tempdir().unwrap();
+    let upper = temp.path().join("upper");
+    std::fs::create_dir_all(upper.join("usr/bin")).unwrap();
+    std::fs::create_dir_all(upper.join("var/lib")).unwrap();
+    std::fs::write(upper.join("usr/bin/primary"), b"shared").unwrap();
+    std::fs::hard_link(upper.join("usr/bin/primary"), upper.join("var/lib/alias")).unwrap();
+    let cas = CasStore::new(temp.path().join("objects")).unwrap();
+    let profile = user_profile();
+
+    let error = scan_selected_root_overlay_upper(&upper, &cas, "overlay-hardlink-test", &profile)
+        .unwrap_err();
+
+    assert!(matches!(error, crate::Error::NotImplemented(_)), "{error}");
+}
+
+#[test]
+fn mounted_overlay_capture_interprets_cross_domain_shared_whiteouts_as_removals() {
+    const NAME: &str = "generation::root_manifest::overlay::tests::mounted_overlay_capture_interprets_cross_domain_shared_whiteouts_as_removals";
+    if !run_overlay_mount_test(NAME) {
+        return;
+    }
+    let mut fixture = OverlayMountFixture::new(
+        &[
+            ("usr/bin/removed", b"usr".as_slice()),
+            ("var/lib/removed", b"var".as_slice()),
+        ],
+        user_profile(),
+    );
+    std::fs::remove_file(fixture.merged.join("usr/bin/removed")).unwrap();
+    std::fs::remove_file(fixture.merged.join("var/lib/removed")).unwrap();
+    fixture.freeze();
+    fixture.assert_shared_whiteout_inode("usr/bin/removed", "var/lib/removed");
+
+    assert_eq!(fixture.removals(), ["/usr/bin/removed", "/var/lib/removed"]);
+}
+
+#[test]
+fn mounted_overlay_capture_interprets_same_domain_shared_whiteouts_as_removals() {
+    const NAME: &str = "generation::root_manifest::overlay::tests::mounted_overlay_capture_interprets_same_domain_shared_whiteouts_as_removals";
+    if !run_overlay_mount_test(NAME) {
+        return;
+    }
+    let mut fixture = OverlayMountFixture::new(
+        &[
+            ("usr/bin/first", b"first".as_slice()),
+            ("usr/lib/second", b"second".as_slice()),
+        ],
+        user_profile(),
+    );
+    std::fs::remove_file(fixture.merged.join("usr/bin/first")).unwrap();
+    std::fs::remove_file(fixture.merged.join("usr/lib/second")).unwrap();
+    fixture.freeze();
+    fixture.assert_shared_whiteout_inode("usr/bin/first", "usr/lib/second");
+
+    assert_eq!(fixture.removals(), ["/usr/bin/first", "/usr/lib/second"]);
+}
+
+/// One real selected-root OverlayFS mount over a private tmpfs upper.
+///
+/// Field order is drop order: the overlay is unmounted, then the tmpfs, and
+/// only then is the workspace directory removed.
+struct OverlayMountFixture {
+    mounted: Option<MountedSelectedRootOverlay>,
+    _scratch: MountedScratchTmpfs,
+    temp: tempfile::TempDir,
+    upper: PathBuf,
+    merged: PathBuf,
+    profile: SelectedRootOverlayProfile,
+}
+
+impl OverlayMountFixture {
+    fn new(lower_files: &[(&str, &[u8])], profile: SelectedRootOverlayProfile) -> Self {
+        let temp = tempfile::tempdir().unwrap();
+        let lower = temp.path().join("lower");
+        let merged = temp.path().join("merged");
+        std::fs::create_dir(&lower).unwrap();
+        std::fs::create_dir(&merged).unwrap();
+        for (path, bytes) in lower_files {
+            let path = lower.join(path.trim_start_matches('/'));
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, bytes).unwrap();
+        }
+        // A container runtime root is normally itself an OverlayFS mount that
+        // cannot host an OverlayFS upper. Keep the upper on a private tmpfs the
+        // same way the selected-root session does.
+        let scratch = MountedScratchTmpfs::mount(&temp.path().join("scratch"))
+            .expect("private tmpfs for a selected-root OverlayFS upper");
+        let upper = scratch.path().join("upper");
+        let work = scratch.path().join("work");
+        std::fs::create_dir(&upper).unwrap();
+        std::fs::create_dir(&work).unwrap();
+        let mounted = MountedSelectedRootOverlay::mount(&lower, &upper, &work, &merged, &profile)
+            .expect("real selected-root OverlayFS mount");
+        Self {
+            mounted: Some(mounted),
+            _scratch: scratch,
+            temp,
+            upper,
+            merged,
+            profile,
+        }
+    }
+
+    fn freeze(&mut self) {
+        self.mounted
+            .take()
+            .expect("fixture is mounted")
+            .freeze(&self.upper)
+            .expect("freeze selected-root OverlayFS upper");
+    }
+
+    /// Prove the kernel used the shared-whiteout inode the reproducer depends
+    /// on, for either the char-device or the xattr whiteout encoding.
+    fn assert_shared_whiteout_inode(&self, left: &str, right: &str) {
+        let left = std::fs::symlink_metadata(self.upper.join(left)).unwrap();
+        let right = std::fs::symlink_metadata(self.upper.join(right)).unwrap();
+        assert_eq!(
+            (left.dev(), left.ino()),
+            (right.dev(), right.ino()),
+            "OverlayFS did not hard-link one shared whiteout inode"
+        );
+    }
+
+    fn removals(&self) -> Vec<String> {
+        let cas = CasStore::new(self.temp.path().join("objects")).unwrap();
+        let (root, entries) =
+            scan_selected_root_overlay_upper(&self.upper, &cas, "upper-v1", &self.profile).unwrap();
+        decode_upper_operations(root, entries, &self.profile, |_| Ok(false))
+            .unwrap()
+            .removals
+    }
+}
+
+/// Namespace gate for real OverlayFS mount proofs.
+///
+/// Mirrors `scriptlet::test_support::run_selected_root_namespace_test`: when
+/// already root inside a usable mount namespace the body runs, otherwise the
+/// current test binary is re-executed under a private user and mount
+/// namespace. The parent returns `false`, so the test is a no-op there.
+fn run_overlay_mount_test(test_name: &str) -> bool {
+    const CHILD_MARKER: &str = "CONARY_OVERLAY_MOUNT_TEST_MARKER";
+
+    if nix::unistd::geteuid().is_root() && mount_namespace_available() {
+        if let Some(marker) = std::env::var_os(CHILD_MARKER) {
+            std::fs::write(marker, test_name).expect("record overlay mount test execution");
+        }
+        return true;
+    }
+    assert!(
+        std::env::var_os(CHILD_MARKER).is_none(),
+        "overlay mount test child lacks a usable mount namespace"
+    );
+
+    let namespace_args = [
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "--propagation",
+        "private",
+    ];
+    let probe = Command::new("unshare")
+        .args(namespace_args)
+        .arg("/bin/true")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    if !probe.is_ok_and(|status| status.success()) {
+        return false;
+    }
+
+    let marker = tempfile::NamedTempFile::new().expect("overlay mount test execution marker");
+    let status = Command::new("unshare")
+        .args(namespace_args)
+        .arg(std::env::current_exe().expect("current test executable"))
+        .arg(test_name)
+        .args(["--exact", "--nocapture"])
+        .env(CHILD_MARKER, marker.path())
+        .status()
+        .expect("run overlay mount proof in a user and mount namespace");
+    assert!(
+        status.success(),
+        "overlay mount namespace child failed for {test_name}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(marker.path()).expect("read mount test execution marker"),
+        test_name,
+        "overlay mount namespace child matched no exact test"
+    );
+    false
+}
+
+fn mount_namespace_available() -> bool {
+    let mut command = Command::new("/bin/true");
+    // Safety: this child-only probe performs no work after unsharing.
+    unsafe {
+        command.pre_exec(|| {
+            nix::sched::unshare(nix::sched::CloneFlags::CLONE_NEWNS).map_err(std::io::Error::from)
+        });
+    }
+    command.status().is_ok()
 }
 
 fn user_profile() -> SelectedRootOverlayProfile {

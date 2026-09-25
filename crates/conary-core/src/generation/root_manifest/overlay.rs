@@ -32,8 +32,6 @@ use crate::filesystem::PrivateCasWriter;
 use crate::payload::{PayloadNodeKind, ResolvedPayloadNode};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
-#[cfg(test)]
-use std::path::Path;
 
 pub const SELECTED_ROOT_OVERLAY_PROFILE_VERSION: u32 = 1;
 
@@ -346,23 +344,60 @@ fn insert_payload_xattr(
     Ok(())
 }
 
-fn is_whiteout(entry: &GenerationRootEntry, xattr_whiteout: bool) -> crate::Result<bool> {
+/// Typed OverlayFS whiteout rule shared by the upper scanner and the delta
+/// decoder.
+///
+/// A whiteout is either a 0/0 character device or a zero-size regular file
+/// carrying the profile's private `whiteout` xattr. Whiteouts are deletion
+/// markers, so the upper scanner must exclude them from hardlink grouping
+/// before the delta decoder interprets them.
+#[derive(Debug, Clone)]
+pub(super) struct OverlayWhiteoutClassifier {
+    whiteout_xattr: String,
+}
+
+impl OverlayWhiteoutClassifier {
+    pub(super) fn for_profile(profile: &SelectedRootOverlayProfile) -> Self {
+        Self {
+            whiteout_xattr: format!("{}whiteout", profile.private_prefix()),
+        }
+    }
+
+    /// Whether raw captured xattrs carry the private whiteout marker.
+    pub(super) fn has_xattr_marker(&self, xattrs: &BTreeMap<String, Vec<u8>>) -> bool {
+        xattrs.contains_key(&self.whiteout_xattr)
+    }
+
+    /// Classify one captured entry with the exact rule the decoder uses.
+    pub(super) fn is_whiteout(&self, entry: &GenerationRootEntry) -> bool {
+        classify_overlay_whiteout(
+            &entry.node.source.kind,
+            entry.content.as_ref().map(|content| content.size),
+            self.has_xattr_marker(&entry.node.source.xattrs),
+        )
+    }
+}
+
+fn classify_overlay_whiteout(
+    kind: &PayloadNodeKind,
+    content_size: Option<u64>,
+    xattr_whiteout: bool,
+) -> bool {
     if matches!(
-        entry.node.source.kind,
+        kind,
         PayloadNodeKind::CharacterDevice { major: 0, minor: 0 }
     ) {
-        return Ok(true);
+        return true;
     }
-    if !xattr_whiteout {
-        return Ok(false);
-    }
-    Ok(
-        matches!(entry.node.source.kind, PayloadNodeKind::Regular { .. })
-            && entry
-                .content
-                .as_ref()
-                .is_some_and(|content| content.size == 0),
-    )
+    xattr_whiteout && matches!(kind, PayloadNodeKind::Regular { .. }) && content_size == Some(0)
+}
+
+fn is_whiteout(entry: &GenerationRootEntry, xattr_whiteout: bool) -> crate::Result<bool> {
+    Ok(classify_overlay_whiteout(
+        &entry.node.source.kind,
+        entry.content.as_ref().map(|content| content.size),
+        xattr_whiteout,
+    ))
 }
 
 fn normalize_removals(removals: &mut Vec<String>) {
