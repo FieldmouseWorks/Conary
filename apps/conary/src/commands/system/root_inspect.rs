@@ -24,7 +24,7 @@
 //! session is an uncommitted trial and a rolled-back session a discarded one,
 //! so both refuse; a kept session is the recorded promotion decision.
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use conary_agent_contract::{InspectResult, OperationEnvelope, OperationStatus, RiskLevel};
 use conary_core::generation::root_manifest::{CapturedSelectedRoot, GenerationRootEntry};
@@ -503,18 +503,39 @@ fn apply_synthesized_root(data: &mut RootInspectData) {
     data.kind = Some(RootNodeKind::Directory);
 }
 
-/// Normalize one lookup path lexically without resolving the filesystem.
-fn normalize_lookup_path(path: &str) -> Result<String> {
+/// Why a lookup path cannot name one committed selected-root node.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub(crate) enum LookupPathError {
+    #[error("selected-root inspect path must not be empty")]
+    Empty,
+    #[error(
+        "selected-root inspect path {path:?} is relative; pass an absolute path starting with '/'"
+    )]
+    Relative { path: String },
+    #[error("selected-root inspect path {path:?} contains '..'; inspect the exact committed path")]
+    ParentComponent { path: String },
+}
+
+/// Normalize one absolute lookup path lexically without resolving the
+/// filesystem.
+fn normalize_lookup_path(path: &str) -> std::result::Result<String, LookupPathError> {
     if path.is_empty() {
-        bail!("selected-root inspect path must not be empty");
+        return Err(LookupPathError::Empty);
+    }
+    if !path.starts_with('/') {
+        return Err(LookupPathError::Relative {
+            path: path.to_string(),
+        });
     }
     let mut components = Vec::new();
     for component in path.split('/') {
         match component {
             "" | "." => {}
-            ".." => bail!(
-                "selected-root inspect path {path:?} contains '..'; inspect the exact committed path"
-            ),
+            ".." => {
+                return Err(LookupPathError::ParentComponent {
+                    path: path.to_string(),
+                });
+            }
             other => components.push(other),
         }
     }

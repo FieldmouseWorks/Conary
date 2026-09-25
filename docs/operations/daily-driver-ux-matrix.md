@@ -173,9 +173,10 @@ same typed selected-root baseline a real install prepares: the newest
 recoverable selected-root publication snapshot through the typed loader, else
 the current generation artifact, else the installed database projection
 through `collect_selected_root_from_db_with_authority`, which is the one
-materialization authority. The lookup normalizes `<path>` lexically and
-returns the literal node, so a symlink is reported as a symlink rather than
-its target.
+materialization authority. `<path>` must be absolute: an empty path, a
+relative path, or one containing `..` is refused with a typed path error.
+The lookup normalizes it lexically and returns
+the literal node, so a symlink is reported as a symlink rather than its target.
 
 The selected database is opened through
 `conary_core::db::open_live_read_only`: live read-only, never initializes. It

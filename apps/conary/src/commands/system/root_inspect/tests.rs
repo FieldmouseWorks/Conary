@@ -1499,7 +1499,7 @@ fn root_inspect_rejects_a_state_less_link_that_moves_after_selection() {
 fn root_inspect_normalizes_lookup_paths_without_symlink_resolution() {
     let fixture = Fixture::new();
 
-    let normalized = fixture.inspect("opt/./fixture//hello");
+    let normalized = fixture.inspect("/opt/./fixture//hello");
     assert!(normalized.present);
     assert_eq!(normalized.path, "/opt/fixture/hello");
 
@@ -1718,4 +1718,51 @@ fn root_inspect_reads_a_normal_database() {
 
     cmd_root_inspect(db_path.to_str().unwrap(), "/opt/fixture/hello", true)
         .expect("a normal current-schema database must inspect");
+}
+
+/// A path that does not start with `/` names no node in the selected root, so
+/// normalization must refuse it with the typed relative error instead of
+/// silently interpreting it relative to `/`.
+#[test]
+fn normalize_lookup_path_rejects_relative_paths() {
+    assert_eq!(
+        super::normalize_lookup_path("etc/passwd"),
+        Err(LookupPathError::Relative {
+            path: "etc/passwd".to_string(),
+        })
+    );
+    assert_eq!(
+        super::normalize_lookup_path("./etc"),
+        Err(LookupPathError::Relative {
+            path: "./etc".to_string(),
+        })
+    );
+
+    // Positive control through the same function: absolute paths, including
+    // redundant separators and `.` components, still normalize.
+    assert_eq!(
+        super::normalize_lookup_path("/etc/passwd").unwrap(),
+        "/etc/passwd"
+    );
+    assert_eq!(
+        super::normalize_lookup_path("//etc/./passwd").unwrap(),
+        "/etc/passwd"
+    );
+    assert_eq!(super::normalize_lookup_path("/").unwrap(), "/");
+}
+
+/// An empty path and a `..` component are distinct typed refusals, so the
+/// empty check cannot pass for a path that actually contains `..`.
+#[test]
+fn normalize_lookup_path_rejects_empty_and_parent_components() {
+    assert_eq!(
+        super::normalize_lookup_path(""),
+        Err(LookupPathError::Empty)
+    );
+    assert_eq!(
+        super::normalize_lookup_path("/etc/../x"),
+        Err(LookupPathError::ParentComponent {
+            path: "/etc/../x".to_string(),
+        })
+    );
 }
