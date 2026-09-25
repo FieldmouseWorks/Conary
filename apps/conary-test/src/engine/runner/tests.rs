@@ -12,6 +12,7 @@ use crate::config::manifest::{
 };
 use crate::container::backend::ExecResult;
 use crate::container::mock::MockBackend;
+use crate::engine::variables::{FIXTURE_DIR_CONFIG_KEY, FixturePreflightError};
 
 // -- Helpers --
 
@@ -427,6 +428,74 @@ async fn undeclared_manifest_installs_no_fixture() {
         shell_fixture_install_calls(&backend, &config).is_empty(),
         "a manifest that declares no fixture must install none"
     );
+}
+
+/// A declared fixture with no `paths.fixture_dir` must fail the typed preflight
+/// before any container exec, never at install time with a literal placeholder.
+#[tokio::test]
+async fn declared_fixture_without_fixture_dir_fails_preflight_before_exec() {
+    let mut config = test_config();
+    config.paths.fixture_dir = None;
+    let backend = MockBackend::new(Vec::new());
+    let manifest = trivial_manifest("missing-fixture-dir", vec![StaticFixture::Shell]);
+    let mut installed_fixtures = InstalledFixtures::default();
+    let mut runner = TestRunner::new(config, "fedora44".to_string());
+
+    let error = runner
+        .run_with_cancel(
+            &manifest,
+            &backend,
+            &"ctr-missing-fixture-dir".to_string(),
+            None,
+            None,
+            None,
+            None,
+            &mut installed_fixtures,
+        )
+        .await
+        .expect_err("a declared fixture without fixture_dir must fail");
+
+    assert!(
+        matches!(
+            error.downcast_ref::<FixturePreflightError>(),
+            Some(FixturePreflightError::MissingFixtureDir {
+                fixture: StaticFixture::Shell,
+                config_key: FIXTURE_DIR_CONFIG_KEY,
+                ..
+            })
+        ),
+        "unexpected error: {error}"
+    );
+    assert!(
+        backend.exec_calls().is_empty(),
+        "preflight must fail before the harness issues any container exec"
+    );
+}
+
+/// Positive control for the preflight: the same declared fixture with
+/// `fixture_dir` set clears it and installs normally.
+#[tokio::test]
+async fn declared_fixture_with_fixture_dir_passes_preflight() {
+    let config = test_config();
+    assert!(config.paths.fixture_dir.is_some());
+    let backend = MockBackend::new(Vec::new());
+    let manifest = trivial_manifest("fixture-dir-set", vec![StaticFixture::Shell]);
+    let mut installed_fixtures = InstalledFixtures::default();
+    let mut runner = TestRunner::new(config, "fedora44".to_string());
+
+    runner
+        .run_with_cancel(
+            &manifest,
+            &backend,
+            &"ctr-fixture-dir-set".to_string(),
+            None,
+            None,
+            None,
+            None,
+            &mut installed_fixtures,
+        )
+        .await
+        .expect("a declared fixture with fixture_dir set must clear preflight");
 }
 
 #[tokio::test]

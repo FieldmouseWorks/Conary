@@ -228,6 +228,7 @@ impl TestRunner {
         remi_ctx: Option<&RemiStreamCtx>,
         installed_fixtures: &mut InstalledFixtures,
     ) -> Result<TestSuite> {
+        variables::preflight_declared_fixtures(&self.config, std::iter::once(manifest))?;
         self.load_manifest_vars(manifest);
         self.install_declared_fixtures(manifest, backend, container_id, installed_fixtures)
             .await?;

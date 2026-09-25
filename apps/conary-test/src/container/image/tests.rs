@@ -12,6 +12,7 @@ use super::{
 };
 use crate::config::DistroBuildContext;
 use crate::config::TestManifest;
+use crate::config::manifest::StaticFixture;
 use conary_core::repository::supported_profiles::ProfilePackageFormat;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -898,12 +899,12 @@ fn stage_build_context_generates_missing_phase2_fixture_outputs() {
             .join("fixtures/conary-test-fixture/v2/output/conary-test-fixture-2.0.0-1.ccs")
             .is_file()
     );
+    let shell_artifact =
+        super::static_fixture_artifact_path(StaticFixture::Shell, &staged.root.join("fixtures"));
     assert!(
-        staged
-            .root
-            .join("fixtures/conary-test-shell/output/conary-test-shell-1.0.0-1.ccs")
-            .is_file(),
-        "the shell provider fixture must be built and staged for the image"
+        shell_artifact.is_file(),
+        "the shell provider fixture must be built and staged at {}",
+        shell_artifact.display()
     );
     assert!(
         staged
@@ -958,11 +959,13 @@ fn stage_build_context_skips_provider_fixtures_without_requirement() {
             .is_file(),
         "the primary fixture still builds without a host binary"
     );
+    let shell_output =
+        super::static_fixture_artifact_path(StaticFixture::Shell, &staged.root.join("fixtures"))
+            .parent()
+            .expect("the shell artifact path has an output directory")
+            .to_path_buf();
     assert!(
-        !staged
-            .root
-            .join("fixtures/conary-test-shell/output")
-            .exists(),
+        !shell_output.exists(),
         "no selected suite installs the shell provider, so it must not be staged"
     );
     assert!(
