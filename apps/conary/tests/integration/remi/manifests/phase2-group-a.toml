@@ -12,6 +12,7 @@
 [suite]
 name = "Phase 2, Group A: Deep Install Flow (T38-T50)"
 phase = 2
+requires_fixtures = ["conary-test-shell"]
 
 # Provides /bin/sh for the fixture's post-install hook (#1080).
 [[suite.setup]]

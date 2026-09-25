@@ -9,6 +9,7 @@
 [suite]
 name = "Phase 4 Group C: CCS Ops, Query, Repo Management"
 phase = 4
+requires_fixtures = ["conary-test-shell"]
 
 # Provides /bin/sh for the fixture's post-install hook (#1080).
 [[suite.setup]]

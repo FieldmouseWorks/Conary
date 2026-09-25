@@ -200,6 +200,7 @@ fn test_distro_override_precedence() {
             name: "test".to_string(),
             phase: 1,
             setup: Vec::new(),
+            requires_fixtures: Vec::new(),
             mock_server: None,
             timeout: None,
             corpus: None,

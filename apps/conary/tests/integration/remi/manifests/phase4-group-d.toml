@@ -9,6 +9,7 @@
 [suite]
 name = "Phase 4 Group D: Security, Trust, System Ops, Federation, Automation"
 phase = 4
+requires_fixtures = ["conary-test-shell"]
 
 # Provides /bin/sh for the fixture's post-install hook (#1080).
 [[suite.setup]]

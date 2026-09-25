@@ -8,6 +8,7 @@
 [suite]
 name = "Phase 3 Group H: Error Recovery"
 phase = 3
+requires_fixtures = ["conary-test-shell"]
 
 # Provides /bin/sh for the fixture's post-install hook (#1080).
 [[suite.setup]]

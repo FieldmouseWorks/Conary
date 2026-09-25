@@ -48,3 +48,4 @@ path = "src/cli.rs"
 
 [dev-dependencies]
 serde_yaml.workspace = true
+shlex = "1.3"
