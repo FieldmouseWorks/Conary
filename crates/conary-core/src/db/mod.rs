@@ -204,6 +204,9 @@ pub fn open_read_only(path: impl AsRef<Path>) -> Result<Connection> {
 /// Like `open_read_only` it validates the current schema with
 /// [`schema::require_current`] and sets `query_only`, so an empty, fresh, or
 /// retired-schema file is the existing typed refusal and nothing is created.
+/// It also validates the `-wal` sidecar header first, so a truncated or invalid
+/// header is the same typed corruption refusal the other openers return instead
+/// of SQLite silently ignoring it and serving the older checkpointed database.
 /// It reuses `READ_ONLY_CONNECTION_PRAGMAS` (`foreign_keys`, `busy_timeout`),
 /// neither of which writes or requires immutability.
 ///
@@ -216,6 +219,12 @@ pub fn open_live_read_only(path: impl AsRef<Path>) -> Result<Connection> {
     if !path.exists() {
         return Err(Error::DatabaseNotFound(path.to_string_lossy().to_string()));
     }
+
+    // The live opener takes shared locks on the committed WAL frames, so prove
+    // the sidecar header is well formed first. Otherwise SQLite may ignore a
+    // corrupt `-wal` and serve the older checkpointed database, reporting stale
+    // state as the exact committed root.
+    validate_wal_file(path)?;
 
     let conn = Connection::open_with_flags(
         path,
@@ -425,6 +434,31 @@ mod tests {
         assert!(
             matches!(refusal, Error::ConflictError(_)),
             "the offline opener must refuse active WAL frames, got {refusal}"
+        );
+    }
+
+    #[test]
+    fn open_live_read_only_rejects_corrupt_wal_sidecar() {
+        let directory = tempfile::tempdir().unwrap();
+        let db_path = directory.path().join("conary.db");
+        init(&db_path).unwrap();
+
+        // A full-size header with the wrong magic is a corrupt WAL that SQLite
+        // could otherwise ignore in favor of the older checkpointed database.
+        std::fs::write(
+            database_wal_path(&db_path),
+            [0_u8; SQLITE_WAL_HEADER_SIZE as usize],
+        )
+        .unwrap();
+
+        let error = open_live_read_only(&db_path).unwrap_err();
+        assert!(
+            matches!(error, Error::InitError(_)),
+            "a corrupt WAL must keep the typed corruption error, got {error}"
+        );
+        assert!(
+            error.to_string().contains("WAL appears corrupted"),
+            "the refusal must name the corrupt WAL, got {error}"
         );
     }
 

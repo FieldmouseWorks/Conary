@@ -4,10 +4,10 @@
 
 use super::*;
 use crate::commands::generation::selected_root::{
-    SelectedRootBaselineError, clear_before_current_selection_hook,
+    SelectedRootBaseline, SelectedRootBaselineError, clear_before_current_selection_hook,
     persist_captured_publication_snapshot, persist_publication_snapshot,
-    read_selected_root_baseline, read_selected_root_baseline_with_source,
-    set_before_current_selection_hook, set_between_selection_and_collection_hook,
+    read_selected_root_baseline, set_before_current_selection_hook,
+    set_between_selection_and_collection_hook,
 };
 use crate::commands::test_helpers::create_active_test_generation;
 use conary_core::db::models::{
@@ -134,6 +134,14 @@ fn root_inspect_with_unavailable_tmpdir_child() {
                 .find_map(|cause| cause.downcast_ref::<std::io::Error>())
                 .expect("the temp-directory failure must be the typed io cause");
             assert_eq!(io_error.kind(), std::io::ErrorKind::NotFound);
+        }
+        "no_committed_root" => {
+            let data = root_inspect_data(&conn, &runtime_root, "/opt/fixture/hello").unwrap();
+            assert_eq!(data.source, RootInspectSource::NoCommittedRoot);
+            assert!(!data.present);
+            let json = json_data(&data);
+            assert_eq!(json["source"], "no_committed_root");
+            assert_eq!(json["present"], false);
         }
         other => panic!("unknown unavailable-TMPDIR scenario {other}"),
     }
@@ -528,6 +536,20 @@ fn database_projection_inspection_fails_when_tmpdir_is_unavailable() {
     run_tmpdir_child("database_projection", &db_path, &bad_tmpdir);
 }
 
+/// An initialized database with no troves has no committed root, so its
+/// inspection must not need `TMPDIR`: the absent-database branch returns the
+/// typed `NoCommittedRoot` result before any stand-in allocation. The same
+/// unusable `TMPDIR` must therefore still succeed, which the child proves.
+#[test]
+fn empty_database_inspection_succeeds_when_tmpdir_is_unavailable() {
+    let temp = tempfile::tempdir().unwrap();
+    let db_path = temp.path().join("conary.db");
+    conary_core::db::init(&db_path).unwrap();
+    let bad_tmpdir = temp.path().join("no-such-tmpdir");
+
+    run_tmpdir_child("no_committed_root", &db_path, &bad_tmpdir);
+}
+
 #[test]
 fn database_projection_matches_the_main_selected_root_baseline() {
     let temp = tempfile::tempdir().unwrap();
@@ -575,7 +597,11 @@ fn database_projection_matches_the_main_selected_root_baseline() {
     assert_eq!(data.source, RootInspectSource::DatabaseProjection);
     assert!(data.present);
 
-    let captured = read_selected_root_baseline(&conn, &runtime_root).unwrap();
+    let SelectedRootBaseline::Captured { captured, .. } =
+        read_selected_root_baseline(&conn, &runtime_root).unwrap()
+    else {
+        panic!("a present database projection must supply a captured baseline");
+    };
     let entry = captured
         .generation
         .entries
@@ -668,7 +694,11 @@ fn database_projection_selects_and_collects_from_one_read_snapshot() {
     });
 
     let runtime_root = ConaryRuntimeRoot::from_db_path(&db_path);
-    let (source, captured) = read_selected_root_baseline_with_source(&conn, &runtime_root).unwrap();
+    let SelectedRootBaseline::Captured { source, captured } =
+        read_selected_root_baseline(&conn, &runtime_root).unwrap()
+    else {
+        panic!("a present database projection must supply a captured baseline");
+    };
 
     assert!(
         matches!(source, SelectedRootSource::DatabaseProjection { .. }),
@@ -703,9 +733,8 @@ fn read_baseline_reuses_a_caller_owned_savepoint() {
     let runtime_root = ConaryRuntimeRoot::from_db_path(&db_path);
 
     let savepoint = conn.savepoint().unwrap();
-    let (source, _captured) =
-        read_selected_root_baseline_with_source(&savepoint, &runtime_root).unwrap();
-    assert_eq!(source, SelectedRootSource::NoCommittedRoot);
+    let baseline = read_selected_root_baseline(&savepoint, &runtime_root).unwrap();
+    assert!(matches!(baseline, SelectedRootBaseline::NoCommittedRoot));
     savepoint.commit().unwrap();
 }
 
@@ -827,8 +856,11 @@ fn current_generation_selection_retries_when_current_advances_past_the_snapshot(
         }
     });
 
-    let (source, _captured) =
-        read_selected_root_baseline_with_source(&conn, &runtime_root).unwrap();
+    let SelectedRootBaseline::Captured { source, .. } =
+        read_selected_root_baseline(&conn, &runtime_root).unwrap()
+    else {
+        panic!("an advancing current generation must supply a captured baseline");
+    };
 
     let expected_snapshot = published
         .lock()
@@ -872,7 +904,7 @@ fn current_generation_selection_refuses_after_the_attempt_limit() {
         create_active_test_generation(&hook_path, generation);
     });
 
-    let error = read_selected_root_baseline_with_source(&conn, &runtime_root)
+    let error = read_selected_root_baseline(&conn, &runtime_root)
         .expect_err("a /current that keeps moving must exhaust the attempts");
     let typed = error
         .downcast_ref::<SelectedRootBaselineError>()

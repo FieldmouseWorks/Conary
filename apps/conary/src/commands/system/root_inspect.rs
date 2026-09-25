@@ -33,7 +33,7 @@ use conary_core::runtime_root::ConaryRuntimeRoot;
 use serde::{Deserialize, Serialize};
 
 use crate::commands::generation::selected_root::{
-    SelectedRootSource, read_selected_root_baseline_with_source,
+    SelectedRootBaseline, SelectedRootSource, read_selected_root_baseline,
 };
 
 pub(crate) const ROOT_INSPECT_SCHEMA_VERSION: u32 = 2;
@@ -134,7 +134,7 @@ pub(crate) struct RootInspectData {
     /// True when the baseline came from a stable `/current` generation the
     /// pinned snapshot never recorded and no open try session claims, so the
     /// IDs are unknown rather than merely absent. See
-    /// `read_selected_root_baseline_with_source`.
+    /// `read_selected_root_baseline`.
     pub(crate) recovered_without_state: bool,
     pub(crate) source: RootInspectSource,
     pub(crate) path: String,
@@ -194,9 +194,22 @@ pub(crate) fn root_inspect_data(
     // materialization stand-in it reads for root metadata and package-unclaimed
     // parent closure; artifact- and snapshot-backed reads need no temp write
     // access. Because that stand-in is synthesized rather than committed, `/`
-    // withholds it through `apply_synthesized_root`.
-    let (source, captured) = read_selected_root_baseline_with_source(conn, runtime_root)?;
-    let reported = report_source(source);
+    // withholds it through `apply_synthesized_root`. A database with no
+    // installed trove has no committed root and no capture at all.
+    let (reported, captured) = match read_selected_root_baseline(conn, runtime_root)? {
+        SelectedRootBaseline::Captured { source, captured } => {
+            (report_source(source), Some(captured))
+        }
+        SelectedRootBaseline::NoCommittedRoot => (
+            ReportedSource {
+                source: RootInspectSource::NoCommittedRoot,
+                snapshot_id: None,
+                changeset_id: None,
+                recovered_without_state: false,
+            },
+            None,
+        ),
+    };
 
     let mut data = RootInspectData {
         schema_version: ROOT_INSPECT_SCHEMA_VERSION,
@@ -219,9 +232,9 @@ pub(crate) fn root_inspect_data(
         hardlink_target: None,
     };
 
-    // With no committed root nothing is present, not even the empty
-    // projection's synthesized `/` node.
-    if data.source != RootInspectSource::NoCommittedRoot
+    // With no committed root there is no capture, so nothing is present, not
+    // even a synthesized `/` node.
+    if let Some(captured) = captured
         && let Some((manifest, node, content)) = find_captured_node(&captured, &normalized)
     {
         if data.source == RootInspectSource::DatabaseProjection && normalized == "/" {
@@ -268,12 +281,6 @@ fn report_source(source: SelectedRootSource) -> ReportedSource {
             source: RootInspectSource::DatabaseProjection,
             snapshot_id: None,
             changeset_id,
-            recovered_without_state: false,
-        },
-        SelectedRootSource::NoCommittedRoot => ReportedSource {
-            source: RootInspectSource::NoCommittedRoot,
-            snapshot_id: None,
-            changeset_id: None,
             recovered_without_state: false,
         },
     }

@@ -481,8 +481,22 @@ pub(crate) enum SelectedRootSource {
     },
     /// No generation exists yet, so installed database rows are the baseline.
     DatabaseProjection { changeset_id: Option<i64> },
-    /// No generation, snapshot, or installed trove exists, so the projection is
-    /// empty and there is no committed root.
+}
+
+/// The typed read-only selected-root baseline a real install would prepare.
+///
+/// With no committed authority there is no capture, so a caller cannot mistake
+/// a fabricated empty root for committed state. Only [`Self::Captured`] carries
+/// a [`CapturedSelectedRoot`].
+#[derive(Debug)]
+pub(crate) enum SelectedRootBaseline {
+    /// A committed or installed authority supplied this exact capture.
+    Captured {
+        source: SelectedRootSource,
+        captured: Box<CapturedSelectedRoot>,
+    },
+    /// No generation, snapshot, or installed trove exists, so there is no
+    /// committed root and no capture to report.
     NoCommittedRoot,
 }
 
@@ -557,30 +571,6 @@ fn select_selected_root(
     Ok(SelectedRootSelection::DatabaseProjection { installed })
 }
 
-/// Read the exact typed selected-root baseline a real install would prepare.
-///
-/// This is the read-only half of `prepare_current_root`: it takes the same
-/// artifact-versus-database decision but never acquires the runtime mutation
-/// lock, creates a session directory, or writes under the runtime root.
-///
-/// Artifact- and pending-snapshot-backed reads need no temporary write access.
-/// Only the database projection creates a private [`tempfile::TempDir`] and
-/// makes the empty materialization destination stand-in inside it with
-/// [`create_selected_root_stand_in`]. The stand-in is read only for root
-/// metadata and any package-unclaimed parent closure, and the returned
-/// [`CapturedSelectedRoot`] holds manifest values only, never a path into that
-/// directory, so the temp directory is dropped before returning.
-///
-/// The active generation config-state upper is deliberately not projected. Its
-/// capture requires content writes into the runtime CAS and selected-root
-/// snapshot writes, which a preview must not perform.
-pub(crate) fn read_selected_root_baseline(
-    conn: &rusqlite::Connection,
-    runtime_root: &ConaryRuntimeRoot,
-) -> Result<CapturedSelectedRoot> {
-    read_selected_root_baseline_with_source(conn, runtime_root).map(|(_, captured)| captured)
-}
-
 /// How many times a selection may be redone after `/current` moves past the
 /// pinned SQLite snapshot before the read is refused.
 const MAX_CURRENT_GENERATION_ATTEMPTS: usize = 3;
@@ -601,24 +591,39 @@ pub(crate) enum SelectedRootBaselineError {
 
 /// One attempt at the baseline, or the typed signal to re-pin and retry.
 enum BaselineAttempt {
-    Complete {
-        source: SelectedRootSource,
-        captured: Box<CapturedSelectedRoot>,
-    },
+    Complete(SelectedRootBaseline),
     /// `/current` named a generation the pinned snapshot did not record.
     StaleCurrentGeneration,
 }
 
-/// Read the typed source and exact baseline a real install would prepare.
+/// Read the exact typed selected-root baseline a real install would prepare.
+///
+/// This is the read-only half of `prepare_current_root`: it takes the same
+/// artifact-versus-database decision but never acquires the runtime mutation
+/// lock, creates a session directory, or writes under the runtime root.
 ///
 /// The source is the typed selection result, not a recomputation from package
 /// rows, so reporting and preparation cannot disagree about the authority.
 ///
+/// Artifact- and pending-snapshot-backed reads need no temporary write access.
+/// A present database projection creates a private [`tempfile::TempDir`] and
+/// makes the empty stand-in inside it with [`create_selected_root_stand_in`].
+/// An absent one has no committed root at all, so it is
+/// [`SelectedRootBaseline::NoCommittedRoot`] with no capture, temp directory, or
+/// collection: nothing fabricated stands in for authority that was never
+/// recorded. The stand-in is read only for root metadata and any
+/// package-unclaimed parent closure, and the returned capture holds manifest
+/// values only, never a path into that directory, so the temp directory is
+/// dropped before returning. The active generation config-state upper is
+/// deliberately not projected. Its capture requires content writes into the
+/// runtime CAS and selected-root snapshot writes, which a preview must not
+/// perform.
+///
 /// Selection and collection run inside one deferred read transaction; without
 /// it a concurrent install that commits between the selecting query and the
 /// collecting reads can produce a source that disagrees with its capture
-/// (`NoCommittedRoot` with a nonempty capture, or `DatabaseProjection` with an
-/// empty one). WAL mode pins one snapshot at the transaction's first read.
+/// (`DatabaseProjection` with an empty one). WAL mode pins one snapshot at the
+/// transaction's first read.
 ///
 /// `/current` is a filesystem link the database snapshot cannot pin. A
 /// publication commits its state and terminal publication rows before swapping
@@ -632,16 +637,16 @@ enum BaselineAttempt {
 /// recovered state-less target only when no active or orphaned try session
 /// claims it; an uncommitted try-session trial refuses with
 /// [`SelectedRootBaselineError::TrySessionOwnsCurrent`].
-pub(crate) fn read_selected_root_baseline_with_source(
+pub(crate) fn read_selected_root_baseline(
     conn: &rusqlite::Connection,
     runtime_root: &ConaryRuntimeRoot,
-) -> Result<(SelectedRootSource, CapturedSelectedRoot)> {
+) -> Result<SelectedRootBaseline> {
     // A caller may already hold a transaction or savepoint. Reuse that
     // snapshot rather than attempting a nested BEGIN, which SQLite rejects.
     // Its pin cannot be bracketed, so an unrecorded generation stays refused.
     if !conn.is_autocommit() {
         return match read_baseline_attempt(conn, runtime_root, None)? {
-            BaselineAttempt::Complete { source, captured } => Ok((source, *captured)),
+            BaselineAttempt::Complete(baseline) => Ok(baseline),
             BaselineAttempt::StaleCurrentGeneration => {
                 Err(SelectedRootBaselineError::CurrentGenerationChanged.into())
             }
@@ -657,9 +662,9 @@ pub(crate) fn read_selected_root_baseline_with_source(
         let current_before = Some(sample_current_generation_link(runtime_root));
         let transaction = conn.unchecked_transaction()?;
         match read_baseline_attempt(&transaction, runtime_root, current_before) {
-            Ok(BaselineAttempt::Complete { source, captured }) => {
+            Ok(BaselineAttempt::Complete(baseline)) => {
                 transaction.commit()?;
-                return Ok((source, *captured));
+                return Ok(baseline);
             }
             Ok(BaselineAttempt::StaleCurrentGeneration)
                 if attempt < MAX_CURRENT_GENERATION_ATTEMPTS =>
@@ -728,13 +733,13 @@ fn read_baseline_attempt(
             snapshot,
             captured,
             changeset_id,
-        } => BaselineAttempt::Complete {
+        } => BaselineAttempt::Complete(SelectedRootBaseline::Captured {
             source: SelectedRootSource::PendingSnapshot {
                 snapshot_id: snapshot.id(),
                 changeset_id,
             },
             captured,
-        },
+        }),
         SelectedRootSelection::CurrentGeneration {
             artifact,
             generation,
@@ -761,7 +766,7 @@ fn read_baseline_attempt(
                     return Err(SelectedRootBaselineError::TrySessionOwnsCurrent.into());
                 }
                 // The IDs are unknown, not absent; the artifact is the baseline.
-                return Ok(BaselineAttempt::Complete {
+                return Ok(BaselineAttempt::Complete(SelectedRootBaseline::Captured {
                     source: SelectedRootSource::CurrentGeneration {
                         snapshot_id: None,
                         changeset_id: None,
@@ -771,13 +776,13 @@ fn read_baseline_attempt(
                         generation: artifact.generation_root.clone(),
                         state: artifact.mutable_state.clone(),
                     }),
-                });
+                }));
             }
             let snapshot_id =
                 GenerationPublication::selected_root_snapshot_for_generation(conn, generation)?;
             let changeset_id =
                 publication.and_then(|publication| publication.published_through_changeset_id);
-            BaselineAttempt::Complete {
+            BaselineAttempt::Complete(SelectedRootBaseline::Captured {
                 source: SelectedRootSource::CurrentGeneration {
                     snapshot_id,
                     changeset_id,
@@ -787,13 +792,15 @@ fn read_baseline_attempt(
                     generation: artifact.generation_root.clone(),
                     state: artifact.mutable_state.clone(),
                 }),
-            }
+            })
         }
         SelectedRootSelection::DatabaseProjection { installed } => {
-            // The projection synthesizes `/` from the empty materialization
-            // destination a first-generation install would use. Artifact- and
-            // snapshot-backed reads never reach this branch, so only here does
-            // the read need a private temp parent and write access.
+            if installed == InstalledDatabaseAuthority::Absent {
+                return Ok(BaselineAttempt::Complete(
+                    SelectedRootBaseline::NoCommittedRoot,
+                ));
+            }
+            // Only the present projection needs a private temp parent.
             let stand_in_parent = tempfile::TempDir::new()
                 .context("failed to create the private selected-root projection directory")?;
             let empty_root = create_selected_root_stand_in(stand_in_parent.path())?;
@@ -804,26 +811,22 @@ fn read_baseline_attempt(
                 )
                 .map_err(anyhow::Error::from)?;
             drop(stand_in_parent);
-            let source = match installed {
-                InstalledDatabaseAuthority::Present => SelectedRootSource::DatabaseProjection {
+            BaselineAttempt::Complete(SelectedRootBaseline::Captured {
+                source: SelectedRootSource::DatabaseProjection {
                     changeset_id: GenerationPublication::applied_high_water_changeset_id(conn)?,
                 },
-                InstalledDatabaseAuthority::Absent => SelectedRootSource::NoCommittedRoot,
-            };
-            BaselineAttempt::Complete {
-                source,
                 captured: Box::new(captured),
-            }
+            })
         }
     })
 }
 
+#[cfg(test)]
 // Test-only seam between the selecting query and the collecting reads.
 //
 // A test arms this to commit on another connection exactly where an
 // autocommit implementation would open a second snapshot, then proves the
 // capture still reflects the selection's snapshot.
-#[cfg(test)]
 thread_local! {
     static BETWEEN_SELECTION_AND_COLLECTION: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
         std::cell::RefCell::new(None);
@@ -845,13 +848,13 @@ fn run_between_selection_and_collection_hook() {
 #[cfg(not(test))]
 fn run_between_selection_and_collection_hook() {}
 
+#[cfg(test)]
 // Test-only seam between the pinned SQLite snapshot and the `/current` read.
 //
 // A test arms this to publish a newer generation on another connection exactly
 // where the filesystem link can advance past the snapshot, then proves the
 // selection retries against a fresh snapshot. Unlike the selection-to-collection
 // seam this hook is a plain `Fn` so one attempt's hook can observe every retry.
-#[cfg(test)]
 thread_local! {
     static BEFORE_CURRENT_SELECTION: std::cell::RefCell<Option<Box<dyn Fn()>>> =
         std::cell::RefCell::new(None);

@@ -14,6 +14,9 @@ use super::{
     execute_install_transaction_in_selected_root_with_post_graph,
     finalize_install_without_snapshot, preflight_extracted_file_ownership,
 };
+use crate::commands::generation::selected_root::{
+    SelectedRootBaseline, read_selected_root_baseline,
+};
 use anyhow::{Context, Result};
 use conary_core::ccs::native_lifecycle::SourceFormat;
 use conary_core::components::ComponentType;
@@ -64,7 +67,9 @@ struct CcsDryRunBaseline {
 /// A dry run prepares no writable selected root, so it must not fall back to
 /// the live command root. This reads the same baseline a real install would
 /// prepare and materializes only its directories and symlinks into a private
-/// temp directory.
+/// temp directory. When no committed root exists there is no layout to
+/// materialize, so the dry run resolves against the private, empty skeleton
+/// directory instead.
 fn prepare_ccs_dry_run_baseline(
     conn: &rusqlite::Connection,
     db_path: &str,
@@ -73,17 +78,19 @@ fn prepare_ccs_dry_run_baseline(
         conary_core::runtime_root::ConaryRuntimeRoot::from_db_path(PathBuf::from(db_path));
     let temp_dir = tempfile::TempDir::new()
         .context("failed to create the CCS dry-run selected-root skeleton")?;
-    // The database-projection baseline creates its own private empty stand-in
-    // internally. This temp directory is only the CCS dry-run skeleton, with
-    // the materialized layout in a sibling subdirectory.
-    let captured = crate::commands::generation::selected_root::read_selected_root_baseline(
-        conn,
-        &runtime_root,
-    )?;
-    let root = temp_dir.path().join("root");
-    conary_core::generation::root_manifest::materialize_selected_root_layout_skeleton(
-        &captured, &root,
-    )?;
+    let root = match read_selected_root_baseline(conn, &runtime_root)? {
+        SelectedRootBaseline::Captured { captured, .. } => {
+            let root = temp_dir.path().join("root");
+            conary_core::generation::root_manifest::materialize_selected_root_layout_skeleton(
+                &captured, &root,
+            )?;
+            root
+        }
+        // No committed root exists, so there is no capture and no stand-in to
+        // materialize. The dry run still resolves against its own private,
+        // empty skeleton directory, never the live command root.
+        SelectedRootBaseline::NoCommittedRoot => temp_dir.path().to_path_buf(),
+    };
     Ok(CcsDryRunBaseline {
         _temp_dir: temp_dir,
         root,
