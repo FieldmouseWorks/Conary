@@ -28,6 +28,11 @@ pub(crate) fn render(data: &RootInspectData) {
     field("Manifest", manifest_label(data.manifest));
     field("Metadata", data.metadata_label());
     field("Mode", &optional_mode(data.mode));
+    let mtime = match data.mtime {
+        Some(mtime) => format!("{}.{:09}", mtime.seconds, mtime.nanoseconds),
+        None => "-".to_string(),
+    };
+    field("Mtime", &mtime);
     if matches!(
         data.kind,
         Some(RootNodeKind::BlockDevice | RootNodeKind::CharacterDevice)
@@ -42,6 +47,7 @@ pub(crate) fn render(data: &RootInspectData) {
     field("User", &optional_text(data.user.as_deref()));
     field("Group", &optional_text(data.group.as_deref()));
     field("SHA-256", &optional_text(data.sha256.as_deref()));
+    field("Size", &optional_u64(data.size));
     field(
         "Symlink target",
         &optional_text(data.symlink_target.as_deref()),
@@ -50,6 +56,9 @@ pub(crate) fn render(data: &RootInspectData) {
         "Hardlink target",
         &optional_text(data.hardlink_target.as_deref()),
     );
+    if let Some(identity) = data.hardlink_identity.as_deref() {
+        field("Hardlink identity", &visible(identity));
+    }
     if let Some(xattrs) = data.xattrs.as_deref() {
         for xattr in xattrs {
             message(&format!(

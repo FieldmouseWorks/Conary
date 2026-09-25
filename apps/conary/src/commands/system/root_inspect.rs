@@ -9,11 +9,11 @@
 //! selected manifests and never derives a second projection.
 //!
 //! A database projection has no committed manifest root: it synthesizes `/`
-//! from an empty materialization stand-in whose mode and ownership belong to
-//! the inspecting process. That one node is reported with
-//! [`RootInspectMetadata::Synthesized`] and with its mode, ownership, xattrs,
-//! and content authority withheld; every node read from a committed manifest
-//! reports [`RootInspectMetadata::Recorded`].
+//! from an empty materialization stand-in whose mode, ownership, and timestamps
+//! belong to the inspecting process. That one node is reported with
+//! [`RootInspectMetadata::Synthesized`] and with its mode, ownership, mtime,
+//! xattrs, and content authority withheld; every node read from a committed
+//! manifest reports [`RootInspectMetadata::Recorded`].
 //!
 //! Boot recovery can point `/current` at a valid generation with no state or
 //! publication row. A stable link across the read is accepted as
@@ -27,9 +27,9 @@
 use anyhow::{Context, Result, bail};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use conary_agent_contract::{InspectResult, OperationEnvelope, OperationStatus, RiskLevel};
-use conary_core::generation::root_manifest::CapturedSelectedRoot;
+use conary_core::generation::root_manifest::{CapturedSelectedRoot, GenerationRootEntry};
 use conary_core::payload::{
-    PayloadContentAuthority, PayloadIdentity, PayloadNodeKind, ResolvedPayloadNode,
+    PayloadContentAuthority, PayloadIdentity, PayloadNode, PayloadNodeKind, ResolvedPayloadNode,
 };
 use conary_core::runtime_root::ConaryRuntimeRoot;
 use serde::{Deserialize, Serialize};
@@ -38,7 +38,7 @@ use crate::commands::generation::selected_root::{
     SelectedRootBaseline, SelectedRootSource, read_selected_root_baseline,
 };
 
-pub(crate) const ROOT_INSPECT_SCHEMA_VERSION: u32 = 4;
+pub(crate) const ROOT_INSPECT_SCHEMA_VERSION: u32 = 5;
 
 /// Where the reported node's authority came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -151,6 +151,16 @@ impl RootInspectXattr {
     }
 }
 
+/// One recorded modification time.
+///
+/// Mirrors [`conary_core::payload::PayloadTimestamp`] field-for-field so the
+/// sub-second component materialization restores is reported without loss.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub(crate) struct RootInspectTimestamp {
+    pub(crate) seconds: i64,
+    pub(crate) nanoseconds: u32,
+}
+
 /// Versioned `data` payload for `system.root.inspect`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub(crate) struct RootInspectData {
@@ -170,13 +180,19 @@ pub(crate) struct RootInspectData {
     pub(crate) metadata: RootInspectMetadata,
     pub(crate) kind: Option<RootNodeKind>,
     pub(crate) mode: Option<u32>,
+    pub(crate) mtime: Option<RootInspectTimestamp>,
     pub(crate) uid: Option<u64>,
     pub(crate) gid: Option<u64>,
+    /// Source identity as recorded, a name or a numeric ID, alongside the
+    /// resolved `uid` and `gid`.
     pub(crate) user: Option<String>,
     pub(crate) group: Option<String>,
     pub(crate) sha256: Option<String>,
+    pub(crate) size: Option<u64>,
     pub(crate) symlink_target: Option<String>,
     pub(crate) hardlink_target: Option<String>,
+    /// A regular node's primary identity or a hardlink entry's own identity.
+    pub(crate) hardlink_identity: Option<String>,
     pub(crate) device_major: Option<u64>,
     pub(crate) device_minor: Option<u64>,
     /// Name-sorted recorded extended attributes; `Some([])` for a recorded node
@@ -256,13 +272,16 @@ pub(crate) fn root_inspect_data(
         metadata: RootInspectMetadata::Recorded,
         kind: None,
         mode: None,
+        mtime: None,
         uid: None,
         gid: None,
         user: None,
         group: None,
         sha256: None,
+        size: None,
         symlink_target: None,
         hardlink_target: None,
+        hardlink_identity: None,
         device_major: None,
         device_minor: None,
         xattrs: None,
@@ -271,12 +290,12 @@ pub(crate) fn root_inspect_data(
     // With no committed root there is no capture, so nothing is present, not
     // even a synthesized `/` node.
     if let Some(captured) = captured
-        && let Some((manifest, node, content)) = find_captured_node(&captured, &normalized)
+        && let Some((manifest, recorded)) = find_captured_node(&captured, &normalized)
     {
         if data.source == RootInspectSource::DatabaseProjection && normalized == "/" {
             apply_synthesized_root(&mut data);
         } else {
-            apply_node(&mut data, manifest, node, content);
+            apply_node(&mut data, manifest, recorded);
         }
     }
 
@@ -345,16 +364,23 @@ pub(crate) fn inspect_result(data: &RootInspectData) -> Result<InspectResult> {
     Ok(InspectResult::new(envelope).with_data(serde_json::to_value(data)?))
 }
 
+/// One committed node selected for projection.
+enum RecordedNode<'a> {
+    /// A manifest entry, carrying its recorded path and optional content.
+    Entry(&'a GenerationRootEntry),
+    /// The generation root node, which records no entry path or content.
+    Root(&'a ResolvedPayloadNode),
+}
+
 fn find_captured_node<'a>(
     captured: &'a CapturedSelectedRoot,
     path: &str,
-) -> Option<(
-    RootManifestKind,
-    &'a ResolvedPayloadNode,
-    Option<&'a PayloadContentAuthority>,
-)> {
+) -> Option<(RootManifestKind, RecordedNode<'a>)> {
     if path == "/" {
-        return Some((RootManifestKind::Root, &captured.generation.root, None));
+        return Some((
+            RootManifestKind::Root,
+            RecordedNode::Root(&captured.generation.root),
+        ));
     }
     let generation = captured
         .generation
@@ -362,41 +388,57 @@ fn find_captured_node<'a>(
         .iter()
         .find(|entry| entry.path == path);
     if let Some(entry) = generation {
-        return Some((RootManifestKind::Root, &entry.node, entry.content.as_ref()));
+        return Some((RootManifestKind::Root, RecordedNode::Entry(entry)));
     }
     let state = captured
         .state
         .entries
         .iter()
         .find(|entry| entry.path == path);
-    state.map(|entry| {
-        (
-            RootManifestKind::MutableState,
-            &entry.node,
-            entry.content.as_ref(),
-        )
-    })
+    state.map(|entry| (RootManifestKind::MutableState, RecordedNode::Entry(entry)))
 }
 
-fn apply_node(
-    data: &mut RootInspectData,
-    manifest: RootManifestKind,
-    node: &ResolvedPayloadNode,
-    content: Option<&PayloadContentAuthority>,
-) {
+fn apply_node(data: &mut RootInspectData, manifest: RootManifestKind, recorded: RecordedNode<'_>) {
     data.present = true;
     data.manifest = Some(manifest);
-    data.kind = Some(node_kind(&node.source.kind));
-    data.mode = Some(node.source.mode & 0o7777);
-    data.uid = Some(node.uid);
-    data.gid = Some(node.gid);
-    data.user = identity_name(&node.source.user);
-    data.group = identity_name(&node.source.group);
-    data.sha256 = content.map(|content| content.sha256.clone());
+
+    let (node, content) = match recorded {
+        RecordedNode::Entry(entry) => {
+            // The recorded path is already the normalized lookup path reported
+            // as `data.path`, so it is not reported a second time.
+            let GenerationRootEntry {
+                path: _,
+                node,
+                content,
+            } = entry;
+            (node, content.as_ref())
+        }
+        // The generation root node records no entry path and no content.
+        RecordedNode::Root(node) => (node, None),
+    };
+
+    let ResolvedPayloadNode { source, uid, gid } = node;
+    data.uid = Some(*uid);
+    data.gid = Some(*gid);
+
+    let PayloadNode {
+        kind,
+        mode,
+        user,
+        group,
+        mtime,
+        xattrs,
+    } = source;
+    data.mode = Some(*mode & 0o7777);
+    data.mtime = Some(RootInspectTimestamp {
+        seconds: mtime.seconds,
+        nanoseconds: mtime.nanoseconds,
+    });
+    data.user = source_identity(user);
+    data.group = source_identity(group);
     // `PayloadNode::xattrs` is a `BTreeMap`, so this list is name-sorted.
     data.xattrs = Some(
-        node.source
-            .xattrs
+        xattrs
             .iter()
             .map(|(name, value)| RootInspectXattr {
                 name: name.clone(),
@@ -404,25 +446,56 @@ fn apply_node(
             })
             .collect(),
     );
-    match &node.source.kind {
-        PayloadNodeKind::Symlink { target } => data.symlink_target = Some(target.clone()),
-        PayloadNodeKind::Hardlink { target, .. } => data.hardlink_target = Some(target.clone()),
-        PayloadNodeKind::BlockDevice { major, minor }
-        | PayloadNodeKind::CharacterDevice { major, minor } => {
+
+    match kind {
+        PayloadNodeKind::Regular { hardlink_identity } => {
+            data.kind = Some(RootNodeKind::Regular);
+            data.hardlink_identity = hardlink_identity.clone();
+        }
+        PayloadNodeKind::Directory => data.kind = Some(RootNodeKind::Directory),
+        PayloadNodeKind::Symlink { target } => {
+            data.kind = Some(RootNodeKind::Symlink);
+            data.symlink_target = Some(target.clone());
+        }
+        PayloadNodeKind::Hardlink { target, identity } => {
+            data.kind = Some(RootNodeKind::Hardlink);
+            data.hardlink_target = Some(target.clone());
+            data.hardlink_identity = Some(identity.clone());
+        }
+        PayloadNodeKind::BlockDevice { major, minor } => {
+            data.kind = Some(RootNodeKind::BlockDevice);
             data.device_major = Some(*major);
             data.device_minor = Some(*minor);
         }
-        _ => {}
+        PayloadNodeKind::CharacterDevice { major, minor } => {
+            data.kind = Some(RootNodeKind::CharacterDevice);
+            data.device_major = Some(*major);
+            data.device_minor = Some(*minor);
+        }
+        PayloadNodeKind::Fifo => data.kind = Some(RootNodeKind::Fifo),
+        PayloadNodeKind::Socket => data.kind = Some(RootNodeKind::Socket),
     }
+
+    let (sha256, size) = match content {
+        // Regular files are the only nodes that record content authority.
+        Some(content) => {
+            let PayloadContentAuthority { sha256, size } = content;
+            (Some(sha256.clone()), Some(*size))
+        }
+        None => (None, None),
+    };
+    data.sha256 = sha256;
+    data.size = size;
 }
 
 /// Report the projection's stand-in `/` node without its ambient metadata.
 ///
 /// The database projection has no committed manifest root; it synthesizes one
-/// from the empty materialization destination, whose mode and ownership belong
-/// to the inspecting process. The node is present as a directory, but mode,
-/// ownership, xattrs, and content authority are withheld and the record is
-/// marked synthesized so no caller mistakes them for the committed root.
+/// from the empty materialization destination, whose mode, ownership, and
+/// timestamps belong to the inspecting process. The node is present as a
+/// directory, but mode, ownership, mtime, xattrs, and content authority are
+/// withheld and the record is marked synthesized so no caller mistakes them for
+/// the committed root.
 fn apply_synthesized_root(data: &mut RootInspectData) {
     data.present = true;
     data.metadata = RootInspectMetadata::Synthesized;
@@ -448,22 +521,14 @@ fn normalize_lookup_path(path: &str) -> Result<String> {
     Ok(format!("/{}", components.join("/")))
 }
 
-fn node_kind(kind: &PayloadNodeKind) -> RootNodeKind {
-    match kind {
-        PayloadNodeKind::Regular { .. } => RootNodeKind::Regular,
-        PayloadNodeKind::Directory => RootNodeKind::Directory,
-        PayloadNodeKind::Symlink { .. } => RootNodeKind::Symlink,
-        PayloadNodeKind::Hardlink { .. } => RootNodeKind::Hardlink,
-        PayloadNodeKind::Fifo => RootNodeKind::Fifo,
-        PayloadNodeKind::Socket => RootNodeKind::Socket,
-        PayloadNodeKind::BlockDevice { .. } => RootNodeKind::BlockDevice,
-        PayloadNodeKind::CharacterDevice { .. } => RootNodeKind::CharacterDevice,
-    }
-}
-
-fn identity_name(identity: &PayloadIdentity) -> Option<String> {
+/// Report one source identity as recorded: its name, or its numeric ID.
+///
+/// The resolved `uid`/`gid` are reported separately, so a numeric source is
+/// never silently folded into "no source identity" and a named source keeps
+/// both its name and its resolved numeric ID.
+fn source_identity(identity: &PayloadIdentity) -> Option<String> {
     match identity {
-        PayloadIdentity::Numeric { .. } => None,
+        PayloadIdentity::Numeric { id } => Some(id.to_string()),
         PayloadIdentity::Named { name } => Some(name.clone()),
     }
 }

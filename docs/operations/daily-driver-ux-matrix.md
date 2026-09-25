@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-25
-revision: 67
+revision: 68
 summary: Daily-driver CLI publication debt, committed selected-root inspection, installed records, database preflight, repository readiness, typed details, and grouped results
 ---
 
@@ -193,23 +193,31 @@ access to the database itself.
 `metadata` is the typed authority of the reported node values. `recorded`
 means they came from a committed manifest. The database projection has no
 committed manifest root: it synthesizes `/` from an empty materialization
-stand-in whose mode and ownership belong to the inspecting process. That one
-node is reported with `metadata: "synthesized"`, `kind: "directory"`, and
-`mode`, `uid`, `gid`, `user`, `group`, `xattrs`, and content authority all
-absent (`null`); every other path and source reports `recorded`. The synthesized
-node is therefore never presented as the committed root or as what a later
-root-privileged preparation would produce.
+stand-in whose mode, ownership, and timestamps belong to the inspecting process.
+That one node is reported with `metadata: "synthesized"`, `kind: "directory"`,
+and `mode`, `mtime`, `uid`, `gid`, `user`, `group`, `size`, `hardlink_identity`,
+`xattrs`, and content authority all absent (`null`); every other path and source
+reports `recorded`. The synthesized node is therefore never presented as the
+committed root or as what a later root-privileged preparation would produce.
 
 `--json` prints only a `conary-agent-contract` `InspectResult` with operation
 `system.root.inspect`, status `ok`, and risk `read_only`. Its `data` is
-`schema_version: 4` with `snapshot_id`, `changeset_id`,
+`schema_version: 5` with `snapshot_id`, `changeset_id`,
 `recovered_without_state`, `source` (`pending_snapshot`, `current_generation`,
 `database_projection`, or `no_committed_root`), `path`, `present`, `manifest`
 (`root` or `mutable_state`), `metadata` (`recorded` or `synthesized`), `kind`
 (`regular`, `directory`, `symlink`, `hardlink`, `fifo`, `socket`,
-`block_device`, or `character_device`), `mode`, `uid`, `gid`, `user`, `group`,
-`sha256`, `symlink_target`, `hardlink_target`, `device_major`, `device_minor`,
-and `xattrs`. Absent optional values serialize as `null`. `device_major` and
+`block_device`, or `character_device`), `mode`, `mtime`, `uid`, `gid`, `user`,
+`group`, `sha256`, `size`, `symlink_target`, `hardlink_target`,
+`hardlink_identity`, `device_major`, `device_minor`, and `xattrs`. Absent
+optional values serialize as `null`. `mtime` is the recorded
+`{ seconds, nanoseconds }` modification time that materialization restores.
+`size` is the recorded content byte length for a regular node and is `null` for
+every other kind. `user` and `group` report the source identity exactly as
+recorded, a name or a numeric ID, alongside the resolved `uid` and `gid`.
+`hardlink_identity` carries a regular node's primary hardlink identity or a
+hardlink entry's own identity and is `null` when the node records none;
+`hardlink_target` is the linked entry's target path. `device_major` and
 `device_minor` carry the recorded node numbers for `block_device` and
 `character_device` and are `null` for every other kind. `xattrs` is the
 name-sorted list of `{ name, value_base64 }` entries recorded on the node;
@@ -223,10 +231,11 @@ is `true` only for a stable
 `false`. The projected root node `/` is present for the database projection, as
 it is for snapshots and artifacts, but only snapshots and artifacts report its
 recorded metadata. Human output renders the same fields through
-`ui/root_inspect.rs` and adds one `Xattr  <name> (<n> bytes)` line per recorded
-xattr without printing the raw value; an absent path uses `[missing]`, and a
-current-schema database with no committed root still exits 0 with
-`source: no_committed_root`.
+`ui/root_inspect.rs`, showing `mtime` as `seconds.nanoseconds` and `size`,
+rendering the hardlink identity when present, and adding one
+`Xattr  <name> (<n> bytes)` line per recorded xattr without printing the raw
+value; an absent path uses `[missing]`, and a current-schema database with no
+committed root still exits 0 with `source: no_committed_root`.
 
 `/current` is a filesystem link, so the read transaction's SQLite snapshot
 does not cover it. When the link names a generation the pinned snapshot does

@@ -20,7 +20,7 @@ use conary_core::generation::root_manifest::{
     MutableStateManifest, SELECTED_ROOT_MANIFEST_DELTA_VERSION, SelectedRootManifestDelta,
     SelectedRootSnapshot,
 };
-use conary_core::payload::PayloadNode;
+use conary_core::payload::{PayloadNode, PayloadTimestamp};
 use conary_core::repository::versioning::VersionScheme;
 
 /// Serializes tests that mutate process environment variables.
@@ -227,6 +227,48 @@ fn symlink(path: &str, target: &str) -> GenerationRootEntry {
     }
 }
 
+/// Set the recorded modification time with its full sub-second authority.
+fn with_mtime(
+    mut entry: GenerationRootEntry,
+    seconds: i64,
+    nanoseconds: u32,
+) -> GenerationRootEntry {
+    entry.node.source.mtime = PayloadTimestamp {
+        seconds,
+        nanoseconds,
+    };
+    entry
+}
+
+/// A regular file that is the primary of a hardlink group.
+fn hardlink_primary(
+    path: &str,
+    permissions: u32,
+    bytes: &[u8],
+    identity: &str,
+) -> GenerationRootEntry {
+    let mut entry = regular(path, permissions, bytes);
+    entry.node.source.kind = PayloadNodeKind::Regular {
+        hardlink_identity: Some(identity.to_string()),
+    };
+    entry
+}
+
+/// A hardlink entry that names its group's primary and shared identity.
+fn hardlink(path: &str, target: &str, identity: &str) -> GenerationRootEntry {
+    GenerationRootEntry {
+        path: path.to_string(),
+        node: node(
+            PayloadNodeKind::Hardlink {
+                target: target.to_string(),
+                identity: identity.to_string(),
+            },
+            0o644,
+        ),
+        content: None,
+    }
+}
+
 fn device(path: &str, kind: PayloadNodeKind) -> GenerationRootEntry {
     GenerationRootEntry {
         path: path.to_string(),
@@ -264,18 +306,7 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
-        let temp = tempfile::tempdir().unwrap();
-        let db_path = temp.path().join("conary.db");
-        conary_core::db::init(&db_path).unwrap();
-        let conn = conary_core::db::open(&db_path).unwrap();
-        conn.execute(
-            "INSERT INTO changesets (description, status) VALUES ('inspect fixture', 'applied')",
-            [],
-        )
-        .unwrap();
-        let changeset_id = conn.last_insert_rowid();
-
-        let captured = captured_root(
+        Self::with_captured(captured_root(
             vec![
                 directory("/opt"),
                 directory("/opt/fixture"),
@@ -307,7 +338,22 @@ impl Fixture {
                 directory("/var/lib/fixture"),
                 regular("/var/lib/fixture/state", 0o640, b"state\n"),
             ],
-        );
+        ))
+    }
+
+    /// Persist one complete captured root as the newest committed snapshot.
+    fn with_captured(captured: CapturedSelectedRoot) -> Self {
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("conary.db");
+        conary_core::db::init(&db_path).unwrap();
+        let conn = conary_core::db::open(&db_path).unwrap();
+        conn.execute(
+            "INSERT INTO changesets (description, status) VALUES ('inspect fixture', 'applied')",
+            [],
+        )
+        .unwrap();
+        let changeset_id = conn.last_insert_rowid();
+
         let debt = GenerationPublication::create_pending(
             &conn,
             Some(changeset_id),
@@ -461,6 +507,159 @@ fn root_inspect_reports_recorded_xattrs_in_name_order_with_exact_base64() {
     assert_eq!(plain.xattrs, Some(Vec::new()));
     let json = json_data(&plain);
     assert_eq!(json["xattrs"], serde_json::json!([]));
+}
+
+/// Two recorded regular files that differ only in modification time report
+/// different `mtime` values, and two that differ only in content length report
+/// different `size` values. Each pair also asserts the other recorded fields are
+/// identical, so the reported difference is attributable to the field under
+/// test rather than to an unrelated fixture change.
+#[test]
+fn root_inspect_reports_recorded_mtime_and_content_size() {
+    let fixture = Fixture::with_captured(captured_root(
+        vec![
+            directory("/opt"),
+            directory("/opt/fixture"),
+            with_mtime(
+                regular("/opt/fixture/mtime-a", 0o644, b"timed\n"),
+                1_700_000_000,
+                123_456_789,
+            ),
+            with_mtime(
+                regular("/opt/fixture/mtime-b", 0o644, b"timed\n"),
+                1_700_000_001,
+                987_654_321,
+            ),
+            with_mtime(regular("/opt/fixture/size-a", 0o644, b"small\n"), 5, 0),
+            with_mtime(
+                regular("/opt/fixture/size-b", 0o644, b"much larger\n"),
+                5,
+                0,
+            ),
+        ],
+        Vec::new(),
+    ));
+
+    let first = fixture.inspect("/opt/fixture/mtime-a");
+    let second = fixture.inspect("/opt/fixture/mtime-b");
+    assert_eq!(
+        first.mtime,
+        Some(RootInspectTimestamp {
+            seconds: 1_700_000_000,
+            nanoseconds: 123_456_789,
+        })
+    );
+    assert_eq!(
+        second.mtime,
+        Some(RootInspectTimestamp {
+            seconds: 1_700_000_001,
+            nanoseconds: 987_654_321,
+        })
+    );
+    assert_ne!(first.mtime, second.mtime, "mtime must distinguish the pair");
+    assert_eq!(first.size, second.size);
+    assert_eq!(first.sha256, second.sha256);
+    assert_eq!(first.mode, second.mode);
+    assert_eq!(first.user, second.user);
+    assert_eq!(first.group, second.group);
+    assert_eq!(first.xattrs, second.xattrs);
+    let json = json_data(&first);
+    assert_eq!(json["mtime"]["seconds"], 1_700_000_000_i64);
+    assert_eq!(json["mtime"]["nanoseconds"], 123_456_789_u32);
+
+    let small = fixture.inspect("/opt/fixture/size-a");
+    let large = fixture.inspect("/opt/fixture/size-b");
+    assert_eq!(small.size, Some(b"small\n".len() as u64));
+    assert_eq!(large.size, Some(b"much larger\n".len() as u64));
+    assert_ne!(small.size, large.size, "size must distinguish the pair");
+    assert_ne!(small.sha256, large.sha256);
+    assert_eq!(small.mtime, large.mtime);
+    assert_eq!(small.mode, large.mode);
+    let json = json_data(&large);
+    assert_eq!(json["size"], b"much larger\n".len() as u64);
+}
+
+/// A recorded hardlink pair reports the shared identity on both the primary
+/// regular file and the linked entry, plus the linked entry's target.
+#[test]
+fn root_inspect_reports_hardlink_identities() {
+    const IDENTITY: &str = "fixture-hardlink-group";
+    let fixture = Fixture::with_captured(captured_root(
+        vec![
+            directory("/opt"),
+            directory("/opt/fixture"),
+            hardlink(
+                "/opt/fixture/hardlink-peer",
+                "/opt/fixture/hardlink-primary",
+                IDENTITY,
+            ),
+            hardlink_primary(
+                "/opt/fixture/hardlink-primary",
+                0o644,
+                b"linked\n",
+                IDENTITY,
+            ),
+        ],
+        Vec::new(),
+    ));
+
+    let primary = fixture.inspect("/opt/fixture/hardlink-primary");
+    assert_eq!(primary.kind, Some(RootNodeKind::Regular));
+    assert_eq!(primary.hardlink_identity.as_deref(), Some(IDENTITY));
+    assert_eq!(primary.hardlink_target, None);
+
+    let peer = fixture.inspect("/opt/fixture/hardlink-peer");
+    assert_eq!(peer.kind, Some(RootNodeKind::Hardlink));
+    assert_eq!(peer.hardlink_identity.as_deref(), Some(IDENTITY));
+    assert_eq!(
+        peer.hardlink_target.as_deref(),
+        Some("/opt/fixture/hardlink-primary")
+    );
+    assert_eq!(primary.hardlink_identity, peer.hardlink_identity);
+    let json = json_data(&peer);
+    assert_eq!(json["hardlink_identity"], IDENTITY);
+    assert_eq!(json["hardlink_target"], "/opt/fixture/hardlink-primary");
+}
+
+/// Source ownership is reported exactly as recorded: a numeric identity keeps
+/// its decimal ID in `user`/`group` alongside the resolved `uid`/`gid`, and a
+/// named identity keeps both its name and its resolved numeric ID.
+#[test]
+fn root_inspect_reports_source_identity_alongside_resolved_ids() {
+    let mut named_identity = regular("/opt/fixture/named", 0o644, b"named\n");
+    named_identity.node.source.user = PayloadIdentity::Named {
+        name: "demo".to_string(),
+    };
+    named_identity.node.source.group = PayloadIdentity::Named {
+        name: "demo-group".to_string(),
+    };
+    named_identity.node.uid = 1000;
+    named_identity.node.gid = 1001;
+    let numeric_identity = regular("/opt/fixture/numeric", 0o644, b"numeric\n");
+    let fixture = Fixture::with_captured(captured_root(
+        vec![
+            directory("/opt"),
+            directory("/opt/fixture"),
+            named_identity,
+            numeric_identity,
+        ],
+        Vec::new(),
+    ));
+
+    let named = fixture.inspect("/opt/fixture/named");
+    assert_eq!(named.user.as_deref(), Some("demo"));
+    assert_eq!(named.group.as_deref(), Some("demo-group"));
+    assert_eq!(named.uid, Some(1000));
+    assert_eq!(named.gid, Some(1001));
+
+    let numeric = fixture.inspect("/opt/fixture/numeric");
+    assert_eq!(numeric.user.as_deref(), Some("0"));
+    assert_eq!(numeric.group.as_deref(), Some("0"));
+    assert_eq!(numeric.uid, Some(0));
+    assert_eq!(numeric.gid, Some(0));
+    let json = json_data(&numeric);
+    assert_eq!(json["user"], "0");
+    assert_eq!(json["uid"], 0);
 }
 
 #[test]
@@ -621,9 +820,10 @@ fn root_inspect_reports_database_projection_before_first_snapshot() {
     assert_eq!(json["xattrs"], serde_json::json!([]));
 
     // The projection synthesizes `/` from the empty stand-in destination. The
-    // node is present as a directory, but its ambient mode, ownership, and
-    // xattrs are withheld and the record is marked synthesized so no caller
-    // mistakes the inspecting process for the committed root.
+    // node is present as a directory, but its ambient mode, ownership, mtime,
+    // xattrs, and content authority are withheld and the record is marked
+    // synthesized so no caller mistakes the inspecting process for the
+    // committed root.
     let root = root_inspect_data(&conn, &runtime_root, "/").unwrap();
     assert_eq!(root.source, RootInspectSource::DatabaseProjection);
     assert!(root.present);
@@ -631,14 +831,20 @@ fn root_inspect_reports_database_projection_before_first_snapshot() {
     assert_eq!(root.kind, Some(RootNodeKind::Directory));
     assert_eq!(root.metadata, RootInspectMetadata::Synthesized);
     assert_eq!(root.mode, None);
+    assert_eq!(root.mtime, None);
     assert_eq!(root.uid, None);
     assert_eq!(root.gid, None);
     assert_eq!(root.user, None);
     assert_eq!(root.group, None);
+    assert_eq!(root.size, None);
+    assert_eq!(root.hardlink_identity, None);
     assert_eq!(root.xattrs, None);
     let json = json_data(&root);
     assert_eq!(json["metadata"], "synthesized");
     assert!(json["mode"].is_null());
+    assert!(json["mtime"].is_null());
+    assert!(json["size"].is_null());
+    assert!(json["hardlink_identity"].is_null());
     assert!(json["xattrs"].is_null());
 }
 
@@ -753,7 +959,7 @@ fn database_projection_matches_the_main_selected_root_baseline() {
         .expect("the baseline projection must own the installed regular file");
 
     assert_eq!(data.manifest, Some(RootManifestKind::Root));
-    assert_eq!(data.kind, Some(node_kind(&entry.node.source.kind)));
+    assert_eq!(data.kind, Some(RootNodeKind::Regular));
     assert_eq!(data.mode, Some(entry.node.source.mode & 0o7777));
     assert_eq!(
         data.sha256,
