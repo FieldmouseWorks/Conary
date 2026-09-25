@@ -12,6 +12,12 @@ package manager:
 - Ubuntu verifies the dpkg traces.
 - Arch verifies the libalpm/pacman traces.
 
+Exported CCS author hooks run under the CCS zero-argument hook ABI: the
+native package manager's positional arguments reach the exported scriptlet,
+which then invokes the authored body with none. The traces therefore record
+`argc=0` for every event. Coverage that Conary passes each format's exact
+lifecycle arguments belongs to natively built fixtures (#1121).
+
 Those native runs must byte-match the files under `expected/`. Every target
 then installs every source format through Conary and byte-matches the same
 native-verified traces. The expected files are therefore reviewable contract
