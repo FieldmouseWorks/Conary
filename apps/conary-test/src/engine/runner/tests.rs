@@ -7,8 +7,8 @@ use crate::config::distro::{
     DistroConfig, FixtureConfig, GlobalConfig, PathsConfig, RemiConfig, SetupConfig, TestPackage,
 };
 use crate::config::manifest::{
-    Assertion, FileChecksum, KillAfterLog, QemuBoot, QemuImageFormat, ResourceConstraints,
-    SuiteDef, TestDef, TestManifest, TestStep,
+    Assertion, FileChecksum, JsonAssertion, JsonExpectation, KillAfterLog, QemuBoot,
+    QemuImageFormat, ResourceConstraints, SuiteDef, TestDef, TestManifest, TestStep,
 };
 use crate::container::backend::ExecResult;
 use crate::container::mock::MockBackend;

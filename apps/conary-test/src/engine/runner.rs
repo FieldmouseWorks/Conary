@@ -1,6 +1,7 @@
 // apps/conary-test/src/engine/runner.rs
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -10,7 +11,9 @@ use tokio::time::Instant;
 use tracing::{debug, info, warn};
 
 use crate::config::distro::GlobalConfig;
-use crate::config::manifest::{Assertion, ResourceConstraints, TestDef, TestManifest};
+use crate::config::manifest::{
+    Assertion, ResourceConstraints, TestDef, TestManifest, pointers_overlap, validate_json_pointer,
+};
 use crate::container::backend::{ContainerBackend, ContainerConfig, ContainerId, ExecResult};
 use crate::engine::assertions::evaluate_assertion;
 use crate::engine::container_coordinator::ContainerCoordinator;
@@ -125,8 +128,12 @@ impl TestRunner {
     }
 
     /// Load distro-specific manifest variables into the runner variable map.
+    ///
+    /// Recomputed from [`variables::build_manifest_variables`], the single
+    /// authority the CLI early preflight also uses.
     pub fn load_manifest_vars(&mut self, manifest: &TestManifest) {
-        variables::load_manifest_overrides(&mut self.vars, manifest, &self.distro);
+        let vars = variables::build_manifest_variables(&self.config, &self.distro, manifest);
+        self.vars = vars;
     }
 
     /// Run all tests in the manifest against the given container.
@@ -173,6 +180,12 @@ impl TestRunner {
         remi_ctx: Option<&RemiStreamCtx>,
     ) -> Result<TestSuite> {
         self.load_manifest_vars(manifest);
+
+        // Validate every templated stdout_json pointer (suite setup and all
+        // tests) before any suite work: no mock server, setup step, or test
+        // may run under persisted configuration that is invalid.
+        preflight_manifest_stdout_json_pointers(manifest, &self.vars)
+            .map_err(|err| anyhow::anyhow!("configuration error: {err}"))?;
 
         if let Some(mock_server) = &manifest.suite.mock_server {
             start_mock_server(backend, container_id, mock_server).await?;
@@ -752,6 +765,110 @@ impl TestRunner {
     fn expand_assertion(&self, assertion: &Assertion) -> Assertion {
         variables::expand_assertion(assertion, &self.vars)
     }
+}
+
+/// Preflight every loaded manifest's expanded `stdout_json` pointers for every
+/// selected distro.
+///
+/// Run entry points call this once after loading their manifests and before
+/// any image build, container creation, or initialization for any distro.
+/// Each variable map comes from [`variables::build_manifest_variables`], the
+/// same authority `TestRunner` uses, so a pointer rejected here would only
+/// otherwise be rejected inside the runner after earlier container work,
+/// including whole runs for earlier distros.
+///
+/// The first failure aborts with
+/// `configuration error: <manifest path>: distro <distro>: <error>`.
+pub fn preflight_loaded_manifests_stdout_json_pointers(
+    manifests: &[(PathBuf, TestManifest)],
+    config: &GlobalConfig,
+    distros: &[String],
+) -> Result<()> {
+    for distro in distros {
+        for (path, manifest) in manifests {
+            let vars = variables::build_manifest_variables(config, distro, manifest);
+            preflight_manifest_stdout_json_pointers(manifest, &vars).map_err(|error| {
+                anyhow::anyhow!(
+                    "configuration error: {}: distro {distro}: {error}",
+                    path.display()
+                )
+            })?;
+        }
+    }
+    Ok(())
+}
+
+/// Validate every expanded `stdout_json` pointer in a manifest's suite setup
+/// and tests.
+pub(crate) fn preflight_manifest_stdout_json_pointers(
+    manifest: &TestManifest,
+    vars: &HashMap<String, String>,
+) -> Result<()> {
+    preflight_stdout_json_pointers_in_steps("suite setup", &manifest.suite.setup, vars)?;
+    for test in &manifest.test {
+        preflight_stdout_json_pointers(test, vars)?;
+    }
+    Ok(())
+}
+
+/// Validate every `stdout_json` pointer in `test` after variable expansion.
+///
+/// Load-time validation defers templated pointers because substitution can
+/// change their validity. Re-expanding here, with the same variable map the
+/// runner uses, catches a malformed or unresolved expanded pointer before any
+/// of the test's steps execute.
+pub(crate) fn preflight_stdout_json_pointers(
+    test: &TestDef,
+    vars: &HashMap<String, String>,
+) -> Result<()> {
+    preflight_stdout_json_pointers_in_steps(&format!("test {}", test.id), &test.step, vars)
+}
+
+/// Validate expanded `stdout_json` pointers for an ordered list of steps.
+fn preflight_stdout_json_pointers_in_steps(
+    owner: &str,
+    steps: &[crate::config::manifest::TestStep],
+    vars: &HashMap<String, String>,
+) -> Result<()> {
+    for (step_index, step) in steps.iter().enumerate() {
+        let Some(assertion) = step.assert.as_ref() else {
+            continue;
+        };
+        let expanded = variables::expand_assertion(assertion, vars);
+        let Some(checks) = expanded.stdout_json.as_ref() else {
+            continue;
+        };
+        for check in checks {
+            if crate::config::manifest::contains_variable_reference(&check.pointer) {
+                bail!(
+                    "{owner} step {}: stdout_json pointer {:?} has an unresolved variable reference",
+                    step_index + 1,
+                    check.pointer
+                );
+            }
+            validate_json_pointer(&check.pointer)
+                .map_err(|error| anyhow::anyhow!("{owner} step {}: {error}", step_index + 1))?;
+        }
+        // A pointer determines the value at and under it, so a second check
+        // that equals or descends from it is redundant or contradictory.
+        // Compare RFC 6901 tokens rather than string prefixes, so `/ab` and
+        // `/a` do not overlap.
+        for (index, check) in checks.iter().enumerate() {
+            for other in checks.iter().skip(index + 1) {
+                if pointers_overlap(&check.pointer, &other.pointer) {
+                    bail!(
+                        "{owner} step {}: overlapping stdout_json pointers {:?} and {:?}: \
+                         a check on an ancestor already determines its descendants, \
+                         so the second check is redundant or contradictory",
+                        step_index + 1,
+                        check.pointer,
+                        other.pointer
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

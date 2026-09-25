@@ -70,15 +70,18 @@ struct CcsDryRunBaseline {
 /// temp directory. When no committed root exists there is no layout to
 /// materialize, so the dry run resolves against the private, empty skeleton
 /// directory instead.
+///
+/// `runtime_root` is the real installed runtime, supplied by the active
+/// preview when the dry run projects a disposable database. Deriving it from
+/// `conn`'s database path would resolve `/current` and generation artifacts
+/// inside the projection's private temp directory, where none exist.
 fn prepare_ccs_dry_run_baseline(
     conn: &rusqlite::Connection,
-    db_path: &str,
+    runtime_root: &conary_core::runtime_root::ConaryRuntimeRoot,
 ) -> Result<CcsDryRunBaseline> {
-    let runtime_root =
-        conary_core::runtime_root::ConaryRuntimeRoot::from_db_path(PathBuf::from(db_path));
     let temp_dir = tempfile::TempDir::new()
         .context("failed to create the CCS dry-run selected-root skeleton")?;
-    let root = match read_selected_root_baseline(conn, &runtime_root)? {
+    let root = match read_selected_root_baseline(conn, runtime_root)? {
         SelectedRootBaseline::Captured { captured, .. } => {
             let root = temp_dir.path().join("root");
             conary_core::generation::root_manifest::materialize_selected_root_layout_skeleton(
@@ -397,6 +400,16 @@ fn install_ccs_package_transactionally_inner(
         opts.preview.is_none() || opts.dry_run,
         "projected package paths require a dry run"
     );
+    // A preview projection is the same database the caller opened as
+    // `db_path`; binding one to a different path would silently read the wrong
+    // installed authority. Reject the mixed pair before anything resolves
+    // against it.
+    if let Some(preview) = opts.preview {
+        anyhow::ensure!(
+            opts.db_path == preview.path(),
+            "CCS install options bound a preview projection to a different database path"
+        );
+    }
     let declared_paths = opts
         .preview
         .map(|preview| preview.declared_paths())
@@ -445,7 +458,15 @@ fn install_ccs_package_transactionally_inner(
     // installed state; a dry run with no caller-owned root has nothing else to
     // resolve payload paths against.
     let dry_run_baseline = if opts.dry_run && !caller_owned_selected_root {
-        Some(prepare_ccs_dry_run_baseline(conn, opts.db_path)?)
+        // A disposable preview database carries selection rows but no runtime
+        // root of its own. Read `/current` and generation artifacts from the
+        // real runtime the preview was built from; standalone CCS dry runs
+        // have no preview, so their database path is already the real one.
+        let runtime_root = match opts.preview {
+            Some(preview) => preview.runtime_root().clone(),
+            None => conary_core::runtime_root::ConaryRuntimeRoot::from_db_path(opts.db_path),
+        };
+        Some(prepare_ccs_dry_run_baseline(conn, &runtime_root)?)
     } else {
         None
     };
