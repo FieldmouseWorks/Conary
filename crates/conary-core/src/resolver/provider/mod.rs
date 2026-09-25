@@ -23,6 +23,7 @@ use crate::error::{Error, Result};
 use crate::repository::dependency_model::ProvideVersionRelation;
 use crate::repository::resolution_policy::{RequestScope, ResolutionPolicy};
 use crate::repository::versioning::{VersionScheme, validate_repo_version};
+use crate::resolver::canonical::CanonicalEquivalents;
 use crate::resolver::identity::PackageIdentity;
 use crate::resolver::provides_index::ProvidesIndex;
 use resolvo::{
@@ -118,9 +119,9 @@ pub struct ConaryProvider<'db> {
     /// Keyed by `SolvableId` index.
     removal_deps: HashMap<u32, Vec<SolverDep>>,
 
-    /// distro_name -> Vec<equivalent distro_name> for canonical cross-distro resolution.
-    /// Pre-loaded as a HashMap for O(1) lookup in the hot path.
-    canonical_equivalents: HashMap<String, Vec<String>>,
+    /// Canonical cross-distro name equivalences. Pre-loaded for O(1) lookup in
+    /// the hot path and shared with end-state requirement evaluation.
+    canonical_equivalents: CanonicalEquivalents,
 
     /// Demand-driven capability-to-provider cache (modeled after libsolv's
     /// whatprovides). Initialized empty at resolution start via
@@ -191,7 +192,7 @@ impl<'db> ConaryProvider<'db> {
             removal_provides_index: HashMap::new(),
             trove_id_to_name: HashMap::new(),
             removal_deps: HashMap::new(),
-            canonical_equivalents: HashMap::new(),
+            canonical_equivalents: CanonicalEquivalents::default(),
             provides_index: None,
             policy,
             root_request_names: HashSet::new(),
@@ -864,22 +865,11 @@ impl<'db> ConaryProvider<'db> {
     /// same canonical package. This enables cross-distro fallback: when the
     /// solver can't find `libssl3`, it can discover `openssl` as an equivalent.
     ///
-    /// The index is pre-loaded as a `HashMap` for O(1) lookups -- no DB calls
-    /// happen during the solver's hot path.
+    /// The index is pre-loaded for O(1) lookups -- no DB calls happen during the
+    /// solver's hot path.
     pub fn load_canonical_index(&mut self) -> Result<()> {
-        let mut stmt = self.conn.prepare(
-            "SELECT pi1.distro_name, pi2.distro_name
-             FROM resolved_package_implementations pi1
-             JOIN resolved_package_implementations pi2 ON pi1.canonical_id = pi2.canonical_id
-             WHERE pi1.distro_name != pi2.distro_name",
-        )?;
-
-        let mut rows = stmt.query([])?;
-        while let Some(row) = rows.next()? {
-            let from: String = row.get(0)?;
-            let to: String = row.get(1)?;
-            self.canonical_equivalents.entry(from).or_default().push(to);
-        }
+        self.canonical_equivalents =
+            crate::resolver::canonical::load_canonical_equivalents(self.conn)?;
         Ok(())
     }
 
@@ -888,10 +878,7 @@ impl<'db> ConaryProvider<'db> {
     /// Returns all other distro-specific names that map to the same canonical
     /// package. Returns an empty slice when no mapping exists.
     pub fn canonical_equivalents(&self, name: &str) -> &[String] {
-        self.canonical_equivalents
-            .get(name)
-            .map(Vec::as_slice)
-            .unwrap_or(&[])
+        self.canonical_equivalents.for_name(name)
     }
 }
 

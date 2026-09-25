@@ -23,6 +23,7 @@ use crate::repository::dependency_model::{
 };
 use crate::repository::resolution_policy::ResolutionPolicy;
 use crate::repository::versioning::VersionScheme;
+use crate::resolver::canonical::{CanonicalEquivalents, load_canonical_equivalents};
 use crate::resolver::identity::PackageIdentity;
 use crate::resolver::provider::{ConaryProvider, SolverExpression};
 
@@ -31,7 +32,10 @@ use super::{
     EndState, SatGroupOwner, SatPackage, SatRelationRemoval, SatResolution, SatSource,
     SatUnsatisfiedGroup,
 };
-use candidates::{InstalledCandidate, affected_capability_names, installed_hard_group_candidates};
+use candidates::{
+    InstalledCandidate, affected_capability_names, insert_identity_name,
+    installed_hard_group_candidates,
+};
 
 /// Whose stored hard requirement group is validated against the end state.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,13 +62,15 @@ impl ValidatedRequirementGroup {
         &self,
         native_architecture: &str,
         packages: &[PackageIdentity],
+        canonical_equivalents: &CanonicalEquivalents,
     ) -> Result<bool> {
-        crate::resolver::requirement_expression_satisfied(
+        crate::resolver::requirements::requirement_expression_satisfied_with_canonical_equivalents(
             &self.expression,
             self.version_scheme,
             &self.depending_architecture,
             native_architecture,
             packages,
+            canonical_equivalents,
         )
     }
 
@@ -139,8 +145,9 @@ fn end_state_residual(
     group: &ValidatedRequirementGroup,
     fixed_end_state: &[PackageIdentity],
     native_architecture: &str,
+    canonical_equivalents: &CanonicalEquivalents,
 ) -> Result<Option<RepositoryRequirementExpression>> {
-    if group.satisfied_against(native_architecture, fixed_end_state)? {
+    if group.satisfied_against(native_architecture, fixed_end_state, canonical_equivalents)? {
         return Ok(None);
     }
     simplify_against_end_state(
@@ -149,6 +156,7 @@ fn end_state_residual(
         &group.depending_architecture,
         native_architecture,
         fixed_end_state,
+        canonical_equivalents,
     )
 }
 
@@ -171,6 +179,8 @@ struct EndStateValidation {
     /// Explicit pass bound: every non-final pass promotes a group or admits a
     /// candidate, and each can happen at most once per group.
     max_passes: usize,
+    /// Canonical name equivalences shared with SAT candidate filtering.
+    canonical_equivalents: CanonicalEquivalents,
 }
 
 impl EndStateValidation {
@@ -179,6 +189,7 @@ impl EndStateValidation {
         residuals: Vec<Option<RepositoryRequirementExpression>>,
         candidates: Vec<InstalledCandidate>,
         affected: HashSet<String>,
+        canonical_equivalents: CanonicalEquivalents,
     ) -> Self {
         let live = vec![false; groups.len()];
         let admitted = vec![false; candidates.len()];
@@ -191,6 +202,7 @@ impl EndStateValidation {
             admitted,
             affected,
             max_passes,
+            canonical_equivalents,
         }
     }
 
@@ -237,10 +249,15 @@ impl EndStateValidation {
             // Admission is one-way: a dropped candidate is never reconsidered.
             self.admitted[index] = true;
             let group = self.candidates[index].clone().into_validated()?;
-            if !group.satisfied_against(native_architecture, before)? {
+            if !group.satisfied_against(native_architecture, before, &self.canonical_equivalents)? {
                 continue;
             }
-            let residual = end_state_residual(&group, fixed_end_state, native_architecture)?;
+            let residual = end_state_residual(
+                &group,
+                fixed_end_state,
+                native_architecture,
+                &self.canonical_equivalents,
+            )?;
             if residual.is_some() {
                 added_unsatisfied = true;
             }
@@ -253,6 +270,11 @@ impl EndStateValidation {
 
     /// Extend the affected capability set with every selected identity and every
     /// removed installed trove, then admit newly mentioned candidates.
+    ///
+    /// A selected or removed package contributes its canonical equivalents
+    /// alongside its literal identity name, so an installed dependent that names
+    /// a sibling implementation is admitted. Provided-capability names stay
+    /// literal.
     fn extend_from_pass(
         &mut self,
         selected: &[PackageIdentity],
@@ -262,7 +284,11 @@ impl EndStateValidation {
         native_architecture: &str,
     ) -> Result<bool> {
         for package in selected {
-            self.affected.insert(package.name.clone());
+            insert_identity_name(
+                &mut self.affected,
+                &package.name,
+                &self.canonical_equivalents,
+            );
             for capability in &package.provided_capabilities {
                 self.affected.insert(capability.name.clone());
             }
@@ -277,7 +303,11 @@ impl EndStateValidation {
                 })
                 .collect::<HashMap<_, _>>();
             for removal in remove_order {
-                self.affected.insert(removal.package.name.clone());
+                insert_identity_name(
+                    &mut self.affected,
+                    &removal.package.name,
+                    &self.canonical_equivalents,
+                );
                 if let Some(package) = installed.get(&removal.trove_id) {
                     for capability in &package.provided_capabilities {
                         self.affected.insert(capability.name.clone());
@@ -350,6 +380,8 @@ pub(super) fn solve_requirement_groups_for_end_state(
         }
     }
 
+    let canonical_equivalents = load_canonical_equivalents(conn)?;
+
     match end_state {
         EndState::Unknown => {
             if validated.is_empty() {
@@ -367,15 +399,25 @@ pub(super) fn solve_requirement_groups_for_end_state(
                 .iter()
                 .map(|group| Some(group.expression.clone()))
                 .collect::<Vec<_>>();
-            let mut validation =
-                EndStateValidation::new(validated, residuals, Vec::new(), HashSet::new());
+            let mut validation = EndStateValidation::new(
+                validated,
+                residuals,
+                Vec::new(),
+                HashSet::new(),
+                canonical_equivalents,
+            );
             solve_validated_groups_to_fixed_point(conn, &mut validation, None, &[], &[], policy, "")
         }
         EndState::Known { outgoing_trove_ids } => {
             let native_architecture = crate::repository::registry::detect_system_arch()?;
             let facts = end_state_facts(conn, outgoing_trove_ids, incoming)?;
-            let affected =
-                affected_capability_names(outgoing_trove_ids, incoming, &validated, &facts.before);
+            let affected = affected_capability_names(
+                outgoing_trove_ids,
+                incoming,
+                &validated,
+                &facts.before,
+                &canonical_equivalents,
+            );
             if affected.is_empty() {
                 return Ok(SatResolution::empty());
             }
@@ -387,10 +429,16 @@ pub(super) fn solve_requirement_groups_for_end_state(
                     group,
                     &facts.fixed,
                     &native_architecture,
+                    &canonical_equivalents,
                 )?);
             }
-            let mut validation =
-                EndStateValidation::new(validated, residuals, candidates, affected);
+            let mut validation = EndStateValidation::new(
+                validated,
+                residuals,
+                candidates,
+                affected,
+                canonical_equivalents,
+            );
             validation.admit_mentioned(
                 &facts.before,
                 &facts.fixed,
@@ -497,6 +545,7 @@ fn solve_validated_groups_to_fixed_point(
             &remove_order,
             &validation.groups,
             native_architecture,
+            &validation.canonical_equivalents,
         )?;
         if violated.is_empty() && !added_unsatisfied {
             return Ok(SatResolution::resolved(install_order, remove_order));
@@ -539,6 +588,7 @@ fn groups_violated_by_solved_end_state(
     remove_order: &[SatRelationRemoval],
     groups: &[ValidatedRequirementGroup],
     native_architecture: &str,
+    canonical_equivalents: &CanonicalEquivalents,
 ) -> Result<Vec<usize>> {
     let removed = removed_trove_ids(remove_order);
     let mut projected = fixed_end_state.to_vec();
@@ -556,7 +606,7 @@ fn groups_violated_by_solved_end_state(
         if group.owner_removed_by(&removed) {
             continue;
         }
-        if !group.satisfied_against(native_architecture, &projected)? {
+        if !group.satisfied_against(native_architecture, &projected, canonical_equivalents)? {
             violated.push(index);
         }
     }
@@ -767,6 +817,7 @@ fn simplify_against_end_state(
     depending_architecture: &str,
     native_architecture: &str,
     end_state: &[PackageIdentity],
+    canonical_equivalents: &CanonicalEquivalents,
 ) -> Result<Option<RepositoryRequirementExpression>> {
     use RepositoryRequirementExpression as Expression;
 
@@ -776,12 +827,13 @@ fn simplify_against_end_state(
         // work. Composite nodes decide their own satisfaction structurally, so a
         // sub-expression is evaluated exactly once.
         Expression::Atom(_) | Expression::With { .. } | Expression::Without { .. } => {
-            if crate::resolver::requirement_expression_satisfied(
+            if crate::resolver::requirements::requirement_expression_satisfied_with_canonical_equivalents(
                 expression,
                 version_scheme,
                 depending_architecture,
                 native_architecture,
                 end_state,
+                canonical_equivalents,
             )? {
                 Ok(None)
             } else {
@@ -797,6 +849,7 @@ fn simplify_against_end_state(
                     depending_architecture,
                     native_architecture,
                     end_state,
+                    canonical_equivalents,
                 )? {
                     rewritten.push(operand);
                 }
@@ -816,6 +869,7 @@ fn simplify_against_end_state(
                     depending_architecture,
                     native_architecture,
                     end_state,
+                    canonical_equivalents,
                 )? {
                     Some(operand) => rewritten.push(operand),
                     // One true disjunct makes the whole disjunction true.
@@ -835,6 +889,7 @@ fn simplify_against_end_state(
                 depending_architecture,
                 native_architecture,
                 end_state,
+                canonical_equivalents,
             )? {
                 requirement
             } else {
@@ -849,6 +904,7 @@ fn simplify_against_end_state(
                 depending_architecture,
                 native_architecture,
                 end_state,
+                canonical_equivalents,
             )
         }
         Expression::Unless {
@@ -862,6 +918,7 @@ fn simplify_against_end_state(
                 depending_architecture,
                 native_architecture,
                 end_state,
+                canonical_equivalents,
             )? {
                 requirement
             } else {
@@ -876,6 +933,7 @@ fn simplify_against_end_state(
                 depending_architecture,
                 native_architecture,
                 end_state,
+                canonical_equivalents,
             )
         }
     }
@@ -889,13 +947,15 @@ fn condition_holds_against_end_state(
     depending_architecture: &str,
     native_architecture: &str,
     end_state: &[PackageIdentity],
+    canonical_equivalents: &CanonicalEquivalents,
 ) -> Result<bool> {
-    crate::resolver::requirement_expression_satisfied(
+    crate::resolver::requirements::requirement_expression_satisfied_with_canonical_equivalents(
         condition,
         version_scheme,
         depending_architecture,
         native_architecture,
         end_state,
+        canonical_equivalents,
     )
 }
 

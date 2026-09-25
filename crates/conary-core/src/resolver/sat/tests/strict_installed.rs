@@ -2,8 +2,12 @@
 
 #![cfg(test)]
 
+use super::formal_dependencies::insert_repo_pkg_with_reqs;
 use super::*;
-use crate::db::models::{ProvideEntry, RepositoryProvide, Trove, TroveType};
+use crate::db::models::{
+    CanonicalMappingAuthority, CanonicalPackage, PackageImplementation, ProvideEntry,
+    RepositoryProvide, Trove, TroveType,
+};
 use crate::repository::dependency_model::{
     RepositoryCapabilityKind, RepositoryRequirementClause, RepositoryRequirementGroup,
     RepositoryRequirementKind,
@@ -623,4 +627,241 @@ fn authority_conditional_chain_solves_beyond_two_passes() {
         .collect::<Vec<_>>();
     names.sort_unstable();
     assert_eq!(names, ["bar", "baz", "foo", "qux"], "{resolved:?}");
+}
+
+/// Register one canonical package with distro-specific implementation names.
+fn insert_canonical_equivalence(
+    conn: &Connection,
+    canonical_name: &str,
+    implementations: &[(&str, &str)],
+) {
+    let mut package = CanonicalPackage::new(canonical_name.to_string(), "package".to_string());
+    let canonical_id = package.insert(conn).unwrap();
+    for (distro, distro_name) in implementations {
+        let mut implementation = PackageImplementation::new(
+            canonical_id,
+            (*distro).to_string(),
+            (*distro_name).to_string(),
+            CanonicalMappingAuthority::Contract,
+        );
+        implementation.insert(conn).unwrap();
+    }
+}
+
+/// Map `httpd` and `apache2` to one canonical identity.
+fn canonical_httpd_apache2(conn: &Connection) {
+    insert_canonical_equivalence(
+        conn,
+        "httpd",
+        &[("fedora-44", "httpd"), ("ubuntu-26.04", "apache2")],
+    );
+}
+
+#[test]
+fn strict_policy_accepts_installed_canonical_equivalent() {
+    let (_dir, conn) = setup_test_db();
+    let policy = strict_policy_without_source_authority(&conn);
+    insert_rpm_trove(&conn, "apache2", "1.0.0", &[]);
+
+    // Control: `apache2` is a different literal identity than `httpd`, and
+    // strict policy has no repository authority to install a provider, so the
+    // incoming requirement is refused.
+    let refused = solve_requirement_groups_with_outgoing_and_policy(
+        &conn,
+        &[hard_depends("httpd")],
+        VersionScheme::Rpm,
+        &[],
+        &policy,
+    )
+    .unwrap_err();
+    assert!(matches!(refused, Error::ConfigError(_)), "{refused:?}");
+
+    // The canonical row makes the installed `apache2` the same package identity
+    // as `httpd`, so the fixed end state satisfies the requirement with an
+    // empty install order.
+    canonical_httpd_apache2(&conn);
+    let satisfied = solve_requirement_groups_with_outgoing_and_policy(
+        &conn,
+        &[hard_depends("httpd")],
+        VersionScheme::Rpm,
+        &[],
+        &policy,
+    )
+    .unwrap();
+    assert!(satisfied.install_order.is_empty(), "{satisfied:?}");
+    assert!(satisfied.remove_order.is_empty(), "{satisfied:?}");
+    assert_eq!(satisfied.conflict_message, None, "{satisfied:?}");
+}
+
+#[test]
+fn repository_authority_accepts_solved_canonical_equivalent() {
+    let (_dir, conn) = setup_test_db();
+    let repository_id = repository_fixture(&conn);
+    let policy = ResolutionPolicy::new().with_primary_source_identity("fedora-44");
+    canonical_httpd_apache2(&conn);
+    insert_rpm_repo_package(&conn, repository_id, "apache2", "1-1");
+    // The surviving installed dependent names the repository equivalent, so
+    // transitive loading admits the `apache2` solvable into SAT's candidate
+    // universe while the incoming group still names `httpd`.
+    insert_rpm_trove(&conn, "dependent", "1.0.0", &[("apache2", None)]);
+
+    let resolved = solve_requirement_groups_with_outgoing_and_policy(
+        &conn,
+        &[hard_depends("httpd")],
+        VersionScheme::Rpm,
+        &[],
+        &policy,
+    )
+    .unwrap();
+    assert!(resolved.conflict_message.is_none(), "{resolved:?}");
+    let names = resolved
+        .install_order
+        .iter()
+        .map(|package| package.name.as_str())
+        .collect::<Vec<_>>();
+    assert!(names.contains(&"apache2"), "{resolved:?}");
+}
+
+#[test]
+fn repository_authority_rejects_non_equivalent_name() {
+    let (_dir, conn) = setup_test_db();
+    let repository_id = repository_fixture(&conn);
+    let policy = ResolutionPolicy::new().with_primary_source_identity("fedora-44");
+    // `apache2` is present in the same candidate universe but has no canonical
+    // row linking it to `httpd`, so it is a different identity and the
+    // requirement is refused.
+    insert_rpm_repo_package(&conn, repository_id, "apache2", "1-1");
+    insert_rpm_trove(&conn, "dependent", "1.0.0", &[("apache2", None)]);
+
+    let refused = solve_requirement_groups_with_outgoing_and_policy(
+        &conn,
+        &[hard_depends("httpd")],
+        VersionScheme::Rpm,
+        &[],
+        &policy,
+    )
+    .unwrap();
+    assert!(refused.conflict_message.is_some(), "{refused:?}");
+    assert!(refused.install_order.is_empty(), "{refused:?}");
+}
+
+#[test]
+fn installed_canonical_equivalent_survives_literal_provider_removal() {
+    let (_dir, conn) = setup_test_db();
+    let policy = strict_policy_without_source_authority(&conn);
+    let literal_httpd = insert_rpm_trove(&conn, "httpd", "1.0.0", &[]);
+    insert_rpm_trove(&conn, "apache2", "1.0.0", &[]);
+    insert_rpm_trove(&conn, "dependent", "1.0.0", &[("httpd", None)]);
+
+    // Control: removing the literal `httpd` leaves the installed dependent's
+    // `httpd` group unsatisfied in the fixed end state, so strict policy
+    // refuses rather than silently dropping the breakage.
+    let refused = solve_requirement_groups_with_outgoing_and_policy(
+        &conn,
+        &[],
+        VersionScheme::Rpm,
+        &[literal_httpd],
+        &policy,
+    )
+    .unwrap_err();
+    assert!(matches!(refused, Error::ConfigError(_)), "{refused:?}");
+
+    // The transaction leaves `apache2` alone; because it is a canonical
+    // equivalent of `httpd`, the installed dependent is not newly broken.
+    canonical_httpd_apache2(&conn);
+    let satisfied = solve_requirement_groups_with_outgoing_and_policy(
+        &conn,
+        &[],
+        VersionScheme::Rpm,
+        &[literal_httpd],
+        &policy,
+    )
+    .unwrap();
+    assert!(satisfied.install_order.is_empty(), "{satisfied:?}");
+    assert!(satisfied.remove_order.is_empty(), "{satisfied:?}");
+    assert_eq!(satisfied.conflict_message, None, "{satisfied:?}");
+}
+
+/// Build the `apache2`-obsoleted-by-`newpkg` relation-removal fixture.
+///
+/// Returns `(apache2_trove_id, dependent_trove_id)`. The installed `apache2`
+/// provides nothing beyond its own identity, and the repository `newpkg`
+/// obsoletes it without providing anything named `httpd`, so the only way the
+/// installed `consumer-x`'s `httpd` group can be noticed is canonical
+/// equivalence between `httpd` and `apache2`.
+fn relation_removal_fixture(conn: &Connection) -> (i64, i64) {
+    let repository_id = repository_fixture(conn);
+    let apache2_trove_id = insert_rpm_trove(conn, "apache2", "1.0.0", &[]);
+    let dependent_trove_id = insert_rpm_trove(conn, "consumer-x", "1.0.0", &[("httpd", None)]);
+
+    let newpkg_id = insert_repo_pkg_with_reqs(
+        conn,
+        repository_id,
+        "newpkg",
+        "2.0-1",
+        "https://example.invalid/newpkg.rpm",
+        "rpm",
+        &[],
+    );
+    let obsolete = crate::repository::package_relation::parse_native_relation(
+        RepositoryRequirementKind::Obsolete,
+        VersionScheme::Rpm,
+        "apache2 < 2",
+    )
+    .unwrap();
+    insert_typed_repo_requirement_group(conn, newpkg_id, &obsolete);
+
+    (apache2_trove_id, dependent_trove_id)
+}
+
+#[test]
+fn relation_removal_of_canonical_equivalent_is_attributed_to_installed_requirer() {
+    let (_dir, conn) = setup_test_db();
+    let (apache2_trove_id, dependent_trove_id) = relation_removal_fixture(&conn);
+    let policy = ResolutionPolicy::new().with_primary_source_identity("fedora-44");
+    let requirement = hard_depends("newpkg");
+    let solve = || {
+        solve_requirement_groups_with_outgoing_and_policy(
+            &conn,
+            std::slice::from_ref(&requirement),
+            VersionScheme::Rpm,
+            &[],
+            &policy,
+        )
+        .unwrap()
+    };
+
+    // Control through the same fixture: without canonical rows, `consumer-x`
+    // names `httpd` while the removed `apache2` provides nothing, so the group
+    // is pre-existing breakage that this transaction must not blame. The
+    // fixture still plans the removal (proving the relation is live).
+    let control = solve();
+    assert_eq!(control.conflict_message, None, "{control:?}");
+    assert!(control.unsatisfied_groups.is_empty(), "{control:?}");
+    assert_eq!(
+        control
+            .remove_order
+            .iter()
+            .map(|removal| removal.trove_id)
+            .collect::<Vec<_>>(),
+        vec![apache2_trove_id],
+        "{control:?}"
+    );
+
+    // The canonical rows make `apache2` the same identity as `httpd`, so
+    // removing `apache2` silently breaks `consumer-x` unless the fixed point
+    // admits and blames it. The refusal names that installed requirer.
+    canonical_httpd_apache2(&conn);
+    let refused = solve();
+    assert!(refused.conflict_message.is_some(), "{refused:?}");
+    assert!(refused.install_order.is_empty(), "{refused:?}");
+    assert_eq!(refused.unsatisfied_groups.len(), 1, "{refused:?}");
+    assert_eq!(
+        refused.unsatisfied_groups[0].owner,
+        crate::resolver::sat::SatGroupOwner::Installed {
+            trove_id: dependent_trove_id,
+            package_name: "consumer-x".to_string(),
+        },
+        "{refused:?}"
+    );
 }

@@ -19,6 +19,7 @@ use crate::repository::dependency_model::{
     RepositoryRequirementExpression, RepositoryRequirementKind,
 };
 use crate::repository::versioning::VersionScheme;
+use crate::resolver::canonical::CanonicalEquivalents;
 use crate::resolver::identity::PackageIdentity;
 
 use super::{ValidatedGroupOwner, ValidatedRequirementGroup};
@@ -113,20 +114,43 @@ pub(super) fn installed_hard_group_candidates(
     Ok(candidates)
 }
 
+/// Insert a package identity name and every canonical equivalent of that name
+/// into the affected set.
+///
+/// Canonical equivalence is identity-only. Call sites add provided-capability
+/// names literally, because a canonical row must never make a capability name
+/// affected.
+pub(super) fn insert_identity_name(
+    affected: &mut HashSet<String>,
+    name: &str,
+    canonical_equivalents: &CanonicalEquivalents,
+) {
+    affected.insert(name.to_string());
+    for equivalent in canonical_equivalents.for_name(name) {
+        affected.insert(equivalent.clone());
+    }
+}
+
 /// The capability names the transaction already declares as added or removed:
 /// the incoming package's name and provides, the incoming groups' atoms (which
 /// the solve may install from a repository), and every declared outgoing
 /// trove's name and provides. The loop extends this with the identities SAT
 /// selects and the troves relation planning removes.
+///
+/// A package identity name contributes its canonical equivalents too, because
+/// removing or replacing one implementation removes the canonical identity and
+/// can break an installed dependent that names a sibling. Provided-capability
+/// names stay literal.
 pub(super) fn affected_capability_names(
     outgoing_trove_ids: &[i64],
     incoming: Option<&PackageIdentity>,
     incoming_groups: &[ValidatedRequirementGroup],
     before: &[PackageIdentity],
+    canonical_equivalents: &CanonicalEquivalents,
 ) -> HashSet<String> {
     let mut affected = HashSet::new();
     if let Some(incoming) = incoming {
-        affected.insert(incoming.name.clone());
+        insert_identity_name(&mut affected, &incoming.name, canonical_equivalents);
         for capability in &incoming.provided_capabilities {
             affected.insert(capability.name.clone());
         }
@@ -144,7 +168,7 @@ pub(super) fn affected_capability_names(
         {
             continue;
         }
-        affected.insert(package.name.clone());
+        insert_identity_name(&mut affected, &package.name, canonical_equivalents);
         for capability in &package.provided_capabilities {
             affected.insert(capability.name.clone());
         }
