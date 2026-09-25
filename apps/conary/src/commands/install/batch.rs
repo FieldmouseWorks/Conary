@@ -28,6 +28,9 @@ use super::ccs_hook_interpreter::{element_plan, hook_interpreters, preflight_hoo
 use super::ccs_removal_hooks::CcsRemovalHookPlan;
 use super::inner;
 use super::native_events::{NativeInstallInput, PreparedNativeTransaction};
+use super::payload_effects::{
+    ElementPayloadEffectInput, PayloadEffectFiles, plan_element_payload_effects,
+};
 use super::prepare::{UpgradeCheck, check_upgrade_status, parse_package};
 use super::{
     InstallIntent, InstallReplacement, InstallSemantics, NativeLifecycleInstallState,
@@ -512,20 +515,31 @@ impl<'a> BatchInstaller<'a> {
         // then require each hook's interpreter, all before the first mutation.
         let elements = packages
             .iter()
-            .map(|package| {
-                element_plan(
+            .map(|package| -> Result<_> {
+                let effects = plan_element_payload_effects(
+                    &preflight_state,
+                    &selected_path,
+                    ElementPayloadEffectInput {
+                        semantics: package.semantics,
+                        package_name: &package.name,
+                        relation_removals: &package.relation_removals,
+                        replacing_trove_id: package.old_trove_id()?,
+                        config_declarations: &package.config_declarations,
+                        files: PayloadEffectFiles::Extracted(&package.extracted_files),
+                    },
+                )?;
+                Ok(element_plan(
                     &package.name,
                     &package.version,
                     package.old_trove.as_deref(),
                     &package.relation_removals,
-                    &package.extracted_files,
-                    &package.provides,
+                    effects,
                     package
                         .ccs
                         .as_ref()
                         .map(|ccs| hook_interpreters(&ccs.hooks))
                         .unwrap_or_default(),
-                )
+                ))
             })
             .collect::<Result<Vec<_>>>()?;
         preflight_hook_interpreters(&preflight_state, &selected_path, &elements)?;

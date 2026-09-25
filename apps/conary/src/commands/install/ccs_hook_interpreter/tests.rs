@@ -3,12 +3,25 @@
 #![cfg(test)]
 
 use super::*;
-use conary_core::packages::traits::ExtractedFile;
+use crate::commands::install::payload_effects::{
+    ElementPayloadEffectInput, ElementPayloadEffects, PayloadEffectFiles,
+    plan_element_payload_effects,
+};
+use crate::commands::install::{InstallSemantics, PackageFormatType};
+use crate::commands::{LiveRootContent, LiveRootFile};
+use conary_core::db::models::{ConfigFile, ConfigSource, Trove, TroveType};
+use conary_core::filesystem::ProjectedNode;
+use conary_core::packages::config_authority::{ConfigPayloadAssociation, SourceConfigDeclaration};
+use conary_core::packages::deb::authority::DebianConfigDeclaration;
+use conary_core::packages::payload::{PackagePayloadFile, ReopenablePayload};
 use conary_core::payload::{
     PayloadContentAuthority, PayloadIdentity, PayloadNode, PayloadNodeKind, PayloadTimestamp,
+    ResolvedPayloadNode,
 };
+use conary_core::repository::versioning::VersionScheme;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
 
 const PRESENT: &str = "/usr/bin/hook-interpreter";
 
@@ -17,13 +30,6 @@ fn typed(error: anyhow::Error) -> CcsHookInterpreterUnavailable {
     error
         .downcast()
         .expect("refusal must be the typed CcsHookInterpreterUnavailable")
-}
-
-fn executable(path: &str) -> IntroducedNode {
-    IntroducedNode {
-        path: path.to_string(),
-        kind: IntroducedNodeKind::Executable,
-    }
 }
 
 fn post_install(interpreter: &str) -> HookInterpreter {
@@ -40,23 +46,55 @@ fn pre_remove(interpreter: &str) -> HookInterpreter {
     }
 }
 
-fn non_executable(path: &str) -> IntroducedNode {
-    IntroducedNode {
-        path: path.to_string(),
-        kind: IntroducedNodeKind::NonExecutable,
+struct Fixture {
+    _temp: tempfile::TempDir,
+    conn: rusqlite::Connection,
+    root: PathBuf,
+}
+
+fn fixture() -> Fixture {
+    let (temp, db_path) = crate::commands::test_helpers::create_test_db();
+    let conn = conary_core::db::open(&db_path).unwrap();
+    let root = temp.path().join("selected");
+    fs::create_dir_all(&root).unwrap();
+    Fixture {
+        _temp: temp,
+        conn,
+        root,
     }
 }
 
-fn projected_symlink(path: &str, target: &str) -> IntroducedNode {
-    IntroducedNode {
-        path: path.to_string(),
-        kind: IntroducedNodeKind::Symlink {
-            target: target.to_string(),
-        },
-    }
+fn rpm_semantics() -> InstallSemantics {
+    InstallSemantics::native_package(PackageFormatType::Rpm)
 }
 
-fn payload_node(kind: PayloadNodeKind, mode: u32) -> PayloadNode {
+fn deb_semantics() -> InstallSemantics {
+    InstallSemantics::native_package(PackageFormatType::Deb)
+}
+
+fn write_regular(root: &Path, package_path: &str, bytes: &[u8], mode: u32) {
+    let path = root.join(package_path.trim_start_matches('/'));
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, bytes).unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(mode)).unwrap();
+}
+
+fn write_executable(root: &Path, package_path: &str) {
+    write_regular(root, package_path, b"#!/bin/sh\nexit 0\n", 0o755);
+}
+
+fn insert_trove(conn: &rusqlite::Connection, name: &str) -> i64 {
+    Trove::new(
+        name.to_string(),
+        "1.0.0".to_string(),
+        TroveType::Package,
+        VersionScheme::Conary,
+    )
+    .insert(conn)
+    .unwrap()
+}
+
+fn numeric_node(kind: PayloadNodeKind, mode: u32) -> PayloadNode {
     PayloadNode {
         kind,
         mode,
@@ -67,721 +105,477 @@ fn payload_node(kind: PayloadNodeKind, mode: u32) -> PayloadNode {
     }
 }
 
-fn payload_file(path: &str, node: PayloadNode) -> PackagePayloadFile {
-    let content = b"#!/bin/sh\nexit 0\n".to_vec();
-    let (content, content_authority) = if matches!(node.kind, PayloadNodeKind::Regular { .. }) {
-        let authority = PayloadContentAuthority {
-            sha256: conary_core::hash::sha256(&content),
-            size: content.len() as u64,
-        };
-        (content, Some(authority))
-    } else {
-        (Vec::new(), None)
-    };
-    let payload =
-        conary_core::packages::PackagePayload::from_extracted_in_memory(vec![ExtractedFile {
-            path: path.to_string(),
-            node,
-            content,
-            content_authority,
-        }])
-        .unwrap();
-    payload.into_files().into_iter().next().unwrap()
+fn regular_node(mode: u32) -> PayloadNode {
+    numeric_node(
+        PayloadNodeKind::Regular {
+            hardlink_identity: None,
+        },
+        libc::S_IFREG | (mode & 0o7777),
+    )
 }
 
-fn ledger_with_executable() -> (tempfile::TempDir, HookInterpreterLedger) {
-    let root = tempfile::tempdir().unwrap();
-    let path = root.path().join(PRESENT.trim_start_matches('/'));
-    fs::create_dir_all(path.parent().unwrap()).unwrap();
-    fs::write(&path, b"#!/bin/sh\nexit 0\n").unwrap();
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
-    let ledger = HookInterpreterLedger::new(root.path());
-    (root, ledger)
+fn directory_node(mode: u32) -> PayloadNode {
+    numeric_node(PayloadNodeKind::Directory, libc::S_IFDIR | (mode & 0o7777))
+}
+
+fn symlink_node(target: &str) -> PayloadNode {
+    numeric_node(
+        PayloadNodeKind::Symlink {
+            target: target.to_string(),
+        },
+        libc::S_IFLNK | 0o777,
+    )
+}
+
+fn hardlink_node(target: &str, identity: &str, mode: u32) -> PayloadNode {
+    numeric_node(
+        PayloadNodeKind::Hardlink {
+            target: target.to_string(),
+            identity: identity.to_string(),
+        },
+        libc::S_IFREG | (mode & 0o7777),
+    )
+}
+
+fn regular_payload(path: &str, bytes: &[u8], mode: u32) -> PackagePayloadFile {
+    let authority = PayloadContentAuthority {
+        sha256: conary_core::hash::sha256(bytes),
+        size: bytes.len() as u64,
+    };
+    PackagePayloadFile::new(
+        path.to_string(),
+        regular_node(mode),
+        Some(authority),
+        Some(ReopenablePayload::from_in_memory_bytes(bytes.to_vec())),
+    )
+    .unwrap()
+}
+
+fn node_payload(path: &str, node: PayloadNode) -> PackagePayloadFile {
+    PackagePayloadFile::new(path.to_string(), node, None, None).unwrap()
+}
+
+fn directory_payload(path: &str, mode: u32) -> PackagePayloadFile {
+    node_payload(path, directory_node(mode))
+}
+
+fn hardlink_payload(path: &str, target: &str, identity: &str, mode: u32) -> PackagePayloadFile {
+    node_payload(path, hardlink_node(target, identity, mode))
+}
+
+/// Build one element's payload effects exactly as the install callers do.
+fn effects(
+    fixture: &Fixture,
+    semantics: InstallSemantics,
+    files: &[PackagePayloadFile],
+) -> ElementPayloadEffects {
+    plan_element_payload_effects(
+        &fixture.conn,
+        &fixture.root,
+        ElementPayloadEffectInput {
+            semantics,
+            package_name: "fixture",
+            relation_removals: &[],
+            replacing_trove_id: None,
+            config_declarations: &[],
+            files: PayloadEffectFiles::Extracted(files),
+        },
+    )
+    .unwrap()
+}
+
+fn plan(
+    fixture: &Fixture,
+    semantics: InstallSemantics,
+    files: &[PackagePayloadFile],
+    hooks: Vec<HookInterpreter>,
+) -> ElementPlan {
+    element_plan(
+        "fixture",
+        "1.0.0",
+        None,
+        &[],
+        effects(fixture, semantics, files),
+        hooks,
+    )
+}
+
+/// Build one element plan whose payload declares a Debian conffile at `path`.
+fn deb_conffile_plan(
+    fixture: &Fixture,
+    path: &str,
+    files: &[PackagePayloadFile],
+    hooks: Vec<HookInterpreter>,
+) -> ElementPlan {
+    let declarations = vec![SourceConfigDeclaration::Debian(DebianConfigDeclaration {
+        control_index: 0,
+        path: path.to_string(),
+        remove_on_upgrade: false,
+        payload: ConfigPayloadAssociation::Matched,
+    })];
+    element_plan(
+        "fixture",
+        "1.0.0",
+        None,
+        &[],
+        plan_element_payload_effects(
+            &fixture.conn,
+            &fixture.root,
+            ElementPayloadEffectInput {
+                semantics: deb_semantics(),
+                package_name: "fixture",
+                relation_removals: &[],
+                replacing_trove_id: None,
+                config_declarations: &declarations,
+                files: PayloadEffectFiles::Extracted(files),
+            },
+        )
+        .unwrap(),
+        hooks,
+    )
+}
+
+fn live_file(path: &str, node: PayloadNode) -> LiveRootFile {
+    LiveRootFile {
+        path: path.to_string(),
+        content: LiveRootContent::absent(),
+        node: ResolvedPayloadNode::from_numeric_source(node).unwrap(),
+    }
 }
 
 #[test]
-fn present_interpreter_in_root_is_available() {
-    let (_root, ledger) = ledger_with_executable();
+fn projected_node_maps_every_payload_kind() {
+    assert_eq!(
+        projected_node(&live_file("/usr/bin/run", regular_node(0o755))),
+        ProjectedNode::Regular { executable: true }
+    );
+    assert_eq!(
+        projected_node(&live_file("/usr/share/data", regular_node(0o644))),
+        ProjectedNode::Regular { executable: false }
+    );
+    assert_eq!(
+        projected_node(&live_file("/opt", directory_node(0o755))),
+        ProjectedNode::Directory
+    );
+    assert_eq!(
+        projected_node(&live_file("/bin/sh", symlink_node("busybox"))),
+        ProjectedNode::Symlink {
+            target: "busybox".to_string()
+        }
+    );
+    assert_eq!(
+        projected_node(&live_file(
+            "/bin/sh",
+            hardlink_node("/bin/busybox", "chain:1", 0o755)
+        )),
+        ProjectedNode::Hardlink {
+            target: "/bin/busybox".to_string()
+        }
+    );
+    assert_eq!(
+        projected_node(&live_file(
+            "/run/pipe",
+            numeric_node(PayloadNodeKind::Fifo, libc::S_IFIFO | 0o644)
+        )),
+        ProjectedNode::Other
+    );
+}
 
-    ledger
-        .require("pkg", "1.0.0", HookPhase::PostInstall, PRESENT)
+#[test]
+fn post_install_interpreter_in_the_root_is_available() {
+    let fixture = fixture();
+    write_executable(&fixture.root, PRESENT);
+    let element = plan(&fixture, rpm_semantics(), &[], vec![post_install(PRESENT)]);
+
+    preflight_hook_interpreters(&fixture.conn, &fixture.root, &[element])
         .expect("an executable in the selected root is available");
 }
 
 #[test]
-fn absent_interpreter_is_rejected_with_the_exact_reason() {
-    let (_root, ledger) = ledger_with_executable();
+fn absent_post_install_interpreter_is_refused_with_the_exact_reason() {
+    let fixture = fixture();
+    write_executable(&fixture.root, PRESENT);
     let missing = "/usr/bin/absent";
 
-    // Positive control: the identical fixture finds the present path.
-    ledger
-        .require("pkg", "1.0.0", HookPhase::PostInstall, PRESENT)
+    // Positive control on the same fixture: the present path is available.
+    let present = plan(&fixture, rpm_semantics(), &[], vec![post_install(PRESENT)]);
+    preflight_hook_interpreters(&fixture.conn, &fixture.root, &[present])
         .expect("the fixture's present executable is available");
 
-    let error = ledger
-        .require("pkg", "1.0.0", HookPhase::PostInstall, missing)
+    let element = plan(&fixture, rpm_semantics(), &[], vec![post_install(missing)]);
+    let error = preflight_hook_interpreters(&fixture.conn, &fixture.root, &[element])
         .map_err(typed)
         .expect_err("an absent interpreter must be refused");
-    assert_eq!(error.package, "pkg");
+    assert_eq!(error.package, "fixture");
     assert_eq!(error.version, "1.0.0");
     assert_eq!(error.phase, HookPhase::PostInstall);
     assert_eq!(error.interpreter, missing);
 }
 
 #[test]
-fn own_element_can_introduce_an_absent_interpreter() {
-    let root = tempfile::tempdir().unwrap();
-    let mut ledger = HookInterpreterLedger::new(root.path());
+fn pre_remove_interpreter_is_refused_then_authorized_by_shipped_payload() {
+    let fixture = fixture();
+
+    let refused = plan(&fixture, rpm_semantics(), &[], vec![pre_remove("/bin/sh")]);
+    let error = preflight_hook_interpreters(&fixture.conn, &fixture.root, &[refused])
+        .map_err(typed)
+        .expect_err("an unavailable pre-remove interpreter must be refused");
+    assert_eq!(error.phase, HookPhase::PreRemove);
+    assert_eq!(error.interpreter, "/bin/sh");
+
+    // Positive control through the same fixture: the element ships /bin/sh.
+    let satisfied = plan(
+        &fixture,
+        rpm_semantics(),
+        &[regular_payload("/bin/sh", b"#!/bin/sh\n", 0o755)],
+        vec![pre_remove("/bin/sh")],
+    );
+    preflight_hook_interpreters(&fixture.conn, &fixture.root, &[satisfied])
+        .expect("a shipped payload interpreter satisfies the pre-remove hook");
+}
+
+#[test]
+fn own_element_introduced_executable_authorizes_post_install() {
+    let fixture = fixture();
     let planned = "/opt/planned/sh";
 
     // Negative control on the same fixture: without the element it is absent.
-    assert!(
-        ledger
-            .require("pkg", "1.0.0", HookPhase::PostInstall, planned)
-            .map_err(typed)
-            .is_err()
-    );
+    let absent = plan(&fixture, rpm_semantics(), &[], vec![post_install(planned)]);
+    preflight_hook_interpreters(&fixture.conn, &fixture.root, &[absent])
+        .map_err(typed)
+        .expect_err("an unplanned interpreter path must be refused");
 
-    ledger
-        .apply_element(Vec::new(), vec![executable(planned)], Vec::new())
-        .unwrap();
-    ledger
-        .require("pkg", "1.0.0", HookPhase::PostInstall, planned)
+    let provided = plan(
+        &fixture,
+        rpm_semantics(),
+        &[regular_payload(planned, b"#!/bin/sh\n", 0o755)],
+        vec![post_install(planned)],
+    );
+    preflight_hook_interpreters(&fixture.conn, &fixture.root, &[provided])
         .expect("a path introduced by this element is planned availability");
 }
 
 #[test]
-fn earlier_element_executable_authorizes_a_later_interpreter() {
-    let root = tempfile::tempdir().unwrap();
-    let mut ledger = HookInterpreterLedger::new(root.path());
+fn a_later_element_provider_authorizes_an_earlier_consumer() {
+    let fixture = fixture();
+    let consumer = plan(
+        &fixture,
+        rpm_semantics(),
+        &[],
+        vec![post_install("/bin/sh")],
+    );
 
-    ledger
-        .apply_element(Vec::new(), vec![executable("/usr/bin/sh")], Vec::new())
-        .unwrap();
-    ledger
-        .require(
-            "provider-dependent",
-            "2.0.0",
-            HookPhase::PostInstall,
-            "/usr/bin/sh",
-        )
-        .expect("an earlier element's executable payload authorizes the interpreter");
+    // Negative control: the consumer alone is refused.
+    preflight_hook_interpreters(
+        &fixture.conn,
+        &fixture.root,
+        std::slice::from_ref(&consumer),
+    )
+    .map_err(typed)
+    .expect_err("a consumer with no provider must be refused");
+
+    let provider = plan(
+        &fixture,
+        rpm_semantics(),
+        &[regular_payload("/bin/sh", b"#!/bin/sh\n", 0o755)],
+        Vec::new(),
+    );
+    preflight_hook_interpreters(&fixture.conn, &fixture.root, &[consumer, provider])
+        .expect("a later element's payload authorizes an earlier element's interpreter");
 }
 
 #[test]
-fn removal_by_an_earlier_element_beats_root_presence() {
-    let (_root, mut ledger) = ledger_with_executable();
+fn restore_removal_element_removes_a_root_provider_before_installs() {
+    let fixture = fixture();
+    write_executable(&fixture.root, PRESENT);
+    let consumer = plan(&fixture, rpm_semantics(), &[], vec![post_install(PRESENT)]);
 
-    // Positive control: before removal the same fixture is available.
-    ledger
-        .require("pkg", "1.0.0", HookPhase::PostInstall, PRESENT)
-        .expect("the fixture's executable is available before removal");
+    // Positive control: before removal the root provider is available.
+    preflight_hook_interpreters(
+        &fixture.conn,
+        &fixture.root,
+        std::slice::from_ref(&consumer),
+    )
+    .expect("the root provider is available before removal");
 
-    ledger
-        .apply_element(vec![PRESENT.to_string()], Vec::new(), Vec::new())
-        .unwrap();
-    let error = ledger
-        .require("pkg", "1.0.0", HookPhase::PostInstall, PRESENT)
+    // A removal-only element that owns the interpreter path precedes the
+    // install.
+    let mut removal = removal_element_plan(&[]);
+    removal.removed_paths = vec![PRESENT.to_string()];
+    let error = preflight_hook_interpreters(&fixture.conn, &fixture.root, &[removal, consumer])
         .map_err(typed)
-        .expect_err("a removed final provider must not authorize a later interpreter");
+        .expect_err("a removed provider cannot authorize a restored hook");
     assert_eq!(error.interpreter, PRESENT);
     assert_eq!(error.phase, HookPhase::PostInstall);
 }
 
 #[test]
-fn reintroduction_after_removal_restores_availability() {
-    let root = tempfile::tempdir().unwrap();
-    let mut ledger = HookInterpreterLedger::new(root.path());
-
-    ledger
-        .apply_element(vec![PRESENT.to_string()], Vec::new(), Vec::new())
-        .unwrap();
-    assert!(
-        ledger
-            .require("pkg", "1.0.0", HookPhase::PostInstall, PRESENT)
-            .map_err(typed)
-            .is_err()
-    );
-
-    ledger
-        .apply_element(Vec::new(), vec![executable(PRESENT)], Vec::new())
-        .unwrap();
-    ledger
-        .require("pkg", "1.0.0", HookPhase::PostInstall, PRESENT)
-        .expect("a later element reintroducing the path restores availability");
-}
-
-#[test]
-fn introduced_node_classification_uses_kind_and_mode() {
-    let classify = |node| IntroducedNode::from_payload_file(&payload_file("/usr/bin/node", node));
-
-    assert_eq!(
-        classify(PayloadNode::regular(0o755)).kind,
-        IntroducedNodeKind::Executable
-    );
-    assert_eq!(
-        classify(PayloadNode::regular(0o644)).kind,
-        IntroducedNodeKind::NonExecutable
-    );
-    assert_eq!(
-        classify(payload_node(
-            PayloadNodeKind::Directory,
-            libc::S_IFDIR | 0o755
-        ))
-        .kind,
-        IntroducedNodeKind::Directory
-    );
-    assert_eq!(
-        classify(payload_node(
-            PayloadNodeKind::Symlink {
-                target: "busybox".to_string(),
-            },
-            libc::S_IFLNK | 0o777,
-        ))
-        .kind,
-        IntroducedNodeKind::Symlink {
-            target: "busybox".to_string(),
-        }
-    );
-}
-
-#[test]
-fn introduced_non_executable_regular_file_is_unavailable_and_exec_bit_authorizes() {
-    let root = tempfile::tempdir().unwrap();
-    let mut ledger = HookInterpreterLedger::new(root.path());
-    let path = "/usr/bin/hook-interpreter";
-    ledger
-        .apply_element(Vec::new(), vec![non_executable(path)], Vec::new())
-        .unwrap();
-    let error = ledger
-        .require("pkg", "1.0.0", HookPhase::PostInstall, path)
-        .map_err(typed)
-        .expect_err("a regular payload file without an execute bit cannot run the hook");
-    assert_eq!(error.interpreter, path);
-
-    // Positive control on the same fixture: the execute bit authorizes.
-    let mut executable_ledger = HookInterpreterLedger::new(root.path());
-    executable_ledger
-        .apply_element(Vec::new(), vec![executable(path)], Vec::new())
-        .unwrap();
-    executable_ledger
-        .require("pkg", "1.0.0", HookPhase::PostInstall, path)
-        .expect("the same node with an execute bit authorizes the interpreter");
-}
-
-#[test]
-fn introduced_directory_at_the_interpreter_path_is_unavailable() {
-    let root = tempfile::tempdir().unwrap();
-    let mut ledger = HookInterpreterLedger::new(root.path());
-    let directory = IntroducedNode::from_payload_file(&payload_file(
-        "/usr/bin/sh",
-        payload_node(PayloadNodeKind::Directory, libc::S_IFDIR | 0o755),
-    ));
-    ledger
-        .apply_element(Vec::new(), vec![directory], Vec::new())
-        .unwrap();
-    let error = ledger
-        .require("pkg", "1.0.0", HookPhase::PostInstall, "/usr/bin/sh")
-        .map_err(typed)
-        .expect_err("a directory node cannot act as the hook interpreter");
-    assert_eq!(error.interpreter, "/usr/bin/sh");
-
-    // Positive control on the same fixture: a regular executable node at the
-    // same path authorizes.
-    let executable_file = IntroducedNode::from_payload_file(&payload_file(
-        "/usr/bin/sh",
-        PayloadNode::regular(0o755),
-    ));
-    let mut executable_ledger = HookInterpreterLedger::new(root.path());
-    executable_ledger
-        .apply_element(Vec::new(), vec![executable_file], Vec::new())
-        .unwrap();
-    executable_ledger
-        .require("pkg", "1.0.0", HookPhase::PostInstall, "/usr/bin/sh")
-        .expect("the same fixture with an executable regular node authorizes");
-}
-
-#[test]
-fn introduced_directory_nodes_are_traversed_to_reach_a_child_executable() {
-    let root = tempfile::tempdir().unwrap();
-    let mut ledger = HookInterpreterLedger::new(root.path());
-    let directory = |path: &str| {
-        IntroducedNode::from_payload_file(&payload_file(
-            path,
-            payload_node(PayloadNodeKind::Directory, libc::S_IFDIR | 0o755),
-        ))
-    };
-    ledger
-        .apply_element(
-            Vec::new(),
-            vec![
-                directory("/usr"),
-                directory("/usr/bin"),
-                executable("/usr/bin/sh"),
-            ],
-            Vec::new(),
-        )
-        .unwrap();
-    ledger
-        .require("pkg", "1.0.0", HookPhase::PostInstall, "/usr/bin/sh")
-        .expect("payload directory nodes must be traversed to reach the interpreter");
-}
-
-#[test]
-fn introduced_symlink_to_an_introduced_executable_is_available() {
-    let root = tempfile::tempdir().unwrap();
-    let mut ledger = HookInterpreterLedger::new(root.path());
-    ledger
-        .apply_element(
-            Vec::new(),
-            vec![
-                projected_symlink("/bin/sh", "busybox"),
-                executable("/bin/busybox"),
-            ],
-            Vec::new(),
-        )
-        .unwrap();
-    ledger
-        .require("pkg", "1.0.0", HookPhase::PostInstall, "/bin/sh")
-        .expect("an introduced symlink to an introduced executable is available");
-}
-
-#[test]
-fn introduced_symlink_absolute_target_resolves_inside_the_root() {
-    let root = tempfile::tempdir().unwrap();
-    let mut ledger = HookInterpreterLedger::new(root.path());
-    ledger
-        .apply_element(
-            Vec::new(),
-            vec![
-                projected_symlink("/bin/sh", "/usr/bin/busybox"),
-                executable("/usr/bin/busybox"),
-            ],
-            Vec::new(),
-        )
-        .unwrap();
-    ledger
-        .require("pkg", "1.0.0", HookPhase::PostInstall, "/bin/sh")
-        .expect("an absolute symlink target is root-relative, never host-relative");
-}
-
-#[test]
-fn introduced_symlink_without_a_projected_target_is_unavailable() {
-    let root = tempfile::tempdir().unwrap();
-    let mut ledger = HookInterpreterLedger::new(root.path());
-    ledger
-        .apply_element(
-            Vec::new(),
-            vec![projected_symlink("/bin/sh", "busybox")],
-            Vec::new(),
-        )
-        .unwrap();
-    let error = ledger
-        .require("pkg", "1.0.0", HookPhase::PostInstall, "/bin/sh")
-        .map_err(typed)
-        .expect_err("an introduced symlink with no provided target cannot run the hook");
-    assert_eq!(error.interpreter, "/bin/sh");
-
-    // Positive control on the same fixture: providing the target authorizes.
-    let mut provided = HookInterpreterLedger::new(root.path());
-    provided
-        .apply_element(
-            Vec::new(),
-            vec![
-                projected_symlink("/bin/sh", "busybox"),
-                executable("/bin/busybox"),
-            ],
-            Vec::new(),
-        )
-        .unwrap();
-    provided
-        .require("pkg", "1.0.0", HookPhase::PostInstall, "/bin/sh")
-        .expect("the same symlink with its executable target provided authorizes");
-}
-
-#[test]
-fn declared_file_capability_without_a_payload_node_does_not_authorize() {
-    let root = tempfile::tempdir().unwrap();
-    let mut ledger = HookInterpreterLedger::new(root.path());
-    ledger
-        .apply_element(Vec::new(), Vec::new(), vec!["/bin/sh".to_string()])
-        .unwrap();
-    let error = ledger
-        .require("pkg", "1.0.0", HookPhase::PostInstall, "/bin/sh")
-        .map_err(typed)
-        .expect_err("a declared File capability is not payload authority");
-    assert_eq!(error.interpreter, "/bin/sh");
-
-    // Positive control on the same fixture: a payload-backed executable
-    // authorizes even though the declaration alone did not.
-    let mut backed = HookInterpreterLedger::new(root.path());
-    backed
-        .apply_element(
-            Vec::new(),
-            vec![executable("/bin/sh")],
-            vec!["/bin/sh".to_string()],
-        )
-        .unwrap();
-    backed
-        .require("pkg", "1.0.0", HookPhase::PostInstall, "/bin/sh")
-        .expect("a declared File capability backed by an executable node authorizes");
-}
-
-#[test]
-fn selected_root_alias_normalizes_both_payload_and_interpreter() {
-    let root = tempfile::tempdir().unwrap();
-    fs::create_dir_all(root.path().join("usr/bin")).unwrap();
-    std::os::unix::fs::symlink("usr/bin", root.path().join("bin")).unwrap();
-    let mut ledger = HookInterpreterLedger::new(root.path());
-    ledger
-        .apply_element(Vec::new(), vec![executable("/usr/bin/sh")], Vec::new())
-        .unwrap();
-    ledger
-        .require("pkg", "1.0.0", HookPhase::PostInstall, "/bin/sh")
-        .expect("the selected-root alias must resolve to the introduced payload path");
-
-    // Negative control on the same fixture: an alias the element does not
-    // introduce is still absent.
-    let error = ledger
-        .require("pkg", "1.0.0", HookPhase::PostInstall, "/bin/bash")
-        .map_err(typed)
-        .expect_err("an alias that the transaction does not provide is refused");
-    assert_eq!(error.interpreter, "/bin/bash");
-}
-
-#[test]
-fn removed_ancestor_symlink_makes_the_interpreter_unreachable() {
-    let root = tempfile::tempdir().unwrap();
-    fs::create_dir_all(root.path().join("usr/bin")).unwrap();
-    std::os::unix::fs::symlink("usr/bin", root.path().join("bin")).unwrap();
-    let installed = root.path().join("usr/bin/sh");
-    fs::write(&installed, b"#!/bin/sh\nexit 0\n").unwrap();
-    fs::set_permissions(&installed, fs::Permissions::from_mode(0o755)).unwrap();
-    let mut ledger = HookInterpreterLedger::new(root.path());
-
-    // Positive control on the same fixture: the root alias reaches the
-    // executable before any removal.
-    ledger
-        .require("pkg", "1.0.0", HookPhase::PostInstall, "/bin/sh")
-        .expect("the root alias reaches the executable before removal");
-
-    ledger
-        .apply_element(vec!["/bin".to_string()], Vec::new(), Vec::new())
-        .unwrap();
-    let error = ledger
-        .require("pkg", "1.0.0", HookPhase::PostInstall, "/bin/sh")
-        .map_err(typed)
-        .expect_err("a removed ancestor symlink must make the alias unreachable");
-    assert_eq!(error.interpreter, "/bin/sh");
-}
-
-#[test]
-fn introduced_ancestor_symlink_reaches_an_introduced_executable() {
-    let root = tempfile::tempdir().unwrap();
-    let mut ledger = HookInterpreterLedger::new(root.path());
-    ledger
-        .apply_element(
-            Vec::new(),
-            vec![
-                projected_symlink("/bin", "usr/bin"),
-                executable("/usr/bin/sh"),
-            ],
-            Vec::new(),
-        )
-        .unwrap();
-    ledger
-        .require("pkg", "1.0.0", HookPhase::PostInstall, "/bin/sh")
-        .expect("an introduced ancestor symlink reaches the introduced executable");
-
-    // Negative control on the same fixture: without the introduced symlink the
-    // root has no /bin to resolve the interpreter through.
-    let mut without_alias = HookInterpreterLedger::new(root.path());
-    without_alias
-        .apply_element(Vec::new(), vec![executable("/usr/bin/sh")], Vec::new())
-        .unwrap();
-    let error = without_alias
-        .require("pkg", "1.0.0", HookPhase::PostInstall, "/bin/sh")
-        .map_err(typed)
-        .expect_err("without the projected symlink the interpreter path is unreachable");
-    assert_eq!(error.interpreter, "/bin/sh");
-}
-
-#[test]
-fn projected_and_root_symlink_loop_is_a_resolution_error() {
-    let root = tempfile::tempdir().unwrap();
-    fs::create_dir_all(root.path().join("usr")).unwrap();
-    std::os::unix::fs::symlink("usr/bin", root.path().join("bin")).unwrap();
-    let mut ledger = HookInterpreterLedger::new(root.path());
-    ledger
-        .apply_element(
-            Vec::new(),
-            vec![projected_symlink("/usr/bin", "/bin")],
-            Vec::new(),
-        )
-        .unwrap();
-
-    let error = ledger
-        .require("pkg", "1.0.0", HookPhase::PostInstall, "/bin/sh")
-        .expect_err("a projected/root symlink loop must fail resolution");
-    assert!(
-        error
-            .downcast_ref::<CcsHookInterpreterUnavailable>()
-            .is_none(),
-        "a symlink loop is a resolution error, not the typed unavailability"
-    );
-    assert!(
-        matches!(
-            error.downcast_ref::<conary_core::Error>(),
-            Some(conary_core::Error::PathTraversal(_))
-        ),
-        "the loop must surface as a typed selected-root path traversal: {error:?}"
-    );
-}
-
-#[test]
-fn preflight_records_every_element_before_requiring_any_interpreter() {
-    let root = tempfile::tempdir().unwrap();
-    let elements = vec![
-        ElementPlan {
-            package: "consumer".to_string(),
-            version: "1.0.0".to_string(),
-            removed_trove_ids: Vec::new(),
-            removed_paths: Vec::new(),
-            introduced_nodes: Vec::new(),
-            declared_file_capabilities: Vec::new(),
-            hook_interpreters: vec![post_install("/bin/sh")],
-        },
-        ElementPlan {
-            package: "provider".to_string(),
-            version: "1.0.0".to_string(),
-            removed_trove_ids: Vec::new(),
-            removed_paths: Vec::new(),
-            introduced_nodes: vec![executable("/bin/sh")],
-            declared_file_capabilities: Vec::new(),
-            hook_interpreters: Vec::new(),
-        },
-    ];
-    preflight_hook_interpreters(&test_conn().1, root.path(), &elements)
-        .expect("a later element's payload authorizes an earlier element's interpreter");
-}
-
-#[test]
-fn pre_remove_only_declared_file_capability_is_refused() {
-    let root = tempfile::tempdir().unwrap();
-    let consumer = ElementPlan {
-        package: "consumer".to_string(),
-        version: "1.0.0".to_string(),
-        removed_trove_ids: Vec::new(),
-        removed_paths: Vec::new(),
-        introduced_nodes: Vec::new(),
-        declared_file_capabilities: vec!["/bin/sh".to_string()],
-        hook_interpreters: vec![pre_remove("/bin/sh")],
-    };
-
-    let error =
-        preflight_hook_interpreters(&test_conn().1, root.path(), std::slice::from_ref(&consumer))
-            .map_err(typed)
-            .expect_err("a declared File capability alone cannot run a pre-remove hook");
-    assert_eq!(error.package, "consumer");
-    assert_eq!(error.version, "1.0.0");
-    assert_eq!(error.phase, HookPhase::PreRemove);
-    assert_eq!(error.interpreter, "/bin/sh");
-}
-
-#[test]
-fn pre_remove_declared_file_capability_backed_by_payload_is_available() {
-    let root = tempfile::tempdir().unwrap();
-    let consumer = ElementPlan {
-        package: "consumer".to_string(),
-        version: "1.0.0".to_string(),
-        removed_trove_ids: Vec::new(),
-        removed_paths: Vec::new(),
-        introduced_nodes: vec![executable("/bin/sh")],
-        declared_file_capabilities: vec!["/bin/sh".to_string()],
-        hook_interpreters: vec![pre_remove("/bin/sh")],
-    };
-
-    preflight_hook_interpreters(&test_conn().1, root.path(), std::slice::from_ref(&consumer))
-        .expect("the same declaration backed by an executable payload authorizes the hook");
-}
-
-#[test]
 fn post_install_availability_does_not_authorize_a_different_pre_remove_interpreter() {
-    let root = tempfile::tempdir().unwrap();
-    let consumer = ElementPlan {
-        package: "consumer".to_string(),
-        version: "1.0.0".to_string(),
-        removed_trove_ids: Vec::new(),
-        removed_paths: Vec::new(),
-        introduced_nodes: vec![executable("/usr/bin/post-install-sh")],
-        declared_file_capabilities: Vec::new(),
-        hook_interpreters: vec![
+    let fixture = fixture();
+    let consumer = plan(
+        &fixture,
+        rpm_semantics(),
+        &[regular_payload(
+            "/usr/bin/post-install-sh",
+            b"#!/bin/sh\n",
+            0o755,
+        )],
+        vec![
             post_install("/usr/bin/post-install-sh"),
             pre_remove("/bin/sh"),
         ],
-    };
+    );
 
-    let error =
-        preflight_hook_interpreters(&test_conn().1, root.path(), std::slice::from_ref(&consumer))
-            .map_err(typed)
-            .expect_err("the post-install interpreter must not authorize the pre-remove one");
+    let error = preflight_hook_interpreters(
+        &fixture.conn,
+        &fixture.root,
+        std::slice::from_ref(&consumer),
+    )
+    .map_err(typed)
+    .expect_err("the post-install interpreter must not authorize the pre-remove one");
     assert_eq!(error.phase, HookPhase::PreRemove);
     assert_eq!(error.interpreter, "/bin/sh");
 
-    // Positive control on the same fixture: introducing the pre-remove
+    // Positive control through the same fixture: shipping the pre-remove
     // interpreter satisfies both hooks.
-    let mut satisfied = consumer.clone();
-    satisfied.introduced_nodes.push(executable("/bin/sh"));
+    let satisfied = plan(
+        &fixture,
+        rpm_semantics(),
+        &[
+            regular_payload("/usr/bin/post-install-sh", b"#!/bin/sh\n", 0o755),
+            regular_payload("/bin/sh", b"#!/bin/sh\n", 0o755),
+        ],
+        vec![
+            post_install("/usr/bin/post-install-sh"),
+            pre_remove("/bin/sh"),
+        ],
+    );
     preflight_hook_interpreters(
-        &test_conn().1,
-        root.path(),
+        &fixture.conn,
+        &fixture.root,
         std::slice::from_ref(&satisfied),
     )
     .expect("an element introducing both interpreters satisfies both phases");
 }
 
-/// A fresh database; element plans without removed troves never query it.
-fn test_conn() -> (tempfile::TempDir, rusqlite::Connection) {
-    let temp = tempfile::tempdir().unwrap();
-    let path = temp.path().join("conary.db");
-    conary_core::db::init(path.to_str().unwrap()).unwrap();
-    let conn = conary_core::db::open(path.to_str().unwrap()).unwrap();
-    (temp, conn)
-}
+#[test]
+fn config_suffix_interpreter_is_refused_and_an_unmodified_primary_is_available() {
+    let fixture = fixture();
+    let old = b"old".to_vec();
+    let owner = insert_trove(&fixture.conn, "previous-owner");
+    let mut config = ConfigFile::new(
+        "/etc/hook-interpreter".to_string(),
+        owner,
+        conary_core::hash::sha256(&old),
+    );
+    config.source = ConfigSource::Deb;
+    config.insert(&fixture.conn).unwrap();
 
-fn projected_hardlink(path: &str, target: &str) -> IntroducedNode {
-    IntroducedNode {
-        path: path.to_string(),
-        kind: IntroducedNodeKind::Hardlink {
-            target: target.to_string(),
-        },
-    }
+    // The primary is locally modified, so the incoming executable lands at
+    // `.dpkg-dist` and the primary stays non-executable.
+    write_regular(&fixture.root, "/etc/hook-interpreter", b"local", 0o644);
+    let refused = deb_conffile_plan(
+        &fixture,
+        "/etc/hook-interpreter",
+        &[regular_payload("/etc/hook-interpreter", b"new", 0o755)],
+        vec![post_install("/etc/hook-interpreter")],
+    );
+    let error =
+        preflight_hook_interpreters(&fixture.conn, &fixture.root, std::slice::from_ref(&refused))
+            .map_err(typed)
+            .expect_err("a suffixed config payload must not make the primary executable");
+    assert_eq!(error.interpreter, "/etc/hook-interpreter");
+
+    // Control through the same fixture: the primary is unmodified, so the
+    // incoming executable replaces it and is available.
+    write_regular(&fixture.root, "/etc/hook-interpreter", b"old", 0o644);
+    let satisfied = deb_conffile_plan(
+        &fixture,
+        "/etc/hook-interpreter",
+        &[regular_payload("/etc/hook-interpreter", b"new", 0o755)],
+        vec![post_install("/etc/hook-interpreter")],
+    );
+    preflight_hook_interpreters(
+        &fixture.conn,
+        &fixture.root,
+        std::slice::from_ref(&satisfied),
+    )
+    .expect("an unmodified primary is replaced by the executable");
 }
 
 #[test]
-fn introduced_hardlink_shares_its_target_node_executability() {
-    // Busybox-style providers hardlink applets to one executable.
-    let root = tempfile::tempdir().unwrap();
-    let mut ledger = HookInterpreterLedger::new(root.path());
-    ledger
-        .apply_element(
-            Vec::new(),
-            vec![
-                executable("/bin/busybox"),
-                projected_hardlink("/bin/sh", "/bin/busybox"),
-            ],
-            Vec::new(),
-        )
-        .unwrap();
-    ledger
-        .require("pkg", "1.0.0", HookPhase::PostInstall, "/bin/sh")
-        .expect("a hardlink to an introduced executable is available");
+fn two_edge_hardlink_chain_is_available_and_a_non_executable_anchor_is_refused() {
+    let fixture = fixture();
+    let available = plan(
+        &fixture,
+        rpm_semantics(),
+        &[
+            regular_payload("/bin/anchor", b"#!/bin/sh\n", 0o755),
+            hardlink_payload("/bin/edge", "/bin/anchor", "chain:1", 0o755),
+            hardlink_payload("/bin/sh", "/bin/edge", "chain:1", 0o755),
+        ],
+        vec![post_install("/bin/sh")],
+    );
+    preflight_hook_interpreters(
+        &fixture.conn,
+        &fixture.root,
+        std::slice::from_ref(&available),
+    )
+    .expect("a two-edge hardlink chain reaches the executable anchor");
 
-    // Same shape, but the shared inode is not executable.
-    let root = tempfile::tempdir().unwrap();
-    let mut ledger = HookInterpreterLedger::new(root.path());
-    ledger
-        .apply_element(
-            Vec::new(),
-            vec![
-                non_executable("/bin/busybox"),
-                projected_hardlink("/bin/sh", "/bin/busybox"),
-            ],
-            Vec::new(),
-        )
-        .unwrap();
-    let error = ledger
-        .require("pkg", "1.0.0", HookPhase::PostInstall, "/bin/sh")
-        .map_err(typed)
-        .expect_err("a hardlink to a non-executable node is unavailable");
+    // Control through the same fixture: the anchor is not executable.
+    let refused = plan(
+        &fixture,
+        rpm_semantics(),
+        &[
+            regular_payload("/bin/anchor", b"#!/bin/sh\n", 0o644),
+            hardlink_payload("/bin/edge", "/bin/anchor", "chain:1", 0o644),
+            hardlink_payload("/bin/sh", "/bin/edge", "chain:1", 0o644),
+        ],
+        vec![post_install("/bin/sh")],
+    );
+    let error =
+        preflight_hook_interpreters(&fixture.conn, &fixture.root, std::slice::from_ref(&refused))
+            .map_err(typed)
+            .expect_err("a hardlink to a non-executable anchor is unavailable");
     assert_eq!(error.interpreter, "/bin/sh");
 }
 
 #[test]
-fn restore_removal_element_removes_a_root_provider_before_installs() {
-    let (_root, ledger) = ledger_with_executable();
-    let root_path = ledger.root.clone();
+fn directory_through_usr_merge_alias_reaches_a_shipped_interpreter() {
+    let fixture = fixture();
+    fs::create_dir_all(fixture.root.join("usr/bin")).unwrap();
+    std::os::unix::fs::symlink("usr/bin", fixture.root.join("bin")).unwrap();
 
-    // Positive control: with no removal element the root interpreter is available.
-    let consumer = ElementPlan {
-        package: "consumer".to_string(),
-        version: "1.0.0".to_string(),
-        removed_trove_ids: Vec::new(),
-        removed_paths: Vec::new(),
-        introduced_nodes: Vec::new(),
-        declared_file_capabilities: Vec::new(),
-        hook_interpreters: vec![post_install(PRESENT)],
-    };
-    preflight_hook_interpreters(&test_conn().1, &root_path, std::slice::from_ref(&consumer))
-        .expect("the root interpreter is available without a removal");
+    // Positive control: the preserved `/bin -> usr/bin` alias plus the shipped
+    // `/usr/bin/sh` makes a `/bin/sh` hook available.
+    let available = plan(
+        &fixture,
+        rpm_semantics(),
+        &[
+            directory_payload("/bin", 0o755),
+            regular_payload("/usr/bin/sh", b"#!/bin/sh\n", 0o755),
+        ],
+        vec![post_install("/bin/sh")],
+    );
+    preflight_hook_interpreters(
+        &fixture.conn,
+        &fixture.root,
+        std::slice::from_ref(&available),
+    )
+    .expect("the preserved alias reaches the shipped interpreter");
 
-    // A removal-only element that owns the interpreter path precedes the install.
-    let removal = ElementPlan {
-        package: String::new(),
-        version: String::new(),
-        removed_trove_ids: Vec::new(),
-        removed_paths: vec![PRESENT.to_string()],
-        introduced_nodes: Vec::new(),
-        declared_file_capabilities: Vec::new(),
-        hook_interpreters: Vec::new(),
-    };
-    let error = preflight_hook_interpreters(&test_conn().1, &root_path, &[removal, consumer])
-        .map_err(typed)
-        .expect_err("a removed provider cannot authorize a restored hook");
-    assert_eq!(error.package, "consumer");
-    assert_eq!(error.interpreter, PRESENT);
-}
-
-#[test]
-fn implied_parent_defers_to_an_existing_root_symlink() {
-    // Root: `/bin -> usr/bin` with an executable `/usr/bin/sh`. An element
-    // introduces an unrelated `/bin/tool`; materialization writes through the
-    // existing symlink, so `/bin` must not become a shadowing directory.
-    let root = tempfile::tempdir().unwrap();
-    let sh = root.path().join("usr/bin/sh");
-    fs::create_dir_all(sh.parent().unwrap()).unwrap();
-    fs::write(&sh, b"#!/bin/sh\n").unwrap();
-    fs::set_permissions(&sh, fs::Permissions::from_mode(0o755)).unwrap();
-    std::os::unix::fs::symlink("usr/bin", root.path().join("bin")).unwrap();
-    let mut ledger = HookInterpreterLedger::new(root.path());
-
-    // Positive control: before any element, `/bin/sh` resolves through root.
-    ledger
-        .require("pkg", "1.0.0", HookPhase::PostInstall, "/bin/sh")
-        .expect("root alias resolves the interpreter");
-
-    ledger
-        .apply_element(Vec::new(), vec![executable("/bin/tool")], Vec::new())
-        .unwrap();
-    ledger
-        .require("pkg", "1.0.0", HookPhase::PostInstall, "/bin/sh")
-        .expect("an implied /bin parent must not shadow the root symlink");
-}
-
-#[test]
-fn removed_parent_recreated_by_payload_is_a_real_directory() {
-    // Root: `/bin -> usr/bin`, no `/usr/bin/sh`. The transaction removes the
-    // `/bin` symlink, then a payload ships `/bin/sh` itself: materialization
-    // recreates `/bin` as a directory holding the new executable.
-    let root = tempfile::tempdir().unwrap();
-    fs::create_dir_all(root.path().join("usr/bin")).unwrap();
-    std::os::unix::fs::symlink("usr/bin", root.path().join("bin")).unwrap();
-    let mut ledger = HookInterpreterLedger::new(root.path());
-
-    ledger
-        .apply_element(vec!["/bin".to_string()], Vec::new(), Vec::new())
-        .unwrap();
-    // Negative control: with `/bin` removed and nothing shipped, unreachable.
-    let error = ledger
-        .require("pkg", "1.0.0", HookPhase::PostInstall, "/bin/sh")
-        .map_err(typed)
-        .expect_err("a removed ancestor makes the interpreter unreachable");
+    // Control through the same fixture: without the ship the alias names no
+    // interpreter.
+    let refused = plan(
+        &fixture,
+        rpm_semantics(),
+        &[directory_payload("/bin", 0o755)],
+        vec![post_install("/bin/sh")],
+    );
+    let error =
+        preflight_hook_interpreters(&fixture.conn, &fixture.root, std::slice::from_ref(&refused))
+            .map_err(typed)
+            .expect_err("without the shipped interpreter the alias is unavailable");
     assert_eq!(error.interpreter, "/bin/sh");
-
-    ledger
-        .apply_element(Vec::new(), vec![executable("/bin/sh")], Vec::new())
-        .unwrap();
-    ledger
-        .require("pkg", "1.0.0", HookPhase::PostInstall, "/bin/sh")
-        .expect("the payload recreates /bin as a directory with an executable sh");
 }

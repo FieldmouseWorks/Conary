@@ -6,7 +6,7 @@
 //! transaction mechanics stay in `install/mod.rs`.
 
 use super::ccs_hook_interpreter::{
-    HookInterpreter, element_plan, hook_interpreters, preflight_hook_interpreters,
+    HookInterpreter, extracted_element_plan, hook_interpreters, preflight_hook_interpreters,
 };
 use super::ccs_removal_hooks::CcsRemovalHookPlan;
 use super::native_events::{NativeInstallInput, PreparedNativeTransaction};
@@ -504,13 +504,14 @@ fn install_ccs_package_transactionally_inner(
             show_ccs_hook_interpreter_requirement(requirement);
         }
     } else if !required_hook_interpreters.is_empty() {
-        let element = element_plan(
-            pkg.name(),
-            pkg.version(),
+        let element = extracted_element_plan(
+            &preflight_state,
+            Path::new(&transaction_root),
+            pkg,
+            &extraction,
+            semantics,
             old_trove,
             &relation_plan.removals,
-            &extraction.extracted_files,
-            &selected_capabilities,
             required_hook_interpreters,
         )?;
         preflight_hook_interpreters(

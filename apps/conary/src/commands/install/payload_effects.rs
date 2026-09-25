@@ -68,7 +68,7 @@ impl PayloadEffectFiles<'_> {
 
 /// Everything that decides the selected-root filesystem effect of applying one
 /// element's payload.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(super) struct ElementPayloadEffects {
     /// Incoming files with resolved ownership and exact content authority.
     pub(super) resolved_files: Vec<ResolvedInstallFile>,
@@ -103,6 +103,21 @@ impl PartialEq for ElementPayloadEffects {
 }
 
 impl Eq for ElementPayloadEffects {}
+
+impl ElementPayloadEffects {
+    /// The files this plan materializes into the selected root, at their
+    /// effective paths.
+    ///
+    /// Preserved leaves are excluded: the selected root already owns them, so
+    /// the event-time projection must resolve them on disk rather than overlay
+    /// a node the payload never writes.
+    pub(super) fn materialized_files(&self) -> impl Iterator<Item = &LiveRootFile> {
+        self.install_files
+            .iter()
+            .chain(self.through_symlink_files.iter())
+            .filter(|file| !self.directory_plan.preserves_leaf(&file.path))
+    }
+}
 
 /// Compare two planned file lists by the typed effect each file carries.
 ///
