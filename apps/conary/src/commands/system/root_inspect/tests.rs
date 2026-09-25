@@ -155,6 +155,8 @@ fn node(kind: PayloadNodeKind, permissions: u32) -> ResolvedPayloadNode {
     source.mode = match &source.kind {
         PayloadNodeKind::Directory => libc::S_IFDIR | (permissions & 0o7777),
         PayloadNodeKind::Symlink { .. } => libc::S_IFLNK | (permissions & 0o7777),
+        PayloadNodeKind::BlockDevice { .. } => libc::S_IFBLK | (permissions & 0o7777),
+        PayloadNodeKind::CharacterDevice { .. } => libc::S_IFCHR | (permissions & 0o7777),
         _ => libc::S_IFREG | (permissions & 0o7777),
     };
     source.user = PayloadIdentity::Numeric { id: 0 };
@@ -199,6 +201,14 @@ fn symlink(path: &str, target: &str) -> GenerationRootEntry {
     }
 }
 
+fn device(path: &str, kind: PayloadNodeKind) -> GenerationRootEntry {
+    GenerationRootEntry {
+        path: path.to_string(),
+        node: node(kind, 0o600),
+        content: None,
+    }
+}
+
 fn captured_root(
     immutable: Vec<GenerationRootEntry>,
     state: Vec<GenerationRootEntry>,
@@ -216,8 +226,8 @@ fn captured_root(
     }
 }
 
-/// A committed snapshot with a regular file, a symlink, a mutable-state file,
-/// and a path that a later delta removes.
+/// A committed snapshot with regular files, a symlink, device nodes, a
+/// mutable-state file, and a path that a later delta removes.
 struct Fixture {
     _temp: tempfile::TempDir,
     conn: rusqlite::Connection,
@@ -244,7 +254,15 @@ impl Fixture {
                 directory("/opt"),
                 directory("/opt/fixture"),
                 regular("/opt/fixture/hello", 0o644, b"hello world\n"),
+                device(
+                    "/opt/fixture/null",
+                    PayloadNodeKind::CharacterDevice { major: 1, minor: 3 },
+                ),
                 regular("/opt/fixture/removed", 0o600, b"gone\n"),
+                device(
+                    "/opt/fixture/sda",
+                    PayloadNodeKind::BlockDevice { major: 8, minor: 0 },
+                ),
                 symlink("/opt/fixture/sh", "/bin/busybox"),
             ],
             vec![
@@ -322,6 +340,41 @@ fn root_inspect_reports_regular_file_digest_and_symlink_target() {
     let json = json_data(&link);
     assert_eq!(json["kind"], "symlink");
     assert_eq!(json["symlink_target"], "/bin/busybox");
+}
+
+#[test]
+fn root_inspect_reports_device_numbers_for_device_nodes() {
+    let fixture = Fixture::new();
+
+    let character = fixture.inspect("/opt/fixture/null");
+    assert!(character.present);
+    assert_eq!(character.kind, Some(RootNodeKind::CharacterDevice));
+    assert_eq!(character.device_major, Some(1));
+    assert_eq!(character.device_minor, Some(3));
+    let json = json_data(&character);
+    assert_eq!(json["kind"], "character_device");
+    assert_eq!(json["device_major"], 1);
+    assert_eq!(json["device_minor"], 3);
+
+    let block = fixture.inspect("/opt/fixture/sda");
+    assert!(block.present);
+    assert_eq!(block.kind, Some(RootNodeKind::BlockDevice));
+    assert_eq!(block.device_major, Some(8));
+    assert_eq!(block.device_minor, Some(0));
+    let json = json_data(&block);
+    assert_eq!(json["kind"], "block_device");
+    assert_eq!(json["device_major"], 8);
+    assert_eq!(json["device_minor"], 0);
+
+    // Control: a regular file has no device identity, so both fields are null.
+    let file = fixture.inspect("/opt/fixture/hello");
+    assert_eq!(file.kind, Some(RootNodeKind::Regular));
+    assert_eq!(file.device_major, None);
+    assert_eq!(file.device_minor, None);
+    let json = json_data(&file);
+    assert_eq!(json["kind"], "regular");
+    assert!(json["device_major"].is_null());
+    assert!(json["device_minor"].is_null());
 }
 
 #[test]

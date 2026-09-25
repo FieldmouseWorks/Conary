@@ -36,7 +36,7 @@ use crate::commands::generation::selected_root::{
     SelectedRootBaseline, SelectedRootSource, read_selected_root_baseline,
 };
 
-pub(crate) const ROOT_INSPECT_SCHEMA_VERSION: u32 = 2;
+pub(crate) const ROOT_INSPECT_SCHEMA_VERSION: u32 = 3;
 
 /// Where the reported node's authority came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -150,6 +150,8 @@ pub(crate) struct RootInspectData {
     pub(crate) sha256: Option<String>,
     pub(crate) symlink_target: Option<String>,
     pub(crate) hardlink_target: Option<String>,
+    pub(crate) device_major: Option<u64>,
+    pub(crate) device_minor: Option<u64>,
 }
 
 impl RootInspectData {
@@ -230,6 +232,8 @@ pub(crate) fn root_inspect_data(
         sha256: None,
         symlink_target: None,
         hardlink_target: None,
+        device_major: None,
+        device_minor: None,
     };
 
     // With no committed root there is no capture, so nothing is present, not
@@ -360,6 +364,11 @@ fn apply_node(
     match &node.source.kind {
         PayloadNodeKind::Symlink { target } => data.symlink_target = Some(target.clone()),
         PayloadNodeKind::Hardlink { target, .. } => data.hardlink_target = Some(target.clone()),
+        PayloadNodeKind::BlockDevice { major, minor }
+        | PayloadNodeKind::CharacterDevice { major, minor } => {
+            data.device_major = Some(*major);
+            data.device_minor = Some(*minor);
+        }
         _ => {}
     }
 }

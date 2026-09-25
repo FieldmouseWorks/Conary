@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-25
-revision: 64
+revision: 65
 summary: Daily-driver CLI publication debt, committed selected-root inspection, installed records, database preflight, repository readiness, typed details, and grouped results
 ---
 
@@ -202,14 +202,17 @@ root-privileged preparation would produce.
 
 `--json` prints only a `conary-agent-contract` `InspectResult` with operation
 `system.root.inspect`, status `ok`, and risk `read_only`. Its `data` is
-`schema_version: 2` with `snapshot_id`, `changeset_id`,
+`schema_version: 3` with `snapshot_id`, `changeset_id`,
 `recovered_without_state`, `source` (`pending_snapshot`, `current_generation`,
 `database_projection`, or `no_committed_root`), `path`, `present`, `manifest`
 (`root` or `mutable_state`), `metadata` (`recorded` or `synthesized`), `kind`
 (`regular`, `directory`, `symlink`, `hardlink`, `fifo`, `socket`,
 `block_device`, or `character_device`), `mode`, `uid`, `gid`, `user`, `group`,
-`sha256`, `symlink_target`, and `hardlink_target`. Absent optional values
-serialize as `null`. `recovered_without_state` is `true` only for a stable
+`sha256`, `symlink_target`, `hardlink_target`, `device_major`, and
+`device_minor`. Absent optional values serialize as `null`. `device_major` and
+`device_minor` carry the recorded node numbers for `block_device` and
+`character_device` and are `null` for every other kind. `recovered_without_state`
+is `true` only for a stable
 `current_generation` baseline the pinned snapshot never recorded, where the
 `null` IDs are unknown rather than inapplicable; every other source reports
 `false`. The projected root node `/` is present for the database projection, as

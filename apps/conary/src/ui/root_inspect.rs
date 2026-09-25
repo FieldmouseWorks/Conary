@@ -28,6 +28,15 @@ pub(crate) fn render(data: &RootInspectData) {
     field("Manifest", manifest_label(data.manifest));
     field("Metadata", data.metadata_label());
     field("Mode", &optional_mode(data.mode));
+    if matches!(
+        data.kind,
+        Some(RootNodeKind::BlockDevice | RootNodeKind::CharacterDevice)
+    ) {
+        field(
+            "Device",
+            &device_label(data.device_major, data.device_minor),
+        );
+    }
     field("UID", &optional_u64(data.uid));
     field("GID", &optional_u64(data.gid));
     field("User", &optional_text(data.user.as_deref()));
@@ -73,4 +82,11 @@ fn optional_text(value: Option<&str>) -> String {
 
 fn optional_mode(value: Option<u32>) -> String {
     value.map_or_else(|| "-".to_string(), |mode| format!("{mode:04o}"))
+}
+
+fn device_label(major: Option<u64>, minor: Option<u64>) -> String {
+    match (major, minor) {
+        (Some(major), Some(minor)) => format!("{major}:{minor}"),
+        _ => "-".to_string(),
+    }
 }
