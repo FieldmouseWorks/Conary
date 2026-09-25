@@ -299,3 +299,97 @@ fn repository_authority_still_admits_repository_candidate() {
         "{result:?}"
     );
 }
+
+#[test]
+fn authority_known_end_state_requires_triggered_installed_condition() {
+    let (_dir, conn) = setup_test_db();
+    let repository_id = repository_fixture(&conn);
+    insert_rpm_trove(&conn, "bar", "1.0.0", &[]);
+    let policy = ResolutionPolicy::new().with_primary_source_identity("fedora-44");
+
+    // `bar` is installed and survives the transaction, so the fixed end state
+    // makes the condition true and `foo` is required. SAT must not be allowed
+    // to leave `bar` unselected to discharge the implication vacuously.
+    let unresolved = solve_requirement_groups_with_outgoing_and_policy(
+        &conn,
+        &[conditional_depends("foo", "bar")],
+        VersionScheme::Rpm,
+        &[],
+        &policy,
+    )
+    .unwrap();
+    assert!(unresolved.conflict_message.is_some(), "{unresolved:?}");
+    assert!(unresolved.install_order.is_empty(), "{unresolved:?}");
+
+    // Positive control through the same fixture: admitting `foo` in the
+    // repository makes the triggered requirement solvable, and `foo` is the
+    // only package the resolution installs.
+    insert_rpm_repo_package(&conn, repository_id, "foo", "1-1");
+    let resolved = solve_requirement_groups_with_outgoing_and_policy(
+        &conn,
+        &[conditional_depends("foo", "bar")],
+        VersionScheme::Rpm,
+        &[],
+        &policy,
+    )
+    .unwrap();
+    assert!(resolved.conflict_message.is_none(), "{resolved:?}");
+    assert_eq!(resolved.install_order.len(), 1, "{resolved:?}");
+    assert_eq!(resolved.install_order[0].name, "foo", "{resolved:?}");
+    assert_eq!(
+        resolved.install_order[0].source,
+        SatSource::Repository,
+        "{resolved:?}"
+    );
+}
+
+#[test]
+fn authority_known_end_state_discharges_vacuous_installed_condition() {
+    let (_dir, conn) = setup_test_db();
+    let _repository_id = repository_fixture(&conn);
+    let policy = ResolutionPolicy::new().with_primary_source_identity("fedora-44");
+
+    // `bar` is absent from both the installed state and (there is no) incoming
+    // package, so the implication is genuinely vacuous and needs no install
+    // even though the policy admits repository candidates.
+    let result = solve_requirement_groups_with_outgoing_and_policy(
+        &conn,
+        &[conditional_depends("foo", "bar")],
+        VersionScheme::Rpm,
+        &[],
+        &policy,
+    )
+    .unwrap();
+    assert_eq!(result.conflict_message, None, "{result:?}");
+    assert!(result.install_order.is_empty(), "{result:?}");
+    assert!(result.remove_order.is_empty(), "{result:?}");
+}
+
+#[test]
+fn authority_known_end_state_refuses_to_replace_a_surviving_installed_trove() {
+    let (_dir, conn) = setup_test_db();
+    let repository_id = repository_fixture(&conn);
+    insert_rpm_trove(&conn, "foo", "1.0.0", &[]);
+    insert_rpm_repo_package(&conn, repository_id, "foo", "3-1");
+    let policy = ResolutionPolicy::new().with_primary_source_identity("fedora-44");
+    let requirement = crate::repository::requirement::parse_native_requirement(
+        RepositoryRequirementKind::Depends,
+        VersionScheme::Rpm,
+        "foo >= 2.0.0",
+    )
+    .unwrap();
+
+    // The installed `foo` 1.0.0 survives, so the fixed end state holds it. The
+    // repository's `foo` 3-1 would replace a surviving trove, so the solve must
+    // conflict instead of silently planning the replacement.
+    let result = solve_requirement_groups_with_outgoing_and_policy(
+        &conn,
+        &[requirement],
+        VersionScheme::Rpm,
+        &[],
+        &policy,
+    )
+    .unwrap();
+    assert!(result.conflict_message.is_some(), "{result:?}");
+    assert!(result.install_order.is_empty(), "{result:?}");
+}

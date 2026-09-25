@@ -13,7 +13,7 @@ mod timing;
 
 use resolvo::{Problem, Solver, UnsolvableOrCancelled};
 use rusqlite::Connection;
-use std::collections::{BTreeSet, HashSet};
+use std::collections::BTreeSet;
 use std::time::Duration;
 
 use petgraph::Direction;
@@ -95,6 +95,17 @@ pub struct SatResolution {
     pub remove_order: Vec<SatRelationRemoval>,
     /// Human-readable conflict explanation if unsolvable.
     pub conflict_message: Option<String>,
+}
+
+impl SatResolution {
+    /// A resolution that selects and installs nothing.
+    fn empty() -> Self {
+        Self {
+            install_order: Vec::new(),
+            remove_order: Vec::new(),
+            conflict_message: None,
+        }
+    }
 }
 
 /// One exact required group that has no candidate provider.
@@ -469,31 +480,55 @@ fn solve_requirement_groups_for_architecture_with_policy(
     policy
         .validate_source_identities()
         .map_err(Error::ConfigError)?;
-    if let Err(validation_message) = policy.validate_for_dependency_resolution() {
-        return match end_state {
-            EndState::Unknown => Err(Error::ConfigError(validation_message)),
-            EndState::Known { outgoing_trove_ids } => requirement_groups_hold_against_end_state(
+    let invalid_policy = policy.validate_for_dependency_resolution().err();
+
+    // The transaction's end state is fixed: every installed trove except the
+    // outgoing set, plus the incoming package. A hard group that end state
+    // already satisfies needs no repository work, so only its residual groups
+    // reach SAT. Their conditions are resolved against the fixed state first so
+    // the solver cannot drop a surviving provider to discharge the group
+    // vacuously.
+    let pending_expressions = match end_state {
+        EndState::Unknown => {
+            if let Some(message) = invalid_policy.as_deref() {
+                return Err(Error::ConfigError(message.to_string()));
+            }
+            hard_groups
+                .iter()
+                .map(|group| group.expression.clone())
+                .collect::<Vec<_>>()
+        }
+        EndState::Known { outgoing_trove_ids } => {
+            let pending = install::unsatisfied_groups_against_end_state(
                 conn,
                 &hard_groups,
                 version_scheme,
                 depending_architecture,
                 outgoing_trove_ids,
                 incoming,
-                validation_message,
-            ),
-        };
-    }
+            )?;
+            if pending.is_empty() {
+                return Ok(SatResolution::empty());
+            }
+            if let Some(message) = invalid_policy.as_deref() {
+                // Strict mixing with no repository authority admits only the
+                // fixed end state itself.
+                return Err(Error::ConfigError(message.to_string()));
+            }
+            pending
+        }
+    };
 
-    let outgoing_trove_ids = match end_state {
+    let outgoing_trove_ids: &[i64] = match end_state {
         EndState::Known { outgoing_trove_ids } => outgoing_trove_ids,
         EndState::Unknown => &[],
     };
 
-    let expressions = hard_groups
+    let expressions = pending_expressions
         .iter()
-        .map(|group| {
+        .map(|expression| {
             crate::resolver::provider::repository_expression_to_solver_for_architecture(
-                &group.expression,
+                expression,
                 version_scheme,
                 depending_architecture,
             )
@@ -505,6 +540,7 @@ fn solve_requirement_groups_for_architecture_with_policy(
         &expressions,
         policy,
         outgoing_trove_ids,
+        matches!(end_state, EndState::Known { .. }),
     )?;
     let requirements = install::build_expression_requirements(&mut provider, &expressions)?;
     let problem = Problem::new().requirements(requirements);
@@ -532,55 +568,6 @@ fn solve_requirement_groups_for_architecture_with_policy(
             "Dependency resolution was cancelled".to_string(),
         )),
     }
-}
-
-/// Evaluate exact hard requirement groups against the transaction's fixed end
-/// state: every installed trove except `outgoing_trove_ids`, plus `incoming`.
-///
-/// There are no choices to make here. Installed troves are not optional
-/// candidates the solver may drop, so a conditional requirement can never be
-/// discharged by leaving its condition out of the end state. The existing typed
-/// expression evaluator owns the Boolean semantics.
-fn requirement_groups_hold_against_end_state(
-    conn: &Connection,
-    groups: &[&RepositoryRequirementGroup],
-    version_scheme: VersionScheme,
-    depending_architecture: &str,
-    outgoing_trove_ids: &[i64],
-    incoming: Option<&PackageIdentity>,
-    validation_message: String,
-) -> Result<SatResolution> {
-    let mut end_state = crate::resolver::load_installed_package_identities(conn)?;
-    if !outgoing_trove_ids.is_empty() {
-        let outgoing_trove_ids = outgoing_trove_ids.iter().copied().collect::<HashSet<_>>();
-        end_state.retain(|package| {
-            !package
-                .installed_trove_id
-                .is_some_and(|trove_id| outgoing_trove_ids.contains(&trove_id))
-        });
-    }
-    if let Some(incoming) = incoming {
-        end_state.push(incoming.clone());
-    }
-
-    let native_architecture = crate::repository::registry::detect_system_arch()?;
-    for group in groups {
-        if !crate::resolver::requirement_expression_satisfied(
-            &group.expression,
-            version_scheme,
-            depending_architecture,
-            &native_architecture,
-            &end_state,
-        )? {
-            return Err(Error::ConfigError(validation_message));
-        }
-    }
-
-    Ok(SatResolution {
-        install_order: Vec::new(),
-        remove_order: Vec::new(),
-        conflict_message: None,
-    })
 }
 
 /// Return whether an incoming package already satisfies one positive

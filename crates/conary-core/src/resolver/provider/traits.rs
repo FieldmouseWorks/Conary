@@ -248,13 +248,27 @@ impl DependencyProvider for ConaryProvider<'_> {
         // If the package is pinned (troves.pinned = 1), lock the solver to
         // the installed version so the SAT solver cannot choose a different
         // version.  This implements G3: respect per-package version pins.
+        //
+        // A fixed end state additionally locks the surviving installed
+        // candidate for an exact package name: the transaction keeps that
+        // trove, so a requirement may not replace it with a repository version.
+        // Virtual capabilities are deliberately not locked: several packages
+        // may provide one, so forbidding an alternative provider would reject a
+        // satisfiable end state.
         let locked = candidates
             .iter()
-            .find(|&&sid| {
+            .copied()
+            .find(|&sid| {
                 let pkg = &self.solvables[sid.to_index()];
                 pkg.name == *name_str && pkg.installed_pinned
             })
-            .copied();
+            .or_else(|| {
+                if self.surviving_installed_candidates_locked {
+                    self.installed_solvable_for_name(name)
+                } else {
+                    None
+                }
+            });
 
         Some(Candidates {
             candidates,

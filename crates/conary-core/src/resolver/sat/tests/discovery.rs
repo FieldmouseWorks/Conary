@@ -122,7 +122,8 @@ fn nested_root_negation_preserves_positive_literals() {
     ])));
     let policy = ResolutionPolicy::new().with_primary_source_identity("fedora-44");
     let provider =
-        install::build_provider_for_requirement_expressions(&conn, &[root], &policy, &[]).unwrap();
+        install::build_provider_for_requirement_expressions(&conn, &[root], &policy, &[], false)
+            .unwrap();
     let names = provider
         .solvable_ids()
         .iter()

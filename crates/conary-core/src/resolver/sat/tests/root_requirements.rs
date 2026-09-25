@@ -73,6 +73,15 @@ fn repository(conn: &Connection) -> i64 {
     repository.insert(conn).unwrap()
 }
 
+fn authority_repository(conn: &Connection) -> i64 {
+    let mut repository = Repository::new(
+        "rich-root".to_string(),
+        "https://rich-root.invalid".to_string(),
+    );
+    repository.source_profile = Some("fedora-44".to_string());
+    repository.insert(conn).unwrap()
+}
+
 fn package(conn: &Connection, repository_id: i64, name: &str, provides: &[&str]) {
     let package_id = insert_repo_pkg_with_reqs(
         conn,
@@ -448,4 +457,102 @@ fn strict_known_end_state_includes_the_incoming_package_condition() {
     .unwrap();
     assert!(satisfied.install_order.is_empty(), "{satisfied:?}");
     assert_eq!(satisfied.conflict_message, None, "{satisfied:?}");
+}
+
+#[test]
+fn authority_known_end_state_requires_triggered_incoming_condition() {
+    let (_temp, conn) = setup_test_db();
+    let repository_id = authority_repository(&conn);
+    let conditional = parse_native_requirement(
+        RepositoryRequirementKind::Depends,
+        VersionScheme::Rpm,
+        "(foo if bar)",
+    )
+    .unwrap();
+    let policy = ResolutionPolicy::new().with_primary_source_identity("fedora-44");
+    let condition = generic_capability("bar");
+    let package = IncomingPackage {
+        requirements: vec![conditional],
+        capabilities: vec![condition.clone()],
+    };
+
+    // The incoming package provides the condition, so the fixed end state makes
+    // `bar` present and `foo` required. SAT must see that fact and fail when no
+    // admitted `foo` candidate exists instead of discharging the implication
+    // vacuously.
+    let unresolved = solve_package_requirements_with_provides_outgoing_and_policy(
+        &conn,
+        &package,
+        vec![condition.clone()],
+        &[],
+        &policy,
+    )
+    .unwrap();
+    assert!(unresolved.conflict_message.is_some(), "{unresolved:?}");
+    assert!(unresolved.install_order.is_empty(), "{unresolved:?}");
+
+    // Positive control through the same fixture: admitting `foo` in the
+    // repository makes the triggered requirement solvable, and `foo` is the
+    // only package the resolution installs.
+    insert_repo_pkg_with_reqs(
+        &conn,
+        repository_id,
+        "foo",
+        "1.0.0",
+        "https://rich-root.invalid/foo.rpm",
+        "rpm",
+        &[],
+    );
+    let resolved = solve_package_requirements_with_provides_outgoing_and_policy(
+        &conn,
+        &package,
+        vec![condition],
+        &[],
+        &policy,
+    )
+    .unwrap();
+    assert!(resolved.conflict_message.is_none(), "{resolved:?}");
+    assert_eq!(selected_names(&resolved), ["foo"], "{resolved:?}");
+    assert_eq!(resolved.install_order.len(), 1, "{resolved:?}");
+}
+
+#[test]
+fn authority_known_end_state_counts_incoming_provides_in_sat() {
+    let (_temp, conn) = setup_test_db();
+    let repository_id = authority_repository(&conn);
+    insert_repo_pkg_with_reqs(
+        &conn,
+        repository_id,
+        "foo",
+        "1.0.0",
+        "https://rich-root.invalid/foo.rpm",
+        "rpm",
+        &[],
+    );
+    let conjunction = parse_native_requirement(
+        RepositoryRequirementKind::Depends,
+        VersionScheme::Rpm,
+        "(foo and bar)",
+    )
+    .unwrap();
+    let policy = ResolutionPolicy::new().with_primary_source_identity("fedora-44");
+    let condition = generic_capability("bar");
+    let package = IncomingPackage {
+        requirements: vec![conjunction],
+        capabilities: vec![condition.clone()],
+    };
+
+    // The incoming package provides `bar` but not `foo`, so only `foo` needs a
+    // repository candidate. SAT must see the incoming provide as present rather
+    // than require a `bar` solvable that does not exist.
+    let resolved = solve_package_requirements_with_provides_outgoing_and_policy(
+        &conn,
+        &package,
+        vec![condition],
+        &[],
+        &policy,
+    )
+    .unwrap();
+    assert!(resolved.conflict_message.is_none(), "{resolved:?}");
+    assert_eq!(selected_names(&resolved), ["foo"], "{resolved:?}");
 }

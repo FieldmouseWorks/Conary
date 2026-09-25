@@ -6,7 +6,12 @@ use std::collections::HashSet;
 use std::time::Instant;
 
 use crate::error::Result;
+use crate::repository::dependency_model::{
+    RepositoryRequirementExpression, RepositoryRequirementGroup,
+};
 use crate::repository::resolution_policy::ResolutionPolicy;
+use crate::repository::versioning::VersionScheme;
+use crate::resolver::identity::PackageIdentity;
 use crate::version::VersionConstraint;
 
 use super::super::provider::{ConaryConstraint, ConaryProvider, SolverExpression};
@@ -60,12 +65,16 @@ pub(super) fn build_provider_for_requirement_expressions<'conn>(
     expressions: &[SolverExpression],
     policy: &ResolutionPolicy,
     outgoing_trove_ids: &[i64],
+    lock_surviving_installed: bool,
 ) -> Result<ConaryProvider<'conn>> {
     let phase = timing::start(None, timing::Phase::Initialization);
     let mut provider = ConaryProvider::new_with_policy(conn, policy.clone())?;
     drop(phase);
     provider.set_root_request_names(requirement_names(expressions));
     provider.exclude_installed_troves(outgoing_trove_ids.iter().copied());
+    if lock_surviving_installed {
+        provider.lock_surviving_installed_candidates();
+    }
     let phase = timing::start(None, timing::Phase::Installed);
     provider.load_installed_packages()?;
     drop(phase);
@@ -160,6 +169,222 @@ pub(super) fn build_expression_requirements(
     expressions: &[SolverExpression],
 ) -> Result<Vec<ConditionalRequirement>> {
     provider.compile_root_requirements(expressions)
+}
+
+/// Evaluate exact hard requirement groups against the transaction's fixed end
+/// state and return the residual expressions that still need repository work.
+///
+/// There are no choices to make against the fixed state, so the shared typed
+/// expression evaluator decides each group directly. Groups that hold are
+/// dropped. For the rest, [`simplify_against_end_state`] removes every
+/// sub-expression the fixed state already satisfies.
+pub(super) fn unsatisfied_groups_against_end_state(
+    conn: &Connection,
+    groups: &[&RepositoryRequirementGroup],
+    version_scheme: VersionScheme,
+    depending_architecture: &str,
+    outgoing_trove_ids: &[i64],
+    incoming: Option<&PackageIdentity>,
+) -> Result<Vec<RepositoryRequirementExpression>> {
+    let end_state = fixed_end_state(conn, outgoing_trove_ids, incoming)?;
+    let native_architecture = crate::repository::registry::detect_system_arch()?;
+
+    let mut pending = Vec::new();
+    for group in groups {
+        if crate::resolver::requirement_expression_satisfied(
+            &group.expression,
+            version_scheme,
+            depending_architecture,
+            &native_architecture,
+            &end_state,
+        )? {
+            continue;
+        }
+        if let Some(expression) = simplify_against_end_state(
+            &group.expression,
+            version_scheme,
+            depending_architecture,
+            &native_architecture,
+            &end_state,
+        )? {
+            pending.push(expression);
+        }
+    }
+    Ok(pending)
+}
+
+/// The transaction's fixed end state: every installed trove except
+/// `outgoing_trove_ids`, plus `incoming`.
+fn fixed_end_state(
+    conn: &Connection,
+    outgoing_trove_ids: &[i64],
+    incoming: Option<&PackageIdentity>,
+) -> Result<Vec<PackageIdentity>> {
+    let mut end_state = crate::resolver::load_installed_package_identities(conn)?;
+    if !outgoing_trove_ids.is_empty() {
+        let outgoing_trove_ids = outgoing_trove_ids.iter().copied().collect::<HashSet<_>>();
+        end_state.retain(|package| {
+            !package
+                .installed_trove_id
+                .is_some_and(|trove_id| outgoing_trove_ids.contains(&trove_id))
+        });
+    }
+    if let Some(incoming) = incoming {
+        end_state.push(incoming.clone());
+    }
+    Ok(end_state)
+}
+
+/// Simplify one requirement expression against the fixed end state, returning
+/// the residual the solver must still satisfy (`None` means already true).
+///
+/// Any sub-expression the end state satisfies is true for the whole
+/// transaction, so it is dropped. This makes the solver's model agree with the
+/// fixed state without pinning every surviving installed trove as a root
+/// requirement: when `bar` survives, `foo if bar` becomes `foo`; when `bar` is
+/// absent from both installed state and the incoming package, the implication
+/// disappears; and an incoming-provided atom inside a conjunction is removed
+/// instead of forcing SAT to find a candidate that does not exist.
+///
+/// `with`/`without` survive only when the end state does not satisfy them. They
+/// compile to one same-provider capability expression evaluated per candidate,
+/// so a satisfied one is dropped whole rather than decomposed.
+fn simplify_against_end_state(
+    expression: &RepositoryRequirementExpression,
+    version_scheme: VersionScheme,
+    depending_architecture: &str,
+    native_architecture: &str,
+    end_state: &[PackageIdentity],
+) -> Result<Option<RepositoryRequirementExpression>> {
+    use RepositoryRequirementExpression as Expression;
+
+    match expression {
+        // A capability or same-provider expression the fixed end state already
+        // satisfies is true for the whole transaction and needs no repository
+        // work. Composite nodes decide their own satisfaction structurally, so a
+        // sub-expression is evaluated exactly once.
+        Expression::Atom(_) | Expression::With { .. } | Expression::Without { .. } => {
+            if crate::resolver::requirement_expression_satisfied(
+                expression,
+                version_scheme,
+                depending_architecture,
+                native_architecture,
+                end_state,
+            )? {
+                Ok(None)
+            } else {
+                Ok(Some(expression.clone()))
+            }
+        }
+        Expression::And(operands) => {
+            let mut rewritten = Vec::with_capacity(operands.len());
+            for operand in operands {
+                if let Some(operand) = simplify_against_end_state(
+                    operand,
+                    version_scheme,
+                    depending_architecture,
+                    native_architecture,
+                    end_state,
+                )? {
+                    rewritten.push(operand);
+                }
+            }
+            Ok(match rewritten.len() {
+                0 => None,
+                1 => rewritten.pop(),
+                _ => Some(Expression::And(rewritten)),
+            })
+        }
+        Expression::Or(operands) => {
+            let mut rewritten = Vec::with_capacity(operands.len());
+            for operand in operands {
+                match simplify_against_end_state(
+                    operand,
+                    version_scheme,
+                    depending_architecture,
+                    native_architecture,
+                    end_state,
+                )? {
+                    Some(operand) => rewritten.push(operand),
+                    // One true disjunct makes the whole disjunction true.
+                    None => return Ok(None),
+                }
+            }
+            Ok(Some(Expression::Or(rewritten)))
+        }
+        Expression::If {
+            requirement,
+            condition,
+            otherwise,
+        } => {
+            let branch = if condition_holds_against_end_state(
+                condition,
+                version_scheme,
+                depending_architecture,
+                native_architecture,
+                end_state,
+            )? {
+                requirement
+            } else {
+                match otherwise {
+                    Some(otherwise) => otherwise,
+                    None => return Ok(None),
+                }
+            };
+            simplify_against_end_state(
+                branch,
+                version_scheme,
+                depending_architecture,
+                native_architecture,
+                end_state,
+            )
+        }
+        Expression::Unless {
+            requirement,
+            condition,
+            otherwise,
+        } => {
+            let branch = if !condition_holds_against_end_state(
+                condition,
+                version_scheme,
+                depending_architecture,
+                native_architecture,
+                end_state,
+            )? {
+                requirement
+            } else {
+                match otherwise {
+                    Some(otherwise) => otherwise,
+                    None => return Ok(None),
+                }
+            };
+            simplify_against_end_state(
+                branch,
+                version_scheme,
+                depending_architecture,
+                native_architecture,
+                end_state,
+            )
+        }
+    }
+}
+
+/// Evaluate one condition sub-expression against the fixed end state using the
+/// shared typed expression evaluator.
+fn condition_holds_against_end_state(
+    condition: &RepositoryRequirementExpression,
+    version_scheme: VersionScheme,
+    depending_architecture: &str,
+    native_architecture: &str,
+    end_state: &[PackageIdentity],
+) -> Result<bool> {
+    crate::resolver::requirement_expression_satisfied(
+        condition,
+        version_scheme,
+        depending_architecture,
+        native_architecture,
+        end_state,
+    )
 }
 
 pub(super) fn collect_install_order(

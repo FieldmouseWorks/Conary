@@ -141,6 +141,12 @@ pub struct ConaryProvider<'db> {
     /// satisfied by a package the transaction's end state does not contain.
     excluded_installed_trove_ids: HashSet<i64>,
 
+    /// When set, every surviving installed candidate is locked as the only
+    /// selectable candidate for its name. The owning transaction's end state
+    /// fixes each surviving installed trove, so the solver must not replace it
+    /// with a repository version.
+    pub(super) surviving_installed_candidates_locked: bool,
+
     // --- Data source ---
     pub(super) conn: &'db rusqlite::Connection,
 }
@@ -191,6 +197,7 @@ impl<'db> ConaryProvider<'db> {
             root_request_names: HashSet::new(),
             native_architecture: crate::repository::registry::detect_system_arch()?,
             excluded_installed_trove_ids: HashSet::new(),
+            surviving_installed_candidates_locked: false,
             conn,
         })
     }
@@ -206,6 +213,19 @@ impl<'db> ConaryProvider<'db> {
     /// requirement because the transaction's end state excludes them.
     pub fn exclude_installed_troves(&mut self, trove_ids: impl IntoIterator<Item = i64>) {
         self.excluded_installed_trove_ids.extend(trove_ids);
+    }
+
+    /// Treat every surviving installed candidate as a fixed fact of the
+    /// transaction's end state.
+    ///
+    /// For an exact package name, the surviving installed candidate stays
+    /// selectable but no other version may be chosen. This keeps the solver's
+    /// model aligned with the packages the transaction actually keeps; a
+    /// requirement that only a different version can satisfy is a conflict
+    /// rather than a silent replacement of a surviving trove. Virtual
+    /// capabilities are not locked because several packages may provide one.
+    pub(crate) fn lock_surviving_installed_candidates(&mut self) {
+        self.surviving_installed_candidates_locked = true;
     }
 
     pub(crate) fn ignore_requirement_groups(
