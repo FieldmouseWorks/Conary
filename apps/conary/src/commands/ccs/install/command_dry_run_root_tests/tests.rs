@@ -271,3 +271,236 @@ async fn ccs_dry_run_refuses_fifo_at_lifecycle_program_path() {
         ),
     }
 }
+
+/// A real runtime database plus its boot-visible runtime root. The fixture
+/// installs one file whose parent directory has no installed database row, so
+/// only a generation artifact can supply that parent closure.
+struct PreviewRuntimeFixture {
+    temp: tempfile::TempDir,
+    db_path: std::path::PathBuf,
+}
+
+impl PreviewRuntimeFixture {
+    fn new() -> Self {
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("conary.db");
+        conary_core::db::init(&db_path).unwrap();
+        let conn = conary_core::db::open(&db_path).unwrap();
+        crate::commands::test_helpers::persist_test_host_capabilities(&conn);
+        drop(conn);
+        Self { temp, db_path }
+    }
+
+    fn runtime_root(&self) -> conary_core::runtime_root::ConaryRuntimeRoot {
+        conary_core::runtime_root::ConaryRuntimeRoot::from_db_path(self.db_path.clone())
+    }
+
+    /// Install `/sbin/init` without inserting its `/sbin` parent directory row.
+    fn seed_installed_file_without_parent_row(&self) {
+        use conary_core::db::models::{FileEntry, Trove, TroveType};
+        use conary_core::payload::{
+            PayloadContentAuthority, PayloadIdentity, PayloadNode, ResolvedPayloadNode,
+        };
+        use conary_core::repository::versioning::VersionScheme;
+
+        let content = b"installed fixture\n";
+        let runtime_root = self.runtime_root();
+        let sha256 = conary_core::filesystem::CasStore::new(runtime_root.objects_dir())
+            .unwrap()
+            .store(content)
+            .unwrap();
+
+        let conn = conary_core::db::open(&self.db_path).unwrap();
+        let mut trove = Trove::new(
+            "preview-unclaimed-parent".to_string(),
+            "1.0.0".to_string(),
+            TroveType::Package,
+            VersionScheme::Conary,
+        );
+        trove.architecture =
+            Some(conary_core::ccs::manifest::DEFAULT_CONARY_ARCHITECTURE.to_string());
+        let trove_id = trove.insert(&conn).unwrap();
+
+        let mut node = PayloadNode::regular(0o755);
+        node.user = PayloadIdentity::Numeric {
+            id: u64::from(unsafe { libc::geteuid() }),
+        };
+        node.group = PayloadIdentity::Numeric {
+            id: u64::from(unsafe { libc::getegid() }),
+        };
+        let mut entry = FileEntry::new(
+            "/sbin/init".to_string(),
+            ResolvedPayloadNode::from_numeric_source(node).unwrap(),
+            Some(PayloadContentAuthority {
+                sha256,
+                size: content.len() as u64,
+            }),
+            trove_id,
+        );
+        entry.insert(&conn).unwrap();
+        assert!(
+            FileEntry::find_by_path(&conn, "/sbin").unwrap().is_none(),
+            "the fixture must leave /sbin unclaimed as a parent directory"
+        );
+    }
+
+    /// Publish generation 1 and point `/current` at it. The artifact carries
+    /// `/sbin` and `/sbin/init`.
+    fn activate_generation(&self) {
+        crate::commands::test_helpers::create_active_test_generation(&self.db_path, 1);
+        assert!(
+            conary_core::generation::mount::current_generation(self.runtime_root().root())
+                .unwrap()
+                .is_some(),
+            "the fixture must have an active generation"
+        );
+    }
+}
+
+fn probe_regular_file(path: &str, content: &[u8], mode: u32) -> conary_core::ccs::FileEntry {
+    use conary_core::payload::{PayloadContentAuthority, PayloadIdentity, PayloadNode};
+
+    let mut node = PayloadNode::regular(mode & 0o7777);
+    node.user = PayloadIdentity::Numeric {
+        id: u64::from(unsafe { libc::geteuid() }),
+    };
+    node.group = PayloadIdentity::Numeric {
+        id: u64::from(unsafe { libc::getegid() }),
+    };
+    conary_core::ccs::FileEntry {
+        path: path.to_string(),
+        node,
+        content: Some(PayloadContentAuthority {
+            sha256: conary_core::hash::sha256(content),
+            size: content.len() as u64,
+        }),
+        component: "runtime".to_string(),
+        chunks: None,
+    }
+}
+
+fn signed_probe_package(temp_dir: &std::path::Path, name: &str) -> conary_core::ccs::CcsPackage {
+    use conary_core::ccs::builder::write_signed_current_ccs_package;
+    use conary_core::ccs::{BuildResult, CcsManifest, ComponentData, SigningKeyPair};
+
+    let package_path = temp_dir.join(format!("{name}.ccs"));
+    let content = b"probe\n".to_vec();
+    let files = vec![probe_regular_file(
+        "/usr/bin/preview-runtime-root",
+        &content,
+        0o100755,
+    )];
+    let result = BuildResult {
+        manifest: CcsManifest::new_minimal(name, "1.0.0"),
+        components: HashMap::from([(
+            "runtime".to_string(),
+            ComponentData {
+                name: "runtime".to_string(),
+                files: files.clone(),
+                hash: "test-runtime".to_string(),
+                size: content.len() as u64,
+            },
+        )]),
+        files: files.clone(),
+        payloads: conary_core::ccs::builder::payloads_from_bounded_memory_for_tests(
+            &files,
+            HashMap::from([(conary_core::hash::sha256(&content), content)]),
+        )
+        .unwrap(),
+        total_size: 0,
+        chunked: false,
+        chunk_stats: None,
+    };
+    let signing_key = SigningKeyPair::generate().with_key_id("preview-runtime-root-test");
+    write_signed_current_ccs_package(&result, &package_path, &signing_key, true).unwrap();
+
+    let verification = crate::commands::install::verify_ccs_package_authority(
+        temp_dir.join("conary.db").to_str().unwrap(),
+        &package_path,
+        &crate::commands::install::CcsEnvelopeAuthority::ExactKey(signing_key.public_key_base64()),
+        None,
+    )
+    .unwrap();
+    conary_core::ccs::CcsPackage::from_verified_archive(
+        package_path.to_str().unwrap(),
+        &verification,
+    )
+    .unwrap()
+}
+
+/// Run the same direct CCS transaction the update planner drives: a disposable
+/// projection bound to its real runtime database.
+fn run_preview_dry_run(
+    fixture: &PreviewRuntimeFixture,
+    package: &conary_core::ccs::CcsPackage,
+) -> anyhow::Result<()> {
+    let real_conn = conary_core::db::open(&fixture.db_path).unwrap();
+    let preview = crate::commands::install::preview::PreviewDatabase::new(
+        &real_conn,
+        fixture.db_path.to_str().unwrap(),
+    )
+    .unwrap();
+    drop(real_conn);
+
+    let install_root = fixture.temp.path().join("install-root");
+    std::fs::create_dir_all(&install_root).unwrap();
+    let mut conn = conary_core::db::open(preview.path()).unwrap();
+    crate::commands::install::install_ccs_package_transactionally(
+        &mut conn,
+        package,
+        crate::commands::install::CcsTransactionInstallOptions {
+            preview: Some(&preview),
+            db_path: preview.path(),
+            root: install_root.to_str().unwrap(),
+            dry_run: true,
+            defer_generation: false,
+            quiet: true,
+            sandbox_mode: conary_core::scriptlet::SandboxMode::Always,
+            allow_downgrade: false,
+            intent: crate::commands::install::InstallIntent::PackageChange,
+            reinstall: false,
+            selection_reason: None,
+            selected_manifest_components: None,
+            repository_provenance: None,
+            requested_source_identity: None,
+            replacement: None,
+        },
+    )
+    .map(|_| ())
+}
+
+/// Regression: the installed database omits a parent directory row that the
+/// active generation artifact carries. The preview must read that artifact
+/// through the real runtime root rather than project an empty stand-in.
+#[test]
+fn preview_dry_run_baseline_reads_the_real_runtime_current_generation() {
+    let fixture = PreviewRuntimeFixture::new();
+    fixture.seed_installed_file_without_parent_row();
+    fixture.activate_generation();
+    let package = signed_probe_package(fixture.temp.path(), "preview-current-generation");
+
+    run_preview_dry_run(&fixture, &package)
+        .expect("the real runtime generation supplies the package-unclaimed /sbin parent closure");
+}
+
+/// Control for the regression: the identical fixture has no generation, so the
+/// preview keeps the typed database-projection behavior and cannot invent the
+/// missing parent directory.
+#[test]
+fn preview_dry_run_baseline_without_a_generation_uses_database_projection() {
+    let fixture = PreviewRuntimeFixture::new();
+    fixture.seed_installed_file_without_parent_row();
+    let package = signed_probe_package(fixture.temp.path(), "preview-database-projection");
+
+    let error = run_preview_dry_run(&fixture, &package)
+        .expect_err("database projection cannot resolve the unclaimed /sbin parent");
+
+    let typed = error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<conary_core::Error>())
+        .unwrap_or_else(|| panic!("expected a typed conary_core error: {error:#}"));
+    assert!(
+        matches!(typed, conary_core::Error::InvalidPath(_)),
+        "expected InvalidPath from the database-projection parent closure, got {typed:?}: {error:#}"
+    );
+}
