@@ -187,6 +187,7 @@ impl BatchInstaller<'_> {
                 conn,
                 changeset_id,
                 crate::commands::publication_deferred_follow_up(
+                    outcome.failure_kind,
                     "generation publication is pending".to_string(),
                     self.db_path,
                 ),

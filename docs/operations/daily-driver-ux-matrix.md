@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-09-24
-revision: 57
+last_updated: 2026-09-25
+revision: 59
 summary: Daily-driver CLI publication debt, installed records, database preflight, repository readiness, typed details, and grouped results
 ---
 
@@ -110,6 +110,58 @@ failed cause details, typed pending/running/failed selection, excluded terminal
 and nonrecoverable records, order, empty output, all terminal/pipe/`NO_COLOR`
 modes, and unchanged complete database snapshots. The quoted retry is exercised
 with `--help` to verify its parser and shell arguments without applying it.
+
+When publication fails because the selected root has no base system, the
+install/update pending-publication warning (`PublicationFailureKind::NoBaseSystem`)
+and the `system history` deferred follow-up both select their text from typed
+authority, never from the recorded message. The warning carries
+`MissingBaseSystemPart` directly; the history follow-up records a distinct kind
+per part (`generation_publication_no_base_system_missing_init` or
+`generation_publication_no_base_system_missing_boot_assets`) so re-reading the
+database selects the same part without parsing the reason line. The reason line
+names the missing part: `MissingInit` for an absent executable `/sbin/init`, or
+`MissingBootAssets` for a manifest with no kernel/EFI boot assets (the initramfs
+is generated for a host build). Both show the reason line, the committed-change
+reassurance, and adopt/install guidance matched to that part; neither prints a
+`conary system generation publish --yes` note, because re-running publication
+cannot succeed until the missing part exists:
+
+```text
+warning: Package mutation committed, but generation publication is pending.
+  Changeset: 42
+  Reason: selected root has no base system yet: no executable /sbin/init, so no generation can be published or booted
+note: The package change is committed and will publish once a base system with an executable /sbin/init is present.
+note: Adopt this machine's native system: conary system adopt --system
+note: Or install a base system that provides /sbin/init from a repository.
+```
+
+A manifest with an executable `/sbin/init` but no kernel or EFI loader keeps the
+same shape, but the reason and guidance name the boot assets the builder stages:
+a `/boot/vmlinuz-<release>` kernel and an EFI loader at
+`/boot/EFI/BOOT/BOOTX64.EFI` (or systemd-boot's
+`/usr/lib/systemd/boot/efi/systemd-bootx64.efi`):
+
+```text
+  Reason: selected root has no base system yet: no kernel or boot assets, so no generation can be published or booted
+note: The package change is committed and will publish once a /boot/vmlinuz-<release> kernel and an EFI loader are present.
+note: Adopt this machine's native system: conary system adopt --system
+note: Or install a kernel package that provides /boot/vmlinuz-<release> and an EFI loader at /boot/EFI/BOOT/BOOTX64.EFI or systemd-boot's /usr/lib/systemd/boot/efi/systemd-bootx64.efi.
+```
+
+`system history` regenerates that guidance from the recorded kind for the
+database it opened, and replays the exact reason line recorded with the
+follow-up. The focused proof is `cargo test -p conary --lib
+ui::diagnostics::tests::no_base_publication_output_explains_and_omits_publish_note`,
+`cargo test -p conary --lib
+ui::diagnostics::tests::missing_boot_assets_publication_output_explains_and_omits_publish_note`,
+`cargo test -p conary --lib
+ui::history::tests::no_base_system_follow_up_renders_guidance_without_retry_note`,
+`cargo test -p conary --lib
+ui::history::tests::missing_boot_assets_follow_up_renders_the_boot_asset_reason_and_guidance`,
+and `cargo test -p conary --lib commands::changeset_metadata` covering the
+typed no-base follow-up on the changeset envelope. `conary system generation
+pending` still shows its publication retry note for this case until the
+typed failure kind is persisted (#1110).
 
 ## Ordinary Installed Lists
 

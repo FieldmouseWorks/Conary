@@ -123,6 +123,12 @@ fn resolve_generation_boot_asset_sources_with_tools(
         return resolve_runtime_boot_asset_sources_with_tools(staged, dracut, depmod, cpio);
     }
 
+    // Boot assets must come from this exact manifest here: the publication path
+    // returns earlier when verified prior-generation assets are reusable, and
+    // rebuild never reuses. A manifest with no kernel or EFI loader cannot
+    // produce a bootable generation.
+    super::root_validation::validate_generation_root_host_boot_assets(&runtime_inputs.generation)?;
+
     let artifact_root = artifact_root_for_generations_root(generations_root)?;
     let objects_dir = artifact_root.join("objects");
     let sysroot_workspace =
@@ -363,12 +369,12 @@ fn runtime_boot_asset_sources_for_release(
 }
 
 /// ESP location the generation stages its EFI bootloader from.
-const ESP_BOOTLOADER_REL: &str = "EFI/BOOT/BOOTX64.EFI";
+pub(super) const ESP_BOOTLOADER_REL: &str = "EFI/BOOT/BOOTX64.EFI";
 
 /// systemd-boot's own installed EFI binary, the file `bootctl install` copies
 /// to the ESP. Conary captures that mutation instead of executing it, so the
 /// generation builder owns the copy.
-const SYSTEMD_BOOT_EFI_REL: &str = "usr/lib/systemd/boot/efi/systemd-bootx64.efi";
+pub(super) const SYSTEMD_BOOT_EFI_REL: &str = "usr/lib/systemd/boot/efi/systemd-bootx64.efi";
 
 /// Resolve the exact file staged as the generation's `BOOTX64.EFI`.
 ///

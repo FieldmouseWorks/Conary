@@ -11,7 +11,18 @@
 
 use super::transaction_summary::visible;
 use super::{Status, field_line, heading_line, message, note_line, row_line};
+use conary_core::MissingBaseSystemPart;
 use conary_core::db::models::{Changeset, GenerationPublication, LifecycleEvent};
+
+/// Typed remediation guidance selected by the command boundary from persisted
+/// follow-up kind authority. Rendering never infers this from the message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FollowUpGuidance {
+    None,
+    /// Publication is pending because the selected root has no base system.
+    /// Re-running publication cannot succeed until the named part is present.
+    AdoptOrInstallBaseSystem(MissingBaseSystemPart),
+}
 
 /// One deferred follow-up already classified by the command boundary.
 ///
@@ -23,6 +34,7 @@ pub(crate) struct HistoryFollowUp {
     pub status: String,
     pub message: String,
     pub retry_command: Option<String>,
+    pub guidance: FollowUpGuidance,
 }
 
 /// Open the history frame. The caller replaces it with [`empty`] when no
@@ -115,8 +127,17 @@ fn follow_up_lines(follow_up: &HistoryFollowUp) -> Vec<String> {
         field_line("Status", &visible(&follow_up.status)),
         field_line("Reason", &visible(&follow_up.message)),
     ];
-    if let Some(retry_command) = &follow_up.retry_command {
-        lines.push(note_line(&format!("Retry: {}", visible(retry_command))));
+    match follow_up.guidance {
+        FollowUpGuidance::None => {
+            if let Some(retry_command) = &follow_up.retry_command {
+                lines.push(note_line(&format!("Retry: {}", visible(retry_command))));
+            }
+        }
+        FollowUpGuidance::AdoptOrInstallBaseSystem(missing) => {
+            for guidance in crate::ui::publication::no_base_system_guidance(missing) {
+                lines.push(note_line(guidance));
+            }
+        }
     }
     lines
 }
@@ -266,6 +287,7 @@ mod tests {
             status: "failed".to_owned(),
             message: "boom\nsplit".to_owned(),
             retry_command: Some("conary\u{1b}publish".to_owned()),
+            guidance: FollowUpGuidance::None,
         }];
         let lines = entry_lines(&changeset, None, &deferred, &[]);
         assert_eq!(lines[1], "  Description: line one\\nline two\\u{1b}[31m");
@@ -292,12 +314,14 @@ mod tests {
                 status: "failed".to_owned(),
                 message: "root is not self-contained".to_owned(),
                 retry_command: Some("conary system generation publish --yes".to_owned()),
+                guidance: FollowUpGuidance::None,
             },
             HistoryFollowUp {
                 kind: "generation_publication".to_owned(),
                 status: "failed".to_owned(),
                 message: "root is not self-contained".to_owned(),
                 retry_command: None,
+                guidance: FollowUpGuidance::None,
             },
         ];
         let lines = entry_lines(&changeset(Some(7)), None, &deferred, &[]);
@@ -320,6 +344,82 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn no_base_system_follow_up_renders_guidance_without_retry_note() {
+        plain();
+        let reason = crate::ui::publication::no_base_system_reason(
+            conary_core::MissingBaseSystemPart::MissingInit,
+        );
+        let deferred = [HistoryFollowUp {
+            kind: "generation_publication_no_base_system_missing_init".to_owned(),
+            status: "pending".to_owned(),
+            message: reason.to_owned(),
+            retry_command: None,
+            guidance: FollowUpGuidance::AdoptOrInstallBaseSystem(
+                conary_core::MissingBaseSystemPart::MissingInit,
+            ),
+        }];
+        let lines = entry_lines(&changeset(Some(7)), None, &deferred, &[]);
+        assert_eq!(lines[4], "Deferred work (1):");
+        assert_eq!(
+            lines[5],
+            "  Kind: generation_publication_no_base_system_missing_init"
+        );
+        assert_eq!(lines[6], "  Status: pending");
+        assert_eq!(lines[7], field_line("Reason", reason));
+        assert_eq!(
+            lines[8],
+            "note: The package change is committed and will publish once a base system with an executable /sbin/init is present."
+        );
+        assert_eq!(
+            lines[9],
+            "note: Adopt this machine's native system: conary system adopt --system"
+        );
+        assert_eq!(
+            lines[10],
+            "note: Or install a base system that provides /sbin/init from a repository."
+        );
+        assert_eq!(lines.len(), 11);
+    }
+
+    #[test]
+    fn missing_boot_assets_follow_up_renders_the_boot_asset_reason_and_guidance() {
+        plain();
+        let reason = crate::ui::publication::no_base_system_reason(
+            conary_core::MissingBaseSystemPart::MissingBootAssets,
+        );
+        let deferred = [HistoryFollowUp {
+            kind: "generation_publication_no_base_system_missing_boot_assets".to_owned(),
+            status: "pending".to_owned(),
+            message: reason.to_owned(),
+            retry_command: None,
+            guidance: FollowUpGuidance::AdoptOrInstallBaseSystem(
+                conary_core::MissingBaseSystemPart::MissingBootAssets,
+            ),
+        }];
+        let lines = entry_lines(&changeset(Some(7)), None, &deferred, &[]);
+        assert_eq!(lines[4], "Deferred work (1):");
+        assert_eq!(
+            lines[5],
+            "  Kind: generation_publication_no_base_system_missing_boot_assets"
+        );
+        assert_eq!(lines[6], "  Status: pending");
+        assert_eq!(lines[7], field_line("Reason", reason));
+        assert_eq!(
+            lines[8],
+            "note: The package change is committed and will publish once a /boot/vmlinuz-<release> kernel and an EFI loader are present."
+        );
+        assert_eq!(
+            lines[9],
+            "note: Adopt this machine's native system: conary system adopt --system"
+        );
+        assert_eq!(
+            lines[10],
+            "note: Or install a kernel package that provides /boot/vmlinuz-<release> and an EFI loader at /boot/EFI/BOOT/BOOTX64.EFI or systemd-boot's /usr/lib/systemd/boot/efi/systemd-bootx64.efi."
+        );
+        assert_eq!(lines.len(), 11);
     }
 
     #[test]

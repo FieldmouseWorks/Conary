@@ -139,6 +139,36 @@ mod tests {
             &BootRoot::Staged(boot_root.to_path_buf()),
         )
         .unwrap();
+
+        // Minimal exact-manifest boot assets so the host rebuild path passes the
+        // manifest boot-asset check and reaches the sysroot toolchain it tests.
+        let kernel = cas.store(b"kernel").unwrap();
+        let initramfs = cas.store(b"initramfs").unwrap();
+        let efi = cas.store(b"efi").unwrap();
+        insert_regular_file_with_parents(
+            &conn,
+            "/boot/vmlinuz-6.20.0-conary",
+            kernel,
+            b"kernel".len(),
+            0o644,
+            trove_id,
+        );
+        insert_regular_file_with_parents(
+            &conn,
+            "/boot/initramfs-6.20.0-conary.img",
+            initramfs,
+            b"initramfs".len(),
+            0o644,
+            trove_id,
+        );
+        insert_regular_file_with_parents(
+            &conn,
+            "/boot/EFI/BOOT/BOOTX64.EFI",
+            efi,
+            b"efi".len(),
+            0o644,
+            trove_id,
+        );
         let publication = GenerationPublication::create_pending(
             &conn,
             None,
@@ -234,23 +264,28 @@ mod tests {
 
     #[test]
     fn applied_boot_runtime_request_forces_exact_rebuild_path() {
+        // The reuse decision is the whole contract under test: an applied
+        // boot-runtime request must make verified-asset reuse ineligible, so
+        // the builder takes the exact sysroot rebuild path. Deciding it here
+        // needs no sysroot materialization and no ownership privileges.
         let fixture = published_fixture();
         apply_changeset(&fixture.conn, true);
-
-        let error = super::super::create::build_generation_from_db_with_boot_root(
-            &fixture.conn,
-            &fixture.generations_root,
-            "kernel package mutation",
-            &BootRoot::Host,
-        )
-        .unwrap_err()
-        .to_string();
-
+        let reusable = resolve_reusable_boot_assets(&fixture.conn, &fixture.generations_root)
+            .expect("reuse eligibility must be decidable for an applied boot-runtime request");
         assert!(
-            error.contains("generation-sysroot-workspace")
-                || error.contains("generation boot root")
-                || error.contains("boot"),
-            "the deliberately unprivileged fixture should reach the sysroot rebuild path: {error}"
+            reusable.is_none(),
+            "an applied boot-runtime request must not reuse the published boot assets"
+        );
+
+        // Positive control through the same fixture: an ordinary changeset
+        // keeps the published boot assets reusable.
+        let fixture = published_fixture();
+        apply_changeset(&fixture.conn, false);
+        let reusable = resolve_reusable_boot_assets(&fixture.conn, &fixture.generations_root)
+            .expect("reuse eligibility must be decidable for an ordinary changeset");
+        assert!(
+            reusable.is_some(),
+            "an ordinary changeset must keep the verified boot assets reusable"
         );
     }
 

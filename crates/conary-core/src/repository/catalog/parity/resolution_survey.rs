@@ -429,6 +429,10 @@ impl NativeResolutionSurveyErrorVariantV1 {
             Error::InvalidPath(_) => Self::InvalidPath,
             Error::PathTraversal(_) => Self::PathTraversal,
             Error::NotFound(_) => Self::NotFound,
+            // A generation root missing a base-system part is a
+            // missing-entrypoint condition, so it shares the survey's generic
+            // not-found wire class.
+            Error::GenerationRootMissingBaseSystem { .. } => Self::NotFound,
             Error::RecoveryFailed(_)
             | Error::BootVerity(_)
             | Error::RecoveryScanExhausted { .. } => Self::RecoveryFailed,

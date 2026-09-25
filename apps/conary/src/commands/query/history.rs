@@ -3,30 +3,53 @@
 //! Read changeset evidence and prepare command-scoped recovery guidance for UI rendering.
 
 use super::super::open_db;
-use crate::ui::history::{self, HistoryFollowUp};
+use crate::commands::generation::publication::PublicationOutcome;
+use crate::ui::history::{self, FollowUpGuidance, HistoryFollowUp};
 use anyhow::Result;
 use conary_core::db::models::{Changeset, GenerationPublication, LifecycleEvent};
+
+fn follow_up_guidance(
+    follow_up: &crate::commands::DeferredFollowUp,
+    db_path: &str,
+) -> (Option<String>, FollowUpGuidance) {
+    match crate::commands::classify_deferred_follow_up_kind(follow_up) {
+        crate::commands::DeferredFollowUpKind::GenerationPublication => (
+            follow_up
+                .retry_command
+                .as_ref()
+                .map(|_| PublicationOutcome::retry_command(db_path)),
+            FollowUpGuidance::None,
+        ),
+        crate::commands::DeferredFollowUpKind::GenerationPublicationNoBaseSystemInit => (
+            None,
+            FollowUpGuidance::AdoptOrInstallBaseSystem(
+                conary_core::MissingBaseSystemPart::MissingInit,
+            ),
+        ),
+        crate::commands::DeferredFollowUpKind::GenerationPublicationNoBaseSystemBootAssets => (
+            None,
+            FollowUpGuidance::AdoptOrInstallBaseSystem(
+                conary_core::MissingBaseSystemPart::MissingBootAssets,
+            ),
+        ),
+        crate::commands::DeferredFollowUpKind::Other => {
+            (follow_up.retry_command.clone(), FollowUpGuidance::None)
+        }
+    }
+}
 
 fn history_follow_ups(changeset: &Changeset, db_path: &str) -> Result<Vec<HistoryFollowUp>> {
     Ok(
         crate::commands::deferred_follow_up(changeset.metadata.as_deref())?
             .into_iter()
             .map(|follow_up| {
-                let retry_command = match crate::commands::classify_deferred_follow_up_kind(
-                    &follow_up,
-                ) {
-                    crate::commands::DeferredFollowUpKind::GenerationPublication => Some(
-                        crate::commands::generation::publication::PublicationOutcome::retry_command(
-                            db_path,
-                        ),
-                    ),
-                    crate::commands::DeferredFollowUpKind::Other => follow_up.retry_command,
-                };
+                let (retry_command, guidance) = follow_up_guidance(&follow_up, db_path);
                 HistoryFollowUp {
                     kind: follow_up.kind,
                     status: follow_up.status,
                     message: follow_up.message,
                     retry_command,
+                    guidance,
                 }
             })
             .collect(),
@@ -109,6 +132,43 @@ mod tests {
             Some("recorded command")
         );
         assert_eq!(records[2].retry_command, None);
+    }
+
+    #[test]
+    fn no_base_publication_guidance_records_and_classifies_each_missing_part() {
+        use crate::commands::generation::publication::PublicationFailureKind;
+        use crate::commands::publication_deferred_follow_up;
+        use conary_core::MissingBaseSystemPart;
+
+        for (missing, expected) in [
+            (
+                MissingBaseSystemPart::MissingInit,
+                FollowUpGuidance::AdoptOrInstallBaseSystem(MissingBaseSystemPart::MissingInit),
+            ),
+            (
+                MissingBaseSystemPart::MissingBootAssets,
+                FollowUpGuidance::AdoptOrInstallBaseSystem(
+                    MissingBaseSystemPart::MissingBootAssets,
+                ),
+            ),
+        ] {
+            let mut changeset = Changeset::new("fixture".into());
+            changeset.metadata = Some(
+                metadata_with_deferred_follow_up(
+                    Vec::new(),
+                    vec![publication_deferred_follow_up(
+                        Some(PublicationFailureKind::NoBaseSystem(missing)),
+                        "generation publication is pending".into(),
+                        "/tmp/history.db",
+                    )],
+                )
+                .unwrap(),
+            );
+            let records = history_follow_ups(&changeset, "/tmp/history.db").unwrap();
+            assert_eq!(records.len(), 1);
+            assert_eq!(records[0].guidance, expected, "{missing:?}");
+            assert_eq!(records[0].retry_command, None);
+        }
     }
 
     #[test]

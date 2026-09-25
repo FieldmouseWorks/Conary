@@ -3,6 +3,7 @@
 #![cfg(test)]
 
 use super::*;
+use conary_core::MissingBaseSystemPart;
 use std::borrow::Cow;
 use std::process::Command;
 
@@ -157,6 +158,7 @@ fn pending() -> PublicationOutcome {
             "conary system generation publish --db-path /fixture/conary.db --yes".into(),
         ),
         failure_reason: None,
+        failure_kind: None,
         completed_debts: 0,
     }
 }
@@ -182,6 +184,50 @@ fn publication_renderer_uses_exact_pending_and_retry_facts() {
     );
     outcome.needs_publication = false;
     assert!(pending_publication(42, &outcome).is_none());
+}
+
+#[test]
+fn no_base_publication_renders_guidance_and_omits_publish_note() {
+    let mut outcome = pending();
+    outcome.failure_kind = Some(PublicationFailureKind::NoBaseSystem(
+        MissingBaseSystemPart::MissingInit,
+    ));
+    outcome.failure_reason = Some("Failed to build EROFS generation: raw builder error".into());
+    outcome.retry_command = Some("conary system generation publish --yes".into());
+    let diagnostic = pending_publication(42, &outcome).unwrap();
+    assert_eq!(
+        diagnostic.plain_body(),
+        concat!(
+            "Package mutation committed, but generation publication is pending.\n",
+            "  Changeset: 42\n",
+            "  Reason: selected root has no base system yet: no executable /sbin/init, so no generation can be published or booted\n",
+            "note: The package change is committed and will publish once a base system with an executable /sbin/init is present.\n",
+            "note: Adopt this machine's native system: conary system adopt --system\n",
+            "note: Or install a base system that provides /sbin/init from a repository.",
+        )
+    );
+}
+
+#[test]
+fn missing_boot_assets_publication_renders_guidance_with_the_boot_asset_reason() {
+    let mut outcome = pending();
+    outcome.failure_kind = Some(PublicationFailureKind::NoBaseSystem(
+        MissingBaseSystemPart::MissingBootAssets,
+    ));
+    outcome.failure_reason = Some("Failed to build EROFS generation: raw builder error".into());
+    outcome.retry_command = Some("conary system generation publish --yes".into());
+    let diagnostic = pending_publication(42, &outcome).unwrap();
+    assert_eq!(
+        diagnostic.plain_body(),
+        concat!(
+            "Package mutation committed, but generation publication is pending.\n",
+            "  Changeset: 42\n",
+            "  Reason: selected root has no base system yet: no kernel or boot assets, so no generation can be published or booted\n",
+            "note: The package change is committed and will publish once a /boot/vmlinuz-<release> kernel and an EFI loader are present.\n",
+            "note: Adopt this machine's native system: conary system adopt --system\n",
+            "note: Or install a kernel package that provides /boot/vmlinuz-<release> and an EFI loader at /boot/EFI/BOOT/BOOTX64.EFI or systemd-boot's /usr/lib/systemd/boot/efi/systemd-bootx64.efi.",
+        )
+    );
 }
 
 #[test]
@@ -223,6 +269,92 @@ fn default_publication_output_has_one_warning_and_one_retry() {
     assert!(
         !stdout.contains("Retained generation publication state"),
         "{stdout}"
+    );
+}
+
+#[test]
+fn no_base_publication_capture_child() {
+    if std::env::var_os("CONARY_NO_BASE_PUBLICATION_CAPTURE").is_none() {
+        return;
+    }
+    conary_bootstrap::init_cli_tracing("warn");
+    let mut outcome = pending();
+    outcome.failure_kind = Some(PublicationFailureKind::NoBaseSystem(
+        MissingBaseSystemPart::MissingInit,
+    ));
+    crate::commands::generation::publication::warn_if_publication_pending(42, &outcome);
+}
+
+#[test]
+fn no_base_publication_output_explains_and_omits_publish_note() {
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    crate::test_hooks::clear_inherited_hooks(&mut command);
+    let output = command
+        .args([
+            "--exact",
+            "ui::diagnostics::tests::no_base_publication_capture_child",
+            "--nocapture",
+        ])
+        .env("CONARY_NO_BASE_PUBLICATION_CAPTURE", "1")
+        .env("NO_COLOR", "1")
+        .env_remove("RUST_LOG")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(
+        stderr,
+        concat!(
+            "warning: Package mutation committed, but generation publication is pending.\n",
+            "  Changeset: 42\n",
+            "  Reason: selected root has no base system yet: no executable /sbin/init, so no generation can be published or booted\n",
+            "note: The package change is committed and will publish once a base system with an executable /sbin/init is present.\n",
+            "note: Adopt this machine's native system: conary system adopt --system\n",
+            "note: Or install a base system that provides /sbin/init from a repository.\n",
+        )
+    );
+}
+
+#[test]
+fn missing_boot_assets_publication_capture_child() {
+    if std::env::var_os("CONARY_MISSING_BOOT_ASSETS_PUBLICATION_CAPTURE").is_none() {
+        return;
+    }
+    conary_bootstrap::init_cli_tracing("warn");
+    let mut outcome = pending();
+    outcome.failure_kind = Some(PublicationFailureKind::NoBaseSystem(
+        MissingBaseSystemPart::MissingBootAssets,
+    ));
+    crate::commands::generation::publication::warn_if_publication_pending(42, &outcome);
+}
+
+#[test]
+fn missing_boot_assets_publication_output_explains_and_omits_publish_note() {
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    crate::test_hooks::clear_inherited_hooks(&mut command);
+    let output = command
+        .args([
+            "--exact",
+            "ui::diagnostics::tests::missing_boot_assets_publication_capture_child",
+            "--nocapture",
+        ])
+        .env("CONARY_MISSING_BOOT_ASSETS_PUBLICATION_CAPTURE", "1")
+        .env("NO_COLOR", "1")
+        .env_remove("RUST_LOG")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(
+        stderr,
+        concat!(
+            "warning: Package mutation committed, but generation publication is pending.\n",
+            "  Changeset: 42\n",
+            "  Reason: selected root has no base system yet: no kernel or boot assets, so no generation can be published or booted\n",
+            "note: The package change is committed and will publish once a /boot/vmlinuz-<release> kernel and an EFI loader are present.\n",
+            "note: Adopt this machine's native system: conary system adopt --system\n",
+            "note: Or install a kernel package that provides /boot/vmlinuz-<release> and an EFI loader at /boot/EFI/BOOT/BOOTX64.EFI or systemd-boot's /usr/lib/systemd/boot/efi/systemd-bootx64.efi.\n",
+        )
     );
 }
 
