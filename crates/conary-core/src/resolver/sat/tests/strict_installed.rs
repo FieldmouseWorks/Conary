@@ -60,7 +60,7 @@ fn conditional_depends(required: &str, condition: &str) -> RepositoryRequirement
     .unwrap()
 }
 
-fn hard_depends(name: &str) -> RepositoryRequirementGroup {
+pub(super) fn hard_depends(name: &str) -> RepositoryRequirementGroup {
     crate::repository::requirement::parse_native_requirement(
         RepositoryRequirementKind::Depends,
         VersionScheme::Rpm,
@@ -75,7 +75,7 @@ fn strict_policy_without_source_authority(conn: &Connection) -> ResolutionPolicy
         .resolution
 }
 
-fn repository_fixture(conn: &Connection) -> i64 {
+pub(super) fn repository_fixture(conn: &Connection) -> i64 {
     let mut repository = Repository::new(
         "fedora-44".to_string(),
         "https://example.invalid/fedora".to_string(),
@@ -412,35 +412,6 @@ fn authority_known_end_state_discharges_vacuous_installed_condition() {
     assert_eq!(result.conflict_message, None, "{result:?}");
     assert!(result.install_order.is_empty(), "{result:?}");
     assert!(result.remove_order.is_empty(), "{result:?}");
-}
-
-#[test]
-fn authority_known_end_state_refuses_to_replace_a_surviving_installed_trove() {
-    let (_dir, conn) = setup_test_db();
-    let repository_id = repository_fixture(&conn);
-    insert_rpm_trove(&conn, "foo", "1.0.0", &[]);
-    insert_rpm_repo_package(&conn, repository_id, "foo", "3-1");
-    let policy = ResolutionPolicy::new().with_primary_source_identity("fedora-44");
-    let requirement = crate::repository::requirement::parse_native_requirement(
-        RepositoryRequirementKind::Depends,
-        VersionScheme::Rpm,
-        "foo >= 2.0.0",
-    )
-    .unwrap();
-
-    // The installed `foo` 1.0.0 survives, so the fixed end state holds it. The
-    // repository's `foo` 3-1 would replace a surviving trove, so the solve must
-    // conflict instead of silently planning the replacement.
-    let result = solve_requirement_groups_with_outgoing_and_policy(
-        &conn,
-        &[requirement],
-        VersionScheme::Rpm,
-        &[],
-        &policy,
-    )
-    .unwrap();
-    assert!(result.conflict_message.is_some(), "{result:?}");
-    assert!(result.install_order.is_empty(), "{result:?}");
 }
 
 fn install_collection_trove(conn: &Connection, name: &str) {
@@ -976,9 +947,9 @@ fn parallel_installed_variants_are_all_selectable() {
         "{resolved:?}"
     );
 
-    // Control through the same fixture: a requirement only a repository
-    // version satisfies must not replace a surviving variant, so the solve
-    // refuses even though the repository package exists.
+    // Control through the same fixture: both surviving variants share the
+    // repository version's install slot, so it has no exact predecessor to
+    // replace and the solve refuses even though the package exists.
     insert_rpm_repo_package(&conn, repository_id, "libfoo", "3-1");
     let refused = solve_requirement_groups_with_outgoing_and_policy(
         &conn,

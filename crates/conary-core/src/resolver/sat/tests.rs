@@ -1512,6 +1512,8 @@ mod formal_dependencies;
 mod relations;
 #[path = "tests/root_requirements.rs"]
 mod root_requirements;
+#[path = "tests/slot_replacement.rs"]
+mod slot_replacement;
 #[path = "tests/strict_installed.rs"]
 mod strict_installed;
 #[path = "tests/virtual_conditions.rs"]

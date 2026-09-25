@@ -72,8 +72,9 @@ pub(super) struct PassContext<'a> {
 /// installed roots that make surviving installed facts SAT-visible are compiled
 /// on every pass, excluding the troves the accumulated hidden set removes. Each
 /// such root is the disjunction of the exact installed trove and the loaded
-/// candidates whose typed relations remove it, so an installed fact yields to a
-/// selected obsoleter instead of making the obsoleter unselectable.
+/// candidates whose typed relations remove it or that replace it through its
+/// install slot, so an installed fact yields to a selected obsoleter or
+/// dependency upgrade instead of making it unselectable.
 ///
 /// The removal set a later pass withholds from candidate discovery is exact for
 /// that pass, but the removal order the resolution reports is exactly the final
@@ -114,7 +115,7 @@ pub(super) fn solve_validated_groups_to_fixed_point(
             &validation.ignored_groups,
         )?;
 
-        let (install_order, remove_order, selected) = match pass {
+        let (install_order, remove_order, replaced, selected) = match pass {
             ExpressionPass::Conflict(message) => {
                 return unsatisfiable_pass_resolution(
                     context,
@@ -128,22 +129,23 @@ pub(super) fn solve_validated_groups_to_fixed_point(
             ExpressionPass::Resolved {
                 install_order,
                 remove_order,
+                replaced,
                 selected,
-            } => (install_order, remove_order, selected),
+            } => (install_order, remove_order, replaced, selected),
         };
 
-        // This pass's relation plan is the only removal set the resolution may
-        // report. A stale removal from an earlier pass whose obsoleting package
-        // this pass no longer selects must not survive into the report or the
-        // projected end state.
-        let removed_now = removed_trove_ids(&remove_order);
+        // This pass's relation plan and install-slot replacements are the only
+        // removals the projected end state may hold. A stale removal from an
+        // earlier pass whose obsoleting or replacing package this pass no
+        // longer selects must not survive into the report or the projection.
+        let removed_now = pass_removed_trove_ids(&remove_order, &replaced);
 
         // A pass can mention capabilities only SAT-selected repository packages
         // or relation-removed installed troves provide. Admit any installed
         // candidate those newly mention before validating the projection.
         let admitted_group = validation.extend_from_pass(
             &selected,
-            &remove_order,
+            &removed_now,
             before,
             surviving,
             native_architecture,
@@ -151,7 +153,7 @@ pub(super) fn solve_validated_groups_to_fixed_point(
         let violated = groups_violated_by_solved_end_state(
             fixed_end_state,
             &selected,
-            &remove_order,
+            &removed_now,
             &validation.groups,
             native_architecture,
             &validation.canonical_equivalents,
@@ -276,20 +278,19 @@ fn compile_pass_roots(
 /// satisfy.
 ///
 /// The projected end state is the fixed state plus every package SAT selected,
-/// minus the exact installed troves the relation plan removes. A group whose
-/// owning installed trove the relation plan removes is itself dropped, because
-/// the trove owns no group in that pass's end state. The shared typed evaluator
+/// minus the exact installed troves the pass removes, by relation or install
+/// slot replacement. A group whose owning installed trove the pass removes is
+/// itself dropped, because the trove owns no group in that pass's end state. The shared typed evaluator
 /// decides satisfaction, so the assertion uses the same algebra as the
 /// pre-transaction projection.
 fn groups_violated_by_solved_end_state(
     fixed_end_state: &[PackageIdentity],
     selected: &[PackageIdentity],
-    remove_order: &[SatRelationRemoval],
+    removed: &HashSet<i64>,
     groups: &[ValidatedRequirementGroup],
     native_architecture: &str,
     canonical_equivalents: &CanonicalEquivalents,
 ) -> Result<Vec<usize>> {
-    let removed = removed_trove_ids(remove_order);
     let mut projected = fixed_end_state.to_vec();
     if !removed.is_empty() {
         projected.retain(|package| {
@@ -302,7 +303,7 @@ fn groups_violated_by_solved_end_state(
 
     let mut violated = Vec::new();
     for (index, group) in groups.iter().enumerate() {
-        if group.owner_removed_by(&removed) {
+        if group.owner_removed_by(removed) {
             continue;
         }
         if !group.satisfied_against(native_architecture, &projected, canonical_equivalents)? {
@@ -318,6 +319,10 @@ enum ExpressionPass {
     Resolved {
         install_order: Vec<SatPackage>,
         remove_order: Vec<SatRelationRemoval>,
+        /// Installed troves selected repository packages replace through their
+        /// install slot; the installer upgrades them, so they leave the end
+        /// state exactly like relation removals.
+        replaced: Vec<i64>,
         selected: Vec<PackageIdentity>,
     },
 }
@@ -367,6 +372,7 @@ fn solve_expression_pass(
             Ok(ExpressionPass::Resolved {
                 install_order: collect_new_install_order(solver.provider(), &solvable_ids),
                 remove_order: relation_plan.removals,
+                replaced: solver.provider().selected_slot_replacements(&solvable_ids),
                 selected: collect_selected_identities(solver.provider(), &solvable_ids),
             })
         }
@@ -481,6 +487,7 @@ fn unsatisfiable_pass_resolution(
         ExpressionPass::Resolved {
             selected,
             remove_order,
+            replaced,
             ..
         } => {
             // Attribute only the installed groups the incoming-only end state
@@ -490,7 +497,7 @@ fn unsatisfiable_pass_resolution(
             let violated = groups_violated_by_solved_end_state(
                 fixed_end_state,
                 &selected,
-                &remove_order,
+                &pass_removed_trove_ids(&remove_order, &replaced),
                 &validation.groups,
                 native_architecture,
                 &validation.canonical_equivalents,
@@ -533,4 +540,12 @@ fn collect_selected_identities(
         .filter(|solvable_id| Some(**solvable_id) != fixed_incoming)
         .map(|solvable_id| provider.get_solvable(*solvable_id).clone())
         .collect()
+}
+
+/// Every installed trove a resolved pass removes: its relation plan plus the
+/// troves its selection replaces through their install slot.
+fn pass_removed_trove_ids(remove_order: &[SatRelationRemoval], replaced: &[i64]) -> HashSet<i64> {
+    let mut removed = removed_trove_ids(remove_order);
+    removed.extend(replaced.iter().copied());
+    removed
 }

@@ -40,7 +40,8 @@ pub(crate) fn relation_removes_candidate(
 
 impl ConaryProvider<'_> {
     /// The SAT root keeping installed trove `trove_id` selected unless a loaded
-    /// non-installed candidate relation-removes it.
+    /// non-installed candidate relation-removes it or replaces it through its
+    /// install slot (`slot_replacement`).
     ///
     /// The installed alternative is the exact trove identity. Each removing
     /// candidate is grouped by its concrete package name into an
@@ -88,6 +89,20 @@ impl ConaryProvider<'_> {
                         .insert(candidate_id.into_raw());
                     break;
                 }
+            }
+        }
+        let predecessor = self
+            .solvable_ids()
+            .iter()
+            .copied()
+            .find(|&id| self.get_solvable(id).installed_trove_id == Some(trove_id));
+        if let Some(predecessor) = predecessor {
+            let replacers = self.slot_replacers(predecessor);
+            if !replacers.is_empty() {
+                removers
+                    .entry(existing.name.clone())
+                    .or_default()
+                    .extend(replacers);
             }
         }
         for (name, solvables) in removers {

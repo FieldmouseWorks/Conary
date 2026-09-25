@@ -241,8 +241,9 @@ impl ConaryProvider<'_> {
     /// end state locks surviving candidates.
     ///
     /// Both are facts of the declared end state, so a requirement on this name
-    /// must be satisfiable by selecting them all together rather than by a
-    /// repository candidate. The fixed incoming package always comes first; a
+    /// must be satisfiable by selecting them all together, or by a repository
+    /// candidate only as an exact install-slot replacer of a surviving variant.
+    /// The fixed incoming package always comes first; a
     /// name can be both the incoming's identity and a surviving variant's
     /// identity in a parallel install.
     fn fixed_facts_for_name(&self, name: NameId, candidates: &[SolvableId]) -> Vec<SolvableId> {
@@ -252,7 +253,7 @@ impl ConaryProvider<'_> {
         {
             facts.push(incoming);
         }
-        if self.surviving_installed_candidates_locked {
+        if self.surviving_installed_lock.is_some() {
             let name_str = &self.names[name.to_index()];
             for &candidate in candidates {
                 let package = &self.solvables[candidate.to_index()];
@@ -365,9 +366,9 @@ impl DependencyProvider for ConaryProvider<'_> {
 
         // The fixed facts of this name are the fixed incoming package and every
         // surviving installed variant of the exact name. They are all part of
-        // the declared end state, so a requirement on this name must be
-        // satisfiable by selecting them together, never by a repository
-        // candidate.
+        // the declared end state, so a requirement on this name is satisfied by
+        // selecting them together, or by a repository candidate only as the
+        // installer's exact install-slot upgrade of one surviving variant.
         //
         // If the package is pinned (troves.pinned = 1) and there is no fixed
         // fact, lock the solver to the installed version so the SAT solver
@@ -381,19 +382,24 @@ impl DependencyProvider for ConaryProvider<'_> {
             .any(|&sid| self.solvables[sid.to_index()].installed_trove_id.is_some())
         {
             // A fixed end state keeps every surviving installed variant of the
-            // exact name. Repository candidates of that name must never replace
-            // the incoming package or a surviving variant, so they are filtered
-            // out rather than allowed to compete. With more than one fact the
-            // solver must be able to select all of them, which the exact roots
-            // require and `allow_multiple` permits. A lone surviving variant is
-            // locked unambiguously and forbids every other candidate.
+            // exact name. A repository candidate of that name never replaces
+            // the incoming package, and replaces a surviving variant only as
+            // its exact slot replacer, whose compiled constraint excludes the
+            // predecessor; every other same-name repository candidate is
+            // filtered out. Several facts or a replacer need `allow_multiple`
+            // so the solver can select every package the end state holds. A
+            // lone surviving variant with no replacer is locked unambiguously.
             candidates.retain(|&sid| {
                 let pkg = &self.solvables[sid.to_index()];
                 pkg.name != *name_str
                     || pkg.installed_trove_id.is_some()
                     || Some(sid) == self.fixed_incoming
+                    || self.slot_predecessor(sid).is_some()
             });
-            if fixed_facts.len() > 1 {
+            let has_replacer = candidates
+                .iter()
+                .any(|&sid| self.slot_predecessor(sid).is_some());
+            if fixed_facts.len() > 1 || has_replacer {
                 allow_multiple = true;
             } else {
                 locked = fixed_facts.first().copied();
@@ -434,7 +440,7 @@ impl DependencyProvider for ConaryProvider<'_> {
         match self.compiled_dependencies.get(&solvable.into_raw()) {
             Some(requirements) => Dependencies::Known(KnownDependencies {
                 requirements: requirements.clone(),
-                constrains: Vec::new(),
+                constrains: self.slot_replacement_constrains(solvable),
             }),
             None => Dependencies::Unknown(self.missing_dependency_authority),
         }

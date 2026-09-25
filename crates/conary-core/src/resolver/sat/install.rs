@@ -105,6 +105,9 @@ pub(super) fn build_provider_for_requirement_expressions<'conn>(
     drop(phase);
     let phase = timing::start(None, timing::Phase::Compilation);
     provider.intern_all_dependency_version_sets()?;
+    // Slot exclusions name the loaded candidate pool, so they compile only once
+    // discovery is complete.
+    provider.compile_slot_replacement_constrains()?;
     drop(phase);
     Ok(provider)
 }

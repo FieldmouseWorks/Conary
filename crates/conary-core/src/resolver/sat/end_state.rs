@@ -9,9 +9,10 @@
 //! transaction can affect is only complete after a solve. Every surviving
 //! installed package the transaction's groups can observe is rooted as the
 //! disjunction of its exact identity and the loaded candidates that
-//! relation-remove it, so its stored dependencies are enforced natively by SAT
-//! unless a selected obsoleter removes it; the affected capability set decides
-//! which installed packages are observed.
+//! relation-remove it or replace it through its install slot, so its stored
+//! dependencies are enforced natively by SAT unless a selected obsoleter or
+//! same-name upgrade removes it; the affected capability set decides which
+//! installed packages are observed.
 //!
 //! The fixed-point pass driver itself lives in `fixed_point`, which decides
 //! which validated groups each pass compiles into SAT roots.
@@ -21,7 +22,7 @@ mod fixed_point;
 
 use resolvo::SolvableId;
 use rusqlite::Connection;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use crate::error::{Error, Result};
 use crate::repository::dependency_model::{
@@ -311,14 +312,15 @@ impl EndStateValidation {
     /// Extend the affected capability set with every selected identity and every
     /// removed installed trove, then admit newly mentioned candidates.
     ///
-    /// A selected or removed package contributes its canonical equivalents
-    /// alongside its literal identity name, so an installed dependent that names
-    /// a sibling implementation is admitted. Provided-capability names stay
-    /// literal.
+    /// `removed_trove_ids` is the pass's whole removal set: relation removals
+    /// and install-slot replacements alike. A selected or removed package
+    /// contributes its canonical equivalents alongside its literal identity
+    /// name, so an installed dependent that names a sibling implementation is
+    /// admitted. Provided-capability names stay literal.
     fn extend_from_pass(
         &mut self,
         selected: &[PackageIdentity],
-        remove_order: &[SatRelationRemoval],
+        removed_trove_ids: &HashSet<i64>,
         before: &[PackageIdentity],
         surviving: &[PackageIdentity],
         native_architecture: &str,
@@ -333,34 +335,23 @@ impl EndStateValidation {
                 self.affected.insert(capability.name.clone());
             }
         }
-        if !remove_order.is_empty() {
-            let installed = before
-                .iter()
-                .filter_map(|package| {
-                    package
-                        .installed_trove_id
-                        .map(|trove_id| (trove_id, package))
-                })
-                .collect::<HashMap<_, _>>();
-            for removal in remove_order {
-                insert_identity_name(
-                    &mut self.affected,
-                    &removal.package.name,
-                    &self.canonical_equivalents,
-                );
-                if let Some(package) = installed.get(&removal.trove_id) {
-                    for capability in &package.provided_capabilities {
-                        self.affected.insert(capability.name.clone());
-                    }
-                }
+        for package in before {
+            if !package
+                .installed_trove_id
+                .is_some_and(|trove_id| removed_trove_ids.contains(&trove_id))
+            {
+                continue;
+            }
+            insert_identity_name(
+                &mut self.affected,
+                &package.name,
+                &self.canonical_equivalents,
+            );
+            for capability in &package.provided_capabilities {
+                self.affected.insert(capability.name.clone());
             }
         }
-        self.admit_mentioned(
-            before,
-            surviving,
-            native_architecture,
-            &removed_trove_ids(remove_order),
-        )
+        self.admit_mentioned(before, surviving, native_architecture, removed_trove_ids)
     }
 }
 

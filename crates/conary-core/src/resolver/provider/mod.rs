@@ -15,6 +15,7 @@ mod loading;
 pub(crate) mod matching;
 mod relation_removal;
 mod repository;
+mod slot_replacement;
 mod traits;
 pub mod types;
 
@@ -38,6 +39,7 @@ use loading::{
 };
 pub(crate) use matching::constraint_matches_package;
 pub(crate) use relation_removal::relation_removes_candidate;
+use slot_replacement::SurvivingInstalledLock;
 pub use types::{ConaryConstraint, SolverDep, SolverExpression, SolverRelation};
 
 type RemovalProvider = (i64, Option<String>, Option<ProvideVersionRelation>);
@@ -153,12 +155,11 @@ pub struct ConaryProvider<'db> {
     relation_only_installed_troves: HashSet<i64>,
 
     /// When set, surviving installed candidates are fixed facts of the owning
-    /// transaction's end state. For an exact package name, repository
-    /// candidates are filtered out so they can never replace the fixed incoming
-    /// package or a surviving variant; a lone fixed fact is locked, while
-    /// multiple facts (the incoming package plus variants, or parallel
-    /// variants) are all selectable via `allow_multiple`.
-    pub(super) surviving_installed_candidates_locked: bool,
+    /// transaction's end state. For an exact package name, a repository
+    /// candidate is offered only as the exact install-slot replacement of one
+    /// surviving trove (`slot_replacement`); a lone fixed fact with no replacer
+    /// is locked, while several facts or a replacer use `allow_multiple`.
+    pub(super) surviving_installed_lock: Option<SurvivingInstalledLock>,
 
     /// The incoming package registered as a fixed SAT fact. It carries
     /// transaction identity but no repository or installed provenance, and its
@@ -216,7 +217,7 @@ impl<'db> ConaryProvider<'db> {
             native_architecture: crate::repository::registry::detect_system_arch()?,
             excluded_installed_trove_ids: HashSet::new(),
             relation_only_installed_troves: HashSet::new(),
-            surviving_installed_candidates_locked: false,
+            surviving_installed_lock: None,
             fixed_incoming: None,
             conn,
         })
@@ -251,15 +252,14 @@ impl<'db> ConaryProvider<'db> {
     /// Treat every surviving installed candidate as a fixed fact of the
     /// transaction's end state.
     ///
-    /// For an exact package name, repository candidates are filtered out so no
-    /// version may replace the fixed incoming package or a surviving variant. A
-    /// lone fixed fact is locked; the incoming package and parallel variants are
-    /// all selectable. This keeps the solver's model aligned with the packages
-    /// the transaction actually keeps; a requirement only a different version
-    /// can satisfy is a conflict rather than a silent replacement. Virtual
+    /// For an exact package name, no repository version may replace the fixed
+    /// incoming package, and one replaces a surviving variant only as the
+    /// installer's exact install-slot upgrade of it (`slot_replacement`). A
+    /// lone fixed fact with no replacer is locked; the incoming package,
+    /// parallel variants, and replacers are all selectable. Virtual
     /// capabilities are not filtered because several packages may provide one.
     pub(crate) fn lock_surviving_installed_candidates(&mut self) {
-        self.surviving_installed_candidates_locked = true;
+        self.surviving_installed_lock = Some(SurvivingInstalledLock::default());
     }
 
     /// Register the incoming package as a fixed SAT fact.
