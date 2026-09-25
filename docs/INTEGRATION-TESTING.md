@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-25
-revision: 70
+revision: 74
 summary: Define the Podman container integration harness, its prerequisites, running suites, fixtures, and result/proof contracts
 ---
 
@@ -1260,6 +1260,45 @@ Current JSON semantics:
 2. Define test steps using the manifest schema (run, assert, mock_server, etc.)
 3. For a local proof, run `cargo run -p conary-test -- list`
 4. For deeper manual debugging, run `cargo run -p conary-test -- run --suite <manifest> --distro <distro> --phase <N>`
+
+Prove behavior with typed output. When a command emits JSON, assert on it with
+`stdout_json`: stdout must parse as one JSON document, each RFC 6901 `pointer`
+must resolve, and the resolved value must equal `equals` exactly (objects by
+key set, arrays in order, integers and floats never cross-match). An entry may
+instead set `null = true` to require JSON null at the pointer, or
+`equals_json = '<JSON text>'` for a JSON value literal that TOML cannot
+express: TOML integers are `i64`, so `equals` cannot hold an unsigned integer
+above `i64::MAX` (the loader keeps `18446744073709551615` as a `u64`), and TOML
+has no null literal, so `equals` cannot hold a JSON null nested inside an object
+or array. The `equals_json` text is parsed at load time; invalid JSON is a load
+error naming the pointer. The exact comparator supports a number token only
+when it canonicalizes exactly and its magnitude lies within finite `f64`: a
+number beyond `f64::MAX` (for example a 400-digit integer) and a token whose
+exponent does not fit `i64` (for example `1e-9223372036854775809`, which
+`serde_json` reads as a finite zero) are both unsupported. Every number in
+`equals_json` must satisfy that one rule, so `equals_json` containing an
+unsupported token is refused at load with a range error naming the pointer.
+Stdout that contains an unsupported token is likewise reported as a number
+beyond the supported range, not as invalid JSON or an invalid number token.
+Each entry sets exactly one of `equals`,
+`equals_json`, or `null = true`. String leaves and pointers receive `${VAR}`
+expansion.
+
+```toml
+[test.step.assert]
+exit_code = 0
+stdout_json = [
+  { pointer = "/status", equals = "planned" },
+  { pointer = "/data/skipped", equals = [] },
+  { pointer = "/data/removable/0/package_release", null = true },
+  { pointer = "/id", equals_json = '18446744073709551615' },
+  { pointer = "/meta", equals_json = '{"a":[1,null]}' },
+]
+```
+
+The substring assertions (`stdout_contains*`, `stderr_contains`) remain for
+unmigrated suites; they must not be the proof for new tests where a typed
+surface exists. See issue #1070 for the migration.
 
 ## Adding Distros
 
