@@ -78,6 +78,10 @@ pub fn build_variables(config: &GlobalConfig, distro: &str) -> HashMap<String, S
                 "FIXTURE_SHELL_CCS".to_string(),
                 format!("{fixture_dir}/conary-test-shell/output/conary-test-shell-1.0.0-1.ccs"),
             );
+            vars.insert(
+                "FIXTURE_INIT_CCS".to_string(),
+                format!("{fixture_dir}/conary-test-init/output/conary-test-init-1.0.0-1.ccs"),
+            );
         }
         if let Some(value) = &fixtures.v1_hello_sha256 {
             vars.insert("FIXTURE_V1_HELLO_SHA256".to_string(), value.clone());

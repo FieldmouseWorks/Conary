@@ -1,0 +1,20 @@
+[package]
+name = "conary-test-init"
+version = "1.0.0"
+version_scheme = "conary"
+release = "1"
+kind = "package"
+description = "Hermetic executable /sbin/init provider for integration suites"
+license = "MIT"
+
+[package.platform]
+os = "linux"
+arch = "x86_64"
+libc = "gnu"
+
+[provides]
+capabilities = ["conary-test-init"]
+files = ["/sbin/init"]
+
+[components]
+default = ["runtime"]

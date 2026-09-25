@@ -20,6 +20,13 @@ conary = "ccs install ${FIXTURE_SHELL_CCS} --policy ${FIXTURE_CCS_POLICY} --sand
 [suite.setup.assert]
 exit_code = 0
 
+# Provides an executable /sbin/init so installs can publish a generation (#1102).
+[[suite.setup]]
+conary = "ccs install ${FIXTURE_INIT_CCS} --policy ${FIXTURE_CCS_POLICY} --sandbox always --yes"
+
+[suite.setup.assert]
+exit_code = 0
+
 [distro_overrides.fedora44]
 small_package = "tree"
 small_binary = "/usr/bin/tree"

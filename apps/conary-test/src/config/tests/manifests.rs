@@ -692,9 +692,10 @@ fn test_load_phase3_group_m_manifest_installs_local_fixture_ccs() {
 }
 
 /// Every manifest that installs the local fixture must first install the
-/// hermetic `/bin/sh` provider so the fixture hooks can run (#1080).
+/// hermetic `/bin/sh` provider so the fixture hooks can run (#1080) and the
+/// executable `/sbin/init` provider so installs can publish (#1102).
 #[test]
-fn fixture_installing_manifests_install_the_shell_provider() {
+fn fixture_installing_manifests_install_the_required_providers() {
     let manifest_dir = remi_manifest_path("");
     if !manifest_dir.exists() {
         return;
@@ -726,16 +727,30 @@ fn fixture_installing_manifests_install_the_shell_provider() {
             continue;
         }
 
-        let installs_shell = manifest.suite.setup.iter().any(|step| {
-            step.conary
-                .as_deref()
-                .is_some_and(|command| command.contains("ccs install ${FIXTURE_SHELL_CCS}"))
-        });
-        assert!(
-            installs_shell,
-            "{} installs the local fixture but has no suite setup installing ${{FIXTURE_SHELL_CCS}}",
-            path.display()
-        );
+        // The suite setup must install each provider with the exact expected
+        // argv. There is no harness argv parser, so split on ASCII whitespace
+        // and compare the whole token sequence.
+        for provider in ["${FIXTURE_SHELL_CCS}", "${FIXTURE_INIT_CCS}"] {
+            let installs_provider = manifest.suite.setup.iter().any(|step| {
+                step.conary.as_deref().is_some_and(|command| {
+                    command.split_ascii_whitespace().eq([
+                        "ccs",
+                        "install",
+                        provider,
+                        "--policy",
+                        "${FIXTURE_CCS_POLICY}",
+                        "--sandbox",
+                        "always",
+                        "--yes",
+                    ])
+                })
+            });
+            assert!(
+                installs_provider,
+                "{} installs the local fixture but has no suite setup installing {provider}",
+                path.display()
+            );
+        }
         checked.push(path);
     }
 

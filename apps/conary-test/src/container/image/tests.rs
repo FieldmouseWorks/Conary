@@ -4,7 +4,7 @@
 
 use super::{
     NativePackageArtifact, STATIC_TEST_SHELL_ENV, find_project_root, resolve_stage_source,
-    resolve_static_test_shell, stage_build_context, stage_native_package,
+    resolve_static_test_binary, stage_build_context, stage_native_package,
 };
 use crate::config::DistroBuildContext;
 use conary_core::repository::supported_profiles::ProfilePackageFormat;
@@ -73,7 +73,7 @@ impl Drop for EnvGuard {
 
 #[test]
 #[cfg(unix)]
-fn resolve_static_test_shell_uses_explicit_executable_path() {
+fn resolve_static_test_binary_uses_explicit_executable_path() {
     let env = EnvGuard::new(&[STATIC_TEST_SHELL_ENV]);
     let directory = tempfile::tempdir().expect("create temp directory");
     let shell = directory.path().join("static-sh");
@@ -82,20 +82,20 @@ fn resolve_static_test_shell_uses_explicit_executable_path() {
     env.set(STATIC_TEST_SHELL_ENV, shell.as_os_str());
 
     assert_eq!(
-        resolve_static_test_shell().expect("explicit executable must be selected"),
+        resolve_static_test_binary().expect("explicit executable must be selected"),
         shell
     );
 }
 
 #[test]
 #[cfg(unix)]
-fn resolve_static_test_shell_rejects_missing_explicit_path() {
+fn resolve_static_test_binary_rejects_missing_explicit_path() {
     let env = EnvGuard::new(&[STATIC_TEST_SHELL_ENV]);
     let directory = tempfile::tempdir().expect("create temp directory");
     let missing = directory.path().join("absent-shell");
     env.set(STATIC_TEST_SHELL_ENV, missing.as_os_str());
 
-    let error = resolve_static_test_shell().expect_err("missing explicit path must be rejected");
+    let error = resolve_static_test_binary().expect_err("missing explicit path must be rejected");
     assert!(
         error.to_string().contains(STATIC_TEST_SHELL_ENV),
         "error must name the environment variable: {error}"
@@ -104,7 +104,7 @@ fn resolve_static_test_shell_rejects_missing_explicit_path() {
 
 #[test]
 #[cfg(unix)]
-fn resolve_static_test_shell_finds_busybox_first_on_path() {
+fn resolve_static_test_binary_finds_busybox_first_on_path() {
     let env = EnvGuard::new(&[STATIC_TEST_SHELL_ENV, "PATH"]);
     env.clear(STATIC_TEST_SHELL_ENV);
 
@@ -121,7 +121,7 @@ fn resolve_static_test_shell_finds_busybox_first_on_path() {
     env.set("PATH", controlled.as_os_str());
 
     assert_eq!(
-        resolve_static_test_shell().expect("busybox on PATH must be selected"),
+        resolve_static_test_binary().expect("busybox on PATH must be selected"),
         busybox
     );
 }
@@ -288,6 +288,7 @@ fn stage_build_context_generates_missing_phase2_fixture_outputs() {
     let remi_root = project_root.join("apps/conary/tests/integration/remi");
     let fixture_root = project_root.join("apps/conary/tests/fixtures/conary-test-fixture");
     let shell_fixture_root = project_root.join("apps/conary/tests/fixtures/conary-test-shell");
+    let init_fixture_root = project_root.join("apps/conary/tests/fixtures/conary-test-init");
     let authority_root = project_root.join("apps/conary/tests/fixtures/ccs-test-authority");
     let containerfile = remi_root.join("containers/Containerfile.arch");
     let conary = project_root.join("conary");
@@ -298,6 +299,7 @@ fn stage_build_context_generates_missing_phase2_fixture_outputs() {
     fs::create_dir_all(fixture_root.join("v2/stage/usr/share/conary-test"))
         .expect("create v2 fixture source");
     fs::create_dir_all(&shell_fixture_root).expect("create shell fixture directory");
+    fs::create_dir_all(&init_fixture_root).expect("create init fixture directory");
     fs::create_dir_all(&authority_root).expect("create fixture authority");
     fs::write(
         project_root.join("Cargo.toml"),
@@ -313,6 +315,11 @@ fn stage_build_context_generates_missing_phase2_fixture_outputs() {
         "[package]\nname = \"conary-test-shell\"\n",
     )
     .expect("write shell ccs");
+    fs::write(
+        init_fixture_root.join("ccs.toml"),
+        "[package]\nname = \"conary-test-init\"\n",
+    )
+    .expect("write init ccs");
     fs::write(
         fixture_root.join("v1/stage/usr/share/conary-test/hello.txt"),
         "hello v1\n",
@@ -353,6 +360,7 @@ case "$manifest" in
   */v1/ccs.toml) file="conary-test-fixture-1.0.0-1.ccs" ;;
   */v2/ccs.toml) file="conary-test-fixture-2.0.0-1.ccs" ;;
   */conary-test-shell/ccs.toml) file="conary-test-shell-1.0.0-1.ccs" ;;
+  */conary-test-init/ccs.toml) file="conary-test-init-1.0.0-1.ccs" ;;
   *) echo "unexpected manifest: $manifest" >&2; exit 2 ;;
 esac
 [[ -n "$output" ]]
@@ -395,6 +403,13 @@ printf 'fixture\n' > "$output/$file"
             .join("fixtures/conary-test-shell/output/conary-test-shell-1.0.0-1.ccs")
             .is_file(),
         "the shell provider fixture must be built and staged for the image"
+    );
+    assert!(
+        staged
+            .root
+            .join("fixtures/conary-test-init/output/conary-test-init-1.0.0-1.ccs")
+            .is_file(),
+        "the init provider fixture must be built and staged for the image"
     );
 
     drop(staged);

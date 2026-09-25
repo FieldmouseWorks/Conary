@@ -160,6 +160,10 @@ fn test_build_variables_fixture_ccs_paths() {
         vars["FIXTURE_SHELL_CCS"],
         "/opt/remi-tests/fixtures/conary-test-shell/output/conary-test-shell-1.0.0-1.ccs"
     );
+    assert_eq!(
+        vars["FIXTURE_INIT_CCS"],
+        "/opt/remi-tests/fixtures/conary-test-init/output/conary-test-init-1.0.0-1.ccs"
+    );
 }
 
 #[test]

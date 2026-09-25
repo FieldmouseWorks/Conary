@@ -114,6 +114,27 @@ fn copy_dir_filtered(src: &Path, dst: &Path, skip_names: &[&str]) -> Result<()> 
 
 const STATIC_TEST_SHELL_ENV: &str = "CONARY_TEST_STATIC_SHELL";
 
+/// A test fixture that stages one static executable at a fixed payload path.
+#[derive(Debug, Clone, Copy)]
+struct StaticBinaryFixture {
+    /// Directory under `fixtures/` that holds the fixture's `ccs.toml`.
+    name: &'static str,
+    /// Payload path inside that fixture's `stage/` tree.
+    payload: &'static str,
+}
+
+/// The `/bin/sh` provider that lets fixture hooks run (#1080).
+const STATIC_SHELL_FIXTURE: StaticBinaryFixture = StaticBinaryFixture {
+    name: "conary-test-shell",
+    payload: "bin/sh",
+};
+
+/// The executable `/sbin/init` provider that lets installs publish (#1102).
+const STATIC_INIT_FIXTURE: StaticBinaryFixture = StaticBinaryFixture {
+    name: "conary-test-init",
+    payload: "sbin/init",
+};
+
 /// Return true when `path` is a regular file with an execute bit set.
 fn is_executable_regular_file(path: &Path) -> bool {
     let Ok(metadata) = fs::metadata(path) else {
@@ -135,13 +156,13 @@ fn is_executable_regular_file(path: &Path) -> bool {
     }
 }
 
-/// Locate the static shell the `conary-test-shell` fixture stages as `/bin/sh`.
+/// Locate the static binary the shell and init fixtures stage.
 ///
 /// An explicit `CONARY_TEST_STATIC_SHELL` wins. Otherwise the first executable
 /// `busybox` on `PATH` is used. The binary contents are deliberately not
-/// inspected: the fixture hook that runs through this interpreter is the
-/// functional proof that it can serve as `/bin/sh`.
-fn resolve_static_test_shell() -> Result<PathBuf> {
+/// inspected: the fixture payloads that run through this interpreter are the
+/// functional proof that it can serve as an executable entrypoint.
+fn resolve_static_test_binary() -> Result<PathBuf> {
     if let Some(explicit) = std::env::var_os(STATIC_TEST_SHELL_ENV) {
         let path = PathBuf::from(explicit);
         if !is_executable_regular_file(&path) {
@@ -163,7 +184,7 @@ fn resolve_static_test_shell() -> Result<PathBuf> {
     }
 
     bail!(
-        "integration fixture conary-test-shell needs a statically linked shell: install busybox (static) or set CONARY_TEST_STATIC_SHELL=<path>"
+        "integration fixtures need a statically linked binary for /bin/sh and /sbin/init: install busybox (static) or set CONARY_TEST_STATIC_SHELL=<path>"
     )
 }
 
@@ -255,51 +276,53 @@ fn build_signed_fixture(
     Ok(package)
 }
 
-/// Stage the static shell source into the `conary-test-shell` fixture and build
-/// the signed provider. A missing fixture directory means this workspace has no
-/// shell provider to build, matching how the v1/v2 fixtures are skipped.
-fn build_test_shell_fixture(
+/// Stage the shared static binary at `fixture.payload` and build the signed
+/// provider. A missing fixture directory means this workspace has no such
+/// provider to build, matching how the v1/v2 fixtures are skipped.
+fn build_static_binary_fixture(
     fixtures_root: &Path,
+    fixture: StaticBinaryFixture,
+    source: &Path,
     conary_bin: &Path,
     signing_key: &Path,
     trust_policy: &Path,
 ) -> Result<()> {
-    let fixture_root = fixtures_root.join("conary-test-shell");
+    let fixture_root = fixtures_root.join(fixture.name);
     if !fixture_root.is_dir() {
         return Ok(());
     }
     let manifest = fixture_root.join("ccs.toml");
     if !manifest.is_file() {
         bail!(
-            "integration fixture conary-test-shell is missing {}",
+            "integration fixture {} is missing {}",
+            fixture.name,
             manifest.display()
         );
     }
 
-    let source = resolve_static_test_shell()?;
     let stage = fixture_root.join("stage");
     if stage.exists() {
         fs::remove_dir_all(&stage)
             .with_context(|| format!("failed to reset {}", stage.display()))?;
     }
-    let staged_shell = stage.join("bin/sh");
-    let staged_parent = staged_shell
+    let staged_binary = stage.join(fixture.payload);
+    let staged_parent = staged_binary
         .parent()
-        .expect("staged shell path always has a parent");
+        .expect("staged fixture payload always has a parent");
     fs::create_dir_all(staged_parent)
         .with_context(|| format!("failed to create {}", staged_parent.display()))?;
-    fs::copy(&source, &staged_shell).with_context(|| {
+    fs::copy(source, &staged_binary).with_context(|| {
         format!(
-            "failed to stage static shell {} as {}",
+            "failed to stage static binary {} as {}",
             source.display(),
-            staged_shell.display()
+            staged_binary.display()
         )
     })?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&staged_shell, fs::Permissions::from_mode(0o755))
-            .with_context(|| format!("failed to make {} executable", staged_shell.display()))?;
+        fs::set_permissions(&staged_binary, fs::Permissions::from_mode(0o755))
+            .with_context(|| format!("failed to make {} executable", staged_binary.display()))?;
     }
 
     build_signed_fixture(
@@ -315,8 +338,9 @@ fn build_test_shell_fixture(
 
 fn ensure_phase2_fixture_outputs(fixtures_root: &Path, conary_bin: &Path) -> Result<()> {
     let fixture_root = fixtures_root.join("conary-test-fixture");
-    let shell_root = fixtures_root.join("conary-test-shell");
-    if !fixture_root.is_dir() && !shell_root.is_dir() {
+    let shell_root = fixtures_root.join(STATIC_SHELL_FIXTURE.name);
+    let init_root = fixtures_root.join(STATIC_INIT_FIXTURE.name);
+    if !fixture_root.is_dir() && !shell_root.is_dir() && !init_root.is_dir() {
         return Ok(());
     }
 
@@ -351,7 +375,19 @@ fn ensure_phase2_fixture_outputs(fixtures_root: &Path, conary_bin: &Path) -> Res
         }
     }
 
-    build_test_shell_fixture(fixtures_root, conary_bin, &signing_key, &trust_policy)?;
+    if shell_root.is_dir() || init_root.is_dir() {
+        let source = resolve_static_test_binary()?;
+        for fixture in [STATIC_SHELL_FIXTURE, STATIC_INIT_FIXTURE] {
+            build_static_binary_fixture(
+                fixtures_root,
+                fixture,
+                &source,
+                conary_bin,
+                &signing_key,
+                &trust_policy,
+            )?;
+        }
+    }
 
     Ok(())
 }
