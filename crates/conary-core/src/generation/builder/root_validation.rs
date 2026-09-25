@@ -13,10 +13,7 @@ pub(super) fn validate_runtime_generation_root_is_self_contained(
         return Ok(());
     }
 
-    Err(crate::Error::NotFound(
-        "runtime generation is not self-contained: its exact root manifest has no executable /sbin/init entrypoint"
-            .to_string(),
-    ))
+    Err(crate::Error::GenerationRootMissingInitEntrypoint)
 }
 
 fn generation_root_has_init_entrypoint(manifest: &GenerationRootManifest) -> bool {
@@ -160,6 +157,24 @@ mod tests {
             regular("/usr/sbin/init", 0o755),
         ]);
         assert!(!generation_root_has_init_entrypoint(&manifest));
+    }
+
+    #[test]
+    fn self_contained_validation_types_a_missing_init_as_no_base_system() {
+        let without_init = manifest(vec![
+            directory("/usr"),
+            directory("/usr/bin"),
+            regular("/usr/bin/hello", 0o755),
+        ]);
+        let error = validate_runtime_generation_root_is_self_contained(&without_init)
+            .expect_err("a root without an executable /sbin/init must be refused");
+        assert!(matches!(
+            error,
+            crate::Error::GenerationRootMissingInitEntrypoint
+        ));
+        let with_init = manifest(vec![directory("/sbin"), regular("/sbin/init", 0o755)]);
+        validate_runtime_generation_root_is_self_contained(&with_init)
+            .expect("a root with an executable /sbin/init must validate");
     }
 
     #[test]

@@ -18,6 +18,15 @@ pub(crate) struct PublicationRequest<'a> {
     pub config_transaction: GenerationConfigTransaction,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PublicationFailureKind {
+    /// The selected root has no executable `/sbin/init` yet, so no generation
+    /// can be built, published, or booted until a base system is present.
+    NoBaseSystem,
+    /// Any other build or replay failure.
+    Other,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PublicationOutcome {
     pub generation_number: Option<i64>,
@@ -25,6 +34,9 @@ pub(crate) struct PublicationOutcome {
     pub needs_publication: bool,
     pub retry_command: Option<String>,
     pub failure_reason: Option<String>,
+    /// Typed cause of the failure, kept separate from [`Self::failure_reason`]
+    /// so rendering never selects guidance by inspecting error text.
+    pub failure_kind: Option<PublicationFailureKind>,
     pub completed_debts: usize,
 }
 
@@ -155,10 +167,11 @@ fn publish_pending_debt_with_hook(
             needs_publication: false,
             retry_command: None,
             failure_reason: None,
+            failure_kind: None,
             completed_debts: completed,
         }),
         Err(error) => {
-            let failure_reason = error.to_string();
+            let (failure_kind, failure_reason) = classify_publication_failure(&error);
             debt.mark_failed(conn, &failure_reason)?;
             Ok(PublicationOutcome {
                 generation_number: None,
@@ -166,10 +179,24 @@ fn publish_pending_debt_with_hook(
                 needs_publication: true,
                 retry_command: Some(PublicationOutcome::retry_command(db_path)),
                 failure_reason: Some(failure_reason),
+                failure_kind: Some(failure_kind),
                 completed_debts: 0,
             })
         }
     }
+}
+
+/// Split a publication failure into its typed cause and rendered message.
+///
+/// Only the exact `GenerationBuildFailure` wrapper the builder attaches is
+/// inspected; every other failure keeps its prior rendered text verbatim.
+fn classify_publication_failure(error: &anyhow::Error) -> (PublicationFailureKind, String) {
+    if let Some(failure) =
+        error.downcast_ref::<crate::commands::composefs_ops::GenerationBuildFailure>()
+    {
+        return (failure.kind, failure.message.clone());
+    }
+    (PublicationFailureKind::Other, error.to_string())
 }
 
 struct PublicationReplayRequest<'a> {

@@ -252,6 +252,18 @@ pub enum Error {
     #[error(transparent)]
     BootVerity(#[from] crate::generation::verity_policy::VerityPolicyError),
 
+    /// A runtime generation root has no executable `/sbin/init` entrypoint.
+    ///
+    /// This is a typed "the selected root has no base system yet" condition. The
+    /// refusal is intentional because a generation is a bootable artifact, so
+    /// neither the image nor a boot entry can be produced until a base system is
+    /// present. Callers must select guidance from this variant instead of
+    /// inspecting the rendered error text.
+    #[error(
+        "runtime generation is not self-contained: its exact root manifest has no executable /sbin/init entrypoint"
+    )]
+    GenerationRootMissingInitEntrypoint,
+
     /// Operation timed out
     #[error("Timeout: {0}")]
     TimeoutError(String),

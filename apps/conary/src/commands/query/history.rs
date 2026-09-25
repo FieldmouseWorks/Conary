@@ -3,30 +3,44 @@
 //! Read changeset evidence and prepare command-scoped recovery guidance for UI rendering.
 
 use super::super::open_db;
-use crate::ui::history::{self, HistoryFollowUp};
+use crate::commands::generation::publication::PublicationOutcome;
+use crate::ui::history::{self, FollowUpGuidance, HistoryFollowUp};
 use anyhow::Result;
 use conary_core::db::models::{Changeset, GenerationPublication, LifecycleEvent};
+
+fn follow_up_guidance(
+    follow_up: &crate::commands::DeferredFollowUp,
+    db_path: &str,
+) -> (Option<String>, FollowUpGuidance) {
+    match crate::commands::classify_deferred_follow_up_kind(follow_up) {
+        crate::commands::DeferredFollowUpKind::GenerationPublication => (
+            follow_up
+                .retry_command
+                .as_ref()
+                .map(|_| PublicationOutcome::retry_command(db_path)),
+            FollowUpGuidance::None,
+        ),
+        crate::commands::DeferredFollowUpKind::GenerationPublicationNoBaseSystem => {
+            (None, FollowUpGuidance::AdoptOrInstallBaseSystem)
+        }
+        crate::commands::DeferredFollowUpKind::Other => {
+            (follow_up.retry_command.clone(), FollowUpGuidance::None)
+        }
+    }
+}
 
 fn history_follow_ups(changeset: &Changeset, db_path: &str) -> Result<Vec<HistoryFollowUp>> {
     Ok(
         crate::commands::deferred_follow_up(changeset.metadata.as_deref())?
             .into_iter()
             .map(|follow_up| {
-                let retry_command = match crate::commands::classify_deferred_follow_up_kind(
-                    &follow_up,
-                ) {
-                    crate::commands::DeferredFollowUpKind::GenerationPublication => Some(
-                        crate::commands::generation::publication::PublicationOutcome::retry_command(
-                            db_path,
-                        ),
-                    ),
-                    crate::commands::DeferredFollowUpKind::Other => follow_up.retry_command,
-                };
+                let (retry_command, guidance) = follow_up_guidance(&follow_up, db_path);
                 HistoryFollowUp {
                     kind: follow_up.kind,
                     status: follow_up.status,
                     message: follow_up.message,
                     retry_command,
+                    guidance,
                 }
             })
             .collect(),
@@ -109,6 +123,30 @@ mod tests {
             Some("recorded command")
         );
         assert_eq!(records[2].retry_command, None);
+    }
+
+    #[test]
+    fn no_base_publication_guidance_comes_from_the_recorded_kind() {
+        let mut changeset = Changeset::new("fixture".into());
+        changeset.metadata = Some(
+            metadata_with_deferred_follow_up(
+                Vec::new(),
+                vec![DeferredFollowUp {
+                    kind: "generation_publication_no_base_system".into(),
+                    status: "pending".into(),
+                    message: crate::ui::publication::NO_BASE_SYSTEM_REASON.into(),
+                    retry_command: None,
+                }],
+            )
+            .unwrap(),
+        );
+        let records = history_follow_ups(&changeset, "/tmp/history.db").unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(
+            records[0].guidance,
+            FollowUpGuidance::AdoptOrInstallBaseSystem
+        );
+        assert_eq!(records[0].retry_command, None);
     }
 
     #[test]

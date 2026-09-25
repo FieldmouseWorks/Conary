@@ -228,6 +228,7 @@ fn explicit_publication_failure_reports_recorded_cause_and_retry() {
         needs_publication: true,
         retry_command: Some("conary system generation publish --yes".to_string()),
         failure_reason: Some("exact generation builder failure".to_string()),
+        failure_kind: None,
         completed_debts: 0,
     };
 

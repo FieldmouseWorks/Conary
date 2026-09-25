@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-09-24
-revision: 57
+last_updated: 2026-09-25
+revision: 58
 summary: Daily-driver CLI publication debt, installed records, database preflight, repository readiness, typed details, and grouped results
 ---
 
@@ -110,6 +110,34 @@ failed cause details, typed pending/running/failed selection, excluded terminal
 and nonrecoverable records, order, empty output, all terminal/pipe/`NO_COLOR`
 modes, and unchanged complete database snapshots. The quoted retry is exercised
 with `--help` to verify its parser and shell arguments without applying it.
+
+When publication fails because the selected root has no base system, the
+install/update pending-publication warning (`PublicationFailureKind::NoBaseSystem`)
+and the `system history` deferred follow-up (`generation_publication_no_base_system`)
+both select their text from that typed kind, never from the recorded message.
+Both show the reason line, the committed-change reassurance, and the
+adopt/install guidance; neither prints a `conary system generation publish
+--yes` note, because re-running publication cannot succeed until `/sbin/init`
+exists:
+
+```text
+warning: Package mutation committed, but generation publication is pending.
+  Changeset: 42
+  Reason: selected root has no base system yet: no executable /sbin/init, so no generation can be published or booted
+note: The package change is committed and will publish once a base system is present.
+note: Adopt this machine's native system: conary system adopt --system
+note: Or install a base system that provides /sbin/init from a repository.
+```
+
+`system history` regenerates that guidance from the recorded kind for the
+database it opened. The focused proof is `cargo test -p conary --lib
+ui::diagnostics::tests::no_base_publication_output_explains_and_omits_publish_note`
+and `cargo test -p conary --lib
+ui::history::tests::no_base_system_follow_up_renders_guidance_without_retry_note`,
+with `cargo test -p conary --lib commands::changeset_metadata` covering the
+typed no-base follow-up on the changeset envelope. `conary system generation
+pending` still shows its publication retry note for this case until the
+typed failure kind is persisted (#1110).
 
 ## Ordinary Installed Lists
 

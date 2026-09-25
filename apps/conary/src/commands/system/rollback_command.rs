@@ -178,6 +178,7 @@ where
             &conn,
             committed.rollback_id,
             crate::commands::publication_deferred_follow_up(
+                publication.failure_kind,
                 "rollback generation publication is pending".to_string(),
                 db_path,
             ),

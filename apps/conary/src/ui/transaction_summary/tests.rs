@@ -13,6 +13,7 @@ fn publication(pending: bool) -> PublicationOutcome {
         needs_publication: pending,
         retry_command: None,
         failure_reason: None,
+        failure_kind: None,
         completed_debts: usize::from(!pending),
     }
 }

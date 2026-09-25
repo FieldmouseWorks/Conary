@@ -10,6 +10,7 @@ pub(crate) mod installed_info;
 pub(crate) mod installed_list;
 mod installed_provides;
 pub(crate) mod progress;
+pub(crate) mod publication;
 pub(crate) mod repository;
 pub(crate) mod transaction_summary;
 pub(crate) mod update_summary;
