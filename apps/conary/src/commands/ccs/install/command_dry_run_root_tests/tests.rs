@@ -6,8 +6,8 @@ use std::collections::HashMap;
 
 use super::command::cmd_ccs_install;
 use super::test_support::{
-    TestRootRegularFile, ccs_regular_file, seed_test_root_layout,
-    seed_test_root_layout_with_regular_files,
+    TestRootRegularFile, TestRootSpecialNode, ccs_regular_file, seed_test_root_layout,
+    seed_test_root_layout_with_regular_files, seed_test_root_layout_with_special_nodes,
 };
 
 /// Build a signed package that ships a regular `/usr/bin/sh`. The on-disk host
@@ -222,4 +222,52 @@ async fn ccs_dry_run_resolves_alternatives_against_executable_baseline() {
         .query_row("SELECT COUNT(*) FROM troves", [], |row| row.get(0))
         .unwrap();
     assert_eq!(troves, 1, "dry run must not persist the previewed package");
+}
+
+/// The same alternatives package against a baseline whose target-root
+/// `/usr/bin/update-alternatives` is a FIFO. A real apply refuses the FIFO, so
+/// the preview must refuse it too instead of materializing an executable
+/// regular placeholder.
+#[tokio::test]
+async fn ccs_dry_run_refuses_fifo_at_lifecycle_program_path() {
+    const TEST_NAME: &str = "commands::ccs::install::command_dry_run_root_tests::ccs_dry_run_refuses_fifo_at_lifecycle_program_path";
+    if !crate::commands::test_helpers::run_exact_test_in_user_mount_namespace(TEST_NAME) {
+        return;
+    }
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let install_root = temp_dir.path().join("root");
+    let db_path = temp_dir.path().join("conary.db");
+    std::fs::create_dir_all(&install_root).unwrap();
+    conary_core::db::init(&db_path).unwrap();
+    seed_test_root_layout_with_special_nodes(
+        db_path.to_str().unwrap(),
+        "preview-alternatives-fifo",
+        &["/usr", "/usr/bin"],
+        &[],
+        &[],
+        &[TestRootSpecialNode {
+            path: "/usr/bin/update-alternatives",
+            kind: conary_core::payload::PayloadNodeKind::Fifo,
+            mode: libc::S_IFIFO | 0o755,
+        }],
+    );
+    let (package_path, policy_path) =
+        alternatives_package(temp_dir.path(), "preview-alternatives-fifo");
+
+    let error = run_dry_run(&package_path, &policy_path, &db_path, &install_root).unwrap_err();
+
+    let typed = error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<conary_core::Error>())
+        .unwrap_or_else(|| panic!("expected a typed conary_core error: {error:#}"));
+    match typed {
+        conary_core::Error::ScriptletExecution {
+            kind: conary_core::scriptlet::ScriptletFailureKind::ProgramUnavailable,
+            ..
+        } => {}
+        other => panic!(
+            "expected ProgramUnavailable for the FIFO lifecycle program, got {other:?}: {error:#}"
+        ),
+    }
 }

@@ -108,6 +108,14 @@ pub(super) struct TestRootRegularFile<'a> {
     pub mode: u32,
 }
 
+/// A special (non-regular, non-directory, non-symlink) payload node seeded into
+/// a test baseline layout. Special nodes carry no content authority.
+pub(super) struct TestRootSpecialNode<'a> {
+    pub path: &'a str,
+    pub kind: conary_core::payload::PayloadNodeKind,
+    pub mode: u32,
+}
+
 pub(super) fn seed_test_root_layout(
     db_path: &str,
     fixture_name: &str,
@@ -126,6 +134,46 @@ pub(super) fn seed_test_root_layout_with_regular_files(
     directories: &[&str],
     symlinks: &[(&str, &str)],
     regular_files: &[TestRootRegularFile<'_>],
+) {
+    seed_test_root_layout_entries(
+        db_path,
+        fixture_name,
+        directories,
+        symlinks,
+        regular_files,
+        &[],
+    );
+}
+
+/// Seed the baseline layout including exact special-node kinds.
+///
+/// A special node at a lifecycle program path is what proves a preview refuses
+/// the same baseline a real apply would refuse.
+pub(super) fn seed_test_root_layout_with_special_nodes(
+    db_path: &str,
+    fixture_name: &str,
+    directories: &[&str],
+    symlinks: &[(&str, &str)],
+    regular_files: &[TestRootRegularFile<'_>],
+    special_nodes: &[TestRootSpecialNode<'_>],
+) {
+    seed_test_root_layout_entries(
+        db_path,
+        fixture_name,
+        directories,
+        symlinks,
+        regular_files,
+        special_nodes,
+    );
+}
+
+fn seed_test_root_layout_entries(
+    db_path: &str,
+    fixture_name: &str,
+    directories: &[&str],
+    symlinks: &[(&str, &str)],
+    regular_files: &[TestRootRegularFile<'_>],
+    special_nodes: &[TestRootSpecialNode<'_>],
 ) {
     use conary_core::db::models::{
         Changeset, ChangesetStatus, Component, FileEntry, ProvideEntry, Trove, TroveType,
@@ -207,6 +255,16 @@ pub(super) fn seed_test_root_layout_with_regular_files(
                     sha256: conary_core::hash::sha256(content),
                     size: content.len() as u64,
                 }),
+                trove_id,
+            );
+            entry.component_id = Some(component_id);
+            entry.insert(tx)?;
+        }
+        for special in special_nodes {
+            let mut entry = FileEntry::new(
+                special.path.to_string(),
+                current_node(special.kind.clone(), special.mode),
+                None,
                 trove_id,
             );
             entry.component_id = Some(component_id);
