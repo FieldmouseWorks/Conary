@@ -25,6 +25,7 @@ mod relations;
 mod witness_universe;
 
 use super::ccs_removal_hooks::CcsRemovalHookPlan;
+use super::dependencies::CertifiedOutgoing;
 use super::inner;
 use super::native_events::{NativeInstallInput, PreparedNativeTransaction};
 use super::prepare::{UpgradeCheck, check_upgrade_status, parse_package};
@@ -44,6 +45,7 @@ use conary_core::filesystem::CasStore;
 use conary_core::packages::config_authority::SourceConfigDeclaration;
 use conary_core::packages::payload::PackagePayloadFile;
 use conary_core::scriptlet::SandboxMode;
+use conary_core::transaction::PackageRelationPlan;
 #[cfg(test)]
 use preparation::BatchConflict;
 pub use preparation::prepare_package_for_batch;
@@ -232,6 +234,10 @@ impl PreparedPackage {
 pub struct BatchInstaller<'a> {
     db_path: &'a str,
     sandbox_mode: SandboxMode,
+    /// The exact installed set the caller's dependency solve projected as
+    /// outgoing. `Some` certifies that the locked batch removes exactly this
+    /// set; `None` means the caller solved without a projection.
+    certified_outgoing: Option<CertifiedOutgoing>,
 }
 
 pub(crate) struct BatchInstallResult {
@@ -286,7 +292,21 @@ impl<'a> BatchInstaller<'a> {
         Self {
             db_path,
             sandbox_mode,
+            certified_outgoing: None,
         }
+    }
+
+    /// Certify the exact installed set the dependency solve projected outgoing.
+    ///
+    /// The locked batch re-resolves its replacement targets and relation
+    /// removals and refuses with `OutgoingSetChanged` if the set differs. `None`
+    /// leaves the batch uncertified.
+    pub(crate) fn with_certified_outgoing(
+        mut self,
+        certified_outgoing: Option<CertifiedOutgoing>,
+    ) -> Self {
+        self.certified_outgoing = certified_outgoing;
+        self
     }
 
     /// Install multiple packages atomically
@@ -400,6 +420,13 @@ impl<'a> BatchInstaller<'a> {
         }
         let promise_plan = ordering::order_packages_for_transaction(conn, packages)?;
         self.plan_package_relations_for_batch(conn, packages)?;
+        // The dependency solve chose its exclusions from installed state read
+        // before the mutation lock. The locked batch just re-resolved the same
+        // replacement targets and relation removals; it must find exactly the
+        // set the solve was allowed to assume removed.
+        if let Some(certified) = self.certified_outgoing.as_ref() {
+            certified.require_unchanged(&resolved_batch_outgoing(packages)?)?;
+        }
         Ok(promise_plan)
     }
 
@@ -446,6 +473,7 @@ impl<'a> BatchInstaller<'a> {
         // an end state missing a capability the batch was admitted on.
         let locked_root =
             crate::commands::generation::selected_root::LockedRuntimeRoot::acquire(self.db_path)?;
+        super::dependencies::run_after_mutation_lock_hook();
         let mut promise_plan = self.validate_batch_transaction(&conn, &mut packages)?;
         // Baseline snapshot preparation belongs to the preflight refusal boundary.
         let preflight_state = conn.savepoint()?;
@@ -895,4 +923,47 @@ pub(super) fn finalization_trove_ids(packages: &[PreparedPackage]) -> Result<Vec
                 .map(|removal| Some(removal.trove_id)),
         )
         .collect::<Vec<_>>())
+}
+
+/// The exactly resolved outgoing set of an ordered, relation-planned batch.
+///
+/// The packages already carry the removals `plan_package_relations_for_batch`
+/// attached under the mutation lock. Rebuilding the typed plan from them and
+/// calling the one certified-set definition keeps this side identical to the
+/// pre-lock projection.
+fn resolved_batch_outgoing(packages: &[PreparedPackage]) -> Result<CertifiedOutgoing> {
+    let plan = PackageRelationPlan {
+        removals: packages
+            .iter()
+            .flat_map(|package| package.relation_removals.iter().cloned())
+            .collect(),
+        deconfigurations: Vec::new(),
+    };
+    CertifiedOutgoing::from_replacements_and_relations(
+        packages
+            .iter()
+            .filter_map(|package| package.old_trove.as_deref()),
+        &plan,
+    )
+}
+
+/// Project the installed troves a prepared batch would remove, from installed
+/// state read before the mutation lock.
+///
+/// Relation planning is asked the same question the locked transaction asks;
+/// a caller that solved dependencies against this projection passes it to
+/// `BatchInstaller::with_certified_outgoing` so the batch refuses when the
+/// locked set differs.
+pub(crate) fn project_batch_outgoing(
+    conn: &Connection,
+    packages: &[PreparedPackage],
+) -> Result<CertifiedOutgoing> {
+    let incoming = relations::incoming_relation_facts(packages);
+    let plan = conary_core::transaction::plan_package_relation_batch_facts(conn, &incoming)?;
+    CertifiedOutgoing::from_replacements_and_relations(
+        packages
+            .iter()
+            .filter_map(|package| package.old_trove.as_deref()),
+        &plan,
+    )
 }

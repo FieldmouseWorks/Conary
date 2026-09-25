@@ -645,10 +645,11 @@ fn adopted_malformed_self_provides_return_conflict_without_diagnostic_panic() {
         &format!("{kernel_capability} = {kernel_capability_version}"),
     )
     .unwrap();
-    let result = solve_requirement_groups_with_policy(
+    let result = solve_requirement_groups_with_outgoing_and_policy(
         &conn,
         &[requirement],
         VersionScheme::Rpm,
+        &[],
         &ResolutionPolicy::new()
             .with_mixing(crate::repository::resolution_policy::DependencyMixingPolicy::Permissive),
     )

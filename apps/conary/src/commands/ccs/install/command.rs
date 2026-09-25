@@ -8,6 +8,7 @@ use std::path::Path;
 use super::capability_declaration::validate_ccs_capability_declaration;
 use super::component_selection::select_ccs_components;
 use super::dependency::{incoming_package_identity, validate_incoming_version_against_dependents};
+use crate::commands::install::dependencies::CertifiedOutgoing;
 use crate::commands::install::{
     CcsTransactionInstallOptions, InstallIntent, UpgradeCheck, check_ccs_upgrade_status,
     install_ccs_package_transactionally, install_semantics_for_ccs_manifest,
@@ -155,23 +156,9 @@ pub fn cmd_ccs_install(
         ccs_pkg.manifest().package.version_scheme,
         &selected_capabilities,
     )?;
-    let mut outgoing_trove_ids = relation_plan
-        .removals
-        .iter()
-        .map(|removal| removal.trove_id)
-        .collect::<Vec<_>>();
-    if let Some(trove) = replacing {
-        // Relation removal and replacement may duplicate an ID intentionally; the validator deduplicates it.
-        let trove_id = trove.id.ok_or_else(|| {
-            anyhow::anyhow!(
-                "CCS replacement trove '{} {} ({})' has no database id",
-                trove.name,
-                trove.version,
-                trove.architecture.as_deref().unwrap_or("no-arch")
-            )
-        })?;
-        outgoing_trove_ids.push(trove_id);
-    }
+    let certified_outgoing =
+        CertifiedOutgoing::from_replacements_and_relations(replacing, &relation_plan)?;
+    let outgoing_trove_ids = certified_outgoing.sorted_ids();
     let incoming_identity = incoming_package_identity(&ccs_pkg, selected_capabilities.clone())?;
     validate_incoming_version_against_dependents(&conn, &outgoing_trove_ids, &incoming_identity)?;
 
@@ -241,6 +228,7 @@ pub fn cmd_ccs_install(
                 repository_provenance: None,
                 requested_source_identity: None,
                 replacement: None,
+                certified_outgoing: Some(certified_outgoing.clone()),
             },
         )?;
         return Ok(());
@@ -265,6 +253,7 @@ pub fn cmd_ccs_install(
             repository_provenance: None,
             requested_source_identity: None,
             replacement: None,
+            certified_outgoing: Some(certified_outgoing),
         },
     )?;
     let _changeset_id = tx_result.changeset_id;

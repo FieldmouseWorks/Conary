@@ -122,10 +122,11 @@ fn solve_rpm_roots(conn: &Connection, native: &[&str]) -> SatResolution {
             .unwrap()
         })
         .collect::<Vec<_>>();
-    solve_requirement_groups_with_policy(
+    solve_requirement_groups_with_outgoing_and_policy(
         conn,
         &groups,
         VersionScheme::Rpm,
+        &[],
         &ResolutionPolicy::new()
             .with_mixing(crate::repository::resolution_policy::DependencyMixingPolicy::Permissive),
     )
@@ -245,9 +246,11 @@ fn package_solver_discharge_self_provide_but_selects_external_dependency() {
         }],
     };
 
-    let result = solve_package_requirements_with_policy(
+    let result = solve_package_requirements_with_provides_outgoing_and_policy(
         &conn,
         &package,
+        package.resolution_capabilities().unwrap(),
+        &[],
         &ResolutionPolicy::new()
             .with_mixing(crate::repository::resolution_policy::DependencyMixingPolicy::Permissive),
     )
@@ -374,10 +377,11 @@ fn package_solver_provides_view_governs_file_pre_depends_self_satisfaction() {
 
     // Positive control: the passed File provide discharges the package's own
     // hard PreDepends, so the solve needs nothing external against an empty DB.
-    let self_satisfied = solve_package_requirements_with_provides_and_policy(
+    let self_satisfied = solve_package_requirements_with_provides_outgoing_and_policy(
         &conn,
         &package,
         vec![file_provide],
+        &[],
         &policy,
     )
     .unwrap();
@@ -393,9 +397,14 @@ fn package_solver_provides_view_governs_file_pre_depends_self_satisfaction() {
 
     // Negative: without that File provide in the passed view the requirement is
     // external, and the empty DB has no provider for it.
-    let unresolved =
-        solve_package_requirements_with_provides_and_policy(&conn, &package, Vec::new(), &policy)
-            .unwrap();
+    let unresolved = solve_package_requirements_with_provides_outgoing_and_policy(
+        &conn,
+        &package,
+        Vec::new(),
+        &[],
+        &policy,
+    )
+    .unwrap();
     assert!(unresolved.conflict_message.is_some(), "{unresolved:?}");
     assert!(unresolved.install_order.is_empty(), "{unresolved:?}");
     assert!(unresolved.remove_order.is_empty(), "{unresolved:?}");

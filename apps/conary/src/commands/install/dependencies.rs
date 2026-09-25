@@ -9,11 +9,122 @@
 use super::dep_resolution;
 use super::{BatchInstaller, InstallPhase, InstallProgress};
 use anyhow::{Context, Result};
+use conary_core::db::models::Trove;
 use conary_core::packages::PackageFormat;
 use conary_core::repository::dependency_model::RepositoryRequirementKind;
 use conary_core::resolver::{SatResolution, SatSource};
 use conary_core::scriptlet::SandboxMode;
+use conary_core::transaction::PackageRelationPlan;
+use std::collections::BTreeSet;
 use tracing::info;
+
+/// The exact installed set a transaction projects as outgoing.
+///
+/// The set is defined once as every replacement target plus every
+/// relation-removal trove id. A caller projects it before the runtime mutation
+/// lock and re-resolves it under the lock; the two must agree or the
+/// transaction refuses.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CertifiedOutgoing {
+    ids: BTreeSet<i64>,
+}
+
+impl CertifiedOutgoing {
+    /// Project every replacement target and relation removal as exact trove IDs.
+    ///
+    /// This is the one definition of the certified outgoing set. The pre-lock
+    /// projection and the locked transaction both call it over their own
+    /// resolved relation plan, so the two sets cannot disagree by formula.
+    pub(crate) fn from_replacements_and_relations<'a>(
+        replacements: impl IntoIterator<Item = &'a Trove>,
+        relation_plan: &PackageRelationPlan,
+    ) -> Result<Self> {
+        let mut ids = relation_plan
+            .removals
+            .iter()
+            .map(|removal| removal.trove_id)
+            .collect::<BTreeSet<_>>();
+        for trove in replacements {
+            let trove_id = trove.id.with_context(|| {
+                format!(
+                    "replacement trove '{} {} ({})' has no database id",
+                    trove.name,
+                    trove.version,
+                    trove.architecture.as_deref().unwrap_or("no-arch")
+                )
+            })?;
+            ids.insert(trove_id);
+        }
+        Ok(Self { ids })
+    }
+
+    /// The exact trove IDs in stable order for the solver's exclusion list.
+    pub(crate) fn sorted_ids(&self) -> Vec<i64> {
+        self.ids.iter().copied().collect()
+    }
+
+    /// Refuse when the locked transaction resolved a different outgoing set.
+    pub(crate) fn require_unchanged(&self, locked: &Self) -> Result<()> {
+        if self.ids != locked.ids {
+            return Err(OutgoingSetChanged {
+                projected: self.sorted_ids(),
+                locked: locked.sorted_ids(),
+            }
+            .into());
+        }
+        Ok(())
+    }
+}
+
+/// The installed set the transaction projected before the mutation lock is not
+/// the set the locked transaction resolved. Nothing was mutated, so the caller
+/// may retry against new state.
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "installed package state changed between the transaction projection and the \
+     locked transaction; retry the operation (projected outgoing troves {projected:?}, \
+     resolved outgoing troves {locked:?})"
+)]
+pub(crate) struct OutgoingSetChanged {
+    pub projected: Vec<i64>,
+    pub locked: Vec<i64>,
+}
+
+// Test-only seam that runs immediately after a sink acquires the runtime
+// mutation lock and before it re-resolves installed state.
+//
+// The certification is deterministic but would otherwise require a second
+// thread to race installed-state mutation into the pre-resolution window.
+// Tests arm this closure to mutate installed state at exactly that point.
+#[cfg(test)]
+thread_local! {
+    static AFTER_MUTATION_LOCK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Arm the post-lock seam. The closure runs once on the next locked sink.
+#[cfg(test)]
+pub(crate) fn set_after_mutation_lock_hook(hook: impl FnOnce() + 'static) {
+    AFTER_MUTATION_LOCK.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
+}
+
+/// Disarm the post-lock seam without running it.
+#[cfg(test)]
+pub(crate) fn clear_after_mutation_lock_hook() {
+    AFTER_MUTATION_LOCK.with(|slot| *slot.borrow_mut() = None);
+}
+
+/// Run and consume an armed post-lock seam.
+#[cfg(test)]
+pub(crate) fn run_after_mutation_lock_hook() {
+    let hook = AFTER_MUTATION_LOCK.with(|slot| slot.borrow_mut().take());
+    if let Some(hook) = hook {
+        hook();
+    }
+}
+
+#[cfg(not(test))]
+pub(crate) fn run_after_mutation_lock_hook() {}
 
 /// Context for the dependency analysis phase.
 pub(super) struct DepAnalysisContext<'a> {
@@ -27,6 +138,12 @@ pub(super) struct DepAnalysisContext<'a> {
     pub(super) root: &'a str,
     pub(super) sandbox_mode: SandboxMode,
     pub(super) policy: &'a conary_core::repository::resolution_policy::ResolutionPolicy,
+    /// Installed troves the transaction projects as removed, including the
+    /// upgrade or replacement target and its relation removals. The solve
+    /// excludes them from its provider universe; the owning caller re-resolves
+    /// the exact set before and under its mutation lock and certifies those two
+    /// against each other.
+    pub(super) outgoing: &'a CertifiedOutgoing,
 }
 
 #[derive(PartialEq, Eq)]
@@ -73,10 +190,16 @@ pub(super) async fn handle_dependencies(
     );
     crate::ui::println!("Checking dependencies for {}...", ctx.pkg.name());
 
-    let sat_result = conary_core::resolver::solve_package_requirements_with_policy(
-        ctx.conn, ctx.pkg, ctx.policy,
-    )
-    .with_context(|| format!("Failed to resolve dependencies for '{}'", ctx.pkg.name()))?;
+    let outgoing_trove_ids = ctx.outgoing.sorted_ids();
+    let sat_result =
+        conary_core::resolver::solve_package_requirements_with_provides_outgoing_and_policy(
+            ctx.conn,
+            ctx.pkg,
+            ctx.pkg.resolution_capabilities()?,
+            &outgoing_trove_ids,
+            ctx.policy,
+        )
+        .with_context(|| format!("Failed to resolve dependencies for '{}'", ctx.pkg.name()))?;
 
     // If SAT reports a conflict, surface it
     if let Some(ref conflict_msg) = sat_result.conflict_message {
@@ -243,4 +366,43 @@ fn check_unresolvable_deps(
         ctx.pkg.name(),
         dep_plan.unresolvable.len()
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn projection(ids: impl IntoIterator<Item = i64>) -> CertifiedOutgoing {
+        CertifiedOutgoing {
+            ids: ids.into_iter().collect(),
+        }
+    }
+
+    #[test]
+    fn matching_outgoing_projection_is_accepted() {
+        let projected = projection([3, 7]);
+        let locked = projection([7, 3]);
+        projected.require_unchanged(&locked).unwrap();
+    }
+
+    #[test]
+    fn duplicated_relation_removal_collapses_to_the_certified_set() {
+        let projected = projection([4, 4, 9]);
+        let locked = projection([9, 4]);
+        projected.require_unchanged(&locked).unwrap();
+    }
+
+    #[test]
+    fn membership_change_is_refused_with_the_typed_error() {
+        let projected = projection([3, 7]);
+        let locked = projection([3, 8]);
+        let error = projected
+            .require_unchanged(&locked)
+            .expect_err("a changed outgoing set must be refused");
+        let changed = error
+            .downcast_ref::<OutgoingSetChanged>()
+            .expect("refusal must carry the typed outgoing-set error");
+        assert_eq!(changed.projected, vec![3, 7]);
+        assert_eq!(changed.locked, vec![3, 8]);
+    }
 }

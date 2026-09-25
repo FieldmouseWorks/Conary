@@ -85,39 +85,6 @@ fn repository_fixture(conn: &Connection) -> i64 {
 }
 
 #[test]
-fn unknown_end_state_under_strict_policy_is_refused() {
-    let (_dir, conn) = setup_test_db();
-    let repository_id = repository_fixture(&conn);
-    installed_file_provider(&conn, "installed-provider");
-    repository_file_provider(&conn, repository_id, "repository-provider");
-    let policy = strict_policy_without_source_authority(&conn);
-
-    // The caller did not say which installed troves the transaction removes, so
-    // the installed provider cannot be trusted to survive it.
-    let error = solve_requirement_groups_with_policy(
-        &conn,
-        &[file_predepends()],
-        VersionScheme::Rpm,
-        &policy,
-    )
-    .unwrap_err();
-    assert!(matches!(error, Error::ConfigError(_)), "{error:?}");
-
-    // A known empty outgoing set makes the same input satisfiable.
-    let satisfied = solve_requirement_groups_with_outgoing_and_policy(
-        &conn,
-        &[file_predepends()],
-        VersionScheme::Rpm,
-        &[],
-        &policy,
-    )
-    .unwrap();
-    assert!(satisfied.install_order.is_empty(), "{satisfied:?}");
-    assert!(satisfied.remove_order.is_empty(), "{satisfied:?}");
-    assert_eq!(satisfied.conflict_message, None);
-}
-
-#[test]
 fn strict_requirement_without_installed_provider_is_refused() {
     let (_dir, conn) = setup_test_db();
     let repository_id = repository_fixture(&conn);
@@ -267,6 +234,74 @@ fn repository_authority_does_not_use_outgoing_installed_provider() {
 }
 
 #[test]
+fn upgrade_requirement_only_the_replaced_version_provides_is_refused() {
+    let (_dir, conn) = setup_test_db();
+    let repository_id = repository_fixture(&conn);
+    // `libold` 1.0.0 is the installed version this upgrade replaces and the
+    // only provider of `libold-cap`.
+    let replaced_trove_id = insert_rpm_trove(&conn, "libold", "1.0.0", &[]);
+    insert_provide(&conn, replaced_trove_id, "libold-cap", None);
+    let policy = ResolutionPolicy::new().with_primary_source_identity("fedora-44");
+    let requirement = hard_depends("libold-cap");
+
+    // Control: while the installed version survives, the fixed end state already
+    // holds the capability and the solve needs no repository provider.
+    let surviving = solve_requirement_groups_with_outgoing_and_policy(
+        &conn,
+        std::slice::from_ref(&requirement),
+        VersionScheme::Rpm,
+        &[],
+        &policy,
+    )
+    .unwrap();
+    assert!(surviving.conflict_message.is_none(), "{surviving:?}");
+    assert!(surviving.install_order.is_empty(), "{surviving:?}");
+
+    // Negative: the replacement removes the only provider, so the projected end
+    // state has no provider and the solve must refuse typed instead of
+    // satisfying the requirement from the trove the transaction removes.
+    let refused = solve_requirement_groups_with_outgoing_and_policy(
+        &conn,
+        std::slice::from_ref(&requirement),
+        VersionScheme::Rpm,
+        &[replaced_trove_id],
+        &policy,
+    )
+    .unwrap();
+    assert!(refused.conflict_message.is_some(), "{refused:?}");
+    assert!(refused.install_order.is_empty(), "{refused:?}");
+
+    // Positive control through the same fixture: a repository provider
+    // satisfies the same requirement after the replaced version leaves.
+    let provider_id = insert_rpm_repo_package(&conn, repository_id, "libold-cap-provider", "1-1");
+    RepositoryProvide::new(
+        provider_id,
+        "libold-cap".to_string(),
+        None,
+        "virtual".to_string(),
+        None,
+        VersionScheme::Rpm,
+    )
+    .insert(&conn)
+    .unwrap();
+    let resolved = solve_requirement_groups_with_outgoing_and_policy(
+        &conn,
+        &[requirement],
+        VersionScheme::Rpm,
+        &[replaced_trove_id],
+        &policy,
+    )
+    .unwrap();
+    assert!(resolved.conflict_message.is_none(), "{resolved:?}");
+    let names = resolved
+        .install_order
+        .iter()
+        .map(|package| package.name.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(names, ["libold-cap-provider"], "{resolved:?}");
+}
+
+#[test]
 fn malformed_source_identity_is_refused_before_installed_fallback() {
     let (_dir, conn) = setup_test_db();
     installed_file_provider(&conn, "installed-provider");
@@ -295,10 +330,11 @@ fn repository_authority_still_admits_repository_candidate() {
     repository_file_provider(&conn, repository_id, "repository-provider");
 
     let policy = ResolutionPolicy::new().with_primary_source_identity("fedora-44");
-    let result = solve_requirement_groups_with_policy(
+    let result = solve_requirement_groups_with_outgoing_and_policy(
         &conn,
         &[file_predepends()],
         VersionScheme::Rpm,
+        &[],
         &policy,
     )
     .unwrap();

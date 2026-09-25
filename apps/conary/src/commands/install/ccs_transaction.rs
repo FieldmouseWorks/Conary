@@ -41,6 +41,10 @@ pub(crate) struct CcsTransactionInstallOptions<'a> {
     /// Exact installed-record authority selected by an update. `None` for
     /// ordinary installs, which keep first name/architecture match behavior.
     pub replacement: Option<InstallReplacement>,
+    /// The exact installed set the caller's dependency solve projected as
+    /// outgoing. `Some` certifies that the locked transaction removes exactly
+    /// this set; `None` means the caller solved without a projection.
+    pub certified_outgoing: Option<super::dependencies::CertifiedOutgoing>,
 }
 
 pub(crate) struct CcsTransactionInstallResult {
@@ -366,6 +370,9 @@ fn install_ccs_package_transactionally_inner(
     } else {
         None
     };
+    if !opts.dry_run {
+        super::dependencies::run_after_mutation_lock_hook();
+    }
     let upgrade = check_ccs_upgrade_status(
         conn,
         pkg,
@@ -437,6 +444,17 @@ fn install_ccs_package_transactionally_inner(
     .context("Failed to plan CCS package conflicts and replacements")?;
     conary_core::transaction::validate_package_relation_plan(&preflight_state, &relation_plan)
         .context("CCS package conflicts and replacements cannot be applied")?;
+    // The dependency solve chose its exclusions before this transaction took the
+    // lock. Installed state might have changed in the window, so the certified
+    // outgoing set must equal the set re-resolved here.
+    if let Some(certified) = opts.certified_outgoing.as_ref() {
+        let locked_outgoing =
+            super::dependencies::CertifiedOutgoing::from_replacements_and_relations(
+                old_trove,
+                &relation_plan,
+            )?;
+        certified.require_unchanged(&locked_outgoing)?;
+    }
     let native_lifecycle_bundle = pkg.manifest().native_lifecycle.as_ref();
     let native_transaction = PreparedNativeTransaction::prepare_batch_with_declared_paths(
         &preflight_state,

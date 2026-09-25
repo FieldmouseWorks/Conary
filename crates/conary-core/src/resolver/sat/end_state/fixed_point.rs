@@ -88,13 +88,11 @@ pub(super) struct PassContext<'a> {
 pub(super) fn solve_validated_groups_to_fixed_point(
     context: &PassContext<'_>,
     validation: &mut EndStateValidation,
-    fixed_end_state: Option<&[PackageIdentity]>,
+    fixed_end_state: &[PackageIdentity],
     before: &[PackageIdentity],
     surviving: &[PackageIdentity],
     native_architecture: &str,
 ) -> Result<SatResolution> {
-    // A fixed end state locks the surviving installed candidates; an unknown
-    // end state cannot project, so there is nothing to lock or validate.
     let mut passes = 0;
     // Pass one has no installed groups. Its resolved relation plan seeds the
     // accumulated hidden set that decides which installed owners later passes
@@ -132,12 +130,6 @@ pub(super) fn solve_validated_groups_to_fixed_point(
                 remove_order,
                 selected,
             } => (install_order, remove_order, selected),
-        };
-
-        // An unknown end state cannot be projected, so the caller's own
-        // semantics apply and there is nothing to validate against.
-        let Some(fixed_end_state) = fixed_end_state else {
-            return Ok(SatResolution::resolved(install_order, remove_order));
         };
 
         // This pass's relation plan is the only removal set the resolution may
@@ -441,13 +433,9 @@ fn unsatisfiable_pass_resolution(
     validation: &EndStateValidation,
     solver_message: &str,
     roots: &PassRoots<'_>,
-    fixed_end_state: Option<&[PackageIdentity]>,
+    fixed_end_state: &[PackageIdentity],
     native_architecture: &str,
 ) -> Result<SatResolution> {
-    let Some(fixed_end_state) = fixed_end_state else {
-        // An unknown end state cannot project installed groups.
-        return Ok(SatResolution::conflict(solver_message.to_string()));
-    };
     if !roots.include_installed {
         // The failing pass carried only incoming roots.
         return Ok(SatResolution::conflict(solver_message.to_string()));

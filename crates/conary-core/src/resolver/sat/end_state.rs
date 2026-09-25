@@ -35,8 +35,7 @@ use crate::resolver::provider::ConaryProvider;
 use crate::resolver::provider::types::RequirementGroupIdentity;
 
 use super::{
-    EndState, SatGroupOwner, SatPackage, SatRelationRemoval, SatResolution, SatSource,
-    SatUnsatisfiedGroup,
+    SatGroupOwner, SatPackage, SatRelationRemoval, SatResolution, SatSource, SatUnsatisfiedGroup,
 };
 use candidates::{
     InstalledCandidate, affected_capability_names, insert_identity_name,
@@ -373,19 +372,20 @@ fn removed_trove_ids(remove_order: &[SatRelationRemoval]) -> HashSet<i64> {
         .collect()
 }
 
-/// Solve exact hard requirement groups against the transaction end state.
+/// Solve exact hard requirement groups against the transaction's known end
+/// state.
 ///
-/// `groups` are the incoming package's external hard groups. For a known end
-/// state the surviving installed packages' stored hard groups are validated
-/// against the same projected end state, so a fresh install cannot silently
-/// break an installed package. An unknown end state keeps the incoming-only
-/// semantics.
+/// `groups` are the incoming package's external hard groups and
+/// `outgoing_trove_ids` are the exact installed troves the owning transaction
+/// removes. The surviving installed packages' stored hard groups are validated
+/// against the projected end state, so a fresh install cannot silently break an
+/// installed package.
 pub(super) fn solve_requirement_groups_for_end_state(
     conn: &Connection,
     groups: &[RepositoryRequirementGroup],
     version_scheme: VersionScheme,
     depending_architecture: &str,
-    end_state: EndState<'_>,
+    outgoing_trove_ids: &[i64],
     incoming: Option<&PackageIdentity>,
     policy: &ResolutionPolicy,
 ) -> Result<SatResolution> {
@@ -423,104 +423,69 @@ pub(super) fn solve_requirement_groups_for_end_state(
 
     let canonical_equivalents = load_canonical_equivalents(conn)?;
 
-    match end_state {
-        EndState::Unknown => {
-            if validated.is_empty() {
-                return Ok(SatResolution::empty());
-            }
-            // A malformed source identity is always a hard error; installed
-            // satisfaction never repairs an invalid policy.
-            policy
-                .validate_source_identities()
-                .map_err(Error::ConfigError)?;
-            if let Some(message) = policy.validate_for_dependency_resolution().err() {
-                return Err(Error::ConfigError(message));
-            }
-            let mut validation = EndStateValidation::new(
-                validated,
-                Vec::new(),
-                HashSet::new(),
-                canonical_equivalents,
-            );
-            // An unknown end state adds no fixed incoming solvable: the caller
-            // has not declared its outgoing set, so the incoming package stays
-            // a request-only fact and the current single-pass semantics hold.
-            let context = PassContext {
-                conn,
-                policy,
-                incoming: None,
-                outgoing_trove_ids: &[],
-                lock_surviving_installed: false,
-            };
-            solve_validated_groups_to_fixed_point(&context, &mut validation, None, &[], &[], "")
-        }
-        EndState::Known { outgoing_trove_ids } => {
-            let native_architecture = crate::repository::registry::detect_system_arch()?;
-            let facts = end_state_facts(conn, outgoing_trove_ids, incoming)?;
-            let affected = affected_capability_names(
-                outgoing_trove_ids,
-                incoming,
-                &validated,
-                &facts.before,
-                &canonical_equivalents,
-            );
-            if affected.is_empty() {
-                return Ok(SatResolution::empty());
-            }
-            let candidates =
-                installed_hard_group_candidates(conn, outgoing_trove_ids, &facts.before)?;
-            let mut validation =
-                EndStateValidation::new(validated, candidates, affected, canonical_equivalents);
-            validation.admit_mentioned(
-                &facts.before,
-                &facts.surviving,
-                &native_architecture,
-                &HashSet::new(),
-            )?;
-            if validation.groups.is_empty() {
-                return Ok(SatResolution::empty());
-            }
-            policy
-                .validate_source_identities()
-                .map_err(Error::ConfigError)?;
-            // The fixed end state already holds every group, so no repository
-            // work is needed and strict mixing is satisfied.
-            let mut fixed_holds_all = true;
-            for group in &validation.groups {
-                if !group.satisfied_against(
-                    &native_architecture,
-                    &facts.fixed,
-                    &validation.canonical_equivalents,
-                )? {
-                    fixed_holds_all = false;
-                    break;
-                }
-            }
-            if fixed_holds_all {
-                return Ok(SatResolution::empty());
-            }
-            if let Some(message) = policy.validate_for_dependency_resolution().err() {
-                // Strict mixing with no repository authority admits only the
-                // fixed end state itself.
-                return Err(Error::ConfigError(message));
-            }
-            let context = PassContext {
-                conn,
-                policy,
-                incoming,
-                outgoing_trove_ids,
-                lock_surviving_installed: true,
-            };
-            solve_validated_groups_to_fixed_point(
-                &context,
-                &mut validation,
-                Some(facts.fixed.as_slice()),
-                &facts.before,
-                &facts.surviving,
-                &native_architecture,
-            )
+    let native_architecture = crate::repository::registry::detect_system_arch()?;
+    let facts = end_state_facts(conn, outgoing_trove_ids, incoming)?;
+    let affected = affected_capability_names(
+        outgoing_trove_ids,
+        incoming,
+        &validated,
+        &facts.before,
+        &canonical_equivalents,
+    );
+    if affected.is_empty() {
+        return Ok(SatResolution::empty());
+    }
+    let candidates = installed_hard_group_candidates(conn, outgoing_trove_ids, &facts.before)?;
+    let mut validation =
+        EndStateValidation::new(validated, candidates, affected, canonical_equivalents);
+    validation.admit_mentioned(
+        &facts.before,
+        &facts.surviving,
+        &native_architecture,
+        &HashSet::new(),
+    )?;
+    if validation.groups.is_empty() {
+        return Ok(SatResolution::empty());
+    }
+    policy
+        .validate_source_identities()
+        .map_err(Error::ConfigError)?;
+    // The fixed end state already holds every group, so no repository work is
+    // needed and strict mixing is satisfied.
+    let mut fixed_holds_all = true;
+    for group in &validation.groups {
+        if !group.satisfied_against(
+            &native_architecture,
+            &facts.fixed,
+            &validation.canonical_equivalents,
+        )? {
+            fixed_holds_all = false;
+            break;
         }
     }
+    if fixed_holds_all {
+        return Ok(SatResolution::empty());
+    }
+    if let Some(message) = policy.validate_for_dependency_resolution().err() {
+        // Strict mixing with no repository authority admits only the fixed end
+        // state itself.
+        return Err(Error::ConfigError(message));
+    }
+    let context = PassContext {
+        conn,
+        policy,
+        incoming,
+        outgoing_trove_ids,
+        lock_surviving_installed: true,
+    };
+    solve_validated_groups_to_fixed_point(
+        &context,
+        &mut validation,
+        facts.fixed.as_slice(),
+        &facts.before,
+        &facts.surviving,
+        &native_architecture,
+    )
 }
 
 /// Build the install order from the identities resolvo selected.

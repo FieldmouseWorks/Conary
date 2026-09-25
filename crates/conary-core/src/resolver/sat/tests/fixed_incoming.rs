@@ -161,6 +161,53 @@ fn incoming_conditional_conjunction_sees_its_own_provide() {
 }
 
 #[test]
+fn incoming_provide_activates_conditional_requirement_against_repository() {
+    let (_dir, conn) = setup_test_db();
+    let repository_id = authority_repository(&conn);
+    insert_repo_pkg_with_reqs(
+        &conn,
+        repository_id,
+        "foo",
+        "1-1",
+        "https://example.invalid/foo.rpm",
+        "rpm",
+        &[],
+    );
+    // The incoming package provides `bar` and declares `foo if bar`, so its own
+    // fixed fact makes the condition true and `foo` must be installed.
+    let package = TestIncoming {
+        name: "conditional-provider",
+        version: "1.0.0-1",
+        requirements: parse_groups(&["(foo if bar)"]),
+        capabilities: vec![generic_capability("bar")],
+    };
+    let policy = ResolutionPolicy::new().with_primary_source_identity("fedora-44");
+    let solve = || {
+        solve_package_requirements_with_provides_outgoing_and_policy(
+            &conn,
+            &package,
+            package.resolution_capabilities().unwrap(),
+            &[],
+            &policy,
+        )
+        .unwrap()
+    };
+
+    let resolved = solve();
+    assert!(resolved.conflict_message.is_none(), "{resolved:?}");
+    assert_eq!(selected_names(&resolved), ["foo"], "{resolved:?}");
+
+    // Control through the same fixture: removing the only `foo` provider makes
+    // the activated requirement unsatisfiable, and the refusal is a typed SAT
+    // conflict rather than an install order that omits the dependency.
+    conn.execute("DELETE FROM repository_packages WHERE name = 'foo'", [])
+        .unwrap();
+    let refused = solve();
+    assert!(refused.conflict_message.is_some(), "{refused:?}");
+    assert!(refused.install_order.is_empty(), "{refused:?}");
+}
+
+#[test]
 fn relation_removed_condition_is_not_reloaded_by_a_later_pass() {
     let (_dir, conn) = setup_test_db();
     let repository_id = authority_repository(&conn);

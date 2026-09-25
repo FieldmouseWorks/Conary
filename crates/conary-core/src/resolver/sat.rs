@@ -438,56 +438,14 @@ fn solve_exact_repository_package_with_policy_inner(
     }
 }
 
-/// Whether the caller knows the exact installed troves its transaction removes.
-///
-/// The end state of a transaction is `(installed - outgoing) + incoming`. A
-/// caller that has not computed its outgoing set cannot be answered from
-/// installed state alone: an installed provider may be removed after the solve,
-/// so approving the requirement would be unsound.
-#[derive(Debug, Clone, Copy)]
-enum EndState<'a> {
-    /// The caller knows every installed trove the transaction removes.
-    Known { outgoing_trove_ids: &'a [i64] },
-    /// The caller has not computed its outgoing set.
-    Unknown,
-}
-
-/// Solve exact typed package requirements using their source-native version
-/// algebra and Boolean expression semantics.
-///
-/// The transaction's end state is unknown: the caller has not supplied the
-/// exact installed troves it removes. Under strict mixing with no repository
-/// authority the solve refuses rather than satisfying the requirements from
-/// installed state that the transaction may later remove. Callers that know
-/// their outgoing set use
-/// [`solve_requirement_groups_with_outgoing_and_policy`].
-pub fn solve_requirement_groups_with_policy(
-    conn: &Connection,
-    groups: &[RepositoryRequirementGroup],
-    version_scheme: VersionScheme,
-    policy: &ResolutionPolicy,
-) -> Result<SatResolution> {
-    let depending_architecture =
-        crate::repository::registry::native_architecture_for_scheme(version_scheme)?;
-    end_state::solve_requirement_groups_for_end_state(
-        conn,
-        groups,
-        version_scheme,
-        &depending_architecture,
-        EndState::Unknown,
-        None,
-        policy,
-    )
-}
-
-/// Solve exact typed package requirements against the transaction's end state.
+/// Solve exact typed package requirements against the transaction's known end
+/// state.
 ///
 /// `outgoing_trove_ids` are exact installed trove identities the owning
 /// transaction removes. They are excluded from installed candidates so a
 /// requirement is never satisfied by a package that will not exist afterwards.
-/// Unlike [`solve_requirement_groups_with_policy`] this is a known end state, so
-/// strict mixing with no repository authority may be discharged against the
-/// fixed `(installed - outgoing)` set.
+/// Because the end state is known, strict mixing with no repository authority
+/// may be discharged against the fixed `(installed - outgoing)` set.
 pub fn solve_requirement_groups_with_outgoing_and_policy(
     conn: &Connection,
     groups: &[RepositoryRequirementGroup],
@@ -502,7 +460,7 @@ pub fn solve_requirement_groups_with_outgoing_and_policy(
         groups,
         version_scheme,
         &depending_architecture,
-        EndState::Known { outgoing_trove_ids },
+        outgoing_trove_ids,
         None,
         policy,
     )
@@ -605,36 +563,8 @@ pub fn positive_requirement_group_satisfied_by_package(
     )
 }
 
-/// Solve one parsed package's external requirements after discharging exact
-/// positive requirements that the given provided capabilities cover.
-///
-/// The transaction's end state is unknown: the caller has not supplied the
-/// exact installed troves it removes. Under strict mixing with no repository
-/// authority the solve refuses rather than satisfying a requirement from an
-/// installed provider the transaction may later remove. Callers that know
-/// their outgoing set use
-/// [`solve_package_requirements_with_provides_outgoing_and_policy`].
-///
-/// Callers that have already reduced `package.resolution_capabilities()` to the
-/// exact set their selection installs pass that view here, so a requirement is
-/// never discharged against a provide the selected payload does not ship.
-pub fn solve_package_requirements_with_provides_and_policy(
-    conn: &Connection,
-    package: &dyn PackageFormat,
-    provided_capabilities: Vec<ProvidedCapability>,
-    policy: &ResolutionPolicy,
-) -> Result<SatResolution> {
-    solve_package_requirements_with_provides_for_end_state(
-        conn,
-        package,
-        provided_capabilities,
-        EndState::Unknown,
-        policy,
-    )
-}
-
 /// Solve one parsed package's external requirements against the transaction's
-/// end state after discharging exact positive requirements that the given
+/// known end state after discharging exact positive requirements that the given
 /// provided capabilities cover.
 ///
 /// `outgoing_trove_ids` are exact installed troves the owning transaction
@@ -643,6 +573,10 @@ pub fn solve_package_requirements_with_provides_and_policy(
 /// state is known, strict mixing with no repository authority is discharged
 /// against the fixed `(installed - outgoing) + incoming` set, which includes the
 /// incoming package's own provided capabilities.
+///
+/// Callers that have already reduced `package.resolution_capabilities()` to the
+/// exact set their selection installs pass that view here, so a requirement is
+/// never discharged against a provide the selected payload does not ship.
 pub fn solve_package_requirements_with_provides_outgoing_and_policy(
     conn: &Connection,
     package: &dyn PackageFormat,
@@ -654,7 +588,7 @@ pub fn solve_package_requirements_with_provides_outgoing_and_policy(
         conn,
         package,
         provided_capabilities,
-        EndState::Known { outgoing_trove_ids },
+        outgoing_trove_ids,
         policy,
     )
 }
@@ -663,7 +597,7 @@ fn solve_package_requirements_with_provides_for_end_state(
     conn: &Connection,
     package: &dyn PackageFormat,
     provided_capabilities: Vec<ProvidedCapability>,
-    end_state: EndState<'_>,
+    outgoing_trove_ids: &[i64],
     policy: &ResolutionPolicy,
 ) -> Result<SatResolution> {
     let incoming = PackageIdentity {
@@ -705,30 +639,8 @@ fn solve_package_requirements_with_provides_for_end_state(
         &external_requirements,
         package.version_scheme(),
         &depending_architecture,
-        end_state,
+        outgoing_trove_ids,
         Some(&incoming),
-        policy,
-    )
-}
-
-/// Solve one parsed package's external requirements after discharging exact
-/// positive requirements that the incoming package itself provides.
-///
-/// All install entrypoints without a component selection use this boundary so a
-/// converted CCS archive and its source-native package receive identical
-/// dependency semantics. The transaction's end state is unknown because the
-/// caller has not yet computed the installed troves it removes; strict mixing
-/// with no repository authority therefore refuses instead of trusting installed
-/// state.
-pub fn solve_package_requirements_with_policy(
-    conn: &Connection,
-    package: &dyn PackageFormat,
-    policy: &ResolutionPolicy,
-) -> Result<SatResolution> {
-    solve_package_requirements_with_provides_and_policy(
-        conn,
-        package,
-        package.resolution_capabilities()?,
         policy,
     )
 }

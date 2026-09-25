@@ -315,3 +315,97 @@ async fn consumer_replacing_its_predepends_provider_is_refused() {
         "a refused consumer must not be installed"
     );
 }
+
+/// Rebuild the installed strict provider at a newer version so the CCS command
+/// certifies the installed row as its outgoing replacement target.
+fn strict_provider_upgrade(dir: &Path) -> TestPackage {
+    use conary_core::ccs::CcsManifest;
+
+    write_package(
+        dir,
+        CcsManifest::new_minimal("strict-provider", "2.0.0"),
+        vec![
+            ("/sbin/init", b"#!/bin/sh\nexec true\n".to_vec()),
+            (PROVIDER_PATH, b"provider tool v2\n".to_vec()),
+        ],
+    )
+}
+
+#[tokio::test]
+async fn ccs_upgrade_refuses_when_the_certified_replacement_target_disappears() {
+    use conary_core::db::models::Trove;
+
+    let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
+    let temp_dir = tempfile::tempdir().unwrap();
+    let install_root = temp_dir.path().join("root");
+    let db_path = temp_dir.path().join("conary.db");
+    let db_path_str = db_path.to_str().unwrap();
+    let install_root_str = install_root.to_str().unwrap();
+
+    std::fs::create_dir_all(&install_root).unwrap();
+    conary_core::db::init(db_path_str).unwrap();
+    stage_test_boot_assets(temp_dir.path());
+
+    install_strict_provider(temp_dir.path(), db_path_str, install_root_str);
+    let conn = conary_core::db::open(db_path_str).unwrap();
+    let installed_id = Trove::find_by_name(&conn, "strict-provider")
+        .unwrap()
+        .remove(0)
+        .id
+        .unwrap();
+    drop(conn);
+    let upgrade = strict_provider_upgrade(temp_dir.path());
+
+    // The seam runs with the mutation lock held and removes the replacement
+    // target the command's solve certified, so the transaction re-resolves a
+    // fresh install instead of the projected upgrade.
+    let hook_db_path = db_path_str.to_string();
+    crate::commands::install::dependencies::set_after_mutation_lock_hook(move || {
+        let conn = conary_core::db::open(&hook_db_path).unwrap();
+        assert_eq!(
+            conn.execute("DELETE FROM troves WHERE id = ?1", [installed_id])
+                .unwrap(),
+            1,
+            "the seam must remove the certified replacement target"
+        );
+    });
+
+    let error = run_install(&upgrade, db_path_str, install_root_str, false)
+        .expect_err("a CCS install accepted an outgoing set changed before it locked");
+    crate::commands::install::dependencies::clear_after_mutation_lock_hook();
+    let changed = error
+        .downcast_ref::<crate::commands::install::dependencies::OutgoingSetChanged>()
+        .expect("refusal must carry the typed outgoing-set error");
+    assert_eq!(changed.projected, vec![installed_id]);
+    assert!(changed.locked.is_empty(), "{changed:?}");
+}
+
+/// Positive control: with no armed seam the same upgrade resolves exactly the
+/// certified outgoing set and installs.
+#[tokio::test]
+async fn ccs_upgrade_proceeds_when_the_certified_outgoing_set_is_unchanged() {
+    use conary_core::db::models::Trove;
+
+    let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
+    let temp_dir = tempfile::tempdir().unwrap();
+    let install_root = temp_dir.path().join("root");
+    let db_path = temp_dir.path().join("conary.db");
+    let db_path_str = db_path.to_str().unwrap();
+    let install_root_str = install_root.to_str().unwrap();
+
+    std::fs::create_dir_all(&install_root).unwrap();
+    conary_core::db::init(db_path_str).unwrap();
+    stage_test_boot_assets(temp_dir.path());
+
+    install_strict_provider(temp_dir.path(), db_path_str, install_root_str);
+    let upgrade = strict_provider_upgrade(temp_dir.path());
+
+    crate::commands::install::dependencies::clear_after_mutation_lock_hook();
+    run_install(&upgrade, db_path_str, install_root_str, false)
+        .expect("an unchanged certified outgoing set must upgrade");
+
+    let conn = conary_core::db::open(db_path_str).unwrap();
+    let installed = Trove::find_by_name(&conn, "strict-provider").unwrap();
+    assert_eq!(installed.len(), 1, "the upgrade must leave one provider");
+    assert_eq!(installed[0].version, "2.0.0");
+}
