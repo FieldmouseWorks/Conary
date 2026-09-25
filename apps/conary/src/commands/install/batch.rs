@@ -30,6 +30,7 @@ use super::inner;
 use super::native_events::{NativeInstallInput, PreparedNativeTransaction};
 use super::payload_effects::{
     ElementPayloadEffectInput, PayloadEffectFiles, plan_element_payload_effects,
+    projected_payload_nodes,
 };
 use super::prepare::{UpgradeCheck, check_upgrade_status, parse_package};
 use super::{
@@ -167,6 +168,7 @@ impl PreparedPackage {
                 .iter()
                 .map(|file| file.path.clone())
                 .collect(),
+            new_path_nodes: projected_payload_nodes(&self.extracted_files),
         }
     }
 

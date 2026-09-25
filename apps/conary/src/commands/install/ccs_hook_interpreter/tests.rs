@@ -5,7 +5,7 @@
 use super::*;
 use crate::commands::install::payload_effects::{
     ElementPayloadEffectInput, ElementPayloadEffects, PayloadEffectFiles,
-    plan_element_payload_effects,
+    plan_element_payload_effects, projected_node,
 };
 use crate::commands::install::{InstallSemantics, PackageFormatType};
 use crate::commands::{LiveRootContent, LiveRootFile};
@@ -243,28 +243,32 @@ fn live_file(path: &str, node: PayloadNode) -> LiveRootFile {
     }
 }
 
+fn project_live_file(file: &LiveRootFile) -> ProjectedNode {
+    projected_node(&file.node.source.kind, file.node.source.mode)
+}
+
 #[test]
 fn projected_node_maps_every_payload_kind() {
     assert_eq!(
-        projected_node(&live_file("/usr/bin/run", regular_node(0o755))),
+        project_live_file(&live_file("/usr/bin/run", regular_node(0o755))),
         ProjectedNode::Regular { executable: true }
     );
     assert_eq!(
-        projected_node(&live_file("/usr/share/data", regular_node(0o644))),
+        project_live_file(&live_file("/usr/share/data", regular_node(0o644))),
         ProjectedNode::Regular { executable: false }
     );
     assert_eq!(
-        projected_node(&live_file("/opt", directory_node(0o755))),
+        project_live_file(&live_file("/opt", directory_node(0o755))),
         ProjectedNode::Directory
     );
     assert_eq!(
-        projected_node(&live_file("/bin/sh", symlink_node("busybox"))),
+        project_live_file(&live_file("/bin/sh", symlink_node("busybox"))),
         ProjectedNode::Symlink {
             target: "busybox".to_string()
         }
     );
     assert_eq!(
-        projected_node(&live_file(
+        project_live_file(&live_file(
             "/bin/sh",
             hardlink_node("/bin/busybox", "chain:1", 0o755)
         )),
@@ -273,7 +277,7 @@ fn projected_node_maps_every_payload_kind() {
         }
     );
     assert_eq!(
-        projected_node(&live_file(
+        project_live_file(&live_file(
             "/run/pipe",
             numeric_node(PayloadNodeKind::Fifo, libc::S_IFIFO | 0o644)
         )),

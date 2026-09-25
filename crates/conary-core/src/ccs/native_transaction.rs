@@ -26,7 +26,7 @@ pub use deb::{
 };
 pub use graph::{
     DebTriggerActivationBoundary, NativeEventPathProjection, NativeTransactionGraph,
-    NativeTransactionPathCapabilities, NativeTransactionStep,
+    NativeTransactionStep,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

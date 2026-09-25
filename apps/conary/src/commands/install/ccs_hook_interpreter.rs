@@ -7,13 +7,11 @@
 
 use super::payload_effects::ElementPayloadEffects;
 use super::{ExtractionResult, InstallSemantics};
-use crate::commands::LiveRootFile;
 use anyhow::Context;
 use conary_core::ccs::manifest::Hooks;
 use conary_core::db::models::{PackagePayloadOwnership, PayloadClaim, Trove};
-use conary_core::filesystem::{ProjectedExecutable, ProjectedNode, SelectedRootProjection};
+use conary_core::filesystem::{ProjectedExecutable, SelectedRootProjection};
 use conary_core::packages::PackageFormat;
-use conary_core::payload::PayloadNodeKind;
 use conary_core::transaction::PackageRelationRemoval;
 use rusqlite::Connection;
 use std::collections::BTreeSet;
@@ -143,8 +141,8 @@ pub(super) fn preflight_hook_interpreters(
             projection.remove(&path)?;
         }
         if let Some(effects) = element.effects.as_ref() {
-            for file in effects.materialized_files() {
-                projection.insert(&file.path, projected_node(file))?;
+            for (path, node) in effects.projected_nodes() {
+                projection.insert(&path, node)?;
             }
         }
     }
@@ -182,26 +180,6 @@ fn require_interpreter(
             }
             .into())
         }
-    }
-}
-
-/// Map one materialized payload file to the node the projection overlays.
-fn projected_node(file: &LiveRootFile) -> ProjectedNode {
-    match &file.node.source.kind {
-        PayloadNodeKind::Regular { .. } => ProjectedNode::Regular {
-            executable: file.node.source.mode & 0o111 != 0,
-        },
-        PayloadNodeKind::Symlink { target } => ProjectedNode::Symlink {
-            target: target.clone(),
-        },
-        PayloadNodeKind::Hardlink { target, .. } => ProjectedNode::Hardlink {
-            target: target.clone(),
-        },
-        PayloadNodeKind::Directory => ProjectedNode::Directory,
-        PayloadNodeKind::BlockDevice { .. }
-        | PayloadNodeKind::CharacterDevice { .. }
-        | PayloadNodeKind::Fifo
-        | PayloadNodeKind::Socket => ProjectedNode::Other,
     }
 }
 

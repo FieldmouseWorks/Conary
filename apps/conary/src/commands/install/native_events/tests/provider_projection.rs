@@ -3,6 +3,58 @@
 #![cfg(test)]
 
 use super::*;
+use conary_core::filesystem::ProjectedNode;
+use std::collections::BTreeMap;
+
+fn executable_node() -> ProjectedNode {
+    ProjectedNode::Regular { executable: true }
+}
+
+fn projected(interpreter: &str, target: ProjectedNode) -> NativeEventPathProjection {
+    NativeEventPathProjection::Projected {
+        introduced: BTreeMap::from([(interpreter.trim_start_matches('/').to_string(), target)]),
+        explicitly_removed: BTreeSet::new(),
+    }
+}
+
+fn rpm_event(
+    bundle: &NativeLifecycleBundle,
+    stage: NativeEventStage,
+    entry_id: &str,
+    placement: NativeEventPlacement,
+    args: Vec<String>,
+) -> NativeTransactionEvent {
+    NativeTransactionEvent {
+        owner_package: bundle.source_package.clone(),
+        owner_version: bundle.source_version.clone(),
+        owner_arch: bundle.source_arch.clone(),
+        source_format: "rpm".to_string(),
+        stage,
+        program: NativeEventProgram::BundleEntry {
+            entry_id: entry_id.to_string(),
+        },
+        args,
+        stdin: Vec::new(),
+        matched_targets: Vec::new(),
+        rpm_trigger_owner: None,
+        deb_package_refcount: None,
+        order_key: bundle.source_package.clone(),
+        placement,
+    }
+}
+
+fn assert_missing_interpreter(error: &anyhow::Error, interpreter: &str) {
+    assert!(
+        matches!(
+            error.downcast_ref::<conary_core::scriptlet::NativeLifecyclePreflightError>(),
+            Some(conary_core::scriptlet::NativeLifecyclePreflightError::MissingInterpreter {
+                interpreter: actual,
+                ..
+            }) if actual == interpreter
+        ),
+        "unexpected error: {error:#}"
+    );
+}
 
 #[test]
 fn post_payload_preflight_accepts_incoming_interpreter() {
@@ -14,90 +66,102 @@ fn post_payload_preflight_accepts_incoming_interpreter() {
         LifecyclePath::PostInstall,
         interpreter,
     );
-    let event = NativeTransactionEvent {
-        owner_package: bundle.source_package.clone(),
-        owner_version: bundle.source_version.clone(),
-        owner_arch: bundle.source_arch.clone(),
-        source_format: "rpm".to_string(),
-        stage: NativeEventStage::PackagePostInstall,
-        program: NativeEventProgram::BundleEntry {
-            entry_id: "rpm:%post".to_string(),
-        },
-        args: vec!["1".to_string()],
-        stdin: Vec::new(),
-        matched_targets: Vec::new(),
-        rpm_trigger_owner: None,
-        deb_package_refcount: None,
-        order_key: "incoming-runtime-user".to_string(),
-        placement: NativeEventPlacement::TransactionElement {
+    let event = rpm_event(
+        &bundle,
+        NativeEventStage::PackagePostInstall,
+        "rpm:%post",
+        NativeEventPlacement::TransactionElement {
             transaction_index: 0,
         },
-    };
-    let prepared = prepared_with_projected_event(
-        bundle,
-        event,
-        NativeEventPathProjection::Projected {
-            introduced_paths: BTreeSet::from([interpreter.trim_start_matches('/').to_string()]),
-            explicitly_removed_paths: BTreeSet::new(),
-            introduced_path_capabilities: BTreeSet::new(),
-            explicitly_removed_path_capabilities: BTreeSet::new(),
-        },
+        vec!["1".to_string()],
     );
+    let prepared =
+        prepared_with_projected_event(bundle, event, projected(interpreter, executable_node()));
     let target_root = tempfile::tempdir().unwrap();
 
     prepared
         .preflight(target_root.path(), &ExecutionMode::Install)
-        .expect("post-payload preflight must use the incoming path projection");
+        .expect("post-payload preflight must use the incoming typed projection");
 }
 
 #[test]
-fn post_payload_preflight_accepts_an_exact_projected_path_provider() {
-    let interpreter = "/bin/sh";
+fn post_payload_preflight_rejects_incoming_interpreter() {
+    let interpreter = "/opt/incoming-runtime/bin/sh";
     let bundle = rpm_bundle_for_phase(
-        "path-provider-user",
+        "incoming-runtime-user",
         "1",
         "rpm:%pre",
         LifecyclePath::PreInstall,
         interpreter,
     );
-    let event = NativeTransactionEvent {
-        owner_package: bundle.source_package.clone(),
-        owner_version: bundle.source_version.clone(),
-        owner_arch: bundle.source_arch.clone(),
-        source_format: "rpm".to_string(),
-        stage: NativeEventStage::PackagePreInstall,
-        program: NativeEventProgram::BundleEntry {
-            entry_id: "rpm:%pre".to_string(),
+    let event = rpm_event(
+        &bundle,
+        NativeEventStage::PackagePreInstall,
+        "rpm:%pre",
+        NativeEventPlacement::TransactionElement {
+            transaction_index: 0,
         },
-        args: vec!["1".to_string()],
-        stdin: Vec::new(),
-        matched_targets: Vec::new(),
-        rpm_trigger_owner: None,
-        deb_package_refcount: None,
-        order_key: "path-provider-user".to_string(),
-        placement: NativeEventPlacement::TransactionElement {
-            transaction_index: 1,
-        },
-    };
-    let prepared = prepared_with_projected_event(
-        bundle,
-        event,
-        NativeEventPathProjection::Projected {
-            introduced_paths: BTreeSet::from(["usr/bin/sh".to_string()]),
-            explicitly_removed_paths: BTreeSet::new(),
-            introduced_path_capabilities: BTreeSet::from(["bin/sh".to_string()]),
-            explicitly_removed_path_capabilities: BTreeSet::new(),
-        },
+        vec!["1".to_string()],
     );
+    let prepared =
+        prepared_with_projected_event(bundle, event, NativeEventPathProjection::CurrentRoot);
     let target_root = tempfile::tempdir().unwrap();
 
-    prepared
+    let error = prepared
         .preflight(target_root.path(), &ExecutionMode::Install)
-        .expect("an already-applied exact path provider must satisfy interpreter preflight");
+        .expect_err("pre-payload preflight must validate the current root");
+    assert_missing_interpreter(&error, interpreter);
 }
 
 #[test]
-fn prepared_batch_projects_an_earlier_exact_interpreter_provider() {
+fn absolute_symlink_interpreter_does_not_follow_the_host() {
+    let interpreter = "/opt/runtime/bin/sh";
+    let bundle = rpm_bundle_for_phase(
+        "symlink-runtime-user",
+        "1",
+        "rpm:%pre",
+        LifecyclePath::PreInstall,
+        interpreter,
+    );
+    let event = rpm_event(
+        &bundle,
+        NativeEventStage::PackagePreInstall,
+        "rpm:%pre",
+        NativeEventPlacement::TransactionElement {
+            transaction_index: 0,
+        },
+        vec!["1".to_string()],
+    );
+    let prepared =
+        prepared_with_projected_event(bundle, event, NativeEventPathProjection::CurrentRoot);
+    let target_root = tempfile::tempdir().unwrap();
+    // The absolute target exists on the host, and a host-following `.exists()`
+    // would accept it. The selected-root resolver must treat it as root-relative.
+    assert!(Path::new("/bin/sh").is_file());
+    std::fs::create_dir_all(target_root.path().join("opt/runtime/bin")).unwrap();
+    symlink("/bin/sh", target_root.path().join("opt/runtime/bin/sh")).unwrap();
+
+    let error = prepared
+        .preflight(target_root.path(), &ExecutionMode::Install)
+        .expect_err("an absolute symlink target outside the selected root is unavailable");
+    assert_missing_interpreter(&error, interpreter);
+
+    // Control: the same absolute target materialized inside the selected root.
+    std::fs::create_dir_all(target_root.path().join("bin")).unwrap();
+    std::fs::write(target_root.path().join("bin/sh"), b"#!/bin/sh\n").unwrap();
+    let mut permissions = std::fs::metadata(target_root.path().join("bin/sh"))
+        .unwrap()
+        .permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(target_root.path().join("bin/sh"), permissions).unwrap();
+
+    prepared
+        .preflight(target_root.path(), &ExecutionMode::Install)
+        .expect("the in-root absolute target must satisfy interpreter preflight");
+}
+
+#[test]
+fn declared_path_capability_without_a_payload_node_is_unavailable() {
     let (_temp, db_path) = crate::commands::test_helpers::create_test_db();
     let conn = conary_core::db::open(&db_path).unwrap();
     let provider = conary_core::packages::traits::ProvidedCapability {
@@ -117,23 +181,103 @@ fn prepared_batch_projects_an_earlier_exact_interpreter_provider() {
         LifecyclePath::PreInstall,
         "/bin/sh",
     );
+    let target_root = tempfile::tempdir().unwrap();
+
+    let prepare = |provider_nodes: BTreeMap<String, ProjectedNode>| {
+        PreparedNativeTransaction::prepare_batch(
+            &conn,
+            &[
+                NativeInstallInput {
+                    package_name: "bash-fixture",
+                    package_version: "1",
+                    package_arch: Some("x86_64"),
+                    version_scheme: VersionScheme::Rpm,
+                    provides: std::slice::from_ref(&provider),
+                    new_bundle: None,
+                    old_trove: None,
+                    relation_removals: &[],
+                    relation_deconfigurations: &[],
+                    paths: vec!["/bin/sh".to_string()],
+                    new_path_nodes: provider_nodes,
+                },
+                NativeInstallInput {
+                    package_name: "crypto-policies-fixture",
+                    package_version: "1",
+                    package_arch: Some("x86_64"),
+                    version_scheme: VersionScheme::Rpm,
+                    provides: &[],
+                    new_bundle: Some(&consumer_bundle),
+                    old_trove: None,
+                    relation_removals: &[],
+                    relation_deconfigurations: &[],
+                    paths: vec!["/etc/crypto-policies/config".to_string()],
+                    new_path_nodes: BTreeMap::new(),
+                },
+            ],
+        )
+        .unwrap()
+    };
+
+    let without_node = prepare(BTreeMap::new());
+    let error = without_node
+        .preflight(target_root.path(), &ExecutionMode::Install)
+        .expect_err("a declared path capability with no payload node is unavailable");
+    assert_missing_interpreter(&error, "/bin/sh");
+
+    let with_node = prepare(BTreeMap::from([("/bin/sh".to_string(), executable_node())]));
+    with_node
+        .preflight(target_root.path(), &ExecutionMode::Install)
+        .expect("the payload node backing the capability must satisfy preflight");
+}
+
+#[test]
+fn post_payload_preflight_resolves_a_hardlinked_interpreter_from_the_payload() {
+    let (_temp, db_path) = crate::commands::test_helpers::create_test_db();
+    let conn = conary_core::db::open(&db_path).unwrap();
+    let provider_nodes = BTreeMap::from([
+        (
+            "/usr/bin/sh".to_string(),
+            ProjectedNode::Hardlink {
+                target: "/usr/lib/sh".to_string(),
+            },
+        ),
+        (
+            "/usr/lib/sh".to_string(),
+            ProjectedNode::Hardlink {
+                target: "/usr/lib/sh-real".to_string(),
+            },
+        ),
+        ("/usr/lib/sh-real".to_string(), executable_node()),
+    ]);
+    let consumer_bundle = rpm_bundle_for_phase(
+        "hardlink-consumer",
+        "1",
+        "rpm:%post",
+        LifecyclePath::PostInstall,
+        "/usr/bin/sh",
+    );
     let prepared = PreparedNativeTransaction::prepare_batch(
         &conn,
         &[
             NativeInstallInput {
-                package_name: "bash-fixture",
+                package_name: "hardlink-provider",
                 package_version: "1",
                 package_arch: Some("x86_64"),
                 version_scheme: VersionScheme::Rpm,
-                provides: &[provider],
+                provides: &[],
                 new_bundle: None,
                 old_trove: None,
                 relation_removals: &[],
                 relation_deconfigurations: &[],
-                paths: vec!["/usr/bin/sh".to_string()],
+                paths: vec![
+                    "/usr/bin/sh".to_string(),
+                    "/usr/lib/sh".to_string(),
+                    "/usr/lib/sh-real".to_string(),
+                ],
+                new_path_nodes: provider_nodes,
             },
             NativeInstallInput {
-                package_name: "crypto-policies-fixture",
+                package_name: "hardlink-consumer",
                 package_version: "1",
                 package_arch: Some("x86_64"),
                 version_scheme: VersionScheme::Rpm,
@@ -142,7 +286,8 @@ fn prepared_batch_projects_an_earlier_exact_interpreter_provider() {
                 old_trove: None,
                 relation_removals: &[],
                 relation_deconfigurations: &[],
-                paths: vec!["/etc/crypto-policies/config".to_string()],
+                paths: vec!["/etc/hardlink-consumer.conf".to_string()],
+                new_path_nodes: BTreeMap::new(),
             },
         ],
     )
@@ -151,48 +296,5 @@ fn prepared_batch_projects_an_earlier_exact_interpreter_provider() {
 
     prepared
         .preflight(target_root.path(), &ExecutionMode::Install)
-        .expect("the earlier dependency payload must project its exact /bin/sh provider");
-}
-
-#[test]
-fn pre_payload_preflight_rejects_incoming_interpreter() {
-    let interpreter = "/opt/incoming-runtime/bin/sh";
-    let bundle = rpm_bundle_for_phase(
-        "incoming-runtime-user",
-        "1",
-        "rpm:%pre",
-        LifecyclePath::PreInstall,
-        interpreter,
-    );
-    let event = NativeTransactionEvent {
-        owner_package: bundle.source_package.clone(),
-        owner_version: bundle.source_version.clone(),
-        owner_arch: bundle.source_arch.clone(),
-        source_format: "rpm".to_string(),
-        stage: NativeEventStage::PackagePreInstall,
-        program: NativeEventProgram::BundleEntry {
-            entry_id: "rpm:%pre".to_string(),
-        },
-        args: vec!["1".to_string()],
-        stdin: Vec::new(),
-        matched_targets: Vec::new(),
-        rpm_trigger_owner: None,
-        deb_package_refcount: None,
-        order_key: "incoming-runtime-user".to_string(),
-        placement: NativeEventPlacement::TransactionElement {
-            transaction_index: 0,
-        },
-    };
-    let prepared =
-        prepared_with_projected_event(bundle, event, NativeEventPathProjection::CurrentRoot);
-    let target_root = tempfile::tempdir().unwrap();
-
-    let error = prepared
-        .preflight(target_root.path(), &ExecutionMode::Install)
-        .expect_err("pre-payload preflight must validate the current root");
-    let error_chain = format!("{error:#}");
-    assert!(
-        error_chain.contains("Interpreter not found"),
-        "unexpected error: {error_chain}"
-    );
+        .expect("a payload hardlink chain must resolve as the projected interpreter");
 }

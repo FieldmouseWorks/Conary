@@ -10,6 +10,7 @@ use super::ccs_hook_interpreter::{
 };
 use super::ccs_removal_hooks::CcsRemovalHookPlan;
 use super::native_events::{NativeInstallInput, PreparedNativeTransaction};
+use super::payload_effects::projected_payload_nodes;
 use super::{
     ExtractionResult, FinalizeInstallOutput, InstallIntent, InstallPhase, InstallProgress,
     InstallReplacement, InstallSemantics, RepositoryInstallProvenance, TransactionContext,
@@ -476,6 +477,7 @@ fn install_ccs_package_transactionally_inner(
                 .iter()
                 .map(|file| file.path.clone())
                 .collect(),
+            new_path_nodes: projected_payload_nodes(&extraction.extracted_files),
         }],
         &declared_paths,
     )?;

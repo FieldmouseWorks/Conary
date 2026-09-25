@@ -3,17 +3,17 @@
 //! Transaction-wide runtime validation for exact native lifecycle programs.
 
 use super::{NativePreflightContext, PreparedNativeTransaction, executor_for_owner, runtime};
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use conary_core::ccs::native_transaction::{
     DebRecoveryResult, NativeEventPathProjection, NativeEventProgram, NativePackageIdentity,
-    NativeTransactionChange, NativeTransactionEvent, NativeTransactionPathCapabilities,
-    NativeTransactionPlan,
+    NativeTransactionChange, NativeTransactionEvent, NativeTransactionPlan,
 };
+use conary_core::filesystem::{ProjectedNode, SelectedRootProjection};
 use conary_core::scriptlet::{
-    ExecutionMode, NativeInterpreterAvailability, SandboxMode, ScriptletExecutor,
+    ExecutionMode, NativeInterpreterResolution, SandboxMode, ScriptletExecutor,
 };
-use std::collections::BTreeSet;
-use std::path::{Component, Path, PathBuf};
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 
 #[derive(Debug, Default)]
 pub(super) struct NativePathProjection {
@@ -29,19 +29,12 @@ impl NativePathProjection {
     pub(super) fn from_transaction(
         plan: &NativeTransactionPlan,
         changes: &[NativeTransactionChange],
+        new_path_nodes: &[BTreeMap<String, ProjectedNode>],
         final_owned: &BTreeSet<String>,
-        path_capabilities: &[NativeTransactionPathCapabilities],
-        final_path_capabilities: &BTreeSet<String>,
     ) -> Result<Self> {
         let events = plan
             .graph
-            .path_projections(
-                plan.events.len(),
-                changes,
-                final_owned,
-                path_capabilities,
-                final_path_capabilities,
-            )?
+            .path_projections(plan.events.len(), changes, new_path_nodes, final_owned)?
             .into_iter()
             .enumerate()
             .map(|(event_index, projection)| {
@@ -65,36 +58,28 @@ impl NativePathProjection {
         projection: &NativeEventPathProjection,
         root: &Path,
         interpreter: &str,
-    ) -> Result<NativeInterpreterAvailability> {
-        let NativeEventPathProjection::Projected {
-            introduced_paths,
-            explicitly_removed_paths,
-            introduced_path_capabilities,
-            explicitly_removed_path_capabilities,
+    ) -> Result<NativeInterpreterResolution> {
+        let mut selected = SelectedRootProjection::new(root);
+        let projected = matches!(projection, NativeEventPathProjection::Projected { .. });
+        if let NativeEventPathProjection::Projected {
+            introduced,
+            explicitly_removed,
         } = projection
-        else {
-            return Ok(NativeInterpreterAvailability::CurrentRoot);
-        };
-        let interpreter_path = normalize_package_path(interpreter)
-            .with_context(|| format!("native interpreter path '{interpreter}' is invalid"))?;
-        let normalized = interpreter_path
-            .to_str()
-            .context("normalized native interpreter path is not UTF-8")?;
-        if explicitly_removed_paths.contains(normalized)
-            || explicitly_removed_path_capabilities.contains(normalized)
         {
-            return Ok(NativeInterpreterAvailability::ProjectedMissing);
+            for (path, node) in introduced {
+                selected.insert(path, node.clone())?;
+            }
+            for path in explicitly_removed {
+                selected.remove(path)?;
+            }
         }
-        Ok(
-            if root.join(&interpreter_path).exists()
-                || introduced_paths.contains(normalized)
-                || introduced_path_capabilities.contains(normalized)
-            {
-                NativeInterpreterAvailability::ProjectedPresent
-            } else {
-                NativeInterpreterAvailability::ProjectedMissing
-            },
-        )
+        let executable = selected
+            .resolve_executable(interpreter)
+            .with_context(|| format!("native interpreter path '{interpreter}' is invalid"))?;
+        Ok(NativeInterpreterResolution {
+            executable,
+            projected,
+        })
     }
 }
 
@@ -205,21 +190,4 @@ impl PreparedNativeTransaction {
         .preflight_native_command(&argv)
         .map_err(anyhow::Error::from)
     }
-}
-
-fn normalize_package_path(path: &str) -> Result<PathBuf> {
-    let mut normalized = PathBuf::new();
-    for component in Path::new(path).components() {
-        match component {
-            Component::RootDir | Component::CurDir => {}
-            Component::Normal(component) => normalized.push(component),
-            Component::ParentDir | Component::Prefix(_) => {
-                bail!("package path '{path}' escapes its transaction root")
-            }
-        }
-    }
-    if normalized.as_os_str().is_empty() {
-        bail!("package path '{path}' does not name a file");
-    }
-    Ok(normalized)
 }

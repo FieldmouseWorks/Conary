@@ -21,11 +21,13 @@ use super::shared_directory::DirectoryInstallPlan;
 use crate::commands::LiveRootFile;
 use anyhow::Result;
 use conary_core::db::models::Trove;
-use conary_core::filesystem::CasStore;
+use conary_core::filesystem::{CasStore, ProjectedNode};
 use conary_core::packages::PackageFormat;
 use conary_core::packages::config_authority::SourceConfigDeclaration;
 use conary_core::packages::payload::PackagePayloadFile;
+use conary_core::payload::PayloadNodeKind;
 use conary_core::transaction::PackageRelationRemoval;
+use std::collections::BTreeMap;
 use std::path::Path;
 
 /// The incoming files a plan is derived from.
@@ -117,6 +119,62 @@ impl ElementPayloadEffects {
             .chain(self.through_symlink_files.iter())
             .filter(|file| !self.directory_plan.preserves_leaf(&file.path))
     }
+
+    /// The typed overlay this plan materializes into the selected root.
+    ///
+    /// This is the node-kind derivation the event-time interpreter projection
+    /// overlays, so preflight and execution agree on what the payload writes.
+    pub(super) fn projected_nodes(&self) -> BTreeMap<String, ProjectedNode> {
+        self.materialized_files()
+            .map(|file| {
+                (
+                    file.path.clone(),
+                    projected_node(&file.node.source.kind, file.node.source.mode),
+                )
+            })
+            .collect()
+    }
+}
+
+/// Map one payload node to the node the selected-root projection overlays.
+///
+/// This is the single node-kind derivation shared by execution's
+/// [`ElementPayloadEffects`] and the native event-time projection.
+pub(super) fn projected_node(kind: &PayloadNodeKind, mode: u32) -> ProjectedNode {
+    match kind {
+        PayloadNodeKind::Regular { .. } => ProjectedNode::Regular {
+            executable: mode & 0o111 != 0,
+        },
+        PayloadNodeKind::Symlink { target } => ProjectedNode::Symlink {
+            target: target.clone(),
+        },
+        PayloadNodeKind::Hardlink { target, .. } => ProjectedNode::Hardlink {
+            target: target.clone(),
+        },
+        PayloadNodeKind::Directory => ProjectedNode::Directory,
+        PayloadNodeKind::BlockDevice { .. }
+        | PayloadNodeKind::CharacterDevice { .. }
+        | PayloadNodeKind::Fifo
+        | PayloadNodeKind::Socket => ProjectedNode::Other,
+    }
+}
+
+/// The typed overlay of one element's declared payload files.
+///
+/// Native plan callers build the event-time projection from the same payload
+/// files execution resolves, so both sides share [`projected_node`].
+pub(super) fn projected_payload_nodes(
+    files: &[PackagePayloadFile],
+) -> BTreeMap<String, ProjectedNode> {
+    files
+        .iter()
+        .map(|file| {
+            (
+                file.path.clone(),
+                projected_node(&file.node.kind, file.node.mode),
+            )
+        })
+        .collect()
 }
 
 /// Compare two planned file lists by the typed effect each file carries.

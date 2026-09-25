@@ -4,6 +4,7 @@ use super::acquire::{CcsInstallParams, resolve_and_parse_package};
 use super::ccs_removal_hooks::CcsRemovalHookPlan;
 use super::dependencies::{DepAnalysisContext, handle_dependencies};
 use super::native_events::{NativeInstallInput, PreparedNativeTransaction};
+use super::payload_effects::projected_payload_nodes;
 use super::prepare::check_upgrade_status;
 use super::resolve::is_local_package_request;
 use super::validation::{parse_component_and_validate, try_promote_existing_dep};
@@ -358,6 +359,7 @@ async fn cmd_install_with_intent(
                 .iter()
                 .map(|file| file.path.clone())
                 .collect(),
+            new_path_nodes: projected_payload_nodes(&extraction.extracted_files),
         },
     )?;
     let ccs_removal_hook_plan = CcsRemovalHookPlan::prepare(

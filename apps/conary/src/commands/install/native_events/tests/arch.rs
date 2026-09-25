@@ -80,6 +80,7 @@ fn arch_hook_depends_accepts_incoming_virtual_provide_from_native_install_input(
             relation_removals: &relation_removals,
             relation_deconfigurations: &[],
             paths: vec!["usr/share/cache/index".to_string()],
+            new_path_nodes: Default::default(),
         }],
     )
     .unwrap();
@@ -120,6 +121,7 @@ fn arch_hook_depends_accepts_incoming_virtual_provide_from_native_install_input(
             relation_removals: &relation_removals,
             relation_deconfigurations: &[],
             paths: vec!["usr/share/cache/index".to_string()],
+            new_path_nodes: Default::default(),
         }],
     )
     .unwrap();

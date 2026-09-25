@@ -11,6 +11,7 @@ use super::super::native_events::{
 use super::super::native_graph::{
     NativeGraphPayloadMutation, drive_native_graph, finalize_owned_trove, normalize_archive_path,
 };
+use super::super::payload_effects::projected_payload_nodes;
 use super::super::{
     FinalizeInstallOutput, InstallProgress, InstallTransactionResult, TransactionContext,
     build_execution_mode, finalize_install_without_snapshot,
@@ -580,6 +581,7 @@ fn prepare_install_graph(
                 .iter()
                 .map(|file| file.path.clone())
                 .collect(),
+            new_path_nodes: projected_payload_nodes(&prepared.extraction.extracted_files),
         })
         .collect::<Vec<_>>();
     let native_transaction = PreparedNativeTransaction::prepare_batch(tx, &inputs)?;

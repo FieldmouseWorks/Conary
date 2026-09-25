@@ -10,13 +10,14 @@ use contracts::{
     validate_stdin_contract,
 };
 pub use contracts::{
-    NativeInterpreterAvailability, NativeInvocationRuntime, NativeLifecycleExecution,
+    NativeInterpreterResolution, NativeInvocationRuntime, NativeLifecycleExecution,
 };
 
 use super::process::ScriptletProcess;
 use super::rpm_runtime::{execute_embedded_lua, prepare_body as prepare_rpm_body};
 use super::{ExecutionMode, ScriptletExecutor, ScriptletFailureKind, ScriptletOutcome};
 use crate::ccs::native_lifecycle::{RpmProgram, RpmRuntimeMetadata};
+use crate::filesystem::{ProjectedExecutable, SelectedRootProjection};
 use anyhow::{Result as AnyhowResult, bail};
 use std::time::Duration;
 
@@ -29,9 +30,9 @@ impl ScriptletExecutor {
         &self,
         execution: &NativeLifecycleExecution<'_>,
         runtime: &NativeInvocationRuntime<'_>,
-        interpreter_availability: NativeInterpreterAvailability,
+        interpreter: NativeInterpreterResolution,
     ) -> AnyhowResult<()> {
-        self.validate_native_lifecycle_contracts(execution, runtime, None, interpreter_availability)
+        self.validate_native_lifecycle_contracts(execution, runtime, None, Some(interpreter))
     }
 
     /// Preflight an RPM lifecycle entry, including its exact body transforms
@@ -41,14 +42,9 @@ impl ScriptletExecutor {
         execution: &NativeLifecycleExecution<'_>,
         runtime: &NativeInvocationRuntime<'_>,
         rpm: &RpmRuntimeMetadata,
-        interpreter_availability: NativeInterpreterAvailability,
+        interpreter: NativeInterpreterResolution,
     ) -> AnyhowResult<()> {
-        self.validate_native_lifecycle_contracts(
-            execution,
-            runtime,
-            Some(rpm),
-            interpreter_availability,
-        )
+        self.validate_native_lifecycle_contracts(execution, runtime, Some(rpm), Some(interpreter))
     }
 
     /// Execute a native lifecycle bundle entry and return typed outcome metadata.
@@ -79,12 +75,8 @@ impl ScriptletExecutor {
         let requested_sandbox_mode = self.sandbox_mode;
         let effective_sandbox = self.effective_sandbox();
 
-        if let Err(error) = self.validate_native_lifecycle_contracts(
-            execution,
-            runtime,
-            rpm,
-            NativeInterpreterAvailability::CurrentRoot,
-        ) {
+        let validation = self.validate_native_lifecycle_contracts(execution, runtime, rpm, None);
+        if let Err(error) = validation {
             return self.failure_outcome(
                 execution.phase,
                 ScriptletFailureKind::SandboxSetupUnavailable,
@@ -244,7 +236,7 @@ impl ScriptletExecutor {
         execution: &NativeLifecycleExecution<'_>,
         runtime: &NativeInvocationRuntime<'_>,
         rpm: Option<&RpmRuntimeMetadata>,
-        interpreter_availability: NativeInterpreterAvailability,
+        resolution: Option<NativeInterpreterResolution>,
     ) -> AnyhowResult<()> {
         self.require_target_root().map_err(|_| {
             NativeLifecyclePreflightError::InvalidExecutionRoot {
@@ -318,22 +310,20 @@ impl ScriptletExecutor {
             return Ok(());
         }
 
-        let interpreter_present = match interpreter_availability {
-            NativeInterpreterAvailability::CurrentRoot => {
-                let interpreter_check_path = self
-                    .root
-                    .join(execution.interpreter.trim_start_matches('/'));
-                interpreter_check_path.exists()
-            }
-            NativeInterpreterAvailability::ProjectedPresent => true,
-            NativeInterpreterAvailability::ProjectedMissing => false,
+        let (interpreter, projected) = match resolution {
+            Some(resolution) => (resolution.executable, resolution.projected),
+            None => (
+                SelectedRootProjection::new(&self.root)
+                    .resolve_executable(execution.interpreter)?,
+                false,
+            ),
         };
 
-        if !interpreter_present {
+        if !matches!(interpreter, ProjectedExecutable::Executable { .. }) {
             return Err(NativeLifecyclePreflightError::MissingInterpreter {
                 interpreter: execution.interpreter.into(),
                 entry_id: execution.entry_id.into(),
-                projected: interpreter_availability != NativeInterpreterAvailability::CurrentRoot,
+                projected,
             }
             .into());
         }
