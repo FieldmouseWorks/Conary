@@ -401,6 +401,25 @@ fn stdout_json_equals_json_rejects_infinite_magnitude_number() {
 }
 
 #[test]
+fn stdout_json_equals_json_rejects_out_of_i64_exponent() {
+    // Positive control through the same fixture: an exponent that fits `i64`
+    // loads and keeps its exact source token for the comparator.
+    let check = stdout_json_check(r#"pointer = "/x", equals_json = '1e-300'"#);
+    assert_eq!(check.numbers.get(""), Some(&"1e-300".to_string()));
+
+    // Negative: the exponent does not fit `i64`, so `CanonicalDecimal::parse`
+    // cannot canonicalize it even though `serde_json` reads the token as a
+    // finite zero. The loader must refuse it instead of deferring the failure
+    // to comparison.
+    let entry = r#"pointer = "/x", equals_json = '1e-9223372036854775809'"#;
+    let error = stdout_json_entry_error(entry);
+
+    assert!(error.contains("/x"), "{error}");
+    assert!(error.contains("not supported"), "{error}");
+    assert!(!error.contains("invalid `equals_json` JSON"), "{error}");
+}
+
+#[test]
 fn stdout_json_equals_has_no_json_source_tokens() {
     // TOML `equals` values have no JSON text, so the comparator reduces them
     // through the value's shortest round-trip form instead.

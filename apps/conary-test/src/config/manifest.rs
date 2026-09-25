@@ -1,7 +1,7 @@
 // apps/conary-test/src/config/manifest.rs
 
 use crate::engine::assertions::{
-    JsonNumberToken, find_json_number_tokens, first_out_of_range_number,
+    JsonNumberToken, find_json_number_tokens, first_unsupported_number,
 };
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
@@ -481,14 +481,14 @@ impl TryFrom<RawJsonAssertion> for JsonAssertion {
                 (JsonExpectation::Equals(value), HashMap::new())
             }
             (None, Some(text), None) => {
-                // Scan the raw text before `serde_json` so a number beyond
-                // finite `f64` range is reported as an explicit limitation
-                // rather than serde_json's generic parse error. A walker error
-                // means the text is malformed; fall through so serde_json owns
-                // the syntax diagnostic.
+                // Scan the raw text before `serde_json` so every number the
+                // exact comparator cannot canonicalize or hold in finite `f64`
+                // is reported as an explicit limitation. A walker error means
+                // the text is malformed; fall through so serde_json owns the
+                // syntax diagnostic.
                 let scanned = find_json_number_tokens(&text);
                 if let Ok(numbers) = &scanned
-                    && let Some(number) = first_out_of_range_number(numbers)
+                    && let Some(number) = first_unsupported_number(numbers)
                 {
                     return Err(unsupported_equals_json_number(&raw.pointer, number));
                 }
@@ -563,16 +563,19 @@ fn invalid_equals_json(pointer: &str, error: &serde_json::Error) -> String {
     format!("stdout_json pointer {pointer:?} has invalid `equals_json` JSON: {error}")
 }
 
-/// Build the load error for `equals_json` text containing a number beyond
-/// finite `f64` range.
+/// Build the load error for `equals_json` text containing a number the exact
+/// comparator does not support.
 ///
-/// `serde_json` without `arbitrary_precision` cannot represent such a number
-/// and would fail with a generic parse error. Naming the number's pointer and
-/// the limitation makes the failure actionable.
+/// `serde_json` without `arbitrary_precision` cannot represent a magnitude
+/// beyond finite `f64`, and the comparator's `CanonicalDecimal::parse` also
+/// rejects an exponent that does not fit `i64`. Both cases fail the same
+/// supported-number predicate. Naming the number's pointer and the limitation
+/// makes the failure actionable.
 fn unsupported_equals_json_number(pointer: &str, number: &JsonNumberToken) -> String {
     format!(
         "stdout_json pointer {pointer:?} has an `equals_json` number at {:?} beyond the \
-         supported finite f64 range; such numbers are not supported",
+         supported range: the exact comparator requires a JSON number whose exponent and \
+         magnitude fit finite f64, so an out-of-range exponent or magnitude is not supported",
         number.pointer
     )
 }

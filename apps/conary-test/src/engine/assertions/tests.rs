@@ -202,8 +202,36 @@ fn stdout_json_reports_malformed_number_as_syntax_error() {
 }
 
 #[test]
-fn number_exceeds_f64_classifies_boundaries() {
-    // Finite boundaries must not be flagged.
+fn stdout_json_reports_out_of_i64_exponent_as_range() {
+    // Positive control: an exponent that fits `i64` is supported, so the
+    // assertion on the other field passes.
+    let assertion = json_assertion("/value", serde_json::json!(1));
+    assert!(evaluate_assertion(&assertion, 0, r#"{"n":1e-300,"value":1}"#, "").is_ok());
+
+    // Negative: `serde_json` reads this token as a finite zero, but the exact
+    // comparator cannot canonicalize its exponent. Even though the assertion
+    // addresses `/value`, the unsupported token at `/n` is the reported cause,
+    // never the invalid-number-token comparison error.
+    let stdout = r#"{"n":1e-9223372036854775809,"value":1}"#;
+    let error = evaluate_assertion(&assertion, 0, stdout, "").unwrap_err();
+    let message = error.to_string();
+    assert!(message.contains("/n"), "{message}");
+    assert!(message.contains("beyond the supported range"), "{message}");
+    assert!(!message.contains("not valid JSON"), "{message}");
+    assert!(!message.contains("invalid JSON number token"), "{message}");
+}
+
+#[test]
+fn stdout_json_compares_in_range_exponent_exactly() {
+    // Positive control for the unsupported-exponent rule: the same value
+    // written with an uppercase exponent still matches exactly.
+    let assertion = json_text_assertion("/n", "1e-300");
+    assert!(evaluate_assertion(&assertion, 0, r#"{"n":1E-300}"#, "").is_ok());
+}
+
+#[test]
+fn is_supported_json_number_token_classifies_boundaries() {
+    // Finite boundaries must be supported.
     for token in [
         "0",
         "1",
@@ -212,25 +240,37 @@ fn number_exceeds_f64_classifies_boundaries() {
         "1e308",
         "1.7976931348623157e308",
         "1e-999",
+        "1e-9223372036854775807",
     ] {
-        assert!(!number_exceeds_f64(token), "{token} unexpectedly flagged");
+        assert!(
+            is_supported_json_number_token(token),
+            "{token} unexpectedly unsupported"
+        );
     }
 
-    // An order above 308, top-order infinity, and an exponent too large for
-    // `i64` are all beyond finite range.
+    // An order above 308, top-order infinity, an exponent above `i64::MAX`, and
+    // an exponent below `i64::MIN` are all beyond the supported range.
     let beyond = [
         "1e309".to_string(),
         "1.8e308".to_string(),
         "9".repeat(400),
         "1e99999999999999999999".to_string(),
+        "1e-9223372036854775809".to_string(),
     ];
     for token in &beyond {
-        assert!(number_exceeds_f64(token), "{token} unexpectedly accepted");
+        assert!(
+            !is_supported_json_number_token(token),
+            "{token} unexpectedly supported"
+        );
     }
 
-    // A malformed token is a syntax concern, not a range one.
+    // A malformed token also fails the predicate; the loader's all-valid guard
+    // keeps it a syntax concern rather than this range rule.
     for token in ["01e999", "1.2.3e999", "1e", "+1e999"] {
-        assert!(!number_exceeds_f64(token), "{token} unexpectedly flagged");
+        assert!(
+            !is_supported_json_number_token(token),
+            "{token} unexpectedly supported"
+        );
     }
 }
 

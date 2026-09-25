@@ -80,32 +80,29 @@ pub fn evaluate_assertion(
 
 /// Parse all of `stdout` as one JSON document and apply every typed check.
 fn evaluate_stdout_json(checks: &[JsonAssertion], stdout: &str) -> Result<()> {
-    let document: JsonValue = match serde_json::from_str(stdout) {
-        Ok(document) => document,
-        Err(error) => {
-            // `serde_json` without `arbitrary_precision` rejects a number
-            // beyond finite `f64` range, so an otherwise valid document can
-            // look like a syntax error. Re-scan with the number walker: when
-            // every number is well-formed and one exceeds the range, name the
-            // concrete limitation instead. Any other defect, including a
-            // malformed number or text the walker cannot scan, keeps the
-            // generic diagnostic.
-            if let Ok(numbers) = find_json_number_tokens(stdout)
-                && let Some(number) = first_out_of_range_number(&numbers)
-            {
-                bail!(
-                    "stdout is valid JSON but contains a number beyond the supported range at \"{}\"",
-                    number.pointer
-                );
-            }
-            bail!("stdout is not valid JSON: {error}");
-        }
-    };
+    // Classify source number tokens before comparing. `serde_json` accepts a
+    // token such as `1e-9223372036854775809` as a finite zero even though the
+    // exact comparator cannot canonicalize its exponent, and it rejects a token
+    // beyond finite `f64` range as a syntax error. Both are the same range
+    // limitation, so scan once and name it. The scan must succeed and every
+    // token must be a well-formed number; any other defect keeps the generic
+    // syntax diagnostic.
+    let scanned = find_json_number_tokens(stdout);
+    if let Ok(numbers) = &scanned
+        && let Some(number) = first_unsupported_number(numbers)
+    {
+        bail!(
+            "stdout is valid JSON but contains a number beyond the supported range at \"{}\"",
+            number.pointer
+        );
+    }
+    let document: JsonValue = serde_json::from_str(stdout)
+        .map_err(|error| anyhow::anyhow!("stdout is not valid JSON: {error}"))?;
     // `serde_json` stores every decimal token as `f64`, and an integer token
     // outside `i64`/`u64` as `f64` too. Record the source token for every
     // number at its pointer so a check compares exact decimal values instead
     // of rounded floats.
-    let actual_numbers: HashMap<String, String> = find_json_number_tokens(stdout)
+    let actual_numbers: HashMap<String, String> = scanned
         .map_err(|error| anyhow::anyhow!("stdout is not valid JSON: {error}"))?
         .into_iter()
         .map(|number| (number.pointer, number.token))
@@ -135,8 +132,8 @@ fn evaluate_stdout_json(checks: &[JsonAssertion], stdout: &str) -> Result<()> {
                         "stdout JSON number at pointer \"{pointer}\" has no recorded source token; \
                          refusing to compare an unverifiable value"
                     ),
-                    Err(JsonComparisonError::InvalidNumber { pointer, error }) => bail!(
-                        "stdout JSON number at pointer \"{pointer}\" is not an exact decimal: {error}"
+                    Err(JsonComparisonError::UnsupportedNumber { pointer }) => bail!(
+                        "stdout is valid JSON but contains a number beyond the supported range at \"{pointer}\""
                     ),
                 }
             }
@@ -175,10 +172,7 @@ enum JsonComparisonError {
     /// The actual value is a number but the walker did not record its token.
     MissingActualNumber { pointer: String },
     /// A number token could not be reduced to an exact decimal.
-    InvalidNumber {
-        pointer: String,
-        error: CanonicalDecimalError,
-    },
+    UnsupportedNumber { pointer: String },
 }
 
 /// Compare two JSON values structurally.
@@ -230,9 +224,8 @@ fn compare_json_values(
             match ExactNumber::matches(expected, expected_token, actual_token) {
                 Ok(true) => Ok(()),
                 Ok(false) => Err(JsonComparisonError::Mismatch),
-                Err(error) => Err(JsonComparisonError::InvalidNumber {
+                Err(_) => Err(JsonComparisonError::UnsupportedNumber {
                     pointer: pointer.to_string(),
-                    error,
                 }),
             }
         }
@@ -350,6 +343,27 @@ impl CanonicalDecimal {
     }
 }
 
+/// Whether the exact comparator supports `token`.
+///
+/// A token is supported when `CanonicalDecimal::parse` reduces it exactly and
+/// its magnitude lies within finite `f64`. This is the one rule shared by
+/// manifest loading and runtime evaluation. Canonicalizability is part of the
+/// rule because `parse` rejects an exponent outside `i64` while `serde_json`
+/// accepts such a token as a finite zero (for example
+/// `1e-9223372036854775809`); without that clause a manifest would load and then
+/// fail during comparison.
+pub(crate) fn is_supported_json_number_token(token: &str) -> bool {
+    let Ok(value) = CanonicalDecimal::parse(token) else {
+        return false;
+    };
+    if canonical_order(&value).is_some_and(|order| order > F64_MAX_DECIMAL_EXPONENT) {
+        return false;
+    }
+    // The leading-digit order settles every value above 308; at exactly 308 the
+    // leading digits still decide, so ask whether the token rounds to infinity.
+    token.parse::<f64>().is_ok_and(f64::is_finite)
+}
+
 /// Build the error for a token that does not parse as a JSON number.
 fn invalid_number_token(token: &str) -> CanonicalDecimalError {
     CanonicalDecimalError {
@@ -386,35 +400,12 @@ fn parse_exponent(text: &str) -> Option<i64> {
 /// The decimal exponent of `f64::MAX` (`1.797...e308`).
 const F64_MAX_DECIMAL_EXPONENT: i64 = 308;
 
-/// Whether a JSON number token's magnitude exceeds the finite `f64` range.
+/// The first unsupported number among a complete scan.
 ///
-/// `serde_json` without `arbitrary_precision` represents every number as
-/// `i64`, `u64`, or `f64`, so a token beyond this range is exactly the set it
-/// cannot parse. Detection is structural first: a number is
-/// `digits * 10^exponent`, so its leading digit sits at
-/// `exponent + digits.len() - 1`, and any order above `f64::MAX`'s 308 is out
-/// of range. The top order, where the leading digits still decide, is settled
-/// by asking whether the token parses to infinity. A token that is not a valid
-/// JSON number is not this rule's concern and is never classified here.
-fn number_exceeds_f64(token: &str) -> bool {
-    if !is_json_number_token(token) {
-        return false;
-    }
-    if let Ok(value) = CanonicalDecimal::parse(token)
-        && canonical_order(&value).is_some_and(|order| order > F64_MAX_DECIMAL_EXPONENT)
-    {
-        return true;
-    }
-    token.parse::<f64>().is_ok_and(f64::is_infinite)
-}
-
-/// The first scanned number beyond finite `f64` range, when every scanned
-/// number is a valid RFC 8259 number.
-///
-/// The all-valid guard lets a caller excuse a parse failure only when a
-/// number's magnitude is the *only* defect. A document that also contains a
+/// The all-valid guard lets a caller excuse a parse failure only when an
+/// unsupported number is the *only* defect. A document that also contains a
 /// malformed number yields `None` so its syntax error stays authoritative.
-pub(crate) fn first_out_of_range_number(numbers: &[JsonNumberToken]) -> Option<&JsonNumberToken> {
+pub(crate) fn first_unsupported_number(numbers: &[JsonNumberToken]) -> Option<&JsonNumberToken> {
     if !numbers
         .iter()
         .all(|number| is_json_number_token(&number.token))
@@ -423,7 +414,7 @@ pub(crate) fn first_out_of_range_number(numbers: &[JsonNumberToken]) -> Option<&
     }
     numbers
         .iter()
-        .find(|number| number_exceeds_f64(&number.token))
+        .find(|number| !is_supported_json_number_token(&number.token))
 }
 
 /// The decimal exponent of a canonical value's leading digit.
