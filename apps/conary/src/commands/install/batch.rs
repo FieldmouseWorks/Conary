@@ -29,8 +29,8 @@ use super::ccs_removal_hooks::CcsRemovalHookPlan;
 use super::inner;
 use super::native_events::{NativeInstallInput, PreparedNativeTransaction};
 use super::payload_effects::{
-    ElementPayloadEffectInput, PayloadEffectFiles, plan_element_payload_effects,
-    projected_payload_nodes,
+    ElementPayloadEffectInput, ElementPayloadEffects, PayloadEffectFiles,
+    plan_element_payload_effects, projected_payload_nodes,
 };
 use super::prepare::{UpgradeCheck, check_upgrade_status, parse_package};
 use super::{
@@ -468,9 +468,37 @@ impl<'a> BatchInstaller<'a> {
                 &package.extracted_files,
             )?;
         }
+        // One effects plan per element feeds both the native event-time
+        // projection and the CCS hook preflight, exactly as execution's
+        // `apply_payload` will materialize them.
+        let effects = packages
+            .iter()
+            .map(|package| -> Result<ElementPayloadEffects> {
+                plan_element_payload_effects(
+                    &preflight_state,
+                    &selected_path,
+                    ElementPayloadEffectInput {
+                        semantics: package.semantics,
+                        package_name: &package.name,
+                        relation_removals: &package.relation_removals,
+                        replacing_trove_id: package.old_trove_id()?,
+                        config_declarations: &package.config_declarations,
+                        files: PayloadEffectFiles::Extracted(&package.extracted_files),
+                    },
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
         let native_inputs = packages
             .iter()
-            .map(PreparedPackage::native_install_input)
+            .zip(&effects)
+            .map(|(package, effects)| {
+                // Override the declared-payload nodes `native_install_input`
+                // seeds for the preview path with this element's effects plan,
+                // so the event-time projection matches execution.
+                let mut input = package.native_install_input();
+                input.new_path_nodes = effects.projected_nodes();
+                input
+            })
             .collect::<Vec<_>>();
         let native_transaction =
             PreparedNativeTransaction::prepare_batch(&preflight_state, &native_inputs)?;
@@ -517,20 +545,9 @@ impl<'a> BatchInstaller<'a> {
         // then require each hook's interpreter, all before the first mutation.
         let elements = packages
             .iter()
-            .map(|package| -> Result<_> {
-                let effects = plan_element_payload_effects(
-                    &preflight_state,
-                    &selected_path,
-                    ElementPayloadEffectInput {
-                        semantics: package.semantics,
-                        package_name: &package.name,
-                        relation_removals: &package.relation_removals,
-                        replacing_trove_id: package.old_trove_id()?,
-                        config_declarations: &package.config_declarations,
-                        files: PayloadEffectFiles::Extracted(&package.extracted_files),
-                    },
-                )?;
-                Ok(element_plan(
+            .zip(effects)
+            .map(|(package, effects)| {
+                element_plan(
                     &package.name,
                     &package.version,
                     package.old_trove.as_deref(),
@@ -541,9 +558,9 @@ impl<'a> BatchInstaller<'a> {
                         .as_ref()
                         .map(|ccs| hook_interpreters(&ccs.hooks))
                         .unwrap_or_default(),
-                ))
+                )
             })
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<Vec<_>>();
         preflight_hook_interpreters(&preflight_state, &selected_path, &elements)?;
 
         preflight_state.commit()?;

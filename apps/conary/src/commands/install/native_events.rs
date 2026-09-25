@@ -65,9 +65,9 @@ pub(super) struct NativeInstallInput<'a> {
     pub relation_removals: &'a [PackageRelationRemoval],
     pub relation_deconfigurations: &'a [PackageRelationDeconfiguration],
     pub paths: Vec<String>,
-    /// Typed nodes for `paths`, from the element's payload-effect plan. The
-    /// event-time projection overlays these so native and CCS share one
-    /// derivation.
+    /// Typed nodes at their effective paths, from the element's payload-effect
+    /// plan. The event-time projection overlays these so native and CCS share
+    /// one derivation.
     pub new_path_nodes: BTreeMap<String, ProjectedNode>,
 }
 

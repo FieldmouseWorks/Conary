@@ -29,6 +29,8 @@ use std::os::unix::fs::{PermissionsExt, symlink};
 mod arch;
 #[path = "tests/deconfiguration.rs"]
 mod deconfiguration;
+#[path = "tests/payload_effects_projection.rs"]
+mod payload_effects_projection;
 #[path = "tests/provider_projection.rs"]
 mod provider_projection;
 #[path = "tests/rpm_warning.rs"]

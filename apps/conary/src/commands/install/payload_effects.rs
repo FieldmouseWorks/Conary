@@ -161,8 +161,10 @@ pub(super) fn projected_node(kind: &PayloadNodeKind, mode: u32) -> ProjectedNode
 
 /// The typed overlay of one element's declared payload files.
 ///
-/// Native plan callers build the event-time projection from the same payload
-/// files execution resolves, so both sides share [`projected_node`].
+/// This is the declared-spelling projection used where no selected-root effects
+/// plan exists (the CCS dry run and state restore). Install and batch callers
+/// overlay [`ElementPayloadEffects::projected_nodes`] instead, so config
+/// suffixes and preserved aliases match what execution materializes.
 pub(super) fn projected_payload_nodes(
     files: &[PackagePayloadFile],
 ) -> BTreeMap<String, ProjectedNode> {

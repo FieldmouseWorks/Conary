@@ -6,11 +6,13 @@
 //! transaction mechanics stay in `install/mod.rs`.
 
 use super::ccs_hook_interpreter::{
-    HookInterpreter, extracted_element_plan, hook_interpreters, preflight_hook_interpreters,
+    HookInterpreter, element_plan, hook_interpreters, preflight_hook_interpreters,
 };
 use super::ccs_removal_hooks::CcsRemovalHookPlan;
 use super::native_events::{NativeInstallInput, PreparedNativeTransaction};
-use super::payload_effects::projected_payload_nodes;
+use super::payload_effects::{
+    ElementPayloadEffects, plan_extracted_element_payload_effects, projected_payload_nodes,
+};
 use super::{
     ExtractionResult, FinalizeInstallOutput, InstallIntent, InstallPhase, InstallProgress,
     InstallReplacement, InstallSemantics, RepositoryInstallProvenance, TransactionContext,
@@ -460,6 +462,22 @@ fn install_ccs_package_transactionally_inner(
     conary_core::transaction::validate_package_relation_plan(&preflight_state, &relation_plan)
         .context("CCS package conflicts and replacements cannot be applied")?;
     let native_lifecycle_bundle = pkg.manifest().native_lifecycle.as_ref();
+    // One plan per element feeds the native event-time projection and, for a
+    // real install, the CCS hook preflight. A dry run has no prepared selected
+    // root, so its native input keeps the declared payload nodes.
+    let selected_payload_effects = if selected_root.is_some() {
+        Some(plan_extracted_element_payload_effects(
+            &preflight_state,
+            Path::new(&transaction_root),
+            pkg,
+            &extraction.extracted_files,
+            semantics,
+            old_trove,
+            &relation_plan.removals,
+        )?)
+    } else {
+        None
+    };
     let native_transaction = PreparedNativeTransaction::prepare_batch_with_declared_paths(
         &preflight_state,
         &[NativeInstallInput {
@@ -477,7 +495,10 @@ fn install_ccs_package_transactionally_inner(
                 .iter()
                 .map(|file| file.path.clone())
                 .collect(),
-            new_path_nodes: projected_payload_nodes(&extraction.extracted_files),
+            new_path_nodes: selected_payload_effects.as_ref().map_or_else(
+                || projected_payload_nodes(&extraction.extracted_files),
+                ElementPayloadEffects::projected_nodes,
+            ),
         }],
         &declared_paths,
     )?;
@@ -506,16 +527,16 @@ fn install_ccs_package_transactionally_inner(
             show_ccs_hook_interpreter_requirement(requirement);
         }
     } else if !required_hook_interpreters.is_empty() {
-        let element = extracted_element_plan(
-            &preflight_state,
-            Path::new(&transaction_root),
-            pkg,
-            &extraction,
-            semantics,
+        let effects = selected_payload_effects
+            .context("real CCS install has no selected-root payload effects")?;
+        let element = element_plan(
+            pkg.name(),
+            pkg.version(),
             old_trove,
             &relation_plan.removals,
+            effects,
             required_hook_interpreters,
-        )?;
+        );
         preflight_hook_interpreters(
             &preflight_state,
             Path::new(&transaction_root),

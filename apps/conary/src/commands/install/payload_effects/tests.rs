@@ -273,6 +273,65 @@ fn preflight_entry_point_matches_the_generic_planner() {
     assert_eq!(direct, via_entry);
 }
 
+/// The single-install path: preflight derives effects from the extraction form
+/// while `apply_payload` derives them from the stored CAS form. Both must be the
+/// same typed effect.
+#[test]
+fn preflight_extraction_plan_matches_the_stored_apply_plan() {
+    let fixture = fixture();
+    std::fs::create_dir_all(fixture.root.join("etc")).unwrap();
+    std::fs::write(fixture.root.join("etc/demo.conf"), b"local").unwrap();
+    let old_trove = insert_trove(&fixture.conn, "old-owner");
+    let mut old = ConfigFile::new(
+        "/etc/demo.conf".to_string(),
+        old_trove,
+        conary_core::hash::sha256(b"old"),
+    );
+    old.source = ConfigSource::Arch;
+    old.insert(&fixture.conn).unwrap();
+
+    let declarations = vec![alpm_matched("/etc/demo.conf")];
+    let extracted = vec![regular_payload("/etc/demo.conf", b"new", 0o100644)];
+    let semantics = InstallSemantics::native_package(PackageFormatType::Arch);
+    let pkg = FakePackage {
+        declarations: declarations.clone(),
+    };
+    let replacing = Trove::find_by_id(&fixture.conn, old_trove).unwrap();
+
+    let preflight = plan_extracted_element_payload_effects(
+        &fixture.conn,
+        &fixture.root,
+        &pkg,
+        &extracted,
+        semantics,
+        replacing.as_ref(),
+        &[],
+    )
+    .unwrap();
+    let stored = inner::store_extracted_files_in_cas(&fixture.cas, &extracted).unwrap();
+    let apply = plan_element_payload_effects(
+        &fixture.conn,
+        &fixture.root,
+        ElementPayloadEffectInput {
+            semantics,
+            package_name: pkg.name(),
+            relation_removals: &[],
+            replacing_trove_id: Some(old_trove),
+            config_declarations: &declarations,
+            files: PayloadEffectFiles::Stored {
+                cas: &fixture.cas,
+                files: &stored,
+            },
+        },
+    )
+    .unwrap();
+
+    assert_eq!(
+        preflight, apply,
+        "preflight's extraction plan must equal the stored plan execution applies"
+    );
+}
+
 #[test]
 fn preserved_hardlink_chain_plan_agrees_before_and_after_cas() {
     let fixture = fixture();

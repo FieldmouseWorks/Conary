@@ -4,7 +4,7 @@ use super::acquire::{CcsInstallParams, resolve_and_parse_package};
 use super::ccs_removal_hooks::CcsRemovalHookPlan;
 use super::dependencies::{DepAnalysisContext, handle_dependencies};
 use super::native_events::{NativeInstallInput, PreparedNativeTransaction};
-use super::payload_effects::projected_payload_nodes;
+use super::payload_effects::plan_extracted_element_payload_effects;
 use super::prepare::check_upgrade_status;
 use super::resolve::is_local_package_request;
 use super::validation::{parse_component_and_validate, try_promote_existing_dep};
@@ -342,26 +342,6 @@ async fn cmd_install_with_intent(
         Vec::new()
     };
     let resolution_capabilities = pkg.resolution_capabilities()?;
-    let native_transaction = PreparedNativeTransaction::prepare_install(
-        &conn,
-        NativeInstallInput {
-            package_name: pkg.name(),
-            package_version: pkg.version(),
-            package_arch: pkg.architecture(),
-            version_scheme: semantics.version_scheme,
-            provides: &resolution_capabilities,
-            new_bundle: native_lifecycle_state.bundle_to_persist.as_ref(),
-            old_trove: old_trove_to_upgrade.as_deref(),
-            relation_removals: &relation_plan.removals,
-            relation_deconfigurations: &relation_plan.deconfigurations,
-            paths: extraction
-                .extracted_files
-                .iter()
-                .map(|file| file.path.clone())
-                .collect(),
-            new_path_nodes: projected_payload_nodes(&extraction.extracted_files),
-        },
-    )?;
     let ccs_removal_hook_plan = CcsRemovalHookPlan::prepare(
         &conn,
         old_trove_to_upgrade.as_deref(),
@@ -382,6 +362,37 @@ async fn cmd_install_with_intent(
             format!("Install {}-{}", pkg.name(), pkg.version()),
         )?;
     let transaction_root = selected_root.selected_root().to_string_lossy().into_owned();
+    // One plan feeds the native event-time projection, so preflight sees the
+    // config suffixes and preserved aliases `apply_payload` will materialize.
+    let effects = plan_extracted_element_payload_effects(
+        &preflight_state,
+        Path::new(&transaction_root),
+        pkg.as_ref(),
+        &extraction.extracted_files,
+        semantics,
+        old_trove_to_upgrade.as_deref(),
+        &relation_plan.removals,
+    )?;
+    let native_transaction = PreparedNativeTransaction::prepare_install(
+        &preflight_state,
+        NativeInstallInput {
+            package_name: pkg.name(),
+            package_version: pkg.version(),
+            package_arch: pkg.architecture(),
+            version_scheme: semantics.version_scheme,
+            provides: &resolution_capabilities,
+            new_bundle: native_lifecycle_state.bundle_to_persist.as_ref(),
+            old_trove: old_trove_to_upgrade.as_deref(),
+            relation_removals: &relation_plan.removals,
+            relation_deconfigurations: &relation_plan.deconfigurations,
+            paths: extraction
+                .extracted_files
+                .iter()
+                .map(|file| file.path.clone())
+                .collect(),
+            new_path_nodes: effects.projected_nodes(),
+        },
+    )?;
     native_transaction.preflight(Path::new(&transaction_root), &native_execution_mode)?;
     let preflighted_ccs_removal_hooks =
         ccs_removal_hook_plan.preflight(Path::new(&transaction_root), sandbox_mode)?;
