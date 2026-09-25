@@ -20,9 +20,18 @@ fn follow_up_guidance(
                 .map(|_| PublicationOutcome::retry_command(db_path)),
             FollowUpGuidance::None,
         ),
-        crate::commands::DeferredFollowUpKind::GenerationPublicationNoBaseSystem => {
-            (None, FollowUpGuidance::AdoptOrInstallBaseSystem)
-        }
+        crate::commands::DeferredFollowUpKind::GenerationPublicationNoBaseSystemInit => (
+            None,
+            FollowUpGuidance::AdoptOrInstallBaseSystem(
+                conary_core::MissingBaseSystemPart::MissingInit,
+            ),
+        ),
+        crate::commands::DeferredFollowUpKind::GenerationPublicationNoBaseSystemBootAssets => (
+            None,
+            FollowUpGuidance::AdoptOrInstallBaseSystem(
+                conary_core::MissingBaseSystemPart::MissingBootAssets,
+            ),
+        ),
         crate::commands::DeferredFollowUpKind::Other => {
             (follow_up.retry_command.clone(), FollowUpGuidance::None)
         }
@@ -126,30 +135,40 @@ mod tests {
     }
 
     #[test]
-    fn no_base_publication_guidance_comes_from_the_recorded_kind() {
-        let mut changeset = Changeset::new("fixture".into());
-        changeset.metadata = Some(
-            metadata_with_deferred_follow_up(
-                Vec::new(),
-                vec![DeferredFollowUp {
-                    kind: "generation_publication_no_base_system".into(),
-                    status: "pending".into(),
-                    message: crate::ui::publication::no_base_system_reason(
-                        conary_core::MissingBaseSystemPart::MissingInit,
-                    )
-                    .into(),
-                    retry_command: None,
-                }],
-            )
-            .unwrap(),
-        );
-        let records = history_follow_ups(&changeset, "/tmp/history.db").unwrap();
-        assert_eq!(records.len(), 1);
-        assert_eq!(
-            records[0].guidance,
-            FollowUpGuidance::AdoptOrInstallBaseSystem
-        );
-        assert_eq!(records[0].retry_command, None);
+    fn no_base_publication_guidance_records_and_classifies_each_missing_part() {
+        use crate::commands::generation::publication::PublicationFailureKind;
+        use crate::commands::publication_deferred_follow_up;
+        use conary_core::MissingBaseSystemPart;
+
+        for (missing, expected) in [
+            (
+                MissingBaseSystemPart::MissingInit,
+                FollowUpGuidance::AdoptOrInstallBaseSystem(MissingBaseSystemPart::MissingInit),
+            ),
+            (
+                MissingBaseSystemPart::MissingBootAssets,
+                FollowUpGuidance::AdoptOrInstallBaseSystem(
+                    MissingBaseSystemPart::MissingBootAssets,
+                ),
+            ),
+        ] {
+            let mut changeset = Changeset::new("fixture".into());
+            changeset.metadata = Some(
+                metadata_with_deferred_follow_up(
+                    Vec::new(),
+                    vec![publication_deferred_follow_up(
+                        Some(PublicationFailureKind::NoBaseSystem(missing)),
+                        "generation publication is pending".into(),
+                        "/tmp/history.db",
+                    )],
+                )
+                .unwrap(),
+            );
+            let records = history_follow_ups(&changeset, "/tmp/history.db").unwrap();
+            assert_eq!(records.len(), 1);
+            assert_eq!(records[0].guidance, expected, "{missing:?}");
+            assert_eq!(records[0].retry_command, None);
+        }
     }
 
     #[test]

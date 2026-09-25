@@ -92,7 +92,7 @@ fn no_base_system_deferred_follow_up_drops_the_publish_retry() {
         "generation publication is pending".to_string(),
         "/tmp/recovery.db",
     );
-    assert_eq!(follow_up.kind, "generation_publication_no_base_system");
+    assert_eq!(follow_up.kind, NO_BASE_SYSTEM_MISSING_INIT_KIND);
     assert_eq!(follow_up.status, "pending");
     assert_eq!(follow_up.retry_command, None);
     assert_eq!(
@@ -112,7 +112,7 @@ fn missing_boot_assets_follow_up_records_the_boot_asset_reason() {
         "generation publication is pending".to_string(),
         "/tmp/recovery.db",
     );
-    assert_eq!(follow_up.kind, "generation_publication_no_base_system");
+    assert_eq!(follow_up.kind, NO_BASE_SYSTEM_MISSING_BOOT_ASSETS_KIND);
     assert_eq!(follow_up.retry_command, None);
     assert_eq!(
         follow_up.message,

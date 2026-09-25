@@ -194,7 +194,7 @@ pub(crate) fn pending_publication(
             "Reason",
             crate::ui::publication::no_base_system_reason(missing),
         );
-        for guidance in crate::ui::publication::NO_BASE_SYSTEM_GUIDANCE {
+        for guidance in crate::ui::publication::no_base_system_guidance(missing) {
             diagnostic = diagnostic.note(guidance);
         }
         return Some(diagnostic);

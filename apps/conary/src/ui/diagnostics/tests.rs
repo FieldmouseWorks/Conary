@@ -201,7 +201,7 @@ fn no_base_publication_renders_guidance_and_omits_publish_note() {
             "Package mutation committed, but generation publication is pending.\n",
             "  Changeset: 42\n",
             "  Reason: selected root has no base system yet: no executable /sbin/init, so no generation can be published or booted\n",
-            "note: The package change is committed and will publish once a base system is present.\n",
+            "note: The package change is committed and will publish once a base system with an executable /sbin/init is present.\n",
             "note: Adopt this machine's native system: conary system adopt --system\n",
             "note: Or install a base system that provides /sbin/init from a repository.",
         )
@@ -223,9 +223,9 @@ fn missing_boot_assets_publication_renders_guidance_with_the_boot_asset_reason()
             "Package mutation committed, but generation publication is pending.\n",
             "  Changeset: 42\n",
             "  Reason: selected root has no base system yet: no kernel or boot assets, so no generation can be published or booted\n",
-            "note: The package change is committed and will publish once a base system is present.\n",
+            "note: The package change is committed and will publish once a /boot/vmlinuz-<release> kernel and an EFI loader are present.\n",
             "note: Adopt this machine's native system: conary system adopt --system\n",
-            "note: Or install a base system that provides /sbin/init from a repository.",
+            "note: Or install a kernel package that provides /boot/vmlinuz-<release> and an EFI loader at /boot/EFI/BOOT/BOOTX64.EFI or systemd-boot's /usr/lib/systemd/boot/efi/systemd-bootx64.efi.",
         )
     );
 }
@@ -308,7 +308,7 @@ fn no_base_publication_output_explains_and_omits_publish_note() {
             "warning: Package mutation committed, but generation publication is pending.\n",
             "  Changeset: 42\n",
             "  Reason: selected root has no base system yet: no executable /sbin/init, so no generation can be published or booted\n",
-            "note: The package change is committed and will publish once a base system is present.\n",
+            "note: The package change is committed and will publish once a base system with an executable /sbin/init is present.\n",
             "note: Adopt this machine's native system: conary system adopt --system\n",
             "note: Or install a base system that provides /sbin/init from a repository.\n",
         )
@@ -351,9 +351,9 @@ fn missing_boot_assets_publication_output_explains_and_omits_publish_note() {
             "warning: Package mutation committed, but generation publication is pending.\n",
             "  Changeset: 42\n",
             "  Reason: selected root has no base system yet: no kernel or boot assets, so no generation can be published or booted\n",
-            "note: The package change is committed and will publish once a base system is present.\n",
+            "note: The package change is committed and will publish once a /boot/vmlinuz-<release> kernel and an EFI loader are present.\n",
             "note: Adopt this machine's native system: conary system adopt --system\n",
-            "note: Or install a base system that provides /sbin/init from a repository.\n",
+            "note: Or install a kernel package that provides /boot/vmlinuz-<release> and an EFI loader at /boot/EFI/BOOT/BOOTX64.EFI or systemd-boot's /usr/lib/systemd/boot/efi/systemd-bootx64.efi.\n",
         )
     );
 }

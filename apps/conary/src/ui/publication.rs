@@ -21,12 +21,28 @@ pub(crate) fn no_base_system_reason(missing: MissingBaseSystemPart) -> &'static 
     }
 }
 
-/// Committed-change reassurance plus the two supported ways to provide a base.
-pub(crate) const NO_BASE_SYSTEM_GUIDANCE: [&str; 3] = [
-    "The package change is committed and will publish once a base system is present.",
-    "Adopt this machine's native system: conary system adopt --system",
-    "Or install a base system that provides /sbin/init from a repository.",
-];
+/// Committed-change reassurance plus the two supported ways to provide the
+/// exact missing base-system part.
+///
+/// The install note names the builder's own boot paths, so a root that already
+/// has `/sbin/init` is never told to install init again. `boot_assets.rs`
+/// stages its loader from `EFI/BOOT/BOOTX64.EFI` under the generation boot root
+/// (shown here as `/boot`) or, when no ESP is staged, from systemd-boot's
+/// installed `/usr/lib/systemd/boot/efi/systemd-bootx64.efi`.
+pub(crate) fn no_base_system_guidance(missing: MissingBaseSystemPart) -> [&'static str; 3] {
+    match missing {
+        MissingBaseSystemPart::MissingInit => [
+            "The package change is committed and will publish once a base system with an executable /sbin/init is present.",
+            "Adopt this machine's native system: conary system adopt --system",
+            "Or install a base system that provides /sbin/init from a repository.",
+        ],
+        MissingBaseSystemPart::MissingBootAssets => [
+            "The package change is committed and will publish once a /boot/vmlinuz-<release> kernel and an EFI loader are present.",
+            "Adopt this machine's native system: conary system adopt --system",
+            "Or install a kernel package that provides /boot/vmlinuz-<release> and an EFI loader at /boot/EFI/BOOT/BOOTX64.EFI or systemd-boot's /usr/lib/systemd/boot/efi/systemd-bootx64.efi.",
+        ],
+    }
+}
 
 /// Render the explicit publish/recover failure body for a no-base debt.
 ///
@@ -40,7 +56,7 @@ pub(crate) fn no_base_system_command_failure(
         format!("{context} is still pending."),
         format!("Reason: {}", no_base_system_reason(missing)),
     ];
-    for guidance in NO_BASE_SYSTEM_GUIDANCE {
+    for guidance in no_base_system_guidance(missing) {
         lines.push(guidance.to_string());
     }
     lines.join("\n")

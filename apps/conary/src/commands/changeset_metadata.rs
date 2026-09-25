@@ -23,10 +23,36 @@ pub(crate) struct DeferredFollowUp {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DeferredFollowUpKind {
     GenerationPublication,
-    /// Publication is pending because the selected root has no base system, so
-    /// re-running publication cannot succeed until a base system is present.
-    GenerationPublicationNoBaseSystem,
+    /// Publication is pending because the selected root has no executable
+    /// `/sbin/init`, so re-running publication cannot succeed until a base
+    /// system provides one.
+    GenerationPublicationNoBaseSystemInit,
+    /// Publication is pending because the selected root has no kernel or EFI
+    /// boot assets, so re-running publication cannot succeed until they exist.
+    GenerationPublicationNoBaseSystemBootAssets,
     Other,
+}
+
+/// Persisted follow-up kind when the selected root has no executable
+/// `/sbin/init`.
+const NO_BASE_SYSTEM_MISSING_INIT_KIND: &str = "generation_publication_no_base_system_missing_init";
+
+/// Persisted follow-up kind when the selected root has no kernel or boot
+/// assets.
+const NO_BASE_SYSTEM_MISSING_BOOT_ASSETS_KIND: &str =
+    "generation_publication_no_base_system_missing_boot_assets";
+
+/// The recorded follow-up kind for the exact missing base-system part.
+///
+/// The kind is the durable authority the history renderer classifies back into
+/// [`DeferredFollowUpKind`]; it must never be reconstructed from the message.
+fn no_base_system_follow_up_kind(missing: conary_core::MissingBaseSystemPart) -> &'static str {
+    match missing {
+        conary_core::MissingBaseSystemPart::MissingInit => NO_BASE_SYSTEM_MISSING_INIT_KIND,
+        conary_core::MissingBaseSystemPart::MissingBootAssets => {
+            NO_BASE_SYSTEM_MISSING_BOOT_ASSETS_KIND
+        }
+    }
 }
 
 pub(crate) fn classify_deferred_follow_up_kind(
@@ -34,8 +60,11 @@ pub(crate) fn classify_deferred_follow_up_kind(
 ) -> DeferredFollowUpKind {
     match follow_up.kind.as_str() {
         "generation_publication" => DeferredFollowUpKind::GenerationPublication,
-        "generation_publication_no_base_system" => {
-            DeferredFollowUpKind::GenerationPublicationNoBaseSystem
+        NO_BASE_SYSTEM_MISSING_INIT_KIND => {
+            DeferredFollowUpKind::GenerationPublicationNoBaseSystemInit
+        }
+        NO_BASE_SYSTEM_MISSING_BOOT_ASSETS_KIND => {
+            DeferredFollowUpKind::GenerationPublicationNoBaseSystemBootAssets
         }
         _ => DeferredFollowUpKind::Other,
     }
@@ -49,7 +78,7 @@ pub(crate) fn publication_deferred_follow_up(
     use crate::commands::generation::publication::PublicationFailureKind;
     if let Some(PublicationFailureKind::NoBaseSystem(missing)) = failure_kind {
         return DeferredFollowUp {
-            kind: "generation_publication_no_base_system".to_string(),
+            kind: no_base_system_follow_up_kind(missing).to_string(),
             status: "pending".to_string(),
             message: crate::ui::publication::no_base_system_reason(missing).to_string(),
             retry_command: None,

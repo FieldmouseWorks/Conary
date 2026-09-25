@@ -266,7 +266,7 @@ fn explicit_publish_missing_init_renders_guidance_without_a_retry_line() {
         concat!(
             "Generation publication is still pending.\n",
             "Reason: selected root has no base system yet: no executable /sbin/init, so no generation can be published or booted\n",
-            "The package change is committed and will publish once a base system is present.\n",
+            "The package change is committed and will publish once a base system with an executable /sbin/init is present.\n",
             "Adopt this machine's native system: conary system adopt --system\n",
             "Or install a base system that provides /sbin/init from a repository.",
         )
@@ -290,7 +290,52 @@ fn explicit_recover_missing_boot_assets_renders_guidance_without_a_retry_line() 
         concat!(
             "Generation publication recovery is still pending.\n",
             "Reason: selected root has no base system yet: no kernel or boot assets, so no generation can be published or booted\n",
-            "The package change is committed and will publish once a base system is present.\n",
+            "The package change is committed and will publish once a /boot/vmlinuz-<release> kernel and an EFI loader are present.\n",
+            "Adopt this machine's native system: conary system adopt --system\n",
+            "Or install a kernel package that provides /boot/vmlinuz-<release> and an EFI loader at /boot/EFI/BOOT/BOOTX64.EFI or systemd-boot's /usr/lib/systemd/boot/efi/systemd-bootx64.efi.",
+        )
+    );
+    assert!(!rendered.contains("Retry with:"));
+}
+
+#[test]
+fn explicit_publish_missing_boot_assets_renders_guidance_without_a_retry_line() {
+    let outcome = no_base_outcome(conary_core::MissingBaseSystemPart::MissingBootAssets);
+
+    let rendered =
+        pending_publication_error("Generation publication", &outcome, "/tmp/recovery.db")
+            .to_string();
+
+    assert_eq!(
+        rendered,
+        concat!(
+            "Generation publication is still pending.\n",
+            "Reason: selected root has no base system yet: no kernel or boot assets, so no generation can be published or booted\n",
+            "The package change is committed and will publish once a /boot/vmlinuz-<release> kernel and an EFI loader are present.\n",
+            "Adopt this machine's native system: conary system adopt --system\n",
+            "Or install a kernel package that provides /boot/vmlinuz-<release> and an EFI loader at /boot/EFI/BOOT/BOOTX64.EFI or systemd-boot's /usr/lib/systemd/boot/efi/systemd-bootx64.efi.",
+        )
+    );
+    assert!(!rendered.contains("Retry with:"));
+}
+
+#[test]
+fn explicit_recover_missing_init_renders_guidance_without_a_retry_line() {
+    let outcome = no_base_outcome(conary_core::MissingBaseSystemPart::MissingInit);
+
+    let rendered = pending_publication_error(
+        "Generation publication recovery",
+        &outcome,
+        "/tmp/recovery.db",
+    )
+    .to_string();
+
+    assert_eq!(
+        rendered,
+        concat!(
+            "Generation publication recovery is still pending.\n",
+            "Reason: selected root has no base system yet: no executable /sbin/init, so no generation can be published or booted\n",
+            "The package change is committed and will publish once a base system with an executable /sbin/init is present.\n",
             "Adopt this machine's native system: conary system adopt --system\n",
             "Or install a base system that provides /sbin/init from a repository.",
         )
