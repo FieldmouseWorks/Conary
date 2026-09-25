@@ -7,6 +7,13 @@
 //! generation artifact, then the installed database projection, and finally an
 //! explicit no-committed-root state. This module looks up one exact path in the
 //! selected manifests and never derives a second projection.
+//!
+//! A database projection has no committed manifest root: it synthesizes `/`
+//! from an empty materialization stand-in whose mode and ownership belong to
+//! the inspecting process. That one node is reported with
+//! [`RootInspectMetadata::Synthesized`] and with its mode, ownership, and
+//! content authority withheld; every node read from a committed manifest
+//! reports [`RootInspectMetadata::Recorded`].
 
 use anyhow::{Context, Result, bail};
 use conary_agent_contract::{InspectResult, OperationEnvelope, OperationStatus, RiskLevel};
@@ -55,6 +62,17 @@ pub(crate) enum RootNodeKind {
     CharacterDevice,
 }
 
+/// Where the reported node field values came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum RootInspectMetadata {
+    /// The values came from a committed manifest.
+    Recorded,
+    /// The values describe an inspecting-process stand-in rather than the
+    /// committed root, so node metadata is withheld.
+    Synthesized,
+}
+
 impl RootInspectSource {
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
@@ -90,6 +108,15 @@ impl RootNodeKind {
     }
 }
 
+impl RootInspectMetadata {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Recorded => "recorded",
+            Self::Synthesized => "synthesized",
+        }
+    }
+}
+
 /// Versioned `data` payload for `system.root.inspect`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub(crate) struct RootInspectData {
@@ -100,6 +127,7 @@ pub(crate) struct RootInspectData {
     pub(crate) path: String,
     pub(crate) present: bool,
     pub(crate) manifest: Option<RootManifestKind>,
+    pub(crate) metadata: RootInspectMetadata,
     pub(crate) kind: Option<RootNodeKind>,
     pub(crate) mode: Option<u32>,
     pub(crate) uid: Option<u64>,
@@ -109,6 +137,13 @@ pub(crate) struct RootInspectData {
     pub(crate) sha256: Option<String>,
     pub(crate) symlink_target: Option<String>,
     pub(crate) hardlink_target: Option<String>,
+}
+
+impl RootInspectData {
+    /// Human-facing label for the node metadata authority.
+    pub(crate) const fn metadata_label(&self) -> &'static str {
+        self.metadata.as_str()
+    }
 }
 
 /// Open the selected database and render the result as typed JSON or human text.
@@ -138,6 +173,8 @@ pub(crate) fn root_inspect_data(
     // package-unclaimed parent closure. It is created by the same helper the
     // real destination uses, inside a private temp parent, so the captured `/`
     // node carries the destination contract rather than the parent's mode.
+    // Because that node is synthesized rather than committed, `/` withholds it
+    // through `apply_synthesized_root`.
     let empty_root_parent = tempfile::TempDir::new()
         .context("failed to create the private selected-root inspection directory")?;
     let empty_root = create_selected_root_stand_in(empty_root_parent.path())?;
@@ -153,6 +190,7 @@ pub(crate) fn root_inspect_data(
         path: normalized.clone(),
         present: false,
         manifest: None,
+        metadata: RootInspectMetadata::Recorded,
         kind: None,
         mode: None,
         uid: None,
@@ -169,7 +207,11 @@ pub(crate) fn root_inspect_data(
     if data.source != RootInspectSource::NoCommittedRoot
         && let Some((manifest, node, content)) = find_captured_node(&captured, &normalized)
     {
-        apply_node(&mut data, manifest, node, content);
+        if data.source == RootInspectSource::DatabaseProjection && normalized == "/" {
+            apply_synthesized_root(&mut data);
+        } else {
+            apply_node(&mut data, manifest, node, content);
+        }
     }
 
     Ok(data)
@@ -277,6 +319,20 @@ fn apply_node(
         PayloadNodeKind::Hardlink { target, .. } => data.hardlink_target = Some(target.clone()),
         _ => {}
     }
+}
+
+/// Report the projection's stand-in `/` node without its ambient metadata.
+///
+/// The database projection has no committed manifest root; it synthesizes one
+/// from the empty materialization destination, whose mode and ownership belong
+/// to the inspecting process. The node is present as a directory, but mode,
+/// ownership, and content authority are withheld and the record is marked
+/// synthesized so no caller mistakes them for the committed root.
+fn apply_synthesized_root(data: &mut RootInspectData) {
+    data.present = true;
+    data.metadata = RootInspectMetadata::Synthesized;
+    data.manifest = Some(RootManifestKind::Root);
+    data.kind = Some(RootNodeKind::Directory);
 }
 
 /// Normalize one lookup path lexically without resolving the filesystem.

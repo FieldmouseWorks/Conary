@@ -4,13 +4,16 @@
 
 use super::*;
 use crate::commands::generation::selected_root::{
-    create_selected_root_destination, create_selected_root_stand_in,
+    SelectedRootBaselineError, clear_before_current_selection_hook, create_selected_root_stand_in,
     persist_captured_publication_snapshot, persist_publication_snapshot,
     read_selected_root_baseline, read_selected_root_baseline_with_source,
-    set_between_selection_and_collection_hook,
+    set_before_current_selection_hook, set_between_selection_and_collection_hook,
 };
 use crate::commands::test_helpers::create_active_test_generation;
-use conary_core::db::models::{FileEntry, GenerationPublication, InstallSource, Trove, TroveType};
+use conary_core::db::models::{
+    FileEntry, GenerationPublication, GenerationPublicationPhase, GenerationPublicationStatus,
+    InstallSource, Trove, TroveType,
+};
 use conary_core::generation::root_manifest::{
     GENERATION_ROOT_MANIFEST_VERSION, GenerationRootEntry, GenerationRootManifest,
     MutableStateManifest, SELECTED_ROOT_MANIFEST_DELTA_VERSION, SelectedRootManifestDelta,
@@ -18,7 +21,6 @@ use conary_core::generation::root_manifest::{
 };
 use conary_core::payload::PayloadNode;
 use conary_core::repository::versioning::VersionScheme;
-use std::os::unix::fs::MetadataExt;
 
 fn node(kind: PayloadNodeKind, permissions: u32) -> ResolvedPayloadNode {
     let mut source = PayloadNode::regular(0o644);
@@ -175,12 +177,14 @@ fn root_inspect_reports_regular_file_digest_and_symlink_target() {
     assert!(file.present);
     assert_eq!(file.manifest, Some(RootManifestKind::Root));
     assert_eq!(file.kind, Some(RootNodeKind::Regular));
+    assert_eq!(file.metadata, RootInspectMetadata::Recorded);
     assert_eq!(file.mode, Some(0o644));
     assert_eq!(file.uid, Some(0));
     assert_eq!(file.gid, Some(0));
     let json = json_data(&file);
     assert_eq!(json["present"], true);
     assert_eq!(json["kind"], "regular");
+    assert_eq!(json["metadata"], "recorded");
     assert_eq!(json["mode"], 0o644);
     assert_eq!(json["sha256"], conary_core::hash::sha256(b"hello world\n"));
 
@@ -340,27 +344,32 @@ fn root_inspect_reports_database_projection_before_first_snapshot() {
     assert!(data.present);
     assert_eq!(data.manifest, Some(RootManifestKind::Root));
     assert_eq!(data.kind, Some(RootNodeKind::Regular));
+    assert_eq!(data.metadata, RootInspectMetadata::Recorded);
     assert_eq!(data.mode, Some(0o600));
     let json = json_data(&data);
     assert_eq!(json["source"], "database_projection");
+    assert_eq!(json["metadata"], "recorded");
+    assert_eq!(json["mode"], 0o600);
     assert_eq!(json["sha256"], conary_core::hash::sha256(b"projected\n"));
 
-    // The projection owns a real root node, so `/` is present as it is for
-    // snapshots and generation artifacts.
+    // The projection synthesizes `/` from the empty stand-in destination. The
+    // node is present as a directory, but its ambient mode and ownership are
+    // withheld and the record is marked synthesized so no caller mistakes the
+    // inspecting process for the committed root.
     let root = root_inspect_data(&conn, &runtime_root, "/").unwrap();
     assert_eq!(root.source, RootInspectSource::DatabaseProjection);
     assert!(root.present);
     assert_eq!(root.manifest, Some(RootManifestKind::Root));
     assert_eq!(root.kind, Some(RootNodeKind::Directory));
-
-    // `/` must carry the same mode the real preparation's materialization
-    // destination gets, not the private stand-in parent's `0700` mode. Compare
-    // against a destination created by the real creation helper.
-    let reference_parent = tempfile::TempDir::new().unwrap();
-    let reference = reference_parent.path().join("lower");
-    create_selected_root_destination(&reference).unwrap();
-    let expected_mode = std::fs::symlink_metadata(&reference).unwrap().mode() & 0o7777;
-    assert_eq!(root.mode, Some(expected_mode));
+    assert_eq!(root.metadata, RootInspectMetadata::Synthesized);
+    assert_eq!(root.mode, None);
+    assert_eq!(root.uid, None);
+    assert_eq!(root.gid, None);
+    assert_eq!(root.user, None);
+    assert_eq!(root.group, None);
+    let json = json_data(&root);
+    assert_eq!(json["metadata"], "synthesized");
+    assert!(json["mode"].is_null());
 }
 
 #[test]
@@ -571,6 +580,140 @@ fn root_inspect_reports_published_generation_when_no_snapshot_exists() {
         json["sha256"],
         conary_core::hash::sha256(b"test init binary")
     );
+
+    // A generation artifact records its root node, so `/` keeps its committed
+    // mode and ownership instead of the projection's synthesized stand-in.
+    let root = root_inspect_data(&conn, &runtime_root, "/").unwrap();
+    assert_eq!(root.source, RootInspectSource::CurrentGeneration);
+    assert!(root.present);
+    assert_eq!(root.kind, Some(RootNodeKind::Directory));
+    assert_eq!(root.metadata, RootInspectMetadata::Recorded);
+    assert_eq!(root.mode, Some(0o755));
+}
+
+/// Publish generation `generation` exactly as a concurrent publication would:
+/// build the artifact/state/`/current` link, then record a terminal generation
+/// publication bound to a selected-root snapshot. Returns the snapshot id.
+fn publish_generation_with_snapshot(db_path: &std::path::Path, generation: i64) -> i64 {
+    create_active_test_generation(db_path, generation);
+    let conn = conary_core::db::open(db_path).unwrap();
+    let runtime_root = ConaryRuntimeRoot::from_db_path(db_path.to_path_buf());
+    let debt = GenerationPublication::create_pending(
+        &conn,
+        None,
+        None,
+        db_path.to_str().unwrap(),
+        &runtime_root.root().display().to_string(),
+        "concurrent publication fixture",
+        &Default::default(),
+    )
+    .unwrap();
+    let captured = captured_root(
+        vec![
+            directory("/sbin"),
+            regular(
+                &format!("/sbin/generation-{generation}"),
+                0o644,
+                format!("generation {generation}\n").as_bytes(),
+            ),
+        ],
+        Vec::new(),
+    );
+    let snapshot = persist_captured_publication_snapshot(&conn, &debt, &captured).unwrap();
+    debt.set_phase(
+        &conn,
+        GenerationPublicationPhase::DatabaseBackedUp,
+        GenerationPublicationStatus::Running,
+        Some(generation),
+        Some(generation),
+    )
+    .unwrap();
+    debt.mark_complete_through(&conn, None, generation, generation)
+        .unwrap();
+    snapshot.id()
+}
+
+/// `/current` is not covered by the SQLite snapshot. A publication that swaps
+/// the link after the pinned transaction began must not pair the new artifact
+/// with the old snapshot's authority; the selection re-pins and reports the new
+/// generation's own selected-root snapshot.
+#[test]
+fn current_generation_selection_retries_when_current_advances_past_the_snapshot() {
+    let temp = tempfile::tempdir().unwrap();
+    let db_path = temp.path().join("conary.db");
+    conary_core::db::init(&db_path).unwrap();
+    create_active_test_generation(&db_path, 1);
+    let conn = conary_core::db::open(&db_path).unwrap();
+    let runtime_root = ConaryRuntimeRoot::from_db_path(&db_path);
+    let empty_root_parent = tempfile::TempDir::new().unwrap();
+    let empty_root = create_selected_root_stand_in(empty_root_parent.path()).unwrap();
+
+    let published = std::sync::Arc::new(std::sync::Mutex::new(None::<i64>));
+    let hook_path = db_path.clone();
+    let hook_published = published.clone();
+    set_before_current_selection_hook(move || {
+        let mut slot = hook_published.lock().unwrap();
+        if slot.is_none() {
+            *slot = Some(publish_generation_with_snapshot(&hook_path, 2));
+        }
+    });
+
+    let (source, _captured) =
+        read_selected_root_baseline_with_source(&conn, &runtime_root, &empty_root).unwrap();
+
+    let expected_snapshot = published
+        .lock()
+        .unwrap()
+        .expect("the hook must publish the advancing generation");
+    assert_eq!(
+        source,
+        SelectedRootSource::CurrentGeneration {
+            snapshot_id: Some(expected_snapshot),
+            changeset_id: None,
+        }
+    );
+    assert_eq!(
+        conary_core::generation::mount::current_generation(runtime_root.root()).unwrap(),
+        Some(2)
+    );
+    clear_before_current_selection_hook();
+}
+
+/// A hook that keeps advancing `/current` cannot be reconciled with any pinned
+/// snapshot, so the read refuses with the typed retry error after the attempts
+/// are exhausted instead of returning a stale pairing.
+#[test]
+fn current_generation_selection_refuses_after_the_attempt_limit() {
+    let temp = tempfile::tempdir().unwrap();
+    let db_path = temp.path().join("conary.db");
+    conary_core::db::init(&db_path).unwrap();
+    create_active_test_generation(&db_path, 1);
+    let conn = conary_core::db::open(&db_path).unwrap();
+    let runtime_root = ConaryRuntimeRoot::from_db_path(&db_path);
+    let empty_root_parent = tempfile::TempDir::new().unwrap();
+    let empty_root = create_selected_root_stand_in(empty_root_parent.path()).unwrap();
+
+    let next_generation = std::sync::Arc::new(std::sync::Mutex::new(2_i64));
+    let hook_path = db_path.clone();
+    let hook_next = next_generation.clone();
+    set_before_current_selection_hook(move || {
+        let mut next = hook_next.lock().unwrap();
+        let generation = *next;
+        *next += 1;
+        drop(next);
+        create_active_test_generation(&hook_path, generation);
+    });
+
+    let error = read_selected_root_baseline_with_source(&conn, &runtime_root, &empty_root)
+        .expect_err("a /current that keeps moving must exhaust the attempts");
+    let typed = error
+        .downcast_ref::<SelectedRootBaselineError>()
+        .expect("the refusal must be the typed current-generation error");
+    assert!(matches!(
+        typed,
+        SelectedRootBaselineError::CurrentGenerationChanged
+    ));
+    clear_before_current_selection_hook();
 }
 
 #[test]

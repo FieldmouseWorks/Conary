@@ -22,6 +22,7 @@ pub(crate) fn render(data: &RootInspectData) {
 
     row(Status::Ok, &["present", kind_label(data.kind)]);
     field("Manifest", manifest_label(data.manifest));
+    field("Metadata", data.metadata_label());
     field("Mode", &optional_mode(data.mode));
     field("UID", &optional_u64(data.uid));
     field("GID", &optional_u64(data.gid));

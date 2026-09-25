@@ -16,7 +16,7 @@ pub(crate) use publication_authority::{
 
 use crate::commands::{LiveRootFile, LiveRootStats, LiveRootTransaction};
 use anyhow::{Context, Result, bail};
-use conary_core::db::models::{GenerationPublication, Trove};
+use conary_core::db::models::{GenerationPublication, SystemState, Trove};
 use conary_core::filesystem::CasStore;
 use conary_core::generation::artifact::GenerationArtifact;
 use conary_core::generation::composefs::ComposefsRuntimeUnavailable;
@@ -529,6 +529,10 @@ fn select_selected_root(
         });
     }
 
+    // The pending-snapshot query above is the transaction's first read, so the
+    // WAL snapshot is pinned here; `/current` is read only after it.
+    run_before_current_selection_hook();
+
     if let Some(generation) =
         conary_core::generation::mount::current_generation(runtime_root.root())?
     {
@@ -571,6 +575,30 @@ pub(crate) fn read_selected_root_baseline(
         .map(|(_, captured)| captured)
 }
 
+/// How many times a selection may be redone after `/current` moves past the
+/// pinned SQLite snapshot before the read is refused.
+const MAX_CURRENT_GENERATION_ATTEMPTS: usize = 3;
+
+/// Typed refusal for a `/current` link that outran its pinned snapshot.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum SelectedRootBaselineError {
+    /// Every attempt read a `/current` generation the pinned snapshot did not
+    /// yet record, so no attempt could pair the artifact with its own database
+    /// authority.
+    #[error("the current generation changed during inspection; retry")]
+    CurrentGenerationChanged,
+}
+
+/// One attempt at the baseline, or the typed signal to re-pin and retry.
+enum BaselineAttempt {
+    Complete {
+        source: SelectedRootSource,
+        captured: Box<CapturedSelectedRoot>,
+    },
+    /// `/current` named a generation the pinned snapshot did not record.
+    StaleCurrentGeneration,
+}
+
 /// Read the typed source and exact baseline a real install would prepare.
 ///
 /// The source is the typed selection result, not a recomputation from package
@@ -581,6 +609,17 @@ pub(crate) fn read_selected_root_baseline(
 /// collecting queries can produce a source that disagrees with its capture:
 /// `NoCommittedRoot` with a nonempty capture, or `DatabaseProjection` with an
 /// empty one. WAL mode pins one snapshot at the transaction's first read.
+///
+/// `/current` is a filesystem link, so the database snapshot alone cannot pin
+/// the generation it names. A publication that swaps `/current` after the
+/// snapshot began would otherwise pair the new artifact with a database view
+/// that predates the generation's state. The current-generation branch
+/// therefore verifies inside the transaction that the snapshot records the
+/// generation's publication row or its state snapshot, and the whole selection
+/// is retried in a fresh snapshot (at most
+/// [`MAX_CURRENT_GENERATION_ATTEMPTS`] times) when it does not. Exhausting the
+/// attempts is a typed
+/// [`SelectedRootBaselineError::CurrentGenerationChanged`].
 pub(crate) fn read_selected_root_baseline_with_source(
     conn: &rusqlite::Connection,
     runtime_root: &ConaryRuntimeRoot,
@@ -588,31 +627,47 @@ pub(crate) fn read_selected_root_baseline_with_source(
 ) -> Result<(SelectedRootSource, CapturedSelectedRoot)> {
     // A caller may already hold a transaction or savepoint. Reuse that
     // snapshot rather than attempting a nested BEGIN, which SQLite rejects.
-    let transaction = conn
-        .is_autocommit()
-        .then(|| conn.unchecked_transaction())
-        .transpose()?;
-    let baseline = match &transaction {
-        Some(transaction) => {
-            read_selected_root_baseline_from_snapshot(transaction, runtime_root, empty_root)
-        }
-        None => read_selected_root_baseline_from_snapshot(conn, runtime_root, empty_root),
-    };
-    // Commit only a completed read so a failed read keeps its original error
-    // instead of a masked commit failure.
-    if baseline.is_ok()
-        && let Some(transaction) = transaction
-    {
-        transaction.commit()?;
+    // The caller's snapshot cannot be re-pinned, so a generation it does not
+    // record is refused rather than retried.
+    if !conn.is_autocommit() {
+        return match read_selected_root_baseline_attempt(conn, runtime_root, empty_root)? {
+            BaselineAttempt::Complete { source, captured } => Ok((source, *captured)),
+            BaselineAttempt::StaleCurrentGeneration => {
+                Err(SelectedRootBaselineError::CurrentGenerationChanged.into())
+            }
+        };
     }
-    baseline
+
+    let mut attempt = 0;
+    loop {
+        attempt += 1;
+        let transaction = conn.unchecked_transaction()?;
+        match read_selected_root_baseline_attempt(&transaction, runtime_root, empty_root) {
+            Ok(BaselineAttempt::Complete { source, captured }) => {
+                transaction.commit()?;
+                return Ok((source, *captured));
+            }
+            Ok(BaselineAttempt::StaleCurrentGeneration)
+                if attempt < MAX_CURRENT_GENERATION_ATTEMPTS =>
+            {
+                // Dropping the transaction rolls the pinned snapshot back so
+                // the next attempt can observe the publication that moved
+                // `/current`.
+                drop(transaction);
+            }
+            Ok(BaselineAttempt::StaleCurrentGeneration) => {
+                return Err(SelectedRootBaselineError::CurrentGenerationChanged.into());
+            }
+            Err(error) => return Err(error),
+        }
+    }
 }
 
-fn read_selected_root_baseline_from_snapshot(
+fn read_selected_root_baseline_attempt(
     conn: &rusqlite::Connection,
     runtime_root: &ConaryRuntimeRoot,
     empty_root: &Path,
-) -> Result<(SelectedRootSource, CapturedSelectedRoot)> {
+) -> Result<BaselineAttempt> {
     let selection = select_selected_root(
         conn,
         runtime_root,
@@ -620,37 +675,46 @@ fn read_selected_root_baseline_from_snapshot(
         conary_core::generation::composefs::probe_composefs_mount_runtime,
     )?;
     run_between_selection_and_collection_hook();
-    match selection {
+    Ok(match selection {
         SelectedRootSelection::PendingPublication {
             snapshot,
             captured,
             changeset_id,
-        } => Ok((
-            SelectedRootSource::PendingSnapshot {
+        } => BaselineAttempt::Complete {
+            source: SelectedRootSource::PendingSnapshot {
                 snapshot_id: snapshot.id(),
                 changeset_id,
             },
-            *captured,
-        )),
+            captured,
+        },
         SelectedRootSelection::CurrentGeneration {
             artifact,
             generation,
             ..
         } => {
+            // The generation's state snapshot and terminal publication row are
+            // committed with the artifact and before `/current` moves, so a
+            // snapshot that records neither proves the link advanced past it.
+            // The state snapshot also covers generations selected through
+            // `generation switch` without a publication row.
+            let publication = GenerationPublication::completed_for_generation(conn, generation)?;
+            if publication.is_none() && SystemState::find_by_number(conn, generation)?.is_none() {
+                return Ok(BaselineAttempt::StaleCurrentGeneration);
+            }
             let snapshot_id =
                 GenerationPublication::selected_root_snapshot_for_generation(conn, generation)?;
-            let changeset_id = GenerationPublication::completed_for_generation(conn, generation)?
-                .and_then(|publication| publication.published_through_changeset_id);
-            Ok((
-                SelectedRootSource::CurrentGeneration {
+            let changeset_id =
+                publication.and_then(|publication| publication.published_through_changeset_id);
+            BaselineAttempt::Complete {
+                source: SelectedRootSource::CurrentGeneration {
                     snapshot_id,
                     changeset_id,
                 },
-                CapturedSelectedRoot {
+                captured: Box::new(CapturedSelectedRoot {
                     generation: artifact.generation_root.clone(),
                     state: artifact.mutable_state.clone(),
-                },
-            ))
+                }),
+            }
         }
         SelectedRootSelection::DatabaseProjection { installed } => {
             let captured =
@@ -664,9 +728,12 @@ fn read_selected_root_baseline_from_snapshot(
                 },
                 InstalledDatabaseAuthority::Absent => SelectedRootSource::NoCommittedRoot,
             };
-            Ok((source, captured))
+            BaselineAttempt::Complete {
+                source,
+                captured: Box::new(captured),
+            }
         }
-    }
+    })
 }
 
 // Test-only seam between the selecting query and the collecting reads.
@@ -695,6 +762,40 @@ fn run_between_selection_and_collection_hook() {
 
 #[cfg(not(test))]
 fn run_between_selection_and_collection_hook() {}
+
+// Test-only seam between the pinned SQLite snapshot and the `/current` read.
+//
+// A test arms this to publish a newer generation on another connection exactly
+// where the filesystem link can advance past the snapshot, then proves the
+// selection retries against a fresh snapshot. Unlike the selection-to-collection
+// seam this hook is a plain `Fn` so one attempt's hook can observe every retry.
+#[cfg(test)]
+thread_local! {
+    static BEFORE_CURRENT_SELECTION: std::cell::RefCell<Option<Box<dyn Fn()>>> =
+        std::cell::RefCell::new(None);
+}
+
+#[cfg(test)]
+pub(crate) fn set_before_current_selection_hook(hook: impl Fn() + 'static) {
+    BEFORE_CURRENT_SELECTION.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
+}
+
+#[cfg(test)]
+pub(crate) fn clear_before_current_selection_hook() {
+    BEFORE_CURRENT_SELECTION.with(|slot| *slot.borrow_mut() = None);
+}
+
+#[cfg(test)]
+fn run_before_current_selection_hook() {
+    BEFORE_CURRENT_SELECTION.with(|slot| {
+        if let Some(hook) = slot.borrow().as_ref() {
+            hook();
+        }
+    });
+}
+
+#[cfg(not(test))]
+fn run_before_current_selection_hook() {}
 
 fn prepare_current_root_with_probe(
     conn: &rusqlite::Connection,
