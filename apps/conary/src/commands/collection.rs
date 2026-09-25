@@ -7,6 +7,15 @@ use conary_core::scriptlet::SandboxMode;
 use rusqlite::Connection;
 use tracing::info;
 
+/// Version stored on locally created collection troves.
+///
+/// Collections carry no upstream version of their own; this grammar-valid
+/// placeholder satisfies the Conary version scheme that [`Trove::insert`]
+/// validates against.
+///
+/// [`Trove::insert`]: conary_core::db::models::Trove::insert
+pub const COLLECTION_TROVE_VERSION: &str = "1.0.0";
+
 /// Find a collection trove by name and return its database ID.
 fn find_collection_id(conn: &Connection, name: &str) -> Result<i64> {
     let troves = conary_core::db::models::Trove::find_by_name(conn, name)?;
@@ -54,7 +63,7 @@ pub fn cmd_collection_create(
         // Create the collection as a trove
         let mut trove = conary_core::db::models::Trove::new(
             name.to_string(),
-            "1.0".to_string(),
+            COLLECTION_TROVE_VERSION.to_string(),
             conary_core::db::models::TroveType::Collection,
             conary_core::repository::versioning::VersionScheme::Conary,
         );
@@ -335,4 +344,80 @@ pub async fn cmd_collection_install(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use conary_core::db::models::{CollectionMember, Trove, TroveType};
+
+    /// `system init` equivalent: create an empty database with the current schema.
+    fn setup_collection_test_db() -> (tempfile::TempDir, String) {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("conary.db").display().to_string();
+        conary_core::db::init(&db_path).unwrap();
+        (temp_dir, db_path)
+    }
+
+    fn collection_trove(db_path: &str, name: &str) -> Trove {
+        let conn = conary_core::db::open(db_path).unwrap();
+        Trove::find_by_name(&conn, name)
+            .unwrap()
+            .into_iter()
+            .find(|trove| trove.trove_type == TroveType::Collection)
+            .expect("collection trove must be persisted")
+    }
+
+    #[test]
+    fn collection_create_list_show_reads_back_typed_record() {
+        let (_temp_dir, db_path) = setup_collection_test_db();
+        let members = vec!["gcc".to_string(), "make".to_string()];
+
+        cmd_collection_create("dev-tools", Some("Development tools"), &members, &db_path)
+            .expect("collection create must accept the placeholder version");
+
+        let collection = collection_trove(&db_path, "dev-tools");
+        assert_eq!(collection.trove_type, TroveType::Collection);
+        assert_eq!(collection.name, "dev-tools");
+        assert_eq!(collection.version, COLLECTION_TROVE_VERSION);
+        assert_eq!(collection.description.as_deref(), Some("Development tools"));
+
+        let collection_id = collection.id.expect("persisted collection must have an id");
+        let conn = conary_core::db::open(&db_path).unwrap();
+        let stored_members = CollectionMember::find_by_collection(&conn, collection_id).unwrap();
+        let member_names: Vec<&str> = stored_members
+            .iter()
+            .map(|member| member.member_name.as_str())
+            .collect();
+        assert_eq!(member_names, vec!["gcc", "make"]);
+
+        cmd_collection_list(&db_path).expect("collection list must succeed");
+        cmd_collection_show("dev-tools", &db_path).expect("collection show must succeed");
+    }
+
+    #[test]
+    fn collection_create_refuses_duplicate_name() {
+        let (_temp_dir, db_path) = setup_collection_test_db();
+        let members = vec!["gcc".to_string()];
+
+        // Positive control: the same fixture and inputs must succeed once, so the
+        // refusal below cannot come from a broken database or fixture.
+        cmd_collection_create("dev-tools", None, &members, &db_path)
+            .expect("positive control: first collection create must succeed");
+
+        let duplicate = cmd_collection_create("dev-tools", None, &members, &db_path);
+        assert!(
+            duplicate.is_err(),
+            "creating a collection with an existing name must be refused"
+        );
+
+        // The refusal must leave exactly the one collection the control created.
+        let conn = conary_core::db::open(&db_path).unwrap();
+        let collections = Trove::find_by_name(&conn, "dev-tools")
+            .unwrap()
+            .into_iter()
+            .filter(|trove| trove.trove_type == TroveType::Collection)
+            .count();
+        assert_eq!(collections, 1);
+    }
 }
