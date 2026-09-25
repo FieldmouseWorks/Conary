@@ -26,12 +26,12 @@ mod command_payload_tests;
 #[path = "install/command_reinstall_tests/tests.rs"]
 mod command_reinstall_tests;
 #[cfg(test)]
-mod command_strict_installed_tests;
-#[cfg(test)]
 #[path = "install/command_selected_provide_tests/tests.rs"]
 mod command_selected_provide_tests;
 #[cfg(test)]
 mod command_selected_root_tests;
+#[cfg(test)]
+mod command_strict_installed_tests;
 #[cfg(test)]
 mod test_support;
 
