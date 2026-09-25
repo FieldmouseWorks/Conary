@@ -6,7 +6,7 @@
 //! Package identity is now represented by `PackageIdentity` from
 //! `resolver::identity`.
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::fmt;
 
 use crate::repository::dependency_model::{
@@ -36,6 +36,22 @@ pub enum ConaryConstraint {
     ProviderExpression {
         expression: CapabilityExpression,
     },
+    /// Exact root selecting only the fixed incoming package.
+    ///
+    /// The incoming package is a transaction fact, not a repository or
+    /// installed candidate, so its identity must never be satisfied by a
+    /// same-name candidate.
+    FixedIncoming,
+    /// Exact solvable identities that satisfy a compiled condition atom under
+    /// one concrete package name.
+    ///
+    /// resolvo's condition encoding tracks presence per name, so a condition
+    /// that a differently named provider (a virtual capability or canonical
+    /// equivalent) satisfies cannot reuse the atom's own version set. The
+    /// condition compiler groups the matching solvables by their concrete name
+    /// and interns this variant under that name; `filter_candidates` then
+    /// matches by exact ID. Positive requirements never intern this variant.
+    ExactSolvables(BTreeSet<u32>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -296,6 +312,8 @@ impl fmt::Display for ConaryConstraint {
             Self::ProviderExpression { expression } => {
                 write!(f, "same-provider {expression:?}")
             }
+            Self::FixedIncoming => write!(f, "fixed incoming package"),
+            Self::ExactSolvables(solvables) => write!(f, "exact solvables {solvables:?}"),
         }
     }
 }

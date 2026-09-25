@@ -142,11 +142,23 @@ pub struct ConaryProvider<'db> {
     /// satisfied by a package the transaction's end state does not contain.
     excluded_installed_trove_ids: HashSet<i64>,
 
+    /// Installed trove IDs hidden from SAT candidate queries but still loaded as
+    /// relation-visible solvables. A relation plan derived in an earlier pass
+    /// removes these troves, so no requirement may be satisfied by them, but
+    /// `plan_selected_relations` must still see them as installed to re-derive
+    /// each pass's exact removal set.
+    relation_only_installed_troves: HashSet<i64>,
+
     /// When set, every surviving installed candidate is locked as the only
     /// selectable candidate for its name. The owning transaction's end state
     /// fixes each surviving installed trove, so the solver must not replace it
     /// with a repository version.
     pub(super) surviving_installed_candidates_locked: bool,
+
+    /// The incoming package registered as a fixed SAT fact. It carries
+    /// transaction identity but no repository or installed provenance, and its
+    /// declared capabilities enter the same indexes installed provides use.
+    fixed_incoming: Option<SolvableId>,
 
     // --- Data source ---
     pub(super) conn: &'db rusqlite::Connection,
@@ -198,7 +210,9 @@ impl<'db> ConaryProvider<'db> {
             root_request_names: HashSet::new(),
             native_architecture: crate::repository::registry::detect_system_arch()?,
             excluded_installed_trove_ids: HashSet::new(),
+            relation_only_installed_troves: HashSet::new(),
             surviving_installed_candidates_locked: false,
+            fixed_incoming: None,
             conn,
         })
     }
@@ -216,6 +230,19 @@ impl<'db> ConaryProvider<'db> {
         self.excluded_installed_trove_ids.extend(trove_ids);
     }
 
+    /// Load exact installed troves but hide them from SAT candidate queries.
+    ///
+    /// A relation plan from an earlier fixed-point pass removes these troves, so
+    /// no requirement may be satisfied by them. They stay loaded so
+    /// `plan_selected_relations` can re-derive the removal from the final
+    /// selection; only candidate discovery filters them out.
+    pub fn hide_relation_only_installed_troves(
+        &mut self,
+        trove_ids: impl IntoIterator<Item = i64>,
+    ) {
+        self.relation_only_installed_troves.extend(trove_ids);
+    }
+
     /// Treat every surviving installed candidate as a fixed fact of the
     /// transaction's end state.
     ///
@@ -227,6 +254,51 @@ impl<'db> ConaryProvider<'db> {
     /// capabilities are not locked because several packages may provide one.
     pub(crate) fn lock_surviving_installed_candidates(&mut self) {
         self.surviving_installed_candidates_locked = true;
+    }
+
+    /// Register the incoming package as a fixed SAT fact.
+    ///
+    /// The incoming package is part of the transaction, not a repository or
+    /// installed candidate, so it must carry no repository package or installed
+    /// trove provenance. Its declared capabilities enter the same indexes that
+    /// installed provides use, so `get_candidates` returns it for its name, for
+    /// each provided capability, and for canonical equivalents.
+    pub(crate) fn add_fixed_incoming(&mut self, identity: PackageIdentity) -> Result<SolvableId> {
+        if self.fixed_incoming.is_some() {
+            return Err(Error::ResolutionError(
+                "the fixed incoming package was registered more than once".to_string(),
+            ));
+        }
+        if identity.repo_package_id.is_some()
+            || identity.installed_trove_id.is_some()
+            || identity.installed_pinned
+        {
+            return Err(Error::ResolutionError(format!(
+                "fixed incoming package '{}' must not carry repository or installed provenance",
+                identity.name
+            )));
+        }
+        let _name_id = self.intern_name(&identity.name)?;
+        let solvable_id = self.add_solvable(identity)?;
+        self.fixed_incoming = Some(solvable_id);
+        Ok(solvable_id)
+    }
+
+    /// The fixed incoming solvable, when this solve has one.
+    pub(crate) fn fixed_incoming_solvable(&self) -> Option<SolvableId> {
+        self.fixed_incoming
+    }
+
+    /// Intern the exact root requirement that selects the fixed incoming
+    /// package, if one is registered.
+    pub(crate) fn intern_fixed_incoming_root(&mut self) -> Result<Option<VersionSetId>> {
+        let Some(solvable_id) = self.fixed_incoming else {
+            return Ok(None);
+        };
+        let name = self.solvables[solvable_id.to_index()].name.clone();
+        let name_id = self.intern_name(&name)?;
+        self.intern_conary_version_set(name_id, ConaryConstraint::FixedIncoming)
+            .map(Some)
     }
 
     pub(crate) fn ignore_requirement_groups(
@@ -588,6 +660,8 @@ impl<'db> ConaryProvider<'db> {
                         }
                         ConaryConstraint::RpmRuntime(_) => {}
                         ConaryConstraint::ExactRepositoryPackage(_) => {}
+                        ConaryConstraint::FixedIncoming => {}
+                        ConaryConstraint::ExactSolvables(_) => {}
                         ConaryConstraint::Requested(_) | ConaryConstraint::Repository { .. }
                             if !known.contains(atom.name.as_str()) =>
                         {
@@ -713,6 +787,9 @@ impl<'db> ConaryProvider<'db> {
             ConaryConstraint::ProviderExpression { .. } => {
                 self.intern_conary_version_set(name_id, constraint.clone())?;
             }
+            ConaryConstraint::FixedIncoming | ConaryConstraint::ExactSolvables(_) => {
+                self.intern_conary_version_set(name_id, constraint.clone())?;
+            }
         }
         Ok(())
     }
@@ -736,6 +813,15 @@ impl<'db> ConaryProvider<'db> {
             .get(capability)
             .cloned()
             .unwrap_or_default()
+    }
+
+    /// Whether `solvable` is an installed trove hidden as a prior relation
+    /// removal. Such a solvable stays relation-visible but must never be a SAT
+    /// candidate.
+    pub(super) fn is_relation_only_installed(&self, solvable: SolvableId) -> bool {
+        self.solvables[solvable.to_index()]
+            .installed_trove_id
+            .is_some_and(|trove_id| self.relation_only_installed_troves.contains(&trove_id))
     }
 
     /// Find the installed solvable for a name, if any.

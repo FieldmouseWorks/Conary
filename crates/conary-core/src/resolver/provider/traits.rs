@@ -105,6 +105,123 @@ impl Interner for ConaryProvider<'_> {
 // --- DependencyProvider implementation ---
 
 impl ConaryProvider<'_> {
+    /// Loaded solvables the solver may choose for `name`, before version-set
+    /// filtering.
+    ///
+    /// This is exactly the candidate pool `get_candidates` hands to
+    /// `filter_candidates`. The condition compiler reuses it so a condition's
+    /// matching set comes from the same discovery and matching helpers the SAT
+    /// requirement path uses.
+    pub(super) fn candidates_for_name(&self, name: NameId) -> Vec<SolvableId> {
+        let name_str = &self.names[name.to_index()];
+        if self.provider_expression_name_ids.contains(&name.into_raw()) {
+            return self
+                .solvable_ids
+                .iter()
+                .copied()
+                .filter(|&solvable| !self.is_relation_only_installed(solvable))
+                .collect();
+        }
+        let mut candidates = self.solvables_for_name(name);
+
+        // Always include canonical equivalents so the solver can fall back to
+        // them when version constraints filter out all exact-name candidates.
+        // sort_candidates ranks exact-name matches above canonical ones.
+        for equiv in self.canonical_equivalents(name_str) {
+            if let Some(&equiv_name_id) = self.name_to_id.get(equiv) {
+                let equiv_candidates = self.solvables_for_name(equiv_name_id);
+                if !equiv_candidates.is_empty() {
+                    tracing::debug!(
+                        "Canonical candidates for {}: {} ({} candidates)",
+                        name_str,
+                        equiv,
+                        equiv_candidates.len()
+                    );
+                    candidates.extend(equiv_candidates);
+                }
+            }
+        }
+
+        // Virtual providers were resolved from typed repository/installed
+        // provide rows during provider construction. SAT callbacks only
+        // consume those preloaded facts and never fall back to metadata text.
+        candidates.extend(self.solvables_for_provide(name_str));
+
+        // A previous pass's relation plan removes these troves from the
+        // transaction end state, so they must not satisfy any requirement even
+        // though they remain relation-visible for removal re-derivation.
+        candidates.retain(|&solvable| !self.is_relation_only_installed(solvable));
+        candidates
+    }
+
+    /// Apply `version_set` to a candidate pool in either the matching or
+    /// inverse direction.
+    ///
+    /// This is the single matcher `filter_candidates` delegates to and the
+    /// condition compiler calls directly, so a compiled condition and a SAT
+    /// requirement can never disagree about which solvables satisfy an atom.
+    pub(super) fn matching_candidates(
+        &self,
+        candidates: &[SolvableId],
+        version_set: VersionSetId,
+        inverse: bool,
+    ) -> Vec<SolvableId> {
+        let (name_id, ref constraint) = self.version_sets[version_set.to_index()];
+        let requested_name = &self.names[name_id.to_index()];
+        // The fixed incoming constraint is an exact solvable identity rather
+        // than a name/version test, so it bypasses string matching entirely.
+        if matches!(constraint, ConaryConstraint::FixedIncoming) {
+            return candidates
+                .iter()
+                .copied()
+                .filter(|&sid| (Some(sid) == self.fixed_incoming) != inverse)
+                .collect();
+        }
+        // A compiled condition literal selects exact solvables under their
+        // concrete name; membership, not a name/version test, decides it.
+        if let ConaryConstraint::ExactSolvables(solvables) = constraint {
+            return candidates
+                .iter()
+                .copied()
+                .filter(|&sid| {
+                    let matches = solvables.contains(&sid.into_raw())
+                        && self.solvables[sid.to_index()].name == *requested_name;
+                    if inverse { !matches } else { matches }
+                })
+                .collect();
+        }
+        candidates
+            .iter()
+            .copied()
+            .filter(|&sid| {
+                let pkg = &self.solvables[sid.to_index()];
+                let identity_name_matches = pkg.name == *requested_name
+                    || self
+                        .canonical_equivalents(requested_name)
+                        .iter()
+                        .any(|equivalent| equivalent == &pkg.name);
+                let matches = constraint_matches_candidate(
+                    requested_name,
+                    constraint,
+                    pkg,
+                    &self.native_architecture,
+                    identity_name_matches,
+                )
+                .expect("resolver candidate identity is validated before SAT filtering");
+                if inverse { !matches } else { matches }
+            })
+            .collect()
+    }
+
+    /// The fixed incoming candidate when the requested name is its literal
+    /// identity. Provided capabilities and canonical identities are not locked:
+    /// several packages may provide them.
+    fn fixed_incoming_candidate(&self, name: NameId) -> Option<SolvableId> {
+        let solvable_id = self.fixed_incoming?;
+        let package = &self.solvables[solvable_id.to_index()];
+        (package.name == self.names[name.to_index()]).then_some(solvable_id)
+    }
+
     pub(super) fn sort_solvables(&self, solvables: &mut [SolvableId]) {
         // Determine the "primary" name: the first solvable's name is assumed to
         // be the exact-name match. Canonical equivalents have different names and
@@ -165,29 +282,7 @@ impl DependencyProvider for ConaryProvider<'_> {
         version_set: VersionSetId,
         inverse: bool,
     ) -> Vec<SolvableId> {
-        let (name_id, ref constraint) = self.version_sets[version_set.to_index()];
-        let requested_name = &self.names[name_id.to_index()];
-        candidates
-            .iter()
-            .copied()
-            .filter(|&sid| {
-                let pkg = &self.solvables[sid.to_index()];
-                let identity_name_matches = pkg.name == *requested_name
-                    || self
-                        .canonical_equivalents(requested_name)
-                        .iter()
-                        .any(|equivalent| equivalent == &pkg.name);
-                let matches = constraint_matches_candidate(
-                    requested_name,
-                    constraint,
-                    pkg,
-                    &self.native_architecture,
-                    identity_name_matches,
-                )
-                .expect("resolver candidate identity is validated before SAT filtering");
-                if inverse { !matches } else { matches }
-            })
-            .collect()
+        self.matching_candidates(candidates, version_set, inverse)
     }
 
     async fn get_candidates(&self, name: NameId) -> Option<Candidates> {
@@ -195,9 +290,12 @@ impl DependencyProvider for ConaryProvider<'_> {
         if name_str == "\0conary:false" {
             return None;
         }
+        let candidates = self.candidates_for_name(name);
+        if candidates.is_empty() {
+            return None;
+        }
         if self.provider_expression_name_ids.contains(&name.into_raw()) {
-            let candidates = self.solvable_ids.clone();
-            return (!candidates.is_empty()).then_some(Candidates {
+            return Some(Candidates {
                 candidates,
                 favored: None,
                 locked: None,
@@ -206,45 +304,24 @@ impl DependencyProvider for ConaryProvider<'_> {
                 allow_multiple: false,
             });
         }
-        let mut candidates = self.solvables_for_name(name);
-
-        // Always include canonical equivalents so the solver can fall back to
-        // them when version constraints filter out all exact-name candidates.
-        // sort_candidates ranks exact-name matches above canonical ones.
-        for equiv in self.canonical_equivalents(name_str) {
-            if let Some(&equiv_name_id) = self.name_to_id.get(equiv) {
-                let equiv_candidates = self.solvables_for_name(equiv_name_id);
-                if !equiv_candidates.is_empty() {
-                    tracing::debug!(
-                        "Canonical candidates for {}: {} ({} candidates)",
-                        name_str,
-                        equiv,
-                        equiv_candidates.len()
-                    );
-                    candidates.extend(equiv_candidates);
-                }
-            }
-        }
-
-        // Virtual providers were resolved from typed repository/installed
-        // provide rows during provider construction. SAT callbacks only
-        // consume those preloaded facts and never fall back to metadata text.
-        candidates.extend(self.solvables_for_provide(name_str));
-
-        if candidates.is_empty() {
-            return None;
-        }
 
         let exact_root_candidate = self.root_request_names.contains(name_str)
             && candidates
                 .iter()
                 .any(|candidate| self.solvables[candidate.to_index()].name == *name_str);
-        let favored = self.installed_solvable_for_name(name).or_else(|| {
-            (!exact_root_candidate)
-                .then(|| self.installed_solvable_for_candidates(&candidates))
-                .flatten()
-        });
+        let favored = self
+            .installed_solvable_for_name(name)
+            .filter(|solvable_id| candidates.contains(solvable_id))
+            .or_else(|| {
+                (!exact_root_candidate)
+                    .then(|| self.installed_solvable_for_candidates(&candidates))
+                    .flatten()
+            });
 
+        // The fixed incoming package is a fact: a requirement on its name must
+        // be satisfied by it, never by a same-name repository candidate, while
+        // the exact root keeps it selected.
+        //
         // If the package is pinned (troves.pinned = 1), lock the solver to
         // the installed version so the SAT solver cannot choose a different
         // version.  This implements G3: respect per-package version pins.
@@ -255,16 +332,19 @@ impl DependencyProvider for ConaryProvider<'_> {
         // Virtual capabilities are deliberately not locked: several packages
         // may provide one, so forbidding an alternative provider would reject a
         // satisfiable end state.
-        let locked = candidates
-            .iter()
-            .copied()
-            .find(|&sid| {
-                let pkg = &self.solvables[sid.to_index()];
-                pkg.name == *name_str && pkg.installed_pinned
+        let locked = self
+            .fixed_incoming_candidate(name)
+            .filter(|solvable_id| candidates.contains(solvable_id))
+            .or_else(|| {
+                candidates.iter().copied().find(|&sid| {
+                    let pkg = &self.solvables[sid.to_index()];
+                    pkg.name == *name_str && pkg.installed_pinned
+                })
             })
             .or_else(|| {
                 if self.surviving_installed_candidates_locked {
                     self.installed_solvable_for_name(name)
+                        .filter(|solvable_id| candidates.contains(solvable_id))
                 } else {
                     None
                 }

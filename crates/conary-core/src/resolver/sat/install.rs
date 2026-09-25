@@ -7,6 +7,7 @@ use std::time::Instant;
 
 use crate::error::Result;
 use crate::repository::resolution_policy::ResolutionPolicy;
+use crate::resolver::identity::PackageIdentity;
 use crate::version::VersionConstraint;
 
 use super::super::provider::{ConaryConstraint, ConaryProvider, SolverExpression};
@@ -59,19 +60,29 @@ pub(super) fn build_provider_for_requirement_expressions<'conn>(
     conn: &'conn Connection,
     expressions: &[SolverExpression],
     policy: &ResolutionPolicy,
+    incoming: Option<&PackageIdentity>,
     outgoing_trove_ids: &[i64],
+    relation_only_trove_ids: &HashSet<i64>,
     lock_surviving_installed: bool,
 ) -> Result<ConaryProvider<'conn>> {
     let phase = timing::start(None, timing::Phase::Initialization);
     let mut provider = ConaryProvider::new_with_policy(conn, policy.clone())?;
     drop(phase);
     provider.set_root_request_names(requirement_names(expressions));
+    // Caller-declared outgoing troves are not part of the end state at all.
+    // Relation-removed troves from an earlier pass stay loaded (relation
+    // planning re-derives each pass's exact removal set) but are hidden from
+    // candidate discovery.
     provider.exclude_installed_troves(outgoing_trove_ids.iter().copied());
+    provider.hide_relation_only_installed_troves(relation_only_trove_ids.iter().copied());
     if lock_surviving_installed {
         provider.lock_surviving_installed_candidates();
     }
     let phase = timing::start(None, timing::Phase::Installed);
     provider.load_installed_packages()?;
+    if let Some(incoming) = incoming {
+        provider.add_fixed_incoming(incoming.clone())?;
+    }
     drop(phase);
     let phase = timing::start(None, timing::Phase::Canonical);
     provider.build_provides_index()?;
@@ -135,6 +146,8 @@ fn requirement_names(expressions: &[SolverExpression]) -> HashSet<String> {
                 }
                 ConaryConstraint::RpmRuntime(_) => {}
                 ConaryConstraint::ExactRepositoryPackage(_) => {}
+                ConaryConstraint::FixedIncoming => {}
+                ConaryConstraint::ExactSolvables(_) => {}
                 ConaryConstraint::Requested(_) | ConaryConstraint::Repository { .. } => {
                     names.insert(atom.name.clone());
                 }

@@ -1503,6 +1503,8 @@ fn test_removal_does_not_attribute_preexisting_unsatisfied_capability_to_unrelat
 
 #[path = "tests/canonical.rs"]
 mod canonical;
+#[path = "tests/fixed_incoming.rs"]
+mod fixed_incoming;
 #[path = "tests/formal_dependencies.rs"]
 mod formal_dependencies;
 #[path = "tests/relations.rs"]
@@ -1511,3 +1513,5 @@ mod relations;
 mod root_requirements;
 #[path = "tests/strict_installed.rs"]
 mod strict_installed;
+#[path = "tests/virtual_conditions.rs"]
+mod virtual_conditions;

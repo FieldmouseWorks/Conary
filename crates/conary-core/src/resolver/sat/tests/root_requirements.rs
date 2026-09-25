@@ -722,9 +722,9 @@ fn transitively_selected_provider_activates_an_installed_conditional() {
     let dependent_trove_id =
         insert_rpm_trove(&conn, "dependent-x", "1.0.0", &[("(foo if bar)", None)]);
     // `bar` is a real repository package named `bar`, reached transitively:
-    // incoming requires `baz`, and repository `baz` requires `bar`. A condition
-    // never matches a virtual provide in SAT (#1126), so `bar` cannot be
-    // modelled as a provide of `baz`.
+    // incoming requires `baz`, and repository `baz` requires `bar`. This
+    // proves the dynamic affected set through a transitive selection; the
+    // virtual-provide case is covered by `sat/tests/virtual_conditions.rs`.
     insert_repo_pkg_with_reqs(
         &conn,
         repository_id,

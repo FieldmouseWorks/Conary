@@ -2,7 +2,7 @@
 
 //! Exact compilation of native Boolean dependency expressions for resolvo.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use resolvo::{
     Condition, ConditionId, ConditionalRequirement, LogicalOperator, Requirement, VersionSetId,
@@ -115,13 +115,13 @@ impl ConaryProvider<'_> {
             if literal.positive {
                 positive.push(version_set);
             } else {
-                negative.push(version_set);
+                negative.push(self.intern_condition_literal(&literal.atom, version_set)?);
             }
         }
 
         positive.sort_by_key(|id| id.0);
         positive.dedup();
-        negative.sort_by_key(|id| id.0);
+        negative.sort_unstable();
         negative.dedup();
 
         let requirement = match positive.as_slice() {
@@ -176,16 +176,70 @@ impl ConaryProvider<'_> {
         )
     }
 
-    fn intern_conjunction(&mut self, sets: &[VersionSetId]) -> Result<Option<ConditionId>> {
-        let mut conditions = sets
+    /// Intern the Boolean condition for one negated literal.
+    ///
+    /// A condition literal is true exactly when a selected solvable satisfies
+    /// the atom the same way a positive requirement would. resolvo tracks
+    /// presence per name, so a version set whose name is the atom's own name
+    /// cannot express a capability or canonical provider that carries a
+    /// different concrete name. Compute the matching solvables with the same
+    /// discovery and filtering the SAT requirement path uses, group them by
+    /// concrete name, and return an OR of per-name exact-solvable requirements.
+    /// When every match already carries the atom's own name the original
+    /// version set is exact; when nothing matches the condition is constant
+    /// false.
+    fn intern_condition_literal(
+        &mut self,
+        atom: &SolverAtom,
+        version_set: VersionSetId,
+    ) -> Result<ConditionId> {
+        let Some(&name_id) = self.name_to_id.get(&atom.name) else {
+            return self.intern_false_condition();
+        };
+        let candidates = self.candidates_for_name(name_id);
+        let matching = self.matching_candidates(&candidates, version_set, false);
+        if matching.is_empty() {
+            return self.intern_false_condition();
+        }
+        let all_same_name = matching
             .iter()
-            .map(|set| self.intern_condition(Condition::Requirement(*set)))
-            .collect::<Result<Vec<_>>>()?
-            .into_iter();
-        let Some(mut combined) = conditions.next() else {
+            .all(|&solvable| self.get_solvable(solvable).name == atom.name);
+        if all_same_name {
+            return self.intern_condition(Condition::Requirement(version_set));
+        }
+
+        let mut groups: BTreeMap<String, BTreeSet<u32>> = BTreeMap::new();
+        for solvable in matching {
+            let package = self.get_solvable(solvable);
+            groups
+                .entry(package.name.clone())
+                .or_default()
+                .insert(solvable.into_raw());
+        }
+
+        let mut conditions = Vec::with_capacity(groups.len());
+        for (name, solvables) in groups {
+            let name_id = self.intern_name(&name)?;
+            let condition_set = self
+                .intern_conary_version_set(name_id, ConaryConstraint::ExactSolvables(solvables))?;
+            conditions.push(self.intern_condition(Condition::Requirement(condition_set))?);
+        }
+        self.intern_disjunction(&conditions)
+    }
+
+    /// The constant-false condition, encoded through the same unsatisfiable
+    /// version-set name the requirement path uses.
+    fn intern_false_condition(&mut self) -> Result<ConditionId> {
+        let version_set = self.intern_false_requirement()?;
+        self.intern_condition(Condition::Requirement(version_set))
+    }
+
+    fn intern_conjunction(&mut self, conditions: &[ConditionId]) -> Result<Option<ConditionId>> {
+        let Some((&first, rest)) = conditions.split_first() else {
             return Ok(None);
         };
-        for condition in conditions {
+        let mut combined = first;
+        for &condition in rest {
             combined = self.intern_condition(Condition::Binary(
                 LogicalOperator::And,
                 combined,
@@ -193,6 +247,18 @@ impl ConaryProvider<'_> {
             ))?;
         }
         Ok(Some(combined))
+    }
+
+    fn intern_disjunction(&mut self, conditions: &[ConditionId]) -> Result<ConditionId> {
+        let Some((&first, rest)) = conditions.split_first() else {
+            return self.intern_false_condition();
+        };
+        let mut combined = first;
+        for &condition in rest {
+            combined =
+                self.intern_condition(Condition::Binary(LogicalOperator::Or, combined, condition))?;
+        }
+        Ok(combined)
     }
 
     fn intern_condition(&mut self, condition: Condition) -> Result<ConditionId> {

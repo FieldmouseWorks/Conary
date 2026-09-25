@@ -39,7 +39,7 @@ use candidates::{
     InstalledCandidate, affected_capability_names, insert_identity_name,
     installed_hard_group_candidates,
 };
-use fixed_point::solve_validated_groups_to_fixed_point;
+use fixed_point::{PassContext, solve_validated_groups_to_fixed_point};
 
 /// Whose stored hard requirement group is validated against the end state.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -170,9 +170,15 @@ struct EndStateValidation {
     /// Groups in evaluation order: incoming first, then candidates in persisted
     /// order as they are admitted.
     groups: Vec<ValidatedRequirementGroup>,
-    /// Residual against the fixed end state, aligned with `groups`.
+    /// SAT root expression for each group, aligned with `groups`.
+    ///
+    /// An incoming request with a fixed incoming identity and every admitted
+    /// installed group carry their full expression. A request group with no
+    /// incoming identity keeps the fixed-state residual until phase 2 forces
+    /// surviving installed packages as exact roots.
     residuals: Vec<Option<RepositoryRequirementExpression>>,
-    /// Whether each group in `groups` was promoted to its unsimplified form.
+    /// Whether each group is already rooted by its full expression, so a
+    /// violated pass never rewrites it.
     live: Vec<bool>,
     /// Installed candidates not yet admitted, in persisted order.
     candidates: Vec<InstalledCandidate>,
@@ -180,11 +186,10 @@ struct EndStateValidation {
     admitted: Vec<bool>,
     /// Capability names the transaction adds or removes; only grows.
     affected: HashSet<String>,
-    /// Explicit pass bound: every non-final pass promotes a group or admits a
-    /// candidate. Both are one-way, and an admitted candidate can later be
-    /// promoted, so the loop takes at most `groups + 2 * candidates + 1` passes.
-    /// A removal set that changes between passes never adds a non-progress pass,
-    /// so this bound covers oscillation as well.
+    /// Explicit pass bound. Every non-final pass roots a newly violated group,
+    /// admits a candidate, or grows the hidden removal set; restoring a stale
+    /// hidden trove shrinks it. All moves are finite, so the loop takes at most
+    /// `groups + 2 * candidates + 1` passes before the defensive bound refuses.
     max_passes: usize,
     /// Canonical name equivalences shared with SAT candidate filtering.
     canonical_equivalents: CanonicalEquivalents,
@@ -194,11 +199,11 @@ impl EndStateValidation {
     fn new(
         groups: Vec<ValidatedRequirementGroup>,
         residuals: Vec<Option<RepositoryRequirementExpression>>,
+        live: Vec<bool>,
         candidates: Vec<InstalledCandidate>,
         affected: HashSet<String>,
         canonical_equivalents: CanonicalEquivalents,
     ) -> Self {
-        let live = vec![false; groups.len()];
         let admitted = vec![false; candidates.len()];
         let max_passes = groups.len() + 2 * candidates.len() + 1;
         Self {
@@ -223,13 +228,11 @@ impl EndStateValidation {
     /// pre-existing breakage is never attributed to this transaction. A
     /// candidate whose owner this pass's relation plan removes is left
     /// unadmitted, because the owner is not part of that pass's end state; the
-    /// exclusion is per pass, so a later pass that keeps the owner still
-    /// considers it. Returns whether any admitted candidate still needs the
-    /// solver (non-`None` residual against the fixed state).
+    /// exclusion accumulates across passes. Returns whether any admitted
+    /// candidate contributed a group that still needs the solver.
     fn admit_mentioned(
         &mut self,
         before: &[PackageIdentity],
-        fixed_end_state: &[PackageIdentity],
         native_architecture: &str,
         removed_trove_ids: &HashSet<i64>,
     ) -> Result<bool> {
@@ -251,7 +254,7 @@ impl EndStateValidation {
             }
         }
 
-        let mut added_unsatisfied = false;
+        let mut admitted_group = false;
         for index in newly_mentioned {
             // Admission is one-way: a dropped candidate is never reconsidered.
             self.admitted[index] = true;
@@ -259,20 +262,15 @@ impl EndStateValidation {
             if !group.satisfied_against(native_architecture, before, &self.canonical_equivalents)? {
                 continue;
             }
-            let residual = end_state_residual(
-                &group,
-                fixed_end_state,
-                native_architecture,
-                &self.canonical_equivalents,
-            )?;
-            if residual.is_some() {
-                added_unsatisfied = true;
-            }
+            // Installed groups use their full expression. Post-solve validation
+            // still projects them against the fixed end state until phase 2
+            // makes surviving installed packages forced exact roots.
+            self.residuals.push(Some(group.expression.clone()));
+            self.live.push(true);
             self.groups.push(group);
-            self.residuals.push(residual);
-            self.live.push(false);
+            admitted_group = true;
         }
-        Ok(added_unsatisfied)
+        Ok(admitted_group)
     }
 
     /// Extend the affected capability set with every selected identity and every
@@ -287,7 +285,6 @@ impl EndStateValidation {
         selected: &[PackageIdentity],
         remove_order: &[SatRelationRemoval],
         before: &[PackageIdentity],
-        fixed_end_state: &[PackageIdentity],
         native_architecture: &str,
     ) -> Result<bool> {
         for package in selected {
@@ -324,7 +321,6 @@ impl EndStateValidation {
         }
         self.admit_mentioned(
             before,
-            fixed_end_state,
             native_architecture,
             &removed_trove_ids(remove_order),
         )
@@ -406,14 +402,26 @@ pub(super) fn solve_requirement_groups_for_end_state(
                 .iter()
                 .map(|group| Some(group.expression.clone()))
                 .collect::<Vec<_>>();
+            let live = vec![true; validated.len()];
             let mut validation = EndStateValidation::new(
                 validated,
                 residuals,
+                live,
                 Vec::new(),
                 HashSet::new(),
                 canonical_equivalents,
             );
-            solve_validated_groups_to_fixed_point(conn, &mut validation, None, &[], &[], policy, "")
+            // An unknown end state adds no fixed incoming solvable: the caller
+            // has not declared its outgoing set, so the incoming package stays
+            // a request-only fact and the current single-pass semantics hold.
+            let context = PassContext {
+                conn,
+                policy,
+                incoming: None,
+                outgoing_trove_ids: &[],
+                lock_surviving_installed: false,
+            };
+            solve_validated_groups_to_fixed_point(&context, &mut validation, None, &[], "")
         }
         EndState::Known { outgoing_trove_ids } => {
             let native_architecture = crate::repository::registry::detect_system_arch()?;
@@ -430,35 +438,57 @@ pub(super) fn solve_requirement_groups_for_end_state(
             }
             let candidates =
                 installed_hard_group_candidates(conn, outgoing_trove_ids, &facts.before)?;
+            // With a fixed incoming solvable SAT sees every incoming-provided
+            // atom, so the incoming request's hard groups are full-expression
+            // roots instead of residuals. A request group with no incoming
+            // identity keeps the fixed-state residual until phase 2 forces
+            // surviving installed packages as exact roots.
+            let incoming_fixed = incoming.is_some();
             let mut residuals = Vec::with_capacity(validated.len());
+            let mut live = Vec::with_capacity(validated.len());
             for group in &validated {
-                residuals.push(end_state_residual(
-                    group,
-                    &facts.fixed,
-                    &native_architecture,
-                    &canonical_equivalents,
-                )?);
+                if incoming_fixed && matches!(group.owner, ValidatedGroupOwner::Incoming) {
+                    residuals.push(Some(group.expression.clone()));
+                    live.push(true);
+                } else {
+                    residuals.push(end_state_residual(
+                        group,
+                        &facts.fixed,
+                        &native_architecture,
+                        &canonical_equivalents,
+                    )?);
+                    live.push(false);
+                }
             }
             let mut validation = EndStateValidation::new(
                 validated,
                 residuals,
+                live,
                 candidates,
                 affected,
                 canonical_equivalents,
             );
-            validation.admit_mentioned(
-                &facts.before,
-                &facts.fixed,
-                &native_architecture,
-                &HashSet::new(),
-            )?;
+            validation.admit_mentioned(&facts.before, &native_architecture, &HashSet::new())?;
             if validation.groups.is_empty() {
                 return Ok(SatResolution::empty());
             }
             policy
                 .validate_source_identities()
                 .map_err(Error::ConfigError)?;
-            if validation.residuals.iter().all(Option::is_none) {
+            // The fixed end state already holds every group, so no repository
+            // work is needed and strict mixing is satisfied.
+            let mut fixed_holds_all = true;
+            for group in &validation.groups {
+                if !group.satisfied_against(
+                    &native_architecture,
+                    &facts.fixed,
+                    &validation.canonical_equivalents,
+                )? {
+                    fixed_holds_all = false;
+                    break;
+                }
+            }
+            if fixed_holds_all {
                 return Ok(SatResolution::empty());
             }
             if let Some(message) = policy.validate_for_dependency_resolution().err() {
@@ -466,13 +496,18 @@ pub(super) fn solve_requirement_groups_for_end_state(
                 // fixed end state itself.
                 return Err(Error::ConfigError(message));
             }
-            solve_validated_groups_to_fixed_point(
+            let context = PassContext {
                 conn,
+                policy,
+                incoming,
+                outgoing_trove_ids,
+                lock_surviving_installed: true,
+            };
+            solve_validated_groups_to_fixed_point(
+                &context,
                 &mut validation,
                 Some(facts.fixed.as_slice()),
                 &facts.before,
-                outgoing_trove_ids,
-                policy,
                 &native_architecture,
             )
         }
@@ -481,6 +516,12 @@ pub(super) fn solve_requirement_groups_for_end_state(
 
 /// Simplify one requirement expression against the fixed end state, returning
 /// the residual the solver must still satisfy (`None` means already true).
+///
+/// This remains only for request groups that have no fixed incoming solvable:
+/// with no incoming identity in SAT there is nothing that can make their
+/// installed conditions visible until phase 2 forces surviving installed
+/// packages as exact roots. A request with a fixed incoming identity uses its
+/// full expression instead.
 ///
 /// Any sub-expression the end state satisfies is true for the whole
 /// transaction, so it is dropped. This makes the solver's model agree with the
@@ -642,12 +683,17 @@ fn condition_holds_against_end_state(
 }
 
 /// Build the install order from the identities resolvo selected.
+///
+/// The fixed incoming solvable is a transaction fact, not an installed or
+/// repository package, so it never appears in the install order.
 pub(super) fn collect_install_order(
     provider: &ConaryProvider<'_>,
     solvable_ids: &[SolvableId],
 ) -> Vec<SatPackage> {
+    let fixed_incoming = provider.fixed_incoming_solvable();
     solvable_ids
         .iter()
+        .filter(|sid| Some(**sid) != fixed_incoming)
         .map(|sid| {
             let pkg = provider.get_solvable(*sid);
             SatPackage {
