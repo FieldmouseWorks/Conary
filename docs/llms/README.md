@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-09-23
-revision: 23
+last_updated: 2026-09-25
+revision: 24
 summary: Route assistants to canonical owners, focused proof, and the shared execution workflow
 ---
 
@@ -57,7 +57,6 @@ This keeps startup guidance small while retaining precise, on-demand context.
 | Architecture question | `docs/ARCHITECTURE.md`, then the owning `docs/modules/*.md` |
 | Package semantic or persisted contract | The owning file under `docs/specs/` |
 | Integration test or fixture | `docs/INTEGRATION-TESTING.md` and `docs/modules/test-fixtures.md` |
-| Redshirt or shared experiment tooling | [Ownership and integration contract](../INTEGRATION-TESTING.md#redshirt-relationship), then [cross-project workflow](../../CONTRIBUTING.md#working-with-redshirt) |
 | Deploy, MCP, release, or host work | `docs/operations/infrastructure.md` plus the owner packet |
 | Current project status | [Concise status](../../ROADMAP.md), then [detailed roadmap](../roadmaps/development-roadmap.md) and live issue/PR state |
 | Multi-step assisted execution | [Agent execution workflow](agent-workflow.md) |

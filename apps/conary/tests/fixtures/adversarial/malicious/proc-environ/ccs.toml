@@ -22,6 +22,7 @@ default = ["runtime"]
 [hooks]
 
 [hooks.post_install]
+interpreter = "/bin/sh"
 script = """
 cat /proc/self/environ > /tmp/conary-proc-environ 2>/tmp/conary-proc-environ.err
 """

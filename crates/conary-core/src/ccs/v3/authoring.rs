@@ -3,7 +3,10 @@
 use super::schema::*;
 use crate::ccs::builder::BuildResult;
 use crate::ccs::v3::PackageKindTagV3;
-use crate::repository::dependency_model::RepositoryRequirementGroup;
+use crate::repository::dependency_model::{
+    RepositoryCapabilityKind, RepositoryRequirementClause, RepositoryRequirementGroup,
+    RepositoryRequirementKind,
+};
 use crate::repository::versioning::VersionScheme;
 use anyhow::{Result, bail};
 use std::collections::{BTreeMap, BTreeSet};
@@ -142,6 +145,7 @@ pub fn project_build_result_authority_to_v3(
     let config_authority = config_authority_for_manifest(&input.build.manifest, input.build)?;
     let file_capabilities =
         file_capability_authority_for_manifest(&input.build.manifest, input.build)?;
+    validate_file_provides_are_shipped(input.build)?;
     let files = input
         .build
         .files
@@ -318,6 +322,13 @@ fn project_manifest_capabilities(
             .iter()
             .map(|name| provided_capability(DependencyKindV3::PkgConfig, name, None, scheme)),
     );
+    entries.extend(
+        manifest
+            .provides
+            .files
+            .iter()
+            .map(|name| provided_capability(DependencyKindV3::File, name, None, scheme)),
+    );
     sort_and_deduplicate_capabilities(entries)
 }
 
@@ -325,12 +336,59 @@ pub(super) fn project_requirements(
     manifest: &crate::ccs::manifest::CcsManifest,
 ) -> Vec<RepositoryRequirementGroup> {
     let mut keyed = BTreeMap::new();
-    for requirement in manifest.requirements.clone() {
+    for requirement in manifest
+        .requirements
+        .clone()
+        .into_iter()
+        .chain(derived_hook_interpreter_requirements(manifest))
+    {
         let key = serde_json::to_string(&requirement)
             .expect("typed CCS requirement is JSON serializable");
         keyed.entry(key).or_insert(requirement);
     }
     keyed.into_values().collect()
+}
+
+/// Derive the pre-install `File` requirements that authorize each distinct
+/// lifecycle hook interpreter.
+///
+/// `docs/specs/foreign-package-lifecycle-contracts.md` lines 50-56, 395-400,
+/// and 537-550 require a lifecycle program's interpreter to be satisfied
+/// through a declared dependency; no parser or builder may guess one. The
+/// derived group is hard and versionless, and an author-declared equivalent is
+/// left untouched so the signed set never gains a duplicate.
+fn derived_hook_interpreter_requirements(
+    manifest: &crate::ccs::manifest::CcsManifest,
+) -> Vec<RepositoryRequirementGroup> {
+    let mut interpreters = BTreeSet::new();
+    for hook in [
+        manifest.hooks.post_install.as_ref(),
+        manifest.hooks.pre_remove.as_ref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        interpreters.insert(hook.interpreter.as_str());
+    }
+    interpreters
+        .into_iter()
+        .filter(|interpreter| !declares_interpreter_file_requirement(manifest, interpreter))
+        .map(|interpreter| {
+            let mut clause = RepositoryRequirementClause::name_only(interpreter.to_string());
+            clause.capability_kind = Some(RepositoryCapabilityKind::File);
+            RepositoryRequirementGroup::simple(RepositoryRequirementKind::PreDepends, clause)
+        })
+        .collect()
+}
+
+fn declares_interpreter_file_requirement(
+    manifest: &crate::ccs::manifest::CcsManifest,
+    interpreter: &str,
+) -> bool {
+    manifest
+        .requirements
+        .iter()
+        .any(|group| group.is_hard_pre_install_file(interpreter))
 }
 
 fn provided_capability(
@@ -458,6 +516,62 @@ fn file_capability_authority_for_manifest(
         }
     }
     Ok(canonical)
+}
+
+/// A declared file provide the package ships must come from an
+/// always-installed component. A declared path the package does not ship is a
+/// source-style declaration (as RPM `Provides: /bin/sh` is for a payload that
+/// carries `/usr/bin/sh` on a usr-merged layout); hook execution still requires
+/// the interpreter preflight to prove an executable in the projected root.
+fn validate_file_provides_are_shipped(build: &BuildResult) -> Result<()> {
+    let shipped = build
+        .files
+        .iter()
+        .filter(|file| file.node.kind.is_regular() || file.node.kind.is_symlink())
+        .map(|file| (file.path.as_str(), file.component.as_str()))
+        .collect::<BTreeMap<_, _>>();
+    let available = build.components.keys().cloned().collect::<Vec<_>>();
+    let always_installed = always_installed_component_names(&build.manifest.components, &available)
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    for path in &build.manifest.provides.files {
+        let Some(component) = shipped.get(path.as_str()) else {
+            continue;
+        };
+        if !always_installed.contains(*component) {
+            bail!(
+                "declared file provide {path} belongs to optional component {component}; file provides must be shipped by an always-installed component"
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Component names that install when the caller requests no optional
+/// components.
+///
+/// This is the shared authority for the "always installed" rule used by
+/// build-time file-provide validation and install-time component selection:
+/// normalized, de-duplicated `components.default` names that exist in
+/// `available`, or every available component when no declared default
+/// resolves. Callers supply `available` because a build manifest and a signed
+/// component map are separate typed sources.
+pub fn always_installed_component_names(
+    components: &crate::ccs::manifest::Components,
+    available: &[String],
+) -> Vec<String> {
+    let mut defaults = Vec::new();
+    for component in &components.default {
+        let normalized = component.trim().to_ascii_lowercase();
+        if available.contains(&normalized) && !defaults.contains(&normalized) {
+            defaults.push(normalized);
+        }
+    }
+    if defaults.is_empty() {
+        available.to_vec()
+    } else {
+        defaults
+    }
 }
 
 fn select_default_component(build: &BuildResult) -> Result<String> {

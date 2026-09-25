@@ -23,6 +23,9 @@ impl ScriptletExecutor {
         };
         match self.package_format {
             PackageFormat::Conary => match (mode, phase) {
+                // CCS author script hooks receive no positional arguments in
+                // any phase; the CCS format owns its lifecycle ABI.
+                (ExecutionMode::Install, "post-install") => Ok(Vec::new()),
                 (ExecutionMode::Remove, "pre-remove") => Ok(Vec::new()),
                 _ => Err(unsupported()),
             },
@@ -144,7 +147,17 @@ fn execution_mode_name(mode: &ExecutionMode) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::super::{ExecutionMode, PackageFormat, ScriptletExecutor};
+    use crate::error::{Error, ScriptletFailureKind};
     use std::path::Path;
+
+    fn assert_contract_violation(error: Error) {
+        match error {
+            Error::ScriptletExecution { kind, .. } => {
+                assert_eq!(kind, ScriptletFailureKind::ContractViolation);
+            }
+            other => panic!("expected a scriptlet contract violation, got {other:?}"),
+        }
+    }
 
     #[test]
     fn test_rpm_args() {
@@ -300,44 +313,61 @@ mod tests {
     }
 
     #[test]
+    fn test_conary_args() {
+        let executor =
+            ScriptletExecutor::new(Path::new("/"), "test-pkg", "1.0.0", PackageFormat::Conary);
+
+        // CCS author script hooks receive no positional arguments in any phase.
+        assert!(
+            executor
+                .get_args(&ExecutionMode::Remove, "pre-remove")
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            executor
+                .get_args(&ExecutionMode::Install, "post-install")
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn guessed_lifecycle_arguments_are_rejected() {
         let conary =
             ScriptletExecutor::new(Path::new("/"), "test-pkg", "1.0.0", PackageFormat::Conary);
-        assert!(
+        assert_contract_violation(
             conary
-                .get_args(&ExecutionMode::Install, "post-install")
-                .unwrap_err()
-                .to_string()
-                .contains("unsupported conary lifecycle phase 'post-install' for install")
+                .get_args(&ExecutionMode::Remove, "post-remove")
+                .unwrap_err(),
+        );
+        assert_contract_violation(
+            conary
+                .get_args(&ExecutionMode::Remove, "post-install")
+                .unwrap_err(),
         );
 
         let rpm = ScriptletExecutor::new(Path::new("/"), "test-pkg", "1.0.0", PackageFormat::Rpm);
-        assert!(
+        assert_contract_violation(
             rpm.get_args(&ExecutionMode::Install, "trigger")
-                .unwrap_err()
-                .to_string()
-                .contains("unsupported rpm lifecycle phase 'trigger' for install")
+                .unwrap_err(),
         );
 
         let deb = ScriptletExecutor::new(Path::new("/"), "test-pkg", "1.0.0", PackageFormat::Deb);
-        assert!(
+        assert_contract_violation(
             deb.get_args(&ExecutionMode::Install, "trigger")
-                .unwrap_err()
-                .to_string()
-                .contains("unsupported deb lifecycle phase 'trigger' for install")
+                .unwrap_err(),
         );
 
         let arch = ScriptletExecutor::new(Path::new("/"), "test-pkg", "1.0.0", PackageFormat::Arch);
-        assert!(
+        assert_contract_violation(
             arch.get_args(
                 &ExecutionMode::UpgradeRemoval {
                     new_version: "2.0.0".to_string(),
                 },
                 "pre-remove",
             )
-            .unwrap_err()
-            .to_string()
-            .contains("unsupported arch lifecycle phase 'pre-remove' for upgrade-removal")
+            .unwrap_err(),
         );
     }
 }

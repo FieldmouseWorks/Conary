@@ -46,17 +46,13 @@ delegation, evidence, authorization, repair policy, interruption, and closeout.
 For substantive work, keep one live graph in its primary issue or established
 handoff; unlock dependent work only after the parent verifies its artifact and
 acceptance evidence. Finish only after authorized integration, evidence
-read-back, and cleanup of resources owned by the task. Default model roles,
-when available, are `gpt-6-astra` at `max` as primary conversation owner for
-architecture, planning, task selection, review, and integration; `gpt-6-sol`
-at `max` for complex implementation, refactoring, and debugging; `gpt-6-luna` at `max`
-for bounded exploration, documentation, tests, and routine edits. Request the
-role and effort explicitly when dispatching useful work, name its inputs,
-acceptance check, and file ownership, and protect concurrent edits. If the
-requested model is unavailable, report that fact without silent substitution.
-These are defaults for the available agent environment, not a contribution
-requirement; other tools and human contributors remain welcome. Codex-specific
-session controls are described in `docs/llms/openai-codex.md`.
+read-back, and cleanup of resources owned by the task. Conary names no required
+model, vendor, or agent tool; model choice and delegation belong to each
+contributor's own session and machine-local preferences. The primary integrator
+owns architecture, planning, task selection, review, and integration. When
+dispatching useful work, name its inputs, acceptance check, and file ownership,
+and protect concurrent edits. Human contributors and any agent tool are
+welcome.
 
 Read-only scoping remains read-only until a change is requested.
 
@@ -90,9 +86,6 @@ Agent operations use versioned, typed, inspectable resources and plan/apply
 results through `conary-agent-contract`; MCP adapts that contract and is never
 a second authority. Do not weaken agent trust or approvals, or make an
 essential operation available only through ad hoc shell or free-form output.
-Redshirt owns reusable experiment tooling in Rust; Conary owns package rules
-and independent checks. Follow the
-[Redshirt workflow](CONTRIBUTING.md#working-with-redshirt).
 
 ## Defects And Maintainability
 

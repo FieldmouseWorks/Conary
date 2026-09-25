@@ -3,40 +3,81 @@
 use anyhow::{Context, Result};
 use conary_core::db::models::{PackagePayloadOwnership, Trove};
 use conary_core::scriptlet::ExecutionMode;
-use std::collections::HashSet;
+use rusqlite::Connection;
+use std::collections::{BTreeSet, HashSet};
 use tracing::info;
 
+use self::plan_output::{AutoremovePlanData, AutoremoveSkipReason, plan_result};
 use super::types::RemoveLifecycleOptions;
 use crate::commands::{SandboxMode, open_db};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum AutoremoveSkipReason {
-    AdoptedNativeAuthority,
-    Pinned,
-}
+/// Maximum fixed-point rounds apply mode and the preview planner run.
+const MAX_AUTOREMOVE_ITERATIONS: usize = 100;
 
 #[derive(Debug, Clone)]
-struct AutoremovePlan {
+pub(super) struct AutoremovePlan {
+    pub(super) removable: Vec<Trove>,
+    pub(super) skipped: Vec<(Trove, AutoremoveSkipReason)>,
+}
+
+/// One round of the fixed-point preview plan.
+#[derive(Debug, Clone)]
+struct AutoremoveFixedPointRound {
+    /// 1-based round number.
+    round: u32,
     removable: Vec<Trove>,
+}
+
+/// The fixed point apply mode would reach, computed without mutating anything.
+///
+/// Every recorded round has at least one removable trove, so the rounds are
+/// numbered `1..=rounds.len()` without gaps.
+#[derive(Debug, Clone)]
+pub(super) struct AutoremoveFixedPointPlan {
+    rounds: Vec<AutoremoveFixedPointRound>,
     skipped: Vec<(Trove, AutoremoveSkipReason)>,
+}
+
+/// What `cmd_autoremove` does with the orphan plan.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AutoremoveMode {
+    /// Remove the planned orphans.
+    Apply,
+    /// Print the plan as human-readable text without removing anything.
+    PreviewText,
+    /// Print the plan as a typed JSON document without removing anything.
+    PreviewJson,
 }
 
 /// Remove orphaned packages (installed as dependencies but no longer needed)
 ///
 /// Finds packages that were installed as dependencies of other packages,
 /// but are no longer required by any installed package.
-pub fn cmd_autoremove(db_path: &str, dry_run: bool, sandbox_mode: SandboxMode) -> Result<()> {
+pub fn cmd_autoremove(
+    db_path: &str,
+    mode: AutoremoveMode,
+    sandbox_mode: SandboxMode,
+) -> Result<()> {
     info!("Finding orphaned packages...");
 
     let conn = open_db(db_path)?;
 
-    let orphans = conary_core::db::models::Trove::find_orphans(&conn)?;
-    if orphans.is_empty() {
+    if mode != AutoremoveMode::Apply {
+        let plan = plan_autoremove_fixed_point(&conn)?;
+        return preview_autoremove(&plan, mode);
+    }
+
+    // Apply mode reflects real removal outcomes, so it re-queries after every
+    // round instead of using the simulated fixed point.
+    let initial_round = Trove::find_orphan_round(&conn, &BTreeSet::new())?;
+    let orphans_empty = initial_round.removable.is_empty() && initial_round.protected.is_empty();
+    let plan = plan_autoremove(initial_round.removable, initial_round.protected);
+
+    if orphans_empty {
         println!("No orphaned packages found.");
         return Ok(());
     }
 
-    let plan = plan_autoremove(orphans);
     if plan.removable.is_empty() {
         println!("No Conary-owned orphaned packages can be autoremoved.");
         print_autoremove_skips(&plan.skipped);
@@ -45,34 +86,37 @@ pub fn cmd_autoremove(db_path: &str, dry_run: bool, sandbox_mode: SandboxMode) -
     print_autoremove_candidates("Found", &plan.removable);
     print_autoremove_skips(&plan.skipped);
 
-    if dry_run {
-        println!("\nDry run - no packages will be removed.");
-        println!("Run without --dry-run to remove these packages.");
-        return Ok(());
-    }
-
     // Fixed-point iteration: removing orphans may expose new orphans (transitive chains).
-    // Re-query after each round until no more orphans are found.
-    const MAX_ITERATIONS: usize = 100;
+    // Re-query after each round until no more orphans are found. At most
+    // MAX_AUTOREMOVE_ITERATIONS removal rounds run; a further round of removable
+    // troves is reported as an error instead of being silently dropped.
     let mut total_removed = 0;
     let mut total_failed = 0;
+    let mut remaining_beyond_limit = 0;
     let mut current_plan = plan;
     let mut failed_orphans = HashSet::new();
 
-    for iteration in 0..MAX_ITERATIONS {
+    for iteration in 0..=MAX_AUTOREMOVE_ITERATIONS {
         if iteration > 0 {
-            // Re-query orphans after previous round of removals
+            // Re-query orphans after previous round of removals.
             let conn = open_db(db_path)?;
-            let current_orphans = conary_core::db::models::Trove::find_orphans(&conn)?;
-            if current_orphans.is_empty() {
+            let round = Trove::find_orphan_round(&conn, &BTreeSet::new())?;
+            current_plan = plan_autoremove(round.removable, round.protected);
+            current_plan.removable.retain(|trove| {
+                trove
+                    .id
+                    .is_none_or(|trove_id| !failed_orphans.contains(&trove_id))
+            });
+            if current_plan.removable.is_empty() {
+                if !current_plan.skipped.is_empty() {
+                    println!("\nNo additional Conary-owned orphaned packages can be autoremoved.");
+                    print_autoremove_skips(&current_plan.skipped);
+                }
                 break;
             }
-            current_plan = plan_autoremove(current_orphans);
-            current_plan
-                .removable
-                .retain(|trove| !failed_orphans.contains(&autoremove_identity(trove)));
-            if current_plan.removable.is_empty() {
-                println!("\nNo additional Conary-owned orphaned packages can be autoremoved.");
+            if iteration == MAX_AUTOREMOVE_ITERATIONS {
+                remaining_beyond_limit = current_plan.removable.len();
+                print_autoremove_candidates("Found additional", &current_plan.removable);
                 print_autoremove_skips(&current_plan.skipped);
                 break;
             }
@@ -96,20 +140,15 @@ pub fn cmd_autoremove(db_path: &str, dry_run: bool, sandbox_mode: SandboxMode) -
         let mut round_removed = 0;
         for trove in &current_plan.removable {
             println!("\nRemoving {} {}...", trove.name, trove.version);
-            match super::cmd_remove(
-                &trove.name,
-                db_path,
-                Some(trove.version.clone()),
-                trove.architecture.clone(),
-                sandbox_mode,
-                false,
-            ) {
+            match super::cmd_remove_exact(trove, db_path, sandbox_mode, false) {
                 Ok(()) => {
                     round_removed += 1;
                 }
                 Err(e) => {
                     eprintln!("  Failed to remove {}: {}", trove.name, e);
-                    failed_orphans.insert(autoremove_identity(trove));
+                    if let Some(trove_id) = trove.id {
+                        failed_orphans.insert(trove_id);
+                    }
                     total_failed += 1;
                 }
             }
@@ -132,8 +171,122 @@ pub fn cmd_autoremove(db_path: &str, dry_run: bool, sandbox_mode: SandboxMode) -
             total_failed
         );
     }
+    if remaining_beyond_limit > 0 {
+        println!(
+            "  Remaining: {} package(s) after the {MAX_AUTOREMOVE_ITERATIONS}-round limit",
+            remaining_beyond_limit
+        );
+        anyhow::bail!(
+            "Autoremove reached the {MAX_AUTOREMOVE_ITERATIONS}-round limit with orphaned packages remaining; see summary above"
+        );
+    }
 
     Ok(())
+}
+
+/// Print a preview plan without mutating anything.
+fn preview_autoremove(plan: &AutoremoveFixedPointPlan, mode: AutoremoveMode) -> Result<()> {
+    if mode == AutoremoveMode::PreviewJson {
+        let data = AutoremovePlanData::from_fixed_point(plan);
+        let result = plan_result(&data)?;
+        println!("{}", serde_json::to_string_pretty(&result)?);
+        return Ok(());
+    }
+
+    if plan.rounds.is_empty() {
+        if plan.skipped.is_empty() {
+            println!("No orphaned packages found.");
+        } else {
+            println!("No Conary-owned orphaned packages can be autoremoved.");
+            print_autoremove_skips(&plan.skipped);
+        }
+        return Ok(());
+    }
+
+    for (index, round) in plan.rounds.iter().enumerate() {
+        let prefix = if index == 0 {
+            "Found"
+        } else {
+            "Found additional"
+        };
+        print_autoremove_candidates(prefix, &round.removable);
+    }
+    print_autoremove_skips(&plan.skipped);
+    println!("\nDry run - no packages will be removed.");
+    println!("Run without --dry-run to remove these packages.");
+
+    Ok(())
+}
+
+/// Simulate apply's fixed point without mutating anything.
+fn plan_autoremove_fixed_point(conn: &Connection) -> Result<AutoremoveFixedPointPlan> {
+    plan_autoremove_fixed_point_with_limit(conn, MAX_AUTOREMOVE_ITERATIONS)
+}
+
+/// Simulate apply's fixed point, recording at most `max_rounds` removal rounds.
+///
+/// The query after the final allowed round must be empty; otherwise the plan
+/// needs more rounds than the caller permits and an error is returned.
+fn plan_autoremove_fixed_point_with_limit(
+    conn: &Connection,
+    max_rounds: usize,
+) -> Result<AutoremoveFixedPointPlan> {
+    let mut removed: BTreeSet<i64> = BTreeSet::new();
+    let mut skipped: Vec<(Trove, AutoremoveSkipReason)> = Vec::new();
+    let mut skipped_ids: BTreeSet<i64> = BTreeSet::new();
+    let mut rounds: Vec<AutoremoveFixedPointRound> = Vec::new();
+
+    for iteration in 0..=max_rounds {
+        let round = Trove::find_orphan_round(conn, &removed)?;
+        let removable = round
+            .removable
+            .into_iter()
+            .filter(|trove| {
+                trove
+                    .id
+                    .is_none_or(|trove_id| !skipped_ids.contains(&trove_id))
+            })
+            .collect::<Vec<_>>();
+        let protected = round
+            .protected
+            .into_iter()
+            .filter(|trove| {
+                trove
+                    .id
+                    .is_none_or(|trove_id| !skipped_ids.contains(&trove_id))
+            })
+            .collect::<Vec<_>>();
+        let AutoremovePlan {
+            removable,
+            skipped: round_skipped,
+        } = plan_autoremove(removable, protected);
+
+        for (trove, reason) in round_skipped {
+            if let Some(trove_id) = trove.id {
+                skipped_ids.insert(trove_id);
+            }
+            skipped.push((trove, reason));
+        }
+
+        if removable.is_empty() {
+            return Ok(AutoremoveFixedPointPlan { rounds, skipped });
+        }
+        if iteration == max_rounds {
+            anyhow::bail!(
+                "autoremove plan did not reach a fixed point after {max_rounds} iterations"
+            );
+        }
+
+        let round_number = u32::try_from(iteration + 1)
+            .map_err(|_| anyhow::anyhow!("autoremove round number exceeded u32"))?;
+        removed.extend(removable.iter().filter_map(|trove| trove.id));
+        rounds.push(AutoremoveFixedPointRound {
+            round: round_number,
+            removable,
+        });
+    }
+
+    anyhow::bail!("autoremove plan did not reach a fixed point after {max_rounds} iterations")
 }
 
 fn preflight_autoremove_round(
@@ -202,19 +355,18 @@ fn preflight_autoremove_round(
     Ok(())
 }
 
-fn plan_autoremove(orphaned: Vec<Trove>) -> AutoremovePlan {
-    let mut removable = Vec::new();
-    let mut skipped = Vec::new();
-
-    for trove in orphaned {
-        if trove.install_source.is_adopted() {
-            skipped.push((trove, AutoremoveSkipReason::AdoptedNativeAuthority));
-        } else if trove.pinned {
-            skipped.push((trove, AutoremoveSkipReason::Pinned));
-        } else {
-            removable.push(trove);
-        }
-    }
+fn plan_autoremove(removable: Vec<Trove>, protected: Vec<Trove>) -> AutoremovePlan {
+    let skipped = protected
+        .into_iter()
+        .map(|trove| {
+            let reason = if trove.install_source.is_adopted() {
+                AutoremoveSkipReason::AdoptedNativeAuthority
+            } else {
+                AutoremoveSkipReason::Pinned
+            };
+            (trove, reason)
+        })
+        .collect();
 
     AutoremovePlan { removable, skipped }
 }
@@ -268,13 +420,8 @@ fn print_autoremove_trove(trove: &Trove) {
     println!();
 }
 
-fn autoremove_identity(trove: &Trove) -> (String, String, Option<String>) {
-    (
-        trove.name.clone(),
-        trove.version.clone(),
-        trove.architecture.clone(),
-    )
-}
+#[path = "autoremove/plan_output.rs"]
+mod plan_output;
 
 #[cfg(test)]
 #[path = "autoremove/tests.rs"]

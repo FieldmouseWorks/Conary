@@ -186,6 +186,7 @@ async fn ccs_install_runs_package_hook_for_devel_only_component_selection() {
     let mut manifest = CcsManifest::new_minimal("devel-only", "1.0.0");
     manifest.hooks.post_install = Some(ScriptHook {
         script: "exit 23".to_string(),
+        interpreter: "/bin/sh".to_string(),
         reversible: None,
     });
 

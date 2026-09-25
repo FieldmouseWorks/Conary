@@ -40,6 +40,11 @@ impl HookConverter for RpmHookConverter {
         lines.extend(CommonHookGenerator::tmpfiles_commands(hooks));
         lines.extend(CommonHookGenerator::sysctl_commands(hooks));
         if let Some(hook) = &hooks.post_install {
+            // CCS author script hooks receive no positional arguments. The
+            // interpreter is validated to `/bin/sh` before this converter runs,
+            // which is the shell this scriptlet already executes under; clear the
+            // native package manager's argv first.
+            lines.push("set --".to_string());
             lines.push(hook.script.clone());
         }
 
@@ -56,6 +61,11 @@ impl HookConverter for RpmHookConverter {
         // Stop services before removal
         lines.extend(CommonHookGenerator::systemd_commands(hooks, false));
         if let Some(hook) = &hooks.pre_remove {
+            // CCS author script hooks receive no positional arguments. The
+            // interpreter is validated to `/bin/sh` before this converter runs,
+            // which is the shell this scriptlet already executes under; clear the
+            // native package manager's argv first.
+            lines.push("set --".to_string());
             lines.push(hook.script.clone());
         }
 
@@ -327,6 +337,7 @@ pub fn generate(result: &BuildResult, output_path: &Path) -> Result<GenerationRe
     }
 
     // Add scriptlets
+    CommonHookGenerator::validate_script_interpreters(&manifest.hooks)?;
     let hook_converter = RpmHookConverter;
 
     if let Some(script) = hook_converter.pre_install(&manifest.hooks) {
@@ -524,4 +535,4 @@ fn payload_kind_name(kind: &PayloadNodeKind) -> &'static str {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

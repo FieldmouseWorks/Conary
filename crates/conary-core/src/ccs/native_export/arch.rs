@@ -58,6 +58,11 @@ impl HookConverter for ArchHookConverter {
         // sysctl
         lines.extend(CommonHookGenerator::sysctl_commands(hooks));
         if let Some(hook) = &hooks.post_install {
+            // CCS author script hooks receive no positional arguments. The
+            // interpreter is validated to `/bin/sh` before this converter runs,
+            // which is the shell this .INSTALL function already executes under;
+            // clear libalpm's argv first.
+            lines.push("set --".to_string());
             lines.push(hook.script.clone());
         }
 
@@ -74,6 +79,11 @@ impl HookConverter for ArchHookConverter {
         // Stop services
         lines.extend(CommonHookGenerator::systemd_commands(hooks, false));
         if let Some(hook) = &hooks.pre_remove {
+            // CCS author script hooks receive no positional arguments. The
+            // interpreter is validated to `/bin/sh` before this converter runs,
+            // which is the shell this .INSTALL function already executes under;
+            // clear libalpm's argv first.
+            lines.push("set --".to_string());
             lines.push(hook.script.clone());
         }
 
@@ -207,6 +217,7 @@ pub fn generate(result: &BuildResult, output_path: &Path) -> Result<GenerationRe
     fs::write(pkg_root.join(".PKGINFO"), &pkginfo)?;
 
     // Generate .INSTALL script if we have hooks
+    CommonHookGenerator::validate_script_interpreters(&manifest.hooks)?;
     let hook_converter = ArchHookConverter;
     let install_script = generate_install_script(&hook_converter, &manifest.hooks);
     if let Some(script) = &install_script {
@@ -539,10 +550,12 @@ mod tests {
         let hooks = Hooks {
             post_install: Some(crate::ccs::manifest::ScriptHook {
                 script: "echo installed > /var/lib/myapp/installed".to_string(),
+                interpreter: "/bin/sh".to_string(),
                 reversible: None,
             }),
             pre_remove: Some(crate::ccs::manifest::ScriptHook {
                 script: "echo removed > /var/lib/myapp/removed".to_string(),
+                interpreter: "/bin/sh".to_string(),
                 reversible: None,
             }),
             ..Default::default()
@@ -564,5 +577,107 @@ mod tests {
         let release = "7";
         let pkgver = format!("{}-{release}", version.replace('-', "_"));
         assert_eq!(pkgver, "1.0.0_beta-7");
+    }
+
+    #[test]
+    fn arch_export_refuses_a_script_hook_interpreter_it_cannot_execute() {
+        let mut result = create_test_build_result();
+        result.manifest.hooks.post_install = Some(crate::ccs::manifest::ScriptHook {
+            script: "print('installed')".to_string(),
+            interpreter: "/usr/bin/python3".to_string(),
+            reversible: None,
+        });
+        let temp_dir = TempDir::new().unwrap();
+
+        let error = generate(&result, &temp_dir.path().join("python.pkg.tar.zst")).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "CCS hook interpreter /usr/bin/python3 is not implemented (supported: /bin/sh)"
+        );
+
+        // Positive control: the same fixture exports once the hook declares the
+        // implemented interpreter.
+        result
+            .manifest
+            .hooks
+            .post_install
+            .as_mut()
+            .unwrap()
+            .interpreter = "/bin/sh".to_string();
+        let output_path = temp_dir.path().join("shell.pkg.tar.zst");
+        generate(&result, &output_path).unwrap();
+        assert!(output_path.exists());
+    }
+
+    fn exported_arch_install(result: &BuildResult, file_name: &str) -> String {
+        let temp_dir = TempDir::new().unwrap();
+        let output_path = temp_dir.path().join(file_name);
+        generate(result, &output_path).unwrap();
+        let package = crate::packages::arch::ArchPackage::parse(output_path.to_str().unwrap())
+            .expect("parse generated Arch package");
+        package
+            .native_scriptlet_abi()
+            .iter()
+            .find(|entry| entry.native_slot == "post_install")
+            .expect("Arch post_install entry")
+            .body
+            .text
+            .clone()
+            .expect("Arch .INSTALL is UTF-8")
+    }
+
+    #[test]
+    fn arch_authored_ccs_script_hook_clears_native_positional_arguments() {
+        let mut result = create_test_build_result();
+        result.manifest.hooks.post_install = Some(crate::ccs::manifest::ScriptHook {
+            script: "printf 'post-installed' > /var/lib/example/installed".to_string(),
+            interpreter: "/bin/sh".to_string(),
+            reversible: None,
+        });
+        result.manifest.hooks.pre_remove = Some(crate::ccs::manifest::ScriptHook {
+            script: "printf 'pre-removed' > /var/lib/example/removed".to_string(),
+            interpreter: "/bin/sh".to_string(),
+            reversible: None,
+        });
+
+        assert_eq!(
+            exported_arch_install(&result, "authored.pkg.tar.zst"),
+            "post_install() {\n    set --\n    printf 'post-installed' > /var/lib/example/installed\n}\n\n\
+             post_upgrade() {\n    set --\n    printf 'post-installed' > /var/lib/example/installed\n}\n\n\
+             pre_remove() {\n    set --\n    printf 'pre-removed' > /var/lib/example/removed\n}\n\n"
+        );
+    }
+
+    #[test]
+    fn arch_converted_native_lifecycle_program_is_not_rewritten_by_the_authored_hook_guard() {
+        // Converted native programs preserve their source ABI on
+        // `CcsManifest::native_lifecycle`; they never pass through `Hooks`, so the
+        // zero-argument guard must not rewrite them. The presence of the bundle must
+        // leave the emitted authored-hook `.INSTALL` byte-identical.
+        let authored = crate::ccs::manifest::ScriptHook {
+            script: "printf 'authored' > /dev/null".to_string(),
+            interpreter: "/bin/sh".to_string(),
+            reversible: None,
+        };
+        let mut without = create_test_build_result();
+        without.manifest.hooks.post_install = Some(authored.clone());
+        let mut with = create_test_build_result();
+        with.manifest.hooks.post_install = Some(authored);
+        with.manifest.native_lifecycle = Some(
+            crate::ccs::native_export::rpm::tests::converted_native_lifecycle_bundle(
+                "printf 'native:%s' \"$1\"",
+            ),
+        );
+
+        let expected = "post_install() {\n    set --\n    printf 'authored' > /dev/null\n}\n\n\
+                        post_upgrade() {\n    set --\n    printf 'authored' > /dev/null\n}\n\n";
+        assert_eq!(
+            exported_arch_install(&without, "without-native.pkg.tar.zst"),
+            expected
+        );
+        assert_eq!(
+            exported_arch_install(&with, "with-native.pkg.tar.zst"),
+            expected
+        );
     }
 }

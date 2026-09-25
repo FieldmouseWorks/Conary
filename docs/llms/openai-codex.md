@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-09-23
-revision: 5
+last_updated: 2026-09-24
+revision: 6
 summary: OpenAI-specific notes for Codex context, session controls, and the Conary agent workflow
 ---
 
@@ -58,20 +58,16 @@ in the current issue, PR, or prompt rather than durable docs. Ask for findings,
 decisions, concise rationale, and observed verification—not hidden
 chain-of-thought.
 
-Conary's requested model roles and delegation choices are in `AGENTS.md`; they
-are project workflow choices, not universal rankings or availability
-guarantees. Request model and effort through the available host controls, and
-preserve the host's permission boundaries. If a model is unavailable, report
-that without substitution. Report selected model and effort only when the
-harness exposes them: editing repository instructions cannot change or attest
-the running parent session. OpenAI's [Agents API session configuration guide](https://developers.openai.com/api/docs/guides/agents-api/configuration#update-settings-for-an-existing-session)
+Conary names no required model. Choose model and effort through the available
+host controls, and preserve the host's permission boundaries. If a model is
+unavailable, report that without substitution. Report selected model and effort
+only when the harness exposes them: editing repository instructions cannot
+change or attest the running parent session. OpenAI's [Agents API session configuration guide](https://developers.openai.com/api/docs/guides/agents-api/configuration#update-settings-for-an-existing-session)
 documents settings changes for API-managed sessions; the host owns controls
 available in each session.
 
-If using an optional supervised helper, including DeepSeek, follow the
-[shared agent workflow](agent-workflow.md) and the active session's
-authorization. Conary's default roles do not require contributors to use
-OpenAI tools.
+Delegation to any helper follows the [shared agent workflow](agent-workflow.md)
+and the active session's authorization.
 
 ## Long Work
 

@@ -300,7 +300,8 @@ fn render_installed_scripts_text(
     ));
     if let Some(hook) = ccs_remove_hook {
         output.push_str(&format!(
-            "Installed CCS remove hook (installed_ccs_remove_hooks): present\n  pre-remove       source=installed_ccs_remove_hooks interpreter=/bin/sh reversible={}\n",
+            "Installed CCS remove hook (installed_ccs_remove_hooks): present\n  pre-remove       source=installed_ccs_remove_hooks interpreter={} reversible={}\n",
+            hook.interpreter,
             hook.reversible
                 .map(|value| value.to_string())
                 .unwrap_or_else(|| "unspecified".to_string())
@@ -561,7 +562,7 @@ fn entry_summary(entry: &NativeLifecycleEntry) -> EntryQuerySummary {
 fn ccs_remove_hook_summary(hook: &InstalledCcsRemoveHook) -> CcsRemoveHookQuerySummary {
     CcsRemoveHookQuerySummary {
         source: "installed_ccs_remove_hooks".to_string(),
-        interpreter: "/bin/sh".to_string(),
+        interpreter: hook.interpreter.clone(),
         reversible: hook.reversible,
         script_sha256: conary_core::hash::sha256_prefixed(hook.script.as_bytes()),
     }

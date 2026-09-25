@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-09-23
-revision: 3
+last_updated: 2026-09-24
+revision: 4
 summary: Define scoped agent execution, task graphs, evidence, authorization, resumption, and closeout for Conary work
 ---
 
@@ -33,8 +33,7 @@ A simple, independent task gets a short plan. Substantive work with dependent
 steps uses one canonical graph in its primary issue body; if an established
 handoff already owns that graph, keep it there and link it from the issue and
 PR. A PR links evidence and review but does not create a competing task graph.
-Graph changes and ready-task selection remain with the primary integrator,
-using the `gpt-6-astra` role when available.
+Graph changes and ready-task selection remain with the primary integrator.
 
 The [workflow setup issue](https://github.com/FieldmouseWorks/Conary/issues/1063)
 provides a worked graph with its authorization, effort policy, and evidence.
@@ -58,18 +57,16 @@ completion claim is a pointer to review, not verification. Do not unlock a
 dependent node until its parent verifies the dependency. On batch failure,
 inspect every completed child and keep independent results.
 
-`AGENTS.md` defines the requested default roles and effort. Dispatch only
-useful, bounded work; state exact inputs, acceptance, model and effort, owner,
-and file ownership. Confirm concurrent owners do not overlap and tell them to
-preserve existing edits. The primary integrator owns architecture, graph
-changes, selection, review, and integration. If a requested model is
-unavailable, report it without silent substitution; do not claim a model or
-effort that the harness cannot show. DeepSeek is an optional supervised helper
-only when active project/session authorization permits it; honor an existing
-pause until explicitly re-enabled. If enabled, it never owns architecture or
-integration. Record why it helps, exact model, independent verification,
-results, corrections, and reliability in the existing work record. Do not
-create evaluation-only tasks.
+Conary names no required model or agent tool; each contributor's session
+chooses its own. Dispatch only useful, bounded work; state exact inputs,
+acceptance, owner, and file ownership. Confirm concurrent owners do not overlap
+and tell them to preserve existing edits. The primary integrator owns
+architecture, graph changes, selection, review, and integration; delegated
+helpers never do. If a requested model is unavailable, report it without silent
+substitution; do not claim a model or effort that the harness cannot show.
+Record which model did delegated work, its independent verification, results,
+and corrections in the existing work record. Do not create evaluation-only
+tasks.
 
 ## Authorization And Effort
 

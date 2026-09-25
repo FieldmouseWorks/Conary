@@ -143,11 +143,11 @@ impl LockedRuntimeRoot {
             session_id,
             transaction_engine,
         } = self;
-        let mut overlay_capabilities = if materialized_backing {
+        let mut overlay_scratch = if materialized_backing {
             None
         } else {
             match SelectedRootOverlaySession::preflight(&session_dir) {
-                Ok(capabilities) => Some(capabilities),
+                Ok(scratch) => Some(scratch),
                 Err(error) => {
                     let _ = fs::remove_dir_all(&session_dir);
                     return Err(error);
@@ -158,6 +158,7 @@ impl LockedRuntimeRoot {
             match prepare_current_root(conn, &runtime_root, &session_dir, materialized_backing) {
                 Ok(prepared) => prepared,
                 Err(error) => {
+                    drop(overlay_scratch.take());
                     let _ = fs::remove_dir_all(&session_dir);
                     return Err(error);
                 }
@@ -167,6 +168,7 @@ impl LockedRuntimeRoot {
         let deferred_ima = match DeferredImaAuthority::from_captured(prior) {
             Ok(authority) => authority,
             Err(error) => {
+                drop(overlay_scratch.take());
                 let _ = fs::remove_dir_all(&session_dir);
                 return Err(error);
             }
@@ -179,9 +181,9 @@ impl LockedRuntimeRoot {
                 match SelectedRootOverlaySession::begin_materialized(
                     &session_dir,
                     prior,
-                    overlay_capabilities
+                    overlay_scratch
                         .take()
-                        .expect("OverlayFS capability preflight must precede root preparation"),
+                        .expect("OverlayFS scratch preflight must precede root preparation"),
                 ) {
                     Ok(overlay) => SelectedRootBacking::Overlay(overlay),
                     Err(error) => {
@@ -197,9 +199,9 @@ impl LockedRuntimeRoot {
                     prior,
                     artifact,
                     cas,
-                    overlay_capabilities
+                    overlay_scratch
                         .take()
-                        .expect("OverlayFS capability preflight must precede root preparation"),
+                        .expect("OverlayFS scratch preflight must precede root preparation"),
                 ) {
                     Ok(overlay) => SelectedRootBacking::Overlay(overlay),
                     Err(error) => {
@@ -391,6 +393,9 @@ impl SelectedRootSession {
             Ok(snapshot)
         })();
         if result.is_err() {
+            if let SelectedRootBacking::Overlay(overlay) = &mut self.backing {
+                let _ = overlay.unmount_for_discard();
+            }
             let _ = remove_session_dir(&self.session_dir);
         }
         result
