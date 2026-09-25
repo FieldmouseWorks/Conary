@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-25
-revision: 55
+revision: 56
 summary: Define source-independent lifecycle, exact adopted-artifact conversion, source-authority handoff, manifest-scoped Remi catalog resources, generation activation, and configuration transactions for RPM, Debian, Arch, and eopkg packages
 ---
 
@@ -65,9 +65,11 @@ declaration, as RPM `Provides: /bin/sh` is for a usr-merged payload carrying
 preflight must still find an executable in the projected selected root before
 any hook runs. CCS author script hooks run as `post_install` after payload
 installation and `pre_remove` before payload removal, and receive no positional
-arguments. Native RPM, Debian, and Arch exports preserve that zero-argument ABI
-by clearing the exported scriptlet's positional parameters before the authored
-body runs. Every documented RPM, Debian, ALPM, and eopkg lifecycle semantic in
+arguments when Conary installs the CCS package directly. A native RPM, Debian,
+or Arch export is a package in that format, so its exported scriptlets run
+under that format's lifecycle ABI, including its positional arguments; the
+exporter never strips them. The native lifecycle parity oracle relies on this
+to prove Conary passes each format's exact arguments. Every documented RPM, Debian, ALPM, and eopkg lifecycle semantic in
 this specification is required implementation for the supported-format
 contract.
 
