@@ -503,6 +503,27 @@ pub struct ResourceConstraints {
     pub network_isolated: Option<bool>,
 }
 
+/// The manifest element that owns an assertion under validation.
+///
+/// The owner supplies only the error context; the validation rules are
+/// identical for a test step and a `suite.setup` step.
+#[derive(Debug, Clone, Copy)]
+enum AssertionOwner<'a> {
+    /// A step in `suite.setup`, by zero-based index.
+    SuiteSetup { step: usize },
+    /// A step in the named test, by zero-based index.
+    Test { id: &'a str, step: usize },
+}
+
+impl AssertionOwner<'_> {
+    fn context(&self) -> String {
+        match self {
+            Self::SuiteSetup { step } => format!("suite setup, step {step}"),
+            Self::Test { id, step } => format!("test {id}, step {step}"),
+        }
+    }
+}
+
 impl Assertion {
     /// Validate that the assertion has no conflicting fields.
     ///
@@ -510,7 +531,22 @@ impl Assertion {
     /// same value, or `stdout_contains` and `stdout_not_contains` with the
     /// same string, which would make the assertion impossible to satisfy.
     pub fn validate(&self, test_id: &str, step_index: usize) -> Result<()> {
-        let ctx = || format!("test {test_id}, step {step_index}");
+        self.validate_for(AssertionOwner::Test {
+            id: test_id,
+            step: step_index,
+        })
+    }
+
+    /// Validate an assertion attached to a `suite.setup` step.
+    ///
+    /// Suite setup assertions must obey the same load-time rules as test-step
+    /// assertions, so both route through `validate_for`.
+    pub(crate) fn validate_suite_setup(&self, step_index: usize) -> Result<()> {
+        self.validate_for(AssertionOwner::SuiteSetup { step: step_index })
+    }
+
+    fn validate_for(&self, owner: AssertionOwner<'_>) -> Result<()> {
+        let ctx = || owner.context();
 
         // exit_code vs exit_code_not
         if let (Some(code), Some(not_code)) = (self.exit_code, self.exit_code_not)
@@ -618,6 +654,13 @@ impl TestManifest {
                         "suite corpus coverage and case claims disagree: missing={missing:?}, undeclared={undeclared:?}"
                     );
                 }
+            }
+        }
+        // Suite setup assertions run before any test and must satisfy the
+        // same load-time rules; their owner label identifies them as setup.
+        for (i, step) in self.suite.setup.iter().enumerate() {
+            if let Some(ref assertion) = step.assert {
+                assertion.validate_suite_setup(i)?;
             }
         }
         for test in &self.test {

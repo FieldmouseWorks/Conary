@@ -524,3 +524,97 @@ fn stdout_json_rejects_duplicate_pointers_with_identical_expectations() {
 
     assert!(manifest.validate().is_err());
 }
+
+/// Build a manifest whose single `suite.setup` step asserts the given
+/// `stdout_json` array entries. `entries` is the body of the array.
+fn suite_setup_stdout_json_source(entries: &str) -> String {
+    format!(
+        r#"
+        [suite]
+        name = "setup-stdout-json"
+        phase = 4
+
+        [[suite.setup]]
+        run = "true"
+
+        [suite.setup.assert]
+        stdout_json = [{entries}]
+
+        [[test]]
+        id = "TSETUP01"
+        name = "setup stdout json"
+        description = "validates suite setup stdout_json"
+        timeout = 10
+
+        [[test.step]]
+        run = "true"
+        "#
+    )
+}
+
+/// Write a suite-setup `stdout_json` manifest into `dir` and load it through
+/// the same `load_manifest` path the CLI uses.
+fn load_suite_setup_stdout_json(
+    dir: &std::path::Path,
+    file: &str,
+    entries: &str,
+) -> anyhow::Result<TestManifest> {
+    let path = dir.join(file);
+    std::fs::write(&path, suite_setup_stdout_json_source(entries)).unwrap();
+    crate::config::load_manifest(&path)
+}
+
+#[test]
+fn load_manifest_rejects_overlapping_suite_setup_stdout_json_pointers() {
+    let dir = tempfile::tempdir().unwrap();
+
+    // Positive control through the same fixture: sibling pointers under a
+    // shared parent load, so the negative can only fail on the overlap rule.
+    assert!(
+        load_suite_setup_stdout_json(
+            dir.path(),
+            "siblings.toml",
+            r#"{ pointer = "/data/a", equals = 1 }, { pointer = "/data/b", equals = 2 }"#,
+        )
+        .is_ok()
+    );
+
+    // Negative: `/data` is an ancestor of `/data/status`, so the ancestor
+    // check already determines the descendant.
+    let error = load_suite_setup_stdout_json(
+        dir.path(),
+        "overlap.toml",
+        r#"{ pointer = "/data", equals = { status = "planned" } }, { pointer = "/data/status", equals = "failed" }"#,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("suite setup"), "{error}");
+    assert!(error.contains("/data/status"), "{error}");
+}
+
+#[test]
+fn load_manifest_rejects_malformed_suite_setup_literal_pointer() {
+    let dir = tempfile::tempdir().unwrap();
+
+    // Positive control through the same fixture: a valid literal pointer in
+    // suite setup loads.
+    assert!(
+        load_suite_setup_stdout_json(
+            dir.path(),
+            "valid.toml",
+            r#"{ pointer = "/data", equals = 1 }"#,
+        )
+        .is_ok()
+    );
+
+    // Negative: a literal pointer without a leading slash is rejected while
+    // loading the manifest.
+    let error = load_suite_setup_stdout_json(
+        dir.path(),
+        "malformed.toml",
+        r#"{ pointer = "data", equals = 1 }"#,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("RFC 6901"), "{error}");
+}
