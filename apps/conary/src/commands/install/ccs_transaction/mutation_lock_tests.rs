@@ -9,8 +9,14 @@ use conary_core::repository::versioning::VersionScheme;
 use std::collections::HashMap;
 
 fn metadata_only_ccs(temp: &std::path::Path) -> (CcsPackage, SigningKeyPair) {
-    let package_path = temp.join("ccs-lock-fixture.ccs");
-    let manifest = CcsManifest::new_minimal("ccs-lock-fixture", "2.0.0");
+    metadata_only_ccs_with(temp, CcsManifest::new_minimal("ccs-lock-fixture", "2.0.0"))
+}
+
+fn metadata_only_ccs_with(
+    temp: &std::path::Path,
+    manifest: CcsManifest,
+) -> (CcsPackage, SigningKeyPair) {
+    let package_path = temp.join(format!("{}.ccs", manifest.package.name));
     let result = BuildResult {
         manifest,
         components: HashMap::new(),
@@ -131,4 +137,103 @@ fn standalone_ccs_install_resolves_upgrade_identity_under_the_mutation_lock() {
         Err(error) => error,
     };
     assert!(error.contains("is already installed"), "{error}");
+}
+
+/// Install a metadata-only package whose hard requirement nothing provides,
+/// carrying the certification a pre-lock solve would have attached.
+fn install_with_unsatisfied_certification(
+    temp: &std::path::Path,
+    package: &CcsPackage,
+    dry_run: bool,
+) -> anyhow::Result<()> {
+    let db_path = temp.join("conary.db").to_string_lossy().into_owned();
+    let install_root = temp.join("install-root").to_string_lossy().into_owned();
+    let mut conn = conary_core::db::open(&db_path).unwrap();
+    let policy = conary_core::repository::load_effective_policy(
+        &conn,
+        conary_core::repository::resolution_policy::RequestScope::Any,
+    )
+    .unwrap()
+    .resolution;
+    let certified_outgoing =
+        crate::commands::install::dependencies::CertifiedOutgoing::from_replacements_and_relations(
+            std::iter::empty(),
+            &conary_core::transaction::PackageRelationPlan {
+                removals: Vec::new(),
+                deconfigurations: Vec::new(),
+            },
+        )
+        .unwrap();
+    install_ccs_package_transactionally(
+        &mut conn,
+        package,
+        CcsTransactionInstallOptions {
+            preview: None,
+            db_path: &db_path,
+            root: &install_root,
+            dry_run,
+            defer_generation: false,
+            quiet: true,
+            sandbox_mode: conary_core::scriptlet::SandboxMode::Always,
+            allow_downgrade: false,
+            intent: InstallIntent::PackageChange,
+            reinstall: false,
+            selection_reason: None,
+            selected_manifest_components: None,
+            repository_provenance: None,
+            requested_source_identity: None,
+            replacement: None,
+            certified_outgoing: Some(certified_outgoing),
+            certified_requirements: Some(
+                crate::commands::install::dependencies::CertifiedRequirements {
+                    policy,
+                    capabilities: package.resolution_capabilities().unwrap(),
+                },
+            ),
+        },
+    )
+    .map(|_| ())
+}
+
+/// A dry run takes no mutation lock and reports an unsatisfied solve as a
+/// preview, so it must not re-certify requirements. The same certified inputs
+/// without the dry run are the negative control: they refuse typed.
+#[test]
+fn dry_run_does_not_certify_requirements_under_the_lock() {
+    use conary_core::repository::dependency_model::{
+        RepositoryRequirementClause, RepositoryRequirementGroup, RepositoryRequirementKind,
+    };
+
+    let _mount_skip = crate::commands::composefs_ops::test_mount_skip_guard();
+    let temp = tempfile::tempdir().unwrap();
+    let db_path = temp.path().join("conary.db");
+    std::fs::create_dir_all(temp.path().join("install-root")).unwrap();
+    conary_core::db::init(&db_path).unwrap();
+    crate::commands::test_helpers::seed_test_bootable_runtime(&db_path);
+    let mut manifest = CcsManifest::new_minimal("ccs-lock-consumer", "1.0.0");
+    manifest
+        .requirements
+        .push(RepositoryRequirementGroup::simple(
+            RepositoryRequirementKind::Depends,
+            RepositoryRequirementClause::name_only("absent-provider".to_string()),
+        ));
+    let (package, _signing_key) = metadata_only_ccs_with(temp.path(), manifest);
+
+    install_with_unsatisfied_certification(temp.path(), &package, true)
+        .expect("a dry run previews without certifying requirements under a lock");
+
+    let error = install_with_unsatisfied_certification(temp.path(), &package, false)
+        .expect_err("a real install certified an unsatisfied requirement");
+    assert!(
+        error
+            .downcast_ref::<crate::commands::install::dependencies::RequirementsChanged>()
+            .is_some(),
+        "{error:#}"
+    );
+    let conn = conary_core::db::open(&db_path).unwrap();
+    assert!(
+        Trove::find_by_name(&conn, "ccs-lock-consumer")
+            .unwrap()
+            .is_empty()
+    );
 }

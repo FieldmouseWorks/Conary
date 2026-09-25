@@ -539,8 +539,11 @@ fn install_ccs_package_transactionally_inner(
         certified.require_unchanged(&locked_outgoing)?;
         // The dependency solve chose its provider universe before this
         // transaction took the lock. Re-solve under the lock so a provider
-        // another transaction removed in the window refuses here.
-        if let Some(requirements) = opts.certified_requirements.as_ref() {
+        // another transaction removed in the window refuses here. A dry run
+        // takes no lock and reports an unsatisfied solve as a preview.
+        if !opts.dry_run
+            && let Some(requirements) = opts.certified_requirements.as_ref()
+        {
             super::dependencies::certify_requirements_under_lock(
                 &preflight_state,
                 pkg,
