@@ -21,7 +21,7 @@
 //! [`RootInspectData::recovered_without_state`] set, so callers can tell that
 //! the unknown IDs were never recorded rather than simply omitted.
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use conary_agent_contract::{InspectResult, OperationEnvelope, OperationStatus, RiskLevel};
 use conary_core::generation::root_manifest::CapturedSelectedRoot;
 use conary_core::payload::{
@@ -31,7 +31,7 @@ use conary_core::runtime_root::ConaryRuntimeRoot;
 use serde::{Deserialize, Serialize};
 
 use crate::commands::generation::selected_root::{
-    SelectedRootSource, create_selected_root_stand_in, read_selected_root_baseline_with_source,
+    SelectedRootSource, read_selected_root_baseline_with_source,
 };
 
 pub(crate) const ROOT_INSPECT_SCHEMA_VERSION: u32 = 2;
@@ -179,18 +179,12 @@ pub(crate) fn root_inspect_data(
 ) -> Result<RootInspectData> {
     let normalized = normalize_lookup_path(path)?;
     // The read-only baseline is the same typed selection a real install makes.
-    // The private empty directory stands in for the empty materialization
-    // destination a first-generation projection reads for root metadata and
-    // package-unclaimed parent closure. It is created by the same helper the
-    // real destination uses, inside a private temp parent, so the captured `/`
-    // node carries the destination contract rather than the parent's mode.
-    // Because that node is synthesized rather than committed, `/` withholds it
-    // through `apply_synthesized_root`.
-    let empty_root_parent = tempfile::TempDir::new()
-        .context("failed to create the private selected-root inspection directory")?;
-    let empty_root = create_selected_root_stand_in(empty_root_parent.path())?;
-    let (source, captured) =
-        read_selected_root_baseline_with_source(conn, runtime_root, &empty_root)?;
+    // Only its database-projection branch creates the private empty
+    // materialization stand-in it reads for root metadata and package-unclaimed
+    // parent closure; artifact- and snapshot-backed reads need no temp write
+    // access. Because that stand-in is synthesized rather than committed, `/`
+    // withholds it through `apply_synthesized_root`.
+    let (source, captured) = read_selected_root_baseline_with_source(conn, runtime_root)?;
     let reported = report_source(source);
 
     let mut data = RootInspectData {

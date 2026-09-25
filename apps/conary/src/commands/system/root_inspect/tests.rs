@@ -4,7 +4,7 @@
 
 use super::*;
 use crate::commands::generation::selected_root::{
-    SelectedRootBaselineError, clear_before_current_selection_hook, create_selected_root_stand_in,
+    SelectedRootBaselineError, clear_before_current_selection_hook,
     persist_captured_publication_snapshot, persist_publication_snapshot,
     read_selected_root_baseline, read_selected_root_baseline_with_source,
     set_before_current_selection_hook, set_between_selection_and_collection_hook,
@@ -21,6 +21,124 @@ use conary_core::generation::root_manifest::{
 };
 use conary_core::payload::PayloadNode;
 use conary_core::repository::versioning::VersionScheme;
+
+/// Serializes tests that mutate process environment variables.
+///
+/// `TMPDIR` is read by every `tempfile` constructor in the process, so a test
+/// that points it at an unusable path must not race the rest of the suite. The
+/// exact-child process below runs this one test, and the guard restores the
+/// previous value when it ends.
+static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn lock_env() -> std::sync::MutexGuard<'static, ()> {
+    ENV_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Set one process environment variable and restore its previous value on drop.
+struct EnvVarGuard {
+    key: &'static str,
+    previous: Option<std::ffi::OsString>,
+}
+
+impl EnvVarGuard {
+    fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+        let previous = std::env::var_os(key);
+        unsafe {
+            std::env::set_var(key, value);
+        }
+        Self { key, previous }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        unsafe {
+            if let Some(previous) = &self.previous {
+                std::env::set_var(self.key, previous);
+            } else {
+                std::env::remove_var(self.key);
+            }
+        }
+    }
+}
+
+const TMPDIR_CHILD_SCENARIO: &str = "CONARY_ROOT_INSPECT_TMPDIR_SCENARIO";
+const TMPDIR_CHILD_DB: &str = "CONARY_ROOT_INSPECT_TMPDIR_DB";
+const TMPDIR_CHILD_BAD_DIR: &str = "CONARY_ROOT_INSPECT_TMPDIR_BAD_DIR";
+const TMPDIR_CHILD_MARKER: &str = "CONARY_ROOT_INSPECT_TMPDIR_MARKER";
+const TMPDIR_CHILD_TEST: &str =
+    "commands::system::root_inspect::tests::root_inspect_with_unavailable_tmpdir_child";
+
+/// Run the exact child test with an unusable `TMPDIR`.
+///
+/// The child sets `TMPDIR` itself, so the bad value never reaches a concurrently
+/// running test. The marker file proves the exact child test ran and passed
+/// rather than being filtered out to an empty, trivially successful run.
+fn run_tmpdir_child(scenario: &str, db_path: &std::path::Path, bad_tmpdir: &std::path::Path) {
+    let temp = tempfile::tempdir().unwrap();
+    let marker = temp.path().join("child-ran");
+    let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+    crate::test_hooks::clear_inherited_hooks(&mut command);
+    command
+        .args(["--exact", TMPDIR_CHILD_TEST, "--nocapture"])
+        .env(TMPDIR_CHILD_SCENARIO, scenario)
+        .env(TMPDIR_CHILD_DB, db_path)
+        .env(TMPDIR_CHILD_BAD_DIR, bad_tmpdir)
+        .env(TMPDIR_CHILD_MARKER, &marker);
+    let status = command
+        .status()
+        .expect("spawn the unavailable-TMPDIR inspection child");
+    assert!(
+        status.success(),
+        "the {scenario} unavailable-TMPDIR child test must pass"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&marker).expect("the exact child test must run"),
+        scenario,
+    );
+}
+
+/// Prove the child ran the same inspection under an unusable `TMPDIR`.
+#[test]
+fn root_inspect_with_unavailable_tmpdir_child() {
+    let Ok(scenario) = std::env::var(TMPDIR_CHILD_SCENARIO) else {
+        return;
+    };
+    let _env_lock = lock_env();
+    let db_path = std::path::PathBuf::from(
+        std::env::var_os(TMPDIR_CHILD_DB).expect("the child database path"),
+    );
+    let bad_tmpdir =
+        std::env::var_os(TMPDIR_CHILD_BAD_DIR).expect("the child unusable TMPDIR path");
+    let marker = std::env::var_os(TMPDIR_CHILD_MARKER).expect("the child marker path");
+    let _tmpdir = EnvVarGuard::set("TMPDIR", &bad_tmpdir);
+
+    let conn = conary_core::db::open(&db_path).unwrap();
+    let runtime_root = ConaryRuntimeRoot::from_db_path(&db_path);
+
+    match scenario.as_str() {
+        "current_generation" => {
+            let data = root_inspect_data(&conn, &runtime_root, "/sbin/init").unwrap();
+            assert_eq!(data.source, RootInspectSource::CurrentGeneration);
+            assert!(data.present);
+            assert_eq!(data.kind, Some(RootNodeKind::Regular));
+        }
+        "database_projection" => {
+            let error = root_inspect_data(&conn, &runtime_root, "/opt/fixture/projected")
+                .expect_err("a database projection must need the empty stand-in");
+            let io_error = error
+                .chain()
+                .find_map(|cause| cause.downcast_ref::<std::io::Error>())
+                .expect("the temp-directory failure must be the typed io cause");
+            assert_eq!(io_error.kind(), std::io::ErrorKind::NotFound);
+        }
+        other => panic!("unknown unavailable-TMPDIR scenario {other}"),
+    }
+
+    std::fs::write(marker, &scenario).expect("record the successful child scenario");
+}
 
 fn node(kind: PayloadNodeKind, permissions: u32) -> ResolvedPayloadNode {
     let mut source = PayloadNode::regular(0o644);
@@ -372,6 +490,43 @@ fn root_inspect_reports_database_projection_before_first_snapshot() {
     assert!(json["mode"].is_null());
 }
 
+/// A current-generation artifact is read straight from its typed manifest. It
+/// must inspect successfully even when `TMPDIR` names a directory that does not
+/// exist, because no branch of that read creates the projection stand-in.
+#[test]
+fn current_generation_inspection_succeeds_when_tmpdir_is_unavailable() {
+    let temp = tempfile::tempdir().unwrap();
+    let db_path = temp.path().join("conary.db");
+    conary_core::db::init(&db_path).unwrap();
+    create_active_test_generation(&db_path, 1);
+    let bad_tmpdir = temp.path().join("no-such-tmpdir");
+
+    run_tmpdir_child("current_generation", &db_path, &bad_tmpdir);
+}
+
+/// A database projection still needs the empty materialization stand-in. With
+/// the same unusable `TMPDIR` it must fail while creating that private
+/// directory, proving the stand-in is now made only on this branch.
+#[test]
+fn database_projection_inspection_fails_when_tmpdir_is_unavailable() {
+    let temp = tempfile::tempdir().unwrap();
+    let db_path = temp.path().join("conary.db");
+    conary_core::db::init(&db_path).unwrap();
+    let conn = conary_core::db::open(&db_path).unwrap();
+    let mut trove = Trove::new(
+        "projection-fixture".to_string(),
+        "1.0.0".to_string(),
+        TroveType::Package,
+        VersionScheme::Conary,
+    );
+    trove.install_source = InstallSource::Repository;
+    trove.insert(&conn).unwrap();
+    drop(conn);
+    let bad_tmpdir = temp.path().join("no-such-tmpdir");
+
+    run_tmpdir_child("database_projection", &db_path, &bad_tmpdir);
+}
+
 #[test]
 fn database_projection_matches_the_main_selected_root_baseline() {
     let temp = tempfile::tempdir().unwrap();
@@ -419,9 +574,7 @@ fn database_projection_matches_the_main_selected_root_baseline() {
     assert_eq!(data.source, RootInspectSource::DatabaseProjection);
     assert!(data.present);
 
-    let empty_root_parent = tempfile::TempDir::new().unwrap();
-    let empty_root = create_selected_root_stand_in(empty_root_parent.path()).unwrap();
-    let captured = read_selected_root_baseline(&conn, &runtime_root, &empty_root).unwrap();
+    let captured = read_selected_root_baseline(&conn, &runtime_root).unwrap();
     let entry = captured
         .generation
         .entries
@@ -514,10 +667,7 @@ fn database_projection_selects_and_collects_from_one_read_snapshot() {
     });
 
     let runtime_root = ConaryRuntimeRoot::from_db_path(&db_path);
-    let empty_root_parent = tempfile::TempDir::new().unwrap();
-    let empty_root = create_selected_root_stand_in(empty_root_parent.path()).unwrap();
-    let (source, captured) =
-        read_selected_root_baseline_with_source(&conn, &runtime_root, &empty_root).unwrap();
+    let (source, captured) = read_selected_root_baseline_with_source(&conn, &runtime_root).unwrap();
 
     assert!(
         matches!(source, SelectedRootSource::DatabaseProjection { .. }),
@@ -550,12 +700,10 @@ fn read_baseline_reuses_a_caller_owned_savepoint() {
     conary_core::db::init(&db_path).unwrap();
     let mut conn = conary_core::db::open(&db_path).unwrap();
     let runtime_root = ConaryRuntimeRoot::from_db_path(&db_path);
-    let empty_root_parent = tempfile::TempDir::new().unwrap();
-    let empty_root = create_selected_root_stand_in(empty_root_parent.path()).unwrap();
 
     let savepoint = conn.savepoint().unwrap();
     let (source, _captured) =
-        read_selected_root_baseline_with_source(&savepoint, &runtime_root, &empty_root).unwrap();
+        read_selected_root_baseline_with_source(&savepoint, &runtime_root).unwrap();
     assert_eq!(source, SelectedRootSource::NoCommittedRoot);
     savepoint.commit().unwrap();
 }
@@ -667,8 +815,6 @@ fn current_generation_selection_retries_when_current_advances_past_the_snapshot(
     create_active_test_generation(&db_path, 1);
     let conn = conary_core::db::open(&db_path).unwrap();
     let runtime_root = ConaryRuntimeRoot::from_db_path(&db_path);
-    let empty_root_parent = tempfile::TempDir::new().unwrap();
-    let empty_root = create_selected_root_stand_in(empty_root_parent.path()).unwrap();
 
     let published = std::sync::Arc::new(std::sync::Mutex::new(None::<i64>));
     let hook_path = db_path.clone();
@@ -681,7 +827,7 @@ fn current_generation_selection_retries_when_current_advances_past_the_snapshot(
     });
 
     let (source, _captured) =
-        read_selected_root_baseline_with_source(&conn, &runtime_root, &empty_root).unwrap();
+        read_selected_root_baseline_with_source(&conn, &runtime_root).unwrap();
 
     let expected_snapshot = published
         .lock()
@@ -713,8 +859,6 @@ fn current_generation_selection_refuses_after_the_attempt_limit() {
     create_active_test_generation(&db_path, 1);
     let conn = conary_core::db::open(&db_path).unwrap();
     let runtime_root = ConaryRuntimeRoot::from_db_path(&db_path);
-    let empty_root_parent = tempfile::TempDir::new().unwrap();
-    let empty_root = create_selected_root_stand_in(empty_root_parent.path()).unwrap();
 
     let next_generation = std::sync::Arc::new(std::sync::Mutex::new(2_i64));
     let hook_path = db_path.clone();
@@ -727,7 +871,7 @@ fn current_generation_selection_refuses_after_the_attempt_limit() {
         create_active_test_generation(&hook_path, generation);
     });
 
-    let error = read_selected_root_baseline_with_source(&conn, &runtime_root, &empty_root)
+    let error = read_selected_root_baseline_with_source(&conn, &runtime_root)
         .expect_err("a /current that keeps moving must exhaust the attempts");
     let typed = error
         .downcast_ref::<SelectedRootBaselineError>()
@@ -768,7 +912,10 @@ fn root_inspect_accepts_a_stable_current_generation_without_state_rows() {
     assert_eq!(json["recovered_without_state"], true);
     assert!(json["snapshot_id"].is_null());
     assert!(json["changeset_id"].is_null());
-    assert_eq!(json["sha256"], conary_core::hash::sha256(b"test init binary"));
+    assert_eq!(
+        json["sha256"],
+        conary_core::hash::sha256(b"test init binary")
+    );
 }
 
 /// The stable-link acceptance is bracketed by reads before and after the

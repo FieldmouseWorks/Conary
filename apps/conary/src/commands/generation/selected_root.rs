@@ -562,9 +562,14 @@ fn select_selected_root(
 /// This is the read-only half of `prepare_current_root`: it takes the same
 /// artifact-versus-database decision but never acquires the runtime mutation
 /// lock, creates a session directory, or writes under the runtime root.
-/// `empty_root` stands in for the empty materialization destination of a
-/// first-generation projection, which is read only for root metadata and any
-/// package-unclaimed parent closure.
+///
+/// Artifact- and pending-snapshot-backed reads need no temporary write access.
+/// Only the database projection creates a private [`tempfile::TempDir`] and
+/// makes the empty materialization destination stand-in inside it with
+/// [`create_selected_root_stand_in`]. The stand-in is read only for root
+/// metadata and any package-unclaimed parent closure, and the returned
+/// [`CapturedSelectedRoot`] holds manifest values only, never a path into that
+/// directory, so the temp directory is dropped before returning.
 ///
 /// The active generation config-state upper is deliberately not projected. Its
 /// capture requires content writes into the runtime CAS and selected-root
@@ -572,10 +577,8 @@ fn select_selected_root(
 pub(crate) fn read_selected_root_baseline(
     conn: &rusqlite::Connection,
     runtime_root: &ConaryRuntimeRoot,
-    empty_root: &Path,
 ) -> Result<CapturedSelectedRoot> {
-    read_selected_root_baseline_with_source(conn, runtime_root, empty_root)
-        .map(|(_, captured)| captured)
+    read_selected_root_baseline_with_source(conn, runtime_root).map(|(_, captured)| captured)
 }
 
 /// How many times a selection may be redone after `/current` moves past the
@@ -627,16 +630,21 @@ enum BaselineAttempt {
 /// A stable `/current` link to a generation the snapshot never recorded is a
 /// recovered state-less target, not a race; otherwise the retry and typed
 /// refusal below still apply.
+///
+/// Artifact- and pending-snapshot-backed baselines are read straight from their
+/// typed authorities and need no temporary write access. Only the database
+/// projection creates a private [`tempfile::TempDir`] for the empty
+/// materialization stand-in, and the returned [`CapturedSelectedRoot`] holds no
+/// path into it.
 pub(crate) fn read_selected_root_baseline_with_source(
     conn: &rusqlite::Connection,
     runtime_root: &ConaryRuntimeRoot,
-    empty_root: &Path,
 ) -> Result<(SelectedRootSource, CapturedSelectedRoot)> {
     // A caller may already hold a transaction or savepoint. Reuse that
     // snapshot rather than attempting a nested BEGIN, which SQLite rejects.
     // Its pin cannot be bracketed, so an unrecorded generation stays refused.
     if !conn.is_autocommit() {
-        return match read_baseline_attempt(conn, runtime_root, empty_root, None)? {
+        return match read_baseline_attempt(conn, runtime_root, None)? {
             BaselineAttempt::Complete { source, captured } => Ok((source, *captured)),
             BaselineAttempt::StaleCurrentGeneration => {
                 Err(SelectedRootBaselineError::CurrentGenerationChanged.into())
@@ -651,7 +659,7 @@ pub(crate) fn read_selected_root_baseline_with_source(
         // selection; a state-less target needs all three reads to agree.
         let current_before = current_generation_link(runtime_root)?;
         let transaction = conn.unchecked_transaction()?;
-        match read_baseline_attempt(&transaction, runtime_root, empty_root, current_before) {
+        match read_baseline_attempt(&transaction, runtime_root, current_before) {
             Ok(BaselineAttempt::Complete { source, captured }) => {
                 transaction.commit()?;
                 return Ok((source, *captured));
@@ -692,7 +700,6 @@ fn current_generation_link(runtime_root: &ConaryRuntimeRoot) -> conary_core::Res
 fn read_baseline_attempt(
     conn: &rusqlite::Connection,
     runtime_root: &ConaryRuntimeRoot,
-    empty_root: &Path,
     current_before: Option<i64>,
 ) -> Result<BaselineAttempt> {
     let selection = select_selected_root(
@@ -761,11 +768,20 @@ fn read_baseline_attempt(
             }
         }
         SelectedRootSelection::DatabaseProjection { installed } => {
+            // The projection synthesizes `/` from the empty materialization
+            // destination a first-generation install would use. Artifact- and
+            // snapshot-backed reads never reach this branch, so only here does
+            // the read need a private temp parent and write access.
+            let stand_in_parent = tempfile::TempDir::new()
+                .context("failed to create the private selected-root projection directory")?;
+            let empty_root = create_selected_root_stand_in(stand_in_parent.path())?;
             let captured =
                 conary_core::generation::builder::collect_selected_root_from_db_with_authority(
-                    conn, empty_root,
+                    conn,
+                    &empty_root,
                 )
                 .map_err(anyhow::Error::from)?;
+            drop(stand_in_parent);
             let source = match installed {
                 InstalledDatabaseAuthority::Present => SelectedRootSource::DatabaseProjection {
                     changeset_id: GenerationPublication::applied_high_water_changeset_id(conn)?,
