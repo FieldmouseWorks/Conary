@@ -126,9 +126,12 @@ fn nested_root_negation_preserves_positive_literals() {
         &[root],
         &policy,
         None,
-        &[],
-        &std::collections::HashSet::new(),
-        false,
+        install::FixedTransactionFacts {
+            outgoing_trove_ids: &[],
+            relation_only_trove_ids: &std::collections::HashSet::new(),
+            lock_surviving_installed: false,
+            ignored_installed_groups: &std::collections::HashSet::new(),
+        },
     )
     .unwrap();
     let names = provider

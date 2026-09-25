@@ -6,10 +6,12 @@
 //! A known end state is `(installed - outgoing) + incoming`. SAT may add
 //! repository packages, and relation planning may remove more installed troves
 //! than the caller declared outgoing, so the set of installed packages the
-//! transaction can affect is only complete after a solve. This module loads the
-//! bounded candidate universe once as cheap raw facts and admits a candidate
-//! only once a selected or removed capability mentions one of its atoms; an
-//! unadmitted candidate never incurs architecture resolution or evaluation.
+//! transaction can affect is only complete after a solve. Every surviving
+//! installed package the transaction's groups can observe is rooted as the
+//! disjunction of its exact identity and the loaded candidates that
+//! relation-remove it, so its stored dependencies are enforced natively by SAT
+//! unless a selected obsoleter removes it; the affected capability set decides
+//! which installed packages are observed.
 //!
 //! The fixed-point pass driver itself lives in `fixed_point`, which decides
 //! which validated groups each pass compiles into SAT roots.
@@ -30,6 +32,7 @@ use crate::repository::versioning::VersionScheme;
 use crate::resolver::canonical::{CanonicalEquivalents, load_canonical_equivalents};
 use crate::resolver::identity::PackageIdentity;
 use crate::resolver::provider::ConaryProvider;
+use crate::resolver::provider::types::RequirementGroupIdentity;
 
 use super::{
     EndState, SatGroupOwner, SatPackage, SatRelationRemoval, SatResolution, SatSource,
@@ -110,6 +113,8 @@ impl ValidatedRequirementGroup {
 struct EndStateFacts {
     /// Every installed package trove before the transaction removes anything.
     before: Vec<PackageIdentity>,
+    /// `before - outgoing`, the installed packages the transaction keeps.
+    surviving: Vec<PackageIdentity>,
     /// `(before - outgoing) + incoming`, package troves only.
     fixed: Vec<PackageIdentity>,
 }
@@ -128,7 +133,7 @@ fn end_state_facts(
     let before =
         crate::resolver::requirements::load_installed_package_identities_for_packages(conn)?;
     let outgoing = outgoing_trove_ids.iter().copied().collect::<HashSet<_>>();
-    let mut fixed = before
+    let surviving = before
         .iter()
         .filter(|package| {
             !package
@@ -137,57 +142,44 @@ fn end_state_facts(
         })
         .cloned()
         .collect::<Vec<_>>();
+    let mut fixed = surviving.clone();
     if let Some(incoming) = incoming {
         fixed.push(incoming.clone());
     }
-    Ok(EndStateFacts { before, fixed })
+    Ok(EndStateFacts {
+        before,
+        surviving,
+        fixed,
+    })
 }
 
-/// The residual expression one validated group still needs from the solver
-/// against the fixed end state (`None` means the fixed state already holds it).
-fn end_state_residual(
-    group: &ValidatedRequirementGroup,
-    fixed_end_state: &[PackageIdentity],
-    native_architecture: &str,
-    canonical_equivalents: &CanonicalEquivalents,
-) -> Result<Option<RepositoryRequirementExpression>> {
-    if group.satisfied_against(native_architecture, fixed_end_state, canonical_equivalents)? {
-        return Ok(None);
-    }
-    simplify_against_end_state(
-        &group.expression,
-        group.version_scheme,
-        &group.depending_architecture,
-        native_architecture,
-        fixed_end_state,
-        canonical_equivalents,
-    )
+/// One surviving installed package the transaction's groups can observe, forced
+/// as a SAT root that keeps it unless a loaded candidate relation-removes it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ForcedInstalledTrove {
+    pub(super) trove_id: i64,
 }
 
 /// The hard groups validated against the transaction end state and the finite
 /// universe of installed candidates they are drawn from.
 struct EndStateValidation {
-    /// Groups in evaluation order: incoming first, then candidates in persisted
-    /// order as they are admitted.
+    /// Groups in evaluation order: incoming first, then admitted installed
+    /// groups. Every group carries a full expression; the pass driver decides
+    /// which owners are rooted on each pass.
     groups: Vec<ValidatedRequirementGroup>,
-    /// SAT root expression for each group, aligned with `groups`.
-    ///
-    /// An incoming request with a fixed incoming identity and every admitted
-    /// installed group carry their full expression. A request group with no
-    /// incoming identity keeps the fixed-state residual until phase 2 forces
-    /// surviving installed packages as exact roots.
-    residuals: Vec<Option<RepositoryRequirementExpression>>,
-    /// Whether each group is already rooted by its full expression, so a
-    /// violated pass never rewrites it.
-    live: Vec<bool>,
     /// Installed candidates not yet admitted, in persisted order.
     candidates: Vec<InstalledCandidate>,
-    /// Whether each candidate has been admitted or permanently dropped.
+    /// Whether each candidate has been admitted or permanently discharged.
     admitted: Vec<bool>,
+    /// Surviving installed packages the transaction's groups can observe.
+    forced_installed: Vec<ForcedInstalledTrove>,
+    /// Installed groups already unsatisfied before the transaction, discharged
+    /// by identity so their forced owner never becomes unsatisfiable.
+    ignored_groups: HashSet<RequirementGroupIdentity>,
     /// Capability names the transaction adds or removes; only grows.
     affected: HashSet<String>,
-    /// Explicit pass bound. Every non-final pass roots a newly violated group,
-    /// admits a candidate, or grows the hidden removal set; restoring a stale
+    /// Explicit pass bound. Every non-final pass admits a candidate, grows the
+    /// hidden removal set, or newly roots a validated group; restoring a stale
     /// hidden trove shrinks it. All moves are finite, so the loop takes at most
     /// `groups + 2 * candidates + 1` passes before the defensive bound refuses.
     max_passes: usize,
@@ -198,8 +190,6 @@ struct EndStateValidation {
 impl EndStateValidation {
     fn new(
         groups: Vec<ValidatedRequirementGroup>,
-        residuals: Vec<Option<RepositoryRequirementExpression>>,
-        live: Vec<bool>,
         candidates: Vec<InstalledCandidate>,
         affected: HashSet<String>,
         canonical_equivalents: CanonicalEquivalents,
@@ -208,34 +198,64 @@ impl EndStateValidation {
         let max_passes = groups.len() + 2 * candidates.len() + 1;
         Self {
             groups,
-            residuals,
-            live,
             candidates,
             admitted,
+            forced_installed: Vec::new(),
+            ignored_groups: HashSet::new(),
             affected,
             max_passes,
             canonical_equivalents,
         }
     }
 
-    /// Admit every not-yet-admitted candidate whose expression mentions an
-    /// affected capability, appending it in persisted candidate order.
+    /// Recompute the surviving installed packages the transaction's groups can
+    /// observe: a surviving package whose literal name, one of its provided
+    /// capabilities, or a canonical equivalent of its name appears in the
+    /// affected capability set.
+    fn refresh_forced_installed(&mut self, surviving: &[PackageIdentity]) {
+        let mut forced = Vec::new();
+        for package in surviving {
+            let Some(trove_id) = package.installed_trove_id else {
+                continue;
+            };
+            let observed = self.affected.contains(&package.name)
+                || self
+                    .canonical_equivalents
+                    .for_name(&package.name)
+                    .iter()
+                    .any(|equivalent| self.affected.contains(equivalent))
+                || package
+                    .provided_capabilities
+                    .iter()
+                    .any(|capability| self.affected.contains(&capability.name));
+            if observed {
+                forced.push(ForcedInstalledTrove { trove_id });
+            }
+        }
+        self.forced_installed = forced;
+    }
+
+    /// Admit every not-yet-admitted candidate the transaction can observe,
+    /// appending it in persisted candidate order.
     ///
-    /// Admission is where a candidate's architecture authority is resolved and
-    /// its pre-transaction satisfaction is evaluated. A missing authority is a
-    /// typed refusal for that admitted group only. A group that was already
-    /// unsatisfied before the transaction is dropped permanently so a
-    /// pre-existing breakage is never attributed to this transaction. A
-    /// candidate whose owner this pass's relation plan removes is left
-    /// unadmitted, because the owner is not part of that pass's end state; the
-    /// exclusion accumulates across passes. Returns whether any admitted
-    /// candidate contributed a group that still needs the solver.
+    /// A candidate is observed when its owner is a forced installed package or
+    /// its group expression mentions an affected capability. Admission is where
+    /// a candidate's architecture authority is resolved and its pre-transaction
+    /// satisfaction is evaluated. A missing authority is a typed refusal for
+    /// that admitted group only. A group that was already unsatisfied before
+    /// the transaction is discharged permanently by identity so a pre-existing
+    /// breakage is never attributed to this transaction and never makes a
+    /// forced owner unsatisfiable. A candidate whose owner this pass's relation
+    /// plan removes is left unadmitted. Returns whether any admitted candidate
+    /// contributed a group that still needs the solver.
     fn admit_mentioned(
         &mut self,
         before: &[PackageIdentity],
+        surviving: &[PackageIdentity],
         native_architecture: &str,
         removed_trove_ids: &HashSet<i64>,
     ) -> Result<bool> {
+        self.refresh_forced_installed(surviving);
         let mut newly_mentioned = Vec::new();
         for (index, candidate) in self.candidates.iter().enumerate() {
             if self.admitted[index] {
@@ -244,11 +264,16 @@ impl EndStateValidation {
             if removed_trove_ids.contains(&candidate.trove_id) {
                 continue;
             }
-            if candidate
-                .expression
-                .atoms()
+            let owner_forced = self
+                .forced_installed
                 .iter()
-                .any(|atom| self.affected.contains(&atom.name))
+                .any(|forced| forced.trove_id == candidate.trove_id);
+            if owner_forced
+                || candidate
+                    .expression
+                    .atoms()
+                    .iter()
+                    .any(|atom| self.affected.contains(&atom.name))
             {
                 newly_mentioned.push(index);
             }
@@ -256,19 +281,30 @@ impl EndStateValidation {
 
         let mut admitted_group = false;
         for index in newly_mentioned {
-            // Admission is one-way: a dropped candidate is never reconsidered.
+            // Admission is one-way: a discharged candidate is never
+            // reconsidered.
             self.admitted[index] = true;
-            let group = self.candidates[index].clone().into_validated()?;
+            let candidate = self.candidates[index].clone();
+            let group = candidate.clone().into_validated()?;
             if !group.satisfied_against(native_architecture, before, &self.canonical_equivalents)? {
+                self.ignored_groups
+                    .insert(RequirementGroupIdentity::Installed {
+                        trove_id: candidate.trove_id,
+                        requirement_group_id: candidate.requirement_group_id,
+                    });
                 continue;
             }
-            // Installed groups use their full expression. Post-solve validation
-            // still projects them against the fixed end state until phase 2
-            // makes surviving installed packages forced exact roots.
-            self.residuals.push(Some(group.expression.clone()));
-            self.live.push(true);
+            // A rooted group's atoms, including condition atoms, are observed
+            // by the transaction, so they can force the installed packages they
+            // name on a later pass.
+            for atom in candidate.expression.atoms() {
+                self.affected.insert(atom.name.clone());
+            }
             self.groups.push(group);
             admitted_group = true;
+        }
+        if admitted_group {
+            self.refresh_forced_installed(surviving);
         }
         Ok(admitted_group)
     }
@@ -285,6 +321,7 @@ impl EndStateValidation {
         selected: &[PackageIdentity],
         remove_order: &[SatRelationRemoval],
         before: &[PackageIdentity],
+        surviving: &[PackageIdentity],
         native_architecture: &str,
     ) -> Result<bool> {
         for package in selected {
@@ -321,6 +358,7 @@ impl EndStateValidation {
         }
         self.admit_mentioned(
             before,
+            surviving,
             native_architecture,
             &removed_trove_ids(remove_order),
         )
@@ -398,15 +436,8 @@ pub(super) fn solve_requirement_groups_for_end_state(
             if let Some(message) = policy.validate_for_dependency_resolution().err() {
                 return Err(Error::ConfigError(message));
             }
-            let residuals = validated
-                .iter()
-                .map(|group| Some(group.expression.clone()))
-                .collect::<Vec<_>>();
-            let live = vec![true; validated.len()];
             let mut validation = EndStateValidation::new(
                 validated,
-                residuals,
-                live,
                 Vec::new(),
                 HashSet::new(),
                 canonical_equivalents,
@@ -421,7 +452,7 @@ pub(super) fn solve_requirement_groups_for_end_state(
                 outgoing_trove_ids: &[],
                 lock_surviving_installed: false,
             };
-            solve_validated_groups_to_fixed_point(&context, &mut validation, None, &[], "")
+            solve_validated_groups_to_fixed_point(&context, &mut validation, None, &[], &[], "")
         }
         EndState::Known { outgoing_trove_ids } => {
             let native_architecture = crate::repository::registry::detect_system_arch()?;
@@ -438,37 +469,14 @@ pub(super) fn solve_requirement_groups_for_end_state(
             }
             let candidates =
                 installed_hard_group_candidates(conn, outgoing_trove_ids, &facts.before)?;
-            // With a fixed incoming solvable SAT sees every incoming-provided
-            // atom, so the incoming request's hard groups are full-expression
-            // roots instead of residuals. A request group with no incoming
-            // identity keeps the fixed-state residual until phase 2 forces
-            // surviving installed packages as exact roots.
-            let incoming_fixed = incoming.is_some();
-            let mut residuals = Vec::with_capacity(validated.len());
-            let mut live = Vec::with_capacity(validated.len());
-            for group in &validated {
-                if incoming_fixed && matches!(group.owner, ValidatedGroupOwner::Incoming) {
-                    residuals.push(Some(group.expression.clone()));
-                    live.push(true);
-                } else {
-                    residuals.push(end_state_residual(
-                        group,
-                        &facts.fixed,
-                        &native_architecture,
-                        &canonical_equivalents,
-                    )?);
-                    live.push(false);
-                }
-            }
-            let mut validation = EndStateValidation::new(
-                validated,
-                residuals,
-                live,
-                candidates,
-                affected,
-                canonical_equivalents,
-            );
-            validation.admit_mentioned(&facts.before, &native_architecture, &HashSet::new())?;
+            let mut validation =
+                EndStateValidation::new(validated, candidates, affected, canonical_equivalents);
+            validation.admit_mentioned(
+                &facts.before,
+                &facts.surviving,
+                &native_architecture,
+                &HashSet::new(),
+            )?;
             if validation.groups.is_empty() {
                 return Ok(SatResolution::empty());
             }
@@ -508,178 +516,11 @@ pub(super) fn solve_requirement_groups_for_end_state(
                 &mut validation,
                 Some(facts.fixed.as_slice()),
                 &facts.before,
+                &facts.surviving,
                 &native_architecture,
             )
         }
     }
-}
-
-/// Simplify one requirement expression against the fixed end state, returning
-/// the residual the solver must still satisfy (`None` means already true).
-///
-/// This remains only for request groups that have no fixed incoming solvable:
-/// with no incoming identity in SAT there is nothing that can make their
-/// installed conditions visible until phase 2 forces surviving installed
-/// packages as exact roots. A request with a fixed incoming identity uses its
-/// full expression instead.
-///
-/// Any sub-expression the end state satisfies is true for the whole
-/// transaction, so it is dropped. This makes the solver's model agree with the
-/// fixed state without pinning every surviving installed trove as a root
-/// requirement: when `bar` survives, `foo if bar` becomes `foo`; when `bar` is
-/// absent from both installed state and the incoming package, the implication
-/// disappears; and an incoming-provided atom inside a conjunction is removed
-/// instead of forcing SAT to find a candidate that does not exist.
-///
-/// `with`/`without` survive only when the end state does not satisfy them. They
-/// compile to one same-provider capability expression evaluated per candidate,
-/// so a satisfied one is dropped whole rather than decomposed.
-fn simplify_against_end_state(
-    expression: &RepositoryRequirementExpression,
-    version_scheme: VersionScheme,
-    depending_architecture: &str,
-    native_architecture: &str,
-    end_state: &[PackageIdentity],
-    canonical_equivalents: &CanonicalEquivalents,
-) -> Result<Option<RepositoryRequirementExpression>> {
-    use RepositoryRequirementExpression as Expression;
-
-    match expression {
-        // A capability or same-provider expression the fixed end state already
-        // satisfies is true for the whole transaction and needs no repository
-        // work. Composite nodes decide their own satisfaction structurally, so a
-        // sub-expression is evaluated exactly once.
-        Expression::Atom(_) | Expression::With { .. } | Expression::Without { .. } => {
-            if crate::resolver::requirements::requirement_expression_satisfied_with_canonical_equivalents(
-                expression,
-                version_scheme,
-                depending_architecture,
-                native_architecture,
-                end_state,
-                canonical_equivalents,
-            )? {
-                Ok(None)
-            } else {
-                Ok(Some(expression.clone()))
-            }
-        }
-        Expression::And(operands) => {
-            let mut rewritten = Vec::with_capacity(operands.len());
-            for operand in operands {
-                if let Some(operand) = simplify_against_end_state(
-                    operand,
-                    version_scheme,
-                    depending_architecture,
-                    native_architecture,
-                    end_state,
-                    canonical_equivalents,
-                )? {
-                    rewritten.push(operand);
-                }
-            }
-            Ok(match rewritten.len() {
-                0 => None,
-                1 => rewritten.pop(),
-                _ => Some(Expression::And(rewritten)),
-            })
-        }
-        Expression::Or(operands) => {
-            let mut rewritten = Vec::with_capacity(operands.len());
-            for operand in operands {
-                match simplify_against_end_state(
-                    operand,
-                    version_scheme,
-                    depending_architecture,
-                    native_architecture,
-                    end_state,
-                    canonical_equivalents,
-                )? {
-                    Some(operand) => rewritten.push(operand),
-                    // One true disjunct makes the whole disjunction true.
-                    None => return Ok(None),
-                }
-            }
-            Ok(Some(Expression::Or(rewritten)))
-        }
-        Expression::If {
-            requirement,
-            condition,
-            otherwise,
-        } => {
-            let branch = if condition_holds_against_end_state(
-                condition,
-                version_scheme,
-                depending_architecture,
-                native_architecture,
-                end_state,
-                canonical_equivalents,
-            )? {
-                requirement
-            } else {
-                match otherwise {
-                    Some(otherwise) => otherwise,
-                    None => return Ok(None),
-                }
-            };
-            simplify_against_end_state(
-                branch,
-                version_scheme,
-                depending_architecture,
-                native_architecture,
-                end_state,
-                canonical_equivalents,
-            )
-        }
-        Expression::Unless {
-            requirement,
-            condition,
-            otherwise,
-        } => {
-            let branch = if !condition_holds_against_end_state(
-                condition,
-                version_scheme,
-                depending_architecture,
-                native_architecture,
-                end_state,
-                canonical_equivalents,
-            )? {
-                requirement
-            } else {
-                match otherwise {
-                    Some(otherwise) => otherwise,
-                    None => return Ok(None),
-                }
-            };
-            simplify_against_end_state(
-                branch,
-                version_scheme,
-                depending_architecture,
-                native_architecture,
-                end_state,
-                canonical_equivalents,
-            )
-        }
-    }
-}
-
-/// Evaluate one condition sub-expression against the fixed end state using the
-/// shared typed expression evaluator.
-fn condition_holds_against_end_state(
-    condition: &RepositoryRequirementExpression,
-    version_scheme: VersionScheme,
-    depending_architecture: &str,
-    native_architecture: &str,
-    end_state: &[PackageIdentity],
-    canonical_equivalents: &CanonicalEquivalents,
-) -> Result<bool> {
-    crate::resolver::requirements::requirement_expression_satisfied_with_canonical_equivalents(
-        condition,
-        version_scheme,
-        depending_architecture,
-        native_architecture,
-        end_state,
-        canonical_equivalents,
-    )
 }
 
 /// Build the install order from the identities resolvo selected.
@@ -714,5 +555,22 @@ pub(super) fn collect_install_order(
                 },
             }
         })
+        .collect()
+}
+
+/// Build the install order for a known end state: only the packages the
+/// transaction newly installs.
+///
+/// Every surviving installed package the transaction can observe is a fixed
+/// SAT root, so resolvo selects it as a fact of the projected end state. Such a
+/// package is already installed and must never be reported as something to
+/// install.
+pub(super) fn collect_new_install_order(
+    provider: &ConaryProvider<'_>,
+    solvable_ids: &[SolvableId],
+) -> Vec<SatPackage> {
+    collect_install_order(provider, solvable_ids)
+        .into_iter()
+        .filter(|package| package.installed_trove_id.is_none())
         .collect()
 }

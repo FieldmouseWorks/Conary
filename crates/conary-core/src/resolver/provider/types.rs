@@ -42,6 +42,13 @@ pub enum ConaryConstraint {
     /// installed candidate, so its identity must never be satisfied by a
     /// same-name candidate.
     FixedIncoming,
+    /// Exact root selecting one surviving installed trove.
+    ///
+    /// A known end state keeps every surviving installed package the
+    /// transaction can observe, so its exact installed solvable is a required
+    /// fact rather than an optional candidate. `filter_candidates` matches by
+    /// installed trove identity, never by name/version.
+    ExactInstalledTrove(i64),
     /// Exact solvable identities that satisfy a compiled condition atom under
     /// one concrete package name.
     ///
@@ -250,7 +257,7 @@ impl CapabilityExpression {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SolverDep {
     pub expression: SolverExpression,
-    pub requirement_group: Option<RepositoryRequirementGroupIdentity>,
+    pub requirement_group: Option<RequirementGroupIdentity>,
 }
 
 /// Persisted authority for one repository requirement group.
@@ -258,6 +265,21 @@ pub struct SolverDep {
 pub struct RepositoryRequirementGroupIdentity {
     pub repository_package_id: i64,
     pub repository_requirement_group_id: i64,
+}
+
+/// The exact persisted requirement group behind a compiled dependency, from
+/// either a repository package or an installed trove.
+///
+/// The fixed-point driver discharges individual pre-existing broken installed
+/// groups by identity, so an installed dependency must carry the same typed
+/// identity the repository path already carries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum RequirementGroupIdentity {
+    Repository(RepositoryRequirementGroupIdentity),
+    Installed {
+        trove_id: i64,
+        requirement_group_id: i64,
+    },
 }
 
 /// Exact transaction relation attached to a solver candidate.
@@ -313,6 +335,9 @@ impl fmt::Display for ConaryConstraint {
                 write!(f, "same-provider {expression:?}")
             }
             Self::FixedIncoming => write!(f, "fixed incoming package"),
+            Self::ExactInstalledTrove(trove_id) => {
+                write!(f, "installed trove {trove_id}")
+            }
             Self::ExactSolvables(solvables) => write!(f, "exact solvables {solvables:?}"),
         }
     }

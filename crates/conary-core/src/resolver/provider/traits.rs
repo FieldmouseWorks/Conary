@@ -190,6 +190,20 @@ impl ConaryProvider<'_> {
                 })
                 .collect();
         }
+        // A fixed installed root selects one exact surviving trove, never a
+        // same-name repository candidate.
+        if let ConaryConstraint::ExactInstalledTrove(trove_id) = constraint {
+            return candidates
+                .iter()
+                .copied()
+                .filter(|&sid| {
+                    let package = &self.solvables[sid.to_index()];
+                    let matches = package.installed_trove_id == Some(*trove_id)
+                        && package.name == *requested_name;
+                    if inverse { !matches } else { matches }
+                })
+                .collect();
+        }
         candidates
             .iter()
             .copied()
@@ -290,7 +304,7 @@ impl DependencyProvider for ConaryProvider<'_> {
         if name_str == "\0conary:false" {
             return None;
         }
-        let candidates = self.candidates_for_name(name);
+        let mut candidates = self.candidates_for_name(name);
         if candidates.is_empty() {
             return None;
         }
@@ -325,14 +339,7 @@ impl DependencyProvider for ConaryProvider<'_> {
         // If the package is pinned (troves.pinned = 1), lock the solver to
         // the installed version so the SAT solver cannot choose a different
         // version.  This implements G3: respect per-package version pins.
-        //
-        // A fixed end state additionally locks the surviving installed
-        // candidate for an exact package name: the transaction keeps that
-        // trove, so a requirement may not replace it with a repository version.
-        // Virtual capabilities are deliberately not locked: several packages
-        // may provide one, so forbidding an alternative provider would reject a
-        // satisfiable end state.
-        let locked = self
+        let mut locked = self
             .fixed_incoming_candidate(name)
             .filter(|solvable_id| candidates.contains(solvable_id))
             .or_else(|| {
@@ -340,15 +347,37 @@ impl DependencyProvider for ConaryProvider<'_> {
                     let pkg = &self.solvables[sid.to_index()];
                     pkg.name == *name_str && pkg.installed_pinned
                 })
-            })
-            .or_else(|| {
-                if self.surviving_installed_candidates_locked {
-                    self.installed_solvable_for_name(name)
-                        .filter(|solvable_id| candidates.contains(solvable_id))
-                } else {
-                    None
-                }
             });
+
+        // A fixed end state keeps every surviving installed variant of the
+        // exact name. Repository candidates of that name must never replace a
+        // surviving variant, so they are filtered out rather than allowed to
+        // compete. With more than one variant the solver must be able to select
+        // all of them, which the exact installed roots require and
+        // `allow_multiple` permits. With one variant a lock names it
+        // unambiguously and forbids every other candidate.
+        let mut allow_multiple = false;
+        if self.surviving_installed_candidates_locked && locked.is_none() {
+            let exact_installed_variants = candidates
+                .iter()
+                .copied()
+                .filter(|&sid| {
+                    let pkg = &self.solvables[sid.to_index()];
+                    pkg.name == *name_str && pkg.installed_trove_id.is_some()
+                })
+                .collect::<Vec<_>>();
+            if !exact_installed_variants.is_empty() {
+                candidates.retain(|&sid| {
+                    let pkg = &self.solvables[sid.to_index()];
+                    pkg.name != *name_str || pkg.installed_trove_id.is_some()
+                });
+                if exact_installed_variants.len() > 1 {
+                    allow_multiple = true;
+                } else {
+                    locked = exact_installed_variants.first().copied();
+                }
+            }
+        }
 
         Some(Candidates {
             candidates,
@@ -356,7 +385,7 @@ impl DependencyProvider for ConaryProvider<'_> {
             locked,
             hint_dependencies_available: HintDependenciesAvailable::All,
             excluded: Vec::new(),
-            allow_multiple: false,
+            allow_multiple,
         })
     }
 

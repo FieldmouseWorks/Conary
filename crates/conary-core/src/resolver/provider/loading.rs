@@ -19,8 +19,8 @@ use crate::repository::versioning::{RepoVersionConstraint, VersionScheme, parse_
 use crate::resolver::identity::ProvidedCapability;
 
 use super::types::{
-    CapabilityExpression, ConaryConstraint, RepositoryRequirementGroupIdentity, SolverDep,
-    SolverExpression, SolverRelation,
+    CapabilityExpression, ConaryConstraint, RepositoryRequirementGroupIdentity,
+    RequirementGroupIdentity, SolverDep, SolverExpression, SolverRelation,
 };
 
 /// Load dependency requests for a repository package.
@@ -94,15 +94,17 @@ fn load_grouped_dependency_requests(
                 package_scheme,
                 package_architecture,
             )?,
-            requirement_group: Some(RepositoryRequirementGroupIdentity {
-                repository_package_id: group.repository_package_id,
-                repository_requirement_group_id: group.id.ok_or_else(|| {
-                    Error::MissingId(format!(
-                        "repository requirement group for package {} has no persisted ID",
-                        group.repository_package_id
-                    ))
-                })?,
-            }),
+            requirement_group: Some(RequirementGroupIdentity::Repository(
+                RepositoryRequirementGroupIdentity {
+                    repository_package_id: group.repository_package_id,
+                    repository_requirement_group_id: group.id.ok_or_else(|| {
+                        Error::MissingId(format!(
+                            "repository requirement group for package {} has no persisted ID",
+                            group.repository_package_id
+                        ))
+                    })?,
+                },
+            )),
         });
     }
 
@@ -367,13 +369,21 @@ pub(super) fn load_installed_dependency_requests(
             )
         })
         .map(|record| {
+            let requirement_group_id = record.id.ok_or_else(|| {
+                Error::MissingId(format!(
+                    "installed requirement group for trove {trove_id} has no persisted ID"
+                ))
+            })?;
             Ok(SolverDep {
                 expression: repository_expression_to_solver_for_architecture(
                     &record.requirement.expression,
                     record.version_scheme,
                     package_architecture,
                 )?,
-                requirement_group: None,
+                requirement_group: Some(RequirementGroupIdentity::Installed {
+                    trove_id,
+                    requirement_group_id,
+                }),
             })
         })
         .collect()

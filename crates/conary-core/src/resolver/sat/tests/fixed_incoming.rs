@@ -231,6 +231,71 @@ fn relation_removed_condition_is_not_reloaded_by_a_later_pass() {
 }
 
 #[test]
+fn installed_root_does_not_load_an_unreferenced_obsoleter() {
+    let (_dir, conn) = setup_test_db();
+    let repository_id = authority_repository(&conn);
+    let bar_trove_id = insert_rpm_trove(&conn, "bar", "1.0.0", &[]);
+    let baz_id = insert_repo_pkg_with_reqs(
+        &conn,
+        repository_id,
+        "baz",
+        "2.0-1",
+        "https://example.invalid/baz.rpm",
+        "rpm",
+        &[],
+    );
+    insert_repo_pkg_with_reqs(
+        &conn,
+        repository_id,
+        "helper",
+        "1-1",
+        "https://example.invalid/helper.rpm",
+        "rpm",
+        &[],
+    );
+    let obsolete = crate::repository::package_relation::parse_native_relation(
+        RepositoryRequirementKind::Obsolete,
+        VersionScheme::Rpm,
+        "bar < 2",
+    )
+    .unwrap();
+    insert_typed_repo_requirement_group(&conn, baz_id, &obsolete);
+
+    // `helper` keeps the transaction on the SAT path: the positive `bar` root
+    // alone is already held by the fixed end state. Nothing names `baz`, so its
+    // typed relation never loads and the forced `bar` root has no remover
+    // alternative. The disjunction must not pull the obsoleter into the solve.
+    let groups = parse_groups(&["bar", "helper"]);
+    let policy = ResolutionPolicy::new().with_primary_source_identity("fedora-44");
+    let resolved = solve_requirement_groups_with_outgoing_and_policy(
+        &conn,
+        &groups,
+        VersionScheme::Rpm,
+        &[],
+        &policy,
+    )
+    .unwrap();
+
+    assert!(resolved.conflict_message.is_none(), "{resolved:?}");
+    assert_eq!(selected_names(&resolved), ["helper"], "{resolved:?}");
+    assert!(
+        resolved
+            .install_order
+            .iter()
+            .all(|package| package.name != "baz"),
+        "{resolved:?}"
+    );
+    assert!(resolved.remove_order.is_empty(), "{resolved:?}");
+    assert!(
+        resolved
+            .remove_order
+            .iter()
+            .all(|removal| removal.trove_id != bar_trove_id),
+        "{resolved:?}"
+    );
+}
+
+#[test]
 fn incoming_name_and_provide_are_satisfied_by_the_fixed_fact() {
     let (_dir, conn) = setup_test_db();
     let repository_id = authority_repository(&conn);

@@ -10,6 +10,7 @@ use crate::repository::resolution_policy::ResolutionPolicy;
 use crate::resolver::identity::PackageIdentity;
 use crate::version::VersionConstraint;
 
+use super::super::provider::types::RequirementGroupIdentity;
 use super::super::provider::{ConaryConstraint, ConaryProvider, SolverExpression};
 use super::{check_transitive_loading_limits, timing};
 
@@ -25,9 +26,7 @@ pub(super) fn build_provider_for_install_ignoring_groups<'conn>(
     conn: &'conn Connection,
     requests: &[(String, VersionConstraint)],
     policy: &ResolutionPolicy,
-    ignored: impl IntoIterator<
-        Item = crate::resolver::provider::types::RepositoryRequirementGroupIdentity,
-    >,
+    ignored: impl IntoIterator<Item = RequirementGroupIdentity>,
 ) -> Result<ConaryProvider<'conn>> {
     let phase = timing::start(None, timing::Phase::Initialization);
     let mut provider = ConaryProvider::new_with_policy(conn, policy.clone())?;
@@ -61,10 +60,14 @@ pub(super) fn build_provider_for_requirement_expressions<'conn>(
     expressions: &[SolverExpression],
     policy: &ResolutionPolicy,
     incoming: Option<&PackageIdentity>,
-    outgoing_trove_ids: &[i64],
-    relation_only_trove_ids: &HashSet<i64>,
-    lock_surviving_installed: bool,
+    facts: FixedTransactionFacts<'_>,
 ) -> Result<ConaryProvider<'conn>> {
+    let FixedTransactionFacts {
+        outgoing_trove_ids,
+        relation_only_trove_ids,
+        lock_surviving_installed,
+        ignored_installed_groups,
+    } = facts;
     let phase = timing::start(None, timing::Phase::Initialization);
     let mut provider = ConaryProvider::new_with_policy(conn, policy.clone())?;
     drop(phase);
@@ -88,6 +91,14 @@ pub(super) fn build_provider_for_requirement_expressions<'conn>(
     provider.build_provides_index()?;
     provider.load_canonical_index()?;
     provider.expand_root_request_names_with_canonical_equivalents();
+    // A forced installed package's stored hard groups are enforced natively by
+    // SAT. Groups already unsatisfied before the transaction are discharged by
+    // identity so pre-existing breakage never makes the solve unsatisfiable.
+    // Discharging after canonical loading keeps the recompiled condition set
+    // consistent with the final compilation.
+    if !ignored_installed_groups.is_empty() {
+        provider.discharge_requirement_groups(ignored_installed_groups.iter().copied())?;
+    }
     drop(phase);
     let phase = timing::start(None, timing::Phase::Transitive);
     load_transitive_repo_packages(&mut provider, requirement_names(expressions))?;
@@ -96,6 +107,19 @@ pub(super) fn build_provider_for_requirement_expressions<'conn>(
     provider.intern_all_dependency_version_sets()?;
     drop(phase);
     Ok(provider)
+}
+
+/// The fixed-transaction facts a requirement-expression provider must honor.
+pub(super) struct FixedTransactionFacts<'a> {
+    /// Exact installed trove IDs the owning transaction removes entirely.
+    pub(super) outgoing_trove_ids: &'a [i64],
+    /// Installed troves an earlier pass's relation plan removes; loaded but
+    /// hidden from candidate discovery.
+    pub(super) relation_only_trove_ids: &'a HashSet<i64>,
+    /// Whether surviving installed variants are fixed end-state facts.
+    pub(super) lock_surviving_installed: bool,
+    /// Pre-existing broken installed groups discharged by identity.
+    pub(super) ignored_installed_groups: &'a HashSet<RequirementGroupIdentity>,
 }
 
 fn load_transitive_repo_packages(
@@ -147,6 +171,7 @@ fn requirement_names(expressions: &[SolverExpression]) -> HashSet<String> {
                 ConaryConstraint::RpmRuntime(_) => {}
                 ConaryConstraint::ExactRepositoryPackage(_) => {}
                 ConaryConstraint::FixedIncoming => {}
+                ConaryConstraint::ExactInstalledTrove(_) => {}
                 ConaryConstraint::ExactSolvables(_) => {}
                 ConaryConstraint::Requested(_) | ConaryConstraint::Repository { .. } => {
                     names.insert(atom.name.clone());

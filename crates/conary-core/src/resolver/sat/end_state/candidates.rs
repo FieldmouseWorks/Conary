@@ -32,6 +32,9 @@ pub(super) struct InstalledCandidate {
     pub(super) native_text: Option<String>,
     pub(super) version_scheme: VersionScheme,
     pub(super) trove_id: i64,
+    /// Persisted `package_requirement_groups.id`, the authority a pre-existing
+    /// broken group is discharged by.
+    pub(super) requirement_group_id: i64,
     pub(super) package_name: String,
     /// The owning package's stored architecture authority, when it has one.
     pub(super) architecture: Option<String>,
@@ -102,11 +105,18 @@ pub(super) fn installed_hard_group_candidates(
         let Some(package) = packages.get(&stored.trove_id) else {
             continue;
         };
+        let requirement_group_id = stored.id.ok_or_else(|| {
+            Error::MissingId(format!(
+                "installed requirement group for trove {} has no persisted ID",
+                stored.trove_id
+            ))
+        })?;
         candidates.push(InstalledCandidate {
             expression: stored.requirement.expression.clone(),
             native_text: stored.requirement.native_text.clone(),
             version_scheme: stored.version_scheme,
             trove_id: stored.trove_id,
+            requirement_group_id,
             package_name: package.name.clone(),
             architecture: package.architecture.clone(),
         });

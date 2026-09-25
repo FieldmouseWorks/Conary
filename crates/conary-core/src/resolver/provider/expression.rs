@@ -66,7 +66,7 @@ impl ConaryProvider<'_> {
     fn compile_expression(
         &mut self,
         expression: &SolverExpression,
-        provenance: Option<(u32, super::types::RepositoryRequirementGroupIdentity)>,
+        provenance: Option<(u32, super::types::RequirementGroupIdentity)>,
     ) -> Result<Vec<ConditionalRequirement>> {
         let normal = to_normal_form(expression, false);
         let clauses = to_cnf(&normal);
@@ -87,7 +87,7 @@ impl ConaryProvider<'_> {
     fn compile_clause(
         &mut self,
         clause: &[Literal],
-        provenance: Option<(u32, super::types::RepositoryRequirementGroupIdentity)>,
+        provenance: Option<(u32, super::types::RequirementGroupIdentity)>,
     ) -> Result<Option<ConditionalRequirement>> {
         let mut positive = Vec::new();
         let mut negative = Vec::new();

@@ -5,11 +5,11 @@
 //!
 //! The first pass is request-only. Relation removals are only known after a
 //! pass resolves, so an installed group whose owner a later relation plan
-//! removes must not make the preliminary pass unsolvable. Each later pass makes
-//! the installed groups whose owners no earlier pass removed into SAT roots,
-//! and hides every accumulated removal from candidate discovery while keeping
-//! it relation-visible. Validation uses the current pass's exact relation plan,
-//! so an owner the transaction keeps never contributes a stale removal.
+//! removes must not make the preliminary pass unsolvable. Each later pass also
+//! compiles the installed groups whose owners no earlier pass removed, and
+//! hides every accumulated removal from candidate discovery while keeping it
+//! relation-visible. Validation uses the current pass's exact relation plan, so
+//! an owner the transaction keeps never contributes a stale removal.
 
 use std::collections::HashSet;
 
@@ -17,20 +17,21 @@ use resolvo::{ConditionalRequirement, Problem, SolvableId, Solver, UnsolvableOrC
 use rusqlite::Connection;
 
 use crate::error::{Error, Result};
-use crate::repository::dependency_model::RepositoryRequirementExpression;
 use crate::repository::resolution_policy::ResolutionPolicy;
 use crate::resolver::canonical::CanonicalEquivalents;
 use crate::resolver::identity::PackageIdentity;
+use crate::resolver::provider::types::RequirementGroupIdentity;
 use crate::resolver::provider::{ConaryProvider, SolverExpression};
 
 use super::super::install::{
-    build_expression_requirements, build_provider_for_requirement_expressions,
+    FixedTransactionFacts, build_expression_requirements,
+    build_provider_for_requirement_expressions,
 };
 use super::super::relations::plan_selected_relations;
 use super::super::{SatPackage, SatRelationRemoval, SatResolution, SatUnsatisfiedGroup};
 use super::{
-    EndStateValidation, ValidatedGroupOwner, ValidatedRequirementGroup, collect_install_order,
-    removed_trove_ids,
+    EndStateValidation, ForcedInstalledTrove, ValidatedGroupOwner, ValidatedRequirementGroup,
+    collect_new_install_order, removed_trove_ids,
 };
 
 /// The SAT root selection for one pass.
@@ -64,12 +65,15 @@ pub(super) struct PassContext<'a> {
 ///
 /// `validation.groups` starts with the request's hard groups and the affected
 /// installed candidates, and grows as each resolved pass mentions new
-/// capabilities. With a fixed incoming solvable the request's groups are full
-/// expressions and every pass also carries the exact fixed-incoming root. The
-/// first pass compiles only request-owned roots: the relation plan that can
-/// remove an installed group's owner is only known after a pass resolves. Every
-/// later pass compiles installed groups too, never an owner an earlier pass
-/// removed.
+/// capabilities. Every group is a full expression; the first pass compiles only
+/// request-owned roots because the relation plan that can remove an installed
+/// group's owner is only known after a pass resolves. Every later pass compiles
+/// installed groups too, never an owner an earlier pass removed. The forced
+/// installed roots that make surviving installed facts SAT-visible are compiled
+/// on every pass, excluding the troves the accumulated hidden set removes. Each
+/// such root is the disjunction of the exact installed trove and the loaded
+/// candidates whose typed relations remove it, so an installed fact yields to a
+/// selected obsoleter instead of making the obsoleter unselectable.
 ///
 /// The removal set a later pass withholds from candidate discovery is exact for
 /// that pass, but the removal order the resolution reports is exactly the final
@@ -86,12 +90,13 @@ pub(super) fn solve_validated_groups_to_fixed_point(
     validation: &mut EndStateValidation,
     fixed_end_state: Option<&[PackageIdentity]>,
     before: &[PackageIdentity],
+    surviving: &[PackageIdentity],
     native_architecture: &str,
 ) -> Result<SatResolution> {
     // A fixed end state locks the surviving installed candidates; an unknown
     // end state cannot project, so there is nothing to lock or validate.
     let mut passes = 0;
-    // Pass one has no installed roots. Its resolved relation plan seeds the
+    // Pass one has no installed groups. Its resolved relation plan seeds the
     // accumulated hidden set that decides which installed owners later passes
     // drop and which troves are withheld from candidate discovery.
     let mut include_installed_roots = false;
@@ -102,9 +107,14 @@ pub(super) fn solve_validated_groups_to_fixed_point(
             include_installed: include_installed_roots,
             excluded_trove_ids: &hidden_trove_ids,
         };
-        let expressions =
-            compile_group_residuals(&validation.groups, &validation.residuals, &roots)?;
-        let pass = solve_expression_pass(context, &expressions, &hidden_trove_ids)?;
+        let compiled = compile_pass_roots(validation, &roots)?;
+        let pass = solve_expression_pass(
+            context,
+            &compiled.group_expressions,
+            &compiled.forced_installed,
+            &hidden_trove_ids,
+            &validation.ignored_groups,
+        )?;
 
         let (install_order, remove_order, selected) = match pass {
             ExpressionPass::Conflict(message) => {
@@ -139,8 +149,13 @@ pub(super) fn solve_validated_groups_to_fixed_point(
         // A pass can mention capabilities only SAT-selected repository packages
         // or relation-removed installed troves provide. Admit any installed
         // candidate those newly mention before validating the projection.
-        let admitted_group =
-            validation.extend_from_pass(&selected, &remove_order, before, native_architecture)?;
+        let admitted_group = validation.extend_from_pass(
+            &selected,
+            &remove_order,
+            before,
+            surviving,
+            native_architecture,
+        )?;
         let violated = groups_violated_by_solved_end_state(
             fixed_end_state,
             &selected,
@@ -168,13 +183,10 @@ pub(super) fn solve_validated_groups_to_fixed_point(
             continue;
         }
 
-        // Promote a newly violated simplified request group to its full
-        // expression. Full-expression groups are already live, so they are
-        // never rewritten. A violated group that was not a root (installed
-        // groups on the incoming-only first pass, or an owner an earlier pass
-        // removed) becomes a root on the next pass if its owner survives.
-        // Groups already live and the residual vector keep original group
-        // order, so every pass is deterministic.
+        // A violated installed group not yet a root becomes one on the next
+        // pass if its owner survives, so the fixed-point loop owns the whole
+        // enforcement path. The residual vector is not rewritten: every group
+        // is already a full expression.
         let next_hidden = hidden_trove_ids
             .union(&removed_now)
             .copied()
@@ -183,33 +195,15 @@ pub(super) fn solve_validated_groups_to_fixed_point(
             include_installed: true,
             excluded_trove_ids: &next_hidden,
         };
-        let mut promoted = false;
-        let mut newly_rooted = false;
-        for &index in &violated {
-            let group = &validation.groups[index];
-            if !roots.includes(group) {
-                newly_rooted |= next_roots.includes(group);
-                continue;
-            }
-            if !validation.live[index] {
-                validation.live[index] = true;
-                validation.residuals[index] = Some(group.expression.clone());
-                promoted = true;
-            }
-        }
-        if !promoted && !admitted_group && !newly_rooted {
-            return Ok(unsatisfied_groups_conflict(
-                &validation.groups,
-                &validation.residuals,
-                &violated,
-            ));
+        let newly_rooted = violated.iter().any(|&index| {
+            !roots.includes(&validation.groups[index])
+                && next_roots.includes(&validation.groups[index])
+        });
+        if !admitted_group && !newly_rooted {
+            return Ok(unsatisfied_groups_conflict(&validation.groups, &violated));
         }
         if passes >= validation.max_passes {
-            return Ok(unsatisfied_groups_conflict(
-                &validation.groups,
-                &validation.residuals,
-                &violated,
-            ));
+            return Ok(unsatisfied_groups_conflict(&validation.groups, &violated));
         }
 
         // The next pass makes every installed owner not yet removed into a
@@ -245,31 +239,45 @@ fn unstabilized_removals_conflict(
     ))
 }
 
-/// Compile the residual expression of each validated group that is a SAT root
-/// for this pass, skipping discharged groups. The result preserves group order.
+/// The SAT roots for one pass.
 ///
-/// An `Incoming`-owned residual is always a root. An installed-owned residual
-/// is a root only when `roots.include_installed` is set and its owning trove is
-/// not in `roots.excluded_trove_ids`, the accumulated hidden set.
-fn compile_group_residuals(
-    groups: &[ValidatedRequirementGroup],
-    residuals: &[Option<RepositoryRequirementExpression>],
+/// Group expressions are compiled directly. Forced installed troves stay as
+/// typed facts until the provider has loaded candidates: only then can the
+/// disjunction name the loaded candidates whose relations remove each trove.
+struct CompiledPassRoots {
+    group_expressions: Vec<SolverExpression>,
+    forced_installed: Vec<ForcedInstalledTrove>,
+}
+
+/// Compile the SAT roots for one pass: every validated group the pass selection
+/// roots plus the forced installed troves the accumulated hidden set does not
+/// remove.
+fn compile_pass_roots(
+    validation: &EndStateValidation,
     roots: &PassRoots<'_>,
-) -> Result<Vec<SolverExpression>> {
-    groups
-        .iter()
-        .zip(residuals)
-        .filter(|(group, _)| roots.includes(group))
-        .filter_map(|(group, residual)| {
-            residual.as_ref().map(|expression| {
+) -> Result<CompiledPassRoots> {
+    let mut group_expressions = Vec::new();
+    for group in &validation.groups {
+        if roots.includes(group) {
+            group_expressions.push(
                 crate::resolver::provider::repository_expression_to_solver_for_architecture(
-                    expression,
+                    &group.expression,
                     group.version_scheme,
                     &group.depending_architecture,
-                )
-            })
-        })
-        .collect()
+                )?,
+            );
+        }
+    }
+    let forced_installed = validation
+        .forced_installed
+        .iter()
+        .filter(|forced| !roots.excluded_trove_ids.contains(&forced.trove_id))
+        .cloned()
+        .collect();
+    Ok(CompiledPassRoots {
+        group_expressions,
+        forced_installed,
+    })
 }
 
 /// Return the indices of original hard groups the projected end state does not
@@ -278,11 +286,9 @@ fn compile_group_residuals(
 /// The projected end state is the fixed state plus every package SAT selected,
 /// minus the exact installed troves the relation plan removes. A group whose
 /// owning installed trove the relation plan removes is itself dropped, because
-/// the trove owns no group in that pass's end state. Evaluating the unsimplified
-/// groups against it catches a conditional the pre-solve simplification dropped
-/// but that SAT then turned true by selecting the condition package. The shared
-/// typed evaluator decides satisfaction, so the check uses the same algebra as
-/// the fixed-state pass.
+/// the trove owns no group in that pass's end state. The shared typed evaluator
+/// decides satisfaction, so the assertion uses the same algebra as the
+/// pre-transaction projection.
 fn groups_violated_by_solved_end_state(
     fixed_end_state: &[PackageIdentity],
     selected: &[PackageIdentity],
@@ -324,24 +330,37 @@ enum ExpressionPass {
     },
 }
 
-/// Run one solve over the given root expressions, returning the relation plan's
-/// typed outcome or the selected package facts.
+/// Run one solve over the given group roots and forced installed troves,
+/// returning the relation plan's typed outcome or the selected package facts.
 fn solve_expression_pass(
     context: &PassContext<'_>,
     expressions: &[SolverExpression],
+    forced_installed: &[ForcedInstalledTrove],
     relation_only_trove_ids: &HashSet<i64>,
+    ignored_groups: &HashSet<RequirementGroupIdentity>,
 ) -> Result<ExpressionPass> {
     let mut provider = build_provider_for_requirement_expressions(
         context.conn,
         expressions,
         context.policy,
         context.incoming,
-        context.outgoing_trove_ids,
-        relation_only_trove_ids,
-        context.lock_surviving_installed,
+        FixedTransactionFacts {
+            outgoing_trove_ids: context.outgoing_trove_ids,
+            relation_only_trove_ids,
+            lock_surviving_installed: context.lock_surviving_installed,
+            ignored_installed_groups: ignored_groups,
+        },
     )?;
     let fixed_incoming_root = provider.intern_fixed_incoming_root()?;
     let mut requirements = build_expression_requirements(&mut provider, expressions)?;
+    // A forced installed root is only computable once the provider has loaded
+    // its candidate universe, because it names the loaded candidates whose
+    // typed relations remove the installed trove.
+    let forced_roots = forced_installed
+        .iter()
+        .map(|forced| provider.forced_installed_root(forced.trove_id))
+        .collect::<Result<Vec<_>>>()?;
+    requirements.extend(provider.compile_root_requirements(&forced_roots)?);
     if let Some(root) = fixed_incoming_root {
         requirements.push(ConditionalRequirement::from(root));
     }
@@ -354,7 +373,7 @@ fn solve_expression_pass(
                 return Ok(ExpressionPass::Conflict(conflict));
             }
             Ok(ExpressionPass::Resolved {
-                install_order: collect_install_order(solver.provider(), &solvable_ids),
+                install_order: collect_new_install_order(solver.provider(), &solvable_ids),
                 remove_order: relation_plan.removals,
                 selected: collect_selected_identities(solver.provider(), &solvable_ids),
             })
@@ -373,24 +392,19 @@ fn solve_expression_pass(
 ///
 /// A pass that makes no progress always has a violated group to name. The
 /// defensive pass-counter exit can be reached with none, in which case every
-/// residual group is named so the refusal still carries typed owners.
+/// validated group is named so the refusal still carries typed owners.
 fn unsatisfied_groups_conflict(
     groups: &[ValidatedRequirementGroup],
-    residuals: &[Option<RepositoryRequirementExpression>],
     violated: &[usize],
 ) -> SatResolution {
     let indices = if violated.is_empty() {
-        residuals
-            .iter()
-            .enumerate()
-            .filter_map(|(index, residual)| residual.as_ref().map(|_| index))
-            .collect::<Vec<_>>()
+        (0..groups.len()).collect::<Vec<_>>()
     } else {
         violated.to_vec()
     };
     let unsatisfied = indices
-        .iter()
-        .map(|&index| groups[index].unsatisfied())
+        .into_iter()
+        .map(|index| groups[index].unsatisfied())
         .collect::<Vec<_>>();
     let descriptions = unsatisfied
         .iter()
@@ -410,12 +424,12 @@ fn unsatisfied_groups_conflict(
 ///
 /// The pass can fail because the incoming requirements alone are unsatisfiable,
 /// for example when the incoming package requires a capability no repository
-/// provides. Naming every installed group with a residual would misattribute
-/// that failure. When installed groups contribute residuals, one diagnostic pass
-/// over only the incoming residuals distinguishes the two cases: if it also
-/// fails, the incoming requirements are the cause and no installed group is
-/// named; if it resolves, the installed groups the incoming-only end state still
-/// leaves unsatisfied are the cause.
+/// provides. Naming every installed group would misattribute that failure. When
+/// installed groups contribute residuals, one diagnostic pass over only the
+/// incoming roots distinguishes the two cases: if it also fails, the incoming
+/// requirements are the cause and no installed group is named; if it resolves,
+/// the installed groups the incoming-only end state still leaves unsatisfied are
+/// the cause.
 ///
 /// An installed group that the incoming facts already satisfy is never named,
 /// even though it was a root of the failing pass. Pass one has no installed
@@ -446,13 +460,11 @@ fn unsatisfiable_pass_resolution(
         .groups
         .iter()
         .enumerate()
-        .zip(&validation.residuals)
-        .filter(|((_, group), residual)| {
-            residual.is_some()
-                && matches!(group.owner, ValidatedGroupOwner::Installed { .. })
+        .filter(|(_, group)| {
+            matches!(group.owner, ValidatedGroupOwner::Installed { .. })
                 && !group.owner_removed_by(roots.excluded_trove_ids)
         })
-        .map(|((index, group), _)| (index, group.unsatisfied()))
+        .map(|(index, group)| (index, group.unsatisfied()))
         .collect::<Vec<_>>();
     if installed.is_empty() {
         return Ok(SatResolution::conflict(solver_message.to_string()));
@@ -461,19 +473,22 @@ fn unsatisfiable_pass_resolution(
     let incoming_expressions = validation
         .groups
         .iter()
-        .zip(&validation.residuals)
-        .filter(|(group, _)| matches!(group.owner, ValidatedGroupOwner::Incoming))
-        .filter_map(|(group, residual)| {
-            residual.as_ref().map(|expression| {
-                crate::resolver::provider::repository_expression_to_solver_for_architecture(
-                    expression,
-                    group.version_scheme,
-                    &group.depending_architecture,
-                )
-            })
+        .filter(|group| matches!(group.owner, ValidatedGroupOwner::Incoming))
+        .map(|group| {
+            crate::resolver::provider::repository_expression_to_solver_for_architecture(
+                &group.expression,
+                group.version_scheme,
+                &group.depending_architecture,
+            )
         })
         .collect::<Result<Vec<_>>>()?;
-    match solve_expression_pass(context, &incoming_expressions, roots.excluded_trove_ids)? {
+    match solve_expression_pass(
+        context,
+        &incoming_expressions,
+        &[],
+        roots.excluded_trove_ids,
+        &validation.ignored_groups,
+    )? {
         ExpressionPass::Conflict(incoming_message) => Ok(SatResolution::conflict(incoming_message)),
         ExpressionPass::Resolved {
             selected,

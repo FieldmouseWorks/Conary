@@ -13,6 +13,7 @@ mod evidence;
 mod expression;
 mod loading;
 pub(crate) mod matching;
+mod relation_removal;
 mod repository;
 mod traits;
 pub mod types;
@@ -36,6 +37,7 @@ use loading::{
     load_installed_dependency_requests, load_installed_relations, relation_to_solver_dep,
 };
 pub(crate) use matching::constraint_matches_package;
+pub(crate) use relation_removal::relation_removes_candidate;
 pub use types::{ConaryConstraint, SolverDep, SolverExpression, SolverRelation};
 
 type RemovalProvider = (i64, Option<String>, Option<ProvideVersionRelation>);
@@ -91,10 +93,11 @@ pub struct ConaryProvider<'db> {
 
     /// Exact persisted group behind each compiled positive version set.
     compiled_requirement_groups:
-        HashMap<(u32, u32), std::collections::BTreeSet<types::RepositoryRequirementGroupIdentity>>,
+        HashMap<(u32, u32), std::collections::BTreeSet<types::RequirementGroupIdentity>>,
 
-    /// Positive groups omitted only by the exact-root conflict-precedence probe.
-    ignored_requirement_groups: HashSet<types::RepositoryRequirementGroupIdentity>,
+    /// Positive groups omitted only by the exact-root conflict-precedence probe
+    /// or because a forced installed package was already unsatisfied.
+    ignored_requirement_groups: HashSet<types::RequirementGroupIdentity>,
     pub(crate) probe_deadline: Option<std::time::Instant>,
 
     /// Boolean conditions referenced by compiled conditional requirements.
@@ -149,10 +152,11 @@ pub struct ConaryProvider<'db> {
     /// each pass's exact removal set.
     relation_only_installed_troves: HashSet<i64>,
 
-    /// When set, every surviving installed candidate is locked as the only
-    /// selectable candidate for its name. The owning transaction's end state
-    /// fixes each surviving installed trove, so the solver must not replace it
-    /// with a repository version.
+    /// When set, surviving installed candidates are fixed facts of the owning
+    /// transaction's end state. For an exact package name, repository
+    /// candidates are filtered out so they can never replace a surviving
+    /// variant; a single surviving variant is locked, while multiple parallel
+    /// variants are all selectable via `allow_multiple`.
     pub(super) surviving_installed_candidates_locked: bool,
 
     /// The incoming package registered as a fixed SAT fact. It carries
@@ -246,12 +250,13 @@ impl<'db> ConaryProvider<'db> {
     /// Treat every surviving installed candidate as a fixed fact of the
     /// transaction's end state.
     ///
-    /// For an exact package name, the surviving installed candidate stays
-    /// selectable but no other version may be chosen. This keeps the solver's
+    /// For an exact package name, repository candidates are filtered out so no
+    /// version may replace a surviving variant. A single surviving variant is
+    /// locked; parallel variants are all selectable. This keeps the solver's
     /// model aligned with the packages the transaction actually keeps; a
-    /// requirement that only a different version can satisfy is a conflict
-    /// rather than a silent replacement of a surviving trove. Virtual
-    /// capabilities are not locked because several packages may provide one.
+    /// requirement only a different version can satisfy is a conflict rather
+    /// than a silent replacement. Virtual capabilities are not filtered because
+    /// several packages may provide one.
     pub(crate) fn lock_surviving_installed_candidates(&mut self) {
         self.surviving_installed_candidates_locked = true;
     }
@@ -303,7 +308,7 @@ impl<'db> ConaryProvider<'db> {
 
     pub(crate) fn ignore_requirement_groups(
         &mut self,
-        groups: impl IntoIterator<Item = types::RepositoryRequirementGroupIdentity>,
+        groups: impl IntoIterator<Item = types::RequirementGroupIdentity>,
     ) {
         self.ignored_requirement_groups.extend(groups);
     }
@@ -311,7 +316,7 @@ impl<'db> ConaryProvider<'db> {
     /// Monotonically discharge positive groups without reloading repository facts.
     pub(crate) fn discharge_requirement_groups(
         &mut self,
-        groups: impl IntoIterator<Item = types::RepositoryRequirementGroupIdentity>,
+        groups: impl IntoIterator<Item = types::RequirementGroupIdentity>,
     ) -> Result<()> {
         self.ignore_requirement_groups(groups);
         for dependencies in self.dependencies.values_mut() {
@@ -661,6 +666,7 @@ impl<'db> ConaryProvider<'db> {
                         ConaryConstraint::RpmRuntime(_) => {}
                         ConaryConstraint::ExactRepositoryPackage(_) => {}
                         ConaryConstraint::FixedIncoming => {}
+                        ConaryConstraint::ExactInstalledTrove(_) => {}
                         ConaryConstraint::ExactSolvables(_) => {}
                         ConaryConstraint::Requested(_) | ConaryConstraint::Repository { .. }
                             if !known.contains(atom.name.as_str()) =>
@@ -787,7 +793,9 @@ impl<'db> ConaryProvider<'db> {
             ConaryConstraint::ProviderExpression { .. } => {
                 self.intern_conary_version_set(name_id, constraint.clone())?;
             }
-            ConaryConstraint::FixedIncoming | ConaryConstraint::ExactSolvables(_) => {
+            ConaryConstraint::FixedIncoming
+            | ConaryConstraint::ExactInstalledTrove(_)
+            | ConaryConstraint::ExactSolvables(_) => {
                 self.intern_conary_version_set(name_id, constraint.clone())?;
             }
         }
