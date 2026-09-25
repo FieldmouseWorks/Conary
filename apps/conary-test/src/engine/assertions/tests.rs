@@ -161,6 +161,22 @@ fn stdout_json_numbers_compare_by_typed_value() {
 }
 
 #[test]
+fn stdout_json_equals_json_matches_unsigned_integer_above_i64_max() {
+    // This is the value the `equals_json` load path produces; the exact token
+    // must stay a `u64` through comparison.
+    let expected: serde_json::Value = serde_json::from_str("18446744073709551615").unwrap();
+    assert_eq!(expected.as_u64(), Some(u64::MAX));
+    let assertion = json_assertion("/id", expected);
+
+    // Positive control through the same fixture.
+    assert!(evaluate_assertion(&assertion, 0, r#"{"id":18446744073709551615}"#, "").is_ok());
+
+    let error =
+        evaluate_assertion(&assertion, 0, r#"{"id":18446744073709551614}"#, "").unwrap_err();
+    assert!(error.to_string().contains("/id"), "{error}");
+}
+
+#[test]
 fn stdout_json_empty_pointer_compares_whole_document() {
     let assertion = json_assertion("", serde_json::json!({ "status": "planned" }));
 

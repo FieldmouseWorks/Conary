@@ -302,6 +302,10 @@ pub struct Assertion {
     #[serde(default)]
     pub stdout_contains_any_if_success: Option<Vec<String>>,
     /// Typed checks against stdout parsed as a single JSON document.
+    ///
+    /// Each entry sets exactly one expectation form: `equals` (a TOML value),
+    /// `equals_json` (a JSON text string for values TOML cannot express), or
+    /// `null = true`.
     #[serde(default)]
     pub stdout_json: Option<Vec<JsonAssertion>>,
     #[serde(default)]
@@ -317,6 +321,9 @@ pub struct Assertion {
 }
 
 /// One typed check against stdout parsed as a single JSON document.
+///
+/// The expected value is supplied by exactly one of the TOML entry's `equals`,
+/// `equals_json`, or `null = true` fields.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(try_from = "RawJsonAssertion")]
 pub struct JsonAssertion {
@@ -333,9 +340,9 @@ pub enum JsonExpectation {
     Equals(JsonValue),
     /// Resolved value is JSON null.
     ///
-    /// TOML has no null literal, so JSON nulls nested inside an `equals`
-    /// object or array cannot be expressed; assert such fields individually by
-    /// pointer.
+    /// TOML has no null literal and its integers are `i64`, so use
+    /// `equals_json` to express a nested null or an unsigned integer above
+    /// `i64::MAX`.
     Null,
 }
 
@@ -346,6 +353,15 @@ struct RawJsonAssertion {
     pointer: String,
     #[serde(default)]
     equals: Option<toml::Value>,
+    /// A JSON value literal, parsed at load time.
+    ///
+    /// TOML integers are `i64` and TOML has no null literal, so `equals` cannot
+    /// express an unsigned integer above `i64::MAX` or a nested JSON null. The
+    /// string holds the JSON text verbatim, and `serde_json` keeps the exact
+    /// integer token (for example `18446744073709551615` loads as a `u64`).
+    /// Mutually exclusive with `equals` and `null`.
+    #[serde(default)]
+    equals_json: Option<String>,
     #[serde(default)]
     null: Option<bool>,
 }
@@ -437,20 +453,29 @@ impl TryFrom<RawJsonAssertion> for JsonAssertion {
         if !contains_variable_reference(&raw.pointer) {
             validate_json_pointer(&raw.pointer)?;
         }
-        let expected = match (raw.equals, raw.null) {
-            (Some(value), None) => {
+        let expected = match (raw.equals, raw.equals_json, raw.null) {
+            (Some(value), None, None) => {
                 let value = toml_to_json(&value).map_err(|error| error.to_string())?;
                 JsonExpectation::Equals(value)
             }
-            (None, Some(true)) => JsonExpectation::Null,
-            (None, Some(false)) => {
-                return Err("`null = false` is not an assertion; use `equals`".to_string());
+            (None, Some(text), None) => {
+                let parsed = serde_json::from_str(&text);
+                let value = parsed.map_err(|error| invalid_equals_json(&raw.pointer, &error))?;
+                JsonExpectation::Equals(value)
             }
-            (Some(_), Some(_)) => {
-                return Err("set exactly one of `equals` or `null`".to_string());
+            (None, None, Some(true)) => JsonExpectation::Null,
+            (None, None, Some(false)) => {
+                return Err(
+                    "`null = false` is not an assertion; use `equals` or `equals_json`".to_string(),
+                );
             }
-            (None, None) => {
-                return Err("set one of `equals` or `null = true`".to_string());
+            (None, None, None) => {
+                return Err(
+                    "set exactly one of `equals`, `equals_json`, or `null = true`".to_string(),
+                );
+            }
+            _ => {
+                return Err("set exactly one of `equals`, `equals_json`, or `null`".to_string());
             }
         };
         Ok(Self {
@@ -492,6 +517,11 @@ fn toml_to_json(value: &toml::Value) -> Result<JsonValue> {
             JsonValue::Object(object)
         }
     })
+}
+
+/// Build the load error for `equals_json` text that is not valid JSON.
+fn invalid_equals_json(pointer: &str, error: &serde_json::Error) -> String {
+    format!("stdout_json pointer {pointer:?} has invalid `equals_json` JSON: {error}")
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

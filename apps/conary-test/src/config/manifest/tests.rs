@@ -242,11 +242,35 @@ fn stdout_json_equals_converts_toml_values_to_json() {
     }
 }
 
-/// Parse a `stdout_json` entry, asserting the manifest is rejected.
+#[test]
+fn stdout_json_equals_json_keeps_full_range_unsigned_integer() {
+    let expectation =
+        stdout_json_expectation(r#"pointer = "/id", equals_json = '18446744073709551615'"#);
+
+    // `serde_json` must keep the exact token as a `u64`; routing it through
+    // `f64` or `i64` would lose or reject it.
+    let JsonExpectation::Equals(value) = expectation else {
+        panic!("expected an equals expectation");
+    };
+    assert_eq!(value.as_u64(), Some(u64::MAX));
+}
+
+#[test]
+fn stdout_json_equals_json_round_trips_nested_null() {
+    let expectation = stdout_json_expectation(r#"pointer = "/x", equals_json = '{"a":[1,null]}'"#);
+
+    // TOML `equals` cannot express the nested null.
+    assert_eq!(
+        expectation,
+        JsonExpectation::Equals(serde_json::json!({ "a": [1, null] }))
+    );
+}
+
+/// Parse a `stdout_json` entry and return the manifest error message.
 ///
 /// A known-good entry must parse in the same template first, so a rejection
 /// can only come from the entry under test and never from template syntax.
-fn stdout_json_entry_is_rejected(entry: &str) {
+fn stdout_json_entry_error(entry: &str) -> String {
     assert!(
         toml::from_str::<TestManifest>(&stdout_json_manifest_source(
             r#"pointer = "/x", equals = 1"#
@@ -254,7 +278,13 @@ fn stdout_json_entry_is_rejected(entry: &str) {
         .is_ok(),
         "positive control must parse"
     );
-    assert!(toml::from_str::<TestManifest>(&stdout_json_manifest_source(entry)).is_err());
+    let result = toml::from_str::<TestManifest>(&stdout_json_manifest_source(entry));
+    result.unwrap_err().to_string()
+}
+
+/// Parse a `stdout_json` entry, asserting the manifest is rejected.
+fn stdout_json_entry_is_rejected(entry: &str) {
+    stdout_json_entry_error(entry);
 }
 
 fn stdout_json_manifest_source(entry: &str) -> String {
@@ -287,6 +317,28 @@ fn stdout_json_rejects_null_false() {
 #[test]
 fn stdout_json_rejects_both_equals_and_null() {
     stdout_json_entry_is_rejected(r#"pointer = "/x", equals = "y", null = true"#);
+}
+
+#[test]
+fn stdout_json_rejects_invalid_equals_json_text() {
+    let error = stdout_json_entry_error(r#"pointer = "/x", equals_json = "not json""#);
+
+    assert!(error.contains("/x"), "{error}");
+    assert!(error.contains("equals_json"), "{error}");
+}
+
+#[test]
+fn stdout_json_rejects_equals_together_with_equals_json() {
+    let error = stdout_json_entry_error(r#"pointer = "/x", equals = 1, equals_json = "1""#);
+
+    assert!(error.contains("exactly one"), "{error}");
+}
+
+#[test]
+fn stdout_json_rejects_equals_json_together_with_null() {
+    let error = stdout_json_entry_error(r#"pointer = "/x", equals_json = "1", null = true"#);
+
+    assert!(error.contains("exactly one"), "{error}");
 }
 
 #[test]
