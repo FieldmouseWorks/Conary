@@ -83,7 +83,8 @@ pub use repo::{
 };
 pub use state::StateCommands;
 pub use system::{
-    DbBackupCommands, NativePackageManager, SystemCommands, TakeoverLevel, UpdateChannelAction,
+    DbBackupCommands, NativePackageManager, RootCommands, SystemCommands, TakeoverLevel,
+    UpdateChannelAction,
 };
 pub use trigger::TriggerCommands;
 pub use trust::TrustCommands;

@@ -285,7 +285,8 @@ fn classify_system(command: &cli::SystemCommands) -> Option<CommandRiskPolicy> {
         cli::SystemCommands::Completions { .. }
         | cli::SystemCommands::History { .. }
         | cli::SystemCommands::Verify { .. }
-        | cli::SystemCommands::Sbom { .. } => Some(read_only("conary system read-only command")),
+        | cli::SystemCommands::Sbom { .. }
+        | cli::SystemCommands::Root { .. } => Some(read_only("conary system read-only command")),
         cli::SystemCommands::Restore { dry_run, yes, .. } => Some(policy_with_intent(
             "conary system restore",
             CommandRisk::ActiveHostMutation,

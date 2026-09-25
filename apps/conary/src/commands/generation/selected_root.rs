@@ -16,7 +16,7 @@ pub(crate) use publication_authority::{
 
 use crate::commands::{LiveRootFile, LiveRootStats, LiveRootTransaction};
 use anyhow::{Context, Result, bail};
-use conary_core::db::models::GenerationPublication;
+use conary_core::db::models::{GenerationPublication, Trove};
 use conary_core::filesystem::CasStore;
 use conary_core::generation::artifact::GenerationArtifact;
 use conary_core::generation::composefs::ComposefsRuntimeUnavailable;
@@ -459,6 +459,39 @@ fn prepare_current_root(
     )
 }
 
+/// The typed authority that supplied a read-only selected-root baseline.
+///
+/// This is the one derivation of which baseline source the read-only preview
+/// and `system root inspect` report; callers never recompute it from package
+/// rows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SelectedRootSource {
+    /// A pending publication debt owns an already-captured typed baseline.
+    PendingSnapshot {
+        snapshot_id: i64,
+        changeset_id: Option<i64>,
+    },
+    /// The current generation artifact carries the baseline as typed manifests.
+    CurrentGeneration {
+        snapshot_id: Option<i64>,
+        changeset_id: Option<i64>,
+    },
+    /// No generation exists yet, so installed database rows are the baseline.
+    DatabaseProjection { changeset_id: Option<i64> },
+    /// No generation, snapshot, or installed trove exists, so the projection is
+    /// empty and there is no committed root.
+    NoCommittedRoot,
+}
+
+/// Whether the installed database has any trove at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InstalledDatabaseAuthority {
+    /// At least one installed trove exists.
+    Present,
+    /// The database has no installed troves at all.
+    Absent,
+}
+
 /// Exact baseline source a selected-root preparation or preview selects.
 ///
 /// The writable preparation path and the read-only preview path both derive
@@ -468,6 +501,7 @@ enum SelectedRootSelection {
     PendingPublication {
         snapshot: SelectedRootSnapshot,
         captured: Box<CapturedSelectedRoot>,
+        changeset_id: Option<i64>,
     },
     /// The current generation artifact carries the baseline as typed manifests.
     CurrentGeneration {
@@ -476,7 +510,9 @@ enum SelectedRootSelection {
         lower_mode: CurrentGenerationLowerMode,
     },
     /// No generation exists yet, so installed database rows are the baseline.
-    DatabaseProjection,
+    DatabaseProjection {
+        installed: InstalledDatabaseAuthority,
+    },
 }
 
 fn select_selected_root(
@@ -485,10 +521,11 @@ fn select_selected_root(
     require_materialized: bool,
     probe: impl FnOnce() -> std::result::Result<PathBuf, ComposefsRuntimeUnavailable>,
 ) -> Result<SelectedRootSelection> {
-    if let Some((snapshot, captured)) = latest_selected_root_snapshot(conn)? {
+    if let Some(pending) = latest_selected_root_snapshot(conn)? {
         return Ok(SelectedRootSelection::PendingPublication {
-            snapshot,
-            captured: Box::new(captured),
+            snapshot: pending.snapshot,
+            captured: Box::new(pending.captured),
+            changeset_id: pending.changeset_id,
         });
     }
 
@@ -505,7 +542,12 @@ fn select_selected_root(
         });
     }
 
-    Ok(SelectedRootSelection::DatabaseProjection)
+    let installed = if Trove::list_all(conn)?.is_empty() {
+        InstalledDatabaseAuthority::Absent
+    } else {
+        InstalledDatabaseAuthority::Present
+    };
+    Ok(SelectedRootSelection::DatabaseProjection { installed })
 }
 
 /// Read the exact typed selected-root baseline a real install would prepare.
@@ -525,22 +567,70 @@ pub(crate) fn read_selected_root_baseline(
     runtime_root: &ConaryRuntimeRoot,
     empty_root: &Path,
 ) -> Result<CapturedSelectedRoot> {
-    match select_selected_root(
+    read_selected_root_baseline_with_source(conn, runtime_root, empty_root)
+        .map(|(_, captured)| captured)
+}
+
+/// Read the typed source and exact baseline a real install would prepare.
+///
+/// The source is the typed selection result, not a recomputation from package
+/// rows, so reporting and preparation cannot disagree about the authority.
+pub(crate) fn read_selected_root_baseline_with_source(
+    conn: &rusqlite::Connection,
+    runtime_root: &ConaryRuntimeRoot,
+    empty_root: &Path,
+) -> Result<(SelectedRootSource, CapturedSelectedRoot)> {
+    let selection = select_selected_root(
         conn,
         runtime_root,
         use_materialized_selected_root_backing(),
         conary_core::generation::composefs::probe_composefs_mount_runtime,
-    )? {
-        SelectedRootSelection::PendingPublication { captured, .. } => Ok(*captured),
-        SelectedRootSelection::CurrentGeneration { artifact, .. } => Ok(CapturedSelectedRoot {
-            generation: artifact.generation_root.clone(),
-            state: artifact.mutable_state.clone(),
-        }),
-        SelectedRootSelection::DatabaseProjection => {
-            conary_core::generation::builder::collect_selected_root_from_db_with_authority(
-                conn, empty_root,
-            )
-            .map_err(anyhow::Error::from)
+    )?;
+    match selection {
+        SelectedRootSelection::PendingPublication {
+            snapshot,
+            captured,
+            changeset_id,
+        } => Ok((
+            SelectedRootSource::PendingSnapshot {
+                snapshot_id: snapshot.id(),
+                changeset_id,
+            },
+            *captured,
+        )),
+        SelectedRootSelection::CurrentGeneration {
+            artifact,
+            generation,
+            ..
+        } => {
+            let snapshot_id =
+                GenerationPublication::selected_root_snapshot_for_generation(conn, generation)?;
+            let changeset_id = GenerationPublication::completed_for_generation(conn, generation)?
+                .and_then(|publication| publication.published_through_changeset_id);
+            Ok((
+                SelectedRootSource::CurrentGeneration {
+                    snapshot_id,
+                    changeset_id,
+                },
+                CapturedSelectedRoot {
+                    generation: artifact.generation_root.clone(),
+                    state: artifact.mutable_state.clone(),
+                },
+            ))
+        }
+        SelectedRootSelection::DatabaseProjection { installed } => {
+            let captured =
+                conary_core::generation::builder::collect_selected_root_from_db_with_authority(
+                    conn, empty_root,
+                )
+                .map_err(anyhow::Error::from)?;
+            let source = match installed {
+                InstalledDatabaseAuthority::Present => SelectedRootSource::DatabaseProjection {
+                    changeset_id: GenerationPublication::applied_high_water_changeset_id(conn)?,
+                },
+                InstalledDatabaseAuthority::Absent => SelectedRootSource::NoCommittedRoot,
+            };
+            Ok((source, captured))
         }
     }
 }
@@ -554,7 +644,9 @@ fn prepare_current_root_with_probe(
 ) -> Result<PreparedSelectedRoot> {
     let cas = CasStore::new(runtime_root.objects_dir())?;
     match select_selected_root(conn, runtime_root, require_materialized, probe)? {
-        SelectedRootSelection::PendingPublication { snapshot, captured } => {
+        SelectedRootSelection::PendingPublication {
+            snapshot, captured, ..
+        } => {
             let selected_root =
                 selected_root_materialization_destination(session_dir, require_materialized)?;
             materialize_captured_selected_root(&captured, &cas, &selected_root)?;
@@ -604,7 +696,7 @@ fn prepare_current_root_with_probe(
                 snapshot,
             })
         }
-        SelectedRootSelection::DatabaseProjection => {
+        SelectedRootSelection::DatabaseProjection { .. } => {
             let selected_root =
                 selected_root_materialization_destination(session_dir, require_materialized)?;
             let captured =

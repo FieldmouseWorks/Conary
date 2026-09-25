@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-09-25
-revision: 59
-summary: Daily-driver CLI publication debt, installed records, database preflight, repository readiness, typed details, and grouped results
+revision: 60
+summary: Daily-driver CLI publication debt, committed selected-root inspection, installed records, database preflight, repository readiness, typed details, and grouped results
 ---
 
 # Daily-Driver UX Matrix
@@ -33,6 +33,7 @@ takeover, generation activation, or conaryd, the CLI should say that directly.
 | `pin <pkg>` | Pins a selected installed variant | Ambiguous installed variants | Use `--version`, `--release`, and `--arch` to pin the intended variant | Existing `cargo test -p conary --test query pin_and_unpin_use_same_variant_selector` |
 | `unpin <pkg>` | Releases a selected installed variant | Ambiguous installed variants | Use `--version`, `--release`, and `--arch` to unpin the intended variant | Existing `cargo test -p conary --test query pin_and_unpin_use_same_variant_selector` |
 | `system history` | Recorded changeset fields, rollback relationships, continued lifecycle failures, and deferred recovery guidance | Obsolete changeset metadata keeps its existing refusal | Publication retries use the selected database; history does not decide rollback eligibility | `cargo test -p conary --test cli_history` |
+| `system root inspect <path> [--json]` | Reports the exact committed selected-root node at one path from the newest publication snapshot, current generation artifact, or installed database projection; `--json` prints a typed `system.root.inspect` result (see [Committed Selected Root Inspection](#committed-selected-root-inspection)) | An absent path or an empty database is a typed `present: false` result with exit 0, not an error string | Inspect the exact committed path before publication; the command never resolves symlinks or reads the live root | `cargo test -p conary --lib root_inspect` |
 
 ## Autoremove Preview
 
@@ -162,6 +163,33 @@ and `cargo test -p conary --lib commands::changeset_metadata` covering the
 typed no-base follow-up on the changeset envelope. `conary system generation
 pending` still shows its publication retry note for this case until the
 typed failure kind is persisted (#1110).
+
+## Committed Selected Root Inspection
+
+`conary system root inspect <path> [--db-path <database>] [--json]` answers
+what the committed selected root records at one exact path without publishing
+a generation and without reading the live filesystem. The authority is the
+same typed selected-root baseline a real install prepares: the newest
+recoverable selected-root publication snapshot through the typed loader, else
+the current generation artifact, else the installed database projection
+through `collect_selected_root_from_db_with_authority`, which is the one
+materialization authority. The lookup normalizes `<path>` lexically and
+returns the literal node, so a symlink is reported as a symlink rather than
+its target.
+
+`--json` prints only a `conary-agent-contract` `InspectResult` with operation
+`system.root.inspect`, status `ok`, and risk `read_only`. Its `data` is
+`schema_version: 1` with `snapshot_id`, `changeset_id`, `source`
+(`pending_snapshot`, `current_generation`, `database_projection`, or
+`no_committed_root`), `path`, `present`, `manifest` (`root` or
+`mutable_state`), `kind` (`regular`, `directory`, `symlink`, `hardlink`,
+`fifo`, `socket`, `block_device`, or `character_device`), `mode`, `uid`,
+`gid`, `user`, `group`, `sha256`, `symlink_target`, and `hardlink_target`.
+Absent optional values serialize as `null`. The projected root node `/` is
+present for the database projection, as it is for snapshots and artifacts.
+Human output renders the same fields through `ui/root_inspect.rs`; an absent
+path uses `[missing]`, and the empty database still exits 0 with
+`source: no_committed_root`.
 
 ## Ordinary Installed Lists
 

@@ -531,10 +531,17 @@ fn selected_system_db_path(command: &cli::SystemCommands) -> &str {
         cli::SystemCommands::DbBackup { command } => selected_db_backup_db_path(command),
         cli::SystemCommands::State(command) => selected_state_db_path(command),
         cli::SystemCommands::Generation(command) => selected_generation_db_path(command),
+        cli::SystemCommands::Root(command) => selected_root_db_path(command),
         cli::SystemCommands::Trigger(command) => selected_trigger_db_path(command),
         cli::SystemCommands::Redirect(command) => selected_redirect_db_path(command),
         cli::SystemCommands::UpdateChannel { action } => selected_update_channel_db_path(action),
         cli::SystemCommands::Completions { .. } => DEFAULT_DB_PATH,
+    }
+}
+
+fn selected_root_db_path(command: &cli::RootCommands) -> &str {
+    match command {
+        cli::RootCommands::Inspect { db, .. } => &db.db_path,
     }
 }
 
