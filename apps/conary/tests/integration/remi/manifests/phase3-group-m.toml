@@ -14,20 +14,6 @@ name = "Phase 3 Group M: Real-World Operations"
 phase = 3
 requires_fixtures = ["conary-test-shell", "conary-test-base"]
 
-# Provides /bin/sh for the fixture's post-install hook (#1080).
-[[suite.setup]]
-conary = "ccs install ${FIXTURE_SHELL_CCS} --policy ${FIXTURE_CCS_POLICY} --sandbox always --yes"
-
-[suite.setup.assert]
-exit_code = 0
-
-# Provides /sbin/init and fake boot assets so installs can publish a generation (#1102).
-[[suite.setup]]
-conary = "ccs install ${FIXTURE_BASE_CCS} --policy ${FIXTURE_CCS_POLICY} --sandbox always --yes"
-
-[suite.setup.assert]
-exit_code = 0
-
 [distro_overrides.fedora44]
 small_package = "tree"
 small_binary = "/usr/bin/tree"

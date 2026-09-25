@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-09-21
-revision: 69
+last_updated: 2026-09-25
+revision: 70
 summary: Define the Redshirt shared Rust tooling boundary, Conary-owned package checks, and integration cutover requirements alongside the existing integration proof contracts
 ---
 
@@ -378,6 +378,23 @@ disposable Ed25519 authority under
 the key explicitly, and every install or verify passes one of those policies.
 This authority is public test data and must never authorize release,
 repository, federation, update, or production packages.
+
+Suites opt into a static fixture with `[suite] requires_fixtures` in their
+manifest. The harness builds the declared fixture into the image and installs
+it into the test container once per container, before the first manifest that
+declares it runs. A `suite.setup` step must not install a declared fixture: a
+phase-wide run reuses one container and database, so a second identical install
+would abort the phase.
+
+The checked-in provider fixtures are the hermetic static `/bin/sh`
+(`conary-test-shell`, #1080) and the fake `/sbin/init` plus boot-asset base
+(`conary-test-base`, #1102); the harness installs the base after the shell
+because a base's init may need `/bin/sh`. Staging builds a provider only when a
+selected suite declares it: a suite that declares neither consults no host
+shell, so an image build never requires one. Both share the same host static
+binary, which the base stages as `/sbin/init` after the same ELF validation the
+shell payload receives; the base skips the shell hook probe because `/sbin/init`
+never runs fixture hooks.
 
 Rotate and rebuild the complete CCS fixture corpus together:
 

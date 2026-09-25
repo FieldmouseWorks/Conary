@@ -42,3 +42,16 @@ executable `PT_LOAD` segment containing the entry point. The `/bin/sh` hook
 probe is skipped for the base because `/sbin/init` never runs fixture hooks; when
 a suite also installs `conary-test-shell`, the probed shared binary is staged as
 both payloads.
+
+## Installation
+
+The harness is the only installer, so a suite never installs a declared fixture
+from `suite.setup`. A suite opts in with
+`requires_fixtures = ["conary-test-base"]`, and the harness installs the
+declared fixture into the test container itself -- once per container and before
+the first manifest that declares it runs -- with the same exec path and
+arguments the old setup steps used:
+`ccs install <fixture> --policy ${FIXTURE_CCS_POLICY} --sandbox always --yes`.
+A failed installation aborts the run with a typed error naming the fixture, and
+the manifest guard rejects a `suite.setup` step that installs any declared
+fixture.

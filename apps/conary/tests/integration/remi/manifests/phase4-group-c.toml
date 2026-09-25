@@ -11,20 +11,6 @@ name = "Phase 4 Group C: CCS Ops, Query, Repo Management"
 phase = 4
 requires_fixtures = ["conary-test-shell", "conary-test-base"]
 
-# Provides /bin/sh for the fixture's post-install hook (#1080).
-[[suite.setup]]
-conary = "ccs install ${FIXTURE_SHELL_CCS} --policy ${FIXTURE_CCS_POLICY} --sandbox always --yes"
-
-[suite.setup.assert]
-exit_code = 0
-
-# Provides /sbin/init and fake boot assets so installs can publish a generation (#1102).
-[[suite.setup]]
-conary = "ccs install ${FIXTURE_BASE_CCS} --policy ${FIXTURE_CCS_POLICY} --sandbox always --yes"
-
-[suite.setup.assert]
-exit_code = 0
-
 # ==========================================================================
 #  CCS NON-INSTALL OPERATIONS (T196-T204)
 # ==========================================================================

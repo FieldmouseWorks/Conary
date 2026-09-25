@@ -289,6 +289,7 @@ async fn test_cancel_flag_stops_runner() {
     let cancel_flag = Arc::new(AtomicBool::new(true));
 
     let mut runner = TestRunner::new(test_config(), "fedora44".to_string());
+    let mut installed_fixtures = InstalledFixtures::default();
     let suite = runner
         .run_with_cancel(
             &manifest,
@@ -298,6 +299,7 @@ async fn test_cancel_flag_stops_runner() {
             Some(cancel_flag),
             None,
             None,
+            &mut installed_fixtures,
         )
         .await
         .unwrap();
@@ -363,6 +365,7 @@ async fn test_suite_timeout_cancels_remaining() {
 
     let backend = MockBackend::new(Vec::new());
     let mut runner = TestRunner::new(test_config(), "fedora44".to_string());
+    let mut installed_fixtures = InstalledFixtures::default();
     let suite = runner
         .run_with_cancel(
             &manifest,
@@ -372,6 +375,7 @@ async fn test_suite_timeout_cancels_remaining() {
             None,
             None,
             None,
+            &mut installed_fixtures,
         )
         .await
         .unwrap();

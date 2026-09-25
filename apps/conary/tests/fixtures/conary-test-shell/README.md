@@ -11,10 +11,17 @@ The payload is a statically linked shell copied into `stage/bin/sh` at image
 staging time by `apps/conary-test/src/container/image.rs`; it is not committed
 to the repository. `stage/` and `output/` are ignored.
 
-The fixture is built only when a selected suite declares it in its typed
-`requires_fixtures` list (`requires_fixtures = ["conary-test-shell"]`); command
-text never opts an image in, so quoting or rewriting the install step cannot
-silently drop the shell. Images for other suites never consult a host shell.
+A suite opts in only through its typed `requires_fixtures` list
+(`requires_fixtures = ["conary-test-shell"]`); command text never opts an image
+in, so quoting or rewriting an install command cannot silently drop the shell.
+The harness then installs the declared fixture into the test container itself --
+once per container and before the first manifest that declares it runs -- with
+the same exec path and arguments the old setup steps used:
+`ccs install <fixture> --policy ${FIXTURE_CCS_POLICY} --sandbox always --yes`.
+A suite must not install a declared fixture from `suite.setup`, and a failed
+installation aborts the run with a typed error naming the fixture. Images for
+other suites never consult a host shell.
+
 The source binary is chosen by `resolve_static_test_shell()`: when
 `CONARY_TEST_STATIC_SHELL` is set, that exact path is used; otherwise the first
 `busybox` on `PATH` that validates is used. Validation requires a 64-bit
