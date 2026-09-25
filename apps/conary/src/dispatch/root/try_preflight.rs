@@ -131,6 +131,12 @@ fn is_try_management_action(command: &Commands) -> bool {
     )
 }
 
+/// Whether dispatch opens the selected database read-write for try-session
+/// bookkeeping before this command runs.
+///
+/// `system root inspect` is excluded: it reads committed selected-root
+/// authority through its own read-only opener, never mutates, and must never
+/// initialize a database.
 pub(super) fn command_uses_try_session_preflight_db(command: &Commands) -> bool {
     match command {
         Commands::Cook { .. }
@@ -144,6 +150,11 @@ pub(super) fn command_uses_try_session_preflight_db(command: &Commands) -> bool 
         | Commands::System(
             cli::SystemCommands::Completions { .. } | cli::SystemCommands::RebuildDatabase { .. },
         )
+        // `system root inspect` reads committed selected-root authority only,
+        // never mutates, and must never initialize a database. Keeping it out
+        // of this preflight leaves the selected database to the command's own
+        // read-only opener.
+        | Commands::System(cli::SystemCommands::Root(cli::RootCommands::Inspect { .. }))
         | Commands::Ccs(
             cli::CcsCommands::Init { .. }
             | cli::CcsCommands::Build { .. }
@@ -531,17 +542,11 @@ fn selected_system_db_path(command: &cli::SystemCommands) -> &str {
         cli::SystemCommands::DbBackup { command } => selected_db_backup_db_path(command),
         cli::SystemCommands::State(command) => selected_state_db_path(command),
         cli::SystemCommands::Generation(command) => selected_generation_db_path(command),
-        cli::SystemCommands::Root(command) => selected_root_db_path(command),
+        cli::SystemCommands::Root(cli::RootCommands::Inspect { db, .. }) => &db.db_path,
         cli::SystemCommands::Trigger(command) => selected_trigger_db_path(command),
         cli::SystemCommands::Redirect(command) => selected_redirect_db_path(command),
         cli::SystemCommands::UpdateChannel { action } => selected_update_channel_db_path(action),
         cli::SystemCommands::Completions { .. } => DEFAULT_DB_PATH,
-    }
-}
-
-fn selected_root_db_path(command: &cli::RootCommands) -> &str {
-    match command {
-        cli::RootCommands::Inspect { db, .. } => &db.db_path,
     }
 }
 
