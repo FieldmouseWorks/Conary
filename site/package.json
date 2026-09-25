@@ -21,7 +21,7 @@
 		"@types/js-yaml": "4.0.9",
 		"@types/node": "^26.5.0",
 		"js-yaml": "5.4.1",
-		"svelte": "^5.57.0",
+		"svelte": "^5.57.1",
 		"svelte-check": "^4.7.6",
 		"typescript": "^6.0.3",
 		"vite": "^8.2.2",
