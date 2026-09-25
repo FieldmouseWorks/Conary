@@ -56,6 +56,15 @@ fn conditional_depends(required: &str, condition: &str) -> RepositoryRequirement
     .unwrap()
 }
 
+fn hard_depends(name: &str) -> RepositoryRequirementGroup {
+    crate::repository::requirement::parse_native_requirement(
+        RepositoryRequirementKind::Depends,
+        VersionScheme::Rpm,
+        name,
+    )
+    .unwrap()
+}
+
 fn strict_policy_without_source_authority(conn: &Connection) -> ResolutionPolicy {
     load_effective_policy(conn, RequestScope::Any)
         .unwrap()
@@ -474,9 +483,9 @@ fn authority_solve_validates_conditions_triggered_by_selected_packages() {
     assert!(refused.conflict_message.is_some(), "{refused:?}");
     assert!(refused.install_order.is_empty(), "{refused:?}");
 
-    // Positive control through the same fixture: admitting `foo` lets the
-    // retry select it alongside the selected condition, and the install order
-    // is exactly the two packages.
+    // Positive control through the same fixture: admitting `foo` lets the next
+    // pass select it alongside the selected condition, and the install order is
+    // exactly the two packages.
     insert_rpm_repo_package(&conn, repository_id, "foo", "1-1");
     let resolved = solve_requirement_groups_with_outgoing_and_policy(
         &conn,
@@ -495,4 +504,123 @@ fn authority_solve_validates_conditions_triggered_by_selected_packages() {
     names.sort_unstable();
     assert_eq!(names, ["bar", "foo"], "{resolved:?}");
     assert!(resolved.remove_order.is_empty(), "{resolved:?}");
+}
+
+#[test]
+fn authority_conditional_chain_solves_to_a_fixed_point() {
+    let (_dir, conn) = setup_test_db();
+    let repository_id = repository_fixture(&conn);
+    for name in ["bar", "foo", "baz"] {
+        insert_rpm_repo_package(&conn, repository_id, name, "1-1");
+    }
+    let policy = ResolutionPolicy::new().with_primary_source_identity("fedora-44");
+    let groups = vec![
+        hard_depends("bar"),
+        conditional_depends("foo", "bar"),
+        conditional_depends("baz", "foo"),
+    ];
+
+    // Seeded with `bar` and `(foo if bar)`, pass one selects `bar` and exposes
+    // `(foo if bar)`; pass two selects `foo` and exposes `(baz if foo)`; pass
+    // three selects `baz`. A single retry would stop after pass two.
+    let resolved = solve_requirement_groups_with_outgoing_and_policy(
+        &conn,
+        &groups,
+        VersionScheme::Rpm,
+        &[],
+        &policy,
+    )
+    .unwrap();
+
+    assert!(resolved.conflict_message.is_none(), "{resolved:?}");
+    let mut names = resolved
+        .install_order
+        .iter()
+        .map(|package| package.name.as_str())
+        .collect::<Vec<_>>();
+    names.sort_unstable();
+    assert_eq!(names, ["bar", "baz", "foo"], "{resolved:?}");
+}
+
+#[test]
+fn authority_conditional_chain_conflicts_when_terminal_requirement_is_unavailable() {
+    let (_dir, conn) = setup_test_db();
+    let repository_id = repository_fixture(&conn);
+    for name in ["bar", "foo", "baz"] {
+        insert_rpm_repo_package(&conn, repository_id, name, "1-1");
+    }
+    let policy = ResolutionPolicy::new().with_primary_source_identity("fedora-44");
+    let groups = || {
+        vec![
+            hard_depends("bar"),
+            conditional_depends("foo", "bar"),
+            conditional_depends("baz", "foo"),
+        ]
+    };
+
+    // Positive control through the same fixture: with `baz` admitted the chain
+    // solves, so the refusal below is caused by `baz` being absent and not by a
+    // malformed fixture. `(baz if foo)` is the group promoted before the third
+    // pass.
+    let solved = solve_requirement_groups_with_outgoing_and_policy(
+        &conn,
+        &groups(),
+        VersionScheme::Rpm,
+        &[],
+        &policy,
+    )
+    .unwrap();
+    assert!(solved.conflict_message.is_none(), "{solved:?}");
+    assert_eq!(solved.install_order.len(), 3, "{solved:?}");
+
+    conn.execute("DELETE FROM repository_packages WHERE name = 'baz'", [])
+        .unwrap();
+    let refused = solve_requirement_groups_with_outgoing_and_policy(
+        &conn,
+        &groups(),
+        VersionScheme::Rpm,
+        &[],
+        &policy,
+    )
+    .unwrap();
+    assert!(refused.conflict_message.is_some(), "{refused:?}");
+    assert!(refused.install_order.is_empty(), "{refused:?}");
+    assert!(refused.remove_order.is_empty(), "{refused:?}");
+}
+
+#[test]
+fn authority_conditional_chain_solves_beyond_two_passes() {
+    let (_dir, conn) = setup_test_db();
+    let repository_id = repository_fixture(&conn);
+    for name in ["bar", "foo", "baz", "qux"] {
+        insert_rpm_repo_package(&conn, repository_id, name, "1-1");
+    }
+    let policy = ResolutionPolicy::new().with_primary_source_identity("fedora-44");
+    let groups = vec![
+        hard_depends("bar"),
+        conditional_depends("foo", "bar"),
+        conditional_depends("baz", "foo"),
+        conditional_depends("qux", "baz"),
+    ];
+
+    // Four chained conditionals require four passes: each pass exposes exactly
+    // one more live group. Success here shows the iteration is not capped at the
+    // original one-retry two-pass behavior.
+    let resolved = solve_requirement_groups_with_outgoing_and_policy(
+        &conn,
+        &groups,
+        VersionScheme::Rpm,
+        &[],
+        &policy,
+    )
+    .unwrap();
+
+    assert!(resolved.conflict_message.is_none(), "{resolved:?}");
+    let mut names = resolved
+        .install_order
+        .iter()
+        .map(|package| package.name.as_str())
+        .collect::<Vec<_>>();
+    names.sort_unstable();
+    assert_eq!(names, ["bar", "baz", "foo", "qux"], "{resolved:?}");
 }

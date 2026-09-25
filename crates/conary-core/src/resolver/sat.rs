@@ -546,96 +546,80 @@ fn solve_requirement_groups_for_architecture_with_policy(
         }
     };
 
-    let first_expressions =
-        compile_group_residuals(&group_residuals, version_scheme, depending_architecture)?;
-    let first = solve_expression_pass(
-        conn,
-        &first_expressions,
-        policy,
-        outgoing_trove_ids,
-        lock_surviving_installed,
-    )?;
+    // The fixed-state simplification only decides the conditions it can see.
+    // SAT can select a condition package and make another conditional live,
+    // which can make yet another one live. Iterate passes until every original
+    // hard group holds against the full projected end state, promoting every
+    // newly violated group to its unsimplified expression so resolvo sees the
+    // live conditional rather than the fixed-state decision that dropped it.
+    //
+    // Each pass either succeeds, stops with a typed conflict, or promotes at
+    // least one newly violated group. A group is promoted at most once and the
+    // live set is carried across passes, so the live set strictly grows until a
+    // pass promotes nothing; that pass returns the conflict. At most
+    // `hard_groups.len()` passes promote, so `hard_groups.len() + 1` passes
+    // bound the loop. The counter makes the bound explicit and stops a logic
+    // error from looping forever.
+    let max_passes = hard_groups.len() + 1;
+    let mut residuals = group_residuals;
+    let mut live = vec![false; hard_groups.len()];
+    let mut passes = 0;
+    loop {
+        passes += 1;
+        let expressions =
+            compile_group_residuals(&residuals, version_scheme, depending_architecture)?;
+        let pass = solve_expression_pass(
+            conn,
+            &expressions,
+            policy,
+            outgoing_trove_ids,
+            lock_surviving_installed,
+        )?;
 
-    let (install_order, remove_order, selected) = match first {
-        ExpressionPass::Conflict(message) => return Ok(SatResolution::conflict(message)),
-        ExpressionPass::Resolved {
-            install_order,
-            remove_order,
-            selected,
-        } => (install_order, remove_order, selected),
-    };
+        let (install_order, remove_order, selected) = match pass {
+            ExpressionPass::Conflict(message) => return Ok(SatResolution::conflict(message)),
+            ExpressionPass::Resolved {
+                install_order,
+                remove_order,
+                selected,
+            } => (install_order, remove_order, selected),
+        };
 
-    // An unknown end state cannot be projected, so the caller's own semantics
-    // apply and there is nothing to validate against.
-    let Some(fixed_end_state) = fixed_end_state else {
-        return Ok(SatResolution::resolved(install_order, remove_order));
-    };
+        // An unknown end state cannot be projected, so the caller's own
+        // semantics apply and there is nothing to validate against.
+        let Some(fixed_end_state) = fixed_end_state.as_ref() else {
+            return Ok(SatResolution::resolved(install_order, remove_order));
+        };
 
-    // A conditional the fixed-state simplification dropped can become true once
-    // SAT selects its condition package. Validate every original hard group
-    // against the full projected end state before reporting success.
-    let violated = install::groups_violated_by_solved_end_state(
-        &fixed_end_state,
-        &selected,
-        &remove_order,
-        &hard_groups,
-        version_scheme,
-        depending_architecture,
-        &native_architecture,
-    )?;
-    if violated.is_empty() {
-        return Ok(SatResolution::resolved(install_order, remove_order));
-    }
+        let violated = install::groups_violated_by_solved_end_state(
+            fixed_end_state,
+            &selected,
+            &remove_order,
+            &hard_groups,
+            version_scheme,
+            depending_architecture,
+            &native_architecture,
+        )?;
+        if violated.is_empty() {
+            return Ok(SatResolution::resolved(install_order, remove_order));
+        }
 
-    // One bounded retry: keep the violated groups unsimplified so resolvo sees
-    // the live conditional instead of a fixed-state decision. If the retry
-    // still leaves a group unsatisfied in the projected end state, the request
-    // is a conflict rather than an unsound success.
-    let retry_residuals = group_residuals
-        .iter()
-        .enumerate()
-        .map(|(index, residual)| {
-            if violated.contains(&index) {
-                Some(hard_groups[index].expression.clone())
-            } else {
-                residual.clone()
+        // Promote every newly violated group to its unsimplified expression.
+        // Groups already live and the residual vector keep original group
+        // order, so every pass is deterministic.
+        let mut promoted = false;
+        for &index in &violated {
+            if !live[index] {
+                live[index] = true;
+                residuals[index] = Some(hard_groups[index].expression.clone());
+                promoted = true;
             }
-        })
-        .collect::<Vec<_>>();
-    let retry_expressions =
-        compile_group_residuals(&retry_residuals, version_scheme, depending_architecture)?;
-    let retry = solve_expression_pass(
-        conn,
-        &retry_expressions,
-        policy,
-        outgoing_trove_ids,
-        lock_surviving_installed,
-    )?;
-
-    match retry {
-        ExpressionPass::Conflict(message) => Ok(SatResolution::conflict(message)),
-        ExpressionPass::Resolved {
-            install_order,
-            remove_order,
-            selected,
-        } => {
-            let still_violated = install::groups_violated_by_solved_end_state(
-                &fixed_end_state,
-                &selected,
-                &remove_order,
+        }
+        if !promoted || passes == max_passes {
+            return Ok(SatResolution::conflict(unsatisfied_groups_message(
                 &hard_groups,
-                version_scheme,
-                depending_architecture,
-                &native_architecture,
-            )?;
-            if still_violated.is_empty() {
-                Ok(SatResolution::resolved(install_order, remove_order))
-            } else {
-                Ok(SatResolution::conflict(unsatisfied_groups_message(
-                    &hard_groups,
-                    &still_violated,
-                )))
-            }
+                &violated,
+            )));
         }
     }
 }
@@ -711,8 +695,9 @@ fn solve_expression_pass(
     }
 }
 
-/// A conflict explanation naming every hard group the retry could not place in
-/// the projected end state, as decided by the shared typed evaluator.
+/// A conflict explanation naming every hard group the fixed-point iteration
+/// could not place in the projected end state, as decided by the shared typed
+/// evaluator.
 fn unsatisfied_groups_message(
     hard_groups: &[&RepositoryRequirementGroup],
     violated: &[usize],

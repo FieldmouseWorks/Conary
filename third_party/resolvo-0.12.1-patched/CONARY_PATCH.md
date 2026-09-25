@@ -1,7 +1,7 @@
 # Conary resolvo patch
 
 This directory vendors crates.io `resolvo` 0.12.1 under its BSD-3-Clause
-license. Conary carries two scoped fixes:
+license. Conary carries three scoped fixes:
 
 - `src/conflict.rs` retains only conflict-graph nodes reachable from the synthetic
   request root before rendering an unsatisfiable result.
@@ -9,6 +9,15 @@ license. Conary carries two scoped fixes:
   concrete name when a virtual capability has mixed-name candidates. This is
   backported from [upstream PR #293](https://github.com/prefix-dev/resolvo/pull/293),
   commit `dfb403fce20c989a150ef5bbf89c2d2c1e2b3199`, still a draft at review time.
+
+- `src/conflict.rs` asserts that an `AnyOf` clause (`selected | !variable`)
+  is never falsified, instead of upstream's debug assertion that its `selected`
+  variable is never false. Conditional requirements legitimately decide an
+  `AtLeastOne` condition variable false whenever its solvable is also false; the
+  upstream assertion then panics while rendering an unsatisfiable conditional
+  chain (for example `bar`, `foo if bar`, `baz if foo` with `baz` unavailable).
+  Release builds were already correct. Conary's regression is
+  `resolver::sat::tests::strict_installed::authority_conditional_chain_conflicts_when_terminal_requirement_is_unavailable`.
 
 There is no persisted schema or public API change.
 
