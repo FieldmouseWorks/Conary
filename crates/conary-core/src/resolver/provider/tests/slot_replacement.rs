@@ -135,3 +135,76 @@ fn cross_scheme_install_slot_has_no_replacer() {
     assert!(candidates.candidates.contains(&same_scheme_id));
     assert!(!candidates.candidates.contains(&cross_scheme_id));
 }
+
+#[test]
+fn relation_remover_excludes_exactly_the_installed_trove_it_obsoletes() {
+    let (_dir, conn) = setup_test_db();
+    let mut provider = ConaryProvider::new(&conn).unwrap();
+    let oldlib = provider.intern_name("oldlib").unwrap();
+
+    let obsoleted_id = provider
+        .add_solvable(installed_identity(
+            "oldlib",
+            "1",
+            VersionScheme::Rpm,
+            Some(7),
+        ))
+        .unwrap();
+    let survivor_id = provider
+        .add_solvable(installed_identity(
+            "keptlib",
+            "1",
+            VersionScheme::Rpm,
+            Some(9),
+        ))
+        .unwrap();
+    let remover_id = provider
+        .add_solvable(repo_identity("obsoleter", "9", VersionScheme::Rpm, Some(8)))
+        .unwrap();
+    for id in [obsoleted_id, survivor_id] {
+        provider.relations.insert(id.into_raw(), Vec::new());
+    }
+    provider.relations.insert(
+        remover_id.into_raw(),
+        vec![SolverRelation {
+            scheme: VersionScheme::Rpm,
+            relation: crate::repository::package_relation::parse_native_relation(
+                crate::repository::dependency_model::RepositoryRequirementKind::Obsolete,
+                VersionScheme::Rpm,
+                "oldlib < 2",
+            )
+            .unwrap(),
+        }],
+    );
+    provider.lock_surviving_installed_candidates();
+    provider.intern_all_dependency_version_sets().unwrap();
+    provider.compile_replacement_constrains().unwrap();
+
+    // Selecting the obsoleter forbids the trove it removes, so no pass can both
+    // select it and satisfy a requirement from what it obsoletes.
+    assert_eq!(
+        provider.relation_removed_installed(remover_id).unwrap(),
+        vec![obsoleted_id]
+    );
+    let resolvo::Dependencies::Known(dependencies) =
+        block_on(provider.get_dependencies(remover_id))
+    else {
+        panic!("the remover has compiled dependencies");
+    };
+    assert_eq!(dependencies.constrains.len(), 1);
+    let pool = block_on(provider.get_candidates(oldlib))
+        .unwrap()
+        .candidates;
+    assert_eq!(
+        provider.matching_candidates(&pool, dependencies.constrains[0], true),
+        vec![obsoleted_id]
+    );
+
+    // Control: a trove the relation does not match imposes nothing.
+    assert!(
+        provider
+            .relation_removed_installed(survivor_id)
+            .unwrap()
+            .is_empty()
+    );
+}
