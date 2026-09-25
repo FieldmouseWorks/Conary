@@ -1,6 +1,6 @@
 // apps/conary-test/src/config/manifest.rs
 
-use crate::engine::assertions::{InexactJsonInteger, find_inexact_json_integers};
+use crate::engine::assertions::find_json_number_tokens;
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
@@ -332,12 +332,24 @@ pub struct JsonAssertion {
     pub pointer: String,
     /// Expected value at the pointer.
     pub expected: JsonExpectation,
+    /// Exact source token for every number in `expected`, keyed by its RFC 6901
+    /// pointer relative to the expected document root.
+    ///
+    /// `equals_json` numbers keep the token from the manifest text, so a
+    /// decimal is compared by its exact value rather than a rounded `f64`.
+    /// `equals` numbers come from TOML, which has no JSON token; they have no
+    /// entry here and the comparator uses the value's shortest round-trip
+    /// representation instead.
+    pub(crate) numbers: HashMap<String, String>,
 }
 
 /// Expected value for a `stdout_json` pointer.
 #[derive(Debug, Clone, PartialEq)]
 pub enum JsonExpectation {
     /// Resolved value equals this JSON value.
+    ///
+    /// A number is compared by its exact decimal value; an integer token never
+    /// equals a decimal token, so `1` does not equal `1.0`.
     Equals(JsonValue),
     /// Resolved value is JSON null.
     ///
@@ -358,10 +370,9 @@ struct RawJsonAssertion {
     ///
     /// TOML integers are `i64` and TOML has no null literal, so `equals` cannot
     /// express an unsigned integer above `i64::MAX` or a nested JSON null. The
-    /// string holds the JSON text verbatim, and `serde_json` keeps an exact
-    /// integer token within `i64`/`u64` (for example `18446744073709551615`
-    /// loads as a `u64`). An integer token outside that range cannot be
-    /// represented exactly, so load fails rather than rounding it to `f64`.
+    /// string holds the JSON text verbatim. Every number token is kept exactly
+    /// from this text, so an integer outside `i64`/`u64` or any decimal is
+    /// compared by its exact decimal value rather than a rounded `f64`.
     /// Mutually exclusive with `equals` and `null`.
     #[serde(default)]
     equals_json: Option<String>,
@@ -456,24 +467,22 @@ impl TryFrom<RawJsonAssertion> for JsonAssertion {
         if !contains_variable_reference(&raw.pointer) {
             validate_json_pointer(&raw.pointer)?;
         }
-        let expected = match (raw.equals, raw.equals_json, raw.null) {
+        let (expected, numbers) = match (raw.equals, raw.equals_json, raw.null) {
             (Some(value), None, None) => {
                 let value = toml_to_json(&value).map_err(|error| error.to_string())?;
-                JsonExpectation::Equals(value)
+                (JsonExpectation::Equals(value), HashMap::new())
             }
             (None, Some(text), None) => {
                 let parsed = serde_json::from_str(&text);
                 let value = parsed.map_err(|error| invalid_equals_json(&raw.pointer, &error))?;
-                if let Some(integer) = find_inexact_json_integers(&text)
+                let numbers = find_json_number_tokens(&text)
                     .map_err(|error| invalid_equals_json_text(&raw.pointer, &error))?
                     .into_iter()
-                    .next()
-                {
-                    return Err(inexact_equals_json_error(&raw.pointer, &integer));
-                }
-                JsonExpectation::Equals(value)
+                    .map(|number| (number.pointer, number.token))
+                    .collect();
+                (JsonExpectation::Equals(value), numbers)
             }
-            (None, None, Some(true)) => JsonExpectation::Null,
+            (None, None, Some(true)) => (JsonExpectation::Null, HashMap::new()),
             (None, None, Some(false)) => {
                 return Err(
                     "`null = false` is not an assertion; use `equals` or `equals_json`".to_string(),
@@ -491,6 +500,7 @@ impl TryFrom<RawJsonAssertion> for JsonAssertion {
         Ok(Self {
             pointer: raw.pointer,
             expected,
+            numbers,
         })
     }
 }
@@ -540,21 +550,6 @@ fn invalid_equals_json(pointer: &str, error: &serde_json::Error) -> String {
 /// an internal invariant failure rather than user input reaching a new state.
 fn invalid_equals_json_text(pointer: &str, error: &anyhow::Error) -> String {
     format!("stdout_json pointer {pointer:?} has invalid `equals_json`: {error}")
-}
-
-/// Build the load error for an `equals_json` integer outside the exactly
-/// comparable `i64`/`u64` range.
-///
-/// `pointer` addresses the `equals_json` document from the assertion, and
-/// `integer.pointer` addresses the number inside it, so concatenating them
-/// names the integer's real pointer relative to stdout.
-fn inexact_equals_json_error(pointer: &str, integer: &InexactJsonInteger) -> String {
-    let location = format!("{pointer}{}", integer.pointer);
-    format!(
-        "stdout_json pointer {pointer:?} has invalid `equals_json`: integer `{}` at JSON pointer \
-         {location:?} is outside the exactly comparable i64/u64 range",
-        integer.token
-    )
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

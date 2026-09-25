@@ -526,6 +526,7 @@ fn stdout_json_test(id: &str, pointer: &str) -> TestDef {
                 stdout_json: Some(vec![JsonAssertion {
                     pointer: pointer.to_string(),
                     expected: JsonExpectation::Equals(serde_json::json!(1)),
+                    numbers: HashMap::new(),
                 }]),
                 ..Assertion::default()
             }),
@@ -562,6 +563,7 @@ fn stdout_json_checks_test(id: &str, pointers: &[&str]) -> TestDef {
                         .map(|(index, pointer)| JsonAssertion {
                             pointer: pointer.to_string(),
                             expected: JsonExpectation::Equals(serde_json::json!(index as u64)),
+                            numbers: HashMap::new(),
                         })
                         .collect(),
                 ),

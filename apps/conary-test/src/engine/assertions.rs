@@ -82,13 +82,14 @@ pub fn evaluate_assertion(
 fn evaluate_stdout_json(checks: &[JsonAssertion], stdout: &str) -> Result<()> {
     let document: JsonValue = serde_json::from_str(stdout)
         .map_err(|error| anyhow::anyhow!("stdout is not valid JSON: {error}"))?;
-    // `serde_json` stores an integer token outside i64/u64 as `f64`, which
-    // cannot hold it exactly. Record the source token at each pointer so a
-    // number check refuses the value instead of comparing rounded floats.
-    let inexact_integers: HashMap<String, String> = find_inexact_json_integers(stdout)
+    // `serde_json` stores every decimal token as `f64`, and an integer token
+    // outside `i64`/`u64` as `f64` too. Record the source token for every
+    // number at its pointer so a check compares exact decimal values instead
+    // of rounded floats.
+    let actual_numbers: HashMap<String, String> = find_json_number_tokens(stdout)
         .map_err(|error| anyhow::anyhow!("stdout is not valid JSON: {error}"))?
         .into_iter()
-        .map(|integer| (integer.pointer, integer.token))
+        .map(|number| (number.pointer, number.token))
         .collect();
     for check in checks {
         let Some(actual) = document.pointer(&check.pointer) else {
@@ -96,7 +97,14 @@ fn evaluate_stdout_json(checks: &[JsonAssertion], stdout: &str) -> Result<()> {
         };
         match &check.expected {
             JsonExpectation::Equals(expected) => {
-                match compare_json_values(expected, actual, &check.pointer, &inexact_integers) {
+                let expected_numbers = expected_number_index(check);
+                match compare_json_values(
+                    expected,
+                    actual,
+                    &check.pointer,
+                    &expected_numbers,
+                    &actual_numbers,
+                ) {
                     Ok(()) => {}
                     Err(JsonComparisonError::Mismatch) => bail!(
                         "stdout JSON at pointer \"{}\" did not match expected value\nexpected: {}\nactual: {}",
@@ -104,12 +112,12 @@ fn evaluate_stdout_json(checks: &[JsonAssertion], stdout: &str) -> Result<()> {
                         serde_json::to_string_pretty(expected)?,
                         serde_json::to_string_pretty(actual)?,
                     ),
-                    Err(JsonComparisonError::InexactInteger { pointer, token }) => bail!(
-                        "stdout JSON at pointer \"{}\" has integer `{}` at JSON pointer \"{}\" \
-                         outside the exactly comparable i64/u64 range; refusing to compare it as a float",
-                        check.pointer,
-                        token,
-                        pointer,
+                    Err(JsonComparisonError::MissingActualNumber { pointer }) => bail!(
+                        "stdout JSON number at pointer \"{pointer}\" has no recorded source token; \
+                         refusing to compare an unverifiable value"
+                    ),
+                    Err(JsonComparisonError::InvalidNumber { pointer, error }) => bail!(
+                        "stdout JSON number at pointer \"{pointer}\" is not an exact decimal: {error}"
                     ),
                 }
             }
@@ -127,25 +135,47 @@ fn evaluate_stdout_json(checks: &[JsonAssertion], stdout: &str) -> Result<()> {
     Ok(())
 }
 
+/// Build the expected number index for one check.
+///
+/// `JsonAssertion::numbers` stores tokens by their RFC 6901 pointer relative to
+/// the expected document, while comparison walks the value at `check.pointer`
+/// and threads absolute pointers. Prefixing each inner pointer keeps the two
+/// key spaces aligned even when the check pointer is nested or templated.
+fn expected_number_index(check: &JsonAssertion) -> HashMap<String, String> {
+    check
+        .numbers
+        .iter()
+        .map(|(inner, token)| (format!("{}{}", check.pointer, inner), token.clone()))
+        .collect()
+}
+
 /// Why a typed JSON comparison did not succeed.
 enum JsonComparisonError {
     /// The values differ.
     Mismatch,
-    /// The actual value is an integer token outside the i64/u64 range, which
-    /// `serde_json` stored as `f64`.
-    InexactInteger { pointer: String, token: String },
+    /// The actual value is a number but the walker did not record its token.
+    MissingActualNumber { pointer: String },
+    /// A number token could not be reduced to an exact decimal.
+    InvalidNumber {
+        pointer: String,
+        error: CanonicalDecimalError,
+    },
 }
 
 /// Compare two JSON values structurally.
 ///
-/// The RFC 6901 pointer to the current position is threaded through the walk
-/// so an out-of-range actual integer can be named exactly instead of being
-/// compared as a float.
+/// The RFC 6901 pointer to the current position is threaded through the walk,
+/// and numbers are compared by their exact decimal source tokens: `expected`
+/// tokens come from `equals_json` (or the value's shortest round-trip form when
+/// the expectation came from TOML), and `actual` tokens come from the stdout
+/// text. Integer and decimal tokens are different kinds, so `1` never equals
+/// `1.0`.
 fn compare_json_values(
     expected: &JsonValue,
     actual: &JsonValue,
     pointer: &str,
-    inexact_integers: &HashMap<String, String>,
+    expected_numbers: &HashMap<String, String>,
+    actual_numbers: &HashMap<String, String>,
 ) -> std::result::Result<(), JsonComparisonError> {
     match (expected, actual) {
         (JsonValue::Object(expected), JsonValue::Object(actual)) => {
@@ -157,7 +187,7 @@ fn compare_json_values(
                     return Err(JsonComparisonError::Mismatch);
                 };
                 let child = format!("{pointer}/{}", escape_json_pointer_token(key));
-                compare_json_values(expected, actual, &child, inexact_integers)?;
+                compare_json_values(expected, actual, &child, expected_numbers, actual_numbers)?;
             }
             Ok(())
         }
@@ -167,21 +197,24 @@ fn compare_json_values(
             }
             for (index, (expected, actual)) in expected.iter().zip(actual).enumerate() {
                 let child = format!("{pointer}/{index}");
-                compare_json_values(expected, actual, &child, inexact_integers)?;
+                compare_json_values(expected, actual, &child, expected_numbers, actual_numbers)?;
             }
             Ok(())
         }
-        (JsonValue::Number(expected), JsonValue::Number(actual)) => {
-            if let Some(token) = inexact_integers.get(pointer) {
-                return Err(JsonComparisonError::InexactInteger {
+        (JsonValue::Number(expected), JsonValue::Number(_)) => {
+            let Some(actual_token) = actual_numbers.get(pointer) else {
+                return Err(JsonComparisonError::MissingActualNumber {
                     pointer: pointer.to_string(),
-                    token: token.clone(),
                 });
-            }
-            if json_numbers_equal(expected, actual) {
-                Ok(())
-            } else {
-                Err(JsonComparisonError::Mismatch)
+            };
+            let expected_token = expected_numbers.get(pointer).map(String::as_str);
+            match ExactNumber::matches(expected, expected_token, actual_token) {
+                Ok(true) => Ok(()),
+                Ok(false) => Err(JsonComparisonError::Mismatch),
+                Err(error) => Err(JsonComparisonError::InvalidNumber {
+                    pointer: pointer.to_string(),
+                    error,
+                }),
             }
         }
         (JsonValue::String(expected), JsonValue::String(actual)) if expected == actual => Ok(()),
@@ -191,61 +224,221 @@ fn compare_json_values(
     }
 }
 
-/// Numbers match only when both are integers with the same value or both are
-/// floats with the same value; an integer never matches a float.
-fn json_numbers_equal(expected: &serde_json::Number, actual: &serde_json::Number) -> bool {
-    match (integer_value(expected), integer_value(actual)) {
-        (Some(expected), Some(actual)) => expected == actual,
-        (None, None) => match (expected.as_f64(), actual.as_f64()) {
-            (Some(expected), Some(actual)) => expected == actual,
-            _ => false,
-        },
-        _ => false,
+/// The syntactically distinct kinds of JSON number (RFC 8259 §6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum JsonNumberKind {
+    /// No fraction and no exponent, for example `1` or `-2`.
+    Integer,
+    /// A fraction, an exponent, or both, for example `1.0` or `1e2`.
+    Decimal,
+}
+
+impl JsonNumberKind {
+    /// Classify a JSON number source token by its grammar shape.
+    pub(crate) fn from_token(token: &str) -> Self {
+        if token.bytes().any(|byte| matches!(byte, b'.' | b'e' | b'E')) {
+            Self::Decimal
+        } else {
+            Self::Integer
+        }
     }
 }
 
-fn integer_value(number: &serde_json::Number) -> Option<i128> {
-    number
-        .as_i64()
-        .map(i128::from)
-        .or_else(|| number.as_u64().map(i128::from))
+/// A JSON number reduced to its exact decimal value.
+///
+/// The value is `(-1)^negative * digits * 10^exponent`, where `digits` is a
+/// decimal string with no leading or trailing zeros and is `"0"` for zero.
+/// Equal decimal values have identical canonical forms, so `1.50`, `1.5`,
+/// `15e-1`, and `0.15E1` all normalize to `digits = "15"`, `exponent = -1`.
+/// Zero is never negative, so `-0`, `-0.0`, and `0` share one canonical zero.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CanonicalDecimal {
+    negative: bool,
+    digits: String,
+    exponent: i64,
 }
 
-/// An integer literal in JSON text that `serde_json` cannot represent exactly.
-///
-/// `serde_json` stores an integer token outside `i64`/`u64` as an `f64`, whose
-/// 53-bit significand cannot hold every such integer. The source token is kept
-/// here so a check can refuse it by name instead of comparing rounded floats.
-#[derive(Debug, Clone)]
-pub(crate) struct InexactJsonInteger {
-    /// RFC 6901 pointer to the number within the scanned document.
-    pub(crate) pointer: String,
-    /// The integer's source token.
-    pub(crate) token: String,
+impl CanonicalDecimal {
+    /// Parse a JSON number source token into canonical form.
+    ///
+    /// The scanner is hand-written against the RFC 8259 §6 grammar; it does not
+    /// use a regular expression. `token` must already have parsed with
+    /// `serde_json`, so a parse error here is an internal invariant failure.
+    pub(crate) fn parse(token: &str) -> std::result::Result<Self, CanonicalDecimalError> {
+        let (negative, unsigned) = match token.strip_prefix('-') {
+            Some(rest) => (true, rest),
+            None => (false, token),
+        };
+        let (mantissa, exponent_text) = match unsigned.split_once(['e', 'E']) {
+            Some((mantissa, exponent)) => (mantissa, Some(exponent)),
+            None => (unsigned, None),
+        };
+        let exponent = match exponent_text {
+            Some(text) => parse_exponent(text).ok_or_else(|| invalid_number_token(token))?,
+            None => 0,
+        };
+        let (integer_digits, fraction_digits) = match mantissa.split_once('.') {
+            Some((integer, fraction)) => {
+                if fraction.is_empty() {
+                    return Err(invalid_number_token(token));
+                }
+                (integer, fraction)
+            }
+            None => (mantissa, ""),
+        };
+        if !is_integer_part(integer_digits)
+            || !fraction_digits.bytes().all(|byte| byte.is_ascii_digit())
+        {
+            return Err(invalid_number_token(token));
+        }
+        // `digits` is the integer and fraction digits concatenated without the
+        // point; the value is `digits * 10^(exponent - fraction_len)`.
+        let mut digits = String::with_capacity(integer_digits.len() + fraction_digits.len());
+        digits.push_str(integer_digits);
+        digits.push_str(fraction_digits);
+        let mut exponent = exponent
+            .checked_sub(
+                i64::try_from(fraction_digits.len()).map_err(|_| invalid_number_token(token))?,
+            )
+            .ok_or_else(|| invalid_number_token(token))?;
+        let Some(first_significant) = digits.bytes().position(|byte| byte != b'0') else {
+            return Ok(Self {
+                negative: false,
+                digits: "0".to_string(),
+                exponent: 0,
+            });
+        };
+        let mut significant = digits[first_significant..].to_string();
+        let trailing_zeros = significant
+            .bytes()
+            .rev()
+            .take_while(|byte| *byte == b'0')
+            .count();
+        if trailing_zeros > 0 {
+            significant.truncate(significant.len() - trailing_zeros);
+            exponent = exponent
+                .checked_add(
+                    i64::try_from(trailing_zeros).map_err(|_| invalid_number_token(token))?,
+                )
+                .ok_or_else(|| invalid_number_token(token))?;
+        }
+        Ok(Self {
+            negative,
+            digits: significant,
+            exponent,
+        })
+    }
 }
 
-/// Find every integer literal in `json` that does not fit `i64` or `u64`.
-///
-/// `serde_json` keeps an in-range integer token exact but represents an
-/// out-of-range one as `f64`, so `18446744073709551616` and
-/// `18446744073709551617` become the same number. Rather than enable an
-/// optional `serde_json` feature that exposes source tokens, this re-scans the
-/// validated text with a small typed walker. The walker skips strings and
-/// tracks RFC 6901 pointers, so it cannot mistake a digit sequence inside a
-/// string for a JSON number, and it matches the JSON grammar exactly rather
-/// than by pattern.
-///
-/// `json` must already have parsed with `serde_json`; the walker assumes
-/// well-formed JSON and fails only if that invariant is broken.
-pub(crate) fn find_inexact_json_integers(json: &str) -> Result<Vec<InexactJsonInteger>> {
-    let mut walker = JsonNumberWalker {
-        bytes: json.as_bytes(),
-        pos: 0,
-        pointer: String::new(),
-        inexact: Vec::new(),
+/// Build the error for a token that does not parse as a JSON number.
+fn invalid_number_token(token: &str) -> CanonicalDecimalError {
+    CanonicalDecimalError {
+        token: token.to_string(),
+    }
+}
+
+/// Whether `digits` is the integer part of an RFC 8259 number.
+fn is_integer_part(digits: &str) -> bool {
+    if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+        return false;
+    }
+    // RFC 8259 forbids a leading zero unless the integer part is exactly "0".
+    digits == "0" || !digits.starts_with('0')
+}
+
+/// Parse the exponent digits after `e`/`E` into an `i64`.
+fn parse_exponent(text: &str) -> Option<i64> {
+    let (negative, digits) = if let Some(rest) = text.strip_prefix('+') {
+        (false, rest)
+    } else if let Some(rest) = text.strip_prefix('-') {
+        (true, rest)
+    } else {
+        (false, text)
     };
-    walker.walk_document()?;
-    Ok(walker.inexact)
+    if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    let magnitude = digits.parse::<i128>().ok()?;
+    let signed = if negative { -magnitude } else { magnitude };
+    i64::try_from(signed).ok()
+}
+
+/// A number token that is not a valid RFC 8259 number.
+#[derive(Debug, thiserror::Error)]
+#[error("invalid JSON number token `{token}`")]
+pub(crate) struct CanonicalDecimalError {
+    token: String,
+}
+
+/// A JSON number paired with its syntactic kind and exact decimal value.
+struct ExactNumber {
+    kind: JsonNumberKind,
+    value: CanonicalDecimal,
+}
+
+impl ExactNumber {
+    /// Reduce a source token, preserving whether it is an integer or decimal.
+    fn from_token(token: &str) -> std::result::Result<Self, CanonicalDecimalError> {
+        Ok(Self {
+            kind: JsonNumberKind::from_token(token),
+            value: CanonicalDecimal::parse(token)?,
+        })
+    }
+
+    /// Reduce a `serde_json` value that has no source token.
+    ///
+    /// Used for `equals` expectations from TOML: TOML has no JSON text, so an
+    /// integer becomes its decimal digits and a float becomes Rust's shortest
+    /// round-trip representation (`format!("{value}")`). TOML floats are
+    /// therefore limited to the decimals `f64` can represent exactly; use
+    /// `equals_json` for the exact form.
+    fn from_serde_number(
+        number: &serde_json::Number,
+    ) -> std::result::Result<Self, CanonicalDecimalError> {
+        if let Some(value) = number.as_i64() {
+            return Self::from_integer_token(value.to_string());
+        }
+        if let Some(value) = number.as_u64() {
+            return Self::from_integer_token(value.to_string());
+        }
+        if let Some(value) = number.as_f64() {
+            // The kind comes from the typed `serde_json` float, not from the
+            // formatted text: `format!("{}", 1.0_f64)` is `"1"`, which would
+            // otherwise read as an integer token.
+            return Ok(Self {
+                kind: JsonNumberKind::Decimal,
+                value: CanonicalDecimal::parse(&format!("{value}"))?,
+            });
+        }
+        Err(invalid_number_token(&number.to_string()))
+    }
+
+    fn from_integer_token(token: String) -> std::result::Result<Self, CanonicalDecimalError> {
+        Ok(Self {
+            kind: JsonNumberKind::Integer,
+            value: CanonicalDecimal::parse(&token)?,
+        })
+    }
+
+    /// Whether `expected` equals `actual_token` by exact decimal value.
+    ///
+    /// Cross-kind matches are refused: an integer token never equals a decimal
+    /// token, so `1` does not equal `1.0` even though their canonical decimal
+    /// values agree. `expected_token` is the source token when the expectation
+    /// came from `equals_json`; otherwise the `serde_json` value is reduced via
+    /// its shortest round-trip representation.
+    fn matches(
+        expected: &serde_json::Number,
+        expected_token: Option<&str>,
+        actual_token: &str,
+    ) -> std::result::Result<bool, CanonicalDecimalError> {
+        let expected = match expected_token {
+            Some(token) => Self::from_token(token)?,
+            None => Self::from_serde_number(expected)?,
+        };
+        let actual = Self::from_token(actual_token)?;
+        Ok(expected.kind == actual.kind && expected.value == actual.value)
+    }
 }
 
 /// Escape one RFC 6901 reference token so it can be appended to a pointer.
@@ -264,6 +457,38 @@ pub(crate) fn escape_json_pointer_token(token: &str) -> String {
     escaped
 }
 
+/// One JSON number's source token and the RFC 6901 pointer that addresses it.
+#[derive(Debug, Clone)]
+pub(crate) struct JsonNumberToken {
+    /// RFC 6901 pointer to the number within the scanned document.
+    pub(crate) pointer: String,
+    /// The number's source token, exactly as it appears in the text.
+    pub(crate) token: String,
+}
+
+/// Find every number literal in `json` with the source token at its pointer.
+///
+/// `serde_json` keeps an in-range integer token exact but represents every
+/// decimal token, and any integer outside `i64`/`u64`, as `f64`, which cannot
+/// hold them exactly. Rather than enable an optional `serde_json` feature that
+/// exposes source tokens, this re-scans the validated text with a small typed
+/// walker. The walker skips strings and tracks RFC 6901 pointers, so it cannot
+/// mistake a digit sequence inside a string for a JSON number, and it matches
+/// the JSON grammar exactly rather than by pattern.
+///
+/// `json` must already have parsed with `serde_json`; the walker assumes
+/// well-formed JSON and fails only if that invariant is broken.
+pub(crate) fn find_json_number_tokens(json: &str) -> Result<Vec<JsonNumberToken>> {
+    let mut walker = JsonNumberWalker {
+        bytes: json.as_bytes(),
+        pos: 0,
+        pointer: String::new(),
+        numbers: Vec::new(),
+    };
+    walker.walk_document()?;
+    Ok(walker.numbers)
+}
+
 /// A minimal exact walker over already-validated JSON text.
 ///
 /// It exists only to pair each number token with its RFC 6901 pointer; the
@@ -273,7 +498,7 @@ struct JsonNumberWalker<'a> {
     bytes: &'a [u8],
     pos: usize,
     pointer: String,
-    inexact: Vec<InexactJsonInteger>,
+    numbers: Vec<JsonNumberToken>,
 }
 
 impl JsonNumberWalker<'_> {
@@ -452,17 +677,10 @@ impl JsonNumberWalker<'_> {
         }
         let token = std::str::from_utf8(&self.bytes[start..self.pos])
             .map_err(|error| anyhow::anyhow!("invalid UTF-8 in JSON number: {error}"))?;
-        // An integer literal has no fraction or exponent. If it fits neither
-        // `i64` nor `u64`, `serde_json` will have stored it as `f64`.
-        if !token.bytes().any(|byte| matches!(byte, b'.' | b'e' | b'E'))
-            && token.parse::<i64>().is_err()
-            && token.parse::<u64>().is_err()
-        {
-            self.inexact.push(InexactJsonInteger {
-                pointer: self.pointer.clone(),
-                token: token.to_string(),
-            });
-        }
+        self.numbers.push(JsonNumberToken {
+            pointer: self.pointer.clone(),
+            token: token.to_string(),
+        });
         Ok(())
     }
 

@@ -191,6 +191,19 @@ fn stdout_json_pointer(entry: &str) -> String {
         .clone()
 }
 
+/// Parse a single-entry `stdout_json` manifest and return its typed check.
+fn stdout_json_check(entry: &str) -> JsonAssertion {
+    let manifest: TestManifest = toml::from_str(&stdout_json_manifest_source(entry)).unwrap();
+    manifest.test[0].step[0]
+        .assert
+        .as_ref()
+        .unwrap()
+        .stdout_json
+        .as_ref()
+        .unwrap()[0]
+        .clone()
+}
+
 #[test]
 fn stdout_json_accepts_valid_rfc6901_pointers() {
     let cases = [
@@ -287,57 +300,70 @@ fn stdout_json_equals_json_accepts_big_integer_digits_in_a_string() {
 }
 
 #[test]
-fn stdout_json_equals_json_accepts_float_exponent() {
-    // A float token is inexact by construction, so it stays loadable.
+fn stdout_json_equals_json_keeps_float_exponent_token() {
+    // The parsed value is `f64`, but the exact token is kept for comparison.
+    let check = stdout_json_check(r#"pointer = "/x", equals_json = '1.5e3'"#);
     assert_eq!(
-        stdout_json_expectation(r#"pointer = "/x", equals_json = '1.5e3'"#),
+        check.expected,
         JsonExpectation::Equals(serde_json::json!(1500.0))
     );
+    assert_eq!(check.numbers.get(""), Some(&"1.5e3".to_string()));
 }
 
 #[test]
-fn stdout_json_rejects_out_of_range_equals_json_integer() {
-    // Positive control through the same manifest template as the negative.
-    assert!(
-        toml::from_str::<TestManifest>(&stdout_json_manifest_source(
-            r#"pointer = "/id", equals_json = '18446744073709551615'"#
-        ))
-        .is_ok(),
-        "positive control must load"
+fn stdout_json_equals_json_keeps_out_of_range_integer_token() {
+    // Positive control: `u64::MAX` fits `u64`, so it is exact without help.
+    assert_eq!(
+        stdout_json_expectation(r#"pointer = "/id", equals_json = '18446744073709551615'"#),
+        JsonExpectation::Equals(serde_json::json!(u64::MAX))
     );
 
-    // Negative: `u64::MAX + 1` is an integer literal that `serde_json` can
-    // only store as `f64`, so the loader must refuse it and name the pointer.
-    let error = stdout_json_entry_error(r#"pointer = "/id", equals_json = '18446744073709551616'"#);
-    assert!(error.contains("/id"), "{error}");
-    assert!(error.contains("18446744073709551616"), "{error}");
-    assert!(error.contains("exactly comparable"), "{error}");
+    // `u64::MAX + 1` only parses as `f64`, but the loader keeps the exact
+    // source token so the comparator can use it instead of a rounded value.
+    let check = stdout_json_check(r#"pointer = "/id", equals_json = '18446744073709551616'"#);
+    assert_eq!(
+        check.numbers.get(""),
+        Some(&"18446744073709551616".to_string())
+    );
 }
 
 #[test]
-fn stdout_json_rejects_out_of_range_negative_equals_json_integer() {
-    // Positive control: one below the range is the smallest `i64`, which fits.
+fn stdout_json_equals_json_keeps_out_of_range_negative_integer_token() {
+    // Positive control: `i64::MIN` fits `i64` and is exact.
     assert_eq!(
         stdout_json_expectation(r#"pointer = "/id", equals_json = '-9223372036854775808'"#),
         JsonExpectation::Equals(serde_json::json!(i64::MIN))
     );
 
-    // Negative: one below `i64::MIN` fits neither `i64` nor `u64`.
-    let error = stdout_json_entry_error(r#"pointer = "/id", equals_json = '-9223372036854775809'"#);
-    assert!(error.contains("/id"), "{error}");
-    assert!(error.contains("-9223372036854775809"), "{error}");
-    assert!(error.contains("exactly comparable"), "{error}");
+    // One below `i64::MIN` fits neither signed nor unsigned; the token is kept.
+    let check = stdout_json_check(r#"pointer = "/id", equals_json = '-9223372036854775809'"#);
+    assert_eq!(
+        check.numbers.get(""),
+        Some(&"-9223372036854775809".to_string())
+    );
 }
 
 #[test]
-fn stdout_json_rejects_nested_out_of_range_equals_json_integer() {
-    let error = stdout_json_entry_error(
-        r#"pointer = "/data", equals_json = '{"id": 18446744073709551616}'"#,
-    );
+fn stdout_json_equals_json_keeps_nested_out_of_range_integer_token() {
+    let check =
+        stdout_json_check(r#"pointer = "/data", equals_json = '{"id": 18446744073709551616}'"#);
 
-    // The error names the integer's full pointer inside stdout.
-    assert!(error.contains("/data/id"), "{error}");
-    assert!(error.contains("18446744073709551616"), "{error}");
+    // The token is keyed by its pointer relative to the expected document.
+    assert_eq!(
+        check.numbers.get("/id"),
+        Some(&"18446744073709551616".to_string())
+    );
+}
+
+#[test]
+fn stdout_json_equals_has_no_json_source_tokens() {
+    // TOML `equals` values have no JSON text, so the comparator reduces them
+    // through the value's shortest round-trip form instead.
+    let check = stdout_json_check(r#"pointer = "/x", equals = 1.5"#);
+    assert!(check.numbers.is_empty());
+
+    let check = stdout_json_check(r#"pointer = "/x", equals_json = '1.5'"#);
+    assert_eq!(check.numbers.get(""), Some(&"1.5".to_string()));
 }
 
 /// Parse a `stdout_json` entry and return the manifest error message.

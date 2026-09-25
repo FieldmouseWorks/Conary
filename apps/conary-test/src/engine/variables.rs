@@ -378,6 +378,9 @@ pub fn expand_assertion(assertion: &Assertion, vars: &HashMap<String, String>) -
                         }
                         JsonExpectation::Null => JsonExpectation::Null,
                     },
+                    // Number tokens are unaffected by variable expansion; an
+                    // expanded pointer prefix is applied when the check runs.
+                    numbers: check.numbers.clone(),
                 })
                 .collect()
         }),

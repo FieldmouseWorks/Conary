@@ -403,6 +403,7 @@ fn test_expand_assertion_expands_stdout_json_string_leaves() {
                 "flag": true,
                 "nothing": null,
             })),
+            numbers: HashMap::new(),
         }]),
         ..Assertion::default()
     };
@@ -431,6 +432,7 @@ fn test_expand_assertion_expands_null_stdout_json_pointer() {
         stdout_json: Some(vec![JsonAssertion {
             pointer: "/data/${FOO}".to_string(),
             expected: JsonExpectation::Null,
+            numbers: HashMap::new(),
         }]),
         ..Assertion::default()
     };
@@ -598,6 +600,7 @@ fn stdout_json_pointer_test(pointer: &str) -> TestDef {
                 stdout_json: Some(vec![JsonAssertion {
                     pointer: pointer.to_string(),
                     expected: JsonExpectation::Equals(serde_json::json!(1)),
+                    numbers: HashMap::new(),
                 }]),
                 ..Assertion::default()
             }),
