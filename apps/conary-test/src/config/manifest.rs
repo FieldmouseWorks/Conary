@@ -352,10 +352,12 @@ struct RawJsonAssertion {
 
 /// Whether `input` contains a manifest `${NAME}` variable reference.
 ///
-/// This is the single owner of the template marker; variable expansion and
-/// deferred validation both use it.
+/// Delegates to the template grammar owner in `engine::variables`, so the
+/// marker, name charset, and expansion rules cannot drift apart. A `${` that
+/// does not form a well-formed reference still counts, so deferred validation
+/// continues to catch malformed or truncated templates.
 pub(crate) fn contains_variable_reference(input: &str) -> bool {
-    input.contains("${")
+    crate::engine::variables::contains_variable_reference(input)
 }
 
 /// Validate the syntax of an RFC 6901 JSON pointer.

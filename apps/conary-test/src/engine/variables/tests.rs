@@ -6,6 +6,7 @@ use super::*;
 use crate::config::distro::{
     DistroConfig, FixtureConfig, GlobalConfig, PathsConfig, RemiConfig, SetupConfig, TestPackage,
 };
+use crate::config::manifest::{TestDef, TestStep};
 
 fn test_config() -> GlobalConfig {
     let mut distros = HashMap::new();
@@ -95,6 +96,108 @@ fn test_multiple_variables() {
     vars.insert("A".to_string(), "1".to_string());
     vars.insert("B".to_string(), "2".to_string());
     assert_eq!(expand_variables("${A} and ${B}", &vars), "1 and 2");
+}
+
+#[test]
+fn expansion_replaces_adjacent_and_repeated_references() {
+    let vars = HashMap::from([
+        ("KEY".to_string(), "value".to_string()),
+        ("A".to_string(), "1".to_string()),
+        ("B".to_string(), "2".to_string()),
+    ]);
+
+    assert_eq!(expand_variables("${KEY}", &vars), "value");
+    assert_eq!(expand_variables("${A}${B}", &vars), "12");
+    assert_eq!(expand_variables("${KEY}/${KEY}", &vars), "value/value");
+    assert_eq!(
+        expand_variables("pre${A}mid${B}post", &vars),
+        "pre1mid2post"
+    );
+}
+
+#[test]
+fn unknown_and_malformed_markers_are_left_verbatim() {
+    let vars = HashMap::from([("KEY".to_string(), "value".to_string())]);
+
+    // Unknown references stay visible for the unresolved-reference checks.
+    assert_eq!(expand_variables("${NOPE}", &vars), "${NOPE}");
+    // A `$` without `{` is not a marker.
+    assert_eq!(expand_variables("$KEY", &vars), "$KEY");
+    assert_eq!(expand_variables("cost $5", &vars), "cost $5");
+    // Unterminated or otherwise malformed markers survive verbatim.
+    assert_eq!(expand_variables("${", &vars), "${");
+    assert_eq!(expand_variables("tail ${", &vars), "tail ${");
+    assert_eq!(expand_variables("${KEY", &vars), "${KEY");
+    assert_eq!(expand_variables("${KEY}${", &vars), "value${");
+}
+
+#[test]
+fn shell_parameter_expansions_are_not_manifest_references() {
+    // A shell expansion whose prefix parses as a known name must not expand
+    // partially: the trailing `:-`, `#`, or `##` makes the marker malformed.
+    let vars = HashMap::from([
+        ("GEN".to_string(), "expanded".to_string()),
+        ("NATIVE_PKG_SHA256".to_string(), "sha".to_string()),
+        ("current_generation".to_string(), "gen".to_string()),
+        ("KEY".to_string(), "value".to_string()),
+    ]);
+
+    assert_eq!(expand_variables("${GEN:-0}", &vars), "${GEN:-0}");
+    assert_eq!(
+        expand_variables("${#NATIVE_PKG_SHA256}", &vars),
+        "${#NATIVE_PKG_SHA256}"
+    );
+    assert_eq!(
+        expand_variables("${current_generation##*/}", &vars),
+        "${current_generation##*/}"
+    );
+    // A well-formed reference after a malformed marker still expands.
+    assert_eq!(
+        expand_variables("${GEN:-0} ${KEY}", &vars),
+        "${GEN:-0} value"
+    );
+}
+
+#[test]
+fn contains_variable_reference_reports_well_formed_and_malformed_markers() {
+    assert!(contains_variable_reference("${KEY}"));
+    assert!(contains_variable_reference("/data/${"));
+    assert!(contains_variable_reference("${#VAR}"));
+    assert!(!contains_variable_reference("$KEY"));
+    assert!(!contains_variable_reference("plain text"));
+}
+
+#[test]
+fn nested_template_in_a_value_is_emitted_verbatim() {
+    // The finding's example: JSON_POINTER's value contains `${KEY}`. A
+    // single-pass expander emits that value verbatim instead of rescanning it,
+    // so `KEY` never enters the result.
+    let vars = HashMap::from([
+        ("JSON_POINTER".to_string(), "/data/${KEY}".to_string()),
+        ("KEY".to_string(), "value".to_string()),
+    ]);
+
+    assert_eq!(expand_variables("${JSON_POINTER}", &vars), "/data/${KEY}");
+}
+
+#[test]
+fn expansion_is_deterministic_across_map_insertion_orders() {
+    let entries = [
+        ("JSON_POINTER".to_string(), "/data/${KEY}".to_string()),
+        ("KEY".to_string(), "value".to_string()),
+        ("OTHER".to_string(), "other".to_string()),
+    ];
+
+    for iteration in 0..50 {
+        let mut vars = HashMap::new();
+        // Rotate the insertion order each iteration so different hash-table
+        // layouts are exercised.
+        for (key, value) in entries.iter().cycle().skip(iteration).take(entries.len()) {
+            vars.insert(key.clone(), value.clone());
+        }
+        let expanded = expand_variables("${JSON_POINTER}", &vars);
+        assert_eq!(expanded, "/data/${KEY}", "iteration {iteration}");
+    }
 }
 
 #[test]
@@ -475,5 +578,65 @@ capabilities = ["native_lifecycle", "${target_service_capability}"]
     assert_eq!(
         expanded.target.capabilities,
         ["native_lifecycle", "openrc_activation"]
+    );
+}
+
+/// A one-step test whose only assertion checks `pointer` via `stdout_json`,
+/// matching the runner preflight fixtures.
+fn stdout_json_pointer_test(pointer: &str) -> TestDef {
+    TestDef {
+        id: "TVAR01".to_string(),
+        name: "variable preflight".to_string(),
+        description: "variable expansion preflight".to_string(),
+        timeout: 30,
+        flaky: None,
+        retries: None,
+        retry_delay_ms: None,
+        step: vec![TestStep {
+            run: Some("echo ok".to_string()),
+            assert: Some(Assertion {
+                stdout_json: Some(vec![JsonAssertion {
+                    pointer: pointer.to_string(),
+                    expected: JsonExpectation::Equals(serde_json::json!(1)),
+                }]),
+                ..Assertion::default()
+            }),
+            ..TestStep::default()
+        }],
+        resources: None,
+        depends_on: None,
+        fatal: None,
+        group: None,
+        skip: None,
+        requires: Vec::new(),
+        corpus: None,
+    }
+}
+
+#[test]
+fn nested_template_pointer_is_rejected_by_the_unresolved_reference_preflight() {
+    let test = stdout_json_pointer_test("${JSON_POINTER}");
+
+    // Positive control through the same fixture: a flat value passes the
+    // preflight, so the rejection below can only come from the nested template.
+    let flat = HashMap::from([
+        ("JSON_POINTER".to_string(), "/data/value".to_string()),
+        ("KEY".to_string(), "value".to_string()),
+    ]);
+    assert!(crate::engine::runner::preflight_stdout_json_pointers(&test, &flat).is_ok());
+
+    // Negative: JSON_POINTER's value contains `${KEY}`, which the single-pass
+    // expander emits literally, leaving an unresolved reference.
+    let nested = HashMap::from([
+        ("JSON_POINTER".to_string(), "/data/${KEY}".to_string()),
+        ("KEY".to_string(), "value".to_string()),
+    ]);
+    assert_eq!(expand_variables("${JSON_POINTER}", &nested), "/data/${KEY}");
+    let error = crate::engine::runner::preflight_stdout_json_pointers(&test, &nested)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("unresolved variable reference"),
+        "error should report the unresolved reference: {error}"
     );
 }

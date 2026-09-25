@@ -129,20 +129,146 @@ pub fn build_manifest_variables(
     vars
 }
 
+/// One token in the manifest `${NAME}` template grammar.
+///
+/// A reference is the literal `${`, a name, and a closing `}`. A name matches
+/// `[A-Za-z_][A-Za-z0-9_]*`: an ASCII letter or underscore followed by ASCII
+/// letters, digits, or underscores. That is exactly the shape of every name the
+/// harness defines today, both the built-ins inserted by [`build_variables`]
+/// and every `distro_overrides` key in the integration manifests. Anything
+/// else, including a bare `$`, an unterminated `${`, and a shell parameter
+/// expansion such as `${GEN:-0}` or `${#VAR}`, is literal text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TemplateToken<'a> {
+    /// Text with no `${` marker.
+    Literal(&'a str),
+    /// A well-formed `${NAME}` reference.
+    Reference {
+        /// The `NAME` between `${` and `}`.
+        name: &'a str,
+        /// The whole `${NAME}` text, emitted verbatim when `NAME` is unknown.
+        raw: &'a str,
+    },
+    /// A `${` that does not introduce a well-formed reference.
+    ///
+    /// Emitted verbatim. Scanning resumes after the two marker characters, so a
+    /// later well-formed reference in the same input still expands.
+    Malformed(&'a str),
+}
+
+/// Left-to-right tokenizer for the manifest template grammar.
+///
+/// This is the single owner of the grammar; [`expand_variables`] and
+/// [`contains_variable_reference`] both drive it.
+struct TemplateTokenizer<'a> {
+    input: &'a str,
+    position: usize,
+}
+
+impl<'a> TemplateTokenizer<'a> {
+    fn new(input: &'a str) -> Self {
+        Self { input, position: 0 }
+    }
+}
+
+impl<'a> Iterator for TemplateTokenizer<'a> {
+    type Item = TemplateToken<'a>;
+
+    fn next(&mut self) -> Option<TemplateToken<'a>> {
+        let input = self.input;
+        if self.position >= input.len() {
+            return None;
+        }
+        let start = self.position;
+        let rest = &input[start..];
+        let marker = match rest.find("${") {
+            Some(relative) => start + relative,
+            None => {
+                self.position = input.len();
+                return Some(TemplateToken::Literal(rest));
+            }
+        };
+        // Emit any literal text before the marker first so the token stream is
+        // contiguous and lossless.
+        if marker > start {
+            self.position = marker;
+            return Some(TemplateToken::Literal(&input[start..marker]));
+        }
+        match parse_variable_reference(input, marker) {
+            Some((name, end)) => {
+                self.position = end;
+                Some(TemplateToken::Reference {
+                    name,
+                    raw: &input[marker..end],
+                })
+            }
+            None => {
+                self.position = marker + 2;
+                Some(TemplateToken::Malformed(&input[marker..marker + 2]))
+            }
+        }
+    }
+}
+
+/// Parse the `${NAME}` reference at byte `marker`, if it is well formed.
+///
+/// `marker` indexes the `${` pair and must fall on a character boundary.
+/// Returns the name and the index just past the closing `}`, or `None` when the
+/// name is empty, contains a character outside the name charset, or is not
+/// closed by `}`.
+fn parse_variable_reference(input: &str, marker: usize) -> Option<(&str, usize)> {
+    let bytes = input.as_bytes();
+    let name_start = marker + 2;
+    if !is_name_start(*bytes.get(name_start)?) {
+        return None;
+    }
+    let mut end = name_start + 1;
+    while bytes.get(end).is_some_and(|&byte| is_name_continue(byte)) {
+        end += 1;
+    }
+    (bytes.get(end) == Some(&b'}')).then_some((&input[name_start..end], end + 1))
+}
+
+/// Whether `byte` may begin a manifest variable name.
+fn is_name_start(byte: u8) -> bool {
+    byte.is_ascii_alphabetic() || byte == b'_'
+}
+
+/// Whether `byte` may continue a manifest variable name.
+fn is_name_continue(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_'
+}
+
+/// Whether `input` contains a manifest `${NAME}` template marker.
+///
+/// A marker is a `${`, whether or not it forms a well-formed reference, so a
+/// malformed or truncated template is still reported rather than silently
+/// accepted.
+pub(crate) fn contains_variable_reference(input: &str) -> bool {
+    TemplateTokenizer::new(input).any(|token| !matches!(token, TemplateToken::Literal(_)))
+}
+
 /// Replace `${VAR}` patterns in a string with values from the variable map.
 ///
-/// Variables that are not present in the map are left as-is (the `${VAR}`
-/// placeholder remains in the output).
+/// The input is scanned once, left to right. A `${NAME}` whose `NAME` is in the
+/// map is replaced by its value verbatim: the value is not rescanned, so a
+/// value that itself contains `${...}` is emitted literally and nested
+/// templates in values are not expanded. Unknown `${NAME}` references and
+/// malformed markers are left as-is, which keeps unresolved references visible
+/// for the existing unresolved-reference checks.
 pub fn expand_variables(input: &str, vars: &HashMap<String, String>) -> String {
-    if !crate::config::manifest::contains_variable_reference(input) {
-        return input.to_string();
+    let mut expanded = String::with_capacity(input.len());
+    for token in TemplateTokenizer::new(input) {
+        match token {
+            TemplateToken::Literal(text) | TemplateToken::Malformed(text) => {
+                expanded.push_str(text);
+            }
+            TemplateToken::Reference { name, raw } => {
+                expanded.push_str(vars.get(name).map(String::as_str).unwrap_or(raw));
+            }
+        }
     }
-    let mut result = input.to_string();
-    for (key, value) in vars {
-        let pattern = format!("${{{key}}}");
-        result = result.replace(&pattern, value);
-    }
-    result
+    expanded
 }
 
 /// Resolve manifest variables in the string-bearing corpus authority before
