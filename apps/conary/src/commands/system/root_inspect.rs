@@ -11,8 +11,8 @@
 //! A database projection has no committed manifest root: it synthesizes `/`
 //! from an empty materialization stand-in whose mode and ownership belong to
 //! the inspecting process. That one node is reported with
-//! [`RootInspectMetadata::Synthesized`] and with its mode, ownership, and
-//! content authority withheld; every node read from a committed manifest
+//! [`RootInspectMetadata::Synthesized`] and with its mode, ownership, xattrs,
+//! and content authority withheld; every node read from a committed manifest
 //! reports [`RootInspectMetadata::Recorded`].
 //!
 //! Boot recovery can point `/current` at a valid generation with no state or
@@ -25,6 +25,7 @@
 //! so both refuse; a kept session is the recorded promotion decision.
 
 use anyhow::{Context, Result, bail};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use conary_agent_contract::{InspectResult, OperationEnvelope, OperationStatus, RiskLevel};
 use conary_core::generation::root_manifest::CapturedSelectedRoot;
 use conary_core::payload::{
@@ -37,7 +38,7 @@ use crate::commands::generation::selected_root::{
     SelectedRootBaseline, SelectedRootSource, read_selected_root_baseline,
 };
 
-pub(crate) const ROOT_INSPECT_SCHEMA_VERSION: u32 = 3;
+pub(crate) const ROOT_INSPECT_SCHEMA_VERSION: u32 = 4;
 
 /// Where the reported node's authority came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -126,6 +127,30 @@ impl RootInspectMetadata {
     }
 }
 
+/// One recorded extended attribute, in name order.
+///
+/// An xattr value is arbitrary bytes, so it is carried as standard base64
+/// rather than as text. The recorded value is preserved exactly; the byte
+/// length the human frame reports is recovered by decoding.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub(crate) struct RootInspectXattr {
+    pub(crate) name: String,
+    pub(crate) value_base64: String,
+}
+
+impl RootInspectXattr {
+    /// Exact recorded value size in bytes.
+    ///
+    /// The value is standard base64 of the recorded bytes, so a value this
+    /// type encoded always decodes; a value from elsewhere that does not is
+    /// reported as zero rather than panicking the renderer.
+    pub(crate) fn value_len(&self) -> usize {
+        BASE64
+            .decode(self.value_base64.as_bytes())
+            .map_or(0, |value| value.len())
+    }
+}
+
 /// Versioned `data` payload for `system.root.inspect`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub(crate) struct RootInspectData {
@@ -154,6 +179,10 @@ pub(crate) struct RootInspectData {
     pub(crate) hardlink_target: Option<String>,
     pub(crate) device_major: Option<u64>,
     pub(crate) device_minor: Option<u64>,
+    /// Name-sorted recorded extended attributes; `Some([])` for a recorded node
+    /// with none and `None` when `present` is false or the metadata is
+    /// synthesized.
+    pub(crate) xattrs: Option<Vec<RootInspectXattr>>,
 }
 
 impl RootInspectData {
@@ -236,6 +265,7 @@ pub(crate) fn root_inspect_data(
         hardlink_target: None,
         device_major: None,
         device_minor: None,
+        xattrs: None,
     };
 
     // With no committed root there is no capture, so nothing is present, not
@@ -363,6 +393,17 @@ fn apply_node(
     data.user = identity_name(&node.source.user);
     data.group = identity_name(&node.source.group);
     data.sha256 = content.map(|content| content.sha256.clone());
+    // `PayloadNode::xattrs` is a `BTreeMap`, so this list is name-sorted.
+    data.xattrs = Some(
+        node.source
+            .xattrs
+            .iter()
+            .map(|(name, value)| RootInspectXattr {
+                name: name.clone(),
+                value_base64: BASE64.encode(value),
+            })
+            .collect(),
+    );
     match &node.source.kind {
         PayloadNodeKind::Symlink { target } => data.symlink_target = Some(target.clone()),
         PayloadNodeKind::Hardlink { target, .. } => data.hardlink_target = Some(target.clone()),
@@ -380,8 +421,8 @@ fn apply_node(
 /// The database projection has no committed manifest root; it synthesizes one
 /// from the empty materialization destination, whose mode and ownership belong
 /// to the inspecting process. The node is present as a directory, but mode,
-/// ownership, and content authority are withheld and the record is marked
-/// synthesized so no caller mistakes them for the committed root.
+/// ownership, xattrs, and content authority are withheld and the record is
+/// marked synthesized so no caller mistakes them for the committed root.
 fn apply_synthesized_root(data: &mut RootInspectData) {
     data.present = true;
     data.metadata = RootInspectMetadata::Synthesized;

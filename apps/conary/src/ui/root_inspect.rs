@@ -2,7 +2,7 @@
 //! Read-only committed selected-root node frame.
 
 use super::transaction_summary::visible;
-use super::{Status, field, heading, row};
+use super::{Status, field, heading, message, row};
 use crate::commands::{RootInspectData, RootInspectSource, RootManifestKind, RootNodeKind};
 
 pub(crate) fn render(data: &RootInspectData) {
@@ -50,6 +50,15 @@ pub(crate) fn render(data: &RootInspectData) {
         "Hardlink target",
         &optional_text(data.hardlink_target.as_deref()),
     );
+    if let Some(xattrs) = data.xattrs.as_deref() {
+        for xattr in xattrs {
+            message(&format!(
+                "  Xattr  {} ({} bytes)",
+                visible(&xattr.name),
+                xattr.value_len()
+            ));
+        }
+    }
 }
 
 fn source_label(source: RootInspectSource) -> &'static str {

@@ -72,6 +72,13 @@ const TMPDIR_CHILD_MARKER: &str = "CONARY_ROOT_INSPECT_TMPDIR_MARKER";
 const TMPDIR_CHILD_TEST: &str =
     "commands::system::root_inspect::tests::root_inspect_with_unavailable_tmpdir_child";
 
+/// Binary `security.capability` value for the recorded-xattr proof. The Linux
+/// file-capability blob is not text, so the inspection must carry it exactly.
+const CAPABILITY_XATTR: &[u8] = &[
+    0x01, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00,
+];
+
 /// Run the exact child test with an unusable `TMPDIR`.
 ///
 /// The child sets `TMPDIR` itself, so the bad value never reaches a concurrently
@@ -188,6 +195,25 @@ fn regular(path: &str, permissions: u32, bytes: &[u8]) -> GenerationRootEntry {
     }
 }
 
+/// A regular file carrying the exact recorded xattrs, inserted in the order
+/// given so the recorded name ordering is not the insertion order.
+fn regular_with_xattrs(
+    path: &str,
+    permissions: u32,
+    bytes: &[u8],
+    xattrs: &[(&str, &[u8])],
+) -> GenerationRootEntry {
+    let mut entry = regular(path, permissions, bytes);
+    for (name, value) in xattrs {
+        entry
+            .node
+            .source
+            .xattrs
+            .insert((*name).to_string(), value.to_vec());
+    }
+    entry
+}
+
 fn symlink(path: &str, target: &str) -> GenerationRootEntry {
     GenerationRootEntry {
         path: path.to_string(),
@@ -253,6 +279,16 @@ impl Fixture {
             vec![
                 directory("/opt"),
                 directory("/opt/fixture"),
+                regular_with_xattrs(
+                    "/opt/fixture/cap",
+                    0o755,
+                    b"capable\n",
+                    &[
+                        // Inserted user-first so the report proves name sorting.
+                        ("user.demo", b"\x00\xff\x10"),
+                        ("security.capability", CAPABILITY_XATTR),
+                    ],
+                ),
                 regular("/opt/fixture/hello", 0o644, b"hello world\n"),
                 device(
                     "/opt/fixture/null",
@@ -375,6 +411,56 @@ fn root_inspect_reports_device_numbers_for_device_nodes() {
     assert_eq!(json["kind"], "regular");
     assert!(json["device_major"].is_null());
     assert!(json["device_minor"].is_null());
+}
+
+/// A recorded node reports its xattrs exactly, name-sorted and base64-encoded,
+/// while a recorded node with none reports an empty list. A withheld list
+/// (`null`) is the synthesized projection's stand-in, never "records none".
+#[test]
+fn root_inspect_reports_recorded_xattrs_in_name_order_with_exact_base64() {
+    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+
+    let fixture = Fixture::new();
+
+    let cap = fixture.inspect("/opt/fixture/cap");
+    assert_eq!(cap.source, RootInspectSource::PendingSnapshot);
+    assert!(cap.present);
+    assert_eq!(cap.kind, Some(RootNodeKind::Regular));
+    assert_eq!(cap.metadata, RootInspectMetadata::Recorded);
+    let recorded = cap
+        .xattrs
+        .as_deref()
+        .expect("a recorded node must report its xattr list");
+    assert_eq!(
+        recorded
+            .iter()
+            .map(|xattr| xattr.name.as_str())
+            .collect::<Vec<_>>(),
+        ["security.capability", "user.demo"],
+        "recorded xattrs must be name-sorted, not insertion-sorted"
+    );
+    assert_eq!(recorded[0].value_base64, BASE64.encode(CAPABILITY_XATTR));
+    assert_eq!(recorded[0].value_len(), CAPABILITY_XATTR.len());
+    assert_eq!(recorded[1].value_base64, BASE64.encode(b"\x00\xff\x10"));
+
+    let json = json_data(&cap);
+    assert_eq!(json["metadata"], "recorded");
+    assert_eq!(json["xattrs"][0]["name"], "security.capability");
+    assert_eq!(
+        json["xattrs"][0]["value_base64"],
+        BASE64.encode(CAPABILITY_XATTR)
+    );
+    assert_eq!(json["xattrs"][1]["name"], "user.demo");
+    assert_eq!(
+        json["xattrs"][1]["value_base64"],
+        BASE64.encode(b"\x00\xff\x10")
+    );
+
+    // Control: a recorded node with no xattrs reports `[]`, not `null`.
+    let plain = fixture.inspect("/opt/fixture/hello");
+    assert_eq!(plain.xattrs, Some(Vec::new()));
+    let json = json_data(&plain);
+    assert_eq!(json["xattrs"], serde_json::json!([]));
 }
 
 #[test]
@@ -526,16 +612,18 @@ fn root_inspect_reports_database_projection_before_first_snapshot() {
     assert_eq!(data.kind, Some(RootNodeKind::Regular));
     assert_eq!(data.metadata, RootInspectMetadata::Recorded);
     assert_eq!(data.mode, Some(0o600));
+    assert_eq!(data.xattrs, Some(Vec::new()));
     let json = json_data(&data);
     assert_eq!(json["source"], "database_projection");
     assert_eq!(json["metadata"], "recorded");
     assert_eq!(json["mode"], 0o600);
     assert_eq!(json["sha256"], conary_core::hash::sha256(b"projected\n"));
+    assert_eq!(json["xattrs"], serde_json::json!([]));
 
     // The projection synthesizes `/` from the empty stand-in destination. The
-    // node is present as a directory, but its ambient mode and ownership are
-    // withheld and the record is marked synthesized so no caller mistakes the
-    // inspecting process for the committed root.
+    // node is present as a directory, but its ambient mode, ownership, and
+    // xattrs are withheld and the record is marked synthesized so no caller
+    // mistakes the inspecting process for the committed root.
     let root = root_inspect_data(&conn, &runtime_root, "/").unwrap();
     assert_eq!(root.source, RootInspectSource::DatabaseProjection);
     assert!(root.present);
@@ -547,9 +635,11 @@ fn root_inspect_reports_database_projection_before_first_snapshot() {
     assert_eq!(root.gid, None);
     assert_eq!(root.user, None);
     assert_eq!(root.group, None);
+    assert_eq!(root.xattrs, None);
     let json = json_data(&root);
     assert_eq!(json["metadata"], "synthesized");
     assert!(json["mode"].is_null());
+    assert!(json["xattrs"].is_null());
 }
 
 /// A current-generation artifact is read straight from its typed manifest. It
