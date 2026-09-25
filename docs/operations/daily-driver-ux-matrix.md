@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-25
-revision: 62
+revision: 63
 summary: Daily-driver CLI publication debt, committed selected-root inspection, installed records, database preflight, repository readiness, typed details, and grouped results
 ---
 
@@ -33,7 +33,7 @@ takeover, generation activation, or conaryd, the CLI should say that directly.
 | `pin <pkg>` | Pins a selected installed variant | Ambiguous installed variants | Use `--version`, `--release`, and `--arch` to pin the intended variant | Existing `cargo test -p conary --test query pin_and_unpin_use_same_variant_selector` |
 | `unpin <pkg>` | Releases a selected installed variant | Ambiguous installed variants | Use `--version`, `--release`, and `--arch` to unpin the intended variant | Existing `cargo test -p conary --test query pin_and_unpin_use_same_variant_selector` |
 | `system history` | Recorded changeset fields, rollback relationships, continued lifecycle failures, and deferred recovery guidance | Obsolete changeset metadata keeps its existing refusal | Publication retries use the selected database; history does not decide rollback eligibility | `cargo test -p conary --test cli_history` |
-| `system root inspect <path> [--json]` | Reports the exact committed selected-root node at one path from the newest publication snapshot, current generation artifact, or installed database projection; `--json` prints a typed `system.root.inspect` result whose `metadata` is `recorded` for committed manifests and `synthesized` for the projection's stand-in `/`, and whose stable state-less recovery generation is marked `recovered_without_state: true` (see [Committed Selected Root Inspection](#committed-selected-root-inspection)) | An absent path or an empty database is a typed `present: false` result with exit 0, not an error string; a `/current` generation the pinned snapshot cannot confirm and that moves across the read is retried and then refused with the typed "the current generation changed during inspection; retry" error | Inspect the exact committed path before publication; the command never resolves symlinks or reads the live root | `cargo test -p conary --lib root_inspect` |
+| `system root inspect <path> [--json]` | Reports the exact committed selected-root node at one path from the newest publication snapshot, current generation artifact, or installed database projection; the selected database is opened **live read-only, never initializes**, migrates, or writes it, so a running system's uncheckpointed WAL is read as a real snapshot; `--json` prints a typed `system.root.inspect` result whose `metadata` is `recorded` for committed manifests and `synthesized` for the projection's stand-in `/`, and whose stable state-less recovery generation is marked `recovered_without_state: true` (see [Committed Selected Root Inspection](#committed-selected-root-inspection)) | An absent path or a current-schema database with no committed root is a typed `present: false` result with exit 0, not an error string; a zero-byte, non-Conary, or retired-schema database file is refused with the existing typed error and left untouched; a `/current` generation the pinned snapshot cannot confirm and that moves across the read is retried and then refused with the typed "the current generation changed during inspection; retry" error | Inspect the exact committed path before publication; the command never resolves symlinks, reads the live root, or initializes a database | `cargo test -p conary --lib root_inspect` |
 
 ## Autoremove Preview
 
@@ -177,6 +177,19 @@ materialization authority. The lookup normalizes `<path>` lexically and
 returns the literal node, so a symlink is reported as a symlink rather than
 its target.
 
+The selected database is opened through
+`conary_core::db::open_live_read_only`: live read-only, never initializes. It
+takes ordinary SQLite read-only locks instead of `immutable=1`, so the
+baseline's deferred read transaction pins a real WAL snapshot of the committed
+frames and a concurrently writing system is observed atomically, including the
+normal case where `-wal` still holds active frames. It still validates the
+current schema without creating, migrating, or writing any state. An empty
+file, a readable non-Conary database, and a retired-schema database are refused
+with the existing typed error and left untouched; a readable but non-writable
+current-schema database inspects normally as long as SQLite can use or create
+the `-shm` wal-index, because every branch of the baseline read needs no write
+access to the database itself.
+
 `metadata` is the typed authority of the reported node values. `recorded`
 means they came from a committed manifest. The database projection has no
 committed manifest root: it synthesizes `/` from an empty materialization
@@ -202,8 +215,8 @@ serialize as `null`. `recovered_without_state` is `true` only for a stable
 `false`. The projected root node `/` is present for the database projection, as
 it is for snapshots and artifacts, but only snapshots and artifacts report its
 recorded metadata. Human output renders the same fields through
-`ui/root_inspect.rs`; an absent path uses `[missing]`, and the empty database
-still exits 0 with `source: no_committed_root`.
+`ui/root_inspect.rs`; an absent path uses `[missing]`, and a current-schema
+database with no committed root still exits 0 with `source: no_committed_root`.
 
 `/current` is a filesystem link, so the read transaction's SQLite snapshot
 does not cover it. When the link names a generation the pinned snapshot does
@@ -212,13 +225,17 @@ repeats the whole selection, at most three times. A link that keeps advancing
 past every snapshot is refused with the typed
 `the current generation changed during inspection; retry` error instead of
 pairing the new generation's artifact with stale snapshot or changeset IDs.
+The pre-snapshot sample never fails the read: a pending publication snapshot is
+authoritative without `/current`, and an unreadable link only leaves a
+state-less recovery target unstable, so the ordinary retry and typed refusal
+still apply.
 
 Boot recovery is the one legitimate state-less target: it can update `/current`
 to a valid generation artifact and explicitly accept a missing `SystemState`,
 and it writes no terminal `GenerationPublication` row. The read therefore
 samples `/current` immediately before the snapshot is pinned and again after
-the selection. When the before read, the selected generation, and the after
-read all agree, the artifact is accepted as `source: current_generation` with
+the selection. When the before sample, the selected generation, and the after
+sample all agree, the artifact is accepted as `source: current_generation` with
 `snapshot_id` and `changeset_id` `null` and `recovered_without_state: true`.
 When they differ, the link moved across the snapshot and the ordinary retry and
 typed refusal above still apply; a concurrent publication always records its

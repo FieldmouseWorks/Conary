@@ -971,3 +971,216 @@ fn root_inspect_normalizes_lookup_paths_without_symlink_resolution() {
     let link = fixture.inspect("/opt/fixture/sh");
     assert_eq!(link.kind, Some(RootNodeKind::Symlink));
 }
+
+/// A pending publication snapshot is authoritative without `/current`. A
+/// dangling link must not stop the read before the snapshot can be selected.
+#[test]
+fn pending_snapshot_inspection_ignores_a_dangling_current_link() {
+    let fixture = Fixture::new();
+    let runtime_root = fixture.runtime_root();
+    std::os::unix::fs::symlink(
+        runtime_root.generations_dir().join("999"),
+        runtime_root.current_link(),
+    )
+    .unwrap();
+
+    let data = fixture.inspect("/opt/fixture/hello");
+    assert_eq!(data.source, RootInspectSource::PendingSnapshot);
+    assert_eq!(data.snapshot_id, Some(fixture.snapshot_id));
+    assert!(data.present);
+    assert_eq!(data.kind, Some(RootNodeKind::Regular));
+}
+
+/// The dangling link is still refused when no pending snapshot can take
+/// authority ahead of it, proving the positive case selects the snapshot
+/// rather than swallowing every `/current` failure.
+#[test]
+fn dangling_current_link_without_a_pending_snapshot_is_refused() {
+    let temp = tempfile::tempdir().unwrap();
+    let db_path = temp.path().join("conary.db");
+    conary_core::db::init(&db_path).unwrap();
+    let conn = conary_core::db::open(&db_path).unwrap();
+    let runtime_root = ConaryRuntimeRoot::from_db_path(&db_path);
+    std::os::unix::fs::symlink(
+        runtime_root.generations_dir().join("999"),
+        runtime_root.current_link(),
+    )
+    .unwrap();
+
+    let error = root_inspect_data(&conn, &runtime_root, "/opt/fixture/hello")
+        .expect_err("a dangling /current with no pending snapshot must refuse");
+    let typed = error
+        .downcast_ref::<conary_core::Error>()
+        .expect("the refusal must retain the typed current-link error");
+    assert!(matches!(typed, conary_core::Error::IoError(_)));
+}
+
+#[test]
+fn root_inspect_refuses_an_empty_database_file_without_initializing_it() {
+    let temp = tempfile::tempdir().unwrap();
+    let db_path = temp.path().join("empty.db");
+    std::fs::write(&db_path, []).unwrap();
+    assert_eq!(std::fs::metadata(&db_path).unwrap().len(), 0);
+
+    let error = cmd_root_inspect(db_path.to_str().unwrap(), "/opt/fixture/hello", true)
+        .expect_err("an empty database file must be refused, not initialized");
+    let typed = error
+        .downcast_ref::<conary_core::Error>()
+        .expect("the refusal must retain the typed schema error");
+    assert!(
+        matches!(
+            typed,
+            conary_core::Error::SchemaRebuildRequired { observed, .. }
+                if observed == "fresh database"
+        ),
+        "an empty file must be the typed fresh-database refusal, got {typed}"
+    );
+
+    assert_eq!(
+        std::fs::metadata(&db_path).unwrap().len(),
+        0,
+        "inspection must not write a schema header into an empty file"
+    );
+    assert_eq!(
+        conary_core::db::schema::inspect(&db_path).unwrap(),
+        conary_core::db::schema::SchemaCompatibility::Fresh,
+        "the file must remain a fresh database with no tables"
+    );
+}
+
+/// Why a mode-0o444 database cannot prove read-only inspection here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReadOnlyDatabaseSkip {
+    /// Root bypasses the file mode, so it cannot exercise a denied write.
+    EffectiveUserIsRoot,
+}
+
+impl ReadOnlyDatabaseSkip {
+    /// `Ok(())` when the mode denies this process writes, else the typed skip.
+    fn detect(db_path: &std::path::Path) -> std::result::Result<(), Self> {
+        if nix::unistd::Uid::effective().is_root() {
+            return Err(Self::EffectiveUserIsRoot);
+        }
+        assert!(
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(db_path)
+                .is_err(),
+            "a mode-0o444 database must deny a non-root write before the proof"
+        );
+        Ok(())
+    }
+}
+
+/// The live opener reads a mode-0o444 database. SQLite's WAL reader still needs
+/// write access to the `-shm` wal-index, and to the containing directory when it
+/// must create that `-shm`, so the fixture leaves the directory writable and
+/// checkpoints the WAL first: the mode-0o444 database file is the only
+/// read-only part, and `-shm` initialization never has to recover frames.
+#[test]
+fn root_inspect_reads_a_read_only_database() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().unwrap();
+    let db_path = temp.path().join("conary.db");
+    conary_core::db::init(&db_path).unwrap();
+    {
+        let conn = conary_core::db::open(&db_path).unwrap();
+        conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+            .unwrap();
+        let journal_mode: String = conn
+            .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(journal_mode, "wal", "the fixture must stay in WAL mode");
+    }
+    std::fs::set_permissions(&db_path, std::fs::Permissions::from_mode(0o444)).unwrap();
+
+    if let Err(skip) = ReadOnlyDatabaseSkip::detect(&db_path) {
+        // The only honored skip reason is root bypassing the file mode.
+        assert_eq!(skip, ReadOnlyDatabaseSkip::EffectiveUserIsRoot);
+        return;
+    }
+
+    cmd_root_inspect(db_path.to_str().unwrap(), "/opt/fixture/hello", true)
+        .expect("a readable, non-writable current-schema database must inspect");
+}
+
+/// A write committed on an open connection, not yet checkpointed, lives only in
+/// the `-wal`. The live opener reads that snapshot and inspection sees the
+/// committed file; the offline immutable opener refuses the same state.
+#[test]
+fn root_inspect_reads_a_live_uncheckpointed_wal_commit() {
+    let temp = tempfile::tempdir().unwrap();
+    let db_path = temp.path().join("conary.db");
+    conary_core::db::init(&db_path).unwrap();
+    let conn = conary_core::db::open(&db_path).unwrap();
+    let mut trove = Trove::new(
+        "live-wal-fixture".to_string(),
+        "1.0.0".to_string(),
+        TroveType::Package,
+        VersionScheme::Conary,
+    );
+    trove.install_source = InstallSource::Repository;
+    let trove_id = trove.insert(&conn).unwrap();
+    for path in ["/opt", "/opt/fixture"] {
+        FileEntry::new(
+            path.to_string(),
+            node(PayloadNodeKind::Directory, 0o755),
+            None,
+            trove_id,
+        )
+        .insert(&conn)
+        .unwrap();
+    }
+    let digest = conary_core::hash::sha256(b"live wal\n");
+    FileEntry::new(
+        "/opt/fixture/live".to_string(),
+        node(
+            PayloadNodeKind::Regular {
+                hardlink_identity: None,
+            },
+            0o644,
+        ),
+        Some(PayloadContentAuthority {
+            sha256: digest.clone(),
+            size: b"live wal\n".len() as u64,
+        }),
+        trove_id,
+    )
+    .insert(&conn)
+    .unwrap();
+
+    // The writer stays open, so the commit sits in the -wal with active frames.
+    let wal_path = db_path.with_extension("db-wal");
+    assert!(
+        std::fs::metadata(&wal_path).unwrap().len() > 0,
+        "the commit must remain in the WAL, not be checkpointed"
+    );
+
+    let reader = conary_core::db::open_live_read_only(&db_path).unwrap();
+    let runtime_root = ConaryRuntimeRoot::from_db_path(&db_path);
+    let data = root_inspect_data(&reader, &runtime_root, "/opt/fixture/live").unwrap();
+    assert_eq!(data.source, RootInspectSource::DatabaseProjection);
+    assert!(data.present, "inspection must see the committed WAL frame");
+    assert_eq!(data.metadata, RootInspectMetadata::Recorded);
+    assert_eq!(data.kind, Some(RootNodeKind::Regular));
+    assert_eq!(data.sha256.as_deref(), Some(digest.as_str()));
+
+    // Control: the offline immutable opener refuses the same live WAL with its
+    // typed active-frame error, showing why the live opener is required.
+    let refusal = conary_core::db::open_read_only(&db_path).unwrap_err();
+    assert!(
+        matches!(refusal, conary_core::Error::ConflictError(_)),
+        "the offline opener must refuse active WAL frames, got {refusal}"
+    );
+}
+
+#[test]
+fn root_inspect_reads_a_normal_database() {
+    let temp = tempfile::tempdir().unwrap();
+    let db_path = temp.path().join("conary.db");
+    conary_core::db::init(&db_path).unwrap();
+
+    cmd_root_inspect(db_path.to_str().unwrap(), "/opt/fixture/hello", true)
+        .expect("a normal current-schema database must inspect");
+}

@@ -655,9 +655,10 @@ pub(crate) fn read_selected_root_baseline_with_source(
     let mut attempt = 0;
     loop {
         attempt += 1;
-        // Bracket the WAL snapshot: read `/current` before the pin and after
-        // selection; a state-less target needs all three reads to agree.
-        let current_before = current_generation_link(runtime_root)?;
+        // Bracket the WAL snapshot: sample `/current` before the pin and after
+        // selection; a state-less target needs every read to agree. The sample
+        // never fails the read: a pending snapshot ignores `/current` entirely.
+        let current_before = Some(sample_current_generation_link(runtime_root));
         let transaction = conn.unchecked_transaction()?;
         match read_baseline_attempt(&transaction, runtime_root, current_before) {
             Ok(BaselineAttempt::Complete { source, captured }) => {
@@ -685,12 +686,31 @@ fn current_generation_link(runtime_root: &ConaryRuntimeRoot) -> conary_core::Res
     conary_core::generation::mount::current_generation(runtime_root.root())
 }
 
+/// One non-failing sample of the `/current` link.
+///
+/// `Unreadable` stays distinct from `Absent`: a state-less generation is never
+/// stable against it, so it retries and can still refuse instead of accepting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CurrentLinkSample {
+    Generation(i64),
+    Absent,
+    Unreadable,
+}
+
+/// Sample `/current` without ever failing the baseline read.
+fn sample_current_generation_link(runtime_root: &ConaryRuntimeRoot) -> CurrentLinkSample {
+    match current_generation_link(runtime_root) {
+        Ok(Some(generation)) => CurrentLinkSample::Generation(generation),
+        Ok(None) => CurrentLinkSample::Absent,
+        Err(_) => CurrentLinkSample::Unreadable,
+    }
+}
+
 /// One attempt at the baseline against a snapshot pinned by the caller.
 ///
-/// `current_before` is `/current` read immediately before the snapshot was
-/// pinned, or `None` when the caller already owned the snapshot. A state-less
-/// generation is accepted only when `current_before`, the selected generation,
-/// and a trailing `/current` read all agree.
+/// `current_before` is the typed `/current` sample taken before the snapshot
+/// was pinned, or `None` when the caller already owned it. A state-less
+/// generation is stable only when both samples name it, never when unreadable.
 /// Boot recovery is the state-less source: `mark_generation_state_active_if_present`
 /// in `crates/conary-core/src/transaction/recovery.rs` accepts a missing
 /// `SystemState` after `mount_artifact_and_link` updates `/current` (lines
@@ -700,7 +720,7 @@ fn current_generation_link(runtime_root: &ConaryRuntimeRoot) -> conary_core::Res
 fn read_baseline_attempt(
     conn: &rusqlite::Connection,
     runtime_root: &ConaryRuntimeRoot,
-    current_before: Option<i64>,
+    current_before: Option<CurrentLinkSample>,
 ) -> Result<BaselineAttempt> {
     let selection = select_selected_root(
         conn,
@@ -733,8 +753,9 @@ fn read_baseline_attempt(
             // through `generation switch` without a publication row.
             let publication = GenerationPublication::completed_for_generation(conn, generation)?;
             if publication.is_none() && SystemState::find_by_number(conn, generation)?.is_none() {
-                let stable = current_before == Some(generation)
-                    && current_generation_link(runtime_root)? == Some(generation);
+                let stable = current_before == Some(CurrentLinkSample::Generation(generation))
+                    && sample_current_generation_link(runtime_root)
+                        == CurrentLinkSample::Generation(generation);
                 if !stable {
                     return Ok(BaselineAttempt::StaleCurrentGeneration);
                 }

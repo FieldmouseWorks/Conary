@@ -21,7 +21,7 @@
 //! [`RootInspectData::recovered_without_state`] set, so callers can tell that
 //! the unknown IDs were never recorded rather than simply omitted.
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use conary_agent_contract::{InspectResult, OperationEnvelope, OperationStatus, RiskLevel};
 use conary_core::generation::root_manifest::CapturedSelectedRoot;
 use conary_core::payload::{
@@ -157,9 +157,18 @@ impl RootInspectData {
     }
 }
 
-/// Open the selected database and render the result as typed JSON or human text.
+/// Open the selected database read-only and render the result as typed JSON or
+/// human text.
+///
+/// Inspection validates the current schema through
+/// [`conary_core::db::open_live_read_only`], which creates nothing and takes
+/// normal read-only locks so a live WAL snapshot is read atomically while
+/// concurrent writers are active. An empty, non-Conary, or retired-schema file
+/// is the existing typed rebuild refusal and is left untouched; a readable but
+/// non-writable current-schema database inspects normally.
 pub fn cmd_root_inspect(db_path: &str, path: &str, json: bool) -> Result<()> {
-    let conn = crate::commands::open_db(db_path)?;
+    let conn = conary_core::db::open_live_read_only(db_path)
+        .context("open the current Conary database read-only for root inspection")?;
     let runtime_root = ConaryRuntimeRoot::from_db_path(std::path::PathBuf::from(db_path));
     let data = root_inspect_data(&conn, &runtime_root, path)?;
     if json {
