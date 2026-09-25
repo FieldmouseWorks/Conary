@@ -391,3 +391,61 @@ fn package_solver_provides_view_governs_file_pre_depends_self_satisfaction() {
     assert!(unresolved.install_order.is_empty(), "{unresolved:?}");
     assert!(unresolved.remove_order.is_empty(), "{unresolved:?}");
 }
+
+fn generic_capability(name: &str) -> ProvidedCapability {
+    ProvidedCapability {
+        kind: RepositoryCapabilityKind::Generic,
+        name: name.to_string(),
+        version: None,
+        version_relation: None,
+        version_scheme: VersionScheme::Rpm,
+        architecture_qualifier: ProvideArchitectureQualifier::Implicit,
+        provenance: CapabilityProvenance::AuthorDeclared,
+    }
+}
+
+#[test]
+fn strict_known_end_state_includes_the_incoming_package_condition() {
+    let (_temp, conn) = setup_test_db();
+    let conditional = parse_native_requirement(
+        RepositoryRequirementKind::Depends,
+        VersionScheme::Rpm,
+        "(missing-capability if config(phase4-corpus))",
+    )
+    .unwrap();
+    let policy = ResolutionPolicy::new();
+
+    // The incoming package provides the condition, so the implication is
+    // triggered. Its own capability view is part of the fixed end state, so the
+    // missing required capability must refuse the solve rather than satisfy the
+    // implication vacuously.
+    let package = IncomingPackage {
+        requirements: vec![conditional],
+        capabilities: vec![generic_capability("config(phase4-corpus)")],
+    };
+    let error = solve_package_requirements_with_provides_outgoing_and_policy(
+        &conn,
+        &package,
+        vec![generic_capability("config(phase4-corpus)")],
+        &[],
+        &policy,
+    )
+    .unwrap_err();
+    assert!(matches!(error, Error::ConfigError(_)), "{error:?}");
+
+    // Positive control: when the incoming package also provides the required
+    // capability, the same conditional requirement holds.
+    let satisfied = solve_package_requirements_with_provides_outgoing_and_policy(
+        &conn,
+        &package,
+        vec![
+            generic_capability("config(phase4-corpus)"),
+            generic_capability("missing-capability"),
+        ],
+        &[],
+        &policy,
+    )
+    .unwrap();
+    assert!(satisfied.install_order.is_empty(), "{satisfied:?}");
+    assert_eq!(satisfied.conflict_message, None, "{satisfied:?}");
+}

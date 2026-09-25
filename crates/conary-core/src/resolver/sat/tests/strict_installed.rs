@@ -47,6 +47,15 @@ fn file_predepends() -> RepositoryRequirementGroup {
     RepositoryRequirementGroup::simple(RepositoryRequirementKind::PreDepends, clause)
 }
 
+fn conditional_depends(required: &str, condition: &str) -> RepositoryRequirementGroup {
+    crate::repository::requirement::parse_native_requirement(
+        RepositoryRequirementKind::Depends,
+        VersionScheme::Rpm,
+        &format!("({required} if {condition})"),
+    )
+    .unwrap()
+}
+
 fn strict_policy_without_source_authority(conn: &Connection) -> ResolutionPolicy {
     load_effective_policy(conn, RequestScope::Any)
         .unwrap()
@@ -63,23 +72,36 @@ fn repository_fixture(conn: &Connection) -> i64 {
 }
 
 #[test]
-fn installed_provider_satisfies_strict_requirement_without_repository_authority() {
+fn unknown_end_state_under_strict_policy_is_refused() {
     let (_dir, conn) = setup_test_db();
     let repository_id = repository_fixture(&conn);
     installed_file_provider(&conn, "installed-provider");
     repository_file_provider(&conn, repository_id, "repository-provider");
+    let policy = strict_policy_without_source_authority(&conn);
 
-    let result = solve_requirement_groups_with_policy(
+    // The caller did not say which installed troves the transaction removes, so
+    // the installed provider cannot be trusted to survive it.
+    let error = solve_requirement_groups_with_policy(
         &conn,
         &[file_predepends()],
         VersionScheme::Rpm,
-        &strict_policy_without_source_authority(&conn),
+        &policy,
+    )
+    .unwrap_err();
+    assert!(matches!(error, Error::ConfigError(_)), "{error:?}");
+
+    // A known empty outgoing set makes the same input satisfiable.
+    let satisfied = solve_requirement_groups_with_outgoing_and_policy(
+        &conn,
+        &[file_predepends()],
+        VersionScheme::Rpm,
+        &[],
+        &policy,
     )
     .unwrap();
-
-    assert!(result.install_order.is_empty(), "{result:?}");
-    assert!(result.remove_order.is_empty(), "{result:?}");
-    assert_eq!(result.conflict_message, None);
+    assert!(satisfied.install_order.is_empty(), "{satisfied:?}");
+    assert!(satisfied.remove_order.is_empty(), "{satisfied:?}");
+    assert_eq!(satisfied.conflict_message, None);
 }
 
 #[test]
@@ -88,15 +110,67 @@ fn strict_requirement_without_installed_provider_is_refused() {
     let repository_id = repository_fixture(&conn);
     repository_file_provider(&conn, repository_id, "repository-provider");
 
-    let error = solve_requirement_groups_with_policy(
+    // Negative control for the installed-provider case: the known end state is
+    // empty, so the requirement has no provider and must be refused.
+    let error = solve_requirement_groups_with_outgoing_and_policy(
         &conn,
         &[file_predepends()],
         VersionScheme::Rpm,
+        &[],
         &strict_policy_without_source_authority(&conn),
     )
     .unwrap_err();
 
     assert!(matches!(error, Error::ConfigError(_)), "{error:?}");
+}
+
+#[test]
+fn conditional_requirement_is_refused_when_installed_condition_is_true() {
+    let (_dir, conn) = setup_test_db();
+    let policy = strict_policy_without_source_authority(&conn);
+
+    // Control: the condition is absent, so the implication is genuinely vacuous.
+    let vacuous = solve_requirement_groups_with_outgoing_and_policy(
+        &conn,
+        &[conditional_depends("foo", "bar")],
+        VersionScheme::Rpm,
+        &[],
+        &policy,
+    )
+    .unwrap();
+    assert_eq!(vacuous.conflict_message, None, "{vacuous:?}");
+
+    // `bar` is installed and survives the transaction, so `foo` must be present
+    // even though the SAT solver could otherwise leave `bar` out.
+    insert_rpm_trove(&conn, "bar", "1.0.0", &[]);
+    let error = solve_requirement_groups_with_outgoing_and_policy(
+        &conn,
+        &[conditional_depends("foo", "bar")],
+        VersionScheme::Rpm,
+        &[],
+        &policy,
+    )
+    .unwrap_err();
+    assert!(matches!(error, Error::ConfigError(_)), "{error:?}");
+}
+
+#[test]
+fn conditional_requirement_is_satisfied_when_both_sides_are_installed() {
+    let (_dir, conn) = setup_test_db();
+    insert_rpm_trove(&conn, "bar", "1.0.0", &[]);
+    insert_rpm_trove(&conn, "foo", "1.0.0", &[]);
+
+    let satisfied = solve_requirement_groups_with_outgoing_and_policy(
+        &conn,
+        &[conditional_depends("foo", "bar")],
+        VersionScheme::Rpm,
+        &[],
+        &strict_policy_without_source_authority(&conn),
+    )
+    .unwrap();
+    assert!(satisfied.install_order.is_empty(), "{satisfied:?}");
+    assert!(satisfied.remove_order.is_empty(), "{satisfied:?}");
+    assert_eq!(satisfied.conflict_message, None);
 }
 
 #[test]
@@ -185,12 +259,15 @@ fn malformed_source_identity_is_refused_before_installed_fallback() {
     installed_file_provider(&conn, "installed-provider");
 
     // The installed set could satisfy the requirement, but a malformed
-    // identity is invalid authority rather than absent authority.
+    // identity is invalid authority rather than absent authority. The known
+    // empty end state would otherwise succeed, so the refusal must come from
+    // identity validation.
     let policy = ResolutionPolicy::new().with_primary_source_identity(" bad identity ");
-    let error = solve_requirement_groups_with_policy(
+    let error = solve_requirement_groups_with_outgoing_and_policy(
         &conn,
         &[file_predepends()],
         VersionScheme::Rpm,
+        &[],
         &policy,
     )
     .unwrap_err();
