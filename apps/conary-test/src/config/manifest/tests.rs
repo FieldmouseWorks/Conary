@@ -266,6 +266,80 @@ fn stdout_json_equals_json_round_trips_nested_null() {
     );
 }
 
+#[test]
+fn stdout_json_equals_json_accepts_signed_integer_minimum() {
+    let expectation =
+        stdout_json_expectation(r#"pointer = "/id", equals_json = '-9223372036854775808'"#);
+
+    let JsonExpectation::Equals(value) = expectation else {
+        panic!("expected an equals expectation");
+    };
+    assert_eq!(value.as_i64(), Some(i64::MIN));
+}
+
+#[test]
+fn stdout_json_equals_json_accepts_big_integer_digits_in_a_string() {
+    // A digit run inside a string is not a JSON number and must load.
+    assert_eq!(
+        stdout_json_expectation(r#"pointer = "/id", equals_json = '"18446744073709551616"'"#),
+        JsonExpectation::Equals(serde_json::json!("18446744073709551616"))
+    );
+}
+
+#[test]
+fn stdout_json_equals_json_accepts_float_exponent() {
+    // A float token is inexact by construction, so it stays loadable.
+    assert_eq!(
+        stdout_json_expectation(r#"pointer = "/x", equals_json = '1.5e3'"#),
+        JsonExpectation::Equals(serde_json::json!(1500.0))
+    );
+}
+
+#[test]
+fn stdout_json_rejects_out_of_range_equals_json_integer() {
+    // Positive control through the same manifest template as the negative.
+    assert!(
+        toml::from_str::<TestManifest>(&stdout_json_manifest_source(
+            r#"pointer = "/id", equals_json = '18446744073709551615'"#
+        ))
+        .is_ok(),
+        "positive control must load"
+    );
+
+    // Negative: `u64::MAX + 1` is an integer literal that `serde_json` can
+    // only store as `f64`, so the loader must refuse it and name the pointer.
+    let error = stdout_json_entry_error(r#"pointer = "/id", equals_json = '18446744073709551616'"#);
+    assert!(error.contains("/id"), "{error}");
+    assert!(error.contains("18446744073709551616"), "{error}");
+    assert!(error.contains("exactly comparable"), "{error}");
+}
+
+#[test]
+fn stdout_json_rejects_out_of_range_negative_equals_json_integer() {
+    // Positive control: one below the range is the smallest `i64`, which fits.
+    assert_eq!(
+        stdout_json_expectation(r#"pointer = "/id", equals_json = '-9223372036854775808'"#),
+        JsonExpectation::Equals(serde_json::json!(i64::MIN))
+    );
+
+    // Negative: one below `i64::MIN` fits neither `i64` nor `u64`.
+    let error = stdout_json_entry_error(r#"pointer = "/id", equals_json = '-9223372036854775809'"#);
+    assert!(error.contains("/id"), "{error}");
+    assert!(error.contains("-9223372036854775809"), "{error}");
+    assert!(error.contains("exactly comparable"), "{error}");
+}
+
+#[test]
+fn stdout_json_rejects_nested_out_of_range_equals_json_integer() {
+    let error = stdout_json_entry_error(
+        r#"pointer = "/data", equals_json = '{"id": 18446744073709551616}'"#,
+    );
+
+    // The error names the integer's full pointer inside stdout.
+    assert!(error.contains("/data/id"), "{error}");
+    assert!(error.contains("18446744073709551616"), "{error}");
+}
+
 /// Parse a `stdout_json` entry and return the manifest error message.
 ///
 /// A known-good entry must parse in the same template first, so a rejection

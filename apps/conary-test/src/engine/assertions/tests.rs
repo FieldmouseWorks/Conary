@@ -209,3 +209,103 @@ fn stdout_json_null_reports_missing_pointer() {
 
     assert!(evaluate_assertion(&assertion, 0, r#"{}"#, "").is_err());
 }
+
+#[test]
+fn stdout_json_refuses_out_of_range_actual_integer() {
+    let expected: serde_json::Value = serde_json::from_str("18446744073709551615").unwrap();
+    assert_eq!(expected.as_u64(), Some(u64::MAX));
+    let assertion = json_assertion("/id", expected);
+
+    // Positive control through the same fixture.
+    assert!(evaluate_assertion(&assertion, 0, r#"{"id":18446744073709551615}"#, "").is_ok());
+
+    // Negative: `u64::MAX + 1` is an integer token outside the exact range.
+    // `serde_json` rounds it to the same `f64`, so the assertion must refuse
+    // it rather than match through rounding, and name the source token.
+    let error =
+        evaluate_assertion(&assertion, 0, r#"{"id":18446744073709551617}"#, "").unwrap_err();
+    let message = error.to_string();
+    assert!(message.contains("/id"), "{message}");
+    assert!(message.contains("18446744073709551617"), "{message}");
+    assert!(message.contains("exactly comparable"), "{message}");
+}
+
+#[test]
+fn stdout_json_refuses_out_of_range_actual_integer_even_against_float() {
+    // The float expectation equals the `f64` that `18446744073709551617`
+    // rounds to, so only token awareness keeps the comparison sound. Both the
+    // expectation and the positive control come from `serde_json` so the test
+    // does not depend on the float parser's rounding mode.
+    let expected: serde_json::Value = serde_json::from_str("1.8446744073709552e19").unwrap();
+    let assertion = json_assertion("/id", expected);
+
+    // Positive control: a real float token with that value matches.
+    assert!(evaluate_assertion(&assertion, 0, r#"{"id":1.8446744073709552e19}"#, "").is_ok());
+
+    // Negative: an out-of-range integer token must not match as a float.
+    let error =
+        evaluate_assertion(&assertion, 0, r#"{"id":18446744073709551617}"#, "").unwrap_err();
+    assert!(error.to_string().contains("exactly comparable"), "{error}");
+}
+
+#[test]
+fn stdout_json_refuses_nested_out_of_range_actual_integer() {
+    let assertion = json_assertion("/data", serde_json::json!({ "id": 1 }));
+
+    // Positive control through the same fixture.
+    assert!(evaluate_assertion(&assertion, 0, r#"{"data":{"id":1}}"#, "").is_ok());
+
+    // Negative: the error names the nested pointer, not just the check's.
+    let error = evaluate_assertion(&assertion, 0, r#"{"data":{"id":18446744073709551617}}"#, "")
+        .unwrap_err();
+    let message = error.to_string();
+    assert!(message.contains("/data/id"), "{message}");
+    assert!(message.contains("18446744073709551617"), "{message}");
+}
+
+#[test]
+fn stdout_json_accepts_big_integer_digits_in_string() {
+    let assertion = json_assertion("/id", serde_json::json!("18446744073709551617"));
+
+    assert!(evaluate_assertion(&assertion, 0, r#"{"id":"18446744073709551617"}"#, "").is_ok());
+}
+
+#[test]
+fn find_inexact_json_integers_reports_nested_pointers() {
+    let found = find_inexact_json_integers(
+        r#"{"a":[1,18446744073709551616],"b":{"c":-9223372036854775809}}"#,
+    )
+    .unwrap();
+
+    let pointers: Vec<&str> = found
+        .iter()
+        .map(|integer| integer.pointer.as_str())
+        .collect();
+    assert_eq!(pointers, vec!["/a/1", "/b/c"]);
+}
+
+#[test]
+fn find_inexact_json_integers_ignores_exact_and_float_tokens() {
+    let found = find_inexact_json_integers(
+        r#"{"max":18446744073709551615,"min":-9223372036854775808,"float":1.5e3,"text":"18446744073709551616"}"#,
+    )
+    .unwrap();
+
+    assert!(found.is_empty(), "{found:?}");
+}
+
+#[test]
+fn find_inexact_json_integers_escapes_pointer_tokens() {
+    let found = find_inexact_json_integers(r#"{"a/b":{"c~d":18446744073709551616}}"#).unwrap();
+
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].pointer, "/a~1b/c~0d");
+}
+
+#[test]
+fn find_inexact_json_integers_decodes_string_escapes_in_keys() {
+    let found = find_inexact_json_integers(r#"{"\u0061":18446744073709551616}"#).unwrap();
+
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].pointer, "/a");
+}

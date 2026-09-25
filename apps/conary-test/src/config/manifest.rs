@@ -1,5 +1,6 @@
 // apps/conary-test/src/config/manifest.rs
 
+use crate::engine::assertions::{InexactJsonInteger, find_inexact_json_integers};
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
@@ -357,8 +358,10 @@ struct RawJsonAssertion {
     ///
     /// TOML integers are `i64` and TOML has no null literal, so `equals` cannot
     /// express an unsigned integer above `i64::MAX` or a nested JSON null. The
-    /// string holds the JSON text verbatim, and `serde_json` keeps the exact
-    /// integer token (for example `18446744073709551615` loads as a `u64`).
+    /// string holds the JSON text verbatim, and `serde_json` keeps an exact
+    /// integer token within `i64`/`u64` (for example `18446744073709551615`
+    /// loads as a `u64`). An integer token outside that range cannot be
+    /// represented exactly, so load fails rather than rounding it to `f64`.
     /// Mutually exclusive with `equals` and `null`.
     #[serde(default)]
     equals_json: Option<String>,
@@ -461,6 +464,13 @@ impl TryFrom<RawJsonAssertion> for JsonAssertion {
             (None, Some(text), None) => {
                 let parsed = serde_json::from_str(&text);
                 let value = parsed.map_err(|error| invalid_equals_json(&raw.pointer, &error))?;
+                if let Some(integer) = find_inexact_json_integers(&text)
+                    .map_err(|error| invalid_equals_json_text(&raw.pointer, &error))?
+                    .into_iter()
+                    .next()
+                {
+                    return Err(inexact_equals_json_error(&raw.pointer, &integer));
+                }
                 JsonExpectation::Equals(value)
             }
             (None, None, Some(true)) => JsonExpectation::Null,
@@ -522,6 +532,29 @@ fn toml_to_json(value: &toml::Value) -> Result<JsonValue> {
 /// Build the load error for `equals_json` text that is not valid JSON.
 fn invalid_equals_json(pointer: &str, error: &serde_json::Error) -> String {
     format!("stdout_json pointer {pointer:?} has invalid `equals_json` JSON: {error}")
+}
+
+/// Build the load error for `equals_json` text the number walker rejected.
+///
+/// The walker only runs after `serde_json` accepts the same text, so this is
+/// an internal invariant failure rather than user input reaching a new state.
+fn invalid_equals_json_text(pointer: &str, error: &anyhow::Error) -> String {
+    format!("stdout_json pointer {pointer:?} has invalid `equals_json`: {error}")
+}
+
+/// Build the load error for an `equals_json` integer outside the exactly
+/// comparable `i64`/`u64` range.
+///
+/// `pointer` addresses the `equals_json` document from the assertion, and
+/// `integer.pointer` addresses the number inside it, so concatenating them
+/// names the integer's real pointer relative to stdout.
+fn inexact_equals_json_error(pointer: &str, integer: &InexactJsonInteger) -> String {
+    let location = format!("{pointer}{}", integer.pointer);
+    format!(
+        "stdout_json pointer {pointer:?} has invalid `equals_json`: integer `{}` at JSON pointer \
+         {location:?} is outside the exactly comparable i64/u64 range",
+        integer.token
+    )
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
