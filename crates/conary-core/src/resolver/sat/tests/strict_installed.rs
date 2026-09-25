@@ -100,6 +100,86 @@ fn strict_requirement_without_installed_provider_is_refused() {
 }
 
 #[test]
+fn outgoing_installed_provider_is_excluded_from_strict_installed_solve() {
+    let (_dir, conn) = setup_test_db();
+    let provider_trove_id = installed_file_provider(&conn, "installed-provider");
+    let policy = strict_policy_without_source_authority(&conn);
+
+    // Positive control: while the provider is not outgoing, the installed-only
+    // path satisfies the requirement with an empty install order.
+    let satisfied = solve_requirement_groups_with_outgoing_and_policy(
+        &conn,
+        &[file_predepends()],
+        VersionScheme::Rpm,
+        &[],
+        &policy,
+    )
+    .unwrap();
+    assert!(satisfied.install_order.is_empty(), "{satisfied:?}");
+    assert!(satisfied.remove_order.is_empty(), "{satisfied:?}");
+    assert_eq!(satisfied.conflict_message, None);
+
+    // With the provider outgoing, the end state has no provider, so the
+    // installed-only path must refuse rather than use a package the
+    // transaction removes.
+    let error = solve_requirement_groups_with_outgoing_and_policy(
+        &conn,
+        &[file_predepends()],
+        VersionScheme::Rpm,
+        &[provider_trove_id],
+        &policy,
+    )
+    .unwrap_err();
+    assert!(matches!(error, Error::ConfigError(_)), "{error:?}");
+}
+
+#[test]
+fn repository_authority_does_not_use_outgoing_installed_provider() {
+    let (_dir, conn) = setup_test_db();
+    let repository_id = repository_fixture(&conn);
+    let provider_trove_id = installed_file_provider(&conn, "installed-provider");
+    repository_file_provider(&conn, repository_id, "repository-provider");
+    let policy = ResolutionPolicy::new().with_primary_source_identity("fedora-44");
+
+    // Positive control: with a repository candidate admitted and the installed
+    // provider not outgoing, the authority path solves.
+    let surviving = solve_requirement_groups_with_outgoing_and_policy(
+        &conn,
+        &[file_predepends()],
+        VersionScheme::Rpm,
+        &[],
+        &policy,
+    )
+    .unwrap();
+    assert!(surviving.conflict_message.is_none(), "{surviving:?}");
+
+    // With the installed provider outgoing, only the repository candidate can
+    // satisfy the requirement.
+    let replaced = solve_requirement_groups_with_outgoing_and_policy(
+        &conn,
+        &[file_predepends()],
+        VersionScheme::Rpm,
+        &[provider_trove_id],
+        &policy,
+    )
+    .unwrap();
+    assert!(replaced.conflict_message.is_none(), "{replaced:?}");
+    assert!(
+        replaced.install_order.iter().any(|package| {
+            package.name == "repository-provider" && package.source == SatSource::Repository
+        }),
+        "{replaced:?}"
+    );
+    assert!(
+        replaced
+            .install_order
+            .iter()
+            .all(|package| package.installed_trove_id != Some(provider_trove_id)),
+        "{replaced:?}"
+    );
+}
+
+#[test]
 fn malformed_source_identity_is_refused_before_installed_fallback() {
     let (_dir, conn) = setup_test_db();
     installed_file_provider(&conn, "installed-provider");

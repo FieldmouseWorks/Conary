@@ -136,6 +136,11 @@ pub struct ConaryProvider<'db> {
     /// Exact target-native architecture used by source dependency qualifiers.
     native_architecture: String,
 
+    /// Exact installed trove IDs the owning transaction removes. These troves
+    /// are never loaded as installed candidates, so no requirement can be
+    /// satisfied by a package the transaction's end state does not contain.
+    excluded_installed_trove_ids: HashSet<i64>,
+
     // --- Data source ---
     pub(super) conn: &'db rusqlite::Connection,
 }
@@ -185,12 +190,22 @@ impl<'db> ConaryProvider<'db> {
             policy,
             root_request_names: HashSet::new(),
             native_architecture: crate::repository::registry::detect_system_arch()?,
+            excluded_installed_trove_ids: HashSet::new(),
             conn,
         })
     }
 
     pub fn set_root_request_names(&mut self, names: impl IntoIterator<Item = String>) {
         self.root_request_names = names.into_iter().collect();
+    }
+
+    /// Mark exact installed troves as outgoing for this solve.
+    ///
+    /// The transaction that owns the solve already planned these troves for
+    /// removal (upgrade slot or relation plan). They must not satisfy a
+    /// requirement because the transaction's end state excludes them.
+    pub fn exclude_installed_troves(&mut self, trove_ids: impl IntoIterator<Item = i64>) {
+        self.excluded_installed_trove_ids.extend(trove_ids);
     }
 
     pub(crate) fn ignore_requirement_groups(
@@ -392,13 +407,16 @@ impl<'db> ConaryProvider<'db> {
         let packages = crate::resolver::requirements::load_installed_package_identities(self.conn)?;
 
         for pkg in packages {
+            let trove_id = pkg.installed_trove_id;
+            if trove_id.is_some_and(|id| self.excluded_installed_trove_ids.contains(&id)) {
+                continue;
+            }
             let package_architecture = pkg
                 .architecture
                 .clone()
                 .unwrap_or_else(|| self.native_architecture.clone());
             // Intern name for side effect (ensures this name is known to the solver)
             let _name_id = self.intern_name(&pkg.name)?;
-            let trove_id = pkg.installed_trove_id;
             let solvable_id = self.add_solvable(pkg)?;
 
             if let Some(tid) = trove_id {

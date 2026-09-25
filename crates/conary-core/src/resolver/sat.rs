@@ -360,6 +360,21 @@ pub fn solve_requirement_groups_with_policy(
     version_scheme: VersionScheme,
     policy: &ResolutionPolicy,
 ) -> Result<SatResolution> {
+    solve_requirement_groups_with_outgoing_and_policy(conn, groups, version_scheme, &[], policy)
+}
+
+/// Solve exact typed package requirements against the transaction's end state.
+///
+/// `outgoing_trove_ids` are exact installed trove identities the owning
+/// transaction removes. They are excluded from installed candidates so a
+/// requirement is never satisfied by a package that will not exist afterwards.
+pub fn solve_requirement_groups_with_outgoing_and_policy(
+    conn: &Connection,
+    groups: &[RepositoryRequirementGroup],
+    version_scheme: VersionScheme,
+    outgoing_trove_ids: &[i64],
+    policy: &ResolutionPolicy,
+) -> Result<SatResolution> {
     let depending_architecture =
         crate::repository::registry::native_architecture_for_scheme(version_scheme)?;
     solve_requirement_groups_for_architecture_with_policy(
@@ -367,6 +382,7 @@ pub fn solve_requirement_groups_with_policy(
         groups,
         version_scheme,
         &depending_architecture,
+        outgoing_trove_ids,
         policy,
     )
 }
@@ -376,6 +392,7 @@ fn solve_requirement_groups_for_architecture_with_policy(
     groups: &[RepositoryRequirementGroup],
     version_scheme: VersionScheme,
     depending_architecture: &str,
+    outgoing_trove_ids: &[i64],
     policy: &ResolutionPolicy,
 ) -> Result<SatResolution> {
     let mut expressions = Vec::new();
@@ -427,13 +444,18 @@ fn solve_requirement_groups_for_architecture_with_policy(
         return solve_requirement_groups_from_installed(
             conn,
             &expressions,
+            outgoing_trove_ids,
             policy,
             validation_message,
         );
     }
 
-    let mut provider =
-        install::build_provider_for_requirement_expressions(conn, &expressions, policy)?;
+    let mut provider = install::build_provider_for_requirement_expressions(
+        conn,
+        &expressions,
+        policy,
+        outgoing_trove_ids,
+    )?;
     let requirements = install::build_expression_requirements(&mut provider, &expressions)?;
     let problem = Problem::new().requirements(requirements);
     let mut solver = Solver::new(provider);
@@ -469,15 +491,21 @@ fn solve_requirement_groups_for_architecture_with_policy(
 /// repository rows, so `ConaryProvider::get_candidates` can only offer
 /// installed solvables. A request that needs a repository candidate is refused
 /// with the policy's validation message, preserving the repository-needed
-/// refusal.
+/// refusal. Installed troves the transaction removes are excluded through
+/// `outgoing_trove_ids`.
 fn solve_requirement_groups_from_installed(
     conn: &Connection,
     expressions: &[SolverExpression],
+    outgoing_trove_ids: &[i64],
     policy: &ResolutionPolicy,
     validation_message: String,
 ) -> Result<SatResolution> {
-    let mut provider =
-        install::build_installed_provider_for_requirement_expressions(conn, expressions, policy)?;
+    let mut provider = install::build_installed_provider_for_requirement_expressions(
+        conn,
+        expressions,
+        policy,
+        outgoing_trove_ids,
+    )?;
     let requirements = install::build_expression_requirements(&mut provider, expressions)?;
     let problem = Problem::new().requirements(requirements);
     let mut solver = Solver::new(provider);
@@ -604,6 +632,29 @@ pub fn solve_package_requirements_with_provides_and_policy(
     provided_capabilities: Vec<ProvidedCapability>,
     policy: &ResolutionPolicy,
 ) -> Result<SatResolution> {
+    solve_package_requirements_with_provides_outgoing_and_policy(
+        conn,
+        package,
+        provided_capabilities,
+        &[],
+        policy,
+    )
+}
+
+/// Solve one parsed package's external requirements against the transaction's
+/// end state after discharging exact positive requirements that the given
+/// provided capabilities cover.
+///
+/// `outgoing_trove_ids` are exact installed troves the owning transaction
+/// removes. They are excluded from the installed solve so a requirement is
+/// never satisfied by a package that will not exist afterwards.
+pub fn solve_package_requirements_with_provides_outgoing_and_policy(
+    conn: &Connection,
+    package: &dyn PackageFormat,
+    provided_capabilities: Vec<ProvidedCapability>,
+    outgoing_trove_ids: &[i64],
+    policy: &ResolutionPolicy,
+) -> Result<SatResolution> {
     let incoming = PackageIdentity {
         repo_package_id: None,
         name: package.name().to_string(),
@@ -643,6 +694,7 @@ pub fn solve_package_requirements_with_provides_and_policy(
         &external_requirements,
         package.version_scheme(),
         &depending_architecture,
+        outgoing_trove_ids,
         policy,
     )
 }

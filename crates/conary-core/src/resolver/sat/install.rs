@@ -59,11 +59,13 @@ pub(super) fn build_provider_for_requirement_expressions<'conn>(
     conn: &'conn Connection,
     expressions: &[SolverExpression],
     policy: &ResolutionPolicy,
+    outgoing_trove_ids: &[i64],
 ) -> Result<ConaryProvider<'conn>> {
     let phase = timing::start(None, timing::Phase::Initialization);
     let mut provider = ConaryProvider::new_with_policy(conn, policy.clone())?;
     drop(phase);
     provider.set_root_request_names(requirement_names(expressions));
+    provider.exclude_installed_troves(outgoing_trove_ids.iter().copied());
     let phase = timing::start(None, timing::Phase::Installed);
     provider.load_installed_packages()?;
     drop(phase);
@@ -87,15 +89,19 @@ pub(super) fn build_provider_for_requirement_expressions<'conn>(
 /// candidate authority. This builder omits `load_transitive_repo_packages`, so
 /// the only possible repository admission path is never taken and
 /// `ConaryProvider::get_candidates` can only return installed solvables.
+/// Installed troves in `outgoing_trove_ids` are excluded so the solve evaluates
+/// the transaction's end state rather than the current one.
 pub(super) fn build_installed_provider_for_requirement_expressions<'conn>(
     conn: &'conn Connection,
     expressions: &[SolverExpression],
     policy: &ResolutionPolicy,
+    outgoing_trove_ids: &[i64],
 ) -> Result<ConaryProvider<'conn>> {
     let phase = timing::start(None, timing::Phase::Initialization);
     let mut provider = ConaryProvider::new_with_policy(conn, policy.clone())?;
     drop(phase);
     provider.set_root_request_names(requirement_names(expressions));
+    provider.exclude_installed_troves(outgoing_trove_ids.iter().copied());
     let phase = timing::start(None, timing::Phase::Installed);
     provider.load_installed_packages()?;
     drop(phase);

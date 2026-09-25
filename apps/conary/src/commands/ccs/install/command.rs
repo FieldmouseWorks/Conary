@@ -185,10 +185,11 @@ pub fn cmd_ccs_install(
             conary_core::repository::resolution_policy::RequestScope::Any,
         )?;
         let resolution =
-            conary_core::resolver::solve_package_requirements_with_provides_and_policy(
+            conary_core::resolver::solve_package_requirements_with_provides_outgoing_and_policy(
                 &conn,
                 &ccs_pkg,
                 selected_capabilities,
+                &outgoing_trove_ids,
                 &effective_policy.resolution,
             )?;
         if let Some(conflict) = resolution.conflict_message {

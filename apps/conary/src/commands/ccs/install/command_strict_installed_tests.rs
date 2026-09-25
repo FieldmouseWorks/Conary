@@ -199,3 +199,119 @@ async fn consumer_predepends_is_refused_when_no_installed_provider_exists() {
         "a refused consumer must not be installed"
     );
 }
+
+fn replace_relation(
+    name: &str,
+) -> conary_core::repository::dependency_model::RepositoryRequirementGroup {
+    use conary_core::repository::dependency_model::RepositoryRequirementKind;
+    use conary_core::repository::versioning::VersionScheme;
+
+    conary_core::repository::package_relation::parse_native_relation(
+        RepositoryRequirementKind::Replace,
+        VersionScheme::Conary,
+        name,
+    )
+    .unwrap()
+}
+
+fn install_strict_provider(dir: &Path, db_path: &str, install_root: &str) {
+    use conary_core::ccs::CcsManifest;
+
+    let provider = write_package(
+        dir,
+        CcsManifest::new_minimal("strict-provider", "1.0.0"),
+        vec![
+            ("/sbin/init", b"#!/bin/sh\nexec true\n".to_vec()),
+            (PROVIDER_PATH, b"provider tool\n".to_vec()),
+        ],
+    );
+    run_install(&provider, db_path, install_root, false).unwrap();
+}
+
+fn write_strict_consumer(dir: &Path, replaces_provider: bool) -> TestPackage {
+    use conary_core::ccs::CcsManifest;
+
+    let mut manifest = CcsManifest::new_minimal("strict-consumer", "1.0.0");
+    manifest.requirements.push(file_predepends(PROVIDER_PATH));
+    if replaces_provider {
+        manifest.relations.push(replace_relation("strict-provider"));
+    }
+    write_package(
+        dir,
+        manifest,
+        vec![(CONSUMER_PATH, b"consumer tool\n".to_vec())],
+    )
+}
+
+/// Positive control for the replacement case: the identical consumer installs
+/// when it does not remove the provider that satisfies its pre-dependency.
+#[tokio::test]
+async fn consumer_predepends_installs_while_installed_provider_survives() {
+    let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
+    let temp_dir = tempfile::tempdir().unwrap();
+    let install_root = temp_dir.path().join("root");
+    let db_path = temp_dir.path().join("conary.db");
+    let db_path_str = db_path.to_str().unwrap();
+    let install_root_str = install_root.to_str().unwrap();
+
+    std::fs::create_dir_all(&install_root).unwrap();
+    conary_core::db::init(db_path_str).unwrap();
+    stage_test_boot_assets(temp_dir.path());
+
+    install_strict_provider(temp_dir.path(), db_path_str, install_root_str);
+    let consumer = write_strict_consumer(temp_dir.path(), false);
+    run_install(&consumer, db_path_str, install_root_str, false).unwrap();
+
+    let conn = conary_core::db::open(db_path_str).unwrap();
+    assert_eq!(
+        conary_core::db::models::Trove::find_by_name(&conn, "strict-consumer")
+            .unwrap()
+            .len(),
+        1,
+        "the consumer must install while its provider survives"
+    );
+}
+
+/// The consumer's own replacement relation removes the provider that its
+/// pre-dependency needs, so the end state is unsatisfiable and the install must
+/// be refused before any mutation.
+#[tokio::test]
+async fn consumer_replacing_its_predepends_provider_is_refused() {
+    let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
+    let temp_dir = tempfile::tempdir().unwrap();
+    let install_root = temp_dir.path().join("root");
+    let db_path = temp_dir.path().join("conary.db");
+    let db_path_str = db_path.to_str().unwrap();
+    let install_root_str = install_root.to_str().unwrap();
+
+    std::fs::create_dir_all(&install_root).unwrap();
+    conary_core::db::init(db_path_str).unwrap();
+    stage_test_boot_assets(temp_dir.path());
+
+    install_strict_provider(temp_dir.path(), db_path_str, install_root_str);
+    let consumer = write_strict_consumer(temp_dir.path(), true);
+
+    let error = run_install(&consumer, db_path_str, install_root_str, false).unwrap_err();
+    let config_error = error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<conary_core::Error>());
+    assert!(
+        matches!(config_error, Some(conary_core::Error::ConfigError(_))),
+        "{error:#}"
+    );
+
+    let conn = conary_core::db::open(db_path_str).unwrap();
+    assert_eq!(
+        conary_core::db::models::Trove::find_by_name(&conn, "strict-provider")
+            .unwrap()
+            .len(),
+        1,
+        "the refused transaction must leave the provider installed"
+    );
+    assert!(
+        conary_core::db::models::Trove::find_by_name(&conn, "strict-consumer")
+            .unwrap()
+            .is_empty(),
+        "a refused consumer must not be installed"
+    );
+}
