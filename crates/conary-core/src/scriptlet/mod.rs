@@ -41,7 +41,7 @@ mod runtime;
 mod sandbox;
 mod sysusers;
 #[cfg(test)]
-pub(crate) mod test_support;
+mod test_support;
 mod types;
 
 pub use crate::activation::SystemdActivationInvocation;

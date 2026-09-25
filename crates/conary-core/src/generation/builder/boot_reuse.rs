@@ -264,32 +264,28 @@ mod tests {
 
     #[test]
     fn applied_boot_runtime_request_forces_exact_rebuild_path() {
-        // Materializing the exact sysroot sets file ownership, so this test runs
-        // with root authority inside a private user and mount namespace.
-        if !crate::scriptlet::test_support::run_selected_root_namespace_test(
-            "generation::builder::boot_reuse::tests::applied_boot_runtime_request_forces_exact_rebuild_path",
-        ) {
-            return;
-        }
+        // The reuse decision is the whole contract under test: an applied
+        // boot-runtime request must make verified-asset reuse ineligible, so
+        // the builder takes the exact sysroot rebuild path. Deciding it here
+        // needs no sysroot materialization and no ownership privileges.
         let fixture = published_fixture();
         apply_changeset(&fixture.conn, true);
-
-        let error = super::super::create::build_generation_from_db_with_boot_root(
-            &fixture.conn,
-            &fixture.generations_root,
-            "kernel package mutation",
-            &BootRoot::Host,
-        )
-        .unwrap_err();
-
-        // Verified-asset reuse is skipped, so the builder materializes the exact
-        // sysroot and then fails to resolve the initramfs toolchain for the
-        // selected kernel. That is a typed not-found failure, never a successful
-        // reuse or a base-system refusal.
+        let reusable = resolve_reusable_boot_assets(&fixture.conn, &fixture.generations_root)
+            .expect("reuse eligibility must be decidable for an applied boot-runtime request");
         assert!(
-            matches!(&error, crate::Error::NotFound(_)),
-            "an applied boot-runtime request must enter the exact sysroot rebuild \
-             path and fail on its absent initramfs toolchain: {error}"
+            reusable.is_none(),
+            "an applied boot-runtime request must not reuse the published boot assets"
+        );
+
+        // Positive control through the same fixture: an ordinary changeset
+        // keeps the published boot assets reusable.
+        let fixture = published_fixture();
+        apply_changeset(&fixture.conn, false);
+        let reusable = resolve_reusable_boot_assets(&fixture.conn, &fixture.generations_root)
+            .expect("reuse eligibility must be decidable for an ordinary changeset");
+        assert!(
+            reusable.is_some(),
+            "an ordinary changeset must keep the verified boot assets reusable"
         );
     }
 
