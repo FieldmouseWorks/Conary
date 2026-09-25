@@ -528,6 +528,8 @@ feature card. Broad changes should also run the full local CI path:
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace --exclude conary-test --verbose
+cargo test -p conary --no-default-features --test test_hook_ownership --verbose
+cargo test -p conary --features test-hooks --verbose
 cargo test -p conary-test --verbose
 ```
 
@@ -537,7 +539,8 @@ service-owned code.
 Hosted `pr-gate` (`.github/workflows/pr-gate.yml`) runs only for pull requests
 targeting `main` (`on: pull_request: branches: [main]`, plus
 `workflow_dispatch`). A stacked PR based on another branch therefore gets no
-hosted checks; its proof is the full local gate above, or a `workflow_dispatch`
+hosted checks; its proof is the full local gate above, which includes the conary
+shard's `test-hooks` and `test_hook_ownership` runs, or a `workflow_dispatch`
 run on its branch. When a non-required matrix cell fails, compare its failing
 test ID and error against the known cause before treating it as pre-existing: a
 suite stops at its first fatal failure, so a known-red cell can mask a new
