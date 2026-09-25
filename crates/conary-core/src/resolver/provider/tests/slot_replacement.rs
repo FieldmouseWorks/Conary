@@ -92,3 +92,46 @@ fn ambiguous_install_slot_has_no_replacer() {
     let candidates = block_on(provider.get_candidates(name)).unwrap();
     assert!(!candidates.candidates.contains(&repository_id));
 }
+
+#[test]
+fn cross_scheme_install_slot_has_no_replacer() {
+    let (_dir, conn) = setup_test_db();
+    let mut provider = ConaryProvider::new(&conn).unwrap();
+    let name = provider.intern_name("libfoo").unwrap();
+    provider
+        .add_solvable(installed_identity(
+            "libfoo",
+            "1",
+            VersionScheme::Rpm,
+            Some(7),
+        ))
+        .unwrap();
+    let same_scheme_id = provider
+        .add_solvable(repo_identity("libfoo", "3", VersionScheme::Rpm, Some(8)))
+        .unwrap();
+    let cross_scheme_id = provider
+        .add_solvable(repo_identity("libfoo", "3", VersionScheme::Debian, Some(9)))
+        .unwrap();
+    provider.lock_surviving_installed_candidates();
+
+    // Both repository packages occupy the installed trove's machine slot, but a
+    // dependency install cannot replace across version schemes without an
+    // explicit replatform, so only the same-scheme package is a replacer.
+    let installed = &provider.solvables[0];
+    let cross_scheme = &provider.solvables[cross_scheme_id.to_index()];
+    assert!(
+        crate::repository::selector::package_install_slots_match(
+            installed.version_scheme,
+            installed.architecture.as_deref(),
+            cross_scheme.version_scheme,
+            cross_scheme.architecture.as_deref(),
+            &provider.native_architecture,
+        ),
+        "control: the cross-scheme package must share the installed machine slot"
+    );
+    assert!(provider.slot_predecessor(same_scheme_id).is_some());
+    assert_eq!(provider.slot_predecessor(cross_scheme_id), None);
+    let candidates = block_on(provider.get_candidates(name)).unwrap();
+    assert!(candidates.candidates.contains(&same_scheme_id));
+    assert!(!candidates.candidates.contains(&cross_scheme_id));
+}

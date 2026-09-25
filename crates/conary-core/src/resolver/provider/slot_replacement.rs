@@ -10,7 +10,10 @@
 //!
 //! - a repository candidate replaces an installed trove only when that trove is
 //!   the one installed package of its name sharing the candidate's slot, it is
-//!   not pinned, and the fixed incoming package does not occupy the slot;
+//!   not pinned, it has the candidate's version scheme (a dependency install is
+//!   an ordinary package change, and the installer refuses a cross-scheme
+//!   replacement without an explicit replatform), and the fixed incoming
+//!   package does not occupy the slot;
 //! - the replacer is exclusive with every other same-name solvable in its slot,
 //!   so the solver never keeps the predecessor beside its replacement;
 //! - a forced installed root yields to its replacers, as it yields to a
@@ -79,7 +82,10 @@ impl ConaryProvider<'_> {
                     && self.share_install_slot(installed, package)
             });
         let predecessor = predecessors.next()?;
-        if predecessors.next().is_some() || self.solvables[predecessor.to_index()].installed_pinned
+        let installed = &self.solvables[predecessor.to_index()];
+        if predecessors.next().is_some()
+            || installed.installed_pinned
+            || installed.version_scheme != package.version_scheme
         {
             return None;
         }
