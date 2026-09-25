@@ -1075,3 +1075,98 @@ fn relation_removed_trove_owns_no_end_state_group() {
         "{refused:?}"
     );
 }
+
+/// Build the incoming-provides-condition fixture where repository `d` may or
+/// may not obsolete the installed condition owner `x-trove`.
+///
+/// The incoming package provides `bar` and requires `d`. Installed `x-trove`
+/// carries `(foo if bar)` with `foo` absent everywhere, so once `bar` is
+/// present the activated group needs a provider the transaction cannot place.
+/// When `d` obsoletes `x-trove`, the relation plan may remove the owner before
+/// its group is ever a SAT root. Returns `(x_trove_id, d_package_id)`.
+fn incoming_condition_owner_obsoleted_by_requirement(
+    conn: &Connection,
+    d_obsoletes_x: bool,
+) -> (i64, i64) {
+    let repository_id = authority_repository(conn);
+    let x_trove_id = insert_rpm_trove(conn, "x-trove", "1.0.0", &[("(foo if bar)", None)]);
+    let d_id = insert_repo_pkg_with_reqs(
+        conn,
+        repository_id,
+        "d",
+        "2.0-1",
+        "https://rich-root.invalid/d.rpm",
+        "rpm",
+        &[],
+    );
+    if d_obsoletes_x {
+        let obsolete = crate::repository::package_relation::parse_native_relation(
+            RepositoryRequirementKind::Obsolete,
+            VersionScheme::Rpm,
+            "x-trove < 2",
+        )
+        .unwrap();
+        insert_typed_repo_requirement_group(conn, d_id, &obsolete);
+    }
+    (x_trove_id, d_id)
+}
+
+#[test]
+fn relation_removal_of_activated_condition_owner_is_not_poisoned_by_pass_one() {
+    let (_temp, conn) = setup_test_db();
+    let (x_trove_id, d_id) = incoming_condition_owner_obsoleted_by_requirement(&conn, true);
+    let policy = ResolutionPolicy::new().with_primary_source_identity("fedora-44");
+    let condition = generic_capability("bar");
+    let package = IncomingPackage {
+        requirements: vec![
+            parse_native_requirement(RepositoryRequirementKind::Depends, VersionScheme::Rpm, "d")
+                .unwrap(),
+        ],
+        capabilities: vec![condition.clone()],
+    };
+    let solve = || {
+        solve_package_requirements_with_provides_outgoing_and_policy(
+            &conn,
+            &package,
+            vec![condition.clone()],
+            &[],
+            &policy,
+        )
+        .unwrap()
+    };
+
+    // Positive control: the incoming `bar` activates `x-trove`'s
+    // `(foo if bar)`, but repository `d` also obsoletes `x-trove`, so pass one
+    // must not root SAT on `foo` before the relation plan removes the owner.
+    // The solve names the removal and reports no unsatisfied group.
+    let resolved = solve();
+    assert!(resolved.conflict_message.is_none(), "{resolved:?}");
+    assert!(resolved.unsatisfied_groups.is_empty(), "{resolved:?}");
+    assert!(selected_names(&resolved).contains(&"d"), "{resolved:?}");
+    assert_eq!(resolved.remove_order.len(), 1, "{resolved:?}");
+    assert_eq!(
+        resolved.remove_order[0].trove_id, x_trove_id,
+        "{resolved:?}"
+    );
+    assert_eq!(resolved.remove_order[0].package.name, "x-trove");
+
+    // Control through the same fixture: drop the obsolete relation so `d` no
+    // longer removes the activated owner. The projected end state now needs the
+    // absent `foo`, so the typed refusal must name `x-trove`, proving the
+    // positive above came from the removal of the owner and not from a
+    // malformed fixture.
+    crate::db::models::RepositoryRequirementGroup::delete_by_package(&conn, d_id).unwrap();
+    crate::db::models::RepositoryRequirement::delete_by_package(&conn, d_id).unwrap();
+    let refused = solve();
+    assert!(refused.conflict_message.is_some(), "{refused:?}");
+    assert!(refused.install_order.is_empty(), "{refused:?}");
+    assert_eq!(refused.unsatisfied_groups.len(), 1, "{refused:?}");
+    assert_eq!(
+        refused.unsatisfied_groups[0].owner,
+        crate::resolver::sat::SatGroupOwner::Installed {
+            trove_id: x_trove_id,
+            package_name: "x-trove".to_string(),
+        },
+        "{refused:?}"
+    );
+}
