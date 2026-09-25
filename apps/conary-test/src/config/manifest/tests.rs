@@ -618,3 +618,82 @@ fn load_manifest_rejects_malformed_suite_setup_literal_pointer() {
     .to_string();
     assert!(error.contains("RFC 6901"), "{error}");
 }
+
+/// Build a manifest source with one `distro_overrides` entry for `fedora44`
+/// whose variable name is `key`.
+fn distro_override_manifest_source(key: &str) -> String {
+    format!(
+        r#"
+        [suite]
+        name = "distro-overrides"
+        phase = 4
+
+        [[test]]
+        id = "TOVR01"
+        name = "distro override key"
+        description = "validates distro_override variable names"
+        timeout = 10
+
+        [[test.step]]
+        run = "true"
+
+        [distro_overrides.fedora44]
+        "{key}" = "value"
+        "#
+    )
+}
+
+/// Write a one-override manifest into a temp dir and load it through
+/// `load_manifest`, the same path the CLI uses.
+fn load_distro_override(key: &str) -> anyhow::Result<TestManifest> {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("distro-override.toml");
+    std::fs::write(&path, distro_override_manifest_source(key)).unwrap();
+    crate::config::load_manifest(&path)
+}
+
+#[test]
+fn distro_override_accepts_template_name() {
+    let manifest = load_distro_override("JSON_POINTER").unwrap();
+
+    assert!(
+        manifest
+            .distro_overrides
+            .get("fedora44")
+            .unwrap()
+            .contains_key("JSON_POINTER")
+    );
+}
+
+/// Load `key` through the same fixture as the valid-name control, so a
+/// rejection can only come from the variable-name rule.
+fn distro_override_rejection(key: &str) -> String {
+    assert!(
+        load_distro_override("JSON_POINTER").is_ok(),
+        "positive control must load"
+    );
+    load_distro_override(key).unwrap_err().to_string()
+}
+
+#[test]
+fn distro_override_rejects_hyphenated_name() {
+    let error = distro_override_rejection("JSON-POINTER");
+
+    assert!(error.contains("manifest \"distro-overrides\""), "{error}");
+    assert!(error.contains("fedora44"), "{error}");
+    assert!(error.contains("JSON-POINTER"), "{error}");
+}
+
+#[test]
+fn distro_override_rejects_leading_digit_name() {
+    let error = distro_override_rejection("1KEY");
+
+    assert!(error.contains("distro_overrides key \"1KEY\""), "{error}");
+}
+
+#[test]
+fn distro_override_rejects_empty_name() {
+    let error = distro_override_rejection("");
+
+    assert!(error.contains("distro_overrides key \"\""), "{error}");
+}

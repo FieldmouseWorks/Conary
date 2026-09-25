@@ -217,16 +217,23 @@ impl<'a> Iterator for TemplateTokenizer<'a> {
 /// name is empty, contains a character outside the name charset, or is not
 /// closed by `}`.
 fn parse_variable_reference(input: &str, marker: usize) -> Option<(&str, usize)> {
-    let bytes = input.as_bytes();
     let name_start = marker + 2;
-    if !is_name_start(*bytes.get(name_start)?) {
-        return None;
+    let close = input[name_start..].find('}')? + name_start;
+    let name = &input[name_start..close];
+    is_template_name(name).then_some((name, close + 1))
+}
+
+/// Whether `name` is a valid manifest template name: `[A-Za-z_][A-Za-z0-9_]*`.
+///
+/// This is the single owner of the name rule. `parse_variable_reference` and
+/// manifest load-time validation both consult it, so a `distro_overrides` key
+/// that `${NAME}` can never address is rejected instead of silently ignored.
+pub(crate) fn is_template_name(name: &str) -> bool {
+    let mut bytes = name.bytes();
+    match bytes.next() {
+        Some(first) if is_name_start(first) => bytes.all(is_name_continue),
+        _ => false,
     }
-    let mut end = name_start + 1;
-    while bytes.get(end).is_some_and(|&byte| is_name_continue(byte)) {
-        end += 1;
-    }
-    (bytes.get(end) == Some(&b'}')).then_some((&input[name_start..end], end + 1))
 }
 
 /// Whether `byte` may begin a manifest variable name.

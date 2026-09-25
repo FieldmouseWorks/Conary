@@ -631,6 +631,23 @@ impl Assertion {
 impl TestManifest {
     /// Validate all assertions in the manifest for conflicting fields.
     pub fn validate(&self) -> Result<()> {
+        // Every `distro_overrides` inner key is a template variable name, so it
+        // must satisfy the same grammar `${NAME}` accepts. A key the tokenizer
+        // cannot reference would otherwise be merged into the variable map and
+        // never substituted.
+        for (distro, overrides) in &self.distro_overrides {
+            for key in overrides.keys() {
+                if !crate::engine::variables::is_template_name(key) {
+                    bail!(
+                        "manifest {:?}: distro {:?} distro_overrides key {:?} is not a valid \
+                         template name ([A-Za-z_][A-Za-z0-9_]*)",
+                        self.suite.name,
+                        distro,
+                        key
+                    );
+                }
+            }
+        }
         let corpus_tests = self
             .test
             .iter()
