@@ -25,5 +25,6 @@ pub use cas::{
 };
 pub(crate) use cas::{CasObjectLivenessLease, EphemeralObjectStageMetrics, EphemeralObjectStore};
 pub use path::{safe_join, sanitize_filename, sanitize_path};
+pub use selected_root::{ProjectedExecutable, ProjectedNode, SelectedRootProjection};
 pub use source_path::{DeploymentPath, SourcePathBytes};
 pub use vfs::{NodeId, NodeKind, VfsNode, VfsStats, VfsTree};

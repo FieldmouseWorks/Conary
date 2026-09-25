@@ -9,6 +9,9 @@ use std::ffi::OsString;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
+mod projection;
+pub use projection::{ProjectedExecutable, ProjectedNode, SelectedRootProjection};
+
 /// Maximum number of symlink redirects the selected-root resolver follows
 /// while resolving one package path. Callers that follow projected symlinks
 /// use the same bound so a payload cannot exceed it before materialization.
@@ -116,28 +119,16 @@ pub fn selected_root_symlink_targets_directory(
 /// return the resolved root-relative path when it names a regular file with
 /// at least one execute bit. `Ok(None)` when any component is absent.
 /// Absolute symlink targets resolve against `root`, never the host.
+///
+/// This is the empty [`SelectedRootProjection`], so the projected and
+/// pre-transaction resolvers share one walk.
 pub fn selected_root_executable(root: &Path, path: &str) -> Result<Option<PathBuf>> {
-    validate_selected_root(root)?;
-    let relative = root_relative_package_path(path)?;
-    let resolved = match resolve_existing_root_relative_path(root, &relative, path) {
-        Ok(resolved) => resolved,
-        Err(Error::NotFound(_)) => return Ok(None),
-        Err(error) => return Err(error),
-    };
-    let candidate = root.join(&resolved);
-    let metadata = match fs::metadata(&candidate) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(Error::Io(error)),
-    };
-    if !metadata.file_type().is_file() {
-        return Ok(None);
+    match SelectedRootProjection::new(root).resolve_executable(path)? {
+        ProjectedExecutable::Executable { resolved } => {
+            Ok(Some(PathBuf::from(resolved.trim_start_matches('/'))))
+        }
+        ProjectedExecutable::NotExecutable { .. } | ProjectedExecutable::Missing => Ok(None),
     }
-    use std::os::unix::fs::PermissionsExt;
-    if metadata.permissions().mode() & 0o111 == 0 {
-        return Ok(None);
-    }
-    Ok(Some(resolved))
 }
 
 fn resolve_leaf_without_following(
@@ -265,17 +256,38 @@ fn resolve_root_relative_path(
             )));
         }
         let target = fs::read_link(&candidate).map_err(Error::Io)?;
-        let mut redirected = if target.is_absolute() {
-            PathBuf::new()
-        } else {
-            resolved.clone()
-        };
-        append_lexical_target(&mut redirected, &target, package_path, &candidate_relative)?;
-        redirected.extend(pending);
-        pending = components(&redirected)?;
+        pending = splice_symlink_target(
+            &resolved,
+            &target,
+            package_path,
+            &candidate_relative,
+            pending,
+        )?;
         resolved.clear();
     }
     Ok(resolved)
+}
+
+/// Splice one symlink target into the remaining lexical walk.
+///
+/// An absolute target restarts at the selected root; a relative target
+/// resolves against the link's parent. Every redirected prefix is walked again
+/// so the projection can re-check it.
+fn splice_symlink_target(
+    resolved: &Path,
+    target: &Path,
+    package_path: &str,
+    symlink: &Path,
+    remaining: VecDeque<OsString>,
+) -> Result<VecDeque<OsString>> {
+    let mut redirected = if target.is_absolute() {
+        PathBuf::new()
+    } else {
+        resolved.to_path_buf()
+    };
+    append_lexical_target(&mut redirected, target, package_path, symlink)?;
+    redirected.extend(remaining);
+    components(&redirected)
 }
 
 fn components(path: &Path) -> Result<VecDeque<OsString>> {
