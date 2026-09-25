@@ -154,9 +154,10 @@ pub struct ConaryProvider<'db> {
 
     /// When set, surviving installed candidates are fixed facts of the owning
     /// transaction's end state. For an exact package name, repository
-    /// candidates are filtered out so they can never replace a surviving
-    /// variant; a single surviving variant is locked, while multiple parallel
-    /// variants are all selectable via `allow_multiple`.
+    /// candidates are filtered out so they can never replace the fixed incoming
+    /// package or a surviving variant; a lone fixed fact is locked, while
+    /// multiple facts (the incoming package plus variants, or parallel
+    /// variants) are all selectable via `allow_multiple`.
     pub(super) surviving_installed_candidates_locked: bool,
 
     /// The incoming package registered as a fixed SAT fact. It carries
@@ -251,12 +252,12 @@ impl<'db> ConaryProvider<'db> {
     /// transaction's end state.
     ///
     /// For an exact package name, repository candidates are filtered out so no
-    /// version may replace a surviving variant. A single surviving variant is
-    /// locked; parallel variants are all selectable. This keeps the solver's
-    /// model aligned with the packages the transaction actually keeps; a
-    /// requirement only a different version can satisfy is a conflict rather
-    /// than a silent replacement. Virtual capabilities are not filtered because
-    /// several packages may provide one.
+    /// version may replace the fixed incoming package or a surviving variant. A
+    /// lone fixed fact is locked; the incoming package and parallel variants are
+    /// all selectable. This keeps the solver's model aligned with the packages
+    /// the transaction actually keeps; a requirement only a different version
+    /// can satisfy is a conflict rather than a silent replacement. Virtual
+    /// capabilities are not filtered because several packages may provide one.
     pub(crate) fn lock_surviving_installed_candidates(&mut self) {
         self.surviving_installed_candidates_locked = true;
     }

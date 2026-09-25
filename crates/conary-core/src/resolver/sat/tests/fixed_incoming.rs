@@ -342,3 +342,98 @@ fn incoming_name_and_provide_are_satisfied_by_the_fixed_fact() {
     // installed and the fixed fact never enters the install order.
     assert_eq!(selected_names(&resolved), ["external"], "{resolved:?}");
 }
+
+/// Insert an installed RPM package trove with an explicit architecture, so a
+/// parallel install of the incoming package's own name can be represented.
+fn insert_installed_trove_for_architecture(
+    conn: &Connection,
+    name: &str,
+    version: &str,
+    architecture: &str,
+) -> i64 {
+    let trove_id = insert_rpm_trove(conn, name, version, &[]);
+    conn.execute(
+        "UPDATE troves SET architecture = ?1 WHERE id = ?2",
+        rusqlite::params![architecture, trove_id],
+    )
+    .unwrap();
+    trove_id
+}
+
+#[test]
+fn incoming_coexists_with_surviving_same_name_variant() {
+    let (_dir, conn) = setup_test_db();
+    let repository_id = authority_repository(&conn);
+    // `bar` is only in the repository, so the solve must reach SAT even though
+    // the incoming's own name is already held by a surviving variant.
+    insert_repo_pkg_with_reqs(
+        &conn,
+        repository_id,
+        "bar",
+        "1-1",
+        "https://example.invalid/bar.rpm",
+        "rpm",
+        &[],
+    );
+    let surviving_variant =
+        insert_installed_trove_for_architecture(&conn, "libfoo", "1.0.0", "aarch64");
+    let policy = ResolutionPolicy::new().with_primary_source_identity("fedora-44");
+
+    let package = TestIncoming {
+        name: "libfoo",
+        version: "2.0-1",
+        requirements: parse_groups(&["bar"]),
+        capabilities: Vec::new(),
+    };
+    let resolved = solve_package_requirements_with_provides_outgoing_and_policy(
+        &conn,
+        &package,
+        package.resolution_capabilities().unwrap(),
+        &[],
+        &policy,
+    )
+    .unwrap();
+
+    // The incoming `x86_64` package and the surviving `aarch64` variant are both
+    // facts of the end state, so SAT must select both while installing only the
+    // repository `bar`.
+    assert!(resolved.conflict_message.is_none(), "{resolved:?}");
+    assert_eq!(selected_names(&resolved), ["bar"], "{resolved:?}");
+    assert!(
+        resolved
+            .install_order
+            .iter()
+            .all(|package| package.installed_trove_id != Some(surviving_variant)),
+        "{resolved:?}"
+    );
+
+    // Control through the same fixture: the incoming requires a third
+    // repository version of its own name. That repository candidate would
+    // satisfy the requirement if it were allowed, but it must not replace the
+    // surviving variant, so the requirement is refused typed.
+    insert_repo_pkg_with_reqs(
+        &conn,
+        repository_id,
+        "libfoo",
+        "3.0.0",
+        "https://example.invalid/libfoo.rpm",
+        "rpm",
+        &[],
+    );
+    let replacement = TestIncoming {
+        name: "libfoo",
+        version: "2.0-1",
+        requirements: parse_groups(&["libfoo = 3.0.0"]),
+        capabilities: Vec::new(),
+    };
+    let refused = solve_package_requirements_with_provides_outgoing_and_policy(
+        &conn,
+        &replacement,
+        replacement.resolution_capabilities().unwrap(),
+        &[],
+        &policy,
+    )
+    .unwrap();
+    assert!(refused.conflict_message.is_some(), "{refused:?}");
+    assert!(refused.install_order.is_empty(), "{refused:?}");
+}

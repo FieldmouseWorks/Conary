@@ -236,6 +236,37 @@ impl ConaryProvider<'_> {
         (package.name == self.names[name.to_index()]).then_some(solvable_id)
     }
 
+    /// The fixed facts of a name: the fixed incoming solvable when its literal
+    /// name is `name`, plus every surviving installed variant of `name` when the
+    /// end state locks surviving candidates.
+    ///
+    /// Both are facts of the declared end state, so a requirement on this name
+    /// must be satisfiable by selecting them all together rather than by a
+    /// repository candidate. The fixed incoming package always comes first; a
+    /// name can be both the incoming's identity and a surviving variant's
+    /// identity in a parallel install.
+    fn fixed_facts_for_name(&self, name: NameId, candidates: &[SolvableId]) -> Vec<SolvableId> {
+        let mut facts = Vec::new();
+        if let Some(incoming) = self.fixed_incoming_candidate(name)
+            && candidates.contains(&incoming)
+        {
+            facts.push(incoming);
+        }
+        if self.surviving_installed_candidates_locked {
+            let name_str = &self.names[name.to_index()];
+            for &candidate in candidates {
+                let package = &self.solvables[candidate.to_index()];
+                if package.name == *name_str
+                    && package.installed_trove_id.is_some()
+                    && !facts.contains(&candidate)
+                {
+                    facts.push(candidate);
+                }
+            }
+        }
+        facts
+    }
+
     pub(super) fn sort_solvables(&self, solvables: &mut [SolvableId]) {
         // Determine the "primary" name: the first solvable's name is assumed to
         // be the exact-name match. Canonical equivalents have different names and
@@ -332,51 +363,51 @@ impl DependencyProvider for ConaryProvider<'_> {
                     .flatten()
             });
 
-        // The fixed incoming package is a fact: a requirement on its name must
-        // be satisfied by it, never by a same-name repository candidate, while
-        // the exact root keeps it selected.
+        // The fixed facts of this name are the fixed incoming package and every
+        // surviving installed variant of the exact name. They are all part of
+        // the declared end state, so a requirement on this name must be
+        // satisfiable by selecting them together, never by a repository
+        // candidate.
         //
-        // If the package is pinned (troves.pinned = 1), lock the solver to
-        // the installed version so the SAT solver cannot choose a different
-        // version.  This implements G3: respect per-package version pins.
-        let mut locked = self
-            .fixed_incoming_candidate(name)
-            .filter(|solvable_id| candidates.contains(solvable_id))
-            .or_else(|| {
-                candidates.iter().copied().find(|&sid| {
-                    let pkg = &self.solvables[sid.to_index()];
-                    pkg.name == *name_str && pkg.installed_pinned
-                })
-            });
-
-        // A fixed end state keeps every surviving installed variant of the
-        // exact name. Repository candidates of that name must never replace a
-        // surviving variant, so they are filtered out rather than allowed to
-        // compete. With more than one variant the solver must be able to select
-        // all of them, which the exact installed roots require and
-        // `allow_multiple` permits. With one variant a lock names it
-        // unambiguously and forbids every other candidate.
+        // If the package is pinned (troves.pinned = 1) and there is no fixed
+        // fact, lock the solver to the installed version so the SAT solver
+        // cannot choose a different version.  This implements G3: respect
+        // per-package version pins.
+        let fixed_facts = self.fixed_facts_for_name(name, &candidates);
         let mut allow_multiple = false;
-        if self.surviving_installed_candidates_locked && locked.is_none() {
-            let exact_installed_variants = candidates
-                .iter()
-                .copied()
-                .filter(|&sid| {
-                    let pkg = &self.solvables[sid.to_index()];
-                    pkg.name == *name_str && pkg.installed_trove_id.is_some()
-                })
-                .collect::<Vec<_>>();
-            if !exact_installed_variants.is_empty() {
-                candidates.retain(|&sid| {
-                    let pkg = &self.solvables[sid.to_index()];
-                    pkg.name != *name_str || pkg.installed_trove_id.is_some()
-                });
-                if exact_installed_variants.len() > 1 {
-                    allow_multiple = true;
-                } else {
-                    locked = exact_installed_variants.first().copied();
-                }
+        let mut locked = None;
+        if fixed_facts
+            .iter()
+            .any(|&sid| self.solvables[sid.to_index()].installed_trove_id.is_some())
+        {
+            // A fixed end state keeps every surviving installed variant of the
+            // exact name. Repository candidates of that name must never replace
+            // the incoming package or a surviving variant, so they are filtered
+            // out rather than allowed to compete. With more than one fact the
+            // solver must be able to select all of them, which the exact roots
+            // require and `allow_multiple` permits. A lone surviving variant is
+            // locked unambiguously and forbids every other candidate.
+            candidates.retain(|&sid| {
+                let pkg = &self.solvables[sid.to_index()];
+                pkg.name != *name_str
+                    || pkg.installed_trove_id.is_some()
+                    || Some(sid) == self.fixed_incoming
+            });
+            if fixed_facts.len() > 1 {
+                allow_multiple = true;
+            } else {
+                locked = fixed_facts.first().copied();
             }
+        } else if let Some(incoming) = fixed_facts.first() {
+            // Only the fixed incoming package is a fact of this name. Its exact
+            // root keeps it selected, and the exclusive lock forbids every
+            // same-name repository candidate from replacing it.
+            locked = Some(*incoming);
+        } else {
+            locked = candidates.iter().copied().find(|&sid| {
+                let pkg = &self.solvables[sid.to_index()];
+                pkg.name == *name_str && pkg.installed_pinned
+            });
         }
 
         Some(Candidates {
