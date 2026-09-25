@@ -120,15 +120,17 @@ pub fn materialize_captured_selected_root(
     sync_filesystem(destination)
 }
 
-/// Materialize only the directory-and-symlink layout of a captured selected
-/// root.
+/// Materialize the directory, symlink, and permission layout of a captured
+/// selected root.
 ///
-/// This exists for read-only path resolution previews. Directories become
-/// directories, symlinks keep their exact targets, and every other node kind
-/// becomes an empty regular file because the resolver only needs to know that
-/// a path exists and is not a symlink. No CAS content, ownership, mode,
-/// timestamps, or xattrs are written, and the destination is never required to
-/// be empty. Callers own the destination and must keep it private.
+/// This exists for read-only path resolution previews and read-only lifecycle
+/// preflight. Directories become directories, symlinks keep their exact
+/// targets, and every other node kind becomes an empty regular file that
+/// carries the manifest's permission bits, so preflight can tell whether a
+/// target-root program is executable. The layout and permission bits survive;
+/// content, ownership, timestamps, and xattrs are never written, and the
+/// destination is never required to be empty. Callers own the destination and
+/// must keep it private.
 pub fn materialize_selected_root_layout_skeleton(
     captured: &CapturedSelectedRoot,
     destination: &Path,
@@ -136,13 +138,34 @@ pub fn materialize_selected_root_layout_skeleton(
     captured.generation.validate()?;
     captured.state.validate()?;
     prepare_layout_destination(destination)?;
+
+    let mut directories = Vec::new();
+    let mut leaves = Vec::new();
     for entry in captured
         .generation
         .entries
         .iter()
         .chain(&captured.state.entries)
     {
-        materialize_layout_entry(entry, destination)?;
+        if matches!(entry.node.source.kind, PayloadNodeKind::Directory) {
+            directories.push(entry);
+        } else {
+            leaves.push(entry);
+        }
+    }
+
+    // Create every directory first with a writable, traversable mode so a
+    // manifest mode such as 0o000 cannot stop the skeleton from being built.
+    for entry in &directories {
+        materialize_layout_directory(entry, destination)?;
+    }
+    for entry in &leaves {
+        materialize_layout_leaf(entry, destination)?;
+    }
+    // Restore directory permission bits only after every child exists.
+    for entry in directories.iter().rev() {
+        let path = destination_path(destination, &entry.path)?;
+        fs::set_permissions(&path, fs::Permissions::from_mode(layout_mode(&entry.node)))?;
     }
     Ok(())
 }
@@ -162,38 +185,62 @@ fn prepare_layout_destination(destination: &Path) -> crate::Result<()> {
     }
 }
 
-fn materialize_layout_entry(entry: &GenerationRootEntry, destination: &Path) -> crate::Result<()> {
+fn materialize_layout_directory(
+    entry: &GenerationRootEntry,
+    destination: &Path,
+) -> crate::Result<()> {
+    let path = destination_path(destination, &entry.path)?;
+    match fs::create_dir(&path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+            let metadata = fs::symlink_metadata(&path)?;
+            if !metadata.file_type().is_dir() {
+                return Err(crate::Error::ConflictError(format!(
+                    "layout skeleton path {} already exists and is not a directory",
+                    entry.path
+                )));
+            }
+        }
+        Err(error) => return Err(error.into()),
+    }
+    // Keep the directory writable and traversable until all of its children
+    // exist; `materialize_selected_root_layout_skeleton` restores the manifest
+    // permission bits afterwards.
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o700))?;
+    Ok(())
+}
+
+fn materialize_layout_leaf(entry: &GenerationRootEntry, destination: &Path) -> crate::Result<()> {
     let path = destination_path(destination, &entry.path)?;
     match &entry.node.source.kind {
-        PayloadNodeKind::Directory => match fs::create_dir(&path) {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-                let metadata = fs::symlink_metadata(&path)?;
-                if metadata.file_type().is_dir() {
-                    Ok(())
-                } else {
-                    Err(crate::Error::ConflictError(format!(
-                        "layout skeleton path {} already exists and is not a directory",
-                        entry.path
-                    )))
-                }
-            }
-            Err(error) => Err(error.into()),
-        },
         PayloadNodeKind::Symlink { target } => {
             std::os::unix::fs::symlink(target, &path)?;
-            Ok(())
         }
-        // The path resolver only distinguishes an existing node from a
-        // symlink, so every other kind becomes an empty placeholder.
+        PayloadNodeKind::Directory => {
+            unreachable!("directories are materialized separately")
+        }
+        // The resolver only distinguishes an existing node from a symlink and
+        // lifecycle preflight reads permission bits, so every other kind
+        // becomes an empty placeholder. The mode is set explicitly because the
+        // creating process umask would otherwise trim it.
         _ => {
             OpenOptions::new()
                 .write(true)
                 .create_new(true)
                 .open(&path)?;
-            Ok(())
+            fs::set_permissions(&path, fs::Permissions::from_mode(layout_mode(&entry.node)))?;
         }
     }
+    Ok(())
+}
+
+/// Permission bits the skeleton preserves for one manifest node.
+///
+/// The preview never needs setuid or setgid authority, so those bits are
+/// cleared while the remaining permission and sticky bits are kept. This
+/// mirrors the setuid/setgid stripping a real deployment applies.
+fn layout_mode(node: &ResolvedPayloadNode) -> u32 {
+    node.source.mode & 0o1777
 }
 
 /// Overlay one validated package payload tree onto an existing root.

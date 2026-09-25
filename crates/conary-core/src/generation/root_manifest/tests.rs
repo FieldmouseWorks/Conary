@@ -277,8 +277,12 @@ fn layout_skeleton_materializes_directories_symlinks_and_placeholders() {
             entries: vec![
                 directory_entry("/usr", 0o755),
                 directory_entry("/usr/bin", 0o755),
+                regular_entry_with_mode("/usr/bin/executable", b"not materialized", 0o755),
+                directory_entry("/usr/bin/private", 0o500),
+                regular_entry_with_mode("/usr/bin/private/inside", b"not materialized", 0o400),
+                regular_entry_with_mode("/usr/bin/setuid-tool", b"not materialized", 0o4755),
                 symlink_entry,
-                regular_entry("/usr/bin/tool", b"not materialized"),
+                regular_entry_with_mode("/usr/bin/tool", b"not materialized", 0o644),
             ],
         },
         state: MutableStateManifest {
@@ -300,25 +304,52 @@ fn layout_skeleton_materializes_directories_symlinks_and_placeholders() {
             .is_dir()
     );
     assert_eq!(
+        std::fs::metadata(destination.join("usr"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o7777,
+        0o755
+    );
+    // A restrictive manifest directory mode is applied only after the child
+    // below it has been created.
+    assert_eq!(
+        std::fs::metadata(destination.join("usr/bin/private"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o7777,
+        0o500
+    );
+    assert_eq!(
         std::fs::read_link(destination.join("usr/bin/sh")).unwrap(),
         Path::new("bash")
     );
     let tool = std::fs::symlink_metadata(destination.join("usr/bin/tool")).unwrap();
     assert!(tool.file_type().is_file());
+    assert_eq!(tool.permissions().mode() & 0o7777, 0o644);
+    assert_eq!(tool.len(), 0);
+    let executable = std::fs::symlink_metadata(destination.join("usr/bin/executable")).unwrap();
+    assert!(executable.file_type().is_file());
     assert_eq!(
-        std::fs::metadata(destination.join("usr/bin/tool"))
-            .unwrap()
-            .len(),
-        0
+        executable.permissions().mode() & 0o7777,
+        0o755,
+        "an executable manifest node must yield an executable placeholder"
     );
+    let setuid = std::fs::symlink_metadata(destination.join("usr/bin/setuid-tool")).unwrap();
+    assert!(setuid.file_type().is_file());
+    assert_eq!(
+        setuid.permissions().mode() & 0o7777,
+        0o755,
+        "setuid and setgid bits must be cleared on a placeholder"
+    );
+    let inside = std::fs::symlink_metadata(destination.join("usr/bin/private/inside")).unwrap();
+    assert!(inside.file_type().is_file());
+    assert_eq!(inside.permissions().mode() & 0o7777, 0o400);
     let events = std::fs::symlink_metadata(destination.join("var/lib/events")).unwrap();
     assert!(events.file_type().is_file());
-    assert_eq!(
-        std::fs::metadata(destination.join("var/lib/events"))
-            .unwrap()
-            .len(),
-        0
-    );
+    assert_eq!(events.permissions().mode() & 0o7777, 0o640);
+    assert_eq!(events.len(), 0);
 }
 
 #[test]
@@ -588,13 +619,17 @@ fn directory_entry(path: &str, permissions: u32) -> GenerationRootEntry {
 }
 
 fn regular_entry(path: &str, bytes: &[u8]) -> GenerationRootEntry {
+    regular_entry_with_mode(path, bytes, 0o644)
+}
+
+fn regular_entry_with_mode(path: &str, bytes: &[u8], permissions: u32) -> GenerationRootEntry {
     GenerationRootEntry {
         path: path.to_string(),
         node: resolved(PayloadNode {
             kind: PayloadNodeKind::Regular {
                 hardlink_identity: None,
             },
-            mode: libc::S_IFREG | 0o644,
+            mode: libc::S_IFREG | permissions,
             user: PayloadIdentity::Numeric {
                 id: u64::from(unsafe { libc::geteuid() }),
             },
