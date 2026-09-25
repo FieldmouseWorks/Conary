@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-25
-revision: 65
+revision: 66
 summary: Daily-driver CLI publication debt, committed selected-root inspection, installed records, database preflight, repository readiness, typed details, and grouped results
 ---
 
@@ -33,7 +33,7 @@ takeover, generation activation, or conaryd, the CLI should say that directly.
 | `pin <pkg>` | Pins a selected installed variant | Ambiguous installed variants | Use `--version`, `--release`, and `--arch` to pin the intended variant | Existing `cargo test -p conary --test query pin_and_unpin_use_same_variant_selector` |
 | `unpin <pkg>` | Releases a selected installed variant | Ambiguous installed variants | Use `--version`, `--release`, and `--arch` to unpin the intended variant | Existing `cargo test -p conary --test query pin_and_unpin_use_same_variant_selector` |
 | `system history` | Recorded changeset fields, rollback relationships, continued lifecycle failures, and deferred recovery guidance | Obsolete changeset metadata keeps its existing refusal | Publication retries use the selected database; history does not decide rollback eligibility | `cargo test -p conary --test cli_history` |
-| `system root inspect <path> [--json]` | Reports the exact committed selected-root node at one path from the newest publication snapshot, current generation artifact, or installed database projection; the selected database is opened **live read-only, never initializes**, migrates, or writes it, so a running system's uncheckpointed WAL is read as a real snapshot; `--json` prints a typed `system.root.inspect` result whose `metadata` is `recorded` for committed manifests and `synthesized` for the projection's stand-in `/`, and whose stable state-less recovery generation is marked `recovered_without_state: true` only when no active or orphaned try session claims it (see [Committed Selected Root Inspection](#committed-selected-root-inspection)) | An absent path or a current-schema database with no committed root is a typed `present: false` result with exit 0, not an error string; a zero-byte, non-Conary, or retired-schema database file is refused with the existing typed error and left untouched; a `/current` generation the pinned snapshot cannot confirm and that moves across the read is retried and then refused with the typed "the current generation changed during inspection; retry" error; a state-less `/current` claimed by an active or orphaned try session is refused with the typed try-session error until `conary try keep` or `conary try rollback` resolves it | Inspect the exact committed path before publication; the command never resolves symlinks, reads the live root, or initializes a database | `cargo test -p conary --lib root_inspect` |
+| `system root inspect <path> [--json]` | Reports the exact committed selected-root node at one path from the newest publication snapshot, current generation artifact, or installed database projection; the selected database is opened **live read-only, never initializes**, migrates, or writes it, so a running system's uncheckpointed WAL is read as a real snapshot; `--json` prints a typed `system.root.inspect` result whose `metadata` is `recorded` for committed manifests and `synthesized` for the projection's stand-in `/`, and whose stable state-less recovery generation is marked `recovered_without_state: true` only when no active, orphaned, or rolled-back try session claims it (a kept try session is committed) (see [Committed Selected Root Inspection](#committed-selected-root-inspection)) | An absent path or a current-schema database with no committed root is a typed `present: false` result with exit 0, not an error string; a zero-byte, non-Conary, or retired-schema database file is refused with the existing typed error and left untouched; a `/current` generation the pinned snapshot cannot confirm and that moves across the read is retried and then refused with the typed "the current generation changed during inspection; retry" error; a state-less `/current` claimed by an active or orphaned try session is refused with the typed try-session error until `conary try keep` or `conary try rollback` resolves it, and one claimed by a rolled-back try session is refused with its own typed error as a discarded trial | Inspect the exact committed path before publication; the command never resolves symlinks, reads the live root, or initializes a database | `cargo test -p conary --lib root_inspect` |
 
 ## Autoremove Preview
 
@@ -238,25 +238,33 @@ to a valid generation artifact and explicitly accept a missing `SystemState`,
 and it writes no terminal `GenerationPublication` row. The read therefore
 samples `/current` immediately before the snapshot is pinned and again after
 the selection. When the before sample, the selected generation, and the after
-sample all agree, and no active or orphaned try session claims that generation,
-the artifact is accepted as `source: current_generation` with `snapshot_id` and
-`changeset_id` `null` and `recovered_without_state: true`. When they differ, the
-link moved across the snapshot and the ordinary retry and typed refusal above
-still apply; a concurrent publication always records its state and terminal
-publication rows before moving the link.
+sample all agree, and no active, orphaned, or rolled-back try session claims
+that generation, the artifact is accepted as `source: current_generation` with
+`snapshot_id` and `changeset_id` `null` and `recovered_without_state: true`.
+When they differ, the link moved across the snapshot and the ordinary retry and
+typed refusal above still apply; a concurrent publication always records its
+state and terminal publication rows before moving the link.
 
 An activated try session produces the same state-less link shape without boot
 recovery: `begin_try_session` builds its generation from the copied try
 database and publishes it as the live `/current`, while the live database has
 no state row and no publication for it. The read consults the live try-session
-authority (`TrySession::find_active_or_orphaned`) and refuses with the typed
-try-session error when an active or orphaned session's `try_generation_id`
-names the selected generation, directing the operator to `conary try keep` or
-`conary try rollback` before inspecting. The CCS dry-run baseline skeleton
-shares this reader, so a dry run also refuses the uncommitted trial instead of
-resolving payload paths against it. A namespace try session builds its
-generation without publishing it as `/current`, so it does not claim the
-selected generation in normal operation.
+authority (`TrySession::find_by_try_generation`) for the selected generation in
+every status. An active or orphaned session refuses with the typed try-session
+error, directing the operator to `conary try keep` or `conary try rollback`
+before inspecting. A rolled-back session refuses with its own typed error:
+`rollback_active_try_session` leaves `/current` on the try generation when the
+session has no previous generation to restore, so the link outlives the
+discarded trial and is not a committed recovery baseline. A kept session is the
+operator's explicit promotion decision and does not refuse: a namespace keep
+promotes the copied database and marks the generation's live `SystemState`
+active (`keep_active_try_session`), so a kept generation normally has committed
+state and never reaches this branch, while an activated keep records the
+resolved `Kept` status that commits the state-less link. The CCS dry-run
+baseline skeleton shares this reader, so a dry run follows the same decision
+instead of resolving payload paths against an uncommitted trial. A namespace
+try session builds its generation without publishing it as `/current`, so it
+does not claim the selected generation in normal operation.
 
 ## Ordinary Installed Lists
 

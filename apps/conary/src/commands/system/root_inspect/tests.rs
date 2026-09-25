@@ -13,7 +13,7 @@ use crate::commands::test_helpers::create_active_test_generation;
 use conary_core::db::models::{
     CreateTrySession, FileEntry, GenerationPublication, GenerationPublicationPhase,
     GenerationPublicationStatus, InstallSource, SystemState, Trove, TroveType, TrySession,
-    TrySessionMode,
+    TrySessionMode, TrySessionStatus,
 };
 use conary_core::generation::root_manifest::{
     GENERATION_ROOT_MANIFEST_VERSION, GenerationRootEntry, GenerationRootManifest,
@@ -1050,6 +1050,111 @@ fn root_inspect_refuses_a_state_less_current_generation_claimed_by_a_try_session
         matches!(typed, SelectedRootBaselineError::TrySessionOwnsCurrent),
         "the refusal must come from the try-session rule, got {typed}"
     );
+}
+
+/// `rollback_active_try_session` leaves `/current` on the try generation when
+/// the session had no previous generation to restore, then marks the session
+/// `RolledBack`. That discarded trial is not a committed recovery baseline, so
+/// inspection must refuse it with the typed rolled-back error instead of
+/// reporting its payload as recovered.
+#[test]
+fn root_inspect_refuses_a_state_less_current_generation_rolled_back_by_a_try_session() {
+    let temp = tempfile::tempdir().unwrap();
+    let db_path = temp.path().join("conary.db");
+    conary_core::db::init(&db_path).unwrap();
+    create_state_less_test_generation(&db_path, 1);
+    let conn = conary_core::db::open(&db_path).unwrap();
+    let runtime_root = ConaryRuntimeRoot::from_db_path(&db_path);
+
+    // Positive control: with no try session the same state-less generation is
+    // the accepted boot-recovery baseline.
+    let recovered = root_inspect_data(&conn, &runtime_root, "/sbin/init").unwrap();
+    assert_eq!(recovered.source, RootInspectSource::CurrentGeneration);
+    assert!(recovered.recovered_without_state);
+
+    let session = TrySession::create_active(
+        &conn,
+        CreateTrySession {
+            id: "try-rolled-back-fixture",
+            package_path: "/fixture/package.ccs",
+            package_signing_key: "fixture-signing-key",
+            package_name: Some("try-fixture"),
+            package_version: Some("1.0.0"),
+            previous_generation_id: None,
+            mode: TrySessionMode::Activated,
+            work_dir: "/fixture/work",
+        },
+    )
+    .unwrap();
+    session.set_try_generation(&conn, 1).unwrap();
+    session.mark_rolled_back(&conn).unwrap();
+    assert_eq!(
+        TrySession::find_by_try_generation(&conn, 1)
+            .unwrap()
+            .expect("the rolled-back session must still claim the generation")
+            .status,
+        TrySessionStatus::RolledBack
+    );
+
+    let error = root_inspect_data(&conn, &runtime_root, "/sbin/init")
+        .expect_err("a rolled-back try session's state-less /current is not recovery");
+    let typed = error
+        .downcast_ref::<SelectedRootBaselineError>()
+        .expect("the refusal must be the typed baseline error");
+    assert!(
+        matches!(typed, SelectedRootBaselineError::TrySessionRolledBack),
+        "the refusal must come from the rolled-back try-session rule, got {typed}"
+    );
+}
+
+/// A kept try session is the operator's explicit promotion decision, so its
+/// generation is not an uncommitted trial. `keep_active_try_session` promotes a
+/// namespace session's copied database and marks the live `SystemState` active;
+/// an activated keep records only the resolved `Kept` status, which is the
+/// commit authority for the state-less link. The read therefore accepts the
+/// kept generation as recovery instead of refusing it.
+#[test]
+fn root_inspect_accepts_a_state_less_current_generation_kept_by_a_try_session() {
+    let temp = tempfile::tempdir().unwrap();
+    let db_path = temp.path().join("conary.db");
+    conary_core::db::init(&db_path).unwrap();
+    create_state_less_test_generation(&db_path, 1);
+    let conn = conary_core::db::open(&db_path).unwrap();
+    let runtime_root = ConaryRuntimeRoot::from_db_path(&db_path);
+
+    let session = TrySession::create_active(
+        &conn,
+        CreateTrySession {
+            id: "try-kept-fixture",
+            package_path: "/fixture/package.ccs",
+            package_signing_key: "fixture-signing-key",
+            package_name: Some("try-fixture"),
+            package_version: Some("1.0.0"),
+            previous_generation_id: None,
+            mode: TrySessionMode::Activated,
+            work_dir: "/fixture/work",
+        },
+    )
+    .unwrap();
+    session.set_try_generation(&conn, 1).unwrap();
+    session.mark_kept(&conn).unwrap();
+    assert_eq!(
+        TrySession::find_by_try_generation(&conn, 1)
+            .unwrap()
+            .expect("the kept session must claim the generation")
+            .status,
+        TrySessionStatus::Kept
+    );
+
+    let data = root_inspect_data(&conn, &runtime_root, "/sbin/init").unwrap();
+    assert_eq!(data.source, RootInspectSource::CurrentGeneration);
+    assert!(
+        data.recovered_without_state,
+        "the kept state-less generation is still the artifact baseline"
+    );
+    assert_eq!(data.snapshot_id, None);
+    assert_eq!(data.changeset_id, None);
+    assert!(data.present);
 }
 
 /// The stable-link acceptance is bracketed by reads before and after the
