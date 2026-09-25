@@ -212,3 +212,28 @@ fn removing_through_symlink_claim_before_target_owner_releases_only_the_target_e
     assert!(FileEntry::find_by_path(&conn, "/real").unwrap().is_none());
     assert!(FileEntry::find_by_path(&conn, "/shared").unwrap().is_some());
 }
+
+#[test]
+fn released_paths_keep_a_path_a_surviving_claimant_retains() {
+    let (_temp, conn) = create_test_db();
+    let owner = insert_trove(&conn, "anchor-owner");
+    let claimant = insert_trove(&conn, "second-claimant");
+    insert_anchor(&conn, "/shared", symlink("/real"), owner);
+    insert_symlink_payload_claim(&conn, "/shared", claimant, directory(0o755, 2));
+    insert_anchor(&conn, "/solo", symlink("/solo-target"), owner);
+    let claims = PayloadClaim::index_all(&conn).unwrap();
+
+    // Removing only the owner: `/shared` survives through the second claimant,
+    // while the unshared `/solo` (the positive control) is released.
+    let only_owner = std::collections::BTreeSet::from([owner]);
+    let released =
+        PackagePayloadOwnership::released_paths(&conn, &claims, &[owner], &only_owner).unwrap();
+    assert_eq!(released, vec!["/solo".to_string()]);
+
+    // Removing both claimants in one transaction releases `/shared` too.
+    let both = std::collections::BTreeSet::from([owner, claimant]);
+    let mut released =
+        PackagePayloadOwnership::released_paths(&conn, &claims, &[owner], &both).unwrap();
+    released.sort();
+    assert_eq!(released, vec!["/shared".to_string(), "/solo".to_string()]);
+}

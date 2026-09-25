@@ -5,6 +5,9 @@
 //! manifest selection, hook-status, and capability-gate helpers. Shared install
 //! transaction mechanics stay in `install/mod.rs`.
 
+use super::ccs_hook_interpreter::{
+    HookInterpreter, element_plan, hook_interpreters, preflight_hook_interpreters,
+};
 use super::ccs_removal_hooks::CcsRemovalHookPlan;
 use super::native_events::{NativeInstallInput, PreparedNativeTransaction};
 use super::{
@@ -326,11 +329,17 @@ fn ccs_lifecycle_dry_run_entries(
             .iter()
             .map(|hook| format!("alternative:{}:{}", hook.name, hook.path)),
     );
-    if hooks.post_install.is_some() {
-        entries.push("post-install:/bin/sh:sandboxed-target-root:planned".to_string());
+    if let Some(hook) = hooks.post_install.as_ref() {
+        entries.push(format!(
+            "post-install:{}:sandboxed-target-root:planned",
+            hook.interpreter
+        ));
     }
-    if hooks.pre_remove.is_some() {
-        entries.push("pre-remove:/bin/sh:sandboxed-target-root:persisted".to_string());
+    if let Some(hook) = hooks.pre_remove.as_ref() {
+        entries.push(format!(
+            "pre-remove:{}:sandboxed-target-root:persisted",
+            hook.interpreter
+        ));
     }
     entries.extend(
         manifest
@@ -350,6 +359,18 @@ fn show_ccs_lifecycle_dry_run(manifest: &conary_core::ccs::manifest::CcsManifest
         entries.join(", ")
     };
     crate::ui::field("Lifecycle", &summary);
+}
+
+/// Report a hook interpreter a dry run would require. Enforcement is deferred
+/// because a preview may legitimately precede the provider.
+fn show_ccs_hook_interpreter_requirement(requirement: &HookInterpreter) {
+    crate::ui::field(
+        "Hook interpreter",
+        &format!(
+            "{} must be provided in the selected root before the {} hook runs",
+            requirement.interpreter, requirement.phase
+        ),
+    );
 }
 
 pub(super) fn enforce_ccs_scriptlet_capability_gate(
@@ -531,6 +552,30 @@ fn install_ccs_package_transactionally_inner(
         hook_executor
             .preflight_hooks(hooks)
             .context("CCS lifecycle host capability preflight failed")?;
+    }
+    let required_hook_interpreters = hook_interpreters(hooks);
+    if opts.dry_run {
+        // A dry run previews the plan; it must not fail because an
+        // interpreter is not materialized yet. Name every requirement and
+        // continue.
+        for requirement in &required_hook_interpreters {
+            show_ccs_hook_interpreter_requirement(requirement);
+        }
+    } else if !required_hook_interpreters.is_empty() {
+        let element = element_plan(
+            pkg.name(),
+            pkg.version(),
+            old_trove,
+            &relation_plan.removals,
+            &extraction.extracted_files,
+            &selected_capabilities,
+            required_hook_interpreters,
+        )?;
+        preflight_hook_interpreters(
+            &preflight_state,
+            Path::new(&transaction_root),
+            std::slice::from_ref(&element),
+        )?;
     }
 
     let mut changes = vec![super::report::InstallChange::incoming(

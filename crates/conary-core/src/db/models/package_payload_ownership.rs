@@ -109,6 +109,34 @@ impl PackagePayloadOwnership {
         Ok(paths)
     }
 
+    /// Paths the given troves claim that no claimant outside
+    /// `transaction_removed` retains.
+    ///
+    /// Removal re-anchors a shared path to a surviving claimant, so a path any
+    /// claimant outside the transaction's removed set still retains stays in
+    /// the final root. Judging against the whole removed set (not one trove)
+    /// means paths shared only among removed troves are released.
+    pub fn released_paths(
+        conn: &Connection,
+        claims: &super::PayloadClaimIndex,
+        trove_ids: &[i64],
+        transaction_removed: &std::collections::BTreeSet<i64>,
+    ) -> Result<Vec<String>> {
+        let mut released = Vec::new();
+        for &trove_id in trove_ids {
+            for claim in PayloadClaim::find_by_trove(conn, trove_id)? {
+                if claims
+                    .retaining(&claim.path)
+                    .iter()
+                    .all(|retainer| transaction_removed.contains(&retainer.trove_id))
+                {
+                    released.push(claim.path);
+                }
+            }
+        }
+        Ok(released)
+    }
+
     pub fn load(conn: &Connection, trove_id: i64) -> Result<Self> {
         let claims = PayloadClaim::find_by_trove(conn, trove_id)?;
         let mut entries = Vec::with_capacity(claims.len());
