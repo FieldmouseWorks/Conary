@@ -11,7 +11,12 @@ The payload is a statically linked shell copied into `stage/bin/sh` at image
 staging time by `apps/conary-test/src/container/image.rs`; it is not committed
 to the repository. `stage/` and `output/` are ignored.
 
+The fixture is built only when a selected suite's setup installs
+`${FIXTURE_SHELL_CCS}`; images for other suites never consult a host shell.
 The source binary is chosen by `resolve_static_test_shell()`: when
-`CONARY_TEST_STATIC_SHELL` is set, that exact executable path is used;
-otherwise the first executable `busybox` on `PATH` is used. The suite's hook
-execution is the functional proof that the shell runs.
+`CONARY_TEST_STATIC_SHELL` is set, that exact path is used; otherwise the first
+`busybox` on `PATH` that validates is used. Validation requires a 64-bit
+little-endian ELF for the image architecture, of type `ET_EXEC` or static-PIE
+`ET_DYN`, with no `PT_INTERP` and no `DT_NEEDED` entries, because it runs in an
+otherwise empty selected-root chroot. The suite's hook execution is the
+functional proof that the shell runs.

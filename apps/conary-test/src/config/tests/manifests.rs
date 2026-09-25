@@ -726,13 +726,12 @@ fn fixture_installing_manifests_install_the_shell_provider() {
             continue;
         }
 
-        let installs_shell = manifest.suite.setup.iter().any(|step| {
-            step.conary
-                .as_deref()
-                .is_some_and(|command| command.contains("ccs install ${FIXTURE_SHELL_CCS}"))
-        });
-        assert!(
-            installs_shell,
+        // The provider requirement is derived from the parsed manifest argv
+        // rather than a substring of the command text, matching the image
+        // builder's own typed decision.
+        assert_eq!(
+            crate::container::image::ShellProviderRequirement::from_manifests([&manifest]),
+            crate::container::image::ShellProviderRequirement::Installed,
             "{} installs the local fixture but has no suite setup installing ${{FIXTURE_SHELL_CCS}}",
             path.display()
         );
