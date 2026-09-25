@@ -233,6 +233,95 @@ fn selected_root_round_trip_preserves_typed_tree_and_omits_ephemeral_domains() {
 }
 
 #[test]
+fn layout_skeleton_materializes_directories_symlinks_and_placeholders() {
+    let temp = tempfile::tempdir().unwrap();
+    let destination = temp.path().join("skeleton");
+    let symlink_entry = GenerationRootEntry {
+        path: "/usr/bin/sh".to_string(),
+        node: resolved(PayloadNode {
+            kind: PayloadNodeKind::Symlink {
+                target: "bash".to_string(),
+            },
+            mode: libc::S_IFLNK | 0o777,
+            user: PayloadIdentity::Numeric {
+                id: u64::from(unsafe { libc::geteuid() }),
+            },
+            group: PayloadIdentity::Numeric {
+                id: u64::from(unsafe { libc::getegid() }),
+            },
+            mtime: PayloadTimestamp::UNIX_EPOCH,
+            xattrs: BTreeMap::new(),
+        }),
+        content: None,
+    };
+    let fifo_entry = GenerationRootEntry {
+        path: "/var/lib/events".to_string(),
+        node: resolved(PayloadNode {
+            kind: PayloadNodeKind::Fifo,
+            mode: libc::S_IFIFO | 0o640,
+            user: PayloadIdentity::Numeric {
+                id: u64::from(unsafe { libc::geteuid() }),
+            },
+            group: PayloadIdentity::Numeric {
+                id: u64::from(unsafe { libc::getegid() }),
+            },
+            mtime: PayloadTimestamp::UNIX_EPOCH,
+            xattrs: BTreeMap::new(),
+        }),
+        content: None,
+    };
+    let captured = CapturedSelectedRoot {
+        generation: GenerationRootManifest {
+            version: GENERATION_ROOT_MANIFEST_VERSION,
+            root: directory_node(0o755),
+            entries: vec![
+                directory_entry("/usr", 0o755),
+                directory_entry("/usr/bin", 0o755),
+                symlink_entry,
+                regular_entry("/usr/bin/tool", b"not materialized"),
+            ],
+        },
+        state: MutableStateManifest {
+            version: GENERATION_ROOT_MANIFEST_VERSION,
+            entries: vec![
+                directory_entry("/var", 0o755),
+                directory_entry("/var/lib", 0o755),
+                fifo_entry,
+            ],
+        },
+    };
+
+    materialize_selected_root_layout_skeleton(&captured, &destination).unwrap();
+
+    assert!(
+        std::fs::symlink_metadata(destination.join("usr"))
+            .unwrap()
+            .file_type()
+            .is_dir()
+    );
+    assert_eq!(
+        std::fs::read_link(destination.join("usr/bin/sh")).unwrap(),
+        Path::new("bash")
+    );
+    let tool = std::fs::symlink_metadata(destination.join("usr/bin/tool")).unwrap();
+    assert!(tool.file_type().is_file());
+    assert_eq!(
+        std::fs::metadata(destination.join("usr/bin/tool"))
+            .unwrap()
+            .len(),
+        0
+    );
+    let events = std::fs::symlink_metadata(destination.join("var/lib/events")).unwrap();
+    assert!(events.file_type().is_file());
+    assert_eq!(
+        std::fs::metadata(destination.join("var/lib/events"))
+            .unwrap()
+            .len(),
+        0
+    );
+}
+
+#[test]
 fn hardlink_identities_are_stable_across_inode_reallocation() {
     let temp = tempfile::tempdir().unwrap();
     let source = temp.path().join("source");

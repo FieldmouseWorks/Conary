@@ -120,6 +120,82 @@ pub fn materialize_captured_selected_root(
     sync_filesystem(destination)
 }
 
+/// Materialize only the directory-and-symlink layout of a captured selected
+/// root.
+///
+/// This exists for read-only path resolution previews. Directories become
+/// directories, symlinks keep their exact targets, and every other node kind
+/// becomes an empty regular file because the resolver only needs to know that
+/// a path exists and is not a symlink. No CAS content, ownership, mode,
+/// timestamps, or xattrs are written, and the destination is never required to
+/// be empty. Callers own the destination and must keep it private.
+pub fn materialize_selected_root_layout_skeleton(
+    captured: &CapturedSelectedRoot,
+    destination: &Path,
+) -> crate::Result<()> {
+    captured.generation.validate()?;
+    captured.state.validate()?;
+    prepare_layout_destination(destination)?;
+    for entry in captured
+        .generation
+        .entries
+        .iter()
+        .chain(&captured.state.entries)
+    {
+        materialize_layout_entry(entry, destination)?;
+    }
+    Ok(())
+}
+
+fn prepare_layout_destination(destination: &Path) -> crate::Result<()> {
+    match fs::symlink_metadata(destination) {
+        Ok(metadata) if metadata.file_type().is_dir() => Ok(()),
+        Ok(_) => Err(crate::Error::InvalidPath(format!(
+            "layout skeleton destination is not a directory: {}",
+            destination.display()
+        ))),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            fs::create_dir_all(destination)?;
+            Ok(())
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn materialize_layout_entry(entry: &GenerationRootEntry, destination: &Path) -> crate::Result<()> {
+    let path = destination_path(destination, &entry.path)?;
+    match &entry.node.source.kind {
+        PayloadNodeKind::Directory => match fs::create_dir(&path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                let metadata = fs::symlink_metadata(&path)?;
+                if metadata.file_type().is_dir() {
+                    Ok(())
+                } else {
+                    Err(crate::Error::ConflictError(format!(
+                        "layout skeleton path {} already exists and is not a directory",
+                        entry.path
+                    )))
+                }
+            }
+            Err(error) => Err(error.into()),
+        },
+        PayloadNodeKind::Symlink { target } => {
+            std::os::unix::fs::symlink(target, &path)?;
+            Ok(())
+        }
+        // The path resolver only distinguishes an existing node from a
+        // symlink, so every other kind becomes an empty placeholder.
+        _ => {
+            OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)?;
+            Ok(())
+        }
+    }
+}
+
 /// Overlay one validated package payload tree onto an existing root.
 ///
 /// Directory nodes merge with existing directories and replace non-directory
