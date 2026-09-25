@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-07-25
-revision: 2
-summary: The advanced packaging and platform command surface hidden from default CLI help
+last_updated: 2026-09-25
+revision: 3
+summary: The advanced packaging and platform command surface hidden from default CLI help, and the commands authorized without --yes
 ---
 
 # Advanced Commands
@@ -29,3 +29,22 @@ not duplicate it; run the command for the current surface. Broad areas:
   `query`, `automation`, `mcp`
 
 Every command keeps `conary <command> --help`.
+
+## Commands That Do Not Require `--yes`
+
+Commands that change packages, files, generation state, or native authority
+require `--yes` unless run with `--dry-run`. The command-risk policy in
+`apps/conary/src/command_risk.rs` authorizes these without it:
+
+- `conary self-update`, `conary try keep`, `conary try rollback`, and
+  `conary try --activate`, which carry apply intent themselves. The
+  `self-update --check` and verify forms are read-only.
+- `conary system adopt` in its `--system`, package, and `--refresh` forms,
+  which change Conary's tracking records rather than host files.
+- The root-only `conary system adopt --refresh --quiet --from-sync-hook`
+  native package-manager hook.
+- The hidden boot-time `conary system generation activate` continuation,
+  authorized by the selected generation artifact and kernel command line.
+- The local-state class (`conary repo`, `conary pin`, `conary unpin`,
+  `conary system init`, and similar), which is not gated even where a member
+  writes host files, as `conary config restore` does.
