@@ -6,6 +6,7 @@ mod effects;
 use super::batch::PreparedPackage;
 use anyhow::{Context, Result};
 use conary_core::db::models::{Changeset, PackagePayloadOwnership, Trove};
+use conary_core::runtime_root::ConaryRuntimeRoot;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -54,6 +55,7 @@ pub(crate) struct PreviewDatabase {
     _temporary: tempfile::TempDir,
     path: String,
     keyring_dir: PathBuf,
+    runtime_root: ConaryRuntimeRoot,
     declared_paths: Mutex<DeclaredPayloadPaths>,
 }
 
@@ -68,6 +70,7 @@ impl PreviewDatabase {
                 .context("preview database path is not UTF-8")?
                 .into(),
             keyring_dir: conary_core::db::paths::keyring_dir(runtime_db_path),
+            runtime_root: ConaryRuntimeRoot::from_db_path(runtime_db_path),
             declared_paths: Mutex::default(),
             _temporary: temporary,
         })
@@ -79,6 +82,13 @@ impl PreviewDatabase {
 
     pub(super) fn keyring_dir(&self) -> &Path {
         &self.keyring_dir
+    }
+
+    /// The real installed runtime this preview projects. Read-only runtime
+    /// state (`/current`, generation artifacts) must resolve against this root,
+    /// never the projection's private temp directory.
+    pub(super) fn runtime_root(&self) -> &ConaryRuntimeRoot {
+        &self.runtime_root
     }
 
     pub(super) fn declared_paths(&self) -> Result<DeclaredPayloadPaths> {
