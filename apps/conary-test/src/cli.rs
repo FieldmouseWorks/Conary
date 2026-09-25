@@ -867,7 +867,7 @@ fn main() -> Result<()> {
                             .with_context(|| format!("unknown distro: {distro}"))?;
                         tracing::info!(%distro, containerfile = %cf_path.display(), "Building image");
                         // `images build` selects no suite, so it must not
-                        // require a host shell for the shell provider fixture.
+                        // require a host binary for any provider fixture.
                         let shell_provider = ShellProviderRequirement::NotInstalled;
                         let tag = match native_package {
                             Some(package) => {

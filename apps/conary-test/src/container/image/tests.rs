@@ -2,10 +2,13 @@
 
 #![cfg(test)]
 
+use super::static_shell::{
+    STATIC_TEST_SHELL_ENV, StaticShellError, probe_static_shell, resolve_static_test_shell,
+    validate_static_shell,
+};
 use super::{
-    NativePackageArtifact, STATIC_TEST_SHELL_ENV, ShellProviderRequirement, StaticShellError,
-    find_project_root, resolve_stage_source, resolve_static_test_shell, stage_build_context,
-    stage_native_package,
+    NativePackageArtifact, ShellProviderRequirement, find_project_root, resolve_stage_source,
+    stage_build_context, stage_native_package,
 };
 use crate::config::DistroBuildContext;
 use crate::config::TestManifest;
@@ -77,9 +80,13 @@ const SYNTHETIC_ELF_HEADER_LEN: usize = 64;
 const SYNTHETIC_PROGRAM_HEADER_LEN: usize = 56;
 const SYNTHETIC_E_TYPE_OFFSET: usize = 0x10;
 const SYNTHETIC_E_MACHINE_OFFSET: usize = 0x12;
+const SYNTHETIC_E_ENTRY_OFFSET: usize = 0x18;
 const SYNTHETIC_E_PHOFF_OFFSET: usize = 0x20;
 const SYNTHETIC_E_PHENTSIZE_OFFSET: usize = 0x36;
 const SYNTHETIC_E_PHNUM_OFFSET: usize = 0x38;
+const SYNTHETIC_P_FLAGS_OFFSET: usize = 4;
+const SYNTHETIC_P_VADDR_OFFSET: usize = 16;
+const SYNTHETIC_P_MEMSZ_OFFSET: usize = 40;
 
 const SYNTHETIC_ET_EXEC: u16 = 2;
 const SYNTHETIC_ET_DYN: u16 = 3;
@@ -90,36 +97,77 @@ const SYNTHETIC_PT_LOAD: u32 = 1;
 const SYNTHETIC_PT_DYNAMIC: u32 = 2;
 const SYNTHETIC_PT_INTERP: u32 = 3;
 
+const SYNTHETIC_PF_X: u32 = 0x1;
+const SYNTHETIC_PF_R: u32 = 0x4;
+
 const SYNTHETIC_DT_NULL: i64 = 0;
 const SYNTHETIC_DT_NEEDED: i64 = 1;
 
 /// A program header the synthetic ELF fixture emits.
 enum SyntheticSegment<'a> {
-    Load,
+    /// A loadable segment with the virtual address, permission flags, and file
+    /// and memory sizes the validator inspects.
+    Load {
+        vaddr: u64,
+        flags: u32,
+        filesz: u64,
+        memsz: u64,
+    },
     Interp,
     Dynamic(&'a [i64]),
+}
+
+/// A read-execute load segment with file content: the runnable shape the
+/// validator accepts.
+fn executable_load(vaddr: u64, filesz: u64, memsz: u64) -> SyntheticSegment<'static> {
+    SyntheticSegment::Load {
+        vaddr,
+        flags: SYNTHETIC_PF_R | SYNTHETIC_PF_X,
+        filesz,
+        memsz,
+    }
 }
 
 /// Build a minimal ELF64 image carrying exactly the requested program headers.
 ///
 /// Real busybox is not required: the validator only inspects the ELF header and
 /// program headers, so a synthetic image proves each accepted and refused case
-/// deterministically on any host.
-fn synthetic_elf(e_type: u16, e_machine: u16, segments: &[SyntheticSegment<'_>]) -> Vec<u8> {
+/// deterministically on any host. The load-segment fields are explicit so a
+/// malformed shape (no execute bit, no file content, unreachable entry point)
+/// can be exercised without a real binary.
+fn synthetic_elf(
+    e_type: u16,
+    e_machine: u16,
+    e_entry: u64,
+    segments: &[SyntheticSegment<'_>],
+) -> Vec<u8> {
     let program_header_end =
         SYNTHETIC_ELF_HEADER_LEN + SYNTHETIC_PROGRAM_HEADER_LEN * segments.len();
 
     let mut payload = Vec::new();
+    // p_type, p_offset, p_filesz, p_flags, p_vaddr, p_memsz
     let mut headers = Vec::with_capacity(segments.len());
     for segment in segments {
         match segment {
-            SyntheticSegment::Load => headers.push((SYNTHETIC_PT_LOAD, 0, 0)),
+            SyntheticSegment::Load {
+                vaddr,
+                flags,
+                filesz,
+                memsz,
+            } => headers.push((SYNTHETIC_PT_LOAD, 0, *filesz, *flags, *vaddr, *memsz)),
             SyntheticSegment::Interp => {
                 let offset = program_header_end + payload.len();
                 let interpreter = b"/lib64/ld-linux-x86-64.so.2";
                 payload.extend_from_slice(interpreter);
                 payload.push(0);
-                headers.push((SYNTHETIC_PT_INTERP, offset, interpreter.len()));
+                headers.push((
+                    SYNTHETIC_PT_INTERP,
+                    offset as u64,
+                    interpreter.len() as u64,
+                    0,
+                    0,
+                    0,
+                ));
             }
             SyntheticSegment::Dynamic(tags) => {
                 let offset = program_header_end + payload.len();
@@ -127,7 +175,14 @@ fn synthetic_elf(e_type: u16, e_machine: u16, segments: &[SyntheticSegment<'_>])
                     payload.extend_from_slice(&tag.to_le_bytes());
                     payload.extend_from_slice(&0i64.to_le_bytes());
                 }
-                headers.push((SYNTHETIC_PT_DYNAMIC, offset, tags.len() * 16));
+                headers.push((
+                    SYNTHETIC_PT_DYNAMIC,
+                    offset as u64,
+                    (tags.len() * 16) as u64,
+                    0,
+                    0,
+                    0,
+                ));
             }
         }
     }
@@ -140,6 +195,8 @@ fn synthetic_elf(e_type: u16, e_machine: u16, segments: &[SyntheticSegment<'_>])
         .copy_from_slice(&e_type.to_le_bytes());
     image[SYNTHETIC_E_MACHINE_OFFSET..SYNTHETIC_E_MACHINE_OFFSET + 2]
         .copy_from_slice(&e_machine.to_le_bytes());
+    image[SYNTHETIC_E_ENTRY_OFFSET..SYNTHETIC_E_ENTRY_OFFSET + 8]
+        .copy_from_slice(&e_entry.to_le_bytes());
     image[SYNTHETIC_E_PHOFF_OFFSET..SYNTHETIC_E_PHOFF_OFFSET + 8]
         .copy_from_slice(&(SYNTHETIC_ELF_HEADER_LEN as u64).to_le_bytes());
     image[SYNTHETIC_E_PHENTSIZE_OFFSET..SYNTHETIC_E_PHENTSIZE_OFFSET + 2]
@@ -147,11 +204,19 @@ fn synthetic_elf(e_type: u16, e_machine: u16, segments: &[SyntheticSegment<'_>])
     image[SYNTHETIC_E_PHNUM_OFFSET..SYNTHETIC_E_PHNUM_OFFSET + 2]
         .copy_from_slice(&(segments.len() as u16).to_le_bytes());
 
-    for (index, (p_type, p_offset, p_filesz)) in headers.iter().enumerate() {
+    for (index, (p_type, p_offset, p_filesz, p_flags, p_vaddr, p_memsz)) in
+        headers.iter().enumerate()
+    {
         let base = SYNTHETIC_ELF_HEADER_LEN + index * SYNTHETIC_PROGRAM_HEADER_LEN;
         image[base..base + 4].copy_from_slice(&p_type.to_le_bytes());
-        image[base + 8..base + 16].copy_from_slice(&(*p_offset as u64).to_le_bytes());
-        image[base + 32..base + 40].copy_from_slice(&(*p_filesz as u64).to_le_bytes());
+        image[base + SYNTHETIC_P_FLAGS_OFFSET..base + SYNTHETIC_P_FLAGS_OFFSET + 4]
+            .copy_from_slice(&p_flags.to_le_bytes());
+        image[base + 8..base + 16].copy_from_slice(&p_offset.to_le_bytes());
+        image[base + SYNTHETIC_P_VADDR_OFFSET..base + SYNTHETIC_P_VADDR_OFFSET + 8]
+            .copy_from_slice(&p_vaddr.to_le_bytes());
+        image[base + 32..base + 40].copy_from_slice(&p_filesz.to_le_bytes());
+        image[base + SYNTHETIC_P_MEMSZ_OFFSET..base + SYNTHETIC_P_MEMSZ_OFFSET + 8]
+            .copy_from_slice(&p_memsz.to_le_bytes());
     }
     image[program_header_end..].copy_from_slice(&payload);
 
@@ -163,7 +228,8 @@ fn static_shell_elf() -> Vec<u8> {
     synthetic_elf(
         SYNTHETIC_ET_EXEC,
         SYNTHETIC_EM_X86_64,
-        &[SyntheticSegment::Load],
+        0x40_1000,
+        &[executable_load(0x40_0000, 0x1000, 0x2000)],
     )
 }
 
@@ -175,15 +241,41 @@ fn write_executable(path: &Path, contents: &[u8]) {
 
 #[test]
 #[cfg(unix)]
-fn resolve_static_test_shell_uses_explicit_static_elf() {
-    let env = EnvGuard::new(&[STATIC_TEST_SHELL_ENV]);
+fn validate_static_shell_accepts_static_exec_elf() {
     let directory = tempfile::tempdir().expect("create temp directory");
     let shell = directory.path().join("static-sh");
     write_executable(&shell, &static_shell_elf());
+
+    validate_static_shell(&shell).expect("a static ET_EXEC shell must be accepted");
+}
+
+/// Find a real `busybox` on `PATH` that passes both the structural check and the
+/// functional probe.
+///
+/// Callers must hold the crate environment lock so the `PATH` read does not race
+/// another test's mutation.
+#[cfg(unix)]
+fn usable_busybox_on_path() -> Option<PathBuf> {
+    let path_var = std::env::var_os("PATH")?;
+    std::env::split_paths(&path_var)
+        .map(|directory| directory.join("busybox"))
+        .find(|candidate| {
+            validate_static_shell(candidate).is_ok() && probe_static_shell(candidate).is_ok()
+        })
+}
+
+#[test]
+#[cfg(unix)]
+fn resolve_static_test_shell_uses_a_probe_passing_explicit_shell() {
+    let env = EnvGuard::new(&[STATIC_TEST_SHELL_ENV]);
+    let Some(shell) = usable_busybox_on_path() else {
+        return;
+    };
+
     env.set(STATIC_TEST_SHELL_ENV, shell.as_os_str());
 
     assert_eq!(
-        resolve_static_test_shell().expect("explicit static ELF must be selected"),
+        resolve_static_test_shell().expect("a probe-passing static shell must be selected"),
         shell
     );
 }
@@ -211,10 +303,13 @@ fn resolve_static_test_shell_rejects_missing_explicit_path() {
 fn resolve_static_test_shell_finds_static_busybox_first_on_path() {
     let env = EnvGuard::new(&[STATIC_TEST_SHELL_ENV, "PATH"]);
     env.clear(STATIC_TEST_SHELL_ENV);
+    let Some(busybox) = usable_busybox_on_path() else {
+        return;
+    };
 
     let directory = tempfile::tempdir().expect("create temp directory");
-    let busybox = directory.path().join("busybox");
-    write_executable(&busybox, &static_shell_elf());
+    let candidate = directory.path().join("busybox");
+    std::os::unix::fs::symlink(&busybox, &candidate).expect("link the busybox candidate");
 
     let original = std::env::var_os("PATH").unwrap_or_default();
     let mut entries = vec![directory.path().to_path_buf()];
@@ -224,14 +319,13 @@ fn resolve_static_test_shell_finds_static_busybox_first_on_path() {
 
     assert_eq!(
         resolve_static_test_shell().expect("static busybox on PATH must be selected"),
-        busybox
+        candidate
     );
 }
 
 #[test]
 #[cfg(unix)]
-fn resolve_static_test_shell_rejects_dynamic_explicit_path() {
-    let env = EnvGuard::new(&[STATIC_TEST_SHELL_ENV]);
+fn validate_static_shell_rejects_program_interpreter() {
     let directory = tempfile::tempdir().expect("create temp directory");
     let shell = directory.path().join("dynamic-sh");
     write_executable(
@@ -239,44 +333,38 @@ fn resolve_static_test_shell_rejects_dynamic_explicit_path() {
         &synthetic_elf(
             SYNTHETIC_ET_EXEC,
             SYNTHETIC_EM_X86_64,
-            &[SyntheticSegment::Load, SyntheticSegment::Interp],
+            0x40_1000,
+            &[
+                executable_load(0x40_0000, 0x1000, 0x2000),
+                SyntheticSegment::Interp,
+            ],
         ),
     );
-    env.set(STATIC_TEST_SHELL_ENV, shell.as_os_str());
 
-    let error = resolve_static_test_shell().expect_err("dynamic shell must be rejected");
+    let error = validate_static_shell(&shell).expect_err("dynamic shell must be rejected");
     assert!(
-        matches!(
-            error.downcast_ref::<StaticShellError>(),
-            Some(StaticShellError::RequestsInterpreter { .. })
-        ),
+        matches!(error, StaticShellError::RequestsInterpreter { .. }),
         "unexpected error: {error}"
     );
 }
 
 #[test]
 #[cfg(unix)]
-fn resolve_static_test_shell_rejects_script() {
-    let env = EnvGuard::new(&[STATIC_TEST_SHELL_ENV]);
+fn validate_static_shell_rejects_script() {
     let directory = tempfile::tempdir().expect("create temp directory");
     let shell = directory.path().join("script-sh");
     write_executable(&shell, b"#!/bin/sh\nexit 0\n");
-    env.set(STATIC_TEST_SHELL_ENV, shell.as_os_str());
 
-    let error = resolve_static_test_shell().expect_err("a script shell must be rejected");
+    let error = validate_static_shell(&shell).expect_err("a script shell must be rejected");
     assert!(
-        matches!(
-            error.downcast_ref::<StaticShellError>(),
-            Some(StaticShellError::NotElf64 { .. })
-        ),
+        matches!(error, StaticShellError::NotElf64 { .. }),
         "unexpected error: {error}"
     );
 }
 
 #[test]
 #[cfg(unix)]
-fn resolve_static_test_shell_rejects_wrong_machine() {
-    let env = EnvGuard::new(&[STATIC_TEST_SHELL_ENV]);
+fn validate_static_shell_rejects_wrong_machine() {
     let directory = tempfile::tempdir().expect("create temp directory");
     let shell = directory.path().join("aarch64-sh");
     write_executable(
@@ -284,17 +372,16 @@ fn resolve_static_test_shell_rejects_wrong_machine() {
         &synthetic_elf(
             SYNTHETIC_ET_EXEC,
             SYNTHETIC_EM_AARCH64,
-            &[SyntheticSegment::Load],
+            0x40_1000,
+            &[executable_load(0x40_0000, 0x1000, 0x2000)],
         ),
     );
-    env.set(STATIC_TEST_SHELL_ENV, shell.as_os_str());
 
-    let error = resolve_static_test_shell().expect_err("wrong machine must be rejected");
+    let error = validate_static_shell(&shell).expect_err("wrong machine must be rejected");
     assert!(
         matches!(
-            error.downcast_ref::<StaticShellError>(),
-            Some(StaticShellError::WrongMachine { machine, .. })
-                if *machine == SYNTHETIC_EM_AARCH64
+            error,
+            StaticShellError::WrongMachine { machine, .. } if machine == SYNTHETIC_EM_AARCH64
         ),
         "unexpected error: {error}"
     );
@@ -302,8 +389,7 @@ fn resolve_static_test_shell_rejects_wrong_machine() {
 
 #[test]
 #[cfg(unix)]
-fn resolve_static_test_shell_rejects_dynamic_dependencies() {
-    let env = EnvGuard::new(&[STATIC_TEST_SHELL_ENV]);
+fn validate_static_shell_rejects_dynamic_dependencies() {
     let directory = tempfile::tempdir().expect("create temp directory");
     let shell = directory.path().join("needed-sh");
     write_executable(
@@ -311,28 +397,24 @@ fn resolve_static_test_shell_rejects_dynamic_dependencies() {
         &synthetic_elf(
             SYNTHETIC_ET_DYN,
             SYNTHETIC_EM_X86_64,
+            0x100,
             &[
-                SyntheticSegment::Load,
+                executable_load(0, 0x1000, 0x1000),
                 SyntheticSegment::Dynamic(&[SYNTHETIC_DT_NEEDED, SYNTHETIC_DT_NULL]),
             ],
         ),
     );
-    env.set(STATIC_TEST_SHELL_ENV, shell.as_os_str());
 
-    let error = resolve_static_test_shell().expect_err("DT_NEEDED shell must be rejected");
+    let error = validate_static_shell(&shell).expect_err("DT_NEEDED shell must be rejected");
     assert!(
-        matches!(
-            error.downcast_ref::<StaticShellError>(),
-            Some(StaticShellError::HasDynamicDependencies { .. })
-        ),
+        matches!(error, StaticShellError::HasDynamicDependencies { .. }),
         "unexpected error: {error}"
     );
 }
 
 #[test]
 #[cfg(unix)]
-fn resolve_static_test_shell_accepts_static_pie_without_dependencies() {
-    let env = EnvGuard::new(&[STATIC_TEST_SHELL_ENV]);
+fn validate_static_shell_accepts_static_pie_without_dependencies() {
     let directory = tempfile::tempdir().expect("create temp directory");
     let shell = directory.path().join("static-pie-sh");
     write_executable(
@@ -340,79 +422,184 @@ fn resolve_static_test_shell_accepts_static_pie_without_dependencies() {
         &synthetic_elf(
             SYNTHETIC_ET_DYN,
             SYNTHETIC_EM_X86_64,
+            0x100,
             &[
-                SyntheticSegment::Load,
+                executable_load(0, 0x1000, 0x1000),
                 SyntheticSegment::Dynamic(&[SYNTHETIC_DT_NULL]),
             ],
         ),
     );
-    env.set(STATIC_TEST_SHELL_ENV, shell.as_os_str());
 
-    assert_eq!(
-        resolve_static_test_shell().expect("static-PIE shell must be accepted"),
-        shell
+    validate_static_shell(&shell).expect("static-PIE shell must be accepted");
+}
+
+#[test]
+#[cfg(unix)]
+fn validate_static_shell_rejects_load_without_execute() {
+    let directory = tempfile::tempdir().expect("create temp directory");
+    let shell = directory.path().join("read-only-sh");
+    write_executable(
+        &shell,
+        &synthetic_elf(
+            SYNTHETIC_ET_EXEC,
+            SYNTHETIC_EM_X86_64,
+            0x40_1000,
+            &[SyntheticSegment::Load {
+                vaddr: 0x40_0000,
+                flags: SYNTHETIC_PF_R,
+                filesz: 0x1000,
+                memsz: 0x2000,
+            }],
+        ),
+    );
+
+    let error = validate_static_shell(&shell).expect_err("a load without execute must be refused");
+    assert!(
+        matches!(error, StaticShellError::NoExecutableLoadSegment { .. }),
+        "unexpected error: {error}"
     );
 }
 
 #[test]
-fn shell_provider_requirement_is_typed_from_manifest_argv() {
-    let shell_only = manifest_with_suite_setups(&[
-        "ccs install ${FIXTURE_SHELL_CCS} --policy ${FIXTURE_CCS_POLICY} --sandbox always --yes",
-    ]);
+#[cfg(unix)]
+fn validate_static_shell_rejects_empty_executable_load() {
+    let directory = tempfile::tempdir().expect("create temp directory");
+    let shell = directory.path().join("empty-load-sh");
+    write_executable(
+        &shell,
+        &synthetic_elf(
+            SYNTHETIC_ET_EXEC,
+            SYNTHETIC_EM_X86_64,
+            0x40_1000,
+            &[SyntheticSegment::Load {
+                vaddr: 0x40_0000,
+                flags: SYNTHETIC_PF_R | SYNTHETIC_PF_X,
+                filesz: 0,
+                memsz: 0x2000,
+            }],
+        ),
+    );
+
+    let error =
+        validate_static_shell(&shell).expect_err("an executable load with no content is refused");
+    assert!(
+        matches!(error, StaticShellError::NoExecutableLoadSegment { .. }),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn validate_static_shell_rejects_entry_outside_executable_load() {
+    let directory = tempfile::tempdir().expect("create temp directory");
+    let shell = directory.path().join("unreachable-entry-sh");
+    write_executable(
+        &shell,
+        &synthetic_elf(
+            SYNTHETIC_ET_EXEC,
+            SYNTHETIC_EM_X86_64,
+            0x50_0000,
+            &[executable_load(0x40_0000, 0x1000, 0x2000)],
+        ),
+    );
+
+    let error =
+        validate_static_shell(&shell).expect_err("an entry outside the load must be refused");
+    assert!(
+        matches!(
+            error,
+            StaticShellError::EntryPointOutsideExecutableLoad { entry, .. } if entry == 0x50_0000
+        ),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn probe_static_shell_accepts_real_busybox() {
+    let _env = EnvGuard::new(&["PATH"]);
+    let Some(busybox) = usable_busybox_on_path() else {
+        return;
+    };
+
+    probe_static_shell(&busybox).expect("a standalone-applet busybox must pass the probe");
+}
+
+#[test]
+#[cfg(unix)]
+fn probe_static_shell_rejects_a_shell_that_exits_nonzero() {
+    let directory = tempfile::tempdir().expect("create temp directory");
+    let shell = directory.path().join("failing-sh");
+    write_executable(&shell, b"#!/bin/sh\nexit 1\n");
+
+    let error = probe_static_shell(&shell).expect_err("a non-zero shell must be refused");
+    assert!(
+        matches!(error, StaticShellError::MissingHookUtilities { .. }),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn shell_provider_requirement_comes_only_from_the_typed_declaration() {
+    let declaring = manifest_with_suite(&["conary-test-shell"], "true");
     assert_eq!(
-        ShellProviderRequirement::from_manifests([&shell_only]),
+        ShellProviderRequirement::from_manifests([&declaring]),
         ShellProviderRequirement::Shell
     );
-    assert!(ShellProviderRequirement::Shell.shell_required());
-    assert!(!ShellProviderRequirement::Shell.init_required());
 
-    let init_only = manifest_with_suite_setups(&[
-        "ccs install ${FIXTURE_INIT_CCS} --policy ${FIXTURE_CCS_POLICY} --sandbox always --yes",
-    ]);
+    let base = manifest_with_suite(&["conary-test-base"], "true");
     assert_eq!(
-        ShellProviderRequirement::from_manifests([&init_only]),
-        ShellProviderRequirement::Init
+        ShellProviderRequirement::from_manifests([&base]),
+        ShellProviderRequirement::Base
     );
 
-    let both = manifest_with_suite_setups(&[
-        "ccs install ${FIXTURE_SHELL_CCS} --policy ${FIXTURE_CCS_POLICY} --sandbox always --yes",
-        "ccs install ${FIXTURE_INIT_CCS} --policy ${FIXTURE_CCS_POLICY} --sandbox always --yes",
-    ]);
+    let both = manifest_with_suite(&["conary-test-shell", "conary-test-base"], "true");
     assert_eq!(
         ShellProviderRequirement::from_manifests([&both]),
-        ShellProviderRequirement::ShellAndInit
+        ShellProviderRequirement::ShellAndBase
     );
-    assert!(ShellProviderRequirement::ShellAndInit.shell_required());
-    assert!(ShellProviderRequirement::ShellAndInit.init_required());
-    assert!(!ShellProviderRequirement::Init.shell_required());
+    assert!(ShellProviderRequirement::ShellAndBase.shell_required());
+    assert!(ShellProviderRequirement::ShellAndBase.base_required());
+    assert!(!ShellProviderRequirement::Base.shell_required());
+    assert!(!ShellProviderRequirement::Shell.base_required());
 
-    let unrelated = manifest_with_suite_setups(&["conary repo sync remi"]);
+    // Command text that mentions (or quotes) a fixture variable must not opt
+    // the image in; only the typed declaration does.
+    let quoted_shell = manifest_with_suite(
+        &[],
+        r#"ccs install "${FIXTURE_SHELL_CCS}" --policy ${FIXTURE_CCS_POLICY} --sandbox always --yes"#,
+    );
     assert_eq!(
-        ShellProviderRequirement::from_manifests([&unrelated]),
+        ShellProviderRequirement::from_manifests([&quoted_shell]),
         ShellProviderRequirement::NotInstalled
     );
 
-    // A substring that merely contains a variable name must not force a
-    // host-binary dependency; only a whole argv token counts.
-    let substring = manifest_with_suite_setups(&["echo prefix${FIXTURE_SHELL_CCS}suffix"]);
+    let quoted_base = manifest_with_suite(
+        &[],
+        r#"ccs install "${FIXTURE_BASE_CCS}" --policy ${FIXTURE_CCS_POLICY} --sandbox always --yes"#,
+    );
     assert_eq!(
-        ShellProviderRequirement::from_manifests([&substring]),
+        ShellProviderRequirement::from_manifests([&quoted_base]),
         ShellProviderRequirement::NotInstalled
     );
 }
 
-fn manifest_with_suite_setups(commands: &[&str]) -> TestManifest {
-    let setup = commands
+fn manifest_with_suite(fixtures: &[&str], command: &str) -> TestManifest {
+    let fixtures = fixtures
         .iter()
-        .map(|command| format!("[[suite.setup]]\nconary = \"{command}\"\n"))
-        .collect::<String>();
+        .map(|fixture| format!("\"{fixture}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
     let document = format!(
         r#"
 [suite]
 name = "shell-requirement"
 phase = 2
+requires_fixtures = [{fixtures}]
 
-{setup}
+[[suite.setup]]
+conary = '{command}'
+
 [[test]]
 id = "T01"
 name = "demo"
@@ -603,7 +790,7 @@ case "$manifest" in
   */v1/ccs.toml) file="conary-test-fixture-1.0.0-1.ccs" ;;
   */v2/ccs.toml) file="conary-test-fixture-2.0.0-1.ccs" ;;
   */conary-test-shell/ccs.toml) file="conary-test-shell-1.0.0-1.ccs" ;;
-  */conary-test-init/ccs.toml) file="conary-test-init-1.0.0-1.ccs" ;;
+  */conary-test-base/ccs.toml) file="conary-test-base-1.0.0-1.ccs" ;;
   *) echo "unexpected manifest: $manifest" >&2; exit 2 ;;
 esac
 [[ -n "$output" ]]
@@ -618,7 +805,7 @@ fn phase2_fixture_project(project_root: &Path) -> PathBuf {
     let remi_root = project_root.join("apps/conary/tests/integration/remi");
     let fixture_root = project_root.join("apps/conary/tests/fixtures/conary-test-fixture");
     let shell_fixture_root = project_root.join("apps/conary/tests/fixtures/conary-test-shell");
-    let init_fixture_root = project_root.join("apps/conary/tests/fixtures/conary-test-init");
+    let base_fixture_root = project_root.join("apps/conary/tests/fixtures/conary-test-base");
     let authority_root = project_root.join("apps/conary/tests/fixtures/ccs-test-authority");
     let containerfile = remi_root.join("containers/Containerfile.arch");
 
@@ -628,7 +815,7 @@ fn phase2_fixture_project(project_root: &Path) -> PathBuf {
     fs::create_dir_all(fixture_root.join("v2/stage/usr/share/conary-test"))
         .expect("create v2 fixture source");
     fs::create_dir_all(&shell_fixture_root).expect("create shell fixture directory");
-    fs::create_dir_all(&init_fixture_root).expect("create init fixture directory");
+    fs::create_dir_all(&base_fixture_root).expect("create base fixture directory");
     fs::create_dir_all(&authority_root).expect("create fixture authority");
     fs::write(
         project_root.join("Cargo.toml"),
@@ -645,10 +832,10 @@ fn phase2_fixture_project(project_root: &Path) -> PathBuf {
     )
     .expect("write shell ccs");
     fs::write(
-        init_fixture_root.join("ccs.toml"),
-        "[package]\nname = \"conary-test-init\"\n",
+        base_fixture_root.join("ccs.toml"),
+        "[package]\nname = \"conary-test-base\"\n",
     )
-    .expect("write init ccs");
+    .expect("write base ccs");
     fs::write(
         fixture_root.join("v1/stage/usr/share/conary-test/hello.txt"),
         "hello v1\n",
@@ -677,6 +864,12 @@ fn phase2_fixture_project(project_root: &Path) -> PathBuf {
 #[test]
 #[cfg(unix)]
 fn stage_build_context_generates_missing_phase2_fixture_outputs() {
+    let env = EnvGuard::new(&[STATIC_TEST_SHELL_ENV]);
+    let Some(static_shell) = usable_busybox_on_path() else {
+        return;
+    };
+    env.set(STATIC_TEST_SHELL_ENV, static_shell.as_os_str());
+
     let unique = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("system time before unix epoch")
@@ -684,17 +877,12 @@ fn stage_build_context_generates_missing_phase2_fixture_outputs() {
     let project_root = std::env::temp_dir().join(format!("conary-test-phase2-fixtures-{unique}"));
     let containerfile = phase2_fixture_project(&project_root);
 
-    let static_shell = project_root.join("static-shell");
-    write_executable(&static_shell, &static_shell_elf());
-    let env = EnvGuard::new(&[STATIC_TEST_SHELL_ENV]);
-    env.set(STATIC_TEST_SHELL_ENV, static_shell.as_os_str());
-
     let staged = stage_build_context(
         &containerfile,
         "arch",
         DistroBuildContext::Binary,
         None,
-        ShellProviderRequirement::ShellAndInit,
+        ShellProviderRequirement::ShellAndBase,
     )
     .expect("stage build context");
 
@@ -720,16 +908,24 @@ fn stage_build_context_generates_missing_phase2_fixture_outputs() {
     assert!(
         staged
             .root
-            .join("fixtures/conary-test-init/output/conary-test-init-1.0.0-1.ccs")
+            .join("fixtures/conary-test-base/output/conary-test-base-1.0.0-1.ccs")
             .is_file(),
-        "the init provider fixture must be built and staged for the image"
+        "the base provider fixture must be built and staged for the image"
     );
+
+    // The base stages the exact boot layout the generation builder resolves for
+    // a staged boot root. The bytes are clearly fake and are never booted.
+    let base_stage = staged.root.join("fixtures/conary-test-base/stage");
+    assert!(base_stage.join("sbin/init").is_file());
+    assert!(base_stage.join("boot/vmlinuz-conary-test").is_file());
+    assert!(base_stage.join("boot/initramfs-conary-test.img").is_file());
+    assert!(base_stage.join("boot/EFI/BOOT/BOOTX64.EFI").is_file());
 
     drop(staged);
     fs::remove_dir_all(project_root).expect("cleanup project root");
 }
 
-/// Positive control: the same fixture workspace with `ShellAndInit` stages the
+/// Positive control: the same fixture workspace with `ShellAndBase` stages the
 /// provider artifacts; without a requirement it must not consult a host binary
 /// at all, even when `CONARY_TEST_STATIC_SHELL` names an unusable path.
 #[test]
@@ -772,16 +968,16 @@ fn stage_build_context_skips_provider_fixtures_without_requirement() {
     assert!(
         !staged
             .root
-            .join("fixtures/conary-test-init/output")
+            .join("fixtures/conary-test-base/output")
             .exists(),
-        "no selected suite installs the init provider, so it must not be staged"
+        "no selected suite installs the base provider, so it must not be staged"
     );
 
     drop(staged);
     fs::remove_dir_all(project_root).expect("cleanup project root");
 }
 
-/// The init provider is staged on its own when only it is required, and the
+/// The base provider is staged on its own when only it is required, and the
 /// shell provider it shares no fixture directory with is left alone.
 #[test]
 #[cfg(unix)]
@@ -790,10 +986,10 @@ fn stage_build_context_generates_only_the_required_provider() {
         .duration_since(UNIX_EPOCH)
         .expect("system time before unix epoch")
         .as_nanos();
-    let project_root = std::env::temp_dir().join(format!("conary-test-init-only-{unique}"));
+    let project_root = std::env::temp_dir().join(format!("conary-test-base-only-{unique}"));
     let containerfile = phase2_fixture_project(&project_root);
 
-    let static_binary = project_root.join("static-init");
+    let static_binary = project_root.join("static-base");
     write_executable(&static_binary, &static_shell_elf());
     let env = EnvGuard::new(&[STATIC_TEST_SHELL_ENV]);
     env.set(STATIC_TEST_SHELL_ENV, static_binary.as_os_str());
@@ -803,16 +999,16 @@ fn stage_build_context_generates_only_the_required_provider() {
         "arch",
         DistroBuildContext::Binary,
         None,
-        ShellProviderRequirement::Init,
+        ShellProviderRequirement::Base,
     )
-    .expect("staging the init provider must accept a validated static binary");
+    .expect("a base-only image must accept an ELF-validated static binary without a shell probe");
 
     assert!(
         staged
             .root
-            .join("fixtures/conary-test-init/output/conary-test-init-1.0.0-1.ccs")
+            .join("fixtures/conary-test-base/output/conary-test-base-1.0.0-1.ccs")
             .is_file(),
-        "the init provider fixture must be built when a suite installs it"
+        "the base provider fixture must be built when a suite installs it"
     );
     assert!(
         !staged

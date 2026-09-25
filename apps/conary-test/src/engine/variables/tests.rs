@@ -172,8 +172,8 @@ fn test_build_variables_fixture_ccs_paths() {
         "/opt/remi-tests/fixtures/conary-test-shell/output/conary-test-shell-1.0.0-1.ccs"
     );
     assert_eq!(
-        vars["FIXTURE_INIT_CCS"],
-        "/opt/remi-tests/fixtures/conary-test-init/output/conary-test-init-1.0.0-1.ccs"
+        vars["FIXTURE_BASE_CCS"],
+        "/opt/remi-tests/fixtures/conary-test-base/output/conary-test-base-1.0.0-1.ccs"
     );
 }
 
@@ -215,6 +215,7 @@ fn test_distro_override_precedence() {
             name: "test".to_string(),
             phase: 1,
             setup: Vec::new(),
+            requires_fixtures: Vec::new(),
             mock_server: None,
             timeout: None,
             corpus: None,

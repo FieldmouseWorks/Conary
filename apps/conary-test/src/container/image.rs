@@ -4,15 +4,16 @@ use anyhow::{Context, Result, bail};
 use conary_core::repository::supported_profiles::ProfilePackageFormat;
 use std::collections::HashMap;
 use std::fs;
-use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
-use thiserror::Error;
 
 use super::backend::ContainerBackend;
-use crate::config::manifest::TestStep;
-use crate::config::{DistroBuildContext, DistroConfig, TestManifest};
+use crate::config::{DistroBuildContext, DistroConfig};
+
+#[path = "image/static_shell.rs"]
+mod static_shell;
+
+pub use static_shell::ShellProviderRequirement;
 
 #[derive(Debug)]
 struct StagedBuildContext {
@@ -116,402 +117,6 @@ fn copy_dir_filtered(src: &Path, dst: &Path, skip_names: &[&str]) -> Result<()> 
     Ok(())
 }
 
-/// The set of host-resolved fixture providers a selected suite installs.
-///
-/// Both providers stage a static binary copied from the host: a `/bin/sh`
-/// (`conary-test-shell`) lets fixture hooks run (#1080) and an executable
-/// `/sbin/init` (`conary-test-init`) lets installs publish a generation
-/// (#1102). Resolving either must be a deliberate consequence of the manifests
-/// an image is built for, never an unconditional `images build` prerequisite.
-/// `NotInstalled` lets an image build for suites that install neither provider
-/// without any host binary present.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ShellProviderRequirement {
-    /// No selected suite installs a provider; no host binary is resolved.
-    NotInstalled,
-    /// A selected suite installs only the `/bin/sh` provider.
-    Shell,
-    /// A selected suite installs only the `/sbin/init` provider.
-    Init,
-    /// A selected suite installs both providers.
-    ShellAndInit,
-}
-
-impl ShellProviderRequirement {
-    /// Derive the requirement from the selected suites' parsed setup manifests.
-    ///
-    /// Detection compares whole `argv` tokens against the fixture variables, so
-    /// a command that merely mentions a variable as part of unrelated text does
-    /// not silently opt an image build into a host-binary dependency.
-    pub fn from_manifests<'a>(manifests: impl IntoIterator<Item = &'a TestManifest>) -> Self {
-        let mut shell = false;
-        let mut init = false;
-        for manifest in manifests {
-            for step in &manifest.suite.setup {
-                shell |= step_installs_variable(step, SHELL_PROVIDER_VARIABLE);
-                init |= step_installs_variable(step, INIT_PROVIDER_VARIABLE);
-            }
-        }
-
-        match (shell, init) {
-            (false, false) => Self::NotInstalled,
-            (true, false) => Self::Shell,
-            (false, true) => Self::Init,
-            (true, true) => Self::ShellAndInit,
-        }
-    }
-
-    /// Whether a selected suite installs the `/bin/sh` provider.
-    pub fn shell_required(&self) -> bool {
-        matches!(self, Self::Shell | Self::ShellAndInit)
-    }
-
-    /// Whether a selected suite installs the `/sbin/init` provider.
-    pub fn init_required(&self) -> bool {
-        matches!(self, Self::Init | Self::ShellAndInit)
-    }
-}
-
-/// The manifest variable that resolves to the built `conary-test-shell` CCS.
-const SHELL_PROVIDER_VARIABLE: &str = "${FIXTURE_SHELL_CCS}";
-
-/// The manifest variable that resolves to the built `conary-test-init` CCS.
-const INIT_PROVIDER_VARIABLE: &str = "${FIXTURE_INIT_CCS}";
-
-fn step_installs_variable(step: &TestStep, variable: &str) -> bool {
-    [step.conary.as_deref(), step.run.as_deref()]
-        .into_iter()
-        .flatten()
-        .any(|command| {
-            command
-                .split_whitespace()
-                .any(|argument| argument == variable)
-        })
-}
-
-const STATIC_TEST_SHELL_ENV: &str = "CONARY_TEST_STATIC_SHELL";
-
-/// A test fixture that stages one static executable at a fixed payload path.
-#[derive(Debug, Clone, Copy)]
-struct StaticBinaryFixture {
-    /// Directory under `fixtures/` that holds the fixture's `ccs.toml`.
-    name: &'static str,
-    /// Payload path inside that fixture's `stage/` tree.
-    payload: &'static str,
-}
-
-/// The `/bin/sh` provider that lets fixture hooks run (#1080).
-const STATIC_SHELL_FIXTURE: StaticBinaryFixture = StaticBinaryFixture {
-    name: "conary-test-shell",
-    payload: "bin/sh",
-};
-
-/// The executable `/sbin/init` provider that lets installs publish (#1102).
-const STATIC_INIT_FIXTURE: StaticBinaryFixture = StaticBinaryFixture {
-    name: "conary-test-init",
-    payload: "sbin/init",
-};
-
-const ELF_MAGIC: [u8; 4] = [0x7f, b'E', b'L', b'F'];
-const ELF_CLASS_64: u8 = 2;
-const ELF_DATA_LSB: u8 = 1;
-const ELF_HEADER_LEN: usize = 64;
-const ELF_PROGRAM_HEADER_LEN: usize = 56;
-const ELF_DYNAMIC_ENTRY_LEN: usize = 16;
-const E_TYPE_OFFSET: usize = 0x10;
-const E_MACHINE_OFFSET: usize = 0x12;
-const E_PHOFF_OFFSET: usize = 0x20;
-const E_PHENTSIZE_OFFSET: usize = 0x36;
-const E_PHNUM_OFFSET: usize = 0x38;
-const P_OFFSET_OFFSET: usize = 8;
-const P_FILESZ_OFFSET: usize = 32;
-const PN_XNUM: u16 = 0xffff;
-
-const ET_EXEC: u16 = 2;
-const ET_DYN: u16 = 3;
-const EM_X86_64: u16 = 0x3e;
-
-const PT_DYNAMIC: u32 = 2;
-const PT_INTERP: u32 = 3;
-
-const DT_NULL: i64 = 0;
-const DT_NEEDED: i64 = 1;
-
-/// The architecture a distro test image runs, mapped to its ELF `e_machine`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ImageArchitecture {
-    X86_64,
-}
-
-impl ImageArchitecture {
-    /// Every distro test image in this workspace targets x86_64.
-    const IMAGE: Self = Self::X86_64;
-
-    fn elf_machine(self) -> u16 {
-        match self {
-            Self::X86_64 => EM_X86_64,
-        }
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::X86_64 => "x86_64",
-        }
-    }
-}
-
-/// A typed reason a `conary-test-shell` candidate cannot serve as `/bin/sh`.
-#[derive(Debug, Error)]
-enum StaticShellError {
-    #[error("CONARY_TEST_STATIC_SHELL must name an existing executable regular file, got {path}")]
-    ExplicitNotExecutable { path: PathBuf },
-    #[error("static shell candidate {path} is not a little-endian 64-bit ELF binary")]
-    NotElf64 { path: PathBuf },
-    #[error(
-        "static shell candidate {path} has ELF type {e_type:#06x}; expected ET_EXEC or static-PIE ET_DYN"
-    )]
-    UnsupportedType { path: PathBuf, e_type: u16 },
-    #[error(
-        "static shell candidate {path} targets ELF machine {machine:#06x}; expected {expected} ({expected_machine:#06x})"
-    )]
-    WrongMachine {
-        path: PathBuf,
-        machine: u16,
-        expected: &'static str,
-        expected_machine: u16,
-    },
-    #[error(
-        "static shell candidate {path} is dynamically linked (it requests a program interpreter)"
-    )]
-    RequestsInterpreter { path: PathBuf },
-    #[error(
-        "static shell candidate {path} has DT_NEEDED dynamic dependencies; a fully static shell has none"
-    )]
-    HasDynamicDependencies { path: PathBuf },
-    #[error("static shell candidate {path} has malformed ELF program headers: {reason}")]
-    Malformed { path: PathBuf, reason: &'static str },
-    #[error("static shell candidate {path} could not be read: {source}")]
-    Read {
-        path: PathBuf,
-        source: std::io::Error,
-    },
-}
-
-/// Return true when `path` is a regular file with an execute bit set.
-fn is_executable_regular_file(path: &Path) -> bool {
-    let Ok(metadata) = fs::metadata(path) else {
-        return false;
-    };
-    if !metadata.is_file() {
-        return false;
-    }
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        metadata.permissions().mode() & 0o111 != 0
-    }
-
-    #[cfg(not(unix))]
-    {
-        true
-    }
-}
-
-/// Locate the shared static binary the provider fixtures stage.
-///
-/// An explicit `CONARY_TEST_STATIC_SHELL` wins and must validate. Otherwise the
-/// first `busybox` on `PATH` that validates as a fully static ELF for the image
-/// architecture is used; unusable candidates are skipped. Executability alone
-/// is not enough: a dynamic busybox or a script would be signed as `/bin/sh`
-/// (or `/sbin/init`) and then fail inside the otherwise-empty selected-root
-/// chroot, so the ELF is inspected before staging.
-fn resolve_static_test_shell() -> Result<PathBuf> {
-    if let Some(explicit) = std::env::var_os(STATIC_TEST_SHELL_ENV) {
-        let path = PathBuf::from(explicit);
-        if !is_executable_regular_file(&path) {
-            return Err(StaticShellError::ExplicitNotExecutable { path }.into());
-        }
-        validate_static_shell(&path)?;
-        return Ok(path);
-    }
-
-    if let Some(path_var) = std::env::var_os("PATH") {
-        let mut rejection = None;
-        for directory in std::env::split_paths(&path_var) {
-            let candidate = directory.join("busybox");
-            if !is_executable_regular_file(&candidate) {
-                continue;
-            }
-            match validate_static_shell(&candidate) {
-                Ok(()) => return Ok(candidate),
-                Err(error) => {
-                    tracing::debug!(
-                        path = %candidate.display(),
-                        error = %error,
-                        "ignoring unusable busybox candidate"
-                    );
-                    rejection.get_or_insert(error);
-                }
-            }
-        }
-        if let Some(error) = rejection {
-            return Err(error.into());
-        }
-    }
-
-    bail!(
-        "integration fixtures need a statically linked binary for /bin/sh and /sbin/init: install busybox (static) or set {STATIC_TEST_SHELL_ENV}=<path>"
-    )
-}
-
-/// Prove `path` is a fully static ELF the image architecture can execute.
-fn validate_static_shell(path: &Path) -> std::result::Result<(), StaticShellError> {
-    let mut file = File::open(path).map_err(|source| StaticShellError::Read {
-        path: path.to_path_buf(),
-        source,
-    })?;
-
-    let mut header = [0u8; ELF_HEADER_LEN];
-    file.read_exact(&mut header)
-        .map_err(|_| StaticShellError::NotElf64 {
-            path: path.to_path_buf(),
-        })?;
-
-    if header[..4] != ELF_MAGIC || header[4] != ELF_CLASS_64 || header[5] != ELF_DATA_LSB {
-        return Err(StaticShellError::NotElf64 {
-            path: path.to_path_buf(),
-        });
-    }
-
-    let e_type = read_u16(&header, E_TYPE_OFFSET);
-    let e_machine = read_u16(&header, E_MACHINE_OFFSET);
-    let e_phoff = read_u64(&header, E_PHOFF_OFFSET);
-    let e_phentsize = read_u16(&header, E_PHENTSIZE_OFFSET);
-    let e_phnum = read_u16(&header, E_PHNUM_OFFSET);
-
-    if !matches!(e_type, ET_EXEC | ET_DYN) {
-        return Err(StaticShellError::UnsupportedType {
-            path: path.to_path_buf(),
-            e_type,
-        });
-    }
-
-    let expected = ImageArchitecture::IMAGE;
-    if e_machine != expected.elf_machine() {
-        return Err(StaticShellError::WrongMachine {
-            path: path.to_path_buf(),
-            machine: e_machine,
-            expected: expected.label(),
-            expected_machine: expected.elf_machine(),
-        });
-    }
-
-    if e_phnum == PN_XNUM {
-        return Err(StaticShellError::Malformed {
-            path: path.to_path_buf(),
-            reason: "program header count is stored in the section table (PN_XNUM)",
-        });
-    }
-    if e_phnum == 0 || usize::from(e_phentsize) < ELF_PROGRAM_HEADER_LEN {
-        return Err(StaticShellError::Malformed {
-            path: path.to_path_buf(),
-            reason: "missing usable ELF64 program headers",
-        });
-    }
-
-    let mut requests_interpreter = false;
-    let mut dynamic_segment = None;
-    let mut program_header = vec![0u8; usize::from(e_phentsize)];
-
-    for index in 0..u64::from(e_phnum) {
-        let offset = e_phoff + index * u64::from(e_phentsize);
-        file.seek(SeekFrom::Start(offset))
-            .map_err(|source| StaticShellError::Read {
-                path: path.to_path_buf(),
-                source,
-            })?;
-        file.read_exact(&mut program_header)
-            .map_err(|_| StaticShellError::Malformed {
-                path: path.to_path_buf(),
-                reason: "program header table is truncated",
-            })?;
-
-        let p_type = u32::from_le_bytes(program_header[..4].try_into().expect("4 bytes"));
-        match p_type {
-            PT_INTERP => requests_interpreter = true,
-            PT_DYNAMIC => {
-                dynamic_segment = Some((
-                    read_u64(&program_header, P_OFFSET_OFFSET),
-                    read_u64(&program_header, P_FILESZ_OFFSET),
-                ));
-            }
-            _ => {}
-        }
-    }
-
-    if requests_interpreter {
-        return Err(StaticShellError::RequestsInterpreter {
-            path: path.to_path_buf(),
-        });
-    }
-
-    if let Some((offset, size)) = dynamic_segment
-        && dynamic_table_has_needed(&mut file, path, offset, size)?
-    {
-        return Err(StaticShellError::HasDynamicDependencies {
-            path: path.to_path_buf(),
-        });
-    }
-
-    Ok(())
-}
-
-/// Return true when a `PT_DYNAMIC` table carries a `DT_NEEDED` entry.
-fn dynamic_table_has_needed(
-    file: &mut File,
-    path: &Path,
-    offset: u64,
-    size: u64,
-) -> std::result::Result<bool, StaticShellError> {
-    if size == 0 || !size.is_multiple_of(ELF_DYNAMIC_ENTRY_LEN as u64) {
-        return Err(StaticShellError::Malformed {
-            path: path.to_path_buf(),
-            reason: "PT_DYNAMIC size is not a whole number of ELF64 dynamic entries",
-        });
-    }
-
-    file.seek(SeekFrom::Start(offset))
-        .map_err(|source| StaticShellError::Read {
-            path: path.to_path_buf(),
-            source,
-        })?;
-
-    let mut entry = [0u8; ELF_DYNAMIC_ENTRY_LEN];
-    for _ in 0..size / ELF_DYNAMIC_ENTRY_LEN as u64 {
-        file.read_exact(&mut entry)
-            .map_err(|_| StaticShellError::Malformed {
-                path: path.to_path_buf(),
-                reason: "PT_DYNAMIC table is truncated",
-            })?;
-        match i64::from_le_bytes(entry[..8].try_into().expect("8 bytes")) {
-            DT_NULL => return Ok(false),
-            DT_NEEDED => return Ok(true),
-            _ => {}
-        }
-    }
-
-    Ok(false)
-}
-
-fn read_u16(bytes: &[u8], offset: usize) -> u16 {
-    u16::from_le_bytes(bytes[offset..offset + 2].try_into().expect("2 bytes"))
-}
-
-fn read_u64(bytes: &[u8], offset: usize) -> u64 {
-    u64::from_le_bytes(bytes[offset..offset + 8].try_into().expect("8 bytes"))
-}
-
 /// Build one signed fixture package and verify it under the fixture trust
 /// policy, returning the single artifact it emitted.
 fn build_signed_fixture(
@@ -600,13 +205,91 @@ fn build_signed_fixture(
     Ok(package)
 }
 
-/// Stage the shared static binary at `fixture.payload` and build the signed
-/// provider. A missing fixture directory means this workspace has no such
-/// provider to build, matching how the v1/v2 fixtures are skipped.
-fn build_static_binary_fixture(
+/// One file the image builder writes into a provider fixture's `stage/` tree.
+#[derive(Debug, Clone, Copy)]
+enum FixturePayload {
+    /// The host static binary the shell resolver selects and validates.
+    StaticBinary(&'static str),
+    /// Clearly fake bytes for a payload that is never booted or executed.
+    Fake {
+        path: &'static str,
+        contents: &'static [u8],
+    },
+}
+
+/// A hermetic provider fixture staged from the host before the image build.
+#[derive(Debug, Clone, Copy)]
+struct ProviderFixture {
+    /// Directory under `fixtures/` that holds the fixture's `ccs.toml`.
+    name: &'static str,
+    /// Files written into `stage/` before `ccs build`.
+    payloads: &'static [FixturePayload],
+}
+
+/// Fake boot bytes for `conary-test-base`. Publication only copies and hashes
+/// them, so they need no kernel image structure; marking them clearly fake
+/// keeps the repository from looking like it ships a bootable base.
+const FAKE_KERNEL: &[u8] = b"conary-test-base fake kernel image; not bootable\n";
+const FAKE_INITRAMFS: &[u8] = b"conary-test-base fake initramfs; not bootable\n";
+const FAKE_EFI_LOADER: &[u8] = b"conary-test-base fake EFI loader; not bootable\n";
+
+/// The `/bin/sh` provider that lets fixture hooks run (#1080).
+const SHELL_PROVIDER_FIXTURE: ProviderFixture = ProviderFixture {
+    name: "conary-test-shell",
+    payloads: &[FixturePayload::StaticBinary("bin/sh")],
+};
+
+/// The fake `/sbin/init` + boot-asset base that lets installs publish a
+/// generation in an unbooted container (#1102).
+///
+/// The boot assets are the minimal set the generation builder resolves for a
+/// staged boot root: `boot/vmlinuz-<release>` and
+/// `boot/initramfs-<release>.img` matched by exact filename, with
+/// `validate_kernel_release` accepting `conary-test`, plus
+/// `boot/EFI/BOOT/BOOTX64.EFI`. No `lib/modules/<release>` tree is needed
+/// because a staged boot root reads its versioned kernel from `/boot`.
+const BASE_PROVIDER_FIXTURE: ProviderFixture = ProviderFixture {
+    name: "conary-test-base",
+    payloads: &[
+        FixturePayload::StaticBinary("sbin/init"),
+        FixturePayload::Fake {
+            path: "boot/vmlinuz-conary-test",
+            contents: FAKE_KERNEL,
+        },
+        FixturePayload::Fake {
+            path: "boot/initramfs-conary-test.img",
+            contents: FAKE_INITRAMFS,
+        },
+        FixturePayload::Fake {
+            path: "boot/EFI/BOOT/BOOTX64.EFI",
+            contents: FAKE_EFI_LOADER,
+        },
+    ],
+};
+
+/// Set the execute bits on a staged provider payload.
+fn set_executable(path: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755))
+            .with_context(|| format!("failed to make {} executable", path.display()))?;
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
+    Ok(())
+}
+
+/// Stage every payload of `fixture` and build its signed package.
+///
+/// A missing fixture directory means this workspace has no such provider to
+/// build, matching how the v1/v2 fixtures are skipped.
+fn build_provider_fixture(
     fixtures_root: &Path,
-    fixture: StaticBinaryFixture,
-    source: &Path,
+    fixture: &ProviderFixture,
+    static_binary: &Path,
     conary_bin: &Path,
     signing_key: &Path,
     trust_policy: &Path,
@@ -629,24 +312,38 @@ fn build_static_binary_fixture(
         fs::remove_dir_all(&stage)
             .with_context(|| format!("failed to reset {}", stage.display()))?;
     }
-    let staged_binary = stage.join(fixture.payload);
-    let staged_parent = staged_binary
-        .parent()
-        .expect("staged fixture payload always has a parent");
-    fs::create_dir_all(staged_parent)
-        .with_context(|| format!("failed to create {}", staged_parent.display()))?;
-    fs::copy(source, &staged_binary).with_context(|| {
-        format!(
-            "failed to stage static binary {} as {}",
-            source.display(),
-            staged_binary.display()
-        )
-    })?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&staged_binary, fs::Permissions::from_mode(0o755))
-            .with_context(|| format!("failed to make {} executable", staged_binary.display()))?;
+    for payload in fixture.payloads {
+        match *payload {
+            FixturePayload::StaticBinary(path) => {
+                let destination = stage.join(path);
+                fs::create_dir_all(
+                    destination
+                        .parent()
+                        .expect("staged fixture payload always has a parent"),
+                )
+                .with_context(|| format!("failed to create {}", destination.display()))?;
+                fs::copy(static_binary, &destination).with_context(|| {
+                    format!(
+                        "failed to stage static binary {} as {}",
+                        static_binary.display(),
+                        destination.display()
+                    )
+                })?;
+                set_executable(&destination)?;
+            }
+            FixturePayload::Fake { path, contents } => {
+                let destination = stage.join(path);
+                fs::create_dir_all(
+                    destination
+                        .parent()
+                        .expect("staged fixture payload always has a parent"),
+                )
+                .with_context(|| format!("failed to create {}", destination.display()))?;
+                fs::write(&destination, contents).with_context(|| {
+                    format!("failed to stage fixture payload {}", destination.display())
+                })?;
+            }
+        }
     }
 
     build_signed_fixture(
@@ -666,11 +363,11 @@ fn ensure_phase2_fixture_outputs(
     providers: ShellProviderRequirement,
 ) -> Result<()> {
     let fixture_root = fixtures_root.join("conary-test-fixture");
-    let shell_root = fixtures_root.join(STATIC_SHELL_FIXTURE.name);
-    let init_root = fixtures_root.join(STATIC_INIT_FIXTURE.name);
-    let build_shell = providers.shell_required() && shell_root.is_dir();
-    let build_init = providers.init_required() && init_root.is_dir();
-    if !fixture_root.is_dir() && !build_shell && !build_init {
+    let build_shell =
+        providers.shell_required() && fixtures_root.join(SHELL_PROVIDER_FIXTURE.name).is_dir();
+    let build_base =
+        providers.base_required() && fixtures_root.join(BASE_PROVIDER_FIXTURE.name).is_dir();
+    if !fixture_root.is_dir() && !build_shell && !build_base {
         return Ok(());
     }
 
@@ -705,19 +402,24 @@ fn ensure_phase2_fixture_outputs(
         }
     }
 
-    // Both providers stage the same host-resolved static binary, so resolve it
-    // once and only when a selected suite installs at least one of them.
-    if build_shell || build_init {
-        let source = resolve_static_test_shell()?;
+    if build_shell || build_base {
+        // The `/bin/sh` provider must run the fixture hooks, so its binary is
+        // functionally probed. The base provider stages the same binary as
+        // `/sbin/init`, where no hooks run; a base-only image skips the probe.
+        let static_binary = if build_shell {
+            static_shell::resolve_static_test_shell()?
+        } else {
+            static_shell::resolve_static_test_binary()?
+        };
         for (build, fixture) in [
-            (build_shell, STATIC_SHELL_FIXTURE),
-            (build_init, STATIC_INIT_FIXTURE),
+            (build_shell, &SHELL_PROVIDER_FIXTURE),
+            (build_base, &BASE_PROVIDER_FIXTURE),
         ] {
             if build {
-                build_static_binary_fixture(
+                build_provider_fixture(
                     fixtures_root,
                     fixture,
-                    &source,
+                    &static_binary,
                     conary_bin,
                     &signing_key,
                     &trust_policy,

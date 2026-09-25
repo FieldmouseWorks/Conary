@@ -1,10 +1,10 @@
 [package]
-name = "conary-test-init"
+name = "conary-test-base"
 version = "1.0.0"
 version_scheme = "conary"
 release = "1"
 kind = "package"
-description = "Hermetic executable /sbin/init provider for integration suites"
+description = "Fake /sbin/init and boot-asset base for container integration suites"
 license = "MIT"
 
 [package.platform]
@@ -13,7 +13,7 @@ arch = "x86_64"
 libc = "gnu"
 
 [provides]
-capabilities = ["conary-test-init"]
+capabilities = ["conary-test-base"]
 files = ["/sbin/init"]
 
 [components]

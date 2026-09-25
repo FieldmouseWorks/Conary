@@ -12,6 +12,7 @@
 [suite]
 name = "Phase 3 Group M: Real-World Operations"
 phase = 3
+requires_fixtures = ["conary-test-shell", "conary-test-base"]
 
 # Provides /bin/sh for the fixture's post-install hook (#1080).
 [[suite.setup]]
@@ -20,9 +21,9 @@ conary = "ccs install ${FIXTURE_SHELL_CCS} --policy ${FIXTURE_CCS_POLICY} --sand
 [suite.setup.assert]
 exit_code = 0
 
-# Provides an executable /sbin/init so installs can publish a generation (#1102).
+# Provides /sbin/init and fake boot assets so installs can publish a generation (#1102).
 [[suite.setup]]
-conary = "ccs install ${FIXTURE_INIT_CCS} --policy ${FIXTURE_CCS_POLICY} --sandbox always --yes"
+conary = "ccs install ${FIXTURE_BASE_CCS} --policy ${FIXTURE_CCS_POLICY} --sandbox always --yes"
 
 [suite.setup.assert]
 exit_code = 0

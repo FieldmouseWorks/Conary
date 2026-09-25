@@ -11,13 +11,16 @@ The payload is a statically linked shell copied into `stage/bin/sh` at image
 staging time by `apps/conary-test/src/container/image.rs`; it is not committed
 to the repository. `stage/` and `output/` are ignored.
 
-The fixture is built only when a selected suite's setup installs
-`${FIXTURE_SHELL_CCS}`; images for suites that install neither this nor the
-`/sbin/init` provider never consult a host binary. The source binary is chosen
-by the shared `resolve_static_test_shell()` resolver: when
+The fixture is built only when a selected suite declares it in its typed
+`requires_fixtures` list (`requires_fixtures = ["conary-test-shell"]`); command
+text never opts an image in, so quoting or rewriting the install step cannot
+silently drop the shell. Images for other suites never consult a host shell.
+The source binary is chosen by `resolve_static_test_shell()`: when
 `CONARY_TEST_STATIC_SHELL` is set, that exact path is used; otherwise the first
 `busybox` on `PATH` that validates is used. Validation requires a 64-bit
 little-endian ELF for the image architecture, of type `ET_EXEC` or static-PIE
-`ET_DYN`, with no `PT_INTERP` and no `DT_NEEDED` entries, because it runs in an
-otherwise empty selected-root chroot. The suite's hook execution is the
-functional proof that the shell runs.
+`ET_DYN`, with no `PT_INTERP` and no `DT_NEEDED` entries, an executable
+`PT_LOAD` segment with file content, and an entry point inside it. The candidate
+is then functionally probed: it is run with `argv[0] = "sh"` in a cleared
+environment whose `PATH` is empty and asked to `touch` and `rm` a probe file, so
+a shell without standalone `touch`/`rm` applets is refused before staging.

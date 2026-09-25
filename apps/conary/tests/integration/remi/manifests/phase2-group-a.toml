@@ -6,7 +6,7 @@
 # Variables: ${REMI_ENDPOINT}, ${DB_PATH}, ${CONARY_BIN}
 # Fixture variables: ${FIXTURE_PKG_NAME}, ${FIXTURE_FILE}, ${FIXTURE_ADDED_FILE},
 #                    ${FIXTURE_MARKER}, ${FIXTURE_V1_CCS}, ${FIXTURE_V2_CCS},
-#                    ${FIXTURE_SHELL_CCS}, ${FIXTURE_INIT_CCS},
+#                    ${FIXTURE_SHELL_CCS}, ${FIXTURE_BASE_CCS},
 #                    ${FIXTURE_V1_HELLO_SHA256}, ${FIXTURE_V2_HELLO_SHA256},
 #                    ${FIXTURE_V2_ADDED_SHA256}
 # Publication queries: steps begin with ${RESOLVE_PUBLISHED_GENERATION}, which
@@ -17,6 +17,7 @@
 [suite]
 name = "Phase 2, Group A: Deep Install Flow (T38-T50)"
 phase = 2
+requires_fixtures = ["conary-test-shell", "conary-test-base"]
 
 # Provides /bin/sh for the fixture's post-install hook (#1080).
 [[suite.setup]]
@@ -25,9 +26,9 @@ conary = "ccs install ${FIXTURE_SHELL_CCS} --policy ${FIXTURE_CCS_POLICY} --sand
 [suite.setup.assert]
 exit_code = 0
 
-# Provides an executable /sbin/init so installs can publish a generation (#1102).
+# Provides /sbin/init and fake boot assets so installs can publish a generation (#1102).
 [[suite.setup]]
-conary = "ccs install ${FIXTURE_INIT_CCS} --policy ${FIXTURE_CCS_POLICY} --sandbox always --yes"
+conary = "ccs install ${FIXTURE_BASE_CCS} --policy ${FIXTURE_CCS_POLICY} --sandbox always --yes"
 
 [suite.setup.assert]
 exit_code = 0
