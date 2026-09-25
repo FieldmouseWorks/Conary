@@ -29,9 +29,10 @@ use super::ccs_removal_hooks::CcsRemovalHookPlan;
 use super::inner;
 use super::native_events::{NativeInstallInput, PreparedNativeTransaction};
 use super::payload_effects::{
-    ElementPayloadEffectInput, ElementPayloadEffects, PayloadEffectFiles,
-    plan_element_payload_effects, projected_payload_nodes,
+    ElementPayloadEffectInput, PayloadEffectFiles, ProjectedPayloadEffects,
+    plan_element_payload_projection, projected_payload_nodes,
 };
+use super::payload_identity::PlanIdentityMode;
 use super::prepare::{UpgradeCheck, check_upgrade_status, parse_package};
 use super::{
     InstallIntent, InstallReplacement, InstallSemantics, NativeLifecycleInstallState,
@@ -468,13 +469,13 @@ impl<'a> BatchInstaller<'a> {
                 &package.extracted_files,
             )?;
         }
-        // One effects plan per element feeds both the native event-time
+        // One projection plan per element feeds both the native event-time
         // projection and the CCS hook preflight, exactly as execution's
         // `apply_payload` will materialize them.
         let effects = packages
             .iter()
-            .map(|package| -> Result<ElementPayloadEffects> {
-                plan_element_payload_effects(
+            .map(|package| -> Result<ProjectedPayloadEffects> {
+                plan_element_payload_projection(
                     &preflight_state,
                     &selected_path,
                     ElementPayloadEffectInput {
@@ -484,6 +485,7 @@ impl<'a> BatchInstaller<'a> {
                         replacing_trove_id: package.old_trove_id()?,
                         config_declarations: &package.config_declarations,
                         files: PayloadEffectFiles::Extracted(&package.extracted_files),
+                        identity_mode: PlanIdentityMode::EventProjection,
                     },
                 )
             })

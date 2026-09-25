@@ -11,7 +11,7 @@ use super::ccs_hook_interpreter::{
 use super::ccs_removal_hooks::CcsRemovalHookPlan;
 use super::native_events::{NativeInstallInput, PreparedNativeTransaction};
 use super::payload_effects::{
-    ElementPayloadEffects, plan_extracted_element_payload_effects, projected_payload_nodes,
+    ProjectedPayloadEffects, plan_extracted_element_payload_projection, projected_payload_nodes,
 };
 use super::{
     ExtractionResult, FinalizeInstallOutput, InstallIntent, InstallPhase, InstallProgress,
@@ -466,7 +466,7 @@ fn install_ccs_package_transactionally_inner(
     // real install, the CCS hook preflight. A dry run has no prepared selected
     // root, so its native input keeps the declared payload nodes.
     let selected_payload_effects = if selected_root.is_some() {
-        Some(plan_extracted_element_payload_effects(
+        Some(plan_extracted_element_payload_projection(
             &preflight_state,
             Path::new(&transaction_root),
             pkg,
@@ -497,7 +497,7 @@ fn install_ccs_package_transactionally_inner(
                 .collect(),
             new_path_nodes: selected_payload_effects.as_ref().map_or_else(
                 || projected_payload_nodes(&extraction.extracted_files),
-                ElementPayloadEffects::projected_nodes,
+                ProjectedPayloadEffects::projected_nodes,
             ),
         }],
         &declared_paths,

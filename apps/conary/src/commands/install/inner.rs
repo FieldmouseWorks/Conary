@@ -252,7 +252,7 @@ pub(super) fn resolve_extracted_install_files(
         .collect())
 }
 
-fn extracted_cas_identity(
+pub(super) fn extracted_cas_identity(
     file: &conary_core::packages::payload::PackagePayloadFile,
 ) -> Option<String> {
     match &file.node.kind {

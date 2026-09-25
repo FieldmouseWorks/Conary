@@ -4,9 +4,10 @@
 
 use super::*;
 use crate::commands::install::payload_effects::{
-    ElementPayloadEffectInput, ElementPayloadEffects, PayloadEffectFiles,
-    plan_element_payload_effects, projected_node,
+    ElementPayloadEffectInput, PayloadEffectFiles, ProjectedPayloadEffects,
+    plan_element_payload_projection, projected_node,
 };
+use crate::commands::install::payload_identity::PlanIdentityMode;
 use crate::commands::install::{InstallSemantics, PackageFormatType};
 use crate::commands::{LiveRootContent, LiveRootFile};
 use conary_core::db::models::{
@@ -170,7 +171,7 @@ fn effects(
     fixture: &Fixture,
     semantics: InstallSemantics,
     files: &[PackagePayloadFile],
-) -> ElementPayloadEffects {
+) -> ProjectedPayloadEffects {
     effects_for(fixture, semantics, "fixture", None, files)
 }
 
@@ -180,8 +181,8 @@ fn effects_for(
     package_name: &str,
     replacing_trove_id: Option<i64>,
     files: &[PackagePayloadFile],
-) -> ElementPayloadEffects {
-    plan_element_payload_effects(
+) -> ProjectedPayloadEffects {
+    plan_element_payload_projection(
         &fixture.conn,
         &fixture.root,
         ElementPayloadEffectInput {
@@ -191,6 +192,7 @@ fn effects_for(
             replacing_trove_id,
             config_declarations: &[],
             files: PayloadEffectFiles::Extracted(files),
+            identity_mode: PlanIdentityMode::EventProjection,
         },
     )
     .unwrap()
@@ -277,7 +279,7 @@ fn deb_conffile_plan(
         "1.0.0",
         None,
         &[],
-        plan_element_payload_effects(
+        plan_element_payload_projection(
             &fixture.conn,
             &fixture.root,
             ElementPayloadEffectInput {
@@ -287,6 +289,7 @@ fn deb_conffile_plan(
                 replacing_trove_id: None,
                 config_declarations: &declarations,
                 files: PayloadEffectFiles::Extracted(files),
+                identity_mode: PlanIdentityMode::EventProjection,
             },
         )
         .unwrap(),

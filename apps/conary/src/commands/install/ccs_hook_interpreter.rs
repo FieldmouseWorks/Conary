@@ -6,7 +6,7 @@
 //! each hook interpreter against that final projected state.
 
 use super::native_graph::normalize_archive_path;
-use super::payload_effects::ElementPayloadEffects;
+use super::payload_effects::ProjectedPayloadEffects;
 use super::{ExtractionResult, InstallSemantics};
 use anyhow::Context;
 use conary_core::ccs::manifest::Hooks;
@@ -29,19 +29,19 @@ pub(super) struct ElementPlan {
     removed_trove_ids: Vec<i64>,
     /// Paths this element removes that are already resolved.
     removed_paths: Vec<String>,
-    /// The element's side-effect-free selected-root payload plan. `None` for a
-    /// removal-only element, which introduces no payload.
-    effects: Option<ElementPayloadEffects>,
+    /// The element's side-effect-free selected-root payload projection. `None`
+    /// for a removal-only element, which introduces no payload.
+    effects: Option<ProjectedPayloadEffects>,
     hook_interpreters: Vec<HookInterpreter>,
 }
 
-/// Build one element plan from its pre-mutation payload effects.
+/// Build one element plan from its pre-mutation payload projection.
 pub(super) fn element_plan(
     package: &str,
     version: &str,
     old_trove: Option<&Trove>,
     relation_removals: &[PackageRelationRemoval],
-    effects: ElementPayloadEffects,
+    effects: ProjectedPayloadEffects,
     hook_interpreters: Vec<HookInterpreter>,
 ) -> ElementPlan {
     let removed_trove_ids = old_trove
@@ -75,7 +75,7 @@ pub(super) fn extracted_element_plan(
     relation_removals: &[PackageRelationRemoval],
     hook_interpreters: Vec<HookInterpreter>,
 ) -> anyhow::Result<ElementPlan> {
-    let effects = super::payload_effects::plan_extracted_element_payload_effects(
+    let effects = super::payload_effects::plan_extracted_element_payload_projection(
         conn,
         root,
         pkg,
@@ -125,8 +125,8 @@ pub(super) fn preflight_hook_interpreters(
     let final_incoming_paths = elements
         .iter()
         .filter_map(|element| element.effects.as_ref())
-        .flat_map(|effects| effects.resolved_files.iter())
-        .map(|file| normalize_archive_path(&file.path))
+        .flat_map(|effects| effects.incoming_paths())
+        .map(normalize_archive_path)
         .collect::<BTreeSet<_>>();
     let claims = if transaction_removed.is_empty() {
         None

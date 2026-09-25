@@ -4,7 +4,7 @@ use super::acquire::{CcsInstallParams, resolve_and_parse_package};
 use super::ccs_removal_hooks::CcsRemovalHookPlan;
 use super::dependencies::{DepAnalysisContext, handle_dependencies};
 use super::native_events::{NativeInstallInput, PreparedNativeTransaction};
-use super::payload_effects::plan_extracted_element_payload_effects;
+use super::payload_effects::plan_extracted_element_payload_projection;
 use super::prepare::check_upgrade_status;
 use super::resolve::is_local_package_request;
 use super::validation::{parse_component_and_validate, try_promote_existing_dep};
@@ -364,7 +364,7 @@ async fn cmd_install_with_intent(
     let transaction_root = selected_root.selected_root().to_string_lossy().into_owned();
     // One plan feeds the native event-time projection, so preflight sees the
     // config suffixes and preserved aliases `apply_payload` will materialize.
-    let effects = plan_extracted_element_payload_effects(
+    let effects = plan_extracted_element_payload_projection(
         &preflight_state,
         Path::new(&transaction_root),
         pkg.as_ref(),

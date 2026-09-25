@@ -3,6 +3,7 @@
 //! Graph-driven batch payload execution.
 
 use super::super::native_events::{PreparedNativeTransaction, deb_identity_for_trove};
+use super::super::payload_identity::PlanIdentityMode;
 use super::{BatchDbRows, BatchInstaller, PreparedPackage, inner};
 use anyhow::{Context, Result};
 use conary_core::ccs::native_lifecycle::SourceFormat;
@@ -334,6 +335,7 @@ where
                         cas: self.cas,
                         files: stored_files,
                     },
+                    identity_mode: PlanIdentityMode::Authoritative,
                 },
             )?;
             let retain_for_lifecycle = self

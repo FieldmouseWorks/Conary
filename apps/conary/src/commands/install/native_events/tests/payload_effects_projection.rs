@@ -10,9 +10,10 @@
 
 use super::*;
 use crate::commands::install::payload_effects::{
-    ElementPayloadEffectInput, ElementPayloadEffects, PayloadEffectFiles,
-    plan_element_payload_effects,
+    ElementPayloadEffectInput, PayloadEffectFiles, ProjectedPayloadEffects,
+    plan_element_payload_projection,
 };
+use crate::commands::install::payload_identity::PlanIdentityMode;
 use crate::commands::install::{InstallSemantics, PackageFormatType};
 use conary_core::db::models::{ConfigFile, ConfigSource};
 use conary_core::packages::config_authority::{ConfigPayloadAssociation, SourceConfigDeclaration};
@@ -107,8 +108,8 @@ fn plan_effects(
     replacing_trove_id: Option<i64>,
     declarations: &[SourceConfigDeclaration],
     files: &[PackagePayloadFile],
-) -> ElementPayloadEffects {
-    plan_element_payload_effects(
+) -> ProjectedPayloadEffects {
+    plan_element_payload_projection(
         conn,
         root,
         ElementPayloadEffectInput {
@@ -118,13 +119,14 @@ fn plan_effects(
             replacing_trove_id,
             config_declarations: declarations,
             files: PayloadEffectFiles::Extracted(files),
+            identity_mode: PlanIdentityMode::EventProjection,
         },
     )
     .unwrap()
 }
 
 fn native_input<'a>(
-    effects: &ElementPayloadEffects,
+    effects: &ProjectedPayloadEffects,
     bundle: &'a NativeLifecycleBundle,
     old_trove: Option<&'a Trove>,
     declared_paths: &[&str],
@@ -217,8 +219,8 @@ fn kept_config_primary_is_refused_and_a_pristine_primary_admits() {
         &declarations,
         &incoming,
     );
-    assert_eq!(modified.install_files.len(), 1);
-    assert_ne!(modified.install_files[0].path, CONFIG_INTERPRETER);
+    assert_eq!(modified.projected_nodes().len(), 1);
+    assert!(!modified.projected_nodes().contains_key(CONFIG_INTERPRETER));
     let refused = PreparedNativeTransaction::prepare_install(
         &conn,
         native_input(
@@ -247,8 +249,8 @@ fn kept_config_primary_is_refused_and_a_pristine_primary_admits() {
         &declarations,
         &incoming,
     );
-    assert_eq!(pristine.install_files.len(), 1);
-    assert_eq!(pristine.install_files[0].path, CONFIG_INTERPRETER);
+    assert_eq!(pristine.projected_nodes().len(), 1);
+    assert!(pristine.projected_nodes().contains_key(CONFIG_INTERPRETER));
     let admitted = PreparedNativeTransaction::prepare_install(
         &conn,
         native_input(

@@ -7,6 +7,11 @@
 //! pre-payload lifecycle events (notably sysusers) have run.  This module reads
 //! only that root's account databases and rejects missing or ambiguous
 //! authority.
+//!
+//! [`PlanIdentityMode::EventProjection`] is the one exception: the event-time
+//! projection may resolve a name the root does not define yet to a typed
+//! pending owner, because a pre-payload lifecycle event is expected to define
+//! it before execution. [`PlanIdentityMode::Authoritative`] keeps the refusal.
 
 use super::{InstallSemantics, PackageFormatType, PreparedSourceKind};
 use anyhow::{Context, Result, bail};
@@ -16,6 +21,103 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 const MAX_IDENTITY_DATABASE_SIZE: u64 = 16 * 1024 * 1024;
+
+/// Which owner-resolution contract a payload plan is built under.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum PlanIdentityMode {
+    /// Every named owner must already be defined by the selected root. The
+    /// resulting [`ResolvedPayloadNode`]s carry authoritative numeric
+    /// ownership and may reach apply and mutation boundaries.
+    Authoritative,
+    /// A named owner a pre-payload lifecycle event may define is allowed to be
+    /// pending. This is the event-time projection only: the resulting
+    /// [`ProjectedPayloadNode`]s have no authoritative numeric ID and must
+    /// never reach apply or mutation.
+    EventProjection,
+}
+
+/// Which account database an identity name is resolved against.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) enum IdentityKind {
+    User,
+    Group,
+}
+
+impl IdentityKind {
+    fn label(self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::Group => "group",
+        }
+    }
+}
+
+/// One side of a payload node's projected ownership.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum ProjectedOwner {
+    /// The selected root defines the name, or the node carries a numeric ID.
+    Resolved(u64),
+    /// The selected root does not define `name` yet; a pre-payload lifecycle
+    /// event must define it before execution. No numeric ID is invented.
+    Pending { name: String },
+}
+
+/// A payload node resolved under [`PlanIdentityMode::EventProjection`].
+///
+/// This is deliberately distinct from [`ResolvedPayloadNode`]: a projected
+/// node may carry a pending owner, so it must never be accepted by an apply or
+/// mutation boundary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ProjectedPayloadNode {
+    pub source: PayloadNode,
+    pub user: ProjectedOwner,
+    pub group: ProjectedOwner,
+}
+
+impl ProjectedPayloadNode {
+    /// The authoritative resolution, or `None` when either owner is pending.
+    pub(super) fn resolved(&self) -> Option<ResolvedPayloadNode> {
+        let (ProjectedOwner::Resolved(uid), ProjectedOwner::Resolved(gid)) =
+            (&self.user, &self.group)
+        else {
+            return None;
+        };
+        Some(ResolvedPayloadNode {
+            source: self.source.clone(),
+            uid: *uid,
+            gid: *gid,
+        })
+    }
+
+    /// Every owner this node leaves for a pre-payload lifecycle event to
+    /// define, in a deterministic order.
+    pub(super) fn pending_owners(&self) -> impl Iterator<Item = (IdentityKind, &str)> {
+        [
+            (IdentityKind::User, &self.user),
+            (IdentityKind::Group, &self.group),
+        ]
+        .into_iter()
+        .filter_map(|(kind, owner)| match owner {
+            ProjectedOwner::Pending { name } => Some((kind, name.as_str())),
+            ProjectedOwner::Resolved(_) => None,
+        })
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub(super) enum PayloadIdentityError {
+    #[error(
+        "target root {} does not define payload {} name(s): {}",
+        root.display(),
+        kind.label(),
+        names
+    )]
+    MissingNames {
+        root: PathBuf,
+        kind: IdentityKind,
+        names: String,
+    },
+}
 
 pub(crate) fn resolve_native_payload_nodes(
     root: &Path,
@@ -33,20 +135,15 @@ pub(super) fn resolve_payload_nodes(
     let nodes = nodes.into_iter().collect::<Vec<_>>();
     let named_users = named_identities(nodes.iter().map(|node| &node.user), semantics);
     let named_groups = named_identities(nodes.iter().map(|node| &node.group), semantics);
+    let (users, groups) = load_identity_databases(
+        root,
+        !named_users.is_empty(),
+        !named_groups.is_empty(),
+        PlanIdentityMode::Authoritative,
+    )?;
 
-    let users = if named_users.is_empty() {
-        BTreeMap::new()
-    } else {
-        parse_identity_database(root, IdentityDatabaseKind::Passwd)?
-    };
-    let groups = if named_groups.is_empty() {
-        BTreeMap::new()
-    } else {
-        parse_identity_database(root, IdentityDatabaseKind::Group)?
-    };
-
-    require_all_names(&named_users, &users, "user", root)?;
-    require_all_names(&named_groups, &groups, "group", root)?;
+    require_all_names(&named_users, &users, IdentityKind::User, root)?;
+    require_all_names(&named_groups, &groups, IdentityKind::Group, root)?;
 
     nodes
         .into_iter()
@@ -59,6 +156,78 @@ pub(super) fn resolve_payload_nodes(
             Ok(resolved)
         })
         .collect()
+}
+
+/// Resolve payload nodes for the event-time projection.
+///
+/// Unlike [`resolve_payload_nodes`], a named owner the selected root does not
+/// define is not an error: it becomes a typed [`ProjectedOwner::Pending`] for a
+/// pre-payload lifecycle event to define before execution. A name the root does
+/// define resolves to the same numeric ID in both modes.
+pub(super) fn project_payload_nodes(
+    root: &Path,
+    nodes: impl IntoIterator<Item = PayloadNode>,
+    semantics: InstallSemantics,
+) -> Result<Vec<ProjectedPayloadNode>> {
+    let nodes = nodes.into_iter().collect::<Vec<_>>();
+    let named_users = named_identities(nodes.iter().map(|node| &node.user), semantics);
+    let named_groups = named_identities(nodes.iter().map(|node| &node.group), semantics);
+    let (users, groups) = load_identity_databases(
+        root,
+        !named_users.is_empty(),
+        !named_groups.is_empty(),
+        PlanIdentityMode::EventProjection,
+    )?;
+
+    nodes
+        .into_iter()
+        .map(|source| {
+            source.validate()?;
+            let user = projected_identity(&source.user, &users, semantics);
+            let group = projected_identity(&source.group, &groups, semantics);
+            Ok(ProjectedPayloadNode {
+                source,
+                user,
+                group,
+            })
+        })
+        .collect()
+}
+
+fn load_identity_databases(
+    root: &Path,
+    needs_users: bool,
+    needs_groups: bool,
+    mode: PlanIdentityMode,
+) -> Result<(BTreeMap<String, u64>, BTreeMap<String, u64>)> {
+    let users = if needs_users {
+        parse_identity_database(root, IdentityDatabaseKind::Passwd, mode)?
+    } else {
+        BTreeMap::new()
+    };
+    let groups = if needs_groups {
+        parse_identity_database(root, IdentityDatabaseKind::Group, mode)?
+    } else {
+        BTreeMap::new()
+    };
+    Ok((users, groups))
+}
+
+fn projected_identity(
+    identity: &PayloadIdentity,
+    names: &BTreeMap<String, u64>,
+    semantics: InstallSemantics,
+) -> ProjectedOwner {
+    if let Some(id) = source_defined_numeric_identity(identity, semantics) {
+        return ProjectedOwner::Resolved(id);
+    }
+    match identity {
+        PayloadIdentity::Numeric { id } => ProjectedOwner::Resolved(*id),
+        PayloadIdentity::Named { name } => names.get(name).copied().map_or_else(
+            || ProjectedOwner::Pending { name: name.clone() },
+            ProjectedOwner::Resolved,
+        ),
+    }
 }
 
 fn named_identities<'a>(
@@ -101,20 +270,20 @@ fn source_defined_numeric_identity(
 fn require_all_names(
     required: &BTreeSet<&str>,
     resolved: &BTreeMap<String, u64>,
-    kind: &str,
+    kind: IdentityKind,
     root: &Path,
-) -> Result<()> {
+) -> std::result::Result<(), PayloadIdentityError> {
     let missing = required
         .iter()
         .copied()
         .filter(|name| !resolved.contains_key(*name))
         .collect::<Vec<_>>();
     if !missing.is_empty() {
-        bail!(
-            "target root {} does not define payload {kind} name(s): {}",
-            root.display(),
-            missing.join(", ")
-        );
+        return Err(PayloadIdentityError::MissingNames {
+            root: root.to_path_buf(),
+            kind,
+            names: missing.join(", "),
+        });
     }
     Ok(())
 }
@@ -176,8 +345,11 @@ impl IdentityDatabaseKind {
 fn parse_identity_database(
     root: &Path,
     kind: IdentityDatabaseKind,
+    mode: PlanIdentityMode,
 ) -> Result<BTreeMap<String, u64>> {
-    let path = safe_identity_database_path(root, kind)?;
+    let Some(path) = safe_identity_database_path(root, kind, mode)? else {
+        return Ok(BTreeMap::new());
+    };
     let metadata = fs::symlink_metadata(&path)
         .with_context(|| format!("target-root {} database is missing", kind.label()))?;
     if !metadata.file_type().is_file() {
@@ -203,7 +375,18 @@ fn parse_identity_database(
         .map_err(|error| anyhow::anyhow!("invalid target-root {} database: {error}", kind.label()))
 }
 
-fn safe_identity_database_path(root: &Path, kind: IdentityDatabaseKind) -> Result<PathBuf> {
+/// Locate one account database, returning `None` when the selected root has
+/// not materialized it yet.
+///
+/// Only [`PlanIdentityMode::EventProjection`] tolerates absence: a missing
+/// `/etc`, `passwd`, or `group` means every named owner is pending. In
+/// [`PlanIdentityMode::Authoritative`] absence is a typed refusal, and a
+/// malformed or symlinked database is a refusal in both modes.
+fn safe_identity_database_path(
+    root: &Path,
+    kind: IdentityDatabaseKind,
+    mode: PlanIdentityMode,
+) -> Result<Option<PathBuf>> {
     let root_metadata = fs::symlink_metadata(root)
         .with_context(|| format!("target root does not exist: {}", root.display()))?;
     if !root_metadata.file_type().is_dir() {
@@ -211,24 +394,48 @@ fn safe_identity_database_path(root: &Path, kind: IdentityDatabaseKind) -> Resul
     }
 
     let etc = root.join("etc");
-    let etc_metadata = fs::symlink_metadata(&etc)
-        .with_context(|| format!("target root has no /etc directory: {}", root.display()))?;
-    if !etc_metadata.file_type().is_dir() {
-        bail!(
+    match fs::symlink_metadata(&etc) {
+        Ok(metadata) if metadata.file_type().is_dir() => {}
+        Ok(_) => bail!(
             "target-root /etc is not a real directory: {}",
             etc.display()
-        );
+        ),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            if mode == PlanIdentityMode::EventProjection {
+                return Ok(None);
+            }
+            bail!("target root has no /etc directory: {}", root.display());
+        }
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("failed to inspect target-root /etc: {}", etc.display()));
+        }
     }
 
     let path = root.join(kind.relative_path());
-    if fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
-        bail!(
-            "target-root {} database must not be a symlink: {}",
-            kind.label(),
-            path.display()
-        );
+    match fs::symlink_metadata(&path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            bail!(
+                "target-root {} database must not be a symlink: {}",
+                kind.label(),
+                path.display()
+            );
+        }
+        Ok(_) => Ok(Some(path)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            if mode == PlanIdentityMode::EventProjection {
+                return Ok(None);
+            }
+            bail!(
+                "target-root {} database is missing: {}",
+                kind.label(),
+                path.display()
+            );
+        }
+        Err(error) => {
+            Err(error).with_context(|| format!("failed to inspect target-root {}", kind.label()))
+        }
     }
-    Ok(path)
 }
 
 fn parse_identity_records(text: &str, kind: IdentityDatabaseKind) -> Result<BTreeMap<String, u64>> {
@@ -373,7 +580,88 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(error.to_string().contains("does not define payload user"));
+        match error.downcast_ref::<PayloadIdentityError>() {
+            Some(PayloadIdentityError::MissingNames { kind, names, .. }) => {
+                assert_eq!(*kind, IdentityKind::User);
+                assert_eq!(names, "missing");
+            }
+            other => panic!("expected a typed missing-name refusal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn projection_defers_names_the_root_does_not_define_and_resolves_known_ones() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join("etc")).unwrap();
+        fs::write(
+            root.path().join("etc/passwd"),
+            "root:x:0:0:root:/root:/bin/sh\nsvc:x:417:819:svc:/:/sbin/nologin\n",
+        )
+        .unwrap();
+        fs::write(
+            root.path().join("etc/group"),
+            "root:x:0:\nsvc-group:x:819:\n",
+        )
+        .unwrap();
+
+        let projected = project_payload_nodes(
+            root.path(),
+            [
+                named_node("svc", "svc-group"),
+                named_node("late-user", "late-group"),
+            ],
+            rpm_semantics(),
+        )
+        .unwrap();
+
+        // A name the root defines resolves normally in projection mode.
+        assert_eq!(projected[0].user, ProjectedOwner::Resolved(417));
+        assert_eq!(projected[0].group, ProjectedOwner::Resolved(819));
+        assert_eq!(projected[0].resolved().unwrap().uid, 417);
+        // A name it does not define becomes a typed pending owner, and the
+        // node keeps no invented numeric ID.
+        assert_eq!(
+            projected[1].user,
+            ProjectedOwner::Pending {
+                name: "late-user".to_string()
+            }
+        );
+        assert_eq!(
+            projected[1].group,
+            ProjectedOwner::Pending {
+                name: "late-group".to_string()
+            }
+        );
+        assert!(projected[1].resolved().is_none());
+        assert_eq!(
+            projected[1].pending_owners().collect::<Vec<_>>(),
+            vec![
+                (IdentityKind::User, "late-user"),
+                (IdentityKind::Group, "late-group"),
+            ]
+        );
+    }
+
+    #[test]
+    fn projection_tolerates_an_absent_account_database() {
+        let root = tempfile::tempdir().unwrap();
+
+        let projected =
+            project_payload_nodes(root.path(), [named_node("late", "late")], rpm_semantics())
+                .unwrap();
+
+        assert_eq!(
+            projected[0].user,
+            ProjectedOwner::Pending {
+                name: "late".to_string()
+            }
+        );
+        assert_eq!(
+            projected[0].group,
+            ProjectedOwner::Pending {
+                name: "late".to_string()
+            }
+        );
     }
 
     #[test]

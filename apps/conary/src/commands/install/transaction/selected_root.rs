@@ -9,6 +9,7 @@ use crate::commands::install::native_events::{PreparedNativeTransaction, deb_ide
 use crate::commands::install::native_graph::{
     NativeGraphPayloadMutation, drive_native_graph, finalize_owned_trove, normalize_archive_path,
 };
+use crate::commands::install::payload_identity::PlanIdentityMode;
 use crate::commands::install::{ExtractionResult, InstallProgress};
 use anyhow::{Context, Result, bail};
 use conary_core::ccs::native_transaction::NativePackageIdentity;
@@ -333,6 +334,7 @@ impl NativeGraphPayloadMutation for SelectedRootPayload<'_, '_> {
                     cas: self.cas,
                     files: self.stored_files,
                 },
+                identity_mode: PlanIdentityMode::Authoritative,
             },
         )?;
         debug_assert_eq!(

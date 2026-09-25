@@ -4,11 +4,12 @@
 
 use super::*;
 use crate::commands::install::inner;
+use crate::commands::install::payload_identity::{IdentityKind, PlanIdentityMode};
 use crate::commands::install::shared_directory::DirectoryPathPlan;
 use crate::commands::install::{InstallSemantics, PackageFormatType};
 use conary_core::config_transaction::{ConfigInstallDecision, ConfigSuffix};
 use conary_core::db::models::{ConfigFile, ConfigSource, FileEntry, Trove, TroveType};
-use conary_core::filesystem::CasStore;
+use conary_core::filesystem::{CasStore, ProjectedNode};
 use conary_core::packages::config_authority::ConfigPayloadAssociation;
 use conary_core::packages::payload::{PackagePayloadFile, ReopenablePayload};
 use conary_core::packages::traits::PackageFile;
@@ -88,13 +89,19 @@ fn hardlink_node(target: &str, identity: &str, mode: u32) -> PayloadNode {
 }
 
 fn regular_payload(path: &str, bytes: &[u8], mode: u32) -> PackagePayloadFile {
+    regular_payload_with_node(path, bytes, regular_node(mode))
+}
+
+/// A regular payload with exact content authority and a caller-chosen node,
+/// for example one owned by a named user.
+fn regular_payload_with_node(path: &str, bytes: &[u8], node: PayloadNode) -> PackagePayloadFile {
     let authority = PayloadContentAuthority {
         sha256: conary_core::hash::sha256(bytes),
         size: bytes.len() as u64,
     };
     PackagePayloadFile::new(
         path.to_string(),
-        regular_node(mode),
+        node,
         Some(authority),
         Some(ReopenablePayload::from_in_memory_bytes(bytes.to_vec())),
     )
@@ -148,6 +155,7 @@ fn assert_forms_agree(
                 cas: &fixture.cas,
                 files: &stored,
             },
+            identity_mode: PlanIdentityMode::Authoritative,
         },
     )
     .unwrap();
@@ -174,6 +182,7 @@ fn plan_extracted_for(
             replacing_trove_id: None,
             config_declarations: declarations,
             files: PayloadEffectFiles::Extracted(extracted),
+            identity_mode: PlanIdentityMode::Authoritative,
         },
     )
     .unwrap()
@@ -273,6 +282,151 @@ fn preflight_entry_point_matches_the_generic_planner() {
     assert_eq!(direct, via_entry);
 }
 
+/// A named owner a pre-payload lifecycle event creates must not be required
+/// during the event-time projection, while the authoritative planner still
+/// refuses it.
+#[test]
+fn event_projection_defers_a_name_the_root_does_not_define() {
+    let fixture = fixture();
+    std::fs::create_dir_all(fixture.root.join("etc")).unwrap();
+    std::fs::write(
+        fixture.root.join("etc/passwd"),
+        "root:x:0:0:root:/root:/bin/sh\n",
+    )
+    .unwrap();
+    std::fs::write(fixture.root.join("etc/group"), "root:x:0:\n").unwrap();
+
+    let mut node = regular_node(0o755);
+    node.user = PayloadIdentity::Named {
+        name: "summary-late-user".to_string(),
+    };
+    node.group = PayloadIdentity::Named {
+        name: "summary-late-group".to_string(),
+    };
+    let extracted = vec![regular_payload_with_node("/usr/bin/late", b"late\n", node)];
+    let semantics = InstallSemantics::native_package(PackageFormatType::Rpm);
+
+    // Positive control through the same fixture: the event-time projection
+    // admits the payload and records the typed pending owners.
+    let projected = plan_element_payload_projection(
+        &fixture.conn,
+        &fixture.root,
+        ElementPayloadEffectInput {
+            semantics,
+            package_name: "late-owner",
+            relation_removals: &[],
+            replacing_trove_id: None,
+            config_declarations: &[],
+            files: PayloadEffectFiles::Extracted(&extracted),
+            identity_mode: PlanIdentityMode::EventProjection,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        projected.pending_owners().cloned().collect::<Vec<_>>(),
+        vec![
+            PendingOwner {
+                kind: IdentityKind::User,
+                name: "summary-late-user".to_string(),
+            },
+            PendingOwner {
+                kind: IdentityKind::Group,
+                name: "summary-late-group".to_string(),
+            },
+        ]
+    );
+    assert_eq!(
+        projected.projected_nodes().get("/usr/bin/late"),
+        Some(&ProjectedNode::Regular { executable: true })
+    );
+
+    // The same input under Authoritative planning keeps the typed missing-name
+    // refusal.
+    let error = plan_element_payload_effects(
+        &fixture.conn,
+        &fixture.root,
+        ElementPayloadEffectInput {
+            semantics,
+            package_name: "late-owner",
+            relation_removals: &[],
+            replacing_trove_id: None,
+            config_declarations: &[],
+            files: PayloadEffectFiles::Extracted(&extracted),
+            identity_mode: PlanIdentityMode::Authoritative,
+        },
+    )
+    .unwrap_err();
+    match error.downcast_ref::<crate::commands::install::payload_identity::PayloadIdentityError>() {
+        Some(crate::commands::install::payload_identity::PayloadIdentityError::MissingNames {
+            kind,
+            names,
+            ..
+        }) => {
+            assert_eq!(*kind, IdentityKind::User);
+            assert_eq!(names, "summary-late-user");
+        }
+        other => panic!("expected the typed missing-name refusal, got {other:?}"),
+    }
+}
+
+/// A pending owner whose path already has database authority resolves on disk
+/// rather than being overlaid, which is the projection's refusing direction.
+#[test]
+fn event_projection_resolves_a_pending_owner_path_with_existing_authority_on_disk() {
+    let fixture = fixture();
+    std::fs::create_dir_all(fixture.root.join("etc")).unwrap();
+    std::fs::write(
+        fixture.root.join("etc/passwd"),
+        "root:x:0:0:root:/root:/bin/sh\n",
+    )
+    .unwrap();
+    std::fs::write(fixture.root.join("etc/group"), "root:x:0:\n").unwrap();
+
+    let owner = insert_trove(&fixture.conn, "existing-owner");
+    let mut entry = FileEntry::new(
+        "/usr/bin/late".to_string(),
+        ResolvedPayloadNode::from_numeric_source(regular_node(0o755)).unwrap(),
+        Some(PayloadContentAuthority {
+            sha256: conary_core::hash::sha256(b"old"),
+            size: 3,
+        }),
+        owner,
+    );
+    entry.insert(&fixture.conn).unwrap();
+
+    let mut node = regular_node(0o755);
+    node.user = PayloadIdentity::Named {
+        name: "summary-late-user".to_string(),
+    };
+    node.group = PayloadIdentity::Named {
+        name: "summary-late-group".to_string(),
+    };
+    let extracted = vec![regular_payload_with_node("/usr/bin/late", b"late\n", node)];
+    let semantics = InstallSemantics::native_package(PackageFormatType::Rpm);
+
+    let projected = plan_element_payload_projection(
+        &fixture.conn,
+        &fixture.root,
+        ElementPayloadEffectInput {
+            semantics,
+            package_name: "late-owner",
+            relation_removals: &[],
+            replacing_trove_id: None,
+            config_declarations: &[],
+            files: PayloadEffectFiles::Extracted(&extracted),
+            identity_mode: PlanIdentityMode::EventProjection,
+        },
+    )
+    .unwrap();
+
+    assert!(!projected.projected_nodes().contains_key("/usr/bin/late"));
+    assert!(
+        projected
+            .pending_owners()
+            .any(|owner| owner.name == "summary-late-user")
+    );
+}
+
 /// The single-install path: preflight derives effects from the extraction form
 /// while `apply_payload` derives them from the stored CAS form. Both must be the
 /// same typed effect.
@@ -322,6 +476,7 @@ fn preflight_extraction_plan_matches_the_stored_apply_plan() {
                 cas: &fixture.cas,
                 files: &stored,
             },
+            identity_mode: PlanIdentityMode::Authoritative,
         },
     )
     .unwrap();
