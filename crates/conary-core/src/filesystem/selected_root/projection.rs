@@ -73,6 +73,184 @@ impl<'a> SelectedRootProjection<'a> {
         }
     }
 
+    /// The selected root this projection overlays.
+    pub fn root(&self) -> &'a Path {
+        self.root
+    }
+
+    /// Resolve one package spelling to the effective root-relative package
+    /// path, following ancestor aliases through this projection.
+    ///
+    /// The leaf is never followed, so removing an alias removes the alias
+    /// itself rather than its target. A tail below a proven alias that is
+    /// absent from the root is preserved lexically, exactly as the on-disk
+    /// [`super::selected_root_effective_package_path`] does.
+    pub fn effective_package_path(&self, package_path: &str) -> Result<String> {
+        validate_selected_root(self.root)?;
+        let relative = root_relative_package_path(package_path)?;
+        let file_name = relative.file_name().ok_or_else(|| {
+            Error::InvalidPath(format!(
+                "package path {package_path} has no selected-root leaf"
+            ))
+        })?;
+        let parent = relative.parent().unwrap_or_else(|| Path::new(""));
+        let resolved_parent = if parent.as_os_str().is_empty() {
+            PathBuf::new()
+        } else {
+            self.resolve_ancestor_components(parent, package_path)?
+        };
+        let effective = resolved_parent.join(file_name);
+        let text = effective.to_str().ok_or_else(|| {
+            Error::InvalidPath(format!(
+                "effective selected-root path for {package_path} is not UTF-8"
+            ))
+        })?;
+        Ok(format!("/{text}"))
+    }
+
+    /// Apply one removal boundary's package paths exactly as execution's
+    /// `apply_remove_paths` orders it.
+    ///
+    /// Every path is first resolved to its effective spelling against the
+    /// projection. Non-directories are tombstoned immediately in input order,
+    /// then directory candidates are tombstoned deepest-first and only while
+    /// the projection has no surviving descendant beneath them.
+    pub fn remove_package_paths(&mut self, package_paths: &[String]) -> Result<()> {
+        let mut directories = Vec::new();
+        for package_path in package_paths {
+            let effective = self.effective_package_path(package_path)?;
+            match self.projected_entry(&effective)? {
+                ProjectedEntry::Missing => {}
+                ProjectedEntry::Directory => directories.push(effective),
+                ProjectedEntry::Leaf => self.remove(&effective)?,
+            }
+        }
+        directories.sort_by_key(|path| std::cmp::Reverse(path.matches('/').count()));
+        directories.dedup();
+        for directory in directories {
+            if !self.has_surviving_descendant(&directory)? {
+                self.remove(&directory)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Walk the ancestor components of `relative`, following projected and
+    /// on-disk symlinks, and stop at a proven alias with the missing tail
+    /// retained lexically.
+    fn resolve_ancestor_components(&self, relative: &Path, package_path: &str) -> Result<PathBuf> {
+        let mut pending = components(relative)?;
+        let mut resolved = PathBuf::new();
+        let mut symlink_depth = 0usize;
+        while let Some(component) = pending.pop_front() {
+            let candidate_relative = resolved.join(&component);
+            let prefix = absolute_package_path(&candidate_relative)?;
+            if self.removed.contains(&prefix) && !self.overlay.contains_key(&prefix) {
+                resolved.push(component);
+                resolved.extend(pending);
+                return Ok(resolved);
+            }
+            if let Some(node) = self.overlay.get(&prefix) {
+                match node {
+                    ProjectedNode::Symlink { target } => {
+                        symlink_depth += 1;
+                        check_symlink_depth(symlink_depth, package_path)?;
+                        pending = splice_symlink_target(
+                            &resolved,
+                            Path::new(target.as_str()),
+                            package_path,
+                            &candidate_relative,
+                            pending,
+                        )?;
+                        resolved.clear();
+                    }
+                    _ => resolved.push(component),
+                }
+                continue;
+            }
+            let candidate = self.root.join(&candidate_relative);
+            match fs::symlink_metadata(&candidate) {
+                Ok(metadata) if metadata.file_type().is_symlink() => {
+                    symlink_depth += 1;
+                    check_symlink_depth(symlink_depth, package_path)?;
+                    let target = fs::read_link(&candidate).map_err(Error::Io)?;
+                    pending = splice_symlink_target(
+                        &resolved,
+                        &target,
+                        package_path,
+                        &candidate_relative,
+                        pending,
+                    )?;
+                    resolved.clear();
+                }
+                Ok(_) => resolved.push(component),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    resolved.push(component);
+                    resolved.extend(pending);
+                    return Ok(resolved);
+                }
+                Err(error) => return Err(Error::Io(error)),
+            }
+        }
+        Ok(resolved)
+    }
+
+    /// Classify one effective path against the tombstone set, the overlay, and
+    /// the on-disk selected root.
+    fn projected_entry(&self, effective: &str) -> Result<ProjectedEntry> {
+        if self.removed.contains(effective) && !self.overlay.contains_key(effective) {
+            return Ok(ProjectedEntry::Missing);
+        }
+        if let Some(node) = self.overlay.get(effective) {
+            return Ok(match node {
+                ProjectedNode::Directory => ProjectedEntry::Directory,
+                _ => ProjectedEntry::Leaf,
+            });
+        }
+        if self.has_overlay_descendant(effective) {
+            return Ok(ProjectedEntry::Directory);
+        }
+        let relative = effective.trim_start_matches('/');
+        match fs::symlink_metadata(self.root.join(relative)) {
+            Ok(metadata) if metadata.file_type().is_dir() => Ok(ProjectedEntry::Directory),
+            Ok(_) => Ok(ProjectedEntry::Leaf),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                Ok(ProjectedEntry::Missing)
+            }
+            Err(error) => Err(Error::Io(error)),
+        }
+    }
+
+    /// Whether any directory entry directly below `directory` survives the
+    /// projection: an overlay descendant, or an on-disk child that is not
+    /// itself tombstoned.
+    fn has_surviving_descendant(&self, directory: &str) -> Result<bool> {
+        let prefix = format!("{directory}/");
+        if self
+            .overlay
+            .keys()
+            .any(|key| key.starts_with(prefix.as_str()))
+        {
+            return Ok(true);
+        }
+        let relative = directory.trim_start_matches('/');
+        match fs::read_dir(self.root.join(relative)) {
+            Ok(entries) => {
+                for entry in entries {
+                    let entry = entry.map_err(Error::Io)?;
+                    let child_relative = Path::new(relative).join(entry.file_name());
+                    let child = absolute_package_path(&child_relative)?;
+                    if !self.removed.contains(&child) || self.overlay.contains_key(&child) {
+                        return Ok(true);
+                    }
+                }
+                Ok(false)
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(Error::Io(error)),
+        }
+    }
+
     /// Materialize `node` at `path`, superseding any earlier tombstone there.
     ///
     /// A removed ancestor becomes an explicit directory, because inserting a
@@ -279,6 +457,17 @@ impl<'a> SelectedRootProjection<'a> {
     }
 }
 
+/// How a removal candidate behaves at the point execution inspects it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProjectedEntry {
+    /// No node reaches the effective path.
+    Missing,
+    /// An existing directory, whose removal must wait for its descendants.
+    Directory,
+    /// A file, symlink, or other non-directory node.
+    Leaf,
+}
+
 /// The result of walking one package spelling through the projection.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum WalkedNode {
@@ -332,7 +521,7 @@ fn ancestor_keys(key: &str) -> Vec<String> {
 fn check_symlink_depth(depth: usize, package_path: &str) -> Result<()> {
     if depth > MAX_SELECTED_ROOT_SYMLINK_DEPTH {
         return Err(Error::PathTraversal(format!(
-            "package path {package_path} exceeds {MAX_SELECTED_ROOT_SYMLINK_DEPTH} projected selected-root symlinks"
+            "package path {package_path} exceeds {MAX_SELECTED_ROOT_SYMLINK_DEPTH} selected-root symlinks"
         )));
     }
     Ok(())

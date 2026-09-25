@@ -32,20 +32,7 @@ pub struct SelectedRootSymlinkTarget {
 /// target. This lets callers classify the current effective path domain while
 /// preserving the original package spelling as ownership authority.
 pub fn selected_root_effective_package_path(root: &Path, package_path: &str) -> Result<String> {
-    validate_selected_root(root)?;
-    let relative = root_relative_package_path(package_path)?;
-    let relative = resolve_leaf_without_following_with_policy(
-        root,
-        &relative,
-        package_path,
-        MissingAncestorPolicy::PreserveMissingTail,
-    )?;
-    let relative = relative.to_str().ok_or_else(|| {
-        Error::InvalidPath(format!(
-            "effective selected-root path for {package_path} is not UTF-8"
-        ))
-    })?;
-    Ok(format!("/{relative}"))
+    SelectedRootProjection::new(root).effective_package_path(package_path)
 }
 
 /// Capture the exact leaf node named by a package path without following it.
@@ -136,26 +123,6 @@ fn resolve_leaf_without_following(
     relative: &Path,
     package_path: &str,
 ) -> Result<PathBuf> {
-    resolve_leaf_without_following_with_policy(
-        root,
-        relative,
-        package_path,
-        MissingAncestorPolicy::Reject,
-    )
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum MissingAncestorPolicy {
-    Reject,
-    PreserveMissingTail,
-}
-
-fn resolve_leaf_without_following_with_policy(
-    root: &Path,
-    relative: &Path,
-    package_path: &str,
-    missing_ancestor_policy: MissingAncestorPolicy,
-) -> Result<PathBuf> {
     let file_name = relative.file_name().ok_or_else(|| {
         Error::InvalidPath(format!(
             "package path {package_path} has no selected-root leaf"
@@ -165,7 +132,7 @@ fn resolve_leaf_without_following_with_policy(
     let resolved_parent = if parent.as_os_str().is_empty() {
         PathBuf::new()
     } else {
-        resolve_root_relative_path(root, parent, package_path, missing_ancestor_policy)?
+        resolve_root_relative_path(root, parent, package_path)?
     };
     Ok(resolved_parent.join(file_name))
 }
@@ -210,15 +177,10 @@ fn resolve_existing_root_relative_path(
     relative: &Path,
     package_path: &str,
 ) -> Result<PathBuf> {
-    resolve_root_relative_path(root, relative, package_path, MissingAncestorPolicy::Reject)
+    resolve_root_relative_path(root, relative, package_path)
 }
 
-fn resolve_root_relative_path(
-    root: &Path,
-    relative: &Path,
-    package_path: &str,
-    missing_ancestor_policy: MissingAncestorPolicy,
-) -> Result<PathBuf> {
+fn resolve_root_relative_path(root: &Path, relative: &Path, package_path: &str) -> Result<PathBuf> {
     let mut pending = components(relative)?;
     let mut resolved = PathBuf::new();
     let mut symlink_depth = 0usize;
@@ -228,14 +190,6 @@ fn resolve_root_relative_path(
         let candidate = root.join(&candidate_relative);
         let metadata = match fs::symlink_metadata(&candidate) {
             Ok(metadata) => metadata,
-            Err(error)
-                if error.kind() == std::io::ErrorKind::NotFound
-                    && missing_ancestor_policy == MissingAncestorPolicy::PreserveMissingTail =>
-            {
-                resolved.push(component);
-                resolved.extend(pending);
-                return Ok(resolved);
-            }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 return Err(Error::NotFound(format!(
                     "selected-root path {} is unavailable while resolving {package_path}: {error}",

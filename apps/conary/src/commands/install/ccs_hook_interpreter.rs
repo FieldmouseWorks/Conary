@@ -5,6 +5,7 @@
 //! [`SelectedRootProjection`], the same resolver execution uses, then requires
 //! each hook interpreter against that final projected state.
 
+use super::native_graph::normalize_archive_path;
 use super::payload_effects::ElementPayloadEffects;
 use super::{ExtractionResult, InstallSemantics};
 use anyhow::Context;
@@ -118,6 +119,15 @@ pub(super) fn preflight_hook_interpreters(
         .iter()
         .flat_map(|element| element.removed_trove_ids.iter().copied())
         .collect::<BTreeSet<_>>();
+    // Execution excludes every path the transaction's final incoming payload
+    // claims from old-payload removal; the projection must judge releases
+    // against the same set, computed once for the whole transaction.
+    let final_incoming_paths = elements
+        .iter()
+        .filter_map(|element| element.effects.as_ref())
+        .flat_map(|effects| effects.resolved_files.iter())
+        .map(|file| normalize_archive_path(&file.path))
+        .collect::<BTreeSet<_>>();
     let claims = if transaction_removed.is_empty() {
         None
     } else {
@@ -127,19 +137,15 @@ pub(super) fn preflight_hook_interpreters(
     for element in elements {
         let mut removed_paths = element.removed_paths.clone();
         if let Some(claims) = claims.as_ref() {
-            // #1112 slice 5: claim-aware `released_paths` still diverges from
-            // execution for co-claimants, alias removal, and non-empty
-            // directories.
             removed_paths.extend(PackagePayloadOwnership::released_paths(
                 conn,
                 claims,
                 &element.removed_trove_ids,
                 &transaction_removed,
+                &final_incoming_paths,
             )?);
         }
-        for path in removed_paths {
-            projection.remove(&path)?;
-        }
+        projection.remove_package_paths(&removed_paths)?;
         if let Some(effects) = element.effects.as_ref() {
             for (path, node) in effects.projected_nodes() {
                 projection.insert(&path, node)?;

@@ -298,3 +298,56 @@ fn post_payload_preflight_resolves_a_hardlinked_interpreter_from_the_payload() {
         .preflight(target_root.path(), &ExecutionMode::Install)
         .expect("a payload hardlink chain must resolve as the projected interpreter");
 }
+
+#[test]
+fn projected_alias_removal_hides_the_effective_interpreter() {
+    let interpreter = "/bin/sh";
+    let bundle = rpm_bundle_for_phase(
+        "alias-consumer",
+        "1",
+        "rpm:%post",
+        LifecyclePath::PostInstall,
+        interpreter,
+    );
+    let event = rpm_event(
+        &bundle,
+        NativeEventStage::PackagePostInstall,
+        "rpm:%post",
+        NativeEventPlacement::TransactionElement {
+            transaction_index: 0,
+        },
+        vec!["1".to_string()],
+    );
+    let target_root = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(target_root.path().join("usr/bin")).unwrap();
+    symlink("usr/bin", target_root.path().join("bin")).unwrap();
+    std::fs::write(target_root.path().join("usr/bin/sh"), b"#!/bin/sh\n").unwrap();
+    let mut permissions = std::fs::metadata(target_root.path().join("usr/bin/sh"))
+        .unwrap()
+        .permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(target_root.path().join("usr/bin/sh"), permissions).unwrap();
+
+    let removed = NativeEventPathProjection::Projected {
+        introduced: BTreeMap::new(),
+        explicitly_removed: BTreeSet::from(["bin/sh".to_string()]),
+    };
+    let prepared = prepared_with_projected_event(bundle.clone(), event.clone(), removed);
+    let error = prepared
+        .preflight(target_root.path(), &ExecutionMode::Install)
+        .expect_err("removing the alias spelling must hide the effective interpreter");
+    assert_missing_interpreter(&error, interpreter);
+
+    // Control: with nothing removed, the alias resolves the on-disk file.
+    let prepared = prepared_with_projected_event(
+        bundle,
+        event,
+        NativeEventPathProjection::Projected {
+            introduced: BTreeMap::new(),
+            explicitly_removed: BTreeSet::new(),
+        },
+    );
+    prepared
+        .preflight(target_root.path(), &ExecutionMode::Install)
+        .expect("the alias target remains available when nothing is removed");
+}

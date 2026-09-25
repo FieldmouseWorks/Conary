@@ -69,9 +69,8 @@ impl NativePathProjection {
             for (path, node) in introduced {
                 selected.insert(path, node.clone())?;
             }
-            for path in explicitly_removed {
-                selected.remove(path)?;
-            }
+            let removed = explicitly_removed.iter().cloned().collect::<Vec<_>>();
+            selected.remove_package_paths(&removed)?;
         }
         let executable = selected
             .resolve_executable(interpreter)

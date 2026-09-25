@@ -303,10 +303,16 @@ fn install_rejects_looping_symlink_parent() {
     .unwrap();
     let err = tx
         .apply_install_files(&[live_regular("/usr/bin/fixture", b"fixture", 0o755)])
-        .unwrap_err()
-        .to_string();
+        .unwrap_err();
 
-    assert!(err.contains("exceeds 40 selected-root symlinks"));
+    assert!(
+        matches!(
+            err.chain()
+                .find_map(|cause| cause.downcast_ref::<conary_core::Error>()),
+            Some(conary_core::Error::PathTraversal(_))
+        ),
+        "a looping symlink parent must be refused as path traversal: {err:#}"
+    );
     assert!(fs::symlink_metadata(root.join("usr")).unwrap().is_symlink());
 }
 

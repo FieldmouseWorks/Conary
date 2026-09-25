@@ -9,14 +9,16 @@ use crate::commands::install::payload_effects::{
 };
 use crate::commands::install::{InstallSemantics, PackageFormatType};
 use crate::commands::{LiveRootContent, LiveRootFile};
-use conary_core::db::models::{ConfigFile, ConfigSource, Trove, TroveType};
+use conary_core::db::models::{
+    ConfigFile, ConfigSource, ExistingDirectoryMaterialization, FileEntry, Trove, TroveType,
+};
 use conary_core::filesystem::ProjectedNode;
 use conary_core::packages::config_authority::{ConfigPayloadAssociation, SourceConfigDeclaration};
 use conary_core::packages::deb::authority::DebianConfigDeclaration;
 use conary_core::packages::payload::{PackagePayloadFile, ReopenablePayload};
 use conary_core::payload::{
-    PayloadContentAuthority, PayloadIdentity, PayloadNode, PayloadNodeKind, PayloadTimestamp,
-    ResolvedPayloadNode,
+    PayloadContentAuthority, PayloadIdentity, PayloadNode, PayloadNodeKind, PayloadSharingPolicy,
+    PayloadTimestamp, ResolvedPayloadNode,
 };
 use conary_core::repository::versioning::VersionScheme;
 use std::fs;
@@ -169,19 +171,76 @@ fn effects(
     semantics: InstallSemantics,
     files: &[PackagePayloadFile],
 ) -> ElementPayloadEffects {
+    effects_for(fixture, semantics, "fixture", None, files)
+}
+
+fn effects_for(
+    fixture: &Fixture,
+    semantics: InstallSemantics,
+    package_name: &str,
+    replacing_trove_id: Option<i64>,
+    files: &[PackagePayloadFile],
+) -> ElementPayloadEffects {
     plan_element_payload_effects(
         &fixture.conn,
         &fixture.root,
         ElementPayloadEffectInput {
             semantics,
-            package_name: "fixture",
+            package_name,
             relation_removals: &[],
-            replacing_trove_id: None,
+            replacing_trove_id,
             config_declarations: &[],
             files: PayloadEffectFiles::Extracted(files),
         },
     )
     .unwrap()
+}
+
+fn insert_claim(conn: &rusqlite::Connection, path: &str, node: PayloadNode, trove_id: i64) {
+    let content = match &node.kind {
+        PayloadNodeKind::Regular { .. } => Some(PayloadContentAuthority {
+            sha256: conary_core::hash::sha256(b"#!/bin/sh\n"),
+            size: 10,
+        }),
+        _ => None,
+    };
+    let mut entry = FileEntry::new(
+        path.to_string(),
+        ResolvedPayloadNode::from_numeric_source(node).unwrap(),
+        content,
+        trove_id,
+    );
+    entry.insert(conn).unwrap();
+}
+
+/// Insert one of two co-claimants sharing the same RPM-policy payload.
+fn insert_shared_regular_claim(
+    conn: &rusqlite::Connection,
+    path: &str,
+    trove_id: i64,
+    first: bool,
+) {
+    let mut entry = FileEntry::new(
+        path.to_string(),
+        ResolvedPayloadNode::from_numeric_source(regular_node(0o755)).unwrap(),
+        Some(PayloadContentAuthority {
+            sha256: conary_core::hash::sha256(b"#!/bin/sh\n"),
+            size: 10,
+        }),
+        trove_id,
+    )
+    .with_claim_policy(PayloadSharingPolicy::Rpm);
+    if first {
+        entry.insert(conn).unwrap();
+    } else {
+        entry
+            .insert_or_replace(conn, ExistingDirectoryMaterialization::ApplyIncoming)
+            .unwrap();
+    }
+}
+
+fn trove(conn: &rusqlite::Connection, trove_id: i64) -> Trove {
+    Trove::find_by_id(conn, trove_id).unwrap().unwrap()
 }
 
 fn plan(
@@ -582,4 +641,172 @@ fn directory_through_usr_merge_alias_reaches_a_shipped_interpreter() {
             .map_err(typed)
             .expect_err("without the shipped interpreter the alias is unavailable");
     assert_eq!(error.interpreter, "/bin/sh");
+}
+
+#[test]
+fn removed_alias_target_is_projected_at_its_effective_path() {
+    let fixture = fixture();
+    fs::create_dir_all(fixture.root.join("usr/bin")).unwrap();
+    std::os::unix::fs::symlink("usr/bin", fixture.root.join("bin")).unwrap();
+    write_executable(&fixture.root, "/usr/bin/sh");
+
+    let owner = insert_trove(&fixture.conn, "alias-shell-owner");
+    insert_claim(&fixture.conn, "/bin/sh", regular_node(0o755), owner);
+    let owner_trove = trove(&fixture.conn, owner);
+
+    // Negative: the transaction removes the alias spelling and ships nothing,
+    // so the effective `/usr/bin/sh` must disappear with it.
+    let refused = element_plan(
+        "alias-shell-replacement",
+        "2.0.0",
+        Some(&owner_trove),
+        &[],
+        effects(&fixture, rpm_semantics(), &[]),
+        vec![post_install("/bin/sh")],
+    );
+    let error = preflight_hook_interpreters(&fixture.conn, &fixture.root, &[refused])
+        .map_err(typed)
+        .expect_err("removing /bin/sh must hide the effective /usr/bin/sh");
+    assert_eq!(error.interpreter, "/bin/sh");
+
+    // Control: the incoming element re-provides the effective path.
+    let admitted = element_plan(
+        "alias-shell-replacement",
+        "2.0.0",
+        Some(&owner_trove),
+        &[],
+        effects(
+            &fixture,
+            rpm_semantics(),
+            &[regular_payload("/usr/bin/sh", b"#!/bin/sh\n", 0o755)],
+        ),
+        vec![post_install("/bin/sh")],
+    );
+    preflight_hook_interpreters(&fixture.conn, &fixture.root, &[admitted])
+        .expect("the incoming payload re-provides the effective interpreter");
+}
+
+#[test]
+fn nonempty_removed_directory_is_retained_while_a_descendant_survives() {
+    let fixture = fixture();
+    write_executable(&fixture.root, "/opt/tools/sh");
+
+    let directory_owner = insert_trove(&fixture.conn, "tools-directory-owner");
+    insert_claim(
+        &fixture.conn,
+        "/opt/tools",
+        directory_node(0o755),
+        directory_owner,
+    );
+    let descendant_owner = insert_trove(&fixture.conn, "tools-descendant-owner");
+    insert_claim(
+        &fixture.conn,
+        "/opt/tools/sh",
+        regular_node(0o755),
+        descendant_owner,
+    );
+    let directory_owner_trove = trove(&fixture.conn, directory_owner);
+    let descendant_owner_trove = trove(&fixture.conn, descendant_owner);
+    let consumer = plan(
+        &fixture,
+        rpm_semantics(),
+        &[],
+        vec![post_install("/opt/tools/sh")],
+    );
+
+    // The removed trove's sole directory claim must stay while a surviving
+    // owner keeps the on-disk executable beneath it.
+    let removal = removal_element_plan(std::slice::from_ref(&directory_owner_trove));
+    preflight_hook_interpreters(&fixture.conn, &fixture.root, &[removal, consumer.clone()])
+        .expect("a removed directory with a surviving descendant must stay");
+
+    // Control: removing the descendant's owner too empties the directory.
+    let removal = removal_element_plan(&[directory_owner_trove, descendant_owner_trove]);
+    let error = preflight_hook_interpreters(&fixture.conn, &fixture.root, &[removal, consumer])
+        .map_err(typed)
+        .expect_err("removing the last descendant must release the directory");
+    assert_eq!(error.interpreter, "/opt/tools/sh");
+}
+
+#[test]
+fn final_incoming_claim_keeps_a_released_co_claimant_path() {
+    let fixture = fixture();
+    write_executable(&fixture.root, "/usr/bin/sh");
+    let first = insert_trove(&fixture.conn, "shared-shell-first");
+    let second = insert_trove(&fixture.conn, "shared-shell-second");
+    insert_shared_regular_claim(&fixture.conn, "/usr/bin/sh", first, true);
+    insert_shared_regular_claim(&fixture.conn, "/usr/bin/sh", second, false);
+    let first_trove = trove(&fixture.conn, first);
+    let second_trove = trove(&fixture.conn, second);
+
+    // Control: no element keeps the path, so the last release wins.
+    let dropped_first = element_plan(
+        "shared-shell-first",
+        "2.0.0",
+        Some(&first_trove),
+        &[],
+        effects_for(
+            &fixture,
+            rpm_semantics(),
+            "shared-shell-first",
+            Some(first),
+            &[],
+        ),
+        Vec::new(),
+    );
+    let dropped_second = element_plan(
+        "shared-shell-second",
+        "2.0.0",
+        Some(&second_trove),
+        &[],
+        effects_for(
+            &fixture,
+            rpm_semantics(),
+            "shared-shell-second",
+            Some(second),
+            &[],
+        ),
+        vec![post_install("/usr/bin/sh")],
+    );
+    let error = preflight_hook_interpreters(
+        &fixture.conn,
+        &fixture.root,
+        &[dropped_first, dropped_second],
+    )
+    .map_err(typed)
+    .expect_err("a co-claimed path no incoming element keeps must be released");
+    assert_eq!(error.interpreter, "/usr/bin/sh");
+
+    // The earlier element keeps the co-claimed path in the final incoming set,
+    // so the later element's release must not win.
+    let kept_first = element_plan(
+        "shared-shell-first",
+        "2.0.0",
+        Some(&first_trove),
+        &[],
+        effects_for(
+            &fixture,
+            rpm_semantics(),
+            "shared-shell-first",
+            Some(first),
+            &[regular_payload("/usr/bin/sh", b"#!/bin/sh\n", 0o755)],
+        ),
+        Vec::new(),
+    );
+    let dropped_second = element_plan(
+        "shared-shell-second",
+        "2.0.0",
+        Some(&second_trove),
+        &[],
+        effects_for(
+            &fixture,
+            rpm_semantics(),
+            "shared-shell-second",
+            Some(second),
+            &[],
+        ),
+        vec![post_install("/usr/bin/sh")],
+    );
+    preflight_hook_interpreters(&fixture.conn, &fixture.root, &[kept_first, dropped_second])
+        .expect("the earlier element's incoming claim keeps the interpreter");
 }

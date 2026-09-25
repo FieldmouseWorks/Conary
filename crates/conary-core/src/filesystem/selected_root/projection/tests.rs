@@ -491,3 +491,67 @@ fn overlay_directory_node_is_not_executable() {
         executable_outcome("/opt/bin/sh")
     );
 }
+
+#[test]
+fn effective_package_path_follows_a_projected_alias_without_its_leaf() {
+    let root = tempfile::tempdir().unwrap();
+    let mut projection = SelectedRootProjection::new(root.path());
+    projection.insert("/bin", symlink_node("usr/bin")).unwrap();
+    projection.insert("/bin/sh", executable()).unwrap();
+
+    assert_eq!(
+        projection.effective_package_path("/bin/sh").unwrap(),
+        "/usr/bin/sh"
+    );
+    // The alias leaf itself is never followed.
+    assert_eq!(projection.effective_package_path("/bin").unwrap(), "/bin");
+}
+
+#[test]
+fn remove_package_paths_tombstones_the_effective_alias_target() {
+    let root = tempfile::tempdir().unwrap();
+    write_executable(root.path(), "usr/bin/sh");
+    root_symlink(root.path(), "bin", "usr/bin");
+
+    let mut projection = SelectedRootProjection::new(root.path());
+    projection
+        .remove_package_paths(&["/bin/sh".to_string()])
+        .unwrap();
+    assert_eq!(
+        projection.resolve_executable("/bin/sh").unwrap(),
+        ProjectedExecutable::Missing
+    );
+
+    // Positive control: an unrelated path behind the same alias still resolves.
+    write_executable(root.path(), "usr/bin/bash");
+    assert_eq!(
+        projection.resolve_executable("/bin/bash").unwrap(),
+        executable_outcome("/usr/bin/bash")
+    );
+}
+
+#[test]
+fn remove_package_paths_retains_a_directory_with_a_surviving_descendant() {
+    let root = tempfile::tempdir().unwrap();
+    write_executable(root.path(), "opt/tools/sh");
+
+    let mut projection = SelectedRootProjection::new(root.path());
+    projection
+        .remove_package_paths(&["/opt/tools".to_string()])
+        .unwrap();
+    assert_eq!(
+        projection.resolve_executable("/opt/tools/sh").unwrap(),
+        executable_outcome("/opt/tools/sh")
+    );
+
+    // Control through the same fixture: removing the descendant too releases
+    // the now-empty directory.
+    let mut removed = SelectedRootProjection::new(root.path());
+    removed
+        .remove_package_paths(&["/opt/tools".to_string(), "/opt/tools/sh".to_string()])
+        .unwrap();
+    assert_eq!(
+        removed.resolve_executable("/opt/tools/sh").unwrap(),
+        ProjectedExecutable::Missing
+    );
+}
