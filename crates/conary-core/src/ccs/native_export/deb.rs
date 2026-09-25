@@ -46,6 +46,11 @@ impl HookConverter for DebHookConverter {
         lines.extend(CommonHookGenerator::tmpfiles_commands(hooks));
         lines.extend(CommonHookGenerator::sysctl_commands(hooks));
         if let Some(hook) = &hooks.post_install {
+            // CCS author script hooks receive no positional arguments. The
+            // interpreter is validated to `/bin/sh` before this converter runs,
+            // which is the shell this maintainer script already executes under;
+            // clear the native package manager's argv first.
+            lines.push("set --".to_string());
             lines.push(hook.script.clone());
         }
 
@@ -62,6 +67,11 @@ impl HookConverter for DebHookConverter {
         // Stop services before removal
         lines.extend(CommonHookGenerator::systemd_commands(hooks, false));
         if let Some(hook) = &hooks.pre_remove {
+            // CCS author script hooks receive no positional arguments. The
+            // interpreter is validated to `/bin/sh` before this converter runs,
+            // which is the shell this maintainer script already executes under;
+            // clear the native package manager's argv first.
+            lines.push("set --".to_string());
             lines.push(hook.script.clone());
         }
 
@@ -579,5 +589,78 @@ mod tests {
         let output_path = temp_dir.path().join("shell.deb");
         generate(&result, &output_path).unwrap();
         assert!(output_path.exists());
+    }
+
+    fn exported_deb_scriptlet(result: &BuildResult, file_name: &str, member: &str) -> String {
+        let temp_dir = TempDir::new().unwrap();
+        let output_path = temp_dir.path().join(file_name);
+        generate(result, &output_path).unwrap();
+        let package = crate::packages::deb::DebPackage::parse(output_path.to_str().unwrap())
+            .expect("parse generated Debian package");
+        package
+            .native_scriptlet_abi()
+            .iter()
+            .find(|entry| entry.native_slot == member)
+            .unwrap_or_else(|| panic!("missing Debian {member} maintainer script"))
+            .body
+            .text
+            .clone()
+            .expect("Debian maintainer script is UTF-8")
+    }
+
+    #[test]
+    fn deb_authored_ccs_script_hook_clears_native_positional_arguments() {
+        let mut result = create_test_build_result();
+        result.manifest.hooks.post_install = Some(crate::ccs::manifest::ScriptHook {
+            script: "printf 'post-installed' > /var/lib/example/installed".to_string(),
+            interpreter: "/bin/sh".to_string(),
+            reversible: None,
+        });
+        result.manifest.hooks.pre_remove = Some(crate::ccs::manifest::ScriptHook {
+            script: "printf 'pre-removed' > /var/lib/example/removed".to_string(),
+            interpreter: "/bin/sh".to_string(),
+            reversible: None,
+        });
+
+        assert_eq!(
+            exported_deb_scriptlet(&result, "authored-post.deb", "postinst"),
+            "#!/bin/sh\nset -e\nset --\nprintf 'post-installed' > /var/lib/example/installed\nexit 0"
+        );
+        assert_eq!(
+            exported_deb_scriptlet(&result, "authored-prerm.deb", "prerm"),
+            "#!/bin/sh\nset -e\nset --\nprintf 'pre-removed' > /var/lib/example/removed\nexit 0"
+        );
+    }
+
+    #[test]
+    fn deb_converted_native_lifecycle_program_is_not_rewritten_by_the_authored_hook_guard() {
+        // Converted native programs preserve their source ABI on
+        // `CcsManifest::native_lifecycle`; they never pass through `Hooks`, so the
+        // zero-argument guard must not rewrite them. The presence of the bundle must
+        // leave the emitted authored-hook maintainer script byte-identical.
+        let authored = crate::ccs::manifest::ScriptHook {
+            script: "printf 'authored' > /dev/null".to_string(),
+            interpreter: "/bin/sh".to_string(),
+            reversible: None,
+        };
+        let mut without = create_test_build_result();
+        without.manifest.hooks.post_install = Some(authored.clone());
+        let mut with = create_test_build_result();
+        with.manifest.hooks.post_install = Some(authored);
+        with.manifest.native_lifecycle = Some(
+            crate::ccs::native_export::rpm::tests::converted_native_lifecycle_bundle(
+                "printf 'native:%s' \"$1\"",
+            ),
+        );
+
+        let expected = "#!/bin/sh\nset -e\nset --\nprintf 'authored' > /dev/null\nexit 0";
+        assert_eq!(
+            exported_deb_scriptlet(&without, "without-native.deb", "postinst"),
+            expected
+        );
+        assert_eq!(
+            exported_deb_scriptlet(&with, "with-native.deb", "postinst"),
+            expected
+        );
     }
 }
