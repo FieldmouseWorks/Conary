@@ -438,6 +438,10 @@ fn run_single_distro(
             None => manifests_for_phase(phase)?,
         };
         let loaded_manifest_entries = load_manifest_entries(&manifest_paths)?;
+        conary_test::engine::variables::preflight_declared_fixtures(
+            config,
+            loaded_manifest_entries.iter().map(|(_, manifest)| manifest),
+        )?;
         let shell_provider = ShellProviderRequirement::from_manifests(
             loaded_manifest_entries.iter().map(|(_, manifest)| manifest),
         );

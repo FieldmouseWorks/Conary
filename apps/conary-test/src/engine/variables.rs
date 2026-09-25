@@ -2,9 +2,62 @@
 
 use std::collections::HashMap;
 
+use thiserror::Error;
+
 use crate::config::corpus::{CorpusCaseDef, CorpusTargetDef};
 use crate::config::distro::GlobalConfig;
-use crate::config::manifest::{Assertion, FileChecksum, QemuBoot, QemuGuestCopy, TestManifest};
+use crate::config::manifest::{
+    Assertion, FileChecksum, QemuBoot, QemuGuestCopy, StaticFixture, TestManifest,
+};
+
+/// The config key the image builder and harness variable map read to locate a
+/// built fixture artifact.
+pub const FIXTURE_DIR_CONFIG_KEY: &str = "paths.fixture_dir";
+
+/// A selected suite declares a static fixture the config cannot locate.
+///
+/// A declared fixture's artifact path derives from `paths.fixture_dir`; without
+/// that key the harness install would expand a literal `${FIXTURE_...}`
+/// placeholder. Preflighting the typed declaration fails the run before any
+/// container work instead.
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum FixturePreflightError {
+    #[error(
+        "suite `{suite}` declares fixture `{}` but `{config_key}` is not set in the test config",
+        fixture.declaration()
+    )]
+    MissingFixtureDir {
+        suite: String,
+        fixture: StaticFixture,
+        config_key: &'static str,
+    },
+}
+
+/// Fail when a selected suite declares a fixture the config cannot locate.
+///
+/// `paths.fixture_dir` is the sole source of a fixture artifact path, so a run
+/// that declares a fixture without it must fail up front rather than at install
+/// time with an unexpanded placeholder.
+pub fn preflight_declared_fixtures<'a>(
+    config: &GlobalConfig,
+    manifests: impl IntoIterator<Item = &'a TestManifest>,
+) -> std::result::Result<(), FixturePreflightError> {
+    if config.paths.fixture_dir.is_some() {
+        return Ok(());
+    }
+    for manifest in manifests {
+        for &fixture in StaticFixture::ALL {
+            if manifest.suite.requires_fixtures.contains(&fixture) {
+                return Err(FixturePreflightError::MissingFixtureDir {
+                    suite: manifest.suite.name.clone(),
+                    fixture,
+                    config_key: FIXTURE_DIR_CONFIG_KEY,
+                });
+            }
+        }
+    }
+    Ok(())
+}
 
 /// Build the base variable map from global config and distro selection.
 ///
@@ -46,6 +99,14 @@ pub fn build_variables(config: &GlobalConfig, distro: &str) -> HashMap<String, S
                 .to_string_lossy()
                 .into_owned(),
         );
+        for &fixture in StaticFixture::ALL {
+            vars.insert(
+                fixture.artifact_variable().to_string(),
+                crate::container::image::static_fixture_artifact_path(fixture, fixture_root)
+                    .to_string_lossy()
+                    .into_owned(),
+            );
+        }
     }
 
     if let Some(fixtures) = &config.fixtures {
@@ -74,10 +135,6 @@ pub fn build_variables(config: &GlobalConfig, distro: &str) -> HashMap<String, S
                     format!("{fixture_dir}/conary-test-fixture/v2/output/{value}"),
                 );
             }
-            vars.insert(
-                "FIXTURE_SHELL_CCS".to_string(),
-                format!("{fixture_dir}/conary-test-shell/output/conary-test-shell-1.0.0-1.ccs"),
-            );
         }
         if let Some(value) = &fixtures.v1_hello_sha256 {
             vars.insert("FIXTURE_V1_HELLO_SHA256".to_string(), value.clone());

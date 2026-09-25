@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::backend::ContainerBackend;
+use crate::config::manifest::StaticFixture;
 use crate::config::{DistroBuildContext, DistroConfig};
 
 #[path = "image/static_shell.rs"]
@@ -25,6 +26,31 @@ struct StagedBuildContext {
 struct NativePackageArtifact<'a> {
     path: &'a Path,
     format: ProfilePackageFormat,
+}
+
+/// The artifact path image staging writes for one static fixture.
+///
+/// The harness variable map derives its fixture install variables from this
+/// same function, so the path the image builder writes and the path a suite
+/// installs cannot diverge. `fixture_dir` is `paths.fixture_dir`.
+pub fn static_fixture_artifact_path(fixture: StaticFixture, fixture_dir: &Path) -> PathBuf {
+    let (directory, artifact) = match fixture {
+        StaticFixture::Shell => ("conary-test-shell", "conary-test-shell-1.0.0-1.ccs"),
+    };
+    fixture_dir.join(directory).join("output").join(artifact)
+}
+
+impl StaticFixture {
+    /// The harness variable name that holds this fixture's artifact path.
+    ///
+    /// Derived from [`StaticFixture::install_variable`] so the install command
+    /// and the variable map can never name two different variables.
+    pub fn artifact_variable(self) -> &'static str {
+        self.install_variable()
+            .strip_prefix("${")
+            .and_then(|name| name.strip_suffix('}'))
+            .expect("a fixture install variable is always a ${...} placeholder")
+    }
 }
 
 impl Drop for StagedBuildContext {
@@ -214,7 +240,13 @@ fn build_test_shell_fixture(
     signing_key: &Path,
     trust_policy: &Path,
 ) -> Result<()> {
-    let fixture_root = fixtures_root.join("conary-test-shell");
+    let artifact = static_fixture_artifact_path(StaticFixture::Shell, fixtures_root);
+    let output_dir = artifact
+        .parent()
+        .expect("a static fixture artifact path has an output directory");
+    let fixture_root = output_dir
+        .parent()
+        .expect("a static fixture output directory has a fixture root");
     if !fixture_root.is_dir() {
         return Ok(());
     }
@@ -252,14 +284,22 @@ fn build_test_shell_fixture(
             .with_context(|| format!("failed to make {} executable", staged_shell.display()))?;
     }
 
-    build_signed_fixture(
+    let package = build_signed_fixture(
         conary_bin,
         &manifest,
         &stage,
-        &fixture_root.join("output"),
+        output_dir,
         signing_key,
         trust_policy,
     )?;
+    if package != artifact {
+        bail!(
+            "fixture build for {} produced {} but the harness installs {}; update static_fixture_artifact_path",
+            StaticFixture::Shell.declaration(),
+            package.display(),
+            artifact.display()
+        );
+    }
     Ok(())
 }
 
@@ -269,7 +309,11 @@ fn ensure_phase2_fixture_outputs(
     shell_provider: ShellProviderRequirement,
 ) -> Result<()> {
     let fixture_root = fixtures_root.join("conary-test-fixture");
-    let shell_root = fixtures_root.join("conary-test-shell");
+    let shell_artifact = static_fixture_artifact_path(StaticFixture::Shell, fixtures_root);
+    let shell_root = shell_artifact
+        .parent()
+        .and_then(Path::parent)
+        .expect("a static fixture artifact lives under its fixture root");
     let build_shell = shell_provider.is_installed() && shell_root.is_dir();
     if !fixture_root.is_dir() && !build_shell {
         return Ok(());
