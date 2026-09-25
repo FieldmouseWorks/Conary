@@ -1,6 +1,8 @@
 // apps/conary-test/src/config/manifest.rs
 
-use crate::engine::assertions::find_json_number_tokens;
+use crate::engine::assertions::{
+    JsonNumberToken, find_json_number_tokens, first_out_of_range_number,
+};
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
@@ -373,6 +375,12 @@ struct RawJsonAssertion {
     /// string holds the JSON text verbatim. Every number token is kept exactly
     /// from this text, so an integer outside `i64`/`u64` or any decimal is
     /// compared by its exact decimal value rather than a rounded `f64`.
+    ///
+    /// A number whose magnitude exceeds finite `f64` range (for example a
+    /// 400-digit integer, or a value above `f64::MAX`) is not supported: the
+    /// default `serde_json` parser cannot represent it. The loader rejects it
+    /// with an error naming the pointer and the unsupported range rather than
+    /// serde_json's generic parse failure.
     /// Mutually exclusive with `equals` and `null`.
     #[serde(default)]
     equals_json: Option<String>,
@@ -473,9 +481,20 @@ impl TryFrom<RawJsonAssertion> for JsonAssertion {
                 (JsonExpectation::Equals(value), HashMap::new())
             }
             (None, Some(text), None) => {
-                let parsed = serde_json::from_str(&text);
-                let value = parsed.map_err(|error| invalid_equals_json(&raw.pointer, &error))?;
-                let numbers = find_json_number_tokens(&text)
+                // Scan the raw text before `serde_json` so a number beyond
+                // finite `f64` range is reported as an explicit limitation
+                // rather than serde_json's generic parse error. A walker error
+                // means the text is malformed; fall through so serde_json owns
+                // the syntax diagnostic.
+                let scanned = find_json_number_tokens(&text);
+                if let Ok(numbers) = &scanned
+                    && let Some(number) = first_out_of_range_number(numbers)
+                {
+                    return Err(unsupported_equals_json_number(&raw.pointer, number));
+                }
+                let value = serde_json::from_str(&text)
+                    .map_err(|error| invalid_equals_json(&raw.pointer, &error))?;
+                let numbers = scanned
                     .map_err(|error| invalid_equals_json_text(&raw.pointer, &error))?
                     .into_iter()
                     .map(|number| (number.pointer, number.token))
@@ -544,10 +563,25 @@ fn invalid_equals_json(pointer: &str, error: &serde_json::Error) -> String {
     format!("stdout_json pointer {pointer:?} has invalid `equals_json` JSON: {error}")
 }
 
+/// Build the load error for `equals_json` text containing a number beyond
+/// finite `f64` range.
+///
+/// `serde_json` without `arbitrary_precision` cannot represent such a number
+/// and would fail with a generic parse error. Naming the number's pointer and
+/// the limitation makes the failure actionable.
+fn unsupported_equals_json_number(pointer: &str, number: &JsonNumberToken) -> String {
+    format!(
+        "stdout_json pointer {pointer:?} has an `equals_json` number at {:?} beyond the \
+         supported finite f64 range; such numbers are not supported",
+        number.pointer
+    )
+}
+
 /// Build the load error for `equals_json` text the number walker rejected.
 ///
-/// The walker only runs after `serde_json` accepts the same text, so this is
-/// an internal invariant failure rather than user input reaching a new state.
+/// The walker only reaches this path after `serde_json` accepted the same
+/// text, so this is an internal invariant failure rather than user input
+/// reaching a new state.
 fn invalid_equals_json_text(pointer: &str, error: &anyhow::Error) -> String {
     format!("stdout_json pointer {pointer:?} has invalid `equals_json`: {error}")
 }

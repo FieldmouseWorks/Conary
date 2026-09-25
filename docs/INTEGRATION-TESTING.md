@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-25
-revision: 72
+revision: 73
 summary: Define the Podman container integration harness, its prerequisites, running suites, fixtures, and result/proof contracts
 ---
 
@@ -1271,7 +1271,12 @@ express: TOML integers are `i64`, so `equals` cannot hold an unsigned integer
 above `i64::MAX` (the loader keeps `18446744073709551615` as a `u64`), and TOML
 has no null literal, so `equals` cannot hold a JSON null nested inside an object
 or array. The `equals_json` text is parsed at load time; invalid JSON is a load
-error naming the pointer. Each entry sets exactly one of `equals`,
+error naming the pointer. A number beyond finite `f64` range (for example a
+400-digit integer, or a value above `f64::MAX`) is not supported, because the
+default `serde_json` parser cannot represent it; `equals_json` containing one is
+refused at load with a range error naming the pointer. Stdout that is valid JSON
+but contains such a number is likewise reported as a number beyond the supported
+range, not as invalid JSON. Each entry sets exactly one of `equals`,
 `equals_json`, or `null = true`. String leaves and pointers receive `${VAR}`
 expansion.
 

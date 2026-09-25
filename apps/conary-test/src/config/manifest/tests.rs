@@ -356,6 +356,51 @@ fn stdout_json_equals_json_keeps_nested_out_of_range_integer_token() {
 }
 
 #[test]
+fn stdout_json_equals_json_accepts_largest_finite_float_token() {
+    // Boundary positive control: `f64::MAX` is finite and its decimal order is
+    // exactly 308, so neither the structural nor the infinity check fires.
+    let check = stdout_json_check(r#"pointer = "/x", equals_json = '1.7976931348623157e308'"#);
+
+    let JsonExpectation::Equals(value) = check.expected else {
+        panic!("expected an equals expectation");
+    };
+    assert_eq!(value.as_f64(), Some(f64::MAX));
+}
+
+#[test]
+fn stdout_json_equals_json_rejects_number_beyond_f64_range() {
+    // Positive control through the same fixture: `u64::MAX + 1` is finite in
+    // `f64`, so the loader keeps its exact token and accepts the manifest.
+    let finite = stdout_json_check(r#"pointer = "/id", equals_json = '18446744073709551616'"#);
+    assert_eq!(
+        finite.numbers.get(""),
+        Some(&"18446744073709551616".to_string())
+    );
+
+    // Negative: a 400-digit integer exceeds finite `f64` range, which the
+    // default `serde_json` parser cannot represent.
+    let digits = "9".repeat(400);
+    let error = stdout_json_entry_error(&format!(r#"pointer = "/id", equals_json = '{digits}'"#));
+
+    assert!(error.contains("/id"), "{error}");
+    assert!(error.contains("not supported"), "{error}");
+    // The range limitation is named instead of serde_json's generic error.
+    assert!(!error.contains("invalid `equals_json` JSON"), "{error}");
+}
+
+#[test]
+fn stdout_json_equals_json_rejects_infinite_magnitude_number() {
+    // Both detection branches: an exponent order above 308, and an order-308
+    // value whose leading digits push it past `f64::MAX`.
+    for token in ["1e309", "1.8e308"] {
+        let error = stdout_json_entry_error(&format!(r#"pointer = "/x", equals_json = '{token}'"#));
+
+        assert!(error.contains("/x"), "{token}: {error}");
+        assert!(error.contains("not supported"), "{token}: {error}");
+    }
+}
+
+#[test]
 fn stdout_json_equals_has_no_json_source_tokens() {
     // TOML `equals` values have no JSON text, so the comparator reduces them
     // through the value's shortest round-trip form instead.

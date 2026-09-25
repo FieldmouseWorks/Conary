@@ -141,6 +141,100 @@ fn stdout_json_rejects_non_json_stdout() {
 }
 
 #[test]
+fn stdout_json_reports_out_of_range_number_instead_of_invalid_json() {
+    let assertion = json_assertion("/n", serde_json::json!(0));
+    let digits = "9".repeat(400);
+    let stdout = format!(r#"{{"n":{digits}}}"#);
+
+    let error = evaluate_assertion(&assertion, 0, &stdout, "").unwrap_err();
+    let message = error.to_string();
+    assert!(message.contains("/n"), "{message}");
+    assert!(message.contains("beyond the supported range"), "{message}");
+    assert!(!message.contains("not valid JSON"), "{message}");
+}
+
+#[test]
+fn stdout_json_reports_syntax_error_for_malformed_stdout() {
+    // Positive control for the range path: the same fixture reports the range
+    // message when the document is valid apart from the number's magnitude.
+    let assertion = json_assertion("/n", serde_json::json!(0));
+    let digits = "9".repeat(400);
+    let error = evaluate_assertion(&assertion, 0, &format!(r#"{{"n":{digits}}}"#), "").unwrap_err();
+    assert!(
+        error.to_string().contains("beyond the supported range"),
+        "{error}"
+    );
+
+    // Negative: a genuinely malformed document keeps the generic syntax
+    // message, because the walker cannot scan it.
+    let error = evaluate_assertion(&assertion, 0, r#"{"n": }"#, "").unwrap_err();
+    let message = error.to_string();
+    assert!(message.contains("not valid JSON"), "{message}");
+    assert!(!message.contains("beyond the supported range"), "{message}");
+}
+
+#[test]
+fn stdout_json_reports_control_character_as_syntax_error() {
+    // A malformed string must not be called valid just because the document
+    // also contains an out-of-range number; only the range cause is excused.
+    let assertion = json_assertion("/n", serde_json::json!(0));
+    let digits = "9".repeat(400);
+    let stdout = format!("{{\"s\":\"raw\ncontrol\",\"n\":{digits}}}");
+
+    let error = evaluate_assertion(&assertion, 0, &stdout, "").unwrap_err();
+    let message = error.to_string();
+    assert!(message.contains("not valid JSON"), "{message}");
+    assert!(!message.contains("beyond the supported range"), "{message}");
+}
+
+#[test]
+fn stdout_json_reports_malformed_number_as_syntax_error() {
+    // The document also contains an out-of-range number, but the malformed
+    // leading-zero number means a magnitude is not the only defect.
+    let assertion = json_assertion("/n", serde_json::json!(0));
+    let digits = "9".repeat(400);
+    let stdout = format!(r#"{{"a":01,"n":{digits}}}"#);
+
+    let error = evaluate_assertion(&assertion, 0, &stdout, "").unwrap_err();
+    let message = error.to_string();
+    assert!(message.contains("not valid JSON"), "{message}");
+    assert!(!message.contains("beyond the supported range"), "{message}");
+}
+
+#[test]
+fn number_exceeds_f64_classifies_boundaries() {
+    // Finite boundaries must not be flagged.
+    for token in [
+        "0",
+        "1",
+        "-1",
+        "18446744073709551616",
+        "1e308",
+        "1.7976931348623157e308",
+        "1e-999",
+    ] {
+        assert!(!number_exceeds_f64(token), "{token} unexpectedly flagged");
+    }
+
+    // An order above 308, top-order infinity, and an exponent too large for
+    // `i64` are all beyond finite range.
+    let beyond = [
+        "1e309".to_string(),
+        "1.8e308".to_string(),
+        "9".repeat(400),
+        "1e99999999999999999999".to_string(),
+    ];
+    for token in &beyond {
+        assert!(number_exceeds_f64(token), "{token} unexpectedly accepted");
+    }
+
+    // A malformed token is a syntax concern, not a range one.
+    for token in ["01e999", "1.2.3e999", "1e", "+1e999"] {
+        assert!(!number_exceeds_f64(token), "{token} unexpectedly flagged");
+    }
+}
+
+#[test]
 fn stdout_json_reports_missing_pointer() {
     let assertion = json_assertion("/data/missing", serde_json::json!(true));
 
@@ -275,6 +369,25 @@ fn stdout_json_equals_json_compares_big_integers_exactly() {
     // to the same `f64`.
     let error =
         evaluate_assertion(&assertion, 0, r#"{"id":18446744073709551616}"#, "").unwrap_err();
+    let message = error.to_string();
+    assert!(message.contains("/id"), "{message}");
+    assert!(message.contains("did not match"), "{message}");
+}
+
+#[test]
+fn stdout_json_equals_json_compares_u64_max_plus_one_exactly() {
+    // `u64::MAX + 1` exceeds `u64`, so `serde_json` stores it as a rounded
+    // `f64`; the recorded source token keeps the comparison exact. This is the
+    // finite upper boundary just below the unsupported range.
+    let assertion = json_text_assertion("/id", "18446744073709551616");
+
+    // Positive control: the same big integer matches.
+    assert!(evaluate_assertion(&assertion, 0, r#"{"id":18446744073709551616}"#, "").is_ok());
+
+    // Negative: `u64::MAX` rounds to the same `f64` but is a different exact
+    // integer.
+    let error =
+        evaluate_assertion(&assertion, 0, r#"{"id":18446744073709551615}"#, "").unwrap_err();
     let message = error.to_string();
     assert!(message.contains("/id"), "{message}");
     assert!(message.contains("did not match"), "{message}");

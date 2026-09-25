@@ -80,8 +80,27 @@ pub fn evaluate_assertion(
 
 /// Parse all of `stdout` as one JSON document and apply every typed check.
 fn evaluate_stdout_json(checks: &[JsonAssertion], stdout: &str) -> Result<()> {
-    let document: JsonValue = serde_json::from_str(stdout)
-        .map_err(|error| anyhow::anyhow!("stdout is not valid JSON: {error}"))?;
+    let document: JsonValue = match serde_json::from_str(stdout) {
+        Ok(document) => document,
+        Err(error) => {
+            // `serde_json` without `arbitrary_precision` rejects a number
+            // beyond finite `f64` range, so an otherwise valid document can
+            // look like a syntax error. Re-scan with the number walker: when
+            // every number is well-formed and one exceeds the range, name the
+            // concrete limitation instead. Any other defect, including a
+            // malformed number or text the walker cannot scan, keeps the
+            // generic diagnostic.
+            if let Ok(numbers) = find_json_number_tokens(stdout)
+                && let Some(number) = first_out_of_range_number(&numbers)
+            {
+                bail!(
+                    "stdout is valid JSON but contains a number beyond the supported range at \"{}\"",
+                    number.pointer
+                );
+            }
+            bail!("stdout is not valid JSON: {error}");
+        }
+    };
     // `serde_json` stores every decimal token as `f64`, and an integer token
     // outside `i64`/`u64` as `f64` too. Record the source token for every
     // number at its pointer so a check compares exact decimal values instead
@@ -262,8 +281,9 @@ impl CanonicalDecimal {
     /// Parse a JSON number source token into canonical form.
     ///
     /// The scanner is hand-written against the RFC 8259 §6 grammar; it does not
-    /// use a regular expression. `token` must already have parsed with
-    /// `serde_json`, so a parse error here is an internal invariant failure.
+    /// use a regular expression. Callers only reduce tokens they have already
+    /// classified as JSON numbers, but the parser still reports a malformed or
+    /// out-of-range-exponent token as a typed error rather than panicking.
     pub(crate) fn parse(token: &str) -> std::result::Result<Self, CanonicalDecimalError> {
         let (negative, unsigned) = match token.strip_prefix('-') {
             Some(rest) => (true, rest),
@@ -361,6 +381,95 @@ fn parse_exponent(text: &str) -> Option<i64> {
     let magnitude = digits.parse::<i128>().ok()?;
     let signed = if negative { -magnitude } else { magnitude };
     i64::try_from(signed).ok()
+}
+
+/// The decimal exponent of `f64::MAX` (`1.797...e308`).
+const F64_MAX_DECIMAL_EXPONENT: i64 = 308;
+
+/// Whether a JSON number token's magnitude exceeds the finite `f64` range.
+///
+/// `serde_json` without `arbitrary_precision` represents every number as
+/// `i64`, `u64`, or `f64`, so a token beyond this range is exactly the set it
+/// cannot parse. Detection is structural first: a number is
+/// `digits * 10^exponent`, so its leading digit sits at
+/// `exponent + digits.len() - 1`, and any order above `f64::MAX`'s 308 is out
+/// of range. The top order, where the leading digits still decide, is settled
+/// by asking whether the token parses to infinity. A token that is not a valid
+/// JSON number is not this rule's concern and is never classified here.
+fn number_exceeds_f64(token: &str) -> bool {
+    if !is_json_number_token(token) {
+        return false;
+    }
+    if let Ok(value) = CanonicalDecimal::parse(token)
+        && canonical_order(&value).is_some_and(|order| order > F64_MAX_DECIMAL_EXPONENT)
+    {
+        return true;
+    }
+    token.parse::<f64>().is_ok_and(f64::is_infinite)
+}
+
+/// The first scanned number beyond finite `f64` range, when every scanned
+/// number is a valid RFC 8259 number.
+///
+/// The all-valid guard lets a caller excuse a parse failure only when a
+/// number's magnitude is the *only* defect. A document that also contains a
+/// malformed number yields `None` so its syntax error stays authoritative.
+pub(crate) fn first_out_of_range_number(numbers: &[JsonNumberToken]) -> Option<&JsonNumberToken> {
+    if !numbers
+        .iter()
+        .all(|number| is_json_number_token(&number.token))
+    {
+        return None;
+    }
+    numbers
+        .iter()
+        .find(|number| number_exceeds_f64(&number.token))
+}
+
+/// The decimal exponent of a canonical value's leading digit.
+///
+/// Returns `None` when the exponent and digit count cannot be added without
+/// overflowing, which already means the value is far outside `f64` range.
+fn canonical_order(value: &CanonicalDecimal) -> Option<i64> {
+    let digits = i64::try_from(value.digits.len()).ok()?;
+    value.exponent.checked_add(digits)?.checked_sub(1)
+}
+
+/// Whether `token` matches the RFC 8259 §6 number grammar.
+///
+/// `CanonicalDecimal::parse` validates the same grammar but also rejects an
+/// exponent that does not fit `i64`; this independent check keeps a
+/// syntactically valid number with an astronomically large exponent a range
+/// problem rather than a syntax problem. It is a hand-written scanner, not a
+/// regular expression.
+fn is_json_number_token(token: &str) -> bool {
+    let unsigned = token.strip_prefix('-').unwrap_or(token);
+    let (mantissa, exponent) = match unsigned.split_once(['e', 'E']) {
+        Some((mantissa, exponent)) => (mantissa, Some(exponent)),
+        None => (unsigned, None),
+    };
+    if exponent.is_some_and(|exponent| !is_exponent_part(exponent)) {
+        return false;
+    }
+    let (integer, fraction) = match mantissa.split_once('.') {
+        Some((integer, fraction)) => (integer, Some(fraction)),
+        None => (mantissa, None),
+    };
+    if !is_integer_part(integer) {
+        return false;
+    }
+    fraction.is_none_or(|fraction| {
+        !fraction.is_empty() && fraction.bytes().all(|byte| byte.is_ascii_digit())
+    })
+}
+
+/// Whether `text` is the exponent part of an RFC 8259 number.
+///
+/// Unlike `parse_exponent`, this does not bound the magnitude, so an exponent
+/// too large for `i64` is still recognized as part of a valid number.
+fn is_exponent_part(text: &str) -> bool {
+    let digits = text.strip_prefix(['+', '-']).unwrap_or(text);
+    !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit())
 }
 
 /// A number token that is not a valid RFC 8259 number.
@@ -471,13 +580,15 @@ pub(crate) struct JsonNumberToken {
 /// `serde_json` keeps an in-range integer token exact but represents every
 /// decimal token, and any integer outside `i64`/`u64`, as `f64`, which cannot
 /// hold them exactly. Rather than enable an optional `serde_json` feature that
-/// exposes source tokens, this re-scans the validated text with a small typed
-/// walker. The walker skips strings and tracks RFC 6901 pointers, so it cannot
-/// mistake a digit sequence inside a string for a JSON number, and it matches
-/// the JSON grammar exactly rather than by pattern.
+/// exposes source tokens, this re-scans the text with a small typed walker.
+/// The walker skips strings and tracks RFC 6901 pointers, so it cannot mistake
+/// a digit sequence inside a string for a JSON number, and it recognizes JSON
+/// structure rather than scanning for a pattern. Number grammar is validated
+/// separately where it matters.
 ///
-/// `json` must already have parsed with `serde_json`; the walker assumes
-/// well-formed JSON and fails only if that invariant is broken.
+/// Callers pass both text `serde_json` already accepted and raw text whose
+/// parse failed. Malformed input therefore returns a typed error instead of
+/// panicking, which lets the caller fall back to `serde_json`'s diagnostic.
 pub(crate) fn find_json_number_tokens(json: &str) -> Result<Vec<JsonNumberToken>> {
     let mut walker = JsonNumberWalker {
         bytes: json.as_bytes(),
@@ -489,11 +600,11 @@ pub(crate) fn find_json_number_tokens(json: &str) -> Result<Vec<JsonNumberToken>
     Ok(walker.numbers)
 }
 
-/// A minimal exact walker over already-validated JSON text.
+/// A minimal exact walker over JSON text.
 ///
-/// It exists only to pair each number token with its RFC 6901 pointer; the
-/// document has already been parsed by `serde_json`, so it does not build
-/// values and treats malformed input as an internal error.
+/// It exists only to pair each number token with its RFC 6901 pointer; it does
+/// not build values, and it reports malformed input as a typed error so a
+/// caller can decide whether to retry or fall back.
 struct JsonNumberWalker<'a> {
     bytes: &'a [u8],
     pos: usize,
@@ -612,6 +723,11 @@ impl JsonNumberWalker<'_> {
             match self.bump()? {
                 b'"' => break,
                 b'\\' => self.walk_escape(&mut decoded)?,
+                // RFC 8259 allows `0x20` and above unescaped, so a raw control
+                // character is malformed and must not be mistaken for text.
+                byte if byte < 0x20 => {
+                    bail!("unescaped control character in JSON string")
+                }
                 byte => decoded.push(byte),
             }
         }
