@@ -47,6 +47,72 @@ fn directory_entry(path: &str, permissions: u32, owner: u64) -> FileEntry {
     }
 }
 
+/// A minimal converted native lifecycle program shared by the exporter control
+/// tests. Converted native programs preserve their source ABI, including the
+/// native invocation arguments, and live on `CcsManifest::native_lifecycle`
+/// rather than `Hooks`, so the authored-hook zero-argument wrapper must never
+/// reach them.
+pub(crate) fn converted_native_lifecycle_bundle(
+    body: &str,
+) -> crate::ccs::native_lifecycle::NativeLifecycleBundle {
+    use crate::ccs::native_lifecycle::{
+        LifecyclePath, NATIVE_LIFECYCLE_SCHEMA_REVISION, NATIVE_LIFECYCLE_SCHEMA_V1,
+        NativeInvocation, NativeLifecycleBundle, NativeLifecycleEntry, NativeLifecycleEntryKind,
+        ScriptletFidelity, SourceFormat, TransactionOrder, VersionScheme,
+    };
+
+    NativeLifecycleBundle {
+        schema: NATIVE_LIFECYCLE_SCHEMA_V1.to_string(),
+        schema_revision: NATIVE_LIFECYCLE_SCHEMA_REVISION,
+        source_format: SourceFormat::Rpm,
+        source_family: "fedora-rhel".to_string(),
+        source_profile: Some("fedora-44".to_string()),
+        source_release: None,
+        source_arch: Some("x86_64".to_string()),
+        source_package: "converted-fixture".to_string(),
+        source_version: "1.0.0-1.fc44".to_string(),
+        source_checksum: None,
+        version_scheme: VersionScheme::Rpm,
+        conversion_tool: "conary".to_string(),
+        conversion_tool_version: "0.1.0".to_string(),
+        conversion_policy: "native-lifecycle-v2".to_string(),
+        evidence_digest: None,
+        scriptlet_fidelity: ScriptletFidelity::NativeLifecycle,
+        entries: vec![NativeLifecycleEntry {
+            id: "rpm:%post".to_string(),
+            native_slot: Some(crate::packages::native_abi::RpmScriptletSlot::Post),
+            kind: NativeLifecycleEntryKind::Executable,
+            phase: LifecyclePath::PostInstall,
+            lifecycle_paths: vec!["post-install".to_string()],
+            interpreter: "/bin/sh".to_string(),
+            interpreter_args: Vec::new(),
+            body_sha256: crate::hash::sha256_prefixed(body.as_bytes()),
+            body: body.to_string(),
+            body_encoding: None,
+            native_invocation: NativeInvocation {
+                args: vec!["1".to_string()],
+                ..NativeInvocation::default()
+            },
+            transaction_order: TransactionOrder {
+                position: "after-payload".to_string(),
+                ..TransactionOrder::default()
+            },
+            timeout_ms: 30_000,
+            sandbox: None,
+            capabilities: Vec::new(),
+            evidence_digest: None,
+            source_evidence_refs: Vec::new(),
+            rpm_trigger: None,
+            rpm_runtime: None,
+            rpm_sysusers: None,
+            deb_maintainer: None,
+            arch_install: None,
+            arch_hook: None,
+            residual_lifecycle: None,
+        }],
+    }
+}
+
 #[test]
 fn test_rpm_generation_empty() {
     let result = create_test_build_result();
@@ -522,4 +588,75 @@ fn rpm_export_refuses_a_script_hook_interpreter_it_cannot_execute() {
     let output_path = temp_dir.path().join("shell.rpm");
     generate(&result, &output_path).unwrap();
     assert!(output_path.exists());
+}
+
+fn exported_rpm_scriptlet(result: &BuildResult, file_name: &str, slot: &str) -> String {
+    let temp_dir = TempDir::new().unwrap();
+    let output_path = temp_dir.path().join(file_name);
+    generate(result, &output_path).unwrap();
+    let package = crate::packages::rpm::RpmPackage::parse(output_path.to_str().unwrap())
+        .expect("parse generated RPM");
+    package
+        .native_scriptlet_abi()
+        .iter()
+        .find(|entry| entry.native_slot == slot)
+        .unwrap_or_else(|| panic!("missing RPM {slot} scriptlet"))
+        .body
+        .text
+        .clone()
+        .expect("RPM scriptlet is UTF-8")
+}
+
+#[test]
+fn rpm_authored_ccs_script_hook_clears_native_positional_arguments() {
+    let mut result = create_test_build_result();
+    result.manifest.hooks.post_install = Some(ScriptHook {
+        script: "printf 'post-installed' > /var/lib/example/installed".to_string(),
+        interpreter: "/bin/sh".to_string(),
+        reversible: None,
+    });
+    result.manifest.hooks.pre_remove = Some(ScriptHook {
+        script: "printf 'pre-removed' > /var/lib/example/removed".to_string(),
+        interpreter: "/bin/sh".to_string(),
+        reversible: None,
+    });
+
+    assert_eq!(
+        exported_rpm_scriptlet(&result, "authored-post.rpm", "%post"),
+        "#!/bin/sh\nset -e\nset --\nprintf 'post-installed' > /var/lib/example/installed"
+    );
+    assert_eq!(
+        exported_rpm_scriptlet(&result, "authored-preun.rpm", "%preun"),
+        "#!/bin/sh\nset -e\nset --\nprintf 'pre-removed' > /var/lib/example/removed"
+    );
+}
+
+#[test]
+fn rpm_converted_native_lifecycle_program_is_not_rewritten_by_the_authored_hook_guard() {
+    // Converted native programs preserve their source ABI on
+    // `CcsManifest::native_lifecycle`; they never pass through `Hooks`, so the
+    // zero-argument guard must not rewrite them. The presence of the bundle must
+    // leave the emitted authored-hook scriptlet byte-identical.
+    let authored = ScriptHook {
+        script: "printf 'authored' > /dev/null".to_string(),
+        interpreter: "/bin/sh".to_string(),
+        reversible: None,
+    };
+    let mut without = create_test_build_result();
+    without.manifest.hooks.post_install = Some(authored.clone());
+    let mut with = create_test_build_result();
+    with.manifest.hooks.post_install = Some(authored);
+    with.manifest.native_lifecycle = Some(converted_native_lifecycle_bundle(
+        "printf 'native:%s' \"$1\"",
+    ));
+
+    let expected = "#!/bin/sh\nset -e\nset --\nprintf 'authored' > /dev/null";
+    assert_eq!(
+        exported_rpm_scriptlet(&without, "without-native.rpm", "%post"),
+        expected
+    );
+    assert_eq!(
+        exported_rpm_scriptlet(&with, "with-native.rpm", "%post"),
+        expected
+    );
 }
