@@ -18,12 +18,34 @@ use crate::resolver::provider::matching::{
 };
 use crate::resolver::provider::types::ConaryConstraint;
 
-/// Load the exact installed package/provide facts used by bounded requirement
-/// evaluation outside the SAT provider.
+/// Load the exact installed package/provide facts for every installed trove.
+///
+/// This includes non-package troves such as collections created by
+/// `conary collection create`. Callers that evaluate native requirements must
+/// use `load_installed_package_identities_for_packages` instead: a collection
+/// has no architecture authority, and the evaluator rejects the whole fact set
+/// when any member lacks one.
 pub fn load_installed_package_identities(
     conn: &rusqlite::Connection,
 ) -> Result<Vec<PackageIdentity>> {
-    Trove::list_all(conn)?
+    package_identities_from_troves(conn, Trove::list_all(conn)?)
+}
+
+/// Load the exact installed package/provide facts from package troves only.
+///
+/// Collections and components are not requirement providers, so they are
+/// excluded before the facts reach the native requirement evaluator.
+pub fn load_installed_package_identities_for_packages(
+    conn: &rusqlite::Connection,
+) -> Result<Vec<PackageIdentity>> {
+    package_identities_from_troves(conn, Trove::list_packages(conn)?)
+}
+
+fn package_identities_from_troves(
+    conn: &rusqlite::Connection,
+    troves: Vec<Trove>,
+) -> Result<Vec<PackageIdentity>> {
+    troves
         .into_iter()
         .map(|trove| {
             let trove_id = trove.id.ok_or_else(|| {
@@ -72,13 +94,15 @@ pub fn load_installed_package_identities(
 ///
 /// Atomic clause rows are discovery indexes only. The caller must evaluate the
 /// original expression against the returned identities to retain Boolean and
-/// same-provider semantics.
+/// same-provider semantics. Installed candidates are package troves only, since
+/// a collection has no architecture authority and would make the evaluator
+/// reject the candidate set.
 pub(crate) fn load_requirement_candidate_identities(
     conn: &rusqlite::Connection,
     expression: &RepositoryRequirementExpression,
     version_scheme: VersionScheme,
 ) -> Result<Vec<PackageIdentity>> {
-    let mut identities = load_installed_package_identities(conn)?;
+    let mut identities = load_installed_package_identities_for_packages(conn)?;
     let mut seen_repository_packages = HashSet::new();
 
     for clause in expression.atoms() {

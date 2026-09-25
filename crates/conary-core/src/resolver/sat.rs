@@ -22,11 +22,13 @@ use petgraph::visit::EdgeRef;
 use crate::error::{Error, Result};
 use crate::packages::PackageFormat;
 use crate::repository::dependency_model::{
-    ProvidedCapability, RepositoryRequirementGroup, RepositoryRequirementKind,
+    ProvidedCapability, RepositoryRequirementExpression, RepositoryRequirementGroup,
+    RepositoryRequirementKind,
 };
 use crate::repository::resolution_policy::ResolutionPolicy;
 use crate::repository::versioning::VersionScheme;
 use crate::resolver::identity::PackageIdentity;
+use crate::resolver::provider::SolverExpression;
 use crate::version::VersionConstraint;
 
 const MAX_LOADED_NAMES: usize = 50_000;
@@ -104,6 +106,24 @@ impl SatResolution {
             install_order: Vec::new(),
             remove_order: Vec::new(),
             conflict_message: None,
+        }
+    }
+
+    /// A successful resolution with its exact install and removal orders.
+    fn resolved(install_order: Vec<SatPackage>, remove_order: Vec<SatRelationRemoval>) -> Self {
+        Self {
+            install_order,
+            remove_order,
+            conflict_message: None,
+        }
+    }
+
+    /// A resolution that refuses the request with a typed conflict explanation.
+    fn conflict(message: String) -> Self {
+        Self {
+            install_order: Vec::new(),
+            remove_order: Vec::new(),
+            conflict_message: Some(message),
         }
     }
 }
@@ -468,11 +488,7 @@ fn solve_requirement_groups_for_architecture_with_policy(
     }
 
     if hard_groups.is_empty() {
-        return Ok(SatResolution {
-            install_order: Vec::new(),
-            remove_order: Vec::new(),
-            conflict_message: None,
-        });
+        return Ok(SatResolution::empty());
     }
 
     // A malformed source identity is always a hard error; installed
@@ -481,25 +497,36 @@ fn solve_requirement_groups_for_architecture_with_policy(
         .validate_source_identities()
         .map_err(Error::ConfigError)?;
     let invalid_policy = policy.validate_for_dependency_resolution().err();
+    let native_architecture = crate::repository::registry::detect_system_arch()?;
 
-    // The transaction's end state is fixed: every installed trove except the
-    // outgoing set, plus the incoming package. A hard group that end state
+    let outgoing_trove_ids: &[i64] = match end_state {
+        EndState::Known { outgoing_trove_ids } => outgoing_trove_ids,
+        EndState::Unknown => &[],
+    };
+    let lock_surviving_installed = matches!(end_state, EndState::Known { .. });
+
+    // The transaction's end state is fixed: every installed package trove except
+    // the outgoing set, plus the incoming package. A hard group that end state
     // already satisfies needs no repository work, so only its residual groups
     // reach SAT. Their conditions are resolved against the fixed state first so
     // the solver cannot drop a surviving provider to discharge the group
-    // vacuously.
-    let pending_expressions = match end_state {
+    // vacuously. Residuals stay aligned with `hard_groups` so a group the
+    // pre-solve simplification distorted can be retried unsimplified.
+    let (fixed_end_state, group_residuals) = match end_state {
         EndState::Unknown => {
             if let Some(message) = invalid_policy.as_deref() {
                 return Err(Error::ConfigError(message.to_string()));
             }
-            hard_groups
-                .iter()
-                .map(|group| group.expression.clone())
-                .collect::<Vec<_>>()
+            (
+                None,
+                hard_groups
+                    .iter()
+                    .map(|group| Some(group.expression.clone()))
+                    .collect::<Vec<_>>(),
+            )
         }
         EndState::Known { outgoing_trove_ids } => {
-            let pending = install::unsatisfied_groups_against_end_state(
+            let evaluated = install::unsatisfied_groups_against_end_state(
                 conn,
                 &hard_groups,
                 version_scheme,
@@ -507,7 +534,7 @@ fn solve_requirement_groups_for_architecture_with_policy(
                 outgoing_trove_ids,
                 incoming,
             )?;
-            if pending.is_empty() {
+            if evaluated.residuals.iter().all(Option::is_none) {
                 return Ok(SatResolution::empty());
             }
             if let Some(message) = invalid_policy.as_deref() {
@@ -515,17 +542,124 @@ fn solve_requirement_groups_for_architecture_with_policy(
                 // fixed end state itself.
                 return Err(Error::ConfigError(message.to_string()));
             }
-            pending
+            (Some(evaluated.end_state), evaluated.residuals)
         }
     };
 
-    let outgoing_trove_ids: &[i64] = match end_state {
-        EndState::Known { outgoing_trove_ids } => outgoing_trove_ids,
-        EndState::Unknown => &[],
+    let first_expressions =
+        compile_group_residuals(&group_residuals, version_scheme, depending_architecture)?;
+    let first = solve_expression_pass(
+        conn,
+        &first_expressions,
+        policy,
+        outgoing_trove_ids,
+        lock_surviving_installed,
+    )?;
+
+    let (install_order, remove_order, selected) = match first {
+        ExpressionPass::Conflict(message) => return Ok(SatResolution::conflict(message)),
+        ExpressionPass::Resolved {
+            install_order,
+            remove_order,
+            selected,
+        } => (install_order, remove_order, selected),
     };
 
-    let expressions = pending_expressions
+    // An unknown end state cannot be projected, so the caller's own semantics
+    // apply and there is nothing to validate against.
+    let Some(fixed_end_state) = fixed_end_state else {
+        return Ok(SatResolution::resolved(install_order, remove_order));
+    };
+
+    // A conditional the fixed-state simplification dropped can become true once
+    // SAT selects its condition package. Validate every original hard group
+    // against the full projected end state before reporting success.
+    let violated = install::groups_violated_by_solved_end_state(
+        &fixed_end_state,
+        &selected,
+        &remove_order,
+        &hard_groups,
+        version_scheme,
+        depending_architecture,
+        &native_architecture,
+    )?;
+    if violated.is_empty() {
+        return Ok(SatResolution::resolved(install_order, remove_order));
+    }
+
+    // One bounded retry: keep the violated groups unsimplified so resolvo sees
+    // the live conditional instead of a fixed-state decision. If the retry
+    // still leaves a group unsatisfied in the projected end state, the request
+    // is a conflict rather than an unsound success.
+    let retry_residuals = group_residuals
         .iter()
+        .enumerate()
+        .map(|(index, residual)| {
+            if violated.contains(&index) {
+                Some(hard_groups[index].expression.clone())
+            } else {
+                residual.clone()
+            }
+        })
+        .collect::<Vec<_>>();
+    let retry_expressions =
+        compile_group_residuals(&retry_residuals, version_scheme, depending_architecture)?;
+    let retry = solve_expression_pass(
+        conn,
+        &retry_expressions,
+        policy,
+        outgoing_trove_ids,
+        lock_surviving_installed,
+    )?;
+
+    match retry {
+        ExpressionPass::Conflict(message) => Ok(SatResolution::conflict(message)),
+        ExpressionPass::Resolved {
+            install_order,
+            remove_order,
+            selected,
+        } => {
+            let still_violated = install::groups_violated_by_solved_end_state(
+                &fixed_end_state,
+                &selected,
+                &remove_order,
+                &hard_groups,
+                version_scheme,
+                depending_architecture,
+                &native_architecture,
+            )?;
+            if still_violated.is_empty() {
+                Ok(SatResolution::resolved(install_order, remove_order))
+            } else {
+                Ok(SatResolution::conflict(unsatisfied_groups_message(
+                    &hard_groups,
+                    &still_violated,
+                )))
+            }
+        }
+    }
+}
+
+/// One solver pass over compiled root requirement expressions.
+enum ExpressionPass {
+    Conflict(String),
+    Resolved {
+        install_order: Vec<SatPackage>,
+        remove_order: Vec<SatRelationRemoval>,
+        selected: Vec<PackageIdentity>,
+    },
+}
+
+/// Compile the residual expression of each hard group, skipping discharged
+/// groups. The result preserves group order.
+fn compile_group_residuals(
+    residuals: &[Option<RepositoryRequirementExpression>],
+    version_scheme: VersionScheme,
+    depending_architecture: &str,
+) -> Result<Vec<SolverExpression>> {
+    residuals
+        .iter()
+        .flatten()
         .map(|expression| {
             crate::resolver::provider::repository_expression_to_solver_for_architecture(
                 expression,
@@ -533,41 +667,72 @@ fn solve_requirement_groups_for_architecture_with_policy(
                 depending_architecture,
             )
         })
-        .collect::<Result<Vec<_>>>()?;
+        .collect()
+}
 
+/// Run one solve over the given root expressions, returning the relation plan's
+/// typed outcome or the selected package facts.
+fn solve_expression_pass(
+    conn: &Connection,
+    expressions: &[SolverExpression],
+    policy: &ResolutionPolicy,
+    outgoing_trove_ids: &[i64],
+    lock_surviving_installed: bool,
+) -> Result<ExpressionPass> {
     let mut provider = install::build_provider_for_requirement_expressions(
         conn,
-        &expressions,
+        expressions,
         policy,
         outgoing_trove_ids,
-        matches!(end_state, EndState::Known { .. }),
+        lock_surviving_installed,
     )?;
-    let requirements = install::build_expression_requirements(&mut provider, &expressions)?;
+    let requirements = install::build_expression_requirements(&mut provider, expressions)?;
     let problem = Problem::new().requirements(requirements);
     let mut solver = Solver::new(provider);
     match solver.solve(problem) {
         Ok(solvable_ids) => {
             let relation_plan =
                 relations::plan_selected_relations(solver.provider(), &solvable_ids)?;
-            Ok(SatResolution {
-                install_order: if relation_plan.conflict.is_some() {
-                    Vec::new()
-                } else {
-                    install::collect_install_order(solver.provider(), &solvable_ids)
-                },
+            if let Some(conflict) = relation_plan.conflict {
+                return Ok(ExpressionPass::Conflict(conflict));
+            }
+            Ok(ExpressionPass::Resolved {
+                install_order: install::collect_install_order(solver.provider(), &solvable_ids),
                 remove_order: relation_plan.removals,
-                conflict_message: relation_plan.conflict,
+                selected: install::collect_selected_identities(solver.provider(), &solvable_ids),
             })
         }
-        Err(UnsolvableOrCancelled::Unsolvable(conflict)) => Ok(SatResolution {
-            install_order: Vec::new(),
-            remove_order: Vec::new(),
-            conflict_message: Some(conflict.display_user_friendly(&solver).to_string()),
-        }),
+        Err(UnsolvableOrCancelled::Unsolvable(conflict)) => Ok(ExpressionPass::Conflict(
+            conflict.display_user_friendly(&solver).to_string(),
+        )),
         Err(UnsolvableOrCancelled::Cancelled(_)) => Err(Error::InitError(
             "Dependency resolution was cancelled".to_string(),
         )),
     }
+}
+
+/// A conflict explanation naming every hard group the retry could not place in
+/// the projected end state, as decided by the shared typed evaluator.
+fn unsatisfied_groups_message(
+    hard_groups: &[&RepositoryRequirementGroup],
+    violated: &[usize],
+) -> String {
+    let groups = violated
+        .iter()
+        .map(|&index| {
+            let group = hard_groups[index];
+            group
+                .native_text
+                .as_deref()
+                .filter(|text| !text.trim().is_empty())
+                .map(str::to_string)
+                .unwrap_or_else(|| format!("{:?}", group.expression))
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    format!(
+        "the solved install order leaves hard requirement group(s) unsatisfied in the transaction end state: {groups}"
+    )
 }
 
 /// Return whether an incoming package already satisfies one positive

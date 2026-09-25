@@ -3,7 +3,7 @@
 #![cfg(test)]
 
 use super::*;
-use crate::db::models::{ProvideEntry, RepositoryProvide};
+use crate::db::models::{ProvideEntry, RepositoryProvide, Trove, TroveType};
 use crate::repository::dependency_model::{
     RepositoryCapabilityKind, RepositoryRequirementClause, RepositoryRequirementGroup,
     RepositoryRequirementKind,
@@ -392,4 +392,107 @@ fn authority_known_end_state_refuses_to_replace_a_surviving_installed_trove() {
     .unwrap();
     assert!(result.conflict_message.is_some(), "{result:?}");
     assert!(result.install_order.is_empty(), "{result:?}");
+}
+
+fn install_collection_trove(conn: &Connection, name: &str) {
+    // A grammar-valid version: `conary collection create` currently writes
+    // "1.0", which insert-time validation rejects (see #1119).
+    let mut collection = Trove::new(
+        name.to_string(),
+        "1.0.0".to_string(),
+        TroveType::Collection,
+        VersionScheme::Conary,
+    );
+    // `conary collection create` persists no architecture for a collection.
+    collection.insert(conn).unwrap();
+}
+
+#[test]
+fn installed_provider_satisfies_strict_requirement_alongside_collection() {
+    let (_dir, conn) = setup_test_db();
+    let policy = strict_policy_without_source_authority(&conn);
+
+    // Control: the collection is not a provider, so a strict solve has no
+    // architecture-bearing fact that satisfies the requirement.
+    install_collection_trove(&conn, "group-base");
+    let refused = solve_requirement_groups_with_outgoing_and_policy(
+        &conn,
+        &[file_predepends()],
+        VersionScheme::Rpm,
+        &[],
+        &policy,
+    )
+    .unwrap_err();
+    assert!(matches!(refused, Error::ConfigError(_)), "{refused:?}");
+
+    // The installed package trove has architecture authority, so the same
+    // requirement is discharged even though the collection has none.
+    installed_file_provider(&conn, "installed-provider");
+    let satisfied = solve_requirement_groups_with_outgoing_and_policy(
+        &conn,
+        &[file_predepends()],
+        VersionScheme::Rpm,
+        &[],
+        &policy,
+    )
+    .unwrap();
+    assert!(satisfied.install_order.is_empty(), "{satisfied:?}");
+    assert!(satisfied.remove_order.is_empty(), "{satisfied:?}");
+    assert_eq!(satisfied.conflict_message, None, "{satisfied:?}");
+}
+
+#[test]
+fn authority_solve_validates_conditions_triggered_by_selected_packages() {
+    let (_dir, conn) = setup_test_db();
+    let repository_id = repository_fixture(&conn);
+    insert_rpm_repo_package(&conn, repository_id, "bar", "1-1");
+    let policy = ResolutionPolicy::new().with_primary_source_identity("fedora-44");
+    let groups = || {
+        vec![
+            crate::repository::requirement::parse_native_requirement(
+                RepositoryRequirementKind::Depends,
+                VersionScheme::Rpm,
+                "bar",
+            )
+            .unwrap(),
+            conditional_depends("foo", "bar"),
+        ]
+    };
+
+    // Negative control: `bar` is selected to satisfy its own hard group, which
+    // turns `(foo if bar)` true, but `foo` has no admitted candidate. The solve
+    // must refuse instead of returning an install order that violates the
+    // dependency in the real end state.
+    let refused = solve_requirement_groups_with_outgoing_and_policy(
+        &conn,
+        &groups(),
+        VersionScheme::Rpm,
+        &[],
+        &policy,
+    )
+    .unwrap();
+    assert!(refused.conflict_message.is_some(), "{refused:?}");
+    assert!(refused.install_order.is_empty(), "{refused:?}");
+
+    // Positive control through the same fixture: admitting `foo` lets the
+    // retry select it alongside the selected condition, and the install order
+    // is exactly the two packages.
+    insert_rpm_repo_package(&conn, repository_id, "foo", "1-1");
+    let resolved = solve_requirement_groups_with_outgoing_and_policy(
+        &conn,
+        &groups(),
+        VersionScheme::Rpm,
+        &[],
+        &policy,
+    )
+    .unwrap();
+    assert!(resolved.conflict_message.is_none(), "{resolved:?}");
+    let mut names = resolved
+        .install_order
+        .iter()
+        .map(|package| package.name.as_str())
+        .collect::<Vec<_>>();
+    names.sort_unstable();
+    assert_eq!(names, ["bar", "foo"], "{resolved:?}");
+    assert!(resolved.remove_order.is_empty(), "{resolved:?}");
 }

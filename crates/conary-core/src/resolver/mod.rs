@@ -23,7 +23,10 @@ pub use conflict::Conflict;
 pub use identity::PackageIdentity;
 pub use plan::{MissingDependency, ResolutionPlan};
 pub use provides_index::ProvidesIndex;
-pub use requirements::{load_installed_package_identities, requirement_expression_satisfied};
+pub use requirements::{
+    load_installed_package_identities, load_installed_package_identities_for_packages,
+    requirement_expression_satisfied,
+};
 pub use sat::{
     SatPackage, SatResolution, SatSource, positive_requirement_group_satisfied_by_package,
     solve_install_with_policy, solve_package_requirements_with_policy,

@@ -15,7 +15,7 @@ use crate::resolver::identity::PackageIdentity;
 use crate::version::VersionConstraint;
 
 use super::super::provider::{ConaryConstraint, ConaryProvider, SolverExpression};
-use super::{SatPackage, SatSource, check_transitive_loading_limits, timing};
+use super::{SatPackage, SatRelationRemoval, SatSource, check_transitive_loading_limits, timing};
 
 pub(super) fn build_provider_for_install<'conn>(
     conn: &'conn Connection,
@@ -171,13 +171,28 @@ pub(super) fn build_expression_requirements(
     provider.compile_root_requirements(expressions)
 }
 
+/// The original hard groups evaluated against the transaction's fixed end
+/// state.
+pub(super) struct FixedStateEvaluation {
+    /// `(installed - outgoing) + incoming`, package troves only.
+    pub(super) end_state: Vec<PackageIdentity>,
+    /// One residual per input hard group, in the same order.
+    ///
+    /// `None` means the fixed end state already satisfies (or vacuously
+    /// discharges) the group, so the solver needs no repository work for it.
+    pub(super) residuals: Vec<Option<RepositoryRequirementExpression>>,
+}
+
 /// Evaluate exact hard requirement groups against the transaction's fixed end
-/// state and return the residual expressions that still need repository work.
+/// state, returning the fixed facts and the residual expressions that still
+/// need repository work.
 ///
 /// There are no choices to make against the fixed state, so the shared typed
 /// expression evaluator decides each group directly. Groups that hold are
 /// dropped. For the rest, [`simplify_against_end_state`] removes every
-/// sub-expression the fixed state already satisfies.
+/// sub-expression the fixed state already satisfies. Residuals stay aligned
+/// with the input groups so the caller can re-solve a violated group without
+/// simplification.
 pub(super) fn unsatisfied_groups_against_end_state(
     conn: &Connection,
     groups: &[&RepositoryRequirementGroup],
@@ -185,11 +200,11 @@ pub(super) fn unsatisfied_groups_against_end_state(
     depending_architecture: &str,
     outgoing_trove_ids: &[i64],
     incoming: Option<&PackageIdentity>,
-) -> Result<Vec<RepositoryRequirementExpression>> {
+) -> Result<FixedStateEvaluation> {
     let end_state = fixed_end_state(conn, outgoing_trove_ids, incoming)?;
     let native_architecture = crate::repository::registry::detect_system_arch()?;
 
-    let mut pending = Vec::new();
+    let mut residuals = Vec::with_capacity(groups.len());
     for group in groups {
         if crate::resolver::requirement_expression_satisfied(
             &group.expression,
@@ -198,29 +213,94 @@ pub(super) fn unsatisfied_groups_against_end_state(
             &native_architecture,
             &end_state,
         )? {
+            residuals.push(None);
             continue;
         }
-        if let Some(expression) = simplify_against_end_state(
+        residuals.push(simplify_against_end_state(
             &group.expression,
             version_scheme,
             depending_architecture,
             &native_architecture,
             &end_state,
-        )? {
-            pending.push(expression);
-        }
+        )?);
     }
-    Ok(pending)
+    Ok(FixedStateEvaluation {
+        end_state,
+        residuals,
+    })
 }
 
-/// The transaction's fixed end state: every installed trove except
+/// Return the indices of original hard groups the projected end state does not
+/// satisfy.
+///
+/// The projected end state is the fixed state plus every package SAT selected,
+/// minus the exact installed troves the relation plan removes. Evaluating the
+/// unsimplified groups against it catches a conditional the pre-solve
+/// simplification dropped but that SAT then turned true by selecting the
+/// condition package. The shared typed evaluator decides satisfaction, so the
+/// check uses the same algebra as the fixed-state pass.
+pub(super) fn groups_violated_by_solved_end_state(
+    fixed_end_state: &[PackageIdentity],
+    selected: &[PackageIdentity],
+    remove_order: &[SatRelationRemoval],
+    groups: &[&RepositoryRequirementGroup],
+    version_scheme: VersionScheme,
+    depending_architecture: &str,
+    native_architecture: &str,
+) -> Result<Vec<usize>> {
+    let mut projected = fixed_end_state.to_vec();
+    if !remove_order.is_empty() {
+        let removed = remove_order
+            .iter()
+            .map(|removal| removal.trove_id)
+            .collect::<HashSet<_>>();
+        projected.retain(|package| {
+            !package
+                .installed_trove_id
+                .is_some_and(|trove_id| removed.contains(&trove_id))
+        });
+    }
+    projected.extend(selected.iter().cloned());
+
+    let mut violated = Vec::new();
+    for (index, group) in groups.iter().enumerate() {
+        if !crate::resolver::requirement_expression_satisfied(
+            &group.expression,
+            version_scheme,
+            depending_architecture,
+            native_architecture,
+            &projected,
+        )? {
+            violated.push(index);
+        }
+    }
+    Ok(violated)
+}
+
+/// The exact package identities resolvo selected for the solve.
+pub(super) fn collect_selected_identities(
+    provider: &ConaryProvider<'_>,
+    solvable_ids: &[SolvableId],
+) -> Vec<PackageIdentity> {
+    solvable_ids
+        .iter()
+        .map(|solvable_id| provider.get_solvable(*solvable_id).clone())
+        .collect()
+}
+
+/// The transaction's fixed end state: every installed package trove except
 /// `outgoing_trove_ids`, plus `incoming`.
+///
+/// Only package-type troves are facts. Collections created by
+/// `conary collection create` have no architecture, so including them makes the
+/// typed evaluator reject the whole set instead of evaluating the group.
 fn fixed_end_state(
     conn: &Connection,
     outgoing_trove_ids: &[i64],
     incoming: Option<&PackageIdentity>,
 ) -> Result<Vec<PackageIdentity>> {
-    let mut end_state = crate::resolver::load_installed_package_identities(conn)?;
+    let mut end_state =
+        crate::resolver::requirements::load_installed_package_identities_for_packages(conn)?;
     if !outgoing_trove_ids.is_empty() {
         let outgoing_trove_ids = outgoing_trove_ids.iter().copied().collect::<HashSet<_>>();
         end_state.retain(|package| {

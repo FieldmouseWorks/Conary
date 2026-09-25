@@ -422,9 +422,15 @@ impl<'db> ConaryProvider<'db> {
         Ok(id)
     }
 
-    /// Bulk-load all installed troves as solvables.
+    /// Bulk-load every installed package trove as a solvable.
+    ///
+    /// Collections and components are excluded: they are not package
+    /// authorities and a collection carries no architecture.
     pub fn load_installed_packages(&mut self) -> Result<()> {
-        let packages = crate::resolver::requirements::load_installed_package_identities(self.conn)?;
+        let packages =
+            crate::resolver::requirements::load_installed_package_identities_for_packages(
+                self.conn,
+            )?;
 
         for pkg in packages {
             let trove_id = pkg.installed_trove_id;
