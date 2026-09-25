@@ -13,7 +13,9 @@ mod evidence;
 mod expression;
 mod loading;
 pub(crate) mod matching;
+mod relation_removal;
 mod repository;
+mod slot_replacement;
 mod traits;
 pub mod types;
 
@@ -23,6 +25,7 @@ use crate::error::{Error, Result};
 use crate::repository::dependency_model::ProvideVersionRelation;
 use crate::repository::resolution_policy::{RequestScope, ResolutionPolicy};
 use crate::repository::versioning::{VersionScheme, validate_repo_version};
+use crate::resolver::canonical::CanonicalEquivalents;
 use crate::resolver::identity::PackageIdentity;
 use crate::resolver::provides_index::ProvidesIndex;
 use resolvo::{
@@ -35,6 +38,8 @@ use loading::{
     load_installed_dependency_requests, load_installed_relations, relation_to_solver_dep,
 };
 pub(crate) use matching::constraint_matches_package;
+pub(crate) use relation_removal::relation_removes_candidate;
+use slot_replacement::SurvivingInstalledLock;
 pub use types::{ConaryConstraint, SolverDep, SolverExpression, SolverRelation};
 
 type RemovalProvider = (i64, Option<String>, Option<ProvideVersionRelation>);
@@ -90,10 +95,11 @@ pub struct ConaryProvider<'db> {
 
     /// Exact persisted group behind each compiled positive version set.
     compiled_requirement_groups:
-        HashMap<(u32, u32), std::collections::BTreeSet<types::RepositoryRequirementGroupIdentity>>,
+        HashMap<(u32, u32), std::collections::BTreeSet<types::RequirementGroupIdentity>>,
 
-    /// Positive groups omitted only by the exact-root conflict-precedence probe.
-    ignored_requirement_groups: HashSet<types::RepositoryRequirementGroupIdentity>,
+    /// Positive groups omitted only by the exact-root conflict-precedence probe
+    /// or because a forced installed package was already unsatisfied.
+    ignored_requirement_groups: HashSet<types::RequirementGroupIdentity>,
     pub(crate) probe_deadline: Option<std::time::Instant>,
 
     /// Boolean conditions referenced by compiled conditional requirements.
@@ -118,9 +124,9 @@ pub struct ConaryProvider<'db> {
     /// Keyed by `SolvableId` index.
     removal_deps: HashMap<u32, Vec<SolverDep>>,
 
-    /// distro_name -> Vec<equivalent distro_name> for canonical cross-distro resolution.
-    /// Pre-loaded as a HashMap for O(1) lookup in the hot path.
-    canonical_equivalents: HashMap<String, Vec<String>>,
+    /// Canonical cross-distro name equivalences. Pre-loaded for O(1) lookup in
+    /// the hot path and shared with end-state requirement evaluation.
+    canonical_equivalents: CanonicalEquivalents,
 
     /// Demand-driven capability-to-provider cache (modeled after libsolv's
     /// whatprovides). Initialized empty at resolution start via
@@ -135,6 +141,30 @@ pub struct ConaryProvider<'db> {
 
     /// Exact target-native architecture used by source dependency qualifiers.
     native_architecture: String,
+
+    /// Exact installed trove IDs the owning transaction removes. These troves
+    /// are never loaded as installed candidates, so no requirement can be
+    /// satisfied by a package the transaction's end state does not contain.
+    excluded_installed_trove_ids: HashSet<i64>,
+
+    /// Installed trove IDs hidden from SAT candidate queries but still loaded as
+    /// relation-visible solvables. A relation plan derived in an earlier pass
+    /// removes these troves, so no requirement may be satisfied by them, but
+    /// `plan_selected_relations` must still see them as installed to re-derive
+    /// each pass's exact removal set.
+    relation_only_installed_troves: HashSet<i64>,
+
+    /// When set, surviving installed candidates are fixed facts of the owning
+    /// transaction's end state. For an exact package name, a repository
+    /// candidate is offered only as the exact install-slot replacement of one
+    /// surviving trove (`slot_replacement`); a lone fixed fact with no replacer
+    /// is locked, while several facts or a replacer use `allow_multiple`.
+    pub(super) surviving_installed_lock: Option<SurvivingInstalledLock>,
+
+    /// The incoming package registered as a fixed SAT fact. It carries
+    /// transaction identity but no repository or installed provenance, and its
+    /// declared capabilities enter the same indexes installed provides use.
+    fixed_incoming: Option<SolvableId>,
 
     // --- Data source ---
     pub(super) conn: &'db rusqlite::Connection,
@@ -180,11 +210,15 @@ impl<'db> ConaryProvider<'db> {
             removal_provides_index: HashMap::new(),
             trove_id_to_name: HashMap::new(),
             removal_deps: HashMap::new(),
-            canonical_equivalents: HashMap::new(),
+            canonical_equivalents: CanonicalEquivalents::default(),
             provides_index: None,
             policy,
             root_request_names: HashSet::new(),
             native_architecture: crate::repository::registry::detect_system_arch()?,
+            excluded_installed_trove_ids: HashSet::new(),
+            relation_only_installed_troves: HashSet::new(),
+            surviving_installed_lock: None,
+            fixed_incoming: None,
             conn,
         })
     }
@@ -193,9 +227,89 @@ impl<'db> ConaryProvider<'db> {
         self.root_request_names = names.into_iter().collect();
     }
 
+    /// Mark exact installed troves as outgoing for this solve.
+    ///
+    /// The transaction that owns the solve already planned these troves for
+    /// removal (upgrade slot or relation plan). They must not satisfy a
+    /// requirement because the transaction's end state excludes them.
+    pub fn exclude_installed_troves(&mut self, trove_ids: impl IntoIterator<Item = i64>) {
+        self.excluded_installed_trove_ids.extend(trove_ids);
+    }
+
+    /// Load exact installed troves but hide them from SAT candidate queries.
+    ///
+    /// A relation plan from an earlier fixed-point pass removes these troves, so
+    /// no requirement may be satisfied by them. They stay loaded so
+    /// `plan_selected_relations` can re-derive the removal from the final
+    /// selection; only candidate discovery filters them out.
+    pub fn hide_relation_only_installed_troves(
+        &mut self,
+        trove_ids: impl IntoIterator<Item = i64>,
+    ) {
+        self.relation_only_installed_troves.extend(trove_ids);
+    }
+
+    /// Treat every surviving installed candidate as a fixed fact of the
+    /// transaction's end state.
+    ///
+    /// For an exact package name, no repository version may replace the fixed
+    /// incoming package, and one replaces a surviving variant only as the
+    /// installer's exact install-slot upgrade of it (`slot_replacement`). A
+    /// lone fixed fact with no replacer is locked; the incoming package,
+    /// parallel variants, and replacers are all selectable. Virtual
+    /// capabilities are not filtered because several packages may provide one.
+    pub(crate) fn lock_surviving_installed_candidates(&mut self) {
+        self.surviving_installed_lock = Some(SurvivingInstalledLock::default());
+    }
+
+    /// Register the incoming package as a fixed SAT fact.
+    ///
+    /// The incoming package is part of the transaction, not a repository or
+    /// installed candidate, so it must carry no repository package or installed
+    /// trove provenance. Its declared capabilities enter the same indexes that
+    /// installed provides use, so `get_candidates` returns it for its name, for
+    /// each provided capability, and for canonical equivalents.
+    pub(crate) fn add_fixed_incoming(&mut self, identity: PackageIdentity) -> Result<SolvableId> {
+        if self.fixed_incoming.is_some() {
+            return Err(Error::ResolutionError(
+                "the fixed incoming package was registered more than once".to_string(),
+            ));
+        }
+        if identity.repo_package_id.is_some()
+            || identity.installed_trove_id.is_some()
+            || identity.installed_pinned
+        {
+            return Err(Error::ResolutionError(format!(
+                "fixed incoming package '{}' must not carry repository or installed provenance",
+                identity.name
+            )));
+        }
+        let _name_id = self.intern_name(&identity.name)?;
+        let solvable_id = self.add_solvable(identity)?;
+        self.fixed_incoming = Some(solvable_id);
+        Ok(solvable_id)
+    }
+
+    /// The fixed incoming solvable, when this solve has one.
+    pub(crate) fn fixed_incoming_solvable(&self) -> Option<SolvableId> {
+        self.fixed_incoming
+    }
+
+    /// Intern the exact root requirement that selects the fixed incoming
+    /// package, if one is registered.
+    pub(crate) fn intern_fixed_incoming_root(&mut self) -> Result<Option<VersionSetId>> {
+        let Some(solvable_id) = self.fixed_incoming else {
+            return Ok(None);
+        };
+        let name = self.solvables[solvable_id.to_index()].name.clone();
+        let name_id = self.intern_name(&name)?;
+        self.intern_conary_version_set(name_id, ConaryConstraint::FixedIncoming)
+            .map(Some)
+    }
+
     pub(crate) fn ignore_requirement_groups(
         &mut self,
-        groups: impl IntoIterator<Item = types::RepositoryRequirementGroupIdentity>,
+        groups: impl IntoIterator<Item = types::RequirementGroupIdentity>,
     ) {
         self.ignored_requirement_groups.extend(groups);
     }
@@ -203,7 +317,7 @@ impl<'db> ConaryProvider<'db> {
     /// Monotonically discharge positive groups without reloading repository facts.
     pub(crate) fn discharge_requirement_groups(
         &mut self,
-        groups: impl IntoIterator<Item = types::RepositoryRequirementGroupIdentity>,
+        groups: impl IntoIterator<Item = types::RequirementGroupIdentity>,
     ) -> Result<()> {
         self.ignore_requirement_groups(groups);
         for dependencies in self.dependencies.values_mut() {
@@ -387,18 +501,27 @@ impl<'db> ConaryProvider<'db> {
         Ok(id)
     }
 
-    /// Bulk-load all installed troves as solvables.
+    /// Bulk-load every installed package trove as a solvable.
+    ///
+    /// Collections and components are excluded: they are not package
+    /// authorities and a collection carries no architecture.
     pub fn load_installed_packages(&mut self) -> Result<()> {
-        let packages = crate::resolver::requirements::load_installed_package_identities(self.conn)?;
+        let packages =
+            crate::resolver::requirements::load_installed_package_identities_for_packages(
+                self.conn,
+            )?;
 
         for pkg in packages {
+            let trove_id = pkg.installed_trove_id;
+            if trove_id.is_some_and(|id| self.excluded_installed_trove_ids.contains(&id)) {
+                continue;
+            }
             let package_architecture = pkg
                 .architecture
                 .clone()
                 .unwrap_or_else(|| self.native_architecture.clone());
             // Intern name for side effect (ensures this name is known to the solver)
             let _name_id = self.intern_name(&pkg.name)?;
-            let trove_id = pkg.installed_trove_id;
             let solvable_id = self.add_solvable(pkg)?;
 
             if let Some(tid) = trove_id {
@@ -543,6 +666,9 @@ impl<'db> ConaryProvider<'db> {
                         }
                         ConaryConstraint::RpmRuntime(_) => {}
                         ConaryConstraint::ExactRepositoryPackage(_) => {}
+                        ConaryConstraint::FixedIncoming => {}
+                        ConaryConstraint::ExactInstalledTrove(_) => {}
+                        ConaryConstraint::ExactSolvables(_) => {}
                         ConaryConstraint::Requested(_) | ConaryConstraint::Repository { .. }
                             if !known.contains(atom.name.as_str()) =>
                         {
@@ -668,6 +794,11 @@ impl<'db> ConaryProvider<'db> {
             ConaryConstraint::ProviderExpression { .. } => {
                 self.intern_conary_version_set(name_id, constraint.clone())?;
             }
+            ConaryConstraint::FixedIncoming
+            | ConaryConstraint::ExactInstalledTrove(_)
+            | ConaryConstraint::ExactSolvables(_) => {
+                self.intern_conary_version_set(name_id, constraint.clone())?;
+            }
         }
         Ok(())
     }
@@ -691,6 +822,15 @@ impl<'db> ConaryProvider<'db> {
             .get(capability)
             .cloned()
             .unwrap_or_default()
+    }
+
+    /// Whether `solvable` is an installed trove hidden as a prior relation
+    /// removal. Such a solvable stays relation-visible but must never be a SAT
+    /// candidate.
+    pub(super) fn is_relation_only_installed(&self, solvable: SolvableId) -> bool {
+        self.solvables[solvable.to_index()]
+            .installed_trove_id
+            .is_some_and(|trove_id| self.relation_only_installed_troves.contains(&trove_id))
     }
 
     /// Find the installed solvable for a name, if any.
@@ -820,22 +960,11 @@ impl<'db> ConaryProvider<'db> {
     /// same canonical package. This enables cross-distro fallback: when the
     /// solver can't find `libssl3`, it can discover `openssl` as an equivalent.
     ///
-    /// The index is pre-loaded as a `HashMap` for O(1) lookups -- no DB calls
-    /// happen during the solver's hot path.
+    /// The index is pre-loaded for O(1) lookups -- no DB calls happen during the
+    /// solver's hot path.
     pub fn load_canonical_index(&mut self) -> Result<()> {
-        let mut stmt = self.conn.prepare(
-            "SELECT pi1.distro_name, pi2.distro_name
-             FROM resolved_package_implementations pi1
-             JOIN resolved_package_implementations pi2 ON pi1.canonical_id = pi2.canonical_id
-             WHERE pi1.distro_name != pi2.distro_name",
-        )?;
-
-        let mut rows = stmt.query([])?;
-        while let Some(row) = rows.next()? {
-            let from: String = row.get(0)?;
-            let to: String = row.get(1)?;
-            self.canonical_equivalents.entry(from).or_default().push(to);
-        }
+        self.canonical_equivalents =
+            crate::resolver::canonical::load_canonical_equivalents(self.conn)?;
         Ok(())
     }
 
@@ -844,10 +973,7 @@ impl<'db> ConaryProvider<'db> {
     /// Returns all other distro-specific names that map to the same canonical
     /// package. Returns an empty slice when no mapping exists.
     pub fn canonical_equivalents(&self, name: &str) -> &[String] {
-        self.canonical_equivalents
-            .get(name)
-            .map(Vec::as_slice)
-            .unwrap_or(&[])
+        self.canonical_equivalents.for_name(name)
     }
 }
 

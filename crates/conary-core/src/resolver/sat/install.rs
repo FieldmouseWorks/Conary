@@ -1,16 +1,18 @@
 // crates/conary-core/src/resolver/sat/install.rs
 
-use resolvo::{ConditionalRequirement, SolvableId};
+use resolvo::ConditionalRequirement;
 use rusqlite::Connection;
 use std::collections::HashSet;
 use std::time::Instant;
 
 use crate::error::Result;
 use crate::repository::resolution_policy::ResolutionPolicy;
+use crate::resolver::identity::PackageIdentity;
 use crate::version::VersionConstraint;
 
+use super::super::provider::types::RequirementGroupIdentity;
 use super::super::provider::{ConaryConstraint, ConaryProvider, SolverExpression};
-use super::{SatPackage, SatSource, check_transitive_loading_limits, timing};
+use super::{check_transitive_loading_limits, timing};
 
 pub(super) fn build_provider_for_install<'conn>(
     conn: &'conn Connection,
@@ -24,9 +26,7 @@ pub(super) fn build_provider_for_install_ignoring_groups<'conn>(
     conn: &'conn Connection,
     requests: &[(String, VersionConstraint)],
     policy: &ResolutionPolicy,
-    ignored: impl IntoIterator<
-        Item = crate::resolver::provider::types::RepositoryRequirementGroupIdentity,
-    >,
+    ignored: impl IntoIterator<Item = RequirementGroupIdentity>,
 ) -> Result<ConaryProvider<'conn>> {
     let phase = timing::start(None, timing::Phase::Initialization);
     let mut provider = ConaryProvider::new_with_policy(conn, policy.clone())?;
@@ -59,26 +59,70 @@ pub(super) fn build_provider_for_requirement_expressions<'conn>(
     conn: &'conn Connection,
     expressions: &[SolverExpression],
     policy: &ResolutionPolicy,
+    incoming: Option<&PackageIdentity>,
+    facts: FixedTransactionFacts<'_>,
 ) -> Result<ConaryProvider<'conn>> {
+    let FixedTransactionFacts {
+        outgoing_trove_ids,
+        relation_only_trove_ids,
+        lock_surviving_installed,
+        ignored_installed_groups,
+    } = facts;
     let phase = timing::start(None, timing::Phase::Initialization);
     let mut provider = ConaryProvider::new_with_policy(conn, policy.clone())?;
     drop(phase);
     provider.set_root_request_names(requirement_names(expressions));
+    // Caller-declared outgoing troves are not part of the end state at all.
+    // Relation-removed troves from an earlier pass stay loaded (relation
+    // planning re-derives each pass's exact removal set) but are hidden from
+    // candidate discovery.
+    provider.exclude_installed_troves(outgoing_trove_ids.iter().copied());
+    provider.hide_relation_only_installed_troves(relation_only_trove_ids.iter().copied());
+    if lock_surviving_installed {
+        provider.lock_surviving_installed_candidates();
+    }
     let phase = timing::start(None, timing::Phase::Installed);
     provider.load_installed_packages()?;
+    if let Some(incoming) = incoming {
+        provider.add_fixed_incoming(incoming.clone())?;
+    }
     drop(phase);
     let phase = timing::start(None, timing::Phase::Canonical);
     provider.build_provides_index()?;
     provider.load_canonical_index()?;
     provider.expand_root_request_names_with_canonical_equivalents();
+    // A forced installed package's stored hard groups are enforced natively by
+    // SAT. Groups already unsatisfied before the transaction are discharged by
+    // identity so pre-existing breakage never makes the solve unsatisfiable.
+    // Discharging after canonical loading keeps the recompiled condition set
+    // consistent with the final compilation.
+    if !ignored_installed_groups.is_empty() {
+        provider.discharge_requirement_groups(ignored_installed_groups.iter().copied())?;
+    }
     drop(phase);
     let phase = timing::start(None, timing::Phase::Transitive);
     load_transitive_repo_packages(&mut provider, requirement_names(expressions))?;
     drop(phase);
     let phase = timing::start(None, timing::Phase::Compilation);
     provider.intern_all_dependency_version_sets()?;
+    // Replacement exclusions name the loaded candidate pool, so they compile
+    // only once discovery is complete.
+    provider.compile_replacement_constrains()?;
     drop(phase);
     Ok(provider)
+}
+
+/// The fixed-transaction facts a requirement-expression provider must honor.
+pub(super) struct FixedTransactionFacts<'a> {
+    /// Exact installed trove IDs the owning transaction removes entirely.
+    pub(super) outgoing_trove_ids: &'a [i64],
+    /// Installed troves an earlier pass's relation plan removes; loaded but
+    /// hidden from candidate discovery.
+    pub(super) relation_only_trove_ids: &'a HashSet<i64>,
+    /// Whether surviving installed variants are fixed end-state facts.
+    pub(super) lock_surviving_installed: bool,
+    /// Pre-existing broken installed groups discharged by identity.
+    pub(super) ignored_installed_groups: &'a HashSet<RequirementGroupIdentity>,
 }
 
 fn load_transitive_repo_packages(
@@ -129,6 +173,9 @@ fn requirement_names(expressions: &[SolverExpression]) -> HashSet<String> {
                 }
                 ConaryConstraint::RpmRuntime(_) => {}
                 ConaryConstraint::ExactRepositoryPackage(_) => {}
+                ConaryConstraint::FixedIncoming => {}
+                ConaryConstraint::ExactInstalledTrove(_) => {}
+                ConaryConstraint::ExactSolvables(_) => {}
                 ConaryConstraint::Requested(_) | ConaryConstraint::Repository { .. } => {
                     names.insert(atom.name.clone());
                 }
@@ -158,33 +205,4 @@ pub(super) fn build_expression_requirements(
     expressions: &[SolverExpression],
 ) -> Result<Vec<ConditionalRequirement>> {
     provider.compile_root_requirements(expressions)
-}
-
-pub(super) fn collect_install_order(
-    provider: &ConaryProvider<'_>,
-    solvable_ids: &[SolvableId],
-) -> Vec<SatPackage> {
-    solvable_ids
-        .iter()
-        .map(|sid| {
-            let pkg = provider.get_solvable(*sid);
-            SatPackage {
-                name: pkg.name.clone(),
-                version: pkg.version.clone(),
-                package_release: pkg.package_release.clone(),
-                architecture: pkg.architecture.clone(),
-                version_scheme: pkg.version_scheme,
-                repo_package_id: pkg.repo_package_id,
-                repository_id: pkg.repository_id,
-                repository_name: (!pkg.repository_name.is_empty())
-                    .then(|| pkg.repository_name.clone()),
-                installed_trove_id: pkg.installed_trove_id,
-                source: if pkg.installed_trove_id.is_some() {
-                    SatSource::Installed
-                } else {
-                    SatSource::Repository
-                },
-            }
-        })
-        .collect()
 }

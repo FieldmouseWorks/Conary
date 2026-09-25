@@ -2,25 +2,32 @@
 
 use super::acquire::{CcsInstallParams, resolve_and_parse_package};
 use super::ccs_removal_hooks::CcsRemovalHookPlan;
-use super::dependencies::{DepAnalysisContext, handle_dependencies};
+use super::dependencies::{
+    CertifiedOutgoing, DepAnalysisContext, certify_requirements_under_lock, handle_dependencies,
+    run_after_mutation_lock_hook, runtime_requirement_count,
+};
 use super::native_events::{NativeInstallInput, PreparedNativeTransaction};
 use super::prepare::check_upgrade_status;
 use super::resolve::is_local_package_request;
 use super::validation::{parse_component_and_validate, try_promote_existing_dep};
 use super::{
-    InstallIntent, InstallOptions, InstallProgress, InstallSemantics, NativeLifecycleInstallState,
-    TransactionContext, UpgradeCheck, bind_transaction_source_identity, build_execution_mode,
-    build_resolution_policy, effective_source_profile,
-    execute_install_transaction_in_selected_root, extract_and_classify_files, finalize_install,
-    preflight_extracted_file_ownership, require_lossless_native_component_selection,
-    resolve_canonical_name, source_profile_projection,
+    InstallIntent, InstallOptions, InstallProgress, InstallReplacement, InstallSemantics,
+    NativeLifecycleInstallState, TransactionContext, UpgradeCheck,
+    bind_transaction_source_identity, build_execution_mode, build_resolution_policy,
+    effective_source_profile, execute_install_transaction_in_selected_root,
+    extract_and_classify_files, finalize_install, preflight_extracted_file_ownership,
+    require_lossless_native_component_selection, resolve_canonical_name, source_profile_projection,
 };
 use crate::commands::generation::selected_root::LockedRuntimeRoot;
 use crate::commands::open_db;
 use anyhow::{Context, Result};
 use conary_core::components::parse_component_spec;
+use conary_core::db::models::Trove;
+use conary_core::packages::PackageFormat;
 use conary_core::repository::resolution_policy::RequestScope;
-use conary_core::transaction::{plan_package_relations, validate_package_relation_plan};
+use conary_core::transaction::{
+    PackageRelationPlan, plan_package_relations, validate_package_relation_plan,
+};
 use std::path::Path;
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -28,6 +35,54 @@ pub(crate) enum InstallOutcome {
     #[default]
     Completed,
     Cancelled,
+}
+
+/// The installed facts one native transaction resolves from the database: the
+/// replacement or upgrade target, the typed relation plan, and the outgoing set
+/// those two define.
+struct ResolvedInstallFacts {
+    replacement: Option<Box<Trove>>,
+    relation_plan: PackageRelationPlan,
+    outgoing: CertifiedOutgoing,
+}
+
+/// Resolve the replacement target and typed relation plan of one incoming
+/// native package, and compute the certified outgoing set from both.
+///
+/// The pre-lock projection and the locked transaction call this so their two
+/// outgoing sets come from the same inputs and the same formula.
+fn resolve_install_facts(
+    conn: &rusqlite::Connection,
+    pkg: &dyn PackageFormat,
+    semantics: &InstallSemantics,
+    allow_downgrade: bool,
+    intent: InstallIntent,
+    replacement: Option<&InstallReplacement>,
+) -> Result<ResolvedInstallFacts> {
+    let replacement =
+        match check_upgrade_status(conn, pkg, semantics, allow_downgrade, intent, replacement)? {
+            UpgradeCheck::FreshInstall => None,
+            UpgradeCheck::AlreadyInstalled(trove) => {
+                anyhow::bail!(
+                    "Package {} version {} ({}) is already installed",
+                    trove.name,
+                    trove.version,
+                    trove.architecture.as_deref().unwrap_or("no-arch")
+                )
+            }
+            UpgradeCheck::Upgrade(trove)
+            | UpgradeCheck::Downgrade(trove)
+            | UpgradeCheck::Replatform(trove) => Some(trove),
+        };
+    let relation_plan = plan_package_relations(conn, pkg, semantics.version_scheme)
+        .context("Failed to plan package conflicts and replacements")?;
+    let outgoing =
+        CertifiedOutgoing::from_replacements_and_relations(replacement.as_deref(), &relation_plan)?;
+    Ok(ResolvedInstallFacts {
+        replacement,
+        relation_plan,
+        outgoing,
+    })
 }
 
 /// Install a package
@@ -233,6 +288,22 @@ async fn cmd_install_with_intent(
         conn
     };
 
+    // The dependency solve projects the transaction's end state from the
+    // pre-dependency installed facts. The runtime mutation lock is not held
+    // yet: dependency installation acquires it per batch, so holding it here
+    // would deadlock. This projection is therefore advisory, and the
+    // transaction re-resolves its replacement target and relation plan under
+    // the lock below before it certifies any mutation.
+    let solve_outgoing = resolve_install_facts(
+        &conn,
+        pkg.as_ref(),
+        &semantics,
+        allow_downgrade,
+        intent,
+        replacement.as_ref(),
+    )?
+    .outgoing;
+
     // --- Phase 5: Dependency analysis ---
     let dep_ctx = DepAnalysisContext {
         conn: &conn,
@@ -245,6 +316,7 @@ async fn cmd_install_with_intent(
         sandbox_mode,
         policy: &policy,
         root,
+        outgoing: &solve_outgoing,
     };
     if handle_dependencies(&dep_ctx, report).await?
         == super::dependencies::DependencyDecision::Cancelled
@@ -252,6 +324,22 @@ async fn cmd_install_with_intent(
         report.outcome = InstallOutcome::Cancelled;
         return Ok(InstallOutcome::Cancelled);
     }
+
+    // The dependency phase can legitimately change installed state: a
+    // dependency may itself remove a trove this package's relation plan also
+    // matches. The solve's projection above predates that phase, so it is not
+    // the set to certify. Re-resolve the transaction's installed facts here,
+    // immediately before the mutation lock, and define the projected outgoing
+    // set from them.
+    let projected_outgoing = resolve_install_facts(
+        &conn,
+        pkg.as_ref(),
+        &semantics,
+        allow_downgrade,
+        intent,
+        replacement.as_ref(),
+    )?
+    .outgoing;
 
     // Dry-run planning is read-only and does not participate in the runtime
     // mutation serialization boundary. A real install takes that boundary
@@ -261,32 +349,41 @@ async fn cmd_install_with_intent(
     } else {
         Some(LockedRuntimeRoot::acquire(db_path)?)
     };
-    let relation_plan = plan_package_relations(&conn, pkg.as_ref(), semantics.version_scheme)
-        .context("Failed to plan package conflicts and replacements")?;
-    validate_package_relation_plan(&conn, &relation_plan)
-        .context("Package conflicts and replacements cannot be applied")?;
-
-    let old_trove_to_upgrade = match check_upgrade_status(
+    if !dry_run {
+        run_after_mutation_lock_hook();
+    }
+    // The mutation lock is held, so the replacement target and relation effects
+    // are re-resolved here with the same resolver the projection above used.
+    let ResolvedInstallFacts {
+        replacement: old_trove_to_upgrade,
+        relation_plan,
+        outgoing: locked_outgoing,
+    } = resolve_install_facts(
         &conn,
         pkg.as_ref(),
         &semantics,
         allow_downgrade,
         intent,
         replacement.as_ref(),
-    )? {
-        UpgradeCheck::FreshInstall => None,
-        UpgradeCheck::AlreadyInstalled(trove) => {
-            anyhow::bail!(
-                "Package {} version {} ({}) is already installed",
-                trove.name,
-                trove.version,
-                trove.architecture.as_deref().unwrap_or("no-arch")
-            )
-        }
-        UpgradeCheck::Upgrade(trove)
-        | UpgradeCheck::Downgrade(trove)
-        | UpgradeCheck::Replatform(trove) => Some(trove),
-    };
+    )?;
+    validate_package_relation_plan(&conn, &relation_plan)
+        .context("Package conflicts and replacements cannot be applied")?;
+    // Installed state might have changed between the projection and the lock,
+    // so the locked transaction must resolve exactly the projected set.
+    projected_outgoing.require_unchanged(&locked_outgoing)?;
+    // The pre-lock dependency solve placed this package's hard requirements
+    // against the installed state before the dependency phase. Re-solve under
+    // the lock so a provider another transaction removed or upgraded in the
+    // window cannot leave the install committing without it.
+    if !dry_run && !no_deps && runtime_requirement_count(pkg.as_ref()) != 0 {
+        certify_requirements_under_lock(
+            &conn,
+            pkg.as_ref(),
+            pkg.resolution_capabilities()?,
+            &locked_outgoing,
+            &policy,
+        )?;
+    }
     let mut changes = vec![super::report::InstallChange::incoming(
         super::report::ObservedPackage::package(pkg.as_ref(), semantics),
         old_trove_to_upgrade.as_deref(),

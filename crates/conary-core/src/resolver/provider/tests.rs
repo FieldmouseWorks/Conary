@@ -229,6 +229,40 @@ fn resolver_uses_loaded_pin_authority_and_excludes_uncompiled_candidates() {
 }
 
 #[test]
+fn fixed_incoming_and_surviving_same_name_variant_are_both_selectable() {
+    let (_dir, conn) = setup_test_db();
+    let mut provider = ConaryProvider::new(&conn).unwrap();
+    let name = provider.intern_name("libfoo").unwrap();
+
+    let variant_id = provider
+        .add_solvable(installed_identity(
+            "libfoo",
+            "1",
+            VersionScheme::Rpm,
+            Some(7),
+        ))
+        .unwrap();
+    let repository_id = provider
+        .add_solvable(repo_identity("libfoo", "3", VersionScheme::Rpm, Some(8)))
+        .unwrap();
+    let incoming_id = provider
+        .add_fixed_incoming(installed_identity("libfoo", "2", VersionScheme::Rpm, None))
+        .unwrap();
+    provider.lock_surviving_installed_candidates();
+
+    // The fixed incoming package and the surviving same-name variant are both
+    // end-state facts, so the name must expose both and allow the solver to
+    // select them together. The repository candidate of that name must not be
+    // offered as a replacement for either.
+    let candidates = block_on(provider.get_candidates(name)).unwrap();
+    assert!(candidates.allow_multiple);
+    assert!(candidates.locked.is_none());
+    assert!(candidates.candidates.contains(&incoming_id));
+    assert!(candidates.candidates.contains(&variant_id));
+    assert!(!candidates.candidates.contains(&repository_id));
+}
+
+#[test]
 fn diagnostic_metadata_dependency_json_is_not_solver_authority() {
     let (_dir, conn) = setup_test_db();
 
@@ -1149,3 +1183,5 @@ fn installed_debian_package_uses_native_version_scheme() {
 mod installed_and_canonical;
 #[path = "tests/installed_preference.rs"]
 mod installed_preference;
+#[path = "tests/slot_replacement.rs"]
+mod slot_replacement;

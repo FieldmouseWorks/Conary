@@ -334,18 +334,27 @@ impl Conflict {
                         );
                     }
                 }
-                Clause::AnyOf(selected, _variable) => {
-                    // No edge: at-least-one `AnyOf` clauses can never be false
-                    // (the selected variable is only ever propagated true), and
-                    // requires-gate implications are represented by the
-                    // `parent -> candidate` edges drawn from the gate's
-                    // `Requires` clause above.
+                Clause::AnyOf(selected, variable) => {
+                    // No edge: an `AnyOf` clause `selected | !variable` is
+                    // never falsified, and requires-gate implications are
+                    // represented by the `parent -> candidate` edges drawn
+                    // from the gate's `Requires` clause above.
+                    //
+                    // Conary patch: upstream asserted that `selected` itself
+                    // is never false. Conditional requirements decide an
+                    // `AtLeastOne` condition variable false whenever its
+                    // solvable is also false, which satisfies the clause, so
+                    // only the clause as a whole is asserted.
                     if !matches!(
                         state.variable_map.origin(*selected),
                         VariableOrigin::RequiresGate(_)
                     ) {
                         let decision_map = solver.state.decision_tracker.map();
-                        debug_assert_ne!(selected.positive().eval(decision_map), Some(false));
+                        debug_assert!(
+                            !(selected.positive().eval(decision_map) == Some(false)
+                                && variable.positive().eval(decision_map) == Some(true)),
+                            "AnyOf clause falsified: selected is false while its variable is true"
+                        );
                     }
                 }
             }

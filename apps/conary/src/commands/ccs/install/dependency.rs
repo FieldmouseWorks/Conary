@@ -48,7 +48,7 @@ pub(super) fn validate_incoming_version_against_dependents(
     outgoing_trove_ids: &[i64],
     incoming: &PackageIdentity,
 ) -> Result<()> {
-    let before = conary_core::resolver::load_installed_package_identities(conn)?;
+    let before = conary_core::resolver::load_installed_package_identities_for_packages(conn)?;
     let outgoing_trove_ids = outgoing_trove_ids
         .iter()
         .copied()

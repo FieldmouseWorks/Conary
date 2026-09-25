@@ -5,6 +5,7 @@
 //! Provides policy-explicit install solving and exact removal analysis using
 //! the CDCL SAT solver with backtracking support.
 
+mod end_state;
 mod hidden_conflict;
 mod install;
 mod relations;
@@ -85,6 +86,44 @@ pub struct SatRelationRemoval {
     pub native_text: Option<String>,
 }
 
+/// The package whose stored hard requirement group is unsatisfied.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SatGroupOwner {
+    /// The incoming package the solve is for.
+    Incoming,
+    /// A surviving installed package the transaction would break.
+    Installed { trove_id: i64, package_name: String },
+}
+
+/// One hard requirement group a known end state leaves unsatisfied.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SatUnsatisfiedGroup {
+    pub owner: SatGroupOwner,
+    /// Canonical native requirement text, when the source carried one.
+    pub native_text: Option<String>,
+    /// The typed requirement expression the shared evaluator rejected.
+    pub expression: crate::repository::dependency_model::RepositoryRequirementExpression,
+}
+
+impl SatUnsatisfiedGroup {
+    /// The typed requirement text with its owning package, for conflict
+    /// explanations.
+    pub fn description(&self) -> String {
+        let requirement = self
+            .native_text
+            .as_deref()
+            .filter(|text| !text.trim().is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("{:?}", self.expression));
+        match &self.owner {
+            SatGroupOwner::Incoming => requirement,
+            SatGroupOwner::Installed { package_name, .. } => {
+                format!("installed package {package_name} requires {requirement}")
+            }
+        }
+    }
+}
+
 /// Result of SAT-based dependency resolution.
 #[derive(Debug)]
 pub struct SatResolution {
@@ -95,6 +134,51 @@ pub struct SatResolution {
     pub remove_order: Vec<SatRelationRemoval>,
     /// Human-readable conflict explanation if unsolvable.
     pub conflict_message: Option<String>,
+    /// Typed identity of each hard requirement group the solve could not place
+    /// in the requested end state.
+    pub unsatisfied_groups: Vec<SatUnsatisfiedGroup>,
+}
+
+impl SatResolution {
+    /// A resolution that selects and installs nothing.
+    fn empty() -> Self {
+        Self {
+            install_order: Vec::new(),
+            remove_order: Vec::new(),
+            conflict_message: None,
+            unsatisfied_groups: Vec::new(),
+        }
+    }
+
+    /// A successful resolution with its exact install and removal orders.
+    fn resolved(install_order: Vec<SatPackage>, remove_order: Vec<SatRelationRemoval>) -> Self {
+        Self {
+            install_order,
+            remove_order,
+            conflict_message: None,
+            unsatisfied_groups: Vec::new(),
+        }
+    }
+
+    /// A resolution that refuses the request with a typed conflict explanation.
+    fn conflict(message: String) -> Self {
+        Self {
+            install_order: Vec::new(),
+            remove_order: Vec::new(),
+            conflict_message: Some(message),
+            unsatisfied_groups: Vec::new(),
+        }
+    }
+
+    /// A refusal that also names the typed hard groups it could not place.
+    fn conflict_with_groups(message: String, unsatisfied_groups: Vec<SatUnsatisfiedGroup>) -> Self {
+        Self {
+            install_order: Vec::new(),
+            remove_order: Vec::new(),
+            conflict_message: Some(message),
+            unsatisfied_groups,
+        }
+    }
 }
 
 /// One exact required group that has no candidate provider.
@@ -140,6 +224,7 @@ pub fn solve_install_with_policy(
             install_order: Vec::new(),
             remove_order: Vec::new(),
             conflict_message: None,
+            unsatisfied_groups: Vec::new(),
         });
     }
     policy
@@ -161,10 +246,11 @@ pub fn solve_install_with_policy(
                 install_order: if relation_plan.conflict.is_some() {
                     Vec::new()
                 } else {
-                    install::collect_install_order(solver.provider(), &solvable_ids)
+                    end_state::collect_install_order(solver.provider(), &solvable_ids)
                 },
                 remove_order: relation_plan.removals,
                 conflict_message: relation_plan.conflict,
+                unsatisfied_groups: Vec::new(),
             })
         }
         Err(UnsolvableOrCancelled::Unsolvable(conflict)) => {
@@ -173,6 +259,7 @@ pub fn solve_install_with_policy(
                 install_order: Vec::new(),
                 remove_order: Vec::new(),
                 conflict_message: Some(message),
+                unsatisfied_groups: Vec::new(),
             })
         }
         Err(UnsolvableOrCancelled::Cancelled(_)) => Err(Error::InitError(
@@ -274,7 +361,7 @@ fn solve_exact_repository_package_with_policy_inner(
                 )));
             }
             Ok(SatExactResolution::Resolved {
-                install_order: install::collect_install_order(solver.provider(), &solvable_ids),
+                install_order: end_state::collect_install_order(solver.provider(), &solvable_ids),
             })
         }
         Err(UnsolvableOrCancelled::Unsolvable(conflict)) => {
@@ -351,112 +438,40 @@ fn solve_exact_repository_package_with_policy_inner(
     }
 }
 
-/// Solve exact typed package requirements using their source-native version
-/// algebra and Boolean expression semantics.
-pub fn solve_requirement_groups_with_policy(
+/// Solve exact typed package requirements against the transaction's known end
+/// state.
+///
+/// `outgoing_trove_ids` are exact installed trove identities the owning
+/// transaction removes. They are excluded from installed candidates so a
+/// requirement is never satisfied by a package that will not exist afterwards.
+/// Because the end state is known, strict mixing with no repository authority
+/// may be discharged against the fixed `(installed - outgoing)` set.
+pub fn solve_requirement_groups_with_outgoing_and_policy(
     conn: &Connection,
     groups: &[RepositoryRequirementGroup],
     version_scheme: VersionScheme,
+    outgoing_trove_ids: &[i64],
     policy: &ResolutionPolicy,
 ) -> Result<SatResolution> {
     let depending_architecture =
         crate::repository::registry::native_architecture_for_scheme(version_scheme)?;
-    solve_requirement_groups_for_architecture_with_policy(
+    end_state::solve_requirement_groups_for_end_state(
         conn,
         groups,
         version_scheme,
         &depending_architecture,
+        outgoing_trove_ids,
+        None,
         policy,
     )
-}
-
-fn solve_requirement_groups_for_architecture_with_policy(
-    conn: &Connection,
-    groups: &[RepositoryRequirementGroup],
-    version_scheme: VersionScheme,
-    depending_architecture: &str,
-    policy: &ResolutionPolicy,
-) -> Result<SatResolution> {
-    let mut expressions = Vec::new();
-    for group in groups {
-        crate::repository::requirement::validate_requirement_group(group, version_scheme)
-            .map_err(Error::ConfigError)?;
-        match group.kind {
-            RepositoryRequirementKind::Depends | RepositoryRequirementKind::PreDepends => {
-                expressions.push(
-                    crate::resolver::provider::repository_expression_to_solver_for_architecture(
-                        &group.expression,
-                        version_scheme,
-                        depending_architecture,
-                    )?,
-                );
-            }
-            RepositoryRequirementKind::Optional
-            | RepositoryRequirementKind::Recommends
-            | RepositoryRequirementKind::Suggests
-            | RepositoryRequirementKind::Supplements
-            | RepositoryRequirementKind::Enhances
-            | RepositoryRequirementKind::Build => {}
-            RepositoryRequirementKind::Conflict
-            | RepositoryRequirementKind::Breaks
-            | RepositoryRequirementKind::Replace
-            | RepositoryRequirementKind::Obsolete => {
-                return Err(Error::ConfigError(format!(
-                    "negative relation '{}' cannot be solved as a positive install requirement",
-                    group.kind.as_str()
-                )));
-            }
-        }
-    }
-
-    if expressions.is_empty() {
-        return Ok(SatResolution {
-            install_order: Vec::new(),
-            remove_order: Vec::new(),
-            conflict_message: None,
-        });
-    }
-    policy
-        .validate_for_dependency_resolution()
-        .map_err(Error::ConfigError)?;
-
-    let mut provider =
-        install::build_provider_for_requirement_expressions(conn, &expressions, policy)?;
-    let requirements = install::build_expression_requirements(&mut provider, &expressions)?;
-    let problem = Problem::new().requirements(requirements);
-    let mut solver = Solver::new(provider);
-    match solver.solve(problem) {
-        Ok(solvable_ids) => {
-            let relation_plan =
-                relations::plan_selected_relations(solver.provider(), &solvable_ids)?;
-            Ok(SatResolution {
-                install_order: if relation_plan.conflict.is_some() {
-                    Vec::new()
-                } else {
-                    install::collect_install_order(solver.provider(), &solvable_ids)
-                },
-                remove_order: relation_plan.removals,
-                conflict_message: relation_plan.conflict,
-            })
-        }
-        Err(UnsolvableOrCancelled::Unsolvable(conflict)) => Ok(SatResolution {
-            install_order: Vec::new(),
-            remove_order: Vec::new(),
-            conflict_message: Some(conflict.display_user_friendly(&solver).to_string()),
-        }),
-        Err(UnsolvableOrCancelled::Cancelled(_)) => Err(Error::InitError(
-            "Dependency resolution was cancelled".to_string(),
-        )),
-    }
 }
 
 /// Return whether an incoming package already satisfies one positive
 /// requirement group from its exact identity and declared provides.
 ///
-/// Conditional and negated forms remain SAT-owned because their truth can
-/// depend on other packages selected into the transaction. Positive atoms,
-/// conjunctions, and disjunctions are safe to discharge against the incoming
-/// package alone.
+/// Conditional and negated forms are left to the end-state evaluator because
+/// their truth can depend on other packages. Positive atoms, conjunctions, and
+/// disjunctions are safe to discharge against the incoming package alone.
 pub fn positive_requirement_group_satisfied_by_package(
     group: &RepositoryRequirementGroup,
     version_scheme: VersionScheme,
@@ -548,16 +563,41 @@ pub fn positive_requirement_group_satisfied_by_package(
     )
 }
 
-/// Solve one parsed package's external requirements after discharging exact
-/// positive requirements that the given provided capabilities cover.
+/// Solve one parsed package's external requirements against the transaction's
+/// known end state after discharging exact positive requirements that the given
+/// provided capabilities cover.
+///
+/// `outgoing_trove_ids` are exact installed troves the owning transaction
+/// removes. They are excluded from the installed solve so a requirement is
+/// never satisfied by a package that will not exist afterwards. Because the end
+/// state is known, strict mixing with no repository authority is discharged
+/// against the fixed `(installed - outgoing) + incoming` set, which includes the
+/// incoming package's own provided capabilities.
 ///
 /// Callers that have already reduced `package.resolution_capabilities()` to the
 /// exact set their selection installs pass that view here, so a requirement is
 /// never discharged against a provide the selected payload does not ship.
-pub fn solve_package_requirements_with_provides_and_policy(
+pub fn solve_package_requirements_with_provides_outgoing_and_policy(
     conn: &Connection,
     package: &dyn PackageFormat,
     provided_capabilities: Vec<ProvidedCapability>,
+    outgoing_trove_ids: &[i64],
+    policy: &ResolutionPolicy,
+) -> Result<SatResolution> {
+    solve_package_requirements_with_provides_for_end_state(
+        conn,
+        package,
+        provided_capabilities,
+        outgoing_trove_ids,
+        policy,
+    )
+}
+
+fn solve_package_requirements_with_provides_for_end_state(
+    conn: &Connection,
+    package: &dyn PackageFormat,
+    provided_capabilities: Vec<ProvidedCapability>,
+    outgoing_trove_ids: &[i64],
     policy: &ResolutionPolicy,
 ) -> Result<SatResolution> {
     let incoming = PackageIdentity {
@@ -594,30 +634,13 @@ pub fn solve_package_requirements_with_provides_and_policy(
             crate::repository::registry::native_architecture_for_scheme(package.version_scheme())?
         }
     };
-    solve_requirement_groups_for_architecture_with_policy(
+    end_state::solve_requirement_groups_for_end_state(
         conn,
         &external_requirements,
         package.version_scheme(),
         &depending_architecture,
-        policy,
-    )
-}
-
-/// Solve one parsed package's external requirements after discharging exact
-/// positive requirements that the incoming package itself provides.
-///
-/// All install entrypoints without a component selection use this boundary so a
-/// converted CCS archive and its source-native package receive identical
-/// dependency semantics.
-pub fn solve_package_requirements_with_policy(
-    conn: &Connection,
-    package: &dyn PackageFormat,
-    policy: &ResolutionPolicy,
-) -> Result<SatResolution> {
-    solve_package_requirements_with_provides_and_policy(
-        conn,
-        package,
-        package.resolution_capabilities()?,
+        outgoing_trove_ids,
+        Some(&incoming),
         policy,
     )
 }

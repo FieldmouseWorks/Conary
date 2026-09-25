@@ -10,6 +10,7 @@ use crate::repository::dependency_model::{
     RepositoryCapabilityKind, RepositoryRequirementClause, RepositoryRequirementExpression,
 };
 use crate::repository::versioning::{RepoVersionConstraint, VersionScheme, parse_repo_constraint};
+use crate::resolver::canonical::CanonicalEquivalents;
 use crate::resolver::identity::PackageIdentity;
 use crate::resolver::identity::ProvidedCapability;
 use crate::resolver::provider::matching::{
@@ -18,12 +19,34 @@ use crate::resolver::provider::matching::{
 };
 use crate::resolver::provider::types::ConaryConstraint;
 
-/// Load the exact installed package/provide facts used by bounded requirement
-/// evaluation outside the SAT provider.
+/// Load the exact installed package/provide facts for every installed trove.
+///
+/// This includes non-package troves such as collections created by
+/// `conary collection create`. Callers that evaluate native requirements must
+/// use `load_installed_package_identities_for_packages` instead: a collection
+/// has no architecture authority, and the evaluator rejects the whole fact set
+/// when any member lacks one.
 pub fn load_installed_package_identities(
     conn: &rusqlite::Connection,
 ) -> Result<Vec<PackageIdentity>> {
-    Trove::list_all(conn)?
+    package_identities_from_troves(conn, Trove::list_all(conn)?)
+}
+
+/// Load the exact installed package/provide facts from package troves only.
+///
+/// Collections and components are not requirement providers, so they are
+/// excluded before the facts reach the native requirement evaluator.
+pub fn load_installed_package_identities_for_packages(
+    conn: &rusqlite::Connection,
+) -> Result<Vec<PackageIdentity>> {
+    package_identities_from_troves(conn, Trove::list_packages(conn)?)
+}
+
+fn package_identities_from_troves(
+    conn: &rusqlite::Connection,
+    troves: Vec<Trove>,
+) -> Result<Vec<PackageIdentity>> {
+    troves
         .into_iter()
         .map(|trove| {
             let trove_id = trove.id.ok_or_else(|| {
@@ -72,13 +95,15 @@ pub fn load_installed_package_identities(
 ///
 /// Atomic clause rows are discovery indexes only. The caller must evaluate the
 /// original expression against the returned identities to retain Boolean and
-/// same-provider semantics.
+/// same-provider semantics. Installed candidates are package troves only, since
+/// a collection has no architecture authority and would make the evaluator
+/// reject the candidate set.
 pub(crate) fn load_requirement_candidate_identities(
     conn: &rusqlite::Connection,
     expression: &RepositoryRequirementExpression,
     version_scheme: VersionScheme,
 ) -> Result<Vec<PackageIdentity>> {
-    let mut identities = load_installed_package_identities(conn)?;
+    let mut identities = load_installed_package_identities_for_packages(conn)?;
     let mut seen_repository_packages = HashSet::new();
 
     for clause in expression.atoms() {
@@ -216,6 +241,12 @@ fn repository_capability_kind_from_db(kind: &str) -> Result<RepositoryCapability
 
 /// Evaluate a parsed requirement expression against the supplied package facts.
 ///
+/// This entry point treats package identity literally: a package-name atom only
+/// matches a package with that exact name. Use
+/// [`requirement_expression_satisfied_with_canonical_equivalents`] when the
+/// caller has the canonical equivalence index and must agree with SAT, whose
+/// candidate filtering accepts canonical equivalents as the same identity.
+///
 /// `With` and `Without` retain RPM's same-provider semantics by evaluating
 /// both operands against each individual package rather than against the
 /// package set as a whole.
@@ -225,6 +256,31 @@ pub fn requirement_expression_satisfied(
     depending_architecture: &str,
     native_architecture: &str,
     packages: &[PackageIdentity],
+) -> Result<bool> {
+    requirement_expression_satisfied_with_canonical_equivalents(
+        expression,
+        version_scheme,
+        depending_architecture,
+        native_architecture,
+        packages,
+        &CanonicalEquivalents::default(),
+    )
+}
+
+/// Evaluate a parsed requirement expression with canonical equivalence.
+///
+/// A package-name atom accepts either a package named exactly like the atom or
+/// a package whose name is a canonical equivalent of the atom's name, mirroring
+/// the SAT provider's `filter_candidates`. The version, architecture, and
+/// constraint checks are the same helpers as the literal path. Declared
+/// provides are unaffected.
+pub fn requirement_expression_satisfied_with_canonical_equivalents(
+    expression: &RepositoryRequirementExpression,
+    version_scheme: VersionScheme,
+    depending_architecture: &str,
+    native_architecture: &str,
+    packages: &[PackageIdentity],
+    canonical_equivalents: &CanonicalEquivalents,
 ) -> Result<bool> {
     if depending_architecture.is_empty() || native_architecture.is_empty() {
         return Err(Error::ConfigError(
@@ -249,6 +305,7 @@ pub fn requirement_expression_satisfied(
         depending_architecture,
         native_architecture,
         packages,
+        canonical_equivalents,
     )
 }
 
@@ -258,6 +315,7 @@ fn requirement_expression_satisfied_validated(
     depending_architecture: &str,
     native_architecture: &str,
     packages: &[PackageIdentity],
+    canonical_equivalents: &CanonicalEquivalents,
 ) -> Result<bool> {
     match expression {
         RepositoryRequirementExpression::Atom(clause) => packages
@@ -269,6 +327,7 @@ fn requirement_expression_satisfied_validated(
                     depending_architecture,
                     native_architecture,
                     package,
+                    canonical_equivalents,
                 )
             })
             .collect::<Result<Vec<_>>>()
@@ -281,6 +340,7 @@ fn requirement_expression_satisfied_validated(
                     depending_architecture,
                     native_architecture,
                     packages,
+                    canonical_equivalents,
                 )? {
                     return Ok(false);
                 }
@@ -295,6 +355,7 @@ fn requirement_expression_satisfied_validated(
                     depending_architecture,
                     native_architecture,
                     packages,
+                    canonical_equivalents,
                 )? {
                     return Ok(true);
                 }
@@ -312,6 +373,7 @@ fn requirement_expression_satisfied_validated(
                 depending_architecture,
                 native_architecture,
                 packages,
+                canonical_equivalents,
             )? {
                 requirement_expression_satisfied_validated(
                     requirement,
@@ -319,6 +381,7 @@ fn requirement_expression_satisfied_validated(
                     depending_architecture,
                     native_architecture,
                     packages,
+                    canonical_equivalents,
                 )
             } else if let Some(otherwise) = otherwise {
                 requirement_expression_satisfied_validated(
@@ -327,6 +390,7 @@ fn requirement_expression_satisfied_validated(
                     depending_architecture,
                     native_architecture,
                     packages,
+                    canonical_equivalents,
                 )
             } else {
                 Ok(true)
@@ -343,6 +407,7 @@ fn requirement_expression_satisfied_validated(
                 depending_architecture,
                 native_architecture,
                 packages,
+                canonical_equivalents,
             )? {
                 requirement_expression_satisfied_validated(
                     requirement,
@@ -350,6 +415,7 @@ fn requirement_expression_satisfied_validated(
                     depending_architecture,
                     native_architecture,
                     packages,
+                    canonical_equivalents,
                 )
             } else if let Some(otherwise) = otherwise {
                 requirement_expression_satisfied_validated(
@@ -358,6 +424,7 @@ fn requirement_expression_satisfied_validated(
                     depending_architecture,
                     native_architecture,
                     packages,
+                    canonical_equivalents,
                 )
             } else {
                 Ok(true)
@@ -372,12 +439,14 @@ fn requirement_expression_satisfied_validated(
                     depending_architecture,
                     native_architecture,
                     package,
+                    canonical_equivalents,
                 )? && requirement_expression_satisfied_validated(
                     right,
                     version_scheme,
                     depending_architecture,
                     native_architecture,
                     package,
+                    canonical_equivalents,
                 )? {
                     return Ok(true);
                 }
@@ -393,12 +462,14 @@ fn requirement_expression_satisfied_validated(
                     depending_architecture,
                     native_architecture,
                     package,
+                    canonical_equivalents,
                 )? && !requirement_expression_satisfied_validated(
                     right,
                     version_scheme,
                     depending_architecture,
                     native_architecture,
                     package,
+                    canonical_equivalents,
                 )? {
                     return Ok(true);
                 }
@@ -414,6 +485,7 @@ fn atom_satisfied(
     depending_architecture: &str,
     native_architecture: &str,
     package: &PackageIdentity,
+    canonical_equivalents: &CanonicalEquivalents,
 ) -> Result<bool> {
     if let Some(runtime) =
         crate::repository::rpm_runtime::RpmRuntimeRequirement::from_clause(clause, version_scheme)
@@ -452,7 +524,8 @@ fn atom_satisfied(
     let is_package_identity_name = matches!(
         clause.capability_kind,
         None | Some(RepositoryCapabilityKind::PackageName)
-    ) && package.name == clause.name;
+    ) && (package.name == clause.name
+        || canonical_equivalents.contains_equivalent(&clause.name, &package.name));
     if is_package_identity_name
         && constraint_architecture_matches_package(&constraint, package, native_architecture)?
         && constraint_matches_package(&constraint, &package.version, package.version_scheme)?

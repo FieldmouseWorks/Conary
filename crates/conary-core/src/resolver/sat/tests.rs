@@ -645,10 +645,11 @@ fn adopted_malformed_self_provides_return_conflict_without_diagnostic_panic() {
         &format!("{kernel_capability} = {kernel_capability_version}"),
     )
     .unwrap();
-    let result = solve_requirement_groups_with_policy(
+    let result = solve_requirement_groups_with_outgoing_and_policy(
         &conn,
         &[requirement],
         VersionScheme::Rpm,
+        &[],
         &ResolutionPolicy::new()
             .with_mixing(crate::repository::resolution_policy::DependencyMixingPolicy::Permissive),
     )
@@ -1503,9 +1504,19 @@ fn test_removal_does_not_attribute_preexisting_unsatisfied_capability_to_unrelat
 
 #[path = "tests/canonical.rs"]
 mod canonical;
+#[path = "tests/fixed_incoming.rs"]
+mod fixed_incoming;
 #[path = "tests/formal_dependencies.rs"]
 mod formal_dependencies;
 #[path = "tests/relations.rs"]
 mod relations;
 #[path = "tests/root_requirements.rs"]
 mod root_requirements;
+#[path = "tests/slot_replacement.rs"]
+mod slot_replacement;
+#[path = "tests/speculative_removal.rs"]
+mod speculative_removal;
+#[path = "tests/strict_installed.rs"]
+mod strict_installed;
+#[path = "tests/virtual_conditions.rs"]
+mod virtual_conditions;

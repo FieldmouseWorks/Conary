@@ -6,7 +6,7 @@
 //! Package identity is now represented by `PackageIdentity` from
 //! `resolver::identity`.
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::fmt;
 
 use crate::repository::dependency_model::{
@@ -36,6 +36,29 @@ pub enum ConaryConstraint {
     ProviderExpression {
         expression: CapabilityExpression,
     },
+    /// Exact root selecting only the fixed incoming package.
+    ///
+    /// The incoming package is a transaction fact, not a repository or
+    /// installed candidate, so its identity must never be satisfied by a
+    /// same-name candidate.
+    FixedIncoming,
+    /// Exact root selecting one surviving installed trove.
+    ///
+    /// A known end state keeps every surviving installed package the
+    /// transaction can observe, so its exact installed solvable is a required
+    /// fact rather than an optional candidate. `filter_candidates` matches by
+    /// installed trove identity, never by name/version.
+    ExactInstalledTrove(i64),
+    /// Exact solvable identities that satisfy a compiled condition atom under
+    /// one concrete package name.
+    ///
+    /// resolvo's condition encoding tracks presence per name, so a condition
+    /// that a differently named provider (a virtual capability or canonical
+    /// equivalent) satisfies cannot reuse the atom's own version set. The
+    /// condition compiler groups the matching solvables by their concrete name
+    /// and interns this variant under that name; `filter_candidates` then
+    /// matches by exact ID. Positive requirements never intern this variant.
+    ExactSolvables(BTreeSet<u32>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -234,7 +257,7 @@ impl CapabilityExpression {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SolverDep {
     pub expression: SolverExpression,
-    pub requirement_group: Option<RepositoryRequirementGroupIdentity>,
+    pub requirement_group: Option<RequirementGroupIdentity>,
 }
 
 /// Persisted authority for one repository requirement group.
@@ -242,6 +265,21 @@ pub struct SolverDep {
 pub struct RepositoryRequirementGroupIdentity {
     pub repository_package_id: i64,
     pub repository_requirement_group_id: i64,
+}
+
+/// The exact persisted requirement group behind a compiled dependency, from
+/// either a repository package or an installed trove.
+///
+/// The fixed-point driver discharges individual pre-existing broken installed
+/// groups by identity, so an installed dependency must carry the same typed
+/// identity the repository path already carries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum RequirementGroupIdentity {
+    Repository(RepositoryRequirementGroupIdentity),
+    Installed {
+        trove_id: i64,
+        requirement_group_id: i64,
+    },
 }
 
 /// Exact transaction relation attached to a solver candidate.
@@ -296,6 +334,11 @@ impl fmt::Display for ConaryConstraint {
             Self::ProviderExpression { expression } => {
                 write!(f, "same-provider {expression:?}")
             }
+            Self::FixedIncoming => write!(f, "fixed incoming package"),
+            Self::ExactInstalledTrove(trove_id) => {
+                write!(f, "installed trove {trove_id}")
+            }
+            Self::ExactSolvables(solvables) => write!(f, "exact solvables {solvables:?}"),
         }
     }
 }
