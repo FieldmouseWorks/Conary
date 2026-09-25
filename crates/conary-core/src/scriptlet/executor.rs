@@ -310,6 +310,7 @@ mod tests {
         ScriptletOutcome,
     };
     use super::ScriptletExecutor;
+    use crate::scriptlet::test_support::materialized_root;
     use std::path::Path;
 
     #[test]
@@ -361,6 +362,29 @@ mod tests {
             err.contains("not found in target root"),
             "unexpected error: {}",
             err
+        );
+    }
+
+    #[test]
+    fn ccs_post_install_hook_runs_without_positional_arguments() {
+        const TEST_NAME: &str =
+            "scriptlet::executor::tests::ccs_post_install_hook_runs_without_positional_arguments";
+        let Some(root) = materialized_root(TEST_NAME, &["/bin/sh"]) else {
+            return;
+        };
+        let executor =
+            ScriptletExecutor::new(root.path(), "test-pkg", "1.0.0", PackageFormat::Conary);
+        let script = r#"[ "$#" -eq 0 ] || exit 9
+printf ran > /tmp/ccs-post-install-ran"#;
+
+        executor
+            .execute_ccs_install_hook("/bin/sh", script)
+            .expect("CCS post-install hook must run in the selected root");
+
+        assert_eq!(
+            std::fs::read_to_string(root.host_path("/tmp/ccs-post-install-ran"))
+                .expect("hook marker written inside the selected root"),
+            "ran"
         );
     }
 }
