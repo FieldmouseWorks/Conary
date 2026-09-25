@@ -87,6 +87,49 @@ pub(super) fn live_root_files_from_stored_files(
         .collect()
 }
 
+/// Build the selected-root files an element will install directly from the
+/// extraction-form payload, before CAS storage.
+///
+/// Regular content is reopened from the package source rather than an object
+/// store; the resulting content authority is identical to the post-storage
+/// form, so planning does not depend on CAS having been populated.
+pub(super) fn live_root_files_from_extracted_files(
+    extracted_files: &[conary_core::packages::payload::PackagePayloadFile],
+    resolved_files: &[inner::ResolvedInstallFile],
+) -> Result<Vec<LiveRootFile>> {
+    extracted_files
+        .iter()
+        .zip(resolved_files)
+        .map(|(file, resolved)| {
+            let content = match &resolved.node.source.kind {
+                PayloadNodeKind::Regular { .. } => {
+                    let authority = resolved.content.clone().ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "regular payload {} has no content authority",
+                            resolved.path
+                        )
+                    })?;
+                    let source = file.source().ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "regular payload {} has no reopenable source",
+                            resolved.path
+                        )
+                    })?;
+                    LiveRootContent::regular(authority, source.clone()).with_context(|| {
+                        format!("Failed to open {} from the payload source", resolved.path)
+                    })?
+                }
+                _ => LiveRootContent::absent(),
+            };
+            Ok(LiveRootFile {
+                path: resolved.path.clone(),
+                content,
+                node: resolved.node.clone(),
+            })
+        })
+        .collect()
+}
+
 /// Bind hardlinks to compatible regular targets that this install preserves.
 ///
 /// The incoming package retains its source-native claim graph. Root mutation

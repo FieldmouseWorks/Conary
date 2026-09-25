@@ -218,6 +218,58 @@ pub(super) fn resolve_stored_install_files(
         .collect())
 }
 
+/// Resolve extraction-form payload files before any CAS storage.
+///
+/// The CAS identity of a regular node is its content-authority digest and of a
+/// symlink is the SHA-256 of its target (the same value `CasStore::store_symlink`
+/// returns), so the resolved result is identical to the post-storage
+/// [`resolve_stored_install_files`] result without writing an object.
+pub(super) fn resolve_extracted_install_files(
+    root: &Path,
+    extracted_files: &[conary_core::packages::payload::PackagePayloadFile],
+    semantics: InstallSemantics,
+) -> Result<Vec<ResolvedInstallFile>> {
+    let mut paths = HashSet::with_capacity(extracted_files.len());
+    for file in extracted_files {
+        if !paths.insert(file.path.as_str()) {
+            anyhow::bail!("payload path {} is declared more than once", file.path);
+        }
+    }
+    let resolved_nodes = super::payload_identity::resolve_payload_nodes(
+        root,
+        extracted_files.iter().map(|file| file.node.clone()),
+        semantics,
+    )?;
+    Ok(extracted_files
+        .iter()
+        .zip(resolved_nodes)
+        .map(|(file, node)| ResolvedInstallFile {
+            path: file.path.clone(),
+            node,
+            content: file.content_authority.clone(),
+            cas_hash: extracted_cas_identity(file),
+        })
+        .collect())
+}
+
+fn extracted_cas_identity(
+    file: &conary_core::packages::payload::PackagePayloadFile,
+) -> Option<String> {
+    match &file.node.kind {
+        PayloadNodeKind::Regular { .. } => file
+            .content_authority
+            .as_ref()
+            .map(|content| content.sha256.clone()),
+        PayloadNodeKind::Symlink { target } => Some(CasStore::compute_symlink_hash(target)),
+        PayloadNodeKind::Directory
+        | PayloadNodeKind::Hardlink { .. }
+        | PayloadNodeKind::BlockDevice { .. }
+        | PayloadNodeKind::CharacterDevice { .. }
+        | PayloadNodeKind::Fifo
+        | PayloadNodeKind::Socket => None,
+    }
+}
+
 pub(super) fn install_inner_with_stored_files(
     tx: &Transaction<'_>,
     changeset_id: i64,

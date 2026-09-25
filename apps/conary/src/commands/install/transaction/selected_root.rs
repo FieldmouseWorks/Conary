@@ -319,28 +319,35 @@ impl NativeGraphPayloadMutation for SelectedRootPayload<'_, '_> {
         if self.inner_result.is_some() {
             bail!("native transaction graph applies the incoming package more than once");
         }
-        let resolved_files = inner::resolve_stored_install_files(
-            self.selected_root.selected_root(),
-            self.stored_files,
-            self.ctx.semantics,
-        )?;
-        let directory_plan = inner::preflight_resolved_file_ownership(
+        let config_declarations = self.pkg.config_declarations()?;
+        let effects = super::super::payload_effects::plan_element_payload_effects(
             self.tx,
             self.selected_root.selected_root(),
-            &resolved_files,
-            self.pkg.name(),
-            self.ctx.relation_removals,
-            self.ctx.semantics,
+            super::super::payload_effects::ElementPayloadEffectInput {
+                semantics: self.ctx.semantics,
+                package_name: self.pkg.name(),
+                relation_removals: self.ctx.relation_removals,
+                replacing_trove_id: self.ctx.old_trove_to_upgrade.and_then(|trove| trove.id),
+                config_declarations: &config_declarations,
+                files: super::super::payload_effects::PayloadEffectFiles::Stored {
+                    cas: self.cas,
+                    files: self.stored_files,
+                },
+            },
         )?;
-        let all_package_files =
-            super::super::live_root_files_from_stored_files(self.cas, &resolved_files)?;
-        let package_files = all_package_files
-            .iter()
-            .filter(|file| !directory_plan.preserves_leaf(&file.path))
-            .cloned()
-            .collect::<Vec<_>>();
-        let through_symlink_files = directory_plan.through_symlink_root_files(&resolved_files);
-        let config_declarations = self.pkg.config_declarations()?;
+        debug_assert_eq!(
+            effects,
+            super::super::payload_effects::plan_extracted_element_payload_effects(
+                self.tx,
+                self.selected_root.selected_root(),
+                self.pkg,
+                &self.extraction.extracted_files,
+                self.ctx.semantics,
+                self.ctx.old_trove_to_upgrade,
+                self.ctx.relation_removals,
+            )?,
+            "the stored and extraction payload-effect plans must agree"
+        );
         let config_transaction = crate::commands::generation::config_transaction::capture_install(
             self.tx,
             self.selected_root.selected_root(),
@@ -348,36 +355,24 @@ impl NativeGraphPayloadMutation for SelectedRootPayload<'_, '_> {
             crate::commands::generation::config_transaction::ConfigInstallCapture {
                 source: super::super::config_files::source_for_semantics(self.ctx.semantics),
                 declared: &config_declarations,
-                incoming: &package_files,
+                incoming: &effects.config_candidates,
                 replacing_trove_id: self.ctx.old_trove_to_upgrade.and_then(|trove| trove.id),
                 replaced_trove_ids: &[],
             },
         )?;
-        let mut config_plan = super::super::config_files::prepare_config_install(
-            self.tx,
-            self.selected_root.selected_root(),
-            super::super::config_files::source_for_semantics(self.ctx.semantics),
-            &config_declarations,
-            self.ctx.old_trove_to_upgrade.and_then(|trove| trove.id),
-            package_files,
-        )?;
-        let hardlink_references = super::super::execute::prepare_preserved_hardlink_references(
-            self.tx,
-            &directory_plan,
-            &all_package_files,
-            &mut config_plan.files,
+        self.selected_root.apply_install_files_with_references(
+            &effects.install_files,
+            &effects.hardlink_references,
         )?;
         self.selected_root
-            .apply_install_files_with_references(&config_plan.files, &hardlink_references)?;
+            .apply_install_files(&effects.through_symlink_files)?;
         self.selected_root
-            .apply_install_files(&through_symlink_files)?;
-        self.selected_root
-            .apply_remove_paths(&config_plan.remove_paths)?;
+            .apply_remove_paths(&effects.remove_paths)?;
         if let Some(file_capabilities) = self.ctx.file_capabilities {
             super::super::file_capabilities::apply_selected_file_capabilities(
                 self.selected_root.selected_root(),
                 file_capabilities,
-                config_plan.files.iter(),
+                effects.install_files.iter(),
             )?;
         }
         let installed = inner::install_inner_with_stored_files(
@@ -386,8 +381,8 @@ impl NativeGraphPayloadMutation for SelectedRootPayload<'_, '_> {
             self.pkg,
             self.extraction,
             self.ctx,
-            &resolved_files,
-            &directory_plan,
+            &effects.resolved_files,
+            &effects.directory_plan,
         )?;
         if let Some(capabilities) = self.ctx.ccs_capabilities {
             conary_core::capability::store_capabilities(self.tx, installed.trove_id, capabilities)?;

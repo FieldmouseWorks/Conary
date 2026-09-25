@@ -29,6 +29,16 @@ use super::{InstallSemantics, PackageFormatType, PreparedSourceKind};
 pub(crate) struct ConfigInstallPlan {
     pub(crate) files: Vec<LiveRootFile>,
     pub(crate) remove_paths: Vec<String>,
+    /// Typed decision the source contract made for each incoming config
+    /// payload, keyed by the incoming package path (before any suffix).
+    pub(crate) decisions: Vec<ConfigInstallDecisionRecord>,
+}
+
+/// One typed config-install decision for an incoming payload path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ConfigInstallDecisionRecord {
+    pub(crate) path: String,
+    pub(crate) decision: ConfigInstallDecision,
 }
 
 pub(crate) struct ConfigRemovalPlan {
@@ -193,6 +203,7 @@ pub(crate) fn prepare_config_install(
         .collect::<BTreeSet<_>>();
     let mut planned = Vec::with_capacity(files.len() + declarations.len());
     let mut remove_paths = BTreeSet::new();
+    let mut decisions = Vec::new();
 
     for declaration in declared.iter().filter(|declaration| {
         declaration.payload() == ConfigPayloadAssociation::Absent
@@ -305,6 +316,10 @@ pub(crate) fn prepare_config_install(
             current.as_ref().map(|existing| existing.hash.as_str()),
             &new_hash,
         );
+        decisions.push(ConfigInstallDecisionRecord {
+            path: file.path.clone(),
+            decision,
+        });
 
         match decision {
             ConfigInstallDecision::Install => planned.push(file),
@@ -334,6 +349,7 @@ pub(crate) fn prepare_config_install(
     Ok(ConfigInstallPlan {
         files: planned,
         remove_paths: remove_paths.into_iter().collect(),
+        decisions,
     })
 }
 

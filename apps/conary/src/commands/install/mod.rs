@@ -21,6 +21,7 @@ mod native_lifecycle;
 mod options;
 mod ownership_mode;
 mod package_set;
+mod payload_effects;
 mod payload_identity;
 mod prepare;
 pub(crate) mod preview;
