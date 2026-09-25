@@ -8,6 +8,7 @@
 [suite]
 name = "Phase 3 Group G: Data Integrity"
 phase = 3
+requires_fixtures = ["conary-test-shell"]
 
 [distro_overrides.fedora44]
 NATIVE_CORRUPTED_PKG = "/opt/remi-tests/fixtures/adversarial/corrupted/native/output/native-package-corrupted.rpm"

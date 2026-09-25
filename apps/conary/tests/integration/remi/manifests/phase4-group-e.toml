@@ -14,6 +14,7 @@
 [suite]
 name = "Phase 4 Group E: Cross-Distro Compatibility"
 phase = 4
+requires_fixtures = ["conary-test-shell"]
 
 [distro_overrides.fedora44]
 distro_repo = "remi"

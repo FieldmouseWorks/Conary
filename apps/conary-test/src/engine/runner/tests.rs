@@ -8,10 +8,11 @@ use crate::config::distro::{
 };
 use crate::config::manifest::{
     Assertion, FileChecksum, KillAfterLog, QemuBoot, QemuImageFormat, ResourceConstraints,
-    SuiteDef, TestDef, TestManifest, TestStep,
+    StaticFixture, SuiteDef, TestDef, TestManifest, TestStep,
 };
 use crate::container::backend::ExecResult;
 use crate::container::mock::MockBackend;
+use crate::engine::variables::{FIXTURE_DIR_CONFIG_KEY, FixturePreflightError};
 
 // -- Helpers --
 
@@ -106,6 +107,7 @@ fn make_manifest(tests: Vec<TestDef>) -> TestManifest {
             name: "test-suite".to_string(),
             phase: 1,
             setup: Vec::new(),
+            requires_fixtures: Vec::new(),
             mock_server: None,
             timeout: None,
             corpus: None,
@@ -180,6 +182,7 @@ async fn suite_setup_executes_before_tests() {
                 "echo setup ok",
                 Some(make_assertion(Some(0), Some("setup ok"))),
             )],
+            requires_fixtures: Vec::new(),
             mock_server: None,
             timeout: None,
             corpus: None,
@@ -233,6 +236,7 @@ async fn suite_setup_assertion_failure_preserves_command_output() {
                 "failing setup",
                 Some(make_assertion(Some(0), None)),
             )],
+            requires_fixtures: Vec::new(),
             mock_server: None,
             timeout: None,
             corpus: None,
@@ -251,6 +255,371 @@ async fn suite_setup_assertion_failure_preserves_command_output() {
     assert!(error.contains("suite setup assertion failed"));
     assert!(error.contains("setup stdout evidence"));
     assert!(error.contains("setup stderr evidence"));
+}
+
+fn trivial_manifest(name: &str, fixtures: Vec<StaticFixture>) -> TestManifest {
+    let mut manifest = make_manifest(vec![TestDef {
+        id: format!("T-{name}"),
+        name: name.to_string(),
+        description: "fixture install bookkeeping".to_string(),
+        timeout: 30,
+        flaky: None,
+        retries: None,
+        retry_delay_ms: None,
+        step: vec![simple_step_run("true", None)],
+        resources: None,
+        depends_on: None,
+        fatal: None,
+        group: None,
+        skip: None,
+        requires: Vec::new(),
+        corpus: None,
+    }]);
+    manifest.suite.name = name.to_string();
+    manifest.suite.requires_fixtures = fixtures;
+    manifest
+}
+
+/// The exact argv the harness's `sh -c` receives to install the shell fixture.
+fn shell_fixture_install_argv(config: &GlobalConfig) -> Vec<String> {
+    let fixture_dir = config
+        .paths
+        .fixture_dir
+        .as_deref()
+        .expect("fixture directory");
+    vec![
+        "sh".to_string(),
+        "-c".to_string(),
+        format!(
+            "{} ccs install {fixture_dir}/conary-test-shell/output/conary-test-shell-1.0.0-1.ccs \
+             --policy {fixture_dir}/ccs-test-authority/trust-policy.toml \
+             --sandbox always --yes --db-path {}",
+            config.paths.conary_bin, config.paths.db,
+        ),
+    ]
+}
+
+/// Every exec the harness issues to install the declared shell fixture, matched
+/// by the exact argv the setup path used before the harness owned installation.
+fn shell_fixture_install_calls(backend: &MockBackend, config: &GlobalConfig) -> Vec<Vec<String>> {
+    let expected_call = shell_fixture_install_argv(config);
+    backend
+        .exec_calls()
+        .into_iter()
+        .filter(|call| call == &expected_call)
+        .collect()
+}
+
+#[tokio::test]
+async fn declared_fixture_installs_once_per_container() {
+    let config = test_config();
+    let backend = MockBackend::new(Vec::new());
+    let first = trivial_manifest("first", vec![StaticFixture::Shell]);
+    let second = trivial_manifest("second", vec![StaticFixture::Shell]);
+    let mut installed_fixtures = InstalledFixtures::default();
+    let mut runner = TestRunner::new(config.clone(), "fedora44".to_string());
+
+    for manifest in [&first, &second] {
+        runner
+            .run_with_cancel(
+                manifest,
+                &backend,
+                &"ctr-shared".to_string(),
+                None,
+                None,
+                None,
+                None,
+                &mut installed_fixtures,
+            )
+            .await
+            .unwrap();
+    }
+
+    assert_eq!(
+        shell_fixture_install_calls(&backend, &config).len(),
+        1,
+        "a fixture two manifests declare must install once per container"
+    );
+}
+
+#[tokio::test]
+async fn undeclared_manifest_installs_no_fixture() {
+    let config = test_config();
+    let backend = MockBackend::new(Vec::new());
+    let manifest = trivial_manifest("plain", Vec::new());
+    let mut installed_fixtures = InstalledFixtures::default();
+    let mut runner = TestRunner::new(config.clone(), "fedora44".to_string());
+
+    runner
+        .run_with_cancel(
+            &manifest,
+            &backend,
+            &"ctr-plain".to_string(),
+            None,
+            None,
+            None,
+            None,
+            &mut installed_fixtures,
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        shell_fixture_install_calls(&backend, &config).is_empty(),
+        "a manifest that declares no fixture must install none"
+    );
+}
+
+/// A declared fixture with no `paths.fixture_dir` must fail the typed preflight
+/// before any container exec, never at install time with a literal placeholder.
+#[tokio::test]
+async fn declared_fixture_without_fixture_dir_fails_preflight_before_exec() {
+    let mut config = test_config();
+    config.paths.fixture_dir = None;
+    let backend = MockBackend::new(Vec::new());
+    let manifest = trivial_manifest("missing-fixture-dir", vec![StaticFixture::Shell]);
+    let mut installed_fixtures = InstalledFixtures::default();
+    let mut runner = TestRunner::new(config, "fedora44".to_string());
+
+    let error = runner
+        .run_with_cancel(
+            &manifest,
+            &backend,
+            &"ctr-missing-fixture-dir".to_string(),
+            None,
+            None,
+            None,
+            None,
+            &mut installed_fixtures,
+        )
+        .await
+        .expect_err("a declared fixture without fixture_dir must fail");
+
+    assert!(
+        matches!(
+            error.downcast_ref::<FixturePreflightError>(),
+            Some(FixturePreflightError::MissingFixtureDir {
+                fixture: StaticFixture::Shell,
+                config_key: FIXTURE_DIR_CONFIG_KEY,
+                ..
+            })
+        ),
+        "unexpected error: {error}"
+    );
+    assert!(
+        backend.exec_calls().is_empty(),
+        "preflight must fail before the harness issues any container exec"
+    );
+}
+
+/// Positive control for the preflight: the same declared fixture with
+/// `fixture_dir` set clears it and installs normally.
+#[tokio::test]
+async fn declared_fixture_with_fixture_dir_passes_preflight() {
+    let config = test_config();
+    assert!(config.paths.fixture_dir.is_some());
+    let backend = MockBackend::new(Vec::new());
+    let manifest = trivial_manifest("fixture-dir-set", vec![StaticFixture::Shell]);
+    let mut installed_fixtures = InstalledFixtures::default();
+    let mut runner = TestRunner::new(config, "fedora44".to_string());
+
+    runner
+        .run_with_cancel(
+            &manifest,
+            &backend,
+            &"ctr-fixture-dir-set".to_string(),
+            None,
+            None,
+            None,
+            None,
+            &mut installed_fixtures,
+        )
+        .await
+        .expect("a declared fixture with fixture_dir set must clear preflight");
+}
+
+#[tokio::test]
+async fn failed_fixture_install_reports_typed_error() {
+    let backend = MockBackend::new(vec![ExecResult {
+        exit_code: 17,
+        stdout: String::new(),
+        stderr: "ccs refused the install".to_string(),
+    }]);
+    let manifest = trivial_manifest("failing", vec![StaticFixture::Shell]);
+    let mut installed_fixtures = InstalledFixtures::default();
+    let mut runner = TestRunner::new(test_config(), "fedora44".to_string());
+
+    let error = runner
+        .run_with_cancel(
+            &manifest,
+            &backend,
+            &"ctr-failing".to_string(),
+            None,
+            None,
+            None,
+            None,
+            &mut installed_fixtures,
+        )
+        .await
+        .unwrap_err();
+
+    let typed = error
+        .downcast_ref::<FixtureInstallError>()
+        .expect("a declared fixture failure must stay typed");
+    assert!(matches!(
+        typed,
+        FixtureInstallError::NonZeroExit {
+            fixture: StaticFixture::Shell,
+            exit_code: 17,
+            ..
+        }
+    ));
+}
+
+#[tokio::test]
+async fn resource_scoped_test_installs_declared_fixture_in_its_disposable_container() {
+    let config = test_config();
+    // `initialize_container_state` runs one init, one repo-removal per dropped
+    // default, one removal per unselected public profile, and one seed
+    // verification. A phase-1 suite keeps the packaged seed, so no Remi override
+    // runs. The seed verification is last and must report exactly one source.
+    let setup_exec_count = 1
+        + config.setup.remove_default_repos.len()
+        + conary_core::repository::supported_profiles::public_profiles()
+            .len()
+            .saturating_sub(1)
+        + 1;
+
+    let fixture_installed = || ExecResult {
+        exit_code: 0,
+        stdout: "fixture installed".to_string(),
+        stderr: String::new(),
+    };
+    let mut exec_results = vec![fixture_installed()];
+    exec_results.extend((0..setup_exec_count).map(|index| ExecResult {
+        exit_code: 0,
+        stdout: if index + 1 == setup_exec_count {
+            "1\n".to_string()
+        } else {
+            String::new()
+        },
+        stderr: String::new(),
+    }));
+    exec_results.push(fixture_installed());
+    exec_results.push(ExecResult {
+        exit_code: 0,
+        stdout: "resource ok".to_string(),
+        stderr: String::new(),
+    });
+    let backend = MockBackend::new(exec_results);
+
+    let manifest = TestManifest {
+        suite: SuiteDef {
+            name: "resource-fixture".to_string(),
+            phase: 1,
+            setup: Vec::new(),
+            requires_fixtures: vec![StaticFixture::Shell],
+            mock_server: None,
+            timeout: None,
+            corpus: None,
+        },
+        test: vec![TestDef {
+            id: "T-resource-fixture".to_string(),
+            name: "resource_fixture".to_string(),
+            description: "the disposable container installs the declared fixture".to_string(),
+            timeout: 30,
+            flaky: None,
+            retries: None,
+            retry_delay_ms: None,
+            step: vec![simple_step_run(
+                "echo resource ok",
+                Some(make_assertion(Some(0), Some("resource ok"))),
+            )],
+            resources: Some(ResourceConstraints {
+                tmpfs_size_mb: None,
+                memory_limit_mb: Some(512),
+                network_isolated: Some(false),
+            }),
+            depends_on: None,
+            fatal: None,
+            group: None,
+            skip: None,
+            requires: Vec::new(),
+            corpus: None,
+        }],
+        distro_overrides: HashMap::new(),
+    };
+
+    let base_container_config = ContainerConfig {
+        image: "mock-image".to_string(),
+        ..Default::default()
+    };
+    let mut runner = TestRunner::new(config.clone(), "fedora44".to_string());
+    let suite = runner
+        .run(
+            &manifest,
+            &backend,
+            &"ctr-base".to_string(),
+            Some(&base_container_config),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(suite.passed(), 1);
+    assert_eq!(suite.failed(), 0);
+    assert_eq!(
+        backend.created_containers().len(),
+        1,
+        "the resource-scoped test runs in one disposable container"
+    );
+
+    let calls = backend.exec_calls();
+    let install_argv = shell_fixture_install_argv(&config);
+    let install_positions = calls
+        .iter()
+        .enumerate()
+        .filter(|(_, call)| call.as_slice() == install_argv.as_slice())
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        install_positions.len(),
+        2,
+        "the base container and the disposable container each install the declared fixture"
+    );
+
+    let disposable_init = calls
+        .iter()
+        .position(|call| {
+            call.len() == 3
+                && call[0].as_str() == "sh"
+                && call[1].as_str() == "-c"
+                && call[2].contains("system init")
+        })
+        .expect("the disposable container is initialized");
+    let fixture_in_disposable = install_positions[1];
+    let test_step = calls
+        .iter()
+        .position(|call| {
+            call.len() == 3
+                && call[0].as_str() == "sh"
+                && call[1].as_str() == "-c"
+                && call[2].as_str() == "echo resource ok"
+        })
+        .expect("the test's own step runs");
+
+    assert!(
+        install_positions[0] < disposable_init,
+        "the shared container's install is not the disposable one"
+    );
+    assert!(
+        disposable_init < fixture_in_disposable,
+        "the disposable container is initialized before its fixture install"
+    );
+    assert_eq!(
+        fixture_in_disposable + 1,
+        test_step,
+        "the fixture install is the last thing before the test's own step"
+    );
 }
 
 #[tokio::test]
@@ -638,6 +1007,7 @@ async fn test_resource_scoped_flaky_retries_use_fresh_container() {
             name: "resource-flaky".to_string(),
             phase: 2,
             setup: Vec::new(),
+            requires_fixtures: Vec::new(),
             mock_server: None,
             timeout: None,
             corpus: None,
@@ -778,6 +1148,7 @@ async fn remi_failure_does_not_change_exit_outcome_or_json_report() {
         wal: Some(wal.clone()),
     };
     let mut remi_runner = TestRunner::new(test_config(), "fedora44".to_string());
+    let mut installed_fixtures = InstalledFixtures::default();
     let remi_suite = remi_runner
         .run_with_cancel(
             &manifest,
@@ -787,6 +1158,7 @@ async fn remi_failure_does_not_change_exit_outcome_or_json_report() {
             None,
             None,
             Some(&ctx),
+            &mut installed_fixtures,
         )
         .await
         .unwrap();

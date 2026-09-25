@@ -2,6 +2,7 @@
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
+use conary_test::container::image::ShellProviderRequirement;
 use conary_test::engine::container_setup::initialize_container_state;
 use conary_test::paths;
 use handlers::{
@@ -436,7 +437,14 @@ fn run_single_distro(
             }
             None => manifests_for_phase(phase)?,
         };
-        let _loaded_manifest_entries = load_manifest_entries(&manifest_paths)?;
+        let loaded_manifest_entries = load_manifest_entries(&manifest_paths)?;
+        conary_test::engine::variables::preflight_declared_fixtures(
+            config,
+            loaded_manifest_entries.iter().map(|(_, manifest)| manifest),
+        )?;
+        let shell_provider = ShellProviderRequirement::from_manifests(
+            loaded_manifest_entries.iter().map(|(_, manifest)| manifest),
+        );
 
         // Check if all manifests contain only QEMU boot steps — if so,
         // skip container setup entirely (QEMU tests boot their own VMs).
@@ -460,9 +468,14 @@ fn run_single_distro(
             .get(distro)
             .with_context(|| format!("unknown distro: {distro}"))?;
         tracing::info!(distro, containerfile = %cf_path.display(), "Building image");
-        let image_tag =
-            conary_test::container::build_distro_image(&backend, &cf_path, distro, distro_config)
-                .await?;
+        let image_tag = conary_test::container::build_distro_image(
+            &backend,
+            &cf_path,
+            distro,
+            distro_config,
+            shell_provider,
+        )
+        .await?;
         tracing::info!(distro, image = %image_tag, "Image built");
 
         // Create and start the container.
@@ -522,6 +535,7 @@ fn run_single_distro(
         // closed on that path too: a run left at its `pending` default reads as
         // still in flight forever.
         let manifest_outcome: Result<()> = async {
+            let mut installed_fixtures = conary_test::engine::runner::InstalledFixtures::default();
             for manifest_path in &manifest_paths {
                 let manifest =
                     conary_test::config::load_manifest(manifest_path).with_context(|| {
@@ -549,6 +563,7 @@ fn run_single_distro(
                         None,
                         None,
                         remi_run.as_ref().map(|run| run.context()),
+                        &mut installed_fixtures,
                     )
                     .await?;
                 aggregate_suite.expect_corpus_cases(suite.corpus_expected());
@@ -636,6 +651,7 @@ async fn run_qemu_only_suite(
 
     // Fallible loop, closed run on both exits — see the container path.
     let manifest_outcome: Result<()> = async {
+        let mut installed_fixtures = conary_test::engine::runner::InstalledFixtures::default();
         for manifest_path in manifest_paths {
             let manifest = conary_test::config::load_manifest(manifest_path)
                 .with_context(|| format!("failed to load manifest: {}", manifest_path.display()))?;
@@ -651,6 +667,7 @@ async fn run_qemu_only_suite(
                     None,
                     None,
                     remi_run.as_ref().map(|run| run.context()),
+                    &mut installed_fixtures,
                 )
                 .await?;
             aggregate_suite.expect_corpus_cases(suite.corpus_expected());
@@ -857,6 +874,9 @@ fn main() -> Result<()> {
                             .get(&distro)
                             .with_context(|| format!("unknown distro: {distro}"))?;
                         tracing::info!(%distro, containerfile = %cf_path.display(), "Building image");
+                        // `images build` selects no suite, so it must not
+                        // require a host shell for the shell provider fixture.
+                        let shell_provider = ShellProviderRequirement::NotInstalled;
                         let tag = match native_package {
                             Some(package) => {
                                 let profile = conary_core::repository::supported_profiles::profile_by_public_id(
@@ -875,6 +895,7 @@ fn main() -> Result<()> {
                                     distro_config,
                                     &package,
                                     profile.package_format(),
+                                    shell_provider,
                                 )
                                 .await?
                             }
@@ -884,6 +905,7 @@ fn main() -> Result<()> {
                                     &cf_path,
                                     &distro,
                                     distro_config,
+                                    shell_provider,
                                 )
                                 .await?
                             }

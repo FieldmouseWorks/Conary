@@ -14,6 +14,50 @@ pub struct TestManifest {
     pub distro_overrides: HashMap<String, HashMap<String, String>>,
 }
 
+/// A static fixture an image build must stage for a suite before it runs.
+///
+/// The image builder mutates the image in response to these declarations, so
+/// the list is a closed enum rather than free-form text: an undeclared value is
+/// a manifest error, not a silently ignored requirement. Command text never
+/// derives a fixture requirement; a suite that quotes or builds the install
+/// command differently still opts in by naming the fixture here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+pub enum StaticFixture {
+    /// The hermetic static `/bin/sh` provider (`conary-test-shell`).
+    #[serde(rename = "conary-test-shell")]
+    Shell,
+    // A future `Init` fixture joins here; the enum stays closed so an
+    // undeclared value cannot silently change an image.
+}
+
+impl StaticFixture {
+    /// Every fixture, in the order the harness installs it.
+    ///
+    /// Enum order is install order so a provider (the static shell) is present
+    /// before any fixture whose hooks need it. This is the single source for
+    /// that order: callers iterate it instead of re-spelling a separate list.
+    pub const ALL: &[StaticFixture] = &[Self::Shell];
+
+    /// The manifest value a suite writes in `requires_fixtures`.
+    pub const fn declaration(self) -> &'static str {
+        match self {
+            Self::Shell => "conary-test-shell",
+        }
+    }
+
+    /// The harness variable holding this fixture's package for installation.
+    ///
+    /// The harness installs every fixture its manifest declares, expanding this
+    /// variable in the `ccs install` command; image staging materializes the
+    /// value. The guard test compares the variable against the parsed suite
+    /// setup argv so a setup step cannot re-install a declared fixture.
+    pub const fn install_variable(self) -> &'static str {
+        match self {
+            Self::Shell => "${FIXTURE_SHELL_CCS}",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SuiteDef {
@@ -21,6 +65,14 @@ pub struct SuiteDef {
     pub phase: u32,
     #[serde(default)]
     pub setup: Vec<TestStep>,
+    /// Static fixtures the suite requires and image staging must build.
+    ///
+    /// The harness installs each declared fixture once per container before the
+    /// suite runs. `serde` rejects unknown values because [`StaticFixture`] is a
+    /// closed enum, so a typo fails the manifest instead of silently dropping
+    /// the image mutation.
+    #[serde(default)]
+    pub requires_fixtures: Vec<StaticFixture>,
     #[serde(default)]
     pub mock_server: Option<MockServerConfig>,
     /// Suite-level timeout in seconds. If set, the entire suite must

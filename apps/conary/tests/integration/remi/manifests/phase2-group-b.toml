@@ -13,6 +13,7 @@
 [suite]
 name = "Phase 2, Group B: Generation Lifecycle (T51-T57)"
 phase = 2
+requires_fixtures = ["conary-test-shell"]
 
 # Setup: ensure fixture v1 is installed for generation tests
 [[suite.setup]]

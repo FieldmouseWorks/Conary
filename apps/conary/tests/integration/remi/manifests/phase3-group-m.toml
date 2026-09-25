@@ -12,6 +12,7 @@
 [suite]
 name = "Phase 3 Group M: Real-World Operations"
 phase = 3
+requires_fixtures = ["conary-test-shell"]
 
 [distro_overrides.fedora44]
 small_package = "tree"

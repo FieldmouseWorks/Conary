@@ -8,6 +8,7 @@
 [suite]
 name = "Phase 3 Group H: Error Recovery"
 phase = 3
+requires_fixtures = ["conary-test-shell"]
 
 [suite.mock_server]
 port = 18081

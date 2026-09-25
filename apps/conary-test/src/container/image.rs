@@ -8,7 +8,13 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::backend::ContainerBackend;
+use crate::config::manifest::StaticFixture;
 use crate::config::{DistroBuildContext, DistroConfig};
+
+#[path = "image/static_shell.rs"]
+mod static_shell;
+
+pub use static_shell::ShellProviderRequirement;
 
 #[derive(Debug)]
 struct StagedBuildContext {
@@ -20,6 +26,31 @@ struct StagedBuildContext {
 struct NativePackageArtifact<'a> {
     path: &'a Path,
     format: ProfilePackageFormat,
+}
+
+/// The artifact path image staging writes for one static fixture.
+///
+/// The harness variable map derives its fixture install variables from this
+/// same function, so the path the image builder writes and the path a suite
+/// installs cannot diverge. `fixture_dir` is `paths.fixture_dir`.
+pub fn static_fixture_artifact_path(fixture: StaticFixture, fixture_dir: &Path) -> PathBuf {
+    let (directory, artifact) = match fixture {
+        StaticFixture::Shell => ("conary-test-shell", "conary-test-shell-1.0.0-1.ccs"),
+    };
+    fixture_dir.join(directory).join("output").join(artifact)
+}
+
+impl StaticFixture {
+    /// The harness variable name that holds this fixture's artifact path.
+    ///
+    /// Derived from [`StaticFixture::install_variable`] so the install command
+    /// and the variable map can never name two different variables.
+    pub fn artifact_variable(self) -> &'static str {
+        self.install_variable()
+            .strip_prefix("${")
+            .and_then(|name| name.strip_suffix('}'))
+            .expect("a fixture install variable is always a ${...} placeholder")
+    }
 }
 
 impl Drop for StagedBuildContext {
@@ -112,103 +143,215 @@ fn copy_dir_filtered(src: &Path, dst: &Path, skip_names: &[&str]) -> Result<()> 
     Ok(())
 }
 
-fn ensure_phase2_fixture_outputs(fixtures_root: &Path, conary_bin: &Path) -> Result<()> {
-    let fixture_root = fixtures_root.join("conary-test-fixture");
+/// Build one signed fixture package and verify it under the fixture trust
+/// policy, returning the single artifact it emitted.
+fn build_signed_fixture(
+    conary_bin: &Path,
+    manifest: &Path,
+    source: &Path,
+    output_dir: &Path,
+    signing_key: &Path,
+    trust_policy: &Path,
+) -> Result<PathBuf> {
+    if output_dir.exists() {
+        fs::remove_dir_all(output_dir)
+            .with_context(|| format!("failed to reset {}", output_dir.display()))?;
+    }
+    fs::create_dir_all(output_dir)
+        .with_context(|| format!("failed to create {}", output_dir.display()))?;
+
+    let output = std::process::Command::new(conary_bin)
+        .args(["ccs", "build"])
+        .arg(manifest)
+        .arg("--source")
+        .arg(source)
+        .arg("--output")
+        .arg(output_dir)
+        .arg("--key")
+        .arg(signing_key)
+        .output()
+        .with_context(|| {
+            format!(
+                "failed to build fixture {} with {}",
+                manifest.display(),
+                conary_bin.display()
+            )
+        })?;
+
+    if !output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!(
+            "failed to build fixture {}\nstdout:\n{}\nstderr:\n{}",
+            manifest.display(),
+            stdout.trim_end(),
+            stderr.trim_end()
+        );
+    }
+
+    let packages = fs::read_dir(output_dir)
+        .with_context(|| format!("failed to read {}", output_dir.display()))?
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| path.extension().is_some_and(|extension| extension == "ccs"))
+        .collect::<Vec<_>>();
+    if packages.len() != 1 {
+        bail!(
+            "expected one signed fixture in {}, found {}",
+            output_dir.display(),
+            packages.len()
+        );
+    }
+    let package = packages.into_iter().next().expect("one package");
+
+    let verify = std::process::Command::new(conary_bin)
+        .args(["ccs", "verify"])
+        .arg(&package)
+        .arg("--policy")
+        .arg(trust_policy)
+        .output()
+        .with_context(|| {
+            format!(
+                "failed to verify fixture {} with {}",
+                package.display(),
+                conary_bin.display()
+            )
+        })?;
+    if !verify.status.success() {
+        let stdout = String::from_utf8_lossy(&verify.stdout);
+        let stderr = String::from_utf8_lossy(&verify.stderr);
+        bail!(
+            "fixture {} did not verify under {}\nstdout:\n{}\nstderr:\n{}",
+            package.display(),
+            trust_policy.display(),
+            stdout.trim_end(),
+            stderr.trim_end()
+        );
+    }
+
+    Ok(package)
+}
+
+/// Stage the static shell source into the `conary-test-shell` fixture and build
+/// the signed provider. A missing fixture directory means this workspace has no
+/// shell provider to build, matching how the v1/v2 fixtures are skipped.
+fn build_test_shell_fixture(
+    fixtures_root: &Path,
+    conary_bin: &Path,
+    signing_key: &Path,
+    trust_policy: &Path,
+) -> Result<()> {
+    let artifact = static_fixture_artifact_path(StaticFixture::Shell, fixtures_root);
+    let output_dir = artifact
+        .parent()
+        .expect("a static fixture artifact path has an output directory");
+    let fixture_root = output_dir
+        .parent()
+        .expect("a static fixture output directory has a fixture root");
     if !fixture_root.is_dir() {
         return Ok(());
     }
+    let manifest = fixture_root.join("ccs.toml");
+    if !manifest.is_file() {
+        bail!(
+            "integration fixture conary-test-shell is missing {}",
+            manifest.display()
+        );
+    }
+
+    let source = static_shell::resolve_static_test_shell()?;
+    let stage = fixture_root.join("stage");
+    if stage.exists() {
+        fs::remove_dir_all(&stage)
+            .with_context(|| format!("failed to reset {}", stage.display()))?;
+    }
+    let staged_shell = stage.join("bin/sh");
+    let staged_parent = staged_shell
+        .parent()
+        .expect("staged shell path always has a parent");
+    fs::create_dir_all(staged_parent)
+        .with_context(|| format!("failed to create {}", staged_parent.display()))?;
+    fs::copy(&source, &staged_shell).with_context(|| {
+        format!(
+            "failed to stage static shell {} as {}",
+            source.display(),
+            staged_shell.display()
+        )
+    })?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&staged_shell, fs::Permissions::from_mode(0o755))
+            .with_context(|| format!("failed to make {} executable", staged_shell.display()))?;
+    }
+
+    let package = build_signed_fixture(
+        conary_bin,
+        &manifest,
+        &stage,
+        output_dir,
+        signing_key,
+        trust_policy,
+    )?;
+    if package != artifact {
+        bail!(
+            "fixture build for {} produced {} but the harness installs {}; update static_fixture_artifact_path",
+            StaticFixture::Shell.declaration(),
+            package.display(),
+            artifact.display()
+        );
+    }
+    Ok(())
+}
+
+fn ensure_phase2_fixture_outputs(
+    fixtures_root: &Path,
+    conary_bin: &Path,
+    shell_provider: ShellProviderRequirement,
+) -> Result<()> {
+    let fixture_root = fixtures_root.join("conary-test-fixture");
+    let shell_artifact = static_fixture_artifact_path(StaticFixture::Shell, fixtures_root);
+    let shell_root = shell_artifact
+        .parent()
+        .and_then(Path::parent)
+        .expect("a static fixture artifact lives under its fixture root");
+    let build_shell = shell_provider.is_installed() && shell_root.is_dir();
+    if !fixture_root.is_dir() && !build_shell {
+        return Ok(());
+    }
+
     let signing_key = crate::paths::fixture_ccs_key_path_for(fixtures_root);
     let trust_policy = crate::paths::fixture_ccs_policy_path_for(fixtures_root);
     for authority_path in [&signing_key, &trust_policy] {
         if !authority_path.is_file() {
             bail!(
-                "Phase 2 fixture authority is missing {}; regenerate apps/conary/tests/fixtures/ccs-test-authority",
+                "fixture authority is missing {}; regenerate apps/conary/tests/fixtures/ccs-test-authority",
                 authority_path.display()
             );
         }
     }
 
-    for version in ["v1", "v2"] {
-        let version_root = fixture_root.join(version);
-        let manifest = version_root.join("ccs.toml");
-        let source = version_root.join("stage");
-        if !manifest.is_file() || !source.is_dir() {
-            continue;
-        }
+    if fixture_root.is_dir() {
+        for version in ["v1", "v2"] {
+            let version_root = fixture_root.join(version);
+            let manifest = version_root.join("ccs.toml");
+            let source = version_root.join("stage");
+            if !manifest.is_file() || !source.is_dir() {
+                continue;
+            }
 
-        let output_dir = version_root.join("output");
-        if output_dir.exists() {
-            fs::remove_dir_all(&output_dir)
-                .with_context(|| format!("failed to reset {}", output_dir.display()))?;
+            build_signed_fixture(
+                conary_bin,
+                &manifest,
+                &source,
+                &version_root.join("output"),
+                &signing_key,
+                &trust_policy,
+            )?;
         }
-        fs::create_dir_all(&output_dir)
-            .with_context(|| format!("failed to create {}", output_dir.display()))?;
+    }
 
-        let output = std::process::Command::new(conary_bin)
-            .args(["ccs", "build"])
-            .arg(&manifest)
-            .arg("--source")
-            .arg(&source)
-            .arg("--output")
-            .arg(&output_dir)
-            .arg("--key")
-            .arg(&signing_key)
-            .output()
-            .with_context(|| {
-                format!(
-                    "failed to build Phase 2 fixture {} with {}",
-                    manifest.display(),
-                    conary_bin.display()
-                )
-            })?;
-
-        if !output.status.success() {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            bail!(
-                "failed to build Phase 2 fixture {}\nstdout:\n{}\nstderr:\n{}",
-                manifest.display(),
-                stdout.trim_end(),
-                stderr.trim_end()
-            );
-        }
-
-        let packages = fs::read_dir(&output_dir)
-            .with_context(|| format!("failed to read {}", output_dir.display()))?
-            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-            .filter(|path| path.extension().is_some_and(|extension| extension == "ccs"))
-            .collect::<Vec<_>>();
-        if packages.len() != 1 {
-            bail!(
-                "expected one signed Phase 2 fixture in {}, found {}",
-                output_dir.display(),
-                packages.len()
-            );
-        }
-        let verify = std::process::Command::new(conary_bin)
-            .args(["ccs", "verify"])
-            .arg(&packages[0])
-            .arg("--policy")
-            .arg(&trust_policy)
-            .output()
-            .with_context(|| {
-                format!(
-                    "failed to verify Phase 2 fixture {} with {}",
-                    packages[0].display(),
-                    conary_bin.display()
-                )
-            })?;
-        if !verify.status.success() {
-            let stdout = String::from_utf8_lossy(&verify.stdout);
-            let stderr = String::from_utf8_lossy(&verify.stderr);
-            bail!(
-                "Phase 2 fixture {} did not verify under {}\nstdout:\n{}\nstderr:\n{}",
-                packages[0].display(),
-                trust_policy.display(),
-                stdout.trim_end(),
-                stderr.trim_end()
-            );
-        }
+    if build_shell {
+        build_test_shell_fixture(fixtures_root, conary_bin, &signing_key, &trust_policy)?;
     }
 
     Ok(())
@@ -277,6 +420,7 @@ fn stage_build_context(
     distro: &str,
     build_context: DistroBuildContext,
     native_package: Option<NativePackageArtifact<'_>>,
+    shell_provider: ShellProviderRequirement,
 ) -> Result<StagedBuildContext> {
     let integration_root = containerfile
         .parent()
@@ -341,7 +485,7 @@ fn stage_build_context(
         stage_native_package(&root, artifact)?;
     }
 
-    ensure_phase2_fixture_outputs(&root.join("fixtures"), &host_binary)?;
+    ensure_phase2_fixture_outputs(&root.join("fixtures"), &host_binary, shell_provider)?;
 
     Ok(StagedBuildContext {
         dockerfile: root.join("containers").join(dockerfile_name),
@@ -351,14 +495,25 @@ fn stage_build_context(
 
 /// Build a distro-specific test image from a Containerfile.
 ///
-/// Tags the image as `conary-test-{distro}:latest`.
+/// Tags the image as `conary-test-{distro}:latest`. `shell_provider` reports
+/// whether the selected suites install the hermetic `/bin/sh` provider; only
+/// then does staging require a host shell.
 pub async fn build_distro_image(
     backend: &dyn ContainerBackend,
     containerfile: &Path,
     distro: &str,
     distro_config: &DistroConfig,
+    shell_provider: ShellProviderRequirement,
 ) -> Result<String> {
-    build_distro_image_inner(backend, containerfile, distro, distro_config, None).await
+    build_distro_image_inner(
+        backend,
+        containerfile,
+        distro,
+        distro_config,
+        None,
+        shell_provider,
+    )
+    .await
 }
 
 /// Build a distro-specific test image by installing one exact native package.
@@ -373,6 +528,7 @@ pub async fn build_distro_image_from_native_package(
     distro_config: &DistroConfig,
     package: &Path,
     package_format: ProfilePackageFormat,
+    shell_provider: ShellProviderRequirement,
 ) -> Result<String> {
     build_distro_image_inner(
         backend,
@@ -383,6 +539,7 @@ pub async fn build_distro_image_from_native_package(
             path: package,
             format: package_format,
         }),
+        shell_provider,
     )
     .await
 }
@@ -393,12 +550,17 @@ async fn build_distro_image_inner(
     distro: &str,
     distro_config: &DistroConfig,
     native_package: Option<NativePackageArtifact<'_>>,
+    shell_provider: ShellProviderRequirement,
 ) -> Result<String> {
     let tag = format!("conary-test-{distro}:latest");
     let force_rebuild = std::env::var("CONARY_TEST_REBUILD_IMAGE")
         .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
         .unwrap_or(false);
+    // An image built by `images build` has no selected suites and therefore
+    // stages no shell provider. A run whose suites install one must rebuild so
+    // `/bin/sh` is present rather than silently reusing a shell-less image.
     let reuse_existing = native_package.is_none()
+        && shell_provider == ShellProviderRequirement::NotInstalled
         && std::env::var("CONARY_TEST_REUSE_IMAGE")
             .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
             .unwrap_or(false);
@@ -422,6 +584,7 @@ async fn build_distro_image_inner(
         distro,
         distro_config.build_context,
         native_package,
+        shell_provider,
     )?;
     let mut build_args = match (&distro_config.release_root, &distro_config.target_root) {
         (Some(_), Some(_)) => {

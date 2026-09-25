@@ -40,6 +40,7 @@ fn minimal_manifest_with_id(id: &str) -> TestManifest {
             name: format!("suite-{id}"),
             phase: 1,
             setup: Vec::new(),
+            requires_fixtures: Vec::new(),
             mock_server: None,
             timeout: None,
             corpus: None,

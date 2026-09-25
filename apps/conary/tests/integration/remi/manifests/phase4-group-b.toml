@@ -9,6 +9,7 @@
 [suite]
 name = "Phase 4 Group B: Model, Collection, Derive"
 phase = 4
+requires_fixtures = ["conary-test-shell"]
 
 # ==========================================================================
 # System Model Tests (T177-T183)

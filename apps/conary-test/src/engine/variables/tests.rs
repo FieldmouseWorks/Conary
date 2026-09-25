@@ -156,6 +156,33 @@ fn test_build_variables_fixture_ccs_paths() {
         vars["FIXTURE_V2_CCS"],
         "/opt/remi-tests/fixtures/conary-test-fixture/v2/output/conary-test-fixture-2.0.0-1.ccs"
     );
+    assert_eq!(
+        vars["FIXTURE_SHELL_CCS"],
+        "/opt/remi-tests/fixtures/conary-test-shell/output/conary-test-shell-1.0.0-1.ccs"
+    );
+}
+
+/// A config that sets `paths.fixture_dir` but omits the optional `[fixtures]`
+/// table must still define every static fixture's artifact variable, at the
+/// exact path the image builder writes.
+#[test]
+fn fixture_dir_without_fixtures_table_defines_static_fixture_artifacts() {
+    let mut config = test_config();
+    config.fixtures = None;
+
+    let vars = build_variables(&config, "fedora44");
+
+    let fixture_dir = std::path::Path::new("/opt/remi-tests/fixtures");
+    for &fixture in StaticFixture::ALL {
+        assert_eq!(
+            vars[fixture.artifact_variable()],
+            crate::container::image::static_fixture_artifact_path(fixture, fixture_dir)
+                .to_string_lossy()
+                .into_owned(),
+            "{} must be defined whenever fixture_dir is set",
+            fixture.artifact_variable()
+        );
+    }
 }
 
 #[test]
@@ -196,6 +223,7 @@ fn test_distro_override_precedence() {
             name: "test".to_string(),
             phase: 1,
             setup: Vec::new(),
+            requires_fixtures: Vec::new(),
             mock_server: None,
             timeout: None,
             corpus: None,
