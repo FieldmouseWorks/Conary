@@ -16,8 +16,11 @@ The payload is a statically linked binary copied into `stage/sbin/init` at image
 staging time by `apps/conary-test/src/container/image.rs`; it is not committed
 to the repository. `stage/` and `output/` are ignored.
 
-The source binary is the same one the `/bin/sh` provider stages, chosen by the
-shared `resolve_static_test_binary()`: when `CONARY_TEST_STATIC_SHELL` is set,
-that exact executable path is used; otherwise the first executable `busybox` on
-`PATH` is used. Generation validation only checks that the entrypoint is an
-executable regular file, so the suite's package payload is the functional proof.
+The fixture is built only when a selected suite's setup installs
+`${FIXTURE_INIT_CCS}`; images for suites that install neither this nor the
+`/bin/sh` provider never consult a host binary. It shares the validated static
+binary resolution with the `/bin/sh` provider: the source is chosen by
+`resolve_static_test_shell()`, which validates a 64-bit little-endian static
+`ET_EXEC`/static-PIE `ET_DYN` for the image architecture. Generation validation
+checks that `/sbin/init` is an executable regular file, so the suite's
+publication and package payload are the functional proof.

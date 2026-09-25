@@ -134,6 +134,17 @@ fn test_build_variables_populates_core_fields() {
 }
 
 #[test]
+fn test_build_variables_include_published_generation_resolver() {
+    let config = test_config();
+    let vars = build_variables(&config, "fedora44");
+
+    assert_eq!(
+        vars["RESOLVE_PUBLISHED_GENERATION"],
+        RESOLVE_PUBLISHED_GENERATION
+    );
+}
+
+#[test]
 fn test_hooks_binary_defaults_to_the_ordinary_integration_binary() {
     let mut config = test_config();
     config.paths.test_hooks_conary_bin = None;

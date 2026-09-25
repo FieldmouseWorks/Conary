@@ -6,6 +6,14 @@ use crate::config::corpus::{CorpusCaseDef, CorpusTargetDef};
 use crate::config::distro::GlobalConfig;
 use crate::config::manifest::{Assertion, FileChecksum, QemuBoot, QemuGuestCopy, TestManifest};
 
+/// POSIX shell snippet that resolves the currently published generation number
+/// from the `/conary/current` symlink into `$N`.
+///
+/// The snippet exits nonzero when the symlink is missing, does not name
+/// `generations/<number>`, or points at a generation directory that does not
+/// exist, so a manifest query can never run against a malformed publication.
+const RESOLVE_PUBLISHED_GENERATION: &str = "GEN=$(readlink /conary/current) || exit 1; N=${GEN#generations/}; [ -n \"$N\" ] && [ \"$N\" != \"$GEN\" ] && [ -d \"/conary/generations/$N\" ] || exit 1";
+
 /// Build the base variable map from global config and distro selection.
 ///
 /// Populates variables from the Remi endpoint, paths, fixture config, and
@@ -19,6 +27,15 @@ pub fn build_variables(config: &GlobalConfig, distro: &str) -> HashMap<String, S
     vars.insert("DB_PATH".to_string(), config.paths.db.clone());
     vars.insert("CONARY_BIN".to_string(), conary_binaries.ordinary);
     vars.insert("CONARY_HOOKS_BIN".to_string(), conary_binaries.test_hooks);
+
+    // Integration suites read publication state from the typed manifests under
+    // the runtime root. This snippet resolves the currently published
+    // generation into `$N` and fails loudly when `/conary/current` is missing
+    // or malformed; each manifest step appends its exact query with `&&`.
+    vars.insert(
+        "RESOLVE_PUBLISHED_GENERATION".to_string(),
+        RESOLVE_PUBLISHED_GENERATION.to_string(),
+    );
     if let Some(fixture_dir) = &config.paths.fixture_dir {
         vars.insert("FIXTURE_DIR".to_string(), fixture_dir.clone());
         let fixture_root = std::path::Path::new(fixture_dir);

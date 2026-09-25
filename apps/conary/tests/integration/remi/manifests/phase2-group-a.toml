@@ -6,8 +6,13 @@
 # Variables: ${REMI_ENDPOINT}, ${DB_PATH}, ${CONARY_BIN}
 # Fixture variables: ${FIXTURE_PKG_NAME}, ${FIXTURE_FILE}, ${FIXTURE_ADDED_FILE},
 #                    ${FIXTURE_MARKER}, ${FIXTURE_V1_CCS}, ${FIXTURE_V2_CCS},
+#                    ${FIXTURE_SHELL_CCS}, ${FIXTURE_INIT_CCS},
 #                    ${FIXTURE_V1_HELLO_SHA256}, ${FIXTURE_V2_HELLO_SHA256},
 #                    ${FIXTURE_V2_ADDED_SHA256}
+# Publication queries: steps begin with ${RESOLVE_PUBLISHED_GENERATION}, which
+# resolves the generation `/conary/current` names into `$N` and fails loudly if
+# the symlink is missing. They then read the typed manifests under
+# `/conary/generations/$N/` with sqlite3, never the unbooted live root.
 
 [suite]
 name = "Phase 2, Group A: Deep Install Flow (T38-T50)"
@@ -62,16 +67,25 @@ exit_code = 0
 [[test]]
 id = "T39"
 name = "verify_dep_files_on_disk"
-description = "Verify fixture v1 files and directory exist on disk"
+description = "Verify fixture v1 file and directory nodes in the published generation manifest"
 timeout = 10
 group = "A"
 depends_on = ["T38"]
 
+# The unbooted container never materializes a published generation at `/`, so
+# query the typed generation manifest of the generation `/conary/current`
+# names. Exact path equality and a typed node kind, never a text search.
 [[test.step]]
-file_exists = "${FIXTURE_FILE}"
+run = "${RESOLVE_PUBLISHED_GENERATION} && test \"$(sqlite3 :memory: \"SELECT COUNT(*) FROM json_each(readfile('/conary/generations/$N/generation-root.json'), '$.entries') WHERE json_extract(value, '$.path') = '${FIXTURE_FILE}' AND json_extract(value, '$.node.source.kind.type') = 'regular'\")\" -eq 1"
+
+[test.step.assert]
+exit_code = 0
 
 [[test.step]]
-dir_exists = "/usr/share/conary-test"
+run = "${RESOLVE_PUBLISHED_GENERATION} && test \"$(sqlite3 :memory: \"SELECT COUNT(*) FROM json_each(readfile('/conary/generations/$N/generation-root.json'), '$.entries') WHERE json_extract(value, '$.path') = '/usr/share/conary-test' AND json_extract(value, '$.node.source.kind.type') = 'directory'\")\" -eq 1"
+
+[test.step.assert]
+exit_code = 0
 
 # --------------------------------------------------------------------------
 # T40: Verify v1 checksum
@@ -80,13 +94,19 @@ dir_exists = "/usr/share/conary-test"
 [[test]]
 id = "T40"
 name = "verify_v1_checksum"
-description = "Verify fixture v1 hello.txt has correct SHA-256 checksum"
+description = "Verify the published generation manifest records hello.txt's SHA-256"
 timeout = 10
 group = "A"
 depends_on = ["T38"]
 
+# `content.sha256` is the raw SHA-256 of the node content (the default CAS
+# digest algorithm, and therefore the CAS object name), so it compares directly
+# to the fixture's content hash.
 [[test.step]]
-file_checksum = { path = "${FIXTURE_FILE}", sha256 = "${FIXTURE_V1_HELLO_SHA256}" }
+run = "${RESOLVE_PUBLISHED_GENERATION} && test \"$(sqlite3 :memory: \"SELECT COUNT(*) FROM json_each(readfile('/conary/generations/$N/generation-root.json'), '$.entries') WHERE json_extract(value, '$.path') = '${FIXTURE_FILE}' AND json_extract(value, '$.content.sha256') = '${FIXTURE_V1_HELLO_SHA256}'\")\" -eq 1"
+
+[test.step.assert]
+exit_code = 0
 
 # --------------------------------------------------------------------------
 # T41: Verify scriptlet ran
@@ -95,13 +115,18 @@ file_checksum = { path = "${FIXTURE_FILE}", sha256 = "${FIXTURE_V1_HELLO_SHA256}
 [[test]]
 id = "T41"
 name = "verify_scriptlet_ran"
-description = "Verify post-install scriptlet created the marker file"
+description = "Verify the post-install scriptlet marker is in the published mutable state"
 timeout = 10
 group = "A"
 depends_on = ["T38"]
 
+# The marker lives under `/var`, so publication records it in the
+# mutable-state manifest rather than the immutable generation root.
 [[test.step]]
-file_exists = "${FIXTURE_MARKER}"
+run = "${RESOLVE_PUBLISHED_GENERATION} && test \"$(sqlite3 :memory: \"SELECT COUNT(*) FROM json_each(readfile('/conary/generations/$N/mutable-state.json'), '$.entries') WHERE json_extract(value, '$.path') = '${FIXTURE_MARKER}'\")\" -eq 1"
+
+[test.step.assert]
+exit_code = 0
 
 # --------------------------------------------------------------------------
 # T42: Remove with scriptlets
@@ -115,6 +140,14 @@ timeout = 60
 group = "A"
 depends_on = ["T38"]
 
+# Record the pre-removal generation so the absence checks can prove a new
+# generation was published instead of passing against a stale one.
+[[test.step]]
+run = "${RESOLVE_PUBLISHED_GENERATION} && printf '%s' \"$N\" > /tmp/conary-t42-generation-before"
+
+[test.step.assert]
+exit_code = 0
+
 [[test.step]]
 conary = "remove ${FIXTURE_PKG_NAME} --sandbox always --yes"
 
@@ -122,10 +155,22 @@ conary = "remove ${FIXTURE_PKG_NAME} --sandbox always --yes"
 exit_code = 0
 
 [[test.step]]
-file_not_exists = "${FIXTURE_MARKER}"
+run = "${RESOLVE_PUBLISHED_GENERATION} && test \"$N\" -gt \"$(cat /tmp/conary-t42-generation-before)\""
+
+[test.step.assert]
+exit_code = 0
 
 [[test.step]]
-file_not_exists = "${FIXTURE_FILE}"
+run = "${RESOLVE_PUBLISHED_GENERATION} && test \"$(sqlite3 :memory: \"SELECT COUNT(*) FROM json_each(readfile('/conary/generations/$N/mutable-state.json'), '$.entries') WHERE json_extract(value, '$.path') = '${FIXTURE_MARKER}'\")\" -eq 0"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+run = "${RESOLVE_PUBLISHED_GENERATION} && test \"$(sqlite3 :memory: \"SELECT COUNT(*) FROM json_each(readfile('/conary/generations/$N/generation-root.json'), '$.entries') WHERE json_extract(value, '$.path') = '${FIXTURE_FILE}'\")\" -eq 0"
+
+[test.step.assert]
+exit_code = 0
 
 # --------------------------------------------------------------------------
 # T43: Reinstall fixture v1
@@ -178,7 +223,10 @@ group = "A"
 depends_on = ["T44"]
 
 [[test.step]]
-file_checksum = { path = "${FIXTURE_FILE}", sha256 = "${FIXTURE_V2_HELLO_SHA256}" }
+run = "${RESOLVE_PUBLISHED_GENERATION} && test \"$(sqlite3 :memory: \"SELECT COUNT(*) FROM json_each(readfile('/conary/generations/$N/generation-root.json'), '$.entries') WHERE json_extract(value, '$.path') = '${FIXTURE_FILE}' AND json_extract(value, '$.content.sha256') = '${FIXTURE_V2_HELLO_SHA256}'\")\" -eq 1"
+
+[test.step.assert]
+exit_code = 0
 
 # --------------------------------------------------------------------------
 # T46: Verify v2 added file
@@ -187,16 +235,22 @@ file_checksum = { path = "${FIXTURE_FILE}", sha256 = "${FIXTURE_V2_HELLO_SHA256}
 [[test]]
 id = "T46"
 name = "verify_v2_added_file"
-description = "Verify v2 added file exists with correct checksum"
+description = "Verify the v2 added file is a regular node with its SHA-256 in the generation manifest"
 timeout = 10
 group = "A"
 depends_on = ["T44"]
 
 [[test.step]]
-file_exists = "${FIXTURE_ADDED_FILE}"
+run = "${RESOLVE_PUBLISHED_GENERATION} && test \"$(sqlite3 :memory: \"SELECT COUNT(*) FROM json_each(readfile('/conary/generations/$N/generation-root.json'), '$.entries') WHERE json_extract(value, '$.path') = '${FIXTURE_ADDED_FILE}' AND json_extract(value, '$.node.source.kind.type') = 'regular'\")\" -eq 1"
+
+[test.step.assert]
+exit_code = 0
 
 [[test.step]]
-file_checksum = { path = "${FIXTURE_ADDED_FILE}", sha256 = "${FIXTURE_V2_ADDED_SHA256}" }
+run = "${RESOLVE_PUBLISHED_GENERATION} && test \"$(sqlite3 :memory: \"SELECT COUNT(*) FROM json_each(readfile('/conary/generations/$N/generation-root.json'), '$.entries') WHERE json_extract(value, '$.path') = '${FIXTURE_ADDED_FILE}' AND json_extract(value, '$.content.sha256') = '${FIXTURE_V2_ADDED_SHA256}'\")\" -eq 1"
+
+[test.step.assert]
+exit_code = 0
 
 # --------------------------------------------------------------------------
 # T47: Rollback after update
@@ -209,6 +263,14 @@ description = "Rollback the v1->v2 update using changeset history"
 timeout = 120
 group = "A"
 depends_on = ["T44"]
+
+# Record the pre-rollback generation so T48 can prove the rollback published a
+# new generation rather than leaving the update's generation in place.
+[[test.step]]
+run = "${RESOLVE_PUBLISHED_GENERATION} && printf '%s' \"$N\" > /tmp/conary-t48-generation-before"
+
+[test.step.assert]
+exit_code = 0
 
 # Get history and extract the most recent changeset ID, then rollback.
 # The shell pipeline extracts the first Changeset N: heading from history output.
@@ -231,10 +293,22 @@ group = "A"
 depends_on = ["T47"]
 
 [[test.step]]
-file_checksum = { path = "${FIXTURE_FILE}", sha256 = "${FIXTURE_V1_HELLO_SHA256}" }
+run = "${RESOLVE_PUBLISHED_GENERATION} && test \"$N\" -gt \"$(cat /tmp/conary-t48-generation-before)\""
+
+[test.step.assert]
+exit_code = 0
 
 [[test.step]]
-file_not_exists = "${FIXTURE_ADDED_FILE}"
+run = "${RESOLVE_PUBLISHED_GENERATION} && test \"$(sqlite3 :memory: \"SELECT COUNT(*) FROM json_each(readfile('/conary/generations/$N/generation-root.json'), '$.entries') WHERE json_extract(value, '$.path') = '${FIXTURE_FILE}' AND json_extract(value, '$.content.sha256') = '${FIXTURE_V1_HELLO_SHA256}'\")\" -eq 1"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+run = "${RESOLVE_PUBLISHED_GENERATION} && test \"$(sqlite3 :memory: \"SELECT COUNT(*) FROM json_each(readfile('/conary/generations/$N/generation-root.json'), '$.entries') WHERE json_extract(value, '$.path') = '${FIXTURE_ADDED_FILE}'\")\" -eq 0"
+
+[test.step.assert]
+exit_code = 0
 
 # --------------------------------------------------------------------------
 # T49: Pin blocks update

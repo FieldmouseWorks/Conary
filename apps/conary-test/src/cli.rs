@@ -2,6 +2,7 @@
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
+use conary_test::container::image::ShellProviderRequirement;
 use conary_test::engine::container_setup::initialize_container_state;
 use conary_test::paths;
 use handlers::{
@@ -436,7 +437,10 @@ fn run_single_distro(
             }
             None => manifests_for_phase(phase)?,
         };
-        let _loaded_manifest_entries = load_manifest_entries(&manifest_paths)?;
+        let loaded_manifest_entries = load_manifest_entries(&manifest_paths)?;
+        let shell_provider = ShellProviderRequirement::from_manifests(
+            loaded_manifest_entries.iter().map(|(_, manifest)| manifest),
+        );
 
         // Check if all manifests contain only QEMU boot steps — if so,
         // skip container setup entirely (QEMU tests boot their own VMs).
@@ -460,9 +464,14 @@ fn run_single_distro(
             .get(distro)
             .with_context(|| format!("unknown distro: {distro}"))?;
         tracing::info!(distro, containerfile = %cf_path.display(), "Building image");
-        let image_tag =
-            conary_test::container::build_distro_image(&backend, &cf_path, distro, distro_config)
-                .await?;
+        let image_tag = conary_test::container::build_distro_image(
+            &backend,
+            &cf_path,
+            distro,
+            distro_config,
+            shell_provider,
+        )
+        .await?;
         tracing::info!(distro, image = %image_tag, "Image built");
 
         // Create and start the container.
@@ -857,6 +866,9 @@ fn main() -> Result<()> {
                             .get(&distro)
                             .with_context(|| format!("unknown distro: {distro}"))?;
                         tracing::info!(%distro, containerfile = %cf_path.display(), "Building image");
+                        // `images build` selects no suite, so it must not
+                        // require a host shell for the shell provider fixture.
+                        let shell_provider = ShellProviderRequirement::NotInstalled;
                         let tag = match native_package {
                             Some(package) => {
                                 let profile = conary_core::repository::supported_profiles::profile_by_public_id(
@@ -875,6 +887,7 @@ fn main() -> Result<()> {
                                     distro_config,
                                     &package,
                                     profile.package_format(),
+                                    shell_provider,
                                 )
                                 .await?
                             }
@@ -884,6 +897,7 @@ fn main() -> Result<()> {
                                     &cf_path,
                                     &distro,
                                     distro_config,
+                                    shell_provider,
                                 )
                                 .await?
                             }

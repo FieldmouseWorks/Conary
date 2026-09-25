@@ -62,30 +62,38 @@ fn test_load_phase2_group_a_manifest() {
         assert_eq!(t38.fatal, Some(true));
         assert_eq!(t38.group.as_deref(), Some("A"));
 
-        // Verify T39 has dir_exists step
+        // T39 queries the published generation manifest for the file and
+        // directory nodes instead of the unbooted live root.
         let t39 = manifest.test.iter().find(|t| t.id == "T39").unwrap();
+        assert_eq!(t39.step.len(), 2, "T39 should query two manifest nodes");
         assert!(
-            t39.step.iter().any(|s| s.dir_exists.is_some()),
-            "T39 should have a dir_exists step"
+            t39.step.iter().all(|step| {
+                step.run.is_some() && step.file_exists.is_none() && step.dir_exists.is_none()
+            }),
+            "T39 should use exact manifest queries, not live-root assertions"
         );
 
-        // Verify T40 has file_checksum step
+        // T40 queries the published generation manifest's content digest.
         let t40 = manifest.test.iter().find(|t| t.id == "T40").unwrap();
         assert!(
-            t40.step.iter().any(|s| s.file_checksum.is_some()),
-            "T40 should have a file_checksum step"
+            t40.step
+                .iter()
+                .all(|step| step.run.is_some() && step.file_checksum.is_none()),
+            "T40 should use an exact manifest digest query, not a live-root checksum"
         );
 
-        // Verify T42 has file_not_exists steps
+        // T42 records the pre-removal generation, removes the package, proves
+        // the generation advanced, and checks the two nodes are absent from the
+        // newly published generation manifests.
         let t42 = manifest.test.iter().find(|t| t.id == "T42").unwrap();
-        let not_exists_count = t42
-            .step
-            .iter()
-            .filter(|s| s.file_not_exists.is_some())
-            .count();
+        assert!(
+            t42.step.iter().all(|step| step.file_not_exists.is_none()),
+            "T42 must not assert absence against the unbooted live root"
+        );
         assert_eq!(
-            not_exists_count, 2,
-            "T42 should have 2 file_not_exists steps"
+            t42.step.iter().filter(|step| step.run.is_some()).count(),
+            4,
+            "T42 should capture, compare, and query the published manifests"
         );
 
         // Verify T48 depends on T47
@@ -727,30 +735,21 @@ fn fixture_installing_manifests_install_the_required_providers() {
             continue;
         }
 
-        // The suite setup must install each provider with the exact expected
-        // argv. There is no harness argv parser, so split on ASCII whitespace
-        // and compare the whole token sequence.
-        for provider in ["${FIXTURE_SHELL_CCS}", "${FIXTURE_INIT_CCS}"] {
-            let installs_provider = manifest.suite.setup.iter().any(|step| {
-                step.conary.as_deref().is_some_and(|command| {
-                    command.split_ascii_whitespace().eq([
-                        "ccs",
-                        "install",
-                        provider,
-                        "--policy",
-                        "${FIXTURE_CCS_POLICY}",
-                        "--sandbox",
-                        "always",
-                        "--yes",
-                    ])
-                })
-            });
-            assert!(
-                installs_provider,
-                "{} installs the local fixture but has no suite setup installing {provider}",
-                path.display()
-            );
-        }
+        // The provider requirement is derived from the parsed manifest setup
+        // argv rather than a substring of the command text, matching the image
+        // builder's own typed decision for both providers.
+        let requirement =
+            crate::container::image::ShellProviderRequirement::from_manifests([&manifest]);
+        assert!(
+            requirement.shell_required(),
+            "{} installs the local fixture but has no suite setup installing ${{FIXTURE_SHELL_CCS}}",
+            path.display()
+        );
+        assert!(
+            requirement.init_required(),
+            "{} installs the local fixture but has no suite setup installing ${{FIXTURE_INIT_CCS}}",
+            path.display()
+        );
         checked.push(path);
     }
 
