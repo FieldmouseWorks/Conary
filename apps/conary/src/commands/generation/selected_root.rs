@@ -475,6 +475,9 @@ pub(crate) enum SelectedRootSource {
     CurrentGeneration {
         snapshot_id: Option<i64>,
         changeset_id: Option<i64>,
+        /// True when a stable `/current` link named a generation the pinned
+        /// snapshot never recorded, so the IDs are unknown rather than absent.
+        recovered_without_state: bool,
     },
     /// No generation exists yet, so installed database rows are the baseline.
     DatabaseProjection { changeset_id: Option<i64> },
@@ -620,6 +623,10 @@ enum BaselineAttempt {
 /// [`MAX_CURRENT_GENERATION_ATTEMPTS`] times) when it does not. Exhausting the
 /// attempts is a typed
 /// [`SelectedRootBaselineError::CurrentGenerationChanged`].
+///
+/// A stable `/current` link to a generation the snapshot never recorded is a
+/// recovered state-less target, not a race; otherwise the retry and typed
+/// refusal below still apply.
 pub(crate) fn read_selected_root_baseline_with_source(
     conn: &rusqlite::Connection,
     runtime_root: &ConaryRuntimeRoot,
@@ -627,10 +634,9 @@ pub(crate) fn read_selected_root_baseline_with_source(
 ) -> Result<(SelectedRootSource, CapturedSelectedRoot)> {
     // A caller may already hold a transaction or savepoint. Reuse that
     // snapshot rather than attempting a nested BEGIN, which SQLite rejects.
-    // The caller's snapshot cannot be re-pinned, so a generation it does not
-    // record is refused rather than retried.
+    // Its pin cannot be bracketed, so an unrecorded generation stays refused.
     if !conn.is_autocommit() {
-        return match read_selected_root_baseline_attempt(conn, runtime_root, empty_root)? {
+        return match read_baseline_attempt(conn, runtime_root, empty_root, None)? {
             BaselineAttempt::Complete { source, captured } => Ok((source, *captured)),
             BaselineAttempt::StaleCurrentGeneration => {
                 Err(SelectedRootBaselineError::CurrentGenerationChanged.into())
@@ -641,8 +647,11 @@ pub(crate) fn read_selected_root_baseline_with_source(
     let mut attempt = 0;
     loop {
         attempt += 1;
+        // Bracket the WAL snapshot: read `/current` before the pin and after
+        // selection; a state-less target needs all three reads to agree.
+        let current_before = current_generation_link(runtime_root)?;
         let transaction = conn.unchecked_transaction()?;
-        match read_selected_root_baseline_attempt(&transaction, runtime_root, empty_root) {
+        match read_baseline_attempt(&transaction, runtime_root, empty_root, current_before) {
             Ok(BaselineAttempt::Complete { source, captured }) => {
                 transaction.commit()?;
                 return Ok((source, *captured));
@@ -663,10 +672,28 @@ pub(crate) fn read_selected_root_baseline_with_source(
     }
 }
 
-fn read_selected_root_baseline_attempt(
+/// Read `/current` as a generation number, if any.
+fn current_generation_link(runtime_root: &ConaryRuntimeRoot) -> conary_core::Result<Option<i64>> {
+    conary_core::generation::mount::current_generation(runtime_root.root())
+}
+
+/// One attempt at the baseline against a snapshot pinned by the caller.
+///
+/// `current_before` is `/current` read immediately before the snapshot was
+/// pinned, or `None` when the caller already owned the snapshot. A state-less
+/// generation is accepted only when `current_before`, the selected generation,
+/// and a trailing `/current` read all agree.
+/// Boot recovery is the state-less source: `mark_generation_state_active_if_present`
+/// in `crates/conary-core/src/transaction/recovery.rs` accepts a missing
+/// `SystemState` after `mount_artifact_and_link` updates `/current` (lines
+/// 289-315), and neither path writes a terminal `GenerationPublication` row.
+/// A concurrent publication commits those rows before moving the link, so a
+/// stable link without them is recovery, never a publication race.
+fn read_baseline_attempt(
     conn: &rusqlite::Connection,
     runtime_root: &ConaryRuntimeRoot,
     empty_root: &Path,
+    current_before: Option<i64>,
 ) -> Result<BaselineAttempt> {
     let selection = select_selected_root(
         conn,
@@ -694,12 +721,28 @@ fn read_selected_root_baseline_attempt(
         } => {
             // The generation's state snapshot and terminal publication row are
             // committed with the artifact and before `/current` moves, so a
-            // snapshot that records neither proves the link advanced past it.
-            // The state snapshot also covers generations selected through
-            // `generation switch` without a publication row.
+            // snapshot that records neither normally proves the link advanced
+            // past it. The state snapshot also covers generations selected
+            // through `generation switch` without a publication row.
             let publication = GenerationPublication::completed_for_generation(conn, generation)?;
             if publication.is_none() && SystemState::find_by_number(conn, generation)?.is_none() {
-                return Ok(BaselineAttempt::StaleCurrentGeneration);
+                let stable = current_before == Some(generation)
+                    && current_generation_link(runtime_root)? == Some(generation);
+                if !stable {
+                    return Ok(BaselineAttempt::StaleCurrentGeneration);
+                }
+                // The IDs are unknown, not absent; the artifact is the baseline.
+                return Ok(BaselineAttempt::Complete {
+                    source: SelectedRootSource::CurrentGeneration {
+                        snapshot_id: None,
+                        changeset_id: None,
+                        recovered_without_state: true,
+                    },
+                    captured: Box::new(CapturedSelectedRoot {
+                        generation: artifact.generation_root.clone(),
+                        state: artifact.mutable_state.clone(),
+                    }),
+                });
             }
             let snapshot_id =
                 GenerationPublication::selected_root_snapshot_for_generation(conn, generation)?;
@@ -709,6 +752,7 @@ fn read_selected_root_baseline_attempt(
                 source: SelectedRootSource::CurrentGeneration {
                     snapshot_id,
                     changeset_id,
+                    recovered_without_state: false,
                 },
                 captured: Box::new(CapturedSelectedRoot {
                     generation: artifact.generation_root.clone(),

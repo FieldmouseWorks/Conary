@@ -12,7 +12,7 @@ use crate::commands::generation::selected_root::{
 use crate::commands::test_helpers::create_active_test_generation;
 use conary_core::db::models::{
     FileEntry, GenerationPublication, GenerationPublicationPhase, GenerationPublicationStatus,
-    InstallSource, Trove, TroveType,
+    InstallSource, SystemState, Trove, TroveType,
 };
 use conary_core::generation::root_manifest::{
     GENERATION_ROOT_MANIFEST_VERSION, GenerationRootEntry, GenerationRootManifest,
@@ -571,6 +571,7 @@ fn root_inspect_reports_published_generation_when_no_snapshot_exists() {
 
     let data = root_inspect_data(&conn, &runtime_root, "/sbin/init").unwrap();
     assert_eq!(data.source, RootInspectSource::CurrentGeneration);
+    assert!(!data.recovered_without_state);
     assert!(data.present);
     assert_eq!(data.kind, Some(RootNodeKind::Regular));
     assert_eq!(data.mode, Some(0o755));
@@ -633,6 +634,27 @@ fn publish_generation_with_snapshot(db_path: &std::path::Path, generation: i64) 
     snapshot.id()
 }
 
+/// Build generation `generation` with a valid artifact and `/current` link but
+/// no `SystemState` and no `GenerationPublication` row: the exact shape boot
+/// recovery leaves (`recovery.rs` `mark_generation_state_active_if_present`
+/// accepts a missing state snapshot and writes no publication row).
+fn create_state_less_test_generation(db_path: &std::path::Path, generation: i64) {
+    create_active_test_generation(db_path, generation);
+    let conn = conary_core::db::open(db_path).unwrap();
+    let state = SystemState::find_by_number(&conn, generation)
+        .unwrap()
+        .expect("the test helper starts with a state row to remove");
+    SystemState::delete(&conn, state.id.unwrap()).unwrap();
+    let removed_state = SystemState::find_by_number(&conn, generation).unwrap();
+    assert!(removed_state.is_none());
+    assert!(
+        GenerationPublication::completed_for_generation(&conn, generation)
+            .unwrap()
+            .is_none(),
+        "a state-less recovery generation must have no terminal publication row"
+    );
+}
+
 /// `/current` is not covered by the SQLite snapshot. A publication that swaps
 /// the link after the pinned transaction began must not pair the new artifact
 /// with the old snapshot's authority; the selection re-pins and reports the new
@@ -670,6 +692,7 @@ fn current_generation_selection_retries_when_current_advances_past_the_snapshot(
         SelectedRootSource::CurrentGeneration {
             snapshot_id: Some(expected_snapshot),
             changeset_id: None,
+            recovered_without_state: false,
         }
     );
     assert_eq!(
@@ -714,6 +737,80 @@ fn current_generation_selection_refuses_after_the_attempt_limit() {
         SelectedRootBaselineError::CurrentGenerationChanged
     ));
     clear_before_current_selection_hook();
+}
+
+/// Boot recovery can point `/current` at a valid generation artifact that has
+/// neither a state snapshot nor a terminal publication row. When the link is
+/// stable across the read, inspection must accept the artifact and mark the
+/// database IDs unknown rather than refusing forever.
+#[test]
+fn root_inspect_accepts_a_stable_current_generation_without_state_rows() {
+    let temp = tempfile::tempdir().unwrap();
+    let db_path = temp.path().join("conary.db");
+    conary_core::db::init(&db_path).unwrap();
+    create_state_less_test_generation(&db_path, 1);
+    let conn = conary_core::db::open(&db_path).unwrap();
+    let runtime_root = ConaryRuntimeRoot::from_db_path(&db_path);
+
+    let data = root_inspect_data(&conn, &runtime_root, "/sbin/init").unwrap();
+    assert_eq!(data.source, RootInspectSource::CurrentGeneration);
+    assert!(
+        data.recovered_without_state,
+        "a state-less recovery generation must be marked recovered"
+    );
+    assert_eq!(data.snapshot_id, None);
+    assert_eq!(data.changeset_id, None);
+    assert!(data.present);
+    assert_eq!(data.kind, Some(RootNodeKind::Regular));
+    assert_eq!(data.mode, Some(0o755));
+    let json = json_data(&data);
+    assert_eq!(json["source"], "current_generation");
+    assert_eq!(json["recovered_without_state"], true);
+    assert!(json["snapshot_id"].is_null());
+    assert!(json["changeset_id"].is_null());
+    assert_eq!(json["sha256"], conary_core::hash::sha256(b"test init binary"));
+}
+
+/// The stable-link acceptance is bracketed by reads before and after the
+/// snapshot. A state-less target that moves after the selection but before the
+/// trailing read must not be accepted; the retry selects the generation the
+/// link settled on and reports its recorded snapshot instead.
+#[test]
+fn root_inspect_rejects_a_state_less_link_that_moves_after_selection() {
+    let temp = tempfile::tempdir().unwrap();
+    let db_path = temp.path().join("conary.db");
+    conary_core::db::init(&db_path).unwrap();
+    create_state_less_test_generation(&db_path, 1);
+    let conn = conary_core::db::open(&db_path).unwrap();
+    let runtime_root = ConaryRuntimeRoot::from_db_path(&db_path);
+
+    let published = std::sync::Arc::new(std::sync::Mutex::new(None::<i64>));
+    let hook_path = db_path.clone();
+    let hook_published = published.clone();
+    set_between_selection_and_collection_hook(move || {
+        *hook_published.lock().unwrap() = Some(publish_generation_with_snapshot(&hook_path, 2));
+    });
+
+    let data = root_inspect_data(&conn, &runtime_root, "/sbin/init").unwrap();
+
+    let expected_snapshot = published
+        .lock()
+        .unwrap()
+        .expect("the hook must publish the advancing generation");
+    assert_eq!(
+        data.source,
+        RootInspectSource::CurrentGeneration,
+        "the retry must select the generation the link settled on"
+    );
+    assert!(
+        !data.recovered_without_state,
+        "the moved-to generation recorded its own snapshot and must not be marked recovered"
+    );
+    assert_eq!(data.snapshot_id, Some(expected_snapshot));
+    assert_eq!(
+        conary_core::generation::mount::current_generation(runtime_root.root()).unwrap(),
+        Some(2)
+    );
 }
 
 #[test]

@@ -11,6 +11,10 @@ pub(crate) fn render(data: &RootInspectData) {
     field("Source", source_label(data.source));
     field("Snapshot", &optional_i64(data.snapshot_id));
     field("Changeset", &optional_i64(data.changeset_id));
+    field(
+        "Recovered without state",
+        recovered_label(data.recovered_without_state),
+    );
 
     if !data.present {
         row(
@@ -49,6 +53,10 @@ fn kind_label(kind: Option<RootNodeKind>) -> &'static str {
 
 fn manifest_label(manifest: Option<RootManifestKind>) -> &'static str {
     manifest.map_or("-", RootManifestKind::as_str)
+}
+
+fn recovered_label(recovered_without_state: bool) -> &'static str {
+    if recovered_without_state { "yes" } else { "no" }
 }
 
 fn optional_i64(value: Option<i64>) -> String {

@@ -14,6 +14,12 @@
 //! [`RootInspectMetadata::Synthesized`] and with its mode, ownership, and
 //! content authority withheld; every node read from a committed manifest
 //! reports [`RootInspectMetadata::Recorded`].
+//!
+//! Boot recovery can point `/current` at a valid generation with no state or
+//! publication row. A stable link across the read is accepted as
+//! [`RootInspectSource::CurrentGeneration`] with
+//! [`RootInspectData::recovered_without_state`] set, so callers can tell that
+//! the unknown IDs were never recorded rather than simply omitted.
 
 use anyhow::{Context, Result, bail};
 use conary_agent_contract::{InspectResult, OperationEnvelope, OperationStatus, RiskLevel};
@@ -28,7 +34,7 @@ use crate::commands::generation::selected_root::{
     SelectedRootSource, create_selected_root_stand_in, read_selected_root_baseline_with_source,
 };
 
-pub(crate) const ROOT_INSPECT_SCHEMA_VERSION: u32 = 1;
+pub(crate) const ROOT_INSPECT_SCHEMA_VERSION: u32 = 2;
 
 /// Where the reported node's authority came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -123,6 +129,11 @@ pub(crate) struct RootInspectData {
     pub(crate) schema_version: u32,
     pub(crate) snapshot_id: Option<i64>,
     pub(crate) changeset_id: Option<i64>,
+    /// True when the baseline came from a stable `/current` generation the
+    /// pinned snapshot never recorded, so the IDs are unknown rather than
+    /// merely absent. See
+    /// `read_selected_root_baseline_with_source`.
+    pub(crate) recovered_without_state: bool,
     pub(crate) source: RootInspectSource,
     pub(crate) path: String,
     pub(crate) present: bool,
@@ -180,13 +191,14 @@ pub(crate) fn root_inspect_data(
     let empty_root = create_selected_root_stand_in(empty_root_parent.path())?;
     let (source, captured) =
         read_selected_root_baseline_with_source(conn, runtime_root, &empty_root)?;
-    let (source, snapshot_id, changeset_id) = report_source(source);
+    let reported = report_source(source);
 
     let mut data = RootInspectData {
         schema_version: ROOT_INSPECT_SCHEMA_VERSION,
-        snapshot_id,
-        changeset_id,
-        source,
+        snapshot_id: reported.snapshot_id,
+        changeset_id: reported.changeset_id,
+        recovered_without_state: reported.recovered_without_state,
+        source: reported.source,
         path: normalized.clone(),
         present: false,
         manifest: None,
@@ -217,29 +229,48 @@ pub(crate) fn root_inspect_data(
     Ok(data)
 }
 
+/// Serialized report fields selected from one typed baseline source.
+struct ReportedSource {
+    source: RootInspectSource,
+    snapshot_id: Option<i64>,
+    changeset_id: Option<i64>,
+    recovered_without_state: bool,
+}
+
 /// Map the typed selection source onto its serialized report fields.
-fn report_source(source: SelectedRootSource) -> (RootInspectSource, Option<i64>, Option<i64>) {
+fn report_source(source: SelectedRootSource) -> ReportedSource {
     match source {
         SelectedRootSource::PendingSnapshot {
             snapshot_id,
             changeset_id,
-        } => (
-            RootInspectSource::PendingSnapshot,
-            Some(snapshot_id),
+        } => ReportedSource {
+            source: RootInspectSource::PendingSnapshot,
+            snapshot_id: Some(snapshot_id),
             changeset_id,
-        ),
+            recovered_without_state: false,
+        },
         SelectedRootSource::CurrentGeneration {
             snapshot_id,
             changeset_id,
-        } => (
-            RootInspectSource::CurrentGeneration,
+            recovered_without_state,
+        } => ReportedSource {
+            source: RootInspectSource::CurrentGeneration,
             snapshot_id,
             changeset_id,
-        ),
-        SelectedRootSource::DatabaseProjection { changeset_id } => {
-            (RootInspectSource::DatabaseProjection, None, changeset_id)
-        }
-        SelectedRootSource::NoCommittedRoot => (RootInspectSource::NoCommittedRoot, None, None),
+            recovered_without_state,
+        },
+        SelectedRootSource::DatabaseProjection { changeset_id } => ReportedSource {
+            source: RootInspectSource::DatabaseProjection,
+            snapshot_id: None,
+            changeset_id,
+            recovered_without_state: false,
+        },
+        SelectedRootSource::NoCommittedRoot => ReportedSource {
+            source: RootInspectSource::NoCommittedRoot,
+            snapshot_id: None,
+            changeset_id: None,
+            recovered_without_state: false,
+        },
     }
 }
 
