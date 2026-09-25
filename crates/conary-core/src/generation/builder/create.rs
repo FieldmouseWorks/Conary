@@ -669,11 +669,14 @@ mod tests {
             "runtime artifact test",
             &BootRoot::Staged(boot_root.to_path_buf()),
         )
-        .unwrap_err()
-        .to_string();
+        .unwrap_err();
 
-        assert!(error.contains("not self-contained"));
-        assert!(error.contains("/sbin/init"));
+        assert!(matches!(
+            error,
+            crate::Error::GenerationRootMissingBaseSystem {
+                missing: crate::error::MissingBaseSystemPart::MissingInit
+            }
+        ));
         assert!(!generations_root.join("0").exists());
     }
 }

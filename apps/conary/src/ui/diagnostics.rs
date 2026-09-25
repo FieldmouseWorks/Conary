@@ -189,8 +189,11 @@ pub(crate) fn pending_publication(
     let mut diagnostic =
         Diagnostic::new("Package mutation committed, but generation publication is pending.")
             .fact("Changeset", changeset_id.to_string());
-    if outcome.failure_kind == Some(PublicationFailureKind::NoBaseSystem) {
-        diagnostic = diagnostic.fact("Reason", crate::ui::publication::NO_BASE_SYSTEM_REASON);
+    if let Some(PublicationFailureKind::NoBaseSystem(missing)) = outcome.failure_kind {
+        diagnostic = diagnostic.fact(
+            "Reason",
+            crate::ui::publication::no_base_system_reason(missing),
+        );
         for guidance in crate::ui::publication::NO_BASE_SYSTEM_GUIDANCE {
             diagnostic = diagnostic.note(guidance);
         }

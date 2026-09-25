@@ -50,6 +50,30 @@ impl ScriptletFailureKind {
     }
 }
 
+/// Which required part of a base system a runtime generation root lacks.
+///
+/// This is the typed detail on
+/// [`Error::GenerationRootMissingBaseSystem`]. Callers select precise reason
+/// text from this value instead of inspecting rendered error output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MissingBaseSystemPart {
+    /// The exact root manifest has no executable `/sbin/init` entrypoint.
+    MissingInit,
+    /// The exact root manifest has no kernel or EFI boot assets, or the boot
+    /// root cannot be resolved because it is absent.
+    MissingBootAssets,
+}
+
+impl std::fmt::Display for MissingBaseSystemPart {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MissingInit => formatter
+                .write_str("its exact root manifest has no executable /sbin/init entrypoint"),
+            Self::MissingBootAssets => formatter.write_str("it has no kernel or EFI boot assets"),
+        }
+    }
+}
+
 /// Core error types for Conary
 #[derive(Error, Debug)]
 pub enum Error {
@@ -252,17 +276,15 @@ pub enum Error {
     #[error(transparent)]
     BootVerity(#[from] crate::generation::verity_policy::VerityPolicyError),
 
-    /// A runtime generation root has no executable `/sbin/init` entrypoint.
+    /// A runtime generation root has no base system yet.
     ///
     /// This is a typed "the selected root has no base system yet" condition. The
     /// refusal is intentional because a generation is a bootable artifact, so
     /// neither the image nor a boot entry can be produced until a base system is
-    /// present. Callers must select guidance from this variant instead of
-    /// inspecting the rendered error text.
-    #[error(
-        "runtime generation is not self-contained: its exact root manifest has no executable /sbin/init entrypoint"
-    )]
-    GenerationRootMissingInitEntrypoint,
+    /// present. The [`MissingBaseSystemPart`] detail names the absent part so
+    /// callers can render precise guidance without inspecting error text.
+    #[error("runtime generation is not self-contained: {missing}")]
+    GenerationRootMissingBaseSystem { missing: MissingBaseSystemPart },
 
     /// Operation timed out
     #[error("Timeout: {0}")]

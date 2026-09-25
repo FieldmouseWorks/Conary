@@ -24,7 +24,7 @@ pub(crate) struct DeferredFollowUp {
 pub(crate) enum DeferredFollowUpKind {
     GenerationPublication,
     /// Publication is pending because the selected root has no base system, so
-    /// re-running publication cannot succeed until `/sbin/init` exists.
+    /// re-running publication cannot succeed until a base system is present.
     GenerationPublicationNoBaseSystem,
     Other,
 }
@@ -47,11 +47,11 @@ pub(crate) fn publication_deferred_follow_up(
     db_path: &str,
 ) -> DeferredFollowUp {
     use crate::commands::generation::publication::PublicationFailureKind;
-    if failure_kind == Some(PublicationFailureKind::NoBaseSystem) {
+    if let Some(PublicationFailureKind::NoBaseSystem(missing)) = failure_kind {
         return DeferredFollowUp {
             kind: "generation_publication_no_base_system".to_string(),
             status: "pending".to_string(),
-            message: crate::ui::publication::NO_BASE_SYSTEM_REASON.to_string(),
+            message: crate::ui::publication::no_base_system_reason(missing).to_string(),
             retry_command: None,
         };
     }

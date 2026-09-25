@@ -454,6 +454,11 @@ fn pending_publication_error(
     outcome: &crate::commands::generation::publication::PublicationOutcome,
     db_path: &str,
 ) -> anyhow::Error {
+    use crate::commands::generation::publication::PublicationFailureKind;
+    if let Some(PublicationFailureKind::NoBaseSystem(missing)) = outcome.failure_kind {
+        let body = crate::ui::publication::no_base_system_command_failure(context, missing);
+        return anyhow!(body);
+    }
     let cause = outcome
         .failure_reason
         .as_deref()

@@ -47,8 +47,8 @@ impl std::error::Error for GenerationBuildFailure {}
 fn generation_build_failure(error: conary_core::Error) -> anyhow::Error {
     let message = format!("Failed to build EROFS generation: {error}");
     let kind = match error {
-        conary_core::Error::GenerationRootMissingInitEntrypoint => {
-            PublicationFailureKind::NoBaseSystem
+        conary_core::Error::GenerationRootMissingBaseSystem { missing } => {
+            PublicationFailureKind::NoBaseSystem(missing)
         }
         _ => PublicationFailureKind::Other,
     };

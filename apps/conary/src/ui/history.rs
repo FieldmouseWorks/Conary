@@ -19,7 +19,7 @@ use conary_core::db::models::{Changeset, GenerationPublication, LifecycleEvent};
 pub(crate) enum FollowUpGuidance {
     None,
     /// Publication is pending because the selected root has no base system.
-    /// Re-running publication cannot succeed until `/sbin/init` exists.
+    /// Re-running publication cannot succeed until a base system is present.
     AdoptOrInstallBaseSystem,
 }
 
@@ -348,10 +348,13 @@ mod tests {
     #[test]
     fn no_base_system_follow_up_renders_guidance_without_retry_note() {
         plain();
+        let reason = crate::ui::publication::no_base_system_reason(
+            conary_core::MissingBaseSystemPart::MissingInit,
+        );
         let deferred = [HistoryFollowUp {
             kind: "generation_publication_no_base_system".to_owned(),
             status: "pending".to_owned(),
-            message: crate::ui::publication::NO_BASE_SYSTEM_REASON.to_owned(),
+            message: reason.to_owned(),
             retry_command: None,
             guidance: FollowUpGuidance::AdoptOrInstallBaseSystem,
         }];
@@ -359,8 +362,7 @@ mod tests {
         assert_eq!(lines[4], "Deferred work (1):");
         assert_eq!(lines[5], "  Kind: generation_publication_no_base_system");
         assert_eq!(lines[6], "  Status: pending");
-        let reason = field_line("Reason", crate::ui::publication::NO_BASE_SYSTEM_REASON);
-        assert_eq!(lines[7], reason);
+        assert_eq!(lines[7], field_line("Reason", reason));
         assert_eq!(
             lines[8],
             "note: The package change is committed and will publish once a base system is present."
@@ -373,6 +375,24 @@ mod tests {
             lines[10],
             "note: Or install a base system that provides /sbin/init from a repository."
         );
+        assert_eq!(lines.len(), 11);
+    }
+
+    #[test]
+    fn missing_boot_assets_follow_up_renders_the_boot_asset_reason() {
+        plain();
+        let reason = crate::ui::publication::no_base_system_reason(
+            conary_core::MissingBaseSystemPart::MissingBootAssets,
+        );
+        let deferred = [HistoryFollowUp {
+            kind: "generation_publication_no_base_system".to_owned(),
+            status: "pending".to_owned(),
+            message: reason.to_owned(),
+            retry_command: None,
+            guidance: FollowUpGuidance::AdoptOrInstallBaseSystem,
+        }];
+        let lines = entry_lines(&changeset(Some(7)), None, &deferred, &[]);
+        assert_eq!(lines[7], field_line("Reason", reason));
         assert_eq!(lines.len(), 11);
     }
 

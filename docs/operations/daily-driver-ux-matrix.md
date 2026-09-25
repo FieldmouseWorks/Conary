@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-25
-revision: 58
+revision: 59
 summary: Daily-driver CLI publication debt, installed records, database preflight, repository readiness, typed details, and grouped results
 ---
 
@@ -115,10 +115,13 @@ When publication fails because the selected root has no base system, the
 install/update pending-publication warning (`PublicationFailureKind::NoBaseSystem`)
 and the `system history` deferred follow-up (`generation_publication_no_base_system`)
 both select their text from that typed kind, never from the recorded message.
-Both show the reason line, the committed-change reassurance, and the
-adopt/install guidance; neither prints a `conary system generation publish
---yes` note, because re-running publication cannot succeed until `/sbin/init`
-exists:
+The typed kind carries `MissingBaseSystemPart`, so the reason line names the
+missing part: `MissingInit` for an absent executable `/sbin/init`, or
+`MissingBootAssets` for a manifest with no kernel/EFI boot assets (the
+initramfs is generated for a host build). Both show the reason line, the
+committed-change reassurance, and the adopt/install guidance; neither prints a
+`conary system generation publish --yes` note, because re-running publication
+cannot succeed until a base system exists:
 
 ```text
 warning: Package mutation committed, but generation publication is pending.
@@ -129,9 +132,19 @@ note: Adopt this machine's native system: conary system adopt --system
 note: Or install a base system that provides /sbin/init from a repository.
 ```
 
+A manifest with an executable `/sbin/init` but no kernel keeps every fact and
+note above except the reason line:
+
+```text
+  Reason: selected root has no base system yet: no kernel or boot assets, so no generation can be published or booted
+```
+
 `system history` regenerates that guidance from the recorded kind for the
-database it opened. The focused proof is `cargo test -p conary --lib
-ui::diagnostics::tests::no_base_publication_output_explains_and_omits_publish_note`
+database it opened, and replays the exact reason line recorded with the
+follow-up. The focused proof is `cargo test -p conary --lib
+ui::diagnostics::tests::no_base_publication_output_explains_and_omits_publish_note`,
+`cargo test -p conary --lib
+ui::diagnostics::tests::missing_boot_assets_publication_output_explains_and_omits_publish_note`,
 and `cargo test -p conary --lib
 ui::history::tests::no_base_system_follow_up_renders_guidance_without_retry_note`,
 with `cargo test -p conary --lib commands::changeset_metadata` covering the

@@ -20,9 +20,10 @@ pub(crate) struct PublicationRequest<'a> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PublicationFailureKind {
-    /// The selected root has no executable `/sbin/init` yet, so no generation
-    /// can be built, published, or booted until a base system is present.
-    NoBaseSystem,
+    /// The selected root has no base system yet, so no generation can be
+    /// built, published, or booted until a base system is present. The typed
+    /// part names whether the init entrypoint or the boot assets are missing.
+    NoBaseSystem(conary_core::MissingBaseSystemPart),
     /// Any other build or replay failure.
     Other,
 }

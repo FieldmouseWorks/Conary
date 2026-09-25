@@ -139,6 +139,36 @@ mod tests {
             &BootRoot::Staged(boot_root.to_path_buf()),
         )
         .unwrap();
+
+        // Minimal exact-manifest boot assets so the host rebuild path passes the
+        // manifest boot-asset check and reaches the sysroot toolchain it tests.
+        let kernel = cas.store(b"kernel").unwrap();
+        let initramfs = cas.store(b"initramfs").unwrap();
+        let efi = cas.store(b"efi").unwrap();
+        insert_regular_file_with_parents(
+            &conn,
+            "/boot/vmlinuz-6.20.0-conary",
+            kernel,
+            b"kernel".len(),
+            0o644,
+            trove_id,
+        );
+        insert_regular_file_with_parents(
+            &conn,
+            "/boot/initramfs-6.20.0-conary.img",
+            initramfs,
+            b"initramfs".len(),
+            0o644,
+            trove_id,
+        );
+        insert_regular_file_with_parents(
+            &conn,
+            "/boot/EFI/BOOT/BOOTX64.EFI",
+            efi,
+            b"efi".len(),
+            0o644,
+            trove_id,
+        );
         let publication = GenerationPublication::create_pending(
             &conn,
             None,
@@ -234,6 +264,13 @@ mod tests {
 
     #[test]
     fn applied_boot_runtime_request_forces_exact_rebuild_path() {
+        // Materializing the exact sysroot sets file ownership, so this test runs
+        // with root authority inside a private user and mount namespace.
+        if !crate::scriptlet::test_support::run_selected_root_namespace_test(
+            "generation::builder::boot_reuse::tests::applied_boot_runtime_request_forces_exact_rebuild_path",
+        ) {
+            return;
+        }
         let fixture = published_fixture();
         apply_changeset(&fixture.conn, true);
 
@@ -243,14 +280,16 @@ mod tests {
             "kernel package mutation",
             &BootRoot::Host,
         )
-        .unwrap_err()
-        .to_string();
+        .unwrap_err();
 
+        // Verified-asset reuse is skipped, so the builder materializes the exact
+        // sysroot and then fails to resolve the initramfs toolchain for the
+        // selected kernel. That is a typed not-found failure, never a successful
+        // reuse or a base-system refusal.
         assert!(
-            error.contains("generation-sysroot-workspace")
-                || error.contains("generation boot root")
-                || error.contains("boot"),
-            "the deliberately unprivileged fixture should reach the sysroot rebuild path: {error}"
+            matches!(&error, crate::Error::NotFound(_)),
+            "an applied boot-runtime request must enter the exact sysroot rebuild \
+             path and fail on its absent initramfs toolchain: {error}"
         );
     }
 

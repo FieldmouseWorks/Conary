@@ -134,7 +134,10 @@ mod tests {
                 vec![DeferredFollowUp {
                     kind: "generation_publication_no_base_system".into(),
                     status: "pending".into(),
-                    message: crate::ui::publication::NO_BASE_SYSTEM_REASON.into(),
+                    message: crate::ui::publication::no_base_system_reason(
+                        conary_core::MissingBaseSystemPart::MissingInit,
+                    )
+                    .into(),
                     retry_command: None,
                 }],
             )

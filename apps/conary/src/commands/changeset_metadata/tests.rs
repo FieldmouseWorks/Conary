@@ -84,8 +84,11 @@ fn publication_deferred_follow_up_uses_publish_retry() {
 #[test]
 fn no_base_system_deferred_follow_up_drops_the_publish_retry() {
     use crate::commands::generation::publication::PublicationFailureKind;
+    use conary_core::MissingBaseSystemPart;
     let follow_up = publication_deferred_follow_up(
-        Some(PublicationFailureKind::NoBaseSystem),
+        Some(PublicationFailureKind::NoBaseSystem(
+            MissingBaseSystemPart::MissingInit,
+        )),
         "generation publication is pending".to_string(),
         "/tmp/recovery.db",
     );
@@ -94,7 +97,26 @@ fn no_base_system_deferred_follow_up_drops_the_publish_retry() {
     assert_eq!(follow_up.retry_command, None);
     assert_eq!(
         follow_up.message,
-        crate::ui::publication::NO_BASE_SYSTEM_REASON
+        crate::ui::publication::NO_BASE_SYSTEM_MISSING_INIT_REASON
+    );
+}
+
+#[test]
+fn missing_boot_assets_follow_up_records_the_boot_asset_reason() {
+    use crate::commands::generation::publication::PublicationFailureKind;
+    use conary_core::MissingBaseSystemPart;
+    let follow_up = publication_deferred_follow_up(
+        Some(PublicationFailureKind::NoBaseSystem(
+            MissingBaseSystemPart::MissingBootAssets,
+        )),
+        "generation publication is pending".to_string(),
+        "/tmp/recovery.db",
+    );
+    assert_eq!(follow_up.kind, "generation_publication_no_base_system");
+    assert_eq!(follow_up.retry_command, None);
+    assert_eq!(
+        follow_up.message,
+        crate::ui::publication::NO_BASE_SYSTEM_MISSING_BOOT_ASSETS_REASON
     );
 }
 

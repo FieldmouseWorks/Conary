@@ -70,7 +70,7 @@ pub use capability::enforcement::{EnforcementMode, EnforcementPolicy};
 pub use capability::{CapabilityDeclaration, SyscallCapabilities};
 pub use components::ComponentType;
 pub use dependencies::{DependencyClass, LanguageDep};
-pub use error::{Error, Result};
+pub use error::{Error, MissingBaseSystemPart, Result};
 pub use flavor::ArchSpec;
 pub use hash::{Hash, Hasher};
 pub use image::arch::TargetArch;
