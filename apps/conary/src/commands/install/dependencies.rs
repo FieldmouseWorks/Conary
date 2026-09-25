@@ -11,7 +11,8 @@ use super::{BatchInstaller, InstallPhase, InstallProgress};
 use anyhow::{Context, Result};
 use conary_core::db::models::Trove;
 use conary_core::packages::PackageFormat;
-use conary_core::repository::dependency_model::RepositoryRequirementKind;
+use conary_core::repository::dependency_model::{ProvidedCapability, RepositoryRequirementKind};
+use conary_core::repository::resolution_policy::ResolutionPolicy;
 use conary_core::resolver::{SatResolution, SatSource};
 use conary_core::scriptlet::SandboxMode;
 use conary_core::transaction::PackageRelationPlan;
@@ -90,6 +91,96 @@ pub(crate) struct OutgoingSetChanged {
     pub locked: Vec<i64>,
 }
 
+/// The incoming package's hard requirements no longer hold in the locked end
+/// state. The pre-lock dependency solve placed them against installed state the
+/// locked transaction no longer sees; nothing was mutated, so the caller may
+/// retry against new state.
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "installed package state changed between the dependency solve and the locked \
+     transaction; retry the operation (package {package}, conflict {conflict:?}, \
+     missing {missing:?})"
+)]
+pub(crate) struct RequirementsChanged {
+    pub package: String,
+    pub conflict: Option<String>,
+    pub missing: Vec<String>,
+}
+
+/// The exact policy and provided capabilities a pre-lock requirement solve used.
+///
+/// The locked transaction re-solves with these same inputs so it cannot disagree
+/// with the solve it certifies by formula.
+#[derive(Debug, Clone)]
+pub(crate) struct CertifiedRequirements {
+    pub policy: ResolutionPolicy,
+    pub capabilities: Vec<ProvidedCapability>,
+}
+
+/// Re-solve one incoming package's hard requirements under the mutation lock.
+///
+/// Every dependency must already hold in the locked end state: the pre-lock
+/// dependency phase has installed what it needed, so a non-empty install order
+/// or a conflict means installed state changed since the solve. `missing` names
+/// the packages the locked end state would still have to install.
+pub(crate) fn certify_requirements_under_lock(
+    conn: &rusqlite::Connection,
+    pkg: &dyn PackageFormat,
+    capabilities: Vec<ProvidedCapability>,
+    locked_outgoing: &CertifiedOutgoing,
+    policy: &ResolutionPolicy,
+) -> Result<()> {
+    let solved =
+        conary_core::resolver::solve_package_requirements_with_provides_outgoing_and_policy(
+            conn,
+            pkg,
+            capabilities,
+            &locked_outgoing.sorted_ids(),
+            policy,
+        );
+    let resolution = match solved {
+        Ok(resolution) => resolution,
+        // The strict-policy refusal is how the end-state solver reports that the
+        // locked provider universe no longer holds a hard requirement.
+        Err(conary_core::Error::ConfigError(message)) => {
+            return Err(RequirementsChanged {
+                package: pkg.name().to_string(),
+                conflict: Some(message),
+                missing: Vec::new(),
+            }
+            .into());
+        }
+        Err(error) => return Err(error.into()),
+    };
+    if resolution.conflict_message.is_some() || !resolution.install_order.is_empty() {
+        return Err(RequirementsChanged {
+            package: pkg.name().to_string(),
+            conflict: resolution.conflict_message,
+            missing: resolution
+                .install_order
+                .iter()
+                .map(|package| package.name.clone())
+                .collect(),
+        }
+        .into());
+    }
+    Ok(())
+}
+
+/// Count the hard runtime requirements (`Depends`/`PreDepends`) the dependency
+/// phase solves. Zero means the solve has nothing to place.
+pub(crate) fn runtime_requirement_count(pkg: &dyn PackageFormat) -> usize {
+    pkg.requirements()
+        .iter()
+        .filter(|requirement| {
+            matches!(
+                requirement.kind,
+                RepositoryRequirementKind::Depends | RepositoryRequirementKind::PreDepends
+            )
+        })
+        .count()
+}
+
 // Test-only seam that runs immediately after a sink acquires the runtime
 // mutation lock and before it re-resolves installed state.
 //
@@ -157,28 +248,18 @@ pub(super) async fn handle_dependencies(
     ctx: &DepAnalysisContext<'_>,
     report: &mut super::report::InstallReport,
 ) -> Result<DependencyDecision> {
-    let runtime_requirement_count = ctx
-        .pkg
-        .requirements()
-        .iter()
-        .filter(|requirement| {
-            matches!(
-                requirement.kind,
-                RepositoryRequirementKind::Depends | RepositoryRequirementKind::PreDepends
-            )
-        })
-        .count();
+    let requirement_count = runtime_requirement_count(ctx.pkg);
 
-    if ctx.no_deps && runtime_requirement_count != 0 {
+    if ctx.no_deps && requirement_count != 0 {
         info!("Skipping dependency check (--no-deps specified)");
         crate::ui::println!(
             "Skipping {} dependencies (--no-deps specified)",
-            runtime_requirement_count
+            requirement_count
         );
         return Ok(DependencyDecision::Continue);
     }
 
-    if runtime_requirement_count == 0 {
+    if requirement_count == 0 {
         return Ok(DependencyDecision::Continue);
     }
 
@@ -186,7 +267,7 @@ pub(super) async fn handle_dependencies(
     progress.set_phase(ctx.pkg.name(), InstallPhase::ResolvingDeps);
     info!(
         "Resolving {} dependencies with SAT solver...",
-        runtime_requirement_count
+        requirement_count
     );
     crate::ui::println!("Checking dependencies for {}...", ctx.pkg.name());
 

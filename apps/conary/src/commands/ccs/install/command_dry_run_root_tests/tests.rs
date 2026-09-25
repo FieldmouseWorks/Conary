@@ -465,6 +465,7 @@ fn run_preview_dry_run(
             requested_source_identity: None,
             replacement: None,
             certified_outgoing: None,
+            certified_requirements: None,
         },
     )
     .map(|_| ())

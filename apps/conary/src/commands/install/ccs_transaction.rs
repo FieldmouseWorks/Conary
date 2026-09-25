@@ -45,6 +45,10 @@ pub(crate) struct CcsTransactionInstallOptions<'a> {
     /// outgoing. `Some` certifies that the locked transaction removes exactly
     /// this set; `None` means the caller solved without a projection.
     pub certified_outgoing: Option<super::dependencies::CertifiedOutgoing>,
+    /// The exact policy and capabilities the caller's pre-lock requirement
+    /// solve used. `Some` re-solves the incoming package's hard requirements
+    /// under the locked transaction; `None` means the caller solved nothing.
+    pub certified_requirements: Option<super::dependencies::CertifiedRequirements>,
 }
 
 pub(crate) struct CcsTransactionInstallResult {
@@ -533,6 +537,18 @@ fn install_ccs_package_transactionally_inner(
                 &relation_plan,
             )?;
         certified.require_unchanged(&locked_outgoing)?;
+        // The dependency solve chose its provider universe before this
+        // transaction took the lock. Re-solve under the lock so a provider
+        // another transaction removed in the window refuses here.
+        if let Some(requirements) = opts.certified_requirements.as_ref() {
+            super::dependencies::certify_requirements_under_lock(
+                &preflight_state,
+                pkg,
+                requirements.capabilities.clone(),
+                &locked_outgoing,
+                &requirements.policy,
+            )?;
+        }
     }
     let native_lifecycle_bundle = pkg.manifest().native_lifecycle.as_ref();
     let native_transaction = PreparedNativeTransaction::prepare_batch_with_declared_paths(

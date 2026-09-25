@@ -3,7 +3,8 @@
 use super::acquire::{CcsInstallParams, resolve_and_parse_package};
 use super::ccs_removal_hooks::CcsRemovalHookPlan;
 use super::dependencies::{
-    CertifiedOutgoing, DepAnalysisContext, handle_dependencies, run_after_mutation_lock_hook,
+    CertifiedOutgoing, DepAnalysisContext, certify_requirements_under_lock, handle_dependencies,
+    run_after_mutation_lock_hook, runtime_requirement_count,
 };
 use super::native_events::{NativeInstallInput, PreparedNativeTransaction};
 use super::prepare::check_upgrade_status;
@@ -370,6 +371,19 @@ async fn cmd_install_with_intent(
     // Installed state might have changed between the projection and the lock,
     // so the locked transaction must resolve exactly the projected set.
     projected_outgoing.require_unchanged(&locked_outgoing)?;
+    // The pre-lock dependency solve placed this package's hard requirements
+    // against the installed state before the dependency phase. Re-solve under
+    // the lock so a provider another transaction removed or upgraded in the
+    // window cannot leave the install committing without it.
+    if !dry_run && !no_deps && runtime_requirement_count(pkg.as_ref()) != 0 {
+        certify_requirements_under_lock(
+            &conn,
+            pkg.as_ref(),
+            pkg.resolution_capabilities()?,
+            &locked_outgoing,
+            &policy,
+        )?;
+    }
     let mut changes = vec![super::report::InstallChange::incoming(
         super::report::ObservedPackage::package(pkg.as_ref(), semantics),
         old_trove_to_upgrade.as_deref(),

@@ -8,7 +8,9 @@
 use super::super::open_db;
 use super::PackageFormatType;
 use super::batch::{BatchInstaller, PreparedPackageSourceAuthority, prepare_ccs_package_for_batch};
-use super::dependencies::{CertifiedOutgoing, resolved_repository_deps_from_sat_result};
+use super::dependencies::{
+    CertifiedOutgoing, CertifiedRequirements, resolved_repository_deps_from_sat_result,
+};
 use super::repository_batch::{
     RepositoryBatchMode, RepositoryBatchSelection, prepare_repository_batch,
 };
@@ -656,6 +658,7 @@ async fn install_verified_ccs_artifact(
 
     let mut selected_dependencies = Vec::new();
     let mut solve_outgoing = None;
+    let mut certified_requirements = None;
     if !no_deps && !ccs_pkg.requirements().is_empty() {
         let conn = open_db(db_path)?;
         // The solve must exclude the installed troves this transaction removes:
@@ -700,7 +703,7 @@ async fn install_verified_ccs_artifact(
             conary_core::resolver::solve_package_requirements_with_provides_outgoing_and_policy(
                 &conn,
                 &ccs_pkg,
-                provided_capabilities,
+                provided_capabilities.clone(),
                 &outgoing_trove_ids,
                 &resolution_policy,
             )
@@ -723,6 +726,13 @@ async fn install_verified_ccs_artifact(
                 .filter(|dependency| !pending_root.matches(&dependency.package))
                 .collect();
         solve_outgoing = Some(outgoing);
+        // The locked transaction re-solves with the exact inputs this solve
+        // used, so a provider removed in the window refuses instead of
+        // committing.
+        certified_requirements = Some(CertifiedRequirements {
+            policy: resolution_policy.clone(),
+            capabilities: provided_capabilities,
+        });
     }
 
     if selected_dependencies.is_empty() {
@@ -748,6 +758,7 @@ async fn install_verified_ccs_artifact(
                 requested_source_identity,
                 replacement: replacement.clone(),
                 certified_outgoing: solve_outgoing,
+                certified_requirements,
             },
         )?;
         if dry_run && let Some(projection) = report.projection.as_deref() {

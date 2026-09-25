@@ -13,7 +13,8 @@ fn native_install_resolves_upgrade_identity_under_the_mutation_lock() {
     let install_root = temp.path().join("install-root");
     std::fs::create_dir_all(&install_root).unwrap();
     conary_core::db::init(&db_path).unwrap();
-    crate::commands::test_helpers::seed_test_bootable_runtime(&db_path);
+    let (fixture_user, fixture_group) =
+        crate::commands::test_helpers::seed_unprivileged_fixture_owner(&db_path);
 
     let mut builder = rpm::PackageBuilder::new(
         "native-lock-fixture",
@@ -25,7 +26,10 @@ fn native_install_resolves_upgrade_identity_under_the_mutation_lock() {
     builder
         .with_file_contents(
             b"fixture\n".to_vec(),
-            rpm::FileOptions::new("/usr/lib/native-lock-fixture/payload").permissions(0o644),
+            rpm::FileOptions::new("/usr/lib/native-lock-fixture/payload")
+                .permissions(0o644)
+                .user(fixture_user)
+                .group(fixture_group),
         )
         .unwrap();
     let rpm_path = temp.path().join("native-lock-fixture.rpm");
@@ -119,7 +123,8 @@ fn native_upgrade_fixture(temp: &std::path::Path) -> NativeUpgradeFixture {
     let install_root = temp.join("install-root");
     std::fs::create_dir_all(&install_root).unwrap();
     conary_core::db::init(&db_path).unwrap();
-    crate::commands::test_helpers::seed_test_bootable_runtime(&db_path);
+    let (fixture_user, fixture_group) =
+        crate::commands::test_helpers::seed_unprivileged_fixture_owner(&db_path);
 
     let mut builder = rpm::PackageBuilder::new(
         "native-lock-fixture",
@@ -131,7 +136,10 @@ fn native_upgrade_fixture(temp: &std::path::Path) -> NativeUpgradeFixture {
     builder
         .with_file_contents(
             b"fixture\n".to_vec(),
-            rpm::FileOptions::new("/usr/lib/native-lock-fixture/payload").permissions(0o644),
+            rpm::FileOptions::new("/usr/lib/native-lock-fixture/payload")
+                .permissions(0o644)
+                .user(fixture_user)
+                .group(fixture_group),
         )
         .unwrap();
     let rpm_path = temp.join("native-lock-fixture.rpm");
@@ -244,7 +252,8 @@ fn native_obsolete_fixture(temp: &std::path::Path) -> NativeObsoleteFixture {
     let install_root = temp.join("install-root");
     std::fs::create_dir_all(&install_root).unwrap();
     conary_core::db::init(&db_path).unwrap();
-    crate::commands::test_helpers::seed_test_bootable_runtime(&db_path);
+    let (fixture_user, fixture_group) =
+        crate::commands::test_helpers::seed_unprivileged_fixture_owner(&db_path);
     let db_path_string = db_path.to_string_lossy().into_owned();
     let install_root_string = install_root.to_string_lossy().into_owned();
 
@@ -258,7 +267,10 @@ fn native_obsolete_fixture(temp: &std::path::Path) -> NativeObsoleteFixture {
     target_builder
         .with_file_contents(
             b"target\n".to_vec(),
-            rpm::FileOptions::new("/usr/lib/native-obsolete-target/payload").permissions(0o644),
+            rpm::FileOptions::new("/usr/lib/native-obsolete-target/payload")
+                .permissions(0o644)
+                .user(fixture_user)
+                .group(fixture_group),
         )
         .unwrap();
     let target_path = temp.join("native-obsolete-target.rpm");
@@ -307,7 +319,10 @@ fn native_obsolete_fixture(temp: &std::path::Path) -> NativeObsoleteFixture {
     builder
         .with_file_contents(
             b"fixture\n".to_vec(),
-            rpm::FileOptions::new("/usr/lib/native-obsolete-incoming/payload").permissions(0o644),
+            rpm::FileOptions::new("/usr/lib/native-obsolete-incoming/payload")
+                .permissions(0o644)
+                .user(fixture_user)
+                .group(fixture_group),
         )
         .unwrap();
     let rpm_path = temp.join("native-obsolete-incoming.rpm");
@@ -360,5 +375,187 @@ fn native_install_proceeds_when_it_obsoletes_an_installed_trove() {
             .unwrap()
             .len(),
         1,
+    );
+}
+
+struct NativeRequirementFixture {
+    db_path_string: String,
+    install_root: String,
+    rpm_path: String,
+    provider_id: i64,
+}
+
+/// Install the provider the incoming package hard-requires, then build the
+/// incoming RPM. The pre-lock dependency solve places the requirement against
+/// that installed provider.
+fn native_requirement_fixture(temp: &std::path::Path) -> NativeRequirementFixture {
+    let db_path = temp.join("conary.db");
+    let install_root = temp.join("install-root");
+    std::fs::create_dir_all(&install_root).unwrap();
+    conary_core::db::init(&db_path).unwrap();
+    let (fixture_user, fixture_group) =
+        crate::commands::test_helpers::seed_unprivileged_fixture_owner(&db_path);
+    let db_path_string = db_path.to_string_lossy().into_owned();
+    let install_root_string = install_root.to_string_lossy().into_owned();
+
+    let mut provider_builder = rpm::PackageBuilder::new(
+        "native-required-provider",
+        "1.0.0",
+        "MIT",
+        "x86_64",
+        "native install required provider",
+    );
+    provider_builder
+        .with_file_contents(
+            b"provider\n".to_vec(),
+            rpm::FileOptions::new("/usr/lib/native-required-provider/payload")
+                .permissions(0o644)
+                .user(fixture_user)
+                .group(fixture_group),
+        )
+        .unwrap();
+    let provider_path = temp.join("native-required-provider.rpm");
+    provider_builder
+        .build()
+        .unwrap()
+        .write_file(&provider_path)
+        .unwrap();
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime
+        .block_on(cmd_install(
+            provider_path.to_str().unwrap(),
+            InstallOptions {
+                db_path: &db_path_string,
+                root: &install_root_string,
+                architecture: Some("x86_64".to_string()),
+                no_deps: true,
+                sandbox_mode: crate::commands::SandboxMode::Always,
+                yes: true,
+                ..InstallOptions::default()
+            },
+        ))
+        .expect("the required provider fixture must install");
+
+    let provider_id = {
+        let conn = conary_core::db::open(&db_path).unwrap();
+        Trove::find_by_name(&conn, "native-required-provider")
+            .unwrap()
+            .remove(0)
+            .id
+            .unwrap()
+    };
+
+    let mut builder = rpm::PackageBuilder::new(
+        "native-required-consumer",
+        "1.0.0",
+        "MIT",
+        "x86_64",
+        "native install requirement mutation-lock fixture",
+    );
+    builder.requires(rpm::Dependency::any("native-required-provider"));
+    builder
+        .with_file_contents(
+            b"consumer\n".to_vec(),
+            rpm::FileOptions::new("/usr/lib/native-required-consumer/payload")
+                .permissions(0o644)
+                .user(fixture_user)
+                .group(fixture_group),
+        )
+        .unwrap();
+    let rpm_path = temp.join("native-required-consumer.rpm");
+    builder.build().unwrap().write_file(&rpm_path).unwrap();
+
+    NativeRequirementFixture {
+        db_path_string,
+        install_root: install_root_string,
+        rpm_path: rpm_path.to_string_lossy().into_owned(),
+        provider_id,
+    }
+}
+
+fn run_native_requirement_install(fixture: &NativeRequirementFixture) -> Result<(), anyhow::Error> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(cmd_install(
+        &fixture.rpm_path,
+        InstallOptions {
+            db_path: &fixture.db_path_string,
+            root: &fixture.install_root,
+            architecture: Some("x86_64".to_string()),
+            sandbox_mode: crate::commands::SandboxMode::Always,
+            yes: true,
+            ..InstallOptions::default()
+        },
+    ))
+}
+
+/// Another transaction removes the provider that alone satisfied the incoming
+/// package's hard requirement in the window after the pre-lock dependency solve
+/// but before the mutation lock. The locked transaction must refuse rather than
+/// commit with the provider gone.
+#[test]
+fn native_install_refuses_when_a_required_provider_disappears_before_the_mutation_lock() {
+    let _mount_skip = crate::commands::composefs_ops::test_mount_skip_guard();
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = native_requirement_fixture(temp.path());
+
+    let hook_db_path = fixture.db_path_string.clone();
+    let provider_id = fixture.provider_id;
+    super::super::dependencies::set_after_mutation_lock_hook(move || {
+        let conn = conary_core::db::open(&hook_db_path).unwrap();
+        assert_eq!(
+            conn.execute("DELETE FROM troves WHERE id = ?1", [provider_id])
+                .unwrap(),
+            1,
+            "the seam must remove the required provider"
+        );
+    });
+
+    let error = run_native_requirement_install(&fixture)
+        .expect_err("native install accepted a required provider removed before it locked");
+    super::super::dependencies::clear_after_mutation_lock_hook();
+    let changed = error
+        .downcast_ref::<super::super::dependencies::RequirementsChanged>()
+        .expect("refusal must carry the typed requirements-change error");
+    assert_eq!(changed.package, "native-required-consumer");
+    assert!(
+        changed.conflict.is_some() || !changed.missing.is_empty(),
+        "{changed:?}"
+    );
+
+    let conn = conary_core::db::open(&fixture.db_path_string).unwrap();
+    assert!(
+        Trove::find_by_name(&conn, "native-required-consumer")
+            .unwrap()
+            .is_empty(),
+        "a refused consumer must not be persisted"
+    );
+}
+
+/// Positive control: the identical fixture with no armed seam resolves the same
+/// installed provider under the lock and installs the consumer.
+#[test]
+fn native_install_proceeds_when_a_required_provider_survives() {
+    let _mount_skip = crate::commands::composefs_ops::test_mount_skip_guard();
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = native_requirement_fixture(temp.path());
+
+    super::super::dependencies::clear_after_mutation_lock_hook();
+    run_native_requirement_install(&fixture)
+        .expect("an install whose required provider survives must proceed");
+
+    let conn = conary_core::db::open(&fixture.db_path_string).unwrap();
+    assert_eq!(
+        Trove::find_by_name(&conn, "native-required-consumer")
+            .unwrap()
+            .len(),
+        1,
+        "the consumer must be persisted when its provider survives"
     );
 }

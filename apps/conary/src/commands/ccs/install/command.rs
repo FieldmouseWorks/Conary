@@ -8,7 +8,7 @@ use std::path::Path;
 use super::capability_declaration::validate_ccs_capability_declaration;
 use super::component_selection::select_ccs_components;
 use super::dependency::{incoming_package_identity, validate_incoming_version_against_dependents};
-use crate::commands::install::dependencies::CertifiedOutgoing;
+use crate::commands::install::dependencies::{CertifiedOutgoing, CertifiedRequirements};
 use crate::commands::install::{
     CcsTransactionInstallOptions, InstallIntent, UpgradeCheck, check_ccs_upgrade_status,
     install_ccs_package_transactionally, install_semantics_for_ccs_manifest,
@@ -163,6 +163,7 @@ pub fn cmd_ccs_install(
     validate_incoming_version_against_dependents(&conn, &outgoing_trove_ids, &incoming_identity)?;
 
     // Step 4: Check dependencies
+    let mut certified_requirements = None;
     if no_deps {
         println!("Skipping dependency check (--no-deps)");
     } else {
@@ -175,7 +176,7 @@ pub fn cmd_ccs_install(
             conary_core::resolver::solve_package_requirements_with_provides_outgoing_and_policy(
                 &conn,
                 &ccs_pkg,
-                selected_capabilities,
+                selected_capabilities.clone(),
                 &outgoing_trove_ids,
                 &effective_policy.resolution,
             )?;
@@ -205,6 +206,13 @@ pub fn cmd_ccs_install(
                 );
             }
         }
+        // The locked transaction re-solves with the exact inputs this solve
+        // used, so a provider removed in the window refuses instead of
+        // committing.
+        certified_requirements = Some(CertifiedRequirements {
+            policy: effective_policy.resolution,
+            capabilities: selected_capabilities,
+        });
         println!("Dependencies satisfied.");
     }
 
@@ -229,6 +237,7 @@ pub fn cmd_ccs_install(
                 requested_source_identity: None,
                 replacement: None,
                 certified_outgoing: Some(certified_outgoing.clone()),
+                certified_requirements: certified_requirements.clone(),
             },
         )?;
         return Ok(());
@@ -254,6 +263,7 @@ pub fn cmd_ccs_install(
             requested_source_identity: None,
             replacement: None,
             certified_outgoing: Some(certified_outgoing),
+            certified_requirements,
         },
     )?;
     let _changeset_id = tx_result.changeset_id;

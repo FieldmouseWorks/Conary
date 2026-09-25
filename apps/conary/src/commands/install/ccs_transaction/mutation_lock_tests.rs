@@ -94,6 +94,7 @@ fn standalone_ccs_install_resolves_upgrade_identity_under_the_mutation_lock() {
                 requested_source_identity: None,
                 replacement: None,
                 certified_outgoing: None,
+                certified_requirements: None,
             },
         )
         .map_err(|error| format!("{error:#}"));
