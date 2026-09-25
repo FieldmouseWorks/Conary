@@ -18,6 +18,7 @@ use crate::commands::{LiveRootFile, LiveRootStats, LiveRootTransaction};
 use anyhow::{Context, Result, bail};
 use conary_core::db::models::GenerationPublication;
 use conary_core::filesystem::CasStore;
+use conary_core::generation::artifact::GenerationArtifact;
 use conary_core::generation::composefs::ComposefsRuntimeUnavailable;
 use conary_core::generation::root_manifest::{
     CapturedSelectedRoot, SelectedRootSnapshot, materialize_captured_selected_root,
@@ -28,7 +29,7 @@ use conary_core::transaction::{TransactionConfig, TransactionEngine};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use carrier::{PreparedSelectedRoot, current_generation_lower_mode};
+use carrier::{CurrentGenerationLowerMode, PreparedSelectedRoot, current_generation_lower_mode};
 use deferred_ima::DeferredImaAuthority;
 use overlay_session::SelectedRootOverlaySession;
 use publication_authority::latest_selected_root_snapshot;
@@ -458,19 +459,37 @@ fn prepare_current_root(
     )
 }
 
-fn prepare_current_root_with_probe(
+/// Exact baseline source a selected-root preparation or preview selects.
+///
+/// The writable preparation path and the read-only preview path both derive
+/// this, so the artifact-versus-database authority decision cannot drift.
+enum SelectedRootSelection {
+    /// A pending publication debt owns an already-captured typed baseline.
+    PendingPublication {
+        snapshot: SelectedRootSnapshot,
+        captured: Box<CapturedSelectedRoot>,
+    },
+    /// The current generation artifact carries the baseline as typed manifests.
+    CurrentGeneration {
+        artifact: Box<GenerationArtifact>,
+        generation: i64,
+        lower_mode: CurrentGenerationLowerMode,
+    },
+    /// No generation exists yet, so installed database rows are the baseline.
+    DatabaseProjection,
+}
+
+fn select_selected_root(
     conn: &rusqlite::Connection,
     runtime_root: &ConaryRuntimeRoot,
-    session_dir: &Path,
     require_materialized: bool,
     probe: impl FnOnce() -> std::result::Result<PathBuf, ComposefsRuntimeUnavailable>,
-) -> Result<PreparedSelectedRoot> {
-    let cas = CasStore::new(runtime_root.objects_dir())?;
+) -> Result<SelectedRootSelection> {
     if let Some((snapshot, captured)) = latest_selected_root_snapshot(conn)? {
-        let selected_root =
-            selected_root_materialization_destination(session_dir, require_materialized)?;
-        materialize_captured_selected_root(&captured, &cas, &selected_root)?;
-        return Ok(PreparedSelectedRoot::Materialized { captured, snapshot });
+        return Ok(SelectedRootSelection::PendingPublication {
+            snapshot,
+            captured: Box::new(captured),
+        });
     }
 
     if let Some(generation) =
@@ -479,51 +498,125 @@ fn prepare_current_root_with_probe(
         let generation_path = runtime_root.generation_path(generation);
         let lower_mode = current_generation_lower_mode(require_materialized, probe);
         let artifact = lower_mode.load_artifact(&generation_path)?;
-        let mut captured = CapturedSelectedRoot {
-            generation: artifact.generation_root.clone(),
-            state: artifact.mutable_state.clone(),
-        };
-        let mut snapshot = match GenerationPublication::selected_root_snapshot_for_generation(
-            conn,
-            generation,
-        )? {
-            Some(snapshot_id) => SelectedRootSnapshot::find(conn, snapshot_id)?.with_context(|| {
-                format!(
-                    "generation {generation} references missing selected-root snapshot {snapshot_id}"
-                )
-            })?,
-            None => SelectedRootSnapshot::capture(conn, &captured)?,
-        };
-        if let Some((active_snapshot, active_captured)) =
-            config_state::capture_active_upper(conn, runtime_root, generation, snapshot, &cas)?
-        {
-            snapshot = active_snapshot;
-            captured = active_captured;
-        }
-        if lower_mode.requires_materialization() {
-            lower_mode.record_materialized_fallback(generation);
-            let selected_root =
-                selected_root_materialization_destination(session_dir, require_materialized)?;
-            materialize_captured_selected_root(&captured, &cas, &selected_root)?;
-            return Ok(PreparedSelectedRoot::Materialized { captured, snapshot });
-        }
-        return Ok(PreparedSelectedRoot::CurrentGeneration {
+        return Ok(SelectedRootSelection::CurrentGeneration {
             artifact: Box::new(artifact),
-            captured,
-            snapshot,
+            generation,
+            lower_mode,
         });
     }
 
-    let selected_root =
-        selected_root_materialization_destination(session_dir, require_materialized)?;
-    let captured =
-        conary_core::generation::builder::materialize_selected_root_from_db_with_authority(
-            conn,
-            &runtime_root.objects_dir(),
-            &selected_root,
-        )?;
-    let snapshot = SelectedRootSnapshot::capture(conn, &captured)?;
-    Ok(PreparedSelectedRoot::Materialized { captured, snapshot })
+    Ok(SelectedRootSelection::DatabaseProjection)
+}
+
+/// Read the exact typed selected-root baseline a real install would prepare.
+///
+/// This is the read-only half of `prepare_current_root`: it takes the same
+/// artifact-versus-database decision but never acquires the runtime mutation
+/// lock, creates a session directory, or writes under the runtime root.
+/// `empty_root` stands in for the empty materialization destination of a
+/// first-generation projection, which is read only for root metadata and any
+/// package-unclaimed parent closure.
+///
+/// The active generation config-state upper is deliberately not projected. Its
+/// capture requires content writes into the runtime CAS and selected-root
+/// snapshot writes, which a preview must not perform.
+pub(crate) fn read_selected_root_baseline(
+    conn: &rusqlite::Connection,
+    runtime_root: &ConaryRuntimeRoot,
+    empty_root: &Path,
+) -> Result<CapturedSelectedRoot> {
+    match select_selected_root(
+        conn,
+        runtime_root,
+        use_materialized_selected_root_backing(),
+        conary_core::generation::composefs::probe_composefs_mount_runtime,
+    )? {
+        SelectedRootSelection::PendingPublication { captured, .. } => Ok(*captured),
+        SelectedRootSelection::CurrentGeneration { artifact, .. } => Ok(CapturedSelectedRoot {
+            generation: artifact.generation_root.clone(),
+            state: artifact.mutable_state.clone(),
+        }),
+        SelectedRootSelection::DatabaseProjection => {
+            conary_core::generation::builder::collect_selected_root_from_db_with_authority(
+                conn, empty_root,
+            )
+            .map_err(anyhow::Error::from)
+        }
+    }
+}
+
+fn prepare_current_root_with_probe(
+    conn: &rusqlite::Connection,
+    runtime_root: &ConaryRuntimeRoot,
+    session_dir: &Path,
+    require_materialized: bool,
+    probe: impl FnOnce() -> std::result::Result<PathBuf, ComposefsRuntimeUnavailable>,
+) -> Result<PreparedSelectedRoot> {
+    let cas = CasStore::new(runtime_root.objects_dir())?;
+    match select_selected_root(conn, runtime_root, require_materialized, probe)? {
+        SelectedRootSelection::PendingPublication { snapshot, captured } => {
+            let selected_root =
+                selected_root_materialization_destination(session_dir, require_materialized)?;
+            materialize_captured_selected_root(&captured, &cas, &selected_root)?;
+            Ok(PreparedSelectedRoot::Materialized {
+                captured: *captured,
+                snapshot,
+            })
+        }
+        SelectedRootSelection::CurrentGeneration {
+            artifact,
+            generation,
+            lower_mode,
+        } => {
+            let mut captured = CapturedSelectedRoot {
+                generation: artifact.generation_root.clone(),
+                state: artifact.mutable_state.clone(),
+            };
+            let mut snapshot = match GenerationPublication::selected_root_snapshot_for_generation(
+                conn,
+                generation,
+            )? {
+                Some(snapshot_id) => {
+                    SelectedRootSnapshot::find(conn, snapshot_id)?.with_context(|| {
+                        format!(
+                            "generation {generation} references missing selected-root snapshot {snapshot_id}"
+                        )
+                    })?
+                }
+                None => SelectedRootSnapshot::capture(conn, &captured)?,
+            };
+            if let Some((active_snapshot, active_captured)) =
+                config_state::capture_active_upper(conn, runtime_root, generation, snapshot, &cas)?
+            {
+                snapshot = active_snapshot;
+                captured = active_captured;
+            }
+            if lower_mode.requires_materialization() {
+                lower_mode.record_materialized_fallback(generation);
+                let selected_root =
+                    selected_root_materialization_destination(session_dir, require_materialized)?;
+                materialize_captured_selected_root(&captured, &cas, &selected_root)?;
+                return Ok(PreparedSelectedRoot::Materialized { captured, snapshot });
+            }
+            Ok(PreparedSelectedRoot::CurrentGeneration {
+                artifact,
+                captured,
+                snapshot,
+            })
+        }
+        SelectedRootSelection::DatabaseProjection => {
+            let selected_root =
+                selected_root_materialization_destination(session_dir, require_materialized)?;
+            let captured =
+                conary_core::generation::builder::materialize_selected_root_from_db_with_authority(
+                    conn,
+                    &runtime_root.objects_dir(),
+                    &selected_root,
+                )?;
+            let snapshot = SelectedRootSnapshot::capture(conn, &captured)?;
+            Ok(PreparedSelectedRoot::Materialized { captured, snapshot })
+        }
+    }
 }
 
 fn selected_root_materialization_destination(

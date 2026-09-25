@@ -404,39 +404,34 @@ fn bootstrap_smoke_exit_code(status: conary_agent_contract::OperationStatus) -> 
     }
 }
 
-/// Run tests for a single distro.
+/// Resolve the manifests a `run` selects: an explicit suite path or name, or
+/// every manifest for the phase.
+fn run_manifest_paths(phase: u32, suite_path: Option<&str>) -> Result<Vec<PathBuf>> {
+    let Some(p) = suite_path else {
+        return manifests_for_phase(phase);
+    };
+    let path = PathBuf::from(p);
+    // If the path doesn't exist, try resolving relative to the manifest directory
+    if path.exists() {
+        return Ok(vec![path]);
+    }
+    let with_ext = manifest_dir()?.join(format!("{p}.toml"));
+    // Fall through with original path — load_manifest will produce a clear error
+    Ok(vec![if with_ext.exists() { with_ext } else { path }])
+}
+
+/// Run tests for a single distro against manifests the caller has already
+/// loaded and preflighted for every selected distro.
 fn run_single_distro(
     config: &conary_test::config::distro::GlobalConfig,
     distro: &str,
     phase: u32,
-    suite_path: Option<&str>,
+    manifest_paths: &[PathBuf],
 ) -> Result<bool> {
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async {
         let host_results_dir = host_results_dir()?;
         std::fs::create_dir_all(&host_results_dir).ok();
-
-        let manifest_paths = match suite_path {
-            Some(p) => {
-                let path = PathBuf::from(p);
-                // If the path doesn't exist, try resolving relative to the manifest directory
-                let resolved = if path.exists() {
-                    path
-                } else {
-                    let dir = manifest_dir()?;
-                    let with_ext = dir.join(format!("{p}.toml"));
-                    if with_ext.exists() {
-                        with_ext
-                    } else {
-                        // Fall through with original path — load_manifest will produce a clear error
-                        path
-                    }
-                };
-                vec![resolved]
-            }
-            None => manifests_for_phase(phase)?,
-        };
-        let _loaded_manifest_entries = load_manifest_entries(&manifest_paths)?;
 
         // Check if all manifests contain only QEMU boot steps — if so,
         // skip container setup entirely (QEMU tests boot their own VMs).
@@ -447,7 +442,7 @@ fn run_single_distro(
         });
 
         if all_qemu_only {
-            return run_qemu_only_suite(config, distro, phase, &manifest_paths, &host_results_dir)
+            return run_qemu_only_suite(config, distro, phase, manifest_paths, &host_results_dir)
                 .await;
         }
 
@@ -522,7 +517,7 @@ fn run_single_distro(
         // closed on that path too: a run left at its `pending` default reads as
         // still in flight forever.
         let manifest_outcome: Result<()> = async {
-            for manifest_path in &manifest_paths {
+            for manifest_path in manifest_paths {
                 let manifest =
                     conary_test::config::load_manifest(manifest_path).with_context(|| {
                         format!("failed to load manifest: {}", manifest_path.display())
@@ -709,15 +704,28 @@ fn main() -> Result<()> {
             let config = load_config()?;
 
             let distros: Vec<String> = if all_distros {
-                config.distros.keys().cloned().collect()
+                let mut distros: Vec<String> = config.distros.keys().cloned().collect();
+                distros.sort();
+                distros
             } else {
                 vec![distro.context("--distro is required when --all-distros is not set")?]
             };
 
+            // Validate every manifest's expanded stdout_json pointers for every
+            // selected distro before any image build, container creation, or
+            // initialization, so a later manifest or distro cannot fail after
+            // earlier container work.
+            let manifest_paths = run_manifest_paths(phase, suite.as_deref())?;
+            conary_test::engine::runner::preflight_loaded_manifests_stdout_json_pointers(
+                &load_manifest_entries(&manifest_paths)?,
+                &config,
+                &distros,
+            )?;
+
             let mut all_passed = true;
             for d in &distros {
                 tracing::info!(distro = %d, phase, "Starting test run");
-                let passed = run_single_distro(&config, d, phase, suite.as_deref())?;
+                let passed = run_single_distro(&config, d, phase, &manifest_paths)?;
                 if !passed {
                     all_passed = false;
                 }

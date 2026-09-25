@@ -120,6 +120,164 @@ pub fn materialize_captured_selected_root(
     sync_filesystem(destination)
 }
 
+/// Materialize the directory, symlink, and permission layout of a captured
+/// selected root.
+///
+/// This exists for read-only path resolution previews and read-only lifecycle
+/// preflight. Directories become directories and symlinks keep their exact
+/// targets. Every other node kind becomes a placeholder that answers the
+/// lifecycle preflight predicates exactly as the real node would:
+///
+/// - A regular node becomes an empty regular file carrying its permission
+///   bits, so an executable target-root program stays executable. A hardlink
+///   resolves to its regular anchor's kind: `validate_hardlinks` proves the
+///   anchor is the primary regular node with identical metadata, so the linked
+///   path becomes a regular placeholder with the anchor's permission bits.
+/// - A FIFO becomes a real FIFO. `mkfifo` needs no privilege and a FIFO is
+///   never a regular file, so `is_executable_file` answers false exactly as it
+///   does for the real node.
+/// - A socket, block device, or character device becomes an empty regular
+///   file with mode `0o000`. Creating a real device needs `CAP_MKNOD`, and
+///   binding a real socket is limited by `sun_path` length.
+///   `is_executable_file` requires both a regular file and an execute bit, so
+///   the real node fails the first test and the `0o000` placeholder fails the
+///   second while both still exist and are not symlinks.
+///
+/// The layout and permission bits survive; content, ownership, timestamps, and
+/// xattrs are never written, and the destination is never required to be
+/// empty. Callers own the destination and must keep it private.
+pub fn materialize_selected_root_layout_skeleton(
+    captured: &CapturedSelectedRoot,
+    destination: &Path,
+) -> crate::Result<()> {
+    captured.generation.validate()?;
+    captured.state.validate()?;
+    prepare_layout_destination(destination)?;
+
+    let mut directories = Vec::new();
+    let mut leaves = Vec::new();
+    for entry in captured
+        .generation
+        .entries
+        .iter()
+        .chain(&captured.state.entries)
+    {
+        if matches!(entry.node.source.kind, PayloadNodeKind::Directory) {
+            directories.push(entry);
+        } else {
+            leaves.push(entry);
+        }
+    }
+
+    // Create every directory first with a writable, traversable mode so a
+    // manifest mode such as 0o000 cannot stop the skeleton from being built.
+    for entry in &directories {
+        materialize_layout_directory(entry, destination)?;
+    }
+    for entry in &leaves {
+        materialize_layout_leaf(entry, destination)?;
+    }
+    // Restore directory permission bits only after every child exists.
+    for entry in directories.iter().rev() {
+        let path = destination_path(destination, &entry.path)?;
+        fs::set_permissions(&path, fs::Permissions::from_mode(layout_mode(&entry.node)))?;
+    }
+    Ok(())
+}
+
+fn prepare_layout_destination(destination: &Path) -> crate::Result<()> {
+    match fs::symlink_metadata(destination) {
+        Ok(metadata) if metadata.file_type().is_dir() => Ok(()),
+        Ok(_) => Err(crate::Error::InvalidPath(format!(
+            "layout skeleton destination is not a directory: {}",
+            destination.display()
+        ))),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            fs::create_dir_all(destination)?;
+            Ok(())
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn materialize_layout_directory(
+    entry: &GenerationRootEntry,
+    destination: &Path,
+) -> crate::Result<()> {
+    let path = destination_path(destination, &entry.path)?;
+    match fs::create_dir(&path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+            let metadata = fs::symlink_metadata(&path)?;
+            if !metadata.file_type().is_dir() {
+                return Err(crate::Error::ConflictError(format!(
+                    "layout skeleton path {} already exists and is not a directory",
+                    entry.path
+                )));
+            }
+        }
+        Err(error) => return Err(error.into()),
+    }
+    // Keep the directory writable and traversable until all of its children
+    // exist; `materialize_selected_root_layout_skeleton` restores the manifest
+    // permission bits afterwards.
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o700))?;
+    Ok(())
+}
+
+fn materialize_layout_leaf(entry: &GenerationRootEntry, destination: &Path) -> crate::Result<()> {
+    let path = destination_path(destination, &entry.path)?;
+    match &entry.node.source.kind {
+        PayloadNodeKind::Symlink { target } => {
+            std::os::unix::fs::symlink(target, &path)?;
+        }
+        // A regular node, and a hardlink to one, are regular files at
+        // execution time. `validate_hardlinks` proves a hardlink's anchor is
+        // the regular primary carrying exactly this mode, so both become an
+        // empty regular placeholder with the manifest permission bits.
+        PayloadNodeKind::Regular { .. } | PayloadNodeKind::Hardlink { .. } => {
+            create_layout_regular(&path, layout_mode(&entry.node))?;
+        }
+        PayloadNodeKind::Fifo => {
+            create_fifo(&path)?;
+            fs::set_permissions(&path, fs::Permissions::from_mode(layout_mode(&entry.node)))?;
+        }
+        // A real socket or device is rejected for being a non-regular file
+        // before its execute bits are read, so a mode 0o000 regular placeholder
+        // gives the same lifecycle preflight answer. It needs no CAP_MKNOD, and
+        // unlike binding a socket it has no sun_path length limit that a deep
+        // path under the private skeleton root could exceed.
+        PayloadNodeKind::Socket
+        | PayloadNodeKind::BlockDevice { .. }
+        | PayloadNodeKind::CharacterDevice { .. } => {
+            create_layout_regular(&path, 0o000)?;
+        }
+        PayloadNodeKind::Directory => {
+            unreachable!("directories are materialized separately")
+        }
+    }
+    Ok(())
+}
+
+/// Create the empty regular placeholder used for a regular or device node.
+///
+/// The mode is set explicitly because the creating process umask would
+/// otherwise trim it.
+fn create_layout_regular(path: &Path, mode: u32) -> crate::Result<()> {
+    OpenOptions::new().write(true).create_new(true).open(path)?;
+    fs::set_permissions(path, fs::Permissions::from_mode(mode))?;
+    Ok(())
+}
+
+/// Permission bits the skeleton preserves for one manifest node.
+///
+/// The preview never needs setuid or setgid authority, so those bits are
+/// cleared while the remaining permission and sticky bits are kept. This
+/// mirrors the setuid/setgid stripping a real deployment applies.
+fn layout_mode(node: &ResolvedPayloadNode) -> u32 {
+    node.source.mode & 0o1777
+}
+
 /// Overlay one validated package payload tree onto an existing root.
 ///
 /// Directory nodes merge with existing directories and replace non-directory

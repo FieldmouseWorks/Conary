@@ -346,6 +346,7 @@ fn execute_locked_restore(
             conn,
             changeset_id,
             crate::commands::publication_deferred_follow_up(
+                outcome.failure_kind,
                 "generation publication is pending".to_string(),
                 db_path,
             ),

@@ -20,7 +20,7 @@ use conary_core::components::ComponentType;
 use conary_core::packages::PackageFormat;
 use conary_core::scriptlet::SandboxMode;
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tracing::info;
 
 pub(crate) struct CcsTransactionInstallOptions<'a> {
@@ -51,6 +51,52 @@ pub(crate) struct CcsTransactionInstallResult {
     pub trove_id: Option<i64>,
     pub changeset_id: i64,
     pub report: super::report::InstallReport,
+}
+
+/// Private, read-only selected-root layout used only to preview CCS payload
+/// path resolution.
+///
+/// The temp directory must stay alive for as long as the transaction root is
+/// used, so this type owns it rather than returning a bare path.
+struct CcsDryRunBaseline {
+    _temp_dir: tempfile::TempDir,
+    root: PathBuf,
+}
+
+/// Build the layout skeleton a dry run resolves against.
+///
+/// A dry run prepares no writable selected root, so it must not fall back to
+/// the live command root. This reads the same baseline a real install would
+/// prepare and materializes only its directories and symlinks into a private
+/// temp directory.
+///
+/// `runtime_root` is the real installed runtime, supplied by the active
+/// preview when the dry run projects a disposable database. Deriving it from
+/// `conn`'s database path would resolve `/current` and generation artifacts
+/// inside the projection's private temp directory, where none exist.
+fn prepare_ccs_dry_run_baseline(
+    conn: &rusqlite::Connection,
+    runtime_root: &conary_core::runtime_root::ConaryRuntimeRoot,
+) -> Result<CcsDryRunBaseline> {
+    let temp_dir = tempfile::TempDir::new()
+        .context("failed to create the CCS dry-run selected-root skeleton")?;
+    // The database projection reads an empty directory in place of the real
+    // session destination, so the skeleton lives in a sibling subdirectory and
+    // keeps that input empty.
+    let empty_root = temp_dir.path();
+    let captured = crate::commands::generation::selected_root::read_selected_root_baseline(
+        conn,
+        runtime_root,
+        empty_root,
+    )?;
+    let root = temp_dir.path().join("root");
+    conary_core::generation::root_manifest::materialize_selected_root_layout_skeleton(
+        &captured, &root,
+    )?;
+    Ok(CcsDryRunBaseline {
+        _temp_dir: temp_dir,
+        root,
+    })
 }
 
 fn extract_and_classify_ccs_manifest_files(
@@ -353,6 +399,16 @@ fn install_ccs_package_transactionally_inner(
         opts.preview.is_none() || opts.dry_run,
         "projected package paths require a dry run"
     );
+    // A preview projection is the same database the caller opened as
+    // `db_path`; binding one to a different path would silently read the wrong
+    // installed authority. Reject the mixed pair before anything resolves
+    // against it.
+    if let Some(preview) = opts.preview {
+        anyhow::ensure!(
+            opts.db_path == preview.path(),
+            "CCS install options bound a preview projection to a different database path"
+        );
+    }
     let declared_paths = opts
         .preview
         .map(|preview| preview.declared_paths())
@@ -399,6 +455,23 @@ fn install_ccs_package_transactionally_inner(
     // Dry-run remains filesystem-read-only. Every real CCS mutation receives
     // either its caller-owned try root or a freshly prepared selected root.
     // Roll back baseline preparation as well as package state on preflight refusal.
+    //
+    // The preview baseline is read before the savepoint because it only reads
+    // installed state; a dry run with no caller-owned root has nothing else to
+    // resolve payload paths against.
+    let dry_run_baseline = if opts.dry_run && !caller_owned_selected_root {
+        // A disposable preview database carries selection rows but no runtime
+        // root of its own. Read `/current` and generation artifacts from the
+        // real runtime the preview was built from; standalone CCS dry runs
+        // have no preview, so their database path is already the real one.
+        let runtime_root = match opts.preview {
+            Some(preview) => preview.runtime_root().clone(),
+            None => conary_core::runtime_root::ConaryRuntimeRoot::from_db_path(opts.db_path),
+        };
+        Some(prepare_ccs_dry_run_baseline(conn, &runtime_root)?)
+    } else {
+        None
+    };
     let preflight_state = conn.savepoint()?;
     let mut owned_selected_root = locked_root
         .map(|locked_root| {
@@ -412,9 +485,15 @@ fn install_ccs_package_transactionally_inner(
         Some(selected_root) => Some(selected_root),
         None => owned_selected_root.as_mut(),
     };
-    let transaction_root = selected_root.as_deref().map_or_else(
-        || opts.root.to_string(),
-        |session| session.selected_root().to_string_lossy().into_owned(),
+    // The skeleton stays alive through the dry-run return below.
+    let transaction_root = dry_run_baseline.as_ref().map_or_else(
+        || {
+            selected_root.as_deref().map_or_else(
+                || opts.root.to_string(),
+                |session| session.selected_root().to_string_lossy().into_owned(),
+            )
+        },
+        |baseline| baseline.root.to_string_lossy().into_owned(),
     );
     let selected_component_names = match opts.selected_manifest_components.as_ref() {
         Some(selected) => selected.clone(),

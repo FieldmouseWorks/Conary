@@ -509,3 +509,413 @@ async fn test_concurrent_runs_independent() {
     assert_eq!(suite_a.results[0].id, "T-A1");
     assert_eq!(suite_b.results[0].id, "T-B1");
 }
+
+/// A one-step test whose only assertion checks `pointer` via `stdout_json`.
+fn stdout_json_test(id: &str, pointer: &str) -> TestDef {
+    TestDef {
+        id: id.to_string(),
+        name: "stdout_json_preflight".to_string(),
+        description: "stdout_json pointer preflight".to_string(),
+        timeout: 30,
+        flaky: None,
+        retries: None,
+        retry_delay_ms: None,
+        step: vec![TestStep {
+            run: Some("echo ok".to_string()),
+            assert: Some(Assertion {
+                stdout_json: Some(vec![JsonAssertion {
+                    pointer: pointer.to_string(),
+                    expected: JsonExpectation::Equals(serde_json::json!(1)),
+                    numbers: HashMap::new(),
+                }]),
+                ..Assertion::default()
+            }),
+            ..TestStep::default()
+        }],
+        resources: None,
+        depends_on: None,
+        fatal: None,
+        group: None,
+        skip: None,
+        requires: Vec::new(),
+        corpus: None,
+    }
+}
+
+/// A one-step test whose only assertion checks each of `pointers` via
+/// `stdout_json`, in order.
+fn stdout_json_checks_test(id: &str, pointers: &[&str]) -> TestDef {
+    TestDef {
+        id: id.to_string(),
+        name: "stdout_json_preflight".to_string(),
+        description: "stdout_json pointer preflight".to_string(),
+        timeout: 30,
+        flaky: None,
+        retries: None,
+        retry_delay_ms: None,
+        step: vec![TestStep {
+            run: Some("echo ok".to_string()),
+            assert: Some(Assertion {
+                stdout_json: Some(
+                    pointers
+                        .iter()
+                        .enumerate()
+                        .map(|(index, pointer)| JsonAssertion {
+                            pointer: pointer.to_string(),
+                            expected: JsonExpectation::Equals(serde_json::json!(index as u64)),
+                            numbers: HashMap::new(),
+                        })
+                        .collect(),
+                ),
+                ..Assertion::default()
+            }),
+            ..TestStep::default()
+        }],
+        resources: None,
+        depends_on: None,
+        fatal: None,
+        group: None,
+        skip: None,
+        requires: Vec::new(),
+        corpus: None,
+    }
+}
+
+#[test]
+fn preflight_accepts_pointer_substituted_from_a_variable() {
+    let test = stdout_json_test("TJSON-PREFLIGHT-OK", "${JSON_POINTER}");
+    let vars = HashMap::from([("JSON_POINTER".to_string(), "/status".to_string())]);
+
+    assert!(preflight_stdout_json_pointers(&test, &vars).is_ok());
+}
+
+#[test]
+fn preflight_rejects_invalid_pointer_after_substitution() {
+    let test = stdout_json_test("TJSON-PREFLIGHT-BAD", "/data/${KEY}");
+
+    // Positive control: the same test and template pass with a valid value, so
+    // the rejection below can only come from the expanded pointer rule.
+    let valid = HashMap::from([("KEY".to_string(), "value".to_string())]);
+    assert!(preflight_stdout_json_pointers(&test, &valid).is_ok());
+
+    let invalid = HashMap::from([("KEY".to_string(), "a~2b".to_string())]);
+    let error = preflight_stdout_json_pointers(&test, &invalid)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("/data/a~2b"),
+        "error should name the expanded pointer: {error}"
+    );
+}
+
+#[tokio::test]
+async fn invalid_expanded_stdout_json_pointer_fails_before_any_step() {
+    let test = stdout_json_test("TJSON-PREFLIGHT", "/data/${KEY}");
+
+    // Positive control: with a valid substituted value the same fixture passes
+    // and its step executes.
+    let mut valid_manifest = make_manifest(vec![test.clone()]);
+    valid_manifest.distro_overrides.insert(
+        "fedora44".to_string(),
+        HashMap::from([("KEY".to_string(), "value".to_string())]),
+    );
+    let valid_backend = MockBackend::new(vec![ExecResult {
+        exit_code: 0,
+        stdout: r#"{"data": {"value": 1}}"#.to_string(),
+        stderr: String::new(),
+    }]);
+    let mut valid_runner = TestRunner::new(test_config(), "fedora44".to_string());
+    let valid_suite = valid_runner
+        .run(
+            &valid_manifest,
+            &valid_backend,
+            &"ctr-preflight-ok".to_string(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(valid_suite.passed(), 1, "positive control should pass");
+    assert_eq!(valid_backend.exec_calls().len(), 1);
+
+    // Negative: `a~2b` is not a valid pointer escape, so the test must fail
+    // before its step executes.
+    // Negative: a valid first test followed by a later test whose expanded
+    // pointer is invalid. The whole run must refuse before the first test (or
+    // any suite work) executes.
+    let first = stdout_json_test("TJSON-FIRST", "/data/value");
+    let mut invalid_manifest = make_manifest(vec![first, test]);
+    invalid_manifest.distro_overrides.insert(
+        "fedora44".to_string(),
+        HashMap::from([("KEY".to_string(), "a~2b".to_string())]),
+    );
+    let invalid_backend = MockBackend::new(Vec::new());
+    let mut invalid_runner = TestRunner::new(test_config(), "fedora44".to_string());
+    let error = invalid_runner
+        .run(
+            &invalid_manifest,
+            &invalid_backend,
+            &"ctr-preflight-bad".to_string(),
+            None,
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+
+    assert!(
+        invalid_backend.exec_calls().is_empty(),
+        "no suite work may execute before the pointer preflight"
+    );
+    assert!(error.contains("configuration error"), "{error}");
+    assert!(
+        error.contains("/data/a~2b"),
+        "error should name the expanded pointer: {error}"
+    );
+}
+
+#[test]
+fn preflight_rejects_unresolved_pointer_variable() {
+    let test = stdout_json_test("TJSON-PREFLIGHT-UNRESOLVED", "/data/${KEY}");
+
+    // Positive control: the same template resolves and passes when KEY exists.
+    let resolved = HashMap::from([("KEY".to_string(), "value".to_string())]);
+    assert!(preflight_stdout_json_pointers(&test, &resolved).is_ok());
+
+    // `/data/${TYPO}` is syntactically a valid pointer, so only the unresolved
+    // reference rule can reject it.
+    let missing = HashMap::from([("OTHER".to_string(), "value".to_string())]);
+    let error = preflight_stdout_json_pointers(&test, &missing)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("unresolved variable reference"),
+        "error should report the unresolved reference: {error}"
+    );
+}
+
+#[tokio::test]
+async fn invalid_setup_stdout_json_pointer_fails_before_any_setup_step() {
+    let setup_manifest = |key: &str| {
+        let mut manifest = TestManifest {
+            suite: SuiteDef {
+                name: "setup-pointer-preflight".to_string(),
+                phase: 4,
+                setup: stdout_json_test("SETUP", "/data/${KEY}").step,
+                mock_server: None,
+                timeout: None,
+                corpus: None,
+            },
+            test: Vec::new(),
+            distro_overrides: HashMap::new(),
+        };
+        manifest.distro_overrides.insert(
+            "fedora44".to_string(),
+            HashMap::from([("KEY".to_string(), key.to_string())]),
+        );
+        manifest
+    };
+
+    // Positive control: a valid substituted pointer lets the setup step run.
+    let valid_backend = MockBackend::new(vec![ExecResult {
+        exit_code: 0,
+        stdout: r#"{"data": {"value": 1}}"#.to_string(),
+        stderr: String::new(),
+    }]);
+    TestRunner::new(test_config(), "fedora44".to_string())
+        .run(
+            &setup_manifest("value"),
+            &valid_backend,
+            &"ctr-setup-ok".to_string(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(valid_backend.exec_calls().len(), 1);
+
+    // Negative: the expanded setup pointer is invalid, so setup fails before
+    // its step executes.
+    let invalid_backend = MockBackend::new(Vec::new());
+    let error = TestRunner::new(test_config(), "fedora44".to_string())
+        .run(
+            &setup_manifest("a~2b"),
+            &invalid_backend,
+            &"ctr-setup-bad".to_string(),
+            None,
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("configuration error"), "{error}");
+    assert!(invalid_backend.exec_calls().is_empty());
+}
+
+#[test]
+fn early_preflight_rejects_invalid_pointer_in_a_later_manifest() {
+    use std::path::PathBuf;
+
+    let manifest_with_pointer = |key: &str| {
+        let mut manifest = make_manifest(vec![stdout_json_test("TJSON-EARLY", "/data/${KEY}")]);
+        manifest.distro_overrides.insert(
+            "fedora44".to_string(),
+            HashMap::from([("KEY".to_string(), key.to_string())]),
+        );
+        manifest
+    };
+    let loaded = |second: TestManifest| {
+        vec![
+            (
+                PathBuf::from("/manifests/first.toml"),
+                make_manifest(vec![stdout_json_test("TJSON-FIRST", "/status")]),
+            ),
+            (PathBuf::from("/manifests/second.toml"), second),
+        ]
+    };
+
+    // Positive control: the same two manifests pass when the second manifest's
+    // override substitutes a valid pointer.
+    assert!(
+        preflight_loaded_manifests_stdout_json_pointers(
+            &loaded(manifest_with_pointer("value")),
+            &test_config(),
+            &["fedora44".to_string()],
+        )
+        .is_ok()
+    );
+
+    // Negative: only the second manifest's `a~2b` substitution is invalid, so
+    // the error can only come from that pointer rule.
+    let error = preflight_loaded_manifests_stdout_json_pointers(
+        &loaded(manifest_with_pointer("a~2b")),
+        &test_config(),
+        &["fedora44".to_string()],
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(
+        error.starts_with("configuration error: /manifests/second.toml: distro fedora44:"),
+        "error should name the failing manifest: {error}"
+    );
+    assert!(
+        error.contains("/data/a~2b"),
+        "error should name the expanded pointer: {error}"
+    );
+}
+
+#[test]
+fn early_preflight_rejects_invalid_pointer_for_a_later_distro() {
+    use std::path::PathBuf;
+
+    // One manifest whose templated pointer expands validly for `alpha` and
+    // malformed for `omega`, the distro an `--all-distros` run reaches last.
+    let mut manifest = make_manifest(vec![stdout_json_test("TJSON-DISTRO", "/data/${KEY}")]);
+    for (distro, key) in [("alpha", "value"), ("omega", "a~2b")] {
+        manifest.distro_overrides.insert(
+            distro.to_string(),
+            HashMap::from([("KEY".to_string(), key.to_string())]),
+        );
+    }
+    let loaded = vec![(PathBuf::from("/manifests/only.toml"), manifest)];
+
+    // Positive control: the earlier distro alone passes.
+    assert!(
+        preflight_loaded_manifests_stdout_json_pointers(
+            &loaded,
+            &test_config(),
+            &["alpha".to_string()],
+        )
+        .is_ok()
+    );
+
+    // Negative: selecting both distros fails on the later distro's expansion,
+    // before any distro's run can start.
+    let error = preflight_loaded_manifests_stdout_json_pointers(
+        &loaded,
+        &test_config(),
+        &["alpha".to_string(), "omega".to_string()],
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(
+        error.starts_with("configuration error: /manifests/only.toml: distro omega:"),
+        "error should name the failing manifest and distro: {error}"
+    );
+    assert!(
+        error.contains("/data/a~2b"),
+        "error should name the expanded pointer: {error}"
+    );
+}
+
+#[test]
+fn early_preflight_rejects_duplicate_expanded_stdout_json_pointers() {
+    let manifest_with_key = |key: &str| {
+        let checks = stdout_json_checks_test("TJSON-DUP", &["/data/${KEY}", "/data/value"]);
+        let mut manifest = make_manifest(vec![checks]);
+        manifest.distro_overrides.insert(
+            "fedora44".to_string(),
+            HashMap::from([("KEY".to_string(), key.to_string())]),
+        );
+        manifest
+    };
+    let vars = |manifest: &TestManifest| {
+        variables::build_manifest_variables(&test_config(), "fedora44", manifest)
+    };
+
+    // Positive control: KEY="other" expands the template onto a distinct
+    // pointer, so the same step passes.
+    let distinct = manifest_with_key("other");
+    assert!(preflight_manifest_stdout_json_pointers(&distinct, &vars(&distinct)).is_ok());
+
+    // Negative: KEY="value" expands `/data/${KEY}` onto the literal
+    // `/data/value`, so the step checks one pointer twice.
+    let duplicate = manifest_with_key("value");
+    let error = preflight_manifest_stdout_json_pointers(&duplicate, &vars(&duplicate))
+        .unwrap_err()
+        .to_string();
+
+    assert!(
+        error.contains("overlapping"),
+        "error should report the overlap: {error}"
+    );
+    assert!(
+        error.contains("/data/value"),
+        "error should name the overlapping pointer: {error}"
+    );
+}
+
+#[test]
+fn early_preflight_rejects_ancestor_expanded_stdout_json_pointers() {
+    let manifest_with_literal = |literal: &str| {
+        let checks = stdout_json_checks_test("TJSON-ANCESTOR", &["/data/${KEY}", literal]);
+        let mut manifest = make_manifest(vec![checks]);
+        manifest.distro_overrides.insert(
+            "fedora44".to_string(),
+            HashMap::from([("KEY".to_string(), "x".to_string())]),
+        );
+        manifest
+    };
+    let vars = |manifest: &TestManifest| {
+        variables::build_manifest_variables(&test_config(), "fedora44", manifest)
+    };
+
+    // Positive control: the same template and KEY pass when the literal
+    // constrains a separate subtree.
+    let separate = manifest_with_literal("/other");
+    assert!(preflight_manifest_stdout_json_pointers(&separate, &vars(&separate)).is_ok());
+
+    // Negative: the literal `/data` is an ancestor of the expanded `/data/x`,
+    // so the two checks determine the same value.
+    let ancestor = manifest_with_literal("/data");
+    let error = preflight_manifest_stdout_json_pointers(&ancestor, &vars(&ancestor))
+        .unwrap_err()
+        .to_string();
+
+    assert!(
+        error.contains("overlapping"),
+        "error should report the overlap: {error}"
+    );
+    assert!(
+        error.contains("\"/data\"") && error.contains("\"/data/x\""),
+        "error should name both pointers: {error}"
+    );
+}

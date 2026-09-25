@@ -15,6 +15,9 @@ mod command_capability_tests;
 #[cfg(test)]
 mod command_component_tests;
 #[cfg(test)]
+#[path = "install/command_dry_run_root_tests/tests.rs"]
+mod command_dry_run_root_tests;
+#[cfg(test)]
 mod command_hook_tests;
 #[cfg(test)]
 #[path = "install/command_metadata_tests/tests.rs"]

@@ -102,17 +102,85 @@ pub(super) fn stage_test_boot_assets(root: &std::path::Path) {
     std::fs::write(boot_root.join("EFI/BOOT/BOOTX64.EFI"), b"test-efi").unwrap();
 }
 
+/// A regular payload file seeded into a test baseline layout.
+pub(super) struct TestRootRegularFile<'a> {
+    pub path: &'a str,
+    pub mode: u32,
+}
+
+/// A special (non-regular, non-directory, non-symlink) payload node seeded into
+/// a test baseline layout. Special nodes carry no content authority.
+pub(super) struct TestRootSpecialNode<'a> {
+    pub path: &'a str,
+    pub kind: conary_core::payload::PayloadNodeKind,
+    pub mode: u32,
+}
+
 pub(super) fn seed_test_root_layout(
     db_path: &str,
     fixture_name: &str,
     directories: &[&str],
     symlinks: &[(&str, &str)],
 ) {
+    seed_test_root_layout_with_regular_files(db_path, fixture_name, directories, symlinks, &[]);
+}
+
+/// Seed the installed baseline layout that a selected-root preview resolves
+/// against. Regular files carry placeholder content authority because the
+/// layout skeleton materializes permission bits without reading CAS content.
+pub(super) fn seed_test_root_layout_with_regular_files(
+    db_path: &str,
+    fixture_name: &str,
+    directories: &[&str],
+    symlinks: &[(&str, &str)],
+    regular_files: &[TestRootRegularFile<'_>],
+) {
+    seed_test_root_layout_entries(
+        db_path,
+        fixture_name,
+        directories,
+        symlinks,
+        regular_files,
+        &[],
+    );
+}
+
+/// Seed the baseline layout including exact special-node kinds.
+///
+/// A special node at a lifecycle program path is what proves a preview refuses
+/// the same baseline a real apply would refuse.
+pub(super) fn seed_test_root_layout_with_special_nodes(
+    db_path: &str,
+    fixture_name: &str,
+    directories: &[&str],
+    symlinks: &[(&str, &str)],
+    regular_files: &[TestRootRegularFile<'_>],
+    special_nodes: &[TestRootSpecialNode<'_>],
+) {
+    seed_test_root_layout_entries(
+        db_path,
+        fixture_name,
+        directories,
+        symlinks,
+        regular_files,
+        special_nodes,
+    );
+}
+
+fn seed_test_root_layout_entries(
+    db_path: &str,
+    fixture_name: &str,
+    directories: &[&str],
+    symlinks: &[(&str, &str)],
+    regular_files: &[TestRootRegularFile<'_>],
+    special_nodes: &[TestRootSpecialNode<'_>],
+) {
     use conary_core::db::models::{
         Changeset, ChangesetStatus, Component, FileEntry, ProvideEntry, Trove, TroveType,
     };
     use conary_core::payload::{
-        PayloadIdentity, PayloadNode, PayloadNodeKind, PayloadTimestamp, ResolvedPayloadNode,
+        PayloadContentAuthority, PayloadIdentity, PayloadNode, PayloadNodeKind, PayloadTimestamp,
+        ResolvedPayloadNode,
     };
 
     let mut conn = conary_core::db::open(db_path).unwrap();
@@ -172,6 +240,35 @@ pub(super) fn seed_test_root_layout(
             );
             symlink.component_id = Some(component_id);
             symlink.insert(tx)?;
+        }
+        for file in regular_files {
+            let content = file.path.as_bytes();
+            let mut entry = FileEntry::new(
+                file.path.to_string(),
+                current_node(
+                    PayloadNodeKind::Regular {
+                        hardlink_identity: None,
+                    },
+                    libc::S_IFREG | (file.mode & 0o7777),
+                ),
+                Some(PayloadContentAuthority {
+                    sha256: conary_core::hash::sha256(content),
+                    size: content.len() as u64,
+                }),
+                trove_id,
+            );
+            entry.component_id = Some(component_id);
+            entry.insert(tx)?;
+        }
+        for special in special_nodes {
+            let mut entry = FileEntry::new(
+                special.path.to_string(),
+                current_node(special.kind.clone(), special.mode),
+                None,
+                trove_id,
+            );
+            entry.component_id = Some(component_id);
+            entry.insert(tx)?;
         }
 
         let mut provide = ProvideEntry::new(

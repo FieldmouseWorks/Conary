@@ -44,6 +44,28 @@ pub fn materialize_selected_root_from_db(
     materialize_selected_root_from_db_with_authority(conn, objects_dir, selected_root).map(drop)
 }
 
+/// Project the exact typed selected-root authority from installed database
+/// state without materializing it.
+///
+/// This is the read-only half of [`materialize_selected_root_from_db_with_authority`].
+/// It reads `selected_root` only for root metadata and any package-unclaimed
+/// parent closure; it never creates, removes, or writes a path below it. A
+/// read-only preview passes the empty directory that stands in for the real
+/// materialization destination.
+pub fn collect_selected_root_from_db_with_authority(
+    conn: &rusqlite::Connection,
+    selected_root: &Path,
+) -> crate::Result<CapturedSelectedRoot> {
+    let troves = Trove::list_all(conn)?;
+    let all_files = FileEntry::find_all_ordered(conn)?;
+    let runtime_inputs =
+        runtime_inputs::collect_runtime_generation_inputs(conn, &troves, all_files, selected_root)?;
+    Ok(CapturedSelectedRoot {
+        generation: runtime_inputs.generation,
+        state: runtime_inputs.state,
+    })
+}
+
 /// Initialize a writable selected root and return the exact typed authority
 /// used for materialization.
 ///
@@ -55,15 +77,8 @@ pub fn materialize_selected_root_from_db_with_authority(
     objects_dir: &Path,
     selected_root: &Path,
 ) -> crate::Result<CapturedSelectedRoot> {
-    let troves = Trove::list_all(conn)?;
-    let all_files = FileEntry::find_all_ordered(conn)?;
-    let runtime_inputs =
-        runtime_inputs::collect_runtime_generation_inputs(conn, &troves, all_files, selected_root)?;
+    let captured = collect_selected_root_from_db_with_authority(conn, selected_root)?;
     let cas = CasStore::new(objects_dir)?;
-    let captured = CapturedSelectedRoot {
-        generation: runtime_inputs.generation,
-        state: runtime_inputs.state,
-    };
     materialize_captured_selected_root(&captured, &cas, selected_root)?;
     Ok(captured)
 }
@@ -669,11 +684,14 @@ mod tests {
             "runtime artifact test",
             &BootRoot::Staged(boot_root.to_path_buf()),
         )
-        .unwrap_err()
-        .to_string();
+        .unwrap_err();
 
-        assert!(error.contains("not self-contained"));
-        assert!(error.contains("/sbin/init"));
+        assert!(matches!(
+            error,
+            crate::Error::GenerationRootMissingBaseSystem {
+                missing: crate::error::MissingBaseSystemPart::MissingInit
+            }
+        ));
         assert!(!generations_root.join("0").exists());
     }
 }

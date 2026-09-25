@@ -11,7 +11,7 @@ use crate::payload::{
 use std::collections::BTreeMap;
 use std::ffi::CString;
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::os::unix::net::UnixListener;
 use std::path::Path;
 
@@ -230,6 +230,218 @@ fn selected_root_round_trip_preserves_typed_tree_and_omits_ephemeral_domains() {
     assert_eq!(original.ino(), original_link.ino());
     assert_eq!(restored.ino(), restored_link.ino());
     assert_ne!(original.ino(), restored.ino());
+}
+
+#[test]
+fn layout_skeleton_materializes_directories_symlinks_and_placeholders() {
+    let temp = tempfile::tempdir().unwrap();
+    let destination = temp.path().join("skeleton");
+    let symlink_entry = GenerationRootEntry {
+        path: "/usr/bin/sh".to_string(),
+        node: resolved(PayloadNode {
+            kind: PayloadNodeKind::Symlink {
+                target: "bash".to_string(),
+            },
+            mode: libc::S_IFLNK | 0o777,
+            user: PayloadIdentity::Numeric {
+                id: u64::from(unsafe { libc::geteuid() }),
+            },
+            group: PayloadIdentity::Numeric {
+                id: u64::from(unsafe { libc::getegid() }),
+            },
+            mtime: PayloadTimestamp::UNIX_EPOCH,
+            xattrs: BTreeMap::new(),
+        }),
+        content: None,
+    };
+    let fifo_entry = GenerationRootEntry {
+        path: "/var/lib/events".to_string(),
+        node: resolved(PayloadNode {
+            kind: PayloadNodeKind::Fifo,
+            mode: libc::S_IFIFO | 0o640,
+            user: PayloadIdentity::Numeric {
+                id: u64::from(unsafe { libc::geteuid() }),
+            },
+            group: PayloadIdentity::Numeric {
+                id: u64::from(unsafe { libc::getegid() }),
+            },
+            mtime: PayloadTimestamp::UNIX_EPOCH,
+            xattrs: BTreeMap::new(),
+        }),
+        content: None,
+    };
+    let captured = CapturedSelectedRoot {
+        generation: GenerationRootManifest {
+            version: GENERATION_ROOT_MANIFEST_VERSION,
+            root: directory_node(0o755),
+            entries: vec![
+                directory_entry("/usr", 0o755),
+                directory_entry("/usr/bin", 0o755),
+                regular_entry_with_mode("/usr/bin/executable", b"not materialized", 0o755),
+                directory_entry("/usr/bin/private", 0o500),
+                regular_entry_with_mode("/usr/bin/private/inside", b"not materialized", 0o400),
+                regular_entry_with_mode("/usr/bin/setuid-tool", b"not materialized", 0o4755),
+                symlink_entry,
+                regular_entry_with_mode("/usr/bin/tool", b"not materialized", 0o644),
+            ],
+        },
+        state: MutableStateManifest {
+            version: GENERATION_ROOT_MANIFEST_VERSION,
+            entries: vec![
+                directory_entry("/var", 0o755),
+                directory_entry("/var/lib", 0o755),
+                fifo_entry,
+            ],
+        },
+    };
+
+    materialize_selected_root_layout_skeleton(&captured, &destination).unwrap();
+
+    assert!(
+        std::fs::symlink_metadata(destination.join("usr"))
+            .unwrap()
+            .file_type()
+            .is_dir()
+    );
+    assert_eq!(
+        std::fs::metadata(destination.join("usr"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o7777,
+        0o755
+    );
+    // A restrictive manifest directory mode is applied only after the child
+    // below it has been created.
+    assert_eq!(
+        std::fs::metadata(destination.join("usr/bin/private"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o7777,
+        0o500
+    );
+    assert_eq!(
+        std::fs::read_link(destination.join("usr/bin/sh")).unwrap(),
+        Path::new("bash")
+    );
+    let tool = std::fs::symlink_metadata(destination.join("usr/bin/tool")).unwrap();
+    assert!(tool.file_type().is_file());
+    assert_eq!(tool.permissions().mode() & 0o7777, 0o644);
+    assert_eq!(tool.len(), 0);
+    let executable = std::fs::symlink_metadata(destination.join("usr/bin/executable")).unwrap();
+    assert!(executable.file_type().is_file());
+    assert_eq!(
+        executable.permissions().mode() & 0o7777,
+        0o755,
+        "an executable manifest node must yield an executable placeholder"
+    );
+    let setuid = std::fs::symlink_metadata(destination.join("usr/bin/setuid-tool")).unwrap();
+    assert!(setuid.file_type().is_file());
+    assert_eq!(
+        setuid.permissions().mode() & 0o7777,
+        0o755,
+        "setuid and setgid bits must be cleared on a placeholder"
+    );
+    let inside = std::fs::symlink_metadata(destination.join("usr/bin/private/inside")).unwrap();
+    assert!(inside.file_type().is_file());
+    assert_eq!(inside.permissions().mode() & 0o7777, 0o400);
+    let events = std::fs::symlink_metadata(destination.join("var/lib/events")).unwrap();
+    assert!(
+        events.file_type().is_fifo(),
+        "a FIFO manifest node must stay a FIFO in the preview"
+    );
+    assert_eq!(events.permissions().mode() & 0o7777, 0o640);
+}
+
+#[test]
+fn layout_skeleton_maps_special_and_hardlink_nodes_to_preflight_answers() {
+    let temp = tempfile::tempdir().unwrap();
+    let destination = temp.path().join("skeleton");
+    let captured = CapturedSelectedRoot {
+        generation: GenerationRootManifest {
+            version: GENERATION_ROOT_MANIFEST_VERSION,
+            root: directory_node(0o755),
+            entries: vec![
+                directory_entry("/usr", 0o755),
+                directory_entry("/usr/bin", 0o755),
+                // An executable block device must not become an executable
+                // regular file; mode 0o000 is the capability-free placeholder.
+                special_entry(
+                    "/usr/bin/device-tool",
+                    PayloadNodeKind::BlockDevice { major: 1, minor: 3 },
+                    libc::S_IFBLK | 0o755,
+                ),
+                special_entry(
+                    "/usr/bin/fifo-tool",
+                    PayloadNodeKind::Fifo,
+                    libc::S_IFIFO | 0o755,
+                ),
+                hardlink_primary_entry(
+                    "/usr/bin/hardlink-anchor",
+                    b"not materialized",
+                    0o755,
+                    "layout-skeleton-hardlink",
+                ),
+                special_entry(
+                    "/usr/bin/hardlink-link",
+                    PayloadNodeKind::Hardlink {
+                        target: "/usr/bin/hardlink-anchor".to_string(),
+                        identity: "layout-skeleton-hardlink".to_string(),
+                    },
+                    libc::S_IFREG | 0o755,
+                ),
+                special_entry(
+                    "/usr/bin/socket-tool",
+                    PayloadNodeKind::Socket,
+                    libc::S_IFSOCK | 0o666,
+                ),
+            ],
+        },
+        state: MutableStateManifest {
+            version: GENERATION_ROOT_MANIFEST_VERSION,
+            entries: Vec::new(),
+        },
+    };
+
+    materialize_selected_root_layout_skeleton(&captured, &destination).unwrap();
+
+    let device_path = destination.join("usr/bin/device-tool");
+    assert!(
+        !is_executable_file(&device_path),
+        "an executable device placeholder must not answer as an executable file"
+    );
+    assert!(std::fs::symlink_metadata(&device_path).unwrap().is_file());
+
+    let fifo_path = destination.join("usr/bin/fifo-tool");
+    assert!(
+        std::fs::symlink_metadata(&fifo_path)
+            .unwrap()
+            .file_type()
+            .is_fifo(),
+        "a FIFO manifest node must become a FIFO"
+    );
+    assert!(!is_executable_file(&fifo_path));
+
+    let socket_path = destination.join("usr/bin/socket-tool");
+    let socket_metadata = std::fs::symlink_metadata(&socket_path).unwrap();
+    assert!(
+        !socket_metadata.file_type().is_symlink(),
+        "a socket manifest node must exist as a non-symlink placeholder"
+    );
+    assert_eq!(
+        socket_metadata.permissions().mode() & 0o7777,
+        0o000,
+        "a socket placeholder must carry no permission bits"
+    );
+    assert!(!is_executable_file(&socket_path));
+
+    let hardlink_path = destination.join("usr/bin/hardlink-link");
+    assert!(std::fs::symlink_metadata(&hardlink_path).unwrap().is_file());
+    assert!(
+        is_executable_file(&hardlink_path),
+        "a hardlink to an executable regular anchor must be an executable placeholder"
+    );
 }
 
 #[test]
@@ -499,13 +711,17 @@ fn directory_entry(path: &str, permissions: u32) -> GenerationRootEntry {
 }
 
 fn regular_entry(path: &str, bytes: &[u8]) -> GenerationRootEntry {
+    regular_entry_with_mode(path, bytes, 0o644)
+}
+
+fn regular_entry_with_mode(path: &str, bytes: &[u8], permissions: u32) -> GenerationRootEntry {
     GenerationRootEntry {
         path: path.to_string(),
         node: resolved(PayloadNode {
             kind: PayloadNodeKind::Regular {
                 hardlink_identity: None,
             },
-            mode: libc::S_IFREG | 0o644,
+            mode: libc::S_IFREG | permissions,
             user: PayloadIdentity::Numeric {
                 id: u64::from(unsafe { libc::geteuid() }),
             },
@@ -524,6 +740,48 @@ fn regular_entry(path: &str, bytes: &[u8]) -> GenerationRootEntry {
 
 fn resolved(node: PayloadNode) -> ResolvedPayloadNode {
     ResolvedPayloadNode::from_numeric_source(node).unwrap()
+}
+
+/// A non-content node of any kind, used to exercise special-node placeholders.
+fn special_entry(path: &str, kind: PayloadNodeKind, mode: u32) -> GenerationRootEntry {
+    GenerationRootEntry {
+        path: path.to_string(),
+        node: resolved(PayloadNode {
+            kind,
+            mode,
+            user: PayloadIdentity::Numeric {
+                id: u64::from(unsafe { libc::geteuid() }),
+            },
+            group: PayloadIdentity::Numeric {
+                id: u64::from(unsafe { libc::getegid() }),
+            },
+            mtime: PayloadTimestamp::UNIX_EPOCH,
+            xattrs: BTreeMap::new(),
+        }),
+        content: None,
+    }
+}
+
+/// The regular primary of a hardlink group, named by `identity`.
+fn hardlink_primary_entry(
+    path: &str,
+    bytes: &[u8],
+    permissions: u32,
+    identity: &str,
+) -> GenerationRootEntry {
+    let mut entry = regular_entry_with_mode(path, bytes, permissions);
+    entry.node.source.kind = PayloadNodeKind::Regular {
+        hardlink_identity: Some(identity.to_string()),
+    };
+    entry
+}
+
+/// The exact answer the target-root lifecycle preflight predicate
+/// `scriptlet::native_command::is_executable_file` derives. The production
+/// predicate is private, so the test mirrors its typed filesystem test.
+fn is_executable_file(path: &Path) -> bool {
+    path.metadata()
+        .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
 }
 
 fn create_fifo(path: &Path) {

@@ -1,7 +1,11 @@
 // apps/conary-test/src/config/manifest.rs
 
+use crate::engine::assertions::{
+    JsonNumberToken, find_json_number_tokens, first_unsupported_number,
+};
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
+use serde_json::Value as JsonValue;
 use std::collections::{HashMap, HashSet};
 
 /// Top-level test manifest (one TOML file = one suite).
@@ -300,6 +304,13 @@ pub struct Assertion {
     /// Non-zero exit is silently accepted (no assertion failure).
     #[serde(default)]
     pub stdout_contains_any_if_success: Option<Vec<String>>,
+    /// Typed checks against stdout parsed as a single JSON document.
+    ///
+    /// Each entry sets exactly one expectation form: `equals` (a TOML value),
+    /// `equals_json` (a JSON text string for values TOML cannot express), or
+    /// `null = true`.
+    #[serde(default)]
+    pub stdout_json: Option<Vec<JsonAssertion>>,
     #[serde(default)]
     pub stderr_contains: Option<String>,
     #[serde(default)]
@@ -310,6 +321,272 @@ pub struct Assertion {
     pub file_not_exists: Option<String>,
     #[serde(default)]
     pub file_checksum: Option<FileChecksum>,
+}
+
+/// One typed check against stdout parsed as a single JSON document.
+///
+/// The expected value is supplied by exactly one of the TOML entry's `equals`,
+/// `equals_json`, or `null = true` fields.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(try_from = "RawJsonAssertion")]
+pub struct JsonAssertion {
+    /// RFC 6901 JSON pointer into the parsed stdout document ("" is the whole document).
+    pub pointer: String,
+    /// Expected value at the pointer.
+    pub expected: JsonExpectation,
+    /// Exact source token for every number in `expected`, keyed by its RFC 6901
+    /// pointer relative to the expected document root.
+    ///
+    /// `equals_json` numbers keep the token from the manifest text, so a
+    /// decimal is compared by its exact value rather than a rounded `f64`.
+    /// `equals` numbers come from TOML, which has no JSON token; they have no
+    /// entry here and the comparator uses the value's shortest round-trip
+    /// representation instead.
+    pub(crate) numbers: HashMap<String, String>,
+}
+
+/// Expected value for a `stdout_json` pointer.
+#[derive(Debug, Clone, PartialEq)]
+pub enum JsonExpectation {
+    /// Resolved value equals this JSON value.
+    ///
+    /// A number is compared by its exact decimal value; an integer token never
+    /// equals a decimal token, so `1` does not equal `1.0`.
+    Equals(JsonValue),
+    /// Resolved value is JSON null.
+    ///
+    /// TOML has no null literal and its integers are `i64`, so use
+    /// `equals_json` to express a nested null or an unsigned integer above
+    /// `i64::MAX`.
+    Null,
+}
+
+/// Raw TOML shape for a `stdout_json` entry, validated into a `JsonAssertion`.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawJsonAssertion {
+    pointer: String,
+    #[serde(default)]
+    equals: Option<toml::Value>,
+    /// A JSON value literal, parsed at load time.
+    ///
+    /// TOML integers are `i64` and TOML has no null literal, so `equals` cannot
+    /// express an unsigned integer above `i64::MAX` or a nested JSON null. The
+    /// string holds the JSON text verbatim. Every number token is kept exactly
+    /// from this text, so an integer outside `i64`/`u64` or any decimal is
+    /// compared by its exact decimal value rather than a rounded `f64`.
+    ///
+    /// A number whose magnitude exceeds finite `f64` range (for example a
+    /// 400-digit integer, or a value above `f64::MAX`) is not supported: the
+    /// default `serde_json` parser cannot represent it. The loader rejects it
+    /// with an error naming the pointer and the unsupported range rather than
+    /// serde_json's generic parse failure.
+    /// Mutually exclusive with `equals` and `null`.
+    #[serde(default)]
+    equals_json: Option<String>,
+    #[serde(default)]
+    null: Option<bool>,
+}
+
+/// Whether `input` contains a manifest `${NAME}` variable reference.
+///
+/// Delegates to the template grammar owner in `engine::variables`, so the
+/// marker, name charset, and expansion rules cannot drift apart. A `${` that
+/// does not form a well-formed reference still counts, so deferred validation
+/// continues to catch malformed or truncated templates.
+pub(crate) fn contains_variable_reference(input: &str) -> bool {
+    crate::engine::variables::contains_variable_reference(input)
+}
+
+/// Validate the syntax of an RFC 6901 JSON pointer.
+///
+/// The empty string addresses the whole document. Otherwise the pointer must
+/// begin with `/`, and every `~` must introduce the escape `~0` or `~1`. The
+/// `~` character carries no other meaning, so `${VAR}` references are plain
+/// characters for this check.
+///
+/// A pointer containing `${` is a template: the substituted value can change
+/// whether the pointer is valid. Load-time validation therefore skips it and
+/// the runner re-checks the expanded pointer before a test's first step.
+pub(crate) fn validate_json_pointer(pointer: &str) -> std::result::Result<(), String> {
+    if pointer.is_empty() {
+        return Ok(());
+    }
+    if !pointer.starts_with('/') {
+        return Err(format!(
+            "stdout_json pointer {pointer:?} is not an RFC 6901 JSON pointer: \
+             it must be empty or begin with '/'"
+        ));
+    }
+    let mut chars = pointer.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '~' {
+            match chars.next() {
+                Some('0' | '1') => {}
+                Some(escape) => {
+                    return Err(format!(
+                        "stdout_json pointer {pointer:?} is not an RFC 6901 JSON pointer: \
+                         '~' must be followed by '0' or '1', not {escape:?}"
+                    ));
+                }
+                None => {
+                    return Err(format!(
+                        "stdout_json pointer {pointer:?} is not an RFC 6901 JSON pointer: \
+                         a trailing '~' is not a valid escape"
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Split a validated RFC 6901 JSON pointer into its escaped reference tokens.
+///
+/// The root pointer (`""`) has no tokens; otherwise the leading `/` introduces
+/// the first token. Tokens keep their `~0`/`~1` escapes, which RFC 6901 spells
+/// uniquely, so token equality is pointer equality. Callers pass only pointers
+/// that already passed `validate_json_pointer`.
+pub(crate) fn json_pointer_tokens(pointer: &str) -> Vec<&str> {
+    let Some(rest) = pointer.strip_prefix('/') else {
+        return Vec::new();
+    };
+    rest.split('/').collect()
+}
+
+/// Whether two validated RFC 6901 pointers address overlapping values.
+///
+/// Pointers overlap when one equals the other or is a proper ancestor of it,
+/// because a check at a pointer fully determines the value at and under it.
+/// Comparing tokens rather than string prefixes keeps `/a` and `/ab` distinct.
+pub(crate) fn pointers_overlap(a: &str, b: &str) -> bool {
+    let a = json_pointer_tokens(a);
+    let b = json_pointer_tokens(b);
+    let shared = a.len().min(b.len());
+    a[..shared] == b[..shared]
+}
+
+impl TryFrom<RawJsonAssertion> for JsonAssertion {
+    type Error = String;
+
+    fn try_from(raw: RawJsonAssertion) -> std::result::Result<Self, Self::Error> {
+        // A templated pointer is validated after substitution, before the
+        // test's first step runs.
+        if !contains_variable_reference(&raw.pointer) {
+            validate_json_pointer(&raw.pointer)?;
+        }
+        let (expected, numbers) = match (raw.equals, raw.equals_json, raw.null) {
+            (Some(value), None, None) => {
+                let value = toml_to_json(&value).map_err(|error| error.to_string())?;
+                (JsonExpectation::Equals(value), HashMap::new())
+            }
+            (None, Some(text), None) => {
+                // Scan the raw text before `serde_json` so every number the
+                // exact comparator cannot canonicalize or hold in finite `f64`
+                // is reported as an explicit limitation. A walker error means
+                // the text is malformed; fall through so serde_json owns the
+                // syntax diagnostic.
+                let scanned = find_json_number_tokens(&text);
+                if let Ok(numbers) = &scanned
+                    && let Some(number) = first_unsupported_number(numbers)
+                {
+                    return Err(unsupported_equals_json_number(&raw.pointer, number));
+                }
+                let value = serde_json::from_str(&text)
+                    .map_err(|error| invalid_equals_json(&raw.pointer, &error))?;
+                let numbers = scanned
+                    .map_err(|error| invalid_equals_json_text(&raw.pointer, &error))?
+                    .into_iter()
+                    .map(|number| (number.pointer, number.token))
+                    .collect();
+                (JsonExpectation::Equals(value), numbers)
+            }
+            (None, None, Some(true)) => (JsonExpectation::Null, HashMap::new()),
+            (None, None, Some(false)) => {
+                return Err(
+                    "`null = false` is not an assertion; use `equals` or `equals_json`".to_string(),
+                );
+            }
+            (None, None, None) => {
+                return Err(
+                    "set exactly one of `equals`, `equals_json`, or `null = true`".to_string(),
+                );
+            }
+            _ => {
+                return Err("set exactly one of `equals`, `equals_json`, or `null`".to_string());
+            }
+        };
+        Ok(Self {
+            pointer: raw.pointer,
+            expected,
+            numbers,
+        })
+    }
+}
+
+/// Convert a TOML value into its JSON equivalent for typed comparison.
+///
+/// Datetimes and non-finite floats have no JSON representation and are
+/// rejected before a manifest is accepted.
+fn toml_to_json(value: &toml::Value) -> Result<JsonValue> {
+    Ok(match value {
+        toml::Value::String(value) => JsonValue::String(value.clone()),
+        toml::Value::Integer(value) => JsonValue::from(*value),
+        toml::Value::Float(value) => {
+            let number = serde_json::Number::from_f64(*value).ok_or_else(|| {
+                anyhow::anyhow!("non-finite float {value} cannot be represented in JSON")
+            })?;
+            JsonValue::Number(number)
+        }
+        toml::Value::Boolean(value) => JsonValue::Bool(*value),
+        toml::Value::Datetime(_) => {
+            bail!("datetime values are not supported in stdout_json")
+        }
+        toml::Value::Array(values) => JsonValue::Array(
+            values
+                .iter()
+                .map(toml_to_json)
+                .collect::<Result<Vec<_>>>()?,
+        ),
+        toml::Value::Table(table) => {
+            let mut object = serde_json::Map::new();
+            for (key, value) in table {
+                object.insert(key.clone(), toml_to_json(value)?);
+            }
+            JsonValue::Object(object)
+        }
+    })
+}
+
+/// Build the load error for `equals_json` text that is not valid JSON.
+fn invalid_equals_json(pointer: &str, error: &serde_json::Error) -> String {
+    format!("stdout_json pointer {pointer:?} has invalid `equals_json` JSON: {error}")
+}
+
+/// Build the load error for `equals_json` text containing a number the exact
+/// comparator does not support.
+///
+/// `serde_json` without `arbitrary_precision` cannot represent a magnitude
+/// beyond finite `f64`, and the comparator's `CanonicalDecimal::parse` also
+/// rejects an exponent that does not fit `i64`. Both cases fail the same
+/// supported-number predicate. Naming the number's pointer and the limitation
+/// makes the failure actionable.
+fn unsupported_equals_json_number(pointer: &str, number: &JsonNumberToken) -> String {
+    format!(
+        "stdout_json pointer {pointer:?} has an `equals_json` number at {:?} beyond the \
+         supported range: the exact comparator requires a JSON number whose exponent and \
+         magnitude fit finite f64, so an out-of-range exponent or magnitude is not supported",
+        number.pointer
+    )
+}
+
+/// Build the load error for `equals_json` text the number walker rejected.
+///
+/// The walker only reaches this path after `serde_json` accepted the same
+/// text, so this is an internal invariant failure rather than user input
+/// reaching a new state.
+fn invalid_equals_json_text(pointer: &str, error: &anyhow::Error) -> String {
+    format!("stdout_json pointer {pointer:?} has invalid `equals_json`: {error}")
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -323,6 +600,27 @@ pub struct ResourceConstraints {
     pub network_isolated: Option<bool>,
 }
 
+/// The manifest element that owns an assertion under validation.
+///
+/// The owner supplies only the error context; the validation rules are
+/// identical for a test step and a `suite.setup` step.
+#[derive(Debug, Clone, Copy)]
+enum AssertionOwner<'a> {
+    /// A step in `suite.setup`, by zero-based index.
+    SuiteSetup { step: usize },
+    /// A step in the named test, by zero-based index.
+    Test { id: &'a str, step: usize },
+}
+
+impl AssertionOwner<'_> {
+    fn context(&self) -> String {
+        match self {
+            Self::SuiteSetup { step } => format!("suite setup, step {step}"),
+            Self::Test { id, step } => format!("test {id}, step {step}"),
+        }
+    }
+}
+
 impl Assertion {
     /// Validate that the assertion has no conflicting fields.
     ///
@@ -330,7 +628,22 @@ impl Assertion {
     /// same value, or `stdout_contains` and `stdout_not_contains` with the
     /// same string, which would make the assertion impossible to satisfy.
     pub fn validate(&self, test_id: &str, step_index: usize) -> Result<()> {
-        let ctx = || format!("test {test_id}, step {step_index}");
+        self.validate_for(AssertionOwner::Test {
+            id: test_id,
+            step: step_index,
+        })
+    }
+
+    /// Validate an assertion attached to a `suite.setup` step.
+    ///
+    /// Suite setup assertions must obey the same load-time rules as test-step
+    /// assertions, so both route through `validate_for`.
+    pub(crate) fn validate_suite_setup(&self, step_index: usize) -> Result<()> {
+        self.validate_for(AssertionOwner::SuiteSetup { step: step_index })
+    }
+
+    fn validate_for(&self, owner: AssertionOwner<'_>) -> Result<()> {
+        let ctx = || owner.context();
 
         // exit_code vs exit_code_not
         if let (Some(code), Some(not_code)) = (self.exit_code, self.exit_code_not)
@@ -380,6 +693,32 @@ impl Assertion {
             );
         }
 
+        // A non-templated pointer determines the value at and under it, so a
+        // second check that equals or descends from it is redundant or
+        // contradictory. Compare RFC 6901 tokens rather than string prefixes,
+        // so `/ab` and `/a` do not overlap. Templated pointers are deferred to
+        // the expanded preflight, as the load-time pointer validation already
+        // does.
+        if let Some(checks) = &self.stdout_json {
+            let concrete: Vec<&str> = checks
+                .iter()
+                .map(|check| check.pointer.as_str())
+                .filter(|pointer| !contains_variable_reference(pointer))
+                .collect();
+            for (index, pointer) in concrete.iter().copied().enumerate() {
+                for other in concrete[index + 1..].iter().copied() {
+                    if pointers_overlap(pointer, other) {
+                        bail!(
+                            "{}: overlapping stdout_json pointers {pointer:?} and {other:?}: \
+                             a check on an ancestor already determines its descendants, \
+                             so the second check is redundant or contradictory",
+                            ctx()
+                        );
+                    }
+                }
+            }
+        }
+
         Ok(())
     }
 }
@@ -387,6 +726,23 @@ impl Assertion {
 impl TestManifest {
     /// Validate all assertions in the manifest for conflicting fields.
     pub fn validate(&self) -> Result<()> {
+        // Every `distro_overrides` inner key is a template variable name, so it
+        // must satisfy the same grammar `${NAME}` accepts. A key the tokenizer
+        // cannot reference would otherwise be merged into the variable map and
+        // never substituted.
+        for (distro, overrides) in &self.distro_overrides {
+            for key in overrides.keys() {
+                if !crate::engine::variables::is_template_name(key) {
+                    bail!(
+                        "manifest {:?}: distro {:?} distro_overrides key {:?} is not a valid \
+                         template name ([A-Za-z_][A-Za-z0-9_]*)",
+                        self.suite.name,
+                        distro,
+                        key
+                    );
+                }
+            }
+        }
         let corpus_tests = self
             .test
             .iter()
@@ -412,6 +768,13 @@ impl TestManifest {
                         "suite corpus coverage and case claims disagree: missing={missing:?}, undeclared={undeclared:?}"
                     );
                 }
+            }
+        }
+        // Suite setup assertions run before any test and must satisfy the
+        // same load-time rules; their owner label identifies them as setup.
+        for (i, step) in self.suite.setup.iter().enumerate() {
+            if let Some(ref assertion) = step.assert {
+                assertion.validate_suite_setup(i)?;
             }
         }
         for test in &self.test {

@@ -19,8 +19,8 @@ pub use composefs::build_erofs_image_from_root_manifest;
 pub use delta::{SELECTED_ROOT_MANIFEST_DELTA_VERSION, SelectedRootManifestDelta};
 pub use materialize::{
     apply_resolved_payload_metadata, materialize_captured_selected_root,
-    materialize_config_state_upper, materialize_generation_root, materialize_state_root,
-    overlay_payload_entries,
+    materialize_config_state_upper, materialize_generation_root,
+    materialize_selected_root_layout_skeleton, materialize_state_root, overlay_payload_entries,
 };
 pub use overlay::{
     MountedScratchTmpfs, MountedSelectedRootOverlay, OverlayHardlinkCopyUp,

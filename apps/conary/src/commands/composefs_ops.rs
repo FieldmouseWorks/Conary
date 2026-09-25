@@ -19,10 +19,41 @@ use rusqlite::Connection;
 use tracing::info;
 
 use crate::commands::generation::builder::enable_generation_rootfs_verity;
+use crate::commands::generation::publication::PublicationFailureKind;
 use conary_core::config_transaction::GenerationConfigTransaction;
 use conary_core::db::models::{GenerationPublication, SystemState};
 use conary_core::generation::root_manifest::CapturedSelectedRoot;
 use conary_core::runtime_root::ConaryRuntimeRoot;
+
+/// Typed build failure carried through `anyhow` so publication can select
+/// guidance without inspecting [`std::fmt::Display`] text.
+///
+/// The rendered `message` deliberately reproduces the prior
+/// `Failed to build EROFS generation: {error}` string verbatim.
+#[derive(Debug)]
+pub(crate) struct GenerationBuildFailure {
+    pub(crate) kind: PublicationFailureKind,
+    pub(crate) message: String,
+}
+
+impl std::fmt::Display for GenerationBuildFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for GenerationBuildFailure {}
+
+fn generation_build_failure(error: conary_core::Error) -> anyhow::Error {
+    let message = format!("Failed to build EROFS generation: {error}");
+    let kind = match error {
+        conary_core::Error::GenerationRootMissingBaseSystem { missing } => {
+            PublicationFailureKind::NoBaseSystem(missing)
+        }
+        _ => PublicationFailureKind::Other,
+    };
+    anyhow::Error::new(GenerationBuildFailure { kind, message })
+}
 
 /// Rebuild the EROFS generation from current DB state and publish it.
 ///
@@ -114,7 +145,7 @@ fn build_generation_for_input(
                 activation,
             ),
     }
-    .map_err(|e| anyhow::anyhow!("Failed to build EROFS generation: {e}"))?;
+    .map_err(generation_build_failure)?;
 
     info!(
         "Built generation {gen_num} ({} bytes, {} CAS objects)",

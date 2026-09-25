@@ -9,7 +9,7 @@ mod repository;
 mod verification;
 pub(crate) use verification::{verification_failure, write_verification_report};
 
-use crate::commands::generation::publication::PublicationOutcome;
+use crate::commands::generation::publication::{PublicationFailureKind, PublicationOutcome};
 use crate::live_host_safety::{LiveMutationClass, LiveMutationRefusal};
 
 #[derive(Debug, PartialEq, Eq)]
@@ -186,16 +186,26 @@ pub(crate) fn pending_publication(
     if !outcome.needs_publication {
         return None;
     }
+    let mut diagnostic =
+        Diagnostic::new("Package mutation committed, but generation publication is pending.")
+            .fact("Changeset", changeset_id.to_string());
+    if let Some(PublicationFailureKind::NoBaseSystem(missing)) = outcome.failure_kind {
+        diagnostic = diagnostic.fact(
+            "Reason",
+            crate::ui::publication::no_base_system_reason(missing),
+        );
+        for guidance in crate::ui::publication::no_base_system_guidance(missing) {
+            diagnostic = diagnostic.note(guidance);
+        }
+        return Some(diagnostic);
+    }
+    if let Some(reason) = &outcome.failure_reason {
+        diagnostic = diagnostic.fact("Reason", reason);
+    }
     let retry = outcome
         .retry_command
         .as_deref()
         .unwrap_or(crate::commands::generation::publication::DEFAULT_PUBLICATION_RETRY_COMMAND);
-    let mut diagnostic =
-        Diagnostic::new("Package mutation committed, but generation publication is pending.")
-            .fact("Changeset", changeset_id.to_string());
-    if let Some(reason) = &outcome.failure_reason {
-        diagnostic = diagnostic.fact("Reason", reason);
-    }
     Some(diagnostic.note(format!("Run: {retry}")))
 }
 
