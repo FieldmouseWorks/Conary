@@ -11,13 +11,6 @@ name = "Phase 4 Group B: Model, Collection, Derive"
 phase = 4
 requires_fixtures = ["conary-test-shell"]
 
-# Provides /bin/sh for the fixture's post-install hook (#1080).
-[[suite.setup]]
-conary = "ccs install ${FIXTURE_SHELL_CCS} --policy ${FIXTURE_CCS_POLICY} --sandbox always --yes"
-
-[suite.setup.assert]
-exit_code = 0
-
 # ==========================================================================
 # System Model Tests (T177-T183)
 # ==========================================================================

@@ -14,13 +14,6 @@ name = "Phase 2, Group A: Deep Install Flow (T38-T50)"
 phase = 2
 requires_fixtures = ["conary-test-shell"]
 
-# Provides /bin/sh for the fixture's post-install hook (#1080).
-[[suite.setup]]
-conary = "ccs install ${FIXTURE_SHELL_CCS} --policy ${FIXTURE_CCS_POLICY} --sandbox always --yes"
-
-[suite.setup.assert]
-exit_code = 0
-
 # --------------------------------------------------------------------------
 # T38: Install fixture v1
 # --------------------------------------------------------------------------

@@ -531,6 +531,7 @@ fn run_single_distro(
         // closed on that path too: a run left at its `pending` default reads as
         // still in flight forever.
         let manifest_outcome: Result<()> = async {
+            let mut installed_fixtures = conary_test::engine::runner::InstalledFixtures::default();
             for manifest_path in &manifest_paths {
                 let manifest =
                     conary_test::config::load_manifest(manifest_path).with_context(|| {
@@ -558,6 +559,7 @@ fn run_single_distro(
                         None,
                         None,
                         remi_run.as_ref().map(|run| run.context()),
+                        &mut installed_fixtures,
                     )
                     .await?;
                 aggregate_suite.expect_corpus_cases(suite.corpus_expected());
@@ -645,6 +647,7 @@ async fn run_qemu_only_suite(
 
     // Fallible loop, closed run on both exits — see the container path.
     let manifest_outcome: Result<()> = async {
+        let mut installed_fixtures = conary_test::engine::runner::InstalledFixtures::default();
         for manifest_path in manifest_paths {
             let manifest = conary_test::config::load_manifest(manifest_path)
                 .with_context(|| format!("failed to load manifest: {}", manifest_path.display()))?;
@@ -660,6 +663,7 @@ async fn run_qemu_only_suite(
                     None,
                     None,
                     remi_run.as_ref().map(|run| run.context()),
+                    &mut installed_fixtures,
                 )
                 .await?;
             aggregate_suite.expect_corpus_cases(suite.corpus_expected());

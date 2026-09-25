@@ -379,6 +379,13 @@ the key explicitly, and every install or verify passes one of those policies.
 This authority is public test data and must never authorize release,
 repository, federation, update, or production packages.
 
+Suites opt into a static fixture with `[suite] requires_fixtures` in their
+manifest. The harness builds the declared fixture into the image and installs
+it into the test container once per container, before the first manifest that
+declares it runs. A `suite.setup` step must not install a declared fixture: a
+phase-wide run reuses one container and database, so a second identical install
+would abort the phase.
+
 Rotate and rebuild the complete CCS fixture corpus together:
 
 ```bash

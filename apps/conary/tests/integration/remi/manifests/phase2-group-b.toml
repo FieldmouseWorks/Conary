@@ -15,13 +15,6 @@ name = "Phase 2, Group B: Generation Lifecycle (T51-T57)"
 phase = 2
 requires_fixtures = ["conary-test-shell"]
 
-# Provides /bin/sh for the fixture's post-install hook (#1080).
-[[suite.setup]]
-conary = "ccs install ${FIXTURE_SHELL_CCS} --policy ${FIXTURE_CCS_POLICY} --sandbox always --yes"
-
-[suite.setup.assert]
-exit_code = 0
-
 # Setup: ensure fixture v1 is installed for generation tests
 [[suite.setup]]
 conary = "ccs install ${FIXTURE_V1_CCS} --policy ${FIXTURE_CCS_POLICY} --sandbox always --yes"

@@ -1,16 +1,19 @@
 // apps/conary-test/src/engine/runner.rs
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use anyhow::{Result, bail};
+use thiserror::Error;
 use tokio::time::Instant;
 use tracing::{debug, info, warn};
 
 use crate::config::distro::GlobalConfig;
-use crate::config::manifest::{Assertion, ResourceConstraints, TestDef, TestManifest};
+use crate::config::manifest::{
+    Assertion, ResourceConstraints, StaticFixture, TestDef, TestManifest,
+};
 use crate::container::backend::{ContainerBackend, ContainerConfig, ContainerId, ExecResult};
 use crate::engine::assertions::evaluate_assertion;
 use crate::engine::container_coordinator::ContainerCoordinator;
@@ -32,6 +35,49 @@ pub struct RemiStreamCtx {
     pub remi_run_id: i64,
     pub client: Arc<RemiClient>,
     pub wal: Option<Arc<tokio::sync::Mutex<Wal>>>,
+}
+
+/// The static fixtures already installed into one test container.
+///
+/// `requires_fixtures` is the only installation authority, so the harness owns
+/// installation rather than a suite setup step: the per-distro run keeps one
+/// value and threads it through every manifest executed against the same
+/// container. A fixture two manifests declare is installed by the first one.
+#[derive(Debug, Default)]
+pub struct InstalledFixtures {
+    installed: BTreeSet<StaticFixture>,
+}
+
+impl InstalledFixtures {
+    fn contains(&self, fixture: StaticFixture) -> bool {
+        self.installed.contains(&fixture)
+    }
+
+    fn record(&mut self, fixture: StaticFixture) {
+        self.installed.insert(fixture);
+    }
+}
+
+/// A declared static fixture could not be installed into the test container.
+#[derive(Debug, Error)]
+pub enum FixtureInstallError {
+    #[error(
+        "failed to run the install for declared fixture `{}`: {message}",
+        fixture.declaration()
+    )]
+    Exec {
+        fixture: StaticFixture,
+        message: String,
+    },
+    #[error(
+        "installing declared fixture `{}` failed with exit code {exit_code}: {stderr}",
+        fixture.declaration()
+    )]
+    NonZeroExit {
+        fixture: StaticFixture,
+        exit_code: i32,
+        stderr: String,
+    },
 }
 
 /// Executes tests from a manifest against a container.
@@ -140,6 +186,7 @@ impl TestRunner {
         container_id: &ContainerId,
         base_container_config: Option<&ContainerConfig>,
     ) -> Result<TestSuite> {
+        let mut installed_fixtures = InstalledFixtures::default();
         self.run_with_cancel(
             manifest,
             backend,
@@ -148,6 +195,7 @@ impl TestRunner {
             None,
             None,
             None,
+            &mut installed_fixtures,
         )
         .await
     }
@@ -155,6 +203,13 @@ impl TestRunner {
     /// Run all tests with an optional cancellation flag, suite-level timeout
     /// enforcement, optional broadcast channel for live event streaming, and
     /// optional Remi streaming context for pushing per-test results.
+    ///
+    /// `installed_fixtures` records the declared fixtures already present in
+    /// this container. The per-distro run owns one value per container and
+    /// threads it through every manifest, so a fixture two manifests declare is
+    /// installed exactly once. A fixture the manifest declares and the record
+    /// lacks is installed before suite setup runs, so setup steps that need the
+    /// provider find it.
     ///
     /// When `event_tx` is `Some((run_id, sender))`, the runner emits
     /// `TestEvent` variants to the broadcast channel as tests execute.
@@ -171,8 +226,11 @@ impl TestRunner {
         cancel_flag: Option<Arc<AtomicBool>>,
         event_tx: Option<(u64, tokio::sync::broadcast::Sender<TestEvent>)>,
         remi_ctx: Option<&RemiStreamCtx>,
+        installed_fixtures: &mut InstalledFixtures,
     ) -> Result<TestSuite> {
         self.load_manifest_vars(manifest);
+        self.install_declared_fixtures(manifest, backend, container_id, installed_fixtures)
+            .await?;
 
         if let Some(mock_server) = &manifest.suite.mock_server {
             start_mock_server(backend, container_id, mock_server).await?;
@@ -477,6 +535,69 @@ impl TestRunner {
         }
     }
 
+    /// Install the declared fixtures this container does not yet have.
+    ///
+    /// Fixtures install in [`StaticFixture::ALL`] so a provider is present
+    /// before a dependent fixture. `installed` is updated in place, so a
+    /// fixture is installed once per container no matter how many manifests
+    /// declare it.
+    async fn install_declared_fixtures(
+        &self,
+        manifest: &TestManifest,
+        backend: &dyn ContainerBackend,
+        container_id: &ContainerId,
+        installed: &mut InstalledFixtures,
+    ) -> Result<()> {
+        for &fixture in StaticFixture::ALL {
+            if !manifest.suite.requires_fixtures.contains(&fixture) || installed.contains(fixture) {
+                continue;
+            }
+            self.install_fixture(fixture, backend, container_id).await?;
+            installed.record(fixture);
+        }
+        Ok(())
+    }
+
+    /// Install one declared fixture through the same exec path suite setup uses.
+    async fn install_fixture(
+        &self,
+        fixture: StaticFixture,
+        backend: &dyn ContainerBackend,
+        container_id: &ContainerId,
+    ) -> std::result::Result<(), FixtureInstallError> {
+        let ctx = ExecutionContext {
+            conary_bin: &self.config.paths.conary_bin,
+            db_path: &self.config.paths.db,
+        };
+        let args = format!(
+            "ccs install {} --policy ${{FIXTURE_CCS_POLICY}} --sandbox always --yes",
+            fixture.install_variable()
+        );
+        let action = StepAction::Conary(variables::expand_variables(&args, &self.vars));
+        let result = execute_step(
+            &action,
+            backend,
+            container_id,
+            &ctx,
+            Duration::from_secs(300),
+        )
+        .await
+        .map_err(|err| FixtureInstallError::Exec {
+            fixture,
+            message: err.to_string(),
+        })?;
+
+        if result.exit_code != 0 {
+            return Err(FixtureInstallError::NonZeroExit {
+                fixture,
+                exit_code: result.exit_code,
+                stderr: result.stderr.trim().to_string(),
+            });
+        }
+
+        Ok(())
+    }
+
     async fn run_setup_steps(
         &self,
         manifest: &TestManifest,
@@ -598,6 +719,17 @@ impl TestRunner {
                 manifest.suite.phase > 1,
                 backend,
                 &container_id,
+            )
+            .await?;
+            // Each disposable container starts empty, so the declared fixtures
+            // must be installed here rather than relying on the base container's
+            // install. A fresh record keeps the install scoped to this container.
+            let mut installed_fixtures = InstalledFixtures::default();
+            self.install_declared_fixtures(
+                manifest,
+                backend,
+                &container_id,
+                &mut installed_fixtures,
             )
             .await?;
             if let Some(mock_server) = &manifest.suite.mock_server {

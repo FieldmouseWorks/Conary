@@ -692,24 +692,22 @@ fn test_load_phase3_group_m_manifest_installs_local_fixture_ccs() {
     }
 }
 
-/// The typed fixture declaration and the suite setup that installs it are two
-/// views of one requirement.
+/// `requires_fixtures` is the only authority for fixture installation.
 ///
-/// Image staging mutates the image from the declaration alone, so the guard
-/// proves both stay in step: a suite that declares a fixture installs it, and a
-/// suite that installs it declares it. The harness runs suite setup through
-/// `sh -c`, so the install step is matched by exact shell argv equality rather
-/// than by substring, which is what a quoted `"${FIXTURE_SHELL_CCS}"` would
-/// otherwise defeat.
+/// The harness installs each declared fixture once per container, before the
+/// first manifest that declares it runs. A suite setup step must not install
+/// one: the old setup-step mechanism aborted a phase-wide run when a second
+/// manifest re-installed an identical version. The guard compares exact shell
+/// argv (what the harness's `sh -c` sees) against each fixture's typed install
+/// variable, so a quoted `"${FIXTURE_SHELL_CCS}"` cannot slip through.
 #[test]
-fn required_fixtures_match_suite_setup() {
+fn no_suite_setup_installs_a_declared_fixture() {
     let manifest_dir = remi_manifest_path("");
     if !manifest_dir.exists() {
         return;
     }
 
     let mut declaring = 0usize;
-    let mut installing = 0usize;
     for entry in std::fs::read_dir(&manifest_dir).expect("read manifests directory") {
         let path = entry.expect("manifest directory entry").path();
         if path.extension().and_then(|extension| extension.to_str()) != Some("toml") {
@@ -717,35 +715,30 @@ fn required_fixtures_match_suite_setup() {
         }
 
         let manifest = load_manifest(&path).expect("load manifest");
+        declaring += manifest.suite.requires_fixtures.len();
+        // A declared fixture must not also be installed by suite setup.
         for fixture in &manifest.suite.requires_fixtures {
             assert!(
-                setup_installs_fixture(&manifest, *fixture),
-                "{} declares {:?} but no suite setup installs {}",
+                !setup_installs_fixture(&manifest, *fixture),
+                "{} declares {} but also installs it in suite.setup; the harness installs declared fixtures",
                 path.display(),
-                fixture,
-                fixture.install_variable()
+                fixture.declaration()
             );
-            declaring += 1;
         }
 
-        if setup_installs_fixture(&manifest, StaticFixture::Shell) {
-            assert!(
-                manifest
-                    .suite
-                    .requires_fixtures
-                    .contains(&StaticFixture::Shell),
-                "{} installs {} in suite setup but does not declare requires_fixtures = [\"{}\"]",
-                path.display(),
-                StaticFixture::Shell.install_variable(),
-                StaticFixture::Shell.declaration()
-            );
-            installing += 1;
-        }
+        // A setup step must not install a closed-enum fixture even when the
+        // declaration is missing: installation authority is the declaration.
+        assert!(
+            !setup_installs_fixture(&manifest, StaticFixture::Shell),
+            "{} installs {} in suite.setup; declare it in requires_fixtures instead",
+            path.display(),
+            StaticFixture::Shell.install_variable()
+        );
     }
 
     assert!(
-        declaring > 0 && installing > 0,
-        "expected at least one manifest to declare and install the shell fixture"
+        declaring > 0,
+        "expected at least one manifest to declare the shell fixture"
     );
 }
 

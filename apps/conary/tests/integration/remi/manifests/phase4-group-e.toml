@@ -16,13 +16,6 @@ name = "Phase 4 Group E: Cross-Distro Compatibility"
 phase = 4
 requires_fixtures = ["conary-test-shell"]
 
-# Provides /bin/sh for the fixture's post-install hook (#1080).
-[[suite.setup]]
-conary = "ccs install ${FIXTURE_SHELL_CCS} --policy ${FIXTURE_CCS_POLICY} --sandbox always --yes"
-
-[suite.setup.assert]
-exit_code = 0
-
 [distro_overrides.fedora44]
 distro_repo = "remi"
 # A package whose name differs across distros
