@@ -82,10 +82,15 @@ pub(super) struct PassContext<'a> {
 /// selection keeps is restored and re-solved, so a stale removal never survives
 /// into the report.
 ///
+/// A pass that conflicts while troves are hidden restores them and re-solves:
+/// the hidden removals came from an earlier selection, and the conflict may be
+/// theirs rather than the transaction's.
+///
 /// Termination: every non-final pass roots a newly violated group, admits a
-/// candidate, or grows the hidden set; restoring a stale hidden trove shrinks
-/// it. Both are bounded by the explicit pass counter, which is a defensive
-/// bound rather than the primary progress measure.
+/// candidate, or grows the hidden set; restoring a stale hidden trove, or all
+/// of them after a conflict, shrinks it. Both are bounded by the explicit pass
+/// counter, which is a defensive bound rather than the primary progress
+/// measure.
 pub(super) fn solve_validated_groups_to_fixed_point(
     context: &PassContext<'_>,
     validation: &mut EndStateValidation,
@@ -116,6 +121,19 @@ pub(super) fn solve_validated_groups_to_fixed_point(
         )?;
 
         let (install_order, remove_order, replaced, selected) = match pass {
+            // Hidden troves are speculative: an earlier pass's selection
+            // removed them, and a different selection may keep them. Restore
+            // them and re-solve before declaring the transaction
+            // unsatisfiable. Every loaded remover is exclusive with the troves
+            // it removes, so the restored pass cannot both select a remover and
+            // rely on what it removes.
+            ExpressionPass::Conflict(_)
+                if !hidden_trove_ids.is_empty() && passes < validation.max_passes =>
+            {
+                hidden_trove_ids.clear();
+                include_installed_roots = true;
+                continue;
+            }
             ExpressionPass::Conflict(message) => {
                 return unsatisfiable_pass_resolution(
                     context,

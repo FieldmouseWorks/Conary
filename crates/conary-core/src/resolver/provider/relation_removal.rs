@@ -15,8 +15,11 @@ use crate::repository::package_relation::{
     PackageRelationCandidate, PackageRelationProvide, relation_matches_candidate,
 };
 
+use resolvo::SolvableId;
+
 use super::ConaryProvider;
 use super::types::{ConaryConstraint, SolverExpression, SolverRelation};
+use crate::resolver::identity::PackageIdentity;
 
 /// Whether one `relation` declared by `replacement_name` relation-removes the
 /// installed candidate `existing`.
@@ -55,21 +58,8 @@ impl ConaryProvider<'_> {
                 "forced installed trove {trove_id} is not a loaded solver candidate"
             ))
         })?;
-        let provides = existing
-            .provided_capabilities
-            .iter()
-            .map(|capability| PackageRelationProvide {
-                name: &capability.name,
-                version: capability.version.as_deref(),
-                version_scheme: capability.version_scheme,
-            })
-            .collect::<Vec<_>>();
-        let candidate = PackageRelationCandidate {
-            name: &existing.name,
-            version: &existing.version,
-            version_scheme: existing.version_scheme,
-            provides: &provides,
-        };
+        let provides = relation_provides(existing);
+        let candidate = relation_candidate(existing, &provides);
 
         let mut alternatives = vec![SolverExpression::atom(
             existing.name.clone(),
@@ -115,5 +105,68 @@ impl ConaryProvider<'_> {
             return Ok(alternatives.pop().expect("one forced-root alternative"));
         }
         Ok(SolverExpression::Or(alternatives))
+    }
+
+    /// The loaded installed solvables that one non-installed candidate
+    /// relation-removes.
+    ///
+    /// This is the predicate `forced_installed_root` evaluates, so a remover's
+    /// compiled exclusion of the troves it removes and each forced root's
+    /// disjunction always name the same remover/removed pairs.
+    pub(super) fn relation_removed_installed(
+        &self,
+        remover: SolvableId,
+    ) -> Result<Vec<SolvableId>> {
+        let replacement = self.get_solvable(remover);
+        if replacement.installed_trove_id.is_some() {
+            return Ok(Vec::new());
+        }
+        let relations = self.get_relation_list(remover)?;
+        if !relations
+            .iter()
+            .any(|relation| relation.relation.kind.removes_matching_packages())
+        {
+            return Ok(Vec::new());
+        }
+        let mut removed = Vec::new();
+        for &installed_id in self.solvable_ids() {
+            let existing = self.get_solvable(installed_id);
+            if existing.installed_trove_id.is_none() {
+                continue;
+            }
+            let provides = relation_provides(existing);
+            let candidate = relation_candidate(existing, &provides);
+            for relation in relations {
+                if relation_removes_candidate(&replacement.name, &candidate, relation)? {
+                    removed.push(installed_id);
+                    break;
+                }
+            }
+        }
+        Ok(removed)
+    }
+}
+
+fn relation_provides(package: &PackageIdentity) -> Vec<PackageRelationProvide<'_>> {
+    package
+        .provided_capabilities
+        .iter()
+        .map(|capability| PackageRelationProvide {
+            name: &capability.name,
+            version: capability.version.as_deref(),
+            version_scheme: capability.version_scheme,
+        })
+        .collect()
+}
+
+fn relation_candidate<'a>(
+    package: &'a PackageIdentity,
+    provides: &'a [PackageRelationProvide<'a>],
+) -> PackageRelationCandidate<'a> {
+    PackageRelationCandidate {
+        name: &package.name,
+        version: &package.version,
+        version_scheme: package.version_scheme,
+        provides,
     }
 }

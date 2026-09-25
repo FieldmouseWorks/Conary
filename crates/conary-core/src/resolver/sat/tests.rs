@@ -1514,6 +1514,8 @@ mod relations;
 mod root_requirements;
 #[path = "tests/slot_replacement.rs"]
 mod slot_replacement;
+#[path = "tests/speculative_removal.rs"]
+mod speculative_removal;
 #[path = "tests/strict_installed.rs"]
 mod strict_installed;
 #[path = "tests/virtual_conditions.rs"]

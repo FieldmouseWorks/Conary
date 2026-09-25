@@ -17,13 +17,16 @@
 //! - the replacer is exclusive with every other same-name solvable in its slot,
 //!   so the solver never keeps the predecessor beside its replacement;
 //! - a forced installed root yields to its replacers, as it yields to a
-//!   relation remover.
+//!   relation remover;
+//! - a relation remover is likewise exclusive with every installed trove it
+//!   removes, so a pass never both selects an obsoleter and relies on what it
+//!   obsoletes.
 //!
 //! An ambiguous slot (several installed packages of the name share it) has no
 //! predecessor, so no candidate may replace a trove the installer could not
 //! identify exactly.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use resolvo::{DenseIndex, SolvableId, VersionSetId};
 
@@ -38,8 +41,8 @@ use super::types::ConaryConstraint;
 /// facts.
 #[derive(Debug, Default)]
 pub(crate) struct SurvivingInstalledLock {
-    /// Per replacing repository solvable, the constraint that forbids every
-    /// other same-name solvable in its install slot.
+    /// Per replacing or relation-removing solvable, the constraints that
+    /// forbid what it replaces or removes.
     replacement_constrains: HashMap<u32, Vec<VersionSetId>>,
 }
 
@@ -105,38 +108,62 @@ impl ConaryProvider<'_> {
             .collect()
     }
 
-    /// Compile each replacer's exclusion of the other same-name solvables in its
-    /// install slot. Called once the candidate universe is loaded.
+    /// Compile each replacing candidate's exclusions. Called once the candidate
+    /// universe is loaded.
     ///
-    /// resolvo forbids every candidate of the name the constraint does not
-    /// match, so the allowed set is the exact pool `get_candidates` draws from
-    /// minus the replacer's same-slot rivals; providers and canonical
-    /// equivalents under other names stay allowed.
-    pub(crate) fn compile_slot_replacement_constrains(&mut self) -> Result<()> {
+    /// A slot replacer excludes the other same-name solvables in its install
+    /// slot, and a relation remover excludes every installed trove it
+    /// relation-removes: neither may coexist with what it replaces in one end
+    /// state. resolvo forbids every candidate of a constrained name the
+    /// constraint does not match, so each allowed set is the exact pool
+    /// `get_candidates` draws from minus the excluded solvables; providers and
+    /// canonical equivalents under other names stay allowed.
+    pub(crate) fn compile_replacement_constrains(&mut self) -> Result<()> {
         if self.surviving_installed_lock.is_none() {
             return Ok(());
         }
         let mut constrains = HashMap::new();
         for candidate in self.solvable_ids.clone() {
-            if self.slot_predecessor(candidate).is_none() {
+            let package = self.solvables[candidate.to_index()].clone();
+            let mut excluded: BTreeMap<String, BTreeSet<SolvableId>> = BTreeMap::new();
+            if self.slot_predecessor(candidate).is_some() {
+                let rivals = self.name_to_solvable_ids[&package.name]
+                    .iter()
+                    .copied()
+                    .filter(|&other| {
+                        other != candidate
+                            && self.share_install_slot(&self.solvables[other.to_index()], &package)
+                    })
+                    .collect::<Vec<_>>();
+                excluded
+                    .entry(package.name.clone())
+                    .or_default()
+                    .extend(rivals);
+            }
+            for removed in self.relation_removed_installed(candidate)? {
+                excluded
+                    .entry(self.solvables[removed.to_index()].name.clone())
+                    .or_default()
+                    .insert(removed);
+            }
+            if excluded.is_empty() {
                 continue;
             }
-            let package = self.solvables[candidate.to_index()].clone();
-            let name_id = self.intern_name(&package.name)?;
-            let allowed = self
-                .candidates_for_name(name_id)
-                .into_iter()
-                .filter(|&other| {
-                    let rival = &self.solvables[other.to_index()];
-                    other == candidate
-                        || rival.name != package.name
-                        || !self.share_install_slot(rival, &package)
-                })
-                .map(SolvableId::into_raw)
-                .collect::<BTreeSet<_>>();
-            let version_set =
-                self.intern_conary_version_set(name_id, ConaryConstraint::ExactSolvables(allowed))?;
-            constrains.insert(candidate.into_raw(), vec![version_set]);
+            let mut version_sets = Vec::new();
+            for (name, excluded) in excluded {
+                let name_id = self.intern_name(&name)?;
+                let allowed = self
+                    .candidates_for_name(name_id)
+                    .into_iter()
+                    .filter(|other| !excluded.contains(other))
+                    .map(SolvableId::into_raw)
+                    .collect::<BTreeSet<_>>();
+                version_sets.push(self.intern_conary_version_set(
+                    name_id,
+                    ConaryConstraint::ExactSolvables(allowed),
+                )?);
+            }
+            constrains.insert(candidate.into_raw(), version_sets);
         }
         if let Some(lock) = self.surviving_installed_lock.as_mut() {
             lock.replacement_constrains = constrains;
@@ -144,8 +171,9 @@ impl ConaryProvider<'_> {
         Ok(())
     }
 
-    /// The slot exclusion a selected solvable imposes, if it is a replacer.
-    pub(super) fn slot_replacement_constrains(&self, solvable: SolvableId) -> Vec<VersionSetId> {
+    /// The exclusions a selected solvable imposes, if it replaces or removes
+    /// an installed package.
+    pub(super) fn replacement_constrains(&self, solvable: SolvableId) -> Vec<VersionSetId> {
         self.surviving_installed_lock
             .as_ref()
             .and_then(|lock| lock.replacement_constrains.get(&solvable.into_raw()))

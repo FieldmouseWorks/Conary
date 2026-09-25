@@ -440,7 +440,7 @@ impl DependencyProvider for ConaryProvider<'_> {
         match self.compiled_dependencies.get(&solvable.into_raw()) {
             Some(requirements) => Dependencies::Known(KnownDependencies {
                 requirements: requirements.clone(),
-                constrains: self.slot_replacement_constrains(solvable),
+                constrains: self.replacement_constrains(solvable),
             }),
             None => Dependencies::Unknown(self.missing_dependency_authority),
         }

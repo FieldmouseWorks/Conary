@@ -26,7 +26,7 @@ fn slot_replacer_excludes_only_its_install_slot_predecessor() {
         .unwrap();
     provider.lock_surviving_installed_candidates();
     provider.intern_all_dependency_version_sets().unwrap();
-    provider.compile_slot_replacement_constrains().unwrap();
+    provider.compile_replacement_constrains().unwrap();
 
     // The repository package shares only the native variant's install slot, so
     // it is that variant's exact replacer and the name must admit both
