@@ -11,8 +11,9 @@ use crate::commands::generation::selected_root::{
 };
 use crate::commands::test_helpers::create_active_test_generation;
 use conary_core::db::models::{
-    FileEntry, GenerationPublication, GenerationPublicationPhase, GenerationPublicationStatus,
-    InstallSource, SystemState, Trove, TroveType,
+    CreateTrySession, FileEntry, GenerationPublication, GenerationPublicationPhase,
+    GenerationPublicationStatus, InstallSource, SystemState, Trove, TroveType, TrySession,
+    TrySessionMode,
 };
 use conary_core::generation::root_manifest::{
     GENERATION_ROOT_MANIFEST_VERSION, GenerationRootEntry, GenerationRootManifest,
@@ -915,6 +916,54 @@ fn root_inspect_accepts_a_stable_current_generation_without_state_rows() {
     assert_eq!(
         json["sha256"],
         conary_core::hash::sha256(b"test init binary")
+    );
+}
+
+/// An activated try session builds its generation from the copied try database
+/// and publishes it as the live `/current`, while the live database has no
+/// state row or terminal publication for it. That state-less link is an
+/// uncommitted trial, not boot recovery: inspection must refuse with the typed
+/// try-session error instead of reporting the trial payload as committed.
+#[test]
+fn root_inspect_refuses_a_state_less_current_generation_claimed_by_a_try_session() {
+    let temp = tempfile::tempdir().unwrap();
+    let db_path = temp.path().join("conary.db");
+    conary_core::db::init(&db_path).unwrap();
+    create_state_less_test_generation(&db_path, 1);
+    let conn = conary_core::db::open(&db_path).unwrap();
+    let runtime_root = ConaryRuntimeRoot::from_db_path(&db_path);
+
+    // Positive control: with no try session the same state-less generation is
+    // the accepted boot-recovery baseline.
+    let recovered = root_inspect_data(&conn, &runtime_root, "/sbin/init").unwrap();
+    assert_eq!(recovered.source, RootInspectSource::CurrentGeneration);
+    assert!(recovered.recovered_without_state);
+
+    // Record an activated try session that owns that exact generation.
+    let session = TrySession::create_active(
+        &conn,
+        CreateTrySession {
+            id: "try-fixture",
+            package_path: "/fixture/package.ccs",
+            package_signing_key: "fixture-signing-key",
+            package_name: Some("try-fixture"),
+            package_version: Some("1.0.0"),
+            previous_generation_id: None,
+            mode: TrySessionMode::Activated,
+            work_dir: "/fixture/work",
+        },
+    )
+    .unwrap();
+    session.set_try_generation(&conn, 1).unwrap();
+
+    let error = root_inspect_data(&conn, &runtime_root, "/sbin/init")
+        .expect_err("a try session's state-less /current is not recovery");
+    let typed = error
+        .downcast_ref::<SelectedRootBaselineError>()
+        .expect("the refusal must be the typed baseline error");
+    assert!(
+        matches!(typed, SelectedRootBaselineError::TrySessionOwnsCurrent),
+        "the refusal must come from the try-session rule, got {typed}"
     );
 }
 

@@ -16,7 +16,7 @@ pub(crate) use publication_authority::{
 
 use crate::commands::{LiveRootFile, LiveRootStats, LiveRootTransaction};
 use anyhow::{Context, Result, bail};
-use conary_core::db::models::{GenerationPublication, SystemState, Trove};
+use conary_core::db::models::{GenerationPublication, SystemState, Trove, TrySession};
 use conary_core::filesystem::CasStore;
 use conary_core::generation::artifact::GenerationArtifact;
 use conary_core::generation::composefs::ComposefsRuntimeUnavailable;
@@ -593,6 +593,10 @@ pub(crate) enum SelectedRootBaselineError {
     /// authority.
     #[error("the current generation changed during inspection; retry")]
     CurrentGenerationChanged,
+    /// An active or orphaned try session owns the state-less `/current`
+    /// generation; the link is an uncommitted trial, not recovered.
+    #[error("a try session owns uncommitted /current; run conary try keep or conary try rollback")]
+    TrySessionOwnsCurrent,
 }
 
 /// One attempt at the baseline, or the typed signal to re-pin and retry.
@@ -610,32 +614,24 @@ enum BaselineAttempt {
 /// The source is the typed selection result, not a recomputation from package
 /// rows, so reporting and preparation cannot disagree about the authority.
 ///
-/// Selection and collection run inside one deferred read transaction. Without
-/// it, a concurrent install that commits between the selecting query and the
-/// collecting queries can produce a source that disagrees with its capture:
-/// `NoCommittedRoot` with a nonempty capture, or `DatabaseProjection` with an
-/// empty one. WAL mode pins one snapshot at the transaction's first read.
+/// Selection and collection run inside one deferred read transaction; without
+/// it a concurrent install that commits between the selecting query and the
+/// collecting reads can produce a source that disagrees with its capture
+/// (`NoCommittedRoot` with a nonempty capture, or `DatabaseProjection` with an
+/// empty one). WAL mode pins one snapshot at the transaction's first read.
 ///
-/// `/current` is a filesystem link, so the database snapshot alone cannot pin
-/// the generation it names. A publication that swaps `/current` after the
-/// snapshot began would otherwise pair the new artifact with a database view
-/// that predates the generation's state. The current-generation branch
-/// therefore verifies inside the transaction that the snapshot records the
-/// generation's publication row or its state snapshot, and the whole selection
-/// is retried in a fresh snapshot (at most
-/// [`MAX_CURRENT_GENERATION_ATTEMPTS`] times) when it does not. Exhausting the
-/// attempts is a typed
+/// `/current` is a filesystem link the database snapshot cannot pin. A
+/// publication commits its state and terminal publication rows before swapping
+/// the link, so the current-generation branch verifies both are recorded for
+/// the selected generation and retries the whole selection in a fresh snapshot
+/// (at most [`MAX_CURRENT_GENERATION_ATTEMPTS`] times) when they are not.
+/// Exhausting the attempts is a typed
 /// [`SelectedRootBaselineError::CurrentGenerationChanged`].
 ///
 /// A stable `/current` link to a generation the snapshot never recorded is a
-/// recovered state-less target, not a race; otherwise the retry and typed
-/// refusal below still apply.
-///
-/// Artifact- and pending-snapshot-backed baselines are read straight from their
-/// typed authorities and need no temporary write access. Only the database
-/// projection creates a private [`tempfile::TempDir`] for the empty
-/// materialization stand-in, and the returned [`CapturedSelectedRoot`] holds no
-/// path into it.
+/// recovered state-less target only when no active or orphaned try session
+/// claims it; an uncommitted try-session trial refuses with
+/// [`SelectedRootBaselineError::TrySessionOwnsCurrent`].
 pub(crate) fn read_selected_root_baseline_with_source(
     conn: &rusqlite::Connection,
     runtime_root: &ConaryRuntimeRoot,
@@ -711,12 +707,10 @@ fn sample_current_generation_link(runtime_root: &ConaryRuntimeRoot) -> CurrentLi
 /// `current_before` is the typed `/current` sample taken before the snapshot
 /// was pinned, or `None` when the caller already owned it. A state-less
 /// generation is stable only when both samples name it, never when unreadable.
-/// Boot recovery is the state-less source: `mark_generation_state_active_if_present`
-/// in `crates/conary-core/src/transaction/recovery.rs` accepts a missing
-/// `SystemState` after `mount_artifact_and_link` updates `/current` (lines
-/// 289-315), and neither path writes a terminal `GenerationPublication` row.
-/// A concurrent publication commits those rows before moving the link, so a
-/// stable link without them is recovery, never a publication race.
+/// Boot recovery (`mark_generation_state_active_if_present` in
+/// `crates/conary-core/src/transaction/recovery.rs`) writes no terminal
+/// `GenerationPublication` row; a concurrent publication commits its state and
+/// publication rows before moving the link.
 fn read_baseline_attempt(
     conn: &rusqlite::Connection,
     runtime_root: &ConaryRuntimeRoot,
@@ -758,6 +752,13 @@ fn read_baseline_attempt(
                         == CurrentLinkSample::Generation(generation);
                 if !stable {
                     return Ok(BaselineAttempt::StaleCurrentGeneration);
+                }
+                // A try session records the generation it built; an open
+                // session claiming this state-less link is not recovery.
+                if TrySession::find_active_or_orphaned(conn)?
+                    .is_some_and(|session| session.try_generation_id == Some(generation))
+                {
+                    return Err(SelectedRootBaselineError::TrySessionOwnsCurrent.into());
                 }
                 // The IDs are unknown, not absent; the artifact is the baseline.
                 return Ok(BaselineAttempt::Complete {

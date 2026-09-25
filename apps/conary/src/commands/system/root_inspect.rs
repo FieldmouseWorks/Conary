@@ -19,7 +19,9 @@
 //! publication row. A stable link across the read is accepted as
 //! [`RootInspectSource::CurrentGeneration`] with
 //! [`RootInspectData::recovered_without_state`] set, so callers can tell that
-//! the unknown IDs were never recorded rather than simply omitted.
+//! the unknown IDs were never recorded rather than simply omitted. An active
+//! or orphaned try session that owns the same generation is an uncommitted
+//! trial instead, so the read refuses it before recovery is considered.
 
 use anyhow::{Context, Result, bail};
 use conary_agent_contract::{InspectResult, OperationEnvelope, OperationStatus, RiskLevel};
@@ -130,8 +132,8 @@ pub(crate) struct RootInspectData {
     pub(crate) snapshot_id: Option<i64>,
     pub(crate) changeset_id: Option<i64>,
     /// True when the baseline came from a stable `/current` generation the
-    /// pinned snapshot never recorded, so the IDs are unknown rather than
-    /// merely absent. See
+    /// pinned snapshot never recorded and no open try session claims, so the
+    /// IDs are unknown rather than merely absent. See
     /// `read_selected_root_baseline_with_source`.
     pub(crate) recovered_without_state: bool,
     pub(crate) source: RootInspectSource,
