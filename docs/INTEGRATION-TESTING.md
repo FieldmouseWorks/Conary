@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-09-21
-revision: 69
-summary: Define the Redshirt shared Rust tooling boundary, Conary-owned package checks, and integration cutover requirements alongside the existing integration proof contracts
+last_updated: 2026-09-25
+revision: 70
+summary: Define the Podman container integration harness, its prerequisites, running suites, fixtures, and result/proof contracts
 ---
 
 # Integration Testing
@@ -11,48 +11,6 @@ Conary uses Podman containers to run integration tests on real Linux distributio
 Run these commands from the repository root, which is now a virtual Cargo
 workspace. The product entrypoints live under `apps/`, with the shared package
 domain in `crates/conary-core`.
-
-## Redshirt Relationship
-
-[Redshirt](https://github.com/FieldmouseWorks/redshirt) is a separate public MIT
-project for reusable, bounded experiment and interaction tooling. Rust is the
-language for its shared core; consumers connect through versioned typed library
-or process interfaces. Its [architecture](https://github.com/FieldmouseWorks/redshirt/blob/main/docs/ARCHITECTURE.md)
-owns the generic contract, while Conary owns the package adapter and package
-correctness.
-
-| Owner | Responsibilities |
-| --- | --- |
-| Redshirt | Reusable episode controller, optional provider contracts and transport, run/provider budgets, cancellation, generic evidence, concrete replay, and comparison machinery in Rust. |
-| Conary | Package semantics and state, fixture inputs, sandbox setup and capabilities, permitted package operations, observations and candidates, questions and calibrated thresholds, and independent package/version/file-ownership/CAS checks. |
-
-When choosing an action, a provider may select only an offered candidate ID;
-it cannot grant permission, invent a package operation, or judge correctness.
-Conary validates and executes permitted operations and evaluates their effects
-independently. Conary's existing package authority and `conary-agent-contract`
-plan/apply boundary remain in force; Redshirt supplies no additional package or
-MCP authority. Exploratory results do not replace Conary's required lifecycle
-proof or PR gates.
-
-One controller owns an episode. A Conary adapter supplies domain methods to
-that owner without nesting another experiment controller underneath it.
-Preserve freshness checks, cancellation, failed or uncertain attempt
-accounting, mandatory final checks, cleanup, and evidence limits. Default runs
-and concrete replay remain model-free; a live-provider comparison requires its
-own explicit, bounded allowance and independently checked outcomes.
-
-Conary does not yet depend on the external Redshirt runtime. The proposed
-bounded fixture explorer is tracked in [#1050](https://github.com/FieldmouseWorks/Conary/issues/1050);
-its issue and linked PRs own current implementation status and exact proof.
-Before replacing its local controller, prove the shared Rust path with bounded
-model-free parity and replay, including failure, cancellation, final checks,
-and cleanup. Retain the pilot as the comparison baseline until that proof
-passes, then retire its superseded shared machinery in the cutover. Package
-actions, facts, and independent checks remain in Conary.
-
-Use the [cross-project contribution workflow](../CONTRIBUTING.md#working-with-redshirt)
-for changes discovered during package work, including paired blocking changes
-and queued nonblocking improvements.
 
 ## Prerequisites
 
