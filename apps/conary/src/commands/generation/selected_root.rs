@@ -2,12 +2,19 @@
 
 //! Rollback-safe writable roots for generation-aware transaction execution.
 
+mod baseline;
 mod carrier;
 mod config_state;
 mod deferred_ima;
 mod overlay_session;
 mod publication_authority;
 
+pub(crate) use baseline::{SelectedRootBaseline, SelectedRootSource, read_selected_root_baseline};
+#[cfg(test)]
+pub(crate) use baseline::{
+    SelectedRootBaselineError, clear_before_current_selection_hook,
+    set_before_current_selection_hook, set_between_selection_and_collection_hook,
+};
 #[cfg(test)]
 pub(crate) use publication_authority::persist_captured_publication_snapshot;
 pub(crate) use publication_authority::{
@@ -16,7 +23,7 @@ pub(crate) use publication_authority::{
 
 use crate::commands::{LiveRootFile, LiveRootStats, LiveRootTransaction};
 use anyhow::{Context, Result, bail};
-use conary_core::db::models::GenerationPublication;
+use conary_core::db::models::{GenerationPublication, Trove};
 use conary_core::filesystem::CasStore;
 use conary_core::generation::artifact::GenerationArtifact;
 use conary_core::generation::composefs::ComposefsRuntimeUnavailable;
@@ -29,6 +36,7 @@ use conary_core::transaction::{TransactionConfig, TransactionEngine};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use baseline::run_before_current_selection_hook;
 use carrier::{CurrentGenerationLowerMode, PreparedSelectedRoot, current_generation_lower_mode};
 use deferred_ima::DeferredImaAuthority;
 use overlay_session::SelectedRootOverlaySession;
@@ -459,6 +467,15 @@ fn prepare_current_root(
     )
 }
 
+/// Whether the installed database has any trove at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InstalledDatabaseAuthority {
+    /// At least one installed trove exists.
+    Present,
+    /// The database has no installed troves at all.
+    Absent,
+}
+
 /// Exact baseline source a selected-root preparation or preview selects.
 ///
 /// The writable preparation path and the read-only preview path both derive
@@ -468,6 +485,7 @@ enum SelectedRootSelection {
     PendingPublication {
         snapshot: SelectedRootSnapshot,
         captured: Box<CapturedSelectedRoot>,
+        changeset_id: Option<i64>,
     },
     /// The current generation artifact carries the baseline as typed manifests.
     CurrentGeneration {
@@ -476,7 +494,9 @@ enum SelectedRootSelection {
         lower_mode: CurrentGenerationLowerMode,
     },
     /// No generation exists yet, so installed database rows are the baseline.
-    DatabaseProjection,
+    DatabaseProjection {
+        installed: InstalledDatabaseAuthority,
+    },
 }
 
 fn select_selected_root(
@@ -485,12 +505,17 @@ fn select_selected_root(
     require_materialized: bool,
     probe: impl FnOnce() -> std::result::Result<PathBuf, ComposefsRuntimeUnavailable>,
 ) -> Result<SelectedRootSelection> {
-    if let Some((snapshot, captured)) = latest_selected_root_snapshot(conn)? {
+    if let Some(pending) = latest_selected_root_snapshot(conn)? {
         return Ok(SelectedRootSelection::PendingPublication {
-            snapshot,
-            captured: Box::new(captured),
+            snapshot: pending.snapshot,
+            captured: Box::new(pending.captured),
+            changeset_id: pending.changeset_id,
         });
     }
+
+    // The pending-snapshot query above is the transaction's first read, so the
+    // WAL snapshot is pinned here; `/current` is read only after it.
+    run_before_current_selection_hook();
 
     if let Some(generation) =
         conary_core::generation::mount::current_generation(runtime_root.root())?
@@ -505,44 +530,12 @@ fn select_selected_root(
         });
     }
 
-    Ok(SelectedRootSelection::DatabaseProjection)
-}
-
-/// Read the exact typed selected-root baseline a real install would prepare.
-///
-/// This is the read-only half of `prepare_current_root`: it takes the same
-/// artifact-versus-database decision but never acquires the runtime mutation
-/// lock, creates a session directory, or writes under the runtime root.
-/// `empty_root` stands in for the empty materialization destination of a
-/// first-generation projection, which is read only for root metadata and any
-/// package-unclaimed parent closure.
-///
-/// The active generation config-state upper is deliberately not projected. Its
-/// capture requires content writes into the runtime CAS and selected-root
-/// snapshot writes, which a preview must not perform.
-pub(crate) fn read_selected_root_baseline(
-    conn: &rusqlite::Connection,
-    runtime_root: &ConaryRuntimeRoot,
-    empty_root: &Path,
-) -> Result<CapturedSelectedRoot> {
-    match select_selected_root(
-        conn,
-        runtime_root,
-        use_materialized_selected_root_backing(),
-        conary_core::generation::composefs::probe_composefs_mount_runtime,
-    )? {
-        SelectedRootSelection::PendingPublication { captured, .. } => Ok(*captured),
-        SelectedRootSelection::CurrentGeneration { artifact, .. } => Ok(CapturedSelectedRoot {
-            generation: artifact.generation_root.clone(),
-            state: artifact.mutable_state.clone(),
-        }),
-        SelectedRootSelection::DatabaseProjection => {
-            conary_core::generation::builder::collect_selected_root_from_db_with_authority(
-                conn, empty_root,
-            )
-            .map_err(anyhow::Error::from)
-        }
-    }
+    let installed = if Trove::list_all(conn)?.is_empty() {
+        InstalledDatabaseAuthority::Absent
+    } else {
+        InstalledDatabaseAuthority::Present
+    };
+    Ok(SelectedRootSelection::DatabaseProjection { installed })
 }
 
 fn prepare_current_root_with_probe(
@@ -554,7 +547,9 @@ fn prepare_current_root_with_probe(
 ) -> Result<PreparedSelectedRoot> {
     let cas = CasStore::new(runtime_root.objects_dir())?;
     match select_selected_root(conn, runtime_root, require_materialized, probe)? {
-        SelectedRootSelection::PendingPublication { snapshot, captured } => {
+        SelectedRootSelection::PendingPublication {
+            snapshot, captured, ..
+        } => {
             let selected_root =
                 selected_root_materialization_destination(session_dir, require_materialized)?;
             materialize_captured_selected_root(&captured, &cas, &selected_root)?;
@@ -604,7 +599,7 @@ fn prepare_current_root_with_probe(
                 snapshot,
             })
         }
-        SelectedRootSelection::DatabaseProjection => {
+        SelectedRootSelection::DatabaseProjection { .. } => {
             let selected_root =
                 selected_root_materialization_destination(session_dir, require_materialized)?;
             let captured =
@@ -628,12 +623,32 @@ fn selected_root_materialization_destination(
     } else {
         session_dir.join("lower")
     };
-    fs::create_dir_all(&destination).with_context(|| {
+    create_selected_root_destination(&destination)?;
+    Ok(destination)
+}
+
+/// Create one selected-root materialization destination.
+///
+/// `create_dir_all` is the ownership and mode contract every real preparation
+/// gets. A read-only preview reuses this exact step for its stand-in so the
+/// projection cannot capture a private temp parent's `0700` mode instead.
+pub(crate) fn create_selected_root_destination(destination: &Path) -> Result<()> {
+    fs::create_dir_all(destination).with_context(|| {
         format!(
             "failed to create selected-root materialization destination {}",
             destination.display()
         )
-    })?;
+    })
+}
+
+/// Create an empty private stand-in for the selected-root materialization
+/// destination inside `parent`.
+///
+/// The caller owns `parent` and keeps it alive; only the returned destination
+/// is ever read, so the parent's own mode never reaches a capture.
+pub(crate) fn create_selected_root_stand_in(parent: &Path) -> Result<PathBuf> {
+    let destination = parent.join("selected-root-stand-in");
+    create_selected_root_destination(&destination)?;
     Ok(destination)
 }
 

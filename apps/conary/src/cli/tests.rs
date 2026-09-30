@@ -4,7 +4,7 @@
 
 use super::{
     CcsCommands, Cli, CliSandboxMode, Commands, GenerationCommands, McpCommands,
-    NativePackageManager, QueryCommands, RepoCommands, SystemCommands,
+    NativePackageManager, QueryCommands, RepoCommands, RootCommands, SystemCommands,
 };
 use clap::{CommandFactory, Parser};
 
@@ -583,6 +583,40 @@ fn system_init_has_no_host_distro_selector() {
     }
 
     assert!(parse_cli(["conary", "system", "init", "--profile", "fedora-44"]).is_err());
+}
+
+#[test]
+fn system_root_inspect_binds_path_database_and_json() {
+    let cli = parse_cli([
+        "conary",
+        "system",
+        "root",
+        "inspect",
+        "/usr/bin/sh",
+        "--db-path",
+        "/tmp/conary.db",
+        "--json",
+    ])
+    .unwrap();
+    match cli.command {
+        Some(Commands::System(SystemCommands::Root(RootCommands::Inspect { path, db, json }))) => {
+            assert_eq!(path, "/usr/bin/sh");
+            assert_eq!(db.db_path, "/tmp/conary.db");
+            assert!(json);
+        }
+        _ => panic!("expected system root inspect command"),
+    }
+
+    let default = parse_cli(["conary", "system", "root", "inspect", "/etc/hosts"]).unwrap();
+    match default.command {
+        Some(Commands::System(SystemCommands::Root(RootCommands::Inspect {
+            db, json, ..
+        }))) => {
+            assert_eq!(db.db_path, "/var/lib/conary/conary.db");
+            assert!(!json);
+        }
+        _ => panic!("expected system root inspect command"),
+    }
 }
 
 #[test]

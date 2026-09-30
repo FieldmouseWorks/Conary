@@ -253,6 +253,12 @@ pub(super) async fn dispatch_system_command(sys_cmd: cli::SystemCommands) -> Res
 
         cli::SystemCommands::Generation(gen_cmd) => dispatch_system_generation_command(gen_cmd),
 
+        cli::SystemCommands::Root(command) => match command {
+            cli::RootCommands::Inspect { path, db, json } => {
+                commands::cmd_root_inspect(&db.db_path, &path, json)
+            }
+        },
+
         cli::SystemCommands::Takeover {
             up_to,
             yes,

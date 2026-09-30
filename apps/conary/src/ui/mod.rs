@@ -12,6 +12,7 @@ mod installed_provides;
 pub(crate) mod progress;
 pub(crate) mod publication;
 pub(crate) mod repository;
+pub(crate) mod root_inspect;
 pub(crate) mod transaction_summary;
 pub(crate) mod update_summary;
 

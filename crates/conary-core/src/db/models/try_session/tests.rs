@@ -194,6 +194,41 @@ fn find_active_or_orphaned_returns_only_open_sessions() {
 }
 
 #[test]
+fn find_by_try_generation_returns_open_and_terminal_sessions() {
+    let (_temp, conn) = create_test_db();
+    let session = create_namespace_session(&conn, "try-rolled");
+    assert_eq!(session.try_generation_id, None);
+    session.set_try_generation(&conn, 41).unwrap();
+
+    let found = TrySession::find_by_try_generation(&conn, 41)
+        .unwrap()
+        .expect("an active session claims its generation");
+    assert_eq!(found.id, "try-rolled");
+    assert_eq!(found.status, TrySessionStatus::Active);
+
+    session.mark_rolled_back(&conn).unwrap();
+    let found = TrySession::find_by_try_generation(&conn, 41)
+        .unwrap()
+        .expect("a rolled-back session still claims its generation");
+    assert_eq!(found.status, TrySessionStatus::RolledBack);
+
+    let kept = create_namespace_session(&conn, "try-kept");
+    kept.set_try_generation(&conn, 42).unwrap();
+    kept.mark_kept(&conn).unwrap();
+    let found = TrySession::find_by_try_generation(&conn, 42)
+        .unwrap()
+        .expect("a kept session still claims its generation");
+    assert_eq!(found.status, TrySessionStatus::Kept);
+
+    assert!(
+        TrySession::find_by_try_generation(&conn, 99)
+            .unwrap()
+            .is_none(),
+        "a generation no session recorded has no owner"
+    );
+}
+
+#[test]
 fn set_launcher_records_process_and_boot_identity() {
     let (_temp, conn) = create_test_db();
     let session = create_namespace_session(&conn, "try-a");

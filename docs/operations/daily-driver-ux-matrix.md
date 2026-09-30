@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-09-25
-revision: 59
-summary: Daily-driver CLI publication debt, installed records, database preflight, repository readiness, typed details, and grouped results
+revision: 68
+summary: Daily-driver CLI publication debt, committed selected-root inspection, installed records, database preflight, repository readiness, typed details, and grouped results
 ---
 
 # Daily-Driver UX Matrix
@@ -33,6 +33,7 @@ takeover, generation activation, or conaryd, the CLI should say that directly.
 | `pin <pkg>` | Pins a selected installed variant | Ambiguous installed variants | Use `--version`, `--release`, and `--arch` to pin the intended variant | Existing `cargo test -p conary --test query pin_and_unpin_use_same_variant_selector` |
 | `unpin <pkg>` | Releases a selected installed variant | Ambiguous installed variants | Use `--version`, `--release`, and `--arch` to unpin the intended variant | Existing `cargo test -p conary --test query pin_and_unpin_use_same_variant_selector` |
 | `system history` | Recorded changeset fields, rollback relationships, continued lifecycle failures, and deferred recovery guidance | Obsolete changeset metadata keeps its existing refusal | Publication retries use the selected database; history does not decide rollback eligibility | `cargo test -p conary --test cli_history` |
+| `system root inspect <path> [--json]` | Reports the exact committed selected-root node at one path from the newest publication snapshot, current generation artifact, or installed database projection; the selected database is opened **live read-only, never initializes**, migrates, or writes it, so a running system's uncheckpointed WAL is read as a real snapshot; `--json` prints a typed `system.root.inspect` result whose `metadata` is `recorded` for committed manifests and `synthesized` for the projection's stand-in `/`, and whose stable state-less recovery generation is marked `recovered_without_state: true` only when no active, orphaned, or rolled-back try session claims it (a kept try session is committed) (see [Committed Selected Root Inspection](#committed-selected-root-inspection)) | An absent path or a current-schema database with no committed root is a typed `present: false` result with exit 0, not an error string; a zero-byte, non-Conary, or retired-schema database file is refused with the existing typed error and left untouched; a `/current` generation the pinned snapshot cannot confirm and that moves across the read is retried and then refused with the typed "the current generation changed during inspection; retry" error; a state-less `/current` claimed by an active or orphaned try session is refused with the typed try-session error until `conary try keep` or `conary try rollback` resolves it, and one claimed by a rolled-back try session is refused with its own typed error as a discarded trial | Inspect the exact committed path before publication; the command never resolves symlinks, reads the live root, or initializes a database | `cargo test -p conary --lib root_inspect` |
 
 ## Autoremove Preview
 
@@ -162,6 +163,125 @@ and `cargo test -p conary --lib commands::changeset_metadata` covering the
 typed no-base follow-up on the changeset envelope. `conary system generation
 pending` still shows its publication retry note for this case until the
 typed failure kind is persisted (#1110).
+
+## Committed Selected Root Inspection
+
+`conary system root inspect <path> [--db-path <database>] [--json]` answers
+what the committed selected root records at one exact path without publishing
+a generation and without reading the live filesystem. The authority is the
+same typed selected-root baseline a real install prepares: the newest
+recoverable selected-root publication snapshot through the typed loader, else
+the current generation artifact, else the installed database projection
+through `collect_selected_root_from_db_with_authority`, which is the one
+materialization authority. `<path>` must be absolute: an empty path, a
+relative path, or one containing `..` is refused with a typed path error.
+The lookup normalizes it lexically and returns
+the literal node, so a symlink is reported as a symlink rather than its target.
+
+The selected database is opened through
+`conary_core::db::open_live_read_only`: live read-only, never initializes. It
+takes ordinary SQLite read-only locks instead of `immutable=1`, so the
+baseline's deferred read transaction pins a real WAL snapshot of the committed
+frames and a concurrently writing system is observed atomically, including the
+normal case where `-wal` still holds active frames. It still validates the
+current schema without creating, migrating, or writing any state. An empty
+file, a readable non-Conary database, and a retired-schema database are refused
+with the existing typed error and left untouched; a readable but non-writable
+current-schema database inspects normally as long as SQLite can use or create
+the `-shm` wal-index, because every branch of the baseline read needs no write
+access to the database itself.
+
+`metadata` is the typed authority of the reported node values. `recorded`
+means they came from a committed manifest. The database projection has no
+committed manifest root: it synthesizes `/` from an empty materialization
+stand-in whose mode, ownership, and timestamps belong to the inspecting process.
+That one node is reported with `metadata: "synthesized"`, `kind: "directory"`,
+and `mode`, `mtime`, `uid`, `gid`, `user`, `group`, `size`, `hardlink_identity`,
+`xattrs`, and content authority all absent (`null`); every other path and source
+reports `recorded`. The synthesized node is therefore never presented as the
+committed root or as what a later root-privileged preparation would produce.
+
+`--json` prints only a `conary-agent-contract` `InspectResult` with operation
+`system.root.inspect`, status `ok`, and risk `read_only`. Its `data` is
+`schema_version: 5` with `snapshot_id`, `changeset_id`,
+`recovered_without_state`, `source` (`pending_snapshot`, `current_generation`,
+`database_projection`, or `no_committed_root`), `path`, `present`, `manifest`
+(`root` or `mutable_state`), `metadata` (`recorded` or `synthesized`), `kind`
+(`regular`, `directory`, `symlink`, `hardlink`, `fifo`, `socket`,
+`block_device`, or `character_device`), `mode`, `mtime`, `uid`, `gid`, `user`,
+`group`, `sha256`, `size`, `symlink_target`, `hardlink_target`,
+`hardlink_identity`, `device_major`, `device_minor`, and `xattrs`. Absent
+optional values serialize as `null`. `mtime` is the recorded
+`{ seconds, nanoseconds }` modification time that materialization restores.
+`size` is the recorded content byte length for a regular node and is `null` for
+every other kind. `user` and `group` report the source identity exactly as
+recorded, a name or a numeric ID, alongside the resolved `uid` and `gid`.
+`hardlink_identity` carries a regular node's primary hardlink identity or a
+hardlink entry's own identity and is `null` when the node records none;
+`hardlink_target` is the linked entry's target path. `device_major` and
+`device_minor` carry the recorded node numbers for `block_device` and
+`character_device` and are `null` for every other kind. `xattrs` is the
+name-sorted list of `{ name, value_base64 }` entries recorded on the node;
+`value_base64` is standard base64 of the exact value bytes, so a binary
+`security.capability` value round-trips. A recorded node that records no xattrs
+serializes `[]`, while an absent node or the synthesized projection stand-in
+serializes `null`, matching the other withheld fields. `recovered_without_state`
+is `true` only for a stable
+`current_generation` baseline the pinned snapshot never recorded, where the
+`null` IDs are unknown rather than inapplicable; every other source reports
+`false`. The projected root node `/` is present for the database projection, as
+it is for snapshots and artifacts, but only snapshots and artifacts report its
+recorded metadata. Human output renders the same fields through
+`ui/root_inspect.rs`, showing `mtime` as `seconds.nanoseconds` and `size`,
+rendering the hardlink identity when present, and adding one
+`Xattr  <name> (<n> bytes)` line per recorded xattr without printing the raw
+value; an absent path uses `[missing]`, and a current-schema database with no
+committed root still exits 0 with `source: no_committed_root`.
+
+`/current` is a filesystem link, so the read transaction's SQLite snapshot
+does not cover it. When the link names a generation the pinned snapshot does
+not record, the selection ends its read transaction, starts a fresh one, and
+repeats the whole selection, at most three times. A link that keeps advancing
+past every snapshot is refused with the typed
+`the current generation changed during inspection; retry` error instead of
+pairing the new generation's artifact with stale snapshot or changeset IDs.
+The pre-snapshot sample never fails the read: a pending publication snapshot is
+authoritative without `/current`, and an unreadable link only leaves a
+state-less recovery target unstable, so the ordinary retry and typed refusal
+still apply.
+
+Boot recovery is the one legitimate state-less target: it can update `/current`
+to a valid generation artifact and explicitly accept a missing `SystemState`,
+and it writes no terminal `GenerationPublication` row. The read therefore
+samples `/current` immediately before the snapshot is pinned and again after
+the selection. When the before sample, the selected generation, and the after
+sample all agree, and no active, orphaned, or rolled-back try session claims
+that generation, the artifact is accepted as `source: current_generation` with
+`snapshot_id` and `changeset_id` `null` and `recovered_without_state: true`.
+When they differ, the link moved across the snapshot and the ordinary retry and
+typed refusal above still apply; a concurrent publication always records its
+state and terminal publication rows before moving the link.
+
+An activated try session produces the same state-less link shape without boot
+recovery: `begin_try_session` builds its generation from the copied try
+database and publishes it as the live `/current`, while the live database has
+no state row and no publication for it. The read consults the live try-session
+authority (`TrySession::find_by_try_generation`) for the selected generation in
+every status. An active or orphaned session refuses with the typed try-session
+error, directing the operator to `conary try keep` or `conary try rollback`
+before inspecting. A rolled-back session refuses with its own typed error:
+`rollback_active_try_session` leaves `/current` on the try generation when the
+session has no previous generation to restore, so the link outlives the
+discarded trial and is not a committed recovery baseline. A kept session is the
+operator's explicit promotion decision and does not refuse: a namespace keep
+promotes the copied database and marks the generation's live `SystemState`
+active (`keep_active_try_session`), so a kept generation normally has committed
+state and never reaches this branch, while an activated keep records the
+resolved `Kept` status that commits the state-less link. The CCS dry-run
+baseline skeleton shares this reader, so a dry run follows the same decision
+instead of resolving payload paths against an uncommitted trial. A namespace
+try session builds its generation without publishing it as `/current`, so it
+does not claim the selected generation in normal operation.
 
 ## Ordinary Installed Lists
 

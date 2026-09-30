@@ -333,6 +333,10 @@ pub enum SystemCommands {
     #[command(subcommand)]
     Generation(GenerationCommands),
 
+    /// Inspect the committed selected root
+    #[command(subcommand)]
+    Root(RootCommands),
+
     /// Convert entire system to Conary-managed generations
     Takeover {
         /// How far to go: generation by default; cas/owned are internal debug checkpoints
@@ -368,6 +372,26 @@ pub enum SystemCommands {
     UpdateChannel {
         #[command(subcommand)]
         action: UpdateChannelAction,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum RootCommands {
+    /// Show the committed selected-root node at PATH
+    ///
+    /// Reports the exact node recorded by the newest committed selected-root
+    /// snapshot (or the current generation artifact) without resolving
+    /// symlinks or reading the live filesystem.
+    Inspect {
+        /// Absolute path within the selected root
+        path: String,
+
+        #[command(flatten)]
+        db: DbArgs,
+
+        /// Print the result as a typed agent-contract JSON document
+        #[arg(long)]
+        json: bool,
     },
 }
 

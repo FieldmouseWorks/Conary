@@ -799,3 +799,126 @@ fn activated_liveness_rejects_recorded_dead_pid_but_allows_absent_pid() {
         Some(7)
     ));
 }
+
+#[test]
+fn root_inspect_skips_try_session_preflight_database() {
+    let inspect = parse_cli([
+        "conary",
+        "system",
+        "root",
+        "inspect",
+        "/",
+        "--db-path",
+        "/tmp/root-inspect-classification.db",
+    ]);
+    let command = inspect.command.as_ref().expect("parsed command");
+    assert!(
+        !super::command_uses_try_session_preflight_db(command),
+        "system root inspect must not open the try-session preflight database"
+    );
+
+    // Control: a mutating system command still opens the preflight database.
+    let rollback = parse_cli([
+        "conary",
+        "system",
+        "state",
+        "rollback",
+        "1",
+        "--db-path",
+        "/tmp/root-inspect-classification.db",
+    ]);
+    let command = rollback.command.as_ref().expect("parsed command");
+    assert!(
+        super::command_uses_try_session_preflight_db(command),
+        "a mutating system command must keep the try-session preflight database"
+    );
+}
+
+#[tokio::test]
+async fn dispatch_root_inspect_refuses_empty_database_without_initializing() {
+    let temp = tempfile::tempdir().unwrap();
+    let db_path = temp.path().join("empty.db");
+    std::fs::write(&db_path, []).unwrap();
+    assert_eq!(std::fs::metadata(&db_path).unwrap().len(), 0);
+
+    let cli = parse_cli([
+        "conary",
+        "system",
+        "root",
+        "inspect",
+        "/",
+        "--db-path",
+        db_path.to_str().unwrap(),
+        "--json",
+    ]);
+    let error = crate::dispatch::dispatch(cli)
+        .await
+        .expect_err("an empty database file must be refused, not initialized");
+
+    let typed = error
+        .downcast_ref::<conary_core::Error>()
+        .expect("the refusal must retain the typed schema error");
+    assert!(
+        matches!(
+            typed,
+            conary_core::Error::SchemaRebuildRequired { observed, .. }
+                if observed == "fresh database"
+        ),
+        "an empty file must be the typed fresh-database refusal, got {typed}"
+    );
+    assert_eq!(
+        std::fs::metadata(&db_path).unwrap().len(),
+        0,
+        "dispatch must not write a schema header into an empty file before inspection"
+    );
+}
+
+#[tokio::test]
+async fn dispatch_root_inspect_reads_a_read_only_database() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().unwrap();
+    let db_path = temp.path().join("conary.db");
+    conary_core::db::init(&db_path).unwrap();
+    {
+        let conn = conary_core::db::open(&db_path).unwrap();
+        conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+            .unwrap();
+    }
+    std::fs::set_permissions(&db_path, std::fs::Permissions::from_mode(0o444)).unwrap();
+
+    if nix::unistd::Uid::effective().is_root() {
+        // Root bypasses the mode bits, so the fixture cannot prove a denied
+        // write; the only honored skip is an effective root user, and that
+        // user must still be able to write the mode-0o444 file.
+        assert!(
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(&db_path)
+                .is_ok(),
+            "an effective root user must bypass the mode-0o444 write denial"
+        );
+        return;
+    }
+    assert!(
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&db_path)
+            .is_err(),
+        "a mode-0o444 database must deny a non-root write before the end-to-end proof"
+    );
+
+    let cli = parse_cli([
+        "conary",
+        "system",
+        "root",
+        "inspect",
+        "/opt/fixture/hello",
+        "--db-path",
+        db_path.to_str().unwrap(),
+        "--json",
+    ]);
+    crate::dispatch::dispatch(cli)
+        .await
+        .expect("a readable, non-writable current-schema database must inspect");
+}

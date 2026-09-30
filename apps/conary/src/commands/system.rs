@@ -5,6 +5,7 @@ mod init;
 mod rebuild_database;
 mod rollback_command;
 mod rollback_restore;
+mod root_inspect;
 
 pub(crate) use init::DatabaseInitializationContext;
 pub use init::cmd_init;
@@ -15,6 +16,9 @@ pub use rebuild_database::cmd_rebuild_database;
 pub use rollback_command::cmd_rollback;
 #[cfg(test)]
 use rollback_command::cmd_rollback_with_forced_precommit_failure;
+pub(crate) use root_inspect::{
+    RootInspectData, RootInspectSource, RootManifestKind, RootNodeKind, cmd_root_inspect,
+};
 
 #[cfg(test)]
 use super::FileSnapshot;
