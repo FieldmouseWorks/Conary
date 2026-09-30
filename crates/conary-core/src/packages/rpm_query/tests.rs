@@ -272,8 +272,8 @@ fn package_inventory_rejects_malformed_or_duplicate_records() {
 #[test]
 fn file_query_uses_exact_parallel_array_records() {
     let records = parse_rpm_file_records(
-            "/usr/lib/libfixture.so\x1e42\x1e1700000000\x1eabcdef12\x1e0120777\x1eroot\x1eroot\x1elibfixture.so.1\x1e0\x1e0\x1f\
-             /usr/share/fixture data\x1e0\x1e1700000001\x1e\x1e040755\x1eroot\x1eroot\x1e\x1e40\x1e3\x1f",
+            "/usr/lib/libfixture.so\x1e42\x1e1700000000\x1eabcdef12\x1e0120777\x1eroot\x1eroot\x1elibfixture.so.1\x1e0\x1e0\x1e\x1e0\x1e(none)\x1e\x1f\
+             /usr/share/fixture data\x1e0\x1e1700000001\x1e\x1e040755\x1eroot\x1eroot\x1e\x1e40\x1e3\x1e\x1e0\x1e(none)\x1e\x1f",
         )
         .unwrap();
 
@@ -293,7 +293,7 @@ fn file_query_uses_exact_parallel_array_records() {
     );
 
     let zero_digest = parse_rpm_file_records(
-            "/usr/bin/zero\x1e1\x1e1700000002\x1e00000000\x1e0100755\x1eroot\x1eroot\x1e\x1e48\x1e0\x1f",
+            "/usr/bin/zero\x1e1\x1e1700000002\x1e00000000\x1e0100755\x1eroot\x1eroot\x1e\x1e48\x1e0\x1e\x1e0\x1e(none)\x1e\x1f",
         )
         .unwrap();
     assert_eq!(zero_digest[0].digest.as_deref(), Some("00000000"));
@@ -303,7 +303,7 @@ fn file_query_uses_exact_parallel_array_records() {
     );
 
     let missing_ok = parse_rpm_file_records(
-        "/etc/optional\x1e1\x1e1700000002\x1e00000000\x1e0100644\x1eroot\x1eroot\x1e\x1e8\x1e0\x1f",
+        "/etc/optional\x1e1\x1e1700000002\x1e00000000\x1e0100644\x1eroot\x1eroot\x1e\x1e8\x1e0\x1e\x1e0\x1e(none)\x1e\x1f",
     )
     .unwrap();
     assert_eq!(
@@ -312,10 +312,11 @@ fn file_query_uses_exact_parallel_array_records() {
     );
 }
 
-/// The exact ten queryformat fields RPM emits for the filesystem-root anchor:
-/// `FILENAMES=/`, zero size, empty digest and link target, directory mode, no
-/// flags, and a NORMAL installation state.
-const ROOT_ANCHOR_FIELDS: [&str; 10] = [
+/// The exact fourteen queryformat fields RPM emits for the filesystem-root
+/// anchor: `FILENAMES=/`, zero size, empty digest and link target, directory
+/// mode, no flags, a NORMAL installation state, RPM's empty raw basename, rdev
+/// zero, and no capabilities or IMA signature.
+const ROOT_ANCHOR_FIELDS: [&str; 14] = [
     "/",
     "0",
     "1700000000",
@@ -326,11 +327,15 @@ const ROOT_ANCHOR_FIELDS: [&str; 10] = [
     "",
     "0",
     "0",
+    "",
+    "0",
+    "(none)",
+    "",
 ];
 
 /// A deployable config record with the CONFIG flag, used to prove the anchor
 /// refusal does not disturb sibling file authority.
-const CONFIG_FIXTURE_FIELDS: [&str; 10] = [
+const CONFIG_FIXTURE_FIELDS: [&str; 14] = [
     "/etc/fixture.conf",
     "1",
     "1700000001",
@@ -341,10 +346,14 @@ const CONFIG_FIXTURE_FIELDS: [&str; 10] = [
     "",
     "1",
     "0",
+    "",
+    "0",
+    "(none)",
+    "",
 ];
 
 /// Render one RPM file record from its exact parallel queryformat fields.
-fn file_record(fields: [&str; 10]) -> String {
+fn file_record(fields: [&str; 14]) -> String {
     fields.join("\x1e")
 }
 
@@ -353,9 +362,9 @@ fn rpm_filesystem_root_is_an_ownership_anchor_not_deployable_payload() {
     // The root record is verbatim-shaped from Fedora's `filesystem` package:
     // `rpm -q --queryformat` renders `FILENAMES=/` with a directory mode.
     let records = parse_rpm_file_records(
-        "/usr\x1e0\x1e1700000000\x1e\x1e040755\x1eroot\x1eroot\x1e\x1e0\x1e0\x1f\
-         /\x1e0\x1e1700000000\x1e\x1e040555\x1eroot\x1eroot\x1e\x1e0\x1e0\x1f\
-         /usr/bin/fixture\x1e42\x1e1700000001\x1eabcdef12\x1e0100755\x1eroot\x1eroot\x1e\x1e0\x1e0\x1f",
+        "/usr\x1e0\x1e1700000000\x1e\x1e040755\x1eroot\x1eroot\x1e\x1e0\x1e0\x1e\x1e0\x1e(none)\x1e\x1f\
+         /\x1e0\x1e1700000000\x1e\x1e040555\x1eroot\x1eroot\x1e\x1e0\x1e0\x1e\x1e0\x1e(none)\x1e\x1f\
+         /usr/bin/fixture\x1e42\x1e1700000001\x1eabcdef12\x1e0100755\x1eroot\x1eroot\x1e\x1e0\x1e0\x1e\x1e0\x1e(none)\x1e\x1f",
     )
     .unwrap();
 
@@ -405,11 +414,15 @@ fn file_query_rejects_corrupted_root_anchor_metadata() {
     );
 
     for (field, value) in [
-        (4, "0100644"),  // regular-file mode
-        (1, "4"),        // nonzero size
-        (3, "abcdef12"), // digest
-        (7, "x"),        // link target
-        (8, "1"),        // CONFIG flag
+        (4, "0100644"),         // regular-file mode
+        (1, "4"),               // nonzero size
+        (3, "abcdef12"),        // digest
+        (7, "x"),               // link target
+        (8, "1"),               // CONFIG flag
+        (10, "x"),              // non-empty raw basename
+        (11, "5"),              // nonzero rdev
+        (12, "cap_net_raw=ep"), // file capabilities
+        (13, "0302deadbeef"),   // IMA signature
     ] {
         let mut fields = ROOT_ANCHOR_FIELDS;
         fields[field] = value;
@@ -422,13 +435,27 @@ fn file_query_rejects_corrupted_root_anchor_metadata() {
 }
 
 #[test]
+fn ordinary_file_records_carry_capabilities_and_ima_signatures_without_interpretation() {
+    // libgcc files carry hex IMA signatures; the query parser validates the
+    // record shape but does not interpret them as root-anchor metadata.
+    let records = parse_rpm_file_records(
+        "/usr/lib/libgcc_s.so.1\x1e1\x1e1700000002\x1e0123456789abcdef\x1e0100755\x1eroot\x1eroot\x1e\x1e0\x1e0\x1e\x1e0\x1ecap_net_raw=ep\x1e0302deadbeef\x1f",
+    )
+    .unwrap();
+
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].path, "/usr/lib/libgcc_s.so.1");
+    assert_eq!(records[0].digest.as_deref(), Some("0123456789abcdef"));
+}
+
+#[test]
 fn file_query_uses_rpms_persisted_installation_state_as_live_authority() {
     let records = parse_rpm_file_records(
-        "/normal\x1e1\x1e1\x1e00\x1e0100644\x1eroot\x1eroot\x1e\x1e0\x1e0\x1f\
-             /replaced\x1e1\x1e1\x1e00\x1e0100644\x1eroot\x1eroot\x1e\x1e0\x1e1\x1f\
-             /not-installed\x1e1\x1e1\x1e00\x1e0100644\x1eroot\x1eroot\x1e\x1e0\x1e2\x1f\
-             /net-shared\x1e1\x1e1\x1e00\x1e0100644\x1eroot\x1eroot\x1e\x1e0\x1e3\x1f\
-             /wrong-color\x1e1\x1e1\x1e00\x1e0100644\x1eroot\x1eroot\x1e\x1e0\x1e4\x1f",
+        "/normal\x1e1\x1e1\x1e00\x1e0100644\x1eroot\x1eroot\x1e\x1e0\x1e0\x1e\x1e0\x1e(none)\x1e\x1f\
+             /replaced\x1e1\x1e1\x1e00\x1e0100644\x1eroot\x1eroot\x1e\x1e0\x1e1\x1e\x1e0\x1e(none)\x1e\x1f\
+             /not-installed\x1e1\x1e1\x1e00\x1e0100644\x1eroot\x1eroot\x1e\x1e0\x1e2\x1e\x1e0\x1e(none)\x1e\x1f\
+             /net-shared\x1e1\x1e1\x1e00\x1e0100644\x1eroot\x1eroot\x1e\x1e0\x1e3\x1e\x1e0\x1e(none)\x1e\x1f\
+             /wrong-color\x1e1\x1e1\x1e00\x1e0100644\x1eroot\x1eroot\x1e\x1e0\x1e4\x1e\x1e0\x1e(none)\x1e\x1f",
     )
     .unwrap();
 
@@ -446,19 +473,19 @@ fn file_query_rejects_malformed_parallel_array_records() {
     assert!(parse_rpm_file_records("/usr/bin/fixture\x1e42\x1f").is_err());
     assert!(
             parse_rpm_file_records(
-                "/usr/bin/fixture\x1e42\x1e1700000000\x1enot-a-digest\x1e0100755\x1eroot\x1eroot\x1e\x1e0\x1e0\x1f"
+                "/usr/bin/fixture\x1e42\x1e1700000000\x1enot-a-digest\x1e0100755\x1eroot\x1eroot\x1e\x1e0\x1e0\x1e\x1e0\x1e(none)\x1e\x1f"
             )
             .is_err()
         );
     assert!(
             parse_rpm_file_records(
-                "/usr/bin/fixture\x1e42\x1e1700000000\x1eabcdef12\x1e0100755\x1eroot\x1eroot\x1e\x1enot-hex\x1e0\x1f"
+                "/usr/bin/fixture\x1e42\x1e1700000000\x1eabcdef12\x1e0100755\x1eroot\x1eroot\x1e\x1enot-hex\x1e0\x1e\x1e0\x1e(none)\x1e\x1f"
             )
             .is_err()
         );
     assert!(
             parse_rpm_file_records(
-                "/usr/bin/fixture\x1e42\x1e1700000000\x1eabcdef12\x1e0100755\x1eroot\x1eroot\x1e\x1e0\x1e5\x1f"
+                "/usr/bin/fixture\x1e42\x1e1700000000\x1eabcdef12\x1e0100755\x1eroot\x1eroot\x1e\x1e0\x1e5\x1e\x1e0\x1e(none)\x1e\x1f"
             )
             .is_err()
         );

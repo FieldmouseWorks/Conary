@@ -213,9 +213,9 @@ pub(super) fn parse_file_config(
         .enumerate()
     {
         let fields = record.split('\x1e').collect::<Vec<_>>();
-        if fields.len() != 10 {
+        if fields.len() != 14 {
             return Err(Error::ParseError(format!(
-                "RPM file config record {} has {} fields; expected 10",
+                "RPM file config record {} has {} fields; expected 14",
                 record_index + 1,
                 fields.len()
             )));
@@ -350,8 +350,8 @@ mod tests {
             "fixture-{version}-1.x86_64\x1efixture\x1e{version}\x1e1\x1e(none)\x1ex86_64\x1edescription\x1esummary\x1eMIT\x1e(none)\x1e(none)\x1e(none)\x1e(none)\x1e1\x1f"
         );
         let files = concat!(
-            "/etc/fixture.conf\x1e1\x1e1\x1e0123456789abcdef\x1e100644\x1eroot\x1eroot\x1e\x1e11\x1e0\x1f",
-            "/usr/bin/fixture\x1e1\x1e1\x1efedcba9876543210\x1e100755\x1eroot\x1eroot\x1e\x1e0\x1e0\x1f"
+            "/etc/fixture.conf\x1e1\x1e1\x1e0123456789abcdef\x1e100644\x1eroot\x1eroot\x1e\x1e11\x1e0\x1e\x1e0\x1e(none)\x1e\x1f",
+            "/usr/bin/fixture\x1e1\x1e1\x1efedcba9876543210\x1e100755\x1eroot\x1eroot\x1e\x1e0\x1e0\x1e\x1e0\x1e(none)\x1e\x1f"
         );
         let requirements = "glibc.so.6()(64bit)\x1e0\x1e\x1f";
         let provides = "fixture\x1e8\x1e1.0-1\x1f";
