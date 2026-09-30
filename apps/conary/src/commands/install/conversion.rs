@@ -9,7 +9,8 @@ use super::super::open_db;
 use super::PackageFormatType;
 use super::batch::{BatchInstaller, PreparedPackageSourceAuthority, prepare_ccs_package_for_batch};
 use super::dependencies::{
-    CertifiedOutgoing, CertifiedRequirements, resolved_repository_deps_from_sat_result,
+    CertifiedOutgoing, CertifiedRequirements, DependencyConflict,
+    resolved_repository_deps_from_sat_result,
 };
 use super::repository_batch::{
     RepositoryBatchMode, RepositoryBatchSelection, prepare_repository_batch,
@@ -659,7 +660,7 @@ async fn install_verified_ccs_artifact(
     let mut selected_dependencies = Vec::new();
     let mut solve_outgoing = None;
     let mut certified_requirements = None;
-    if !no_deps && !ccs_pkg.requirements().is_empty() {
+    if !no_deps {
         let conn = open_db(db_path)?;
         // The solve must exclude the installed troves this transaction removes:
         // the CCS upgrade or replacement target and its relation removals. Both
@@ -713,11 +714,13 @@ async fn install_verified_ccs_artifact(
                     ccs_pkg.name()
                 )
             })?;
-        if let Some(conflict) = sat_result.conflict_message {
-            anyhow::bail!(
-                "Cannot install CCS package '{}': {conflict}",
-                ccs_pkg.name()
-            );
+        if let Some(conflict) = sat_result.conflict_message.as_deref() {
+            return Err(DependencyConflict {
+                package: ccs_pkg.name().to_string(),
+                conflict: conflict.to_string(),
+                unsatisfied: sat_result.unsatisfied_groups.clone(),
+            }
+            .into());
         }
         let pending_root = PendingCcsProvider::from_package(&ccs_pkg);
         selected_dependencies =

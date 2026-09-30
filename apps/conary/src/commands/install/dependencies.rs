@@ -107,6 +107,24 @@ pub(crate) struct RequirementsChanged {
     pub missing: Vec<String>,
 }
 
+/// The transaction's end state leaves a hard requirement group unsatisfied.
+///
+/// The solve runs against `(installed - outgoing) + incoming`, so the refusal
+/// may name the incoming package's own requirement or a surviving installed
+/// package the transaction would break. `unsatisfied` preserves the typed
+/// owner of every group the fixed-point validation could not place.
+#[derive(Debug, thiserror::Error)]
+#[error("Cannot install {package}: {conflict}")]
+pub(crate) struct DependencyConflict {
+    pub package: String,
+    /// The solver's conflict explanation. Callers that need the typed detail
+    /// downcast the refusal.
+    pub conflict: String,
+    /// Production callers render `conflict`; `unsatisfied` is the typed detail for callers that downcast.
+    #[allow(dead_code)]
+    pub unsatisfied: Vec<conary_core::resolver::sat::SatUnsatisfiedGroup>,
+}
+
 /// The exact policy and provided capabilities a pre-lock requirement solve used.
 ///
 /// The locked transaction re-solves with these same inputs so it cannot disagree
@@ -250,16 +268,14 @@ pub(super) async fn handle_dependencies(
 ) -> Result<DependencyDecision> {
     let requirement_count = runtime_requirement_count(ctx.pkg);
 
-    if ctx.no_deps && requirement_count != 0 {
-        info!("Skipping dependency check (--no-deps specified)");
-        crate::ui::println!(
-            "Skipping {} dependencies (--no-deps specified)",
-            requirement_count
-        );
-        return Ok(DependencyDecision::Continue);
-    }
-
-    if requirement_count == 0 {
+    if ctx.no_deps {
+        if requirement_count != 0 {
+            info!("Skipping dependency check (--no-deps specified)");
+            crate::ui::println!(
+                "Skipping {} dependencies (--no-deps specified)",
+                requirement_count
+            );
+        }
         return Ok(DependencyDecision::Continue);
     }
 
@@ -284,12 +300,12 @@ pub(super) async fn handle_dependencies(
 
     // If SAT reports a conflict, surface it
     if let Some(ref conflict_msg) = sat_result.conflict_message {
-        crate::ui::eprintln!("\nDependency conflicts detected:");
-        crate::ui::eprintln!("  {}", conflict_msg);
-        return Err(anyhow::anyhow!(
-            "Cannot install {}: dependency conflict(s) detected",
-            ctx.pkg.name(),
-        ));
+        return Err(DependencyConflict {
+            package: ctx.pkg.name().to_string(),
+            conflict: conflict_msg.clone(),
+            unsatisfied: sat_result.unsatisfied_groups.clone(),
+        }
+        .into());
     }
 
     let selected = resolved_repository_deps_from_sat_result(&sat_result, ctx.pkg.name());

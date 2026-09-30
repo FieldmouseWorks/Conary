@@ -535,3 +535,163 @@ async fn repository_ccs_closure_runs_root_pretransaction_before_dependency_paylo
         conary_core::db::models::ChangesetStatus::Applied
     );
 }
+
+/// Seed one installed RPM-versioned trove whose only hard group is
+/// `(conditional-require if conditional-trigger)`.
+fn insert_installed_conditional_dependent(db_path: &str, name: &str) -> i64 {
+    use conary_core::db::models::InstalledRequirementGroup;
+    use conary_core::repository::dependency_model::RepositoryRequirementKind;
+    use conary_core::repository::versioning::VersionScheme;
+
+    let conn = conary_core::db::open(db_path).unwrap();
+    let mut trove = Trove::new(
+        name.to_string(),
+        "1.0.0".to_string(),
+        conary_core::db::models::TroveType::Package,
+        VersionScheme::Rpm,
+    );
+    trove.architecture = Some("x86_64".to_string());
+    let trove_id = trove.insert(&conn).unwrap();
+    let requirement = conary_core::repository::requirement::parse_native_requirement(
+        RepositoryRequirementKind::Depends,
+        VersionScheme::Rpm,
+        "(conversion-conditional-require if conversion-conditional-trigger)",
+    )
+    .unwrap();
+    InstalledRequirementGroup::insert_groups(&conn, trove_id, VersionScheme::Rpm, &[requirement])
+        .unwrap();
+    trove_id
+}
+
+/// Build a dependency-free signed CCS artifact. When `provides_trigger` is set
+/// it declares the capability the installed conditional tests on.
+fn write_dependency_free_ccs(temp: &std::path::Path, provides_trigger: bool) -> std::path::PathBuf {
+    let mut manifest = CcsManifest::new_minimal("conversion-dependency-free", "1.0.0");
+    if provides_trigger {
+        manifest
+            .provides
+            .capabilities
+            .push("conversion-conditional-trigger".to_string());
+    }
+    let signing_key = crate::commands::ccs::load_or_create_local_dev_key().unwrap();
+    write_signed_ccs_fixture(
+        temp,
+        "conversion-dependency-free",
+        manifest,
+        "/usr/share/conversion-dependency-free/data",
+        b"dependency-free payload",
+        &signing_key,
+    )
+}
+
+fn dependency_free_install_options<'a>(
+    package_path: &'a std::path::Path,
+    db_path: &'a str,
+    install_root: &'a std::path::Path,
+) -> CcsArtifactInstallOptions<'a> {
+    CcsArtifactInstallOptions {
+        ccs_path: package_path.to_str().unwrap(),
+        db_path,
+        root: install_root.to_str().unwrap(),
+        dry_run: false,
+        sandbox_mode: SandboxMode::Always,
+        no_deps: false,
+        allow_downgrade: false,
+        intent: InstallIntent::PackageChange,
+        yes: true,
+        envelope_authority: CcsEnvelopeAuthority::LocalDev,
+        repository_provenance: None,
+        requested_source_identity: None,
+        resolution_policy: test_resolution_policy(),
+        replacement: None,
+    }
+}
+
+/// A dependency-free converted CCS artifact that provides the capability an
+/// installed package conditions on makes that implication true. With no
+/// provider for the required side anywhere, the conversion solve must refuse
+/// and name the installed owner. Before the fix, the
+/// `!ccs_pkg.requirements().is_empty()` guard skipped the solve.
+#[tokio::test]
+async fn dependency_free_conversion_refuses_when_it_breaks_an_installed_conditional() {
+    let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
+    let temp = tempfile::tempdir().unwrap();
+    let install_root = temp.path().join("root");
+    let db_path = temp.path().join("conary.db");
+    let db_path_str = db_path.to_str().unwrap();
+
+    std::fs::create_dir_all(&install_root).unwrap();
+    conary_core::db::init(db_path_str).unwrap();
+    stage_test_boot_assets(temp.path());
+
+    let dependent_id =
+        insert_installed_conditional_dependent(db_path_str, "conversion-conditional-dependent");
+    let package_path = write_dependency_free_ccs(temp.path(), true);
+
+    let error = install_ccs_artifact(dependency_free_install_options(
+        &package_path,
+        db_path_str,
+        &install_root,
+    ))
+    .await
+    .expect_err(
+        "a dependency-free conversion that triggers an unsatisfied installed conditional must refuse",
+    );
+
+    let conflict = error
+        .downcast_ref::<crate::commands::install::dependencies::DependencyConflict>()
+        .expect("refusal must carry the typed dependency-conflict error");
+    assert_eq!(conflict.package, "conversion-dependency-free");
+    assert!(
+        conflict.unsatisfied.iter().any(|group| matches!(
+            &group.owner,
+            conary_core::resolver::sat::SatGroupOwner::Installed { trove_id, package_name }
+                if *trove_id == dependent_id && package_name == "conversion-conditional-dependent"
+        )),
+        "{conflict:?}"
+    );
+
+    let conn = conary_core::db::open(db_path_str).unwrap();
+    assert!(
+        Trove::find_by_name(&conn, "conversion-dependency-free")
+            .unwrap()
+            .is_empty(),
+        "a refused dependency-free conversion must not be persisted"
+    );
+}
+
+/// Positive control on the same fixture: an incoming artifact that does not
+/// provide the trigger leaves the installed conditional vacuous, so the
+/// conversion solve proceeds and the package installs.
+#[tokio::test]
+async fn dependency_free_conversion_proceeds_when_it_leaves_an_installed_conditional_vacuous() {
+    let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
+    let temp = tempfile::tempdir().unwrap();
+    let install_root = temp.path().join("root");
+    let db_path = temp.path().join("conary.db");
+    let db_path_str = db_path.to_str().unwrap();
+
+    std::fs::create_dir_all(&install_root).unwrap();
+    conary_core::db::init(db_path_str).unwrap();
+    stage_test_boot_assets(temp.path());
+
+    insert_installed_conditional_dependent(db_path_str, "conversion-conditional-dependent");
+    let package_path = write_dependency_free_ccs(temp.path(), false);
+
+    install_ccs_artifact(dependency_free_install_options(
+        &package_path,
+        db_path_str,
+        &install_root,
+    ))
+    .await
+    .expect("an incoming artifact that does not trigger the installed conditional must install");
+
+    let conn = conary_core::db::open(db_path_str).unwrap();
+    assert_eq!(
+        Trove::find_by_name(&conn, "conversion-dependency-free")
+            .unwrap()
+            .len(),
+        1,
+        "the dependency-free conversion must be persisted when the conditional is vacuous"
+    );
+}
