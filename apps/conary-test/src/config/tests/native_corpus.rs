@@ -8,6 +8,7 @@ mod daily_driver;
 mod evidence;
 mod performance;
 mod rejection;
+mod typed_autoremove;
 mod version_rewrite;
 
 #[test]
