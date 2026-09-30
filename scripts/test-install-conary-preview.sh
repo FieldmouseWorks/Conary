@@ -23,6 +23,25 @@ assert_contains() {
     [[ "$text" == *"$expected"* ]] || fail "expected output to contain: $expected"
 }
 
+assert_equals() {
+    local actual="$1"
+    local expected="$2"
+    [[ "$actual" == "$expected" ]] || fail "expected exactly: $expected"
+}
+
+# Compare the whole plan install line, normalizing only the temporary artifact
+# path that mktemp assigned for this run.
+assert_install_line() {
+    local text="$1"
+    local expected_command="$2"
+    local line path
+    line="$(printf '%s\n' "$text" | sed -n '/^  install:/{p;q;}')"
+    [[ -n "$line" ]] || fail "plan did not print an install line"
+    path="${line##* }"
+    [[ "$line" == "  install: ${expected_command} ${path}" ]] ||
+        fail "wrong install line: $line"
+}
+
 embedded_key_base64="$(
     sed -nE 's/^readonly RELEASE_PUBLIC_KEY_DER_BASE64="([^"]+)"$/\1/p' "$INSTALLER"
 )"
@@ -101,6 +120,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 [[ -n "$output" && -n "$url" ]]
+printf '%s\n' "$url" >> "$MOCK_CURL_LOG"
 basename="${url##*/}"
 cp "${FIXTURE_DOWNLOAD_DIR}/${basename}" "$output"
 EOF
@@ -110,6 +130,13 @@ cat > "${mock_bin}/uname" <<'EOF'
 set -euo pipefail
 [[ "${1:-}" == -m ]]
 printf '%s\n' "${MOCK_UNAME:-x86_64}"
+EOF
+
+cat > "${mock_bin}/id" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "${1:-}" == -u ]]
+printf '%s\n' "${MOCK_UID:-1000}"
 EOF
 
 cat > "${mock_bin}/sudo" <<'EOF'
@@ -135,7 +162,15 @@ case "${1:-}" in
     *) exit 2 ;;
 esac
 EOF
-chmod +x "${mock_bin}/curl" "${mock_bin}/uname" "${mock_bin}/sudo" "${mock_bin}/conary"
+chmod +x "${mock_bin}/curl" "${mock_bin}/uname" "${mock_bin}/id" "${mock_bin}/sudo" "${mock_bin}/conary"
+
+# A PATH with the downloader and id but deliberately no sudo, plus the shell
+# the mocks and installer shebang need.
+no_sudo_bin="${TEST_ROOT}/bin-no-sudo"
+mkdir -p "$no_sudo_bin"
+ln -sf "${mock_bin}/id" "${no_sudo_bin}/id"
+ln -sf "${mock_bin}/curl" "${no_sudo_bin}/curl"
+ln -sf "$(command -v bash)" "${no_sudo_bin}/bash"
 
 # Mock only package metadata I/O; ordering uses the host's real dpkg comparator.
 cat > "${mock_bin}/dpkg-deb" <<'EOF'
@@ -165,6 +200,7 @@ printf 'ID=debian\nVERSION_ID=13\n' > "$unsupported_os"
 
 install_log="${TEST_ROOT}/install.log"
 installed_state="${TEST_ROOT}/installed"
+curl_log="${TEST_ROOT}/curl.log"
 
 run_installer() {
     local os_release="$1"
@@ -183,6 +219,8 @@ run_installer() {
             MOCK_QUERY_STATUS="${MOCK_QUERY_STATUS:-0}" \
             MOCK_POST_INSTALL_VERSION="${MOCK_POST_INSTALL_VERSION:-$version}" \
             MOCK_UNAME="${MOCK_UNAME:-x86_64}" \
+            MOCK_UID="${MOCK_UID:-1000}" \
+            MOCK_CURL_LOG="$curl_log" \
             MOCK_INSTALL_FAIL="${MOCK_INSTALL_FAIL:-0}" \
             MOCK_HEALTH_FAIL="${MOCK_HEALTH_FAIL:-0}" \
             CONARY_BOOTSTRAP_TESTING=1 \
@@ -192,6 +230,29 @@ run_installer() {
     } 2>&1)"
     status=$?
     set -e
+}
+
+# Run as non-root on a PATH that deliberately lacks sudo, capturing stderr
+# separately so the refusal can be compared exactly.
+run_installer_without_sudo() {
+    local os_release="$1"
+    shift
+    local stderr_file="${TEST_ROOT}/no-sudo.stderr"
+    set +e
+    output="$({
+        env \
+            PATH="$no_sudo_bin" \
+            FIXTURE_DOWNLOAD_DIR="$downloads" \
+            MOCK_UID=1000 \
+            MOCK_CURL_LOG="$curl_log" \
+            CONARY_BOOTSTRAP_TESTING=1 \
+            CONARY_BOOTSTRAP_OS_RELEASE="$os_release" \
+            CONARY_BOOTSTRAP_PUBLIC_KEY_DER_BASE64="$public_key_base64" \
+            "$INSTALLER" --manifest-url https://fixtures.invalid/conary-bootstrap-v1.manifest "$@"
+    } 2>"$stderr_file")"
+    status=$?
+    set -e
+    stderr_output="$(<"$stderr_file")"
 }
 
 assert_manifest_contract() {
@@ -208,8 +269,7 @@ run_installer "$fedora_os"
 [[ "$status" -eq 0 ]] || fail "Fedora preview failed: $output"
 assert_contains "$output" "host: fedora 44 x86_64"
 assert_contains "$output" "artifact: $rpm"
-assert_contains "$output" "sudo dnf install -y"
-[[ "$output" != *"sudo dnf install -y --"* ]] || fail "Fedora plan used unsupported DNF5 separator"
+assert_install_line "$output" "sudo dnf install -y"
 assert_contains "$output" "initialization owner: native release package post-install hook"
 assert_contains "$output" "health checks: conary --version; conary repo list"
 assert_contains "$output" "Preview complete; no package transaction was invoked."
@@ -224,18 +284,48 @@ run_installer "$ubuntu_os"
 [[ "$status" -eq 0 ]] || fail "Ubuntu preview failed: $output"
 assert_contains "$output" "host: ubuntu 26.04 x86_64"
 assert_contains "$output" "artifact: $deb"
-assert_contains "$output" "sudo apt-get install -y"
+assert_install_line "$output" "sudo apt-get install -y --"
 
 run_installer "$arch_os"
 [[ "$status" -eq 0 ]] || fail "Arch preview failed: $output"
 assert_contains "$output" "host: arch rolling x86_64"
 assert_contains "$output" "artifact: $arch"
+assert_install_line "$output" "sudo pacman -U --noconfirm --"
 
 run_installer "$arch_snapshot_os"
 [[ "$status" -eq 0 ]] || fail "Arch snapshot preview failed: $output"
 assert_contains "$output" "host: arch rolling x86_64"
 assert_contains "$output" "artifact: $arch"
-assert_contains "$output" "sudo pacman -U --noconfirm"
+assert_install_line "$output" "sudo pacman -U --noconfirm --"
+
+# Root on an image without sudo must plan and run the bare package manager.
+for ecosystem in fedora ubuntu arch; do
+    case "$ecosystem" in
+        fedora)
+            host="$fedora_os"
+            expected_command='dnf install -y'
+            ;;
+        ubuntu)
+            host="$ubuntu_os"
+            expected_command='apt-get install -y --'
+            ;;
+        arch)
+            host="$arch_snapshot_os"
+            expected_command='pacman -U --noconfirm --'
+            ;;
+    esac
+    MOCK_UID=0 run_installer "$host"
+    [[ "$status" -eq 0 ]] || fail "${ecosystem} root preview failed: $output"
+    assert_install_line "$output" "$expected_command"
+done
+unset MOCK_UID
+
+# Non-root without sudo must refuse before any download.
+rm -f -- "$curl_log"
+run_installer_without_sudo "$fedora_os"
+[[ "$status" -ne 0 ]] || fail "non-root without sudo unexpectedly passed"
+assert_equals "$stderr_output" "conary bootstrap: run this installer as root or install sudo"
+[[ ! -e "$curl_log" ]] || fail "non-root without sudo invoked curl before refusing"
 
 cp "$manifest" "${TEST_ROOT}/valid.manifest"
 cp "${manifest}.sig" "${TEST_ROOT}/valid.manifest.sig"
