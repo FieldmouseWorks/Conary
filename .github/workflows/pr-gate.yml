@@ -788,6 +788,68 @@ jobs:
             exit 1
           fi
 
+  user-journey:
+    name: user-journey (${{ matrix.host }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [change-scope, native-matrix-artifacts]
+    if: ${{ needs.change-scope.outputs.native_matrices == 'true' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - host: fedora-44
+            image: registry.fedoraproject.org/fedora@sha256:765b2260aa4b4eff379b9a6f983f15fcf41a6f9dda9b272b790e23e92fcbaafb
+          - host: ubuntu-26.04
+            image: docker.io/library/ubuntu:26.04@sha256:678c6550cc43645e08669028bc177f50be4e7c5b8cca677067b1914d4afc7a03
+          - host: arch
+            image: docker.io/library/archlinux@sha256:fe6972d4dc1f660c0c10f4c41b2de8986bab89e7e2955378f8beadb8ebcd7433
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Restore exact-head native matrix executables
+        uses: ./.github/actions/restore-native-matrix-artifact
+        with:
+          commit-sha: ${{ github.sha }}
+          run-id: ${{ github.run_id }}
+          event-name: ${{ github.event_name }}
+      - name: Test the user-journey harness
+        run: bash scripts/test-user-journey.sh
+      - name: Fetch digest-pinned upstream packages
+        run: bash scripts/user-journey-fetch.sh scripts/user-journey-packages.tsv "$RUNNER_TEMP/journey-downloads"
+      - name: Run the user journey in the stock image
+        run: |
+          mkdir -p "$RUNNER_TEMP/journey-out"
+          docker run --rm --privileged \
+            -v "$PWD/target/x86_64-unknown-linux-musl/debug/conary:/usr/local/bin/conary:ro" \
+            -v "$PWD/scripts:/journey:ro" \
+            -v "$RUNNER_TEMP/journey-downloads:/downloads:ro" \
+            -v "$RUNNER_TEMP/journey-out:/out" \
+            "${{ matrix.image }}" bash /journey/user-journey.sh --host "${{ matrix.host }}" --packages /journey/user-journey-packages.tsv --downloads /downloads --evidence /out/journey.json
+      - name: Summarize the user journey
+        if: always()
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/journey-out/journey.json"
+          {
+            echo "### user-journey (${{ matrix.host }})"
+            echo
+            if [[ -f "$evidence" ]]; then
+              echo "| stage | passed | reason | exit code |"
+              echo "| --- | --- | --- | --- |"
+              jq -r '.stages[] | "| \(.id) | \(.passed) | \(.reason) | \(.exit_code) |"' "$evidence"
+            else
+              echo "No journey evidence was produced."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload the user-journey evidence
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: user-journey-${{ matrix.host }}
+          path: ${{ runner.temp }}/journey-out/journey.json
+          if-no-files-found: warn
+          retention-days: 7
+
   native-daily-driver-corpus:
     name: native-daily-driver-corpus (${{ matrix.distro }})
     runs-on: ubuntu-latest
