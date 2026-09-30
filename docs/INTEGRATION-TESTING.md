@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-09-30
-revision: 75
+last_updated: 2026-10-01
+revision: 76
 summary: Define the Podman container integration harness, its prerequisites, running suites, fixtures, and result/proof contracts
 ---
 
@@ -624,7 +624,13 @@ schema version 2, and the exact single removable package/version/release/
 architecture/round record for each distro lane before the follow-up mutation.
 `native_parity_autoremove_preview_requires_the_exact_typed_plan` evaluates that
 assertion against positive and malformed plan controls for Fedora 44, Ubuntu
-26.04, and Arch.
+26.04, and Arch. After apply and the selected-generation absence check,
+`TNPM12` queries the same package's remaining trove rows with SQLite JSON
+output. The entire result must be exactly `[{"installed":0}]`, including its
+integer type and single-row shape; rendered text such as `10 installed` cannot
+prove a zero count. The focused `native_parity_autoremove_` tests cover both
+the preview plan and final-state assertion, including wrong counts, types,
+cardinality, malformed output, and failed commands.
 
 Single-package and batch installs use the same payload-path projection before
 persisting installed resolution authority. The local native install supplies
