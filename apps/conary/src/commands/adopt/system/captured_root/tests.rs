@@ -283,6 +283,17 @@ fn full_adoption_stages_packages_and_captured_root_through_one_authority() {
         VersionScheme::Rpm,
     );
     package.architecture = Some("x86_64".to_string());
+    package.native_package_identity = Some(
+        conary_core::packages::InstalledPackageIdentity::rpm(
+            "native-package-1-1.x86_64",
+            "native-package",
+            None,
+            "1",
+            "1",
+            "x86_64",
+        )
+        .unwrap(),
+    );
     package.installed_by_changeset_id = Some(changeset_id);
     let package_id = package.insert(&tx).unwrap();
 
@@ -319,8 +330,7 @@ fn full_adoption_stages_packages_and_captured_root_through_one_authority() {
         .unwrap();
     package_rows.validate_and_reconcile().unwrap();
 
-    let sync =
-        synchronize_captured_root(&tx, &mut package_rows, changeset_id, &captured).unwrap();
+    let sync = synchronize_captured_root(&tx, &mut package_rows, changeset_id, &captured).unwrap();
     package_rows.finish().unwrap();
 
     assert!(sync.changed);
