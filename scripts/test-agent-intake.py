@@ -27,6 +27,8 @@ if not args or args[0] != "api" or "--method" not in args:
 method = args[args.index("--method") + 1]
 if method != "GET":
     sys.exit(91)
+if "--header" not in args or args[args.index("--header") + 1] != "X-GitHub-Api-Version: 2026-03-10":
+    sys.exit(94)
 route = next((item for item in args if item.startswith("repos/")), None)
 if route is None:
     sys.exit(92)
@@ -49,7 +51,7 @@ if route.endswith("/commits/main"):
 elif route.endswith("/pulls"):
     response = fixture.get("pulls", [])
 elif route.endswith("/actions/runs"):
-    response = fixture.get("runs_by_sha", {}).get(fields.get("head_sha"), {"workflow_runs": []})
+    response = fixture.get("runs_by_sha", {}).get(fields.get("head_sha"), {"total_count": 0, "workflow_runs": []})
 else:
     sys.exit(93)
 
@@ -83,8 +85,8 @@ def workflow_run(run_id, run_number, head_sha, *, workflow_id=1, attempt=1,
     }
 
 
-def run_page(*runs):
-    return {"total_count": len(runs), "workflow_runs": list(runs)}
+def run_page(*runs, total_count=None):
+    return {"total_count": len(runs) if total_count is None else total_count, "workflow_runs": list(runs)}
 
 
 class AgentIntakeTest(unittest.TestCase):
@@ -138,7 +140,10 @@ class AgentIntakeTest(unittest.TestCase):
             main_sha,
             pulls=[{"number": 41, "head": {"sha": pr_sha, "ref": "feature/change"}}],
             runs={
-                main_sha: {"__pages__": [run_page(workflow_run(100, 10, main_sha))]},
+                main_sha: {"__pages__": [
+                    run_page(workflow_run(100, 10, main_sha), total_count=2),
+                    run_page(workflow_run(102, 1, main_sha, workflow_id=3), total_count=2),
+                ]},
                 pr_sha: run_page(workflow_run(101, 4, pr_sha, workflow_id=2)),
             },
         )
@@ -146,16 +151,16 @@ class AgentIntakeTest(unittest.TestCase):
         self.assertEqual(first.returncode, 0, first.stderr)
         self.assertEqual(first.stdout, b"")
         state = self.state_json()
-        self.assertEqual(len(state["seen"]), 2)
-        self.assertEqual(len(state["watermarks"]), 2)
+        self.assertEqual(len(state["seen"]), 3)
+        self.assertEqual(len(state["watermarks"]), 3)
         self.assertFalse((self.state / "reports").exists())
 
         explicit = self.invoke(fixture, "--report-existing")
         self.assertEqual(explicit.returncode, 0, explicit.stderr)
         output = json.loads(explicit.stdout)
-        self.assertEqual(len(output["failures"]), 2)
+        self.assertEqual(len(output["failures"]), 3)
         self.assertTrue(Path(output["report_path"]).is_file())
-        self.assertEqual(Path(output["report_path"]).read_text(encoding="utf-8").count('"url"'), 2)
+        self.assertEqual(Path(output["report_path"]).read_text(encoding="utf-8").count('"url"'), 3)
         self.assertTrue(all(item["report_path"] == output["report_path"] for item in output["failures"]))
         self.assertTrue(any("--paginate" in call for call in self.calls()))
         self.assertTrue(all(call[call.index("--method") + 1] == "GET" for call in self.calls()))
@@ -251,7 +256,6 @@ class AgentIntakeTest(unittest.TestCase):
         self.assertEqual(json.loads(first_failure.stdout)["failures"][0]["attempt"], 1)
 
         attempt_two = self.fixture(main_sha, runs={main_sha: run_page(
-            workflow_run(150, 20, main_sha, workflow_id=8),
             workflow_run(150, 20, main_sha, workflow_id=8, attempt=2),
         )})
         second_failure = self.invoke(attempt_two)
@@ -260,7 +264,6 @@ class AgentIntakeTest(unittest.TestCase):
         self.assertEqual(len(self.state_json()["seen"]), 2)
 
         successful_rerun = self.fixture(main_sha, runs={main_sha: run_page(
-            workflow_run(150, 20, main_sha, workflow_id=8),
             workflow_run(150, 20, main_sha, workflow_id=8, attempt=2, conclusion="success"),
         )})
         resolved = self.invoke(successful_rerun)
@@ -290,6 +293,72 @@ class AgentIntakeTest(unittest.TestCase):
         malformed = self.invoke(baseline)
         self.assertNotEqual(malformed.returncode, 0)
         self.assertEqual(state_path.read_bytes(), malformed_before)
+
+    def test_unknown_or_inconsistent_conclusions_preserve_last_state(self):
+        main_sha = sha(13)
+        baseline = self.fixture(main_sha, runs={main_sha: run_page()})
+        seeded = self.invoke(baseline)
+        self.assertEqual(seeded.returncode, 0, seeded.stderr)
+        state_path = self.state / "state.json"
+        before = state_path.read_bytes()
+
+        unknown = workflow_run(160, 1, main_sha, conclusion="future_failure")
+        missing = workflow_run(161, 2, main_sha)
+        missing.pop("conclusion")
+        null_completed = workflow_run(162, 3, main_sha, conclusion=None)
+        unfinished_with_conclusion = workflow_run(163, 4, main_sha, status="in_progress", conclusion="failure")
+        for invalid in (unknown, missing, null_completed, unfinished_with_conclusion):
+            result = self.invoke(self.fixture(main_sha, runs={main_sha: run_page(invalid)}))
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(state_path.read_bytes(), before)
+
+    def test_head_sha_result_cap_and_incomplete_pagination_preserve_state(self):
+        main_sha = sha(14)
+        baseline = self.fixture(main_sha, runs={main_sha: run_page()})
+        self.assertEqual(self.invoke(baseline).returncode, 0)
+        state_path = self.state / "state.json"
+        before = state_path.read_bytes()
+
+        for count in (1000, 1001):
+            capped = self.fixture(main_sha, runs={main_sha: run_page(
+                workflow_run(170, 1, main_sha), total_count=count,
+            )})
+            result = self.invoke(capped)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(state_path.read_bytes(), before)
+
+        incomplete = self.fixture(main_sha, runs={main_sha: run_page(
+            workflow_run(171, 2, main_sha), total_count=2,
+        )})
+        result = self.invoke(incomplete)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(state_path.read_bytes(), before)
+
+        inconsistent_pages = self.fixture(main_sha, runs={main_sha: {"__pages__": [
+            run_page(workflow_run(172, 3, main_sha), total_count=2),
+            run_page(workflow_run(173, 4, main_sha), total_count=3),
+        ]}})
+        result = self.invoke(inconsistent_pages)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(state_path.read_bytes(), before)
+
+        duplicate_id = workflow_run(174, 5, main_sha)
+        duplicate_pages = self.fixture(main_sha, runs={main_sha: {"__pages__": [
+            run_page(duplicate_id, total_count=2),
+            run_page(duplicate_id, total_count=2),
+        ]}})
+        result = self.invoke(duplicate_pages)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(state_path.read_bytes(), before)
+
+    def test_complete_subcap_result_is_accepted(self):
+        main_sha = sha(15)
+        runs = [workflow_run(1000 + number, number, main_sha) for number in range(1, 1000)]
+        fixture = self.fixture(main_sha, runs={main_sha: run_page(*runs, total_count=999)})
+        result = self.invoke(fixture)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, b"")
+        self.assertEqual(len(self.state_json()["seen"]), 1)
 
     def test_first_api_failure_does_not_create_state(self):
         main_sha = sha(11)

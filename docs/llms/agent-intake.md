@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-30
-revision: 1
+revision: 2
 summary: Define the read-only daily GitHub workflow failure intake and its local state contract
 ---
 
@@ -8,10 +8,21 @@ summary: Define the read-only daily GitHub workflow failure intake and its local
 
 `scripts/agent-intake.py` checks the current `main` commit and the current head
 of each open pull request. It uses only explicit GitHub API `GET` requests to
-read completed and in-progress workflow runs. For each workflow and head SHA,
+read workflow runs. For each workflow and head SHA,
 it considers the newest run number and newest attempt. A newer success or run
 in progress fences an older failure; failed, timed-out, startup-failed, and
 approval-required results can be reported.
+
+The request pins REST API version `2026-03-10`. Workflow-run status and
+conclusion fields must match the recognized GitHub vocabulary: completed runs
+require a known non-null conclusion, and unfinished runs require a null
+conclusion. Unknown or inconsistent outcomes fail without advancing state.
+For each `head_sha` search, the tool also checks page `total_count` consistency
+and unique run IDs; GitHub caps such searches at 1,000 results, so an
+at-cap or incomplete result fails closed. The contract follows GitHub's
+[workflow-runs endpoint](https://docs.github.com/en/rest/actions/workflow-runs?apiVersion=2026-03-10#list-workflow-runs-for-a-repository),
+[check suite status and conclusion values](https://docs.github.com/en/rest/guides/using-the-rest-api-to-interact-with-checks?apiVersion=2026-03-10#about-check-suites),
+and [REST API version header guidance](https://docs.github.com/en/rest/about-the-rest-api/api-versions?apiVersion=2026-03-10).
 
 The first run records current failures as a quiet baseline. Later runs print
 JSON only for newly observed failures. `--report-existing` explicitly prints

@@ -15,8 +15,14 @@ import urllib.parse
 
 
 SCHEMA_VERSION = 1
+GITHUB_API_VERSION = "2026-03-10"
 SHA = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
 REPO = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
+WORKFLOW_STATUSES = {"completed", "in_progress", "pending", "queued", "requested", "waiting"}
+WORKFLOW_CONCLUSIONS = {
+    "action_required", "cancelled", "failure", "neutral", "skipped", "stale",
+    "startup_failure", "success", "timed_out",
+}
 ACTIONABLE_CONCLUSIONS = {"action_required", "failure", "startup_failure", "timed_out"}
 
 
@@ -50,7 +56,10 @@ def parse_documents(raw, endpoint):
 
 def api_get(repo, route, fields=(), paginate=False):
     endpoint = f"repos/{repo}/{route}"
-    argv = ["gh", "api", "--method", "GET"]
+    argv = [
+        "gh", "api", "--method", "GET",
+        "--header", f"X-GitHub-Api-Version: {GITHUB_API_VERSION}",
+    ]
     if paginate:
         argv.append("--paginate")
     for key, value in fields:
@@ -149,22 +158,41 @@ def workflow_runs(repo, targets):
             (("head_sha", head_sha), ("per_page", "100")),
             paginate=True,
         )
+        advertised_count = None
+        returned_ids = set()
         for document in documents:
-            if not isinstance(document, dict) or not isinstance(document.get("workflow_runs"), list):
+            count = document.get("total_count") if isinstance(document, dict) else None
+            if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+                raise IntakeError(f"GitHub returned an invalid total_count for {endpoint}")
+            if count >= 1000:
+                raise IntakeError(f"GitHub head_sha search reaches its 1,000-result cap for {endpoint}")
+            if advertised_count is not None and count != advertised_count:
+                raise IntakeError(f"GitHub changed total_count while paginating {endpoint}")
+            advertised_count = count
+            if not isinstance(document.get("workflow_runs"), list):
                 raise IntakeError(f"unexpected GitHub response shape for {endpoint}")
             for run in document["workflow_runs"]:
                 if not isinstance(run, dict):
                     raise IntakeError("GitHub returned an invalid workflow run")
+                run_id = positive_int(run.get("id"), "workflow run ID")
+                returned_ids.add(run_id)
                 run_sha = valid_sha(run.get("head_sha"), "workflow run head SHA")
                 if run_sha != head_sha:
                     continue
-                run_id = positive_int(run.get("id"), "workflow run ID")
                 attempt = positive_int(run.get("run_attempt"), "workflow run attempt")
                 workflow_id = positive_int(run.get("workflow_id"), "workflow ID")
                 run_number = positive_int(run.get("run_number"), "workflow run number")
                 status = run.get("status")
-                if status not in {"completed", "in_progress", "queued", "waiting", "requested", "pending"}:
+                if not isinstance(status, str) or status not in WORKFLOW_STATUSES:
                     raise IntakeError("GitHub returned an unknown workflow run status")
+                if "conclusion" not in run:
+                    raise IntakeError("GitHub workflow run is missing conclusion")
+                conclusion = run["conclusion"]
+                if status == "completed":
+                    if not isinstance(conclusion, str) or conclusion not in WORKFLOW_CONCLUSIONS:
+                        raise IntakeError("GitHub workflow run has an unknown or missing completed conclusion")
+                elif conclusion is not None:
+                    raise IntakeError("GitHub workflow run has a conclusion before completion")
                 if run_id in by_id:
                     prior_sha, attempts = by_id[run_id]
                     if prior_sha != run_sha:
@@ -176,6 +204,13 @@ def workflow_runs(repo, targets):
                 if prior is not None and prior != run:
                     raise IntakeError("GitHub returned conflicting copies of one workflow run attempt")
                 attempts[attempt] = run
+        if advertised_count is None:
+            raise IntakeError(f"GitHub omitted total_count for {endpoint}")
+        if len(returned_ids) != advertised_count:
+            raise IntakeError(
+                f"GitHub pagination for {endpoint} returned {len(returned_ids)} unique run IDs, "
+                f"but total_count is {advertised_count}"
+            )
 
     by_workflow_head = {}
     for run_sha, attempts in by_id.values():
