@@ -249,8 +249,13 @@ pub(super) fn parse_file_config(
             FileFlags::CONFIG | FileFlags::NOREPLACE | FileFlags::MISSINGOK | FileFlags::GHOST,
         ) {
             // RPM's root is an ownership anchor, not deployable payload (fsm.cc).
+            // A flagged anchor violates the root invariant the artifact parser
+            // enforces, so refuse it instead of silently dropping the flags.
             if fields[0] == "/" {
-                continue;
+                return Err(Error::ParseError(format!(
+                    "RPM root ownership anchor carries unsupported file flags {:#x}",
+                    flags.bits()
+                )));
             }
             let path = crate::packages::archive_utils::normalize_path(fields[0])
                 .map_err(|error| Error::ParseError(error.to_string()))?;

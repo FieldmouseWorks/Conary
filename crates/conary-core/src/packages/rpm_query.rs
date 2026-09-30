@@ -318,9 +318,12 @@ fn parse_rpm_file_records(output: &str) -> Result<Vec<InstalledFileInfo>> {
 ///
 /// RPM's filesystem state machine treats the root as an ownership anchor, not
 /// a deployable payload node. The `filesystem` package owns `/`, and
-/// `rpm -q --queryformat` renders that record with `FILENAMES=/`. Skip that
-/// exact record after the shape checks so it never reaches deployment-path
-/// normalization.
+/// `rpm -q --queryformat` renders that record with `FILENAMES=/`. Classify that
+/// exact record only after every field is parsed, and require it to satisfy the
+/// same root-anchor invariant the RPM artifact parser enforces: a directory
+/// mode, no file flags, no digest, no link target, and size zero. A `/` record
+/// carrying anything else is ambiguous or corrupted and is rejected rather than
+/// skipped, so it never reaches deployment-path normalization.
 ///
 /// <https://github.com/rpm-software-management/rpm/blob/a8f0192aee1c08bd1454ed2ac6ebaf506004b55c/lib/fsm.cc#L71-L82>
 fn parse_rpm_file_record(record_number: usize, record: &str) -> Result<Option<InstalledFileInfo>> {
@@ -335,11 +338,6 @@ fn parse_rpm_file_record(record_number: usize, record: &str) -> Result<Option<In
         return Err(Error::ParseError(format!(
             "RPM file record {record_number} has an empty path"
         )));
-    }
-    // The root is an ownership anchor, not a deployable payload node. Match the
-    // exact `FILENAMES` field only; every other path keeps its validation.
-    if parts[0] == "/" {
-        return Ok(None);
     }
     let size = parts[1].parse::<i64>().map_err(|error| {
         Error::ParseError(format!(
@@ -403,6 +401,32 @@ fn parse_rpm_file_record(record_number: usize, record: &str) -> Result<Option<In
     }
 
     let flags = FileFlags::from_bits_retain(flags);
+    let link_target = rpm_none_to_option(&parts[7]);
+
+    // The root is an ownership anchor, not a deployable payload node. Match the
+    // exact `FILENAMES` field only, and only after the whole record is parsed:
+    // an anchor that violates the root invariant is an error, not a record to
+    // skip. This mirrors the RPM artifact parser's `validate_root_anchor`.
+    if parts[0] == "/" {
+        if (mode as u32) & libc::S_IFMT != libc::S_IFDIR {
+            return Err(Error::ParseError(format!(
+                "RPM file record {record_number} root ownership anchor must be a directory"
+            )));
+        }
+        if !flags.is_empty() {
+            return Err(Error::ParseError(format!(
+                "RPM file record {record_number} root ownership anchor carries unsupported file flags {:#x}",
+                flags.bits()
+            )));
+        }
+        if digest.is_some() || link_target.is_some() || size != 0 {
+            return Err(Error::ParseError(format!(
+                "RPM file record {record_number} root ownership anchor carries non-directory payload metadata"
+            )));
+        }
+        return Ok(None);
+    }
+
     let absence_policy = match (
         flags.contains(FileFlags::GHOST),
         flags.contains(FileFlags::MISSINGOK),
@@ -419,7 +443,7 @@ fn parse_rpm_file_record(record_number: usize, record: &str) -> Result<Option<In
         digest,
         user: Some(user),
         group: Some(group),
-        link_target: rpm_none_to_option(&parts[7]),
+        link_target,
         mtime: Some(mtime),
         absence_policy,
     }))

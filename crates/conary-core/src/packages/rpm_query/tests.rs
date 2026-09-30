@@ -312,6 +312,42 @@ fn file_query_uses_exact_parallel_array_records() {
     );
 }
 
+/// The exact ten queryformat fields RPM emits for the filesystem-root anchor:
+/// `FILENAMES=/`, zero size, empty digest and link target, directory mode, no
+/// flags, and a NORMAL installation state.
+const ROOT_ANCHOR_FIELDS: [&str; 10] = [
+    "/",
+    "0",
+    "1700000000",
+    "",
+    "040555",
+    "root",
+    "root",
+    "",
+    "0",
+    "0",
+];
+
+/// A deployable config record with the CONFIG flag, used to prove the anchor
+/// refusal does not disturb sibling file authority.
+const CONFIG_FIXTURE_FIELDS: [&str; 10] = [
+    "/etc/fixture.conf",
+    "1",
+    "1700000001",
+    "abcdef12",
+    "0100644",
+    "root",
+    "root",
+    "",
+    "1",
+    "0",
+];
+
+/// Render one RPM file record from its exact parallel queryformat fields.
+fn file_record(fields: [&str; 10]) -> String {
+    fields.join("\x1e")
+}
+
 #[test]
 fn rpm_filesystem_root_is_an_ownership_anchor_not_deployable_payload() {
     // The root record is verbatim-shaped from Fedora's `filesystem` package:
@@ -331,15 +367,58 @@ fn rpm_filesystem_root_is_an_ownership_anchor_not_deployable_payload() {
 
 #[test]
 fn rpm_root_config_record_is_not_config_authority() {
-    let config = super::inventory::parse_file_config(
-        "/etc/fixture.conf\x1e1\x1e1700000001\x1eabcdef12\x1e0100644\x1eroot\x1eroot\x1e\x1e1\x1e0\x1f\
-         /\x1e0\x1e1700000000\x1e\x1e040555\x1eroot\x1eroot\x1e\x1e1\x1e0\x1f",
-    )
-    .unwrap();
+    // A flagged root anchor violates the artifact parser's invariant, so the
+    // installed-configuration authority refuses it rather than dropping it.
+    let mut flagged_root = ROOT_ANCHOR_FIELDS;
+    flagged_root[8] = "1";
+    let refused = format!(
+        "{}\x1f{}",
+        file_record(CONFIG_FIXTURE_FIELDS),
+        file_record(flagged_root)
+    );
+    assert!(matches!(
+        super::inventory::parse_file_config(&refused).unwrap_err(),
+        Error::ParseError(_)
+    ));
 
+    // Positive control through the same builder: without flags on `/`, the
+    // sibling config record keeps its authority.
+    let accepted = format!(
+        "{}\x1f{}",
+        file_record(CONFIG_FIXTURE_FIELDS),
+        file_record(ROOT_ANCHOR_FIELDS)
+    );
+    let config = super::inventory::parse_file_config(&accepted).unwrap();
     assert_eq!(config.len(), 1);
     assert!(config.contains_key("/etc/fixture.conf"));
     assert!(!config.contains_key("/"));
+}
+
+#[test]
+fn file_query_rejects_corrupted_root_anchor_metadata() {
+    // Positive control: the unmodified builder output is a valid anchor and
+    // therefore yields no deployable entries.
+    assert!(
+        parse_rpm_file_records(&file_record(ROOT_ANCHOR_FIELDS))
+            .unwrap()
+            .is_empty()
+    );
+
+    for (field, value) in [
+        (4, "0100644"),  // regular-file mode
+        (1, "4"),        // nonzero size
+        (3, "abcdef12"), // digest
+        (7, "x"),        // link target
+        (8, "1"),        // CONFIG flag
+    ] {
+        let mut fields = ROOT_ANCHOR_FIELDS;
+        fields[field] = value;
+        let error = parse_rpm_file_records(&file_record(fields)).unwrap_err();
+        assert!(
+            matches!(error, Error::ParseError(_)),
+            "root anchor field {field}={value:?} must be rejected as a parse error"
+        );
+    }
 }
 
 #[test]
