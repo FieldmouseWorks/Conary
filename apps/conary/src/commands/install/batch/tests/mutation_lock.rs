@@ -196,3 +196,121 @@ fn a_batch_proceeds_when_the_certified_outgoing_set_is_unchanged() {
         "the outgoing relation removal must commit"
     );
 }
+
+fn generic_provide(name: &str) -> conary_core::resolver::identity::ProvidedCapability {
+    conary_core::resolver::identity::ProvidedCapability {
+        kind: conary_core::repository::dependency_model::RepositoryCapabilityKind::Generic,
+        name: name.to_string(),
+        version: None,
+        version_relation: None,
+        version_scheme: conary_core::repository::versioning::VersionScheme::Rpm,
+        architecture_qualifier:
+            conary_core::repository::dependency_model::ProvideArchitectureQualifier::Implicit,
+        provenance: conary_core::repository::dependency_model::CapabilityProvenance::AuthorDeclared,
+    }
+}
+
+/// Insert one installed RPM-versioned trove whose only hard group is
+/// `(foo if bar)`.
+fn insert_installed_conditional_trove(db_path: &str, name: &str) -> i64 {
+    use conary_core::repository::dependency_model::RepositoryRequirementKind;
+
+    let conn = conary_core::db::open(db_path).unwrap();
+    let mut installed = Trove::new(
+        name.to_string(),
+        "1.0.0".to_string(),
+        TroveType::Package,
+        conary_core::repository::versioning::VersionScheme::Rpm,
+    );
+    installed.architecture = Some("x86_64".to_string());
+    let trove_id = installed.insert(&conn).unwrap();
+    let requirement = conary_core::repository::requirement::parse_native_requirement(
+        RepositoryRequirementKind::Depends,
+        conary_core::repository::versioning::VersionScheme::Rpm,
+        "(foo if bar)",
+    )
+    .unwrap();
+    conary_core::db::models::InstalledRequirementGroup::insert_groups(
+        &conn,
+        trove_id,
+        conary_core::repository::versioning::VersionScheme::Rpm,
+        &[requirement],
+    )
+    .unwrap();
+    trove_id
+}
+
+fn certified_end_state_batch() -> Vec<PreparedPackage> {
+    let mut dependency = prepared_test_package("dep-lib", "/usr/lib64/libdep-lib.so.1", b"dep");
+    dependency.install_reason = InstallReason::Dependency;
+    let mut root = prepared_test_package("root-tool", "/usr/bin/root-tool", b"root");
+    root.provides.push(generic_provide("bar"));
+    root.requirements = vec![depends_on("dep-lib")];
+    vec![dependency, root]
+}
+
+fn seeded_db(temp: &std::path::Path) -> (std::path::PathBuf, String) {
+    let db_path = temp.join("conary.db");
+    std::fs::create_dir_all(temp.join("root")).unwrap();
+    conary_core::db::init(&db_path).unwrap();
+    crate::commands::test_helpers::seed_test_bootable_runtime(&db_path);
+    let db_path_string = db_path.to_string_lossy().into_owned();
+    (db_path, db_path_string)
+}
+
+/// The caller solved the batch against installed state before the mutation
+/// lock. Another transaction installs `x`, whose `(foo if bar)` the incoming
+/// root's `bar` activates, after the batch acquires the lock. The locked batch
+/// must re-certify the complete end state and refuse.
+#[test]
+fn a_batch_refuses_an_end_state_broken_after_the_dependency_solve() {
+    let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
+    let temp = tempfile::tempdir().unwrap();
+    let (_db_path, db_path_string) = seeded_db(temp.path());
+
+    let hook_db_path = db_path_string.clone();
+    crate::commands::install::dependencies::set_after_mutation_lock_hook(move || {
+        insert_installed_conditional_trove(&hook_db_path, "x");
+    });
+
+    let error = BatchInstaller::new(&db_path_string, SandboxMode::Always)
+        .with_certified_end_state()
+        .install_batch(certified_end_state_batch())
+        .expect_err("a batch accepted an end state broken before it locked");
+    crate::commands::install::dependencies::clear_after_mutation_lock_hook();
+
+    let changed = error
+        .downcast_ref::<crate::commands::install::dependencies::RequirementsChanged>()
+        .expect("refusal must carry the typed requirements-change error");
+    assert_eq!(changed.package, "root-tool");
+    assert!(
+        changed.unsatisfied.iter().any(|group| matches!(
+            &group.owner,
+            conary_core::resolver::sat::SatGroupOwner::Installed { package_name, .. }
+                if package_name == "x"
+        )),
+        "the refusal must name the installed trove the incoming batch breaks: {changed:?}"
+    );
+}
+
+/// Positive control: the identical batch with no armed seam certifies against a
+/// fixed end state that holds and installs.
+#[test]
+fn a_batch_proceeds_when_the_fixed_end_state_holds() {
+    let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
+    let temp = tempfile::tempdir().unwrap();
+    let (db_path, db_path_string) = seeded_db(temp.path());
+
+    crate::commands::install::dependencies::clear_after_mutation_lock_hook();
+    BatchInstaller::new(&db_path_string, SandboxMode::Always)
+        .with_certified_end_state()
+        .install_batch(certified_end_state_batch())
+        .expect("a fixed end state that holds must install");
+
+    let conn = conary_core::db::open(&db_path).unwrap();
+    assert_eq!(
+        Trove::find_by_name(&conn, "root-tool").unwrap().len(),
+        1,
+        "the root must be persisted"
+    );
+}

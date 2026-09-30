@@ -23,7 +23,7 @@ use petgraph::visit::EdgeRef;
 use crate::error::{Error, Result};
 use crate::packages::PackageFormat;
 use crate::repository::dependency_model::{
-    ProvidedCapability, RepositoryRequirementGroup, RepositoryRequirementKind,
+    DebianMultiArch, ProvidedCapability, RepositoryRequirementGroup, RepositoryRequirementKind,
 };
 use crate::repository::resolution_policy::ResolutionPolicy;
 use crate::repository::versioning::VersionScheme;
@@ -593,21 +593,29 @@ pub fn solve_package_requirements_with_provides_outgoing_and_policy(
     )
 }
 
-fn solve_package_requirements_with_provides_for_end_state(
-    conn: &Connection,
-    package: &dyn PackageFormat,
+/// Build the exact package identity of an incoming package from its fields.
+///
+/// An incoming package is a transaction fact, not a repository or installed
+/// row, so its identity carries no repository, install-slot, or canonical
+/// provenance. Its provided capabilities are the exact set the transaction
+/// installs.
+fn incoming_package_identity(
+    name: String,
+    version: String,
+    package_release: Option<String>,
+    architecture: Option<String>,
+    debian_multi_arch: Option<DebianMultiArch>,
+    version_scheme: VersionScheme,
     provided_capabilities: Vec<ProvidedCapability>,
-    outgoing_trove_ids: &[i64],
-    policy: &ResolutionPolicy,
-) -> Result<SatResolution> {
-    let incoming = PackageIdentity {
+) -> PackageIdentity {
+    PackageIdentity {
         repo_package_id: None,
-        name: package.name().to_string(),
-        version: package.version().to_string(),
-        package_release: package.package_release().map(str::to_string),
-        architecture: package.architecture().map(str::to_string),
-        debian_multi_arch: package.debian_multi_arch(),
-        version_scheme: package.version_scheme(),
+        name,
+        version,
+        package_release,
+        architecture,
+        debian_multi_arch,
+        version_scheme,
         repository_id: None,
         repository_name: String::new(),
         repository_profile: None,
@@ -617,7 +625,101 @@ fn solve_package_requirements_with_provides_for_end_state(
         installed_trove_id: None,
         installed_pinned: false,
         provided_capabilities,
-    };
+    }
+}
+
+/// Resolve the architecture an incoming package's requirements are evaluated
+/// for. A package that declares no architecture depends on the native token of
+/// its own version scheme.
+fn depending_architecture_for(
+    architecture: Option<&str>,
+    version_scheme: VersionScheme,
+) -> Result<String> {
+    match architecture {
+        Some(architecture) => Ok(architecture.to_string()),
+        None => crate::repository::registry::native_architecture_for_scheme(version_scheme),
+    }
+}
+
+/// One member of a fully determined incoming package set.
+///
+/// The identity and the depending architecture are resolved once at
+/// construction so end-state certification can evaluate the package without a
+/// solve.
+pub struct FixedIncomingPackage {
+    pub(super) identity: PackageIdentity,
+    pub(super) requirements: Vec<RepositoryRequirementGroup>,
+    pub(super) version_scheme: VersionScheme,
+    pub(super) depending_architecture: String,
+}
+
+impl FixedIncomingPackage {
+    /// Build one fixed incoming package from its exact fields.
+    ///
+    /// `architecture` absent resolves to the native token for `version_scheme`,
+    /// matching the single-incoming solve path.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        name: String,
+        version: String,
+        package_release: Option<String>,
+        architecture: Option<String>,
+        debian_multi_arch: Option<DebianMultiArch>,
+        version_scheme: VersionScheme,
+        provided_capabilities: Vec<ProvidedCapability>,
+        requirements: Vec<RepositoryRequirementGroup>,
+    ) -> Result<Self> {
+        let depending_architecture =
+            depending_architecture_for(architecture.as_deref(), version_scheme)?;
+        let identity = incoming_package_identity(
+            name,
+            version,
+            package_release,
+            architecture,
+            debian_multi_arch,
+            version_scheme,
+            provided_capabilities,
+        );
+        Ok(Self {
+            identity,
+            requirements,
+            version_scheme,
+            depending_architecture,
+        })
+    }
+}
+
+/// Certify that a fully determined incoming package set holds in the fixed end
+/// state `(installed - outgoing) + incoming`.
+///
+/// Nothing is left to choose under the batch mutation lock, so this evaluates
+/// every hard requirement group the transaction can observe against the fixed
+/// set without running a SAT solve. An empty result certifies the end state;
+/// each returned group preserves its typed owner.
+pub fn certify_fixed_end_state(
+    conn: &Connection,
+    incoming: &[FixedIncomingPackage],
+    outgoing_trove_ids: &[i64],
+) -> Result<Vec<SatUnsatisfiedGroup>> {
+    end_state::certify_fixed_end_state(conn, incoming, outgoing_trove_ids)
+}
+
+fn solve_package_requirements_with_provides_for_end_state(
+    conn: &Connection,
+    package: &dyn PackageFormat,
+    provided_capabilities: Vec<ProvidedCapability>,
+    outgoing_trove_ids: &[i64],
+    policy: &ResolutionPolicy,
+) -> Result<SatResolution> {
+    let incoming = incoming_package_identity(
+        package.name().to_string(),
+        package.version().to_string(),
+        package.package_release().map(str::to_string),
+        package.architecture().map(str::to_string),
+        package.debian_multi_arch(),
+        package.version_scheme(),
+        provided_capabilities,
+    );
     let mut external_requirements = Vec::new();
     for requirement in package.requirements() {
         if !positive_requirement_group_satisfied_by_package(
@@ -628,12 +730,8 @@ fn solve_package_requirements_with_provides_for_end_state(
             external_requirements.push(requirement.clone());
         }
     }
-    let depending_architecture = match package.architecture() {
-        Some(architecture) => architecture.to_string(),
-        None => {
-            crate::repository::registry::native_architecture_for_scheme(package.version_scheme())?
-        }
-    };
+    let depending_architecture =
+        depending_architecture_for(package.architecture(), package.version_scheme())?;
     end_state::solve_requirement_groups_for_end_state(
         conn,
         &external_requirements,

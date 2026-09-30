@@ -105,6 +105,10 @@ pub(crate) struct RequirementsChanged {
     pub package: String,
     pub conflict: Option<String>,
     pub missing: Vec<String>,
+    /// Production callers render the error text; `unsatisfied` is the typed
+    /// detail for callers that downcast.
+    #[allow(dead_code)]
+    pub unsatisfied: Vec<conary_core::resolver::sat::SatUnsatisfiedGroup>,
 }
 
 /// The transaction's end state leaves a hard requirement group unsatisfied.
@@ -165,6 +169,7 @@ pub(crate) fn certify_requirements_under_lock(
                 package: pkg.name().to_string(),
                 conflict: Some(message),
                 missing: Vec::new(),
+                unsatisfied: Vec::new(),
             }
             .into());
         }
@@ -179,6 +184,7 @@ pub(crate) fn certify_requirements_under_lock(
                 .iter()
                 .map(|package| package.name.clone())
                 .collect(),
+            unsatisfied: resolution.unsatisfied_groups,
         }
         .into());
     }

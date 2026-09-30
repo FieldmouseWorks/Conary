@@ -142,8 +142,8 @@ pub(super) fn insert_identity_name(
 }
 
 /// The capability names the transaction already declares as added or removed:
-/// the incoming package's name and provides, the incoming groups' atoms (which
-/// the solve may install from a repository), and every declared outgoing
+/// every incoming package's name and provides, the incoming groups' atoms
+/// (which the solve may install from a repository), and every declared outgoing
 /// trove's name and provides. The loop extends this with the identities SAT
 /// selects and the troves relation planning removes.
 ///
@@ -153,15 +153,15 @@ pub(super) fn insert_identity_name(
 /// names stay literal.
 pub(super) fn affected_capability_names(
     outgoing_trove_ids: &[i64],
-    incoming: Option<&PackageIdentity>,
+    incoming: &[PackageIdentity],
     incoming_groups: &[ValidatedRequirementGroup],
     before: &[PackageIdentity],
     canonical_equivalents: &CanonicalEquivalents,
 ) -> HashSet<String> {
     let mut affected = HashSet::new();
-    if let Some(incoming) = incoming {
-        insert_identity_name(&mut affected, &incoming.name, canonical_equivalents);
-        for capability in &incoming.provided_capabilities {
+    for package in incoming {
+        insert_identity_name(&mut affected, &package.name, canonical_equivalents);
+        for capability in &package.provided_capabilities {
             affected.insert(capability.name.clone());
         }
     }

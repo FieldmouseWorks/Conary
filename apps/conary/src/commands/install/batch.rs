@@ -17,6 +17,7 @@
 use super::super::open_db;
 mod ccs;
 mod config;
+mod end_state;
 mod execution;
 mod ordering;
 mod preparation;
@@ -238,6 +239,11 @@ pub struct BatchInstaller<'a> {
     /// outgoing. `Some` certifies that the locked batch removes exactly this
     /// set; `None` means the caller solved without a projection.
     certified_outgoing: Option<CertifiedOutgoing>,
+    /// Whether the locked batch must re-certify the complete end state. The
+    /// caller solved the batch's dependencies against installed state before
+    /// the lock, so the locked batch re-certifies every hard requirement group
+    /// the fixed end state `(installed - outgoing) + incoming` must hold.
+    certify_end_state: bool,
 }
 
 pub(crate) struct BatchInstallResult {
@@ -293,6 +299,7 @@ impl<'a> BatchInstaller<'a> {
             db_path,
             sandbox_mode,
             certified_outgoing: None,
+            certify_end_state: false,
         }
     }
 
@@ -306,6 +313,18 @@ impl<'a> BatchInstaller<'a> {
         certified_outgoing: Option<CertifiedOutgoing>,
     ) -> Self {
         self.certified_outgoing = certified_outgoing;
+        self
+    }
+
+    /// Certify the complete fixed end state under the mutation lock.
+    ///
+    /// The caller solved the batch's dependencies against installed state read
+    /// before the lock, so the locked batch must re-certify that the fixed end
+    /// state `(installed - outgoing) + every prepared package` holds every hard
+    /// requirement group the transaction can observe. A drift refuses with
+    /// `RequirementsChanged`.
+    pub(crate) fn with_certified_end_state(mut self) -> Self {
+        self.certify_end_state = true;
         self
     }
 
@@ -426,6 +445,13 @@ impl<'a> BatchInstaller<'a> {
         // set the solve was allowed to assume removed.
         if let Some(certified) = self.certified_outgoing.as_ref() {
             certified.require_unchanged(&resolved_batch_outgoing(packages)?)?;
+        }
+        // Under the lock nothing is left to choose, so the complete end state is
+        // `(installed - outgoing) + every prepared package`. Re-certify every
+        // hard requirement group the transaction can observe against that fixed
+        // set without a SAT solve.
+        if self.certify_end_state {
+            end_state::certify_batch_end_state(conn, packages)?;
         }
         Ok(promise_plan)
     }

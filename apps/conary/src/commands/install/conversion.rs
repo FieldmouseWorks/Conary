@@ -856,7 +856,8 @@ async fn install_verified_ccs_artifact(
     let certified_outgoing = prepared.project_certified_outgoing(db_path)?;
     let result = prepared.install_with_result(
         BatchInstaller::new(db_path, sandbox_mode)
-            .with_certified_outgoing(Some(certified_outgoing)),
+            .with_certified_outgoing(Some(certified_outgoing))
+            .with_certified_end_state(),
     )?;
     let trove_id = result.exact_trove_id(&ccs_pkg)?;
     report.extend(result.report);

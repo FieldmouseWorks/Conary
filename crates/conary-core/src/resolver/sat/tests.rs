@@ -1504,6 +1504,8 @@ fn test_removal_does_not_attribute_preexisting_unsatisfied_capability_to_unrelat
 
 #[path = "tests/canonical.rs"]
 mod canonical;
+#[path = "tests/fixed_end_state.rs"]
+mod fixed_end_state;
 #[path = "tests/fixed_incoming.rs"]
 mod fixed_incoming;
 #[path = "tests/formal_dependencies.rs"]

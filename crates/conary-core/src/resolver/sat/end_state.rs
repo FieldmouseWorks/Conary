@@ -36,7 +36,8 @@ use crate::resolver::provider::ConaryProvider;
 use crate::resolver::provider::types::RequirementGroupIdentity;
 
 use super::{
-    SatGroupOwner, SatPackage, SatRelationRemoval, SatResolution, SatSource, SatUnsatisfiedGroup,
+    FixedIncomingPackage, SatGroupOwner, SatPackage, SatRelationRemoval, SatResolution, SatSource,
+    SatUnsatisfiedGroup,
 };
 use candidates::{
     InstalledCandidate, affected_capability_names, insert_identity_name,
@@ -128,7 +129,7 @@ struct EndStateFacts {
 fn end_state_facts(
     conn: &Connection,
     outgoing_trove_ids: &[i64],
-    incoming: Option<&PackageIdentity>,
+    incoming: &[PackageIdentity],
 ) -> Result<EndStateFacts> {
     let before =
         crate::resolver::requirements::load_installed_package_identities_for_packages(conn)?;
@@ -143,9 +144,7 @@ fn end_state_facts(
         .cloned()
         .collect::<Vec<_>>();
     let mut fixed = surviving.clone();
-    if let Some(incoming) = incoming {
-        fixed.push(incoming.clone());
-    }
+    fixed.extend(incoming.iter().cloned());
     Ok(EndStateFacts {
         before,
         surviving,
@@ -363,23 +362,17 @@ fn removed_trove_ids(remove_order: &[SatRelationRemoval]) -> HashSet<i64> {
         .collect()
 }
 
-/// Solve exact hard requirement groups against the transaction's known end
-/// state.
+/// Validate the positive hard groups of one package's stored requirements.
 ///
-/// `groups` are the incoming package's external hard groups and
-/// `outgoing_trove_ids` are the exact installed troves the owning transaction
-/// removes. The surviving installed packages' stored hard groups are validated
-/// against the projected end state, so a fresh install cannot silently break an
-/// installed package.
-pub(super) fn solve_requirement_groups_for_end_state(
-    conn: &Connection,
+/// Every group is validated against the package version scheme. `Depends` and
+/// `PreDepends` become incoming-owned groups; soft kinds are skipped; a negative
+/// kind is a typed refusal because it cannot be solved as a positive install
+/// requirement.
+fn validated_hard_groups(
     groups: &[RepositoryRequirementGroup],
     version_scheme: VersionScheme,
     depending_architecture: &str,
-    outgoing_trove_ids: &[i64],
-    incoming: Option<&PackageIdentity>,
-    policy: &ResolutionPolicy,
-) -> Result<SatResolution> {
+) -> Result<Vec<ValidatedRequirementGroup>> {
     let mut validated = Vec::new();
     for group in groups {
         crate::repository::requirement::validate_requirement_group(group, version_scheme)
@@ -411,14 +404,39 @@ pub(super) fn solve_requirement_groups_for_end_state(
             }
         }
     }
+    Ok(validated)
+}
+
+/// Solve exact hard requirement groups against the transaction's known end
+/// state.
+///
+/// `groups` are the incoming package's external hard groups and
+/// `outgoing_trove_ids` are the exact installed troves the owning transaction
+/// removes. The surviving installed packages' stored hard groups are validated
+/// against the projected end state, so a fresh install cannot silently break an
+/// installed package.
+pub(super) fn solve_requirement_groups_for_end_state(
+    conn: &Connection,
+    groups: &[RepositoryRequirementGroup],
+    version_scheme: VersionScheme,
+    depending_architecture: &str,
+    outgoing_trove_ids: &[i64],
+    incoming: Option<&PackageIdentity>,
+    policy: &ResolutionPolicy,
+) -> Result<SatResolution> {
+    let validated = validated_hard_groups(groups, version_scheme, depending_architecture)?;
+    let incoming_slice = match incoming {
+        Some(incoming) => std::slice::from_ref(incoming),
+        None => &[],
+    };
 
     let canonical_equivalents = load_canonical_equivalents(conn)?;
 
     let native_architecture = crate::repository::registry::detect_system_arch()?;
-    let facts = end_state_facts(conn, outgoing_trove_ids, incoming)?;
+    let facts = end_state_facts(conn, outgoing_trove_ids, incoming_slice)?;
     let affected = affected_capability_names(
         outgoing_trove_ids,
-        incoming,
+        incoming_slice,
         &validated,
         &facts.before,
         &canonical_equivalents,
@@ -477,6 +495,69 @@ pub(super) fn solve_requirement_groups_for_end_state(
         &facts.surviving,
         &native_architecture,
     )
+}
+
+/// Certify that a fully determined incoming package set leaves every hard
+/// requirement group it can observe satisfied in the fixed end state
+/// `(installed - outgoing) + incoming`.
+///
+/// Nothing is left to choose, so no SAT solve runs: the end state is exactly the
+/// surviving installed packages plus every incoming package. Installed groups
+/// the transaction can observe are admitted to a fixed point and evaluated
+/// against that fixed set. A pre-existing broken installed group is discharged
+/// by identity, exactly as in the solve path. The returned groups are the hard
+/// requirement groups the end state leaves unsatisfied; an empty result
+/// certifies the end state.
+pub(super) fn certify_fixed_end_state(
+    conn: &Connection,
+    incoming: &[FixedIncomingPackage],
+    outgoing_trove_ids: &[i64],
+) -> Result<Vec<SatUnsatisfiedGroup>> {
+    let mut groups = Vec::new();
+    for package in incoming {
+        groups.extend(validated_hard_groups(
+            &package.requirements,
+            package.version_scheme,
+            &package.depending_architecture,
+        )?);
+    }
+
+    let canonical_equivalents = load_canonical_equivalents(conn)?;
+    let native_architecture = crate::repository::registry::detect_system_arch()?;
+    let identities = incoming
+        .iter()
+        .map(|package| package.identity.clone())
+        .collect::<Vec<_>>();
+    let facts = end_state_facts(conn, outgoing_trove_ids, &identities)?;
+    let affected = affected_capability_names(
+        outgoing_trove_ids,
+        &identities,
+        &groups,
+        &facts.before,
+        &canonical_equivalents,
+    );
+    let candidates = installed_hard_group_candidates(conn, outgoing_trove_ids, &facts.before)?;
+    let mut validation =
+        EndStateValidation::new(groups, candidates, affected, canonical_equivalents);
+    // Admission is one-way and the candidate set is finite, so this terminates.
+    while validation.admit_mentioned(
+        &facts.before,
+        &facts.surviving,
+        &native_architecture,
+        &HashSet::new(),
+    )? {}
+
+    let mut unsatisfied = Vec::new();
+    for group in &validation.groups {
+        if !group.satisfied_against(
+            &native_architecture,
+            &facts.fixed,
+            &validation.canonical_equivalents,
+        )? {
+            unsatisfied.push(group.unsatisfied());
+        }
+    }
+    Ok(unsatisfied)
 }
 
 /// Build the install order from the identities resolvo selected.
