@@ -156,6 +156,7 @@ pub(super) async fn add_candidate(
         Some(rpm_upgrade_bundle("summary-dependency", "1.0.0")),
         Vec::new(),
         false,
+        &[],
     );
     let dep_bytes = std::fs::read(&dependency).unwrap();
     let dep_repo = insert_test_static_ccs_repository(
