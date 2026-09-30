@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-09-30
-revision: 125
-summary: Route features to owned paths and proof, including agent workflow helpers, typed autoremove preview, installed-list, publication-debt, repository presentation, retained-survey requests, and workflow recovery.
+last_updated: 2026-10-01
+revision: 126
+summary: Route features to owned paths and proof, including agent workflow helpers, typed autoremove preview and final state, installed-list, publication-debt, repository presentation, retained-survey requests, and workflow recovery.
 ---
 
 # Feature Ownership And Interaction Gates
@@ -1220,7 +1220,7 @@ matrix job in `.github/workflows/pr-gate.yml`.
 `cargo test -p conary-test distro_config_requires_a_typed_build_context`;
 `cargo test -p conary-test focused_native_cross_source_manifest_runs_the_shared_lifecycle_contract`;
 `cargo test -p conary-test native_cross_source_`;
-`cargo test -p conary-test native_parity_autoremove_preview_requires_the_exact_typed_plan`.
+`cargo test -p conary-test native_parity_autoremove_`.
 
 **Interaction gate:** `bash scripts/build-static-conary.sh`;
 `cargo run -p conary-test -- run --suite phase4-native-pm-parity --distro fedora44 --phase 4`;
