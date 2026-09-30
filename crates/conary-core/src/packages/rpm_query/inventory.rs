@@ -203,7 +203,9 @@ fn capture_from_output(
     )
 }
 
-fn parse_file_config(output: &str) -> Result<BTreeMap<String, InstalledConfigAuthority>> {
+pub(super) fn parse_file_config(
+    output: &str,
+) -> Result<BTreeMap<String, InstalledConfigAuthority>> {
     let mut config = BTreeMap::new();
     for (record_index, record) in output
         .split('\x1f')
@@ -246,6 +248,10 @@ fn parse_file_config(output: &str) -> Result<BTreeMap<String, InstalledConfigAut
         if flags.intersects(
             FileFlags::CONFIG | FileFlags::NOREPLACE | FileFlags::MISSINGOK | FileFlags::GHOST,
         ) {
+            // RPM's root is an ownership anchor, not deployable payload (fsm.cc).
+            if fields[0] == "/" {
+                continue;
+            }
             let path = crate::packages::archive_utils::normalize_path(fields[0])
                 .map_err(|error| Error::ParseError(error.to_string()))?;
             if config

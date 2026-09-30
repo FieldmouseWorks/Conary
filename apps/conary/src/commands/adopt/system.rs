@@ -560,7 +560,12 @@ pub fn cmd_adopt_system(
         if error_count == 0
             && let Some(captured) = captured_selected_root.as_ref()
         {
-            captured_root_sync = Some(synchronize_captured_root(tx, changeset_id, captured)?);
+            captured_root_sync = Some(synchronize_captured_root(
+                tx,
+                &mut package_rows,
+                changeset_id,
+                captured,
+            )?);
         }
 
         let sqlite_work = package_rows.finish()?;

@@ -313,6 +313,36 @@ fn file_query_uses_exact_parallel_array_records() {
 }
 
 #[test]
+fn rpm_filesystem_root_is_an_ownership_anchor_not_deployable_payload() {
+    // The root record is verbatim-shaped from Fedora's `filesystem` package:
+    // `rpm -q --queryformat` renders `FILENAMES=/` with a directory mode.
+    let records = parse_rpm_file_records(
+        "/usr\x1e0\x1e1700000000\x1e\x1e040755\x1eroot\x1eroot\x1e\x1e0\x1e0\x1f\
+         /\x1e0\x1e1700000000\x1e\x1e040555\x1eroot\x1eroot\x1e\x1e0\x1e0\x1f\
+         /usr/bin/fixture\x1e42\x1e1700000001\x1eabcdef12\x1e0100755\x1eroot\x1eroot\x1e\x1e0\x1e0\x1f",
+    )
+    .unwrap();
+
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[0].path, "/usr");
+    assert_eq!(records[1].path, "/usr/bin/fixture");
+    assert!(records.iter().all(|record| record.path != "/"));
+}
+
+#[test]
+fn rpm_root_config_record_is_not_config_authority() {
+    let config = super::inventory::parse_file_config(
+        "/etc/fixture.conf\x1e1\x1e1700000001\x1eabcdef12\x1e0100644\x1eroot\x1eroot\x1e\x1e1\x1e0\x1f\
+         /\x1e0\x1e1700000000\x1e\x1e040555\x1eroot\x1eroot\x1e\x1e1\x1e0\x1f",
+    )
+    .unwrap();
+
+    assert_eq!(config.len(), 1);
+    assert!(config.contains_key("/etc/fixture.conf"));
+    assert!(!config.contains_key("/"));
+}
+
+#[test]
 fn file_query_uses_rpms_persisted_installation_state_as_live_authority() {
     let records = parse_rpm_file_records(
         "/normal\x1e1\x1e1\x1e00\x1e0100644\x1eroot\x1eroot\x1e\x1e0\x1e0\x1f\

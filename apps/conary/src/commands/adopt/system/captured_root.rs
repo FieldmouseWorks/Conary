@@ -109,6 +109,7 @@ pub(super) fn bind_package_payloads_to_selected_root<'a>(
 
 pub(super) fn synchronize_captured_root(
     tx: &Transaction<'_>,
+    package_rows: &mut PackageTransactionStaging<'_>,
     changeset_id: i64,
     captured: &CapturedSelectedRoot,
 ) -> conary_core::Result<CapturedRootSync> {
@@ -143,7 +144,7 @@ pub(super) fn synchronize_captured_root(
     }
 
     let captured_trove_id = insert_captured_root_trove(tx, changeset_id)?;
-    let mut package_rows = PackageTransactionStaging::begin(tx)?;
+    package_rows.clear()?;
     for entry in entries {
         package_rows.stage_payload(&StagedPayloadRow {
             entry: FileEntry::new(entry.path, entry.node, entry.content, captured_trove_id),
@@ -162,13 +163,6 @@ pub(super) fn synchronize_captured_root(
         .filter(|outcome| outcome.materialized)
         .count();
     let package_entries = outcomes.len() - captured_entries;
-    let sqlite_work = package_rows.finish()?;
-    tracing::debug!(
-        rows_loaded = sqlite_work.rows_loaded,
-        statements = sqlite_work.total_statement_executions(),
-        query_shapes = sqlite_work.query_shapes,
-        "reconciled staged captured-root rows"
-    );
 
     Ok(CapturedRootSync {
         captured_entries,

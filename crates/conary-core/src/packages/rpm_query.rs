@@ -314,6 +314,15 @@ fn parse_rpm_file_records(output: &str) -> Result<Vec<InstalledFileInfo>> {
         .collect()
 }
 
+/// Parse one RPM `--queryformat` file record.
+///
+/// RPM's filesystem state machine treats the root as an ownership anchor, not
+/// a deployable payload node. The `filesystem` package owns `/`, and
+/// `rpm -q --queryformat` renders that record with `FILENAMES=/`. Skip that
+/// exact record after the shape checks so it never reaches deployment-path
+/// normalization.
+///
+/// <https://github.com/rpm-software-management/rpm/blob/a8f0192aee1c08bd1454ed2ac6ebaf506004b55c/lib/fsm.cc#L71-L82>
 fn parse_rpm_file_record(record_number: usize, record: &str) -> Result<Option<InstalledFileInfo>> {
     let parts = record.split('\x1e').collect::<Vec<_>>();
     if parts.len() != 10 {
@@ -326,6 +335,11 @@ fn parse_rpm_file_record(record_number: usize, record: &str) -> Result<Option<In
         return Err(Error::ParseError(format!(
             "RPM file record {record_number} has an empty path"
         )));
+    }
+    // The root is an ownership anchor, not a deployable payload node. Match the
+    // exact `FILENAMES` field only; every other path keeps its validation.
+    if parts[0] == "/" {
+        return Ok(None);
     }
     let size = parts[1].parse::<i64>().map_err(|error| {
         Error::ParseError(format!(
