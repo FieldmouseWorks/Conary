@@ -33,8 +33,16 @@ pub struct SuiteInventoryEntry {
     pub qemu_only: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ManifestDirectoryOutcome {
+    Missing,
+    Unreadable,
+    Incomplete,
+    Readable,
+}
+
 pub fn inspect_manifest_dir(manifest_dir: &Path) -> InspectResult {
-    let inventory = read_suite_inventory(manifest_dir);
+    let (inventory, directory_outcome) = read_suite_inventory_with_outcome(manifest_dir);
     let mut envelope = OperationEnvelope::new(
         "conary-test.suites.inspect",
         OperationStatus::Ok,
@@ -43,35 +51,44 @@ pub fn inspect_manifest_dir(manifest_dir: &Path) -> InspectResult {
     );
     envelope.subject = Some(test_suites());
 
-    if !inventory.dir_exists {
-        envelope.status = OperationStatus::Unavailable;
-        envelope.warnings.push(format!(
-            "manifest directory is missing: {}",
-            manifest_dir.display()
-        ));
-    } else if inventory
-        .errors
-        .iter()
-        .any(|error| error.contains("unreadable"))
-    {
-        envelope.status = OperationStatus::Unavailable;
-        envelope.warnings.push(format!(
-            "manifest directory is unreadable: {}",
-            manifest_dir.display()
-        ));
-    } else if inventory.parsed == 0 {
-        envelope.status = OperationStatus::Unavailable;
-        envelope.warnings.push(format!(
-            "no parseable test manifests found in {}",
-            manifest_dir.display()
-        ));
-    } else if inventory.failed > 0 {
-        envelope.status = OperationStatus::Partial;
-        envelope.warnings.push(format!(
-            "{} test manifest(s) failed to parse in {}",
-            inventory.failed,
-            manifest_dir.display()
-        ));
+    match directory_outcome {
+        ManifestDirectoryOutcome::Missing => {
+            envelope.status = OperationStatus::Unavailable;
+            envelope.warnings.push(format!(
+                "manifest directory is missing: {}",
+                manifest_dir.display()
+            ));
+        }
+        ManifestDirectoryOutcome::Unreadable => {
+            envelope.status = OperationStatus::Unavailable;
+            envelope.warnings.push(format!(
+                "manifest directory is unreadable: {}",
+                manifest_dir.display()
+            ));
+        }
+        ManifestDirectoryOutcome::Incomplete => {
+            envelope.status = OperationStatus::Unavailable;
+            envelope.warnings.push(format!(
+                "manifest directory could not be read completely: {}",
+                manifest_dir.display()
+            ));
+        }
+        ManifestDirectoryOutcome::Readable if inventory.parsed == 0 => {
+            envelope.status = OperationStatus::Unavailable;
+            envelope.warnings.push(format!(
+                "no parseable test manifests found in {}",
+                manifest_dir.display()
+            ));
+        }
+        ManifestDirectoryOutcome::Readable if inventory.failed > 0 => {
+            envelope.status = OperationStatus::Partial;
+            envelope.warnings.push(format!(
+                "{} test manifest(s) failed to parse in {}",
+                inventory.failed,
+                manifest_dir.display()
+            ));
+        }
+        ManifestDirectoryOutcome::Readable => {}
     }
 
     let data = serde_json::to_value(&inventory).expect("suite inventory should serialize to JSON");
@@ -79,6 +96,12 @@ pub fn inspect_manifest_dir(manifest_dir: &Path) -> InspectResult {
 }
 
 pub fn read_suite_inventory(manifest_dir: &Path) -> SuiteInventory {
+    read_suite_inventory_with_outcome(manifest_dir).0
+}
+
+fn read_suite_inventory_with_outcome(
+    manifest_dir: &Path,
+) -> (SuiteInventory, ManifestDirectoryOutcome) {
     let dir_exists = manifest_dir.is_dir();
     let mut inventory = SuiteInventory {
         manifest_dir: manifest_dir.display().to_string(),
@@ -91,7 +114,7 @@ pub fn read_suite_inventory(manifest_dir: &Path) -> SuiteInventory {
     };
 
     if !dir_exists {
-        return inventory;
+        return (inventory, ManifestDirectoryOutcome::Missing);
     }
 
     if directory_has_no_read_bits(manifest_dir) {
@@ -99,7 +122,7 @@ pub fn read_suite_inventory(manifest_dir: &Path) -> SuiteInventory {
             "{}: manifest directory is unreadable",
             manifest_dir.display()
         ));
-        return inventory;
+        return (inventory, ManifestDirectoryOutcome::Unreadable);
     }
 
     let entries = match std::fs::read_dir(manifest_dir) {
@@ -109,15 +132,20 @@ pub fn read_suite_inventory(manifest_dir: &Path) -> SuiteInventory {
                 "{}: manifest directory is unreadable: {error}",
                 manifest_dir.display()
             ));
-            return inventory;
+            return (inventory, ManifestDirectoryOutcome::Unreadable);
         }
     };
 
-    let mut paths: Vec<PathBuf> = entries
-        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-        .filter(|path| path.extension().is_some_and(|ext| ext == "toml"))
-        .collect();
-    paths.sort();
+    let paths = match collect_manifest_paths(entries.map(|entry| entry.map(|entry| entry.path()))) {
+        Ok(paths) => paths,
+        Err(error) => {
+            inventory.errors.push(format!(
+                "{}: manifest directory entry could not be read: {error}",
+                manifest_dir.display()
+            ));
+            return (inventory, ManifestDirectoryOutcome::Incomplete);
+        }
+    };
 
     for path in paths {
         inventory.toml_files += 1;
@@ -156,7 +184,21 @@ pub fn read_suite_inventory(manifest_dir: &Path) -> SuiteInventory {
     inventory
         .suites
         .sort_by(|left, right| left.id.cmp(&right.id));
-    inventory
+    (inventory, ManifestDirectoryOutcome::Readable)
+}
+
+fn collect_manifest_paths(
+    entries: impl IntoIterator<Item = std::io::Result<PathBuf>>,
+) -> std::io::Result<Vec<PathBuf>> {
+    let mut paths = Vec::new();
+    for entry in entries {
+        let path = entry?;
+        if path.extension().is_some_and(|ext| ext == "toml") {
+            paths.push(path);
+        }
+    }
+    paths.sort();
+    Ok(paths)
 }
 
 fn manifest_requires_qemu(manifest: &crate::config::TestManifest) -> bool {
@@ -316,6 +358,62 @@ commands = ["true"]
                 .iter()
                 .any(|warning| warning.contains("failed to parse"))
         );
+    }
+
+    #[test]
+    fn unreadable_in_filename_does_not_make_parse_failure_unavailable() {
+        let root = tempdir().unwrap();
+        write_manifest(root.path(), "good.toml", &container_manifest("good", 1));
+        write_manifest(root.path(), "unreadable.toml", "not = [valid");
+
+        let inspect = inspect_manifest_dir(root.path());
+
+        assert_eq!(inspect.envelope.status, OperationStatus::Partial);
+        assert_eq!(inspect.data["parsed"], 1);
+        assert_eq!(inspect.data["failed"], 1);
+        assert!(
+            inspect.data["errors"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|error| error.as_str().unwrap().contains("unreadable.toml"))
+        );
+        assert!(
+            inspect
+                .envelope
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("failed to parse"))
+        );
+    }
+
+    #[test]
+    fn valid_manifest_named_unreadable_keeps_inventory_ok() {
+        let root = tempdir().unwrap();
+        write_manifest(
+            root.path(),
+            "unreadable.toml",
+            &container_manifest("unreadable", 1),
+        );
+
+        let inspect = inspect_manifest_dir(root.path());
+
+        assert_eq!(inspect.envelope.status, OperationStatus::Ok);
+        assert_eq!(inspect.data["parsed"], 1);
+        assert_eq!(inspect.data["failed"], 0);
+        assert!(inspect.envelope.warnings.is_empty());
+    }
+
+    #[test]
+    fn directory_entry_errors_are_not_dropped() {
+        let entries = [
+            Ok(std::path::PathBuf::from("suite.toml")),
+            Err(std::io::Error::other("injected directory entry failure")),
+        ];
+
+        let error = collect_manifest_paths(entries).unwrap_err();
+
+        assert_eq!(error.kind(), std::io::ErrorKind::Other);
     }
 
     #[test]

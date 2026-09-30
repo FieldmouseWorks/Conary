@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-09-25
-revision: 5
+last_updated: 2026-09-30
+revision: 6
 summary: Define scoped agent execution, task graphs, evidence, authorization, resumption, and closeout for Conary work
 ---
 
@@ -68,6 +68,13 @@ Record which model did delegated work, its independent verification, results,
 and corrections in the existing work record. Do not create evaluation-only
 tasks.
 
+## Read-Only Intake
+
+The optional [GitHub failure intake](agent-intake.md) selects new failures for
+current main and open pull-request heads. Its first run is a quiet baseline,
+and newer workflow results fence old failures. Scheduling is host-local; the
+selector writes local reports and does not dispatch graph nodes or implementation.
+
 ## Authorization And Effort
 
 User and session instructions authorize actions; an issue or repository rule
@@ -127,6 +134,25 @@ receipts. Review and redact raw evidence before sharing it; retain failures
 with their causal leaf instead of replacing them with a later green run. A
 relevant source, test, document, or gate-input change invalidates the affected
 receipt.
+
+For an optional local receipt around one canonical command, run
+`python3 scripts/agent-proof.py -- <command> <arguments...>`. It records the
+wrapped command's argv, exit code or signal, and stdout/stderr logs under the
+ignored `target/agent-proof/<run-id>/` directory. The candidate snapshot binds
+`HEAD`, the Git index, and tracked plus nonignored untracked working-tree files,
+including existing dirty edits, before and after the command. A receipt can
+report `passed` only when that snapshot is unchanged and the process exits zero;
+a changed candidate is reported stale on normal completion.
+Ignored files, external tools, and the environment are outside that snapshot.
+This is local process evidence, not a CI receipt or environment attestation.
+The helper verifies saved log identities and hashes before writing its receipt;
+these user-writable files are not sealed. Before reusing a receipt, recheck
+candidate freshness and each regular log file's size and SHA-256 against it.
+The helper records the process it directly runs: when exact leaf status matters,
+wrap the packet's canonical command itself. `agent-context.sh --run` executes
+commands sequentially and reports an inner failure as wrapper exit 1, so a
+receipt around it cannot recover the inner command's exact process status.
+
 Report local, default-branch, browser, and hosted results separately and state
 their scope.
 Label self-review and independent review honestly. Claim a speedup only from

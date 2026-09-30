@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-09-25
-revision: 24
+last_updated: 2026-09-30
+revision: 25
 summary: Route assistants to canonical owners, focused proof, and the shared execution workflow
 ---
 
@@ -133,5 +133,6 @@ git diff --check
 ```
 
 Add the affected feature-card proof when a behavior claim, command, route, or
-public surface changes. Sweep explicitly for every retired filename or tool
-name removed by the slice.
+public surface changes. For an optional command-bound local receipt, see the
+[agent workflow](agent-workflow.md#work-evidence-and-feedback). Sweep explicitly
+for every retired filename or tool name removed by the slice.

@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-09-14
-revision: 123
-summary: Route features to owned paths and proof, including installed-list, publication-debt, and repository presentation, retained-survey requests, and workflow recovery.
+last_updated: 2026-09-30
+revision: 125
+summary: Route features to owned paths and proof, including agent workflow helpers, typed autoremove preview, installed-list, publication-debt, repository presentation, retained-survey requests, and workflow recovery.
 ---
 
 # Feature Ownership And Interaction Gates
@@ -1219,7 +1219,8 @@ matrix job in `.github/workflows/pr-gate.yml`.
 `cargo test -p conary-test suite_inventory`;
 `cargo test -p conary-test distro_config_requires_a_typed_build_context`;
 `cargo test -p conary-test focused_native_cross_source_manifest_runs_the_shared_lifecycle_contract`;
-`cargo test -p conary-test native_cross_source_`.
+`cargo test -p conary-test native_cross_source_`;
+`cargo test -p conary-test native_parity_autoremove_preview_requires_the_exact_typed_plan`.
 
 **Interaction gate:** `bash scripts/build-static-conary.sh`;
 `cargo run -p conary-test -- run --suite phase4-native-pm-parity --distro fedora44 --phase 4`;
@@ -1414,6 +1415,39 @@ watch only existing Git control paths; it must not permanently invalidate a
 linked worktree or recursively watch the common Git directory that owns the
 shared cache. The `iterate` action selects only `fast-release`; release,
 promotion, and final performance evidence retain the exact release profile.
+
+## Agent Workflow Proof And Intake
+
+**Slug:** agent-workflow-tools
+
+**Capability:** provide local command receipts and read-only intake for
+GitHub workflow failures.
+
+**Start here:** `docs/llms/agent-workflow.md`;
+`docs/llms/agent-intake.md`; `scripts/agent-proof.py`;
+`scripts/test-agent-proof.py`; `scripts/agent-intake.py`;
+`scripts/test-agent-intake.py`.
+
+**Neighbor systems:** repository path routing, local proof logs, GitHub workflow
+runs, and user-local intake state.
+
+**Paths:** `docs/llms/agent-workflow.md`; `docs/llms/agent-intake.md`;
+`scripts/agent-proof.py`; `scripts/test-agent-proof.py`;
+`scripts/agent-intake.py`; `scripts/test-agent-intake.py`.
+
+**Focused proof:** `python3 scripts/test-agent-proof.py`;
+`python3 scripts/test-agent-intake.py`.
+
+**Interaction gate:** `bash scripts/test-agent-context.sh` and
+`bash scripts/agent-context.sh --validate` when ownership routing changes.
+
+**Docs to update:** `docs/llms/agent-workflow.md`;
+`docs/llms/agent-intake.md`; `docs/modules/feature-ownership.md`.
+
+**Safety notes:** command receipts cover the directly wrapped local process
+and their documented candidate scope; they are not hosted CI evidence. Intake
+uses read-only GitHub requests and does not dispatch tasks or write to GitHub.
+The canonical workflow and intake documents own operational details.
 
 ## Agent/MCP Operation Surfaces
 

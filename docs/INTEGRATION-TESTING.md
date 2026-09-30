@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-09-25
-revision: 74
+last_updated: 2026-09-30
+revision: 75
 summary: Define the Podman container integration harness, its prerequisites, running suites, fixtures, and result/proof contracts
 ---
 
@@ -616,6 +616,16 @@ capabilities. Synthesized parent directories are generation layout rather than
 file providers. The RPM lane also retains the generator-authored
 `config(phase4-runtime-fixture) = 1.0.0-1` dependency as one typed RPM
 requirement group; DEB and Arch retain no dependency groups for this fixture.
+
+`TNPM12` establishes its orphan with strict model apply and
+`--no-autoremove`, then previews `autoremove --dry-run --json`. Its typed
+assertion requires the `package.autoremove.plan` operation, `planned` status,
+schema version 2, and the exact single removable package/version/release/
+architecture/round record for each distro lane before the follow-up mutation.
+`native_parity_autoremove_preview_requires_the_exact_typed_plan` evaluates that
+assertion against positive and malformed plan controls for Fedora 44, Ubuntu
+26.04, and Arch.
+
 Single-package and batch installs use the same payload-path projection before
 persisting installed resolution authority. The local native install supplies
 its exact source identity with `--from`; Conary persists that identity without
