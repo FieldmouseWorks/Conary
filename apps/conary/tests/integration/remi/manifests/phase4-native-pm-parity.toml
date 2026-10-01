@@ -427,11 +427,11 @@ run = "CONARY_BIN=${CONARY_BIN} /opt/remi-tests/fixtures/native/prepare-signed-u
 exit_code = 0
 
 [[test.step]]
-run = "sqlite3 ${DB_PATH} \"SELECT r.default_strategy || '|' || r.source_profile || '|' || rp.name || '|' || rp.version || '|' || rp.version_scheme || '|' || rp.architecture || '|' || k.status FROM repositories r JOIN repository_packages rp ON rp.repository_id = r.id JOIN repository_package_keys k ON k.repository_id = r.id WHERE r.name = 'slice-d-local-update'\""
+run = "sqlite3 -json ${DB_PATH} \"SELECT r.default_strategy AS default_strategy, r.source_profile AS source_profile, rp.name AS name, rp.version AS version, rp.version_scheme AS version_scheme, rp.architecture AS architecture, k.status AS key_status FROM repositories r JOIN repository_packages rp ON rp.repository_id = r.id JOIN repository_package_keys k ON k.repository_id = r.id WHERE r.name = 'slice-d-local-update'\""
 
 [test.step.assert]
 exit_code = 0
-stdout_contains = "binary|${native_profile}|phase4-runtime-fixture|${native_update_version}|${native_scheme}|${native_arch}|active"
+stdout_json = [{ pointer = "", equals = [{ default_strategy = "binary", source_profile = "${native_profile}", name = "phase4-runtime-fixture", version = "${native_update_version}", version_scheme = "${native_scheme}", architecture = "${native_arch}", key_status = "active" }] }]
 
 [[test.step]]
 run = "CONARY_TEST_SKIP_GENERATION_MOUNT=1 ${CONARY_BIN} update phase4-runtime-fixture --db-path ${DB_PATH} --root /conary --yes --sandbox always"
@@ -447,11 +447,11 @@ run = "/opt/remi-tests/fixtures/native/assert-selected-generation.py --root /con
 exit_code = 0
 
 [[test.step]]
-run = "sqlite3 ${DB_PATH} \"SELECT name || '|' || version || '|' || COALESCE(architecture, '') || '|' || COALESCE(version_scheme, '') || '|' || COALESCE(source_profile, '') FROM troves WHERE name = 'phase4-runtime-fixture'\""
+run = "sqlite3 -json ${DB_PATH} \"SELECT name, version, COALESCE(architecture, '') AS architecture, COALESCE(version_scheme, '') AS version_scheme, COALESCE(source_profile, '') AS source_profile FROM troves WHERE name = 'phase4-runtime-fixture'\""
 
 [test.step.assert]
 exit_code = 0
-stdout_contains = "phase4-runtime-fixture|${native_update_version}|${native_arch}|${native_scheme}|${native_profile}"
+stdout_json = [{ pointer = "", equals = [{ name = "phase4-runtime-fixture", version = "${native_update_version}", architecture = "${native_arch}", version_scheme = "${native_scheme}", source_profile = "${native_profile}" }] }]
 
 [[test.step]]
 conary = "list phase4-runtime-fixture --info"

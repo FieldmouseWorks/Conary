@@ -12,6 +12,7 @@ mod typed_autoremove;
 mod typed_pin_remove;
 mod typed_repo;
 mod typed_sql;
+mod typed_update;
 mod version_rewrite;
 
 #[test]
