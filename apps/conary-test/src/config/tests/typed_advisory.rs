@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 
 const LANES: &[(&str, &str, &str)] = &[
     ("fedora44", "x86_64", "1.0.1-1"),
-    ("ubuntu-26.04", "amd64", "1.0.1"),
+    ("ubuntu-26.04", "amd64", "1.0.1-1"),
     ("arch", "x86_64", "1.0.1-1"),
 ];
 

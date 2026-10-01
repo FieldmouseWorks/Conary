@@ -670,7 +670,7 @@ fn phase4_security_advisory_pipeline_manifest_carries_trusted_update_contract() 
         "TEST-2026-0001",
         "--security-advisories unknown",
         "--security-advisories supported",
-        "trusted source: conary-json",
+        "source: conary-json (feed trust claim: trusted)",
     ] {
         assert!(
             rendered.contains(required),

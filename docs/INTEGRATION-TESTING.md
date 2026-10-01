@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-10-01
-revision: 84
+revision: 85
 summary: Define the Podman container integration harness, its prerequisites, running suites, fixtures, and result/proof contracts
 ---
 
@@ -976,7 +976,10 @@ advisory ID, fixed version, and feed trust-claim metadata as one exact typed
 SQLite result before `conary update --security` applies the locally authorized
 fix. The result is scoped to the named repository and package version, includes
 the local `supported` decision and native architecture, and rejects extra rows
-or changed advisory values. Feed trust claims remain diagnostic.
+or changed advisory values.
+
+The v1 local install names its exact native source with `--from`; update
+selection follows that persisted source without a direct database write.
 
 Earlier Goal 3 evidence from May 19, 2026:
 
