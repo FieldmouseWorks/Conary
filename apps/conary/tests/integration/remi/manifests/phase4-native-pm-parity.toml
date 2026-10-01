@@ -566,11 +566,18 @@ run = "/opt/remi-tests/fixtures/native/assert-selected-generation.py --root /con
 exit_code = 0
 
 [[test.step]]
-run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' repo troves' FROM troves WHERE name = '${repo_install_pkg}'; SELECT t.name || '|' || COALESCE(r.name, '') || '|' || COALESCE(t.source_profile, '') || '|' || COALESCE(t.version_scheme, '') || '|' || COALESCE(t.install_source, '') || '|' || COALESCE(t.install_reason, '') FROM troves t LEFT JOIN repositories r ON r.id = t.installed_from_repository_id WHERE t.name = '${repo_install_pkg}'\""
+run = "sqlite3 -json ${DB_PATH} \"SELECT COUNT(*) AS repo_troves FROM troves WHERE name = '${repo_install_pkg}'\""
 
 [test.step.assert]
 exit_code = 0
-stdout_contains_all = ["1 repo troves", "${repo_install_pkg}|${REPO_NAME}|${native_profile}|${native_scheme}|repository|explicit"]
+stdout_json = [{ pointer = "", equals = [{ repo_troves = 1 }] }]
+
+[[test.step]]
+run = "sqlite3 -json ${DB_PATH} \"SELECT t.name AS name, COALESCE(r.name,'') AS repository_name, COALESCE(t.source_profile,'') AS source_profile, COALESCE(t.version_scheme,'') AS version_scheme, COALESCE(t.install_source,'') AS install_source, COALESCE(t.install_reason,'') AS install_reason FROM troves t LEFT JOIN repositories r ON r.id = t.installed_from_repository_id WHERE t.name = '${repo_install_pkg}'\""
+
+[test.step.assert]
+exit_code = 0
+stdout_json = [{ pointer = "", equals = [{ name = "${repo_install_pkg}", repository_name = "${REPO_NAME}", source_profile = "${native_profile}", version_scheme = "${native_scheme}", install_source = "repository", install_reason = "explicit" }] }]
 
 [[test.step]]
 conary = "list ${repo_install_pkg} --info"
