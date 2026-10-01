@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-10-01
-revision: 77
+revision: 78
 summary: Define the Podman container integration harness, its prerequisites, running suites, fixtures, and result/proof contracts
 ---
 
@@ -620,13 +620,22 @@ requirement group; DEB and Arch retain no dependency groups for this fixture.
 `TNPM04` reads these persisted facts through individual `sqlite3 -json`
 queries. Each assertion compares the entire row array, including integer
 counts, payload sizes and modes, exact identity/hash/source fields, and
-ordered file/provider sets. For the two counts that differ between distro
+ordered file/provider sets. For the three counts that differ between distro
 lanes, SQLite subtracts the pinned fixture count from the same database count;
 the entire result must be one row with integer `count_delta = 0`. Other counts
 remain direct integer results. Splitting the former multi-query commands keeps
 their read order and emits one JSON document per step. The dependency probe
 checks the exact stored serialization as a JSON string; it does not parse the
 embedded requirement record for an additional semantic claim.
+
+The package-provider query groups the original projected capability, version,
+and kind fields and retains their multiplicity in the integer count delta.
+Fedora has two matching projected rows: the exact identity and a source-declared
+same-name RPM header provide. The DEB and Arch fixtures have one. A missing or
+extra matching row changes the delta; a foreign tuple adds a group and fails
+the entire-array comparison. This projection checks values and multiplicity;
+it does not distinguish provenance roles. The role distinction belongs to the
+[native capability contract](modules/ccs.md) and the daily-driver corpus.
 
 `TNPM09` reads the same latest failed publication row and requires its exact
 status and error, with integer retry and recoverable fields. The focused

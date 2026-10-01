@@ -17,6 +17,7 @@ pub(super) struct Lane {
     pub(super) dependency_probe: &'static str,
     pub(super) config_source: &'static str,
     pub(super) provider_count: &'static str,
+    pub(super) package_provider_count: &'static str,
 }
 
 pub(super) const LANES: &[Lane] = &[
@@ -30,6 +31,7 @@ pub(super) const LANES: &[Lane] = &[
         dependency_probe: RPM_DEP,
         config_source: "rpm",
         provider_count: "7",
+        package_provider_count: "2",
     },
     Lane {
         distro: "ubuntu-26.04",
@@ -41,6 +43,7 @@ pub(super) const LANES: &[Lane] = &[
         dependency_probe: "no-deps",
         config_source: "deb",
         provider_count: "4",
+        package_provider_count: "1",
     },
     Lane {
         distro: "arch",
@@ -52,6 +55,7 @@ pub(super) const LANES: &[Lane] = &[
         dependency_probe: "no-deps",
         config_source: "arch",
         provider_count: "4",
+        package_provider_count: "1",
     },
 ];
 
@@ -68,7 +72,7 @@ pub(super) fn expected_documents(lane: &Lane) -> Vec<Value> {
         files,
         json!([{"count_delta":0}]),
         json!([{"file_provides":3}]),
-        json!([{"capability":"phase4-runtime-fixture","version":VERSION,"kind":"package"}]),
+        json!([{"capability":"phase4-runtime-fixture","version":VERSION,"kind":"package","count_delta":0}]),
         json!([{"capability":"/etc/phase4-runtime-fixture/app.conf"},{"capability":"/usr/bin/phase4-runtime-fixture"},{"capability":"/usr/include/phase4-runtime-fixture/api.h"}]),
         json!([{"count_delta":0}]),
         json!([{"dependency_probe":lane.dependency_probe}]),

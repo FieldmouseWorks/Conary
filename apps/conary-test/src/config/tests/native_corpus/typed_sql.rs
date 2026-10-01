@@ -80,6 +80,15 @@ fn native_parity_sql_requires_exact_typed_rows_for_all_distro_lanes() {
             .unwrap()
             .contains("${native_provider_count}")
     );
+    let package_providers = metadata.step[6].run.as_deref().unwrap();
+    assert!(
+        package_providers.contains("COUNT(*) - ${native_package_provider_count} AS count_delta")
+    );
+    assert!(package_providers.contains("AND kind = 'package'"));
+    assert!(
+        package_providers
+            .contains("GROUP BY capability, COALESCE(version, ''), COALESCE(kind, '')")
+    );
     assert!(
         metadata.step[8]
             .run
@@ -110,6 +119,7 @@ fn native_parity_sql_requires_exact_typed_rows_for_all_distro_lanes() {
             ("native_config_source", lane.config_source),
             ("native_lifecycle_fidelity", FIDELITY),
             ("native_provider_count", lane.provider_count),
+            ("native_package_provider_count", lane.package_provider_count),
         ] {
             assert_eq!(
                 vars.get(key).map(String::as_str),
@@ -206,6 +216,13 @@ fn reject_mutations(checks: &[Assertion], lane: &Lane) {
         (4, "/0/count_delta", json!("0")),
         (4, "/0/count_delta", json!(0.0)),
         (5, "/0/file_provides", json!(4)),
+        (6, "/0/count_delta", json!(-1)),
+        (6, "/0/count_delta", json!(1)),
+        (6, "/0/count_delta", json!("0")),
+        (6, "/0/count_delta", json!(0.0)),
+        (6, "/0/capability", json!("wrong-package")),
+        (6, "/0/version", json!("9.9.9")),
+        (6, "/0/kind", json!("wrong-kind")),
         (8, "/0/count_delta", json!(1)),
         (8, "/0/count_delta", json!("0")),
         (8, "/0/count_delta", json!(0.0)),

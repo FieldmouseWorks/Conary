@@ -63,6 +63,7 @@ native_dependency_probe = 'depends|rpm|{"kind":"Depends","behavior":"Hard","expr
 native_config_source = "rpm"
 native_lifecycle_fidelity = "native-free"
 native_provider_count = "7"
+native_package_provider_count = "2"
 repo_install_pkg = "phase4-repository-fixture"
 repo_install_path = "/usr/share/phase4-repository-fixture/probe.txt"
 repo_seed_security_version = "9999.0-1"
@@ -80,6 +81,7 @@ native_dependency_probe = "no-deps"
 native_config_source = "deb"
 native_lifecycle_fidelity = "native-free"
 native_provider_count = "4"
+native_package_provider_count = "1"
 repo_install_pkg = "phase4-repository-fixture"
 repo_install_path = "/usr/share/phase4-repository-fixture/probe.txt"
 repo_seed_security_version = "9999.0"
@@ -97,6 +99,7 @@ native_dependency_probe = "no-deps"
 native_config_source = "arch"
 native_lifecycle_fidelity = "native-free"
 native_provider_count = "4"
+native_package_provider_count = "1"
 repo_install_pkg = "phase4-repository-fixture"
 repo_install_path = "/usr/share/phase4-repository-fixture/probe.txt"
 repo_seed_security_version = "9999.0-1"
@@ -247,11 +250,11 @@ exit_code = 0
 stdout_json = [{ pointer = "", equals = [{ file_provides = 3 }] }]
 
 [[test.step]]
-run = "sqlite3 -json ${DB_PATH} \"SELECT capability, COALESCE(version, '') AS version, COALESCE(kind, '') AS kind FROM provides WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-runtime-fixture') AND kind = 'package'\""
+run = "sqlite3 -json ${DB_PATH} \"SELECT capability, COALESCE(version, '') AS version, COALESCE(kind, '') AS kind, COUNT(*) - ${native_package_provider_count} AS count_delta FROM provides WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-runtime-fixture') AND kind = 'package' GROUP BY capability, COALESCE(version, ''), COALESCE(kind, '')\""
 
 [test.step.assert]
 exit_code = 0
-stdout_json = [{ pointer = "", equals = [{ capability = "phase4-runtime-fixture", version = "${native_fixture_version}", kind = "package" }] }]
+stdout_json = [{ pointer = "", equals = [{ capability = "phase4-runtime-fixture", version = "${native_fixture_version}", kind = "package", count_delta = 0 }] }]
 
 [[test.step]]
 run = "sqlite3 -json ${DB_PATH} \"SELECT capability FROM provides WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-runtime-fixture') AND kind = 'file' ORDER BY capability\""
