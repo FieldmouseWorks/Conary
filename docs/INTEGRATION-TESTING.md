@@ -648,7 +648,7 @@ queries against the package database. These counts establish presence and
 absence for that package name, not its version or source provenance.
 
 `TNPM07` reads the enrolled update repository and the updated package row with
-`sqlite3 -json` at their existing positions. Before the mutation, the joined
+`sqlite3 -json` at their existing positions. Before the update, the joined
 repository/package/key query requires exactly one row with the binary strategy,
 target profile, package name, update version, version scheme, architecture, and
 active key status. After the update and selected-generation hash check, the
