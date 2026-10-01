@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-10-01
-revision: 79
+revision: 80
 summary: Define the Podman container integration harness, its prerequisites, running suites, fixtures, and result/proof contracts
 ---
 
@@ -636,6 +636,16 @@ extra matching row changes the delta; a foreign tuple adds a group and fails
 the entire-array comparison. This projection checks values and multiplicity;
 it does not distinguish provenance roles. The role distinction belongs to the
 [native capability contract](modules/ccs.md) and the daily-driver corpus.
+
+`TNPM06` and `TNPM08` read the same package's `troves` count through
+`sqlite3 -json` after the selected-generation checks. The refused pinned
+removal must leave exactly one row; the completed removal must leave zero.
+Each whole-array assertion requires one JSON object with an integer `installed`
+count, rejecting extra rows, wrong types, and rendered counts such as
+`11 installed` or `10 installed`. The focused `native_parity_pin_remove_` controls
+exercise those loaded assertions; the full native parity suite executes the
+queries against the package database. These counts establish presence and
+absence for that package name, not its version or source provenance.
 
 `TNPM09` reads the same latest failed publication row and requires its exact
 status and error, with integer retry and recoverable fields. The focused

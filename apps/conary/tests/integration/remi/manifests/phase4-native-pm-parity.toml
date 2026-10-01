@@ -388,11 +388,11 @@ run = "/opt/remi-tests/fixtures/native/assert-selected-generation.py --root /con
 exit_code = 0
 
 [[test.step]]
-run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' installed' FROM troves WHERE name = 'phase4-runtime-fixture'\""
+run = "sqlite3 -json ${DB_PATH} \"SELECT COUNT(*) AS installed FROM troves WHERE name = 'phase4-runtime-fixture'\""
 
 [test.step.assert]
 exit_code = 0
-stdout_contains = "1 installed"
+stdout_json = [{ pointer = "", equals = [{ installed = 1 }] }]
 
 [[test.step]]
 conary = "query whatbreaks phase4-runtime-fixture"
@@ -487,11 +487,11 @@ run = "/opt/remi-tests/fixtures/native/assert-selected-generation.py --root /con
 exit_code = 0
 
 [[test.step]]
-run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' installed' FROM troves WHERE name = 'phase4-runtime-fixture'\""
+run = "sqlite3 -json ${DB_PATH} \"SELECT COUNT(*) AS installed FROM troves WHERE name = 'phase4-runtime-fixture'\""
 
 [test.step.assert]
 exit_code = 0
-stdout_contains = "0 installed"
+stdout_json = [{ pointer = "", equals = [{ installed = 0 }] }]
 
 [[test.step]]
 conary = "system history"
