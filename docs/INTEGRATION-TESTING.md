@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-10-01
-revision: 76
+revision: 77
 summary: Define the Podman container integration harness, its prerequisites, running suites, fixtures, and result/proof contracts
 ---
 
@@ -616,6 +616,25 @@ capabilities. Synthesized parent directories are generation layout rather than
 file providers. The RPM lane also retains the generator-authored
 `config(phase4-runtime-fixture) = 1.0.0-1` dependency as one typed RPM
 requirement group; DEB and Arch retain no dependency groups for this fixture.
+
+`TNPM04` reads these persisted facts through individual `sqlite3 -json`
+queries. Each assertion compares the entire row array, including integer
+counts, payload sizes and modes, exact identity/hash/source fields, and
+ordered file/provider sets. For the two counts that differ between distro
+lanes, SQLite subtracts the pinned fixture count from the same database count;
+the entire result must be one row with integer `count_delta = 0`. Other counts
+remain direct integer results. Splitting the former multi-query commands keeps
+their read order and emits one JSON document per step. The dependency probe
+checks the exact stored serialization as a JSON string; it does not parse the
+embedded requirement record for an additional semantic claim.
+
+`TNPM09` reads the same latest failed publication row and requires its exact
+status and error, with integer retry and recoverable fields. The focused
+`native_parity_sql_` controls evaluate the loaded manifest assertions against
+wrong counts, types, values, row/key cardinality, row order, nulls, malformed or
+concatenated JSON, and failed commands. These controls prove the assertion
+engine; the full native parity suite exercises the actual SQLite queries in
+each container lane.
 
 `TNPM12` establishes its orphan with strict model apply and
 `--no-autoremove`, then previews `autoremove --dry-run --json`. Its typed

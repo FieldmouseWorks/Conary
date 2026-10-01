@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-09-09
-revision: 61
-summary: Map fixture ownership, including native refusals, repository discovery, command captures, typed boot-tool interfaces, and the refreshed Tumbleweed lifecycle snapshot
+last_updated: 2026-10-01
+revision: 62
+summary: Map fixture ownership, including typed native persisted-SQL proof, native refusals, repository discovery, command captures, typed boot-tool interfaces, and the refreshed Tumbleweed lifecycle snapshot
 ---
 
 # Test Fixtures And Proof Maps
@@ -435,7 +435,8 @@ Each fixture family should record:
   `cargo test -p conary-test phase4_native_pm_parity_manifest_carries_cross_source_contract`;
   `cargo test -p conary-test daily_driver::phase4_daily_driver_corpus_manifest_proves_remaining_configuration_states`;
   `cargo test -p conary-test focused_native_cross_source_manifest_runs_the_shared_lifecycle_contract`;
-  `cargo test -p conary-test native_cross_source_`.
+  `cargo test -p conary-test native_cross_source_`;
+  `cargo test -p conary-test native_parity_sql_`.
 - **Medium proof:**
   `cargo test -p conary-test config::tests::test_load_phase1_core_manifest`;
   `cargo test -p conary-test config::tests::test_load_phase3_group_m_manifest_installs_local_fixture_ccs`.

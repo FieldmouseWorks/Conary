@@ -9,6 +9,7 @@ mod evidence;
 mod performance;
 mod rejection;
 mod typed_autoremove;
+mod typed_sql;
 mod version_rewrite;
 
 #[test]
@@ -125,60 +126,6 @@ fn phase4_native_pm_parity_manifest_carries_cross_source_contract() {
         }
     }
 
-    let provider_contract = [
-        (
-            "fedora44",
-            "7",
-            "3",
-            "/etc/phase4-runtime-fixture/app.conf,/usr/bin/phase4-runtime-fixture,/usr/include/phase4-runtime-fixture/api.h",
-        ),
-        (
-            "ubuntu-26.04",
-            "4",
-            "3",
-            "/etc/phase4-runtime-fixture/app.conf,/usr/bin/phase4-runtime-fixture,/usr/include/phase4-runtime-fixture/api.h",
-        ),
-        (
-            "arch",
-            "4",
-            "3",
-            "/etc/phase4-runtime-fixture/app.conf,/usr/bin/phase4-runtime-fixture,/usr/include/phase4-runtime-fixture/api.h",
-        ),
-    ];
-    for (distro, provider_count, file_provider_count, file_provider_set) in provider_contract {
-        let overrides = parity_manifest
-            .distro_overrides
-            .get(distro)
-            .unwrap_or_else(|| panic!("missing {distro} overrides"));
-        for (key, expected) in [
-            ("native_provider_count", provider_count),
-            ("native_file_provider_count", file_provider_count),
-            ("native_file_provider_set", file_provider_set),
-        ] {
-            assert_eq!(
-                overrides.get(key).map(String::as_str),
-                Some(expected),
-                "{distro} must declare its exact {key}"
-            );
-        }
-    }
-    let metadata_test = parity_manifest
-        .test
-        .iter()
-        .find(|test| test.id == "TNPM04")
-        .expect("Phase 4 native PM parity must include TNPM04");
-    let metadata_rendered = format!("{metadata_test:?}");
-    for required in [
-        "${native_provider_count} provides",
-        "${native_file_provider_count} file provides",
-        "phase4-runtime-fixture|${native_fixture_version}|package",
-        "${native_file_provider_set}",
-    ] {
-        assert!(
-            metadata_rendered.contains(required),
-            "TNPM04 must enforce the source-format and payload-owned provider contract {required}"
-        );
-    }
     let deferred_follow_up = parity_manifest
         .test
         .iter()
@@ -187,12 +134,8 @@ fn phase4_native_pm_parity_manifest_carries_cross_source_contract() {
     let deferred_rendered = format!("{deferred_follow_up:?}");
     assert!(
         deferred_rendered.contains("generation_publication")
-            && deferred_rendered.contains("generation publication is pending")
-            && deferred_rendered.contains("generation_publications")
-            && deferred_rendered.contains("last_error")
-            && deferred_rendered
-                .contains("forced generation rebuild failure for test: slice-d-forced"),
-        "TNPM09 must separate canonical deferred authority from exact publication failure evidence"
+            && deferred_rendered.contains("generation publication is pending"),
+        "TNPM09 must preserve canonical deferred metadata and history"
     );
 
     let mock_server = parity_manifest
