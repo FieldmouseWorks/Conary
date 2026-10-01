@@ -520,11 +520,11 @@ exit_code = 0
 stdout_contains = "pending"
 
 [[test.step]]
-run = "sqlite3 ${DB_PATH} \"SELECT COALESCE(metadata, '') FROM changesets WHERE description = 'Install phase4-runtime-fixture-${native_fixture_version}' ORDER BY id DESC LIMIT 1\""
+run = "sqlite3 -json ${DB_PATH} \"SELECT json_extract(metadata, '$.schema') AS schema, json_type(metadata, '$.deferred_follow_up') AS follow_up_type, json_array_length(metadata, '$.deferred_follow_up') AS follow_up_count, json_extract(metadata, '$.deferred_follow_up[0].kind') AS kind, json_extract(metadata, '$.deferred_follow_up[0].status') AS status, json_extract(metadata, '$.deferred_follow_up[0].message') AS message FROM changesets WHERE description = 'Install phase4-runtime-fixture-${native_fixture_version}' ORDER BY id DESC LIMIT 1\""
 
 [test.step.assert]
 exit_code = 0
-stdout_contains_all = ["deferred_follow_up", "generation_publication", "generation publication is pending"]
+stdout_json = [{ pointer = "", equals = [{ schema = "conary.changeset.metadata.v7", follow_up_type = "array", follow_up_count = 1, kind = "generation_publication", status = "pending", message = "generation publication is pending" }] }]
 
 [[test.step]]
 run = "sqlite3 -json ${DB_PATH} \"SELECT status, COALESCE(last_error, '') AS last_error, retry_count, recoverable FROM generation_publications WHERE trigger_changeset_id = (SELECT id FROM changesets WHERE description = 'Install phase4-runtime-fixture-${native_fixture_version}' ORDER BY id DESC LIMIT 1) ORDER BY id DESC LIMIT 1\""
