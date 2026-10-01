@@ -884,11 +884,13 @@ exit_code = 0
 stdout_contains_any = ["Successfully installed", "Installed", "phase4-w7-capability-corpus"]
 
 [[test.step]]
-run = "sqlite3 ${DB_PATH} \"SELECT path || '|' || capabilities_json || '|' || permitted || '|' || effective || '|' || inheritable FROM installed_file_capabilities WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-w7-capability-corpus')\""
+run = "sqlite3 -json ${DB_PATH} \"SELECT installed_file_capabilities.path AS path, json_type(installed_file_capabilities.capabilities_json) AS capabilities_type, json_array_length(installed_file_capabilities.capabilities_json) AS capabilities_count, capability.value AS capability, installed_file_capabilities.permitted AS permitted, installed_file_capabilities.effective AS effective, installed_file_capabilities.inheritable AS inheritable FROM installed_file_capabilities LEFT JOIN json_each(installed_file_capabilities.capabilities_json) AS capability WHERE installed_file_capabilities.trove_id IN (SELECT id FROM troves WHERE name = 'phase4-w7-capability-corpus') ORDER BY installed_file_capabilities.path, capability.key\""
 
 [test.step.assert]
 exit_code = 0
-stdout_contains = "/usr/bin/phase4-w7-capability|[\"cap_net_bind_service\"]|1|1|0"
+stdout_json = [{ pointer = "", equals = [
+    { path = "/usr/bin/phase4-w7-capability", capabilities_type = "array", capabilities_count = 1, capability = "cap_net_bind_service", permitted = 1, effective = 1, inheritable = 0 },
+] }]
 
 [[test.step]]
 run = "/opt/remi-tests/fixtures/native/assert-selected-generation.py --root /conary --expect-xattr-hex /usr/bin/phase4-w7-capability=security.capability,0100000200040000000000000000000000000000"
