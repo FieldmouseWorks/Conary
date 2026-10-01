@@ -176,14 +176,46 @@ group = "security-advisory-pipeline"
 [[test.step]]
 run = """
 ${CONARY_BIN} repo remove security-advisory-json --db-path ${DB_PATH} >/dev/null 2>&1 || true
+set -e
 ${CONARY_BIN} repo add security-advisory-json http://127.0.0.1:18088 --package-format json --source-profile ${native_profile} --db-path ${DB_PATH} --security-advisories supported
 ${CONARY_BIN} repo sync security-advisory-json --db-path ${DB_PATH} --force
-sqlite3 ${DB_PATH} "SELECT is_security_update || '|' || COALESCE(severity, '') || '|' || COALESCE(cve_ids, '') || '|' || COALESCE(advisory_id, '') || '|' || COALESCE(metadata, '') FROM repository_packages WHERE name = 'phase4-runtime-fixture' AND version = '${native_update_version}'"
 """
 
 [test.step.assert]
 exit_code = 0
-stdout_contains_all = ["1|critical|CVE-2026-0001|TEST-2026-0001", "fixed_version", "source_trust", "conary-json"]
+
+[[test.step]]
+run = """
+sqlite3 -json ${DB_PATH} "SELECT r.security_advisory_support AS security_advisory_support, rp.architecture AS architecture, rp.is_security_update AS is_security_update, rp.severity AS severity, rp.cve_ids AS cve_ids, rp.advisory_id AS advisory_id, rp.advisory_url AS advisory_url, json_type(rp.metadata) AS metadata_type, json_type(rp.metadata, '$.security_advisory') AS advisory_type, json_type(rp.metadata, '$.security_advisory.cves') AS cves_type, json_array_length(rp.metadata, '$.security_advisory.cves') AS cves_count, json_extract(rp.metadata, '$.security_advisory.cves[0]') AS cve, json_extract(rp.metadata, '$.security_advisory.id') AS metadata_advisory_id, json_extract(rp.metadata, '$.security_advisory.source') AS source, json_extract(rp.metadata, '$.security_advisory.source_trust') AS source_trust, json_extract(rp.metadata, '$.security_advisory.severity') AS metadata_severity, json_extract(rp.metadata, '$.security_advisory.fixed_version') AS fixed_version, json_extract(rp.metadata, '$.security_advisory.url') AS metadata_url FROM repositories r JOIN repository_packages rp ON rp.repository_id = r.id WHERE r.name = 'security-advisory-json' AND rp.name = 'phase4-runtime-fixture' AND rp.version = '${native_update_version}' ORDER BY rp.architecture, rp.id"
+"""
+
+[test.step.assert]
+exit_code = 0
+stdout_json = [{
+  pointer = "",
+  equals_json = '''[
+    {
+      "security_advisory_support": "supported",
+      "architecture": "${native_arch}",
+      "is_security_update": 1,
+      "severity": "critical",
+      "cve_ids": "CVE-2026-0001",
+      "advisory_id": "TEST-2026-0001",
+      "advisory_url": "https://security.example.test/TEST-2026-0001",
+      "metadata_type": "object",
+      "advisory_type": "object",
+      "cves_type": "array",
+      "cves_count": 1,
+      "cve": "CVE-2026-0001",
+      "metadata_advisory_id": "TEST-2026-0001",
+      "source": "conary-json",
+      "source_trust": "trusted",
+      "metadata_severity": "critical",
+      "fixed_version": "${native_update_version}",
+      "metadata_url": "https://security.example.test/TEST-2026-0001"
+    }
+  ]'''
+}]
 
 [[test]]
 id = "TSEC06"

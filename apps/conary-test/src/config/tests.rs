@@ -615,6 +615,7 @@ fn test_load_phase1_advanced_manifest() {
 }
 
 mod native_corpus;
+mod typed_advisory;
 
 #[test]
 fn derivative_acceptance_manifest_covers_takeover_and_native_apt() {
