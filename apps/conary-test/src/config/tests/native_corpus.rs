@@ -9,6 +9,7 @@ mod evidence;
 mod performance;
 mod rejection;
 mod typed_autoremove;
+mod typed_pin_remove;
 mod typed_repo;
 mod typed_sql;
 mod version_rewrite;
