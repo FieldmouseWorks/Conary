@@ -92,20 +92,48 @@ fn phase4_daily_driver_corpus_manifest_proves_remaining_configuration_states() {
         "daily-driver corpus tests must not rely on flaky majority voting"
     );
 
-    for (test_id, owner) in [("TNPM04", &parity_manifest), ("TNPM15", &manifest)] {
-        let metadata_test = owner
-            .test
-            .iter()
-            .find(|test| test.id == test_id)
-            .unwrap_or_else(|| panic!("missing {test_id} native metadata test"));
-        let metadata_rendered = format!("{metadata_test:?}");
-        assert!(
-            metadata_rendered.contains("regular files")
-                && metadata_rendered
-                    .contains("json_extract(payload_node_json, '$.source.kind.type') = 'regular'",),
-            "{test_id} must distinguish typed regular files from directory payload rows"
-        );
-    }
+    let parity_metadata = parity_manifest
+        .test
+        .iter()
+        .find(|test| test.id == "TNPM04")
+        .expect("missing TNPM04 native metadata test");
+    let regular_file_query = parity_metadata
+        .step
+        .iter()
+        .find(|step| {
+            step.run.as_deref().is_some_and(|command| {
+                command.contains("FROM files") && command.contains("ORDER BY path")
+            })
+        })
+        .expect("TNPM04 must retain its path-ordered regular-file rows");
+    let regular_file_command = regular_file_query.run.as_deref().unwrap();
+    assert!(regular_file_command.starts_with("sqlite3 -json ${DB_PATH} \"SELECT "));
+    assert!(
+        regular_file_command
+            .contains("json_extract(payload_node_json, '$.source.kind.type') = 'regular'"),
+        "TNPM04 must exclude directory payload rows from regular-file metadata"
+    );
+    assert!(
+        regular_file_query
+            .assert
+            .as_ref()
+            .and_then(|assertion| assertion.stdout_json.as_ref())
+            .is_some(),
+        "TNPM04 regular-file rows must use typed JSON assertions"
+    );
+
+    let daily_metadata = manifest
+        .test
+        .iter()
+        .find(|test| test.id == "TNPM15")
+        .expect("missing TNPM15 native metadata test");
+    let daily_metadata_rendered = format!("{daily_metadata:?}");
+    assert!(
+        daily_metadata_rendered.contains("regular files")
+            && daily_metadata_rendered
+                .contains("json_extract(payload_node_json, '$.source.kind.type') = 'regular'",),
+        "TNPM15 must continue distinguishing regular files from directory payload rows"
+    );
 
     let rendered = corpus_tests
         .iter()

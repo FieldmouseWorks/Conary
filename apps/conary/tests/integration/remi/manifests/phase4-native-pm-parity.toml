@@ -60,12 +60,10 @@ native_fixture_version = "1.0.0-1"
 native_update_version = "1.0.1-1"
 native_dependency_count = "1"
 native_dependency_probe = 'depends|rpm|{"kind":"Depends","behavior":"Hard","expression":{"operator":"atom","operands":{"name":"config(phase4-runtime-fixture)","capability_kind":null,"version_constraint":"= 1.0.0-1","architecture_qualifier":{"kind":"unqualified"},"native_text":null}},"alternatives":[{"name":"config(phase4-runtime-fixture)","capability_kind":null,"version_constraint":"= 1.0.0-1","architecture_qualifier":{"kind":"unqualified"},"native_text":null}],"description":null,"native_text":"config(phase4-runtime-fixture) = 1.0.0-1"}'
-native_config_count = "1"
 native_config_source = "rpm"
 native_lifecycle_fidelity = "native-free"
 native_provider_count = "7"
-native_file_provider_count = "3"
-native_file_provider_set = "/etc/phase4-runtime-fixture/app.conf,/usr/bin/phase4-runtime-fixture,/usr/include/phase4-runtime-fixture/api.h"
+native_package_provider_count = "2"
 repo_install_pkg = "phase4-repository-fixture"
 repo_install_path = "/usr/share/phase4-repository-fixture/probe.txt"
 repo_seed_security_version = "9999.0-1"
@@ -80,12 +78,10 @@ native_fixture_version = "1.0.0-1"
 native_update_version = "1.0.1-1"
 native_dependency_count = "0"
 native_dependency_probe = "no-deps"
-native_config_count = "1"
 native_config_source = "deb"
 native_lifecycle_fidelity = "native-free"
 native_provider_count = "4"
-native_file_provider_count = "3"
-native_file_provider_set = "/etc/phase4-runtime-fixture/app.conf,/usr/bin/phase4-runtime-fixture,/usr/include/phase4-runtime-fixture/api.h"
+native_package_provider_count = "1"
 repo_install_pkg = "phase4-repository-fixture"
 repo_install_path = "/usr/share/phase4-repository-fixture/probe.txt"
 repo_seed_security_version = "9999.0"
@@ -100,12 +96,10 @@ native_fixture_version = "1.0.0-1"
 native_update_version = "1.0.1-1"
 native_dependency_count = "0"
 native_dependency_probe = "no-deps"
-native_config_count = "1"
 native_config_source = "arch"
 native_lifecycle_fidelity = "native-free"
 native_provider_count = "4"
-native_file_provider_count = "3"
-native_file_provider_set = "/etc/phase4-runtime-fixture/app.conf,/usr/bin/phase4-runtime-fixture,/usr/include/phase4-runtime-fixture/api.h"
+native_package_provider_count = "1"
 repo_install_pkg = "phase4-repository-fixture"
 repo_install_path = "/usr/share/phase4-repository-fixture/probe.txt"
 repo_seed_security_version = "9999.0-1"
@@ -210,60 +204,110 @@ fatal = true
 depends_on = ["TNPM03"]
 
 [[test.step]]
-run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' troves' FROM troves WHERE name = 'phase4-runtime-fixture'; SELECT name || '|' || version || '|' || COALESCE(architecture, '') || '|' || COALESCE(version_scheme, '') || '|' || COALESCE(source_profile, '') || '|' || COALESCE(install_source, '') || '|' || COALESCE(install_reason, '') FROM troves WHERE name = 'phase4-runtime-fixture'\""
+run = "sqlite3 -json ${DB_PATH} \"SELECT COUNT(*) AS troves_count FROM troves WHERE name = 'phase4-runtime-fixture'\""
 
 [test.step.assert]
 exit_code = 0
-stdout_contains_all = ["1 troves", "phase4-runtime-fixture|${native_fixture_version}|${native_arch}|${native_scheme}|${native_profile}|file|explicit"]
+stdout_json = [{ pointer = "", equals = [{ troves_count = 1 }] }]
 
 [[test.step]]
-run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' regular files' FROM files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-runtime-fixture') AND json_extract(payload_node_json, '$.source.kind.type') = 'regular'; SELECT path || '|' || coalesce(content_sha256, '-') || '|' || coalesce(content_size, '-') || '|' || json_extract(payload_node_json, '$.source.kind.type') || '|' || json_extract(payload_node_json, '$.source.mode') FROM files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-runtime-fixture') AND json_extract(payload_node_json, '$.source.kind.type') = 'regular' ORDER BY path\""
+run = "sqlite3 -json ${DB_PATH} \"SELECT name, version, COALESCE(architecture, '') AS architecture, COALESCE(version_scheme, '') AS version_scheme, COALESCE(source_profile, '') AS source_profile, COALESCE(install_source, '') AS install_source, COALESCE(install_reason, '') AS install_reason FROM troves WHERE name = 'phase4-runtime-fixture'\""
 
 [test.step.assert]
 exit_code = 0
-stdout_contains_all = ["3 regular files", "/etc/phase4-runtime-fixture/app.conf|1da0b50cb027387347265437a11956c1433788d045e4c63b379a1e0740882e7c|61|regular|33188", "/usr/bin/phase4-runtime-fixture|517631de24336343a6aaf1a8f704d326299c14c619fe8c8d75d17824d074bd7f|44|regular|33188", "/usr/include/phase4-runtime-fixture/api.h|88904c275ae0f26a566c03f488ae82869c47ac921fb6f0cf7979d5845f199c88|130|regular|33188"]
+stdout_json = [{ pointer = "", equals = [{ name = "phase4-runtime-fixture", version = "${native_fixture_version}", architecture = "${native_arch}", version_scheme = "${native_scheme}", source_profile = "${native_profile}", install_source = "file", install_reason = "explicit" }] }]
 
 [[test.step]]
-run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' provides' FROM provides WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-runtime-fixture'); SELECT COUNT(*) || ' file provides' FROM provides WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-runtime-fixture') AND kind = 'file'; SELECT capability || '|' || COALESCE(version, '') || '|' || COALESCE(kind, '') FROM provides WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-runtime-fixture') AND kind = 'package'; SELECT COALESCE((SELECT group_concat(capability, ',') FROM (SELECT capability FROM provides WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-runtime-fixture') AND kind = 'file' ORDER BY capability)), 'no file provides')\""
+run = "sqlite3 -json ${DB_PATH} \"SELECT COUNT(*) AS regular_files FROM files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-runtime-fixture') AND json_extract(payload_node_json, '$.source.kind.type') = 'regular'\""
 
 [test.step.assert]
 exit_code = 0
-stdout_contains_all = ["${native_provider_count} provides", "${native_file_provider_count} file provides", "phase4-runtime-fixture|${native_fixture_version}|package", "${native_file_provider_set}"]
+stdout_json = [{ pointer = "", equals = [{ regular_files = 3 }] }]
 
 [[test.step]]
-run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' requirement groups' FROM package_requirement_groups WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-runtime-fixture')\""
+run = "sqlite3 -json ${DB_PATH} \"SELECT path, COALESCE(content_sha256, '-') AS content_sha256, COALESCE(content_size, '-') AS content_size, json_extract(payload_node_json, '$.source.kind.type') AS kind, json_extract(payload_node_json, '$.source.mode') AS mode FROM files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-runtime-fixture') AND json_extract(payload_node_json, '$.source.kind.type') = 'regular' ORDER BY path\""
 
 [test.step.assert]
 exit_code = 0
-stdout_contains = "${native_dependency_count} requirement groups"
+stdout_json = [{ pointer = "", equals = [
+    { path = "/etc/phase4-runtime-fixture/app.conf", content_sha256 = "1da0b50cb027387347265437a11956c1433788d045e4c63b379a1e0740882e7c", content_size = 61, kind = "regular", mode = 33188 },
+    { path = "/usr/bin/phase4-runtime-fixture", content_sha256 = "517631de24336343a6aaf1a8f704d326299c14c619fe8c8d75d17824d074bd7f", content_size = 44, kind = "regular", mode = 33188 },
+    { path = "/usr/include/phase4-runtime-fixture/api.h", content_sha256 = "88904c275ae0f26a566c03f488ae82869c47ac921fb6f0cf7979d5845f199c88", content_size = 130, kind = "regular", mode = 33188 },
+] }]
 
 [[test.step]]
-run = "sqlite3 ${DB_PATH} \"SELECT COALESCE((SELECT group_concat(kind || '|' || version_scheme || '|' || requirement_json, char(10)) FROM package_requirement_groups WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-runtime-fixture') ORDER BY id), 'no-deps')\""
+run = "sqlite3 -json ${DB_PATH} \"SELECT COUNT(*) - ${native_provider_count} AS count_delta FROM provides WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-runtime-fixture')\""
 
 [test.step.assert]
 exit_code = 0
-stdout_contains = "${native_dependency_probe}"
+stdout_json = [{ pointer = "", equals = [{ count_delta = 0 }] }]
 
 [[test.step]]
-run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' config rows' FROM config_files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-runtime-fixture')\""
+run = "sqlite3 -json ${DB_PATH} \"SELECT COUNT(*) AS file_provides FROM provides WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-runtime-fixture') AND kind = 'file'\""
 
 [test.step.assert]
 exit_code = 0
-stdout_contains = "${native_config_count} config rows"
+stdout_json = [{ pointer = "", equals = [{ file_provides = 3 }] }]
 
 [[test.step]]
-run = "sqlite3 ${DB_PATH} \"SELECT path || '|' || original_hash || '|' || COALESCE(current_hash, '') || '|' || noreplace || '|' || status || '|' || source FROM config_files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-runtime-fixture') ORDER BY path\""
+run = "sqlite3 -json ${DB_PATH} \"SELECT capability, COALESCE(version, '') AS version, COALESCE(kind, '') AS kind, COUNT(*) - ${native_package_provider_count} AS count_delta FROM provides WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-runtime-fixture') AND kind = 'package' GROUP BY capability, COALESCE(version, ''), COALESCE(kind, '')\""
 
 [test.step.assert]
 exit_code = 0
-stdout_contains = "/etc/phase4-runtime-fixture/app.conf|1da0b50cb027387347265437a11956c1433788d045e4c63b379a1e0740882e7c|1da0b50cb027387347265437a11956c1433788d045e4c63b379a1e0740882e7c|1|pristine|${native_config_source}"
+stdout_json = [{ pointer = "", equals = [{ capability = "phase4-runtime-fixture", version = "${native_fixture_version}", kind = "package", count_delta = 0 }] }]
 
 [[test.step]]
-run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' lifecycle bundles' FROM installed_native_lifecycle_bundles WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-runtime-fixture'); SELECT source_format || '|' || source_package || '|' || source_version || '|' || scriptlet_fidelity || '|' || lifecycle_state FROM installed_native_lifecycle_bundles WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-runtime-fixture')\""
+run = "sqlite3 -json ${DB_PATH} \"SELECT capability FROM provides WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-runtime-fixture') AND kind = 'file' ORDER BY capability\""
 
 [test.step.assert]
 exit_code = 0
-stdout_contains_all = ["1 lifecycle bundles", "${native_target}|phase4-runtime-fixture|${native_fixture_version}|${native_lifecycle_fidelity}|installed"]
+stdout_json = [{ pointer = "", equals = [
+    { capability = "/etc/phase4-runtime-fixture/app.conf" },
+    { capability = "/usr/bin/phase4-runtime-fixture" },
+    { capability = "/usr/include/phase4-runtime-fixture/api.h" },
+] }]
+
+[[test.step]]
+run = "sqlite3 -json ${DB_PATH} \"SELECT COUNT(*) - ${native_dependency_count} AS count_delta FROM package_requirement_groups WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-runtime-fixture')\""
+
+[test.step.assert]
+exit_code = 0
+stdout_json = [{ pointer = "", equals = [{ count_delta = 0 }] }]
+
+[[test.step]]
+run = "sqlite3 -json ${DB_PATH} \"SELECT COALESCE((SELECT group_concat(kind || '|' || version_scheme || '|' || requirement_json, char(10)) FROM package_requirement_groups WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-runtime-fixture') ORDER BY id), 'no-deps') AS dependency_probe\""
+
+[test.step.assert]
+exit_code = 0
+stdout_json = [{ pointer = "", equals = [{ dependency_probe = "${native_dependency_probe}" }] }]
+
+[[test.step]]
+run = "sqlite3 -json ${DB_PATH} \"SELECT COUNT(*) AS config_rows FROM config_files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-runtime-fixture')\""
+
+[test.step.assert]
+exit_code = 0
+stdout_json = [{ pointer = "", equals = [{ config_rows = 1 }] }]
+
+[[test.step]]
+run = "sqlite3 -json ${DB_PATH} \"SELECT path, original_hash, COALESCE(current_hash, '') AS current_hash, noreplace, status, source FROM config_files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-runtime-fixture') ORDER BY path\""
+
+[test.step.assert]
+exit_code = 0
+stdout_json = [{ pointer = "", equals = [{ path = "/etc/phase4-runtime-fixture/app.conf", original_hash = "1da0b50cb027387347265437a11956c1433788d045e4c63b379a1e0740882e7c", current_hash = "1da0b50cb027387347265437a11956c1433788d045e4c63b379a1e0740882e7c", noreplace = 1, status = "pristine", source = "${native_config_source}" }] }]
+
+[[test.step]]
+run = "sqlite3 -json ${DB_PATH} \"SELECT COUNT(*) AS lifecycle_bundles FROM installed_native_lifecycle_bundles WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-runtime-fixture')\""
+
+[test.step.assert]
+exit_code = 0
+stdout_json = [{ pointer = "", equals = [{ lifecycle_bundles = 1 }] }]
+
+[[test.step]]
+run = "sqlite3 -json ${DB_PATH} \"SELECT source_format, source_package, source_version, scriptlet_fidelity, lifecycle_state FROM installed_native_lifecycle_bundles WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-runtime-fixture')\""
+
+[test.step.assert]
+exit_code = 0
+stdout_json = [{ pointer = "", equals = [{ source_format = "${native_target}", source_package = "phase4-runtime-fixture", source_version = "${native_fixture_version}", scriptlet_fidelity = "${native_lifecycle_fidelity}", lifecycle_state = "installed" }] }]
 
 # --------------------------------------------------------------------------
 # TNPM05: daily query surface
@@ -483,11 +527,11 @@ exit_code = 0
 stdout_contains_all = ["deferred_follow_up", "generation_publication", "generation publication is pending"]
 
 [[test.step]]
-run = "sqlite3 ${DB_PATH} \"SELECT status || '|' || COALESCE(last_error, '') || '|' || retry_count || '|' || recoverable FROM generation_publications WHERE trigger_changeset_id = (SELECT id FROM changesets WHERE description = 'Install phase4-runtime-fixture-${native_fixture_version}' ORDER BY id DESC LIMIT 1) ORDER BY id DESC LIMIT 1\""
+run = "sqlite3 -json ${DB_PATH} \"SELECT status, COALESCE(last_error, '') AS last_error, retry_count, recoverable FROM generation_publications WHERE trigger_changeset_id = (SELECT id FROM changesets WHERE description = 'Install phase4-runtime-fixture-${native_fixture_version}' ORDER BY id DESC LIMIT 1) ORDER BY id DESC LIMIT 1\""
 
 [test.step.assert]
 exit_code = 0
-stdout_contains = "failed|forced generation rebuild failure for test: slice-d-forced|1|1"
+stdout_json = [{ pointer = "", equals = [{ status = "failed", last_error = "forced generation rebuild failure for test: slice-d-forced", retry_count = 1, recoverable = 1 }] }]
 
 [[test.step]]
 conary = "system history"
