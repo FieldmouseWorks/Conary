@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-10-01
-revision: 78
+revision: 79
 summary: Define the Podman container integration harness, its prerequisites, running suites, fixtures, and result/proof contracts
 ---
 
@@ -644,6 +644,18 @@ wrong counts, types, values, row/key cardinality, row order, nulls, malformed or
 concatenated JSON, and failed commands. These controls prove the assertion
 engine; the full native parity suite exercises the actual SQLite queries in
 each container lane.
+
+`TNPM10` checks the repository install's persisted state with two ordered
+`sqlite3 -json` queries. The first requires exactly one row with integer
+`repo_troves = 1` for the package name. The second requires exactly one row
+with that package name, the joined repository name, source profile, version
+scheme, install source `repository`, and install reason `explicit`. It retains
+the left join and the original null-to-empty projections. Whole-array JSON
+comparison rejects extra rows or fields, wrong types, and provenance from
+another package or repository. The focused `native_parity_repo_` controls
+exercise the loaded assertions; the full parity suite exercises the SQLite
+queries against the installed state. Its CLI list checks still cover displayed
+query output.
 
 `TNPM12` establishes its orphan with strict model apply and
 `--no-autoremove`, then previews `autoremove --dry-run --json`. Its typed
