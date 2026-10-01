@@ -670,6 +670,8 @@ fn phase4_security_advisory_pipeline_manifest_carries_trusted_update_contract() 
         "TEST-2026-0001",
         "--security-advisories unknown",
         "--security-advisories supported",
+        "--default-strategy binary",
+        "--ccs-package-key ${FIXTURE_CCS_PUBLIC_KEY}",
         "source: conary-json (feed trust claim: trusted)",
     ] {
         assert!(

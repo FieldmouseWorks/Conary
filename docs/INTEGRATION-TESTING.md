@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-10-01
-revision: 85
+revision: 86
 summary: Define the Podman container integration harness, its prerequisites, running suites, fixtures, and result/proof contracts
 ---
 
@@ -966,10 +966,11 @@ Focused Goal 3 security advisory pipeline proof:
 
 - `cargo run -p conary-test -- run --suite phase4-security-advisory-pipeline --distro fedora44 --phase 4`
 
-The `phase4-security-advisory-pipeline` manifest builds a v1/v2 native fixture
-and serves JSON repository metadata with a feed-authored
+The `phase4-security-advisory-pipeline` manifest installs a native v1 fixture,
+builds a signed CCS v2, and serves JSON repository metadata with a feed-authored
 `security_advisory_source`. Feed `trust` and `source_trust` strings are
-diagnostic only. The suite proves an `unknown` local source refuses before
+diagnostic only; the enrolled CCS package key authenticates the update artifact.
+The suite proves an `unknown` local source refuses before
 mutation, then syncs the same repository after the operator authorizes it with
 `--security-advisories supported`. It verifies persisted severity, CVE,
 advisory ID, fixed version, and feed trust-claim metadata as one exact typed

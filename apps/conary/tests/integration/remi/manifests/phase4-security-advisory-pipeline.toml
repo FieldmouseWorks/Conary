@@ -43,22 +43,21 @@ native_update_version = "1.0.1-1"
 [[test]]
 id = "TSEC01"
 name = "build_security_update_fixtures"
-description = "Build v1 and v2 native fixtures for the advisory pipeline"
+description = "Build native v1 and signed CCS v2 fixtures for the advisory pipeline"
 timeout = 240
 fatal = true
 group = "security-advisory-pipeline"
 
 [[test.step]]
 run = """
-rm -rf /tmp/security-advisory-v1 /tmp/security-advisory-v2 /tmp/security-advisory-v2-src &&
-mkdir -p /tmp/security-advisory-v1 &&
+rm -rf /tmp/security-advisory-v1 /tmp/security-advisory-v2 &&
+mkdir -p /tmp/security-advisory-v1 /tmp/security-advisory-v2 &&
 CONARY_BIN=${CONARY_BIN} /opt/remi-tests/fixtures/native/build-native-fixtures.sh ${native_target} /tmp/security-advisory-v1 /opt/remi-tests/fixtures/phase4-runtime-fixture &&
-cp -a /opt/remi-tests/fixtures/phase4-runtime-fixture /tmp/security-advisory-v2-src &&
-sed -i 's/version = "1.0.0"/version = "1.0.1"/' /tmp/security-advisory-v2-src/ccs.toml &&
-mkdir -p /tmp/security-advisory-v2 &&
-CONARY_BIN=${CONARY_BIN} /opt/remi-tests/fixtures/native/build-native-fixtures.sh ${native_target} /tmp/security-advisory-v2 /tmp/security-advisory-v2-src &&
 . /tmp/security-advisory-v1/native-fixture.env && test -f "$NATIVE_PKG_FILE" &&
-. /tmp/security-advisory-v2/native-fixture.env && test -f "$NATIVE_PKG_FILE"
+${CONARY_BIN} ccs build /opt/remi-tests/fixtures/phase4-signed-update/${native_target}/ccs.toml --source /opt/remi-tests/fixtures/phase4-runtime-fixture-v2/stage --output /tmp/security-advisory-v2 --target ccs --key ${FIXTURE_CCS_KEY} &&
+test "$(find /tmp/security-advisory-v2 -maxdepth 1 -type f -name '*.ccs' | wc -l)" -eq 1 &&
+CCS_FILE=$(find /tmp/security-advisory-v2 -maxdepth 1 -type f -name '*.ccs' -print) &&
+${CONARY_BIN} ccs verify "$CCS_FILE" --policy ${FIXTURE_CCS_POLICY}
 """
 
 [test.step.assert]
@@ -82,8 +81,8 @@ stdout_contains_any = ["Successfully installed", "Installed", "phase4-runtime-fi
 
 [[test]]
 id = "TSEC03"
-name = "publish_trusted_json_advisory_metadata"
-description = "Serve JSON repository metadata with trusted source, CVE, severity, fixed version, and advisory identity"
+name = "publish_json_advisory_metadata"
+description = "Serve JSON metadata for a signed CCS update with feed-claimed source trust, CVE, severity, fixed version, and advisory identity"
 timeout = 60
 fatal = true
 depends_on = ["TSEC02"]
@@ -92,9 +91,12 @@ group = "security-advisory-pipeline"
 [[test.step]]
 run = """
 if test -f /tmp/security-advisory-http.pid; then kill "$(cat /tmp/security-advisory-http.pid)" 2>/dev/null || true; fi
-. /tmp/security-advisory-v2/native-fixture.env
-PKG_BASENAME=$(basename "$NATIVE_PKG_FILE")
-PKG_SIZE=$(wc -c < "$NATIVE_PKG_FILE")
+set -e
+test "$(find /tmp/security-advisory-v2 -maxdepth 1 -type f -name '*.ccs' | wc -l)" -eq 1
+CCS_FILE=$(find /tmp/security-advisory-v2 -maxdepth 1 -type f -name '*.ccs' -print)
+PKG_BASENAME=$(basename "$CCS_FILE")
+PKG_SHA256=$(sha256sum "$CCS_FILE" | awk '{print $1}')
+PKG_SIZE=$(wc -c < "$CCS_FILE")
 cat > /tmp/security-advisory-v2/metadata.json <<JSON
 {
   "name": "security-advisory-json",
@@ -109,11 +111,12 @@ cat > /tmp/security-advisory-v2/metadata.json <<JSON
       "version": "${native_update_version}",
       "version_scheme": "${native_scheme}",
       "architecture": "${native_arch}",
-      "description": "Trusted security update fixture",
-      "checksum": "$NATIVE_PKG_SHA256",
+      "description": "Signed security update fixture",
+      "checksum": "$PKG_SHA256",
       "size": $PKG_SIZE,
       "download_url": "http://127.0.0.1:18088/$PKG_BASENAME",
-      "dependencies": [],
+      "requirements": [],
+      "relations": [],
       "security_advisory": {
         "id": "TEST-2026-0001",
         "severity": "critical",
@@ -148,7 +151,7 @@ group = "security-advisory-pipeline"
 run = """
 ${CONARY_BIN} repo remove security-advisory-json --db-path ${DB_PATH} >/dev/null 2>&1 || true
 set -e
-${CONARY_BIN} repo add security-advisory-json http://127.0.0.1:18088 --package-format json --source-profile ${native_profile} --db-path ${DB_PATH} --security-advisories unknown
+${CONARY_BIN} repo add security-advisory-json http://127.0.0.1:18088 --package-format json --default-strategy binary --ccs-package-key ${FIXTURE_CCS_PUBLIC_KEY} --source-profile ${native_profile} --db-path ${DB_PATH} --security-advisories unknown
 ${CONARY_BIN} repo sync security-advisory-json --db-path ${DB_PATH} --force
 set +e
 OUTPUT=$(${CONARY_BIN} update phase4-runtime-fixture --security --db-path ${DB_PATH} --sandbox always --yes 2>&1)
@@ -166,7 +169,7 @@ stdout_contains_all = ["security metadata", "security-advisory-json"]
 
 [[test]]
 id = "TSEC05"
-name = "trusted_json_advisory_sync_persists_fields"
+name = "supported_json_advisory_sync_persists_fields"
 description = "Supported JSON advisory metadata persists CVE, severity, fixed version, source trust, and advisory id"
 timeout = 180
 fatal = true
@@ -177,7 +180,7 @@ group = "security-advisory-pipeline"
 run = """
 ${CONARY_BIN} repo remove security-advisory-json --db-path ${DB_PATH} >/dev/null 2>&1 || true
 set -e
-${CONARY_BIN} repo add security-advisory-json http://127.0.0.1:18088 --package-format json --source-profile ${native_profile} --db-path ${DB_PATH} --security-advisories supported
+${CONARY_BIN} repo add security-advisory-json http://127.0.0.1:18088 --package-format json --default-strategy binary --ccs-package-key ${FIXTURE_CCS_PUBLIC_KEY} --source-profile ${native_profile} --db-path ${DB_PATH} --security-advisories supported
 ${CONARY_BIN} repo sync security-advisory-json --db-path ${DB_PATH} --force
 """
 
@@ -219,8 +222,8 @@ stdout_json = [{
 
 [[test]]
 id = "TSEC06"
-name = "trusted_security_update_applies"
-description = "update --security selects the trusted advisory candidate and applies the fixed package"
+name = "signed_security_update_applies"
+description = "update --security applies the locally authorized signed CCS candidate"
 timeout = 240
 fatal = true
 depends_on = ["TSEC05"]
