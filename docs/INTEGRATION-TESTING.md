@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-10-01
-revision: 80
+revision: 81
 summary: Define the Podman container integration harness, its prerequisites, running suites, fixtures, and result/proof contracts
 ---
 
@@ -646,6 +646,19 @@ count, rejecting extra rows, wrong types, and rendered counts such as
 exercise those loaded assertions; the full native parity suite executes the
 queries against the package database. These counts establish presence and
 absence for that package name, not its version or source provenance.
+
+`TNPM07` reads the enrolled update repository and the updated package row with
+`sqlite3 -json` at their existing positions. Before the mutation, the joined
+repository/package/key query requires exactly one row with the binary strategy,
+target profile, package name, update version, version scheme, architecture, and
+active key status. After the update and selected-generation hash check, the
+trove query requires exactly one row with the package name, updated version,
+architecture, scheme, and profile. Whole-array equality rejects extra key or
+package rows and a second installed version that pipe-delimited substring
+matching could accept. Focused `native_parity_update_` controls exercise the
+loaded assertions; the full parity suite runs the queries in each container
+lane. The two reads establish enrollment and installed identity separately.
+They do not bind the trove to that repository ID or verify signature bytes.
 
 `TNPM09` reads the same latest failed publication row and requires its exact
 status and error, with integer retry and recoverable fields. The focused
