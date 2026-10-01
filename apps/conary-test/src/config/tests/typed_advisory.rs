@@ -229,9 +229,7 @@ fn demonstrate_substring_decoy(assertion: &Assertion, expected: &Value) {
     };
     let mut wrong = expected.clone();
     wrong[0]["advisory_id"] = json!("WRONG-ADVISORY");
-    let stdout = format!(
-        "1|critical|CVE-2026-0001|WRONG-ADVISORY\ndiagnostic decoy: 1|critical|CVE-2026-0001|TEST-2026-0001 fixed_version source_trust conary-json"
-    );
+    let stdout = "1|critical|CVE-2026-0001|WRONG-ADVISORY\ndiagnostic decoy: 1|critical|CVE-2026-0001|TEST-2026-0001 fixed_version source_trust conary-json".to_string();
     assert!(evaluate_assertion(&old_assertion, 0, &stdout, "").is_ok());
     rejects(assertion, &wrong, "wrong persisted advisory id");
 }
