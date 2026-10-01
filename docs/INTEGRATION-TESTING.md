@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-10-01
-revision: 81
+revision: 82
 summary: Define the Podman container integration harness, its prerequisites, running suites, fixtures, and result/proof contracts
 ---
 
@@ -660,13 +660,17 @@ loaded assertions; the full parity suite runs the queries in each container
 lane. The two reads establish enrollment and installed identity separately.
 They do not bind the trove to that repository ID or verify signature bytes.
 
-`TNPM09` reads the same latest failed publication row and requires its exact
-status and error, with integer retry and recoverable fields. The focused
-`native_parity_sql_` controls evaluate the loaded manifest assertions against
-wrong counts, types, values, row/key cardinality, row order, nulls, malformed or
-concatenated JSON, and failed commands. These controls prove the assertion
-engine; the full native parity suite exercises the actual SQLite queries in
-each container lane.
+`TNPM09` projects the latest matching install changeset's versioned metadata
+through SQLite JSON and requires one `deferred_follow_up` array entry with the
+exact generation-publication kind, pending status, and pending message. The
+projection does not check the retry command or other metadata fields. It reads
+the same latest failed publication row separately and requires its exact status
+and error, with integer retry and recoverable fields. Focused
+`native_parity_deferred_` controls reject a resolved follow-up that the old
+substring check accepted, along with wrong values, types, row shape, malformed
+JSON, and failed commands. The existing `native_parity_sql_` controls exercise
+the publication-row and `TNPM04` assertions. The full native parity suite runs
+the actual SQLite queries in each container lane.
 
 `TNPM10` checks the repository install's persisted state with two ordered
 `sqlite3 -json` queries. The first requires exactly one row with integer
