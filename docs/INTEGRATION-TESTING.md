@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-10-01
-revision: 82
+revision: 83
 summary: Define the Podman container integration harness, its prerequisites, running suites, fixtures, and result/proof contracts
 ---
 
@@ -707,9 +707,10 @@ can select only the matching enrolled repository. The signed update
 fixture enrolls its binary JSON repository, exact source profile, and CCS
 package key through `conary repo add`; it does not mutate protected SQLite
 authority out of band. The focused
-`phase4-native-daily-driver-corpus` manifest owns `TNPM13` through `TNPM19`
-without inheriting prior parity state. It builds a bounded signed loopback CCS
-repository, then builds a package in the host-native format and proves:
+`phase4-native-daily-driver-corpus` owns `TNPM13` through `TNPM32` without
+inheriting prior parity state. Its first seven cases build a bounded signed
+loopback CCS repository, then build a package in the host-native format and
+prove:
 
 - systemd unit file deployment and trigger matching
 - tracked `/etc` config file metadata
@@ -745,8 +746,8 @@ binds pristine config-upgrade coverage to `install_request` plus
 from a bounded repository, and must preserve the native checksum in the
 installed lifecycle bundle while its repository checksum, selected-generation
 config bytes, and persisted pristine config hashes agree. The removal record
-binds to the installed v2 update request. Across the three completed cases the
-suite declares exactly eighteen properties: exact version, native architecture,
+binds to the installed v2 update request. Those three completed cases declare
+exactly eighteen properties: exact version, native architecture,
 regular files, directories, symlinks, hardlinks, payload ownership, payload
 timestamps, a versioned dependency, a queried virtual provide, a queried
 source-declared same-name compatibility provide, matched config, a newly
@@ -795,14 +796,25 @@ RPM export emits a directory entry when its mode differs from the implicit
 payload entries remain implicit so generated packages do not claim shared
 target paths such as `/usr/bin` from the native filesystem package.
 
-Several useful assertions deliberately remain outside semantic coverage. The
-2 MiB zero-filled file is not W7 large-file/resource-boundary proof; the
+`TNPM20` through `TNPM32` add separately pinned native artifacts for identity,
+sparse and large files, xattrs, file capabilities, typed relations, lifecycle,
+trust, runtime actions, and failure boundaries. The completed corpus emits 17
+attributable case records and requires all 44 declared semantic properties.
+`TNPM21` checks the installed file-capability database as an exact typed JSON
+result: one path, one capability, and the three persisted flags must match the
+source artifact, with no additional row or capability. Its separate
+selected-generation assertion checks the `security.capability` xattr.
+
+Several useful assertions in `TNPM13` through `TNPM19` deliberately remain
+outside semantic coverage for those cases. The 2 MiB zero-filled file is not
+W7 large-file/resource-boundary proof; the
 Conary changeset trigger is not a source-package trigger; the disabled systemd
 unit is not activation; the kernel-adjacent file is not an executed target
 helper; and a conflicting-content refusal is not a declared native relation
 conflict. Root ownership does not establish xattr or capability coverage, and
 selected-generation metadata does not establish live-root materialization.
-Those properties still require fixtures that prove their exact contracts.
+The later cases attribute these properties through their own pinned artifacts
+and exact contract checks.
 
 The PR gate also runs the focused `phase4-native-daily-driver-corpus` manifest on
 Fedora 44, Ubuntu 26.04, and Arch in a non-fail-fast matrix, then applies both
@@ -1113,7 +1125,7 @@ Adversarial and stress tests.
 
 ### Phase 4: Feature Validation
 
-Phase 4 currently contains 153 tests across nine manifests. It validates the
+Phase 4 currently contains 166 tests across nine manifests. It validates the
 active, user-facing command surface and checks that claimed features still match
 the current binary. Where a flow is intentionally preview-only or not yet
 implemented, the manifest asserts that it fails cleanly with an explicit
@@ -1127,7 +1139,7 @@ message rather than pretending it is production-ready.
 | D | T221-T255 plus suffix IDs | 38 | Provenance, capability, trust, system ops, federation, automation |
 | E | T256-T273 and T276-T277 plus suffix IDs | 22 | Cross-source compatibility overlay: native package parity, source identity, model convergence, and takeover |
 | Native package-manager parity | TNPM01-TNPM12 plus TNPM02X | 13 | Cross-distro repository and native package-manager parity |
-| Native daily-driver corpus | TNPM13-TNPM19 | 7 | Focused attributable host-native daily-driver semantics |
+| Native daily-driver corpus | TNPM13-TNPM32 | 20 | Focused attributable host-native daily-driver semantics |
 | Native cross-source lifecycle | TNPMX01R, TNPMX01D, TNPMX01A, TNPMX02O | 4 | Attributable native-oracle install/update/rollback/remove corpus evidence plus OpenRC activation proof on every target image |
 | Security advisory pipeline | TSEC01-TSEC07 | 7 | Trusted advisory ingestion and security update proof |
 
