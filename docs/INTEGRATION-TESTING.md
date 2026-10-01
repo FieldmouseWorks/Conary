@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-10-01
-revision: 86
+last_updated: 2026-10-02
+revision: 87
 summary: Define the Podman container integration harness, its prerequisites, running suites, fixtures, and result/proof contracts
 ---
 
@@ -804,6 +804,13 @@ attributable case records and requires all 44 declared semantic properties.
 result: one path, one capability, and the three persisted flags must match the
 source artifact, with no additional row or capability. Its separate
 selected-generation assertion checks the `security.capability` xattr.
+
+`TNPM22` checks the persisted RPM relations as one exact typed JSON
+result for the named installed trove. It requires exactly one `conflict` for
+`phase4-w7-conflict < 2` and one `obsolete` for
+`phase4-w7-replaced <= 1`, each with the RPM version scheme and matching
+typed expression and alternative. Missing or extra negative relation rows,
+duplicate same-name troves, and changed constraints or schemes fail the assertion.
 
 Several useful assertions in `TNPM13` through `TNPM19` deliberately remain
 outside semantic coverage for those cases. The 2 MiB zero-filled file is not

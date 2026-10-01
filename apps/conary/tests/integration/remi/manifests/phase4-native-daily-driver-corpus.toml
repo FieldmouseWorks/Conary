@@ -964,11 +964,80 @@ exit_code = 0
 stdout_contains_any = ["Successfully installed", "Installed", "phase4-w7-rpm-semantics"]
 
 [[test.step]]
-run = "sqlite3 ${DB_PATH} \"SELECT kind || '|' || json_extract(requirement_json, '$.expression.operands.name') || '|' || json_extract(requirement_json, '$.expression.operands.version_constraint') FROM package_requirement_groups WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-w7-rpm-semantics') AND kind IN ('conflict', 'obsolete') ORDER BY kind\""
+run = """
+sqlite3 -json ${DB_PATH} "SELECT
+    t.name AS trove_name,
+    t.version AS trove_version,
+    t.type AS trove_type,
+    t.architecture AS trove_architecture,
+    t.version_scheme AS trove_scheme,
+    t.source_profile AS source_profile,
+    t.install_source AS install_source,
+    t.install_reason AS install_reason,
+    g.kind AS group_kind,
+    g.version_scheme AS group_scheme,
+    json_type(g.requirement_json) AS group_type,
+    json_extract(g.requirement_json, '$.kind') AS payload_kind,
+    json_extract(g.requirement_json, '$.behavior') AS behavior,
+    json_type(g.requirement_json, '$.expression') AS expression_type,
+    json_extract(g.requirement_json, '$.expression.operator') AS expression_operator,
+    json_type(g.requirement_json, '$.expression.operands') AS operand_type,
+    json_extract(g.requirement_json, '$.expression.operands.name') AS expression_name,
+    json_extract(g.requirement_json, '$.expression.operands.version_constraint') AS expression_constraint,
+    json_type(g.requirement_json, '$.expression.operands.capability_kind') AS expression_capability_kind_type,
+    json_extract(g.requirement_json, '$.expression.operands.architecture_qualifier.kind') AS expression_architecture_kind,
+    json_type(g.requirement_json, '$.expression.operands.native_text') AS expression_native_text_type,
+    json_type(g.requirement_json, '$.alternatives') AS alternatives_type,
+    json_array_length(g.requirement_json, '$.alternatives') AS alternatives_count,
+    json_type(g.requirement_json, '$.alternatives[0]') AS alternative_type,
+    json_extract(g.requirement_json, '$.alternatives[0].name') AS alternative_name,
+    json_extract(g.requirement_json, '$.alternatives[0].version_constraint') AS alternative_constraint,
+    json_type(g.requirement_json, '$.alternatives[0].capability_kind') AS alternative_capability_kind_type,
+    json_extract(g.requirement_json, '$.alternatives[0].architecture_qualifier.kind') AS alternative_architecture_kind,
+    json_type(g.requirement_json, '$.alternatives[0].native_text') AS alternative_native_text_type,
+    json_extract(g.requirement_json, '$.native_text') AS native_text
+FROM troves AS t
+LEFT JOIN package_requirement_groups AS g
+    ON g.trove_id = t.id AND g.kind IN ('conflict', 'breaks', 'replace', 'obsolete')
+WHERE t.name = 'phase4-w7-rpm-semantics'
+ORDER BY t.id, g.kind, g.id"
+"""
 
 [test.step.assert]
 exit_code = 0
-stdout_contains_all = ["conflict|phase4-w7-conflict|< 2", "obsolete|phase4-w7-replaced|<= 1"]
+stdout_json = [{
+  pointer = "",
+  equals_json = '''[
+    {
+      "trove_name": "phase4-w7-rpm-semantics", "trove_version": "1.0.0-1", "trove_type": "package",
+      "trove_architecture": "x86_64", "trove_scheme": "rpm", "source_profile": "fedora-44",
+      "install_source": "file", "install_reason": "explicit", "group_kind": "conflict", "group_scheme": "rpm",
+      "group_type": "object", "payload_kind": "Conflict", "behavior": "Hard",
+      "expression_type": "object", "expression_operator": "atom", "operand_type": "object",
+      "expression_name": "phase4-w7-conflict", "expression_constraint": "< 2",
+      "expression_capability_kind_type": "null", "expression_architecture_kind": "unqualified",
+      "expression_native_text_type": "null", "alternatives_type": "array", "alternatives_count": 1,
+      "alternative_type": "object", "alternative_name": "phase4-w7-conflict",
+      "alternative_constraint": "< 2", "alternative_capability_kind_type": "null",
+      "alternative_architecture_kind": "unqualified", "alternative_native_text_type": "null",
+      "native_text": "phase4-w7-conflict < 2"
+    },
+    {
+      "trove_name": "phase4-w7-rpm-semantics", "trove_version": "1.0.0-1", "trove_type": "package",
+      "trove_architecture": "x86_64", "trove_scheme": "rpm", "source_profile": "fedora-44",
+      "install_source": "file", "install_reason": "explicit", "group_kind": "obsolete", "group_scheme": "rpm",
+      "group_type": "object", "payload_kind": "Obsolete", "behavior": "Hard",
+      "expression_type": "object", "expression_operator": "atom", "operand_type": "object",
+      "expression_name": "phase4-w7-replaced", "expression_constraint": "<= 1",
+      "expression_capability_kind_type": "null", "expression_architecture_kind": "unqualified",
+      "expression_native_text_type": "null", "alternatives_type": "array", "alternatives_count": 1,
+      "alternative_type": "object", "alternative_name": "phase4-w7-replaced",
+      "alternative_constraint": "<= 1", "alternative_capability_kind_type": "null",
+      "alternative_architecture_kind": "unqualified", "alternative_native_text_type": "null",
+      "native_text": "phase4-w7-replaced <= 1"
+    }
+  ]'''
+}]
 
 [[test.step]]
 run = "/opt/remi-tests/fixtures/native/assert-selected-generation.py --root /conary --expect-sha256 /var/lib/phase4-w7-rpm-semantics/non-shell.marker=3205d86da0fc907a4ad85e8a9f1db8448816c034dde7161f044d819004345da6 --expect-sha256 /var/lib/phase4-w7-rpm-semantics/transaction.marker=489c47f8a3ba3293737ac7bdbaa4e1f0e71c0211ece5d5093091a92fa358c851 --expect-sha256 /var/lib/phase4-w7-rpm-semantics/trigger.marker=dc7f6d4c8a327e433ae1cf601ed6efb965d6ac81e505ea97691451765b805a2c"
