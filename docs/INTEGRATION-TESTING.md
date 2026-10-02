@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-10-02
-revision: 87
+revision: 88
 summary: Define the Podman container integration harness, its prerequisites, running suites, fixtures, and result/proof contracts
 ---
 
@@ -721,7 +721,7 @@ prove:
   reason and source provenance
 - one source-declared same-name compatibility provide at version `1.0`, kept
   distinct from the native package's exact version in native metadata,
-  installed capability provenance, and `whatprovides` output
+  installed capability provenance, and typed `whatprovides` JSON results
 - an exact installed native-lifecycle bundle plus install/remove hook effects
 - system user and group creation in the selected generation
 - an explicit mode-0750 directory and an exact relative symlink through native
@@ -735,6 +735,14 @@ prove:
 - a QEMU-safe kernel-adjacent `kernel/install.d` file without mutating boot state
 - an alternative target binary (`/usr/bin/phase4-corpus-alt`) as packaged file
   coverage
+
+`TNPM16` checks the complete `query whatprovides --json` result for both the
+package name and its virtual provide. Each result must contain exactly one
+installed provider with the native package's version, architecture, and
+version scheme, the converted CCS release `1`, and the expected capability
+versions and provider count.
+The query result does not establish install source or provide provenance;
+`TNPM15` checks those facts against native metadata and persisted state.
 
 `TNPM16`, `TNPM18`, and `TNPM19` make the chain visible to the typed W7 aggregator. The
 install record reopens both builders' schema-versioned output manifests,

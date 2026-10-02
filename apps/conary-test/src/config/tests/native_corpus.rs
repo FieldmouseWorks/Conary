@@ -16,6 +16,7 @@ mod typed_relations;
 mod typed_repo;
 mod typed_sql;
 mod typed_update;
+mod typed_whatprovides;
 mod version_rewrite;
 
 #[test]
