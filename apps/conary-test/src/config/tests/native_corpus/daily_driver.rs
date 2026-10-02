@@ -210,6 +210,8 @@ fn phase4_daily_driver_corpus_manifest_proves_remaining_configuration_states() {
         assert_eq!(row["published_request"].as_i64(), Some(1));
     }
 
+    super::typed_dependency::assert_tnpm14_dependency_shape(&manifest);
+
     let rendered = corpus_tests
         .iter()
         .map(|test| format!("{test:?}"))
@@ -229,7 +231,6 @@ fn phase4_daily_driver_corpus_manifest_proves_remaining_configuration_states() {
         "${native_corpus_atom_text_type}",
         "${native_corpus_atom_text}",
         "json_extract(g.requirement_json, '$.expression.operands.name')",
-        "|repository|dependency",
         "/usr/share/phase4-repository-fixture/probe.txt",
         "/var/lib/phase4-corpus/scriptlet.marker",
         "RuntimeServiceActivation",
