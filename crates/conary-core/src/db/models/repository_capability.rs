@@ -12,7 +12,7 @@ use crate::repository::dependency_model::{
 };
 use crate::repository::distro::version_scheme_from_db;
 use crate::repository::versioning::VersionScheme;
-use rusqlite::{Connection, Row, params};
+use rusqlite::{Connection, OptionalExtension, Row, params};
 use std::collections::BTreeSet;
 use std::io;
 
@@ -95,6 +95,45 @@ const SELECT_BY_CLI_RAW_QUERY_SQL: &str =
                AND rp.raw IS NOT NULL
                AND rp.raw != ''
              ORDER BY rp.capability, rp.version";
+
+/// CLI integrity probes inspect only rows that the corresponding exact-query
+/// arm could select. Each outer seek uses the same capability or partial raw
+/// index as its provider lookup. `NOT EXISTS` checks the joined identity by
+/// primary key without a LEFT JOIN over the resolved (possibly attached)
+/// repository universe.
+const SELECT_CLI_EXACT_ORPHAN_SQL: &str = "SELECT rp.id, rp.repository_package_id
+             FROM resolved_repository_provides rp
+             WHERE rp.capability = ?1
+               AND (rp.kind IS NULL OR rp.kind = '' OR rp.kind = 'package')
+               AND (rp.raw IS NULL OR rp.raw = '')
+               AND NOT EXISTS (
+                   SELECT 1 FROM resolved_repository_packages pkg
+                   JOIN repositories repo ON repo.id = pkg.repository_id
+                   WHERE pkg.id = rp.repository_package_id
+               )
+             LIMIT 1";
+
+const SELECT_CLI_RAW_ORPHAN_SQL: &str = "SELECT rp.id, rp.repository_package_id
+             FROM resolved_repository_provides rp
+             WHERE rp.raw = ?1
+               AND rp.raw IS NOT NULL
+               AND rp.raw != ''
+               AND NOT EXISTS (
+                   SELECT 1 FROM resolved_repository_packages pkg
+                   JOIN repositories repo ON repo.id = pkg.repository_id
+                   WHERE pkg.id = rp.repository_package_id
+               )
+             LIMIT 1";
+
+const SELECT_CLI_TYPED_ORPHAN_SQL: &str = "SELECT rp.id, rp.repository_package_id
+             FROM resolved_repository_provides rp
+             WHERE rp.capability = ?1 AND rp.kind = ?2
+               AND NOT EXISTS (
+                   SELECT 1 FROM resolved_repository_packages pkg
+                   JOIN repositories repo ON repo.id = pkg.repository_id
+                   WHERE pkg.id = rp.repository_package_id
+               )
+             LIMIT 1";
 
 const SELECT_BY_CAPABILITY_AND_KIND_SQL: &str =
     "SELECT rp.id, rp.repository_package_id, rp.capability, rp.version,
@@ -368,6 +407,27 @@ impl RepositoryProvide {
         Ok(rows)
     }
 
+    /// Reject a matching package-name or raw CLI provide whose package or
+    /// repository identity has disappeared. Disabled but intact repositories
+    /// remain valid metadata and are still excluded by the provider lookup.
+    pub fn validate_cli_exact_references(conn: &Connection, capability: &str) -> Result<()> {
+        if capability.is_empty() {
+            return Ok(());
+        }
+        reject_cli_orphan(conn, SELECT_CLI_EXACT_ORPHAN_SQL, [capability])?;
+        reject_cli_orphan(conn, SELECT_CLI_RAW_ORPHAN_SQL, [capability])
+    }
+
+    /// The explicit typed CLI arm uses this check before the shared resolver
+    /// lookup, whose enabled-repository filtering remains unchanged.
+    pub fn validate_cli_typed_references(
+        conn: &Connection,
+        capability: &str,
+        kind: &str,
+    ) -> Result<()> {
+        reject_cli_orphan(conn, SELECT_CLI_TYPED_ORPHAN_SQL, params![capability, kind])
+    }
+
     /// Find provides matching both capability name and kind in enabled repositories.
     pub fn find_by_capability_and_kind(
         conn: &Connection,
@@ -407,6 +467,24 @@ impl RepositoryProvide {
             provenance: provenance_from_row(row, 10)?,
         })
     }
+}
+
+fn reject_cli_orphan(
+    conn: &Connection,
+    sql: &str,
+    parameters: impl rusqlite::Params,
+) -> Result<()> {
+    let orphan = conn
+        .query_row(sql, parameters, |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
+        })
+        .optional()?;
+    if let Some((provide_id, package_id)) = orphan {
+        return Err(crate::error::Error::ParseError(format!(
+            "matched repository provide {provide_id} references package {package_id} without package or repository metadata"
+        )));
+    }
+    Ok(())
 }
 
 fn provenance_to_db(provenance: &CapabilityProvenance) -> Result<String> {

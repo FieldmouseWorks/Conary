@@ -7,7 +7,7 @@
 
 use super::super::open_db;
 use crate::commands::{InstalledPackageSelector, resolve_installed_package};
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, ensure};
 use conary_core::db::models::{
     InstalledRequirementAtom, ProvideEntry, Repository, RepositoryPackage, RepositoryProvide, Trove,
 };
@@ -224,6 +224,7 @@ fn whatprovides_report(
                 matched.trove_id
             )
         })?;
+        validate_provider_name(&trove.name, "installed trove", matched.trove_id)?;
         let mut capability_versions = matched.capability_versions;
         capability_versions.sort_unstable();
         capability_versions.dedup();
@@ -249,6 +250,11 @@ fn whatprovides_report(
                     matched.repository_package_id
                 )
             })?;
+        validate_provider_name(
+            &package.name,
+            "repository package",
+            matched.repository_package_id,
+        )?;
         validate_repo_version(package.version_scheme, &package.version).with_context(|| {
             format!(
                 "matched repository package {} has invalid version authority",
@@ -262,6 +268,7 @@ fn whatprovides_report(
                     matched.repository_package_id, package.repository_id
                 )
             })?;
+        validate_provider_name(&repository.name, "repository", package.repository_id)?;
         let mut capability_versions = matched.capability_versions;
         capability_versions.sort_unstable();
         capability_versions.dedup();
@@ -290,6 +297,14 @@ fn whatprovides_report(
         providers,
         provider_count,
     })
+}
+
+fn validate_provider_name(name: &str, source: &str, id: i64) -> Result<()> {
+    ensure!(
+        !name.trim().is_empty(),
+        "matched {source} {id} has an empty name"
+    );
+    Ok(())
 }
 
 fn provider_sort_key(
@@ -478,6 +493,7 @@ fn repository_providers_for_capability(
     let mut providers = Vec::new();
     let mut indexes = HashMap::new();
 
+    RepositoryProvide::validate_cli_exact_references(conn, capability)?;
     for provider in RepositoryProvide::find_by_cli_exact_query(conn, capability)? {
         provider.validated_capability().with_context(|| {
             format!(
@@ -489,6 +505,11 @@ fn repository_providers_for_capability(
     }
 
     if let Some((kind, typed_capability)) = parse_typed_capability_query(capability) {
+        RepositoryProvide::validate_cli_typed_references(
+            conn,
+            typed_capability,
+            capability_kind_name(kind),
+        )?;
         for provider in RepositoryProvide::find_by_capability_and_kind(
             conn,
             typed_capability,
@@ -535,6 +556,8 @@ fn parse_typed_capability_query(capability: &str) -> Option<(RepositoryCapabilit
         "path" => RepositoryCapabilityKind::Path,
         "binary" => RepositoryCapabilityKind::Binary,
         "pkgconfig" => RepositoryCapabilityKind::PkgConfig,
+        "pkgconfig32" => RepositoryCapabilityKind::PkgConfig32,
+        "comar" => RepositoryCapabilityKind::Comar,
         "generic" => RepositoryCapabilityKind::Generic,
         _ => return None,
     };
@@ -560,5 +583,17 @@ mod tests {
         let parsed = parse_typed_capability_query("libssl.so.3()(64bit)");
 
         assert_eq!(parsed, None);
+    }
+
+    #[test]
+    fn parse_typed_capability_query_accepts_pkgconfig32_and_comar() {
+        assert_eq!(
+            parse_typed_capability_query("pkgconfig32(libexample)"),
+            Some((RepositoryCapabilityKind::PkgConfig32, "libexample"))
+        );
+        assert_eq!(
+            parse_typed_capability_query("comar(system.base)"),
+            Some((RepositoryCapabilityKind::Comar, "system.base"))
+        );
     }
 }

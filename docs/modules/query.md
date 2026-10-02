@@ -100,7 +100,6 @@ Primary tables hit by queries:
 | `files` | path, trove_id, component_id | component, conflicts |
 | `payload_claims` | path, trove_id | package-facing payload ownership, shared-anchor retention |
 | `components` | parent_trove_id, name | component, components |
-| `repository_packages` | name, repository_id | repquery |
 | `installed_ccs_remove_hooks` | trove_id | scripts |
 | `installed_native_lifecycle_bundles` | trove_id, evidence_digest | scripts |
 | `lifecycle_events` | changeset_id, sequence | system history |
