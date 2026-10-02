@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-10-02
-revision: 94
+revision: 95
 summary: Define the Podman container integration harness, its prerequisites, running suites, fixtures, and result/proof contracts
 ---
 
@@ -749,8 +749,13 @@ Its first persisted-state check requires one complete SQLite JSON row for
 `phase4-daily-driver-corpus`, with the expected version, native architecture,
 version scheme, source profile, `file` install source, and `explicit` install
 reason. Whole-array equality also rejects another trove with the same name;
-the name-filtered check does not count unrelated installed packages. Its
-config-row check requires exactly three rows for that trove, ordered by path:
+the name-filtered check does not count unrelated installed packages.
+Its persisted hardlink check requires one hardlink node for that trove, both
+`hardlink-anchor` and `hardlink-copy` to be regular or hardlink members, and
+exactly one of those named members to be a hardlink. Either path may own the
+regular payload across source formats. Native extraction and the selected-
+generation node checks establish their shared inode, target, and identity.
+Its config-row check requires exactly three rows for that trove, ordered by path:
 `app-deleted.conf`, `app-local.conf`, then `app.conf`. Each row has integer
 `noreplace` value `1`, `pristine` status, and the native config source (`rpm`,
 `deb`, or `arch`). The trove-filtered check does not count unrelated config

@@ -11,7 +11,7 @@ const QUERY: &str = "SELECT name, version, COALESCE(architecture, '') AS archite
 const ADJACENT_RUN: &str = r#"sqlite3 ${DB_PATH} "SELECT COUNT(*) || ' regular files' FROM files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus') AND json_extract(payload_node_json, '$.source.kind.type') = 'regular'; SELECT path || '|' || coalesce(content_size, '-') || '|' || json_extract(payload_node_json, '$.source.kind.type') FROM files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus') AND json_extract(payload_node_json, '$.source.kind.type') = 'regular' ORDER BY path""#;
 const PRE_CONFIG_ORDER: &[&str] = &[
     "path IN ('/opt', '/usr/lib/phase4-corpus/state')",
-    "COUNT(*) || ' hardlinks'",
+    "COUNT(CASE WHEN kind = 'hardlink' THEN 1 END) AS hardlink_count",
     "COUNT(*) || ' requirement groups'",
 ];
 const POST_CONFIG_ORDER: &[&str] = &[
@@ -45,9 +45,18 @@ fn native_corpus_tnpm15_requires_exact_installed_trove_identity() {
         .expect("TNPM15");
     assert_eq!(test.step.len(), 10, "TNPM15 must retain its ten-step order");
     assert_eq!(test.step[1].run.as_deref(), Some(ADJACENT_RUN));
-    for (step, signature) in test.step[2..5].iter().zip(PRE_CONFIG_ORDER) {
+    for (index, (step, signature)) in test.step[2..5].iter().zip(PRE_CONFIG_ORDER).enumerate() {
         let command = step.run.as_deref().expect("ordered TNPM15 command");
-        assert!(command.starts_with("sqlite3 ${DB_PATH} \""));
+        let expected_prefix = if index == 1 {
+            "sqlite3 -json ${DB_PATH} \""
+        } else {
+            "sqlite3 ${DB_PATH} \""
+        };
+        assert!(
+            command.starts_with(expected_prefix),
+            "TNPM15 step {} must use {expected_prefix}",
+            index + 2
+        );
         assert!(
             command.contains(signature),
             "TNPM15 command order: {signature}"
