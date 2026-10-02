@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-10-02
-revision: 66
-summary: Map fixture ownership, including typed native persisted-SQL proof, native refusals, repository discovery, command captures, typed boot-tool interfaces, and the refreshed Tumbleweed lifecycle snapshot
+revision: 67
+summary: Map fixture ownership, including typed native persisted-SQL proof, native refusals, repository discovery, command captures, typed boot-tool interfaces, activation intent evidence, and the refreshed Tumbleweed lifecycle snapshot
 ---
 
 # Test Fixtures And Proof Maps
@@ -532,13 +532,28 @@ Each fixture family should record:
   name and version; the projected `same_changeset` must equal JSON integer `1`,
   proving equality between the bundle's `installed_changeset_id` and the
   trove's `installed_by_changeset_id`. This proves scalar row fields and
-  lineage only; it does not parse or verify bundle TOML or its digest. The
-  update record binds the installed v1 request and an independently built and
-  extracted v2 native request, converts that exact v2 artifact through Conary's
-  native parser, and acquires the resulting signed CCS from a bounded loopback
-  repository. Selected-generation v2 bytes, pristine config hashes and source
-  format, repository checksum and provenance, and the installed lifecycle
-  bundle's native source checksum must all agree. The removal record binds to
+  lineage only; it does not parse or verify bundle TOML or its digest.
+  TNPM15 step 9 expects exactly two ordered whole-array `sqlite3 -json`
+  rows, one for each captured runtime request. The source package and source
+  version match the installed trove; source entries are `rpm:%post`,
+  `deb:postinst`, or `arch:post_install`. Both requests use that trove's
+  install changeset. The join requires its completed, nonrecoverable
+  terminal `database_backed_up` publication and a published-through
+  changeset high-water that includes the request. Each row has a `pending`
+  intent in that exact generation with attempt count `0` and null error,
+  start, and completion fields. The systemd row pins action `start` and
+  one `phase4-corpus.service` unit; the boot-runtime row pins program
+  `depmod`, one `-a` argument, integer schema version `1`, and invoked path
+  `/usr/sbin/depmod`; fields for the other variant are null. There is no
+  global intent-count assertion because a request may be projected into
+  later generations. Persisted rows do not establish a live host result.
+  The update record binds the installed v1 request and an independently
+  built and extracted v2 native request, converts that exact v2 artifact
+  through Conary's native parser, and acquires the resulting signed CCS
+  from a bounded loopback repository. Selected-generation v2 bytes,
+  pristine config hashes and source format, repository checksum and
+  provenance, and the installed lifecycle bundle's native source checksum
+  must all agree. The removal record binds to
   the installed v2 update request. Additional digest-pinned fixtures cover
   epoch/release and architecture-independent identity, sparse and large files,
   xattrs, file capabilities, typed conflict/replacement relations, no-lifecycle

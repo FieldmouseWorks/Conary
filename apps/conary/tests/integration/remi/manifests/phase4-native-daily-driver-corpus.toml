@@ -197,6 +197,7 @@ native_corpus_atom_text_type = "null"
 native_corpus_atom_text = ""
 native_corpus_config_source = "rpm"
 native_corpus_lifecycle_fidelity = "native-lifecycle"
+native_corpus_activation_entry = "rpm:%post"
 native_corpus_source_format = "rpm"
 native_corpus_capability_format = "rpm"
 native_corpus_target_architecture = "x86_64"
@@ -217,6 +218,7 @@ native_corpus_atom_text_type = "text"
 native_corpus_atom_text = "phase4-repository-fixture (= 1.0.0)"
 native_corpus_config_source = "deb"
 native_corpus_lifecycle_fidelity = "native-lifecycle"
+native_corpus_activation_entry = "deb:postinst"
 native_corpus_source_format = "deb"
 native_corpus_capability_format = "debian"
 native_corpus_target_architecture = "x86_64"
@@ -237,6 +239,7 @@ native_corpus_atom_text_type = "null"
 native_corpus_atom_text = ""
 native_corpus_config_source = "arch"
 native_corpus_lifecycle_fidelity = "native-lifecycle"
+native_corpus_activation_entry = "arch:post_install"
 native_corpus_source_format = "alpm"
 native_corpus_capability_format = "alpm"
 native_corpus_target_architecture = "x86_64"
@@ -400,11 +403,11 @@ exit_code = 0
 stdout_json = [{ pointer = "", equals_json = '''[{"trove_name":"phase4-daily-driver-corpus","trove_version":"${native_corpus_fixture_version}","trove_architecture":"${native_arch}","trove_source_profile":"${native_profile}","source_format":"${native_target}","source_family":"${native_target}","source_profile":"${native_profile}","source_arch":"${native_arch}","source_package":"phase4-daily-driver-corpus","source_version":"${native_corpus_fixture_version}","scriptlet_fidelity":"${native_corpus_lifecycle_fidelity}","lifecycle_state":"installed","same_changeset":1}]''' }]
 
 [[test.step]]
-run = "sqlite3 ${DB_PATH} \"SELECT source_kind || '|' || source_package || '|' || json_extract(invocation_json, '$.kind') || '|' || COALESCE(json_extract(invocation_json, '$.invocation.action'), json_extract(invocation_json, '$.invocation.program')) || '|' || COALESCE(json_extract(invocation_json, '$.invocation.units[0]'), json_extract(invocation_json, '$.invocation.arguments[0]')) FROM activation_requests WHERE source_package = 'phase4-daily-driver-corpus' ORDER BY id; SELECT status || '|' || COUNT(*) FROM generation_activation_intents WHERE request_id IN (SELECT id FROM activation_requests WHERE source_package = 'phase4-daily-driver-corpus') GROUP BY status\""
+run = "sqlite3 -json ${DB_PATH} \"SELECT t.name AS trove_name,t.version AS trove_version,r.source_kind,r.source_package,r.source_version,r.source_entry,json_extract(r.invocation_json,'$.kind') AS invocation_kind,json_extract(r.invocation_json,'$.invocation.action') AS systemd_action,json_array_length(r.invocation_json,'$.invocation.units') AS systemd_unit_count,json_extract(r.invocation_json,'$.invocation.units[0]') AS systemd_unit,json_extract(r.invocation_json,'$.invocation.program') AS boot_program,json_array_length(r.invocation_json,'$.invocation.arguments') AS boot_argument_count,json_extract(r.invocation_json,'$.invocation.arguments[0]') AS boot_argument,json_type(r.invocation_json,'$.invocation.schema_version') AS boot_schema_version_type,json_extract(r.invocation_json,'$.invocation.schema_version') AS boot_schema_version,json_extract(r.invocation_json,'$.invocation.executable.invoked_path') AS boot_invoked_path,gp.phase AS publication_phase,gp.status AS publication_status,(gp.published_through_changeset_id >= r.changeset_id) AS published_request,(gp.generation_number = i.generation_number) AS same_generation,i.status AS intent_status,i.attempt_count AS intent_attempt_count,i.last_error AS intent_last_error,i.started_at AS intent_started_at,i.completed_at AS intent_completed_at FROM troves AS t LEFT JOIN activation_requests AS r ON r.changeset_id=t.installed_by_changeset_id AND r.source_package=t.name LEFT JOIN generation_publications AS gp ON gp.trigger_changeset_id=t.installed_by_changeset_id AND gp.phase='database_backed_up' AND gp.status='complete' AND gp.recoverable=0 LEFT JOIN generation_activation_intents AS i ON i.request_id=r.id AND i.generation_number=gp.generation_number WHERE t.name='phase4-daily-driver-corpus' ORDER BY t.id,r.sequence,r.id,gp.id\""
 
 [test.step.assert]
 exit_code = 0
-stdout_contains_all = ["captured-systemctl|phase4-daily-driver-corpus|systemd|start|phase4-corpus.service", "captured-boot-runtime|phase4-daily-driver-corpus|boot-runtime|depmod|-a", "pending|2"]
+stdout_json = [{ pointer = "", equals_json = '''[{"trove_name":"phase4-daily-driver-corpus","trove_version":"${native_corpus_fixture_version}","source_kind":"captured-systemctl","source_package":"phase4-daily-driver-corpus","source_version":"${native_corpus_fixture_version}","source_entry":"${native_corpus_activation_entry}","invocation_kind":"systemd","systemd_action":"start","systemd_unit_count":1,"systemd_unit":"phase4-corpus.service","boot_program":null,"boot_argument_count":null,"boot_argument":null,"boot_schema_version_type":null,"boot_schema_version":null,"boot_invoked_path":null,"publication_phase":"database_backed_up","publication_status":"complete","published_request":1,"same_generation":1,"intent_status":"pending","intent_attempt_count":0,"intent_last_error":null,"intent_started_at":null,"intent_completed_at":null},{"trove_name":"phase4-daily-driver-corpus","trove_version":"${native_corpus_fixture_version}","source_kind":"captured-boot-runtime","source_package":"phase4-daily-driver-corpus","source_version":"${native_corpus_fixture_version}","source_entry":"${native_corpus_activation_entry}","invocation_kind":"boot-runtime","systemd_action":null,"systemd_unit_count":null,"systemd_unit":null,"boot_program":"depmod","boot_argument_count":1,"boot_argument":"-a","boot_schema_version_type":"integer","boot_schema_version":1,"boot_invoked_path":"/usr/sbin/depmod","publication_phase":"database_backed_up","publication_status":"complete","published_request":1,"same_generation":1,"intent_status":"pending","intent_attempt_count":0,"intent_last_error":null,"intent_started_at":null,"intent_completed_at":null}]''' }]
 
 [[test.step]]
 run = "sqlite3 -json ${DB_PATH} \"SELECT t.name AS name, ct.status AS status, ct.matched_files AS matched_files FROM changeset_triggers ct JOIN triggers t ON t.id = ct.trigger_id WHERE t.name = 'phase4-corpus-trigger' ORDER BY ct.id DESC LIMIT 1\""

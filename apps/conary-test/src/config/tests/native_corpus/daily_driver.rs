@@ -3,6 +3,7 @@
 #![cfg(test)]
 
 use super::{conary_fixture_path, load_manifest, remi_manifest_path};
+use crate::config::manifest::JsonExpectation;
 use conary_core::packages::{PackageFormat, traits::NativeLifecyclePath};
 
 #[test]
@@ -147,6 +148,62 @@ fn phase4_daily_driver_corpus_manifest_proves_remaining_configuration_states() {
             .is_some(),
         "TNPM15 lifecycle metadata must use typed JSON assertions"
     );
+    let activation = &daily_metadata.step[8];
+    let activation_command = activation.run.as_deref().expect("TNPM15 activation query");
+    assert!(activation_command.starts_with("sqlite3 -json ${DB_PATH} \"SELECT "));
+    assert_eq!(activation_command.matches("SELECT ").count(), 1);
+    assert!(!activation_command.contains(';'));
+    for join in [
+        "LEFT JOIN activation_requests AS r",
+        "LEFT JOIN generation_publications AS gp",
+        "LEFT JOIN generation_activation_intents AS i",
+        "i.generation_number=gp.generation_number",
+    ] {
+        assert!(
+            activation_command.contains(join),
+            "TNPM15 activation must bind {join}"
+        );
+    }
+    let activation_assertion = activation
+        .assert
+        .as_ref()
+        .expect("TNPM15 activation assertion");
+    assert_eq!(activation_assertion.exit_code, Some(0));
+    assert!(activation_assertion.stdout_contains_all.is_none());
+    let [root] = activation_assertion
+        .stdout_json
+        .as_deref()
+        .expect("typed activation JSON")
+    else {
+        panic!("TNPM15 activation must assert one JSON document");
+    };
+    assert_eq!(root.pointer, "");
+    let JsonExpectation::Equals(expected) = &root.expected else {
+        panic!("TNPM15 activation must assert exact root JSON");
+    };
+    let rows = expected.as_array().expect("TNPM15 activation row array");
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0]["source_kind"].as_str(), Some("captured-systemctl"));
+    assert_eq!(rows[0]["systemd_action"].as_str(), Some("start"));
+    assert_eq!(
+        rows[0]["systemd_unit"].as_str(),
+        Some("phase4-corpus.service")
+    );
+    assert_eq!(
+        rows[1]["source_kind"].as_str(),
+        Some("captured-boot-runtime")
+    );
+    assert_eq!(rows[1]["boot_program"].as_str(), Some("depmod"));
+    assert_eq!(rows[1]["boot_argument"].as_str(), Some("-a"));
+    for row in rows {
+        assert_eq!(
+            row["source_entry"].as_str(),
+            Some("${native_corpus_activation_entry}")
+        );
+        assert_eq!(row["intent_status"].as_str(), Some("pending"));
+        assert_eq!(row["same_generation"].as_i64(), Some(1));
+        assert_eq!(row["published_request"].as_i64(), Some(1));
+    }
 
     let rendered = corpus_tests
         .iter()
@@ -170,9 +227,6 @@ fn phase4_daily_driver_corpus_manifest_proves_remaining_configuration_states() {
         "|repository|dependency",
         "/usr/share/phase4-repository-fixture/probe.txt",
         "/var/lib/phase4-corpus/scriptlet.marker",
-        "captured-systemctl|phase4-daily-driver-corpus|systemd|start|phase4-corpus.service",
-        "captured-boot-runtime|phase4-daily-driver-corpus|boot-runtime|depmod|-a",
-        "pending|2",
         "RuntimeServiceActivation",
         "RuntimeTargetHelper",
         "FailureInterruptedDownload",
@@ -373,6 +427,7 @@ fn phase4_daily_driver_corpus_manifest_proves_remaining_configuration_states() {
             "native_corpus_atom_text_type",
             "native_corpus_atom_text",
             "native_corpus_lifecycle_fidelity",
+            "native_corpus_activation_entry",
             "native_corpus_source_format",
             "native_corpus_capability_format",
             "native_corpus_target_architecture",

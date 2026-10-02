@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-10-02
-revision: 99
-summary: Define the Podman container integration harness, its prerequisites, running suites, fixtures, and result/proof contracts
+revision: 100
+summary: Define the Podman container integration harness, its prerequisites, running suites, fixtures, and result/proof contracts, including TNPM15 activation intent authority
 ---
 
 # Integration Testing
@@ -798,6 +798,22 @@ name and version. Its `same_changeset` projection must equal JSON integer `1`,
 proving equality between the bundle's `installed_changeset_id` and the trove's
 `installed_by_changeset_id`. This assertion covers the row's scalar metadata
 and lineage only; it does not parse or verify `bundle_toml` or its digest.
+Step 9 uses one trove-scoped `sqlite3 -json` whole-array assertion with
+exactly two ordered rows. Both bind the installed
+`phase4-daily-driver-corpus` trove and version to requests for its install
+changeset, native source version, and source entry (`rpm:%post`,
+`deb:postinst`, or `arch:post_install`). The publication join requires that
+changeset's terminal, nonrecoverable `database_backed_up` publication to
+be complete; its published-through changeset high-water must include the
+request. Each request has a `pending` intent in that same generation with
+attempt count `0` and null error, start, and completion fields. The rows pin
+the tagged `systemd` invocation to action `start` and one
+`phase4-corpus.service` unit, and the tagged `boot-runtime` invocation to
+program `depmod`, one `-a` argument, integer schema version `1`, and invoked
+path `/usr/sbin/depmod`; fields for the other variant are null. The check
+makes no global intent-count claim because a request may be projected into
+later generations. Persisted intent rows do not establish that a host
+action ran.
 Its final persisted-state check requires the latest named
 `phase4-corpus-trigger` changeset result to be one exact JSON row with
 `completed` status and integer `matched_files` value `1`. The query selects
