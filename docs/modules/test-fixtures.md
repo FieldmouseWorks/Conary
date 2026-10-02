@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-10-02
-revision: 67
-summary: Map fixture ownership, including typed native persisted-SQL proof, native refusals, repository discovery, command captures, typed boot-tool interfaces, activation intent evidence, and the refreshed Tumbleweed lifecycle snapshot
+revision: 68
+summary: Map fixture ownership, including typed native persisted-SQL proof, regular-file rows, native refusals, repository discovery, command captures, typed boot-tool interfaces, activation intent evidence, and the refreshed Tumbleweed lifecycle snapshot
 ---
 
 # Test Fixtures And Proof Maps
@@ -509,7 +509,14 @@ Each fixture family should record:
   or ALPM lane. The completed install/query
   record binds both the native request and its SAT-selected signed CCS
   dependency to exact build-manifest SHA-256 identities. TNPM15 additionally
-  requires exact trove-scoped persisted directory and symlink rows: the
+  requires nine exact ordered trove-scoped regular-file rows from the whole
+  regular-file set. Each row pins path, typed `regular` kind, integer persisted
+  `content_size`, and persisted SHA-256. The regular hardlink member is
+  `/usr/lib/phase4-corpus/hardlink-copy` on Fedora and
+  `/usr/lib/phase4-corpus/hardlink-anchor` on Ubuntu and Arch; the other member
+  remains a typed hardlink. These persisted values do not rehash host filesystem
+  bytes or prove execution of a host action. TNPM15 also requires exact
+  trove-scoped persisted directory and symlink rows: the
   symlink target is compared in full and the directory modes remain JSON
   integers. TNPM13 stages those native fixture inputs; TNPM14 verifies their
   installed nodes in the selected generation. TNPM15 also pins the named

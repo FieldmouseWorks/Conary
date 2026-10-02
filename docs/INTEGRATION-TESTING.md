@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-10-02
-revision: 100
-summary: Define the Podman container integration harness, its prerequisites, running suites, fixtures, and result/proof contracts, including TNPM15 activation intent authority
+revision: 101
+summary: Define the Podman container integration harness, its prerequisites, running suites, fixtures, and result/proof contracts, including TNPM15 regular-file rows and activation intent authority
 ---
 
 # Integration Testing
@@ -750,6 +750,15 @@ Its first persisted-state check requires one complete SQLite JSON row for
 version scheme, source profile, `file` install source, and `explicit` install
 reason. Whole-array equality also rejects another trove with the same name;
 the name-filtered check does not count unrelated installed packages.
+TNPM15 step 2 requires one trove-scoped `sqlite3 -json` query whose whole-array
+result is the complete nine-row regular-file set for
+`phase4-daily-driver-corpus`, ordered by path. Each row pins its exact path,
+typed `regular` kind, integer persisted `content_size`, and persisted SHA-256.
+The regular hardlink member is `/usr/lib/phase4-corpus/hardlink-copy` on Fedora
+and `/usr/lib/phase4-corpus/hardlink-anchor` on Ubuntu and Arch; the other
+member is persisted as a hardlink. These fields are persisted row values: the
+assertion does not rehash host filesystem bytes or prove execution of a host
+action.
 Its directory and symlink check requires exactly three ordered persisted rows
 for that trove: `/opt` and `/usr/lib/phase4-corpus/state` must each be a
 directory with integer POSIX mode `16872` (directory type plus `0750`

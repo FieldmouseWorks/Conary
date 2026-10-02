@@ -20,6 +20,7 @@ mod typed_installed;
 mod typed_lifecycle;
 mod typed_pin_remove;
 mod typed_provides;
+mod typed_regular;
 mod typed_relations;
 mod typed_remove;
 mod typed_repo;

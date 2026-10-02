@@ -128,13 +128,18 @@ fn phase4_daily_driver_corpus_manifest_proves_remaining_configuration_states() {
         .iter()
         .find(|test| test.id == "TNPM15")
         .expect("missing TNPM15 native metadata test");
-    let daily_metadata_rendered = format!("{daily_metadata:?}");
+    let regular_files = &daily_metadata.step[1];
     assert!(
-        daily_metadata_rendered.contains("regular files")
-            && daily_metadata_rendered
-                .contains("json_extract(payload_node_json, '$.source.kind.type') = 'regular'",),
+        regular_files.run.as_deref().is_some_and(|command| command
+            .contains("json_extract(payload_node_json, '$.source.kind.type') = 'regular'"))
+            && regular_files
+                .assert
+                .as_ref()
+                .and_then(|assertion| assertion.stdout_json.as_ref())
+                .is_some(),
         "TNPM15 must continue distinguishing regular files from directory payload rows"
     );
+    let daily_metadata_rendered = format!("{daily_metadata:?}");
     assert!(
         !daily_metadata_rendered.contains("1 lifecycle bundles")
             && !daily_metadata_rendered.contains("SELECT source_format || '|' || source_package"),
@@ -216,7 +221,7 @@ fn phase4_daily_driver_corpus_manifest_proves_remaining_configuration_states() {
         "/etc/phase4-corpus/app-local.conf",
         "/etc/phase4-corpus/app-deleted.conf",
         "/etc/phase4-corpus/app-unmatched.conf",
-        "9 regular files",
+        "content_sha256",
         "phase4-corpus-alt",
         "phase4-corpus-user",
         "phase4-corpus-group",
