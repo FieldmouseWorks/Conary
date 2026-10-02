@@ -29,7 +29,8 @@ pub fn decode_selected_root_overlay_upper_indexed(
 ) -> crate::Result<SelectedRootManifestDelta> {
     profile.validate()?;
     let prior_root = prior.root(conn)?;
-    let (root, entries) = scan_selected_root_overlay_upper(upper, cas, "selected-root-overlay-v1")?;
+    let (root, entries) =
+        scan_selected_root_overlay_upper(upper, cas, "selected-root-overlay-v1", profile)?;
     let decoded = decode_upper_operations(root, entries, profile, |path| {
         Ok(prior
             .entry(conn, path)?
