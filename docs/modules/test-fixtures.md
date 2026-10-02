@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-10-01
-revision: 62
+last_updated: 2026-10-02
+revision: 63
 summary: Map fixture ownership, including typed native persisted-SQL proof, native refusals, repository discovery, command captures, typed boot-tool interfaces, and the refreshed Tumbleweed lifecycle snapshot
 ---
 
@@ -508,7 +508,11 @@ Each fixture family should record:
   TNPM32 and emits 17 attributable case records for each host-native RPM, DEB,
   or ALPM lane. The completed install/query
   record binds both the native request and its SAT-selected signed CCS
-  dependency to exact build-manifest SHA-256 identities. The update record
+  dependency to exact build-manifest SHA-256 identities. TNPM15 additionally
+  requires exact trove-scoped persisted directory and symlink rows: the
+  symlink target is compared in full and the directory modes remain JSON
+  integers. TNPM13 stages those native fixture inputs; TNPM14 verifies their
+  installed nodes in the selected generation. The update record
   binds the installed v1 request and an independently built and extracted v2
   native request, converts that exact v2 artifact through Conary's native
   parser, and acquires the resulting signed CCS from a bounded loopback
