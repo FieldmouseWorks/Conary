@@ -7,7 +7,14 @@
 pub mod common;
 
 use conary_core::db;
+use conary_core::db::models::{
+    ProvideEntry, RepositoryPackage, RepositoryProvide, Trove, TroveType,
+};
+use conary_core::repository::dependency_model::{
+    ProvideArchitectureQualifier, RepositoryCapabilityKind,
+};
 use conary_core::repository::versioning::VersionScheme;
+use serde_json::{Value, json};
 use std::process::{Command, Output};
 
 fn run_conary(args: &[&str]) -> Output {
@@ -23,6 +30,243 @@ fn output_text(output: &Output) -> String {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     )
+}
+
+fn query_whatprovides_json(db_path: &str, capability: &str) -> Value {
+    let output = run_conary(&[
+        "query",
+        "whatprovides",
+        capability,
+        "--json",
+        "--db-path",
+        db_path,
+    ]);
+    assert!(output.status.success(), "{}", output_text(&output));
+    serde_json::from_slice(&output.stdout).expect("whatprovides --json must emit one JSON value")
+}
+
+fn assert_whatprovides_json_fails_without_stdout(db_path: &str, capability: &str) {
+    let output = run_conary(&[
+        "query",
+        "whatprovides",
+        capability,
+        "--json",
+        "--db-path",
+        db_path,
+    ]);
+    assert!(!output.status.success(), "{}", output_text(&output));
+    assert!(output.stdout.is_empty(), "{}", output_text(&output));
+}
+
+fn expected_package(
+    name: &str,
+    version: &str,
+    release: Option<&str>,
+    architecture: Option<&str>,
+    version_scheme: &str,
+) -> Value {
+    json!({
+        "name": name,
+        "version": version,
+        "release": release,
+        "architecture": architecture,
+        "version_scheme": version_scheme,
+    })
+}
+
+fn expected_provider(
+    source_kind: &str,
+    package: Value,
+    repository: Value,
+    capability_versions: &[&str],
+) -> Value {
+    json!({
+        "source_kind": source_kind,
+        "package": package,
+        "repository": repository,
+        "capability_versions": capability_versions,
+    })
+}
+
+fn expected_whatprovides(capability: &str, providers: Vec<Value>) -> Value {
+    let provider_count = providers.len();
+    json!({
+        "schema_version": 1,
+        "capability": capability,
+        "providers": providers,
+        "provider_count": provider_count,
+    })
+}
+
+struct InstalledPackageFixture<'a> {
+    name: &'a str,
+    version: &'a str,
+    release: Option<&'a str>,
+    architecture: Option<&'a str>,
+    version_scheme: VersionScheme,
+}
+
+fn installed_package_fixture<'a>(
+    name: &'a str,
+    version: &'a str,
+    release: Option<&'a str>,
+    architecture: Option<&'a str>,
+    version_scheme: VersionScheme,
+) -> InstalledPackageFixture<'a> {
+    InstalledPackageFixture {
+        name,
+        version,
+        release,
+        architecture,
+        version_scheme,
+    }
+}
+
+fn insert_installed_soname_provider(
+    conn: &rusqlite::Connection,
+    package: InstalledPackageFixture<'_>,
+    capability: &str,
+    capability_versions: &[(Option<&str>, ProvideArchitectureQualifier)],
+) {
+    insert_installed_typed_provider(
+        conn,
+        package,
+        RepositoryCapabilityKind::Soname,
+        capability,
+        capability_versions,
+    );
+}
+
+fn insert_installed_typed_provider(
+    conn: &rusqlite::Connection,
+    package: InstalledPackageFixture<'_>,
+    kind: RepositoryCapabilityKind,
+    capability: &str,
+    capability_versions: &[(Option<&str>, ProvideArchitectureQualifier)],
+) {
+    let mut trove = Trove::new(
+        package.name.to_string(),
+        package.version.to_string(),
+        TroveType::Package,
+        package.version_scheme,
+    );
+    trove.package_release = package.release.map(str::to_string);
+    trove.architecture = package.architecture.map(str::to_string);
+    let trove_id = trove.insert(conn).unwrap();
+
+    for (version, architecture_qualifier) in capability_versions {
+        let mut provide = ProvideEntry::new_typed(
+            trove_id,
+            kind,
+            capability.to_string(),
+            version.map(str::to_string),
+            package.version_scheme,
+            architecture_qualifier.clone(),
+        );
+        provide.insert(conn).unwrap();
+    }
+}
+
+fn insert_query_test_repository(conn: &rusqlite::Connection, name: &str, identity: &str) -> i64 {
+    use conary_core::db::models::{
+        NativeSourceEcosystem, NativeSourceStream, Repository, RepositoryPolicyScope,
+        RepositorySourcePolicy, RepositoryUpdateMode,
+    };
+    use conary_core::repository::{
+        OpenPgpTrustRoot, RepositoryFormat, RepositoryParserConfig, RepositoryTrustPolicy,
+        RpmMetadataAuthority,
+    };
+
+    let mut repository = Repository::new(
+        name.to_string(),
+        "https://example.test/query-test-repository".to_string(),
+    );
+    repository
+        .set_parser_config(RepositoryParserConfig::Rpm {
+            architecture: "x86_64".to_string(),
+        })
+        .unwrap();
+    assert_eq!(repository.package_format, RepositoryFormat::Fedora);
+
+    let metadata_key = OpenPgpTrustRoot {
+        url: "https://example.test/metadata.gpg".to_string(),
+        fingerprint: "A".repeat(40),
+    };
+    let package_key = OpenPgpTrustRoot {
+        url: "https://example.test/packages.gpg".to_string(),
+        fingerprint: "B".repeat(40),
+    };
+    repository
+        .set_trust_policy(RepositoryTrustPolicy::Rpm {
+            metadata: RpmMetadataAuthority::OpenPgp {
+                keys: vec![metadata_key],
+            },
+            package_keys: vec![package_key],
+        })
+        .unwrap();
+    let policy = RepositorySourcePolicy::new(
+        "query-test-publisher",
+        RepositoryPolicyScope::repository(identity).unwrap(),
+        NativeSourceEcosystem::Rpm,
+        NativeSourceStream::channel("stable").unwrap(),
+        RepositoryUpdateMode::Follow,
+    )
+    .unwrap();
+    repository
+        .set_native_source_policy(policy, identity, None)
+        .unwrap();
+    repository.insert(conn).unwrap()
+}
+
+fn insert_repository_package(
+    conn: &rusqlite::Connection,
+    repository_id: i64,
+    name: &str,
+    version: &str,
+    release: Option<&str>,
+    architecture: Option<&str>,
+) -> i64 {
+    let mut package = RepositoryPackage::new(
+        repository_id,
+        name.to_string(),
+        version.to_string(),
+        VersionScheme::Rpm,
+        "0".repeat(64),
+        1,
+        "https://example.test/packages/query-test-package.rpm".to_string(),
+    );
+    package.package_release = release.unwrap_or_default().to_string();
+    package.architecture = architecture.map(str::to_string);
+    package.insert(conn).unwrap()
+}
+
+fn insert_repository_soname_provide(
+    conn: &rusqlite::Connection,
+    package_id: i64,
+    capability: &str,
+    version: Option<&str>,
+    raw: Option<&str>,
+) -> i64 {
+    insert_repository_typed_provide(conn, package_id, capability, "soname", version, raw)
+}
+
+fn insert_repository_typed_provide(
+    conn: &rusqlite::Connection,
+    package_id: i64,
+    capability: &str,
+    kind: &str,
+    version: Option<&str>,
+    raw: Option<&str>,
+) -> i64 {
+    let mut provide = RepositoryProvide::new(
+        package_id,
+        capability.to_string(),
+        version.map(str::to_string),
+        kind.to_string(),
+        raw.map(str::to_string),
+        VersionScheme::Rpm,
+    );
+    provide.insert(conn).unwrap()
 }
 
 #[test]
@@ -121,19 +365,23 @@ fn test_whatprovides_query() {
         );
         p1.insert(tx)?;
 
-        let mut p2 = ProvideEntry::new(
+        let mut p2 = ProvideEntry::new_typed(
             trove_id,
-            "soname(libssl.so.3)".to_string(),
+            RepositoryCapabilityKind::Soname,
+            "libssl.so.3".to_string(),
             None,
             conary_core::repository::versioning::VersionScheme::Conary,
+            ProvideArchitectureQualifier::Implicit,
         );
         p2.insert(tx)?;
 
-        let mut p3 = ProvideEntry::new(
+        let mut p3 = ProvideEntry::new_typed(
             trove_id,
-            "soname(libcrypto.so.3)".to_string(),
+            RepositoryCapabilityKind::Soname,
+            "libcrypto.so.3".to_string(),
             None,
             conary_core::repository::versioning::VersionScheme::Conary,
+            ProvideArchitectureQualifier::Implicit,
         );
         p3.insert(tx)?;
 
@@ -147,11 +395,14 @@ fn test_whatprovides_query() {
     assert_eq!(providers[0].version, Some("3.0.0".to_string()));
 
     // Test soname lookup
-    let ssl_providers = ProvideEntry::find_all_by_capability(&conn, "soname(libssl.so.3)").unwrap();
+    let ssl_providers =
+        ProvideEntry::find_all_typed(&conn, RepositoryCapabilityKind::Soname, "libssl.so.3")
+            .unwrap();
     assert_eq!(ssl_providers.len(), 1);
 
     // Test pattern search
-    let pattern_results = ProvideEntry::search_capability(&conn, "soname%").unwrap();
+    let pattern_results =
+        ProvideEntry::search_typed(&conn, RepositoryCapabilityKind::Soname, "%").unwrap();
     assert_eq!(pattern_results.len(), 2);
 
     // Test satisfying provider lookup
@@ -659,6 +910,657 @@ fn whatprovides_ignores_repository_prefix_collisions_and_disabled_repos() {
 }
 
 #[test]
+fn whatprovides_json_reports_empty_and_installed_provider_objects() {
+    let (_tmp, db_path, conn) = common::create_test_db();
+    drop(conn);
+
+    let capability = "soname(libfixture.so.1)";
+    assert_eq!(
+        query_whatprovides_json(&db_path, capability),
+        expected_whatprovides(capability, Vec::new())
+    );
+
+    let conn = db::open(&db_path).unwrap();
+    insert_installed_soname_provider(
+        &conn,
+        installed_package_fixture(
+            "zeta-installed",
+            "2.0.0",
+            Some("7"),
+            None,
+            VersionScheme::Conary,
+        ),
+        "libfixture.so.1",
+        &[
+            (Some("2.0.0"), ProvideArchitectureQualifier::Implicit),
+            (Some("1.0.0"), ProvideArchitectureQualifier::Implicit),
+            (
+                Some("2.0.0"),
+                ProvideArchitectureQualifier::Exact("x86_64".to_string()),
+            ),
+        ],
+    );
+    insert_installed_soname_provider(
+        &conn,
+        installed_package_fixture(
+            "alpha-installed",
+            "1.0.0",
+            None,
+            Some("x86_64"),
+            VersionScheme::Conary,
+        ),
+        "libfixture.so.1",
+        &[(None, ProvideArchitectureQualifier::Implicit)],
+    );
+    drop(conn);
+
+    assert_eq!(
+        query_whatprovides_json(&db_path, capability),
+        expected_whatprovides(
+            capability,
+            vec![
+                expected_provider(
+                    "installed",
+                    expected_package("alpha-installed", "1.0.0", None, Some("x86_64"), "conary"),
+                    Value::Null,
+                    &[],
+                ),
+                expected_provider(
+                    "installed",
+                    expected_package("zeta-installed", "2.0.0", Some("7"), None, "conary"),
+                    Value::Null,
+                    &["1.0.0", "2.0.0"],
+                ),
+            ],
+        )
+    );
+}
+
+#[test]
+fn whatprovides_json_reports_repository_identity_and_sorted_unique_versions() {
+    let (_tmp, db_path, conn) = common::create_test_db();
+    let repository_name = "daily-driver";
+    let repository_identity = "daily-driver:x86_64";
+    let repository_id = insert_query_test_repository(&conn, repository_name, repository_identity);
+    let alpha_id = insert_repository_package(
+        &conn,
+        repository_id,
+        "alpha-libs",
+        "1.0-1",
+        Some("1"),
+        Some("x86_64"),
+    );
+    insert_repository_soname_provide(&conn, alpha_id, "libfixture.so.1", Some("1.0"), None);
+
+    let mut unidentified_repository = conary_core::db::models::Repository::new(
+        "unidentified-source".to_string(),
+        "https://example.test/unidentified-source".to_string(),
+    );
+    let unidentified_repository_id = unidentified_repository.insert(&conn).unwrap();
+    let middle_id = insert_repository_package(
+        &conn,
+        unidentified_repository_id,
+        "middle-libs",
+        "1.5-1",
+        None,
+        None,
+    );
+    insert_repository_soname_provide(&conn, middle_id, "libfixture.so.1", None, None);
+
+    let zeta_id = insert_repository_package(
+        &conn,
+        repository_id,
+        "zeta-libs",
+        "2.0-1",
+        Some("4"),
+        Some("aarch64"),
+    );
+    insert_repository_soname_provide(
+        &conn,
+        zeta_id,
+        "libfixture.so.1",
+        Some("2.0"),
+        Some("soname(libfixture.so.1)"),
+    );
+    insert_repository_soname_provide(&conn, zeta_id, "libfixture.so.1", Some("1.0"), None);
+    insert_repository_soname_provide(&conn, zeta_id, "libfixture.so.1", Some("2.0"), None);
+    drop(conn);
+
+    let capability = "soname(libfixture.so.1)";
+    let repository = json!({
+        "name": repository_name,
+        "repository_identity": repository_identity,
+    });
+    assert_eq!(
+        query_whatprovides_json(&db_path, capability),
+        expected_whatprovides(
+            capability,
+            vec![
+                expected_provider(
+                    "repository",
+                    expected_package("alpha-libs", "1.0-1", Some("1"), Some("x86_64"), "rpm"),
+                    repository.clone(),
+                    &["1.0"],
+                ),
+                expected_provider(
+                    "repository",
+                    expected_package("middle-libs", "1.5-1", None, None, "rpm"),
+                    json!({
+                        "name": "unidentified-source",
+                        "repository_identity": null,
+                    }),
+                    &[],
+                ),
+                expected_provider(
+                    "repository",
+                    expected_package("zeta-libs", "2.0-1", Some("4"), Some("aarch64"), "rpm"),
+                    repository,
+                    &["1.0", "2.0"],
+                ),
+            ],
+        )
+    );
+}
+
+#[test]
+fn whatprovides_json_orders_installed_before_repository_providers() {
+    let (_tmp, db_path, conn) = common::create_test_db();
+    insert_installed_soname_provider(
+        &conn,
+        installed_package_fixture(
+            "zeta-installed",
+            "3.0.0",
+            None,
+            Some("x86_64"),
+            VersionScheme::Conary,
+        ),
+        "libmixed.so.1",
+        &[(Some("3.0.0"), ProvideArchitectureQualifier::Implicit)],
+    );
+
+    let repository_name = "mixed-source";
+    let repository_identity = "mixed-source:x86_64";
+    let repository_id = insert_query_test_repository(&conn, repository_name, repository_identity);
+    let package_id = insert_repository_package(
+        &conn,
+        repository_id,
+        "alpha-repository",
+        "1.0-2",
+        Some("2"),
+        Some("x86_64"),
+    );
+    insert_repository_soname_provide(&conn, package_id, "libmixed.so.1", Some("1.0"), None);
+    drop(conn);
+
+    let capability = "soname(libmixed.so.1)";
+    let expected = expected_whatprovides(
+        capability,
+        vec![
+            expected_provider(
+                "installed",
+                expected_package("zeta-installed", "3.0.0", None, Some("x86_64"), "conary"),
+                Value::Null,
+                &["3.0.0"],
+            ),
+            expected_provider(
+                "repository",
+                expected_package(
+                    "alpha-repository",
+                    "1.0-2",
+                    Some("2"),
+                    Some("x86_64"),
+                    "rpm",
+                ),
+                json!({
+                    "name": repository_name,
+                    "repository_identity": repository_identity,
+                }),
+                &["1.0"],
+            ),
+        ],
+    );
+    assert_eq!(query_whatprovides_json(&db_path, capability), expected);
+
+    let output = run_conary(&["query", "whatprovides", capability, "--db-path", &db_path]);
+    assert!(output.status.success(), "{}", output_text(&output));
+    let text = String::from_utf8_lossy(&output.stdout);
+    let installed_header = text.find("Installed providers:").unwrap();
+    let repository_header = text.find("Repository providers:").unwrap();
+    assert!(installed_header < repository_header, "{text}");
+    assert!(
+        text.contains("  zeta-installed 3.0.0 (provides version: 3.0.0) [x86_64]"),
+        "{text}"
+    );
+    assert!(
+        text.contains("  alpha-repository 1.0-2 [x86_64] @mixed-source (provides version: 1.0)"),
+        "{text}"
+    );
+    assert!(text.contains("Total: 2 provider(s)"), "{text}");
+}
+
+#[test]
+fn whatprovides_json_preserves_wrong_architecture_and_excludes_prefix_matches() {
+    let (_tmp, db_path, conn) = common::create_test_db();
+    let capability = "soname(libfixture.so.1)";
+    insert_installed_soname_provider(
+        &conn,
+        installed_package_fixture(
+            "x86_64-provider",
+            "1.0.0",
+            None,
+            Some("x86_64"),
+            VersionScheme::Conary,
+        ),
+        "libfixture.so.1",
+        &[(None, ProvideArchitectureQualifier::Implicit)],
+    );
+    insert_installed_soname_provider(
+        &conn,
+        installed_package_fixture(
+            "aarch64-provider",
+            "1.0.0",
+            None,
+            Some("aarch64"),
+            VersionScheme::Conary,
+        ),
+        "libfixture.so.1",
+        &[(None, ProvideArchitectureQualifier::Implicit)],
+    );
+    insert_installed_soname_provider(
+        &conn,
+        installed_package_fixture(
+            "prefix-only-provider",
+            "1.0.0",
+            None,
+            Some("x86_64"),
+            VersionScheme::Conary,
+        ),
+        "libfixture.so.10",
+        &[(None, ProvideArchitectureQualifier::Implicit)],
+    );
+    drop(conn);
+
+    assert_eq!(
+        query_whatprovides_json(&db_path, capability),
+        expected_whatprovides(
+            capability,
+            vec![
+                expected_provider(
+                    "installed",
+                    expected_package("aarch64-provider", "1.0.0", None, Some("aarch64"), "conary"),
+                    Value::Null,
+                    &[],
+                ),
+                expected_provider(
+                    "installed",
+                    expected_package("x86_64-provider", "1.0.0", None, Some("x86_64"), "conary"),
+                    Value::Null,
+                    &[],
+                ),
+            ],
+        )
+    );
+}
+
+#[test]
+fn whatprovides_json_rejects_malformed_selected_repository_kind_without_stdout() {
+    let (_tmp, db_path, conn) = common::create_test_db();
+    let repository_id = insert_query_test_repository(&conn, "broken-kind", "broken-kind:x86_64");
+    let package_id = insert_repository_package(
+        &conn,
+        repository_id,
+        "broken-libs",
+        "1.0-1",
+        Some("1"),
+        Some("x86_64"),
+    );
+    let provide_id = insert_repository_soname_provide(
+        &conn,
+        package_id,
+        "libbroken.so.1",
+        None,
+        Some("soname(libbroken.so.1)"),
+    );
+    drop(conn);
+
+    let corruption = db::open(&db_path).unwrap();
+    corruption
+        .execute(
+            "UPDATE repository_provides SET kind = 'unknown-kind' WHERE id = ?1",
+            [provide_id],
+        )
+        .unwrap();
+    drop(corruption);
+
+    let output = run_conary(&[
+        "query",
+        "whatprovides",
+        "soname(libbroken.so.1)",
+        "--json",
+        "--db-path",
+        &db_path,
+    ]);
+    assert!(!output.status.success(), "{}", output_text(&output));
+    assert!(output.stdout.is_empty(), "{}", output_text(&output));
+}
+
+#[test]
+fn whatprovides_json_rejects_selected_provider_without_joined_package_metadata() {
+    let (_tmp, db_path, conn) = common::create_test_db();
+    let capability = "soname(liborphan.so.1)";
+    insert_installed_soname_provider(
+        &conn,
+        installed_package_fixture(
+            "valid-provider",
+            "1.0.0",
+            None,
+            Some("x86_64"),
+            VersionScheme::Conary,
+        ),
+        "liborphan.so.1",
+        &[(None, ProvideArchitectureQualifier::Implicit)],
+    );
+    let source_row_id: i64 = conn
+        .query_row("SELECT id FROM provides LIMIT 1", [], |row| row.get(0))
+        .unwrap();
+    drop(conn);
+
+    let corruption = db::open(&db_path).unwrap();
+    corruption
+        .execute_batch("PRAGMA foreign_keys = OFF;")
+        .unwrap();
+    let inserted = corruption
+        .execute(
+            "INSERT INTO provides (
+                trove_id, capability, version, version_relation, kind, version_scheme,
+                architecture_qualifier_kind, architecture_qualifier, provenance
+             )
+             SELECT 9223372036854770000, capability, version, version_relation, kind,
+                    version_scheme, architecture_qualifier_kind, architecture_qualifier,
+                    provenance
+             FROM provides WHERE id = ?1",
+            [source_row_id],
+        )
+        .unwrap();
+    assert_eq!(inserted, 1);
+    drop(corruption);
+
+    let output = run_conary(&[
+        "query",
+        "whatprovides",
+        capability,
+        "--json",
+        "--db-path",
+        &db_path,
+    ]);
+    assert!(!output.status.success(), "{}", output_text(&output));
+    assert!(output.stdout.is_empty(), "{}", output_text(&output));
+}
+
+#[test]
+fn whatprovides_help_lists_json_output() {
+    let output = run_conary(&["query", "whatprovides", "--help"]);
+    assert!(output.status.success(), "{}", output_text(&output));
+    let help = String::from_utf8_lossy(&output.stdout);
+    assert!(help.contains("--json"), "{help}");
+}
+
+#[test]
+fn whatprovides_json_matches_pkgconfig32_and_comar_wrappers_for_both_sources() {
+    let (_tmp, db_path, conn) = common::create_test_db();
+    let mut installed = Trove::new(
+        "installed-config-provider".to_string(),
+        "1.0.0".to_string(),
+        TroveType::Package,
+        VersionScheme::Conary,
+    );
+    let installed_id = installed.insert(&conn).unwrap();
+    for (kind, capability) in [
+        (RepositoryCapabilityKind::PkgConfig32, "rendering"),
+        (RepositoryCapabilityKind::Comar, "settings"),
+    ] {
+        let mut provide = ProvideEntry::new_typed(
+            installed_id,
+            kind,
+            capability.to_string(),
+            None,
+            VersionScheme::Conary,
+            ProvideArchitectureQualifier::Implicit,
+        );
+        provide.insert(&conn).unwrap();
+    }
+
+    let repository_name = "typed-config-source";
+    let repository_identity = "typed-config-source:x86_64";
+    let repository_id = insert_query_test_repository(&conn, repository_name, repository_identity);
+    let repository_package_id = insert_repository_package(
+        &conn,
+        repository_id,
+        "repository-config-provider",
+        "2.0",
+        Some("3"),
+        Some("x86_64"),
+    );
+    insert_repository_typed_provide(
+        &conn,
+        repository_package_id,
+        "rendering",
+        "pkgconfig32",
+        None,
+        None,
+    );
+    insert_repository_typed_provide(
+        &conn,
+        repository_package_id,
+        "settings",
+        "comar",
+        None,
+        None,
+    );
+    drop(conn);
+
+    let repository = json!({
+        "name": repository_name,
+        "repository_identity": repository_identity,
+    });
+    for (wrapper, name) in [("pkgconfig32", "rendering"), ("comar", "settings")] {
+        let capability = format!("{wrapper}({name})");
+        assert_eq!(
+            query_whatprovides_json(&db_path, &capability),
+            expected_whatprovides(
+                &capability,
+                vec![
+                    expected_provider(
+                        "installed",
+                        expected_package(
+                            "installed-config-provider",
+                            "1.0.0",
+                            None,
+                            None,
+                            "conary",
+                        ),
+                        Value::Null,
+                        &[],
+                    ),
+                    expected_provider(
+                        "repository",
+                        expected_package(
+                            "repository-config-provider",
+                            "2.0",
+                            Some("3"),
+                            Some("x86_64"),
+                            "rpm",
+                        ),
+                        repository.clone(),
+                        &[],
+                    ),
+                ],
+            )
+        );
+    }
+}
+
+#[test]
+fn whatprovides_json_rejects_empty_or_whitespace_installed_package_names() {
+    let capability = "soname(libidentity.so.1)";
+    for invalid_name in ["", "   "] {
+        let (_tmp, db_path, conn) = common::create_test_db();
+        insert_installed_soname_provider(
+            &conn,
+            installed_package_fixture(
+                "a-valid-provider",
+                "1.0.0",
+                None,
+                Some("x86_64"),
+                VersionScheme::Conary,
+            ),
+            "libidentity.so.1",
+            &[(None, ProvideArchitectureQualifier::Implicit)],
+        );
+        insert_installed_soname_provider(
+            &conn,
+            installed_package_fixture(
+                invalid_name,
+                "1.0.0",
+                None,
+                Some("x86_64"),
+                VersionScheme::Conary,
+            ),
+            "libidentity.so.1",
+            &[(None, ProvideArchitectureQualifier::Implicit)],
+        );
+        drop(conn);
+
+        assert_whatprovides_json_fails_without_stdout(&db_path, capability);
+    }
+}
+
+#[test]
+fn whatprovides_json_rejects_empty_or_whitespace_repository_package_names() {
+    let capability = "soname(libidentity.so.1)";
+    for invalid_name in ["", "   "] {
+        let (_tmp, db_path, conn) = common::create_test_db();
+        let repository_id =
+            insert_query_test_repository(&conn, "identity-source", "identity-source:x86_64");
+        let valid_id = insert_repository_package(
+            &conn,
+            repository_id,
+            "a-valid-package",
+            "1.0",
+            Some("1"),
+            Some("x86_64"),
+        );
+        insert_repository_soname_provide(&conn, valid_id, "libidentity.so.1", None, None);
+        let invalid_id = insert_repository_package(
+            &conn,
+            repository_id,
+            invalid_name,
+            "1.0",
+            Some("1"),
+            Some("x86_64"),
+        );
+        insert_repository_soname_provide(&conn, invalid_id, "libidentity.so.1", None, None);
+        drop(conn);
+
+        assert_whatprovides_json_fails_without_stdout(&db_path, capability);
+    }
+}
+
+#[test]
+fn whatprovides_json_rejects_empty_or_whitespace_repository_names() {
+    let capability = "soname(libidentity.so.1)";
+    for (index, invalid_name) in ["", "   "].into_iter().enumerate() {
+        let (_tmp, db_path, conn) = common::create_test_db();
+        let valid_repository_id =
+            insert_query_test_repository(&conn, "a-valid-source", "valid-source:x86_64");
+        let valid_package_id = insert_repository_package(
+            &conn,
+            valid_repository_id,
+            "a-valid-package",
+            "1.0",
+            Some("1"),
+            Some("x86_64"),
+        );
+        insert_repository_soname_provide(&conn, valid_package_id, "libidentity.so.1", None, None);
+
+        let repository_identity = format!("invalid-source-{index}:x86_64");
+        let invalid_repository_id =
+            insert_query_test_repository(&conn, invalid_name, &repository_identity);
+        let invalid_package_id = insert_repository_package(
+            &conn,
+            invalid_repository_id,
+            "z-invalid-source-package",
+            "1.0",
+            Some("1"),
+            Some("x86_64"),
+        );
+        insert_repository_soname_provide(&conn, invalid_package_id, "libidentity.so.1", None, None);
+        drop(conn);
+
+        assert_whatprovides_json_fails_without_stdout(&db_path, capability);
+    }
+}
+
+#[test]
+fn whatprovides_json_rejects_orphan_repository_provides() {
+    let capability = "soname(liborphan.so.1)";
+    let (_tmp, db_path, conn) = common::create_test_db();
+    let repository_id =
+        insert_query_test_repository(&conn, "orphan-source", "orphan-source:x86_64");
+    let package_id = insert_repository_package(
+        &conn,
+        repository_id,
+        "a-valid-package",
+        "1.0",
+        Some("1"),
+        Some("x86_64"),
+    );
+    insert_repository_soname_provide(&conn, package_id, "liborphan.so.1", None, None);
+    conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
+    insert_repository_typed_provide(
+        &conn,
+        9_000_000_000_000_000_000,
+        "liborphan.so.1",
+        "soname",
+        None,
+        None,
+    );
+    drop(conn);
+
+    assert_whatprovides_json_fails_without_stdout(&db_path, capability);
+}
+
+#[test]
+fn whatprovides_json_rejects_repository_packages_with_missing_sources() {
+    let capability = "soname(liborphan.so.1)";
+    let (_tmp, db_path, conn) = common::create_test_db();
+    let repository_id =
+        insert_query_test_repository(&conn, "orphan-source", "orphan-source:x86_64");
+    let package_id = insert_repository_package(
+        &conn,
+        repository_id,
+        "a-valid-package",
+        "1.0",
+        Some("1"),
+        Some("x86_64"),
+    );
+    insert_repository_soname_provide(&conn, package_id, "liborphan.so.1", None, None);
+    conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
+    let orphan_package_id = insert_repository_package(
+        &conn,
+        9_000_000_000_000_000_000,
+        "z-orphan-package",
+        "1.0",
+        Some("1"),
+        Some("x86_64"),
+    );
+    insert_repository_soname_provide(&conn, orphan_package_id, "liborphan.so.1", None, None);
+    drop(conn);
+
+    assert_whatprovides_json_fails_without_stdout(&db_path, capability);
+}
+
+#[test]
 fn whatbreaks_reports_same_dependency_blocker_as_remove() {
     use conary_core::db::models::{InstallSource, InstalledRequirementGroup, Trove, TroveType};
     use conary_core::repository::dependency_model::RepositoryRequirementKind;
@@ -852,7 +1754,8 @@ fn test_dependency_queries() {
 
     // Verify soname provides
     let libssl_providers =
-        ProvideEntry::find_all_by_capability(&conn, "soname(libssl.so.3)").unwrap();
+        ProvideEntry::find_all_typed(&conn, RepositoryCapabilityKind::Soname, "libssl.so.3")
+            .unwrap();
     assert_eq!(
         libssl_providers.len(),
         1,
@@ -947,11 +1850,14 @@ fn test_whatprovides_operations() {
     assert_eq!(webserver_providers.len(), 1);
 
     // Test soname lookup
-    let ssl_providers = ProvideEntry::find_all_by_capability(&conn, "soname(libssl.so.3)").unwrap();
+    let ssl_providers =
+        ProvideEntry::find_all_typed(&conn, RepositoryCapabilityKind::Soname, "libssl.so.3")
+            .unwrap();
     assert_eq!(ssl_providers.len(), 1);
 
     // Test pattern search
-    let soname_results = ProvideEntry::search_capability(&conn, "soname%").unwrap();
+    let soname_results =
+        ProvideEntry::search_typed(&conn, RepositoryCapabilityKind::Soname, "%").unwrap();
     assert_eq!(soname_results.len(), 1, "Should find 1 soname provide");
 
     // Test satisfying provider
