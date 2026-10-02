@@ -14,6 +14,7 @@ mod typed_conflict;
 mod typed_deferred;
 mod typed_pin_remove;
 mod typed_relations;
+mod typed_remove;
 mod typed_repo;
 mod typed_sql;
 mod typed_update;

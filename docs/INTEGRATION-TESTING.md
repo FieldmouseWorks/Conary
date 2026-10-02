@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-10-02
-revision: 90
+revision: 91
 summary: Define the Podman container integration harness, its prerequisites, running suites, fixtures, and result/proof contracts
 ---
 
@@ -809,6 +809,12 @@ assertions bind these outcomes to the v2 artifact digests and to the persisted
 removes the primaries (including the RPM ghost path) and the Debian backup
 suffixes, while the ALPM declaration-only path and the RPM `.rpmnew` and ALPM
 `.pacnew` auxiliaries remain byte-exact, matching the source contracts.
+
+`TNPM19` then requires one SQLite JSON row with integer zero installed troves
+for `phase4-daily-driver-corpus` and zero persisted config rows among its four
+named primary paths. The config count is global to those paths, so a row with a
+cleared trove ID still fails; it does not cover unrelated paths or the
+auxiliary suffix files checked separately above.
 
 RPM export emits a directory entry when its mode differs from the implicit
 0755 parent contract or no descendant can create it. Default-mode parents of
