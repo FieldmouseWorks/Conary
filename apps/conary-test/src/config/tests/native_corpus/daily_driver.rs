@@ -134,6 +134,19 @@ fn phase4_daily_driver_corpus_manifest_proves_remaining_configuration_states() {
                 .contains("json_extract(payload_node_json, '$.source.kind.type') = 'regular'",),
         "TNPM15 must continue distinguishing regular files from directory payload rows"
     );
+    assert!(
+        !daily_metadata_rendered.contains("1 lifecycle bundles")
+            && !daily_metadata_rendered.contains("SELECT source_format || '|' || source_package"),
+        "TNPM15 must not restore the obsolete lifecycle substring proof"
+    );
+    assert!(
+        daily_metadata.step[7]
+            .assert
+            .as_ref()
+            .and_then(|assertion| assertion.stdout_json.as_ref())
+            .is_some(),
+        "TNPM15 lifecycle metadata must use typed JSON assertions"
+    );
 
     let rendered = corpus_tests
         .iter()

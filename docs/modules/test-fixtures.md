@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-10-02
-revision: 65
+revision: 66
 summary: Map fixture ownership, including typed native persisted-SQL proof, native refusals, repository discovery, command captures, typed boot-tool interfaces, and the refreshed Tumbleweed lifecycle snapshot
 ---
 
@@ -519,8 +519,21 @@ Each fixture family should record:
   no semantic claim about Fedora's other three groups. TNPM15 also requires
   the exact installed identity and native version `1.0` same-name package
   provide rows, including typed provenance role, native format, and integer
-  record index type. It does not count other same-name versions. The update
-  record binds the installed v1 request and an independently built and
+  record index type. It does not count other same-name versions; this existing
+  step-7 provide proof remains unchanged. TNPM15 step 8 adds one trove-scoped
+  `sqlite3 -json` `LEFT JOIN` assertion that requires exactly one persisted
+  lifecycle-bundle row. Whole-array equality pins trove name, version,
+  architecture, and source profile, plus bundle source format, family, profile,
+  architecture, package, version, `native-lifecycle` fidelity, and `installed`
+  state. The bundle tuples are `rpm/rpm/fedora-44/x86_64`,
+  `deb/deb/ubuntu-26.04/amd64`, and `arch/arch/arch/x86_64`; the Arch bundle's
+  format and family are `arch`, while its separate corpus source-evidence
+  format remains `alpm`. The bundle package and version must match the trove
+  name and version; the projected `same_changeset` must equal JSON integer `1`,
+  proving equality between the bundle's `installed_changeset_id` and the
+  trove's `installed_by_changeset_id`. This proves scalar row fields and
+  lineage only; it does not parse or verify bundle TOML or its digest. The
+  update record binds the installed v1 request and an independently built and
   extracted v2 native request, converts that exact v2 artifact through Conary's
   native parser, and acquires the resulting signed CCS from a bounded loopback
   repository. Selected-generation v2 bytes, pristine config hashes and source
