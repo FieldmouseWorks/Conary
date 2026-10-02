@@ -513,11 +513,10 @@ fatal = true
 depends_on = ["TNPM08"]
 
 [[test.step]]
-run = ". /tmp/native-pm-parity/native-fixture.env && CONARY_TEST_SKIP_GENERATION_MOUNT=1 CONARY_TEST_FAIL_GENERATION_REBUILD=slice-d-forced ${CONARY_BIN} install \"$NATIVE_PKG_FILE\" --convert-to-ccs --db-path ${DB_PATH} --root /conary --no-deps --yes --sandbox always 2>&1"
+run = ". /tmp/native-pm-parity/native-fixture.env && CONARY_TEST_SKIP_GENERATION_MOUNT=1 CONARY_TEST_FAIL_GENERATION_REBUILD=slice-d-forced ${CONARY_BIN} install \"$NATIVE_PKG_FILE\" --convert-to-ccs --db-path ${DB_PATH} --root /conary --no-deps --yes --sandbox always"
 
 [test.step.assert]
 exit_code = 0
-stdout_contains = "pending"
 
 [[test.step]]
 run = "sqlite3 -json ${DB_PATH} \"SELECT json_extract(metadata, '$.schema') AS schema, json_type(metadata, '$.deferred_follow_up') AS follow_up_type, json_array_length(metadata, '$.deferred_follow_up') AS follow_up_count, json_extract(metadata, '$.deferred_follow_up[0].kind') AS kind, json_extract(metadata, '$.deferred_follow_up[0].status') AS status, json_extract(metadata, '$.deferred_follow_up[0].message') AS message FROM changesets WHERE description = 'Install phase4-runtime-fixture-${native_fixture_version}' ORDER BY id DESC LIMIT 1\""

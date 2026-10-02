@@ -75,17 +75,17 @@ fn native_parity_deferred_metadata_requires_exact_typed_rows_for_all_lanes() {
 }
 
 fn assert_preserved_observations(test: &TestDef) {
-    assert!(test.step[0].run.as_deref().is_some_and(|run| {
-        run.contains("CONARY_TEST_FAIL_GENERATION_REBUILD=slice-d-forced")
-            && run.contains(" install ")
-    }));
-    assert_eq!(
-        test.step[0]
-            .assert
-            .as_ref()
-            .and_then(|assertion| assertion.stdout_contains.as_deref()),
-        Some("pending")
-    );
+    let first_step = &test.step[0];
+    let command = first_step
+        .run
+        .as_deref()
+        .expect("first step must run install");
+    assert!(command.contains("CONARY_TEST_FAIL_GENERATION_REBUILD=slice-d-forced"));
+    assert!(command.contains(" install ") && !command.ends_with("2>&1"));
+    let assertion = exit_only_assertion(first_step);
+    demonstrate_pending_substring_false_positive();
+    assert_first_step_exit_behavior(assertion);
+
     assert!(test.step[2].run.as_deref().is_some_and(|run| {
         run.contains("FROM generation_publications") && run.contains("ORDER BY id DESC LIMIT 1")
     }));
@@ -102,6 +102,54 @@ fn assert_preserved_observations(test: &TestDef) {
             .and_then(|assertion| assertion.stdout_contains_all.as_deref()),
         Some(expected_history.as_slice())
     );
+}
+
+fn exit_only_assertion(step: &TestStep) -> &Assertion {
+    let assertion = step
+        .assert
+        .as_ref()
+        .expect("first step must assert successful package mutation");
+    assert_eq!(assertion.exit_code, Some(0));
+    assert!(assertion.exit_code_not.is_none());
+    assert!(assertion.stdout_contains.is_none());
+    assert!(assertion.stdout_not_contains.is_none());
+    assert!(assertion.stdout_contains_all.is_none());
+    assert!(assertion.stdout_contains_any.is_none());
+    assert!(assertion.stdout_contains_if_success.is_none());
+    assert!(assertion.stdout_contains_any_if_success.is_none());
+    assert!(assertion.stdout_json.is_none());
+    assert!(assertion.stderr_contains.is_none());
+    assert!(assertion.stderr_not_contains.is_none());
+    assert!(assertion.file_exists.is_none());
+    assert!(assertion.file_not_exists.is_none());
+    assert!(assertion.file_checksum.is_none());
+    assertion
+}
+
+fn demonstrate_pending_substring_false_positive() {
+    // Constructed matcher witness only; this sentence is not live TNPM09 output.
+    let old_check = Assertion {
+        stdout_contains: Some("pending".into()),
+        ..Assertion::default()
+    };
+    assert!(evaluate_assertion(&old_check, 0, "generation publication is not pending", "").is_ok());
+}
+
+fn assert_first_step_exit_behavior(assertion: &Assertion) {
+    for (exit_code, stdout, succeeds) in [
+        (0, "", true),
+        (
+            0,
+            "Install complete; deferred generation publication recorded.",
+            true,
+        ),
+        (1, "generation publication is pending", false),
+    ] {
+        assert_eq!(
+            evaluate_assertion(assertion, exit_code, stdout, "").is_ok(),
+            succeeds
+        );
+    }
 }
 
 fn sqlite_query(step: &TestStep) -> &str {
