@@ -395,6 +395,48 @@ fn cli_exact_query_matches_raw_or_package_rows_only() {
 }
 
 #[test]
+fn selected_repository_provide_requires_canonical_kind_and_valid_capability() {
+    let valid = RepositoryProvide::new(
+        1,
+        "libssl.so.3".to_string(),
+        None,
+        "soname".to_string(),
+        Some("libssl.so.3()(64bit)".to_string()),
+        VersionScheme::Rpm,
+    );
+    assert_eq!(
+        valid.validated_capability().unwrap().kind,
+        crate::repository::dependency_model::RepositoryCapabilityKind::Soname
+    );
+
+    let invalid_kind = RepositoryProvide::new(
+        1,
+        "libssl.so.3".to_string(),
+        None,
+        "invented-kind".to_string(),
+        Some("libssl.so.3()(64bit)".to_string()),
+        VersionScheme::Rpm,
+    );
+    assert!(
+        format!("{}", invalid_kind.validated_capability().unwrap_err())
+            .contains("unsupported normalized repository provide kind")
+    );
+
+    let invalid_version = RepositoryProvide::new(
+        1,
+        "openssl".to_string(),
+        Some("bad version!".to_string()),
+        "package".to_string(),
+        None,
+        VersionScheme::Conary,
+    );
+    assert!(
+        format!("{}", invalid_version.validated_capability().unwrap_err())
+            .contains("invalid conary provider version")
+    );
+}
+
+#[test]
 fn delete_by_package_removes_provides() {
     let conn = test_db();
     seed_repo_and_package(&conn);

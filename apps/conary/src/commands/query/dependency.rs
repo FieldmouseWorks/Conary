@@ -7,11 +7,13 @@
 
 use super::super::open_db;
 use crate::commands::{InstalledPackageSelector, resolve_installed_package};
-use anyhow::Result;
+use anyhow::{Context, Result};
 use conary_core::db::models::{
     InstalledRequirementAtom, ProvideEntry, Repository, RepositoryPackage, RepositoryProvide, Trove,
 };
-use conary_core::repository::dependency_model::RepositoryCapabilityKind;
+use conary_core::repository::dependency_model::{ProvidedCapability, RepositoryCapabilityKind};
+use conary_core::repository::versioning::{VersionScheme, validate_repo_version};
+use serde::Serialize;
 use std::collections::HashMap;
 use tracing::info;
 
@@ -152,63 +154,229 @@ pub fn cmd_whatbreaks(
 /// - A virtual provide (e.g., perl(DBI))
 /// - A file path (e.g., /usr/bin/python3)
 /// - A typed capability (e.g., soname(libssl.so.3))
-pub fn cmd_whatprovides(capability: &str, db_path: &str) -> Result<()> {
-    let conn = open_db(db_path)?;
+pub fn cmd_whatprovides(capability: &str, db_path: &str, json: bool) -> Result<()> {
+    let mut conn = open_db(db_path)?;
+    let transaction = conn.transaction()?;
+    let report = whatprovides_report(&transaction, capability)?;
+    transaction.commit()?;
 
-    let providers = installed_providers_for_capability(&conn, capability)?;
-    let repo_providers = repository_providers_for_capability(&conn, capability)?;
-
-    if providers.is_empty() && repo_providers.is_empty() {
-        println!("No package provides '{}'", capability);
-        return Ok(());
-    }
-
-    println!("Capability '{}' is provided by:", capability);
-    if !providers.is_empty() {
-        println!("Installed providers:");
-        for provider in &providers {
-            if let Ok(Some(trove)) = Trove::find_by_id(&conn, provider.trove_id) {
-                print!("  {} {}", trove.name, trove.version);
-                for ver in &provider.capability_versions {
-                    print!(" (provides version: {})", ver);
-                }
-                if let Some(ref arch) = trove.architecture {
-                    print!(" [{}]", arch);
-                }
-                println!();
-            }
-        }
-    }
-
-    let mut rendered_repo_providers = 0usize;
-    if !repo_providers.is_empty() {
-        println!("Repository providers:");
-        for provider in &repo_providers {
-            let Some(pkg) = RepositoryPackage::find_by_id(&conn, provider.repository_package_id)?
-            else {
-                continue;
-            };
-            let repo_name = Repository::find_by_id(&conn, pkg.repository_id)?
-                .map(|repo| repo.name)
-                .unwrap_or_else(|| "unknown-repo".to_string());
-            print!("  {} {}", pkg.name, pkg.version);
-            if let Some(arch) = &pkg.architecture {
-                print!(" [{}]", arch);
-            }
-            print!(" @{}", repo_name);
-            for version in &provider.capability_versions {
-                print!(" (provides version: {})", version);
-            }
-            println!();
-            rendered_repo_providers += 1;
-        }
-    }
-
-    println!(
-        "\nTotal: {} provider(s)",
-        providers.len() + rendered_repo_providers
-    );
+    let output = if json {
+        serde_json::to_string(&report)?
+    } else {
+        render_whatprovides_text(&report)?
+    };
+    crate::ui::message(&output);
     Ok(())
+}
+
+const WHATPROVIDES_SCHEMA_VERSION: u16 = 1;
+
+#[derive(Debug, Serialize)]
+struct WhatProvidesReport {
+    schema_version: u16,
+    capability: String,
+    providers: Vec<WhatProvidesProvider>,
+    provider_count: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum ProviderSourceKind {
+    Installed,
+    Repository,
+}
+
+#[derive(Debug, Serialize)]
+struct WhatProvidesProvider {
+    source_kind: ProviderSourceKind,
+    package: ProviderPackageIdentity,
+    repository: Option<ProviderRepositoryIdentity>,
+    capability_versions: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct ProviderPackageIdentity {
+    name: String,
+    version: String,
+    release: Option<String>,
+    architecture: Option<String>,
+    version_scheme: VersionScheme,
+}
+
+#[derive(Debug, Serialize)]
+struct ProviderRepositoryIdentity {
+    name: String,
+    repository_identity: Option<String>,
+}
+
+fn whatprovides_report(
+    conn: &rusqlite::Connection,
+    capability: &str,
+) -> Result<WhatProvidesReport> {
+    let installed_matches = installed_providers_for_capability(conn, capability)?;
+    let repository_matches = repository_providers_for_capability(conn, capability)?;
+    let mut providers = Vec::with_capacity(installed_matches.len() + repository_matches.len());
+
+    for matched in installed_matches {
+        let trove = Trove::find_by_id(conn, matched.trove_id)?.with_context(|| {
+            format!(
+                "matched installed provider references missing trove {}",
+                matched.trove_id
+            )
+        })?;
+        let mut capability_versions = matched.capability_versions;
+        capability_versions.sort_unstable();
+        capability_versions.dedup();
+        providers.push(WhatProvidesProvider {
+            source_kind: ProviderSourceKind::Installed,
+            package: ProviderPackageIdentity {
+                name: trove.name,
+                version: trove.version,
+                release: trove.package_release,
+                architecture: trove.architecture,
+                version_scheme: trove.version_scheme,
+            },
+            repository: None,
+            capability_versions,
+        });
+    }
+
+    for matched in repository_matches {
+        let package = RepositoryPackage::find_by_id(conn, matched.repository_package_id)?
+            .with_context(|| {
+                format!(
+                    "matched repository provider references missing package {}",
+                    matched.repository_package_id
+                )
+            })?;
+        validate_repo_version(package.version_scheme, &package.version).with_context(|| {
+            format!(
+                "matched repository package {} has invalid version authority",
+                matched.repository_package_id
+            )
+        })?;
+        let repository =
+            Repository::find_by_id(conn, package.repository_id)?.with_context(|| {
+                format!(
+                    "matched repository package {} references missing repository {}",
+                    matched.repository_package_id, package.repository_id
+                )
+            })?;
+        let mut capability_versions = matched.capability_versions;
+        capability_versions.sort_unstable();
+        capability_versions.dedup();
+        providers.push(WhatProvidesProvider {
+            source_kind: ProviderSourceKind::Repository,
+            package: ProviderPackageIdentity {
+                name: package.name,
+                version: package.version,
+                release: (!package.package_release.is_empty()).then_some(package.package_release),
+                architecture: package.architecture,
+                version_scheme: package.version_scheme,
+            },
+            repository: Some(ProviderRepositoryIdentity {
+                name: repository.name,
+                repository_identity: repository.repository_identity,
+            }),
+            capability_versions,
+        });
+    }
+
+    providers.sort_by(|left, right| provider_sort_key(left).cmp(&provider_sort_key(right)));
+    let provider_count = providers.len();
+    Ok(WhatProvidesReport {
+        schema_version: WHATPROVIDES_SCHEMA_VERSION,
+        capability: capability.to_string(),
+        providers,
+        provider_count,
+    })
+}
+
+fn provider_sort_key(
+    provider: &WhatProvidesProvider,
+) -> (u8, &str, &str, &str, &str, &str, &str, &str, &[String]) {
+    let source_order = match provider.source_kind {
+        ProviderSourceKind::Installed => 0,
+        ProviderSourceKind::Repository => 1,
+    };
+    (
+        source_order,
+        &provider.package.name,
+        provider.package.version_scheme.as_str(),
+        &provider.package.version,
+        provider.package.release.as_deref().unwrap_or(""),
+        provider.package.architecture.as_deref().unwrap_or(""),
+        provider
+            .repository
+            .as_ref()
+            .map_or("", |repository| &repository.name),
+        provider
+            .repository
+            .as_ref()
+            .and_then(|repository| repository.repository_identity.as_deref())
+            .unwrap_or(""),
+        &provider.capability_versions,
+    )
+}
+
+fn render_whatprovides_text(report: &WhatProvidesReport) -> Result<String> {
+    if report.providers.is_empty() {
+        return Ok(format!("No package provides '{}'", report.capability));
+    }
+
+    let mut lines = vec![format!(
+        "Capability '{}' is provided by:",
+        report.capability
+    )];
+    for source_kind in [
+        ProviderSourceKind::Installed,
+        ProviderSourceKind::Repository,
+    ] {
+        let group = report
+            .providers
+            .iter()
+            .filter(|provider| provider.source_kind == source_kind)
+            .collect::<Vec<_>>();
+        if group.is_empty() {
+            continue;
+        }
+        lines.push(
+            match source_kind {
+                ProviderSourceKind::Installed => "Installed providers:",
+                ProviderSourceKind::Repository => "Repository providers:",
+            }
+            .to_string(),
+        );
+        for provider in group {
+            let mut line = format!("  {} {}", provider.package.name, provider.package.version);
+            if matches!(source_kind, ProviderSourceKind::Installed) {
+                append_capability_versions(&mut line, &provider.capability_versions);
+            }
+            if let Some(architecture) = &provider.package.architecture {
+                line.push_str(&format!(" [{architecture}]"));
+            }
+            if matches!(source_kind, ProviderSourceKind::Repository) {
+                let repository = provider.repository.as_ref().with_context(|| {
+                    format!(
+                        "repository provider '{} {}' is missing repository identity",
+                        provider.package.name, provider.package.version
+                    )
+                })?;
+                line.push_str(&format!(" @{}", repository.name));
+                append_capability_versions(&mut line, &provider.capability_versions);
+            }
+            lines.push(line);
+        }
+    }
+    lines.push(String::new());
+    lines.push(format!("Total: {} provider(s)", report.provider_count));
+    Ok(lines.join("\n"))
+}
+
+fn append_capability_versions(line: &mut String, versions: &[String]) {
+    for version in versions {
+        line.push_str(&format!(" (provides version: {version})"));
+    }
 }
 
 #[derive(Debug)]
@@ -270,16 +438,37 @@ fn installed_providers_for_capability(
     let mut indexes = HashMap::new();
 
     for provider in ProvideEntry::find_all_by_cli_exact_query(conn, capability)? {
+        validate_installed_provider(&provider)?;
         record_installed_provider(&mut providers, &mut indexes, provider);
     }
 
     if let Some((kind, typed_capability)) = parse_typed_capability_query(capability) {
         for provider in ProvideEntry::find_all_typed(conn, kind, typed_capability)? {
+            validate_installed_provider(&provider)?;
             record_installed_provider(&mut providers, &mut indexes, provider);
         }
     }
 
     Ok(providers)
+}
+
+fn validate_installed_provider(provider: &ProvideEntry) -> Result<()> {
+    ProvidedCapability {
+        kind: provider.kind,
+        name: provider.capability.clone(),
+        version: provider.version.clone(),
+        version_relation: provider.version_relation,
+        version_scheme: provider.version_scheme,
+        architecture_qualifier: provider.architecture_qualifier.clone(),
+        provenance: provider.provenance.clone(),
+    }
+    .validate()
+    .with_context(|| {
+        format!(
+            "invalid matched installed provide for trove {}",
+            provider.trove_id
+        )
+    })
 }
 
 fn repository_providers_for_capability(
@@ -290,6 +479,12 @@ fn repository_providers_for_capability(
     let mut indexes = HashMap::new();
 
     for provider in RepositoryProvide::find_by_cli_exact_query(conn, capability)? {
+        provider.validated_capability().with_context(|| {
+            format!(
+                "invalid matched repository provide for package {}",
+                provider.repository_package_id
+            )
+        })?;
         record_repository_provider(&mut providers, &mut indexes, provider);
     }
 
@@ -299,6 +494,12 @@ fn repository_providers_for_capability(
             typed_capability,
             capability_kind_name(kind),
         )? {
+            provider.validated_capability().with_context(|| {
+                format!(
+                    "invalid matched repository provide for package {}",
+                    provider.repository_package_id
+                )
+            })?;
             record_repository_provider(&mut providers, &mut indexes, provider);
         }
     }

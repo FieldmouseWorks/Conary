@@ -275,6 +275,14 @@ impl RepositoryProvide {
         })
     }
 
+    /// Decode and validate one selected repository provide using the same
+    /// capability contract as the repository conversion projection.
+    pub fn validated_capability(&self) -> Result<ProvidedCapability> {
+        let capability = self.as_provided_capability()?;
+        capability.validate()?;
+        Ok(capability)
+    }
+
     /// Load exact provides for a bounded set of repository packages in one
     /// query.
     pub fn find_by_repository_packages(

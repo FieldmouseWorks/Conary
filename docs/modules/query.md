@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-07-30
-revision: 7
-summary: Route exact installed package, claim-aware payload, and native lifecycle query contracts
+last_updated: 2026-10-02
+revision: 8
+summary: Route exact package, payload, lifecycle, and typed provider query contracts
 ---
 
 # Query Module (apps/conary/src/commands/query/)
@@ -26,7 +26,7 @@ conary query <subcommand> [args]
         |
   +-- depends / rdepends    -> dependency.rs   (DependencyEntry table)
   +-- deptree               -> deptree.rs      (recursive traversal, cycle detection)
-  +-- whatprovides           -> dependency.rs   (ProvideEntry table)
+  +-- whatprovides           -> dependency.rs   (provides/troves and repository_provides/repository_packages/repositories)
   +-- whatbreaks             -> dependency.rs   (reverse dependency impact)
   +-- reason                 -> reason.rs       (Trove.install_reason filter)
   +-- repquery               -> repo.rs         (RepositoryPackage table)
@@ -66,6 +66,25 @@ conary system sbom <package|all> [--format cyclonedx]
 | `InstalledNativeLifecycleBundle` | db/models/ | Persisted source-ABI lifecycle authority for later query and transaction planning |
 | `LifecycleEvent` | db/models/ | Typed per-changeset warn-and-continue lifecycle failure evidence |
 
+## Whatprovides Output
+
+`conary query whatprovides <capability> --json` emits a schema-version-1 JSON
+object with `schema_version`, the requested `capability`, `providers`, and
+`provider_count`. Each provider carries `source_kind`, a package object with
+its exact name, version, nullable release and architecture, and version scheme,
+a nullable repository object, and sorted unique capability versions. Repository
+objects carry the persisted repository name and nullable `repository_identity`.
+
+Installed providers precede repository providers. Within each source group,
+providers are ordered lexically by package name, version scheme, version,
+release, architecture, repository name, repository identity, and capability
+versions; nullable tie-break fields sort as empty strings. Capability versions
+are sorted lexically and deduplicated. An empty query returns the same root
+object with an empty provider list and count zero. The text report is rendered
+from the same provider result. A selected malformed provide or provider whose
+required metadata lookup fails causes command failure before stdout is written.
+Package architecture is reported from its stored record.
+
 ## Database Tables
 
 Primary tables hit by queries:
@@ -74,7 +93,10 @@ Primary tables hit by queries:
 |-------|-----------|---------|
 | `troves` | name, type | All queries |
 | `dependencies` | trove_id, depends_on_name | depends, rdepends, deptree, whatbreaks |
-| `provides` | trove_id, capability | whatprovides |
+| `provides` | trove_id, capability | whatprovides installed providers |
+| `repositories` | name | whatprovides repository metadata, repository configuration |
+| `repository_packages` | name, repository_id | repquery, whatprovides repository packages |
+| `repository_provides` | repository_package_id, capability | whatprovides repository providers |
 | `files` | path, trove_id, component_id | component, conflicts |
 | `payload_claims` | path, trove_id | package-facing payload ownership, shared-anchor retention |
 | `components` | parent_trove_id, name | component, components |
