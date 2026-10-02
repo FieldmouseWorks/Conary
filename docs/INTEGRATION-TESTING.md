@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-10-03
-revision: 102
-summary: Define the Podman container integration harness, its prerequisites, running suites, fixtures, and result/proof contracts, including TNPM14 persisted repository-dependency identity and cardinality, TNPM15 regular-file rows, and activation intent authority
+revision: 103
+summary: Define the Podman container integration harness, its prerequisites, running suites, fixtures, and result/proof contracts, including TNPM14 persisted repository-dependency identity and cardinality, TNPM15 regular-file rows and activation intent authority, and TNPM18 post-update trove/config cardinality
 ---
 
 # Integration Testing
@@ -874,6 +874,26 @@ the target transaction; it does not infer a named identity from RPM's display
 metadata. The source format comes from the explicit distro build-context
 override and must resolve to the closed RPM/DEB/ALPM type before evidence can
 count.
+
+TNPM18 step 8 replaces its text match with one `sqlite3 -json` query and a
+whole-array comparison ordered by trove ID. The exact one-row result pins the
+updated `phase4-daily-driver-corpus` trove at version `1.0.1-1` and its
+`/etc/phase4-corpus/app.conf` row. It pins trove architecture, version scheme,
+source profile, repository `w7-native-update`, repository install source, and
+explicit install reason. The config row's package name, version, and
+architecture match the updated trove; its original and current hashes both
+equal `97d836d4bf6c4c49fa763836c117d738fef15b7d995bc2cf82e2a02704364d27`,
+`noreplace` is integer `1`, and status is `pristine`. `config_owner_match = 1`
+proves this row's `trove_id` matches the trove. `related_config_rows = 4`
+counts rows whose `trove_id` matches the trove or whose `package_name` matches
+the package; it is not an owner-only count. Since the query includes every
+trove with that name, another version adds a row and fails whole-array
+equality. The lane values are Fedora/RPM (`x86_64`, scheme `rpm`, profile
+`fedora-44`, config source `rpm`), Ubuntu/DEB (`amd64`, scheme `debian`,
+profile `ubuntu-26.04`, config source `deb`), and Arch (`x86_64`, scheme
+`arch`, profile `arch`, config source `arch`; the separate corpus evidence
+format remains `alpm`). This assertion proves the persisted database
+projection only; it adds no independent payload-byte or signature-byte proof.
 
 The three configuration-state claims ride the same v1-to-v2 signed update and
 stay format-typed. Before the update the fixture stages an exact local edit on

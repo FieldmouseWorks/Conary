@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-10-03
-revision: 69
-summary: Map fixture ownership, including typed native persisted-SQL proof, TNPM14 repository-dependency identity and cardinality, regular-file rows, native refusals, repository discovery, command captures, typed boot-tool interfaces, activation intent evidence, and the refreshed Tumbleweed lifecycle snapshot
+revision: 70
+summary: Map fixture ownership, including typed native persisted-SQL proof, TNPM14 repository-dependency identity and cardinality, regular-file rows, TNPM18 post-update trove/config cardinality, native refusals, repository discovery, command captures, typed boot-tool interfaces, activation intent evidence, and the refreshed Tumbleweed lifecycle snapshot
 ---
 
 # Test Fixtures And Proof Maps
@@ -598,7 +598,28 @@ Each fixture family should record:
   the recreated or intentionally absent primary bytes, the byte-exact
   declaration-only path, and the persisted `config_files` rows (original/current
   hash, status, source, `materialized`, ghost, and remove-on-upgrade flags)
-  lane by lane; no distro gate or path heuristic decides a config outcome. Each native package is independently
+  lane by lane; no distro gate or path heuristic decides a config outcome.
+
+  TNPM18 step 8 compares one complete `sqlite3 -json` array ordered by trove
+  ID. It requires exactly one updated `phase4-daily-driver-corpus` trove at
+  version `1.0.1-1` and its `/etc/phase4-corpus/app.conf` row, pinning the
+  repository `w7-native-update`, `repository` install source, `explicit`
+  reason, config package name/version/architecture, equal original/current
+  hashes `97d836d4bf6c4c49fa763836c117d738fef15b7d995bc2cf82e2a02704364d27`,
+  integer `noreplace = 1`, `pristine` status, and config source. The projected
+  `config_owner_match = 1` proves that this config row's `trove_id` matches the
+  trove. `related_config_rows = 4` counts config rows whose `trove_id` matches
+  that trove or whose `package_name` matches the package; it is not an
+  owner-only count. Because the query includes every same-name trove, a second
+  version adds a row and fails whole-array equality. The lane values are
+  Fedora/RPM (`x86_64`, scheme `rpm`, profile `fedora-44`, config source
+  `rpm`), Ubuntu/DEB (`amd64`, scheme `debian`, profile `ubuntu-26.04`, config
+  source `deb`), and Arch (`x86_64`, scheme `arch`, profile `arch`, config
+  source `arch`; the separate corpus evidence format remains `alpm`). This
+  assertion proves persisted database values and cardinality only; it adds no
+  independent payload-byte or signature-byte proof.
+
+  Each native package is independently
   installed or extracted and both hardlink paths must report one device/inode
   identity with a link count of two, uid/gid `0`, and mtime `1700000000` before
   Conary installation begins. The selected-generation proof then requires both

@@ -601,6 +601,7 @@ fn phase4_daily_driver_corpus_manifest_proves_remaining_configuration_states() {
             "daily-driver update should prove {required}"
         );
     }
+    super::typed_update_config::assert_tnpm18_update_config_shape(&manifest);
 
     let removal_test = manifest
         .test
