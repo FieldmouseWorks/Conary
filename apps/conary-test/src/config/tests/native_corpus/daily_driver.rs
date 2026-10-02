@@ -197,7 +197,6 @@ fn phase4_daily_driver_corpus_manifest_proves_remaining_configuration_states() {
         "query whatprovides phase4-daily-driver-corpus",
         "phase4-daily-driver-corpus|1.0|eq|package",
         "source-declared",
-        "0 config rows",
         "--dependency-fixture-manifest",
         "build-daily-driver-update-fixture.sh",
         "prepare-native-update-repository.sh",
