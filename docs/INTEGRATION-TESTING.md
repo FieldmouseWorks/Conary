@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-10-02
-revision: 89
+revision: 90
 summary: Define the Podman container integration harness, its prerequisites, running suites, fixtures, and result/proof contracts
 ---
 
@@ -660,10 +660,12 @@ loaded assertions; the full parity suite runs the queries in each container
 lane. The two reads establish enrollment and installed identity separately.
 They do not bind the trove to that repository ID or verify signature bytes.
 
-`TNPM09` projects the latest matching install changeset's versioned metadata
-through SQLite JSON and requires one `deferred_follow_up` array entry with the
-exact generation-publication kind, pending status, and pending message. The
-projection does not check the retry command or other metadata fields. It reads
+`TNPM09` requires the install step to exit zero; rendered output is diagnostic
+and does not determine deferred state. It projects the latest matching install
+changeset's versioned metadata through SQLite JSON and requires one
+`deferred_follow_up` array entry with the exact generation-publication kind,
+pending status, and pending message. The projection does not check the retry
+command or other metadata fields. It reads
 the same latest failed publication row separately and requires its exact status
 and error, with integer retry and recoverable fields. Focused
 `native_parity_deferred_` controls reject a resolved follow-up that the old
