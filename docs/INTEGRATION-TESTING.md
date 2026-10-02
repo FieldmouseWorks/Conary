@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-10-02
-revision: 93
+revision: 94
 summary: Define the Podman container integration harness, its prerequisites, running suites, fixtures, and result/proof contracts
 ---
 
@@ -754,7 +754,11 @@ config-row check requires exactly three rows for that trove, ordered by path:
 `app-deleted.conf`, `app-local.conf`, then `app.conf`. Each row has integer
 `noreplace` value `1`, `pristine` status, and the native config source (`rpm`,
 `deb`, or `arch`). The trove-filtered check does not count unrelated config
-rows. Other `TNPM15` steps check files, dependencies, and lifecycle facts.
+rows. Its final persisted-state check requires the latest named
+`phase4-corpus-trigger` changeset result to be one exact JSON row with
+`completed` status and integer `matched_files` value `1`. The query selects
+only that trigger's latest result; it does not assert that earlier results are
+absent. Other `TNPM15` steps check files, dependencies, and lifecycle facts.
 
 `TNPM17` refuses a native package whose file content conflicts with the
 installed corpus package. The rejection helper checks the unchanged database
