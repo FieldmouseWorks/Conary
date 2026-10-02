@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-10-02
-revision: 91
+revision: 92
 summary: Define the Podman container integration harness, its prerequisites, running suites, fixtures, and result/proof contracts
 ---
 
@@ -745,6 +745,12 @@ version scheme, the converted CCS release `1`, and the expected capability
 versions and provider count.
 The query result does not establish install source or provide provenance;
 `TNPM15` checks those facts against native metadata and persisted state.
+Its first persisted-state check requires one complete SQLite JSON row for
+`phase4-daily-driver-corpus`, with the expected version, native architecture,
+version scheme, source profile, `file` install source, and `explicit` install
+reason. Whole-array equality also rejects another trove with the same name;
+the name-filtered check does not count unrelated installed packages. Later
+`TNPM15` steps check files, dependencies, config rows, and lifecycle facts.
 
 `TNPM17` refuses a native package whose file content conflicts with the
 installed corpus package. The rejection helper checks the unchanged database
