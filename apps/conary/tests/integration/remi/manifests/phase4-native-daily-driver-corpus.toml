@@ -193,7 +193,6 @@ native_corpus_fixture_version = "1.0.0-1"
 native_corpus_update_version = "1.0.1-1"
 native_corpus_dependency_count = "4"
 native_corpus_dependency_probe = "phase4-repository-fixture"
-native_corpus_config_count = "3"
 native_corpus_config_source = "rpm"
 native_corpus_lifecycle_fidelity = "native-lifecycle"
 native_corpus_source_format = "rpm"
@@ -212,7 +211,6 @@ native_corpus_fixture_version = "1.0.0-1"
 native_corpus_update_version = "1.0.1-1"
 native_corpus_dependency_count = "1"
 native_corpus_dependency_probe = "phase4-repository-fixture"
-native_corpus_config_count = "3"
 native_corpus_config_source = "deb"
 native_corpus_lifecycle_fidelity = "native-lifecycle"
 native_corpus_source_format = "deb"
@@ -231,7 +229,6 @@ native_corpus_fixture_version = "1.0.0-1"
 native_corpus_update_version = "1.0.1-1"
 native_corpus_dependency_count = "1"
 native_corpus_dependency_probe = "phase4-repository-fixture"
-native_corpus_config_count = "3"
 native_corpus_config_source = "arch"
 native_corpus_lifecycle_fidelity = "native-lifecycle"
 native_corpus_source_format = "alpm"
@@ -376,11 +373,11 @@ exit_code = 0
 stdout_contains_all = ["${native_corpus_dependency_count} requirement groups", "${native_corpus_dependency_probe}", "phase4-repository-fixture|= 1.0.0"]
 
 [[test.step]]
-run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' config rows' FROM config_files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus'); SELECT path || '|' || noreplace || '|' || status || '|' || source FROM config_files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus') ORDER BY path\""
+run = "sqlite3 -json ${DB_PATH} \"SELECT path, noreplace, status, source FROM config_files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus') ORDER BY path\""
 
 [test.step.assert]
 exit_code = 0
-stdout_contains_all = ["${native_corpus_config_count} config rows", "/etc/phase4-corpus/app-deleted.conf|1|pristine|${native_corpus_config_source}", "/etc/phase4-corpus/app-local.conf|1|pristine|${native_corpus_config_source}", "/etc/phase4-corpus/app.conf|1|pristine|${native_corpus_config_source}"]
+stdout_json = [{ pointer = "", equals_json = '''[{"path":"/etc/phase4-corpus/app-deleted.conf","noreplace":1,"status":"pristine","source":"${native_corpus_config_source}"},{"path":"/etc/phase4-corpus/app-local.conf","noreplace":1,"status":"pristine","source":"${native_corpus_config_source}"},{"path":"/etc/phase4-corpus/app.conf","noreplace":1,"status":"pristine","source":"${native_corpus_config_source}"}]''' }]
 
 [[test.step]]
 run = "sqlite3 ${DB_PATH} \"SELECT capability || '|' || version || '|' || version_relation || '|' || kind || '|' || version_scheme || '|' || json_extract(provenance, '$.role') || '|' || COALESCE(json_extract(provenance, '$.format'), '') FROM provides WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus') AND capability = 'phase4-daily-driver-corpus' AND kind = 'package' ORDER BY json_extract(provenance, '$.role')\""

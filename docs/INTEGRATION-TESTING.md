@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-10-02
-revision: 92
+revision: 93
 summary: Define the Podman container integration harness, its prerequisites, running suites, fixtures, and result/proof contracts
 ---
 
@@ -749,8 +749,12 @@ Its first persisted-state check requires one complete SQLite JSON row for
 `phase4-daily-driver-corpus`, with the expected version, native architecture,
 version scheme, source profile, `file` install source, and `explicit` install
 reason. Whole-array equality also rejects another trove with the same name;
-the name-filtered check does not count unrelated installed packages. Later
-`TNPM15` steps check files, dependencies, config rows, and lifecycle facts.
+the name-filtered check does not count unrelated installed packages. Its
+config-row check requires exactly three rows for that trove, ordered by path:
+`app-deleted.conf`, `app-local.conf`, then `app.conf`. Each row has integer
+`noreplace` value `1`, `pristine` status, and the native config source (`rpm`,
+`deb`, or `arch`). The trove-filtered check does not count unrelated config
+rows. Other `TNPM15` steps check files, dependencies, and lifecycle facts.
 
 `TNPM17` refuses a native package whose file content conflicts with the
 installed corpus package. The rejection helper checks the unchanged database

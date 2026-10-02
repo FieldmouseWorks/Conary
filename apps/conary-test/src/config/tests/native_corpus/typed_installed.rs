@@ -9,11 +9,12 @@ use serde_json::{Value, json};
 
 const QUERY: &str = "SELECT name, version, COALESCE(architecture, '') AS architecture, COALESCE(version_scheme, '') AS version_scheme, COALESCE(source_profile, '') AS source_profile, COALESCE(install_source, '') AS install_source, COALESCE(install_reason, '') AS install_reason FROM troves WHERE name = 'phase4-daily-driver-corpus' ORDER BY id";
 const ADJACENT_RUN: &str = r#"sqlite3 ${DB_PATH} "SELECT COUNT(*) || ' regular files' FROM files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus') AND json_extract(payload_node_json, '$.source.kind.type') = 'regular'; SELECT path || '|' || coalesce(content_size, '-') || '|' || json_extract(payload_node_json, '$.source.kind.type') FROM files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus') AND json_extract(payload_node_json, '$.source.kind.type') = 'regular' ORDER BY path""#;
-const TAIL_ORDER: &[&str] = &[
+const PRE_CONFIG_ORDER: &[&str] = &[
     "path IN ('/opt', '/usr/lib/phase4-corpus/state')",
     "COUNT(*) || ' hardlinks'",
     "COUNT(*) || ' requirement groups'",
-    "COUNT(*) || ' config rows'",
+];
+const POST_CONFIG_ORDER: &[&str] = &[
     "FROM provides",
     "FROM installed_native_lifecycle_bundles",
     "FROM activation_requests",
@@ -45,7 +46,15 @@ fn native_corpus_tnpm15_requires_exact_installed_trove_identity() {
         .expect("TNPM15");
     assert_eq!(test.step.len(), 10, "TNPM15 must retain its ten-step order");
     assert_eq!(test.step[1].run.as_deref(), Some(ADJACENT_RUN));
-    for (step, signature) in test.step[2..].iter().zip(TAIL_ORDER) {
+    for (step, signature) in test.step[2..5].iter().zip(PRE_CONFIG_ORDER) {
+        let command = step.run.as_deref().expect("ordered TNPM15 command");
+        assert!(command.starts_with("sqlite3 ${DB_PATH} \""));
+        assert!(
+            command.contains(signature),
+            "TNPM15 command order: {signature}"
+        );
+    }
+    for (step, signature) in test.step[6..].iter().zip(POST_CONFIG_ORDER) {
         let command = step.run.as_deref().expect("ordered TNPM15 command");
         assert!(command.starts_with("sqlite3 ${DB_PATH} \""));
         assert!(
