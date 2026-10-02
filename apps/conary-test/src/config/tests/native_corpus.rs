@@ -17,6 +17,7 @@ mod typed_directory_symlink;
 mod typed_hardlink;
 mod typed_installed;
 mod typed_pin_remove;
+mod typed_provides;
 mod typed_relations;
 mod typed_remove;
 mod typed_repo;

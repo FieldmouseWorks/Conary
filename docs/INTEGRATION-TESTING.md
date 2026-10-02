@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-10-02
-revision: 97
+revision: 98
 summary: Define the Podman container integration harness, its prerequisites, running suites, fixtures, and result/proof contracts
 ---
 
@@ -776,7 +776,15 @@ Its config-row check requires exactly three rows for that trove, ordered by path
 `app-deleted.conf`, `app-local.conf`, then `app.conf`. Each row has integer
 `noreplace` value `1`, `pristine` status, and the native config source (`rpm`,
 `deb`, or `arch`). The trove-filtered check does not count unrelated config
-rows. Its final persisted-state check requires the latest named
+rows. Its same-name provide check requires two exact ordered persisted JSON
+rows for that trove: the installed exact-identity package provide and the
+native source-declared version `1.0` package provide. It fixes their `eq`
+relation, native version scheme, implicit architecture qualifier, and typed
+provenance role; the declaration also requires the native format and an
+integer record index type. Whole-array equality rejects a second version
+`1.0` declaration with a different record index. The query does not count
+other same-name versions, including a possible RPM header self-provide.
+Its final persisted-state check requires the latest named
 `phase4-corpus-trigger` changeset result to be one exact JSON row with
 `completed` status and integer `matched_files` value `1`. The query selects
 only that trigger's latest result; it does not assert that earlier results are

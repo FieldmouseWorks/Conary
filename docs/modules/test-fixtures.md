@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-10-02
-revision: 64
+revision: 65
 summary: Map fixture ownership, including typed native persisted-SQL proof, native refusals, repository discovery, command captures, typed boot-tool interfaces, and the refreshed Tumbleweed lifecycle snapshot
 ---
 
@@ -516,10 +516,13 @@ Each fixture family should record:
   repository fixture to one exact persisted hard `depends` atom and matching
   alternative, including native source text, and checks the trove's total
   requirement-group count (Fedora four; Ubuntu and Arch one). The count makes
-  no semantic claim about Fedora's other three groups. The update record
-  binds the installed v1 request and an independently built and extracted v2
-  native request, converts that exact v2 artifact through Conary's native
-  parser, and acquires the resulting signed CCS from a bounded loopback
+  no semantic claim about Fedora's other three groups. TNPM15 also requires
+  the exact installed identity and native version `1.0` same-name package
+  provide rows, including typed provenance role, native format, and integer
+  record index type. It does not count other same-name versions. The update
+  record binds the installed v1 request and an independently built and
+  extracted v2 native request, converts that exact v2 artifact through Conary's
+  native parser, and acquires the resulting signed CCS from a bounded loopback
   repository. Selected-generation v2 bytes, pristine config hashes and source
   format, repository checksum and provenance, and the installed lifecycle
   bundle's native source checksum must all agree. The removal record binds to

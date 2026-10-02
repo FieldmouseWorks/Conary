@@ -15,7 +15,7 @@ const PRE_CONFIG_ORDER: &[&str] = &[
     "COUNT(*) - ${native_corpus_dependency_count} FROM package_requirement_groups",
 ];
 const POST_CONFIG_ORDER: &[&str] = &[
-    "FROM provides",
+    "JOIN provides AS p",
     "FROM installed_native_lifecycle_bundles",
     "FROM activation_requests",
 ];
@@ -58,9 +58,14 @@ fn native_corpus_tnpm15_requires_exact_installed_trove_identity() {
             "TNPM15 command order: {signature}"
         );
     }
-    for (step, signature) in test.step[6..9].iter().zip(POST_CONFIG_ORDER) {
+    for (index, (step, signature)) in test.step[6..9].iter().zip(POST_CONFIG_ORDER).enumerate() {
         let command = step.run.as_deref().expect("ordered TNPM15 command");
-        assert!(command.starts_with("sqlite3 ${DB_PATH} \""));
+        let expected_prefix = if index == 0 {
+            "sqlite3 -json ${DB_PATH} \""
+        } else {
+            "sqlite3 ${DB_PATH} \""
+        };
+        assert!(command.starts_with(expected_prefix));
         assert!(
             command.contains(signature),
             "TNPM15 command order: {signature}"
