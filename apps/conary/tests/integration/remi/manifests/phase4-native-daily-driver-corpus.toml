@@ -622,11 +622,11 @@ run = "/opt/remi-tests/fixtures/native/assert-selected-generation.py --root /con
 exit_code = 0
 
 [[test.step]]
-run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' installed' FROM troves WHERE name IN ('phase4-daily-driver-corpus', 'phase4-corpus-conflict'); SELECT COUNT(*) || ' conflicts' FROM troves WHERE name = 'phase4-corpus-conflict'\""
+run = "sqlite3 -json ${DB_PATH} \"SELECT (SELECT COUNT(*) FROM troves WHERE name IN ('phase4-daily-driver-corpus', 'phase4-corpus-conflict')) AS installed, (SELECT COUNT(*) FROM troves WHERE name = 'phase4-corpus-conflict') AS conflicts\""
 
 [test.step.assert]
 exit_code = 0
-stdout_contains_all = ["1 installed", "0 conflicts"]
+stdout_json = [{ pointer = "", equals_json = '''[{"installed":1,"conflicts":0}]''' }]
 
 [[test.step]]
 run = "/opt/remi-tests/fixtures/native/write-corpus-evidence.py /tmp/native-pm-corpus-conflict/native-fixture-manifest.json /tmp/conary-corpus-w7-payload-mutation-failure.json ${native_profile} ${native_corpus_source_format} phase4-corpus-conflict ${native_corpus_fixture_version} ${native_arch} transaction_preflight"
