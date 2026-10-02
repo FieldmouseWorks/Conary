@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-10-02
-revision: 95
+revision: 96
 summary: Define the Podman container integration harness, its prerequisites, running suites, fixtures, and result/proof contracts
 ---
 
@@ -726,8 +726,8 @@ prove:
   installed capability provenance, and typed `whatprovides` JSON results
 - an exact installed native-lifecycle bundle plus install/remove hook effects
 - system user and group creation in the selected generation
-- an explicit mode-0750 directory and an exact relative symlink through native
-  package metadata and the selected generation
+- explicit mode-0750 directories and an exact relative symlink staged into the
+  native fixture and checked in the selected generation
 - exact root ownership and whole-second mtime on both members of one hardlink
   set, first through independent native extraction and then through typed
   selected-generation node authority
@@ -750,6 +750,14 @@ Its first persisted-state check requires one complete SQLite JSON row for
 version scheme, source profile, `file` install source, and `explicit` install
 reason. Whole-array equality also rejects another trove with the same name;
 the name-filtered check does not count unrelated installed packages.
+Its directory and symlink check requires exactly three ordered persisted rows
+for that trove: `/opt` and `/usr/lib/phase4-corpus/state` must each be a
+directory with integer POSIX mode `16872` (directory type plus `0750`
+permissions), and `/usr/bin/phase4-corpus-link` must be a symlink with the
+exact relative target `phase4-corpus`. The query checks those three paths and
+does not assert the total directory or symlink count. `TNPM13` constructs the
+native fixture from those staged nodes; `TNPM14` separately checks all three
+nodes in the selected generation.
 Its persisted hardlink check requires one hardlink node for that trove, both
 `hardlink-anchor` and `hardlink-copy` to be regular or hardlink members, and
 exactly one of those named members to be a hardlink. Either path may own the
