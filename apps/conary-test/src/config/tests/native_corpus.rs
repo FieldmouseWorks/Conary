@@ -14,6 +14,7 @@ mod typed_capability;
 mod typed_config;
 mod typed_conflict;
 mod typed_deferred;
+mod typed_dependency;
 mod typed_directory_symlink;
 mod typed_hardlink;
 mod typed_installed;

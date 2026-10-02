@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-10-02
-revision: 68
-summary: Map fixture ownership, including typed native persisted-SQL proof, regular-file rows, native refusals, repository discovery, command captures, typed boot-tool interfaces, activation intent evidence, and the refreshed Tumbleweed lifecycle snapshot
+last_updated: 2026-10-03
+revision: 69
+summary: Map fixture ownership, including typed native persisted-SQL proof, TNPM14 repository-dependency identity and cardinality, regular-file rows, native refusals, repository discovery, command captures, typed boot-tool interfaces, activation intent evidence, and the refreshed Tumbleweed lifecycle snapshot
 ---
 
 # Test Fixtures And Proof Maps
@@ -508,7 +508,15 @@ Each fixture family should record:
   TNPM32 and emits 17 attributable case records for each host-native RPM, DEB,
   or ALPM lane. The completed install/query
   record binds both the native request and its SAT-selected signed CCS
-  dependency to exact build-manifest SHA-256 identities. TNPM15 additionally
+  dependency to exact build-manifest SHA-256 identities. TNPM14 step 3 reads
+  every root-database trove row named `phase4-repository-fixture`, ordered by
+  `t.id`, and compares the full `sqlite3 -json` array to one expected row
+  pinning name, version, release, architecture, version scheme, repository
+  name, source profile, install source, and install reason. A current-schema
+  control inserts a same-name row at another version; whole-array equality
+  rejects it even though the former substring assertion accepted it. This proves
+  persisted identity, provenance, and cardinality; the query does not
+  independently verify signature bytes. TNPM15 separately
   requires nine exact ordered trove-scoped regular-file rows from the whole
   regular-file set. Each row pins path, typed `regular` kind, integer persisted
   `content_size`, and persisted SHA-256. The regular hardlink member is
@@ -519,10 +527,11 @@ Each fixture family should record:
   trove-scoped persisted directory and symlink rows: the
   symlink target is compared in full and the directory modes remain JSON
   integers. TNPM13 stages those native fixture inputs; TNPM14 verifies their
-  installed nodes in the selected generation. TNPM15 also pins the named
-  repository fixture to one exact persisted hard `depends` atom and matching
-  alternative, including native source text, and checks the trove's total
-  requirement-group count (Fedora four; Ubuntu and Arch one). The count makes
+  installed nodes in the selected generation. Separately, TNPM15's trove-scoped
+  requirement-group check pins the named repository fixture to one exact
+  persisted hard `depends` atom and matching alternative, including native
+  source text, and checks the trove's total requirement-group count (Fedora
+  four; Ubuntu and Arch one). The count makes
   no semantic claim about Fedora's other three groups. TNPM15 also requires
   the exact installed identity and native version `1.0` same-name package
   provide rows, including typed provenance role, native format, and integer

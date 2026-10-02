@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-10-02
-revision: 101
-summary: Define the Podman container integration harness, its prerequisites, running suites, fixtures, and result/proof contracts, including TNPM15 regular-file rows and activation intent authority
+last_updated: 2026-10-03
+revision: 102
+summary: Define the Podman container integration harness, its prerequisites, running suites, fixtures, and result/proof contracts, including TNPM14 persisted repository-dependency identity and cardinality, TNPM15 regular-file rows, and activation intent authority
 ---
 
 # Integration Testing
@@ -720,7 +720,14 @@ prove:
   v2 native artifact through a bounded signed loopback repository
 - one exact native versioned dependency resolved by SAT, acquired from the
   synchronized repository, signature-verified, and installed with dependency
-  reason and source provenance
+  reason and source provenance. TNPM14 step 3 reads every persisted
+  `phase4-repository-fixture` row from the root database, ordered by `t.id`,
+  and compares the complete `sqlite3 -json` array to one expected row pinning
+  name, version, release, architecture, version scheme, joined repository
+  name, source profile, install source, and install reason. Whole-array
+  equality rejects an extra same-name row at another version. This proves
+  persisted identity, repository/source provenance, reason, and cardinality;
+  the query does not independently verify signature bytes.
 - one source-declared same-name compatibility provide at version `1.0`, kept
   distinct from the native package's exact version in native metadata,
   installed capability provenance, and typed `whatprovides` JSON results
@@ -772,11 +779,11 @@ Its persisted hardlink check requires one hardlink node for that trove, both
 exactly one of those named members to be a hardlink. Either path may own the
 regular payload across source formats. Native extraction and the selected-
 generation node checks establish their shared inode, target, and identity.
-Its persisted requirement-group check requires one complete JSON row for the
-named trove and its `phase4-repository-fixture` dependency. The row fixes the
-installed identity, SQL `depends` kind and native version scheme, typed
-`Depends`/`Hard` atom with the exact `= 1.0.0` constraint, and one matching
-alternative. It also checks the native source text for each format and a
+TNPM15's separate persisted requirement-group check requires one complete JSON
+row for the named trove and its `phase4-repository-fixture` dependency. The row
+fixes the installed identity, SQL `depends` kind and native version scheme,
+typed `Depends`/`Hard` atom with the exact `= 1.0.0` constraint and one
+matching alternative. It also checks native source text for each format and a
 trove-scoped total-group count of four on Fedora or one on Ubuntu and Arch.
 The name-based join keeps an `optional` replacement visible so whole-row
 equality rejects it. The count does not claim the semantics of Fedora's three
