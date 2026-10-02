@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-10-02
-revision: 96
+revision: 97
 summary: Define the Podman container integration harness, its prerequisites, running suites, fixtures, and result/proof contracts
 ---
 
@@ -763,6 +763,15 @@ Its persisted hardlink check requires one hardlink node for that trove, both
 exactly one of those named members to be a hardlink. Either path may own the
 regular payload across source formats. Native extraction and the selected-
 generation node checks establish their shared inode, target, and identity.
+Its persisted requirement-group check requires one complete JSON row for the
+named trove and its `phase4-repository-fixture` dependency. The row fixes the
+installed identity, SQL `depends` kind and native version scheme, typed
+`Depends`/`Hard` atom with the exact `= 1.0.0` constraint, and one matching
+alternative. It also checks the native source text for each format and a
+trove-scoped total-group count of four on Fedora or one on Ubuntu and Arch.
+The name-based join keeps an `optional` replacement visible so whole-row
+equality rejects it. The count does not claim the semantics of Fedora's three
+other requirement groups.
 Its config-row check requires exactly three rows for that trove, ordered by path:
 `app-deleted.conf`, `app-local.conf`, then `app.conf`. Each row has integer
 `noreplace` value `1`, `pristine` status, and the native config source (`rpm`,

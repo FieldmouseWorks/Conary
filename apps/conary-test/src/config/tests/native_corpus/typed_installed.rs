@@ -12,7 +12,7 @@ const ADJACENT_RUN: &str = r#"sqlite3 ${DB_PATH} "SELECT COUNT(*) || ' regular f
 const PRE_CONFIG_ORDER: &[&str] = &[
     "path IN ('/opt', '/usr/bin/phase4-corpus-link', '/usr/lib/phase4-corpus/state')",
     "COUNT(CASE WHEN kind = 'hardlink' THEN 1 END) AS hardlink_count",
-    "COUNT(*) || ' requirement groups'",
+    "COUNT(*) - ${native_corpus_dependency_count} FROM package_requirement_groups",
 ];
 const POST_CONFIG_ORDER: &[&str] = &[
     "FROM provides",
@@ -47,11 +47,7 @@ fn native_corpus_tnpm15_requires_exact_installed_trove_identity() {
     assert_eq!(test.step[1].run.as_deref(), Some(ADJACENT_RUN));
     for (index, (step, signature)) in test.step[2..5].iter().zip(PRE_CONFIG_ORDER).enumerate() {
         let command = step.run.as_deref().expect("ordered TNPM15 command");
-        let expected_prefix = if index < 2 {
-            "sqlite3 -json ${DB_PATH} \""
-        } else {
-            "sqlite3 ${DB_PATH} \""
-        };
+        let expected_prefix = "sqlite3 -json ${DB_PATH} \"";
         assert!(
             command.starts_with(expected_prefix),
             "TNPM15 step {} must use {expected_prefix}",
