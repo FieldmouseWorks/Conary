@@ -12,6 +12,7 @@ mod typed_autoremove;
 mod typed_capability;
 mod typed_conflict;
 mod typed_deferred;
+mod typed_installed;
 mod typed_pin_remove;
 mod typed_relations;
 mod typed_remove;
