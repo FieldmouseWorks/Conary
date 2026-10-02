@@ -16,7 +16,7 @@ const PRE_CONFIG_ORDER: &[&str] = &[
 ];
 const POST_CONFIG_ORDER: &[&str] = &[
     "JOIN provides AS p",
-    "FROM installed_native_lifecycle_bundles",
+    "LEFT JOIN installed_native_lifecycle_bundles AS b ON b.trove_id=t.id",
     "FROM activation_requests",
 ];
 const LANES: &[(&str, &str, &str, &str, &str, &str)] = &[
@@ -60,7 +60,7 @@ fn native_corpus_tnpm15_requires_exact_installed_trove_identity() {
     }
     for (index, (step, signature)) in test.step[6..9].iter().zip(POST_CONFIG_ORDER).enumerate() {
         let command = step.run.as_deref().expect("ordered TNPM15 command");
-        let expected_prefix = if index == 0 {
+        let expected_prefix = if index < 2 {
             "sqlite3 -json ${DB_PATH} \""
         } else {
             "sqlite3 ${DB_PATH} \""

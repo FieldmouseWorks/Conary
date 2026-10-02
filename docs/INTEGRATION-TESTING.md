@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-10-02
-revision: 98
+revision: 99
 summary: Define the Podman container integration harness, its prerequisites, running suites, fixtures, and result/proof contracts
 ---
 
@@ -784,11 +784,25 @@ provenance role; the declaration also requires the native format and an
 integer record index type. Whole-array equality rejects a second version
 `1.0` declaration with a different record index. The query does not count
 other same-name versions, including a possible RPM header self-provide.
+This existing step-7 same-name provide proof remains unchanged.
+Its step-8 lifecycle assertion uses one trove-scoped `sqlite3 -json` query
+with a `LEFT JOIN` to require exactly one JSON row for the persisted native
+lifecycle bundle. Whole-array equality pins the trove name and version,
+architecture, and source profile, plus the bundle's source format, source
+family, source profile, source architecture, package, version,
+`native-lifecycle` scriptlet fidelity, and `installed` state. The expected
+bundle format/family/profile/architecture tuples are `rpm/rpm/fedora-44/x86_64`
+on Fedora, `deb/deb/ubuntu-26.04/amd64` on Ubuntu, and
+`arch/arch/arch/x86_64` on Arch. Bundle package and version must match the trove
+name and version. Its `same_changeset` projection must equal JSON integer `1`,
+proving equality between the bundle's `installed_changeset_id` and the trove's
+`installed_by_changeset_id`. This assertion covers the row's scalar metadata
+and lineage only; it does not parse or verify `bundle_toml` or its digest.
 Its final persisted-state check requires the latest named
 `phase4-corpus-trigger` changeset result to be one exact JSON row with
 `completed` status and integer `matched_files` value `1`. The query selects
 only that trigger's latest result; it does not assert that earlier results are
-absent. Other `TNPM15` steps check files, dependencies, and lifecycle facts.
+absent. The other `TNPM15` persisted-state checks cover files and dependencies.
 
 `TNPM17` refuses a native package whose file content conflicts with the
 installed corpus package. The rejection helper checks the unchanged database
