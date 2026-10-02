@@ -523,18 +523,50 @@ exit_code = 0
 stdout_contains_all = ["phase4-daily-driver-corpus ${native_corpus_fixture_version} provides:", "/usr/lib/kernel/install.d/95-phase4-corpus.install"]
 
 [[test.step]]
-conary = "query whatprovides phase4-daily-driver-corpus"
+conary = "query whatprovides phase4-daily-driver-corpus --json"
 
 [test.step.assert]
 exit_code = 0
-stdout_contains_all = ["Capability 'phase4-daily-driver-corpus' is provided by:", "phase4-daily-driver-corpus ${native_corpus_fixture_version}", "provides version: ${native_corpus_fixture_version}", "provides version: 1.0", "Total: 1 provider(s)"]
+stdout_json = [{ pointer = "", equals_json = '''{
+  "schema_version": 1,
+  "capability": "phase4-daily-driver-corpus",
+  "providers": [{
+    "source_kind": "installed",
+    "package": {
+      "name": "phase4-daily-driver-corpus",
+      "version": "${native_corpus_fixture_version}",
+      "release": "1",
+      "architecture": "${native_arch}",
+      "version_scheme": "${native_scheme}"
+    },
+    "repository": null,
+    "capability_versions": ["1.0", "${native_corpus_fixture_version}"]
+  }],
+  "provider_count": 1
+}''' }]
 
 [[test.step]]
-conary = "query whatprovides 'virtual(phase4-corpus-tool)'"
+conary = "query whatprovides 'virtual(phase4-corpus-tool)' --json"
 
 [test.step.assert]
 exit_code = 0
-stdout_contains_all = ["Capability 'virtual(phase4-corpus-tool)' is provided by:", "phase4-daily-driver-corpus ${native_corpus_fixture_version}"]
+stdout_json = [{ pointer = "", equals_json = '''{
+  "schema_version": 1,
+  "capability": "virtual(phase4-corpus-tool)",
+  "providers": [{
+    "source_kind": "installed",
+    "package": {
+      "name": "phase4-daily-driver-corpus",
+      "version": "${native_corpus_fixture_version}",
+      "release": "1",
+      "architecture": "${native_arch}",
+      "version_scheme": "${native_scheme}"
+    },
+    "repository": null,
+    "capability_versions": []
+  }],
+  "provider_count": 1
+}''' }]
 
 [[test.step]]
 run = "/opt/remi-tests/fixtures/native/write-corpus-evidence.py /tmp/native-pm-corpus/native-fixture-manifest.json /tmp/conary-corpus-daily-driver-install.json ${native_profile} ${native_corpus_source_format} phase4-daily-driver-corpus ${native_corpus_fixture_version} ${native_arch} resolution installation --dependency-fixture-manifest /tmp/native-pm-corpus-repo/pinned-binary-fixture-manifest.json --dependency-name phase4-repository-fixture --dependency-version 1.0.0-1 --dependency-architecture ${native_arch}"
