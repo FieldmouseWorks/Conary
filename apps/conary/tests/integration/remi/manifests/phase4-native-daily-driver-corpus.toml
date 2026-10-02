@@ -203,6 +203,7 @@ native_corpus_capability_format = "rpm"
 native_corpus_target_architecture = "x86_64"
 native_corpus_payload_user = "numeric:0"
 native_corpus_payload_group = "numeric:0"
+native_corpus_regular_hardlink_path = "/usr/lib/phase4-corpus/hardlink-copy"
 
 [distro_overrides."ubuntu-26.04"]
 native_target = "deb"
@@ -224,6 +225,7 @@ native_corpus_capability_format = "debian"
 native_corpus_target_architecture = "x86_64"
 native_corpus_payload_user = "numeric:0"
 native_corpus_payload_group = "numeric:0"
+native_corpus_regular_hardlink_path = "/usr/lib/phase4-corpus/hardlink-anchor"
 
 [distro_overrides.arch]
 native_target = "arch"
@@ -245,6 +247,7 @@ native_corpus_capability_format = "alpm"
 native_corpus_target_architecture = "x86_64"
 native_corpus_payload_user = "numeric:0"
 native_corpus_payload_group = "numeric:0"
+native_corpus_regular_hardlink_path = "/usr/lib/phase4-corpus/hardlink-anchor"
 
 # --------------------------------------------------------------------------
 # TNPM13: daily-driver corpus build
@@ -354,11 +357,11 @@ exit_code = 0
 stdout_json = [{ pointer = "", equals_json = '''[{"name":"phase4-daily-driver-corpus","version":"${native_corpus_fixture_version}","architecture":"${native_arch}","version_scheme":"${native_scheme}","source_profile":"${native_profile}","install_source":"file","install_reason":"explicit"}]''' }]
 
 [[test.step]]
-run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' regular files' FROM files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus') AND json_extract(payload_node_json, '$.source.kind.type') = 'regular'; SELECT path || '|' || coalesce(content_size, '-') || '|' || json_extract(payload_node_json, '$.source.kind.type') FROM files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus') AND json_extract(payload_node_json, '$.source.kind.type') = 'regular' ORDER BY path\""
+run = "sqlite3 -json ${DB_PATH} \"SELECT path, json_extract(payload_node_json, '$.source.kind.type') AS kind, content_size, content_sha256 FROM files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus') AND json_extract(payload_node_json, '$.source.kind.type') = 'regular' ORDER BY path\""
 
 [test.step.assert]
 exit_code = 0
-stdout_contains_all = ["9 regular files", "/etc/phase4-corpus/app.conf", "/etc/phase4-corpus/app-deleted.conf", "/etc/phase4-corpus/app-local.conf", "/usr/bin/phase4-corpus-alt", "/usr/lib/kernel/install.d/95-phase4-corpus.install", "/usr/lib/systemd/system/phase4-corpus.service", "/usr/share/phase4-corpus/large-payload.bin|2097152|regular"]
+stdout_json = [{ pointer = "", equals_json = '''[{"path":"/etc/phase4-corpus/app-deleted.conf","kind":"regular","content_size":22,"content_sha256":"d9697bd8e59efc7dc9863c9ae9b0c3745262015b3552a20712a9bcbfc3e47f79"},{"path":"/etc/phase4-corpus/app-local.conf","kind":"regular","content_size":20,"content_sha256":"9773fc86d4e388ba3f5eba7408708b46ce20738acf98fc55a4e5f584bbe8af66"},{"path":"/etc/phase4-corpus/app.conf","kind":"regular","content_size":48,"content_sha256":"8b3ca388884ac9c33e5e1c849ac30bc59aa9d494e7afc5d91fb56c8a4e760eb2"},{"path":"/usr/bin/phase4-corpus","kind":"regular","content_size":48,"content_sha256":"565d3f61ffdbbca53c7371588ce6884b680dfa1d1c1bd7fe3954b4ab957e0676"},{"path":"/usr/bin/phase4-corpus-alt","kind":"regular","content_size":52,"content_sha256":"1c279f8af2faaed5ae4aad470ab37742b2cede45b42b65d961f2bb33233e5ad3"},{"path":"/usr/lib/kernel/install.d/95-phase4-corpus.install","kind":"regular","content_size":96,"content_sha256":"8753356f470ea82416c2d7a71cbf8367d4cbe1a8b78f3276fe45035e114c3674"},{"path":"${native_corpus_regular_hardlink_path}","kind":"regular","content_size":31,"content_sha256":"7c1e048a51efb4f45a2910924eac0cd847852cae01e252c0c1a9759d9d07480d"},{"path":"/usr/lib/systemd/system/phase4-corpus.service","kind":"regular","content_size":137,"content_sha256":"20200a86933288373c109a2e3289b2314ff6015886bfbad9bec6e613421e756a"},{"path":"/usr/share/phase4-corpus/large-payload.bin","kind":"regular","content_size":2097152,"content_sha256":"5647f05ec18958947d32874eeb788fa396a05d0bab7c1b71f112ceb7e9b31eee"}]''' }]
 
 [[test.step]]
 run = "sqlite3 -json ${DB_PATH} \"SELECT path, json_extract(payload_node_json, '$.source.kind.type') AS kind, CASE WHEN json_extract(payload_node_json, '$.source.kind.type') = 'directory' THEN json_extract(payload_node_json, '$.source.mode') END AS directory_mode, CASE WHEN json_extract(payload_node_json, '$.source.kind.type') = 'symlink' THEN json_extract(payload_node_json, '$.source.kind.target') END AS symlink_target FROM files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus') AND path IN ('/opt', '/usr/bin/phase4-corpus-link', '/usr/lib/phase4-corpus/state') ORDER BY path\""

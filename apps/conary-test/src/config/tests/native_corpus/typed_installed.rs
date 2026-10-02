@@ -8,7 +8,6 @@ use rusqlite::{Connection, params};
 use serde_json::{Value, json};
 
 const QUERY: &str = "SELECT name, version, COALESCE(architecture, '') AS architecture, COALESCE(version_scheme, '') AS version_scheme, COALESCE(source_profile, '') AS source_profile, COALESCE(install_source, '') AS install_source, COALESCE(install_reason, '') AS install_reason FROM troves WHERE name = 'phase4-daily-driver-corpus' ORDER BY id";
-const ADJACENT_RUN: &str = r#"sqlite3 ${DB_PATH} "SELECT COUNT(*) || ' regular files' FROM files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus') AND json_extract(payload_node_json, '$.source.kind.type') = 'regular'; SELECT path || '|' || coalesce(content_size, '-') || '|' || json_extract(payload_node_json, '$.source.kind.type') FROM files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus') AND json_extract(payload_node_json, '$.source.kind.type') = 'regular' ORDER BY path""#;
 const PRE_CONFIG_ORDER: &[&str] = &[
     "path IN ('/opt', '/usr/bin/phase4-corpus-link', '/usr/lib/phase4-corpus/state')",
     "COUNT(CASE WHEN kind = 'hardlink' THEN 1 END) AS hardlink_count",
@@ -44,7 +43,13 @@ fn native_corpus_tnpm15_requires_exact_installed_trove_identity() {
         .find(|test| test.id == "TNPM15")
         .expect("TNPM15");
     assert_eq!(test.step.len(), 10, "TNPM15 must retain its ten-step order");
-    assert_eq!(test.step[1].run.as_deref(), Some(ADJACENT_RUN));
+    assert!(
+        test.step[1]
+            .run
+            .as_deref()
+            .is_some_and(|command| command.starts_with("sqlite3 -json ${DB_PATH} \"SELECT path,")),
+        "regular-file rows must precede directory and symlink rows"
+    );
     for (index, (step, signature)) in test.step[2..5].iter().zip(PRE_CONFIG_ORDER).enumerate() {
         let command = step.run.as_deref().expect("ordered TNPM15 command");
         let expected_prefix = "sqlite3 -json ${DB_PATH} \"";
