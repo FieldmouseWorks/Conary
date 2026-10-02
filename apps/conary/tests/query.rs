@@ -98,23 +98,39 @@ fn expected_whatprovides(capability: &str, providers: Vec<Value>) -> Value {
     })
 }
 
+struct InstalledPackageFixture<'a> {
+    name: &'a str,
+    version: &'a str,
+    release: Option<&'a str>,
+    architecture: Option<&'a str>,
+    version_scheme: VersionScheme,
+}
+
+fn installed_package_fixture<'a>(
+    name: &'a str,
+    version: &'a str,
+    release: Option<&'a str>,
+    architecture: Option<&'a str>,
+    version_scheme: VersionScheme,
+) -> InstalledPackageFixture<'a> {
+    InstalledPackageFixture {
+        name,
+        version,
+        release,
+        architecture,
+        version_scheme,
+    }
+}
+
 fn insert_installed_soname_provider(
     conn: &rusqlite::Connection,
-    name: &str,
-    package_version: &str,
-    release: Option<&str>,
-    architecture: Option<&str>,
-    version_scheme: VersionScheme,
+    package: InstalledPackageFixture<'_>,
     capability: &str,
     capability_versions: &[(Option<&str>, ProvideArchitectureQualifier)],
 ) {
     insert_installed_typed_provider(
         conn,
-        name,
-        package_version,
-        release,
-        architecture,
-        version_scheme,
+        package,
         RepositoryCapabilityKind::Soname,
         capability,
         capability_versions,
@@ -123,23 +139,19 @@ fn insert_installed_soname_provider(
 
 fn insert_installed_typed_provider(
     conn: &rusqlite::Connection,
-    name: &str,
-    package_version: &str,
-    release: Option<&str>,
-    architecture: Option<&str>,
-    version_scheme: VersionScheme,
+    package: InstalledPackageFixture<'_>,
     kind: RepositoryCapabilityKind,
     capability: &str,
     capability_versions: &[(Option<&str>, ProvideArchitectureQualifier)],
 ) {
     let mut trove = Trove::new(
-        name.to_string(),
-        package_version.to_string(),
+        package.name.to_string(),
+        package.version.to_string(),
         TroveType::Package,
-        version_scheme,
+        package.version_scheme,
     );
-    trove.package_release = release.map(str::to_string);
-    trove.architecture = architecture.map(str::to_string);
+    trove.package_release = package.release.map(str::to_string);
+    trove.architecture = package.architecture.map(str::to_string);
     let trove_id = trove.insert(conn).unwrap();
 
     for (version, architecture_qualifier) in capability_versions {
@@ -148,7 +160,7 @@ fn insert_installed_typed_provider(
             kind,
             capability.to_string(),
             version.map(str::to_string),
-            version_scheme,
+            package.version_scheme,
             architecture_qualifier.clone(),
         );
         provide.insert(conn).unwrap();
@@ -911,11 +923,13 @@ fn whatprovides_json_reports_empty_and_installed_provider_objects() {
     let conn = db::open(&db_path).unwrap();
     insert_installed_soname_provider(
         &conn,
-        "zeta-installed",
-        "2.0.0",
-        Some("7"),
-        None,
-        VersionScheme::Conary,
+        installed_package_fixture(
+            "zeta-installed",
+            "2.0.0",
+            Some("7"),
+            None,
+            VersionScheme::Conary,
+        ),
         "libfixture.so.1",
         &[
             (Some("2.0.0"), ProvideArchitectureQualifier::Implicit),
@@ -928,11 +942,13 @@ fn whatprovides_json_reports_empty_and_installed_provider_objects() {
     );
     insert_installed_soname_provider(
         &conn,
-        "alpha-installed",
-        "1.0.0",
-        None,
-        Some("x86_64"),
-        VersionScheme::Conary,
+        installed_package_fixture(
+            "alpha-installed",
+            "1.0.0",
+            None,
+            Some("x86_64"),
+            VersionScheme::Conary,
+        ),
         "libfixture.so.1",
         &[(None, ProvideArchitectureQualifier::Implicit)],
     );
@@ -1051,11 +1067,13 @@ fn whatprovides_json_orders_installed_before_repository_providers() {
     let (_tmp, db_path, conn) = common::create_test_db();
     insert_installed_soname_provider(
         &conn,
-        "zeta-installed",
-        "3.0.0",
-        None,
-        Some("x86_64"),
-        VersionScheme::Conary,
+        installed_package_fixture(
+            "zeta-installed",
+            "3.0.0",
+            None,
+            Some("x86_64"),
+            VersionScheme::Conary,
+        ),
         "libmixed.so.1",
         &[(Some("3.0.0"), ProvideArchitectureQualifier::Implicit)],
     );
@@ -1126,31 +1144,37 @@ fn whatprovides_json_preserves_wrong_architecture_and_excludes_prefix_matches() 
     let capability = "soname(libfixture.so.1)";
     insert_installed_soname_provider(
         &conn,
-        "x86_64-provider",
-        "1.0.0",
-        None,
-        Some("x86_64"),
-        VersionScheme::Conary,
+        installed_package_fixture(
+            "x86_64-provider",
+            "1.0.0",
+            None,
+            Some("x86_64"),
+            VersionScheme::Conary,
+        ),
         "libfixture.so.1",
         &[(None, ProvideArchitectureQualifier::Implicit)],
     );
     insert_installed_soname_provider(
         &conn,
-        "aarch64-provider",
-        "1.0.0",
-        None,
-        Some("aarch64"),
-        VersionScheme::Conary,
+        installed_package_fixture(
+            "aarch64-provider",
+            "1.0.0",
+            None,
+            Some("aarch64"),
+            VersionScheme::Conary,
+        ),
         "libfixture.so.1",
         &[(None, ProvideArchitectureQualifier::Implicit)],
     );
     insert_installed_soname_provider(
         &conn,
-        "prefix-only-provider",
-        "1.0.0",
-        None,
-        Some("x86_64"),
-        VersionScheme::Conary,
+        installed_package_fixture(
+            "prefix-only-provider",
+            "1.0.0",
+            None,
+            Some("x86_64"),
+            VersionScheme::Conary,
+        ),
         "libfixture.so.10",
         &[(None, ProvideArchitectureQualifier::Implicit)],
     );
@@ -1226,11 +1250,13 @@ fn whatprovides_json_rejects_selected_provider_without_joined_package_metadata()
     let capability = "soname(liborphan.so.1)";
     insert_installed_soname_provider(
         &conn,
-        "valid-provider",
-        "1.0.0",
-        None,
-        Some("x86_64"),
-        VersionScheme::Conary,
+        installed_package_fixture(
+            "valid-provider",
+            "1.0.0",
+            None,
+            Some("x86_64"),
+            VersionScheme::Conary,
+        ),
         "liborphan.so.1",
         &[(None, ProvideArchitectureQualifier::Implicit)],
     );
@@ -1381,21 +1407,25 @@ fn whatprovides_json_rejects_empty_or_whitespace_installed_package_names() {
         let (_tmp, db_path, conn) = common::create_test_db();
         insert_installed_soname_provider(
             &conn,
-            "a-valid-provider",
-            "1.0.0",
-            None,
-            Some("x86_64"),
-            VersionScheme::Conary,
+            installed_package_fixture(
+                "a-valid-provider",
+                "1.0.0",
+                None,
+                Some("x86_64"),
+                VersionScheme::Conary,
+            ),
             "libidentity.so.1",
             &[(None, ProvideArchitectureQualifier::Implicit)],
         );
         insert_installed_soname_provider(
             &conn,
-            invalid_name,
-            "1.0.0",
-            None,
-            Some("x86_64"),
-            VersionScheme::Conary,
+            installed_package_fixture(
+                invalid_name,
+                "1.0.0",
+                None,
+                Some("x86_64"),
+                VersionScheme::Conary,
+            ),
             "libidentity.so.1",
             &[(None, ProvideArchitectureQualifier::Implicit)],
         );
