@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-10-02
-revision: 88
+revision: 89
 summary: Define the Podman container integration harness, its prerequisites, running suites, fixtures, and result/proof contracts
 ---
 
@@ -743,6 +743,15 @@ version scheme, the converted CCS release `1`, and the expected capability
 versions and provider count.
 The query result does not establish install source or provide provenance;
 `TNPM15` checks those facts against native metadata and persisted state.
+
+`TNPM17` refuses a native package whose file content conflicts with the
+installed corpus package. The rejection helper checks the unchanged database
+authority digest, selected-generation link and count, and activation request
+and intent counts; a separate selected-generation check pins the original file
+hashes. One `sqlite3 -json` statement requires the complete persisted count
+result `[{"installed":1,"conflicts":0}]`: `installed` counts the original and
+conflicting package names, while `conflicts` counts only the conflicting name.
+The counts must be JSON integers in exactly one row with no extra fields.
 
 `TNPM16`, `TNPM18`, and `TNPM19` make the chain visible to the typed W7 aggregator. The
 install record reopens both builders' schema-versioned output manifests,

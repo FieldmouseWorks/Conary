@@ -10,6 +10,7 @@ mod performance;
 mod rejection;
 mod typed_autoremove;
 mod typed_capability;
+mod typed_conflict;
 mod typed_deferred;
 mod typed_pin_remove;
 mod typed_relations;
