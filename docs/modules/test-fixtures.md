@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-10-02
-revision: 63
+revision: 64
 summary: Map fixture ownership, including typed native persisted-SQL proof, native refusals, repository discovery, command captures, typed boot-tool interfaces, and the refreshed Tumbleweed lifecycle snapshot
 ---
 
@@ -512,7 +512,11 @@ Each fixture family should record:
   requires exact trove-scoped persisted directory and symlink rows: the
   symlink target is compared in full and the directory modes remain JSON
   integers. TNPM13 stages those native fixture inputs; TNPM14 verifies their
-  installed nodes in the selected generation. The update record
+  installed nodes in the selected generation. TNPM15 also pins the named
+  repository fixture to one exact persisted hard `depends` atom and matching
+  alternative, including native source text, and checks the trove's total
+  requirement-group count (Fedora four; Ubuntu and Arch one). The count makes
+  no semantic claim about Fedora's other three groups. The update record
   binds the installed v1 request and an independently built and extracted v2
   native request, converts that exact v2 artifact through Conary's native
   parser, and acquires the resulting signed CCS from a bounded loopback
