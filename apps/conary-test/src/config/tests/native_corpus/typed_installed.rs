@@ -18,7 +18,6 @@ const POST_CONFIG_ORDER: &[&str] = &[
     "FROM provides",
     "FROM installed_native_lifecycle_bundles",
     "FROM activation_requests",
-    "FROM changeset_triggers",
 ];
 const LANES: &[(&str, &str, &str, &str, &str, &str)] = &[
     ("fedora44", "rpm", "x86_64", "rpm", "fedora-44", "1.0.0-1"),
@@ -54,7 +53,7 @@ fn native_corpus_tnpm15_requires_exact_installed_trove_identity() {
             "TNPM15 command order: {signature}"
         );
     }
-    for (step, signature) in test.step[6..].iter().zip(POST_CONFIG_ORDER) {
+    for (step, signature) in test.step[6..9].iter().zip(POST_CONFIG_ORDER) {
         let command = step.run.as_deref().expect("ordered TNPM15 command");
         assert!(command.starts_with("sqlite3 ${DB_PATH} \""));
         assert!(

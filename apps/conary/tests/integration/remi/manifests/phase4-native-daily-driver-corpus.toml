@@ -401,11 +401,11 @@ exit_code = 0
 stdout_contains_all = ["captured-systemctl|phase4-daily-driver-corpus|systemd|start|phase4-corpus.service", "captured-boot-runtime|phase4-daily-driver-corpus|boot-runtime|depmod|-a", "pending|2"]
 
 [[test.step]]
-run = "sqlite3 ${DB_PATH} \"SELECT t.name || '|' || ct.status || '|' || ct.matched_files FROM changeset_triggers ct JOIN triggers t ON t.id = ct.trigger_id WHERE t.name = 'phase4-corpus-trigger' ORDER BY ct.id DESC LIMIT 1\""
+run = "sqlite3 -json ${DB_PATH} \"SELECT t.name AS name, ct.status AS status, ct.matched_files AS matched_files FROM changeset_triggers ct JOIN triggers t ON t.id = ct.trigger_id WHERE t.name = 'phase4-corpus-trigger' ORDER BY ct.id DESC LIMIT 1\""
 
 [test.step.assert]
 exit_code = 0
-stdout_contains = "phase4-corpus-trigger|completed|1"
+stdout_json = [{ pointer = "", equals_json = '''[{"name":"phase4-corpus-trigger","status":"completed","matched_files":1}]''' }]
 
 # --------------------------------------------------------------------------
 # TNPM16: daily-driver corpus query surface
