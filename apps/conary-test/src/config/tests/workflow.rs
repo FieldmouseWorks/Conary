@@ -130,7 +130,7 @@ fn assert_scope_aware_matrix_gate(step: &WorkflowStep, script: &str) {
 #[derive(Debug, Deserialize)]
 struct WorkspaceTestJob {
     #[serde(default)]
-    needs: Option<String>,
+    needs: Option<JobNeeds>,
     #[serde(rename = "if", default)]
     condition: Option<String>,
     steps: Vec<WorkflowStep>,
@@ -139,7 +139,7 @@ struct WorkspaceTestJob {
 #[derive(Debug, Deserialize)]
 struct WorkspaceTestShardJob {
     name: String,
-    needs: String,
+    needs: JobNeeds,
     #[serde(rename = "if")]
     condition: String,
     strategy: WorkspaceTestShardStrategy,
@@ -240,7 +240,7 @@ fn line_cap_installs_rust_before_running_its_checkers() {
                 .contains("line-cap.sh")
     }));
     let job: WorkspaceTestJob = parse_job(&workflow, "line-cap");
-    assert_eq!(job.needs.as_deref(), Some("gnu-compiler-cache"));
+    assert_eq!(job.needs.as_ref().unwrap().ids(), ["gnu-compiler-cache"]);
     let setup = job
         .steps
         .iter()
@@ -332,8 +332,12 @@ fn action_step<'a>(steps: &'a [WorkflowStep], action: &str) -> &'a WorkflowStep 
     matches[0]
 }
 
-fn assert_protected_compiler_cache_reader(job: &WorkspaceTestJob, phase: &str) {
-    assert_eq!(job.needs.as_deref(), Some("gnu-compiler-cache"));
+fn assert_protected_compiler_cache_reader(
+    job: &WorkspaceTestJob,
+    phase: &str,
+    expected_needs: &[&str],
+) {
+    assert_eq!(job.needs.as_ref().unwrap().ids(), expected_needs);
     assert_eq!(job.condition.as_deref(), Some("${{ always() }}"));
 
     let require = named_step(&job.steps, "Require exact compiler-cache seed");
@@ -928,7 +932,10 @@ fn workspace_gate_provisions_the_exact_namespace_test_boundary() {
     let job: WorkspaceTestShardJob = parse_job(&workflow, "workspace-test-shards");
 
     assert_eq!(job.name, "workspace-test (${{ matrix.shard }})");
-    assert_eq!(job.needs, "gnu-compiler-cache");
+    assert_eq!(
+        job.needs.ids(),
+        ["gnu-compiler-cache", "ci-base-image-policy"]
+    );
     assert_eq!(job.condition, "${{ always() }}");
     assert!(!job.strategy.fail_fast);
     assert_eq!(
@@ -967,11 +974,31 @@ fn workspace_gate_provisions_the_exact_namespace_test_boundary() {
         .iter()
         .position(|step| step.name.as_deref() == Some("Enable exact ownership-test namespaces"))
         .expect("namespace setup step should exist");
+    let policy = named_step(&job.steps, "Require CI base image policy");
+    assert_eq!(
+        policy.env.get("IMAGE_POLICY_RESULT").map(String::as_str),
+        Some("${{ needs.ci-base-image-policy.result }}")
+    );
+    assert_eq!(
+        policy.run.as_deref(),
+        Some("test \"$IMAGE_POLICY_RESULT\" = success")
+    );
+    assert_eq!(policy.condition, None);
+    assert!(!policy.continue_on_error);
+    let policy_index = job
+        .steps
+        .iter()
+        .position(|step| step.name.as_deref() == Some("Require CI base image policy"))
+        .expect("policy preflight step should exist");
     let tests_index = job
         .steps
         .iter()
         .position(|step| step.name.as_deref() == Some("Run workspace test shard"))
         .expect("workspace test step should exist");
+    assert!(
+        policy_index < namespace_index,
+        "policy preflight must precede workspace tests"
+    );
     assert!(
         namespace_index < tests_index,
         "namespace setup must run before workspace tests"
@@ -1026,10 +1053,14 @@ fn compatible_protected_jobs_share_compiler_outputs_with_typed_evidence() {
         ("doctests", "pr-doctests"),
     ] {
         let job: WorkspaceTestJob = parse_job(&pr, job_id);
-        assert_protected_compiler_cache_reader(&job, phase);
+        assert_protected_compiler_cache_reader(&job, phase, &["gnu-compiler-cache"]);
     }
     let pr_shards: WorkspaceTestJob = parse_job(&pr, "workspace-test-shards");
-    assert_protected_compiler_cache_reader(&pr_shards, "pr-workspace-${{ matrix.shard }}");
+    assert_protected_compiler_cache_reader(
+        &pr_shards,
+        "pr-workspace-${{ matrix.shard }}",
+        &["gnu-compiler-cache", "ci-base-image-policy"],
+    );
 
     let main = load_workflow_from(merge_validation_workflow_path());
     assert_compiler_cache_primer(&main, "main-gnu-cache-primer");
@@ -1041,10 +1072,14 @@ fn compatible_protected_jobs_share_compiler_outputs_with_typed_evidence() {
         ("local-smoke", "main-local-smoke"),
     ] {
         let job: WorkspaceTestJob = parse_job(&main, job_id);
-        assert_protected_compiler_cache_reader(&job, phase);
+        assert_protected_compiler_cache_reader(&job, phase, &["gnu-compiler-cache"]);
     }
     let main_shards: WorkspaceTestJob = parse_job(&main, "workspace-test-shards");
-    assert_protected_compiler_cache_reader(&main_shards, "main-workspace-${{ matrix.shard }}");
+    assert_protected_compiler_cache_reader(
+        &main_shards,
+        "main-workspace-${{ matrix.shard }}",
+        &["gnu-compiler-cache"],
+    );
 }
 
 #[test]
