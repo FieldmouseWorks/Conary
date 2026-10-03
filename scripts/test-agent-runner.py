@@ -317,9 +317,15 @@ class EnvelopeControls(unittest.TestCase):
         def fake_run(argv, **_kwargs):
             invocations.append(argv)
             if "graphql" in argv:
-                body = {"data": {"repository": {"pullRequest": {"reviewThreads": {
-                    "nodes": [], "pageInfo": {"hasNextPage": False}
-                }}}}}
+                if any("potentialMergeCommit" in arg for arg in argv):
+                    body = {"data": {"repository": {"nameWithOwner": "FieldmouseWorks/Conary",
+                                                    "pullRequest": {"number": 1,
+                                                                    "potentialMergeCommit": {
+                                                                        "oid": "f" * 40}}}}}
+                else:
+                    body = {"data": {"repository": {"pullRequest": {"reviewThreads": {
+                        "nodes": [], "pageInfo": {"hasNextPage": False}
+                    }}}}}
                 return SimpleNamespace(returncode=0, stdout=json.dumps(body).encode())
             if "user" in argv:
                 return SimpleNamespace(returncode=0, stdout=b"runner-test\n")
@@ -331,9 +337,57 @@ class EnvelopeControls(unittest.TestCase):
             self.assertEqual(gh.authenticated_actor(), "runner-test")
             self.assertEqual(gh.request("GET", "issues/1070"), {})
             self.assertEqual(gh.review_threads(1), [])
-        self.assertEqual(len(invocations), 3)
+            self.assertEqual(gh.potential_merge_sha(1), "f" * 40)
+        self.assertEqual(len(invocations), 4)
         for argv in invocations:
             self.assertEqual(argv[argv.index("--hostname") + 1], "github.com")
+
+    def test_graphql_test_merge_oid_requires_exact_pr_identity_and_valid_sha(self):
+        def response(repository="FieldmouseWorks/Conary", number=99, oid="f" * 40):
+            return {"data": {"repository": {"nameWithOwner": repository,
+                                            "pullRequest": {"number": number,
+                                                            "potentialMergeCommit":
+                                                                None if oid is None else {"oid": oid}}}}}
+
+        cases = [
+            response(oid=None),
+            response(oid="not-a-sha"),
+            response(repository="other/Conary"),
+            response(number=100),
+            {"errors": [{"message": "merge calculation failed"}], **response()},
+            {"data": {"repository": None}},
+        ]
+        for body in cases:
+            with self.subTest(body=body):
+                raw = json.dumps(body).encode()
+                with patch.object(RUNNER.subprocess, "run", return_value=SimpleNamespace(
+                        returncode=0, stdout=raw)) as run:
+                    with self.assertRaises(RUNNER.RunnerError) as caught:
+                        RUNNER.GitHub("FieldmouseWorks/Conary").potential_merge_sha(99)
+                self.assertEqual(caught.exception.code, "remote_unknown")
+                argv = run.call_args.args[0]
+                self.assertEqual(argv[:4], ["gh", "api", "graphql", "--hostname"])
+                self.assertEqual(argv[4], "github.com")
+                self.assertNotIn("--method", argv)
+
+        duplicate = b'{"data":{"repository":{"nameWithOwner":"FieldmouseWorks/Conary",' \
+                    b'"pullRequest":{"number":99,"potentialMergeCommit":{"oid":"' \
+                    + b'f' * 40 + b'","oid":"' + b'e' * 40 + b'"}}}}}'
+        with patch.object(RUNNER.subprocess, "run", return_value=SimpleNamespace(
+                returncode=0, stdout=duplicate)):
+            with self.assertRaises(RUNNER.RunnerError) as caught:
+                RUNNER.GitHub("FieldmouseWorks/Conary").potential_merge_sha(99)
+        self.assertEqual(caught.exception.code, "remote_unknown")
+
+    def test_commit_lookup_binds_response_to_graphql_oid(self):
+        gh = RUNNER.GitHub("FieldmouseWorks/Conary")
+        commit = {"sha": "e" * 40, "tree": {"sha": TREE},
+                  "parents": [{"sha": BASE}, {"sha": HEAD}]}
+        with patch.object(gh, "request", return_value=commit) as request:
+            with self.assertRaises(RUNNER.RunnerError) as caught:
+                gh.commit_data("f" * 40)
+        self.assertEqual(caught.exception.code, "remote_unknown")
+        request.assert_called_once_with("GET", "git/commits/" + "f" * 40)
 
     def test_private_inputs_and_journal_cannot_overlap_child_mount(self):
         base = complete_spec()
@@ -718,7 +772,8 @@ class RecoveryControls(unittest.TestCase):
 
 
 class ControllerFlowControls(unittest.TestCase):
-    def _exercise_flow(self, review_modes=(), drift_on_invalid=None):
+    def _exercise_flow(self, review_modes=(), drift_on_invalid=None,
+                       exercise_merge_cases=False):
         sandbox = RUNNER._load_sandbox()
 
         class FakeSandbox:
@@ -811,6 +866,10 @@ class ControllerFlowControls(unittest.TestCase):
                 self.branch = None
                 self.pull = None
                 self.merge_tree = None
+                self.merge_parents = None
+                self.merge_sha = "f" * 40
+                self.potential_merge = self.merge_sha
+                self.read_only = False
                 self.created = 0
                 self.required = required
 
@@ -834,15 +893,21 @@ class ControllerFlowControls(unittest.TestCase):
                 return deepcopy(self.pull)
 
             def create_branch(self, _branch, base):
+                if self.read_only:
+                    raise AssertionError("promotion-check attempted a remote write")
                 self.created += 1
                 self.branch = base
 
             def comment(self, _number, body):
+                if self.read_only:
+                    raise AssertionError("promotion-check attempted a remote write")
                 self.comments.append({"id": 42 + len(self.comments),
                                       "user": {"login": "runner-test"}, "body": body})
                 return self.comments[-1]["id"]
 
             def draft_pr(self, task_value, body):
+                if self.read_only:
+                    raise AssertionError("promotion-check attempted a remote write")
                 self.pull = {"number": 99, "state": "open", "draft": True,
                              "user": {"login": "runner-test"}, "body": body,
                              "head": {"sha": self.branch, "ref": task_value["branch"]},
@@ -859,8 +924,13 @@ class ControllerFlowControls(unittest.TestCase):
                     raise AssertionError("wrong test PR")
 
             def commit_data(self, _sha):
+                if _sha != self.merge_sha:
+                    raise RUNNER.RunnerError("remote_unknown", "foreign test-merge commit")
                 return {"tree_sha": self.merge_tree,
-                        "parents": [self.base, self.branch]}
+                        "parents": self.merge_parents or [self.base, self.branch]}
+
+            def potential_merge_sha(self, _number):
+                return self.potential_merge
 
             def review_threads(self, _number):
                 return []
@@ -954,6 +1024,7 @@ class ControllerFlowControls(unittest.TestCase):
             self.assertEqual(gh.created, 1)
             gh.merge_tree = subprocess.check_output(
                 ["git", "-C", str(worktree), "rev-parse", "HEAD^{tree}"], text=True).strip()
+            gh.read_only = True
             draft_gate = LocalPush(value, github=gh, source_root=source,
                                    sandbox=child).promotion_check(99)
             self.assertEqual(draft_gate["status"], "blocked")
@@ -963,6 +1034,49 @@ class ControllerFlowControls(unittest.TestCase):
             ready_gate = LocalPush(value, github=gh, source_root=source,
                                    sandbox=child).promotion_check(99)
             self.assertEqual(ready_gate["status"], "ready")
+            if exercise_merge_cases:
+                controller = LocalPush(value, github=gh, source_root=source, sandbox=child)
+                before_journal = RUNNER.read_journal(value)
+                before_comments = deepcopy(gh.comments)
+                before_branch = gh.branch
+
+                del gh.pull["merge_commit_sha"]
+                self.assertEqual(controller.promotion_check(99)["status"], "ready")
+                gh.pull["merge_commit_sha"] = gh.merge_sha
+
+                for bad_oid in (None, "malformed", "e" * 40):
+                    gh.potential_merge = bad_oid
+                    with self.subTest(oid=bad_oid), self.assertRaises(RUNNER.RunnerError) as caught:
+                        controller.promotion_check(99)
+                    self.assertEqual(caught.exception.code, "remote_unknown")
+                gh.potential_merge = gh.merge_sha
+
+                gh.pull["merge_commit_sha"] = "e" * 40
+                with self.assertRaises(RUNNER.RunnerError) as caught:
+                    controller.promotion_check(99)
+                self.assertEqual(caught.exception.code, "remote_unknown")
+                gh.pull["merge_commit_sha"] = None
+                with self.assertRaises(RUNNER.RunnerError) as caught:
+                    controller.promotion_check(99)
+                self.assertEqual(caught.exception.code, "remote_unknown")
+                gh.pull["merge_commit_sha"] = gh.merge_sha
+
+                gh.merge_tree = "e" * 40
+                wrong_tree = controller.promotion_check(99)
+                self.assertEqual(wrong_tree["status"], "blocked")
+                self.assertIn("PR test-merge tree differs from reviewed candidate",
+                              wrong_tree["reasons"])
+                gh.merge_tree = before_journal["candidate"]["tree_sha"]
+                gh.merge_parents = [gh.branch, gh.base]
+                wrong_parents = controller.promotion_check(99)
+                self.assertEqual(wrong_parents["status"], "blocked")
+                self.assertIn("PR test-merge parents differ from reviewed base and head",
+                              wrong_parents["reasons"])
+                gh.merge_parents = None
+
+                self.assertEqual(RUNNER.read_journal(value), before_journal)
+                self.assertEqual(gh.comments, before_comments)
+                self.assertEqual(gh.branch, before_branch)
             return {"error": None, "journal": RUNNER.read_journal(value),
                     "launches": child.launches, "review_inputs": child.review_inputs,
                     "trace_paths": child.trace_paths, "result_paths": child.result_paths,
@@ -974,6 +1088,9 @@ class ControllerFlowControls(unittest.TestCase):
         self.assertIsNone(result["error"])
         self.assertEqual(result["launches"], ["worker", "reviewer"])
         self.assertEqual(result["proof_calls"], 1)
+
+    def test_promotion_test_merge_sources_and_read_only_boundary(self):
+        self.assertIsNone(self._exercise_flow(exercise_merge_cases=True)["error"])
 
     def test_invalid_reviewer_result_retries_only_review_on_same_candidate_and_proof(self):
         result = self._exercise_flow(review_modes=("invalid", "valid"))
