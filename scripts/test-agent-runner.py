@@ -1,0 +1,1014 @@
+# scripts/test-agent-runner.py
+"""Independent controls for the bounded workflow runner."""
+
+import importlib.util
+import hashlib
+import json
+import shutil
+import subprocess
+import sys
+import tempfile
+import unittest
+from copy import deepcopy
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
+
+
+SCRIPT = Path(__file__).with_name("agent-runner.py")
+SPEC = importlib.util.spec_from_file_location("agent_runner", SCRIPT)
+RUNNER = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = RUNNER
+SPEC.loader.exec_module(RUNNER)
+
+BASE = "a" * 40
+HEAD = "b" * 40
+TREE = "c" * 40
+
+
+def journal_times(started=None):
+    started = started or datetime.now(timezone.utc)
+    return {
+        "started_at": started.isoformat().replace("+00:00", "Z"),
+        "deadline_at": (started + timedelta(seconds=3600)).isoformat().replace("+00:00", "Z"),
+    }
+
+
+def task():
+    return {
+        "id": "TNPM18-repository-row",
+        "graph_comment_id": 42,
+        "graph_author": "runner-test",
+        "base_sha": BASE,
+        "branch": "agent/1070-typed-update-repository-row",
+        "prompt_sha256": "d" * 64,
+        "allowed_paths": [
+            "apps/conary/tests/integration/remi/manifests/phase4-native-daily-driver-corpus.toml"
+        ],
+        "checks": [
+            {"id": "focused", "argv": ["cargo", "test", "-p", "conary-test"], "timeout_seconds": 900}
+        ],
+    }
+
+
+def spec():
+    return {
+        "schema_version": 1,
+        "repository": "FieldmouseWorks/Conary",
+        "issue_number": 1070,
+        "controller_actor": "runner-test",
+        "queue": [task()],
+        "required_checks": [
+            {"context": context, "app_id": 15368}
+            for context in ("fmt", "clippy", "workspace-tests", "docs-truth", "frontends")
+        ],
+        "models": {
+            "allowlist": ["gpt-6-sol", "gpt-6-luna"],
+            "worker": {"id": "gpt-6-sol", "reasoning_effort": "max"},
+            "reviewer": {"id": "gpt-6-sol", "reasoning_effort": "max"},
+        },
+    }
+
+
+def complete_spec():
+    value = spec()
+    value.update(
+        {
+            "run_id": "pilot-1070-1",
+            "authorization": {
+                "source": "Owner's 2026-10-03 bounded unattended workflow request",
+                "expires_at": "2099-01-01T00:00:00Z",
+                "remote_writes": ["create_branch", "update_branch", "comment_issue",
+                                  "create_draft_pr"],
+                "merge": False,
+            },
+            "exclusions": [1093],
+            "models": {
+                "allowlist": ["gpt-6-sol", "gpt-6-luna"],
+                "worker": {"id": "gpt-6-sol", "reasoning_effort": "max"},
+                "reviewer": {"id": "gpt-6-sol", "reasoning_effort": "max"},
+            },
+            "limits": {"wall_seconds": 3600, "causal_repairs": 2},
+            "worktree_root": "/tmp/conary-runner-pilot/worktrees",
+            "journal_dir": "/tmp/conary-runner-pilot/journal",
+        }
+    )
+    value["queue"] = [
+        {
+            **task(),
+            "prompt_file": "/tmp/conary-runner-pilot/prompt.txt",
+            "commit_subject": "test(integration): pin update repository row",
+        }
+    ]
+    return value
+
+
+def graph_comment(state="ready", base=BASE, acceptance=None, task_id="TNPM18-repository-row"):
+    if acceptance is None:
+        acceptance = RUNNER.acceptance_sha256(task())
+    marker = {
+        "id": task_id,
+        "state": state,
+        "base_sha": base,
+        "acceptance_sha256": acceptance,
+        "next_action": "implement",
+    }
+    return {
+        "id": 42,
+        "user": {"login": "runner-test"},
+        "body": "<!-- conary-agent-node:v1 " + json.dumps(marker, separators=(",", ":")) + " -->",
+    }
+
+
+def checkpoint_comment(phase="candidate", head=HEAD, tree=TREE):
+    return {
+        "id": 43,
+        "user": {"login": "runner-test"},
+        "body": RUNNER.run_marker("pilot-1070-1", task(), phase, head, tree,
+                                  next_action="observe hosted checks"),
+    }
+
+
+def promotion_inputs():
+    current = spec()
+    checks = [
+        {
+            "id": index,
+            "name": check["context"],
+            "head_sha": HEAD,
+            "status": "completed",
+            "conclusion": "success",
+            "app": {"id": check["app_id"]},
+        }
+        for index, check in enumerate(current["required_checks"], start=1)
+    ]
+    rules = [
+        {
+            "type": "required_status_checks",
+            "parameters": {
+                "required_status_checks": [
+                    {"context": check["context"], "integration_id": check["app_id"]}
+                    for check in current["required_checks"]
+                ]
+            },
+        },
+        {"type": "pull_request", "parameters": {"required_review_thread_resolution": True}},
+    ]
+    pr = {
+        "number": 1184,
+        "state": "open",
+        "draft": False,
+        "head": {"sha": HEAD},
+        "base": {"sha": BASE, "ref": "main"},
+        "mergeable": True,
+        "mergeable_state": "clean",
+        "test_merge_tree_sha": TREE,
+        "test_merge_parents": [BASE, HEAD],
+    }
+    candidate = {
+        "base_sha": BASE,
+        "head_sha": HEAD,
+        "tree_sha": TREE,
+        "check_ids": [check["id"] for check in checks],
+        "worker": {"session_id": "worker-1"},
+        "review": {
+            "approved": True,
+            "head_sha": HEAD,
+            "tree_sha": TREE,
+            "model_id": "gpt-6-sol",
+            "reasoning_effort": "max",
+            "session_id": "review-1",
+            "trace_sha256": "d" * 64,
+            "result_sha256": "e" * 64,
+        },
+    }
+    return current, pr, BASE, rules, checks, [{"isResolved": True}], candidate
+
+
+class SelectionControls(unittest.TestCase):
+    def test_matching_ready_node_is_selected(self):
+        self.assertEqual(RUNNER.select_task(spec(), [graph_comment()]), task())
+
+    def test_no_ready_node_does_not_dispatch(self):
+        self.assertIsNone(RUNNER.select_task(spec(), [graph_comment(state="verified")]))
+
+    def test_stale_base_and_changed_acceptance_stop(self):
+        for comment in (
+            graph_comment(base="e" * 40),
+            graph_comment(acceptance="f" * 64),
+        ):
+            with self.subTest(comment=comment):
+                with self.assertRaises(RUNNER.RunnerError):
+                    RUNNER.select_task(spec(), [comment])
+
+    def test_duplicate_ready_markers_stop(self):
+        comments = [graph_comment(), {**graph_comment(), "id": 43}]
+        with self.assertRaises(RUNNER.RunnerError):
+            RUNNER.select_task(spec(), comments)
+
+    def test_untrusted_graph_author_stops_dispatch(self):
+        comment = graph_comment()
+        comment["user"]["login"] = "random-commenter"
+        with self.assertRaises(RUNNER.RunnerError):
+            RUNNER.select_task(spec(), [comment])
+
+    def test_working_node_on_approval_hold_does_not_resume(self):
+        held = graph_comment(state="working")
+        held["body"] = held["body"].replace('"next_action":"implement"',
+                                            '"next_action":"await_approval"')
+        self.assertIsNone(RUNNER.select_task(complete_spec(),
+                                            [held, checkpoint_comment("claimed", None, None)]))
+
+    def test_observed_task_can_be_verified_but_cannot_override_a_hold(self):
+        value = complete_spec()
+        observed = checkpoint_comment("observed")
+        selected = RUNNER.select_task(value, [graph_comment(state="verified"), observed],
+                                      observed_task_id=task()["id"])
+        self.assertEqual(selected, value["queue"][0])
+        for state, next_action in (("working", "await_approval"),
+                                   ("working", "stop"),
+                                   ("blocked", "await_approval")):
+            held = graph_comment(state=state)
+            held["body"] = held["body"].replace('"next_action":"implement"',
+                                                f'"next_action":"{next_action}"')
+            with self.subTest(state=state, next_action=next_action):
+                with self.assertRaises(RUNNER.RunnerError) as caught:
+                    RUNNER.select_task(value, [held, observed],
+                                       observed_task_id=task()["id"])
+                self.assertEqual(caught.exception.code, "blocked_task")
+
+
+class EnvelopeControls(unittest.TestCase):
+    def test_explicit_bounded_envelope_is_valid(self):
+        self.assertEqual(RUNNER.validate_spec(complete_spec())["schema_version"], 1)
+
+    def test_expired_or_merge_grant_cannot_dispatch(self):
+        for change in (
+            lambda value: value["authorization"].update(expires_at="2000-01-01T00:00:00Z"),
+            lambda value: value["authorization"].update(merge=True),
+        ):
+            value = deepcopy(complete_spec())
+            change(value)
+            with self.subTest(value=value["authorization"]):
+                with self.assertRaises(RUNNER.RunnerError):
+                    RUNNER.validate_spec(value)
+
+    def test_missing_model_effort_or_bounded_time_cannot_dispatch(self):
+        for change in (
+            lambda value: value["models"]["worker"].pop("reasoning_effort"),
+            lambda value: value["limits"].update(wall_seconds=0),
+        ):
+            value = deepcopy(complete_spec())
+            change(value)
+            with self.assertRaises(RUNNER.RunnerError):
+                RUNNER.validate_spec(value)
+
+    def test_path_escape_cannot_be_authorized(self):
+        value = complete_spec()
+        value["queue"][0]["allowed_paths"] = ["../outside-repository"]
+        with self.assertRaises(RUNNER.RunnerError):
+            RUNNER.validate_spec(value)
+
+    def test_private_spec_loader_rejects_group_readable_and_symlink(self):
+        with tempfile.TemporaryDirectory(prefix="runner-spec-control-") as root:
+            path = Path(root) / "run.json"
+            path.write_text(json.dumps(complete_spec()), encoding="utf-8")
+            path.chmod(0o600)
+            self.assertEqual(RUNNER.load_spec(path)["schema_version"], 1)
+            path.chmod(0o640)
+            with self.assertRaises(RUNNER.RunnerError):
+                RUNNER.load_spec(path)
+            path.chmod(0o600)
+            link = Path(root) / "link.json"
+            link.symlink_to(path)
+            with self.assertRaises(RUNNER.RunnerError):
+                RUNNER.load_spec(link)
+
+    def test_private_spec_rejects_duplicate_authority_keys(self):
+        with tempfile.TemporaryDirectory(prefix="runner-duplicate-spec-") as root:
+            path = Path(root) / "run.json"
+            valid = json.dumps(complete_spec())
+            for duplicate in (
+                valid.replace('"repository": "FieldmouseWorks/Conary",',
+                              '"repository": "FieldmouseWorks/Conary", '
+                              '"repository": "other/Conary",', 1),
+                valid.replace('"merge": false', '"merge": false, "merge": true', 1),
+            ):
+                with self.subTest(duplicate=duplicate[:100]):
+                    path.write_text(duplicate, encoding="utf-8")
+                    path.chmod(0o600)
+                    with self.assertRaises(RUNNER.RunnerError) as caught:
+                        RUNNER.load_spec(path)
+                    self.assertEqual(caught.exception.code, "invalid_spec")
+
+    def test_gh_api_pins_public_host_despite_ambient_gh_host(self):
+        invocations = []
+
+        def fake_run(argv, **_kwargs):
+            invocations.append(argv)
+            if "graphql" in argv:
+                body = {"data": {"repository": {"pullRequest": {"reviewThreads": {
+                    "nodes": [], "pageInfo": {"hasNextPage": False}
+                }}}}}
+                return SimpleNamespace(returncode=0, stdout=json.dumps(body).encode())
+            if "user" in argv:
+                return SimpleNamespace(returncode=0, stdout=b"runner-test\n")
+            return SimpleNamespace(returncode=0, stdout=b"HTTP/2 200 OK\n\n{}")
+
+        with patch.dict(RUNNER.os.environ, {"GH_HOST": "enterprise.invalid"}), \
+                patch.object(RUNNER.subprocess, "run", side_effect=fake_run):
+            gh = RUNNER.GitHub("FieldmouseWorks/Conary")
+            self.assertEqual(gh.authenticated_actor(), "runner-test")
+            self.assertEqual(gh.request("GET", "issues/1070"), {})
+            self.assertEqual(gh.review_threads(1), [])
+        self.assertEqual(len(invocations), 3)
+        for argv in invocations:
+            self.assertEqual(argv[argv.index("--hostname") + 1], "github.com")
+
+    def test_private_inputs_and_journal_cannot_overlap_child_mount(self):
+        base = complete_spec()
+        root = base["worktree_root"]
+        for change in (
+            lambda value: value.update(journal_dir=f"{root}/journal"),
+            lambda value: value.update(journal_dir="/tmp/conary-runner-pilot"),
+            lambda value: value.update(auth_file=f"{root}/auth.json"),
+            lambda value: value["queue"][0].update(prompt_file=f"{root}/prompt.txt"),
+        ):
+            value = deepcopy(base)
+            change(value)
+            with self.subTest(value=value):
+                with self.assertRaises(RUNNER.RunnerError):
+                    RUNNER.validate_spec(value)
+
+    def test_private_spec_file_cannot_be_loaded_from_child_mount(self):
+        with tempfile.TemporaryDirectory(prefix="runner-spec-location-") as root:
+            value = complete_spec()
+            value["worktree_root"] = str(Path(root) / "worktrees")
+            value["journal_dir"] = str(Path(root) / "journal")
+            mount = Path(value["worktree_root"])
+            mount.mkdir()
+            private_spec = mount / "run.json"
+            private_spec.write_text(json.dumps(value), encoding="utf-8")
+            private_spec.chmod(0o600)
+            with self.assertRaises(RUNNER.RunnerError):
+                RUNNER.load_spec(private_spec)
+
+
+class RecoveryControls(unittest.TestCase):
+    def test_closed_or_unindexed_issue_cannot_dispatch(self):
+        class FakeGitHub:
+            def __init__(self, state, body):
+                self.state = state
+                self.body = body
+                self.comments_read = 0
+
+            def issue(self, _number):
+                return {"number": 1070, "state": self.state, "body": self.body}
+
+            def issue_comments(self, _number):
+                self.comments_read += 1
+                return [graph_comment()]
+
+        indexed = "<!-- conary-agent-graph-source:v1 comment=42 -->"
+        for state, body in (("closed", indexed), ("open", "No graph index")):
+            with self.subTest(state=state, body=body):
+                github = FakeGitHub(state, body)
+                with self.assertRaises(RUNNER.RunnerError) as caught:
+                    RUNNER.Controller(complete_spec(), github=github)._remote_state()
+                self.assertEqual(caught.exception.code, "ambiguous_graph")
+                self.assertEqual(github.comments_read, 0)
+
+    def test_invalid_utf8_prompt_stops_in_preflight_without_remote_write(self):
+        class FakeGitHub:
+            def __init__(self, node):
+                self.node = node
+                self.writes = 0
+
+            def issue(self, _number):
+                return {"number": 1070, "state": "open", "body":
+                        "<!-- conary-agent-graph-source:v1 comment=42 -->"}
+
+            def issue_comments(self, _number):
+                return [self.node]
+
+            def main_sha(self):
+                return BASE
+
+            def branch_sha(self, _branch):
+                return None
+
+            def pulls_for_branch(self, _branch):
+                return None
+
+            def create_branch(self, _branch, _sha):
+                self.writes += 1
+
+            def comment(self, _number, _body):
+                self.writes += 1
+
+        with tempfile.TemporaryDirectory(prefix="runner-prompt-utf8-") as root:
+            value = complete_spec()
+            prompt = Path(root) / "prompt.txt"
+            prompt.write_bytes(b"task: \xff\n")
+            prompt.chmod(0o600)
+            value["queue"][0]["prompt_file"] = str(prompt)
+            value["queue"][0]["prompt_sha256"] = hashlib.sha256(prompt.read_bytes()).hexdigest()
+            github = FakeGitHub(graph_comment(
+                acceptance=RUNNER.acceptance_sha256(value["queue"][0])))
+            with self.assertRaises(RUNNER.RunnerError) as caught:
+                RUNNER.Controller(value, github=github).dry_run()
+            self.assertEqual(caught.exception.code, "invalid_spec")
+            self.assertEqual(github.writes, 0)
+
+    def test_malformed_model_auth_stops_before_remote_reads_or_writes(self):
+        class NoGitHubUse:
+            def __getattr__(self, name):
+                raise AssertionError(f"GitHub {name} called before auth preflight")
+
+        with tempfile.TemporaryDirectory(prefix="runner-auth-preflight-") as root:
+            value = complete_spec()
+            auth = Path(root) / "auth.json"
+            value["auth_file"] = str(auth)
+            for payload in (
+                "{malformed",
+                '{"access_token":"fake-first-secret-0123456789",'
+                '"access_token":"fake-second-secret-0123456789"}',
+            ):
+                with self.subTest(payload=payload[:12]):
+                    auth.write_text(payload, encoding="utf-8")
+                    auth.chmod(0o600)
+                    controller = RUNNER.Controller(value, github=NoGitHubUse(),
+                                                   sandbox=object())
+                    with self.assertRaises(RUNNER.RunnerError) as caught:
+                        controller._run_inner()
+                    self.assertEqual(caught.exception.code, "missing_input")
+
+    def test_unknown_hosted_state_stops_instead_of_polling_wall_budget(self):
+        class FakeGitHub:
+            def __init__(self, unknown_kind):
+                self.unknown_kind = unknown_kind
+
+            def required_rules(self):
+                return promotion_inputs()[3]
+
+            def workflow_runs(self, sha):
+                return [{"workflow_id": 1, "id": 9, "run_number": 1,
+                         "run_attempt": 1, "head_sha": sha,
+                         "status": "mystery" if self.unknown_kind == "workflow" else "completed",
+                         "conclusion": "success"}]
+
+            def check_runs(self, sha):
+                checks = deepcopy(promotion_inputs()[4])
+                for check in checks:
+                    check["head_sha"] = sha
+                if self.unknown_kind == "check":
+                    checks[0]["status"] = "mystery"
+                return checks
+
+        with tempfile.TemporaryDirectory(prefix="runner-unknown-hosted-") as root:
+            value = complete_spec()
+            value["journal_dir"] = str(Path(root) / "journal")
+            for kind in ("workflow", "check"):
+                with self.subTest(kind=kind), \
+                        patch.object(RUNNER.time, "sleep",
+                                     side_effect=AssertionError("unknown state polled")):
+                    controller = RUNNER.Controller(value, github=FakeGitHub(kind))
+                    with self.assertRaises(RUNNER.RunnerError) as caught:
+                        controller._observe(task(), {"candidate": {"head_sha": HEAD},
+                                             "phase": "draft"})
+                    self.assertIn(caught.exception.code, {"remote_unknown", "unknown_outcome"})
+
+    def test_duplicate_wake_cannot_take_the_same_local_lock(self):
+        with tempfile.TemporaryDirectory(prefix="runner-lock-control-") as root:
+            journal_dir = Path(root) / "journal"
+            with RUNNER.run_lock(journal_dir):
+                with self.assertRaises(RUNNER.RunnerError) as caught:
+                    with RUNNER.run_lock(journal_dir):
+                        pass
+            self.assertEqual(caught.exception.code, "busy")
+
+    def test_checkpoint_without_journal_stops_instead_of_replaying_a_write(self):
+        comments = [graph_comment(), checkpoint_comment()]
+        with self.assertRaises(RUNNER.RunnerError) as caught:
+            RUNNER._validate_remote_checkpoint(complete_spec(), task(), comments, None)
+        self.assertEqual(caught.exception.code, "ambiguous_graph")
+
+    def test_drifted_candidate_checkpoint_stops_recovery(self):
+        journal = {"task_id": task()["id"], "phase": "candidate",
+                   "candidate": {"head_sha": HEAD, "tree_sha": TREE}}
+        comments = [graph_comment(), checkpoint_comment(head="e" * 40)]
+        with self.assertRaises(RUNNER.RunnerError) as caught:
+            RUNNER._validate_remote_checkpoint(complete_spec(), task(), comments, journal)
+        self.assertEqual(caught.exception.code, "ambiguous_graph")
+
+    def test_remote_observed_checkpoint_cannot_replay_older_candidate_phase(self):
+        journal = {"task_id": task()["id"], "phase": "candidate",
+                   "candidate": {"head_sha": HEAD, "tree_sha": TREE}}
+        comments = [graph_comment(), checkpoint_comment(phase="observed")]
+        with self.assertRaises(RUNNER.RunnerError) as caught:
+            RUNNER._validate_remote_checkpoint(complete_spec(), task(), comments, journal)
+        self.assertEqual(caught.exception.code, "ambiguous_graph")
+
+    def test_local_journal_is_bound_to_the_exact_run_envelope(self):
+        with tempfile.TemporaryDirectory(prefix="runner-journal-control-") as root:
+            value = complete_spec()
+            value["journal_dir"] = str(Path(root) / "journal")
+            RUNNER.write_journal(value, {"task_id": task()["id"], "phase": "branch_intent",
+                                         **journal_times()})
+            self.assertEqual(RUNNER.read_journal(value)["phase"], "branch_intent")
+            changed = deepcopy(value)
+            changed["queue"][0]["base_sha"] = "e" * 40
+            with self.assertRaises(RUNNER.RunnerError) as caught:
+                RUNNER.read_journal(changed)
+            self.assertEqual(caught.exception.code, "local_unknown")
+
+    def test_persisted_wall_deadline_still_stops_after_restart(self):
+        with tempfile.TemporaryDirectory(prefix="runner-deadline-control-") as root:
+            value = complete_spec()
+            value["journal_dir"] = str(Path(root) / "journal")
+            started = datetime.now(timezone.utc) - timedelta(seconds=7200)
+            RUNNER.write_journal(value, {"task_id": task()["id"], "phase": "claimed",
+                                         **journal_times(started)})
+            controller = RUNNER.Controller(value)
+            with self.assertRaises(RUNNER.RunnerError) as caught:
+                controller._remaining()
+            self.assertEqual(caught.exception.code, "wall_budget")
+
+    def test_crash_after_claim_does_not_create_a_second_branch_or_checkpoint(self):
+        class FakeGitHub:
+            def __init__(self, first_comment):
+                self.comments = [first_comment]
+                self.branch = None
+                self.branch_creations = 0
+                self.checkpoints = 0
+
+            def issue(self, _number):
+                return {"number": 1070, "state": "open", "body":
+                        "<!-- conary-agent-graph-source:v1 comment=42 -->"}
+
+            def authenticated_actor(self):
+                return "runner-test"
+
+            def issue_comments(self, _number):
+                return deepcopy(self.comments)
+
+            def main_sha(self):
+                return BASE
+
+            def branch_sha(self, _branch):
+                return self.branch
+
+            def pulls_for_branch(self, _branch):
+                return None
+
+            def create_branch(self, _branch, base_sha):
+                self.branch_creations += 1
+                self.branch = base_sha
+
+            def comment(self, _number, body):
+                self.checkpoints += 1
+                self.comments.append({"id": 42 + self.checkpoints,
+                                      "user": {"login": "runner-test"}, "body": body})
+                return 42 + self.checkpoints
+
+        class StopAfterClaim(RUNNER.Controller):
+            def _worktree(self, _task, _journal):
+                raise RUNNER.RunnerError("test_stop", "simulated crash after claim")
+
+        with tempfile.TemporaryDirectory(prefix="runner-claim-control-") as root:
+            value = complete_spec()
+            prompt = Path(root) / "prompt.txt"
+            prompt.write_text("A bounded test task.\n", encoding="utf-8")
+            prompt.chmod(0o600)
+            auth = Path(root) / "auth.json"
+            auth.write_text(
+                json.dumps({"tokens": {"access_token": "fake-crash-auth-value-0123456789"}}),
+                encoding="utf-8")
+            auth.chmod(0o600)
+            value["auth_file"] = str(auth)
+            value["journal_dir"] = str(Path(root) / "journal")
+            value["queue"][0]["prompt_file"] = str(prompt)
+            value["queue"][0]["prompt_sha256"] = hashlib.sha256(prompt.read_bytes()).hexdigest()
+            first_comment = graph_comment(
+                acceptance=RUNNER.acceptance_sha256(value["queue"][0]))
+            github = FakeGitHub(first_comment)
+            for _ in range(2):
+                with self.assertRaises(RUNNER.RunnerError) as caught:
+                    StopAfterClaim(value, github=github).run()
+                self.assertEqual(caught.exception.code, "test_stop")
+            self.assertEqual(github.branch_creations, 1)
+            self.assertEqual(github.checkpoints, 1)
+            self.assertEqual(RUNNER.read_journal(value)["phase"], "claimed")
+
+    def test_controller_uses_the_isolated_proof_launcher(self):
+        class IsolatedProof:
+            def run_proof(self, **_kwargs):
+                raise RUNNER.RunnerError("isolated_proof_called", "proof stayed in sandbox")
+
+        with tempfile.TemporaryDirectory(prefix="runner-proof-control-") as root:
+            controller = RUNNER.Controller(complete_spec(), sandbox=IsolatedProof())
+            with self.assertRaises(RUNNER.RunnerError) as caught:
+                controller._proof(task(), Path(root), {"head_sha": HEAD}, 0)
+            self.assertEqual(caught.exception.code, "isolated_proof_called")
+
+    def test_foreign_pr_on_owned_branch_blocks_before_head_update(self):
+        class ForeignPRGitHub:
+            def authenticated_actor(self):
+                return "runner-test"
+
+            def issue(self, _number):
+                return {"number": 1070, "state": "open", "body":
+                        "<!-- conary-agent-graph-source:v1 comment=42 -->"}
+
+            def issue_comments(self, _number):
+                return [graph_comment(), checkpoint_comment("claimed", None, None)]
+
+            def main_sha(self):
+                return BASE
+
+            def branch_sha(self, _branch):
+                return BASE
+
+            def pulls_for_branch(self, branch):
+                return {"number": 99, "state": "open", "draft": True,
+                        "user": {"login": "foreign-user"}, "body": "Refs #1070",
+                        "head": {"sha": BASE, "ref": branch},
+                        "base": {"sha": BASE, "ref": "main"}}
+
+        value = complete_spec()
+        journal = {"task_id": task()["id"], "phase": "claimed"}
+        controller = RUNNER.Controller(value, github=ForeignPRGitHub())
+        with self.assertRaises(RUNNER.RunnerError) as caught:
+            controller._before_write(task(), "update_branch", BASE, journal)
+        self.assertEqual(caught.exception.code, "occupied_task")
+
+    def test_reconciliation_cannot_consume_wall_deadline_before_remote_write(self):
+        class SlowGitHub:
+            def authenticated_actor(self):
+                return "runner-test"
+
+            def issue(self, _number):
+                return {"number": 1070, "state": "open", "body":
+                        "<!-- conary-agent-graph-source:v1 comment=42 -->"}
+
+            def issue_comments(self, _number):
+                return [graph_comment(), checkpoint_comment("claimed", None, None)]
+
+            def main_sha(self):
+                return BASE
+
+            def branch_sha(self, _branch):
+                return BASE
+
+            def pulls_for_branch(self, _branch):
+                return None
+
+        with tempfile.TemporaryDirectory(prefix="runner-reconcile-clock-") as root:
+            value = complete_spec()
+            value["journal_dir"] = str(Path(root) / "journal")
+            value["limits"]["wall_seconds"] = 1
+            ticks = iter([100.0, 100.1])
+            with patch.object(RUNNER.time, "monotonic", side_effect=lambda: next(ticks, 101.1)):
+                controller = RUNNER.Controller(value, github=SlowGitHub())
+                with self.assertRaises(RUNNER.RunnerError) as caught:
+                    controller._before_write(task(), "update_branch", BASE,
+                                             {"task_id": task()["id"], "phase": "claimed"})
+            self.assertEqual(caught.exception.code, "wall_budget")
+
+    def test_candidate_cannot_commit_exact_model_auth_value(self):
+        with tempfile.TemporaryDirectory(prefix="runner-auth-leak-") as root:
+            root = Path(root)
+            source = root / "source"
+            source.mkdir()
+            subprocess.run(["git", "init", "-q", str(source)], check=True)
+            (source / "README").write_text("base\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(source), "add", "README"], check=True)
+            subprocess.run(["git", "-C", str(source), "-c", "user.name=runner-test",
+                            "-c", "user.email=runner-test@example.invalid",
+                            "commit", "-qm", "seed"], check=True)
+            base = subprocess.check_output(
+                ["git", "-C", str(source), "rev-parse", "HEAD"], text=True).strip()
+            worktree = root / "worker"
+            subprocess.run(["git", "-C", str(source), "worktree", "add", "-q", "--detach",
+                            str(worktree), base], check=True)
+            secret = "fake-model-auth-token-0123456789"
+            auth = root / "auth.json"
+            auth.write_text(json.dumps({"tokens": {"access_token": secret}}), encoding="utf-8")
+            auth.chmod(0o600)
+            (worktree / "README").write_text(f"candidate {secret}\n", encoding="utf-8")
+            value = complete_spec()
+            value["auth_file"] = str(auth)
+            owned_task = {**value["queue"][0], "allowed_paths": ["README"]}
+            with self.assertRaises(RUNNER.RunnerError) as caught:
+                RUNNER.Controller(value, source_root=source)._commit(owned_task, worktree)
+            self.assertEqual(caught.exception.code, "secret_in_candidate")
+            current = subprocess.check_output(
+                ["git", "-C", str(worktree), "rev-parse", "HEAD"], text=True).strip()
+            self.assertEqual(current, base)
+
+
+class ControllerFlowControls(unittest.TestCase):
+    def test_one_slice_reaches_draft_and_observed_checks_without_duplicate_dispatch(self):
+        sandbox = RUNNER._load_sandbox()
+
+        class FakeSandbox:
+            def __init__(self):
+                self.launches = []
+
+            def launch_codex(self, **kwargs):
+                worktree = kwargs["worktree"]
+                review = kwargs["read_only_worktree"]
+                role = "reviewer" if review else "worker"
+                self.launches.append(role)
+                if not review:
+                    (worktree / "README").write_text("candidate change\n", encoding="utf-8")
+                    (worktree / "target").mkdir()
+                    (worktree / "target" / "poison").write_text("ignored worker artifact\n",
+                                                                 encoding="utf-8")
+                else:
+                    receipts = list((worktree / "target" / "agent-proof").glob("*/receipt.json"))
+                    if len(receipts) != 1:
+                        raise AssertionError("reviewer cannot inspect focused proof receipt")
+                    proof_receipt = json.loads(receipts[0].read_text(encoding="utf-8"))
+                    if not (worktree / proof_receipt["stdout"]["path"]).is_file():
+                        raise AssertionError("reviewer cannot inspect focused proof log")
+                    if (worktree / "target" / "poison").exists():
+                        raise AssertionError("reviewer inherited worker ignored artifact")
+                head = subprocess.check_output(["git", "-C", str(worktree), "rev-parse", "HEAD"], text=True).strip()
+                tree = subprocess.check_output(["git", "-C", str(worktree), "rev-parse", "HEAD^{tree}"], text=True).strip()
+                session = f"{role}-session"
+                trace = kwargs["trace_path"]
+                trace.write_text("\n".join(json.dumps(row) for row in (
+                    {"kind": "launch", "model": kwargs["model"],
+                     "reasoning_effort": kwargs["reasoning_effort"],
+                     "read_only_worktree": review},
+                    {"kind": "codex_event", "type": "thread.started", "session_id": session},
+                    {"kind": "complete", "status": "ok", "session_id": session},
+                )) + "\n", encoding="utf-8")
+                kwargs["result_path"].write_text(json.dumps({
+                    "schema_version": 1, "run_id": "flow-test", "task_id": "FlowTask",
+                    "status": "ready", "branch": "agent/flow-test",
+                    "candidate_head": head if review else None,
+                    "candidate_tree": tree if review else None,
+                    "evidence": [], "reason": None,
+                }), encoding="utf-8")
+                return SimpleNamespace(ok=True, timed_out=False, session_id=session,
+                                       model=kwargs["model"],
+                                       reasoning_effort=kwargs["reasoning_effort"], error=None)
+
+            def run_proof(self, **kwargs):
+                return sandbox.run_proof(**kwargs)
+
+        class FakeGitHub:
+            def __init__(self, base, first_comment, required):
+                self.base = base
+                self.comments = [first_comment]
+                self.branch = None
+                self.pull = None
+                self.merge_tree = None
+                self.created = 0
+                self.required = required
+
+            def issue(self, _number):
+                return {"number": 1070, "state": "open", "body":
+                        "<!-- conary-agent-graph-source:v1 comment=42 -->"}
+
+            def authenticated_actor(self):
+                return "runner-test"
+
+            def issue_comments(self, _number):
+                return deepcopy(self.comments)
+
+            def main_sha(self):
+                return self.base
+
+            def branch_sha(self, _branch):
+                return self.branch
+
+            def pulls_for_branch(self, _branch):
+                return deepcopy(self.pull)
+
+            def create_branch(self, _branch, base):
+                self.created += 1
+                self.branch = base
+
+            def comment(self, _number, body):
+                self.comments.append({"id": 42 + len(self.comments),
+                                      "user": {"login": "runner-test"}, "body": body})
+                return self.comments[-1]["id"]
+
+            def draft_pr(self, task_value, body):
+                self.pull = {"number": 99, "state": "open", "draft": True,
+                             "user": {"login": "runner-test"}, "body": body,
+                             "head": {"sha": self.branch, "ref": task_value["branch"]},
+                             "base": {"sha": self.base, "ref": "main"},
+                             "mergeable": True, "merge_commit_sha": "f" * 40}
+                return deepcopy(self.pull)
+
+            def pr(self, number):
+                self.assert_pr_number(number)
+                return deepcopy(self.pull)
+
+            def assert_pr_number(self, number):
+                if number != 99:
+                    raise AssertionError("wrong test PR")
+
+            def commit_data(self, _sha):
+                return {"tree_sha": self.merge_tree,
+                        "parents": [self.base, self.branch]}
+
+            def review_threads(self, _number):
+                return []
+
+            def required_rules(self):
+                return promotion_inputs()[3]
+
+            def workflow_runs(self, sha):
+                return [{"workflow_id": 1, "id": 100, "run_number": 1,
+                         "run_attempt": 1, "head_sha": sha,
+                         "status": "completed", "conclusion": "success"}]
+
+            def check_runs(self, sha):
+                return [{"id": index, "name": item["context"], "head_sha": sha,
+                         "status": "completed", "conclusion": "success",
+                         "app": {"id": item["app_id"]}}
+                        for index, item in enumerate(self.required, 1)]
+
+        class LocalPush(RUNNER.Controller):
+            def _push_candidate(self, task_value, journal, _worktree):
+                if self.gh.branch == journal["candidate"]["head_sha"]:
+                    return
+                self._before_write(task_value, "update_branch", task_value["base_sha"], journal)
+                self.gh.branch = journal["candidate"]["head_sha"]
+
+        with tempfile.TemporaryDirectory(prefix="runner-flow-control-") as root:
+            root = Path(root)
+            source = root / "source"
+            source.mkdir()
+            subprocess.run(["git", "init", "-q", str(source)], check=True)
+            (source / "scripts").mkdir()
+            shutil.copy2(Path(__file__).with_name("agent-proof.py"), source / "scripts" / "agent-proof.py")
+            (source / ".gitignore").write_text("target/\n", encoding="utf-8")
+            (source / "README").write_text("base\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(source), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(source), "-c", "user.name=runner-test",
+                            "-c", "user.email=runner-test@example.invalid", "commit", "-qm", "seed"], check=True)
+            base = subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"], text=True).strip()
+            value = complete_spec()
+            value.update(run_id="flow-test", worktree_root=str(root / "worktrees"),
+                         journal_dir=str(root / "journal"), auth_file=str(root / "auth.json"))
+            value["queue"] = [{**task(), "id": "FlowTask", "base_sha": base,
+                               "branch": "agent/flow-test", "allowed_paths": ["README"],
+                               "commit_subject": "test: exercise bounded flow",
+                               "checks": [{"id": "focused", "argv": ["python3", "-c",
+                                           "from pathlib import Path; assert not Path('target/poison').exists()"],
+                                           "timeout_seconds": 30}],
+                               "prompt_file": str(root / "prompt.txt")}]
+            (root / "auth.json").write_text(
+                json.dumps({"tokens": {"access_token": "fake-flow-auth-value-0123456789"}}),
+                encoding="utf-8")
+            (root / "auth.json").chmod(0o600)
+            (root / "prompt.txt").write_text("Edit README.\n", encoding="utf-8")
+            (root / "prompt.txt").chmod(0o600)
+            value["queue"][0]["prompt_sha256"] = hashlib.sha256((root / "prompt.txt").read_bytes()).hexdigest()
+            (root / "worktrees").mkdir(mode=0o700)
+            worktree = root / "worktrees" / "flow-test"
+            subprocess.run(["git", "-C", str(source), "worktree", "add", "-q", "--detach",
+                            str(worktree), base], check=True)
+            node = graph_comment(base=base,
+                                 acceptance=RUNNER.acceptance_sha256(value["queue"][0]),
+                                 task_id="FlowTask")
+            gh = FakeGitHub(base, node, value["required_checks"])
+            child = FakeSandbox()
+            with RUNNER.run_lock(value["journal_dir"]):
+                result = LocalPush(value, github=gh, source_root=source, sandbox=child).run()
+            self.assertEqual(result["status"], "draft_checks_passed")
+            self.assertEqual(child.launches, ["worker", "reviewer"])
+            self.assertEqual(gh.created, 1)
+            self.assertEqual(gh.pull["draft"], True)
+            self.assertEqual(RUNNER.read_journal(value)["phase"], "observed")
+            with RUNNER.run_lock(value["journal_dir"]):
+                resumed = LocalPush(value, github=gh, source_root=source, sandbox=child).run()
+            self.assertEqual(resumed["status"], "already_observed")
+            self.assertEqual(child.launches, ["worker", "reviewer"])
+            self.assertEqual(gh.created, 1)
+            gh.merge_tree = subprocess.check_output(
+                ["git", "-C", str(worktree), "rev-parse", "HEAD^{tree}"], text=True).strip()
+            draft_gate = LocalPush(value, github=gh, source_root=source,
+                                   sandbox=child).promotion_check(99)
+            self.assertEqual(draft_gate["status"], "blocked")
+            gh.pull["draft"] = False
+            gh.comments[0]["body"] = gh.comments[0]["body"].replace(
+                '"state":"ready"', '"state":"verified"')
+            ready_gate = LocalPush(value, github=gh, source_root=source,
+                                   sandbox=child).promotion_check(99)
+            self.assertEqual(ready_gate["status"], "ready")
+
+
+class PromotionControls(unittest.TestCase):
+    def evaluate(self, inputs):
+        return RUNNER.evaluate_promotion(*inputs)
+
+    def test_exact_candidate_required_checks_and_resolved_threads_are_ready(self):
+        self.assertTrue(self.evaluate(promotion_inputs())["ready"])
+
+    def test_new_main_or_new_head_stops_promotion(self):
+        inputs = list(promotion_inputs())
+        inputs[2] = "e" * 40
+        self.assertFalse(self.evaluate(inputs)["ready"])
+        inputs = list(promotion_inputs())
+        inputs[1]["head"]["sha"] = "e" * 40
+        self.assertFalse(self.evaluate(inputs)["ready"])
+
+    def test_wrong_check_origin_or_unobserved_check_stops_promotion(self):
+        inputs = list(promotion_inputs())
+        inputs[4][0]["app"]["id"] = 7
+        self.assertFalse(self.evaluate(inputs)["ready"])
+        inputs = list(promotion_inputs())
+        inputs[6]["check_ids"].remove(inputs[4][0]["id"])
+        self.assertFalse(self.evaluate(inputs)["ready"])
+
+    def test_missing_review_or_wrong_test_merge_tree_stops_promotion(self):
+        inputs = list(promotion_inputs())
+        del inputs[6]["review"]
+        self.assertFalse(self.evaluate(inputs)["ready"])
+        inputs = list(promotion_inputs())
+        inputs[6]["review"]["model_id"] = "gpt-6-luna"
+        self.assertFalse(self.evaluate(inputs)["ready"])
+        inputs = list(promotion_inputs())
+        inputs[1]["test_merge_tree_sha"] = "e" * 40
+        self.assertFalse(self.evaluate(inputs)["ready"])
+        inputs = list(promotion_inputs())
+        inputs[1]["test_merge_parents"] = [HEAD, BASE]
+        self.assertFalse(self.evaluate(inputs)["ready"])
+        inputs = list(promotion_inputs())
+        inputs[6]["review"]["session_id"] = inputs[6]["worker"]["session_id"]
+        self.assertFalse(self.evaluate(inputs)["ready"])
+
+    def test_required_failure_and_unresolved_thread_stop_promotion(self):
+        inputs = list(promotion_inputs())
+        inputs[4][0]["conclusion"] = "failure"
+        self.assertFalse(self.evaluate(inputs)["ready"])
+        inputs = list(promotion_inputs())
+        inputs[4][0]["conclusion"] = "action_required"
+        self.assertFalse(self.evaluate(inputs)["ready"])
+        inputs = list(promotion_inputs())
+        inputs[5][0]["isResolved"] = False
+        self.assertFalse(self.evaluate(inputs)["ready"])
+
+    def test_unknown_rule_and_optional_failure_stop_promotion(self):
+        inputs = list(promotion_inputs())
+        inputs[3].append({"type": "mystery_rule", "parameters": {}})
+        with self.assertRaises(RUNNER.RunnerError):
+            self.evaluate(inputs)
+        inputs = list(promotion_inputs())
+        inputs[4].append(
+            {
+                "id": 99,
+                "name": "native-cross-source-lifecycle",
+                "head_sha": HEAD,
+                "status": "completed",
+                "conclusion": "failure",
+                "app": {"id": 15368},
+            }
+        )
+        self.assertFalse(self.evaluate(inputs)["ready"])
+
+    def test_optional_image_failure_requires_skipped_product_steps(self):
+        opensuse = {
+            "id": 91,
+            "name": "native-cross-source-lifecycle (opensuse-tumbleweed)",
+            "status": "completed",
+            "conclusion": "failure",
+            "steps": [
+                {"number": 5, "name": "Run ./.github/actions/cache-base-image",
+                 "conclusion": "failure"},
+                *({"number": number, "name": f"product step {number}",
+                   "conclusion": "skipped"} for number in range(6, 13)),
+            ],
+        }
+        aggregate = {
+            "id": 92,
+            "name": "native-cross-source-lifecycle",
+            "status": "completed",
+            "conclusion": "failure",
+            "steps": [{"number": 2, "name": "Require every distro lifecycle job",
+                       "conclusion": "failure"}],
+        }
+        jobs = [opensuse, aggregate]
+        self.assertEqual(
+            RUNNER.optional_pretest_image_failure(jobs)["product_steps_skipped"],
+            list(range(6, 13)),
+        )
+        product_ran = deepcopy(jobs)
+        product_ran[0]["steps"][2]["conclusion"] = "success"
+        self.assertIsNone(RUNNER.optional_pretest_image_failure(product_ran))
+        extra_failure = deepcopy(jobs)
+        extra_failure.append({"id": 93, "name": "other", "status": "completed",
+                              "conclusion": "failure", "steps": []})
+        self.assertIsNone(RUNNER.optional_pretest_image_failure(extra_failure))
+
+
+if __name__ == "__main__":
+    unittest.main()
