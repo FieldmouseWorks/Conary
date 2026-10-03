@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-10-03
-revision: 70
-summary: Map fixture ownership, including typed native persisted-SQL proof, TNPM14 repository-dependency identity and cardinality, regular-file rows, TNPM18 post-update trove/config cardinality, native refusals, repository discovery, command captures, typed boot-tool interfaces, activation intent evidence, and the refreshed Tumbleweed lifecycle snapshot
+revision: 71
+summary: Map fixture ownership, including typed native persisted-SQL proof, TNPM14 repository-dependency identity and cardinality, regular-file rows, TNPM18 repository metadata and post-update trove/config cardinality, native refusals, repository discovery, command captures, typed boot-tool interfaces, activation intent evidence, and the refreshed Tumbleweed lifecycle snapshot
 ---
 
 # Test Fixtures And Proof Maps
@@ -599,6 +599,18 @@ Each fixture family should record:
   declaration-only path, and the persisted `config_files` rows (original/current
   hash, status, source, `materialized`, ghost, and remove-on-upgrade flags)
   lane by lane; no distro gate or path heuristic decides a config outcome.
+
+  TNPM18 step 2 (index 1) reads the prepared update repository before
+  mutation. One `sqlite3 -json` root-array assertion requires exactly one
+  package/key row for `w7-native-update`, ordered by repository package ID
+  and public key. It pins `binary` default strategy, the lane's source profile,
+  package name,
+  version `1.0.1-1`, version scheme and architecture, integer `1` equality
+  between the persisted checksum and the prepared fixture's
+  `NATIVE_UPDATE_CCS_SHA256`, and `active` key status. A second package or key
+  in the same repository adds a row and fails, even if the expected row
+  remains. This is persisted metadata and cardinality proof, not independent
+  signature-byte verification.
 
   TNPM18 step 8 compares one complete `sqlite3 -json` array ordered by trove
   ID. It requires exactly one updated `phase4-daily-driver-corpus` trove at

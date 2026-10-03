@@ -30,8 +30,18 @@ mod typed_sql;
 mod typed_trigger;
 mod typed_update;
 mod typed_update_config;
+mod typed_update_repository;
 mod typed_whatprovides;
 mod version_rewrite;
+
+#[test]
+fn phase4_daily_driver_corpus_repository_step_has_typed_shape() {
+    let manifest = load_manifest(&remi_manifest_path(
+        "phase4-native-daily-driver-corpus.toml",
+    ))
+    .expect("load focused daily-driver manifest");
+    typed_update_repository::assert_tnpm18_repository_shape(&manifest);
+}
 
 #[test]
 fn phase4_native_pm_parity_manifest_carries_cross_source_contract() {
