@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-10-03
-revision: 103
-summary: Define the Podman container integration harness, its prerequisites, running suites, fixtures, and result/proof contracts, including TNPM14 persisted repository-dependency identity and cardinality, TNPM15 regular-file rows and activation intent authority, and TNPM18 post-update trove/config cardinality
+revision: 104
+summary: Define the Podman container integration harness, its prerequisites, running suites, fixtures, and result/proof contracts, including TNPM14 persisted repository-dependency identity and cardinality, TNPM15 regular-file rows and activation intent authority, and TNPM18 repository metadata plus post-update trove/config cardinality
 ---
 
 # Integration Testing
@@ -874,6 +874,19 @@ the target transaction; it does not infer a named identity from RPM's display
 metadata. The source format comes from the explicit distro build-context
 override and must resolve to the closed RPM/DEB/ALPM type before evidence can
 count.
+
+Before TNPM18 mutates the installed generation, step 2 (index 1) reads the
+prepared update repository through one `sqlite3 -json` query. Its root-array
+assertion requires exactly one joined package/key row for
+`w7-native-update`, ordered by repository package ID and public key. It pins
+the `binary` default strategy,
+the lane's source profile, `phase4-daily-driver-corpus` at version `1.0.1-1`,
+the lane's version scheme and architecture, an integer `1` comparison of the
+persisted package checksum with the prepared fixture's
+`NATIVE_UPDATE_CCS_SHA256`, and `active` key status. Another package or key
+in that repository adds a row and fails the whole-array comparison even when
+the expected row remains. This proves persisted metadata and row cardinality;
+it does not independently verify signature bytes.
 
 TNPM18 step 8 replaces its text match with one `sqlite3 -json` query and a
 whole-array comparison ordered by trove ID. The exact one-row result pins the
