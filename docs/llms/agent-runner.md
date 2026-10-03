@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-10-03
-revision: 2
-summary: Specify the validated one-slice agent runner, indexed graph comments, recovery journal, and read-only promotion check
+revision: 3
+summary: Specify the validated one-slice agent runner, indexed graph comments, bounded reviewer-result recovery, and read-only promotion check
 ---
 
 # Bounded Agent Runner
@@ -154,6 +154,28 @@ argv, candidate-before/after identity, and receipt/log hashes against that
 head and tree. Failed receipts and logs remain in the worktree for diagnosis;
 they block acceptance. A successful process launch alone is never acceptance.
 
+The reviewer prompt supplies the logical task branch explicitly because the
+proof worktree is detached. It requires exact run/task/branch/head/tree JSON
+fields and worktree-relative evidence paths. The sandbox records only a
+metadata class for rejected final artifacts (`missing`, `parse`, `shape`,
+`oversize`, `secret`, or `unreadable`); it discards the raw final response and
+rejects credential-bearing event types and session IDs before recording them
+in the trace.
+
+When a reviewer process exits successfully with a session ID and a known bad
+final artifact (`missing`, `parse`, or `shape`), the controller may
+launch one fresh reviewer session in the same invocation. It uses distinct
+trace and result paths, rechecks the frozen candidate plus receipt and log
+hashes, and spends only the remaining wall time. It does not rerun the worker
+or acceptance commands, consume a causal repair, or change the candidate.
+A second bad artifact blocks the run before push or PR creation. An oversized
+artifact is never retried because bytes beyond the read limit were not checked
+for credential values. A rejected secret or unreadable artifact, changed
+candidate or proof, timeout, missing session, or interrupted controller is a
+hard stop. There is no durable
+review-pending resume phase in version 1: an interrupted review leaves the
+journal at `worker_started` and requires manual reconciliation.
+
 Before committing, the controller scans changed working and staged file bytes
 for credential values extracted from the configured auth JSON and common
 credential patterns, including GitHub token forms, `sk-` tokens, and private
@@ -198,6 +220,7 @@ branch-creation outcomes cannot be checkpointed safely and remain hard stops.
 | Another invocation holds the local lock | Do not launch a second worker. Reconcile after the active invocation exits. |
 | Required command fails | Preserve its receipt and stop or use only the remaining causal repair budget on a changed candidate and inputs. Never repeat an unchanged failure. |
 | Review finding | Keep the PR unpromoted; repair within the recorded cap and request a fresh review, or stop when the cap is spent. |
+| Successful reviewer session with a known invalid final artifact | Recheck frozen candidate and proof, then retry the reviewer once with new evidence paths inside the current run budget. Exhaustion blocks before push or PR creation. |
 | Stale/unbound evidence, `action_required`, unknown check state, or uncertain remote write | Stop. Do not interpret unknown as success or retry the write blindly. |
 | Unknown or internally inconsistent hosted workflow/check state | Fail closed immediately; do not treat it as pending or keep polling. Valid queued or in-progress states may continue to be observed. |
 | `unknown_outcome` with a `blocked` checkpoint | Manual stop. Inspect and reconcile the trace, worktree, issue, and remote state; the task is not automatically resumed. |
@@ -218,7 +241,8 @@ obtains a fresh independent review. It does not repeat an unchanged failed
 proof. Failures outside that narrow local repair class stop. For known bounded
 stop codes (`child_blocked`, `model_unavailable`, `proof_failed`,
 `hosted_failure`, `optional_pretest_image_failure`, `wall_budget`,
-`out_of_scope`, `secret_in_candidate`, `action_required`, and
+`out_of_scope`, `secret_in_candidate`, `invalid_reviewer_result`,
+`action_required`, and
 `unknown_outcome`), the controller tries
 to append a `blocked` issue checkpoint when the journal identifies the task
 safely. It skips the checkpoint for ambiguous graph or remote-write state, or
@@ -247,10 +271,13 @@ runner does not create a GitHub approving review, mark the draft ready, or
 merge. The ordinary protected review and merge path still applies, with
 separately sourced merge authorization, exact merged-tree verification, and
 issue/PR read-back. Schema v1 requires `merge: false`. Runner and sandbox
-controls exercise this contract, but no live run or real PR promotion check has
-been exercised in the pilot.
+controls exercise this contract. The live #1070 pilot claimed its task,
+committed the worker candidate, and passed six exact-head proof commands, then
+stopped when the reviewer final artifact was rejected. It did not reach the
+candidate checkpoint, push, or PR creation; no live PR promotion check has run.
 
-This command is not a scheduler and does not watch or retry. For phases that
+This command is not a scheduler and does not watch or restart a run after exit.
+Its one in-process reviewer artifact retry is described above. For phases that
 the runner can reconcile, a later invocation uses the same unexpired envelope
 and recorded run budget after checking the next action and current state. An
 `unknown_outcome` blocked checkpoint requires human reconciliation and an

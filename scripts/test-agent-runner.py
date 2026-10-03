@@ -718,18 +718,25 @@ class RecoveryControls(unittest.TestCase):
 
 
 class ControllerFlowControls(unittest.TestCase):
-    def test_one_slice_reaches_draft_and_observed_checks_without_duplicate_dispatch(self):
+    def _exercise_flow(self, review_modes=(), drift_on_invalid=None):
         sandbox = RUNNER._load_sandbox()
 
         class FakeSandbox:
             def __init__(self):
                 self.launches = []
+                self.review_modes = list(review_modes)
+                self.review_inputs = []
+                self.trace_paths = []
+                self.result_paths = []
+                self.proof_calls = 0
 
             def launch_codex(self, **kwargs):
                 worktree = kwargs["worktree"]
                 review = kwargs["read_only_worktree"]
                 role = "reviewer" if review else "worker"
                 self.launches.append(role)
+                self.trace_paths.append(kwargs["trace_path"])
+                self.result_paths.append(kwargs["result_path"])
                 if not review:
                     (worktree / "README").write_text("candidate change\n", encoding="utf-8")
                     (worktree / "target").mkdir()
@@ -744,17 +751,44 @@ class ControllerFlowControls(unittest.TestCase):
                         raise AssertionError("reviewer cannot inspect focused proof log")
                     if (worktree / "target" / "poison").exists():
                         raise AssertionError("reviewer inherited worker ignored artifact")
+                    if ('branch to "agent/flow-test"' not in kwargs["prompt"] or
+                            "worktree-relative POSIX paths" not in kwargs["prompt"]):
+                        raise AssertionError("reviewer prompt omitted the logical branch or evidence contract")
                 head = subprocess.check_output(["git", "-C", str(worktree), "rev-parse", "HEAD"], text=True).strip()
                 tree = subprocess.check_output(["git", "-C", str(worktree), "rev-parse", "HEAD^{tree}"], text=True).strip()
-                session = f"{role}-session"
+                if review:
+                    self.review_inputs.append((head, tree, hashlib.sha256(receipts[0].read_bytes()).hexdigest()))
+                    mode = self.review_modes.pop(0) if self.review_modes else "valid"
+                    if mode == "invalid" and drift_on_invalid == "candidate":
+                        (worktree / "README").write_text("review drift\n", encoding="utf-8")
+                    if mode == "invalid" and drift_on_invalid == "proof":
+                        receipts[0].write_text("altered receipt\n", encoding="utf-8")
+                    if mode == "interrupt":
+                        raise KeyboardInterrupt()
+                else:
+                    mode = "valid"
+                rejected_class = {"invalid": "shape", "unknown": "unreadable",
+                                  "oversize": "oversize"}.get(mode)
+                session = f"{role}-session-{len(self.launches)}"
                 trace = kwargs["trace_path"]
                 trace.write_text("\n".join(json.dumps(row) for row in (
                     {"kind": "launch", "model": kwargs["model"],
                      "reasoning_effort": kwargs["reasoning_effort"],
                      "read_only_worktree": review},
                     {"kind": "codex_event", "type": "thread.started", "session_id": session},
-                    {"kind": "complete", "status": "ok", "session_id": session},
+                    {"kind": "codex_event", "type": "turn.completed"},
+                    {"kind": "complete", "status": "invalid-final-result"
+                     if rejected_class else "ok",
+                     "session_id": session, "exit_code": 0, "timed_out": False,
+                     "invalid_events": 0,
+                     "final_result_class": rejected_class},
                 )) + "\n", encoding="utf-8")
+                if rejected_class:
+                    return SimpleNamespace(ok=False, timed_out=False, exit_code=0,
+                                           session_id=session, model=kwargs["model"],
+                                           reasoning_effort=kwargs["reasoning_effort"],
+                                           error="invalid-final-result",
+                                           final_result_class=rejected_class)
                 kwargs["result_path"].write_text(json.dumps({
                     "schema_version": 1, "run_id": "flow-test", "task_id": "FlowTask",
                     "status": "ready", "branch": "agent/flow-test",
@@ -762,11 +796,12 @@ class ControllerFlowControls(unittest.TestCase):
                     "candidate_tree": tree if review else None,
                     "evidence": [], "reason": None,
                 }), encoding="utf-8")
-                return SimpleNamespace(ok=True, timed_out=False, session_id=session,
+                return SimpleNamespace(ok=True, timed_out=False, exit_code=0, session_id=session,
                                        model=kwargs["model"],
                                        reasoning_effort=kwargs["reasoning_effort"], error=None)
 
             def run_proof(self, **kwargs):
+                self.proof_calls += 1
                 return sandbox.run_proof(**kwargs)
 
         class FakeGitHub:
@@ -890,17 +925,32 @@ class ControllerFlowControls(unittest.TestCase):
                                  task_id="FlowTask")
             gh = FakeGitHub(base, node, value["required_checks"])
             child = FakeSandbox()
-            with RUNNER.run_lock(value["journal_dir"]):
-                result = LocalPush(value, github=gh, source_root=source, sandbox=child).run()
+            try:
+                with RUNNER.run_lock(value["journal_dir"]):
+                    result = LocalPush(value, github=gh, source_root=source, sandbox=child).run()
+            except KeyboardInterrupt:
+                with RUNNER.run_lock(value["journal_dir"]):
+                    with self.assertRaises(RUNNER.RunnerError) as caught:
+                        LocalPush(value, github=gh, source_root=source, sandbox=child).run()
+                error = caught.exception
+                return {"error": error.code, "journal": RUNNER.read_journal(value),
+                        "launches": child.launches, "review_inputs": child.review_inputs,
+                        "trace_paths": child.trace_paths, "result_paths": child.result_paths,
+                        "proof_calls": child.proof_calls,
+                        "branch": gh.branch, "base": base, "pr": gh.pull}
+            except RUNNER.RunnerError as error:
+                return {"error": error.code, "journal": RUNNER.read_journal(value),
+                        "launches": child.launches, "review_inputs": child.review_inputs,
+                        "trace_paths": child.trace_paths, "result_paths": child.result_paths,
+                        "proof_calls": child.proof_calls,
+                        "branch": gh.branch, "base": base, "pr": gh.pull}
             self.assertEqual(result["status"], "draft_checks_passed")
-            self.assertEqual(child.launches, ["worker", "reviewer"])
             self.assertEqual(gh.created, 1)
             self.assertEqual(gh.pull["draft"], True)
             self.assertEqual(RUNNER.read_journal(value)["phase"], "observed")
             with RUNNER.run_lock(value["journal_dir"]):
                 resumed = LocalPush(value, github=gh, source_root=source, sandbox=child).run()
             self.assertEqual(resumed["status"], "already_observed")
-            self.assertEqual(child.launches, ["worker", "reviewer"])
             self.assertEqual(gh.created, 1)
             gh.merge_tree = subprocess.check_output(
                 ["git", "-C", str(worktree), "rev-parse", "HEAD^{tree}"], text=True).strip()
@@ -913,6 +963,73 @@ class ControllerFlowControls(unittest.TestCase):
             ready_gate = LocalPush(value, github=gh, source_root=source,
                                    sandbox=child).promotion_check(99)
             self.assertEqual(ready_gate["status"], "ready")
+            return {"error": None, "journal": RUNNER.read_journal(value),
+                    "launches": child.launches, "review_inputs": child.review_inputs,
+                    "trace_paths": child.trace_paths, "result_paths": child.result_paths,
+                    "proof_calls": child.proof_calls,
+                    "branch": gh.branch, "base": base, "pr": gh.pull}
+
+    def test_one_slice_reaches_draft_and_observed_checks_without_duplicate_dispatch(self):
+        result = self._exercise_flow()
+        self.assertIsNone(result["error"])
+        self.assertEqual(result["launches"], ["worker", "reviewer"])
+        self.assertEqual(result["proof_calls"], 1)
+
+    def test_invalid_reviewer_result_retries_only_review_on_same_candidate_and_proof(self):
+        result = self._exercise_flow(review_modes=("invalid", "valid"))
+        self.assertIsNone(result["error"])
+        self.assertEqual(result["launches"], ["worker", "reviewer", "reviewer"])
+        self.assertEqual(result["proof_calls"], 1)
+        self.assertEqual(result["review_inputs"][0], result["review_inputs"][1])
+        self.assertNotEqual(result["trace_paths"][1], result["trace_paths"][2])
+        self.assertNotEqual(result["result_paths"][1], result["result_paths"][2])
+        self.assertEqual(result["journal"]["candidate"]["repair_count"], 0)
+        self.assertEqual(result["journal"]["candidate"]["head_sha"], result["branch"])
+
+    def test_exhausted_reviewer_result_retry_stops_before_push_or_pr(self):
+        result = self._exercise_flow(review_modes=("invalid", "invalid"))
+        self.assertEqual(result["error"], "invalid_reviewer_result")
+        self.assertEqual(result["launches"], ["worker", "reviewer", "reviewer"])
+        self.assertEqual(result["proof_calls"], 1)
+        self.assertEqual(result["review_inputs"][0], result["review_inputs"][1])
+        self.assertEqual(result["journal"]["phase"], "blocked")
+        self.assertEqual(result["branch"], result["base"])
+        self.assertIsNone(result["pr"])
+
+    def test_reviewer_result_retry_rejects_candidate_drift(self):
+        result = self._exercise_flow(review_modes=("invalid",), drift_on_invalid="candidate")
+        self.assertEqual(result["error"], "stale_evidence")
+        self.assertEqual(result["launches"], ["worker", "reviewer"])
+        self.assertEqual(result["proof_calls"], 1)
+        self.assertEqual(result["branch"], result["base"])
+        self.assertIsNone(result["pr"])
+
+    def test_reviewer_result_retry_rejects_proof_drift(self):
+        result = self._exercise_flow(review_modes=("invalid",), drift_on_invalid="proof")
+        self.assertEqual(result["error"], "stale_evidence")
+        self.assertEqual(result["launches"], ["worker", "reviewer"])
+        self.assertEqual(result["proof_calls"], 1)
+        self.assertEqual(result["branch"], result["base"])
+        self.assertIsNone(result["pr"])
+
+    def test_non_retryable_reviewer_result_is_a_manual_stop(self):
+        for mode in ("unknown", "oversize"):
+            with self.subTest(mode=mode):
+                result = self._exercise_flow(review_modes=(mode,))
+                self.assertEqual(result["error"], "unknown_outcome")
+                self.assertEqual(result["launches"], ["worker", "reviewer"])
+                self.assertEqual(result["journal"]["phase"], "blocked")
+                self.assertEqual(result["branch"], result["base"])
+                self.assertIsNone(result["pr"])
+
+    def test_interrupted_review_does_not_relaunch_on_resume(self):
+        result = self._exercise_flow(review_modes=("interrupt",))
+        self.assertEqual(result["error"], "unknown_outcome")
+        self.assertEqual(result["launches"], ["worker", "reviewer"])
+        self.assertEqual(result["proof_calls"], 1)
+        self.assertEqual(result["journal"]["phase"], "blocked")
+        self.assertEqual(result["branch"], result["base"])
+        self.assertIsNone(result["pr"])
 
 
 class PromotionControls(unittest.TestCase):
