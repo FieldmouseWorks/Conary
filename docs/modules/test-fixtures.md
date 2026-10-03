@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-10-03
-revision: 75
-summary: Map fixture ownership, including release-backed base-image proof, native persisted-SQL rows, native refusals, repository discovery, command captures, activation intent, the refreshed Tumbleweed lifecycle snapshot, and Group I exact-name package absence
+last_updated: 2026-10-04
+revision: 76
+summary: Map fixture ownership, including release-backed base-image proof, native TNPM05 provider JSON, native persisted-SQL rows, native refusals, repository discovery, command captures, activation intent, the refreshed Tumbleweed lifecycle snapshot, and Group I exact-name package absence
 ---
 
 # Test Fixtures And Proof Maps
@@ -436,6 +436,7 @@ Each fixture family should record:
   `cargo test -p conary-test daily_driver::phase4_daily_driver_corpus_manifest_proves_remaining_configuration_states`;
   `cargo test -p conary-test focused_native_cross_source_manifest_runs_the_shared_lifecycle_contract`;
   `cargo test -p conary-test native_cross_source_`;
+  `cargo test -p conary-test native_parity_whatprovides_`;
   `cargo test -p conary-test native_parity_sql_`.
 - **Medium proof:**
   `cargo test -p conary-test config::tests::test_load_phase1_core_manifest`;
@@ -509,7 +510,17 @@ Each fixture family should record:
   or fields. The count covers only that named trove; failed-install and
   `file_not_exists` assertions cover their separate conditions. The in-memory
   SQLite test proves exact-name filtering and assertion behavior, not a live
-  container run. Native
+  container run. TNPM05 step 4 in `phase4-native-pm-parity` now requires one
+  whole-root schema-v1 `whatprovides --json` result: exactly one installed
+  provider with the fixture package name, lane-native version, architecture and
+  scheme, CCS release `1`, a null repository, only the fixture version in
+  `capability_versions`, and integer provider count `1`. Focused
+  `native_parity_whatprovides_` controls load the Fedora 44, Ubuntu 26.04, and
+  Arch assertions and reject extra or near-name providers, wrong values or
+  types, malformed or concatenated JSON, and nonzero exit. They prove manifest
+  assertion behavior locally; only the full container lanes observe live query
+  output. Query JSON alone does not verify artifact bytes, install source, or
+  provide provenance. Native
   cross-source lifecycle assertions read selected-generation manifests and CAS
   objects; the container's incidental root filesystem is not package-state
   authority. Fedora/RPM, Ubuntu/dpkg, and Arch/pacman each capture the fixture's
