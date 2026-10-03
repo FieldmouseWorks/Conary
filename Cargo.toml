@@ -164,8 +164,9 @@ incremental = true
 # Faster builds in development
 incremental = true
 
-# Multi-gigabyte streaming parser regressions exercise the real SHA-256
-# integrity path. Optimize that dependency in tests so bounded-memory proofs do
-# not turn debug hashing into a CI-duration bottleneck.
-[profile.test.package.sha2]
-opt-level = 3
+# Optimize test builds. Bounded-memory and high-cardinality proofs run real
+# hashing, catalog, and streaming work; unoptimized, two such tests alone set
+# the conary-core suite's wall time (#1138). Test builds keep dev's
+# debug-assertions and overflow-checks.
+[profile.test]
+opt-level = 2
