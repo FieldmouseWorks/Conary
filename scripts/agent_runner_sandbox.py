@@ -64,6 +64,7 @@ class LaunchResult:
     error: str | None
     trace_path: Path
     result_path: Path
+    final_result_class: str | None = None
 
 
 @dataclass(frozen=True)
@@ -158,15 +159,20 @@ def _copy_auth(source: Path, destination: Path) -> set[str]:
         raise ValueError("Codex auth file is invalid") from exc
     secrets: set[str] = set()
 
-    def collect(value: object) -> None:
-        if isinstance(value, str) and len(value) >= 16:
+    sensitive_keys = {"token", "access_token", "refresh_token", "id_token",
+                      "api_key", "secret", "client_secret", "password", "private_key"}
+
+    def collect(value: object, key: str = "") -> None:
+        if isinstance(value, str) and (
+                len(value) >= 16 or
+                ((key in sensitive_keys or key.endswith("_token")) and len(value) >= 4)):
             secrets.add(value)
         elif isinstance(value, dict):
-            for item in value.values():
-                collect(item)
+            for child_key, item in value.items():
+                collect(item, child_key.lower() if isinstance(child_key, str) else "")
         elif isinstance(value, list):
             for item in value:
-                collect(item)
+                collect(item, key)
 
     collect(auth)
     out_fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
@@ -303,48 +309,51 @@ def _kill_process_group(child: subprocess.Popen[bytes]) -> None:
         pass
 
 
-def _safe_result(final: object, secrets: set[str]) -> bool:
-    if not isinstance(final, dict) or set(final) != RESULT_KEYS:
-        return False
-    if type(final["schema_version"]) is not int or final["schema_version"] != 1:
-        return False
-    if final["status"] not in ("ready", "blocked"):
-        return False
-    for name in ("run_id", "task_id"):
-        value = final[name]
-        if not isinstance(value, str) or not (1 <= len(value) <= 128):
-            return False
-    branch = final["branch"]
-    if branch is not None and (not isinstance(branch, str) or not (1 <= len(branch) <= 256)):
-        return False
-    for name in ("candidate_head", "candidate_tree"):
-        value = final[name]
-        if value is not None and (not isinstance(value, str) or not HEAD_ID.fullmatch(value)):
-            return False
-    if final["status"] == "ready" and branch is None:
-        return False
-    reason = final["reason"]
-    if reason is not None and (not isinstance(reason, str) or len(reason) > 500):
-        return False
-    evidence = final["evidence"]
-    if not isinstance(evidence, list) or len(evidence) > 256:
-        return False
-    for entry in evidence:
-        if (not isinstance(entry, str) or not entry or len(entry) > 1024
-                or PurePosixPath(entry).is_absolute() or ".." in PurePosixPath(entry).parts):
-            return False
-
+def _result_problem(final: object, secrets: set[str]) -> str | None:
+    """Classify a final artifact without retaining any of its rejected values."""
     def strings(value: object):
         if isinstance(value, str):
             yield value
         elif isinstance(value, dict):
-            for item in value.values():
+            for key, item in value.items():
+                yield from strings(key)
                 yield from strings(item)
         elif isinstance(value, list):
             for item in value:
                 yield from strings(item)
 
-    return not any(secret in value for value in strings(final) for secret in secrets)
+    if any(secret in value for value in strings(final) for secret in secrets):
+        return "secret"
+    if not isinstance(final, dict) or set(final) != RESULT_KEYS:
+        return "shape"
+    if type(final["schema_version"]) is not int or final["schema_version"] != 1:
+        return "shape"
+    if final["status"] not in ("ready", "blocked"):
+        return "shape"
+    for name in ("run_id", "task_id"):
+        value = final[name]
+        if not isinstance(value, str) or not (1 <= len(value) <= 128):
+            return "shape"
+    branch = final["branch"]
+    if branch is not None and (not isinstance(branch, str) or not (1 <= len(branch) <= 256)):
+        return "shape"
+    for name in ("candidate_head", "candidate_tree"):
+        value = final[name]
+        if value is not None and (not isinstance(value, str) or not HEAD_ID.fullmatch(value)):
+            return "shape"
+    if final["status"] == "ready" and branch is None:
+        return "shape"
+    reason = final["reason"]
+    if reason is not None and (not isinstance(reason, str) or len(reason) > 500):
+        return "shape"
+    evidence = final["evidence"]
+    if not isinstance(evidence, list) or len(evidence) > 256:
+        return "shape"
+    for entry in evidence:
+        if (not isinstance(entry, str) or not entry or len(entry) > 1024
+                or PurePosixPath(entry).is_absolute() or ".." in PurePosixPath(entry).parts):
+            return "shape"
+    return None
 
 
 def _failure_class(payload: bytes) -> str:
@@ -463,9 +472,15 @@ def launch_codex(
                         if not isinstance(name, str) or not EVENT_NAME.fullmatch(name):
                             invalid_events += 1
                             continue
+                        if any(secret in name for secret in secrets):
+                            invalid_events += 1
+                            continue
                         row: dict[str, object] = {"kind": "codex_event", "type": name}
                         if name == "thread.started":
                             found = event.get("thread_id")
+                            if isinstance(found, str) and any(secret in found for secret in secrets):
+                                invalid_events += 1
+                                continue
                             if isinstance(found, str) and re.fullmatch(r"[a-zA-Z0-9-]{1,128}", found):
                                 with event_lock:
                                     session_id = found
@@ -513,6 +528,7 @@ def launch_codex(
                 stderr_thread.join(timeout=5)
             exit_code = child.returncode
             error: str | None = None
+            final_result_class: str | None = None
             if timed_out:
                 error = "timeout"
             elif exit_code != 0:
@@ -529,24 +545,40 @@ def launch_codex(
                     fd = os.open(home / "result.json", os.O_RDONLY | os.O_NOFOLLOW)
                     with os.fdopen(fd, "rb") as source:
                         raw = source.read(MAX_RESULT_BYTES + 1)
-                    if len(raw) > MAX_RESULT_BYTES:
-                        raise ValueError("oversize")
-                    final = json.loads(raw)
-                    if not _safe_result(final, secrets):
-                        raise ValueError("invalid shape")
-                    with _exclusive_file(result_path) as destination:
-                        json.dump(final, destination, sort_keys=True, separators=(",", ":"))
-                        destination.write("\n")
-                except (OSError, UnicodeDecodeError, ValueError):
+                except FileNotFoundError:
+                    final_result_class = "missing"
+                except OSError:
+                    final_result_class = "unreadable"
+                else:
+                    if any(secret.encode("utf-8") in raw for secret in secrets):
+                        final_result_class = "secret"
+                    elif len(raw) > MAX_RESULT_BYTES:
+                        final_result_class = "oversize"
+                    else:
+                        try:
+                            final = json.loads(raw)
+                        except (UnicodeDecodeError, json.JSONDecodeError):
+                            final_result_class = "parse"
+                        else:
+                            final_result_class = _result_problem(final, secrets)
+                    if final_result_class is None:
+                        try:
+                            with _exclusive_file(result_path) as destination:
+                                json.dump(final, destination, sort_keys=True, separators=(",", ":"))
+                                destination.write("\n")
+                        except OSError:
+                            final_result_class = "unreadable"
+                if final_result_class is not None:
                     error = "invalid-final-result"
             record({"kind": "complete", "status": "ok" if error is None else error,
                     "exit_code": exit_code, "timed_out": timed_out,
                     "session_id": session_id, "invalid_events": invalid_events,
+                    "final_result_class": final_result_class,
                     "stderr_sha256": stderr_hash.hexdigest(), "stderr_bytes": stderr_bytes,
                     "stderr_class": _failure_class(bytes(stderr_sample + event_error_sample))
                     if exit_code else None})
             return LaunchResult(error is None, exit_code, timed_out, model, reasoning_effort,
-                                session_id, error, trace_path, result_path)
+                                session_id, error, trace_path, result_path, final_result_class)
 
 
 def run_proof(

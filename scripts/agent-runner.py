@@ -47,6 +47,8 @@ TERMINAL_CONCLUSIONS = {
 HOSTED_STATUSES = {"queued", "in_progress", "completed", "waiting", "pending", "requested"}
 REASONING_EFFORTS = {"minimal", "low", "medium", "high", "xhigh", "max", "ultra"}
 KNOWN_RULES = {"deletion", "non_fast_forward", "required_status_checks", "pull_request"}
+RETRYABLE_REVIEW_RESULT_CLASSES = {"missing", "parse", "shape"}
+MAX_REVIEW_RESULT_RETRIES = 1
 MAX_CANDIDATE_FILE = 64 * 1024 * 1024
 COMMON_CREDENTIAL = re.compile(
     rb"(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|"
@@ -1355,12 +1357,17 @@ class Controller:
         require(not any(name.lower().startswith(forbidden) for name in names),
                 "remote_unknown", "repository config contains a transport or filter override")
 
-    def _launch(self, task, worktree, role, attempt, candidate=None, prior_failure=None):
+    def _launch(self, task, worktree, role, attempt, candidate=None, prior_failure=None,
+                review_retry=0):
         if self.sandbox is None:
             self.sandbox = _load_sandbox()
         model = self.spec["models"][role]
         run_dir = _owned_directory(Path(self.spec["journal_dir"]) / self.spec["run_id"])
         basename = f"{role}-{attempt}"
+        if review_retry:
+            require(role == "reviewer" and 0 < review_retry <= MAX_REVIEW_RESULT_RETRIES,
+                    "internal", "invalid reviewer result retry")
+            basename += f"-retry-{review_retry}"
         trace = run_dir / f"{basename}.jsonl"
         result_file = run_dir / f"{basename}.json"
         if role == "worker":
@@ -1394,15 +1401,28 @@ class Controller:
             ]
             prompt = (
                 f"Independently review Conary task {task['id']} run {self.spec['run_id']}. "
+                f"The logical task branch is {json.dumps(task['branch'])}; the proof "
+                "worktree is detached, so do not infer the branch from Git HEAD. "
                 f"Candidate HEAD {candidate['head_sha']} tree {candidate['tree_sha']}; "
                 f"base {task['base_sha']}. Inspect the diff and receipts. Do not edit any file, "
-                "run gh, commit, or push. Return one JSON object with exact keys schema_version, "
-                "run_id, task_id, status, branch, candidate_head, candidate_tree, evidence, reason. "
-                "Use status ready only with no actionable findings; blocked with concise findings "
-                "otherwise. The head and tree fields must be the exact candidate values. "
+                "run gh, commit, or push. Return exactly one JSON object, without Markdown, "
+                "with these nine keys and no others: schema_version, run_id, task_id, status, "
+                "branch, candidate_head, candidate_tree, evidence, reason. "
+                f"Set schema_version to 1, run_id to {json.dumps(self.spec['run_id'])}, "
+                f"task_id to {json.dumps(task['id'])}, branch to {json.dumps(task['branch'])}, "
+                f"candidate_head to {json.dumps(candidate['head_sha'])}, and candidate_tree "
+                f"to {json.dumps(candidate['tree_sha'])}. Use status ready only with no "
+                "actionable findings; otherwise use blocked and give a concise reason. "
+                "Evidence must be an array of worktree-relative POSIX paths (no absolute "
+                "paths or '..' components); use [] if there are no supporting files. "
+                "Set reason to null for ready or a concise string for blocked. "
                 "The controller ran the configured checks in this fresh proof worktree. "
                 f"Read these validated receipts and their logs: {receipt_summaries}. "
                 "Inspect the candidate diff and whether its tests establish the task property.\n")
+            if review_retry:
+                prompt += ("A previous reviewer session completed but its final JSON artifact "
+                           "was rejected. Review this same frozen candidate and proof again, "
+                           "then follow the exact result contract above.\n")
         before = (git_sha(worktree, "HEAD"), git_sha(worktree, "HEAD^{tree}"),
                   changed_paths(worktree))
         timeout = min(self._remaining(), 3600)
@@ -1420,6 +1440,47 @@ class Controller:
         require(result.model == model["id"] and
                 result.reasoning_effort == model["reasoning_effort"],
                 "model_unavailable", "launcher changed the requested model or effort")
+        if role == "reviewer":
+            require((git_sha(worktree, "HEAD"), git_sha(worktree, "HEAD^{tree}"),
+                     changed_paths(worktree)) == before,
+                    "stale_evidence", "review changed the frozen candidate")
+            if result.error == "invalid-final-result":
+                result_class = getattr(result, "final_result_class", None)
+                if (result.ok is False and result.exit_code == 0 and not result.timed_out and
+                        result.session_id and
+                        result_class in RETRYABLE_REVIEW_RESULT_CLASSES):
+                    require(trace.is_file() and not trace.is_symlink() and
+                            trace.stat().st_size < 16 * 1024 * 1024 and
+                            not result_file.exists(), "unknown_outcome",
+                            "invalid reviewer result lacks a clean trace boundary")
+                    try:
+                        rows = [json.loads(line) for line in
+                                trace.read_text(encoding="utf-8").splitlines()]
+                    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+                        raise RunnerError("unknown_outcome",
+                                          "invalid reviewer result trace is malformed") from error
+                    require(len(rows) >= 3 and all(isinstance(row, dict) for row in rows) and
+                            rows[0].get("kind") == "launch" and
+                            rows[0].get("model") == model["id"] and
+                            rows[0].get("reasoning_effort") == model["reasoning_effort"] and
+                            rows[0].get("read_only_worktree") is True and
+                            any(row.get("kind") == "codex_event" and
+                                row.get("type") == "thread.started" and
+                                row.get("session_id") == result.session_id for row in rows) and
+                            any(row.get("kind") == "codex_event" and
+                                row.get("type") == "turn.completed" for row in rows) and
+                            rows[-1].get("kind") == "complete" and
+                            rows[-1].get("status") == "invalid-final-result" and
+                            rows[-1].get("session_id") == result.session_id and
+                            rows[-1].get("exit_code") == 0 and
+                            rows[-1].get("timed_out") is False and
+                            rows[-1].get("invalid_events") == 0 and
+                            rows[-1].get("final_result_class") == result_class,
+                            "unknown_outcome", "invalid reviewer result trace is inconsistent")
+                    raise RunnerError("invalid_reviewer_result",
+                                      f"reviewer final artifact is {result_class}")
+                raise RunnerError("unknown_outcome",
+                                  "reviewer final artifact has a non-retryable rejection")
         require(result.ok and not result.timed_out and result.session_id,
                 "model_unavailable", f"{role} launch did not complete: {result.error}")
         require(trace.is_file() and result_file.is_file(), "local_unknown",
@@ -1579,7 +1640,7 @@ class Controller:
                 f"{key} changed after evidence collection")
         return path
 
-    def _verify_candidate(self, task, worktree, candidate):
+    def _verify_frozen_review_inputs(self, task, worktree, candidate):
         require(isinstance(candidate, dict) and
                 candidate.get("base_sha") == task["base_sha"] and
                 git_sha(worktree, "HEAD") == candidate.get("head_sha") and
@@ -1590,6 +1651,10 @@ class Controller:
         require(candidate["head_sha"] != task["base_sha"], "stale_evidence",
                 "candidate has no commit after base")
         proof_worktree = self._verify_evidence_worktree(candidate, "proof_worktree")
+        self._verify_proof_evidence(task, candidate, proof_worktree)
+
+    def _verify_candidate(self, task, worktree, candidate):
+        self._verify_frozen_review_inputs(task, worktree, candidate)
         review = candidate.get("review")
         worker = candidate.get("worker")
         require(isinstance(review, dict) and isinstance(worker, dict) and
@@ -1607,6 +1672,8 @@ class Controller:
                         "stale_evidence", f"{kind} record changed after review")
         self._verify_launch_evidence(task, worker, "worker", candidate)
         self._verify_launch_evidence(task, review, "reviewer", candidate)
+
+    def _verify_proof_evidence(self, task, candidate, proof_worktree):
         receipts = candidate.get("proof")
         require(isinstance(receipts, list) and len(receipts) == len(task["checks"]),
                 "stale_evidence", "focused proof receipt count differs")
@@ -1621,14 +1688,19 @@ class Controller:
                 proof_worktree, str(Path(path).relative_to(proof_worktree)))
             require(_digest_file(receipt_path) == expected,
                     "stale_evidence", "focused proof receipt changed")
-            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
-            require(receipt.get("status") == "passed" and
+            try:
+                receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+                raise RunnerError("stale_evidence", "focused proof receipt is malformed") from error
+            require(isinstance(receipt, dict) and receipt.get("status") == "passed" and
                     receipt.get("candidate_before") == receipt.get("candidate_after") and
                     receipt.get("candidate_before", {}).get("head") == candidate["head_sha"] and
                     receipt.get("candidate_before", {}).get("head_tree") == candidate["tree_sha"],
                     "stale_evidence", "focused proof no longer binds candidate")
             for stream in ("stdout", "stderr"):
-                log = receipt.get(stream, {})
+                log = receipt.get(stream)
+                require(isinstance(log, dict), "stale_evidence",
+                        "focused proof log metadata is malformed")
                 locator = log.get("path")
                 require(isinstance(locator, str) and not locator.startswith("/") and
                         ".." not in Path(locator).parts,
@@ -1699,8 +1771,18 @@ class Controller:
                 candidate["proof_worktree"] = str(proof_worktree)
                 candidate["proof"] = self._proof(task, proof_worktree, candidate, attempt)
                 self._verify_evidence_worktree(candidate, "proof_worktree")
-                reviewer = self._launch(task, proof_worktree, "reviewer", attempt,
-                                        candidate=candidate)
+                for review_retry in range(MAX_REVIEW_RESULT_RETRIES + 1):
+                    self._remaining()
+                    self._verify_frozen_review_inputs(task, worktree, candidate)
+                    try:
+                        reviewer = self._launch(task, proof_worktree, "reviewer", attempt,
+                                                candidate=candidate,
+                                                review_retry=review_retry)
+                        break
+                    except RunnerError as error:
+                        if (error.code != "invalid_reviewer_result" or
+                                review_retry >= MAX_REVIEW_RESULT_RETRIES):
+                            raise
                 candidate["review"] = {
                     **reviewer, "approved": True,
                     "head_sha": candidate["head_sha"], "tree_sha": candidate["tree_sha"],
@@ -1991,6 +2073,7 @@ class Controller:
             "child_blocked", "model_unavailable", "proof_failed", "hosted_failure",
             "optional_pretest_image_failure", "wall_budget", "out_of_scope",
             "unknown_outcome", "action_required", "secret_in_candidate",
+            "invalid_reviewer_result",
         }
         if error.code not in recordable:
             return

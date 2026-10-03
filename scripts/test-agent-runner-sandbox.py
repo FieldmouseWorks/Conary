@@ -120,6 +120,10 @@ try:
     worktree_read_only = False
 except OSError:
     worktree_read_only = True
+if mode == 'event_type_reflect':
+    print(json.dumps({'type': 'copy.' + auth['token']}), flush=True)
+if mode == 'session_reflect':
+    print(json.dumps({'type': 'thread.started', 'thread_id': 'id-' + auth['token']}), flush=True)
 print(json.dumps({'type':'thread.started','thread_id':'123e4567-e89b-12d3-a456-426614174000'}), flush=True)
 print(json.dumps({'type':'item.completed','item':{'text':auth['token']}}), flush=True)
 print(auth['token'], file=sys.stderr, flush=True)
@@ -135,8 +139,23 @@ payload = {
     'reason': 'read-only' if worktree_read_only else None,
 }
 if mode == 'reflect':
-    payload['secret'] = auth['token']
-result.write_text(json.dumps(payload))
+    payload['reason'] = auth['token']
+if mode == 'result_missing':
+    pass
+elif mode == 'result_parse':
+    result.write_text('{broken json')
+elif mode == 'result_parse_secret':
+    result.write_text('{broken json ' + auth['token'])
+elif mode == 'result_oversize':
+    result.write_text('x' * (256 * 1024 + 1))
+elif mode == 'result_oversize_secret_tail':
+    result.write_text('x' * (256 * 1024 + 1) + auth['token'])
+elif mode == 'result_unreadable':
+    result.symlink_to('/dev/null')
+else:
+    if mode == 'result_shape':
+        payload['branch'] = None
+    result.write_text(json.dumps(payload))
 """
 
 
@@ -170,7 +189,7 @@ class SandboxTest(unittest.TestCase):
         helper.write_text("#!/usr/bin/python3\nprint('host-ready')\n")
         helper.chmod(0o700)
         self.auth = self.root / "auth.json"
-        self.secret = "FAKE-CODEX-CREDENTIAL-DO-NOT-LOG"
+        self.secret = "fake-codex-credential-do-not-log"
         self.auth.write_text(json.dumps({"token": self.secret}))
         self.auth.chmod(0o600)
         self.mode = self.worktree / ".sandbox-test-mode"
@@ -249,6 +268,62 @@ class SandboxTest(unittest.TestCase):
         outcome = self.launch(mode="reflect")
         self.assertFalse(outcome.ok)
         self.assertEqual(outcome.error, "invalid-final-result")
+        self.assertEqual(outcome.final_result_class, "secret")
+        self.assertFalse(outcome.result_path.exists())
+        self.assertNotIn(self.secret, outcome.trace_path.read_text())
+        self.assertEqual(json.loads(outcome.trace_path.read_text().splitlines()[-1])
+                         ["final_result_class"], "secret")
+
+    def test_final_artifact_failure_classes_contain_no_raw_result(self) -> None:
+        for mode, expected in (("result_missing", "missing"),
+                               ("result_parse", "parse"),
+                               ("result_shape", "shape"),
+                               ("result_oversize", "oversize"),
+                               ("result_unreadable", "unreadable")):
+            with self.subTest(mode=mode):
+                outcome = self.launch(mode=mode)
+                self.assertFalse(outcome.ok)
+                self.assertEqual(outcome.error, "invalid-final-result")
+                self.assertEqual(outcome.final_result_class, expected)
+                self.assertFalse(outcome.result_path.exists())
+                trace = outcome.trace_path.read_text()
+                self.assertEqual(json.loads(trace.splitlines()[-1])["final_result_class"],
+                                 expected)
+                self.assertNotIn(self.secret, trace)
+                self.assertNotIn("broken json", trace)
+
+    def test_malformed_artifact_with_credential_is_classified_as_secret(self) -> None:
+        outcome = self.launch(mode="result_parse_secret")
+        self.assertEqual(outcome.error, "invalid-final-result")
+        self.assertEqual(outcome.final_result_class, "secret")
+        self.assertFalse(outcome.result_path.exists())
+        self.assertNotIn(self.secret, outcome.trace_path.read_text())
+
+    def test_credential_bearing_event_metadata_is_rejected_before_trace(self) -> None:
+        for mode in ("event_type_reflect", "session_reflect"):
+            with self.subTest(mode=mode):
+                outcome = self.launch(mode=mode)
+                self.assertFalse(outcome.ok)
+                self.assertEqual(outcome.error, "invalid-jsonl-events")
+                self.assertFalse(outcome.result_path.exists())
+                trace = outcome.trace_path.read_text()
+                self.assertNotIn(self.secret, trace)
+                self.assertEqual(json.loads(trace.splitlines()[-1])["invalid_events"], 1)
+
+    def test_short_auth_token_is_also_rejected_from_session_id(self) -> None:
+        self.secret = "short-secret"
+        self.auth.write_text(json.dumps({"token": self.secret}))
+        outcome = self.launch(mode="session_reflect")
+        self.assertFalse(outcome.ok)
+        self.assertEqual(outcome.error, "invalid-jsonl-events")
+        self.assertFalse(outcome.result_path.exists())
+        self.assertNotIn(self.secret, outcome.trace_path.read_text())
+
+    def test_oversized_artifact_may_hide_a_credential_after_read_limit(self) -> None:
+        outcome = self.launch(mode="result_oversize_secret_tail")
+        self.assertFalse(outcome.ok)
+        self.assertEqual(outcome.error, "invalid-final-result")
+        self.assertEqual(outcome.final_result_class, "oversize")
         self.assertFalse(outcome.result_path.exists())
         self.assertNotIn(self.secret, outcome.trace_path.read_text())
 
