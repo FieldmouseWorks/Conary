@@ -731,9 +731,57 @@ class GitHub:
     def pr(self, number):
         return self.request("GET", f"pulls/{number}")
 
+    def _pr_graphql(self, number, query, cursor=None):
+        owner, name = self.repository.split("/", 1)
+        argv = [self.binary, "api", "graphql", "--hostname", "github.com",
+                "-f", f"query={query}",
+                "-f", f"owner={owner}", "-f", f"name={name}",
+                "-F", f"number={number}"]
+        if cursor is not None:
+            argv.extend(("-f", f"cursor={cursor}"))
+        try:
+            result = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                    check=False, timeout=60)
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise RunnerError("remote_unknown", "cannot query GitHub pull request") from error
+        require(result.returncode == 0, "remote_unknown", "GitHub pull-request query failed")
+        try:
+            value = json.loads(result.stdout, object_pairs_hook=lambda pairs:
+                               reject_duplicate_keys(pairs, code="remote_unknown"))
+        except (UnicodeDecodeError, ValueError) as error:
+            raise RunnerError("remote_unknown", "GitHub pull-request response is malformed") from error
+        require(isinstance(value, dict) and "errors" not in value,
+                "remote_unknown", "GitHub pull-request query returned errors")
+        return value
+
+    def potential_merge_sha(self, number):
+        query = ("query($owner:String!,$name:String!,$number:Int!){"
+                 "repository(owner:$owner,name:$name){nameWithOwner "
+                 "pullRequest(number:$number){number potentialMergeCommit{oid}}}}")
+        value = self._pr_graphql(number, query)
+        data = value.get("data")
+        repository = data.get("repository") if isinstance(data, dict) else None
+        require(isinstance(repository, dict) and
+                isinstance(repository.get("nameWithOwner"), str) and
+                repository["nameWithOwner"].casefold() == self.repository.casefold(),
+                "remote_unknown", "test-merge query returned a foreign repository")
+        pr = repository.get("pullRequest")
+        require(isinstance(pr, dict) and type(pr.get("number")) is int and
+                pr["number"] == number,
+                "remote_unknown", "test-merge query returned a foreign pull request")
+        commit = pr.get("potentialMergeCommit")
+        require(isinstance(commit, dict), "remote_unknown",
+                "GitHub test-merge commit is unavailable")
+        sha = commit.get("oid")
+        require(isinstance(sha, str) and SHA.fullmatch(sha) is not None,
+                "remote_unknown", "GitHub test-merge commit SHA is malformed")
+        return sha
+
     def commit_data(self, sha):
         commit = self.request("GET", f"git/commits/{sha}")
-        tree = commit.get("tree") if isinstance(commit, dict) else None
+        require(isinstance(commit, dict) and commit.get("sha") == sha,
+                "remote_unknown", "remote commit identity differs from test-merge SHA")
+        tree = commit.get("tree")
         value = tree.get("sha") if isinstance(tree, dict) else None
         fullmatch(SHA, value, "remote commit tree SHA")
         parents = commit.get("parents")
@@ -746,7 +794,6 @@ class GitHub:
         return {"tree_sha": value, "parents": parent_shas}
 
     def review_threads(self, number):
-        owner, name = self.repository.split("/", 1)
         query = ("query($owner:String!,$name:String!,$number:Int!,$cursor:String){"
                  "repository(owner:$owner,name:$name){pullRequest(number:$number){"
                  "reviewThreads(first:100,after:$cursor){nodes{isResolved}"
@@ -754,24 +801,11 @@ class GitHub:
         threads = []
         cursor = None
         for _ in range(11):
-            argv = [self.binary, "api", "graphql", "--hostname", "github.com",
-                    "-f", f"query={query}",
-                    "-f", f"owner={owner}", "-f", f"name={name}",
-                    "-F", f"number={number}"]
-            if cursor is not None:
-                argv.extend(("-f", f"cursor={cursor}"))
+            value = self._pr_graphql(number, query, cursor)
             try:
-                result = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                        check=False, timeout=60)
-            except (OSError, subprocess.TimeoutExpired) as error:
-                raise RunnerError("remote_unknown", "cannot query PR review threads") from error
-            require(result.returncode == 0, "remote_unknown",
-                    "GitHub review-thread query failed")
-            try:
-                value = json.loads(result.stdout)
                 block = value["data"]["repository"]["pullRequest"]["reviewThreads"]
                 nodes, page = block["nodes"], block["pageInfo"]
-            except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+            except (KeyError, TypeError) as error:
                 raise RunnerError("remote_unknown", "review-thread response is malformed") from error
             require(isinstance(nodes, list) and isinstance(page, dict) and
                     type(page.get("hasNextPage")) is bool,
@@ -2130,11 +2164,18 @@ class Controller:
                 f"<!-- conary-agent-pr:v1 run={self.spec['run_id']} task={task['id']} "
                 f"head={candidate['head_sha']} -->" in pr["body"],
                 "remote_unknown", "pull request identity differs from run")
-        merge_sha = pr.get("merge_commit_sha")
-        if isinstance(merge_sha, str) and SHA.fullmatch(merge_sha):
-            merge_data = self.gh.commit_data(merge_sha)
-            pr["test_merge_tree_sha"] = merge_data["tree_sha"]
-            pr["test_merge_parents"] = merge_data["parents"]
+        merge_sha = self.gh.potential_merge_sha(number)
+        require(isinstance(merge_sha, str) and SHA.fullmatch(merge_sha) is not None,
+                "remote_unknown", "GitHub test-merge commit SHA is malformed")
+        if "merge_commit_sha" in pr:
+            rest_sha = pr["merge_commit_sha"]
+            require(isinstance(rest_sha, str) and SHA.fullmatch(rest_sha) is not None,
+                    "remote_unknown", "REST test-merge commit SHA is malformed")
+            require(rest_sha == merge_sha, "remote_unknown",
+                    "REST and GraphQL test-merge commits disagree")
+        merge_data = self.gh.commit_data(merge_sha)
+        pr["test_merge_tree_sha"] = merge_data["tree_sha"]
+        pr["test_merge_parents"] = merge_data["parents"]
         rules = self.gh.required_rules()
         statuses = self.gh.check_runs(candidate["head_sha"])
         threads = self.gh.review_threads(number)

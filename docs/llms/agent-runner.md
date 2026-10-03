@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-10-03
-revision: 5
+revision: 6
 summary: Specify the validated one-slice agent runner, indexed graph comments, hosted observation order, bounded reviewer-result recovery, and read-only promotion check
 ---
 
@@ -276,15 +276,39 @@ optional checks, resolved review threads, and a PR test-merge tree equal to the
 candidate tree with parents `[base, head]`. Unknown or malformed policy is a
 typed error; known mismatches return `blocked` with reasons.
 
+For the test merge, the runner queries GitHub GraphQL's documented
+[`potentialMergeCommit { oid }`](https://docs.github.com/en/graphql/reference/pulls)
+for the configured repository and exact PR number. It requires a valid SHA and
+then reads that commit through the repository-scoped Git commits API and checks
+that the returned SHA matches. If the version-pinned REST PR response includes
+`merge_commit_sha`, that value must equal the GraphQL OID. A missing REST field
+is allowed; null, malformed, or conflicting values block promotion. An
+unavailable GraphQL commit, foreign repository or PR, malformed OID,
+inaccessible commit, or wrong commit tree or parents blocks promotion. The
+runner never substitutes the PR head for the test merge. GitHub documents that
+`potentialMergeCommit` can be null while its test commit is being generated or
+after merge.
+
+The API drift was observed on 2026-10-03 for [PR #1194](https://github.com/FieldmouseWorks/Conary/pull/1194):
+the `2026-03-10`-pinned `GET pulls/1194` response reported `mergeable: true`
+but omitted `merge_commit_sha`. GraphQL `potentialMergeCommit` and the pinned
+`GET git/ref/pull/1194/merge` both returned
+`e173c3359311d2e4b73c4bb9ebe5c0af97487c59`; the repository-scoped commit
+had parents `[49ce8d874db334553efcd0bc0373616d82307be3,
+6f6748b49756afbd90297afb7511040fe3d1cb5e]` and tree
+`a9e5c972` (candidate tree prefix). The default-version REST PR response did
+include the field. The runner uses the documented GraphQL field because the
+[Git database guide](https://docs.github.com/en/rest/guides/using-the-rest-api-to-interact-with-your-git-database)
+warns that pull-request merge refs can become stale without a PR refresh.
+
 A `ready` result is a read-only candidate evaluation, not merge clearance. The
 runner does not create a GitHub approving review, mark the draft ready, or
 merge. The ordinary protected review and merge path still applies, with
 separately sourced merge authorization, exact merged-tree verification, and
 issue/PR read-back. Schema v1 requires `merge: false`. Runner and sandbox
-controls exercise this contract. The live #1070 pilot claimed its task,
-committed the worker candidate, and passed six exact-head proof commands, then
-stopped when the reviewer final artifact was rejected. It did not reach the
-candidate checkpoint, push, or PR creation; no live PR promotion check has run.
+controls exercise this contract. The #1070 pilot later reached PR #1194 with
+exact-head hosted checks; its first live promotion check exposed the REST API
+field omission above.
 
 This command is not a scheduler and does not watch or restart a run after exit.
 Its one in-process reviewer artifact retry is described above. For phases that
