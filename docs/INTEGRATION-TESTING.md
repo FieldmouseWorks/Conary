@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-10-03
-revision: 104
-summary: Define the Podman container integration harness, its prerequisites, running suites, fixtures, and result/proof contracts, including TNPM14 persisted repository-dependency identity and cardinality, TNPM15 regular-file rows and activation intent authority, and TNPM18 repository metadata plus post-update trove/config cardinality
+revision: 105
+summary: Define the Podman container integration harness, its prerequisites, running suites, fixtures, and result/proof contracts, including TNPM14 persisted repository-dependency identity and cardinality, TNPM15 regular-file rows and activation intent authority, and TNPM18 repository metadata plus post-update trove/config/lifecycle cardinality
 ---
 
 # Integration Testing
@@ -907,6 +907,24 @@ profile `ubuntu-26.04`, config source `deb`), and Arch (`x86_64`, scheme
 `arch`, profile `arch`, config source `arch`; the separate corpus evidence
 format remains `alpm`). This assertion proves the persisted database
 projection only; it adds no independent payload-byte or signature-byte proof.
+
+TNPM18 step 9 (index 8) reads the installed lifecycle bundle through one
+parameterized SQLite SELECT of every `phase4-daily-driver-corpus` trove,
+LEFT JOINs bundles by trove ID, and orders by trove ID. Python `tomllib`
+parses each non-null `bundle_toml`; malformed TOML fails the command. One
+root-array comparison requires exactly one updated trove and one joined
+bundle. It pins trove name, version `1.0.1-1`, architecture, version scheme,
+and source profile; persisted bundle source format, source package, source
+version, and `installed` state; and parsed bundle schema
+`conary.native-lifecycles.v1` and revision `20`. The integer
+`source_checksum_matches_fixture = 1` compares only the parsed top-level
+`source_checksum` with `sha256:` plus `NATIVE_UPDATE_SOURCE_SHA256` from the
+prepared v2 native source artifact. The CCS digest is distinct and is not
+this comparison's authority. A missing bundle projects null bundle fields
+and checksum match `0`; an extra same-name trove adds a row. Both fail the
+exact array. This proves persisted data and cardinality, including the
+bundle's recorded native checksum. It does not independently verify
+signature bytes.
 
 The three configuration-state claims ride the same v1-to-v2 signed update and
 stay format-typed. Before the update the fixture stages an exact local edit on

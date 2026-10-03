@@ -736,10 +736,45 @@ exit_code = 0
 stdout_json = [{ pointer = "", equals_json = '''[{"trove_name":"phase4-daily-driver-corpus","trove_version":"${native_corpus_update_version}","trove_architecture":"${native_arch}","trove_version_scheme":"${native_scheme}","trove_source_profile":"${native_profile}","repository_name":"w7-native-update","install_source":"repository","install_reason":"explicit","config_path":"/etc/phase4-corpus/app.conf","config_package_name":"phase4-daily-driver-corpus","config_package_version":"${native_corpus_update_version}","config_package_architecture":"${native_arch}","original_hash":"97d836d4bf6c4c49fa763836c117d738fef15b7d995bc2cf82e2a02704364d27","current_hash":"97d836d4bf6c4c49fa763836c117d738fef15b7d995bc2cf82e2a02704364d27","noreplace":1,"status":"pristine","source":"${native_corpus_config_source}","config_owner_match":1,"related_config_rows":4}]''' }]
 
 [[test.step]]
-run = ". /tmp/native-update-repository/native-update-repository.env && test \"$(sqlite3 ${DB_PATH} \"SELECT source_format || '|' || source_package || '|' || source_version || '|' || lifecycle_state FROM installed_native_lifecycle_bundles WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus')\")\" = \"${native_target}|phase4-daily-driver-corpus|${native_corpus_update_version}|installed\" && sqlite3 ${DB_PATH} \"SELECT bundle_toml FROM installed_native_lifecycle_bundles WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus')\" | grep -F \"source_checksum = \\\"sha256:$NATIVE_UPDATE_SOURCE_SHA256\\\"\""
+run = '''
+. /tmp/native-update-repository/native-update-repository.env &&
+python3 -c '
+import json
+import sqlite3
+import sys
+import tomllib
+
+rows = sqlite3.connect(sys.argv[1]).execute(
+    "SELECT t.name, t.version, t.architecture, t.version_scheme, t.source_profile, "
+    "b.source_format, b.source_package, b.source_version, b.lifecycle_state, b.bundle_toml "
+    "FROM troves AS t LEFT JOIN installed_native_lifecycle_bundles AS b ON b.trove_id = t.id "
+    "WHERE t.name = ? ORDER BY t.id",
+    ("phase4-daily-driver-corpus",),
+).fetchall()
+result = []
+for name, version, architecture, scheme, profile, source_format, source_package, source_version, lifecycle_state, bundle_toml in rows:
+    bundle = tomllib.loads(bundle_toml) if bundle_toml is not None else None
+    result.append({
+        "trove_name": name,
+        "trove_version": version,
+        "trove_architecture": architecture,
+        "trove_version_scheme": scheme,
+        "trove_source_profile": profile,
+        "source_format": source_format,
+        "source_package": source_package,
+        "source_version": source_version,
+        "lifecycle_state": lifecycle_state,
+        "bundle_schema": bundle["schema"] if bundle is not None else None,
+        "bundle_schema_revision": bundle["schema_revision"] if bundle is not None else None,
+        "source_checksum_matches_fixture": int(bundle["source_checksum"] == "sha256:" + sys.argv[2]) if bundle is not None else 0,
+    })
+print(json.dumps(result))
+' "${DB_PATH}" "$NATIVE_UPDATE_SOURCE_SHA256"
+'''
 
 [test.step.assert]
 exit_code = 0
+stdout_json = [{ pointer = "", equals_json = '''[{"trove_name":"phase4-daily-driver-corpus","trove_version":"${native_corpus_update_version}","trove_architecture":"${native_arch}","trove_version_scheme":"${native_scheme}","trove_source_profile":"${native_profile}","source_format":"${native_target}","source_package":"phase4-daily-driver-corpus","source_version":"${native_corpus_update_version}","lifecycle_state":"installed","bundle_schema":"conary.native-lifecycles.v1","bundle_schema_revision":20,"source_checksum_matches_fixture":1}]''' }]
 
 [[test.step]]
 run = "/opt/remi-tests/fixtures/native/write-corpus-evidence.py /tmp/native-pm-corpus/native-fixture-manifest.json /tmp/conary-corpus-daily-driver-update.json ${native_profile} ${native_corpus_source_format} phase4-daily-driver-corpus ${native_corpus_fixture_version} ${native_arch} installation update --update-fixture-manifest /tmp/native-pm-corpus-v2/native-fixture-manifest.json --update-name phase4-daily-driver-corpus --update-version ${native_corpus_update_version} --update-architecture ${native_arch}"
