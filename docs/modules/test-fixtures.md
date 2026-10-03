@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-10-03
-revision: 71
-summary: Map fixture ownership, including typed native persisted-SQL proof, TNPM14 repository-dependency identity and cardinality, regular-file rows, TNPM18 repository metadata and post-update trove/config cardinality, native refusals, repository discovery, command captures, typed boot-tool interfaces, activation intent evidence, and the refreshed Tumbleweed lifecycle snapshot
+revision: 72
+summary: Map fixture ownership, including typed native persisted-SQL proof, TNPM14 repository-dependency identity and cardinality, regular-file rows, TNPM18 repository metadata and post-update trove/config/lifecycle cardinality, native refusals, repository discovery, command captures, typed boot-tool interfaces, activation intent evidence, and the refreshed Tumbleweed lifecycle snapshot
 ---
 
 # Test Fixtures And Proof Maps
@@ -630,6 +630,22 @@ Each fixture family should record:
   source `arch`; the separate corpus evidence format remains `alpm`). This
   assertion proves persisted database values and cardinality only; it adds no
   independent payload-byte or signature-byte proof.
+
+  TNPM18 step 9 (index 8) uses one parameterized SQLite SELECT of every
+  `phase4-daily-driver-corpus` trove, LEFT JOINs its lifecycle bundle, and
+  orders by trove ID. One Python `tomllib` pass parses each non-null
+  `bundle_toml` and emits an exact root JSON array. The one-row expectation
+  pins updated trove name, version `1.0.1-1`, lane architecture, version
+  scheme, and source profile; persisted bundle source format, package,
+  version, and `installed` state; and parsed schema
+  `conary.native-lifecycles.v1` and revision `20`. The integer
+  `source_checksum_matches_fixture = 1` compares the parsed top-level
+  `source_checksum` to `sha256:` plus `NATIVE_UPDATE_SOURCE_SHA256` from the
+  prepared v2 native artifact. `NATIVE_UPDATE_CCS_SHA256` is a separate CCS
+  digest. Missing bundles project null bundle fields and checksum match `0`,
+  extra same-name troves add rows, and malformed TOML exits nonzero. This is
+  persisted data and cardinality proof, not independent signature-byte
+  verification.
 
   Each native package is independently
   installed or extracted and both hardlink paths must report one device/inode
