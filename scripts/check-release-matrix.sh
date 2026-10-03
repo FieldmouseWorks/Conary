@@ -174,6 +174,31 @@ import yaml
 
 
 errors = []
+release_proof = Path(".github/workflows/release-artifact-proof.yml")
+release_sparse_paths = [
+    "/.github/actions/",
+    "/scripts/ci-base-image.py",
+    "/scripts/ci-base-images.json",
+]
+
+
+def exact_authority_checkout(step, path, job_name, steps):
+    values = step.get("with") or {}
+    if (str(step.get("uses", "")).startswith("actions/checkout@")
+            and values.get("ref") == "${{ github.workflow_sha }}"
+            and values.get("path") == "workflow-authority"
+            and values.get("persist-credentials") is False):
+        if (path == release_proof and job_name == "native-package-lifecycle"
+                and any(action.get("uses") == "./workflow-authority/.github/actions/cache-base-image"
+                        for action in steps)):
+            return (isinstance(values.get("sparse-checkout"), str)
+                    and values["sparse-checkout"].splitlines() == release_sparse_paths
+                    and values.get("sparse-checkout-cone-mode") is False)
+        return (values.get("sparse-checkout") == ".github/actions"
+                and values.get("sparse-checkout-cone-mode", True) is True)
+    return False
+
+
 for path in sorted(Path(".github/workflows").glob("*.yml")):
     document = yaml.safe_load(path.read_text())
     for job_name, job in (document.get("jobs") or {}).items():
@@ -201,16 +226,14 @@ for path in sorted(Path(".github/workflows").glob("*.yml")):
                 candidate
                 for candidate in steps[root_index + 1 : action_index]
                 if str(candidate.get("uses", "")).startswith("actions/checkout@")
-                and str((candidate.get("with") or {}).get("ref", "")).strip()
-                == "${{ github.workflow_sha }}"
                 and (candidate.get("with") or {}).get("path") == "workflow-authority"
-                and (candidate.get("with") or {}).get("sparse-checkout") == ".github/actions"
-                and (candidate.get("with") or {}).get("persist-credentials") is False
             ]
-            if not any(index < action_index for index in historical_roots) or not authority_checkouts:
+            if (not any(index < action_index for index in historical_roots)
+                    or len(authority_checkouts) != 1
+                    or not exact_authority_checkout(authority_checkouts[0], path, job_name, steps)):
                 errors.append(
                     f"{path}:{job_name}: local action requires a historical root checkout, "
-                    "then a credential-free, action-only github.workflow_sha checkout at "
+                    "then one credential-free, scoped github.workflow_sha checkout at "
                     "workflow-authority after the latest root checkout and before the action"
                 )
             if not local_uses.startswith("./workflow-authority/.github/actions/"):

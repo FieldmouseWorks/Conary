@@ -33,7 +33,7 @@ runs:
 
         resolved="$(python3 "$GITHUB_ACTION_PATH/../../../scripts/ci-base-image.py" resolve "$ref" --json)"
         ref="$(jq -er '.reference' <<< "$resolved")"
-        release_backed="$(jq -er '.release_backed' <<< "$resolved")"
+        release_backed="$(jq -er '.release_backed | if type == "boolean" then tostring else error("release_backed must be boolean") end' <<< "$resolved")"
         digest="${ref##*@sha256:}"
         echo "ref=$ref" >> "$GITHUB_OUTPUT"
         echo "digest=$digest" >> "$GITHUB_OUTPUT"

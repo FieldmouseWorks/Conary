@@ -534,6 +534,56 @@ class ConsumerWorkflowTests(unittest.TestCase):
         self.assertNotIn('GITHUB_TOKEN', str(action))
         self.assertNotIn('GH_TOKEN', str(action))
 
+    def test_resolve_step_executes_both_boolean_modes_and_refuses_malformed_mode(self):
+        root = Path(__file__).resolve().parent.parent
+        action = yaml.load((root / '.github/actions/cache-base-image/action.yml').read_text(),
+                           Loader=yaml.BaseLoader)
+        step = next(item for item in action['runs']['steps']
+                    if item.get('name') == 'Resolve the pinned base image reference')
+        with tempfile.TemporaryDirectory(prefix='conary-base-resolver-') as temporary:
+            scratch = Path(temporary)
+            harness = scratch / 'harness'
+            harness.write_text('#!/usr/bin/env bash\nprintf "%s\\n" "$TEST_REF"\n')
+            harness.chmod(0o700)
+            run = (step['run'].replace('${{ inputs.harness }}', str(harness))
+                   .replace('${{ inputs.distro }}', 'fixture'))
+            ordinary = 'docker.io/library/ubuntu@sha256:' + 'f' * 64
+            release_backed = image.catalog(root / 'scripts/ci-base-images.json')['opensuse-tumbleweed']['local']
+
+            def execute(reference, action_path, payload=None):
+                output = scratch / 'step-output'
+                output.write_text('')
+                env = {**os.environ, 'GITHUB_ACTION_PATH': str(action_path),
+                       'GITHUB_OUTPUT': str(output), 'TEST_REF': reference}
+                if payload is not None:
+                    env['RESOLVED_JSON'] = json.dumps(payload)
+                result = subprocess.run(['bash', '-euo', 'pipefail', '-c', run],
+                                        capture_output=True, text=True, env=env)
+                return result, dict(line.split('=', 1) for line in output.read_text().splitlines())
+
+            real_action = root / '.github/actions/cache-base-image'
+            for reference, expected in ((ordinary, 'false'), (release_backed, 'true')):
+                with self.subTest(reference=reference):
+                    result, values = execute(reference, real_action)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(values, {'ref': reference,
+                                              'digest': reference.rsplit('@sha256:', 1)[1],
+                                              'release-backed': expected})
+
+            fake_root = scratch / 'fake'
+            fake_action = fake_root / '.github/actions/cache-base-image'
+            fake_action.mkdir(parents=True)
+            fake_helper = fake_root / 'scripts/ci-base-image.py'
+            fake_helper.parent.mkdir()
+            fake_helper.write_text('import os\nprint(os.environ["RESOLVED_JSON"])\n')
+            for payload in ({'reference': ordinary},
+                            {'reference': ordinary, 'release_backed': 'false'},
+                            {'reference': ordinary, 'release_backed': None}):
+                with self.subTest(payload=payload):
+                    result, values = execute(ordinary, fake_action, payload)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertEqual(values, {})
+
     def test_release_proof_checkout_includes_trusted_helper_and_catalog(self):
         root = Path(__file__).resolve().parent.parent
         workflow = yaml.load((root / '.github/workflows/release-artifact-proof.yml').read_text(),
