@@ -52,7 +52,9 @@ if mode == 'model_error':
 if mode == 'toolchain':
     cargo = subprocess.run(['cargo', '--version'], capture_output=True, text=True)
     rustc = subprocess.run(['rustc', '--version'], capture_output=True, text=True)
-    if cargo.returncode or rustc.returncode:
+    cc = subprocess.run(['cc', '--version'], capture_output=True, text=True)
+    cxx = subprocess.run(['c++', '--version'], capture_output=True, text=True)
+    if cargo.returncode or rustc.returncode or cc.returncode or cxx.returncode:
         sys.exit(9)
 companion_ready = None
 if mode == 'companion':

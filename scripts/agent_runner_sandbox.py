@@ -216,6 +216,10 @@ def _restricted_argv(
         "--ro-bind", "/bin", "/bin", "--ro-bind", "/lib", "/lib",
         "--ro-bind", "/lib64", "/lib64", "--dir", "/etc",
     ]
+    # Compiler aliases such as /usr/bin/cc resolve through /etc/alternatives.
+    alternatives = Path("/etc/alternatives")
+    if alternatives.is_dir():
+        argv += ["--ro-bind", str(alternatives), str(alternatives)]
     for entry in ("ssl", "resolv.conf", "hosts", "nsswitch.conf", "passwd", "group", "localtime"):
         source = Path("/etc") / entry
         if source.exists():
