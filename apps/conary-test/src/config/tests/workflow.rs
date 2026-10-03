@@ -291,10 +291,64 @@ fn base_image_cache_never_bypasses_registry_identity() {
         .join("../../.github/actions/cache-base-image/action.yml");
     let action: CompositeAction =
         serde_yaml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let resolve = named_step(
+        &action.runs.steps,
+        "Resolve the pinned base image reference",
+    );
+    assert!(
+        resolve
+            .run
+            .as_deref()
+            .is_some_and(|run| run.contains("ci-base-image.py\" resolve \"$ref\" --json"))
+    );
+    let prepare = named_step(
+        &action.runs.steps,
+        "Restore reviewed release into the local registry",
+    );
+    assert_eq!(
+        prepare.condition.as_deref(),
+        Some("${{ steps.base-image.outputs.release-backed == 'true' }}")
+    );
+    assert!(
+        prepare
+            .run
+            .as_deref()
+            .is_some_and(|run| run.contains("ci-base-image.py\" prepare"))
+    );
+    for name in [
+        "Restore the cached base image",
+        "Load the cached base image",
+        "Save the pulled base image into the cache",
+    ] {
+        assert!(
+            named_step(&action.runs.steps, name)
+                .condition
+                .as_deref()
+                .is_some_and(|condition| condition
+                    .contains("steps.base-image.outputs.release-backed != 'true'"))
+        );
+    }
     let pull = named_step(
         &action.runs.steps,
         "Require the reviewed registry image by digest",
     );
+    let prepare_index = action
+        .runs
+        .steps
+        .iter()
+        .position(|step| {
+            step.name.as_deref() == Some("Restore reviewed release into the local registry")
+        })
+        .unwrap();
+    let pull_index = action
+        .runs
+        .steps
+        .iter()
+        .position(|step| {
+            step.name.as_deref() == Some("Require the reviewed registry image by digest")
+        })
+        .unwrap();
+    assert!(prepare_index < pull_index);
     assert!(
         pull.condition.is_none(),
         "a cache hit must still verify the registry identity"
@@ -353,18 +407,30 @@ sleep() { :; }
         );
     }
     let workflow = load_workflow();
-    let job: WorkspaceTestJob = parse_job(&workflow, "conary-test-crate");
-    let proof = named_step(
-        &job.steps,
-        "Prove retained base images survive origin deletion",
-    );
+    let job: WorkspaceTestJob = parse_job(&workflow, "ci-base-image-policy");
+    let proof = named_step(&job.steps, "Test release-backed CI base image contract");
     assert!(proof.condition.is_none() && !proof.continue_on_error);
-    assert!(
-        proof
-            .run
-            .as_ref()
-            .unwrap()
-            .contains("python3 scripts/test-ci-base-image.py -v")
+    assert_eq!(
+        proof.run.as_deref(),
+        Some("python3 scripts/test-ci-base-image.py")
+    );
+    let lifecycle: MatrixJob = parse_job(&workflow, MATRIX_JOB_ID);
+    let install = named_step(
+        &lifecycle.steps,
+        "Install release-backed base image transport",
+    );
+    assert_eq!(
+        install.condition.as_deref(),
+        Some("${{ matrix.distro == 'opensuse-tumbleweed' }}")
+    );
+    assert_eq!(
+        install.run.as_deref(),
+        Some("bash scripts/ci-install-ubuntu-packages.sh skopeo docker-registry")
+    );
+    let cleanup = named_step(&lifecycle.steps, "Stop the release-backed local registry");
+    assert_eq!(
+        cleanup.condition.as_deref(),
+        Some("${{ always() && matrix.distro == 'opensuse-tumbleweed' }}")
     );
 }
 
@@ -1188,6 +1254,30 @@ fn release_artifact_workflow_installs_every_published_native_package() {
                 distro: "arch".to_string(),
                 native_format: "arch".to_string(),
             },
+        ]
+    );
+
+    let trusted_checkout = named_step(&job.steps, "Check out workflow authority for local actions");
+    assert_eq!(
+        trusted_checkout
+            .with
+            .get("ref")
+            .and_then(serde_yaml::Value::as_str),
+        Some("${{ github.workflow_sha }}")
+    );
+    let sparse = trusted_checkout.with["sparse-checkout"]
+        .as_str()
+        .expect("trusted action sparse paths");
+    assert_eq!(
+        trusted_checkout.with["sparse-checkout-cone-mode"].as_bool(),
+        Some(false)
+    );
+    assert_eq!(
+        sparse.lines().collect::<Vec<_>>(),
+        [
+            "/.github/actions/",
+            "/scripts/ci-base-image.py",
+            "/scripts/ci-base-images.json"
         ]
     );
 

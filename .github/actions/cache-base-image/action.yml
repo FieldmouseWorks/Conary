@@ -1,9 +1,8 @@
 name: cache-base-image
 description: >-
-  Restore optional cached layers, then require an anonymous registry pull by the reviewed
-  digest on every run. Registered retained images use their project-owned
-  registry; cache names never establish image authority. Docker verifies the
-  manifest/config/layer content while pulling the pinned reference.
+  Restore optional layers for ordinary images. For a release-backed image,
+  verify the public archive and seed a job-local registry. Every path requires
+  an anonymous Docker pull by the reviewed digest before building.
 inputs:
   distro:
     description: Test distro slug from the typed conary-test configuration.
@@ -32,22 +31,36 @@ runs:
           exit 1
         }
 
-        ref="$(python3 "$GITHUB_ACTION_PATH/../../../scripts/ci-base-image.py" resolve "$ref")"
+        resolved="$(python3 "$GITHUB_ACTION_PATH/../../../scripts/ci-base-image.py" resolve "$ref" --json)"
+        ref="$(jq -er '.reference' <<< "$resolved")"
+        release_backed="$(jq -er '.release_backed' <<< "$resolved")"
         digest="${ref##*@sha256:}"
         echo "ref=$ref" >> "$GITHUB_OUTPUT"
         echo "digest=$digest" >> "$GITHUB_OUTPUT"
+        echo "release-backed=$release_backed" >> "$GITHUB_OUTPUT"
 
     - name: Restore the cached base image
       id: cache
+      if: ${{ steps.base-image.outputs.release-backed != 'true' }}
       uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
       with:
         path: ~/.cache/conary-base-images/${{ inputs.distro }}.tar
         key: conary-base-image-v2-${{ inputs.distro }}-${{ steps.base-image.outputs.digest }}
 
     - name: Load the cached base image
-      if: steps.cache.outputs.cache-hit == 'true'
+      if: ${{ steps.base-image.outputs.release-backed != 'true' && steps.cache.outputs.cache-hit == 'true' }}
       shell: bash
       run: docker load --input ~/.cache/conary-base-images/${{ inputs.distro }}.tar
+
+    - name: Restore reviewed release into the local registry
+      if: ${{ steps.base-image.outputs.release-backed == 'true' }}
+      shell: bash
+      env:
+        DISTRO: ${{ inputs.distro }}
+      run: |
+        set -euo pipefail
+        python3 "$GITHUB_ACTION_PATH/../../../scripts/ci-base-image.py" prepare \
+          --image "$DISTRO" --workdir "$RUNNER_TEMP/conary-ci-base-$DISTRO"
 
     - name: Require the reviewed registry image by digest
       shell: bash
@@ -75,7 +88,7 @@ runs:
           | python3 -c 'import json,sys; expected=sys.argv[1].rsplit("@",1)[1]; assert any(ref.rsplit("@",1)[-1] == expected for ref in json.load(sys.stdin)), "pulled image lacks its required manifest digest"' "$BASE_IMAGE_REF"
 
     - name: Save the pulled base image into the cache
-      if: steps.cache.outputs.cache-hit != 'true'
+      if: ${{ steps.base-image.outputs.release-backed != 'true' && steps.cache.outputs.cache-hit != 'true' }}
       shell: bash
       env:
         BASE_IMAGE_REF: ${{ steps.base-image.outputs.ref }}

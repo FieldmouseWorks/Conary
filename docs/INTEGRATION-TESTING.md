@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-10-03
-revision: 106
-summary: Define the Podman integration harness and proof contracts, including exact retained base-image acquisition, TNPM14 repository-dependency rows, TNPM15 regular-file and activation rows, and TNPM18 repository and post-update lifecycle rows
+revision: 107
+summary: Define the Podman integration harness and proof contracts, including immutable release-backed base-image acquisition, TNPM14 repository-dependency rows, TNPM15 regular-file and activation rows, and TNPM18 repository and post-update lifecycle rows
 ---
 
 # Integration Testing
@@ -1055,63 +1055,56 @@ succeeds.
 
 ### Retaining reviewed base images
 
-`scripts/ci-base-images.json` binds each retained image's original registry
-reference to a project-owned reference with the **same manifest digest**.
-The first entry is the Tumbleweed `20260908` linux/amd64 base. Its package,
-repository-snapshot and signing-root bindings are unchanged. This catalog
-does not authorize a new snapshot or infer authority from a cache name.
+`scripts/ci-base-images.json` binds the Tumbleweed `20260908` linux/amd64
+source manifest digest and platform to one immutable public release asset. The
+catalog pins the release repository, tag, unique asset name, archive SHA-256,
+size, and job-local runtime reference. The runtime reference uses
+`127.0.0.1:55071` with the **same manifest digest** as the original image.
+Package, repository-snapshot and signing-root bindings are unchanged. The
+catalog does not authorize a new snapshot or infer authority from a cache name.
 
-The `cache-base-image` action may restore cached layers, but every run must
-successfully pull the configured registry reference by digest and inspect that
-digest before building. Docker verifies the manifest, config and layers on
-acquisition. The action resolves its policy helper from its own checkout so
-release-proof workflows retain the selected workflow authority. There is no
-mutable-tag or upstream fallback when a retained image is missing.
+For this image, `.github/actions/cache-base-image` always queries the public
+release metadata anonymously, requires an immutable non-draft release and the
+exact asset digest and size, and downloads from the URL derived from the
+checked-in repository, tag and asset. It verifies the archive SHA-256, safely
+restores the exact OCI directory, and checks its pinned manifest, config,
+layers and platform. Skopeo seeds a Distribution registry bound only to the
+job's loopback port with `--preserve-digests`; an anonymous read-back verifies
+the seeded bytes. The action bypasses its image-archive cache for this lane and
+requires a fresh anonymous `docker pull` by digest and matching `RepoDigests`
+before `conary-test images build`. The registry remains alive through the
+Docker `FROM` and is stopped at the end of the job. No registry write token is
+available to pull-request jobs. The public release asset is the retained byte
+authority; a mutable tag, a stale cache and the retired upstream manifest
+cannot replace it.
 
-Conary maintainers own publication to
-`ghcr.io/fieldmouseworks/conary-ci-base-<distro>`. Pull-request workflows have no
-registry write authority. A maintainer stages the exact reviewed platform
-manifest with Skopeo, independently verifies every manifest/config/layer size
-and SHA-256, then publishes with an explicit scoped registry auth file:
+The dedicated release is `ci-base-971-tumbleweed-20260908`; its asset is
+`opensuse-tumbleweed-20260908-oci-dir.tar` with SHA-256
+`db4dce3794bc93d307dacac63905ab3c11d360a22b24b1cf0dce97f5e38e2824`.
+The helper's `stage` command can still diagnose the declared original registry
+when available, but the Tumbleweed manifest has retired. Changing compression,
+accepting a different manifest, or trusting an unpacked cache is not recovery
+of the pinned image. Keep the immutable asset available as long as its source
+digest is configured. A refresh reviews a new source pin with its matching
+root, package, repository and signing authority and preserves its complete
+bytes before changing the consumer. This first entry does not claim that
+other distro images have already been retained.
 
-```bash
-python3 scripts/ci-base-image.py stage --image opensuse-tumbleweed --layout staged-image
-python3 scripts/ci-base-image.py verify --image opensuse-tumbleweed --layout staged-image
-python3 scripts/ci-base-image.py publish --image opensuse-tumbleweed --layout staged-image --authfile /path/to/private/registry-auth.json
-python3 scripts/ci-base-image.py fetch --image opensuse-tumbleweed --layout anonymous-readback
-```
+For a local Tumbleweed image build, install Skopeo and Distribution, run
+`python3 scripts/ci-base-image.py prepare --image opensuse-tumbleweed --workdir /tmp/conary-ci-base-opensuse-tumbleweed`,
+then use `conary-test images build --distro opensuse-tumbleweed`. Stop the local
+registry with `python3 scripts/ci-base-image.py cleanup --workdir /tmp/conary-ci-base-opensuse-tumbleweed`.
+The chosen workdir must be new and the fixed loopback port must be free.
 
-`stage` reads the declared original registry; `fetch` reads only the retained
-registry. Both require a new destination and anonymous access. `publish` uses
-`--preserve-digests`, writes a digest-derived retention tag, and succeeds only
-after a fresh anonymous download verifies every byte. If the original registry
-has retired its manifest, an independently recovered Skopeo `dir` layout can
-enter at `verify`; changing compression, accepting a different manifest, or
-trusting an unpacked cache is not recovery of the pinned image.
-
-GHCR packages initially default to private. The package owner must enable
-public read access and connect the package to the Conary repository; neither
-permission nor visibility is inferred from the repository name. A failed
-anonymous read-back leaves publication unverified even if an upload completed.
-Do not merge a consumer pin until that read-back and the protected lane pass.
-Registry auth files stay outside the repository and evidence. See the official
-[GHCR authentication and visibility documentation](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry).
-
-Keep every referenced digest and its retention tag; no time-based cleanup job
-may remove them. Refresh by reviewing a new source pin with its matching root,
-package, repository and signing authority, preserving the complete image
-before changing the consumer. Removing unreferenced historical image versions
-is a separate maintainer-reviewed retention change. This first entry does not
-claim that every other distro's upstream image has already been retained.
-
-`python3 scripts/test-ci-base-image.py -v` runs corruption/binding refusals and
-two disposable loopback Distribution registries. It deletes the original
-manifest and both local image copies, then proves a cold anonymous retained
-pull; deleting the retained manifest must fail. The proof runs in the
-protected `conary-test-crate` job with Skopeo and `docker-registry`. It executes
-no image or package workload and uses no host container store. Plain HTTP is
-available only through an explicit literal-loopback fixture flag; production
-transport retains certificate verification.
+`python3 scripts/test-ci-base-image.py -v` runs archive, metadata, digest,
+platform and catalog refusals. Its real disposable Distribution registry test
+proves an origin manifest returns 200, deletes it and confirms 404, then
+deletes the release fixture and source OCI directory after local seeding. It
+proves cold anonymous acquisition by the original manifest digest. The proof
+runs in required `ci-base-image-policy` with Skopeo and `docker-registry` and
+gates the workspace-test shards. It executes no image or package workload and
+uses no host container store. Plain HTTP is limited to a literal loopback
+registry; release downloads retain certificate verification.
 
 The Artix lane keeps both sides of its rolling package view deliberate: the OCI
 base is digest-pinned, and the container selects Artix's two official core
