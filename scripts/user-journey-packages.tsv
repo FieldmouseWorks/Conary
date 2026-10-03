@@ -1,0 +1,4 @@
+profile	name	format	file	sha256	url	binary	binary_sha256
+fedora-44	tree	rpm	tree-2.2.1-4.fc44.x86_64.rpm	345304574b0f8aa3864deb7130ad54069af1257516c34c4eef0a9eea289640db	https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/x86_64/os/Packages/t/tree-2.2.1-4.fc44.x86_64.rpm	/usr/bin/tree	a186b7fd7461cf13ee9609b7ac944d123bc24761607fc3cea3bf3b550b842489
+ubuntu-26.04	tree	deb	tree_2.3.1-1_amd64.deb	4a82d48d504c33f01daaf6bc76aa8cb44190fb3104348d68a8b2f7e76c89e1fd	http://archive.ubuntu.com/ubuntu/pool/universe/t/tree/tree_2.3.1-1_amd64.deb	/usr/bin/tree	a0ebadcceea0f05d92008da4aeb672d81bc4eac3ed00d9816f9bed333e77c551
+arch	tree	alpm	tree-2.3.2-1-x86_64.pkg.tar.zst	8a6230468cc31a2c984a41c092035dd16bf97e737ec3241490724a5419903739	https://archive.archlinux.org/packages/t/tree/tree-2.3.2-1-x86_64.pkg.tar.zst	/usr/bin/tree	e84b34cbd69868275cb7b01f63a26a1c5e9168e9a6f625c0667b1057e72a9212
