@@ -321,7 +321,7 @@ jobs:
           persist-credentials: false
       - name: Install CI base image proof tools
         run: bash scripts/ci-install-ubuntu-packages.sh skopeo docker-registry python3-yaml
-      - name: Test CI base image archive and publication contract
+      - name: Test release-backed CI base image contract
         run: python3 scripts/test-ci-base-image.py
 
   docs-truth:
@@ -666,6 +666,9 @@ jobs:
           commit-sha: ${{ github.sha }}
           run-id: ${{ github.run_id }}
           event-name: ${{ github.event_name }}
+      - name: Install release-backed base image transport
+        if: ${{ matrix.distro == 'opensuse-tumbleweed' }}
+        run: bash scripts/ci-install-ubuntu-packages.sh skopeo docker-registry
       - uses: ./.github/actions/cache-base-image
         with:
           distro: ${{ matrix.distro }}
@@ -786,6 +789,9 @@ jobs:
               select(.role == "signing_root") |
               (.fingerprints | length > 0)] | all)
           ' "$result"
+      - name: Stop the release-backed local registry
+        if: ${{ always() && matrix.distro == 'opensuse-tumbleweed' }}
+        run: python3 scripts/ci-base-image.py cleanup --workdir "$RUNNER_TEMP/conary-ci-base-opensuse-tumbleweed"
 
   native-cross-source-lifecycle-gate:
     name: native-cross-source-lifecycle

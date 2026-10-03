@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-10-03
-revision: 72
-summary: Map fixture ownership, including typed native persisted-SQL proof, TNPM14 repository-dependency identity and cardinality, regular-file rows, TNPM18 repository metadata and post-update trove/config/lifecycle cardinality, native refusals, repository discovery, command captures, typed boot-tool interfaces, activation intent evidence, and the refreshed Tumbleweed lifecycle snapshot
+revision: 74
+summary: Map fixture ownership, including release-backed base-image proof, native persisted-SQL rows, native refusals, repository discovery, command captures, activation intent, and the refreshed Tumbleweed lifecycle snapshot
 ---
 
 # Test Fixtures And Proof Maps
@@ -466,9 +466,17 @@ Each fixture family should record:
   declarations but are disabled because they have no release-matched history
   authority and are not inputs to the lifecycle proof. The current snapshot is
   `20260908`, observed from the digest-pinned amd64 image; repository declaration
-  hashes are measured after the snapshot rewrite. Upstream retention is not
-  guaranteed by a digest pin; #971 owns durable preservation of reviewed image
-  bytes after the recurring retired-manifest failures. `fedora44` is the existing
+  hashes are measured after the snapshot rewrite. Its cataloged loopback
+  runtime reference has the same manifest digest as the original upstream
+  image. `scripts/ci-base-images.json` binds the source digest to one immutable
+  public release asset and its archive SHA-256. `scripts/ci-base-image.py`
+  verifies complete OCI bytes before seeding the local registry;
+  `python3 scripts/test-ci-base-image.py -v` proves cold acquisition after
+  deleting the origin manifest, release fixture and source layout. This lane bypasses the
+  action's image-archive cache and requires a fresh pinned registry pull. #971 owns rollout
+  and broader reviewed-image retention; download and refresh policy live in
+  `docs/INTEGRATION-TESTING.md`.
+  `fedora44` is the existing
   `conary-test` runner distro key; public CCS target IDs remain
   `fedora-44`, `ubuntu-26.04`, and `arch`; `solus` remains a separate candidate
   and conformance-fixture identity.

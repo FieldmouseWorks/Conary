@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-10-03
-revision: 105
-summary: Define the Podman container integration harness, its prerequisites, running suites, fixtures, and result/proof contracts, including TNPM14 persisted repository-dependency identity and cardinality, TNPM15 regular-file rows and activation intent authority, and TNPM18 repository metadata plus post-update trove/config/lifecycle cardinality
+revision: 107
+summary: Define the Podman integration harness and proof contracts, including immutable release-backed base-image acquisition, TNPM14 repository-dependency rows, TNPM15 regular-file and activation rows, and TNPM18 repository and post-update lifecycle rows
 ---
 
 # Integration Testing
@@ -1052,6 +1052,59 @@ authority, container support, an exact trace match, or an image build fails its
 matrix job; there is no manifest skip fallback. A stable
 `native-cross-source-lifecycle` aggregator fails unless every distro matrix job
 succeeds.
+
+### Retaining reviewed base images
+
+`scripts/ci-base-images.json` binds the Tumbleweed `20260908` linux/amd64
+source manifest digest and platform to one immutable public release asset. The
+catalog pins the release repository, tag, unique asset name, archive SHA-256,
+size, and job-local runtime reference. The runtime reference uses
+`127.0.0.1:55071` with the **same manifest digest** as the original image.
+Package, repository-snapshot and signing-root bindings are unchanged. The
+catalog does not authorize a new snapshot or infer authority from a cache name.
+
+For this image, `.github/actions/cache-base-image` always queries the public
+release metadata anonymously, requires an immutable non-draft release and the
+exact asset digest and size, and downloads from the URL derived from the
+checked-in repository, tag and asset. It verifies the archive SHA-256, safely
+restores the exact OCI directory, and checks its pinned manifest, config,
+layers and platform. Skopeo seeds a Distribution registry bound only to the
+job's loopback port with `--preserve-digests`; an anonymous read-back verifies
+the seeded bytes. The action bypasses its image-archive cache for this lane and
+requires a fresh anonymous `docker pull` by digest and matching `RepoDigests`
+before `conary-test images build`. The registry remains alive through the
+Docker `FROM` and is stopped at the end of the job. No registry write token is
+available to pull-request jobs. The public release asset is the retained byte
+authority; a mutable tag, a stale cache and the retired upstream manifest
+cannot replace it.
+
+The dedicated release is `ci-base-971-tumbleweed-20260908`; its asset is
+`opensuse-tumbleweed-20260908-oci-dir.tar` with SHA-256
+`db4dce3794bc93d307dacac63905ab3c11d360a22b24b1cf0dce97f5e38e2824`.
+The helper's `stage` command can still diagnose the declared original registry
+when available, but the Tumbleweed manifest has retired. Changing compression,
+accepting a different manifest, or trusting an unpacked cache is not recovery
+of the pinned image. Keep the immutable asset available as long as its source
+digest is configured. A refresh reviews a new source pin with its matching
+root, package, repository and signing authority and preserves its complete
+bytes before changing the consumer. This first entry does not claim that
+other distro images have already been retained.
+
+For a local Tumbleweed image build, install Skopeo and Distribution, run
+`python3 scripts/ci-base-image.py prepare --image opensuse-tumbleweed --workdir /tmp/conary-ci-base-opensuse-tumbleweed`,
+then use `conary-test images build --distro opensuse-tumbleweed`. Stop the local
+registry with `python3 scripts/ci-base-image.py cleanup --workdir /tmp/conary-ci-base-opensuse-tumbleweed`.
+The chosen workdir must be new and the fixed loopback port must be free.
+
+`python3 scripts/test-ci-base-image.py -v` runs archive, metadata, digest,
+platform and catalog refusals. Its real disposable Distribution registry test
+proves an origin manifest returns 200, deletes it and confirms 404, then
+deletes the release fixture and source OCI directory after local seeding. It
+proves cold anonymous acquisition by the original manifest digest. The proof
+runs in required `ci-base-image-policy` with Skopeo and `docker-registry` and
+gates the workspace-test shards. It executes no image or package workload and
+uses no host container store. Plain HTTP is limited to a literal loopback
+registry; release downloads retain certificate verification.
 
 The Artix lane keeps both sides of its rolling package view deliberate: the OCI
 base is digest-pinned, and the container selects Artix's two official core
