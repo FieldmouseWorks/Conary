@@ -22,8 +22,6 @@ jobs:
       RELEASE_TAG: ci-base-971-tumbleweed-20260908
       ASSET_NAME: opensuse-tumbleweed-20260908-oci-dir.tar
       ARCHIVE_SHA256: db4dce3794bc93d307dacac63905ab3c11d360a22b24b1cf0dce97f5e38e2824
-      ARCHIVE_DIR: ${{ runner.temp }}/ci-base-release
-      LAYOUT_DIR: ${{ runner.temp }}/ci-base-layout
     steps:
       - name: Check out trusted workflow revision
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -52,6 +50,8 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          ARCHIVE_DIR: ${{ runner.temp }}/ci-base-release
+          LAYOUT_DIR: ${{ runner.temp }}/ci-base-layout
         run: |
           set -euo pipefail
           mkdir -p "$ARCHIVE_DIR"
@@ -86,6 +86,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           WORKFLOW_SHA: ${{ github.workflow_sha }}
+          LAYOUT_DIR: ${{ runner.temp }}/ci-base-layout
         run: |
           set -euo pipefail
           auth_dir="$(mktemp -d "${RUNNER_TEMP}/ci-base-auth.XXXXXX")"

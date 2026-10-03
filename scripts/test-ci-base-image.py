@@ -360,6 +360,28 @@ class PublisherWorkflowTests(unittest.TestCase):
         self.assertIn(late_fence, run)
         self.assertLess(run.index('skopeo login'), run.index(late_fence))
 
+    def test_runner_temp_paths_are_bound_only_at_using_steps(self):
+        root = Path(__file__).resolve().parent.parent
+        workflow = yaml.load((root / '.github/workflows/publish-ci-base-image.yml').read_text(),
+                             Loader=yaml.BaseLoader)
+        job = workflow['jobs']['publish']
+        self.assertEqual(set(job['env']),
+                         {'GH_REPO', 'RELEASE_TAG', 'ASSET_NAME', 'ARCHIVE_SHA256'})
+        download = next(step for step in job['steps']
+                        if step.get('name') == 'Download and verify the immutable source archive')
+        self.assertEqual(download['env'], {
+            'GH_TOKEN': '${{ github.token }}',
+            'ARCHIVE_DIR': '${{ runner.temp }}/ci-base-release',
+            'LAYOUT_DIR': '${{ runner.temp }}/ci-base-layout',
+        })
+        publication = next(step for step in job['steps']
+                           if step.get('name') == 'Publish digest-preserving image and verify anonymous read-back')
+        self.assertEqual(publication['env'], {
+            'GITHUB_TOKEN': '${{ github.token }}',
+            'WORKFLOW_SHA': '${{ github.workflow_sha }}',
+            'LAYOUT_DIR': '${{ runner.temp }}/ci-base-layout',
+        })
+
     def test_pr_gate_runs_complete_image_contract_without_registry_write_token(self):
         root = Path(__file__).resolve().parent.parent
         workflow = yaml.load((root / '.github/workflows/pr-gate.yml').read_text(),
