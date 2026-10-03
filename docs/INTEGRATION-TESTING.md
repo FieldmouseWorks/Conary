@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-10-03
-revision: 108
-summary: Define the Podman integration harness and proof contracts, including immutable release-backed base-image acquisition, TNPM14 repository-dependency rows, TNPM15 regular-file and activation rows, TNPM18 repository and post-update lifecycle rows, and Group I exact-name package absence
+last_updated: 2026-10-04
+revision: 109
+summary: Define the Podman integration harness and proof contracts, including immutable release-backed base-image acquisition, TNPM05 whole-root provider JSON, TNPM14 repository-dependency rows, TNPM15 regular-file and activation rows, TNPM18 repository and post-update lifecycle rows, and Group I exact-name package absence
 ---
 
 # Integration Testing
@@ -646,6 +646,21 @@ extra matching row changes the delta; a foreign tuple adds a group and fails
 the entire-array comparison. This projection checks values and multiplicity;
 it does not distinguish provenance roles. The role distinction belongs to the
 [native capability contract](modules/ccs.md) and the daily-driver corpus.
+
+`TNPM05` step 4 runs `query whatprovides phase4-runtime-fixture --json` after
+the native fixture install. Its single whole-root schema-v1 assertion requires
+the requested capability, exactly one installed provider named
+`phase4-runtime-fixture`, the lane's exact native fixture version,
+architecture, and version scheme, CCS release `1`, a null repository, only the
+fixture version in `capability_versions`, and integer `provider_count = 1`. Focused
+`cargo test -p conary-test native_parity_whatprovides_` loads the manifest for
+Fedora 44, Ubuntu 26.04, and Arch and checks that the assertion rejects extra
+or near-name providers, wrong identity or types, malformed or concatenated
+JSON, and a failed command. This local test proves the loaded assertion; the
+full native parity suite must run in each container lane to observe command
+output. The query result does not independently establish artifact bytes,
+install source, or provide provenance; `TNPM04` and selected-generation checks
+cover those separate facts.
 
 `TNPM06` and `TNPM08` read the same package's `troves` count through
 `sqlite3 -json` after the selected-generation checks. The refused pinned
