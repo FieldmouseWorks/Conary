@@ -29,6 +29,7 @@ MAX_RESULT_BYTES = 256 * 1024
 MAX_EVENT_BYTES = 1024 * 1024
 EVENT_NAME = re.compile(r"^[a-z][a-z0-9_.-]{0,63}$")
 MODEL_NAME = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$")
+REASONING_EFFORTS = frozenset({"minimal", "low", "medium", "high", "xhigh", "max", "ultra"})
 HEAD_ID = re.compile(r"^[0-9a-f]{40}$")
 RESULT_KEYS = frozenset({
     "schema_version", "run_id", "task_id", "status", "branch", "candidate_head",
@@ -377,7 +378,7 @@ def launch_codex(
     if (trace_path == result_path or resolved_trace == resolved_result or
             worktree in resolved_trace.parents or worktree in resolved_result.parents):
         raise ValueError("evidence paths must be distinct and outside the worktree")
-    if not MODEL_NAME.fullmatch(model) or reasoning_effort != "max":
+    if not MODEL_NAME.fullmatch(model) or reasoning_effort not in REASONING_EFFORTS:
         raise ValueError("invalid model or reasoning effort")
     if not isinstance(timeout_seconds, int) or timeout_seconds < 1 or timeout_seconds > 24 * 3600:
         raise ValueError("invalid child time limit")

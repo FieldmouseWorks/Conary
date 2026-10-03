@@ -70,7 +70,12 @@ The strict JSON envelope records:
   match its declared hash.
 - `models`: an explicit `allowlist`, plus worker and reviewer model IDs and
   reasoning effort for this invocation. These are run settings, not repository
-  policy. An unavailable or unlisted model is a hard stop.
+  policy. The runner accepts `minimal`, `low`, `medium`, `high`, `xhigh`, `max`,
+  or `ultra` as explicitly pinned efforts. If the Codex CLI rejects the chosen
+  model/effort pair, launch fails without substitution. The controller checks
+  the requested effort in launcher metadata; it does not attest the provider's
+  effective effort. An unavailable or unlisted model is a hard stop. The
+  current #1070 pilot pins Sol/max for both roles.
 - `limits`: finite wall-clock seconds and causal repair count (zero is
   allowed). On the first claim, the journal records an absolute deadline no
   later than `wall_seconds` from that claim. Later invocations use the same

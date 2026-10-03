@@ -45,6 +45,7 @@ TERMINAL_CONCLUSIONS = {
     "neutral", "skipped", "stale", "startup_failure",
 }
 HOSTED_STATUSES = {"queued", "in_progress", "completed", "waiting", "pending", "requested"}
+REASONING_EFFORTS = {"minimal", "low", "medium", "high", "xhigh", "max", "ultra"}
 KNOWN_RULES = {"deletion", "non_fast_forward", "required_status_checks", "pull_request"}
 MAX_CANDIDATE_FILE = 64 * 1024 * 1024
 COMMON_CREDENTIAL = re.compile(
@@ -170,8 +171,9 @@ def validate_spec(data):
         fields(value, {"id", "reasoning_effort"}, label=f"models.{role}")
         require(value["id"] in models["allowlist"], "invalid_spec",
                 f"{role} model is outside the explicit allowlist")
-        require(value["reasoning_effort"] == "max", "invalid_spec",
-                f"{role} reasoning effort must be max for runner schema v1")
+        require(isinstance(value["reasoning_effort"], str) and
+                value["reasoning_effort"] in REASONING_EFFORTS, "invalid_spec",
+                f"{role} reasoning effort is unsupported")
     fields(data["limits"], {"wall_seconds", "causal_repairs"}, label="limits")
     positive(data["limits"]["wall_seconds"], "limits.wall_seconds")
     positive(data["limits"]["causal_repairs"], "limits.causal_repairs", allow_zero=True)

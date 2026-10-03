@@ -243,6 +243,15 @@ class EnvelopeControls(unittest.TestCase):
     def test_explicit_bounded_envelope_is_valid(self):
         self.assertEqual(RUNNER.validate_spec(complete_spec())["schema_version"], 1)
 
+    def test_reasoning_effort_is_pinned_by_run_not_repository_policy(self):
+        value = complete_spec()
+        value["models"]["worker"]["reasoning_effort"] = "high"
+        self.assertEqual(RUNNER.validate_spec(value)["models"]["worker"]["reasoning_effort"],
+                         "high")
+        value["models"]["worker"]["reasoning_effort"] = "bogus"
+        with self.assertRaises(RUNNER.RunnerError):
+            RUNNER.validate_spec(value)
+
     def test_expired_or_merge_grant_cannot_dispatch(self):
         for change in (
             lambda value: value["authorization"].update(expires_at="2000-01-01T00:00:00Z"),

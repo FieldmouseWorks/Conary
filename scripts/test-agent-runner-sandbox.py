@@ -179,7 +179,7 @@ class SandboxTest(unittest.TestCase):
             self.addCleanup(path.unlink, missing_ok=True)
 
     def launch(self, *, mode: str = "success", timeout: int = 8,
-               model: str = "gpt-6-sol", read_only: bool = False):
+               model: str = "gpt-6-sol", effort: str = "max", read_only: bool = False):
         self.mode.write_text(mode)
         trace = self.root / f"{mode}-{model}-trace.jsonl"
         result = self.root / f"{mode}-{model}-result.json"
@@ -189,6 +189,7 @@ class SandboxTest(unittest.TestCase):
                 worktree=self.worktree, prompt="Return the requested JSON result.",
                 model=model, timeout_seconds=timeout, trace_path=trace, result_path=result,
                 codex_binary=self.fake, auth_file=self.auth,
+                reasoning_effort=effort,
                 read_only_worktree=read_only,
             )
         return outcome
@@ -219,6 +220,13 @@ class SandboxTest(unittest.TestCase):
         self.assertNotIn(self.secret, outcome.result_path.read_text())
         for line in trace.splitlines():
             json.loads(line)
+
+    def test_explicit_nondefault_effort_reaches_child_unchanged(self) -> None:
+        outcome = self.launch(effort="high")
+        self.assertTrue(outcome.ok, outcome)
+        self.assertEqual(outcome.reasoning_effort, "high")
+        self.assertIn("model_reasoning_effort=high",
+                      json.loads(self.probe.read_text())["argv"])
 
     def test_timeout_kills_child_and_preserves_failure_receipt(self) -> None:
         outcome = self.launch(mode="sleep", timeout=1)
@@ -346,7 +354,7 @@ class SandboxTest(unittest.TestCase):
     def test_invalid_effort_and_worktree_evidence_are_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "invalid model or reasoning effort"):
             sandbox.launch_codex(
-                worktree=self.worktree, prompt="x", model="gpt-6-sol", reasoning_effort="low",
+                worktree=self.worktree, prompt="x", model="gpt-6-sol", reasoning_effort="bogus",
                 timeout_seconds=1, trace_path=self.root / "bad-trace",
                 result_path=self.root / "bad-result", codex_binary=self.fake, auth_file=self.auth,
             )
