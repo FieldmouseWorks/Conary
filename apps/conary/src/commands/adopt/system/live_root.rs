@@ -8,7 +8,7 @@ use super::{
 };
 use anyhow::Result;
 use conary_core::db::backup::CheckpointReason;
-use conary_core::db::models::{Changeset, ChangesetStatus};
+use conary_core::db::models::{Changeset, ChangesetStatus, PackageTransactionStaging};
 use conary_core::filesystem::CasStore;
 
 pub(super) fn adopt_live_root_as_full_package(
@@ -44,7 +44,9 @@ pub(super) fn adopt_live_root_as_full_package(
     write_db_checkpoint(db_path, CheckpointReason::PreMutation)?;
     let (changeset_id, sync) = conary_core::db::transaction(&mut conn, |tx| {
         let changeset_id = changeset.insert(tx)?;
-        let sync = synchronize_captured_root(tx, changeset_id, &captured)?;
+        let mut package_rows = PackageTransactionStaging::begin(tx)?;
+        let sync = synchronize_captured_root(tx, &mut package_rows, changeset_id, &captured)?;
+        package_rows.finish()?;
         changeset.update_status(tx, ChangesetStatus::Applied)?;
         Ok((changeset_id, sync))
     })?;

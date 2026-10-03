@@ -19,7 +19,7 @@ use std::process::Command;
 use tracing::debug;
 
 const RPM_PACKAGE_RECORD_FORMAT: &str = "%{NEVRA}\x1e%{NAME}\x1e%{VERSION}\x1e%{RELEASE}\x1e%{EPOCH}\x1e%{ARCH}\x1e%{DESCRIPTION}\x1e%{SUMMARY}\x1e%{LICENSE}\x1e%{URL}\x1e%{VENDOR}\x1e%{SOURCERPM}\x1e%{BUILDHOST}\x1e%{INSTALLTIME}\x1f";
-const RPM_FILE_RECORD_FORMAT: &str = "[%{FILENAMES}\x1e%{LONGFILESIZES}\x1e%{FILEMTIMES}\x1e%{FILEDIGESTS}\x1e%{FILEMODES:octal}\x1e%{FILEUSERNAME}\x1e%{FILEGROUPNAME}\x1e%{FILELINKTOS}\x1e%{FILEFLAGS:hex}\x1e%{FILESTATES}\x1f]";
+const RPM_FILE_RECORD_FORMAT: &str = "[%{FILENAMES}\x1e%{LONGFILESIZES}\x1e%{FILEMTIMES}\x1e%{FILEDIGESTS}\x1e%{FILEMODES:octal}\x1e%{FILEUSERNAME}\x1e%{FILEGROUPNAME}\x1e%{FILELINKTOS}\x1e%{FILEFLAGS:hex}\x1e%{FILESTATES}\x1e%{BASENAMES}\x1e%{FILERDEVS}\x1e%{FILECAPS}\x1e%{FILESIGNATURES}\x1f]";
 const RPM_REQUIREMENT_RECORD_FORMAT: &str =
     "[%{REQUIRENAME}\x1e%{REQUIREFLAGS:hex}\x1e%{REQUIREVERSION}\x1f]";
 const RPM_OWNER_RECORD_FORMAT: &str = "%{NAME}\x1f";
@@ -295,12 +295,18 @@ pub fn query_package_files(name: &str) -> Result<Vec<InstalledFileInfo>> {
     Ok(files)
 }
 
+/// Whether an RPM scalar tag carries a value, as opposed to the `""` or
+/// `"(none)"` spellings RPM uses for an absent tag.
+fn rpm_field_is_present(value: &str) -> bool {
+    !value.is_empty() && value != "(none)"
+}
+
 /// Convert an RPM field value to `Option<String>`, treating `"(none)"` and empty as `None`.
 fn rpm_none_to_option(s: &&str) -> Option<String> {
-    if *s == "(none)" || s.is_empty() {
-        None
-    } else {
+    if rpm_field_is_present(s) {
         Some(s.to_string())
+    } else {
+        None
     }
 }
 
@@ -314,11 +320,24 @@ fn parse_rpm_file_records(output: &str) -> Result<Vec<InstalledFileInfo>> {
         .collect()
 }
 
+/// Parse one RPM `--queryformat` file record.
+///
+/// RPM's filesystem state machine treats the root as an ownership anchor, not
+/// a deployable payload node. The `filesystem` package owns `/`, and
+/// `rpm -q --queryformat` renders that record with `FILENAMES=/`. Classify that
+/// exact record only after every field is parsed, and require it to satisfy the
+/// same root-anchor invariant the RPM artifact parser enforces: a directory
+/// mode, no file flags, no digest, no link target, size zero, RPM's empty raw
+/// basename, rdev zero, and no capabilities or IMA signature. A `/` record
+/// carrying anything else is ambiguous or corrupted and is rejected rather than
+/// skipped, so it never reaches deployment-path normalization.
+///
+/// <https://github.com/rpm-software-management/rpm/blob/a8f0192aee1c08bd1454ed2ac6ebaf506004b55c/lib/fsm.cc#L71-L82>
 fn parse_rpm_file_record(record_number: usize, record: &str) -> Result<Option<InstalledFileInfo>> {
     let parts = record.split('\x1e').collect::<Vec<_>>();
-    if parts.len() != 10 {
+    if parts.len() != 14 {
         return Err(Error::ParseError(format!(
-            "RPM file record {record_number} has {} fields; expected exactly 10",
+            "RPM file record {record_number} has {} fields; expected exactly 14",
             parts.len()
         )));
     }
@@ -367,6 +386,12 @@ fn parse_rpm_file_record(record_number: usize, record: &str) -> Result<Option<In
             parts[8]
         ))
     })?;
+    let rdev = parts[11].parse::<u16>().map_err(|error| {
+        Error::ParseError(format!(
+            "RPM file record {record_number} has invalid rdev {:?}: {error}",
+            parts[11]
+        ))
+    })?;
 
     // RPM persists the transaction result for every header file in FILESTATES.
     // Only NORMAL (0) and NETSHARED (3) are installed payload according to
@@ -389,6 +414,54 @@ fn parse_rpm_file_record(record_number: usize, record: &str) -> Result<Option<In
     }
 
     let flags = FileFlags::from_bits_retain(flags);
+    let link_target = rpm_none_to_option(&parts[7]);
+
+    // The root is an ownership anchor, not a deployable payload node. Match the
+    // exact `FILENAMES` field only, and only after the whole record is parsed:
+    // an anchor that violates the root invariant is an error, not a record to
+    // skip. This mirrors the RPM artifact parser's `validate_root_anchor`.
+    if parts[0] == "/" {
+        // RPM's root is `DIRNAMES="/"` plus an empty `BASENAMES`; a `/` record
+        // with a non-empty basename is an ambiguous encoding, not the anchor.
+        if !parts[10].is_empty() {
+            return Err(Error::ParseError(format!(
+                "RPM file record {record_number} root ownership anchor must have RPM's empty raw basename"
+            )));
+        }
+        if (mode as u32) & libc::S_IFMT != libc::S_IFDIR {
+            return Err(Error::ParseError(format!(
+                "RPM file record {record_number} root ownership anchor must be a directory"
+            )));
+        }
+        if !flags.is_empty() {
+            return Err(Error::ParseError(format!(
+                "RPM file record {record_number} root ownership anchor carries unsupported file flags {:#x}",
+                flags.bits()
+            )));
+        }
+        if digest.is_some() || link_target.is_some() || size != 0 {
+            return Err(Error::ParseError(format!(
+                "RPM file record {record_number} root ownership anchor carries non-directory payload metadata"
+            )));
+        }
+        if rdev != 0 {
+            return Err(Error::ParseError(format!(
+                "RPM file record {record_number} root ownership anchor must have rdev 0"
+            )));
+        }
+        if rpm_field_is_present(parts[12]) {
+            return Err(Error::ParseError(format!(
+                "RPM file record {record_number} root ownership anchor must not carry file capabilities"
+            )));
+        }
+        if rpm_field_is_present(parts[13]) {
+            return Err(Error::ParseError(format!(
+                "RPM file record {record_number} root ownership anchor must not carry an IMA signature"
+            )));
+        }
+        return Ok(None);
+    }
+
     let absence_policy = match (
         flags.contains(FileFlags::GHOST),
         flags.contains(FileFlags::MISSINGOK),
@@ -405,7 +478,7 @@ fn parse_rpm_file_record(record_number: usize, record: &str) -> Result<Option<In
         digest,
         user: Some(user),
         group: Some(group),
-        link_target: rpm_none_to_option(&parts[7]),
+        link_target,
         mtime: Some(mtime),
         absence_policy,
     }))
