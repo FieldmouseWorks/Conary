@@ -29,6 +29,7 @@ mod typed_requirement;
 mod typed_sql;
 mod typed_trigger;
 mod typed_update;
+mod typed_update_config;
 mod typed_whatprovides;
 mod version_rewrite;
 
