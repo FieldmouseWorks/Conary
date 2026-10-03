@@ -1891,8 +1891,9 @@ class Controller:
         candidate = journal["candidate"]
         sha = candidate["head_sha"]
         rules = self.gh.required_rules()
-        require(_rule_checks(rules) == {(item["context"], item["app_id"])
-                                        for item in self.spec["required_checks"]},
+        required = {(item["context"], item["app_id"])
+                    for item in self.spec["required_checks"]}
+        require(_rule_checks(rules) == required,
                 "unknown_rules", "required checks changed since run spec was approved")
         while True:
             self._remaining()
@@ -1918,36 +1919,6 @@ class Controller:
                         type(check["app"].get("id")) is int,
                         "remote_unknown", "hosted check is malformed")
                 _validate_hosted_state(check, "hosted check")
-            failed = [run for run in current.values()
-                      if run.get("status") == "completed" and
-                      run.get("conclusion") != "success"]
-            if failed:
-                if any(run.get("conclusion") == "action_required" for run in failed):
-                    raise RunnerError("action_required",
-                                      "hosted workflow requires an authorized action")
-                required_pairs = {(item["context"], item["app_id"])
-                                  for item in self.spec["required_checks"]}
-                required_success = {
-                    (check.get("name"), check.get("app", {}).get("id"))
-                    for check in checks if isinstance(check, dict) and
-                    isinstance(check.get("app"), dict) and
-                    check.get("head_sha") == sha and
-                    check.get("status") == "completed" and
-                    check.get("conclusion") == "success"
-                }
-                if len(failed) == 1 and required_pairs <= required_success:
-                    detail = optional_pretest_image_failure(
-                        self.gh.workflow_jobs(failed[0]["id"]))
-                    if detail is not None:
-                        raise RunnerError(
-                            "optional_pretest_image_failure",
-                            f"openSUSE image acquisition failed in job {detail['opensuse_job_id']} "
-                            f"step {detail['failed_step']}; product steps were skipped; "
-                            f"aggregate job {detail['aggregate_job_id']} failed")
-                raise RunnerError("hosted_failure",
-                                  "hosted workflow failed or requires action on candidate head")
-            required = {(item["context"], item["app_id"])
-                        for item in self.spec["required_checks"]}
             matching = {}
             for check in checks:
                 if not isinstance(check, dict) or check.get("head_sha") != sha:
@@ -1958,25 +1929,53 @@ class Controller:
                 key = (check.get("name"), app["id"])
                 if key in required:
                     matching.setdefault(key, []).append(check)
-                    if check.get("conclusion") == "action_required":
-                        raise RunnerError("action_required",
-                                          f"required check {key[0]} requires action")
-                elif check.get("conclusion") == "action_required":
+            failed = [run for run in current.values()
+                      if run.get("status") == "completed" and
+                      run.get("conclusion") != "success"]
+            if any(run.get("conclusion") == "action_required" for run in failed):
+                raise RunnerError("action_required",
+                                  "hosted workflow requires an authorized action")
+            for check in checks:
+                if check.get("conclusion") == "action_required":
+                    key = (check["name"], check["app"]["id"])
+                    kind = "required" if key in required else "optional"
                     raise RunnerError("action_required",
-                                      f"optional check {key[0]} requires action")
-                elif check.get("status") == "completed" and check.get("conclusion") not in {
-                        "success", None}:
-                    raise RunnerError("hosted_failure", "optional hosted check failed")
+                                      f"{kind} check {key[0]} requires action")
             for key, copies in matching.items():
                 require(len(copies) == 1, "remote_unknown", "required check is ambiguous")
+            for key, copies in matching.items():
                 check = copies[0]
                 if check.get("status") == "completed" and check.get("conclusion") != "success":
                     raise RunnerError("hosted_failure", f"required check {key[0]} failed")
-            ready = (bool(current) and all(run.get("status") == "completed" for run in current.values())
-                     and set(matching) == required and
-                     all(copies[0].get("status") == "completed" and
-                         copies[0].get("conclusion") == "success"
-                         for copies in matching.values()) and
+            required_success = (set(matching) == required and
+                                all(copies[0].get("status") == "completed" and
+                                    copies[0].get("conclusion") == "success"
+                                    for copies in matching.values()))
+            if not required_success:
+                time.sleep(min(20, self._remaining()))
+                continue
+            if failed:
+                if len(failed) == 1:
+                    detail = optional_pretest_image_failure(
+                        self.gh.workflow_jobs(failed[0]["id"]))
+                    if detail is not None:
+                        raise RunnerError(
+                            "optional_pretest_image_failure",
+                            f"openSUSE image acquisition failed in job {detail['opensuse_job_id']} "
+                            f"step {detail['failed_step']}; product steps were skipped; "
+                            f"aggregate job {detail['aggregate_job_id']} failed")
+                raise RunnerError("hosted_failure",
+                                  "hosted workflow failed or requires action on candidate head")
+            if not current or any(run["status"] != "completed" for run in current.values()):
+                time.sleep(min(20, self._remaining()))
+                continue
+            for check in checks:
+                key = (check["name"], check["app"]["id"])
+                if key not in required and check.get("status") == "completed" and \
+                        check.get("conclusion") != "success":
+                    raise RunnerError("hosted_failure", "optional hosted check failed")
+            ready = (bool(current) and
+                     all(run.get("status") == "completed" for run in current.values()) and
                      all(check.get("status") == "completed" and
                          check.get("conclusion") == "success" for check in checks))
             if ready:

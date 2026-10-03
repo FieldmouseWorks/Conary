@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-10-03
-revision: 3
-summary: Specify the validated one-slice agent runner, indexed graph comments, bounded reviewer-result recovery, and read-only promotion check
+revision: 5
+summary: Specify the validated one-slice agent runner, indexed graph comments, hosted observation order, bounded reviewer-result recovery, and read-only promotion check
 ---
 
 # Bounded Agent Runner
@@ -223,11 +223,21 @@ branch-creation outcomes cannot be checkpointed safely and remain hard stops.
 | Successful reviewer session with a known invalid final artifact | Recheck frozen candidate and proof, then retry the reviewer once with new evidence paths inside the current run budget. Exhaustion blocks before push or PR creation. |
 | Stale/unbound evidence, `action_required`, unknown check state, or uncertain remote write | Stop. Do not interpret unknown as success or retry the write blindly. |
 | Unknown or internally inconsistent hosted workflow/check state | Fail closed immediately; do not treat it as pending or keep polling. Valid queued or in-progress states may continue to be observed. |
+| An ordinary optional workflow or check fails while a required check is missing or pending | Keep observing within the run's existing wall budget. Do not record an observed checkpoint or classify the optional failure yet. |
+| Required checks succeed while an optional check has failed but a current workflow is still running | Keep observing within the same wall budget; classify the completed workflow before the optional check. |
+| A required check fails, or any current workflow/check requires action | Stop immediately, even while other required checks are pending. |
 | `unknown_outcome` with a `blocked` checkpoint | Manual stop. Inspect and reconcile the trace, worktree, issue, and remote state; the task is not automatically resumed. |
 | Optional image acquisition fails before product tests | The narrow diagnostic below applies; it remains blocking. Other optional hosted failures are `hosted_failure`. |
 
 `optional_pretest_image_failure` is returned only when required checks have
-succeeded and one current workflow run failed. The workflow's failed-job set
+succeeded and one current workflow run failed. Required contexts must all be
+present at the pinned App IDs; a missing or nonterminal required check delays
+ordinary optional-failure classification. Malformed or duplicate checks still
+fail closed, and `action_required` never waits. After required success, the
+runner checks any completed workflow failure first and waits for all current
+workflows to finish before classifying a generic optional check failure. This
+lets the narrow diagnostic identify a setup failure without waiving it.
+The workflow's failed-job set
 must contain exactly two completed jobs: `native-cross-source-lifecycle
 (opensuse-tumbleweed)` and `native-cross-source-lifecycle`. In the openSUSE job,
 step 5, `Run ./.github/actions/cache-base-image`, must have failed and steps
