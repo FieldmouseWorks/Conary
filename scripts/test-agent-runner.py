@@ -1032,6 +1032,201 @@ class ControllerFlowControls(unittest.TestCase):
         self.assertIsNone(result["pr"])
 
 
+class ObservationControls(unittest.TestCase):
+    class SequencedGitHub:
+        def __init__(self, snapshots, jobs=()):
+            self.snapshots = snapshots
+            self.jobs = jobs
+            self.polls = 0
+            self.job_queries = []
+
+        def required_rules(self):
+            return promotion_inputs()[3]
+
+        def workflow_runs(self, sha):
+            assert sha == HEAD
+            if self.polls >= len(self.snapshots):
+                raise AssertionError("observation polled past the supplied sequence")
+            return deepcopy(self.snapshots[self.polls][0])
+
+        def check_runs(self, sha):
+            assert sha == HEAD
+            checks = deepcopy(self.snapshots[self.polls][1])
+            self.polls += 1
+            return checks
+
+        def workflow_jobs(self, run_id):
+            self.job_queries.append((run_id, self.polls))
+            return deepcopy(self.jobs)
+
+    @staticmethod
+    def workflow(conclusion="failure"):
+        return {"workflow_id": 17, "id": 91, "run_number": 1, "run_attempt": 1,
+                "head_sha": HEAD, "status": "completed", "conclusion": conclusion}
+
+    @staticmethod
+    def checks():
+        return deepcopy(promotion_inputs()[4])
+
+    @staticmethod
+    def pretest_jobs():
+        return [
+            {"id": 92, "name": "native-cross-source-lifecycle (opensuse-tumbleweed)",
+             "status": "completed", "conclusion": "failure", "steps": [
+                 {"number": 5, "name": "Run ./.github/actions/cache-base-image",
+                  "conclusion": "failure"},
+                 *({"number": number, "name": f"product step {number}",
+                    "conclusion": "skipped"} for number in range(6, 13)),
+             ]},
+            {"id": 93, "name": "native-cross-source-lifecycle", "status": "completed",
+             "conclusion": "failure", "steps": [
+                 {"number": 2, "name": "Require every distro lifecycle job",
+                  "conclusion": "failure"},
+             ]},
+        ]
+
+    def observe(self, snapshots, jobs=()):
+        with tempfile.TemporaryDirectory(prefix="runner-observe-order-") as root:
+            value = complete_spec()
+            value["journal_dir"] = str(Path(root) / "journal")
+            github = self.SequencedGitHub(snapshots, jobs)
+            controller = RUNNER.Controller(value, github=github)
+            journal = {"candidate": {"head_sha": HEAD, "tree_sha": TREE},
+                       "phase": "draft", "pr_number": 99}
+            with patch.object(RUNNER.time, "sleep") as sleep, \
+                    patch.object(RUNNER, "write_journal"), \
+                    patch.object(controller, "_ensure_observed_checkpoint"):
+                try:
+                    result = controller._observe(task(), journal)
+                    error = None
+                except RUNNER.RunnerError as caught:
+                    result, error = None, caught
+            return result, error, github.polls, github.job_queries, sleep.call_count, journal
+
+    def test_optional_pretest_waits_for_missing_and_pending_required_checks(self):
+        missing = self.checks()[:-1]
+        pending = self.checks()
+        pending[-1]["status"] = "in_progress"
+        pending[-1]["conclusion"] = None
+        optional = {"id": 99, "name": "native-cross-source-lifecycle",
+                    "head_sha": HEAD, "status": "completed", "conclusion": "failure",
+                    "app": {"id": 15368}}
+        snapshots = [([self.workflow()], checks)
+                     for checks in (missing + [optional], pending + [optional],
+                                    self.checks() + [optional])]
+        result, error, polls, queries, sleeps, _ = self.observe(snapshots, self.pretest_jobs())
+        self.assertIsNone(result)
+        self.assertEqual(error.code, "optional_pretest_image_failure")
+        self.assertEqual((polls, sleeps), (3, 2))
+        self.assertEqual(queries, [(91, 3)])
+
+    def test_optional_check_waits_for_required_checks_then_fails(self):
+        optional = {"id": 99, "name": "native-cross-source-lifecycle",
+                    "head_sha": HEAD, "status": "completed", "conclusion": "failure",
+                    "app": {"id": 15368}}
+        pending = self.checks()
+        pending[-1]["status"] = "queued"
+        pending[-1]["conclusion"] = None
+        running = self.workflow()
+        running["status"] = "in_progress"
+        running["conclusion"] = None
+        snapshots = [([self.workflow("success")], pending + [optional]),
+                     ([running], self.checks() + [optional]),
+                     ([self.workflow("success")], self.checks() + [optional])]
+        _, error, polls, queries, sleeps, _ = self.observe(snapshots)
+        self.assertEqual(error.code, "hosted_failure")
+        self.assertEqual((polls, sleeps), (3, 2))
+        self.assertEqual(queries, [])
+
+    def test_failed_optional_check_waits_for_workflow_pretest_diagnosis(self):
+        optional = {"id": 99, "name": "native-cross-source-lifecycle",
+                    "head_sha": HEAD, "status": "completed", "conclusion": "failure",
+                    "app": {"id": 15368}}
+        running = self.workflow()
+        running["status"] = "in_progress"
+        running["conclusion"] = None
+        snapshots = [([running], self.checks() + [optional]),
+                     ([self.workflow()], self.checks() + [optional])]
+        _, error, polls, queries, sleeps, _ = self.observe(snapshots, self.pretest_jobs())
+        self.assertEqual(error.code, "optional_pretest_image_failure")
+        self.assertEqual((polls, sleeps), (2, 1))
+        self.assertEqual(queries, [(91, 2)])
+
+    def test_other_optional_workflow_waits_then_stays_hosted_failure(self):
+        pending = self.checks()
+        pending[-1]["status"] = "pending"
+        pending[-1]["conclusion"] = None
+        snapshots = [([self.workflow()], pending),
+                     ([self.workflow()], self.checks())]
+        _, error, polls, queries, sleeps, _ = self.observe(snapshots, jobs=[])
+        self.assertEqual(error.code, "hosted_failure")
+        self.assertEqual((polls, sleeps), (2, 1))
+        self.assertEqual(queries, [(91, 2)])
+
+    def test_required_failure_stops_before_optional_diagnosis(self):
+        checks = self.checks()
+        checks[0]["conclusion"] = "failure"
+        checks[-1]["status"] = "in_progress"
+        checks[-1]["conclusion"] = None
+        _, error, polls, queries, sleeps, _ = self.observe(
+            [([self.workflow()], checks)], self.pretest_jobs())
+        self.assertEqual(error.code, "hosted_failure")
+        self.assertEqual((polls, sleeps), (1, 0))
+        self.assertEqual(queries, [])
+
+    def test_action_required_stops_while_required_checks_are_pending(self):
+        pending = self.checks()
+        pending[-1]["status"] = "pending"
+        pending[-1]["conclusion"] = None
+        cases = [([self.workflow("action_required")], pending)]
+        optional = {"id": 99, "name": "optional", "head_sha": HEAD,
+                    "status": "completed", "conclusion": "action_required",
+                    "app": {"id": 15368}}
+        cases.append(([self.workflow()], pending + [optional]))
+        required = deepcopy(pending)
+        required[0]["conclusion"] = "action_required"
+        cases.append(([self.workflow()], required))
+        for runs, checks in cases:
+            with self.subTest(runs=runs, checks=checks):
+                _, error, polls, queries, sleeps, _ = self.observe([(runs, checks)])
+                self.assertEqual(error.code, "action_required")
+                self.assertEqual((polls, sleeps), (1, 0))
+                self.assertEqual(queries, [])
+
+    def test_unknown_or_duplicate_required_state_stops_before_polling(self):
+        bad_run = self.workflow()
+        bad_run["status"] = "mystery"
+        bad_run["conclusion"] = None
+        bad_check = self.checks()
+        bad_check[-1]["status"] = "mystery"
+        bad_check[-1]["conclusion"] = None
+        duplicate = self.checks()
+        duplicate.append({**duplicate[0], "id": 99})
+        wrong_head = self.checks()
+        wrong_head[-1]["head_sha"] = "e" * 40
+        cases = [([bad_run], self.checks()), ([self.workflow()], bad_check),
+                 ([self.workflow()], duplicate), ([self.workflow()], wrong_head)]
+        for runs, checks in cases:
+            with self.subTest(runs=runs, checks=checks):
+                _, error, polls, queries, sleeps, _ = self.observe([(runs, checks)])
+                self.assertEqual(error.code, "remote_unknown")
+                self.assertEqual((polls, sleeps), (1, 0))
+                self.assertEqual(queries, [])
+
+    def test_pending_required_checks_can_finish_successfully(self):
+        pending = self.checks()
+        pending[-1]["status"] = "in_progress"
+        pending[-1]["conclusion"] = None
+        snapshots = [([self.workflow("success")], pending),
+                     ([self.workflow("success")], self.checks())]
+        result, error, polls, queries, sleeps, journal = self.observe(snapshots)
+        self.assertIsNone(error)
+        self.assertEqual(result["status"], "draft_checks_passed")
+        self.assertEqual((polls, sleeps), (2, 1))
+        self.assertEqual(queries, [])
+        self.assertEqual(journal["candidate"]["check_ids"], [1, 2, 3, 4, 5])
+
+
 class PromotionControls(unittest.TestCase):
     def evaluate(self, inputs):
         return RUNNER.evaluate_promotion(*inputs)
