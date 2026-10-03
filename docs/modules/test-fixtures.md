@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-10-03
-revision: 74
-summary: Map fixture ownership, including release-backed base-image proof, native persisted-SQL rows, native refusals, repository discovery, command captures, activation intent, and the refreshed Tumbleweed lifecycle snapshot
+revision: 75
+summary: Map fixture ownership, including release-backed base-image proof, native persisted-SQL rows, native refusals, repository discovery, command captures, activation intent, the refreshed Tumbleweed lifecycle snapshot, and Group I exact-name package absence
 ---
 
 # Test Fixtures And Proof Maps
@@ -501,7 +501,15 @@ Each fixture family should record:
   not retired/current CCS format identifiers. Corrupt and malicious archive
   cases start from signed current authority and mutate afterward. Scriptlet
   failure tests require nonzero install status plus absent package state and
-  payload; degraded installed-state success is not a fixture contract. Native
+  payload; degraded installed-state success is not a fixture contract. Group I
+  `T100`-`T102` step 2 counts `troves` for the exact names `proc-environ`,
+  `adversarial-hostile-scriptlet`, and `outside-root-write`, respectively. Each
+  successful `sqlite3 -json` query must match the complete root array
+  `[{"installed":0}]` at `pointer = ""`, with an integer count and no extra rows
+  or fields. The count covers only that named trove; failed-install and
+  `file_not_exists` assertions cover their separate conditions. The in-memory
+  SQLite test proves exact-name filtering and assertion behavior, not a live
+  container run. Native
   cross-source lifecycle assertions read selected-generation manifests and CAS
   objects; the container's incidental root filesystem is not package-state
   authority. Fedora/RPM, Ubuntu/dpkg, and Arch/pacman each capture the fixture's

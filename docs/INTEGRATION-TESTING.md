@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-10-03
-revision: 107
-summary: Define the Podman integration harness and proof contracts, including immutable release-backed base-image acquisition, TNPM14 repository-dependency rows, TNPM15 regular-file and activation rows, and TNPM18 repository and post-update lifecycle rows
+revision: 108
+summary: Define the Podman integration harness and proof contracts, including immutable release-backed base-image acquisition, TNPM14 repository-dependency rows, TNPM15 regular-file and activation rows, TNPM18 repository and post-update lifecycle rows, and Group I exact-name package absence
 ---
 
 # Integration Testing
@@ -353,6 +353,16 @@ archive fixtures are built as signed current packages first and only then
 mutated, so failures exercise their named integrity boundary. Failing
 post-install scriptlet fixtures must return nonzero and leave package database
 state and payload absent.
+
+Phase 3 Group I `T100`-`T102` step 2 queries `troves` by the exact fixture names
+`proc-environ`, `adversarial-hostile-scriptlet`, and `outside-root-write`,
+respectively. Each `sqlite3 -json` query must exit successfully, and one
+`stdout_json` assertion at the root pointer (`""`) requires the complete array
+`[{"installed":0}]`: one row, an integer zero, and no extra fields. This count
+proves only absence of the named database trove. The failed-install and
+`file_not_exists` steps separately check refusal and listed payload paths;
+manifest parsing and disposable SQLite predicate checks do not establish live
+container behavior.
 
 From a checkout, use
 `cargo run -p conary-test -- bootstrap check --json` before smoke validation to
