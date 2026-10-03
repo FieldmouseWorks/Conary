@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "images": {
+    "opensuse-tumbleweed": {
+      "source": "registry.opensuse.org/opensuse/tumbleweed:20260908@sha256:000f41d72d21563074c380c3f5d27c6d28c9f8aa5f593afaa923905e70c4a0f2",
+      "retained": "ghcr.io/fieldmouseworks/conary-ci-base-opensuse-tumbleweed:20260908@sha256:000f41d72d21563074c380c3f5d27c6d28c9f8aa5f593afaa923905e70c4a0f2",
+      "platform": "linux/amd64"
+    }
+  }
+}

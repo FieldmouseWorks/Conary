@@ -1,0 +1,103 @@
+name: publish-ci-base-image
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: publish-ci-base-opensuse-tumbleweed
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.repository == 'FieldmouseWorks/Conary' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    env:
+      GH_REPO: FieldmouseWorks/Conary
+      RELEASE_TAG: ci-base-971-tumbleweed-20260908
+      ASSET_NAME: opensuse-tumbleweed-20260908-oci-dir.tar
+      ARCHIVE_SHA256: db4dce3794bc93d307dacac63905ab3c11d360a22b24b1cf0dce97f5e38e2824
+      ARCHIVE_DIR: ${{ runner.temp }}/ci-base-release
+      LAYOUT_DIR: ${{ runner.temp }}/ci-base-layout
+    steps:
+      - name: Check out trusted workflow revision
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Require the current default-branch revision
+        shell: bash
+        env:
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$(git rev-parse HEAD)" == "$WORKFLOW_SHA" ]] || {
+            echo "checkout does not match the trusted workflow revision" >&2
+            exit 1
+          }
+          git fetch --no-tags origin main
+          [[ "$(git rev-parse HEAD)" == "$(git rev-parse FETCH_HEAD)" ]] || {
+            echo "workflow revision is no longer the current default branch" >&2
+            exit 1
+          }
+      - name: Install OCI transport
+        run: bash scripts/ci-install-ubuntu-packages.sh skopeo
+      - name: Download and verify the immutable source archive
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$ARCHIVE_DIR"
+          release="$(gh api -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/${GH_REPO}/releases/tags/${RELEASE_TAG}")"
+          jq -e --arg tag "$RELEASE_TAG" --arg asset "$ASSET_NAME" \
+            --arg digest "sha256:${ARCHIVE_SHA256}" '
+              .tag_name == $tag and .draft == false and .prerelease == false
+              and .immutable == true
+              and ([.assets[] | select(.name == $asset)] | length) == 1
+              and ([.assets[] | select(.name == $asset and .digest == $digest
+                      and .state == "uploaded" and .size > 0)] | length) == 1
+            ' <<< "$release" >/dev/null || {
+              echo "dedicated release or exact asset is not published, immutable, and digest pinned" >&2
+              exit 1
+            }
+          gh release download "$RELEASE_TAG" --repo "$GH_REPO" \
+            --pattern "$ASSET_NAME" --dir "$ARCHIVE_DIR"
+          archive="${ARCHIVE_DIR}/${ASSET_NAME}"
+          [[ -f "$archive" && ! -L "$archive" ]] || {
+            echo "release archive is missing or not a regular file" >&2
+            exit 1
+          }
+          printf '%s  %s\n' "$ARCHIVE_SHA256" "$archive" | sha256sum -c -
+          python3 scripts/ci-base-image.py restore --image opensuse-tumbleweed \
+            --archive "$archive" --layout "$LAYOUT_DIR"
+          python3 scripts/ci-base-image.py verify --image opensuse-tumbleweed \
+            --layout "$LAYOUT_DIR"
+      - name: Publish digest-preserving image and verify anonymous read-back
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          auth_dir="$(mktemp -d "${RUNNER_TEMP}/ci-base-auth.XXXXXX")"
+          trap 'rm -rf "$auth_dir"' EXIT
+          authfile="${auth_dir}/auth.json"
+          printf '%s' "$GITHUB_TOKEN" | skopeo login --authfile "$authfile" \
+            --username "$GITHUB_ACTOR" --password-stdin ghcr.io
+          git fetch --no-tags origin main
+          [[ "$(git rev-parse HEAD)" == "$WORKFLOW_SHA" &&
+             "$(git rev-parse FETCH_HEAD)" == "$WORKFLOW_SHA" ]] || {
+            echo "workflow revision is no longer the current default branch" >&2
+            exit 1
+          }
+          python3 scripts/ci-base-image.py publish --image opensuse-tumbleweed \
+            --layout "$LAYOUT_DIR" --authfile "$authfile"
