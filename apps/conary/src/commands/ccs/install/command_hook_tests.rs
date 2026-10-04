@@ -5,6 +5,27 @@ use std::collections::HashMap;
 use super::command::cmd_ccs_install;
 use super::test_support::{ccs_init_file, ccs_regular_file, stage_test_boot_assets};
 
+/// A selected-root interpreter payload.
+///
+/// The materialized test selected root starts empty, so a `/bin/sh`
+/// post-install hook needs an executable at that path to clear the
+/// interpreter-availability preflight.
+fn ccs_shell_file() -> (conary_core::ccs::FileEntry, Vec<u8>, String) {
+    let content = b"#!/bin/sh\nexit 0\n".to_vec();
+    let hash = conary_core::hash::sha256(&content);
+    (
+        ccs_regular_file(
+            "/bin/sh".to_string(),
+            hash.clone(),
+            content.len() as u64,
+            0o100755,
+            "runtime".to_string(),
+        ),
+        content,
+        hash,
+    )
+}
+
 #[tokio::test]
 async fn ccs_install_persists_pre_remove_hook() {
     use conary_core::ccs::manifest::ScriptHook;
@@ -26,6 +47,8 @@ async fn ccs_install_persists_pre_remove_hook() {
     let file_hash = hash::sha256(&content);
     let init_content = b"#!/bin/sh\nexec true\n".to_vec();
     let init_hash = hash::sha256(&init_content);
+    let shell_content = b"#!/bin/sh\nexit 0\n".to_vec();
+    let shell_hash = hash::sha256(&shell_content);
     let files = vec![
         ccs_regular_file(
             "/usr/bin/hooked".to_string(),
@@ -41,8 +64,19 @@ async fn ccs_install_persists_pre_remove_hook() {
             0o100755,
             "runtime".to_string(),
         ),
+        // Positive control for the pre-remove interpreter preflight: the
+        // package ships the executable its declared `/bin/sh` File provide
+        // names, so the selected root can run the persisted hook.
+        ccs_regular_file(
+            "/bin/sh".to_string(),
+            shell_hash.clone(),
+            shell_content.len() as u64,
+            0o100755,
+            "runtime".to_string(),
+        ),
     ];
     let mut manifest = CcsManifest::new_minimal("pre-remove", "1.0.0");
+    manifest.provides.files = vec!["/bin/sh".to_string()];
     manifest.hooks.pre_remove = Some(ScriptHook {
         script: "echo removing pre-remove".to_string(),
         interpreter: "/bin/sh".to_string(),
@@ -56,13 +90,17 @@ async fn ccs_install_persists_pre_remove_hook() {
                 name: "runtime".to_string(),
                 files: files.clone(),
                 hash: "runtime".to_string(),
-                size: (content.len() + init_content.len()) as u64,
+                size: (content.len() + init_content.len() + shell_content.len()) as u64,
             },
         )]),
         files: files.clone(),
         payloads: conary_core::ccs::builder::payloads_from_bounded_memory_for_tests(
             &files,
-            HashMap::from([(file_hash, content), (init_hash, init_content)]),
+            HashMap::from([
+                (file_hash, content),
+                (init_hash, init_content),
+                (shell_hash, shell_content),
+            ]),
         )
         .unwrap(),
         total_size: 0,
@@ -116,6 +154,7 @@ async fn ccs_install_rolls_back_after_post_install_error() {
     let content = b"hello".to_vec();
     let hash = hash::sha256(&content);
     let (init_file, init_content, init_hash) = ccs_init_file();
+    let (shell_file, shell_content, shell_hash) = ccs_shell_file();
     let payload_file = ccs_regular_file(
         "/usr/bin/post-hook-fails".to_string(),
         hash.clone(),
@@ -123,7 +162,7 @@ async fn ccs_install_rolls_back_after_post_install_error() {
         0o100755,
         "runtime".to_string(),
     );
-    let files = vec![payload_file.clone(), init_file.clone()];
+    let files = vec![payload_file.clone(), init_file.clone(), shell_file];
 
     let mut manifest = CcsManifest::new_minimal("post-hook-fails", "1.0.0");
     manifest.hooks.post_install = Some(ScriptHook {
@@ -140,13 +179,17 @@ async fn ccs_install_rolls_back_after_post_install_error() {
                 name: "runtime".to_string(),
                 files: files.clone(),
                 hash: "runtime".to_string(),
-                size: (content.len() + init_content.len()) as u64,
+                size: (content.len() + init_content.len() + shell_content.len()) as u64,
             },
         )]),
         files: files.clone(),
         payloads: conary_core::ccs::builder::payloads_from_bounded_memory_for_tests(
             &files,
-            HashMap::from([(hash, content), (init_hash, init_content)]),
+            HashMap::from([
+                (hash, content),
+                (init_hash, init_content),
+                (shell_hash, shell_content),
+            ]),
         )
         .unwrap(),
         total_size: 5 + init_file
@@ -207,14 +250,18 @@ async fn ccs_install_discards_pre_hook_directories_when_post_hook_fails() {
 
     let file_content = b"blocked".to_vec();
     let file_hash = hash::sha256(&file_content);
+    let (shell_file, shell_content, shell_hash) = ccs_shell_file();
 
-    let files = vec![ccs_regular_file(
-        "/usr/lib/revert-pre-hooks/persist".to_string(),
-        file_hash.clone(),
-        file_content.len() as u64,
-        0o100644,
-        "runtime".to_string(),
-    )];
+    let files = vec![
+        ccs_regular_file(
+            "/usr/lib/revert-pre-hooks/persist".to_string(),
+            file_hash.clone(),
+            file_content.len() as u64,
+            0o100644,
+            "runtime".to_string(),
+        ),
+        shell_file,
+    ];
 
     let mut manifest = CcsManifest::new_minimal("revert-pre-hooks", "1.0.0");
     manifest.hooks.directories.push(DirectoryHook {
@@ -239,13 +286,13 @@ async fn ccs_install_discards_pre_hook_directories_when_post_hook_fails() {
                 name: "runtime".to_string(),
                 files: files.clone(),
                 hash: "runtime".to_string(),
-                size: file_content.len() as u64,
+                size: (file_content.len() + shell_content.len()) as u64,
             },
         )]),
         files: files.clone(),
         payloads: conary_core::ccs::builder::payloads_from_bounded_memory_for_tests(
             &files,
-            HashMap::from([(file_hash, file_content)]),
+            HashMap::from([(file_hash, file_content), (shell_hash, shell_content)]),
         )
         .unwrap(),
         total_size: 7,

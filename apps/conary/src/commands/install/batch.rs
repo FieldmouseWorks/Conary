@@ -24,6 +24,7 @@ mod promises;
 mod relations;
 mod witness_universe;
 
+use super::ccs_hook_interpreter::{element_plan, hook_interpreters, preflight_hook_interpreters};
 use super::ccs_removal_hooks::CcsRemovalHookPlan;
 use super::inner;
 use super::native_events::{NativeInstallInput, PreparedNativeTransaction};
@@ -504,6 +505,30 @@ impl<'a> BatchInstaller<'a> {
             batch_plan.total_files, package_count
         );
         self.preflight_file_ownership_for_batch(&preflight_state, &packages)?;
+
+        // The batch graph applies every element's payload before any CCS
+        // post-install hook runs (`execution.rs`: `drive_graph`, then hooks in
+        // `packages` order). Mirror that boundary: record every element first,
+        // then require each hook's interpreter, all before the first mutation.
+        let elements = packages
+            .iter()
+            .map(|package| {
+                element_plan(
+                    &package.name,
+                    &package.version,
+                    package.old_trove.as_deref(),
+                    &package.relation_removals,
+                    &package.extracted_files,
+                    &package.provides,
+                    package
+                        .ccs
+                        .as_ref()
+                        .map(|ccs| hook_interpreters(&ccs.hooks))
+                        .unwrap_or_default(),
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
+        preflight_hook_interpreters(&preflight_state, &selected_path, &elements)?;
 
         preflight_state.commit()?;
 
