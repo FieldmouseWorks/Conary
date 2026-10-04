@@ -1,5 +1,7 @@
 // apps/conary-test/src/config/tests/native_corpus/typed_install_effect.rs
 
+#![cfg(test)]
+
 use super::super::{load_manifest, remi_manifest_path};
 use crate::config::manifest::Assertion;
 use crate::engine::assertions::evaluate_assertion;
