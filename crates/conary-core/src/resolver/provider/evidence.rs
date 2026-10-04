@@ -7,7 +7,9 @@ use resolvo::{DenseIndex, Requirement, SolvableId, StringId, VersionSetId};
 use crate::error::Result;
 
 use super::ConaryProvider;
-use super::types::{ConaryConstraint, RepositoryRequirementGroupIdentity};
+use super::types::{
+    ConaryConstraint, RepositoryRequirementGroupIdentity, RequirementGroupIdentity,
+};
 
 impl ConaryProvider<'_> {
     pub(crate) fn is_missing_dependency_authority_reason(&self, reason: StringId) -> bool {
@@ -50,7 +52,10 @@ impl ConaryProvider<'_> {
                     .get(&(solvable.into_raw(), version_set.0))
                     .into_iter()
                     .flatten()
-                    .copied()
+            })
+            .filter_map(|identity| match identity {
+                RequirementGroupIdentity::Repository(repository) => Some(*repository),
+                RequirementGroupIdentity::Installed { .. } => None,
             })
             .collect()
     }

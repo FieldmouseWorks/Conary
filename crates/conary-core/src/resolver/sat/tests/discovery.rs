@@ -121,8 +121,19 @@ fn nested_root_negation_preserves_positive_literals() {
         atom("excluded"),
     ])));
     let policy = ResolutionPolicy::new().with_primary_source_identity("fedora-44");
-    let provider =
-        install::build_provider_for_requirement_expressions(&conn, &[root], &policy).unwrap();
+    let provider = install::build_provider_for_requirement_expressions(
+        &conn,
+        &[root],
+        &policy,
+        None,
+        install::FixedTransactionFacts {
+            outgoing_trove_ids: &[],
+            relation_only_trove_ids: &std::collections::HashSet::new(),
+            lock_surviving_installed: false,
+            ignored_installed_groups: &std::collections::HashSet::new(),
+        },
+    )
+    .unwrap();
     let names = provider
         .solvable_ids()
         .iter()

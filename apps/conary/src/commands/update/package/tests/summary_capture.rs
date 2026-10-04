@@ -547,15 +547,11 @@ fn update_summaries_in_terminal_pipe_and_no_color() {
                     .split("Applied package changes:")
                     .next()
                     .unwrap();
-                for field in [
-                    "Remove (1):",
-                    "Deconfigure (1):",
-                    "summary-obsolete",
-                    "summary-consumer",
-                    "obsolete",
-                ] {
+                for field in ["Remove (1):", "summary-obsolete", "obsolete"] {
                     assert!(planned.contains(field), "{frame}");
                 }
+                assert!(!planned.contains("Deconfigure ("), "{frame}");
+                assert!(!planned.contains("summary-consumer"), "{frame}");
             }
             if matches!(
                 scenario,
@@ -599,14 +595,11 @@ fn update_summaries_in_terminal_pipe_and_no_color() {
                 }
             }
             if scenario == "relation_apply" {
-                for field in [
-                    "Removed (1):",
-                    "Deconfigured (1):",
-                    "summary-obsolete",
-                    "summary-consumer",
-                ] {
+                for field in ["Removed (1):", "summary-obsolete"] {
                     assert!(applied.contains(field), "{frame}");
                 }
+                assert!(!applied.contains("Deconfigured ("), "{frame}");
+                assert!(!applied.contains("summary-consumer"), "{frame}");
             }
             assert!(
                 applied.contains(if scenario == "pending" {

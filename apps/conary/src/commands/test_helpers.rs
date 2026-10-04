@@ -352,6 +352,43 @@ pub(crate) fn seed_test_bootable_runtime(db_path: &Path) -> i64 {
     trove_id
 }
 
+/// Seed a fixture user and group bounded to the unprivileged test process so
+/// native package payloads install without root authority.
+///
+/// The base trove carries `/etc/passwd` and `/etc/group` rows mapping the
+/// returned names to the current effective uid and gid. Every RPM the caller
+/// builds must set `.user(name).group(name)` on its file options.
+pub(crate) fn seed_unprivileged_fixture_owner(db_path: &Path) -> (&'static str, &'static str) {
+    const USER: &str = "conary-fixture-user";
+    const GROUP: &str = "conary-fixture-group";
+    seed_test_bootable_runtime(db_path);
+    let conn = conary_core::db::open(db_path).unwrap();
+    let base = Trove::find_by_name(&conn, "test-runtime-base").unwrap()[0]
+        .id
+        .unwrap();
+    let (uid, gid) = (unsafe { libc::geteuid() }, unsafe { libc::getegid() });
+    for (path, contents) in [
+        (
+            "/etc/passwd",
+            format!(
+                "root:x:0:0:root:/root:/bin/sh\n{USER}:x:{uid}:{gid}:fixture:/:/sbin/nologin\n"
+            ),
+        ),
+        ("/etc/group", format!("root:x:0:\n{GROUP}:x:{gid}:\n")),
+    ] {
+        insert_test_regular_file_with_parents(
+            &conn,
+            db_path,
+            path,
+            contents.as_bytes(),
+            0o644,
+            base,
+            None,
+        );
+    }
+    (USER, GROUP)
+}
+
 pub(crate) fn insert_test_static_ccs_repository(
     conn: &rusqlite::Connection,
     name: &str,

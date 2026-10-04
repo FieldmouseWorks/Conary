@@ -605,6 +605,32 @@ pub fn package_architectures_match(
         == effective_machine_architecture(right_scheme, right_architecture, native_architecture)
 }
 
+/// Whether installing an incoming package replaces an installed trove of the
+/// same name because the two occupy one install slot.
+///
+/// This is the single slot rule: install-time upgrade selection and the
+/// resolver's end-state projection of a same-name dependency upgrade both call
+/// it, so the solver never plans a replacement the installer would not make. A
+/// package with no architecture shares no slot.
+pub fn package_install_slots_match(
+    installed_scheme: VersionScheme,
+    installed_architecture: Option<&str>,
+    incoming_scheme: VersionScheme,
+    incoming_architecture: Option<&str>,
+    native_architecture: &str,
+) -> bool {
+    match (installed_architecture, incoming_architecture) {
+        (Some(installed), Some(incoming)) => package_architectures_match(
+            installed_scheme,
+            installed,
+            incoming_scheme,
+            incoming,
+            native_architecture,
+        ),
+        _ => false,
+    }
+}
+
 /// Typed machine identity shared only by non-admission literal comparisons.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum MachineArchitecture {

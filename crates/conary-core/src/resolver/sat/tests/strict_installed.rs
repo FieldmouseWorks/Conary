@@ -1,0 +1,1070 @@
+// crates/conary-core/src/resolver/sat/tests/strict_installed.rs
+
+#![cfg(test)]
+
+use super::formal_dependencies::insert_repo_pkg_with_reqs;
+use super::*;
+use crate::db::models::{
+    CanonicalMappingAuthority, CanonicalPackage, PackageImplementation, ProvideEntry,
+    RepositoryProvide, Trove, TroveType,
+};
+use crate::repository::dependency_model::{
+    RepositoryCapabilityKind, RepositoryRequirementClause, RepositoryRequirementGroup,
+    RepositoryRequirementKind,
+};
+use crate::repository::load_effective_policy;
+use crate::repository::resolution_policy::RequestScope;
+
+const PROVIDER_PATH: &str = "/bin/sh";
+
+fn installed_file_provider(conn: &Connection, name: &str) -> i64 {
+    let trove_id = insert_rpm_trove(conn, name, "1.0.0", &[]);
+    let mut provide = ProvideEntry::new_typed(
+        trove_id,
+        RepositoryCapabilityKind::File,
+        PROVIDER_PATH.to_string(),
+        None,
+        VersionScheme::Rpm,
+        Default::default(),
+    );
+    provide.insert(conn).unwrap();
+    trove_id
+}
+
+fn repository_file_provider(conn: &Connection, repository_id: i64, name: &str) -> i64 {
+    let package_id = insert_rpm_repo_package(conn, repository_id, name, "1-1");
+    let mut provide = RepositoryProvide::new(
+        package_id,
+        PROVIDER_PATH.to_string(),
+        None,
+        "file".to_string(),
+        None,
+        VersionScheme::Rpm,
+    );
+    provide.insert(conn).unwrap();
+    package_id
+}
+
+fn file_predepends() -> RepositoryRequirementGroup {
+    let mut clause = RepositoryRequirementClause::name_only(PROVIDER_PATH.to_string());
+    clause.capability_kind = Some(RepositoryCapabilityKind::File);
+    RepositoryRequirementGroup::simple(RepositoryRequirementKind::PreDepends, clause)
+}
+
+fn conditional_depends(required: &str, condition: &str) -> RepositoryRequirementGroup {
+    crate::repository::requirement::parse_native_requirement(
+        RepositoryRequirementKind::Depends,
+        VersionScheme::Rpm,
+        &format!("({required} if {condition})"),
+    )
+    .unwrap()
+}
+
+pub(super) fn hard_depends(name: &str) -> RepositoryRequirementGroup {
+    crate::repository::requirement::parse_native_requirement(
+        RepositoryRequirementKind::Depends,
+        VersionScheme::Rpm,
+        name,
+    )
+    .unwrap()
+}
+
+fn strict_policy_without_source_authority(conn: &Connection) -> ResolutionPolicy {
+    load_effective_policy(conn, RequestScope::Any)
+        .unwrap()
+        .resolution
+}
+
+pub(super) fn repository_fixture(conn: &Connection) -> i64 {
+    let mut repository = Repository::new(
+        "fedora-44".to_string(),
+        "https://example.invalid/fedora".to_string(),
+    );
+    repository.source_profile = Some("fedora-44".to_string());
+    repository.insert(conn).unwrap()
+}
+
+#[test]
+fn strict_requirement_without_installed_provider_is_refused() {
+    let (_dir, conn) = setup_test_db();
+    let repository_id = repository_fixture(&conn);
+    repository_file_provider(&conn, repository_id, "repository-provider");
+
+    // Negative control for the installed-provider case: the known end state is
+    // empty, so the requirement has no provider and must be refused.
+    let error = solve_requirement_groups_with_outgoing_and_policy(
+        &conn,
+        &[file_predepends()],
+        VersionScheme::Rpm,
+        &[],
+        &strict_policy_without_source_authority(&conn),
+    )
+    .unwrap_err();
+
+    assert!(matches!(error, Error::ConfigError(_)), "{error:?}");
+}
+
+#[test]
+fn conditional_requirement_is_refused_when_installed_condition_is_true() {
+    let (_dir, conn) = setup_test_db();
+    let policy = strict_policy_without_source_authority(&conn);
+
+    // Control: the condition is absent, so the implication is genuinely vacuous.
+    let vacuous = solve_requirement_groups_with_outgoing_and_policy(
+        &conn,
+        &[conditional_depends("foo", "bar")],
+        VersionScheme::Rpm,
+        &[],
+        &policy,
+    )
+    .unwrap();
+    assert_eq!(vacuous.conflict_message, None, "{vacuous:?}");
+
+    // `bar` is installed and survives the transaction, so `foo` must be present
+    // even though the SAT solver could otherwise leave `bar` out.
+    insert_rpm_trove(&conn, "bar", "1.0.0", &[]);
+    let error = solve_requirement_groups_with_outgoing_and_policy(
+        &conn,
+        &[conditional_depends("foo", "bar")],
+        VersionScheme::Rpm,
+        &[],
+        &policy,
+    )
+    .unwrap_err();
+    assert!(matches!(error, Error::ConfigError(_)), "{error:?}");
+}
+
+#[test]
+fn conditional_requirement_is_satisfied_when_both_sides_are_installed() {
+    let (_dir, conn) = setup_test_db();
+    insert_rpm_trove(&conn, "bar", "1.0.0", &[]);
+    insert_rpm_trove(&conn, "foo", "1.0.0", &[]);
+
+    let satisfied = solve_requirement_groups_with_outgoing_and_policy(
+        &conn,
+        &[conditional_depends("foo", "bar")],
+        VersionScheme::Rpm,
+        &[],
+        &strict_policy_without_source_authority(&conn),
+    )
+    .unwrap();
+    assert!(satisfied.install_order.is_empty(), "{satisfied:?}");
+    assert!(satisfied.remove_order.is_empty(), "{satisfied:?}");
+    assert_eq!(satisfied.conflict_message, None);
+}
+
+#[test]
+fn outgoing_installed_provider_is_excluded_from_strict_installed_solve() {
+    let (_dir, conn) = setup_test_db();
+    let provider_trove_id = installed_file_provider(&conn, "installed-provider");
+    let policy = strict_policy_without_source_authority(&conn);
+
+    // Positive control: while the provider is not outgoing, the installed-only
+    // path satisfies the requirement with an empty install order.
+    let satisfied = solve_requirement_groups_with_outgoing_and_policy(
+        &conn,
+        &[file_predepends()],
+        VersionScheme::Rpm,
+        &[],
+        &policy,
+    )
+    .unwrap();
+    assert!(satisfied.install_order.is_empty(), "{satisfied:?}");
+    assert!(satisfied.remove_order.is_empty(), "{satisfied:?}");
+    assert_eq!(satisfied.conflict_message, None);
+
+    // With the provider outgoing, the end state has no provider, so the
+    // installed-only path must refuse rather than use a package the
+    // transaction removes.
+    let error = solve_requirement_groups_with_outgoing_and_policy(
+        &conn,
+        &[file_predepends()],
+        VersionScheme::Rpm,
+        &[provider_trove_id],
+        &policy,
+    )
+    .unwrap_err();
+    assert!(matches!(error, Error::ConfigError(_)), "{error:?}");
+}
+
+#[test]
+fn repository_authority_does_not_use_outgoing_installed_provider() {
+    let (_dir, conn) = setup_test_db();
+    let repository_id = repository_fixture(&conn);
+    let provider_trove_id = installed_file_provider(&conn, "installed-provider");
+    repository_file_provider(&conn, repository_id, "repository-provider");
+    let policy = ResolutionPolicy::new().with_primary_source_identity("fedora-44");
+
+    // Positive control: with a repository candidate admitted and the installed
+    // provider not outgoing, the authority path solves.
+    let surviving = solve_requirement_groups_with_outgoing_and_policy(
+        &conn,
+        &[file_predepends()],
+        VersionScheme::Rpm,
+        &[],
+        &policy,
+    )
+    .unwrap();
+    assert!(surviving.conflict_message.is_none(), "{surviving:?}");
+
+    // With the installed provider outgoing, only the repository candidate can
+    // satisfy the requirement.
+    let replaced = solve_requirement_groups_with_outgoing_and_policy(
+        &conn,
+        &[file_predepends()],
+        VersionScheme::Rpm,
+        &[provider_trove_id],
+        &policy,
+    )
+    .unwrap();
+    assert!(replaced.conflict_message.is_none(), "{replaced:?}");
+    assert!(
+        replaced.install_order.iter().any(|package| {
+            package.name == "repository-provider" && package.source == SatSource::Repository
+        }),
+        "{replaced:?}"
+    );
+    assert!(
+        replaced
+            .install_order
+            .iter()
+            .all(|package| package.installed_trove_id != Some(provider_trove_id)),
+        "{replaced:?}"
+    );
+}
+
+#[test]
+fn upgrade_requirement_only_the_replaced_version_provides_is_refused() {
+    let (_dir, conn) = setup_test_db();
+    let repository_id = repository_fixture(&conn);
+    // `libold` 1.0.0 is the installed version this upgrade replaces and the
+    // only provider of `libold-cap`.
+    let replaced_trove_id = insert_rpm_trove(&conn, "libold", "1.0.0", &[]);
+    insert_provide(&conn, replaced_trove_id, "libold-cap", None);
+    let policy = ResolutionPolicy::new().with_primary_source_identity("fedora-44");
+    let requirement = hard_depends("libold-cap");
+
+    // Control: while the installed version survives, the fixed end state already
+    // holds the capability and the solve needs no repository provider.
+    let surviving = solve_requirement_groups_with_outgoing_and_policy(
+        &conn,
+        std::slice::from_ref(&requirement),
+        VersionScheme::Rpm,
+        &[],
+        &policy,
+    )
+    .unwrap();
+    assert!(surviving.conflict_message.is_none(), "{surviving:?}");
+    assert!(surviving.install_order.is_empty(), "{surviving:?}");
+
+    // Negative: the replacement removes the only provider, so the projected end
+    // state has no provider and the solve must refuse typed instead of
+    // satisfying the requirement from the trove the transaction removes.
+    let refused = solve_requirement_groups_with_outgoing_and_policy(
+        &conn,
+        std::slice::from_ref(&requirement),
+        VersionScheme::Rpm,
+        &[replaced_trove_id],
+        &policy,
+    )
+    .unwrap();
+    assert!(refused.conflict_message.is_some(), "{refused:?}");
+    assert!(refused.install_order.is_empty(), "{refused:?}");
+
+    // Positive control through the same fixture: a repository provider
+    // satisfies the same requirement after the replaced version leaves.
+    let provider_id = insert_rpm_repo_package(&conn, repository_id, "libold-cap-provider", "1-1");
+    RepositoryProvide::new(
+        provider_id,
+        "libold-cap".to_string(),
+        None,
+        "virtual".to_string(),
+        None,
+        VersionScheme::Rpm,
+    )
+    .insert(&conn)
+    .unwrap();
+    let resolved = solve_requirement_groups_with_outgoing_and_policy(
+        &conn,
+        &[requirement],
+        VersionScheme::Rpm,
+        &[replaced_trove_id],
+        &policy,
+    )
+    .unwrap();
+    assert!(resolved.conflict_message.is_none(), "{resolved:?}");
+    let names = resolved
+        .install_order
+        .iter()
+        .map(|package| package.name.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(names, ["libold-cap-provider"], "{resolved:?}");
+}
+
+#[test]
+fn malformed_source_identity_is_refused_before_installed_fallback() {
+    let (_dir, conn) = setup_test_db();
+    installed_file_provider(&conn, "installed-provider");
+
+    // The installed set could satisfy the requirement, but a malformed
+    // identity is invalid authority rather than absent authority. The known
+    // empty end state would otherwise succeed, so the refusal must come from
+    // identity validation.
+    let policy = ResolutionPolicy::new().with_primary_source_identity(" bad identity ");
+    let error = solve_requirement_groups_with_outgoing_and_policy(
+        &conn,
+        &[file_predepends()],
+        VersionScheme::Rpm,
+        &[],
+        &policy,
+    )
+    .unwrap_err();
+
+    assert!(matches!(error, Error::ConfigError(_)), "{error:?}");
+}
+
+#[test]
+fn repository_authority_still_admits_repository_candidate() {
+    let (_dir, conn) = setup_test_db();
+    let repository_id = repository_fixture(&conn);
+    repository_file_provider(&conn, repository_id, "repository-provider");
+
+    let policy = ResolutionPolicy::new().with_primary_source_identity("fedora-44");
+    let result = solve_requirement_groups_with_outgoing_and_policy(
+        &conn,
+        &[file_predepends()],
+        VersionScheme::Rpm,
+        &[],
+        &policy,
+    )
+    .unwrap();
+
+    assert!(result.conflict_message.is_none(), "{result:?}");
+    assert!(
+        result
+            .install_order
+            .iter()
+            .any(|package| package.name == "repository-provider"),
+        "{result:?}"
+    );
+}
+
+#[test]
+fn authority_known_end_state_requires_triggered_installed_condition() {
+    let (_dir, conn) = setup_test_db();
+    let repository_id = repository_fixture(&conn);
+    insert_rpm_trove(&conn, "bar", "1.0.0", &[]);
+    let policy = ResolutionPolicy::new().with_primary_source_identity("fedora-44");
+
+    // `bar` is installed and survives the transaction, so the fixed end state
+    // makes the condition true and `foo` is required. SAT must not be allowed
+    // to leave `bar` unselected to discharge the implication vacuously.
+    let unresolved = solve_requirement_groups_with_outgoing_and_policy(
+        &conn,
+        &[conditional_depends("foo", "bar")],
+        VersionScheme::Rpm,
+        &[],
+        &policy,
+    )
+    .unwrap();
+    assert!(unresolved.conflict_message.is_some(), "{unresolved:?}");
+    assert!(unresolved.install_order.is_empty(), "{unresolved:?}");
+
+    // Positive control through the same fixture: admitting `foo` in the
+    // repository makes the triggered requirement solvable, and `foo` is the
+    // only package the resolution installs.
+    insert_rpm_repo_package(&conn, repository_id, "foo", "1-1");
+    let resolved = solve_requirement_groups_with_outgoing_and_policy(
+        &conn,
+        &[conditional_depends("foo", "bar")],
+        VersionScheme::Rpm,
+        &[],
+        &policy,
+    )
+    .unwrap();
+    assert!(resolved.conflict_message.is_none(), "{resolved:?}");
+    assert_eq!(resolved.install_order.len(), 1, "{resolved:?}");
+    assert_eq!(resolved.install_order[0].name, "foo", "{resolved:?}");
+    assert_eq!(
+        resolved.install_order[0].source,
+        SatSource::Repository,
+        "{resolved:?}"
+    );
+}
+
+#[test]
+fn authority_known_end_state_discharges_vacuous_installed_condition() {
+    let (_dir, conn) = setup_test_db();
+    let _repository_id = repository_fixture(&conn);
+    let policy = ResolutionPolicy::new().with_primary_source_identity("fedora-44");
+
+    // `bar` is absent from both the installed state and (there is no) incoming
+    // package, so the implication is genuinely vacuous and needs no install
+    // even though the policy admits repository candidates.
+    let result = solve_requirement_groups_with_outgoing_and_policy(
+        &conn,
+        &[conditional_depends("foo", "bar")],
+        VersionScheme::Rpm,
+        &[],
+        &policy,
+    )
+    .unwrap();
+    assert_eq!(result.conflict_message, None, "{result:?}");
+    assert!(result.install_order.is_empty(), "{result:?}");
+    assert!(result.remove_order.is_empty(), "{result:?}");
+}
+
+fn install_collection_trove(conn: &Connection, name: &str) {
+    // A grammar-valid version: `conary collection create` currently writes
+    // "1.0", which insert-time validation rejects (see #1119).
+    let mut collection = Trove::new(
+        name.to_string(),
+        "1.0.0".to_string(),
+        TroveType::Collection,
+        VersionScheme::Conary,
+    );
+    // `conary collection create` persists no architecture for a collection.
+    collection.insert(conn).unwrap();
+}
+
+#[test]
+fn installed_provider_satisfies_strict_requirement_alongside_collection() {
+    let (_dir, conn) = setup_test_db();
+    let policy = strict_policy_without_source_authority(&conn);
+
+    // Control: the collection is not a provider, so a strict solve has no
+    // architecture-bearing fact that satisfies the requirement.
+    install_collection_trove(&conn, "group-base");
+    let refused = solve_requirement_groups_with_outgoing_and_policy(
+        &conn,
+        &[file_predepends()],
+        VersionScheme::Rpm,
+        &[],
+        &policy,
+    )
+    .unwrap_err();
+    assert!(matches!(refused, Error::ConfigError(_)), "{refused:?}");
+
+    // The installed package trove has architecture authority, so the same
+    // requirement is discharged even though the collection has none.
+    installed_file_provider(&conn, "installed-provider");
+    let satisfied = solve_requirement_groups_with_outgoing_and_policy(
+        &conn,
+        &[file_predepends()],
+        VersionScheme::Rpm,
+        &[],
+        &policy,
+    )
+    .unwrap();
+    assert!(satisfied.install_order.is_empty(), "{satisfied:?}");
+    assert!(satisfied.remove_order.is_empty(), "{satisfied:?}");
+    assert_eq!(satisfied.conflict_message, None, "{satisfied:?}");
+}
+
+#[test]
+fn authority_solve_validates_conditions_triggered_by_selected_packages() {
+    let (_dir, conn) = setup_test_db();
+    let repository_id = repository_fixture(&conn);
+    insert_rpm_repo_package(&conn, repository_id, "bar", "1-1");
+    let policy = ResolutionPolicy::new().with_primary_source_identity("fedora-44");
+    let groups = || {
+        vec![
+            crate::repository::requirement::parse_native_requirement(
+                RepositoryRequirementKind::Depends,
+                VersionScheme::Rpm,
+                "bar",
+            )
+            .unwrap(),
+            conditional_depends("foo", "bar"),
+        ]
+    };
+
+    // Negative control: `bar` is selected to satisfy its own hard group, which
+    // turns `(foo if bar)` true, but `foo` has no admitted candidate. The solve
+    // must refuse instead of returning an install order that violates the
+    // dependency in the real end state.
+    let refused = solve_requirement_groups_with_outgoing_and_policy(
+        &conn,
+        &groups(),
+        VersionScheme::Rpm,
+        &[],
+        &policy,
+    )
+    .unwrap();
+    assert!(refused.conflict_message.is_some(), "{refused:?}");
+    assert!(refused.install_order.is_empty(), "{refused:?}");
+
+    // Positive control through the same fixture: admitting `foo` lets the next
+    // pass select it alongside the selected condition, and the install order is
+    // exactly the two packages.
+    insert_rpm_repo_package(&conn, repository_id, "foo", "1-1");
+    let resolved = solve_requirement_groups_with_outgoing_and_policy(
+        &conn,
+        &groups(),
+        VersionScheme::Rpm,
+        &[],
+        &policy,
+    )
+    .unwrap();
+    assert!(resolved.conflict_message.is_none(), "{resolved:?}");
+    let mut names = resolved
+        .install_order
+        .iter()
+        .map(|package| package.name.as_str())
+        .collect::<Vec<_>>();
+    names.sort_unstable();
+    assert_eq!(names, ["bar", "foo"], "{resolved:?}");
+    assert!(resolved.remove_order.is_empty(), "{resolved:?}");
+}
+
+#[test]
+fn authority_conditional_chain_solves_to_a_fixed_point() {
+    let (_dir, conn) = setup_test_db();
+    let repository_id = repository_fixture(&conn);
+    for name in ["bar", "foo", "baz"] {
+        insert_rpm_repo_package(&conn, repository_id, name, "1-1");
+    }
+    let policy = ResolutionPolicy::new().with_primary_source_identity("fedora-44");
+    let groups = vec![
+        hard_depends("bar"),
+        conditional_depends("foo", "bar"),
+        conditional_depends("baz", "foo"),
+    ];
+
+    // Seeded with `bar` and `(foo if bar)`, pass one selects `bar` and exposes
+    // `(foo if bar)`; pass two selects `foo` and exposes `(baz if foo)`; pass
+    // three selects `baz`. A single retry would stop after pass two.
+    let resolved = solve_requirement_groups_with_outgoing_and_policy(
+        &conn,
+        &groups,
+        VersionScheme::Rpm,
+        &[],
+        &policy,
+    )
+    .unwrap();
+
+    assert!(resolved.conflict_message.is_none(), "{resolved:?}");
+    let mut names = resolved
+        .install_order
+        .iter()
+        .map(|package| package.name.as_str())
+        .collect::<Vec<_>>();
+    names.sort_unstable();
+    assert_eq!(names, ["bar", "baz", "foo"], "{resolved:?}");
+}
+
+#[test]
+fn authority_conditional_chain_conflicts_when_terminal_requirement_is_unavailable() {
+    let (_dir, conn) = setup_test_db();
+    let repository_id = repository_fixture(&conn);
+    for name in ["bar", "foo", "baz"] {
+        insert_rpm_repo_package(&conn, repository_id, name, "1-1");
+    }
+    let policy = ResolutionPolicy::new().with_primary_source_identity("fedora-44");
+    let groups = || {
+        vec![
+            hard_depends("bar"),
+            conditional_depends("foo", "bar"),
+            conditional_depends("baz", "foo"),
+        ]
+    };
+
+    // Positive control through the same fixture: with `baz` admitted the chain
+    // solves, so the refusal below is caused by `baz` being absent and not by a
+    // malformed fixture. `(baz if foo)` is the group promoted before the third
+    // pass.
+    let solved = solve_requirement_groups_with_outgoing_and_policy(
+        &conn,
+        &groups(),
+        VersionScheme::Rpm,
+        &[],
+        &policy,
+    )
+    .unwrap();
+    assert!(solved.conflict_message.is_none(), "{solved:?}");
+    assert_eq!(solved.install_order.len(), 3, "{solved:?}");
+
+    conn.execute("DELETE FROM repository_packages WHERE name = 'baz'", [])
+        .unwrap();
+    let refused = solve_requirement_groups_with_outgoing_and_policy(
+        &conn,
+        &groups(),
+        VersionScheme::Rpm,
+        &[],
+        &policy,
+    )
+    .unwrap();
+    assert!(refused.conflict_message.is_some(), "{refused:?}");
+    assert!(refused.install_order.is_empty(), "{refused:?}");
+    assert!(refused.remove_order.is_empty(), "{refused:?}");
+}
+
+#[test]
+fn authority_conditional_chain_solves_beyond_two_passes() {
+    let (_dir, conn) = setup_test_db();
+    let repository_id = repository_fixture(&conn);
+    for name in ["bar", "foo", "baz", "qux"] {
+        insert_rpm_repo_package(&conn, repository_id, name, "1-1");
+    }
+    let policy = ResolutionPolicy::new().with_primary_source_identity("fedora-44");
+    let groups = vec![
+        hard_depends("bar"),
+        conditional_depends("foo", "bar"),
+        conditional_depends("baz", "foo"),
+        conditional_depends("qux", "baz"),
+    ];
+
+    // Four chained conditionals require four passes: each pass exposes exactly
+    // one more live group. Success here shows the iteration is not capped at the
+    // original one-retry two-pass behavior.
+    let resolved = solve_requirement_groups_with_outgoing_and_policy(
+        &conn,
+        &groups,
+        VersionScheme::Rpm,
+        &[],
+        &policy,
+    )
+    .unwrap();
+
+    assert!(resolved.conflict_message.is_none(), "{resolved:?}");
+    let mut names = resolved
+        .install_order
+        .iter()
+        .map(|package| package.name.as_str())
+        .collect::<Vec<_>>();
+    names.sort_unstable();
+    assert_eq!(names, ["bar", "baz", "foo", "qux"], "{resolved:?}");
+}
+
+/// Register one canonical package with distro-specific implementation names.
+fn insert_canonical_equivalence(
+    conn: &Connection,
+    canonical_name: &str,
+    implementations: &[(&str, &str)],
+) {
+    let mut package = CanonicalPackage::new(canonical_name.to_string(), "package".to_string());
+    let canonical_id = package.insert(conn).unwrap();
+    for (distro, distro_name) in implementations {
+        let mut implementation = PackageImplementation::new(
+            canonical_id,
+            (*distro).to_string(),
+            (*distro_name).to_string(),
+            CanonicalMappingAuthority::Contract,
+        );
+        implementation.insert(conn).unwrap();
+    }
+}
+
+/// Map `httpd` and `apache2` to one canonical identity.
+fn canonical_httpd_apache2(conn: &Connection) {
+    insert_canonical_equivalence(
+        conn,
+        "httpd",
+        &[("fedora-44", "httpd"), ("ubuntu-26.04", "apache2")],
+    );
+}
+
+#[test]
+fn strict_policy_accepts_installed_canonical_equivalent() {
+    let (_dir, conn) = setup_test_db();
+    let policy = strict_policy_without_source_authority(&conn);
+    insert_rpm_trove(&conn, "apache2", "1.0.0", &[]);
+
+    // Control: `apache2` is a different literal identity than `httpd`, and
+    // strict policy has no repository authority to install a provider, so the
+    // incoming requirement is refused.
+    let refused = solve_requirement_groups_with_outgoing_and_policy(
+        &conn,
+        &[hard_depends("httpd")],
+        VersionScheme::Rpm,
+        &[],
+        &policy,
+    )
+    .unwrap_err();
+    assert!(matches!(refused, Error::ConfigError(_)), "{refused:?}");
+
+    // The canonical row makes the installed `apache2` the same package identity
+    // as `httpd`, so the fixed end state satisfies the requirement with an
+    // empty install order.
+    canonical_httpd_apache2(&conn);
+    let satisfied = solve_requirement_groups_with_outgoing_and_policy(
+        &conn,
+        &[hard_depends("httpd")],
+        VersionScheme::Rpm,
+        &[],
+        &policy,
+    )
+    .unwrap();
+    assert!(satisfied.install_order.is_empty(), "{satisfied:?}");
+    assert!(satisfied.remove_order.is_empty(), "{satisfied:?}");
+    assert_eq!(satisfied.conflict_message, None, "{satisfied:?}");
+}
+
+#[test]
+fn repository_authority_accepts_solved_canonical_equivalent() {
+    let (_dir, conn) = setup_test_db();
+    let repository_id = repository_fixture(&conn);
+    let policy = ResolutionPolicy::new().with_primary_source_identity("fedora-44");
+    canonical_httpd_apache2(&conn);
+    insert_rpm_repo_package(&conn, repository_id, "apache2", "1-1");
+    // The surviving installed dependent names the repository equivalent, so
+    // transitive loading admits the `apache2` solvable into SAT's candidate
+    // universe while the incoming group still names `httpd`.
+    insert_rpm_trove(&conn, "dependent", "1.0.0", &[("apache2", None)]);
+
+    let resolved = solve_requirement_groups_with_outgoing_and_policy(
+        &conn,
+        &[hard_depends("httpd")],
+        VersionScheme::Rpm,
+        &[],
+        &policy,
+    )
+    .unwrap();
+    assert!(resolved.conflict_message.is_none(), "{resolved:?}");
+    let names = resolved
+        .install_order
+        .iter()
+        .map(|package| package.name.as_str())
+        .collect::<Vec<_>>();
+    assert!(names.contains(&"apache2"), "{resolved:?}");
+}
+
+#[test]
+fn repository_authority_rejects_non_equivalent_name() {
+    let (_dir, conn) = setup_test_db();
+    let repository_id = repository_fixture(&conn);
+    let policy = ResolutionPolicy::new().with_primary_source_identity("fedora-44");
+    // `apache2` is present in the same candidate universe but has no canonical
+    // row linking it to `httpd`, so it is a different identity and the
+    // requirement is refused.
+    insert_rpm_repo_package(&conn, repository_id, "apache2", "1-1");
+    insert_rpm_trove(&conn, "dependent", "1.0.0", &[("apache2", None)]);
+
+    let refused = solve_requirement_groups_with_outgoing_and_policy(
+        &conn,
+        &[hard_depends("httpd")],
+        VersionScheme::Rpm,
+        &[],
+        &policy,
+    )
+    .unwrap();
+    assert!(refused.conflict_message.is_some(), "{refused:?}");
+    assert!(refused.install_order.is_empty(), "{refused:?}");
+}
+
+#[test]
+fn installed_canonical_equivalent_survives_literal_provider_removal() {
+    let (_dir, conn) = setup_test_db();
+    let policy = strict_policy_without_source_authority(&conn);
+    let literal_httpd = insert_rpm_trove(&conn, "httpd", "1.0.0", &[]);
+    insert_rpm_trove(&conn, "apache2", "1.0.0", &[]);
+    insert_rpm_trove(&conn, "dependent", "1.0.0", &[("httpd", None)]);
+
+    // Control: removing the literal `httpd` leaves the installed dependent's
+    // `httpd` group unsatisfied in the fixed end state, so strict policy
+    // refuses rather than silently dropping the breakage.
+    let refused = solve_requirement_groups_with_outgoing_and_policy(
+        &conn,
+        &[],
+        VersionScheme::Rpm,
+        &[literal_httpd],
+        &policy,
+    )
+    .unwrap_err();
+    assert!(matches!(refused, Error::ConfigError(_)), "{refused:?}");
+
+    // The transaction leaves `apache2` alone; because it is a canonical
+    // equivalent of `httpd`, the installed dependent is not newly broken.
+    canonical_httpd_apache2(&conn);
+    let satisfied = solve_requirement_groups_with_outgoing_and_policy(
+        &conn,
+        &[],
+        VersionScheme::Rpm,
+        &[literal_httpd],
+        &policy,
+    )
+    .unwrap();
+    assert!(satisfied.install_order.is_empty(), "{satisfied:?}");
+    assert!(satisfied.remove_order.is_empty(), "{satisfied:?}");
+    assert_eq!(satisfied.conflict_message, None, "{satisfied:?}");
+}
+
+/// Build the `apache2`-obsoleted-by-`newpkg` relation-removal fixture.
+///
+/// Returns `(apache2_trove_id, dependent_trove_id)`. The installed `apache2`
+/// provides nothing beyond its own identity, and the repository `newpkg`
+/// obsoletes it without providing anything named `httpd`, so the only way the
+/// installed `consumer-x`'s `httpd` group can be noticed is canonical
+/// equivalence between `httpd` and `apache2`.
+fn relation_removal_fixture(conn: &Connection) -> (i64, i64) {
+    let repository_id = repository_fixture(conn);
+    let apache2_trove_id = insert_rpm_trove(conn, "apache2", "1.0.0", &[]);
+    let dependent_trove_id = insert_rpm_trove(conn, "consumer-x", "1.0.0", &[("httpd", None)]);
+
+    let newpkg_id = insert_repo_pkg_with_reqs(
+        conn,
+        repository_id,
+        "newpkg",
+        "2.0-1",
+        "https://example.invalid/newpkg.rpm",
+        "rpm",
+        &[],
+    );
+    let obsolete = crate::repository::package_relation::parse_native_relation(
+        RepositoryRequirementKind::Obsolete,
+        VersionScheme::Rpm,
+        "apache2 < 2",
+    )
+    .unwrap();
+    insert_typed_repo_requirement_group(conn, newpkg_id, &obsolete);
+
+    (apache2_trove_id, dependent_trove_id)
+}
+
+#[test]
+fn relation_removal_of_canonical_equivalent_is_attributed_to_installed_requirer() {
+    let (_dir, conn) = setup_test_db();
+    let (apache2_trove_id, dependent_trove_id) = relation_removal_fixture(&conn);
+    let policy = ResolutionPolicy::new().with_primary_source_identity("fedora-44");
+    let requirement = hard_depends("newpkg");
+    let solve = || {
+        solve_requirement_groups_with_outgoing_and_policy(
+            &conn,
+            std::slice::from_ref(&requirement),
+            VersionScheme::Rpm,
+            &[],
+            &policy,
+        )
+        .unwrap()
+    };
+
+    // Control through the same fixture: without canonical rows, `consumer-x`
+    // names `httpd` while the removed `apache2` provides nothing, so the group
+    // is pre-existing breakage that this transaction must not blame. The
+    // fixture still plans the removal (proving the relation is live).
+    let control = solve();
+    assert_eq!(control.conflict_message, None, "{control:?}");
+    assert!(control.unsatisfied_groups.is_empty(), "{control:?}");
+    assert_eq!(
+        control
+            .remove_order
+            .iter()
+            .map(|removal| removal.trove_id)
+            .collect::<Vec<_>>(),
+        vec![apache2_trove_id],
+        "{control:?}"
+    );
+
+    // The canonical rows make `apache2` the same identity as `httpd`, so
+    // removing `apache2` silently breaks `consumer-x` unless the fixed point
+    // admits and blames it. The refusal names that installed requirer.
+    canonical_httpd_apache2(&conn);
+    let refused = solve();
+    assert!(refused.conflict_message.is_some(), "{refused:?}");
+    assert!(refused.install_order.is_empty(), "{refused:?}");
+    assert_eq!(refused.unsatisfied_groups.len(), 1, "{refused:?}");
+    assert_eq!(
+        refused.unsatisfied_groups[0].owner,
+        crate::resolver::sat::SatGroupOwner::Installed {
+            trove_id: dependent_trove_id,
+            package_name: "consumer-x".to_string(),
+        },
+        "{refused:?}"
+    );
+}
+
+#[test]
+fn incoming_condition_sees_surviving_installed_trove() {
+    let (_dir, conn) = setup_test_db();
+    let repository_id = repository_fixture(&conn);
+    insert_rpm_trove(&conn, "bar", "1.0.0", &[]);
+    insert_rpm_repo_package(&conn, repository_id, "foo", "1-1");
+    let policy = ResolutionPolicy::new().with_primary_source_identity("fedora-44");
+    let solve = || {
+        solve_requirement_groups_with_outgoing_and_policy(
+            &conn,
+            &[conditional_depends("foo", "bar")],
+            VersionScheme::Rpm,
+            &[],
+            &policy,
+        )
+        .unwrap()
+    };
+
+    // `bar` is a surviving installed package, so the fixed end state makes the
+    // condition true and `foo` must be installed. Only the repository package
+    // appears in the install order; the surviving fact never does.
+    let resolved = solve();
+    assert!(resolved.conflict_message.is_none(), "{resolved:?}");
+    let names = resolved
+        .install_order
+        .iter()
+        .map(|package| package.name.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(names, ["foo"], "{resolved:?}");
+    assert_eq!(resolved.install_order[0].source, SatSource::Repository);
+
+    // Control through the same fixture: with `bar` removed the implication is
+    // genuinely vacuous, so no `foo` is installed.
+    conn.execute("DELETE FROM troves WHERE name = 'bar'", [])
+        .unwrap();
+    let vacuous = solve();
+    assert!(vacuous.conflict_message.is_none(), "{vacuous:?}");
+    assert!(vacuous.install_order.is_empty(), "{vacuous:?}");
+}
+
+#[test]
+fn parallel_installed_variants_are_all_selectable() {
+    let (_dir, conn) = setup_test_db();
+    let repository_id = repository_fixture(&conn);
+    let first = insert_rpm_trove(&conn, "libfoo", "1.0.0", &[]);
+    let second = insert_rpm_trove(&conn, "libfoo", "2.0.0", &[]);
+    insert_rpm_repo_package(&conn, repository_id, "helper", "1-1");
+    let policy = ResolutionPolicy::new().with_primary_source_identity("fedora-44");
+
+    // Both surviving variants are fixed exact roots, so SAT must be allowed to
+    // select both while the incoming requirement is satisfied by version 2.
+    // `helper` is the only package newly installed.
+    let resolved = solve_requirement_groups_with_outgoing_and_policy(
+        &conn,
+        &[hard_depends("libfoo = 2.0.0"), hard_depends("helper")],
+        VersionScheme::Rpm,
+        &[],
+        &policy,
+    )
+    .unwrap();
+    assert!(resolved.conflict_message.is_none(), "{resolved:?}");
+    let names = resolved
+        .install_order
+        .iter()
+        .map(|package| package.name.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(names, ["helper"], "{resolved:?}");
+    assert!(
+        resolved.install_order.iter().all(|package| {
+            package.installed_trove_id != Some(first) && package.installed_trove_id != Some(second)
+        }),
+        "{resolved:?}"
+    );
+
+    // Control through the same fixture: both surviving variants share the
+    // repository version's install slot, so it has no exact predecessor to
+    // replace and the solve refuses even though the package exists.
+    insert_rpm_repo_package(&conn, repository_id, "libfoo", "3-1");
+    let refused = solve_requirement_groups_with_outgoing_and_policy(
+        &conn,
+        &[hard_depends("libfoo = 3.0.0")],
+        VersionScheme::Rpm,
+        &[],
+        &policy,
+    )
+    .unwrap();
+    assert!(refused.conflict_message.is_some(), "{refused:?}");
+    assert!(refused.install_order.is_empty(), "{refused:?}");
+}
+
+#[test]
+fn parallel_installed_variant_satisfies_incoming_without_install() {
+    let (_dir, conn) = setup_test_db();
+    let _repository_id = repository_fixture(&conn);
+    insert_rpm_trove(&conn, "libfoo", "1.0.0", &[]);
+    insert_rpm_trove(&conn, "libfoo", "2.0.0", &[]);
+    let policy = ResolutionPolicy::new().with_primary_source_identity("fedora-44");
+
+    let result = solve_requirement_groups_with_outgoing_and_policy(
+        &conn,
+        &[hard_depends("libfoo = 2.0.0")],
+        VersionScheme::Rpm,
+        &[],
+        &policy,
+    )
+    .unwrap();
+
+    assert!(result.conflict_message.is_none(), "{result:?}");
+    assert!(result.install_order.is_empty(), "{result:?}");
+}
+
+#[test]
+fn preexisting_broken_group_on_forced_installed_package_does_not_block_install() {
+    let (_dir, conn) = setup_test_db();
+    let repository_id = repository_fixture(&conn);
+    // `guard` provides `cap` and carries a stored `missing` group that is
+    // already unsatisfied before the transaction.
+    let guard_trove_id = insert_rpm_trove(&conn, "guard", "1.0.0", &[("missing", None)]);
+    insert_provide(&conn, guard_trove_id, "cap", None);
+    insert_rpm_repo_package(&conn, repository_id, "helper", "1-1");
+    let policy = ResolutionPolicy::new().with_primary_source_identity("fedora-44");
+
+    // Naming `cap` forces the surviving `guard`, so its stored group is
+    // enforced natively. The pre-existing breakage is discharged by identity
+    // and the unrelated `helper` install succeeds.
+    let resolved = solve_requirement_groups_with_outgoing_and_policy(
+        &conn,
+        &[hard_depends("cap"), hard_depends("helper")],
+        VersionScheme::Rpm,
+        &[],
+        &policy,
+    )
+    .unwrap();
+    assert!(resolved.conflict_message.is_none(), "{resolved:?}");
+    let names = resolved
+        .install_order
+        .iter()
+        .map(|package| package.name.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(names, ["helper"], "{resolved:?}");
+}
+
+#[test]
+fn newly_broken_group_on_forced_installed_package_is_refused_naming_owner() {
+    let (_dir, conn) = setup_test_db();
+    let repository_id = repository_fixture(&conn);
+    // `guard` provides `cap` and depends on the installed `dep`.
+    let guard_trove_id = insert_rpm_trove(&conn, "guard", "1.0.0", &[("dep", None)]);
+    insert_provide(&conn, guard_trove_id, "cap", None);
+    insert_rpm_trove(&conn, "dep", "1.0.0", &[]);
+    // `remover` provides the capability that forces the surviving `guard` and
+    // obsoletes `guard`'s only installed dependency.
+    let remover_id = insert_rpm_repo_package(&conn, repository_id, "remover", "1-1");
+    RepositoryProvide::new(
+        remover_id,
+        "cap".to_string(),
+        None,
+        "virtual".to_string(),
+        None,
+        VersionScheme::Rpm,
+    )
+    .insert(&conn)
+    .unwrap();
+    let obsolete = crate::repository::package_relation::parse_native_relation(
+        RepositoryRequirementKind::Obsolete,
+        VersionScheme::Rpm,
+        "dep < 2",
+    )
+    .unwrap();
+    insert_typed_repo_requirement_group(&conn, remover_id, &obsolete);
+
+    let policy = ResolutionPolicy::new().with_primary_source_identity("fedora-44");
+    let refused = solve_requirement_groups_with_outgoing_and_policy(
+        &conn,
+        &[hard_depends("remover")],
+        VersionScheme::Rpm,
+        &[],
+        &policy,
+    )
+    .unwrap();
+
+    // The relation plan removes the forced guard's dependency, so the group is
+    // newly broken and the refusal must name the installed owner.
+    assert!(refused.conflict_message.is_some(), "{refused:?}");
+    assert!(refused.install_order.is_empty(), "{refused:?}");
+    assert_eq!(refused.unsatisfied_groups.len(), 1, "{refused:?}");
+    assert_eq!(
+        refused.unsatisfied_groups[0].owner,
+        crate::resolver::sat::SatGroupOwner::Installed {
+            trove_id: guard_trove_id,
+            package_name: "guard".to_string(),
+        },
+        "{refused:?}"
+    );
+}

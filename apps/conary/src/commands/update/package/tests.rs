@@ -38,7 +38,7 @@ fn build_test_ccs_package_with_relations(
     native_lifecycle: Option<NativeLifecycleBundle>,
     relations: Vec<conary_core::repository::dependency_model::RepositoryRequirementGroup>,
 ) -> PathBuf {
-    build_test_ccs_package_with_owners(dir, name, version, native_lifecycle, relations, false)
+    build_test_ccs_package_with_owners(dir, name, version, native_lifecycle, relations, false, &[])
 }
 
 fn build_test_ccs_package_with_owners(
@@ -48,6 +48,7 @@ fn build_test_ccs_package_with_owners(
     native_lifecycle: Option<NativeLifecycleBundle>,
     relations: Vec<conary_core::repository::dependency_model::RepositoryRequirementGroup>,
     named: bool,
+    provides: &[&str],
 ) -> PathBuf {
     let source_dir = dir.join("src");
     std::fs::create_dir_all(source_dir.join("usr/bin")).unwrap();
@@ -67,6 +68,7 @@ fn build_test_ccs_package_with_owners(
     });
     manifest.native_lifecycle = native_lifecycle;
     manifest.relations = relations;
+    manifest.provides.capabilities = provides.iter().map(ToString::to_string).collect();
 
     let mut result = CcsBuilder::new(manifest, &source_dir)
         .unwrap()
