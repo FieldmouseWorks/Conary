@@ -73,13 +73,13 @@ bash ./install-conary-preview.sh --apply --yes
 
 ### Runnable today
 
-The native package runs `conary system init`, which records host capabilities
-and Remi feed definitions but no installed-package providers, and
-`apps/conary/src/commands/install/dep_resolution.rs` resolves dependencies
-only from Conary's persisted provider graph or repository metadata. So adopt
-the host's installed packages first, with `--full` so their files are
+First, adopt the host's installed packages with `--full`, so their files are
 CAS-backed and present in the selected root; they become the dependency
-source and the lifecycle environment for a local artifact:
+source and the lifecycle environment for a local artifact.
+`conary system init` records host capabilities and Remi feed definitions but
+no installed-package providers, and with no active public universe
+([#598](https://github.com/FieldmouseWorks/Conary/issues/598)) Conary has
+nothing else to resolve dependencies from:
 
 ```bash
 sudo conary system adopt --system --full --dry-run
@@ -120,24 +120,13 @@ sudo conary remove htop --yes
 ```
 
 Commands that change packages, files, generation state, or native authority
-require `--yes` unless run with `--dry-run`. The command-risk policy in
-`apps/conary/src/command_risk.rs` authorizes these state-changing commands
-without it: `conary self-update` (the `--check` and verify forms are
-read-only), `conary try keep`, `conary try rollback`, and
-`conary try --activate`, which carry apply intent themselves;
-`conary system adopt` in its `--system`, package, and `--refresh` forms,
-which change Conary's tracking records rather than host files; the root-only
-`conary system adopt --refresh --quiet --from-sync-hook` native
-package-manager hook; the hidden boot-time `conary system generation activate`
-continuation, authorized by the selected generation artifact and kernel
-command line; and the local-state class (`conary repo`, `conary pin`,
-`conary unpin`, `conary system init`, and similar), which is not gated even
-where a member writes host files, as `conary config restore` does. Use
-`--dry-run` first when the command supports it. The
+require `--yes` unless run with `--dry-run`; use `--dry-run` first when the
+command supports it. A few commands carry apply intent themselves or only
+change Conary's own records and are listed in
+[docs/guides/advanced-commands.md](docs/guides/advanced-commands.md). The
 default `conary --help` shows the daily-driver commands;
-`conary --help-advanced` and
-[docs/guides/advanced-commands.md](docs/guides/advanced-commands.md) list the
-packaging and platform surface.
+`conary --help-advanced` and that guide list the packaging and platform
+surface.
 
 ### What works today
 
@@ -254,10 +243,11 @@ subsequent commands must use the same path.
 Repository gates:
 
 ```bash
-cargo test -p conary
-cargo test -p conary-core
+cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
-cargo fmt --check
+cargo test -p conary --no-default-features --test test_hook_ownership
+cargo test -p conary --features test-hooks
+cargo test -p conary-core
 bash scripts/check-doc-truth.sh
 ```
 
