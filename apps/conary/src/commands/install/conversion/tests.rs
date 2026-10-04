@@ -221,12 +221,27 @@ fn write_runtime_ccs_package(
     let package_path = temp_dir.join(format!("{name}.ccs"));
     let init_content = b"#!/bin/sh\nexec true\n".to_vec();
     let init_hash = hash::sha256(&init_content);
-    let files = vec![regular_ccs_file(
+    let init_size = init_content.len() as u64;
+    let mut files = vec![regular_ccs_file(
         "/usr/sbin/init",
         init_hash.clone(),
-        init_content.len() as u64,
+        init_size,
         0o755,
     )];
+    let mut payloads = HashMap::from([(init_hash, init_content)]);
+    // A post-install hook needs an executable interpreter in the materialized
+    // selected root; otherwise interpreter-availability preflight refuses.
+    if manifest.hooks.post_install.is_some() {
+        let shell_content = b"#!/bin/sh\nexec true\n".to_vec();
+        let shell_hash = hash::sha256(&shell_content);
+        files.push(regular_ccs_file(
+            "/bin/sh",
+            shell_hash.clone(),
+            shell_content.len() as u64,
+            0o755,
+        ));
+        payloads.insert(shell_hash, shell_content);
+    }
     manifest.components.default = vec!["runtime".to_string()];
     let result = BuildResult {
         manifest,
@@ -236,13 +251,15 @@ fn write_runtime_ccs_package(
                 name: "runtime".to_string(),
                 files: files.clone(),
                 hash: "runtime".to_string(),
-                size: init_content.len() as u64,
+                size: files
+                    .iter()
+                    .filter_map(|file| file.content.as_ref().map(|content| content.size))
+                    .sum(),
             },
         )]),
         files: files.clone(),
         payloads: conary_core::ccs::builder::payloads_from_bounded_memory_for_tests(
-            &files,
-            HashMap::from([(init_hash, init_content)]),
+            &files, payloads,
         )
         .unwrap(),
         total_size: 0,
@@ -739,6 +756,116 @@ async fn converted_ccs_install_rolls_back_post_hook_failure() {
 }
 
 #[tokio::test]
+async fn converted_ccs_install_refuses_absent_post_install_interpreter_before_mutation() {
+    let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
+    let temp_dir = tempfile::tempdir().unwrap();
+    let install_root = temp_dir.path().join("root");
+    let db_path = temp_dir.path().join("conary.db");
+    let db_path_str = db_path.to_str().unwrap();
+
+    std::fs::create_dir_all(&install_root).unwrap();
+    conary_core::db::init(db_path_str).unwrap();
+    stage_test_boot_assets(temp_dir.path());
+
+    // A metadata-only package declares a `/bin/sh` post-install hook but ships
+    // no interpreter payload, so the selected root cannot provide it.
+    let mut manifest = CcsManifest::new_minimal("converted-missing-interpreter", "1.0.0");
+    manifest.hooks.post_install = Some(ScriptHook {
+        script: ":".to_string(),
+        interpreter: "/bin/sh".to_string(),
+        reversible: None,
+    });
+    let package_path = temp_dir.path().join("converted-missing-interpreter.ccs");
+    let result = BuildResult {
+        manifest,
+        components: HashMap::new(),
+        files: Vec::new(),
+        payloads: Vec::new(),
+        total_size: 0,
+        chunked: false,
+        chunk_stats: None,
+    };
+    let signing_key = crate::commands::ccs::load_or_create_local_dev_key().unwrap();
+    write_signed_current_ccs_package(&result, &package_path, &signing_key, true).unwrap();
+
+    let error = install_ccs_artifact(converted_install_options(
+        &package_path,
+        db_path_str,
+        &install_root,
+        None,
+    ))
+    .await
+    .unwrap_err();
+
+    let unavailable = error
+        .downcast_ref::<super::super::ccs_hook_interpreter::CcsHookInterpreterUnavailable>()
+        .expect("an absent hook interpreter must be the typed availability refusal");
+    assert_eq!(unavailable.package, "converted-missing-interpreter");
+    assert_eq!(unavailable.version, "1.0.0");
+    assert_eq!(
+        unavailable.phase,
+        super::super::ccs_hook_interpreter::HookPhase::PostInstall
+    );
+    assert_eq!(unavailable.interpreter, "/bin/sh");
+
+    let conn = conary_core::db::open(db_path_str).unwrap();
+    let changesets: i64 = conn
+        .query_row("SELECT COUNT(*) FROM changesets", [], |row| row.get(0))
+        .unwrap();
+    let troves: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM troves WHERE name = 'converted-missing-interpreter'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(changesets, 0, "refusal must not commit a changeset");
+    assert_eq!(troves, 0, "refusal must not persist a trove row");
+}
+
+#[tokio::test]
+async fn converted_ccs_install_admits_post_install_interpreter_present_in_root() {
+    let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
+    let temp_dir = tempfile::tempdir().unwrap();
+    let install_root = temp_dir.path().join("root");
+    let db_path = temp_dir.path().join("conary.db");
+    let db_path_str = db_path.to_str().unwrap();
+
+    std::fs::create_dir_all(&install_root).unwrap();
+    conary_core::db::init(db_path_str).unwrap();
+    stage_test_boot_assets(temp_dir.path());
+
+    // Positive control on the same rule: the package payload provides `/bin/sh`
+    // in the selected root, so the availability preflight admits the install.
+    // The hook still cannot execute without root privileges, so the install
+    // fails later at hook execution rather than at interpreter preflight.
+    let mut manifest = CcsManifest::new_minimal("converted-present-interpreter", "1.0.0");
+    manifest.hooks.post_install = Some(ScriptHook {
+        script: "exit 32".to_string(),
+        interpreter: "/bin/sh".to_string(),
+        reversible: None,
+    });
+    let package_path =
+        write_runtime_ccs_package(temp_dir.path(), "converted-present-interpreter", manifest);
+
+    let error = install_ccs_artifact(converted_install_options(
+        &package_path,
+        db_path_str,
+        &install_root,
+        None,
+    ))
+    .await
+    .unwrap_err();
+
+    assert!(
+        error
+            .downcast_ref::<super::super::ccs_hook_interpreter::CcsHookInterpreterUnavailable>()
+            .is_none(),
+        "a payload-provided interpreter must clear availability preflight: {error:#}"
+    );
+}
+
+#[tokio::test]
 async fn converted_ccs_install_rejects_symlink_child_payload() {
     let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
     let temp_dir = tempfile::tempdir().unwrap();
@@ -922,6 +1049,74 @@ async fn converted_ccs_install_rejects_child_before_package_symlink() {
     assert_eq!(persisted, 0);
 }
 
+#[tokio::test]
+async fn converted_ccs_dry_run_previews_unavailable_interpreter_without_mutation() {
+    let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
+    let temp_dir = tempfile::tempdir().unwrap();
+    let install_root = temp_dir.path().join("root");
+    let db_path = temp_dir.path().join("conary.db");
+    let db_path_str = db_path.to_str().unwrap();
+
+    std::fs::create_dir_all(&install_root).unwrap();
+    conary_core::db::init(db_path_str).unwrap();
+    stage_test_boot_assets(temp_dir.path());
+
+    let mut manifest = CcsManifest::new_minimal("converted-dry-run-interpreter", "1.0.0");
+    manifest.hooks.post_install = Some(ScriptHook {
+        script: ":".to_string(),
+        interpreter: "/bin/sh".to_string(),
+        reversible: None,
+    });
+    let package_path = temp_dir.path().join("converted-dry-run-interpreter.ccs");
+    let result = BuildResult {
+        manifest,
+        components: HashMap::new(),
+        files: Vec::new(),
+        payloads: Vec::new(),
+        total_size: 0,
+        chunked: false,
+        chunk_stats: None,
+    };
+    let signing_key = crate::commands::ccs::load_or_create_local_dev_key().unwrap();
+    write_signed_current_ccs_package(&result, &package_path, &signing_key, true).unwrap();
+
+    // Positive control on the same fixture: enforcing mode refuses with the
+    // typed interpreter-availability error before any mutation.
+    let error = install_ccs_artifact(converted_install_options(
+        &package_path,
+        db_path_str,
+        &install_root,
+        None,
+    ))
+    .await
+    .unwrap_err();
+    assert!(
+        error
+            .downcast_ref::<super::super::ccs_hook_interpreter::CcsHookInterpreterUnavailable>()
+            .is_some(),
+        "the enforcing control must refuse the missing interpreter: {error:#}"
+    );
+
+    let mut dry_run_options =
+        converted_install_options(&package_path, db_path_str, &install_root, None);
+    dry_run_options.dry_run = true;
+    install_ccs_artifact(dry_run_options)
+        .await
+        .expect("a dry run must preview an unavailable hook interpreter without failing");
+
+    let conn = conary_core::db::open(db_path_str).unwrap();
+    let changesets: i64 = conn
+        .query_row("SELECT COUNT(*) FROM changesets", [], |row| row.get(0))
+        .unwrap();
+    let troves: i64 = conn
+        .query_row("SELECT COUNT(*) FROM troves", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(changesets, 0, "a dry run must not commit a changeset");
+    assert_eq!(troves, 0, "a dry run must not persist a trove");
+    assert!(!install_root.join("usr/sbin/init").exists());
+}
+
 mod authority;
 mod capabilities;
 mod dependencies;
+mod hook_interpreter;

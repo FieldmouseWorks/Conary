@@ -167,6 +167,8 @@ async fn ccs_install_runs_package_hook_for_devel_only_component_selection() {
     let runtime_hash = hash::sha256(&runtime_content);
     let devel_content = b"#pragma once\n".to_vec();
     let devel_hash = hash::sha256(&devel_content);
+    let shell_content = b"#!/bin/sh\nexit 0\n".to_vec();
+    let shell_hash = hash::sha256(&shell_content);
 
     let runtime_file = ccs_regular_file(
         "/usr/bin/devel-only".to_string(),
@@ -182,6 +184,15 @@ async fn ccs_install_runs_package_hook_for_devel_only_component_selection() {
         0o100644,
         "devel".to_string(),
     );
+    // The only selected component must carry the post-install interpreter so
+    // the availability preflight admits the package-scoped hook.
+    let shell_file = ccs_regular_file(
+        "/bin/sh".to_string(),
+        shell_hash.clone(),
+        shell_content.len() as u64,
+        0o100755,
+        "devel".to_string(),
+    );
 
     let mut manifest = CcsManifest::new_minimal("devel-only", "1.0.0");
     manifest.hooks.post_install = Some(ScriptHook {
@@ -190,7 +201,7 @@ async fn ccs_install_runs_package_hook_for_devel_only_component_selection() {
         reversible: None,
     });
 
-    let files = vec![runtime_file.clone(), devel_file.clone()];
+    let files = vec![runtime_file.clone(), devel_file.clone(), shell_file.clone()];
     let result = BuildResult {
         manifest,
         components: HashMap::from([
@@ -207,16 +218,20 @@ async fn ccs_install_runs_package_hook_for_devel_only_component_selection() {
                 "devel".to_string(),
                 ComponentData {
                     name: "devel".to_string(),
-                    files: vec![devel_file.clone()],
+                    files: vec![devel_file.clone(), shell_file.clone()],
                     hash: "devel".to_string(),
-                    size: devel_content.len() as u64,
+                    size: (devel_content.len() + shell_content.len()) as u64,
                 },
             ),
         ]),
         files: files.clone(),
         payloads: conary_core::ccs::builder::payloads_from_bounded_memory_for_tests(
             &files,
-            HashMap::from([(runtime_hash, runtime_content), (devel_hash, devel_content)]),
+            HashMap::from([
+                (runtime_hash, runtime_content),
+                (devel_hash, devel_content),
+                (shell_hash, shell_content),
+            ]),
         )
         .unwrap(),
         total_size: 0,

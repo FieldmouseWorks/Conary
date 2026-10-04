@@ -3,6 +3,7 @@
 
 mod acquire;
 mod batch;
+mod ccs_hook_interpreter;
 mod ccs_removal_hooks;
 mod ccs_transaction;
 mod command;
