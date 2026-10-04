@@ -32,6 +32,7 @@ mod typed_sql;
 mod typed_trigger;
 mod typed_update;
 mod typed_update_config;
+mod typed_update_effect;
 mod typed_update_lifecycle;
 mod typed_update_repository;
 mod typed_whatprovides;

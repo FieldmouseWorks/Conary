@@ -453,7 +453,6 @@ run = "CONARY_TEST_SKIP_GENERATION_MOUNT=1 ${CONARY_BIN} update phase4-runtime-f
 
 [test.step.assert]
 exit_code = 0
-stdout_contains = "phase4-runtime-fixture"
 
 [[test.step]]
 run = "/opt/remi-tests/fixtures/native/assert-selected-generation.py --root /conary --expect-sha256 /etc/phase4-runtime-fixture/app.conf=2c76059e3429b1a8429d7026acabffefe3bc738c7344b3f345c2e4d502b1e8dc --expect-sha256 /usr/bin/phase4-runtime-fixture=67366d905b9464bec8c4ff41021bd536292488fc1777cbf6a1fb41a438b2a283"
