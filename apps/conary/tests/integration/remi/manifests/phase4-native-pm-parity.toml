@@ -183,7 +183,6 @@ run = ". /tmp/native-pm-parity/native-fixture.env && CONARY_TEST_SKIP_GENERATION
 
 [test.step.assert]
 exit_code = 0
-stdout_contains_any = ["Successfully installed", "Installed", "phase4-runtime-fixture"]
 
 [[test.step]]
 run = "/opt/remi-tests/fixtures/native/assert-selected-generation.py --root /conary --expect-sha256 /etc/phase4-runtime-fixture/app.conf=1da0b50cb027387347265437a11956c1433788d045e4c63b379a1e0740882e7c --expect-sha256 /usr/bin/phase4-runtime-fixture=517631de24336343a6aaf1a8f704d326299c14c619fe8c8d75d17824d074bd7f --expect-sha256 /usr/include/phase4-runtime-fixture/api.h=88904c275ae0f26a566c03f488ae82869c47ac921fb6f0cf7979d5845f199c88"

@@ -17,6 +17,7 @@ mod typed_deferred;
 mod typed_dependency;
 mod typed_directory_symlink;
 mod typed_hardlink;
+mod typed_install_effect;
 mod typed_installed;
 mod typed_lifecycle;
 mod typed_parity_whatprovides;
