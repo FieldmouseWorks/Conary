@@ -24,7 +24,7 @@ use anyhow::{Context, Result};
 use conary_core::components::parse_component_spec;
 use conary_core::db::models::Trove;
 use conary_core::packages::PackageFormat;
-use conary_core::repository::resolution_policy::RequestScope;
+use conary_core::repository::resolution_policy::{InstalledReplacementPolicy, RequestScope};
 use conary_core::transaction::{
     PackageRelationPlan, plan_package_relations, validate_package_relation_plan,
 };
@@ -195,7 +195,12 @@ async fn cmd_install_with_intent(
         effective_source_policy.resolution,
         from_source.as_deref(),
         repo.as_deref(),
-    )?;
+    )?
+    .with_installed_replacement(if allow_downgrade {
+        InstalledReplacementPolicy::AllowDowngrade
+    } else {
+        InstalledReplacementPolicy::UpgradeOnly
+    });
     let resolved_name = resolve_canonical_name(
         &conn,
         &base_name_for_canonical,

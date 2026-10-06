@@ -23,8 +23,9 @@ use std::collections::{HashMap, HashSet};
 
 use crate::error::{Error, Result};
 use crate::repository::dependency_model::ProvideVersionRelation;
+use crate::repository::resolution_policy::InstalledReplacementPolicy;
 use crate::repository::resolution_policy::{RequestScope, ResolutionPolicy};
-use crate::repository::versioning::{VersionScheme, validate_repo_version};
+use crate::repository::versioning::VersionScheme;
 use crate::resolver::canonical::CanonicalEquivalents;
 use crate::resolver::identity::PackageIdentity;
 use crate::resolver::provides_index::ProvidesIndex;
@@ -254,12 +255,16 @@ impl<'db> ConaryProvider<'db> {
     ///
     /// For an exact package name, no repository version may replace the fixed
     /// incoming package, and one replaces a surviving variant only as the
-    /// installer's exact install-slot upgrade of it (`slot_replacement`). A
-    /// lone fixed fact with no replacer is locked; the incoming package,
-    /// parallel variants, and replacers are all selectable. Virtual
-    /// capabilities are not filtered because several packages may provide one.
-    pub(crate) fn lock_surviving_installed_candidates(&mut self) {
-        self.surviving_installed_lock = Some(SurvivingInstalledLock::default());
+    /// installer's exact install-slot upgrade of it (`slot_replacement`), under
+    /// the caller's `installed_replacement` intent. A lone fixed fact with no
+    /// replacer is locked; the incoming package, parallel variants, and
+    /// replacers are all selectable. Virtual capabilities are not filtered
+    /// because several packages may provide one.
+    pub(crate) fn lock_surviving_installed_candidates(
+        &mut self,
+        installed_replacement: InstalledReplacementPolicy,
+    ) {
+        self.surviving_installed_lock = Some(SurvivingInstalledLock::new(installed_replacement));
     }
 
     /// Register the incoming package as a fixed SAT fact.
@@ -466,12 +471,7 @@ impl<'db> ConaryProvider<'db> {
                 pkg.name
             )));
         }
-        validate_repo_version(pkg.version_scheme, &pkg.version)?;
-        for capability in &pkg.provided_capabilities {
-            if let Some(version) = capability.version.as_deref() {
-                validate_repo_version(capability.version_scheme, version)?;
-            }
-        }
+        pkg.validate_versions()?;
         let idx = self.solvables.len();
         let id = SolvableId::from_raw(Self::pool_u32(idx, "solvable")?);
         // Publish index entries only after every admission/validation check.

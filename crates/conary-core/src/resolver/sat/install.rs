@@ -6,7 +6,7 @@ use std::collections::HashSet;
 use std::time::Instant;
 
 use crate::error::Result;
-use crate::repository::resolution_policy::ResolutionPolicy;
+use crate::repository::resolution_policy::{InstalledReplacementPolicy, ResolutionPolicy};
 use crate::resolver::identity::PackageIdentity;
 use crate::version::VersionConstraint;
 
@@ -66,6 +66,7 @@ pub(super) fn build_provider_for_requirement_expressions<'conn>(
         outgoing_trove_ids,
         relation_only_trove_ids,
         lock_surviving_installed,
+        installed_replacement,
         ignored_installed_groups,
     } = facts;
     let phase = timing::start(None, timing::Phase::Initialization);
@@ -79,7 +80,7 @@ pub(super) fn build_provider_for_requirement_expressions<'conn>(
     provider.exclude_installed_troves(outgoing_trove_ids.iter().copied());
     provider.hide_relation_only_installed_troves(relation_only_trove_ids.iter().copied());
     if lock_surviving_installed {
-        provider.lock_surviving_installed_candidates();
+        provider.lock_surviving_installed_candidates(installed_replacement);
     }
     let phase = timing::start(None, timing::Phase::Installed);
     provider.load_installed_packages()?;
@@ -121,6 +122,10 @@ pub(super) struct FixedTransactionFacts<'a> {
     pub(super) relation_only_trove_ids: &'a HashSet<i64>,
     /// Whether surviving installed variants are fixed end-state facts.
     pub(super) lock_surviving_installed: bool,
+    /// Whether a repository candidate may replace an installed same-slot trove
+    /// with a version that is not strictly newer. Only consulted when
+    /// `lock_surviving_installed` is set.
+    pub(super) installed_replacement: InstalledReplacementPolicy,
     /// Pre-existing broken installed groups discharged by identity.
     pub(super) ignored_installed_groups: &'a HashSet<RequirementGroupIdentity>,
 }

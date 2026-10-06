@@ -12,8 +12,10 @@
 //!   the one installed package of its name sharing the candidate's slot, it is
 //!   not pinned, it has the candidate's version scheme (a dependency install is
 //!   an ordinary package change, and the installer refuses a cross-scheme
-//!   replacement without an explicit replatform), and the fixed incoming
-//!   package does not occupy the slot;
+//!   replacement without an explicit replatform), it is strictly newer than the
+//!   installed trove (native version, then package release) unless the policy
+//!   explicitly admits downgrades, and the fixed incoming package does not
+//!   occupy the slot;
 //! - the replacer is exclusive with every other same-name solvable in its slot,
 //!   so the solver never keeps the predecessor beside its replacement;
 //! - a forced installed root yields to its replacers, as it yields to a
@@ -26,12 +28,15 @@
 //! predecessor, so no candidate may replace a trove the installer could not
 //! identify exactly.
 
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use resolvo::{DenseIndex, SolvableId, VersionSetId};
 
 use crate::error::Result;
+use crate::repository::resolution_policy::InstalledReplacementPolicy;
 use crate::repository::selector::package_install_slots_match;
+use crate::repository::versioning::compare_package_identities;
 use crate::resolver::identity::PackageIdentity;
 
 use super::ConaryProvider;
@@ -41,9 +46,22 @@ use super::types::ConaryConstraint;
 /// facts.
 #[derive(Debug, Default)]
 pub(crate) struct SurvivingInstalledLock {
+    /// Whether a repository candidate may replace an installed same-slot trove
+    /// with a version that is not strictly newer.
+    installed_replacement: InstalledReplacementPolicy,
     /// Per replacing or relation-removing solvable, the constraints that
     /// forbid what it replaces or removes.
     replacement_constrains: HashMap<u32, Vec<VersionSetId>>,
+}
+
+impl SurvivingInstalledLock {
+    /// Lock the surviving installed facts under the caller's replacement intent.
+    pub(super) fn new(installed_replacement: InstalledReplacementPolicy) -> Self {
+        Self {
+            installed_replacement,
+            replacement_constrains: HashMap::new(),
+        }
+    }
 }
 
 impl ConaryProvider<'_> {
@@ -63,7 +81,7 @@ impl ConaryProvider<'_> {
     /// Hidden prior removals count: a trove an earlier pass replaced stays the
     /// predecessor its replacer is re-derived from.
     pub(super) fn slot_predecessor(&self, candidate: SolvableId) -> Option<SolvableId> {
-        self.surviving_installed_lock.as_ref()?;
+        let lock = self.surviving_installed_lock.as_ref()?;
         let package = &self.solvables[candidate.to_index()];
         if package.installed_trove_id.is_some() || Some(candidate) == self.fixed_incoming {
             return None;
@@ -91,6 +109,23 @@ impl ConaryProvider<'_> {
             || installed.version_scheme != package.version_scheme
         {
             return None;
+        }
+        // `UpgradeOnly` admits a replacement only when the candidate is
+        // strictly newer than the installed trove (version, then release), so
+        // the solver never offers what the installer's upgrade check refuses.
+        if lock.installed_replacement == InstalledReplacementPolicy::UpgradeOnly {
+            let ordering = compare_package_identities(
+                package.version_scheme,
+                &package.version,
+                package.package_release.as_deref(),
+                installed.version_scheme,
+                &installed.version,
+                installed.package_release.as_deref(),
+            )
+            .expect("resolver solvables validate version and package release in add_solvable");
+            if ordering != Ordering::Greater {
+                return None;
+            }
         }
         Some(predecessor)
     }

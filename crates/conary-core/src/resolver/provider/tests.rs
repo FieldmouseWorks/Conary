@@ -11,6 +11,7 @@ use crate::db::models::{
 use crate::repository::dependency_model::{
     ProvideArchitectureQualifier, RepositoryRequirementClause, RepositoryRequirementExpression,
 };
+use crate::repository::resolution_policy::InstalledReplacementPolicy;
 use crate::repository::versioning::RepoVersionConstraint;
 use crate::resolver::identity::ProvidedCapability;
 use crate::version::VersionConstraint;
@@ -248,7 +249,7 @@ fn fixed_incoming_and_surviving_same_name_variant_are_both_selectable() {
     let incoming_id = provider
         .add_fixed_incoming(installed_identity("libfoo", "2", VersionScheme::Rpm, None))
         .unwrap();
-    provider.lock_surviving_installed_candidates();
+    provider.lock_surviving_installed_candidates(InstalledReplacementPolicy::UpgradeOnly);
 
     // The fixed incoming package and the surviving same-name variant are both
     // end-state facts, so the name must expose both and allow the solver to

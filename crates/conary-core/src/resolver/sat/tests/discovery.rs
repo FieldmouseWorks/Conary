@@ -5,6 +5,7 @@
 use super::*;
 use crate::repository::dependency_model::RepositoryRequirementKind;
 use crate::repository::requirement::parse_native_requirement;
+use crate::repository::resolution_policy::InstalledReplacementPolicy;
 
 fn fixture() -> (tempfile::TempDir, Connection, i64) {
     let (temp, conn) = setup_test_db();
@@ -130,6 +131,7 @@ fn nested_root_negation_preserves_positive_literals() {
             outgoing_trove_ids: &[],
             relation_only_trove_ids: &std::collections::HashSet::new(),
             lock_surviving_installed: false,
+            installed_replacement: InstalledReplacementPolicy::UpgradeOnly,
             ignored_installed_groups: &std::collections::HashSet::new(),
         },
     )

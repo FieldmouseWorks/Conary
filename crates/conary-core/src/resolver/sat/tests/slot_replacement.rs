@@ -5,6 +5,7 @@
 use super::strict_installed::{hard_depends, repository_fixture};
 use super::*;
 use crate::db::models::{RepositoryProvide, Trove, TroveType};
+use crate::repository::resolution_policy::InstalledReplacementPolicy;
 
 fn authority_policy() -> ResolutionPolicy {
     ResolutionPolicy::new().with_primary_source_identity("fedora-44")
@@ -14,14 +15,16 @@ fn solve(
     conn: &Connection,
     groups: &[crate::repository::dependency_model::RepositoryRequirementGroup],
 ) -> SatResolution {
-    solve_requirement_groups_with_outgoing_and_policy(
-        conn,
-        groups,
-        VersionScheme::Rpm,
-        &[],
-        &authority_policy(),
-    )
-    .unwrap()
+    solve_with_policy(conn, groups, &authority_policy())
+}
+
+fn solve_with_policy(
+    conn: &Connection,
+    groups: &[crate::repository::dependency_model::RepositoryRequirementGroup],
+    policy: &ResolutionPolicy,
+) -> SatResolution {
+    solve_requirement_groups_with_outgoing_and_policy(conn, groups, VersionScheme::Rpm, &[], policy)
+        .unwrap()
 }
 
 fn installed_versions(result: &SatResolution) -> Vec<(&str, &str)> {
@@ -54,6 +57,55 @@ fn authority_known_end_state_upgrades_a_surviving_installed_dependency() {
     let refused = solve(&conn, &[requirement]);
     assert!(refused.conflict_message.is_some(), "{refused:?}");
     assert!(refused.install_order.is_empty(), "{refused:?}");
+}
+
+#[test]
+fn upgrade_only_policy_refuses_a_same_slot_downgrade() {
+    let (_dir, conn) = setup_test_db();
+    let repository_id = repository_fixture(&conn);
+    insert_rpm_trove(&conn, "libfoo", "3", &[]);
+    insert_rpm_repo_package(&conn, repository_id, "libfoo", "2");
+    let requirement = hard_depends("libfoo = 2");
+
+    // The default policy is `UpgradeOnly`. The repository `libfoo 2` is older
+    // than the surviving `libfoo 3`, so it is not an install-slot replacement;
+    // the installed `libfoo 3` cannot satisfy `= 2`, so the solve must refuse
+    // and plan nothing.
+    let refused = solve(&conn, std::slice::from_ref(&requirement));
+    assert!(refused.conflict_message.is_some(), "{refused:?}");
+    assert!(refused.install_order.is_empty(), "{refused:?}");
+
+    // Positive control on the same fixture: an explicit downgrade policy makes
+    // the repository package the install-slot replacement the installer accepts
+    // when `--allow-downgrade` is set.
+    let downgraded = solve_with_policy(
+        &conn,
+        &[requirement],
+        &authority_policy().with_installed_replacement(InstalledReplacementPolicy::AllowDowngrade),
+    );
+    assert!(downgraded.conflict_message.is_none(), "{downgraded:?}");
+    assert_eq!(installed_versions(&downgraded), [("libfoo", "2")]);
+    assert_eq!(downgraded.install_order[0].source, SatSource::Repository);
+}
+
+#[test]
+fn upgrade_only_policy_keeps_an_installed_trove_over_an_equal_version() {
+    let (_dir, conn) = setup_test_db();
+    let repository_id = repository_fixture(&conn);
+    insert_rpm_trove(&conn, "libfoo", "3", &[]);
+    insert_rpm_repo_package(&conn, repository_id, "libfoo", "3");
+    let requirement = hard_depends("libfoo = 3");
+
+    // Equal version is not strictly newer, so under `UpgradeOnly` the
+    // repository candidate is not an install-slot replacer. The surviving
+    // installed trove already satisfies the group, so the solve keeps it and
+    // plans no replacement. The provider test
+    // `equal_version_repository_candidate_is_not_an_upgrade_replacer` asserts
+    // the predecessor rule directly.
+    let resolved = solve(&conn, std::slice::from_ref(&requirement));
+    assert!(resolved.conflict_message.is_none(), "{resolved:?}");
+    assert!(resolved.install_order.is_empty(), "{resolved:?}");
+    assert!(resolved.remove_order.is_empty(), "{resolved:?}");
 }
 
 #[test]

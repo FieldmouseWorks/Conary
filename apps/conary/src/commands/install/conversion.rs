@@ -28,6 +28,7 @@ use conary_core::ccs::convert::{
     ConversionOptions, NativePackageConverter, PendingConversionResult, ScriptletBundleSummary,
 };
 use conary_core::packages::PackageFormat;
+use conary_core::repository::resolution_policy::InstalledReplacementPolicy;
 use conary_core::repository::versioning::VersionScheme;
 use conary_core::resolver::{SatPackage, SatSource};
 use conary_core::scriptlet::SandboxMode;
@@ -652,6 +653,14 @@ async fn install_verified_ccs_artifact(
         resolution_policy,
         replacement,
     } = opts;
+
+    // The solver's install-slot eligibility must mirror the installer's upgrade
+    // check, which this path invokes with `allow_downgrade`.
+    let resolution_policy = resolution_policy.with_installed_replacement(if allow_downgrade {
+        InstalledReplacementPolicy::AllowDowngrade
+    } else {
+        InstalledReplacementPolicy::UpgradeOnly
+    });
 
     let ccs_pkg = CcsPackage::from_verified_archive(ccs_path, &verified)
         .context("Failed to construct verified CCS package")?;

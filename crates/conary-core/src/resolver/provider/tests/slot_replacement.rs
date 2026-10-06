@@ -3,6 +3,9 @@
 #![cfg(test)]
 
 use super::*;
+use crate::error::Error;
+use crate::repository::resolution_policy::InstalledReplacementPolicy;
+use crate::repository::versioning::VersionComparisonError;
 
 #[test]
 fn slot_replacer_excludes_only_its_install_slot_predecessor() {
@@ -24,7 +27,7 @@ fn slot_replacer_excludes_only_its_install_slot_predecessor() {
     let replacer_id = provider
         .add_solvable(repo_identity("libfoo", "3", VersionScheme::Rpm, Some(8)))
         .unwrap();
-    provider.lock_surviving_installed_candidates();
+    provider.lock_surviving_installed_candidates(InstalledReplacementPolicy::UpgradeOnly);
     provider.intern_all_dependency_version_sets().unwrap();
     provider.compile_replacement_constrains().unwrap();
 
@@ -83,7 +86,7 @@ fn ambiguous_install_slot_has_no_replacer() {
     let repository_id = provider
         .add_solvable(repo_identity("kernel", "3", VersionScheme::Rpm, Some(8)))
         .unwrap();
-    provider.lock_surviving_installed_candidates();
+    provider.lock_surviving_installed_candidates(InstalledReplacementPolicy::UpgradeOnly);
 
     // Two installed packages share the repository package's slot, so the
     // installer could not name the trove it replaces and the solver must not
@@ -112,7 +115,7 @@ fn cross_scheme_install_slot_has_no_replacer() {
     let cross_scheme_id = provider
         .add_solvable(repo_identity("libfoo", "3", VersionScheme::Debian, Some(9)))
         .unwrap();
-    provider.lock_surviving_installed_candidates();
+    provider.lock_surviving_installed_candidates(InstalledReplacementPolicy::UpgradeOnly);
 
     // Both repository packages occupy the installed trove's machine slot, but a
     // dependency install cannot replace across version schemes without an
@@ -176,7 +179,7 @@ fn relation_remover_excludes_exactly_the_installed_trove_it_obsoletes() {
             .unwrap(),
         }],
     );
-    provider.lock_surviving_installed_candidates();
+    provider.lock_surviving_installed_candidates(InstalledReplacementPolicy::UpgradeOnly);
     provider.intern_all_dependency_version_sets().unwrap();
     provider.compile_replacement_constrains().unwrap();
 
@@ -206,5 +209,58 @@ fn relation_remover_excludes_exactly_the_installed_trove_it_obsoletes() {
             .relation_removed_installed(survivor_id)
             .unwrap()
             .is_empty()
+    );
+}
+
+#[test]
+fn equal_version_repository_candidate_is_not_an_upgrade_replacer() {
+    let (_dir, conn) = setup_test_db();
+    let mut provider = ConaryProvider::new(&conn).unwrap();
+
+    let installed_id = provider
+        .add_solvable(installed_identity(
+            "libfoo",
+            "3",
+            VersionScheme::Rpm,
+            Some(7),
+        ))
+        .unwrap();
+    let equal_id = provider
+        .add_solvable(repo_identity("libfoo", "3", VersionScheme::Rpm, Some(8)))
+        .unwrap();
+    let newer_id = provider
+        .add_solvable(repo_identity("libfoo", "4", VersionScheme::Rpm, Some(9)))
+        .unwrap();
+    provider.lock_surviving_installed_candidates(InstalledReplacementPolicy::UpgradeOnly);
+
+    // Equal version is not strictly newer, so `UpgradeOnly` refuses it. The
+    // newer candidate on the same fixture is still the exact successor, proving
+    // the refusal comes from the version-direction rule and not a broken fixture.
+    assert_eq!(provider.slot_predecessor(equal_id), None);
+    assert_eq!(provider.slot_predecessor(newer_id), Some(installed_id));
+}
+
+#[test]
+fn invalid_package_release_is_refused_when_a_solvable_is_admitted() {
+    let (_dir, conn) = setup_test_db();
+    let mut provider = ConaryProvider::new(&conn).unwrap();
+
+    let mut invalid = repo_identity("libfoo", "3", VersionScheme::Rpm, Some(8));
+    invalid.package_release = Some("x".to_string());
+    let error = provider.add_solvable(invalid).unwrap_err();
+    assert!(matches!(
+        error,
+        Error::VersionComparison(VersionComparisonError::InvalidPackageRelease { .. })
+    ));
+
+    // Positive control: the same repository candidate with a valid release
+    // passes the same admission check, proving the refusal comes from the
+    // release rule rather than a broken fixture.
+    let mut valid = repo_identity("libfoo", "3", VersionScheme::Rpm, Some(8));
+    valid.package_release = Some("1".to_string());
+    let id = provider.add_solvable(valid).unwrap();
+    assert_eq!(
+        provider.get_solvable(id).package_release.as_deref(),
+        Some("1")
     );
 }

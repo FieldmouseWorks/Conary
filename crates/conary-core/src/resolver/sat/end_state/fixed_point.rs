@@ -363,6 +363,7 @@ fn solve_expression_pass(
             outgoing_trove_ids: context.outgoing_trove_ids,
             relation_only_trove_ids,
             lock_surviving_installed: context.lock_surviving_installed,
+            installed_replacement: context.policy.installed_replacement(),
             ignored_installed_groups: ignored_groups,
         },
     )?;

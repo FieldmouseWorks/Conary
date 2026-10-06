@@ -11,6 +11,8 @@ use crate::error::Result;
 use crate::repository::dependency_model::DebianMultiArch;
 pub use crate::repository::dependency_model::ProvidedCapability;
 use crate::repository::versioning::VersionScheme;
+use crate::repository::versioning::validate_package_release;
+use crate::repository::versioning::validate_repo_version;
 use rusqlite::{Connection, params};
 
 /// Full package identity for resolution, replacing ConaryPackage and ResolverCandidate.
@@ -44,6 +46,25 @@ pub struct PackageIdentity {
 }
 
 impl PackageIdentity {
+    /// Validate this identity's version, package release, and provided
+    /// capability versions against their declared schemes.
+    ///
+    /// The provider admits every solvable through this check, so code that
+    /// assumes solvables carry valid versions and releases (slot replacement)
+    /// can rely on it as an enforced boundary invariant.
+    pub(crate) fn validate_versions(&self) -> Result<()> {
+        validate_repo_version(self.version_scheme, &self.version)?;
+        if let Some(release) = self.package_release.as_deref() {
+            validate_package_release(release)?;
+        }
+        for capability in &self.provided_capabilities {
+            if let Some(version) = capability.version.as_deref() {
+                validate_repo_version(capability.version_scheme, version)?;
+            }
+        }
+        Ok(())
+    }
+
     /// Load all candidates for a package name across all enabled repos.
     pub fn find_all_by_name(conn: &Connection, name: &str) -> Result<Vec<Self>> {
         let mut stmt = conn.prepare(

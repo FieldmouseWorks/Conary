@@ -81,6 +81,22 @@ impl FromStr for DependencyMixingPolicy {
         }
     }
 }
+// Installed replacement policy
+/// Whether a dependency may replace an installed same-slot package with a
+/// version that is not strictly newer. Mirrors the installer's upgrade check.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum InstalledReplacementPolicy {
+    /// A repository candidate may replace an installed same-slot trove only
+    /// when it is strictly newer (version, then package release).
+    #[default]
+    UpgradeOnly,
+
+    /// A repository candidate may also replace an installed same-slot trove
+    /// with an equal or older version.
+    AllowDowngrade,
+}
+
 // Top-level resolution policy
 /// The complete policy governing how the resolver selects candidates.
 ///
@@ -93,6 +109,10 @@ pub struct ResolutionPolicy {
 
     /// How cross-distro dependency mixing is handled.
     pub mixing: DependencyMixingPolicy,
+
+    /// Whether a dependency may replace an installed same-slot package with a
+    /// version that is not strictly newer.
+    pub installed_replacement: InstalledReplacementPolicy,
 
     /// Exact native source identity that owns this transaction.
     ///
@@ -109,6 +129,7 @@ impl Default for ResolutionPolicy {
         Self {
             request_scope: RequestScope::Any,
             mixing: DependencyMixingPolicy::Strict,
+            installed_replacement: InstalledReplacementPolicy::UpgradeOnly,
             primary_source_identity: None,
         }
     }
@@ -133,6 +154,24 @@ impl ResolutionPolicy {
     pub fn with_mixing(mut self, mixing: DependencyMixingPolicy) -> Self {
         self.mixing = mixing;
         self
+    }
+
+    /// Set whether a dependency may replace an installed same-slot package with
+    /// a version that is not strictly newer.
+    #[must_use]
+    pub fn with_installed_replacement(
+        mut self,
+        installed_replacement: InstalledReplacementPolicy,
+    ) -> Self {
+        self.installed_replacement = installed_replacement;
+        self
+    }
+
+    /// Return whether a dependency may replace an installed same-slot package
+    /// with a version that is not strictly newer.
+    #[must_use]
+    pub fn installed_replacement(&self) -> InstalledReplacementPolicy {
+        self.installed_replacement
     }
 
     /// Set the exact native source identity that owns this transaction.
@@ -269,6 +308,22 @@ mod tests {
 
     const FEDORA_REPOSITORY: &str = "fedora";
     const UBUNTU_REPOSITORY: &str = "ubuntu";
+
+    #[test]
+    fn installed_replacement_defaults_to_upgrade_only_and_round_trips() {
+        let policy = ResolutionPolicy::new();
+        assert_eq!(
+            policy.installed_replacement(),
+            InstalledReplacementPolicy::UpgradeOnly
+        );
+
+        let downgrade =
+            policy.with_installed_replacement(InstalledReplacementPolicy::AllowDowngrade);
+        assert_eq!(
+            downgrade.installed_replacement(),
+            InstalledReplacementPolicy::AllowDowngrade
+        );
+    }
 
     #[test]
     fn mixing_policy_parses_only_exact_persisted_values() {
