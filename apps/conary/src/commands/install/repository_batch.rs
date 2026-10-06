@@ -9,6 +9,7 @@ use super::batch::{
 use super::conversion::{
     validate_selected_repository_ccs_identity, validate_selected_repository_native_identity,
 };
+use super::dependencies::CertifiedOutgoing;
 use super::{
     CcsEnvelopeAuthority, InstallIntent, repository_install_provenance_from_package,
     verify_ccs_package_authority, verify_ccs_package_authority_into_cas,
@@ -75,6 +76,14 @@ impl PreparedRepositoryBatch {
         installer: BatchInstaller<'_>,
     ) -> Result<BatchInstallResult> {
         installer.install_batch_with_result(self.packages)
+    }
+
+    /// Project this prepared batch's outgoing installed set before the mutation
+    /// lock. A caller that solved dependencies against this projection passes
+    /// it to the installer so the locked batch can certify it.
+    pub(super) fn project_certified_outgoing(&self, db_path: &str) -> Result<CertifiedOutgoing> {
+        let conn = super::super::open_db(db_path)?;
+        super::batch::project_batch_outgoing(&conn, &self.packages)
     }
 }
 

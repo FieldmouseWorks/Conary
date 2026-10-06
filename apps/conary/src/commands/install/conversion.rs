@@ -8,13 +8,17 @@
 use super::super::open_db;
 use super::PackageFormatType;
 use super::batch::{BatchInstaller, PreparedPackageSourceAuthority, prepare_ccs_package_for_batch};
-use super::dependencies::resolved_repository_deps_from_sat_result;
+use super::dependencies::{
+    CertifiedOutgoing, CertifiedRequirements, DependencyConflict,
+    resolved_repository_deps_from_sat_result,
+};
 use super::repository_batch::{
     RepositoryBatchMode, RepositoryBatchSelection, prepare_repository_batch,
 };
 use super::{
     CcsEnvelopeAuthority, CcsTransactionInstallOptions, InstallIntent, InstallReplacement,
-    RepositoryInstallProvenance, verify_ccs_package_authority,
+    RepositoryInstallProvenance, UpgradeCheck, check_ccs_upgrade_status,
+    install_semantics_for_ccs_manifest, verify_ccs_package_authority,
     verify_pending_ccs_conversion_authority,
 };
 use anyhow::{Context, Result};
@@ -24,6 +28,7 @@ use conary_core::ccs::convert::{
     ConversionOptions, NativePackageConverter, PendingConversionResult, ScriptletBundleSummary,
 };
 use conary_core::packages::PackageFormat;
+use conary_core::repository::resolution_policy::InstalledReplacementPolicy;
 use conary_core::repository::versioning::VersionScheme;
 use conary_core::resolver::{SatPackage, SatSource};
 use conary_core::scriptlet::SandboxMode;
@@ -649,29 +654,82 @@ async fn install_verified_ccs_artifact(
         replacement,
     } = opts;
 
+    // The solver's install-slot eligibility must mirror the installer's upgrade
+    // check, which this path invokes with `allow_downgrade`.
+    let resolution_policy = resolution_policy.with_installed_replacement(if allow_downgrade {
+        InstalledReplacementPolicy::AllowDowngrade
+    } else {
+        InstalledReplacementPolicy::UpgradeOnly
+    });
+
     let ccs_pkg = CcsPackage::from_verified_archive(ccs_path, &verified)
         .context("Failed to construct verified CCS package")?;
     crate::commands::ccs::validate_ccs_capability_declaration(&ccs_pkg)?;
 
     let mut selected_dependencies = Vec::new();
-    if !no_deps && !ccs_pkg.requirements().is_empty() {
+    let mut solve_outgoing = None;
+    let mut certified_requirements = None;
+    if !no_deps {
         let conn = open_db(db_path)?;
-        let sat_result = conary_core::resolver::solve_package_requirements_with_policy(
+        // The solve must exclude the installed troves this transaction removes:
+        // the CCS upgrade or replacement target and its relation removals. Both
+        // are projected from the verified manifest before any dependency is
+        // selected; the transaction re-resolves them under its mutation lock.
+        let semantics = install_semantics_for_ccs_manifest(ccs_pkg.manifest())?;
+        let upgrade = check_ccs_upgrade_status(
             &conn,
             &ccs_pkg,
-            &resolution_policy,
-        )
-        .with_context(|| {
-            format!(
-                "Failed to solve exact requirements for CCS package '{}'",
-                ccs_pkg.name()
+            &semantics,
+            allow_downgrade,
+            intent,
+            false,
+            replacement.as_ref(),
+        )?;
+        let old_trove = match &upgrade {
+            UpgradeCheck::FreshInstall => None,
+            UpgradeCheck::AlreadyInstalled(trove) => {
+                anyhow::bail!(
+                    "Package {} version {} ({}) is already installed",
+                    trove.name,
+                    trove.version,
+                    trove.architecture.as_deref().unwrap_or("no-arch")
+                )
+            }
+            UpgradeCheck::Upgrade(trove)
+            | UpgradeCheck::Downgrade(trove)
+            | UpgradeCheck::Replatform(trove) => Some(trove.as_ref()),
+        };
+        let provided_capabilities = ccs_pkg.resolution_capabilities()?;
+        let relation_plan = conary_core::transaction::plan_package_relations_with_provides(
+            &conn,
+            &ccs_pkg,
+            semantics.version_scheme,
+            &provided_capabilities,
+        )?;
+        let outgoing =
+            CertifiedOutgoing::from_replacements_and_relations(old_trove, &relation_plan)?;
+        let outgoing_trove_ids = outgoing.sorted_ids();
+        let sat_result =
+            conary_core::resolver::solve_package_requirements_with_provides_outgoing_and_policy(
+                &conn,
+                &ccs_pkg,
+                provided_capabilities.clone(),
+                &outgoing_trove_ids,
+                &resolution_policy,
             )
-        })?;
-        if let Some(conflict) = sat_result.conflict_message {
-            anyhow::bail!(
-                "Cannot install CCS package '{}': {conflict}",
-                ccs_pkg.name()
-            );
+            .with_context(|| {
+                format!(
+                    "Failed to solve exact requirements for CCS package '{}'",
+                    ccs_pkg.name()
+                )
+            })?;
+        if let Some(conflict) = sat_result.conflict_message.as_deref() {
+            return Err(DependencyConflict {
+                package: ccs_pkg.name().to_string(),
+                conflict: conflict.to_string(),
+                unsatisfied: sat_result.unsatisfied_groups.clone(),
+            }
+            .into());
         }
         let pending_root = PendingCcsProvider::from_package(&ccs_pkg);
         selected_dependencies =
@@ -679,6 +737,14 @@ async fn install_verified_ccs_artifact(
                 .into_iter()
                 .filter(|dependency| !pending_root.matches(&dependency.package))
                 .collect();
+        solve_outgoing = Some(outgoing);
+        // The locked transaction re-solves with the exact inputs this solve
+        // used, so a provider removed in the window refuses instead of
+        // committing.
+        certified_requirements = Some(CertifiedRequirements {
+            policy: resolution_policy.clone(),
+            capabilities: provided_capabilities,
+        });
     }
 
     if selected_dependencies.is_empty() {
@@ -703,6 +769,8 @@ async fn install_verified_ccs_artifact(
                 repository_provenance: repository_provenance.clone(),
                 requested_source_identity,
                 replacement: replacement.clone(),
+                certified_outgoing: solve_outgoing,
+                certified_requirements,
             },
         )?;
         if dry_run && let Some(projection) = report.projection.as_deref() {
@@ -791,7 +859,15 @@ async fn install_verified_ccs_artifact(
         )?);
         return Ok(None);
     }
-    let result = prepared.install_with_result(BatchInstaller::new(db_path, sandbox_mode))?;
+    // The batch re-resolves every replacement target and relation removal
+    // under its mutation lock. Certify the set projected from installed state
+    // here, before that lock, so a drift refuses instead of committing.
+    let certified_outgoing = prepared.project_certified_outgoing(db_path)?;
+    let result = prepared.install_with_result(
+        BatchInstaller::new(db_path, sandbox_mode)
+            .with_certified_outgoing(Some(certified_outgoing))
+            .with_certified_end_state(),
+    )?;
     let trove_id = result.exact_trove_id(&ccs_pkg)?;
     report.extend(result.report);
     Ok(Some(trove_id))

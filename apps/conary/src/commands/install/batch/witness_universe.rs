@@ -67,7 +67,7 @@ pub(super) fn surviving_installed_identities(
 /// triggers it, and "earliest" only exists once the transaction has an
 /// execution order. [`super::relations`] answers that second question after
 /// ordering, against the ordered batch.
-fn outgoing_installed_troves(
+pub(super) fn outgoing_installed_troves(
     conn: &Connection,
     packages: &[PreparedPackage],
 ) -> Result<BTreeSet<i64>> {

@@ -3,7 +3,9 @@
 //! One bounded missing-first probe; loaded facts survive fresh SAT caches.
 
 use super::*;
-use crate::resolver::provider::types::RepositoryRequirementGroupIdentity;
+use crate::resolver::provider::types::{
+    RepositoryRequirementGroupIdentity, RequirementGroupIdentity,
+};
 use std::time::Instant;
 
 /// Re-solves exclude the initial, unmodified exact-root solve.
@@ -65,9 +67,11 @@ pub(super) fn probe(
     let requests = vec![(root_name.to_string(), VersionConstraint::Any)];
     let mut ignored = initial_missing
         .iter()
-        .map(|dependency| RepositoryRequirementGroupIdentity {
-            repository_package_id: dependency.repository_package_id,
-            repository_requirement_group_id: dependency.repository_requirement_group_id,
+        .map(|dependency| {
+            RequirementGroupIdentity::Repository(RepositoryRequirementGroupIdentity {
+                repository_package_id: dependency.repository_package_id,
+                repository_requirement_group_id: dependency.repository_requirement_group_id,
+            })
         })
         .collect::<BTreeSet<_>>();
     budget.check_time()?;
@@ -101,10 +105,15 @@ pub(super) fn probe(
                     (plan.conflict.is_none() && plan.removals.is_empty()).then(|| {
                         ignored
                             .into_iter()
-                            .map(|group| SatUnresolvedDependency {
-                                repository_package_id: group.repository_package_id,
-                                repository_requirement_group_id: group
-                                    .repository_requirement_group_id,
+                            .filter_map(|group| match group {
+                                RequirementGroupIdentity::Repository(repository) => {
+                                    Some(SatUnresolvedDependency {
+                                        repository_package_id: repository.repository_package_id,
+                                        repository_requirement_group_id: repository
+                                            .repository_requirement_group_id,
+                                    })
+                                }
+                                RequirementGroupIdentity::Installed { .. } => None,
                             })
                             .collect()
                     }),
@@ -134,8 +143,12 @@ pub(super) fn probe(
                     if let resolvo::conflict::ConflictNode::Solvable(requiring) =
                         graph.graph[edge.source()]
                     {
-                        ignored
-                            .extend(provider.unresolved_requirement_groups(requiring, requirement));
+                        ignored.extend(
+                            provider
+                                .unresolved_requirement_groups(requiring, requirement)
+                                .into_iter()
+                                .map(RequirementGroupIdentity::Repository),
+                        );
                     }
                 }
                 budget.check_time()?;

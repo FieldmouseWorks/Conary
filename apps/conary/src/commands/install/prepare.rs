@@ -10,7 +10,7 @@ use conary_core::packages::PackageFormat;
 use conary_core::packages::arch::ArchPackage;
 use conary_core::packages::deb::DebPackage;
 use conary_core::packages::rpm::RpmPackage;
-use conary_core::repository::selector::package_architectures_match;
+use conary_core::repository::selector::package_install_slots_match;
 use conary_core::repository::versioning::{VersionScheme, compare_package_identities};
 use rusqlite::Connection;
 use std::cmp::Ordering;
@@ -396,16 +396,13 @@ fn architectures_share_install_slot(
     incoming_scheme: VersionScheme,
     incoming: Option<&str>,
 ) -> Result<bool> {
-    Ok(match (installed, incoming) {
-        (Some(installed), Some(incoming)) => package_architectures_match(
-            installed_scheme,
-            installed,
-            incoming_scheme,
-            incoming,
-            &conary_core::repository::registry::detect_system_arch()?,
-        ),
-        _ => false,
-    })
+    Ok(package_install_slots_match(
+        installed_scheme,
+        installed,
+        incoming_scheme,
+        incoming,
+        &conary_core::repository::registry::detect_system_arch()?,
+    ))
 }
 
 fn compare_installed_and_incoming_versions(

@@ -130,6 +130,7 @@ pub(super) fn add_candidate(
         Some(bundle),
         relations,
         named,
+        if relation { &["summary-obsolete"] } else { &[] },
     );
     let bytes = std::fs::read(&path).unwrap();
     let (url, _) = serve_test_file(path);

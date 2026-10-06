@@ -59,6 +59,11 @@ pub(crate) fn constraint_architecture_matches_package(
         | ConaryConstraint::ExactRepositoryPackage(_)
         | ConaryConstraint::ProviderExpression { .. }
         | ConaryConstraint::Repository { .. } => true,
+        // Exact solvable identity constraints are decided by the provider's
+        // candidate filter, never by a name/version architecture test.
+        ConaryConstraint::FixedIncoming
+        | ConaryConstraint::ExactInstalledTrove(_)
+        | ConaryConstraint::ExactSolvables(_) => false,
     })
 }
 
@@ -104,6 +109,9 @@ pub(crate) fn constraint_architecture_matches_provide(
         | ConaryConstraint::ExactRepositoryPackage(_)
         | ConaryConstraint::ProviderExpression { .. }
         | ConaryConstraint::Repository { .. } => true,
+        ConaryConstraint::FixedIncoming
+        | ConaryConstraint::ExactInstalledTrove(_)
+        | ConaryConstraint::ExactSolvables(_) => false,
         ConaryConstraint::RpmRuntime(_) => unreachable!("returned above"),
     })
 }
@@ -308,7 +316,10 @@ pub fn constraint_matches_package(
         }
         ConaryConstraint::ExactRepositoryPackage(_)
         | ConaryConstraint::RpmRuntime(_)
-        | ConaryConstraint::ProviderExpression { .. } => Ok(false),
+        | ConaryConstraint::ProviderExpression { .. }
+        | ConaryConstraint::FixedIncoming
+        | ConaryConstraint::ExactInstalledTrove(_)
+        | ConaryConstraint::ExactSolvables(_) => Ok(false),
     }
 }
 
@@ -359,7 +370,10 @@ pub(crate) fn constraint_matches_provide(
         },
         ConaryConstraint::ExactRepositoryPackage(_)
         | ConaryConstraint::RpmRuntime(_)
-        | ConaryConstraint::ProviderExpression { .. } => Ok(false),
+        | ConaryConstraint::ProviderExpression { .. }
+        | ConaryConstraint::FixedIncoming
+        | ConaryConstraint::ExactInstalledTrove(_)
+        | ConaryConstraint::ExactSolvables(_) => Ok(false),
     }
 }
 
@@ -449,10 +463,23 @@ pub(crate) fn constraint_matches_candidate(
         ConaryConstraint::Requested(_)
         | ConaryConstraint::ExactRepositoryPackage(_)
         | ConaryConstraint::RpmRuntime(_)
-        | ConaryConstraint::ProviderExpression { .. } => None,
+        | ConaryConstraint::ProviderExpression { .. }
+        | ConaryConstraint::FixedIncoming
+        | ConaryConstraint::ExactInstalledTrove(_)
+        | ConaryConstraint::ExactSolvables(_) => None,
     };
 
     match constraint {
+        // The fixed incoming constraint is resolved by exact solvable
+        // identity in the provider's candidate filter, never by name/version.
+        ConaryConstraint::FixedIncoming => Ok(false),
+        // The exact installed-trove constraint is resolved by installed trove
+        // identity in the provider's candidate filter, never by package
+        // identity.
+        ConaryConstraint::ExactInstalledTrove(_) => Ok(false),
+        // The exact-solvable constraint is resolved by solvable ID in the
+        // provider's candidate filter, never by package identity.
+        ConaryConstraint::ExactSolvables(_) => Ok(false),
         ConaryConstraint::RpmRuntime(_) => Ok(false),
         ConaryConstraint::ExactRepositoryPackage(expected) => Ok(package.repo_package_id
             == Some(*expected)

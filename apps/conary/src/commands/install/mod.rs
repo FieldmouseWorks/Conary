@@ -9,7 +9,7 @@ mod command;
 pub(crate) mod config_files;
 mod conversion;
 mod dep_resolution;
-mod dependencies;
+pub(crate) mod dependencies;
 mod execute;
 mod file_capabilities;
 mod inner;

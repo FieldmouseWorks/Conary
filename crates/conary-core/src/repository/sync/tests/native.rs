@@ -540,10 +540,11 @@ fn json_contract_keeps_source_version_and_ccs_release_separate() {
         "fixture (= 1.0.0)",
     )
     .unwrap();
-    let resolution = crate::resolver::solve_requirement_groups_with_policy(
+    let resolution = crate::resolver::solve_requirement_groups_with_outgoing_and_policy(
         &conn,
         &[requirement],
         VersionScheme::Debian,
+        &[],
         &crate::repository::resolution_policy::ResolutionPolicy::new()
             .with_primary_source_identity("ubuntu-26.04"),
     )

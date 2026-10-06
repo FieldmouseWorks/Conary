@@ -12,6 +12,60 @@ use crate::repository::resolution_policy::{
 };
 use rusqlite::Connection;
 use std::cmp::Ordering;
+use std::collections::HashMap;
+
+/// Typed index of canonical package identities.
+///
+/// Maps each distro-specific package name to every other name that resolves to
+/// the same canonical package. This is the shared derivation behind SAT
+/// candidate filtering and end-state requirement evaluation, so both
+/// authorities agree on what counts as the same package identity.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CanonicalEquivalents {
+    equivalents: HashMap<String, Vec<String>>,
+}
+
+impl CanonicalEquivalents {
+    /// Every other package name that shares a canonical identity with `name`.
+    ///
+    /// Returns an empty slice when `name` has no canonical mapping.
+    pub fn for_name(&self, name: &str) -> &[String] {
+        match self.equivalents.get(name) {
+            Some(equivalents) => equivalents.as_slice(),
+            None => &[],
+        }
+    }
+
+    /// Whether `candidate` shares a canonical identity with `name`.
+    pub fn contains_equivalent(&self, name: &str, candidate: &str) -> bool {
+        self.for_name(name)
+            .iter()
+            .any(|equivalent| equivalent == candidate)
+    }
+}
+
+/// Load every canonical package name equivalence from the local DB.
+///
+/// For each distro-specific name, finds all other names that map to the same
+/// canonical package. The result is a typed map for O(1) lookups; the query is
+/// the single derivation of canonical equivalence used across the resolver.
+pub fn load_canonical_equivalents(conn: &Connection) -> Result<CanonicalEquivalents> {
+    let mut statement = conn.prepare(
+        "SELECT pi1.distro_name, pi2.distro_name
+         FROM resolved_package_implementations pi1
+         JOIN resolved_package_implementations pi2 ON pi1.canonical_id = pi2.canonical_id
+         WHERE pi1.distro_name != pi2.distro_name",
+    )?;
+
+    let mut equivalents: HashMap<String, Vec<String>> = HashMap::new();
+    let mut rows = statement.query([])?;
+    while let Some(row) = rows.next()? {
+        let from: String = row.get(0)?;
+        let to: String = row.get(1)?;
+        equivalents.entry(from).or_default().push(to);
+    }
+    Ok(CanonicalEquivalents { equivalents })
+}
 
 /// A candidate package from canonical expansion
 #[derive(Debug, Clone)]

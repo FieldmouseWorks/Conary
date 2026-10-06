@@ -13,7 +13,7 @@ use crate::repository::package_relation::{
     relation_matches_candidate,
 };
 use crate::resolver::identity::PackageIdentity;
-use crate::resolver::provider::{ConaryProvider, SolverRelation};
+use crate::resolver::provider::{ConaryProvider, SolverRelation, relation_removes_candidate};
 
 use super::{SatPackage, SatRelationRemoval, SatSource};
 
@@ -108,14 +108,12 @@ pub(super) fn plan_selected_relations(
                 }
                 for installed_id in &installed {
                     let existing = provider.get_solvable(*installed_id);
-                    if replacement.name == existing.name
-                        || selected_new_names.contains(existing.name.as_str())
-                        || !relation_matches_candidate(
-                            &relation.relation,
-                            relation.scheme,
+                    if selected_new_names.contains(existing.name.as_str())
+                        || !relation_removes_candidate(
+                            &replacement.name,
                             &candidates[installed_id],
-                        )
-                        .map_err(Error::ResolutionError)?
+                            relation,
+                        )?
                     {
                         continue;
                     }
