@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-10-06
-revision: 110
+revision: 111
 summary: Define the Podman integration harness and proof contracts, including immutable release-backed base-image acquisition, TNPM05 whole-root provider JSON, TNPM14, TNPM15, and TNPM18 persisted rows, and Group I and J exact package rows
 ---
 
@@ -1575,6 +1575,53 @@ retained, but it is currently unconstructed for local CLI runs. Local runs
 write their JSON reports locally and do not stream results to Remi or populate
 the WAL. Wiring the streaming path is tracked in issue #354.
 
+## User Journey Lane
+
+The `user-journey` job in `.github/workflows/pr-gate.yml` runs the real user
+path on stock distribution images, with default paths and no test hooks. It runs
+on the same change-scope condition as the native matrices, once per host:
+`fedora-44`, `ubuntu-26.04`, and `arch` (images pinned by digest in the
+workflow). Each cell restores the exact-head static `conary` executable, runs
+the mock-based harness test `scripts/test-user-journey.sh`, downloads the
+digest-pinned upstream packages in `scripts/user-journey-packages.tsv` with
+`scripts/user-journey-fetch.sh` (harness failures exit 2 and never report a
+product verdict), then runs `scripts/user-journey.sh` inside the privileged
+stock image.
+
+`scripts/user-journey.sh` records `init` and `adopt`, then for each package row
+(the host's own profile first) records `absent-before:<profile>`,
+`install:<profile>` through `conary install <file> --from <profile> --yes`,
+`run:<profile>`, and `remove:<profile>`. The `run` stage requires the installed
+binary to exist, match the row's expected SHA-256, and execute `--version`
+successfully. Every stage is recorded even after an earlier failure.
+
+Run it locally from the repository root, with a static `conary` binary, inside
+a stock image of the matching host (this mirrors the workflow):
+
+```bash
+bash scripts/test-user-journey.sh   # harness self-test, no containers or root
+bash scripts/user-journey-fetch.sh scripts/user-journey-packages.tsv /tmp/journey-downloads
+docker run --rm --privileged \
+  -v "$PWD/target/x86_64-unknown-linux-musl/debug/conary:/usr/local/bin/conary:ro" \
+  -v "$PWD/scripts:/journey:ro" \
+  -v /tmp/journey-downloads:/downloads:ro -v /tmp/journey-out:/out \
+  <stock-image> bash /journey/user-journey.sh --host <profile> \
+  --packages /journey/user-journey-packages.tsv --downloads /downloads \
+  --evidence /out/journey.json
+```
+
+The evidence file has schema `conary-user-journey-v1` with `host`,
+`conary_version`, and an ordered `stages` array. Each stage has `id`, `passed`,
+`exit_code`, and a typed `reason`: `ok`, `command_failed`, `preexisting_binary`,
+`binary_missing`, `binary_digest_mismatch`, `execution_failed`, or
+`still_present`. Stages that ran a process and failed (`command_failed`,
+`execution_failed`) also carry `stderr_tail`, the last 20 stderr lines. The job
+publishes a step summary table and uploads `journey.json` as the
+`user-journey-<host>` artifact.
+
+The lane is advisory: it is not a required check. It is expected to stay red
+until the product install path works end to end; tracking issue #1146.
+
 ## CI Integration
 
 Trusted integration validation belongs to GitHub Actions, with any runner used
@@ -1597,7 +1644,7 @@ image remains owned by that image's native bootstrap.
 
 | Workflow | Trigger | Purpose |
 |----------|---------|---------|
-| `pr-gate` | Pull request + manual dispatch | Unit/static gates plus the focused eight-distro native lifecycle matrix and authentic derivative APT proof |
+| `pr-gate` | Pull request + manual dispatch | Unit/static gates plus the focused eight-distro native lifecycle matrix, authentic derivative APT proof, and the advisory `user-journey` lane |
 | `merge-validation` | Every push to `main` + manual dispatch | Trusted on-merge smoke validation plus default-branch GNU and native-matrix compiler seeding |
 | `nightly-release` | Daily at 06:30 UTC + manual dispatch | Resume publication or re-prove an immutable nightly from green `main`; retain whole releases for 14 days, never delete tags or deploy |
 | `release-artifact-proof` | Conary deployment + manual dispatch | Install each published native package and run the three-distro Cartesian lifecycle with those exact bytes |

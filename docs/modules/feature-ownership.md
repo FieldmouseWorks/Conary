@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-10-03
-revision: 130
+last_updated: 2026-10-06
+revision: 131
 summary: Route features to owned paths and proof, including guided and bounded unattended agent workflow tools, typed native persisted-SQL checks, autoremove preview and final state, installed-list, publication-debt, repository presentation, retained-survey requests, and workflow recovery.
 ---
 
@@ -1210,6 +1210,10 @@ matrix job in `.github/workflows/pr-gate.yml`.
 `scripts/build-static-conary.sh`;
 `scripts/kernel-header-roots.sh`;
 `scripts/native-matrix-artifact.sh`;
+`scripts/user-journey.sh`;
+`scripts/user-journey-fetch.sh`;
+`scripts/user-journey-packages.tsv`;
+`scripts/test-user-journey.sh`;
 `.github/actions/build-static-conary/action.yml`;
 `.github/actions/setup-native-matrix-compiler-cache/action.yml`;
 `.github/actions/restore-native-matrix-artifact/action.yml`;
@@ -1221,7 +1225,8 @@ matrix job in `.github/workflows/pr-gate.yml`.
 `cargo test -p conary-test focused_native_cross_source_manifest_runs_the_shared_lifecycle_contract`;
 `cargo test -p conary-test native_cross_source_`;
 `cargo test -p conary-test native_parity_autoremove_`;
-`cargo test -p conary-test native_parity_sql_`.
+`cargo test -p conary-test native_parity_sql_`;
+`bash scripts/test-user-journey.sh`.
 
 **Interaction gate:** `bash scripts/build-static-conary.sh`;
 `cargo run -p conary-test -- run --suite phase4-native-pm-parity --distro fedora44 --phase 4`;
