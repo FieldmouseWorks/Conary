@@ -1,0 +1,66 @@
+# packaging/apparmor/conary-exec
+#
+# Grants user namespaces to the Conary source-root launcher, and to nothing
+# else. With kernel.apparmor_restrict_unprivileged_userns=1 (Ubuntu 24.04 and
+# later), unshare(CLONE_NEWUSER) succeeds for an unconfined program but every
+# capability inside the new namespace is denied, so the launcher could not
+# write its identity map or mount its launch root.
+#
+# Modeled on Ubuntu's own bwrap-userns-restrict profile: the launcher gets
+# user namespaces and capabilities inside them, and every program it
+# executes is stacked with unpriv_conary_exec, which denies capabilities.
+# conary-exec therefore cannot be used to lift the user-namespace
+# restriction for arbitrary programs.
+
+abi <abi/4.0>,
+
+include <tunables/global>
+
+profile conary-exec /usr/libexec/conary/conary-exec flags=(attach_disconnected,mediate_deleted) {
+  allow capability,
+  # Not "allow all": the pix stack below must stay effective. 'm' is needed
+  # everywhere so stacked children can map their own libraries.
+  allow file rwlkm /{**,},
+  allow network,
+  allow unix,
+  allow ptrace,
+  allow signal,
+  allow mqueue,
+  allow io_uring,
+  allow userns,
+  allow mount,
+  allow umount,
+  allow pivot_root,
+  allow dbus,
+
+  # The launch target runs stacked against unpriv_conary_exec, losing the
+  # launcher's capabilities inside the namespace.
+  allow pix /** -> &conary-exec//&unpriv_conary_exec,
+
+  # Site-specific additions and overrides. See local/README for details.
+  include if exists <local/conary-exec>
+}
+
+# Strips capabilities from everything the launcher executes.
+profile unpriv_conary_exec flags=(attach_disconnected,mediate_deleted) {
+  allow file rwlkm /{**,},
+  allow network,
+  allow unix,
+  allow ptrace,
+  allow signal,
+  allow mqueue,
+  allow io_uring,
+  allow userns,
+  allow mount,
+  allow umount,
+  allow pivot_root,
+  allow dbus,
+
+  # Keep the stack on further executions; a repeated stack collapses.
+  allow pix /** -> &unpriv_conary_exec,
+
+  audit deny capability,
+
+  # Site-specific additions and overrides. See local/README for details.
+  include if exists <local/unpriv_conary_exec>
+}

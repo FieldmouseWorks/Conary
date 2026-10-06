@@ -39,6 +39,7 @@ pub mod hash;
 pub mod image;
 pub mod json;
 pub mod label;
+pub mod launch;
 pub mod model;
 pub mod operations;
 pub mod packages;

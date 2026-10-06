@@ -5,18 +5,15 @@
 //! and attached only in the child's mount namespace. No host chown is needed.
 
 use super::sandbox_error;
+use crate::container::mount_api::{self, MOVE_MOUNT_F_EMPTY_PATH};
 use crate::container::{BindMount, BindMountIdentity};
 use crate::error::Result;
 use nix::unistd::{Pid, Uid};
 use std::ffi::CString;
 use std::fs::File;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::fd::{AsFd, AsRawFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
-
-// Linux UAPI include/uapi/linux/mount.h (v6.16). libc does not expose
-// MOVE_MOUNT_F_EMPTY_PATH for musl; the kernel ABI is identical on both libc targets.
-const MOVE_MOUNT_F_EMPTY_PATH: libc::c_uint = 0x0000_0004;
 
 pub(super) struct PreparedBuildMounts(Vec<PreparedMount>);
 
@@ -83,25 +80,17 @@ impl PreparedBuildMounts {
             }
             let source = CString::new(mount.source.as_os_str().as_bytes())
                 .map_err(|error| sandbox_error(format!("Invalid build mount: {error}")))?;
-            // SAFETY: source is NUL-terminated; successful open_tree returns
-            // an owned, close-on-exec detached mount descriptor.
-            let fd = unsafe {
-                libc::syscall(
-                    libc::SYS_open_tree,
-                    libc::AT_FDCWD,
-                    source.as_ptr(),
-                    libc::OPEN_TREE_CLONE | libc::OPEN_TREE_CLOEXEC,
-                )
-            };
-            if fd < 0 {
-                return Err(sandbox_error(format!(
-                    "Cannot prepare build mount {}: {}",
-                    mount.source.display(),
-                    std::io::Error::last_os_error()
-                )));
-            }
-            // SAFETY: fd is a fresh descriptor returned above.
-            let fd = unsafe { OwnedFd::from_raw_fd(fd as i32) };
+            let fd = mount_api::open_tree(
+                None,
+                &source,
+                libc::OPEN_TREE_CLONE | libc::OPEN_TREE_CLOEXEC,
+            )
+            .map_err(|error| {
+                sandbox_error(format!(
+                    "Cannot prepare build mount {}: {error}",
+                    mount.source.display()
+                ))
+            })?;
             let metadata = File::from(fd.try_clone()?).metadata()?;
             if !metadata.is_dir() {
                 return Err(sandbox_error("Build workspace mount must be a directory"));
@@ -135,25 +124,19 @@ impl PreparedBuildMounts {
                 userns_fd: namespace.as_raw_fd() as u64,
             };
 
-            // SAFETY: the initialized attribute and empty C string are valid
-            // for this synchronous syscall. The child waits for the ack before
-            // attaching its inherited reference to the same detached mount.
-            let result = unsafe {
-                libc::syscall(
-                    libc::SYS_mount_setattr,
-                    mount.fd.as_raw_fd(),
-                    c"".as_ptr(),
-                    libc::AT_EMPTY_PATH,
-                    &attr,
-                    std::mem::size_of::<libc::mount_attr>(),
-                )
-            };
-            if result < 0 {
-                return Err(sandbox_error(format!(
-                    "Cannot map build mount into sandbox identity: {}",
-                    std::io::Error::last_os_error()
-                )));
-            }
+            // The child waits for the ack before attaching its inherited
+            // reference to the same detached mount.
+            mount_api::mount_setattr(
+                Some(mount.fd.as_fd()),
+                c"",
+                libc::AT_EMPTY_PATH as libc::c_uint,
+                &attr,
+            )
+            .map_err(|error| {
+                sandbox_error(format!(
+                    "Cannot map build mount into sandbox identity: {error}"
+                ))
+            })?;
         }
         Ok(())
     }
@@ -189,23 +172,8 @@ impl PreparedBuildMounts {
         };
         let target = CString::new(target.as_os_str().as_bytes())
             .map_err(|error| sandbox_error(format!("Invalid build target: {error}")))?;
-        // SAFETY: fd is a live detached mount and both C strings are valid.
-        let result = unsafe {
-            libc::syscall(
-                libc::SYS_move_mount,
-                mount.fd.as_raw_fd(),
-                c"".as_ptr(),
-                libc::AT_FDCWD,
-                target.as_ptr(),
-                MOVE_MOUNT_F_EMPTY_PATH,
-            )
-        };
-        if result < 0 {
-            return Err(sandbox_error(format!(
-                "Cannot attach mapped build mount: {}",
-                std::io::Error::last_os_error()
-            )));
-        }
+        mount_api::move_mount(mount.fd.as_fd(), None, &target, MOVE_MOUNT_F_EMPTY_PATH)
+            .map_err(|error| sandbox_error(format!("Cannot attach mapped build mount: {error}")))?;
         Ok(())
     }
 }

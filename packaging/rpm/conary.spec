@@ -63,6 +63,9 @@ cargo build --release --locked -p conary
 %install
 install -Dpm 0755 target/release/%{crate} %{buildroot}%{_bindir}/%{crate}
 
+# Source-root launcher
+install -Dpm 0755 target/release/%{crate}-exec %{buildroot}%{_libexecdir}/%{crate}/%{crate}-exec
+
 # Man page
 install -Dpm 0644 apps/conary/man/%{crate}.1 %{buildroot}%{_mandir}/man1/%{crate}.1
 
@@ -98,6 +101,8 @@ install -Dpm 0644 LICENSE-APACHE %{buildroot}%{_datadir}/licenses/%{crate}/LICEN
 %license LICENSE-MIT LICENSE-APACHE
 %doc README.md
 %{_bindir}/%{crate}
+%dir %{_libexecdir}/%{crate}
+%{_libexecdir}/%{crate}/%{crate}-exec
 %{_mandir}/man1/%{crate}.1*
 %{_unitdir}/%{crate}-generation-activation.service
 %{_unitdir}/multi-user.target.wants/%{crate}-generation-activation.service

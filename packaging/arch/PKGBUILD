@@ -47,6 +47,9 @@ package() {
     # Binary
     install -Dm755 target/release/$pkgname "$pkgdir/usr/bin/$pkgname"
 
+    # Source-root launcher
+    install -Dm755 target/release/$pkgname-exec "$pkgdir/usr/libexec/$pkgname/$pkgname-exec"
+
     # Man page
     install -Dm644 apps/conary/man/$pkgname.1 "$pkgdir/usr/share/man/man1/$pkgname.1"
 

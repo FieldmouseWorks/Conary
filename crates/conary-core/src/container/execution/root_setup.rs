@@ -13,6 +13,7 @@ use super::credentials::seal_namespace_credentials;
 use super::monitor::PidNamespaceMonitor;
 use super::*;
 use crate::container::child_safety::{bring_loopback_up, child_diag, format_int, int_buffer};
+use crate::container::mount_api;
 use crate::container::namespaces::{
     clear_privileged_supplementary_groups, enter_mapped_namespace_root,
 };
@@ -445,29 +446,13 @@ fn wait_for_pid_namespace_init(child: Pid, deadline: Instant) -> Result<i32> {
 fn set_mount_readonly(target: &Path) -> std::result::Result<(), nix::errno::Errno> {
     let target =
         CString::new(target.as_os_str().as_bytes()).map_err(|_| nix::errno::Errno::EINVAL)?;
-    let attr = libc::mount_attr {
-        attr_set: libc::MOUNT_ATTR_RDONLY,
-        attr_clr: 0,
-        propagation: 0,
-        userns_fd: 0,
-    };
-    // SAFETY: target and the initialized mount attribute remain valid for the
-    // synchronous syscall; no mount restrictions are cleared.
-    if unsafe {
-        libc::syscall(
-            libc::SYS_mount_setattr,
-            libc::AT_FDCWD,
-            target.as_ptr(),
-            0,
-            &attr,
-            std::mem::size_of::<libc::mount_attr>(),
-        )
-    } < 0
-    {
-        Err(nix::errno::Errno::last())
-    } else {
-        Ok(())
-    }
+    mount_api::mount_setattr(
+        None,
+        &target,
+        0,
+        &mount_api::set_only(libc::MOUNT_ATTR_RDONLY),
+    )
+    .map_err(|error| nix::errno::Errno::from_raw(error.raw_os_error().unwrap_or(libc::EIO)))
 }
 
 /// Create only sandbox-owned mount-point parents before any binds are attached.

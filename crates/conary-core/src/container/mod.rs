@@ -51,7 +51,8 @@ mod analysis;
 #[cfg(test)]
 mod child_fork_safety;
 mod child_safety;
-mod namespaces;
+pub(crate) mod mount_api;
+pub(crate) mod namespaces;
 
 use child_safety::set_rlimit;
 

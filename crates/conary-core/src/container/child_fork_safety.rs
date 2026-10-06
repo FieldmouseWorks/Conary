@@ -43,6 +43,7 @@ const CHILD_PATH_SOURCES: &[(&str, &str)] = &[
     ),
     ("container/child_safety.rs", include_str!("child_safety.rs")),
     ("container/namespaces.rs", include_str!("namespaces.rs")),
+    ("container/mount_api.rs", include_str!("mount_api.rs")),
     (
         "container/execution/process_wait.rs",
         include_str!("execution/process_wait.rs"),

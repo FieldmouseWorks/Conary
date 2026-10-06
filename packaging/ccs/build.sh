@@ -74,6 +74,9 @@ rm -rf "$STAGE"
 # Binary
 install -Dpm 0755 "$RELEASE_BIN" "$STAGE/usr/bin/$NAME"
 
+# Source-root launcher
+install -Dpm 0755 "$TARGET_DIR/release/$NAME-exec" "$STAGE/usr/libexec/$NAME/$NAME-exec"
+
 # Man page
 install -Dpm 0644 "$REPO_ROOT/apps/conary/man/$NAME.1" "$STAGE/usr/share/man/man1/$NAME.1"
 

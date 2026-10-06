@@ -143,17 +143,50 @@ fn credential_transition_result(result: libc::c_long, operation: &str) -> Result
     Ok(())
 }
 
-pub(super) fn namespace_map_contents(host_id: u32) -> String {
-    format!("0 {host_id} 1\n")
+/// One `uid_map`/`gid_map` extent mapping a single id `inside` the namespace
+/// to `outside` in its parent.
+pub(crate) fn id_map_line(inside: u32, outside: u32) -> String {
+    format!("{inside} {outside} 1\n")
 }
 
-fn write_namespace_map(path: &str, contents: &str) -> Result<()> {
-    fs::write(path, contents).map_err(|e| {
-        Error::scriptlet(
-            ScriptletFailureKind::SandboxSetupUnavailable,
-            format!("Failed to write {path}: {e}"),
-        )
-    })?;
+pub(super) fn namespace_map_contents(host_id: u32) -> String {
+    id_map_line(0, host_id)
+}
+
+/// The per-process identity file a namespace map write targeted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum IdMapFile {
+    SetGroups,
+    UidMap,
+    GidMap,
+}
+
+impl IdMapFile {
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::SetGroups => "setgroups",
+            Self::UidMap => "uid_map",
+            Self::GidMap => "gid_map",
+        }
+    }
+}
+
+/// Deny `setgroups`, then write the uid and gid maps of the process whose
+/// `/proc` directory is `proc_dir`. The kernel accepts an unprivileged gid map
+/// only after `setgroups` is denied, so the order is part of the contract.
+pub(crate) fn write_identity_maps(
+    proc_dir: &str,
+    uid_map: &str,
+    gid_map: &str,
+) -> std::result::Result<(), (IdMapFile, std::io::Error)> {
+    for (file, contents) in [
+        (IdMapFile::SetGroups, "deny"),
+        (IdMapFile::UidMap, uid_map),
+        (IdMapFile::GidMap, gid_map),
+    ] {
+        fs::write(format!("{proc_dir}/{}", file.name()), contents)
+            .map_err(|error| (file, error))?;
+    }
     Ok(())
 }
 
@@ -163,16 +196,17 @@ pub(super) fn configure_user_namespace_root_mapping_for_pid(
     host_gid: u32,
 ) -> Result<()> {
     let proc_root = format!("/proc/{}", pid.as_raw());
-    write_namespace_map(&format!("{proc_root}/setgroups"), "deny")?;
-    write_namespace_map(
-        &format!("{proc_root}/uid_map"),
+    write_identity_maps(
+        &proc_root,
         &namespace_map_contents(host_uid),
-    )?;
-    write_namespace_map(
-        &format!("{proc_root}/gid_map"),
         &namespace_map_contents(host_gid),
-    )?;
-    Ok(())
+    )
+    .map_err(|(file, e)| {
+        Error::scriptlet(
+            ScriptletFailureKind::SandboxSetupUnavailable,
+            format!("Failed to write {proc_root}/{}: {e}", file.name()),
+        )
+    })
 }
 
 pub(super) fn prepare_user_namespace_entrypoint(root: &Path, script_path: &Path) -> Result<()> {

@@ -8,6 +8,7 @@ pub mod cli;
 pub mod command_risk;
 pub mod commands;
 pub mod dispatch;
+pub mod exec_launcher;
 pub mod live_host_safety;
 pub mod logging;
 pub(crate) mod test_hooks;

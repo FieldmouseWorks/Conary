@@ -11,6 +11,11 @@ license.workspace = true
 keywords = ["package-manager", "rpm", "deb", "system"]
 categories = ["command-line-utilities"]
 
+# Source-root launcher installed at /usr/libexec/conary/conary-exec.
+[[bin]]
+name = "conary-exec"
+path = "src/bin/conary-exec.rs"
+
 [features]
 default = []
 test-hooks = []
