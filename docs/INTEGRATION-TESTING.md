@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-10-06
-revision: 110
-summary: Define the Podman integration harness and proof contracts, including immutable release-backed base-image acquisition, TNPM05 whole-root provider JSON, TNPM14 repository-dependency rows, TNPM15 regular-file and activation rows, TNPM18 repository and post-update lifecycle rows, and Group I exact-name package absence
+revision: 111
+summary: Define the Podman integration harness and proof contracts, including immutable release-backed base-image acquisition, TNPM05 whole-root provider JSON, TNPM14, TNPM15, and TNPM18 persisted rows, and Group I and J exact package rows
 ---
 
 # Integration Testing
@@ -363,6 +363,15 @@ proves only absence of the named database trove. The failed-install and
 `file_not_exists` steps separately check refusal and listed payload paths;
 manifest parsing and disposable SQLite predicate checks do not establish live
 container behavior.
+
+Phase 3 Group J `T110` proves that the refused `dep-liba` 2.0.0 install leaves
+the installed set unchanged: one `sqlite3 -json` query selects `name`,
+`version`, `package_release`, and `version_scheme` from `troves` for `dep-app`,
+`dep-base`, `dep-liba`, and `dep-libb`, ordered by name, and `stdout_json` at
+`pointer = ""` requires exactly those four rows at `1.0.0`, release `"1"`,
+scheme `conary`. `T113` requires the single matching `dep-liba` row. The
+in-memory SQLite guard checks exact-name filtering and the assertion's
+failures; it does not establish live container behavior.
 
 From a checkout, use
 `cargo run -p conary-test -- bootstrap check --json` before smoke validation to

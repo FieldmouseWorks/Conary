@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-10-04
-revision: 76
-summary: Map fixture ownership, including release-backed base-image proof, native TNPM05 provider JSON, native persisted-SQL rows, native refusals, repository discovery, command captures, activation intent, the refreshed Tumbleweed lifecycle snapshot, and Group I exact-name package absence
+last_updated: 2026-10-06
+revision: 77
+summary: Map fixture ownership, including release-backed base-image proof, native TNPM05 provider JSON, native persisted-SQL rows, native refusals, repository discovery, command captures, activation intent, the refreshed Tumbleweed lifecycle snapshot, and Group I and J exact package rows
 ---
 
 # Test Fixtures And Proof Maps
@@ -510,7 +510,10 @@ Each fixture family should record:
   or fields. The count covers only that named trove; failed-install and
   `file_not_exists` assertions cover their separate conditions. The in-memory
   SQLite test proves exact-name filtering and assertion behavior, not a live
-  container run. TNPM05 step 4 in `phase4-native-pm-parity` now requires one
+  container run. Group J `T110` and `T113` require the exact `troves` rows
+  (name, version `1.0.0`, release `"1"`, scheme `conary`) for the
+  `adversarial/deps` v1 fixtures they installed, as a complete root array.
+  TNPM05 step 4 in `phase4-native-pm-parity` now requires one
   whole-root schema-v1 `whatprovides --json` result: exactly one installed
   provider with the fixture package name, lane-native version, architecture and
   scheme, CCS release `1`, a null repository, only the fixture version in

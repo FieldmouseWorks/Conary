@@ -734,5 +734,6 @@ fn active_manifest_live_mutation_commands_acknowledge_mutation_and_protect_lifec
 }
 
 mod dependabot;
+mod group_j_dependency_rows;
 mod manifests;
 mod workflow;
