@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-09-25
-revision: 24
-summary: Route assistants to canonical owners, focused proof, and the shared execution workflow
+last_updated: 2026-10-03
+revision: 27
+summary: Route assistants to canonical owners, focused proof, and guided or bounded unattended execution
 ---
 
 # Conary For Coding Assistants
@@ -59,7 +59,7 @@ This keeps startup guidance small while retaining precise, on-demand context.
 | Integration test or fixture | `docs/INTEGRATION-TESTING.md` and `docs/modules/test-fixtures.md` |
 | Deploy, MCP, release, or host work | `docs/operations/infrastructure.md` plus the owner packet |
 | Current project status | [Concise status](../../ROADMAP.md), then [detailed roadmap](../roadmaps/development-roadmap.md) and live issue/PR state |
-| Multi-step assisted execution | [Agent execution workflow](agent-workflow.md) |
+| Multi-step guided or bounded unattended execution | [Agent execution workflow](agent-workflow.md); [runner interface and recovery](agent-runner.md) for configured runs; [read-only CI intake](agent-intake.md) only for failure intake |
 | Public or assistant-doc change | The proof floor below plus the affected behavior owner |
 
 ## Truth Owners
@@ -71,8 +71,13 @@ This keeps startup guidance small while retaining precise, on-demand context.
 4. Architecture, module, specification, integration-testing, and operations
    docs own current subsystem behavior and contracts.
 5. `docs/roadmaps/` owns ordering, maturity, blockers, and milestone state.
-6. [The agent workflow](agent-workflow.md) owns graph structure, delegation,
-   evidence, permission handling, resumption, and task closeout records.
+6. [The agent workflow](agent-workflow.md) owns guided and bounded unattended
+   graph, authorization, evidence, recovery, stop, and closeout rules. The
+   issue body indexes and summarizes runner-backed graphs while each
+   referenced comment owns live node state and dependency prose. The
+   [runner guide](agent-runner.md) owns the implemented runner interface and
+   its tested operational limits; [intake](agent-intake.md) owns its separate
+   read-only failure scan.
 7. Issues and draft PRs own bounded execution status and exact current proof;
    `CONTRIBUTING.md` owns contribution lifecycle, review, and merge rules.
 
@@ -133,5 +138,6 @@ git diff --check
 ```
 
 Add the affected feature-card proof when a behavior claim, command, route, or
-public surface changes. Sweep explicitly for every retired filename or tool
-name removed by the slice.
+public surface changes. For an optional command-bound local receipt, see the
+[agent workflow](agent-workflow.md#work-evidence-and-feedback). Sweep explicitly
+for every retired filename or tool name removed by the slice.

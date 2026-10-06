@@ -58,7 +58,11 @@ jobs:
         with:
           ref: ${{ github.workflow_sha }}
           path: workflow-authority
-          sparse-checkout: .github/actions
+          sparse-checkout: |
+            /.github/actions/
+            /scripts/ci-base-image.py
+            /scripts/ci-base-images.json
+          sparse-checkout-cone-mode: false
           fetch-depth: 1
           persist-credentials: false
       - uses: ./workflow-authority/.github/actions/setup-rust-workspace

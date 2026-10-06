@@ -3,6 +3,10 @@
 #![cfg(test)]
 
 use super::*;
+use crate::config::manifest::JsonExpectation;
+use crate::engine::assertions::evaluate_assertion;
+use rusqlite::Connection;
+use serde_json::json;
 
 #[test]
 fn test_load_phase1_core_manifest() {
@@ -492,14 +496,21 @@ fn test_load_phase3_group_i_manifest_security_boundary_expectations() {
             );
         }
 
-        for (test_id, package_name, payload_path) in [
-            ("T100", "proc-environ", "/usr/bin/proc-environ"),
+        for (test_id, package_name, absent_paths) in [
+            ("T100", "proc-environ", &["/usr/bin/proc-environ"][..]),
             (
                 "T101",
                 "adversarial-hostile-scriptlet",
-                "/usr/bin/hostile-scriptlet",
+                &[
+                    "/usr/bin/hostile-scriptlet",
+                    "/etc/conary-hostile-scriptlet",
+                ][..],
             ),
-            ("T102", "outside-root-write", "/usr/bin/outside-root-write"),
+            (
+                "T102",
+                "outside-root-write",
+                &["/usr/bin/outside-root-write", "/tmp/conary-escape-marker"][..],
+            ),
         ] {
             let test = manifest
                 .test
@@ -521,22 +532,101 @@ fn test_load_phase3_group_i_manifest_security_boundary_expectations() {
                 .run
                 .as_deref()
                 .expect("sandbox scriptlet tests should query package state");
-            assert!(
-                status_step.contains("sqlite3 ${DB_PATH}")
-                    && status_step.contains("FROM troves")
-                    && status_step.contains(package_name),
-                "{test_id} should verify package state is absent from the DB"
-            );
-            let status_assertion = test.step[1].assert.as_ref().unwrap();
+            let expected_query =
+                format!("SELECT COUNT(*) AS installed FROM troves WHERE name = '{package_name}'");
             assert_eq!(
-                status_assertion.stdout_contains.as_deref(),
-                Some("state-absent")
+                status_step,
+                format!("sqlite3 -json ${{DB_PATH}} \"{expected_query}\""),
+                "{test_id} should count only the exact fixture name"
             );
+            let query = status_step
+                .strip_prefix("sqlite3 -json ${DB_PATH} \"")
+                .and_then(|sql| sql.strip_suffix('"'))
+                .expect("one quoted sqlite3 JSON query");
+            let status_assertion = test.step[1].assert.as_ref().unwrap();
+            assert_eq!(status_assertion.exit_code, Some(0));
             assert!(
-                test.step
-                    .iter()
-                    .any(|step| step.file_not_exists.as_deref() == Some(payload_path)),
-                "{test_id} should verify the package payload was rolled back"
+                status_assertion.stdout_contains.is_none(),
+                "{test_id} must not use the old text state proof"
+            );
+            let [whole_array] = status_assertion
+                .stdout_json
+                .as_deref()
+                .expect("one typed package-state assertion")
+            else {
+                panic!("{test_id} must have exactly one JSON assertion");
+            };
+            assert_eq!(whole_array.pointer, "", "{test_id} must compare the root");
+            assert_eq!(
+                whole_array.expected,
+                JsonExpectation::Equals(json!([{ "installed": 0 }])),
+                "{test_id} must require one integer zero count row"
+            );
+
+            let database = Connection::open_in_memory().expect("open disposable SQLite database");
+            database
+                .execute_batch("CREATE TABLE troves (name TEXT NOT NULL);")
+                .expect("create troves fixture");
+            for name in [
+                "unrelated-package".to_owned(),
+                format!("{package_name}-lookalike"),
+            ] {
+                database
+                    .execute("INSERT INTO troves (name) VALUES (?1)", [&name])
+                    .expect("seed unrelated trove");
+            }
+            let installed = || {
+                database
+                    .query_row(query, [], |row| row.get::<_, i64>(0))
+                    .expect("execute manifest count query")
+            };
+            assert_eq!(installed(), 0, "{test_id} must ignore other names");
+            assert!(
+                evaluate_assertion(
+                    status_assertion,
+                    0,
+                    &json!([{ "installed": installed() }]).to_string(),
+                    ""
+                )
+                .is_ok(),
+                "{test_id} must accept the exact zero count"
+            );
+            database
+                .execute("INSERT INTO troves (name) VALUES (?1)", [package_name])
+                .expect("seed exact target trove");
+            assert_eq!(installed(), 1, "{test_id} must count the exact target");
+            assert!(
+                evaluate_assertion(
+                    status_assertion,
+                    0,
+                    &json!([{ "installed": installed() }]).to_string(),
+                    ""
+                )
+                .is_err(),
+                "{test_id} must reject an installed target"
+            );
+            for stdout in [
+                r#"[{"installed":"0"}]"#,
+                r#"[{"installed":0},{"installed":0}]"#,
+            ] {
+                assert!(
+                    evaluate_assertion(status_assertion, 0, stdout, "").is_err(),
+                    "{test_id} must reject the wrong JSON type or array shape"
+                );
+            }
+            assert!(
+                evaluate_assertion(status_assertion, 1, r#"[{"installed":0}]"#, "").is_err(),
+                "{test_id} must reject a failed database query"
+            );
+            let actual_absent_paths: Vec<&str> = test
+                .step
+                .iter()
+                .filter_map(|step| step.file_not_exists.as_deref())
+                .collect();
+            assert_eq!(
+                actual_absent_paths.as_slice(),
+                absent_paths,
+                "{test_id} should retain every payload absence check"
             );
         }
     }

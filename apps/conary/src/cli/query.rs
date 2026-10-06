@@ -50,6 +50,10 @@ pub enum QueryCommands {
 
         #[command(flatten)]
         db: DbArgs,
+
+        /// Emit one versioned, machine-readable JSON result
+        #[arg(long)]
+        json: bool,
     },
 
     /// Show what packages would break if a package is removed

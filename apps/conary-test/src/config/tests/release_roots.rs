@@ -128,10 +128,11 @@ fn rolling_roots_carry_authenticated_native_authority() {
         .as_ref()
         .unwrap();
     assert_eq!(tumbleweed.expected_os_release.id, "opensuse-tumbleweed");
-    assert!(tumbleweed.base_image.contains(&format!(
-        ":{}@sha256:",
-        tumbleweed.expected_os_release.version_id
-    )));
+    assert_eq!(tumbleweed.expected_os_release.version_id, "20260908");
+    assert_eq!(
+        tumbleweed.base_image,
+        "127.0.0.1:55071/conary-ci-base-opensuse-tumbleweed@sha256:000f41d72d21563074c380c3f5d27c6d28c9f8aa5f593afaa923905e70c4a0f2"
+    );
 }
 
 #[test]

@@ -3,6 +3,7 @@
 #![cfg(test)]
 
 use super::*;
+use crate::db::models::{Repository, RepositoryPackage};
 use crate::db::schema;
 use rusqlite::Connection;
 
@@ -50,6 +51,18 @@ fn owned_statements() -> Vec<(&'static str, String)> {
         (
             "find_by_cli_raw_query",
             SELECT_BY_CLI_RAW_QUERY_SQL.to_string(),
+        ),
+        (
+            "validate_cli_exact_references",
+            SELECT_CLI_EXACT_ORPHAN_SQL.to_string(),
+        ),
+        (
+            "validate_cli_raw_references",
+            SELECT_CLI_RAW_ORPHAN_SQL.to_string(),
+        ),
+        (
+            "validate_cli_typed_references",
+            SELECT_CLI_TYPED_ORPHAN_SQL.to_string(),
         ),
         (
             "find_by_capability_and_kind",
@@ -147,6 +160,21 @@ fn every_owned_statement_reaches_repository_provides_through_an_index() {
             "idx_repository_provides_raw",
             "(raw=?)",
         ),
+        (
+            "validate_cli_exact_references",
+            "idx_repository_provides_capability",
+            "(capability=?)",
+        ),
+        (
+            "validate_cli_raw_references",
+            "idx_repository_provides_raw",
+            "(raw=?)",
+        ),
+        (
+            "validate_cli_typed_references",
+            "idx_repository_provides_capability",
+            "(capability=?)",
+        ),
     ] {
         let (_, sql) = owned_statements()
             .into_iter()
@@ -160,6 +188,100 @@ fn every_owned_statement_reaches_repository_provides_through_an_index() {
                     && step.ends_with(expected_constraint)
             }),
             "{label} must seek its expected index: {plan:?}"
+        );
+    }
+}
+
+#[test]
+fn cli_orphan_probes_seek_both_branches_of_an_immutable_attached_universe() {
+    let conn = test_db();
+    let index_file = tempfile::NamedTempFile::new().unwrap();
+    let index = Connection::open(index_file.path()).unwrap();
+    index
+        .execute_batch(
+            "CREATE TABLE repository_provides (
+                 id INTEGER PRIMARY KEY, repository_package_id INTEGER NOT NULL,
+                 capability TEXT NOT NULL, kind TEXT NOT NULL, raw TEXT
+             );
+             CREATE INDEX idx_repository_provides_capability
+                 ON repository_provides(capability);
+             CREATE INDEX idx_repository_provides_raw
+                 ON repository_provides(raw) WHERE raw IS NOT NULL AND raw != '';
+             CREATE TABLE repository_packages (
+                 id INTEGER PRIMARY KEY, repository_id INTEGER NOT NULL
+             );",
+        )
+        .unwrap();
+    drop(index);
+
+    let mut uri = url::Url::from_file_path(index_file.path()).unwrap();
+    uri.query_pairs_mut()
+        .append_pair("mode", "ro")
+        .append_pair("immutable", "1");
+    conn.execute("ATTACH DATABASE ?1 AS remi_universe_index", [uri.as_str()])
+        .unwrap();
+    conn.execute_batch(
+        "CREATE TEMP VIEW resolved_repository_provides AS
+             SELECT id, repository_package_id, capability, kind, raw
+             FROM main.repository_provides
+             UNION ALL
+             SELECT id, repository_package_id, capability, kind, raw
+             FROM remi_universe_index.repository_provides;
+         CREATE TEMP VIEW resolved_repository_packages AS
+             SELECT id, repository_id FROM main.repository_packages
+             UNION ALL
+             SELECT id, repository_id FROM remi_universe_index.repository_packages;",
+    )
+    .unwrap();
+
+    for (label, sql, index_name, constraint) in [
+        (
+            "normalized package-name",
+            SELECT_CLI_EXACT_ORPHAN_SQL,
+            "idx_repository_provides_capability",
+            "(capability=?)",
+        ),
+        (
+            "raw spelling",
+            SELECT_CLI_RAW_ORPHAN_SQL,
+            "idx_repository_provides_raw",
+            "(raw=?)",
+        ),
+        (
+            "typed capability",
+            SELECT_CLI_TYPED_ORPHAN_SQL,
+            "idx_repository_provides_capability",
+            "(capability=?)",
+        ),
+    ] {
+        let plan = query_plan(&conn, sql);
+        let indexed_branches = plan
+            .iter()
+            .filter(|step| step.contains(index_name) && step.ends_with(constraint))
+            .count();
+        assert_eq!(
+            indexed_branches, 2,
+            "{label} must seek main and attached provide indexes: {plan:?}"
+        );
+        assert!(
+            !plan.iter().any(|step| {
+                step.starts_with("SCAN ")
+                    && (step.contains("repository_provides")
+                        || step.contains("repository_packages")
+                        || step.contains("pkg"))
+            }),
+            "{label} scans the attached universe: {plan:?}"
+        );
+        assert!(
+            !plan.iter().any(|step| step.starts_with("MATERIALIZE ")),
+            "{label} materializes the attached universe: {plan:?}"
+        );
+        assert!(
+            plan.iter().any(|step| {
+                step.starts_with("SEARCH ")
+                    && (step.contains("repository_packages") || step.contains("pkg"))
+            }),
+            "{label} must seek package identity by key: {plan:?}"
         );
     }
 }
@@ -391,6 +513,191 @@ fn cli_exact_query_matches_raw_or_package_rows_only() {
     assert!(
         empty_query.is_empty(),
         "an empty query names nothing: {empty_query:?}"
+    );
+}
+
+#[test]
+fn cli_reference_probes_reject_matching_orphans_without_failing_unrelated_queries() {
+    let conn = test_db();
+    seed_repo_and_package(&conn);
+    RepositoryProvide::new(
+        1,
+        "intact-package".to_string(),
+        None,
+        "package".to_string(),
+        None,
+        VersionScheme::Rpm,
+    )
+    .insert(&conn)
+    .unwrap();
+
+    conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
+    RepositoryProvide::new(
+        900,
+        "liborphan.so.1".to_string(),
+        None,
+        "soname".to_string(),
+        Some("raw-orphan".to_string()),
+        VersionScheme::Rpm,
+    )
+    .insert(&conn)
+    .unwrap();
+    RepositoryProvide::new(
+        900,
+        "orphan-package".to_string(),
+        None,
+        "package".to_string(),
+        None,
+        VersionScheme::Rpm,
+    )
+    .insert(&conn)
+    .unwrap();
+    let mut missing_repository = RepositoryPackage::new(
+        901,
+        "missing-repo-pkg".to_string(),
+        "1.0".to_string(),
+        VersionScheme::Rpm,
+        "0".repeat(64),
+        1,
+        "https://example.test/missing-repo-pkg".to_string(),
+    );
+    let package_id = missing_repository.insert(&conn).unwrap();
+    RepositoryProvide::new(
+        package_id,
+        "missing-repo-pkg".to_string(),
+        None,
+        "package".to_string(),
+        None,
+        VersionScheme::Rpm,
+    )
+    .insert(&conn)
+    .unwrap();
+
+    assert!(RepositoryProvide::validate_cli_exact_references(&conn, "intact-package").is_ok());
+    assert!(
+        RepositoryProvide::validate_cli_typed_references(&conn, "intact-package", "package")
+            .is_ok()
+    );
+    for query in ["raw-orphan", "orphan-package", "missing-repo-pkg"] {
+        assert!(
+            RepositoryProvide::validate_cli_exact_references(&conn, query).is_err(),
+            "{query} must refuse an orphaned matching provide"
+        );
+    }
+    assert!(
+        RepositoryProvide::validate_cli_typed_references(&conn, "liborphan.so.1", "soname")
+            .is_err()
+    );
+    assert!(
+        RepositoryProvide::find_by_cli_exact_query(&conn, "raw-orphan")
+            .unwrap()
+            .is_empty(),
+        "the existing joined lookup alone silently hides the orphan"
+    );
+    assert!(
+        RepositoryProvide::find_by_capability_and_kind(&conn, "liborphan.so.1", "soname")
+            .unwrap()
+            .is_empty(),
+        "the shared resolver lookup remains unchanged"
+    );
+}
+
+#[test]
+fn cli_reference_probes_preserve_disabled_repository_exclusion() {
+    let conn = test_db();
+    let mut repository = Repository::new(
+        "disabled-provider-source".to_string(),
+        "https://example.test/disabled".to_string(),
+    );
+    repository.enabled = false;
+    let repository_id = repository.insert(&conn).unwrap();
+    let mut package = RepositoryPackage::new(
+        repository_id,
+        "disabled-package".to_string(),
+        "1.0".to_string(),
+        VersionScheme::Rpm,
+        "0".repeat(64),
+        1,
+        "https://example.test/disabled-package".to_string(),
+    );
+    let package_id = package.insert(&conn).unwrap();
+    RepositoryProvide::new(
+        package_id,
+        "disabled-package".to_string(),
+        None,
+        "package".to_string(),
+        None,
+        VersionScheme::Rpm,
+    )
+    .insert(&conn)
+    .unwrap();
+    RepositoryProvide::new(
+        package_id,
+        "libdisabled.so.1".to_string(),
+        None,
+        "soname".to_string(),
+        Some("raw-disabled".to_string()),
+        VersionScheme::Rpm,
+    )
+    .insert(&conn)
+    .unwrap();
+
+    for query in ["disabled-package", "raw-disabled"] {
+        RepositoryProvide::validate_cli_exact_references(&conn, query).unwrap();
+        assert!(
+            RepositoryProvide::find_by_cli_exact_query(&conn, query)
+                .unwrap()
+                .is_empty(),
+            "{query} must not expose a disabled repository"
+        );
+    }
+    RepositoryProvide::validate_cli_typed_references(&conn, "libdisabled.so.1", "soname").unwrap();
+    assert!(
+        RepositoryProvide::find_by_capability_and_kind(&conn, "libdisabled.so.1", "soname")
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn selected_repository_provide_requires_canonical_kind_and_valid_capability() {
+    let valid = RepositoryProvide::new(
+        1,
+        "libssl.so.3".to_string(),
+        None,
+        "soname".to_string(),
+        Some("libssl.so.3()(64bit)".to_string()),
+        VersionScheme::Rpm,
+    );
+    assert_eq!(
+        valid.validated_capability().unwrap().kind,
+        crate::repository::dependency_model::RepositoryCapabilityKind::Soname
+    );
+
+    let invalid_kind = RepositoryProvide::new(
+        1,
+        "libssl.so.3".to_string(),
+        None,
+        "invented-kind".to_string(),
+        Some("libssl.so.3()(64bit)".to_string()),
+        VersionScheme::Rpm,
+    );
+    assert!(
+        format!("{}", invalid_kind.validated_capability().unwrap_err())
+            .contains("unsupported normalized repository provide kind")
+    );
+
+    let invalid_version = RepositoryProvide::new(
+        1,
+        "openssl".to_string(),
+        Some("bad version!".to_string()),
+        "package".to_string(),
+        None,
+        VersionScheme::Conary,
+    );
+    assert!(
+        format!("{}", invalid_version.validated_capability().unwrap_err())
+            .contains("invalid conary provider version")
     );
 }
 

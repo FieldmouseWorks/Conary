@@ -92,11 +92,11 @@ exit_code_not = 0
 stderr_contains = "post-install hooks failed"
 
 [[test.step]]
-run = "sqlite3 ${DB_PATH} \"SELECT CASE WHEN COUNT(*) = 0 THEN 'state-absent' ELSE 'state-present' END FROM troves WHERE name = 'proc-environ'\""
+run = "sqlite3 -json ${DB_PATH} \"SELECT COUNT(*) AS installed FROM troves WHERE name = 'proc-environ'\""
 
 [test.step.assert]
 exit_code = 0
-stdout_contains = "state-absent"
+stdout_json = [{ pointer = "", equals = [{ installed = 0 }] }]
 
 [[test.step]]
 file_not_exists = "/usr/bin/proc-environ"
@@ -123,11 +123,11 @@ exit_code_not = 0
 stderr_contains = "post-install hooks failed"
 
 [[test.step]]
-run = "sqlite3 ${DB_PATH} \"SELECT CASE WHEN COUNT(*) = 0 THEN 'state-absent' ELSE 'state-present' END FROM troves WHERE name = 'adversarial-hostile-scriptlet'\""
+run = "sqlite3 -json ${DB_PATH} \"SELECT COUNT(*) AS installed FROM troves WHERE name = 'adversarial-hostile-scriptlet'\""
 
 [test.step.assert]
 exit_code = 0
-stdout_contains = "state-absent"
+stdout_json = [{ pointer = "", equals = [{ installed = 0 }] }]
 
 [[test.step]]
 file_not_exists = "/usr/bin/hostile-scriptlet"
@@ -154,11 +154,11 @@ exit_code_not = 0
 stderr_contains = "post-install hooks failed"
 
 [[test.step]]
-run = "sqlite3 ${DB_PATH} \"SELECT CASE WHEN COUNT(*) = 0 THEN 'state-absent' ELSE 'state-present' END FROM troves WHERE name = 'outside-root-write'\""
+run = "sqlite3 -json ${DB_PATH} \"SELECT COUNT(*) AS installed FROM troves WHERE name = 'outside-root-write'\""
 
 [test.step.assert]
 exit_code = 0
-stdout_contains = "state-absent"
+stdout_json = [{ pointer = "", equals = [{ installed = 0 }] }]
 
 [[test.step]]
 file_not_exists = "/usr/bin/outside-root-write"

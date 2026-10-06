@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-09-14
-revision: 123
-summary: Route features to owned paths and proof, including installed-list, publication-debt, and repository presentation, retained-survey requests, and workflow recovery.
+last_updated: 2026-10-03
+revision: 130
+summary: Route features to owned paths and proof, including guided and bounded unattended agent workflow tools, typed native persisted-SQL checks, autoremove preview and final state, installed-list, publication-debt, repository presentation, retained-survey requests, and workflow recovery.
 ---
 
 # Feature Ownership And Interaction Gates
@@ -1219,7 +1219,9 @@ matrix job in `.github/workflows/pr-gate.yml`.
 `cargo test -p conary-test suite_inventory`;
 `cargo test -p conary-test distro_config_requires_a_typed_build_context`;
 `cargo test -p conary-test focused_native_cross_source_manifest_runs_the_shared_lifecycle_contract`;
-`cargo test -p conary-test native_cross_source_`.
+`cargo test -p conary-test native_cross_source_`;
+`cargo test -p conary-test native_parity_autoremove_`;
+`cargo test -p conary-test native_parity_sql_`.
 
 **Interaction gate:** `bash scripts/build-static-conary.sh`;
 `cargo run -p conary-test -- run --suite phase4-native-pm-parity --distro fedora44 --phase 4`;
@@ -1414,6 +1416,56 @@ watch only existing Git control paths; it must not permanently invalidate a
 linked worktree or recursively watch the common Git directory that owns the
 shared cache. The `iterate` action selects only `fast-release`; release,
 promotion, and final performance evidence retain the exact release profile.
+
+## Agent Workflow Proof, Runner, And Intake
+
+**Slug:** agent-workflow-tools
+
+**Capability:** provide candidate-bound local command receipts, one-slice
+bounded execution with recovery pointers, and read-only intake for GitHub
+workflow failures.
+
+**Start here:** `docs/llms/agent-workflow.md`;
+`docs/llms/agent-runner.md`; `docs/llms/agent-intake.md`;
+`scripts/agent-runner.py`; `scripts/agent_runner_sandbox.py`;
+`scripts/agent-proof.py`; `scripts/agent-intake.py`.
+
+**Neighbor systems:** repository path routing, local proof logs, issue-body
+graph indexes, canonical graph comments, isolated agent worktrees, GitHub
+branches/PRs/checks, and user-local runner and intake state.
+
+**Paths:** `docs/llms/agent-workflow.md`; `docs/llms/agent-runner.md`;
+`docs/llms/agent-intake.md`; `scripts/agent-runner.py`;
+`scripts/agent_runner_sandbox.py`; `scripts/test-agent-runner.py`;
+`scripts/test-agent-runner-sandbox.py`; `scripts/agent-proof.py`;
+`scripts/test-agent-proof.py`; `scripts/agent-intake.py`;
+`scripts/test-agent-intake.py`.
+
+**Focused proof:** `python3 scripts/test-agent-proof.py`;
+`python3 scripts/test-agent-intake.py`;
+`python3 scripts/test-agent-runner.py`;
+`python3 scripts/test-agent-runner-sandbox.py`.
+
+**Interaction gate:** `bash scripts/test-agent-context.sh` and
+`bash scripts/agent-context.sh --validate` when ownership routing changes.
+
+**Docs to update:** `docs/llms/agent-workflow.md`;
+`docs/llms/agent-runner.md`; `docs/llms/agent-intake.md`;
+`docs/modules/feature-ownership.md`.
+
+**Safety notes:** command receipts cover the directly wrapped local process
+and their documented candidate scope; they are not hosted CI evidence. The
+run envelope records sourced authorization and bounded writes; the controller
+owns GitHub credentials and runner journals hold recovery metadata, not a
+second task graph. For bounded work, the issue body indexes graph comments;
+each comment owns live node state and dependency prose. The controller trusts
+the integrator's ready marker and does not parse dependency edges. Its ordered
+queue offers alternatives for one task per `run_id`; the next slice needs a
+new envelope and run identity. The runner stops on unknown or stale evidence,
+does not merge or schedule itself, and its candidate scan does not claim
+complete exfiltration prevention. Promotion checks are read-only. Intake uses
+GET-only GitHub requests and does not dispatch tasks or write to GitHub. The
+canonical workflow, runner, and intake documents own operational details.
 
 ## Agent/MCP Operation Surfaces
 

@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-09-09
-revision: 61
-summary: Map fixture ownership, including native refusals, repository discovery, command captures, typed boot-tool interfaces, and the refreshed Tumbleweed lifecycle snapshot
+last_updated: 2026-10-04
+revision: 76
+summary: Map fixture ownership, including release-backed base-image proof, native TNPM05 provider JSON, native persisted-SQL rows, native refusals, repository discovery, command captures, activation intent, the refreshed Tumbleweed lifecycle snapshot, and Group I exact-name package absence
 ---
 
 # Test Fixtures And Proof Maps
@@ -435,7 +435,9 @@ Each fixture family should record:
   `cargo test -p conary-test phase4_native_pm_parity_manifest_carries_cross_source_contract`;
   `cargo test -p conary-test daily_driver::phase4_daily_driver_corpus_manifest_proves_remaining_configuration_states`;
   `cargo test -p conary-test focused_native_cross_source_manifest_runs_the_shared_lifecycle_contract`;
-  `cargo test -p conary-test native_cross_source_`.
+  `cargo test -p conary-test native_cross_source_`;
+  `cargo test -p conary-test native_parity_whatprovides_`;
+  `cargo test -p conary-test native_parity_sql_`.
 - **Medium proof:**
   `cargo test -p conary-test config::tests::test_load_phase1_core_manifest`;
   `cargo test -p conary-test config::tests::test_load_phase3_group_m_manifest_installs_local_fixture_ccs`.
@@ -465,9 +467,17 @@ Each fixture family should record:
   declarations but are disabled because they have no release-matched history
   authority and are not inputs to the lifecycle proof. The current snapshot is
   `20260908`, observed from the digest-pinned amd64 image; repository declaration
-  hashes are measured after the snapshot rewrite. Upstream retention is not
-  guaranteed by a digest pin; #971 owns durable preservation of reviewed image
-  bytes after the recurring retired-manifest failures. `fedora44` is the existing
+  hashes are measured after the snapshot rewrite. Its cataloged loopback
+  runtime reference has the same manifest digest as the original upstream
+  image. `scripts/ci-base-images.json` binds the source digest to one immutable
+  public release asset and its archive SHA-256. `scripts/ci-base-image.py`
+  verifies complete OCI bytes before seeding the local registry;
+  `python3 scripts/test-ci-base-image.py -v` proves cold acquisition after
+  deleting the origin manifest, release fixture and source layout. This lane bypasses the
+  action's image-archive cache and requires a fresh pinned registry pull. #971 owns rollout
+  and broader reviewed-image retention; download and refresh policy live in
+  `docs/INTEGRATION-TESTING.md`.
+  `fedora44` is the existing
   `conary-test` runner distro key; public CCS target IDs remain
   `fedora-44`, `ubuntu-26.04`, and `arch`; `solus` remains a separate candidate
   and conformance-fixture identity.
@@ -492,7 +502,25 @@ Each fixture family should record:
   not retired/current CCS format identifiers. Corrupt and malicious archive
   cases start from signed current authority and mutate afterward. Scriptlet
   failure tests require nonzero install status plus absent package state and
-  payload; degraded installed-state success is not a fixture contract. Native
+  payload; degraded installed-state success is not a fixture contract. Group I
+  `T100`-`T102` step 2 counts `troves` for the exact names `proc-environ`,
+  `adversarial-hostile-scriptlet`, and `outside-root-write`, respectively. Each
+  successful `sqlite3 -json` query must match the complete root array
+  `[{"installed":0}]` at `pointer = ""`, with an integer count and no extra rows
+  or fields. The count covers only that named trove; failed-install and
+  `file_not_exists` assertions cover their separate conditions. The in-memory
+  SQLite test proves exact-name filtering and assertion behavior, not a live
+  container run. TNPM05 step 4 in `phase4-native-pm-parity` now requires one
+  whole-root schema-v1 `whatprovides --json` result: exactly one installed
+  provider with the fixture package name, lane-native version, architecture and
+  scheme, CCS release `1`, a null repository, only the fixture version in
+  `capability_versions`, and integer provider count `1`. Focused
+  `native_parity_whatprovides_` controls load the Fedora 44, Ubuntu 26.04, and
+  Arch assertions and reject extra or near-name providers, wrong values or
+  types, malformed or concatenated JSON, and nonzero exit. They prove manifest
+  assertion behavior locally; only the full container lanes observe live query
+  output. Query JSON alone does not verify artifact bytes, install source, or
+  provide provenance. Native
   cross-source lifecycle assertions read selected-generation manifests and CAS
   objects; the container's incidental root filesystem is not package-state
   authority. Fedora/RPM, Ubuntu/dpkg, and Arch/pacman each capture the fixture's
@@ -507,13 +535,68 @@ Each fixture family should record:
   TNPM32 and emits 17 attributable case records for each host-native RPM, DEB,
   or ALPM lane. The completed install/query
   record binds both the native request and its SAT-selected signed CCS
-  dependency to exact build-manifest SHA-256 identities. The update record
-  binds the installed v1 request and an independently built and extracted v2
-  native request, converts that exact v2 artifact through Conary's native
-  parser, and acquires the resulting signed CCS from a bounded loopback
-  repository. Selected-generation v2 bytes, pristine config hashes and source
-  format, repository checksum and provenance, and the installed lifecycle
-  bundle's native source checksum must all agree. The removal record binds to
+  dependency to exact build-manifest SHA-256 identities. TNPM14 step 3 reads
+  every root-database trove row named `phase4-repository-fixture`, ordered by
+  `t.id`, and compares the full `sqlite3 -json` array to one expected row
+  pinning name, version, release, architecture, version scheme, repository
+  name, source profile, install source, and install reason. A current-schema
+  control inserts a same-name row at another version; whole-array equality
+  rejects it even though the former substring assertion accepted it. This proves
+  persisted identity, provenance, and cardinality; the query does not
+  independently verify signature bytes. TNPM15 separately
+  requires nine exact ordered trove-scoped regular-file rows from the whole
+  regular-file set. Each row pins path, typed `regular` kind, integer persisted
+  `content_size`, and persisted SHA-256. The regular hardlink member is
+  `/usr/lib/phase4-corpus/hardlink-copy` on Fedora and
+  `/usr/lib/phase4-corpus/hardlink-anchor` on Ubuntu and Arch; the other member
+  remains a typed hardlink. These persisted values do not rehash host filesystem
+  bytes or prove execution of a host action. TNPM15 also requires exact
+  trove-scoped persisted directory and symlink rows: the
+  symlink target is compared in full and the directory modes remain JSON
+  integers. TNPM13 stages those native fixture inputs; TNPM14 verifies their
+  installed nodes in the selected generation. Separately, TNPM15's trove-scoped
+  requirement-group check pins the named repository fixture to one exact
+  persisted hard `depends` atom and matching alternative, including native
+  source text, and checks the trove's total requirement-group count (Fedora
+  four; Ubuntu and Arch one). The count makes
+  no semantic claim about Fedora's other three groups. TNPM15 also requires
+  the exact installed identity and native version `1.0` same-name package
+  provide rows, including typed provenance role, native format, and integer
+  record index type. It does not count other same-name versions; this existing
+  step-7 provide proof remains unchanged. TNPM15 step 8 adds one trove-scoped
+  `sqlite3 -json` `LEFT JOIN` assertion that requires exactly one persisted
+  lifecycle-bundle row. Whole-array equality pins trove name, version,
+  architecture, and source profile, plus bundle source format, family, profile,
+  architecture, package, version, `native-lifecycle` fidelity, and `installed`
+  state. The bundle tuples are `rpm/rpm/fedora-44/x86_64`,
+  `deb/deb/ubuntu-26.04/amd64`, and `arch/arch/arch/x86_64`; the Arch bundle's
+  format and family are `arch`, while its separate corpus source-evidence
+  format remains `alpm`. The bundle package and version must match the trove
+  name and version; the projected `same_changeset` must equal JSON integer `1`,
+  proving equality between the bundle's `installed_changeset_id` and the
+  trove's `installed_by_changeset_id`. This proves scalar row fields and
+  lineage only; it does not parse or verify bundle TOML or its digest.
+  TNPM15 step 9 expects exactly two ordered whole-array `sqlite3 -json`
+  rows, one for each captured runtime request. The source package and source
+  version match the installed trove; source entries are `rpm:%post`,
+  `deb:postinst`, or `arch:post_install`. Both requests use that trove's
+  install changeset. The join requires its completed, nonrecoverable
+  terminal `database_backed_up` publication and a published-through
+  changeset high-water that includes the request. Each row has a `pending`
+  intent in that exact generation with attempt count `0` and null error,
+  start, and completion fields. The systemd row pins action `start` and
+  one `phase4-corpus.service` unit; the boot-runtime row pins program
+  `depmod`, one `-a` argument, integer schema version `1`, and invoked path
+  `/usr/sbin/depmod`; fields for the other variant are null. There is no
+  global intent-count assertion because a request may be projected into
+  later generations. Persisted rows do not establish a live host result.
+  The update record binds the installed v1 request and an independently
+  built and extracted v2 native request, converts that exact v2 artifact
+  through Conary's native parser, and acquires the resulting signed CCS
+  from a bounded loopback repository. Selected-generation v2 bytes,
+  pristine config hashes and source format, repository checksum and
+  provenance, and the installed lifecycle bundle's native source checksum
+  must all agree. The removal record binds to
   the installed v2 update request. Additional digest-pinned fixtures cover
   epoch/release and architecture-independent identity, sparse and large files,
   xattrs, file capabilities, typed conflict/replacement relations, no-lifecycle
@@ -542,7 +625,56 @@ Each fixture family should record:
   the recreated or intentionally absent primary bytes, the byte-exact
   declaration-only path, and the persisted `config_files` rows (original/current
   hash, status, source, `materialized`, ghost, and remove-on-upgrade flags)
-  lane by lane; no distro gate or path heuristic decides a config outcome. Each native package is independently
+  lane by lane; no distro gate or path heuristic decides a config outcome.
+
+  TNPM18 step 2 (index 1) reads the prepared update repository before
+  mutation. One `sqlite3 -json` root-array assertion requires exactly one
+  package/key row for `w7-native-update`, ordered by repository package ID
+  and public key. It pins `binary` default strategy, the lane's source profile,
+  package name,
+  version `1.0.1-1`, version scheme and architecture, integer `1` equality
+  between the persisted checksum and the prepared fixture's
+  `NATIVE_UPDATE_CCS_SHA256`, and `active` key status. A second package or key
+  in the same repository adds a row and fails, even if the expected row
+  remains. This is persisted metadata and cardinality proof, not independent
+  signature-byte verification.
+
+  TNPM18 step 8 compares one complete `sqlite3 -json` array ordered by trove
+  ID. It requires exactly one updated `phase4-daily-driver-corpus` trove at
+  version `1.0.1-1` and its `/etc/phase4-corpus/app.conf` row, pinning the
+  repository `w7-native-update`, `repository` install source, `explicit`
+  reason, config package name/version/architecture, equal original/current
+  hashes `97d836d4bf6c4c49fa763836c117d738fef15b7d995bc2cf82e2a02704364d27`,
+  integer `noreplace = 1`, `pristine` status, and config source. The projected
+  `config_owner_match = 1` proves that this config row's `trove_id` matches the
+  trove. `related_config_rows = 4` counts config rows whose `trove_id` matches
+  that trove or whose `package_name` matches the package; it is not an
+  owner-only count. Because the query includes every same-name trove, a second
+  version adds a row and fails whole-array equality. The lane values are
+  Fedora/RPM (`x86_64`, scheme `rpm`, profile `fedora-44`, config source
+  `rpm`), Ubuntu/DEB (`amd64`, scheme `debian`, profile `ubuntu-26.04`, config
+  source `deb`), and Arch (`x86_64`, scheme `arch`, profile `arch`, config
+  source `arch`; the separate corpus evidence format remains `alpm`). This
+  assertion proves persisted database values and cardinality only; it adds no
+  independent payload-byte or signature-byte proof.
+
+  TNPM18 step 9 (index 8) uses one parameterized SQLite SELECT of every
+  `phase4-daily-driver-corpus` trove, LEFT JOINs its lifecycle bundle, and
+  orders by trove ID. One Python `tomllib` pass parses each non-null
+  `bundle_toml` and emits an exact root JSON array. The one-row expectation
+  pins updated trove name, version `1.0.1-1`, lane architecture, version
+  scheme, and source profile; persisted bundle source format, package,
+  version, and `installed` state; and parsed schema
+  `conary.native-lifecycles.v1` and revision `20`. The integer
+  `source_checksum_matches_fixture = 1` compares the parsed top-level
+  `source_checksum` to `sha256:` plus `NATIVE_UPDATE_SOURCE_SHA256` from the
+  prepared v2 native artifact. `NATIVE_UPDATE_CCS_SHA256` is a separate CCS
+  digest. Missing bundles project null bundle fields and checksum match `0`,
+  extra same-name troves add rows, and malformed TOML exits nonzero. This is
+  persisted data and cardinality proof, not independent signature-byte
+  verification.
+
+  Each native package is independently
   installed or extracted and both hardlink paths must report one device/inode
   identity with a link count of two, uid/gid `0`, and mtime `1700000000` before
   Conary installation begins. The selected-generation proof then requires both

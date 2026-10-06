@@ -615,6 +615,7 @@ fn test_load_phase1_advanced_manifest() {
 }
 
 mod native_corpus;
+mod typed_advisory;
 
 #[test]
 fn derivative_acceptance_manifest_covers_takeover_and_native_apt() {
@@ -669,7 +670,9 @@ fn phase4_security_advisory_pipeline_manifest_carries_trusted_update_contract() 
         "TEST-2026-0001",
         "--security-advisories unknown",
         "--security-advisories supported",
-        "trusted source: conary-json",
+        "--default-strategy binary",
+        "--ccs-package-key ${FIXTURE_CCS_PUBLIC_KEY}",
+        "source: conary-json (feed trust claim: trusted)",
     ] {
         assert!(
             rendered.contains(required),
