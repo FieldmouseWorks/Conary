@@ -280,11 +280,13 @@ pub fn setup_command_test_db() -> (TempDir, String) {
             VersionScheme::Conary,
         );
         p3.insert(tx)?;
-        let mut p4 = ProvideEntry::new(
+        let mut p4 = ProvideEntry::new_typed(
             openssl_id,
-            "soname(libssl.so.3)".to_string(),
+            conary_core::repository::dependency_model::RepositoryCapabilityKind::Soname,
+            "libssl.so.3".to_string(),
             None,
             VersionScheme::Conary,
+            Default::default(),
         );
         p4.insert(tx)?;
 

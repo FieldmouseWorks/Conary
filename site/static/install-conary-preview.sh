@@ -92,6 +92,18 @@ if [[ "$apply" == true && "$assume_yes" != true ]]; then
     die "installation requires explicit --apply --yes confirmation"
 fi
 
+# Native package transactions need root; derive the prefix before any download
+# so a root host without sudo never reaches the network.
+effective_uid="$(id -u)"
+privilege=()
+if [[ "$effective_uid" != 0 ]]; then
+    if command -v sudo >/dev/null 2>&1; then
+        privilege=(sudo)
+    else
+        die "run this installer as root or install sudo"
+    fi
+fi
+
 for command in curl sha256sum base64 openssl stat uname mktemp readlink; do
     command -v "$command" >/dev/null 2>&1 || die "required command is unavailable: $command"
 done
@@ -296,7 +308,7 @@ actual_digest="$(sha256sum "$artifact_path" | awk '{print $1}')"
 
 case "$selected_format" in
     # DNF5 exact local install already upgrades/downgrades the target (see release matrix).
-    rpm) install_command=(sudo dnf install -y "$artifact_path") ;;
+    rpm) install_command=("${privilege[@]}" dnf install -y "$artifact_path") ;;
     deb)
         # Read native versions from verified bytes and the native installed database.
         requested_native="$(dpkg-deb --field "$artifact_path" Version)" || die "cannot read Debian package version"
@@ -317,9 +329,9 @@ case "$selected_format" in
             query_status=$?
             [[ "$query_status" -eq 1 ]] || die "cannot query installed Debian package"
         fi
-        install_command=(sudo apt-get install -y "${downgrade_options[@]}" -- "$artifact_path")
+        install_command=("${privilege[@]}" apt-get install -y "${downgrade_options[@]}" -- "$artifact_path")
         ;;
-    arch) install_command=(sudo pacman -U --noconfirm -- "$artifact_path") ;;
+    arch) install_command=("${privilege[@]}" pacman -U --noconfirm -- "$artifact_path") ;;
     *) die "internal unsupported package format" ;;
 esac
 

@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-09-25
-revision: 74
-summary: Define the Podman container integration harness, its prerequisites, running suites, fixtures, and result/proof contracts
+last_updated: 2026-10-04
+revision: 109
+summary: Define the Podman integration harness and proof contracts, including immutable release-backed base-image acquisition, TNPM05 whole-root provider JSON, TNPM14 repository-dependency rows, TNPM15 regular-file and activation rows, TNPM18 repository and post-update lifecycle rows, and Group I exact-name package absence
 ---
 
 # Integration Testing
@@ -354,6 +354,16 @@ mutated, so failures exercise their named integrity boundary. Failing
 post-install scriptlet fixtures must return nonzero and leave package database
 state and payload absent.
 
+Phase 3 Group I `T100`-`T102` step 2 queries `troves` by the exact fixture names
+`proc-environ`, `adversarial-hostile-scriptlet`, and `outside-root-write`,
+respectively. Each `sqlite3 -json` query must exit successfully, and one
+`stdout_json` assertion at the root pointer (`""`) requires the complete array
+`[{"installed":0}]`: one row, an integer zero, and no extra fields. This count
+proves only absence of the named database trove. The failed-install and
+`file_not_exists` steps separately check refusal and listed payload paths;
+manifest parsing and disposable SQLite predicate checks do not establish live
+container behavior.
+
 From a checkout, use
 `cargo run -p conary-test -- bootstrap check --json` before smoke validation to
 inspect local prerequisites such as Cargo, manifest availability, container
@@ -616,6 +626,106 @@ capabilities. Synthesized parent directories are generation layout rather than
 file providers. The RPM lane also retains the generator-authored
 `config(phase4-runtime-fixture) = 1.0.0-1` dependency as one typed RPM
 requirement group; DEB and Arch retain no dependency groups for this fixture.
+
+`TNPM04` reads these persisted facts through individual `sqlite3 -json`
+queries. Each assertion compares the entire row array, including integer
+counts, payload sizes and modes, exact identity/hash/source fields, and
+ordered file/provider sets. For the three counts that differ between distro
+lanes, SQLite subtracts the pinned fixture count from the same database count;
+the entire result must be one row with integer `count_delta = 0`. Other counts
+remain direct integer results. Splitting the former multi-query commands keeps
+their read order and emits one JSON document per step. The dependency probe
+checks the exact stored serialization as a JSON string; it does not parse the
+embedded requirement record for an additional semantic claim.
+
+The package-provider query groups the original projected capability, version,
+and kind fields and retains their multiplicity in the integer count delta.
+Fedora has two matching projected rows: the exact identity and a source-declared
+same-name RPM header provide. The DEB and Arch fixtures have one. A missing or
+extra matching row changes the delta; a foreign tuple adds a group and fails
+the entire-array comparison. This projection checks values and multiplicity;
+it does not distinguish provenance roles. The role distinction belongs to the
+[native capability contract](modules/ccs.md) and the daily-driver corpus.
+
+`TNPM05` step 4 runs `query whatprovides phase4-runtime-fixture --json` after
+the native fixture install. Its single whole-root schema-v1 assertion requires
+the requested capability, exactly one installed provider named
+`phase4-runtime-fixture`, the lane's exact native fixture version,
+architecture, and version scheme, CCS release `1`, a null repository, only the
+fixture version in `capability_versions`, and integer `provider_count = 1`. Focused
+`cargo test -p conary-test native_parity_whatprovides_` loads the manifest for
+Fedora 44, Ubuntu 26.04, and Arch and checks that the assertion rejects extra
+or near-name providers, wrong identity or types, malformed or concatenated
+JSON, and a failed command. This local test proves the loaded assertion; the
+full native parity suite must run in each container lane to observe command
+output. The query result does not independently establish artifact bytes,
+install source, or provide provenance; `TNPM04` and selected-generation checks
+cover those separate facts.
+
+`TNPM06` and `TNPM08` read the same package's `troves` count through
+`sqlite3 -json` after the selected-generation checks. The refused pinned
+removal must leave exactly one row; the completed removal must leave zero.
+Each whole-array assertion requires one JSON object with an integer `installed`
+count, rejecting extra rows, wrong types, and rendered counts such as
+`11 installed` or `10 installed`. The focused `native_parity_pin_remove_` controls
+exercise those loaded assertions; the full native parity suite executes the
+queries against the package database. These counts establish presence and
+absence for that package name, not its version or source provenance.
+
+`TNPM07` reads the enrolled update repository and the updated package row with
+`sqlite3 -json` at their existing positions. Before the update, the joined
+repository/package/key query requires exactly one row with the binary strategy,
+target profile, package name, update version, version scheme, architecture, and
+active key status. After the update and selected-generation hash check, the
+trove query requires exactly one row with the package name, updated version,
+architecture, scheme, and profile. Whole-array equality rejects extra key or
+package rows and a second installed version that pipe-delimited substring
+matching could accept. Focused `native_parity_update_` controls exercise the
+loaded assertions; the full parity suite runs the queries in each container
+lane. The two reads establish enrollment and installed identity separately.
+They do not bind the trove to that repository ID or verify signature bytes.
+
+`TNPM09` requires the install step to exit zero; rendered output is diagnostic
+and does not determine deferred state. It projects the latest matching install
+changeset's versioned metadata through SQLite JSON and requires one
+`deferred_follow_up` array entry with the exact generation-publication kind,
+pending status, and pending message. The projection does not check the retry
+command or other metadata fields. It reads
+the same latest failed publication row separately and requires its exact status
+and error, with integer retry and recoverable fields. Focused
+`native_parity_deferred_` controls reject a resolved follow-up that the old
+substring check accepted, along with wrong values, types, row shape, malformed
+JSON, and failed commands. The existing `native_parity_sql_` controls exercise
+the publication-row and `TNPM04` assertions. The full native parity suite runs
+the actual SQLite queries in each container lane.
+
+`TNPM10` checks the repository install's persisted state with two ordered
+`sqlite3 -json` queries. The first requires exactly one row with integer
+`repo_troves = 1` for the package name. The second requires exactly one row
+with that package name, the joined repository name, source profile, version
+scheme, install source `repository`, and install reason `explicit`. It retains
+the left join and the original null-to-empty projections. Whole-array JSON
+comparison rejects extra rows or fields, wrong types, and provenance from
+another package or repository. The focused `native_parity_repo_` controls
+exercise the loaded assertions; the full parity suite exercises the SQLite
+queries against the installed state. Its CLI list checks still cover displayed
+query output.
+
+`TNPM12` establishes its orphan with strict model apply and
+`--no-autoremove`, then previews `autoremove --dry-run --json`. Its typed
+assertion requires the `package.autoremove.plan` operation, `planned` status,
+schema version 2, and the exact single removable package/version/release/
+architecture/round record for each distro lane before the follow-up mutation.
+`native_parity_autoremove_preview_requires_the_exact_typed_plan` evaluates that
+assertion against positive and malformed plan controls for Fedora 44, Ubuntu
+26.04, and Arch. After apply and the selected-generation absence check,
+`TNPM12` queries the same package's remaining trove rows with SQLite JSON
+output. The entire result must be exactly `[{"installed":0}]`, including its
+integer type and single-row shape; rendered text such as `10 installed` cannot
+prove a zero count. The focused `native_parity_autoremove_` tests cover both
+the preview plan and final-state assertion, including wrong counts, types,
+cardinality, malformed output, and failed commands.
+
 Single-package and batch installs use the same payload-path projection before
 persisting installed resolution authority. The local native install supplies
 its exact source identity with `--from`; Conary persists that identity without
@@ -624,9 +734,10 @@ can select only the matching enrolled repository. The signed update
 fixture enrolls its binary JSON repository, exact source profile, and CCS
 package key through `conary repo add`; it does not mutate protected SQLite
 authority out of band. The focused
-`phase4-native-daily-driver-corpus` manifest owns `TNPM13` through `TNPM19`
-without inheriting prior parity state. It builds a bounded signed loopback CCS
-repository, then builds a package in the host-native format and proves:
+`phase4-native-daily-driver-corpus` owns `TNPM13` through `TNPM32` without
+inheriting prior parity state. Its first seven cases build a bounded signed
+loopback CCS repository, then build a package in the host-native format and
+prove:
 
 - systemd unit file deployment and trigger matching
 - tracked `/etc` config file metadata
@@ -634,14 +745,21 @@ repository, then builds a package in the host-native format and proves:
   v2 native artifact through a bounded signed loopback repository
 - one exact native versioned dependency resolved by SAT, acquired from the
   synchronized repository, signature-verified, and installed with dependency
-  reason and source provenance
+  reason and source provenance. TNPM14 step 3 reads every persisted
+  `phase4-repository-fixture` row from the root database, ordered by `t.id`,
+  and compares the complete `sqlite3 -json` array to one expected row pinning
+  name, version, release, architecture, version scheme, joined repository
+  name, source profile, install source, and install reason. Whole-array
+  equality rejects an extra same-name row at another version. This proves
+  persisted identity, repository/source provenance, reason, and cardinality;
+  the query does not independently verify signature bytes.
 - one source-declared same-name compatibility provide at version `1.0`, kept
   distinct from the native package's exact version in native metadata,
-  installed capability provenance, and `whatprovides` output
+  installed capability provenance, and typed `whatprovides` JSON results
 - an exact installed native-lifecycle bundle plus install/remove hook effects
 - system user and group creation in the selected generation
-- an explicit mode-0750 directory and an exact relative symlink through native
-  package metadata and the selected generation
+- explicit mode-0750 directories and an exact relative symlink staged into the
+  native fixture and checked in the selected generation
 - exact root ownership and whole-second mtime on both members of one hardlink
   set, first through independent native extraction and then through typed
   selected-generation node authority
@@ -651,6 +769,106 @@ repository, then builds a package in the host-native format and proves:
 - a QEMU-safe kernel-adjacent `kernel/install.d` file without mutating boot state
 - an alternative target binary (`/usr/bin/phase4-corpus-alt`) as packaged file
   coverage
+
+`TNPM16` checks the complete `query whatprovides --json` result for both the
+package name and its virtual provide. Each result must contain exactly one
+installed provider with the native package's version, architecture, and
+version scheme, the converted CCS release `1`, and the expected capability
+versions and provider count.
+The query result does not establish install source or provide provenance;
+`TNPM15` checks those facts against native metadata and persisted state.
+Its first persisted-state check requires one complete SQLite JSON row for
+`phase4-daily-driver-corpus`, with the expected version, native architecture,
+version scheme, source profile, `file` install source, and `explicit` install
+reason. Whole-array equality also rejects another trove with the same name;
+the name-filtered check does not count unrelated installed packages.
+TNPM15 step 2 requires one trove-scoped `sqlite3 -json` query whose whole-array
+result is the complete nine-row regular-file set for
+`phase4-daily-driver-corpus`, ordered by path. Each row pins its exact path,
+typed `regular` kind, integer persisted `content_size`, and persisted SHA-256.
+The regular hardlink member is `/usr/lib/phase4-corpus/hardlink-copy` on Fedora
+and `/usr/lib/phase4-corpus/hardlink-anchor` on Ubuntu and Arch; the other
+member is persisted as a hardlink. These fields are persisted row values: the
+assertion does not rehash host filesystem bytes or prove execution of a host
+action.
+Its directory and symlink check requires exactly three ordered persisted rows
+for that trove: `/opt` and `/usr/lib/phase4-corpus/state` must each be a
+directory with integer POSIX mode `16872` (directory type plus `0750`
+permissions), and `/usr/bin/phase4-corpus-link` must be a symlink with the
+exact relative target `phase4-corpus`. The query checks those three paths and
+does not assert the total directory or symlink count. `TNPM13` constructs the
+native fixture from those staged nodes; `TNPM14` separately checks all three
+nodes in the selected generation.
+Its persisted hardlink check requires one hardlink node for that trove, both
+`hardlink-anchor` and `hardlink-copy` to be regular or hardlink members, and
+exactly one of those named members to be a hardlink. Either path may own the
+regular payload across source formats. Native extraction and the selected-
+generation node checks establish their shared inode, target, and identity.
+TNPM15's separate persisted requirement-group check requires one complete JSON
+row for the named trove and its `phase4-repository-fixture` dependency. The row
+fixes the installed identity, SQL `depends` kind and native version scheme,
+typed `Depends`/`Hard` atom with the exact `= 1.0.0` constraint and one
+matching alternative. It also checks native source text for each format and a
+trove-scoped total-group count of four on Fedora or one on Ubuntu and Arch.
+The name-based join keeps an `optional` replacement visible so whole-row
+equality rejects it. The count does not claim the semantics of Fedora's three
+other requirement groups.
+Its config-row check requires exactly three rows for that trove, ordered by path:
+`app-deleted.conf`, `app-local.conf`, then `app.conf`. Each row has integer
+`noreplace` value `1`, `pristine` status, and the native config source (`rpm`,
+`deb`, or `arch`). The trove-filtered check does not count unrelated config
+rows. Its same-name provide check requires two exact ordered persisted JSON
+rows for that trove: the installed exact-identity package provide and the
+native source-declared version `1.0` package provide. It fixes their `eq`
+relation, native version scheme, implicit architecture qualifier, and typed
+provenance role; the declaration also requires the native format and an
+integer record index type. Whole-array equality rejects a second version
+`1.0` declaration with a different record index. The query does not count
+other same-name versions, including a possible RPM header self-provide.
+This existing step-7 same-name provide proof remains unchanged.
+Its step-8 lifecycle assertion uses one trove-scoped `sqlite3 -json` query
+with a `LEFT JOIN` to require exactly one JSON row for the persisted native
+lifecycle bundle. Whole-array equality pins the trove name and version,
+architecture, and source profile, plus the bundle's source format, source
+family, source profile, source architecture, package, version,
+`native-lifecycle` scriptlet fidelity, and `installed` state. The expected
+bundle format/family/profile/architecture tuples are `rpm/rpm/fedora-44/x86_64`
+on Fedora, `deb/deb/ubuntu-26.04/amd64` on Ubuntu, and
+`arch/arch/arch/x86_64` on Arch. Bundle package and version must match the trove
+name and version. Its `same_changeset` projection must equal JSON integer `1`,
+proving equality between the bundle's `installed_changeset_id` and the trove's
+`installed_by_changeset_id`. This assertion covers the row's scalar metadata
+and lineage only; it does not parse or verify `bundle_toml` or its digest.
+Step 9 uses one trove-scoped `sqlite3 -json` whole-array assertion with
+exactly two ordered rows. Both bind the installed
+`phase4-daily-driver-corpus` trove and version to requests for its install
+changeset, native source version, and source entry (`rpm:%post`,
+`deb:postinst`, or `arch:post_install`). The publication join requires that
+changeset's terminal, nonrecoverable `database_backed_up` publication to
+be complete; its published-through changeset high-water must include the
+request. Each request has a `pending` intent in that same generation with
+attempt count `0` and null error, start, and completion fields. The rows pin
+the tagged `systemd` invocation to action `start` and one
+`phase4-corpus.service` unit, and the tagged `boot-runtime` invocation to
+program `depmod`, one `-a` argument, integer schema version `1`, and invoked
+path `/usr/sbin/depmod`; fields for the other variant are null. The check
+makes no global intent-count claim because a request may be projected into
+later generations. Persisted intent rows do not establish that a host
+action ran.
+Its final persisted-state check requires the latest named
+`phase4-corpus-trigger` changeset result to be one exact JSON row with
+`completed` status and integer `matched_files` value `1`. The query selects
+only that trigger's latest result; it does not assert that earlier results are
+absent. The other `TNPM15` persisted-state checks cover files and dependencies.
+
+`TNPM17` refuses a native package whose file content conflicts with the
+installed corpus package. The rejection helper checks the unchanged database
+authority digest, selected-generation link and count, and activation request
+and intent counts; a separate selected-generation check pins the original file
+hashes. One `sqlite3 -json` statement requires the complete persisted count
+result `[{"installed":1,"conflicts":0}]`: `installed` counts the original and
+conflicting package names, while `conflicts` counts only the conflicting name.
+The counts must be JSON integers in exactly one row with no extra fields.
 
 `TNPM16`, `TNPM18`, and `TNPM19` make the chain visible to the typed W7 aggregator. The
 install record reopens both builders' schema-versioned output manifests,
@@ -662,8 +880,8 @@ binds pristine config-upgrade coverage to `install_request` plus
 from a bounded repository, and must preserve the native checksum in the
 installed lifecycle bundle while its repository checksum, selected-generation
 config bytes, and persisted pristine config hashes agree. The removal record
-binds to the installed v2 update request. Across the three completed cases the
-suite declares exactly eighteen properties: exact version, native architecture,
+binds to the installed v2 update request. Those three completed cases declare
+exactly eighteen properties: exact version, native architecture,
 regular files, directories, symlinks, hardlinks, payload ownership, payload
 timestamps, a versioned dependency, a queried virtual provide, a queried
 source-declared same-name compatibility provide, matched config, a newly
@@ -681,6 +899,57 @@ the target transaction; it does not infer a named identity from RPM's display
 metadata. The source format comes from the explicit distro build-context
 override and must resolve to the closed RPM/DEB/ALPM type before evidence can
 count.
+
+Before TNPM18 mutates the installed generation, step 2 (index 1) reads the
+prepared update repository through one `sqlite3 -json` query. Its root-array
+assertion requires exactly one joined package/key row for
+`w7-native-update`, ordered by repository package ID and public key. It pins
+the `binary` default strategy,
+the lane's source profile, `phase4-daily-driver-corpus` at version `1.0.1-1`,
+the lane's version scheme and architecture, an integer `1` comparison of the
+persisted package checksum with the prepared fixture's
+`NATIVE_UPDATE_CCS_SHA256`, and `active` key status. Another package or key
+in that repository adds a row and fails the whole-array comparison even when
+the expected row remains. This proves persisted metadata and row cardinality;
+it does not independently verify signature bytes.
+
+TNPM18 step 8 replaces its text match with one `sqlite3 -json` query and a
+whole-array comparison ordered by trove ID. The exact one-row result pins the
+updated `phase4-daily-driver-corpus` trove at version `1.0.1-1` and its
+`/etc/phase4-corpus/app.conf` row. It pins trove architecture, version scheme,
+source profile, repository `w7-native-update`, repository install source, and
+explicit install reason. The config row's package name, version, and
+architecture match the updated trove; its original and current hashes both
+equal `97d836d4bf6c4c49fa763836c117d738fef15b7d995bc2cf82e2a02704364d27`,
+`noreplace` is integer `1`, and status is `pristine`. `config_owner_match = 1`
+proves this row's `trove_id` matches the trove. `related_config_rows = 4`
+counts rows whose `trove_id` matches the trove or whose `package_name` matches
+the package; it is not an owner-only count. Since the query includes every
+trove with that name, another version adds a row and fails whole-array
+equality. The lane values are Fedora/RPM (`x86_64`, scheme `rpm`, profile
+`fedora-44`, config source `rpm`), Ubuntu/DEB (`amd64`, scheme `debian`,
+profile `ubuntu-26.04`, config source `deb`), and Arch (`x86_64`, scheme
+`arch`, profile `arch`, config source `arch`; the separate corpus evidence
+format remains `alpm`). This assertion proves the persisted database
+projection only; it adds no independent payload-byte or signature-byte proof.
+
+TNPM18 step 9 (index 8) reads the installed lifecycle bundle through one
+parameterized SQLite SELECT of every `phase4-daily-driver-corpus` trove,
+LEFT JOINs bundles by trove ID, and orders by trove ID. Python `tomllib`
+parses each non-null `bundle_toml`; malformed TOML fails the command. One
+root-array comparison requires exactly one updated trove and one joined
+bundle. It pins trove name, version `1.0.1-1`, architecture, version scheme,
+and source profile; persisted bundle source format, source package, source
+version, and `installed` state; and parsed bundle schema
+`conary.native-lifecycles.v1` and revision `20`. The integer
+`source_checksum_matches_fixture = 1` compares only the parsed top-level
+`source_checksum` with `sha256:` plus `NATIVE_UPDATE_SOURCE_SHA256` from the
+prepared v2 native source artifact. The CCS digest is distinct and is not
+this comparison's authority. A missing bundle projects null bundle fields
+and checksum match `0`; an extra same-name trove adds a row. Both fail the
+exact array. This proves persisted data and cardinality, including the
+bundle's recorded native checksum. It does not independently verify
+signature bytes.
 
 The three configuration-state claims ride the same v1-to-v2 signed update and
 stay format-typed. Before the update the fixture stages an exact local edit on
@@ -707,19 +976,43 @@ removes the primaries (including the RPM ghost path) and the Debian backup
 suffixes, while the ALPM declaration-only path and the RPM `.rpmnew` and ALPM
 `.pacnew` auxiliaries remain byte-exact, matching the source contracts.
 
+`TNPM19` then requires one SQLite JSON row with integer zero installed troves
+for `phase4-daily-driver-corpus` and zero persisted config rows among its four
+named primary paths. The config count is global to those paths, so a row with a
+cleared trove ID still fails; it does not cover unrelated paths or the
+auxiliary suffix files checked separately above.
+
 RPM export emits a directory entry when its mode differs from the implicit
 0755 parent contract or no descendant can create it. Default-mode parents of
 payload entries remain implicit so generated packages do not claim shared
 target paths such as `/usr/bin` from the native filesystem package.
 
-Several useful assertions deliberately remain outside semantic coverage. The
-2 MiB zero-filled file is not W7 large-file/resource-boundary proof; the
+`TNPM20` through `TNPM32` add separately pinned native artifacts for identity,
+sparse and large files, xattrs, file capabilities, typed relations, lifecycle,
+trust, runtime actions, and failure boundaries. The completed corpus emits 17
+attributable case records and requires all 44 declared semantic properties.
+`TNPM21` checks the installed file-capability database as an exact typed JSON
+result: one path, one capability, and the three persisted flags must match the
+source artifact, with no additional row or capability. Its separate
+selected-generation assertion checks the `security.capability` xattr.
+
+`TNPM22` checks the persisted RPM relations as one exact typed JSON
+result for the named installed trove. It requires exactly one `conflict` for
+`phase4-w7-conflict < 2` and one `obsolete` for
+`phase4-w7-replaced <= 1`, each with the RPM version scheme and matching
+typed expression and alternative. Missing or extra negative relation rows,
+duplicate same-name troves, and changed constraints or schemes fail the assertion.
+
+Several useful assertions in `TNPM13` through `TNPM19` deliberately remain
+outside semantic coverage for those cases. The 2 MiB zero-filled file is not
+W7 large-file/resource-boundary proof; the
 Conary changeset trigger is not a source-package trigger; the disabled systemd
 unit is not activation; the kernel-adjacent file is not an executed target
 helper; and a conflicting-content refusal is not a declared native relation
 conflict. Root ownership does not establish xattr or capability coverage, and
 selected-generation metadata does not establish live-root materialization.
-Those properties still require fixtures that prove their exact contracts.
+The later cases attribute these properties through their own pinned artifacts
+and exact contract checks.
 
 The PR gate also runs the focused `phase4-native-daily-driver-corpus` manifest on
 Fedora 44, Ubuntu 26.04, and Arch in a non-fail-fast matrix, then applies both
@@ -784,6 +1077,59 @@ authority, container support, an exact trace match, or an image build fails its
 matrix job; there is no manifest skip fallback. A stable
 `native-cross-source-lifecycle` aggregator fails unless every distro matrix job
 succeeds.
+
+### Retaining reviewed base images
+
+`scripts/ci-base-images.json` binds the Tumbleweed `20260908` linux/amd64
+source manifest digest and platform to one immutable public release asset. The
+catalog pins the release repository, tag, unique asset name, archive SHA-256,
+size, and job-local runtime reference. The runtime reference uses
+`127.0.0.1:55071` with the **same manifest digest** as the original image.
+Package, repository-snapshot and signing-root bindings are unchanged. The
+catalog does not authorize a new snapshot or infer authority from a cache name.
+
+For this image, `.github/actions/cache-base-image` always queries the public
+release metadata anonymously, requires an immutable non-draft release and the
+exact asset digest and size, and downloads from the URL derived from the
+checked-in repository, tag and asset. It verifies the archive SHA-256, safely
+restores the exact OCI directory, and checks its pinned manifest, config,
+layers and platform. Skopeo seeds a Distribution registry bound only to the
+job's loopback port with `--preserve-digests`; an anonymous read-back verifies
+the seeded bytes. The action bypasses its image-archive cache for this lane and
+requires a fresh anonymous `docker pull` by digest and matching `RepoDigests`
+before `conary-test images build`. The registry remains alive through the
+Docker `FROM` and is stopped at the end of the job. No registry write token is
+available to pull-request jobs. The public release asset is the retained byte
+authority; a mutable tag, a stale cache and the retired upstream manifest
+cannot replace it.
+
+The dedicated release is `ci-base-971-tumbleweed-20260908`; its asset is
+`opensuse-tumbleweed-20260908-oci-dir.tar` with SHA-256
+`db4dce3794bc93d307dacac63905ab3c11d360a22b24b1cf0dce97f5e38e2824`.
+The helper's `stage` command can still diagnose the declared original registry
+when available, but the Tumbleweed manifest has retired. Changing compression,
+accepting a different manifest, or trusting an unpacked cache is not recovery
+of the pinned image. Keep the immutable asset available as long as its source
+digest is configured. A refresh reviews a new source pin with its matching
+root, package, repository and signing authority and preserves its complete
+bytes before changing the consumer. This first entry does not claim that
+other distro images have already been retained.
+
+For a local Tumbleweed image build, install Skopeo and Distribution, run
+`python3 scripts/ci-base-image.py prepare --image opensuse-tumbleweed --workdir /tmp/conary-ci-base-opensuse-tumbleweed`,
+then use `conary-test images build --distro opensuse-tumbleweed`. Stop the local
+registry with `python3 scripts/ci-base-image.py cleanup --workdir /tmp/conary-ci-base-opensuse-tumbleweed`.
+The chosen workdir must be new and the fixed loopback port must be free.
+
+`python3 scripts/test-ci-base-image.py -v` runs archive, metadata, digest,
+platform and catalog refusals. Its real disposable Distribution registry test
+proves an origin manifest returns 200, deletes it and confirms 404, then
+deletes the release fixture and source OCI directory after local seeding. It
+proves cold anonymous acquisition by the original manifest digest. The proof
+runs in required `ci-base-image-policy` with Skopeo and `docker-registry` and
+gates the workspace-test shards. It executes no image or package workload and
+uses no host container store. Plain HTTP is limited to a literal loopback
+registry; release downloads retain certificate verification.
 
 The Artix lane keeps both sides of its rolling package view deliberate: the OCI
 base is digest-pinned, and the container selects Artix's two official core
@@ -871,16 +1217,23 @@ Focused Goal 3 security advisory pipeline proof:
 
 - `cargo run -p conary-test -- run --suite phase4-security-advisory-pipeline --distro fedora44 --phase 4`
 
-The `phase4-security-advisory-pipeline` manifest builds a v1/v2 native fixture
-and serves JSON repository metadata with a feed-authored
+The `phase4-security-advisory-pipeline` manifest installs a native v1 fixture,
+builds a signed CCS v2, and serves JSON repository metadata with a feed-authored
 `security_advisory_source`. Feed `trust` and `source_trust` strings are
-diagnostic only. The suite proves an `unknown` local source refuses before
+diagnostic only; the enrolled CCS package key authenticates the update artifact.
+The suite proves an `unknown` local source refuses before
 mutation, then syncs the same repository after the operator authorizes it with
 `--security-advisories supported`. It verifies persisted severity, CVE,
-advisory ID, fixed version, and feed trust-claim metadata before
-`conary update --security` applies the locally authorized fix.
+advisory ID, fixed version, and feed trust-claim metadata as one exact typed
+SQLite result before `conary update --security` applies the locally authorized
+fix. The result is scoped to the named repository and package version, includes
+the local `supported` decision and native architecture, and rejects extra rows
+or changed advisory values.
 
-Fresh Goal 3 evidence from May 19, 2026:
+The v1 local install names its exact native source with `--from`; update
+selection follows that persisted source without a direct database write.
+
+Earlier Goal 3 evidence from May 19, 2026:
 
 - Fedora 44/RPM: `phase4-security-advisory-pipeline`, 7 passed, 0 failed, 0
   skipped, 0 cancelled.
@@ -1030,7 +1383,7 @@ Adversarial and stress tests.
 
 ### Phase 4: Feature Validation
 
-Phase 4 currently contains 153 tests across nine manifests. It validates the
+Phase 4 currently contains 166 tests across nine manifests. It validates the
 active, user-facing command surface and checks that claimed features still match
 the current binary. Where a flow is intentionally preview-only or not yet
 implemented, the manifest asserts that it fails cleanly with an explicit
@@ -1044,7 +1397,7 @@ message rather than pretending it is production-ready.
 | D | T221-T255 plus suffix IDs | 38 | Provenance, capability, trust, system ops, federation, automation |
 | E | T256-T273 and T276-T277 plus suffix IDs | 22 | Cross-source compatibility overlay: native package parity, source identity, model convergence, and takeover |
 | Native package-manager parity | TNPM01-TNPM12 plus TNPM02X | 13 | Cross-distro repository and native package-manager parity |
-| Native daily-driver corpus | TNPM13-TNPM19 | 7 | Focused attributable host-native daily-driver semantics |
+| Native daily-driver corpus | TNPM13-TNPM32 | 20 | Focused attributable host-native daily-driver semantics |
 | Native cross-source lifecycle | TNPMX01R, TNPMX01D, TNPMX01A, TNPMX02O | 4 | Attributable native-oracle install/update/rollback/remove corpus evidence plus OpenRC activation proof on every target image |
 | Security advisory pipeline | TSEC01-TSEC07 | 7 | Trusted advisory ingestion and security update proof |
 

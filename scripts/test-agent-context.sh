@@ -228,6 +228,18 @@ nohint_out="$("$script" --path zzz/nowhere.c --map "$fixture_map")"
 grep -q '^No feature-card hint matched' <<<"$nohint_out" \
     || fail "unmatched path did not print the no-hint message"
 
+# The real ownership map must assign each helper and test to its expected owner.
+for helper_path in \
+    scripts/agent-proof.py \
+    scripts/test-agent-proof.py \
+    scripts/agent-intake.py \
+    scripts/test-agent-intake.py
+do
+    helper_packet="$("$script" --path "$helper_path")"
+    grep -q '^slug: agent-workflow-tools$' <<<"$helper_packet" \
+        || fail "$helper_path did not route to agent-workflow-tools"
+done
+
 # --- --changed and --changed --all collection (fixture git repo) ---
 
 changed_repo="$tmp/changed-repo"

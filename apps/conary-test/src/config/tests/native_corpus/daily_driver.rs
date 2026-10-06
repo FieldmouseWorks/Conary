@@ -3,6 +3,7 @@
 #![cfg(test)]
 
 use super::{conary_fixture_path, load_manifest, remi_manifest_path};
+use crate::config::manifest::JsonExpectation;
 use conary_core::packages::{PackageFormat, traits::NativeLifecyclePath};
 
 #[test]
@@ -92,20 +93,124 @@ fn phase4_daily_driver_corpus_manifest_proves_remaining_configuration_states() {
         "daily-driver corpus tests must not rely on flaky majority voting"
     );
 
-    for (test_id, owner) in [("TNPM04", &parity_manifest), ("TNPM15", &manifest)] {
-        let metadata_test = owner
-            .test
-            .iter()
-            .find(|test| test.id == test_id)
-            .unwrap_or_else(|| panic!("missing {test_id} native metadata test"));
-        let metadata_rendered = format!("{metadata_test:?}");
+    let parity_metadata = parity_manifest
+        .test
+        .iter()
+        .find(|test| test.id == "TNPM04")
+        .expect("missing TNPM04 native metadata test");
+    let regular_file_query = parity_metadata
+        .step
+        .iter()
+        .find(|step| {
+            step.run.as_deref().is_some_and(|command| {
+                command.contains("FROM files") && command.contains("ORDER BY path")
+            })
+        })
+        .expect("TNPM04 must retain its path-ordered regular-file rows");
+    let regular_file_command = regular_file_query.run.as_deref().unwrap();
+    assert!(regular_file_command.starts_with("sqlite3 -json ${DB_PATH} \"SELECT "));
+    assert!(
+        regular_file_command
+            .contains("json_extract(payload_node_json, '$.source.kind.type') = 'regular'"),
+        "TNPM04 must exclude directory payload rows from regular-file metadata"
+    );
+    assert!(
+        regular_file_query
+            .assert
+            .as_ref()
+            .and_then(|assertion| assertion.stdout_json.as_ref())
+            .is_some(),
+        "TNPM04 regular-file rows must use typed JSON assertions"
+    );
+
+    let daily_metadata = manifest
+        .test
+        .iter()
+        .find(|test| test.id == "TNPM15")
+        .expect("missing TNPM15 native metadata test");
+    let regular_files = &daily_metadata.step[1];
+    assert!(
+        regular_files.run.as_deref().is_some_and(|command| command
+            .contains("json_extract(payload_node_json, '$.source.kind.type') = 'regular'"))
+            && regular_files
+                .assert
+                .as_ref()
+                .and_then(|assertion| assertion.stdout_json.as_ref())
+                .is_some(),
+        "TNPM15 must continue distinguishing regular files from directory payload rows"
+    );
+    let daily_metadata_rendered = format!("{daily_metadata:?}");
+    assert!(
+        !daily_metadata_rendered.contains("1 lifecycle bundles")
+            && !daily_metadata_rendered.contains("SELECT source_format || '|' || source_package"),
+        "TNPM15 must not restore the obsolete lifecycle substring proof"
+    );
+    assert!(
+        daily_metadata.step[7]
+            .assert
+            .as_ref()
+            .and_then(|assertion| assertion.stdout_json.as_ref())
+            .is_some(),
+        "TNPM15 lifecycle metadata must use typed JSON assertions"
+    );
+    let activation = &daily_metadata.step[8];
+    let activation_command = activation.run.as_deref().expect("TNPM15 activation query");
+    assert!(activation_command.starts_with("sqlite3 -json ${DB_PATH} \"SELECT "));
+    assert_eq!(activation_command.matches("SELECT ").count(), 1);
+    assert!(!activation_command.contains(';'));
+    for join in [
+        "LEFT JOIN activation_requests AS r",
+        "LEFT JOIN generation_publications AS gp",
+        "LEFT JOIN generation_activation_intents AS i",
+        "i.generation_number=gp.generation_number",
+    ] {
         assert!(
-            metadata_rendered.contains("regular files")
-                && metadata_rendered
-                    .contains("json_extract(payload_node_json, '$.source.kind.type') = 'regular'",),
-            "{test_id} must distinguish typed regular files from directory payload rows"
+            activation_command.contains(join),
+            "TNPM15 activation must bind {join}"
         );
     }
+    let activation_assertion = activation
+        .assert
+        .as_ref()
+        .expect("TNPM15 activation assertion");
+    assert_eq!(activation_assertion.exit_code, Some(0));
+    assert!(activation_assertion.stdout_contains_all.is_none());
+    let [root] = activation_assertion
+        .stdout_json
+        .as_deref()
+        .expect("typed activation JSON")
+    else {
+        panic!("TNPM15 activation must assert one JSON document");
+    };
+    assert_eq!(root.pointer, "");
+    let JsonExpectation::Equals(expected) = &root.expected else {
+        panic!("TNPM15 activation must assert exact root JSON");
+    };
+    let rows = expected.as_array().expect("TNPM15 activation row array");
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0]["source_kind"].as_str(), Some("captured-systemctl"));
+    assert_eq!(rows[0]["systemd_action"].as_str(), Some("start"));
+    assert_eq!(
+        rows[0]["systemd_unit"].as_str(),
+        Some("phase4-corpus.service")
+    );
+    assert_eq!(
+        rows[1]["source_kind"].as_str(),
+        Some("captured-boot-runtime")
+    );
+    assert_eq!(rows[1]["boot_program"].as_str(), Some("depmod"));
+    assert_eq!(rows[1]["boot_argument"].as_str(), Some("-a"));
+    for row in rows {
+        assert_eq!(
+            row["source_entry"].as_str(),
+            Some("${native_corpus_activation_entry}")
+        );
+        assert_eq!(row["intent_status"].as_str(), Some("pending"));
+        assert_eq!(row["same_generation"].as_i64(), Some(1));
+        assert_eq!(row["published_request"].as_i64(), Some(1));
+    }
+
+    super::typed_dependency::assert_tnpm14_dependency_shape(&manifest);
 
     let rendered = corpus_tests
         .iter()
@@ -118,18 +223,16 @@ fn phase4_daily_driver_corpus_manifest_proves_remaining_configuration_states() {
         "/etc/phase4-corpus/app-local.conf",
         "/etc/phase4-corpus/app-deleted.conf",
         "/etc/phase4-corpus/app-unmatched.conf",
-        "9 regular files",
+        "content_sha256",
         "phase4-corpus-alt",
         "phase4-corpus-user",
         "phase4-corpus-group",
-        "${native_corpus_dependency_probe}",
-        "phase4-repository-fixture|= 1.0.0",
-        "|repository|dependency",
+        "${native_corpus_requirement_text}",
+        "${native_corpus_atom_text_type}",
+        "${native_corpus_atom_text}",
+        "json_extract(g.requirement_json, '$.expression.operands.name')",
         "/usr/share/phase4-repository-fixture/probe.txt",
         "/var/lib/phase4-corpus/scriptlet.marker",
-        "captured-systemctl|phase4-daily-driver-corpus|systemd|start|phase4-corpus.service",
-        "captured-boot-runtime|phase4-daily-driver-corpus|boot-runtime|depmod|-a",
-        "pending|2",
         "RuntimeServiceActivation",
         "RuntimeTargetHelper",
         "FailureInterruptedDownload",
@@ -144,9 +247,6 @@ fn phase4_daily_driver_corpus_manifest_proves_remaining_configuration_states() {
         "w7-publication-failure",
         "/var/lib/phase4-corpus/remove.marker",
         "phase4-corpus-conflict",
-        "/usr/lib/phase4-corpus/state|directory|0750",
-        "/opt|directory|0750",
-        "/usr/bin/phase4-corpus-link|symlink|phase4-corpus",
         "/usr/lib/phase4-corpus/hardlink-anchor",
         "/usr/lib/phase4-corpus/hardlink-copy",
         "touch -d @1700000000",
@@ -167,12 +267,9 @@ fn phase4_daily_driver_corpus_manifest_proves_remaining_configuration_states() {
         "--from ${native_profile}",
         "query whatprovides 'virtual(phase4-corpus-tool)'",
         "query whatprovides phase4-daily-driver-corpus",
-        "phase4-daily-driver-corpus|1.0|eq|package",
+        "provenance_record_index_type",
+        "${native_corpus_capability_format}",
         "source-declared",
-        "provides version: 1.0",
-        "provides version: ${native_corpus_fixture_version}",
-        "Total: 1 provider(s)",
-        "0 config rows",
         "--dependency-fixture-manifest",
         "build-daily-driver-update-fixture.sh",
         "prepare-native-update-repository.sh",
@@ -267,8 +364,10 @@ fn phase4_daily_driver_corpus_manifest_proves_remaining_configuration_states() {
     for required in [
         "phase4-w7-rpm-semantics",
         "package_requirement_groups",
-        "conflict|phase4-w7-conflict|< 2",
-        "obsolete|phase4-w7-replaced|<= 1",
+        "sqlite3 -json",
+        "expression_constraint",
+        "phase4-w7-conflict < 2",
+        "phase4-w7-replaced <= 1",
         "tomllib.loads",
         "len(raw_entries) == 3",
         "len(entries) == len(raw_entries)",
@@ -330,8 +429,11 @@ fn phase4_daily_driver_corpus_manifest_proves_remaining_configuration_states() {
             "native_corpus_fixture_version",
             "native_corpus_update_version",
             "native_corpus_dependency_count",
-            "native_corpus_dependency_probe",
+            "native_corpus_requirement_text",
+            "native_corpus_atom_text_type",
+            "native_corpus_atom_text",
             "native_corpus_lifecycle_fidelity",
+            "native_corpus_activation_entry",
             "native_corpus_source_format",
             "native_corpus_capability_format",
             "native_corpus_target_architecture",
@@ -499,6 +601,7 @@ fn phase4_daily_driver_corpus_manifest_proves_remaining_configuration_states() {
             "daily-driver update should prove {required}"
         );
     }
+    super::typed_update_config::assert_tnpm18_update_config_shape(&manifest);
 
     let removal_test = manifest
         .test
