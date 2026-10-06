@@ -145,18 +145,16 @@ exit_code_not = 0
 stderr_contains = "dependency"
 
 [[test.step]]
-conary = "list dep-app --info"
+run = "sqlite3 -json ${DB_PATH} \"SELECT name, version, package_release, version_scheme FROM troves WHERE name IN ('dep-app', 'dep-base', 'dep-liba', 'dep-libb') ORDER BY name\""
 
 [test.step.assert]
 exit_code = 0
-stdout_contains = "1.0.0"
-
-[[test.step]]
-conary = "list dep-liba --info"
-
-[test.step.assert]
-exit_code = 0
-stdout_contains = "1.0.0"
+stdout_json = [{ pointer = "", equals = [
+    { name = "dep-app", version = "1.0.0", package_release = "1", version_scheme = "conary" },
+    { name = "dep-base", version = "1.0.0", package_release = "1", version_scheme = "conary" },
+    { name = "dep-liba", version = "1.0.0", package_release = "1", version_scheme = "conary" },
+    { name = "dep-libb", version = "1.0.0", package_release = "1", version_scheme = "conary" },
+] }]
 
 # --------------------------------------------------------------------------
 # T111: Virtual provider satisfaction
@@ -245,11 +243,13 @@ conary = "ccs install /opt/remi-tests/fixtures/adversarial/deps/dep-liba-v1/outp
 exit_code = 0
 
 [[test.step]]
-conary = "list dep-liba --info"
+run = "sqlite3 -json ${DB_PATH} \"SELECT name, version, package_release, version_scheme FROM troves WHERE name = 'dep-liba'\""
 
 [test.step.assert]
 exit_code = 0
-stdout_contains = "1.0.0"
+stdout_json = [{ pointer = "", equals = [
+    { name = "dep-liba", version = "1.0.0", package_release = "1", version_scheme = "conary" },
+] }]
 
 # --------------------------------------------------------------------------
 # T114: Shared provider fixed-point convergence
