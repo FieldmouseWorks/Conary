@@ -264,3 +264,132 @@ fn invalid_package_release_is_refused_when_a_solvable_is_admitted() {
         Some("1")
     );
 }
+
+fn with_release(mut identity: PackageIdentity, release: Option<&str>) -> PackageIdentity {
+    identity.package_release = release.map(str::to_string);
+    identity
+}
+
+#[test]
+fn identical_identity_is_not_a_replacer_even_when_downgrades_are_allowed() {
+    let (_dir, conn) = setup_test_db();
+    let mut provider = ConaryProvider::new(&conn).unwrap();
+
+    let installed_id = provider
+        .add_solvable(with_release(
+            installed_identity("libfoo", "3", VersionScheme::Rpm, Some(7)),
+            Some("2"),
+        ))
+        .unwrap();
+    let identical_id = provider
+        .add_solvable(with_release(
+            repo_identity("libfoo", "3", VersionScheme::Rpm, Some(8)),
+            Some("2"),
+        ))
+        .unwrap();
+    let older_id = provider
+        .add_solvable(with_release(
+            repo_identity("libfoo", "2", VersionScheme::Rpm, Some(9)),
+            Some("2"),
+        ))
+        .unwrap();
+    let respelled_id = provider
+        .add_solvable(with_release(
+            repo_identity("libfoo", "0:3", VersionScheme::Rpm, Some(10)),
+            Some("2"),
+        ))
+        .unwrap();
+    provider.lock_surviving_installed_candidates(InstalledReplacementPolicy::AllowDowngrade);
+
+    // The installer classifies an identical version string and package release
+    // as already installed under every policy, so the identical candidate is
+    // never a replacer.
+    assert_eq!(provider.slot_predecessor(identical_id), None);
+    // Positive controls on the same fixture: an older candidate is the
+    // downgrade the installer applies under `--allow-downgrade`, and a
+    // candidate the RPM scheme orders as equal but spells differently is not
+    // the installer's textual identity, so it is a replacer too.
+    let installed = provider.get_solvable(installed_id);
+    let respelled = provider.get_solvable(respelled_id);
+    assert_eq!(
+        crate::repository::versioning::compare_package_identities(
+            respelled.version_scheme,
+            &respelled.version,
+            respelled.package_release.as_deref(),
+            installed.version_scheme,
+            &installed.version,
+            installed.package_release.as_deref(),
+        )
+        .unwrap(),
+        std::cmp::Ordering::Equal,
+        "control: the respelled candidate must order equal to the installed trove"
+    );
+    assert_eq!(provider.slot_predecessor(older_id), Some(installed_id));
+    assert_eq!(provider.slot_predecessor(respelled_id), Some(installed_id));
+}
+
+#[test]
+fn upgrade_only_breaks_equal_version_ties_by_package_release() {
+    let (_dir, conn) = setup_test_db();
+    let mut provider = ConaryProvider::new(&conn).unwrap();
+
+    let installed_id = provider
+        .add_solvable(with_release(
+            installed_identity("libfoo", "3", VersionScheme::Rpm, Some(7)),
+            Some("2"),
+        ))
+        .unwrap();
+    let higher_id = provider
+        .add_solvable(with_release(
+            repo_identity("libfoo", "3", VersionScheme::Rpm, Some(8)),
+            Some("3"),
+        ))
+        .unwrap();
+    let lower_id = provider
+        .add_solvable(with_release(
+            repo_identity("libfoo", "3", VersionScheme::Rpm, Some(9)),
+            Some("1"),
+        ))
+        .unwrap();
+    let missing_id = provider
+        .add_solvable(repo_identity("libfoo", "3", VersionScheme::Rpm, Some(10)))
+        .unwrap();
+    provider.lock_surviving_installed_candidates(InstalledReplacementPolicy::UpgradeOnly);
+
+    // `compare_package_identities` breaks an equal-version tie by release, and
+    // a missing release counts as zero: only the higher release is newer.
+    assert_eq!(provider.slot_predecessor(higher_id), Some(installed_id));
+    assert_eq!(provider.slot_predecessor(lower_id), None);
+    assert_eq!(provider.slot_predecessor(missing_id), None);
+}
+
+#[test]
+fn upgrade_only_treats_a_missing_installed_release_as_zero() {
+    let (_dir, conn) = setup_test_db();
+    let mut provider = ConaryProvider::new(&conn).unwrap();
+
+    let installed_id = provider
+        .add_solvable(installed_identity(
+            "libfoo",
+            "3",
+            VersionScheme::Rpm,
+            Some(7),
+        ))
+        .unwrap();
+    let released_id = provider
+        .add_solvable(with_release(
+            repo_identity("libfoo", "3", VersionScheme::Rpm, Some(8)),
+            Some("1"),
+        ))
+        .unwrap();
+    let unreleased_id = provider
+        .add_solvable(repo_identity("libfoo", "3", VersionScheme::Rpm, Some(9)))
+        .unwrap();
+    provider.lock_surviving_installed_candidates(InstalledReplacementPolicy::UpgradeOnly);
+
+    // Any valid release (at least 1) is newer than the installed trove's
+    // implicit release zero; a candidate that also lacks a release is the
+    // installed identity and is refused.
+    assert_eq!(provider.slot_predecessor(released_id), Some(installed_id));
+    assert_eq!(provider.slot_predecessor(unreleased_id), None);
+}

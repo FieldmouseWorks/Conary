@@ -12,10 +12,12 @@
 //!   the one installed package of its name sharing the candidate's slot, it is
 //!   not pinned, it has the candidate's version scheme (a dependency install is
 //!   an ordinary package change, and the installer refuses a cross-scheme
-//!   replacement without an explicit replatform), it is strictly newer than the
-//!   installed trove (native version, then package release) unless the policy
-//!   explicitly admits downgrades, and the fixed incoming package does not
-//!   occupy the slot;
+//!   replacement without an explicit replatform), it is not the installed
+//!   trove's exact identity (the installer treats an identical version string
+//!   and package release as already installed under every policy), it is
+//!   strictly newer than the installed trove (native version, then package
+//!   release) unless the policy explicitly admits downgrades, and the fixed
+//!   incoming package does not occupy the slot;
 //! - the replacer is exclusive with every other same-name solvable in its slot,
 //!   so the solver never keeps the predecessor beside its replacement;
 //! - a forced installed root yields to its replacers, as it yields to a
@@ -107,6 +109,17 @@ impl ConaryProvider<'_> {
         if predecessors.next().is_some()
             || installed.installed_pinned
             || installed.version_scheme != package.version_scheme
+        {
+            return None;
+        }
+        // The installer classifies an identical version string and package
+        // release as already installed under every policy, so such a candidate
+        // is never a replacement, even when downgrades are allowed. This is a
+        // textual identity check, exactly as the installer makes it: strings
+        // the version scheme orders as equal but spells differently remain a
+        // replacement the installer applies under `AllowDowngrade`.
+        if package.version == installed.version
+            && package.package_release == installed.package_release
         {
             return None;
         }
