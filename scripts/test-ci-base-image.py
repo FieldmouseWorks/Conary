@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import signal
 import socket
 import subprocess
 import tarfile
@@ -483,6 +484,59 @@ helper.main()
             finally:
                 image.cleanup(workdir)
         self.assertFalse(workdir.exists())
+
+    def test_local_registry_waits_for_the_launched_shell_to_exec(self):
+        # Right after the fork, `$!` still shows the launching shell's command
+        # line, so the first polls cannot match the registry. Startup must keep
+        # polling a live process instead of failing with an empty log.
+        workdir = self.root / 'exec-race'
+        workdir.mkdir()
+        with socket.socket() as probe:
+            probe.bind(('127.0.0.1', 0))
+            port = probe.getsockname()[1]
+        entry = {**self.entry, 'local': self.entry['local'].replace('127.0.0.1:55071',
+                                                                     f'127.0.0.1:{port}')}
+        real_matches = image.registry_process_matches
+        calls = []
+
+        def not_yet_execed(pid, config):
+            calls.append(pid)
+            return False if len(calls) <= 3 else real_matches(pid, config)
+
+        image.registry_process_matches = not_yet_execed
+        try:
+            pid = image.start_registry(entry, workdir)
+        finally:
+            image.registry_process_matches = real_matches
+        try:
+            self.assertGreater(len(calls), 3)
+            self.assertTrue(real_matches(pid, workdir / 'registry.json'))
+        finally:
+            os.kill(pid, signal.SIGTERM)
+
+    def test_local_registry_reports_a_launch_that_exits(self):
+        workdir = self.root / 'exited'
+        workdir.mkdir()
+        bindir = self.root / 'fake-bin'
+        bindir.mkdir()
+        fake = bindir / 'docker-registry'
+        fake.write_text('#!/bin/sh\necho "registry refused config" >&2\nexit 3\n')
+        fake.chmod(0o755)
+        with socket.socket() as probe:
+            probe.bind(('127.0.0.1', 0))
+            port = probe.getsockname()[1]
+        entry = {**self.entry, 'local': self.entry['local'].replace('127.0.0.1:55071',
+                                                                     f'127.0.0.1:{port}')}
+        old_path = os.environ['PATH']
+        os.environ['PATH'] = f'{bindir}:{old_path}'
+        try:
+            started = time.monotonic()
+            with self.assertRaises(RuntimeError) as raised:
+                image.start_registry(entry, workdir)
+        finally:
+            os.environ['PATH'] = old_path
+        self.assertEqual(str(raised.exception), 'registry refused config\n')
+        self.assertLess(time.monotonic() - started, 5)
 
     def test_local_registry_refuses_an_occupied_port(self):
         workdir = self.root / 'occupied'

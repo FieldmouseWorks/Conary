@@ -285,6 +285,15 @@ def local_endpoint(entry):
     return host, path, digest
 
 
+def process_running(pid):
+    """Return whether pid names a live, non-zombie process."""
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text()
+    except OSError:
+        return False
+    return stat.rsplit(")", 1)[1].split()[0] != "Z"
+
+
 def registry_process_matches(pid, config):
     cmdline = Path(f"/proc/{pid}/cmdline")
     try:
@@ -321,7 +330,10 @@ def start_registry(entry, workdir):
                     return pid
         except (OSError, urllib.error.URLError):
             pass
-        if not registry_process_matches(pid, config) or time.monotonic() >= deadline:
+        # `$!` names the forked shell until nohup execs the registry, so a live
+        # process that does not match yet is still starting. Only an exited
+        # launch or the deadline is a failure.
+        if not process_running(pid) or time.monotonic() >= deadline:
             if registry_process_matches(pid, config):
                 os.kill(pid, signal.SIGTERM)
             raise RuntimeError(log.read_text())
