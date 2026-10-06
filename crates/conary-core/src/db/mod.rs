@@ -131,6 +131,21 @@ pub fn init(path: impl AsRef<Path>) -> Result<()> {
     Ok(())
 }
 
+/// Create a new current-schema database at `path` and run `seed` in the
+/// transaction that creates the schema.
+///
+/// The database must not hold any schema object yet; an existing database is
+/// refused rather than extended.
+pub(crate) fn init_fresh_with(
+    path: impl AsRef<Path>,
+    seed: impl FnOnce(&Connection) -> Result<()>,
+) -> Result<()> {
+    let path = path.as_ref();
+    let conn = Connection::open(path)?;
+    configure(&conn)?;
+    schema::initialize_fresh_with(&conn, seed)
+}
+
 /// Open an existing Conary database
 ///
 /// # Arguments

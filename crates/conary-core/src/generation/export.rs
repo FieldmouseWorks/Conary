@@ -65,6 +65,9 @@ impl std::fmt::Display for GenerationExportFormat {
 }
 
 pub struct GenerationExportOptions {
+    /// Runtime root whose generations and `current` link are exported when no
+    /// explicit generation path is given.
+    pub runtime_root: crate::runtime_root::ConaryRuntimeRoot,
     pub generation: Option<i64>,
     pub generation_path: Option<PathBuf>,
     pub format: GenerationExportFormat,
@@ -131,9 +134,11 @@ fn load_artifact_for_options(
         (Some(_), Some(_)) => Err(crate::Error::InvalidPath(
             "generation number and generation path are mutually exclusive".to_string(),
         )),
-        (Some(generation), None) => load_installed_generation_artifact(generation),
+        (Some(generation), None) => {
+            load_installed_generation_artifact(&options.runtime_root, generation)
+        }
         (None, Some(path)) => load_generation_artifact(path),
-        (None, None) => load_generation_artifact(Path::new("/conary/current")),
+        (None, None) => load_generation_artifact(&options.runtime_root.current_link()),
     }
 }
 
@@ -194,6 +199,7 @@ fn export_qcow2(
 ) -> crate::Result<GenerationExportResult> {
     let raw_tmp = raw_temp_path(&options.output);
     let raw_options = GenerationExportOptions {
+        runtime_root: options.runtime_root.clone(),
         generation: None,
         generation_path: None,
         format: GenerationExportFormat::Raw,

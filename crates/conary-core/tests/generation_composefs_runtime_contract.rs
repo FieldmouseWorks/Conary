@@ -364,7 +364,7 @@ fn generation_activation_validates_artifacts_before_pointer_updates() {
         .and_then(|rest| rest.split("/// Roll back").next())
         .expect("failed to isolate cmd_generation_switch body");
     let switch_validate = switch_body
-        .find("validate_generation_activation_artifact(&runtime_root, number)?;")
+        .find("validate_generation_activation_artifact(runtime_root, number)?;")
         .expect("generation switch must validate artifact contract");
     let switch_update = switch_body
         .find("update_current_symlink")
@@ -374,7 +374,7 @@ fn generation_activation_validates_artifacts_before_pointer_updates() {
         "generation switch must validate the artifact before updating /conary/current"
     );
     assert!(
-        switch_body.contains("mark_generation_state_active(&runtime_root, number)?;"),
+        switch_body.contains("mark_generation_state_active(runtime_root, number)?;"),
         "generation switch must mark the matching DB state active when it publishes /conary/current"
     );
 
@@ -384,7 +384,7 @@ fn generation_activation_validates_artifacts_before_pointer_updates() {
         .and_then(|rest| rest.split("/// Recover").next())
         .expect("failed to isolate cmd_generation_rollback body");
     let rollback_validate = rollback_body
-        .find("validate_generation_activation_artifact(&runtime_root, *previous)?;")
+        .find("validate_generation_activation_artifact(runtime_root, *previous)?;")
         .expect("generation rollback must validate artifact contract");
     let rollback_update = rollback_body
         .find("update_current_symlink")
@@ -394,7 +394,7 @@ fn generation_activation_validates_artifacts_before_pointer_updates() {
         "generation rollback must validate the artifact before updating /conary/current"
     );
     assert!(
-        rollback_body.contains("mark_generation_state_active(&runtime_root, *previous)?;"),
+        rollback_body.contains("mark_generation_state_active(runtime_root, *previous)?;"),
         "generation rollback must mark the matching DB state active when it publishes /conary/current"
     );
 
@@ -494,7 +494,7 @@ fn oci_generation_export_uses_generation_artifact_loader() {
     let cli_rs = fs::read_to_string(app_source("cli/mod.rs")).expect("failed to read cli/mod.rs");
 
     assert!(
-        export_rs.contains("load_installed_generation_artifact(n)"),
+        export_rs.contains("load_installed_generation_artifact(runtime_root, n)"),
         "explicit-generation OCI export must load the installed GenerationArtifact contract"
     );
     assert!(
@@ -502,8 +502,8 @@ fn oci_generation_export_uses_generation_artifact_loader() {
         "current-generation OCI export must load the GenerationArtifact contract from the current pointer"
     );
     assert!(
-        export_rs.contains("Path::new(\"/conary/current\")"),
-        "default OCI export must use /conary/current as the current-generation artifact pointer"
+        export_rs.contains("load_current_oci_generation_artifact(&runtime_root.current_link())"),
+        "default OCI export must use its runtime root's current-generation artifact pointer"
     );
     assert!(
         !export_rs.contains("let gen_dir = generation_path(gen_number);"),

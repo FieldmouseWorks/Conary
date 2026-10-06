@@ -21,10 +21,6 @@ struct SideEffectPackageWarning {
     reasons: Vec<&'static str>,
 }
 
-fn default_runtime_root() -> ConaryRuntimeRoot {
-    ConaryRuntimeRoot::default()
-}
-
 fn runtime_root_for_generation_db_path(db_path: &str) -> ConaryRuntimeRoot {
     ConaryRuntimeRoot::from_db_path(PathBuf::from(db_path))
 }
@@ -64,8 +60,7 @@ fn validate_generation_activation_artifact(
 ///
 /// Prints each generation's number, creation date, package count, kernel version,
 /// and whether it is the currently active generation.
-pub fn cmd_generation_list() -> Result<()> {
-    let runtime_root = default_runtime_root();
+pub fn cmd_generation_list(runtime_root: &ConaryRuntimeRoot) -> Result<()> {
     let dir = runtime_root.generations_dir();
 
     if !dir.exists() {
@@ -122,8 +117,7 @@ pub fn cmd_generation_list() -> Result<()> {
 }
 
 /// Print detailed information about a specific generation.
-pub fn cmd_generation_info(gen_number: i64) -> Result<()> {
-    let runtime_root = default_runtime_root();
+pub fn cmd_generation_info(runtime_root: &ConaryRuntimeRoot, gen_number: i64) -> Result<()> {
     let gen_dir = runtime_root.generation_path(gen_number);
 
     if !gen_dir.exists() {
@@ -205,8 +199,7 @@ fn dir_size_bytes(path: &std::path::Path) -> u64 {
         .sum()
 }
 
-fn open_generation_db() -> Result<rusqlite::Connection> {
-    let runtime_root = default_runtime_root();
+fn open_generation_db(runtime_root: &ConaryRuntimeRoot) -> Result<rusqlite::Connection> {
     let db_path = runtime_root.db_path().to_string_lossy();
     crate::commands::open_db(db_path.as_ref()).map_err(|err| {
         anyhow!(
@@ -334,10 +327,11 @@ fn find_side_effect_package_warning(
 }
 
 fn collect_side_effect_package_warnings(
+    runtime_root: &ConaryRuntimeRoot,
     from_generation: i64,
     to_generation: i64,
 ) -> Result<Vec<SideEffectPackageWarning>> {
-    let conn = open_generation_db()?;
+    let conn = open_generation_db(runtime_root)?;
     let from_state = conary_core::db::models::SystemState::find_by_number(&conn, from_generation)?
         .ok_or_else(|| anyhow!("State {from_generation} not found in generation database"))?;
     let to_state = conary_core::db::models::SystemState::find_by_number(&conn, to_generation)?
@@ -362,8 +356,12 @@ fn collect_side_effect_package_warnings(
     Ok(warnings)
 }
 
-fn warn_removed_side_effect_packages(from_generation: i64, to_generation: i64) {
-    match collect_side_effect_package_warnings(from_generation, to_generation) {
+fn warn_removed_side_effect_packages(
+    runtime_root: &ConaryRuntimeRoot,
+    from_generation: i64,
+    to_generation: i64,
+) {
+    match collect_side_effect_package_warnings(runtime_root, from_generation, to_generation) {
         Ok(packages) if !packages.is_empty() => {
             crate::ui::warn(&format!(
                 "Generation switch {from_generation} -> {to_generation} removed package versions without running removal scriptlets."
@@ -608,8 +606,11 @@ pub fn cmd_generation_recover_db(
 }
 
 /// Select `number` as the next boot generation, update the boot entry, and optionally reboot.
-pub fn cmd_generation_switch(number: i64, reboot: bool) -> Result<()> {
-    let runtime_root = default_runtime_root();
+pub fn cmd_generation_switch(
+    runtime_root: &ConaryRuntimeRoot,
+    number: i64,
+    reboot: bool,
+) -> Result<()> {
     let current = current_generation(runtime_root.root())?;
     let gen_dir = runtime_root.generation_path(number);
     if !gen_dir.exists() {
@@ -618,16 +619,16 @@ pub fn cmd_generation_switch(number: i64, reboot: bool) -> Result<()> {
             gen_dir.display()
         ));
     }
-    validate_generation_activation_artifact(&runtime_root, number)?;
+    validate_generation_activation_artifact(runtime_root, number)?;
     let bootloader = super::boot::detect_bootloader();
-    super::boot::write_boot_entry(number, &bootloader)
+    super::boot::write_boot_entry(runtime_root, number, &bootloader)
         .with_context(|| format!("Failed to prepare boot entry for generation {number}"))?;
 
     update_current_symlink(runtime_root.root(), number)
         .map_err(|e| anyhow!("Failed to update current generation symlink: {e}"))?;
-    mark_generation_state_active(&runtime_root, number)?;
+    mark_generation_state_active(runtime_root, number)?;
     if let Some(current) = current {
-        warn_removed_side_effect_packages(current, number);
+        warn_removed_side_effect_packages(runtime_root, current, number);
     }
     println!("Generation {number} selected for next boot.");
     println!("Reboot to activate the selected composefs generation.");
@@ -641,8 +642,7 @@ pub fn cmd_generation_switch(number: i64, reboot: bool) -> Result<()> {
 }
 
 /// Roll back to the highest-numbered generation below the currently selected one.
-pub fn cmd_generation_rollback() -> Result<()> {
-    let runtime_root = default_runtime_root();
+pub fn cmd_generation_rollback(runtime_root: &ConaryRuntimeRoot) -> Result<()> {
     let current =
         current_generation(runtime_root.root())?.ok_or_else(|| anyhow!("No active generation"))?;
 
@@ -663,15 +663,15 @@ pub fn cmd_generation_rollback() -> Result<()> {
     let previous = candidates
         .last()
         .ok_or_else(|| anyhow!("No previous generation to roll back to"))?;
-    validate_generation_activation_artifact(&runtime_root, *previous)?;
+    validate_generation_activation_artifact(runtime_root, *previous)?;
     let bootloader = super::boot::detect_bootloader();
-    super::boot::write_boot_entry(*previous, &bootloader)
+    super::boot::write_boot_entry(runtime_root, *previous, &bootloader)
         .with_context(|| format!("Failed to prepare boot entry for generation {previous}"))?;
 
     update_current_symlink(runtime_root.root(), *previous)
         .map_err(|e| anyhow!("Failed to update current generation symlink: {e}"))?;
-    mark_generation_state_active(&runtime_root, *previous)?;
-    warn_removed_side_effect_packages(current, *previous);
+    mark_generation_state_active(runtime_root, *previous)?;
+    warn_removed_side_effect_packages(runtime_root, current, *previous);
     println!("Generation {previous} selected for next boot.");
     println!("Reboot to activate the rollback generation.");
     Ok(())

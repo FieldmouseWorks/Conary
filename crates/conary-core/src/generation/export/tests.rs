@@ -238,6 +238,11 @@ impl Fixture {
         }
     }
 
+    /// The runtime root whose `generations/7` this fixture populates.
+    fn runtime_root(&self) -> crate::runtime_root::ConaryRuntimeRoot {
+        crate::runtime_root::ConaryRuntimeRoot::for_test_root(self._tmp.path().join("artifact"))
+    }
+
     fn artifact(&self) -> GenerationArtifact {
         crate::generation::artifact::load_generation_artifact(&self.generation_dir).unwrap()
     }
@@ -633,6 +638,7 @@ fn iso_export_writes_bootable_generation_carrier() {
 
     let result = export_generation_image_with_tools(
         GenerationExportOptions {
+            runtime_root: crate::runtime_root::ConaryRuntimeRoot::default(),
             generation: None,
             generation_path: Some(fixture.generation_dir.clone()),
             format: GenerationExportFormat::Iso,
@@ -702,6 +708,7 @@ fn undersized_export_reports_requested_and_minimum_sizes() {
 
     let err = export_generation_image_with_tools(
         GenerationExportOptions {
+            runtime_root: crate::runtime_root::ConaryRuntimeRoot::default(),
             generation: None,
             generation_path: Some(fixture.generation_dir.clone()),
             format: GenerationExportFormat::Raw,
@@ -725,6 +732,7 @@ fn raw_export_calls_shared_repart_backend_and_cleans_staging() {
 
     let result = export_generation_image_with_tools(
         GenerationExportOptions {
+            runtime_root: crate::runtime_root::ConaryRuntimeRoot::default(),
             generation: None,
             generation_path: Some(fixture.generation_dir.clone()),
             format: GenerationExportFormat::Raw,
@@ -763,6 +771,7 @@ fn raw_export_writes_output_provenance_manifest() {
 
     let result = export_generation_image_with_tools(
         GenerationExportOptions {
+            runtime_root: crate::runtime_root::ConaryRuntimeRoot::default(),
             generation: None,
             generation_path: Some(fixture.generation_dir.clone()),
             format: GenerationExportFormat::Raw,
@@ -806,6 +815,7 @@ fn raw_export_passes_4k_aligned_size_to_repart() {
 
     export_generation_image_with_tools(
         GenerationExportOptions {
+            runtime_root: crate::runtime_root::ConaryRuntimeRoot::default(),
             generation: None,
             generation_path: Some(fixture.generation_dir.clone()),
             format: GenerationExportFormat::Raw,
@@ -830,6 +840,7 @@ fn qcow2_export_converts_raw_and_removes_temp_raw() {
 
     let result = export_generation_image_with_tools(
         GenerationExportOptions {
+            runtime_root: crate::runtime_root::ConaryRuntimeRoot::default(),
             generation: None,
             generation_path: Some(fixture.generation_dir.clone()),
             format: GenerationExportFormat::Qcow2,
@@ -863,4 +874,32 @@ fn qcow2_export_converts_raw_and_removes_temp_raw() {
     assert!(qemu_log.contains("convert"));
     assert!(qemu_log.contains("-O"));
     assert!(qemu_log.contains("qcow2"));
+}
+
+#[test]
+fn export_resolves_numbered_and_current_generations_in_its_runtime_root() {
+    let fixture = Fixture::new();
+    let runtime_root = fixture.runtime_root();
+    let options = |generation| GenerationExportOptions {
+        runtime_root: runtime_root.clone(),
+        generation,
+        generation_path: None,
+        format: GenerationExportFormat::Raw,
+        output: fixture._tmp.path().join("unused.raw"),
+        size_bytes: None,
+    };
+
+    let numbered = load_artifact_for_options(&options(Some(7))).unwrap();
+    assert_eq!(numbered.generation, 7);
+    assert_eq!(numbered.generation_dir, runtime_root.generation_path(7));
+
+    // Without a `current` link this runtime root has no current generation.
+    assert!(load_artifact_for_options(&options(None)).is_err());
+    std::os::unix::fs::symlink("generations/7", runtime_root.current_link()).unwrap();
+    let current = load_artifact_for_options(&options(None)).unwrap();
+    assert_eq!(current.generation, 7);
+    assert_eq!(current.generation_dir, runtime_root.current_link());
+
+    // A generation the runtime root does not hold is not found elsewhere.
+    assert!(load_artifact_for_options(&options(Some(8))).is_err());
 }

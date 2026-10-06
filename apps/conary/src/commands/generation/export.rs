@@ -6,10 +6,12 @@ use conary_core::generation::export::{
     GenerationExportFormat, GenerationExportOptions, export_generation_image,
 };
 use conary_core::image::size::ImageSize;
+use conary_core::runtime_root::ConaryRuntimeRoot;
 use std::path::PathBuf;
 use std::str::FromStr;
 
 pub fn cmd_generation_export(
+    runtime_root: &ConaryRuntimeRoot,
     generation: Option<i64>,
     path: Option<&str>,
     format: &str,
@@ -19,6 +21,7 @@ pub fn cmd_generation_export(
     let format = parse_generation_export_format(format)?;
     let size_bytes = parse_generation_export_size(size)?;
     let result = export_generation_image(GenerationExportOptions {
+        runtime_root: runtime_root.clone(),
         generation,
         generation_path: path.map(PathBuf::from),
         format,
@@ -274,6 +277,7 @@ mod tests {
     #[tokio::test]
     async fn iso_loads_generation_artifact_before_tooling() {
         let err = cmd_generation_export(
+            &ConaryRuntimeRoot::default(),
             None,
             Some("/does/not/exist"),
             "iso",
@@ -294,6 +298,7 @@ mod tests {
         let output_path = output.to_string_lossy();
 
         let err = cmd_generation_export(
+            &ConaryRuntimeRoot::default(),
             None,
             Some(generation_path.as_ref()),
             "raw",

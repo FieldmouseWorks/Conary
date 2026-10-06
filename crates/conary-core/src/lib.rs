@@ -52,6 +52,7 @@ pub mod runtime_root;
 pub mod scriptlet;
 pub mod security;
 pub mod self_update;
+pub mod source_root;
 pub mod transaction;
 pub mod trigger;
 pub mod trust;

@@ -19,6 +19,7 @@ use conary_core::generation::artifact::{CasObjectRef, GenerationArtifact};
 use conary_core::generation::metadata::{
     EROFS_IMAGE_NAME, GENERATION_METADATA_FILE, GenerationMetadata,
 };
+use conary_core::runtime_root::ConaryRuntimeRoot;
 use flate2::Compression;
 use flate2::write::GzEncoder;
 use tracing::{info, warn};
@@ -45,17 +46,27 @@ fn oci_arch() -> &'static str {
 /// currently active generation.  The `objects_dir` points to the CAS
 /// store requested by the CLI, but the loaded generation artifact is
 /// authoritative and may redirect the export to its persisted CAS base.
-pub fn export_oci(generation: Option<i64>, objects_dir: &Path, output_dir: &Path) -> Result<()> {
-    let artifact = load_oci_generation_artifact(generation)?;
+pub fn export_oci(
+    runtime_root: &ConaryRuntimeRoot,
+    generation: Option<i64>,
+    objects_dir: &Path,
+    output_dir: &Path,
+) -> Result<()> {
+    let artifact = load_oci_generation_artifact(runtime_root, generation)?;
 
     export_oci_artifact(&artifact, objects_dir, output_dir)
 }
 
-fn load_oci_generation_artifact(generation: Option<i64>) -> Result<GenerationArtifact> {
+fn load_oci_generation_artifact(
+    runtime_root: &ConaryRuntimeRoot,
+    generation: Option<i64>,
+) -> Result<GenerationArtifact> {
     let artifact = match generation {
-        Some(n) => conary_core::generation::artifact::load_installed_generation_artifact(n)
-            .with_context(|| format!("Failed to load artifact for generation {n}"))?,
-        None => load_current_oci_generation_artifact(Path::new("/conary/current"))?,
+        Some(n) => {
+            conary_core::generation::artifact::load_installed_generation_artifact(runtime_root, n)
+                .with_context(|| format!("Failed to load artifact for generation {n}"))?
+        }
+        None => load_current_oci_generation_artifact(&runtime_root.current_link())?,
     };
 
     Ok(artifact)

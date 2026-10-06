@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::{Component, Path, PathBuf};
 
-use super::metadata::{GENERATION_METADATA_FILE, GenerationMetadata, generation_path};
+use super::metadata::{GENERATION_METADATA_FILE, GenerationMetadata};
 use super::root_manifest::{
     GENERATION_ROOT_MANIFEST_FILE, GenerationRootManifest, MUTABLE_STATE_MANIFEST_FILE,
     MutableStateManifest,
@@ -504,8 +504,12 @@ fn load_generation_artifact_with_cas_verification(
     })
 }
 
-pub fn load_installed_generation_artifact(generation: i64) -> crate::Result<GenerationArtifact> {
-    load_generation_artifact(&generation_path(generation))
+/// Load generation `generation` of `runtime_root`.
+pub fn load_installed_generation_artifact(
+    runtime_root: &crate::runtime_root::ConaryRuntimeRoot,
+    generation: i64,
+) -> crate::Result<GenerationArtifact> {
+    load_generation_artifact(&runtime_root.generation_path(generation))
 }
 
 fn require_version(name: &str, version: u32, expected: u32) -> crate::Result<()> {

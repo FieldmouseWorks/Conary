@@ -12,7 +12,7 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use std::path::Path;
 use tracing::info;
 
-/// Revision 57 of the current-only schema epoch.
+/// Revision 58 of the current-only schema epoch.
 ///
 /// Revision 45 makes registered Remi profile membership immutable and journals
 /// exact catalog filesystem deletions before resource metadata disappears.
@@ -44,9 +44,12 @@ use tracing::info;
 /// are therefore fenced behind a rebuild.
 /// Revision 57 stores the declared interpreter on each installed CCS remove
 /// hook so installed authority names the exact program that runs the script.
+/// Revision 58 adds the immutable singleton `source_root_identity` pin that a
+/// source-root database records in the transaction creating its schema. The
+/// host database carries no pin row.
 /// Earlier pre-alpha databases must be rebuilt; no compatibility migration is
 /// provided.
-pub const SCHEMA_VERSION: i32 = 57;
+pub const SCHEMA_VERSION: i32 = 58;
 /// Stable identity that distinguishes this epoch from retired schema revisions.
 pub const SCHEMA_EPOCH: &str = "conary-current-v1";
 
@@ -166,6 +169,32 @@ pub fn ensure_current(conn: &Connection) -> Result<()> {
         }
     }
 
+    create_fresh_schema(conn, |_| Ok(()))
+}
+
+/// Create the current schema in a fresh database and run `seed` in the same
+/// transaction.
+///
+/// Any database that already holds a schema object is refused: this never
+/// adds authority to an existing database. Source roots use it to record
+/// their pinned identity atomically with schema creation.
+pub(crate) fn initialize_fresh_with(
+    conn: &Connection,
+    seed: impl FnOnce(&Connection) -> Result<()>,
+) -> Result<()> {
+    super::generation_delta::configure_mutation_epoch(conn)?;
+    if !database_is_fresh(conn)? {
+        return Err(Error::InitError(
+            "refusing to initialize a database that already holds schema objects".to_string(),
+        ));
+    }
+    create_fresh_schema(conn, seed)
+}
+
+fn create_fresh_schema(
+    conn: &Connection,
+    seed: impl FnOnce(&Connection) -> Result<()>,
+) -> Result<()> {
     let tx = conn.unchecked_transaction()?;
     current_schema::create_current_schema(&tx)?;
     tx.execute(
@@ -176,6 +205,7 @@ pub fn ensure_current(conn: &Connection) -> Result<()> {
         "INSERT INTO schema_version (version) VALUES (?1)",
         params![SCHEMA_VERSION],
     )?;
+    seed(&tx)?;
     tx.commit()?;
     info!("Initialized current schema epoch {}", SCHEMA_VERSION);
     Ok(())

@@ -84,6 +84,26 @@ impl ConaryRuntimeRoot {
     pub fn gc_roots_dir(&self) -> PathBuf {
         self.root.join("gc-roots")
     }
+
+    /// Repository and generation-metadata trust keys for this runtime root.
+    ///
+    /// The default host runtime root keeps its keyring at
+    /// `/var/lib/conary/keys` (honouring `CONARY_DB_DIR` exactly as
+    /// [`crate::db::paths::keyring_dir`] does). Every other runtime root,
+    /// including each source root, owns a disjoint `<root>/keys`.
+    pub fn keys_dir(&self) -> PathBuf {
+        if self.is_default_host() {
+            crate::db::paths::keyring_dir(DEFAULT_DB_PATH)
+        } else {
+            self.root.join("keys")
+        }
+    }
+
+    /// Whether this is the default host runtime root (`/conary` with the
+    /// default host database).
+    pub fn is_default_host(&self) -> bool {
+        self.root == Path::new(DEFAULT_RUNTIME_ROOT) && self.db_path == Path::new(DEFAULT_DB_PATH)
+    }
 }
 
 #[cfg(test)]
@@ -103,6 +123,35 @@ mod tests {
         assert_eq!(root.mount_dir(), Path::new("/conary/mnt"));
         assert_eq!(root.etc_state_dir(), Path::new("/conary/etc-state"));
         assert_eq!(root.gc_roots_dir(), Path::new("/conary/gc-roots"));
+        assert!(root.is_default_host());
+    }
+
+    #[test]
+    fn keys_dir_keeps_host_keyring_and_isolates_other_roots() {
+        let host = ConaryRuntimeRoot::default();
+        assert_eq!(
+            host.keys_dir(),
+            crate::db::paths::keyring_dir("/var/lib/conary/conary.db")
+        );
+        assert_eq!(
+            ConaryRuntimeRoot::from_db_path("/var/lib/conary/conary.db").keys_dir(),
+            host.keys_dir()
+        );
+
+        let other = ConaryRuntimeRoot::new(
+            "/var/lib/conary/roots/arch",
+            "/var/lib/conary/roots/arch/conary.db",
+        );
+        assert!(!other.is_default_host());
+        assert_eq!(
+            other.keys_dir(),
+            Path::new("/var/lib/conary/roots/arch/keys")
+        );
+
+        // A non-default database under the boot runtime root is not the host.
+        let shared_root = ConaryRuntimeRoot::new("/conary", "/tmp/elsewhere/conary.db");
+        assert!(!shared_root.is_default_host());
+        assert_eq!(shared_root.keys_dir(), Path::new("/conary/keys"));
     }
 
     #[test]

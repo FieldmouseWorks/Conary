@@ -94,7 +94,10 @@ impl GenerationMetadata {
     /// power loss cannot leave a truncated metadata file next to a valid
     /// `root.erofs`.
     pub fn write_to(&self, gen_dir: &Path) -> Result<()> {
-        let (signing_key_path, _) = generation_metadata_key_paths();
+        // Generation metadata readers and writers are not yet threaded with
+        // their runtime root; only the host root publishes generations today.
+        let (signing_key_path, _) =
+            generation_metadata_key_paths(&crate::runtime_root::ConaryRuntimeRoot::default());
         let signing_key = signing_key_path
             .exists()
             .then_some(signing_key_path.as_path());
@@ -121,7 +124,8 @@ impl GenerationMetadata {
 
     /// Read metadata from the generation metadata file inside the given generation directory.
     pub fn read_from(gen_dir: &Path) -> Result<Self> {
-        let (signing_key_path, public_key_path) = generation_metadata_key_paths();
+        let (signing_key_path, public_key_path) =
+            generation_metadata_key_paths(&crate::runtime_root::ConaryRuntimeRoot::default());
         let signing_key = signing_key_path
             .exists()
             .then_some(signing_key_path.as_path());
@@ -167,8 +171,11 @@ impl GenerationMetadata {
     }
 }
 
-fn generation_metadata_key_paths() -> (PathBuf, PathBuf) {
-    let keyring_dir = crate::db::paths::keyring_dir("/var/lib/conary/conary.db");
+/// Signing and verification key paths in `runtime_root`'s keyring.
+fn generation_metadata_key_paths(
+    runtime_root: &crate::runtime_root::ConaryRuntimeRoot,
+) -> (PathBuf, PathBuf) {
+    let keyring_dir = runtime_root.keys_dir();
     (
         keyring_dir.join(GENERATION_METADATA_SIGNING_KEY_FILE),
         keyring_dir.join(GENERATION_METADATA_PUBLIC_KEY_FILE),
@@ -322,30 +329,6 @@ pub fn clear_generation_pending(gen_dir: &Path) -> Result<()> {
         Err(crate::Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error),
     }
-}
-
-/// Returns the base directory for all generations: `/conary/generations`
-#[must_use]
-pub fn generations_dir() -> PathBuf {
-    crate::runtime_root::ConaryRuntimeRoot::default().generations_dir()
-}
-
-/// Returns the directory for a specific generation: `/conary/generations/{number}`
-#[must_use]
-pub fn generation_path(number: i64) -> PathBuf {
-    crate::runtime_root::ConaryRuntimeRoot::default().generation_path(number)
-}
-
-/// Returns the symlink pointing to the current active generation: `/conary/current`
-#[must_use]
-pub fn current_link() -> PathBuf {
-    crate::runtime_root::ConaryRuntimeRoot::default().current_link()
-}
-
-/// Returns the directory for GC roots: `/conary/gc-roots`
-#[must_use]
-pub fn gc_roots_dir() -> PathBuf {
-    crate::runtime_root::ConaryRuntimeRoot::default().gc_roots_dir()
 }
 
 /// Resolve one exact kernel release from `gen_dir/usr/lib/modules/`.

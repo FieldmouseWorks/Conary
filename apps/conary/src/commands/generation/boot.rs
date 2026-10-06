@@ -1,8 +1,9 @@
 // apps/conary/src/commands/generation/boot.rs
 //! BLS boot entries and GRUB fallback for generation switching
 
-use super::metadata::{GenerationMetadata, generation_path};
+use super::metadata::GenerationMetadata;
 use anyhow::{Context, Result, anyhow};
+use conary_core::runtime_root::ConaryRuntimeRoot;
 use std::ffi::OsStr;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -53,8 +54,12 @@ fn detect_bootloader_in(bls_dir: &Path, path: Option<&OsStr>) -> BootLoader {
 ///
 /// Creates `/boot/loader/entries/conary-gen-{N}.conf` with kernel, initrd,
 /// and boot options derived from the generation metadata.
-pub fn write_bls_entry(gen_number: i64, root_uuid: &str) -> Result<PathBuf> {
-    let gen_dir = generation_path(gen_number);
+pub fn write_bls_entry(
+    runtime_root: &ConaryRuntimeRoot,
+    gen_number: i64,
+    root_uuid: &str,
+) -> Result<PathBuf> {
+    let gen_dir = runtime_root.generation_path(gen_number);
     let metadata = GenerationMetadata::read_from(&gen_dir)
         .with_context(|| format!("Failed to read metadata for generation {gen_number}"))?;
 
@@ -103,11 +108,12 @@ pub fn write_bls_entry(gen_number: i64, root_uuid: &str) -> Result<PathBuf> {
 /// Creates `/etc/grub.d/42_conary` with a menuentry for the generation,
 /// then runs `grub-mkconfig` (or `grub2-mkconfig`) to regenerate the config.
 pub fn write_grub_snippet(
+    runtime_root: &ConaryRuntimeRoot,
     gen_number: i64,
     root_uuid: &str,
     configuration: &GrubConfiguration,
 ) -> Result<()> {
-    let gen_dir = generation_path(gen_number);
+    let gen_dir = runtime_root.generation_path(gen_number);
     let metadata = GenerationMetadata::read_from(&gen_dir)
         .with_context(|| format!("Failed to read metadata for generation {gen_number}"))?;
 
@@ -179,16 +185,20 @@ fn grub_mkconfig_command(configuration: &GrubConfiguration) -> std::process::Com
 ///
 /// Returns an error unless a supported loader is available and its configuration
 /// is updated successfully.
-pub fn write_boot_entry(gen_number: i64, bootloader: &BootLoader) -> Result<()> {
+pub fn write_boot_entry(
+    runtime_root: &ConaryRuntimeRoot,
+    gen_number: i64,
+    bootloader: &BootLoader,
+) -> Result<()> {
     let root_uuid = detect_root_uuid()?;
 
     match bootloader {
         BootLoader::Bls => {
-            let path = write_bls_entry(gen_number, &root_uuid)?;
+            let path = write_bls_entry(runtime_root, gen_number, &root_uuid)?;
             println!("Boot entry written: {}", path.display());
         }
         BootLoader::Grub(configuration) => {
-            write_grub_snippet(gen_number, &root_uuid, configuration)?;
+            write_grub_snippet(runtime_root, gen_number, &root_uuid, configuration)?;
             println!("GRUB snippet written for generation {gen_number}");
         }
         BootLoader::None => {

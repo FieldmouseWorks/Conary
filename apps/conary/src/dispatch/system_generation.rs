@@ -8,10 +8,16 @@ use super::context::require_live_mutation;
 use crate::cli;
 use crate::commands;
 use crate::live_host_safety::{LiveMutationClass, MutationIntent};
+use conary_core::runtime_root::ConaryRuntimeRoot;
 
 pub(super) fn dispatch_system_generation_command(gen_cmd: cli::GenerationCommands) -> Result<()> {
+    // Generation pointer, inspection, and export commands address the host
+    // runtime root. Source roots never reach these commands.
+    let host_root = ConaryRuntimeRoot::default();
     match gen_cmd {
-        cli::GenerationCommands::List => commands::generation::commands::cmd_generation_list(),
+        cli::GenerationCommands::List => {
+            commands::generation::commands::cmd_generation_list(&host_root)
+        }
         cli::GenerationCommands::Build { summary, yes, db } => {
             require_live_mutation(
                 MutationIntent::from_apply_intent(yes),
@@ -84,6 +90,7 @@ pub(super) fn dispatch_system_generation_command(gen_cmd: cli::GenerationCommand
             output,
             size,
         } => commands::generation::export::cmd_generation_export(
+            &host_root,
             generation,
             path.as_deref(),
             &format,
@@ -101,7 +108,7 @@ pub(super) fn dispatch_system_generation_command(gen_cmd: cli::GenerationCommand
                 LiveMutationClass::AlwaysLive,
                 false,
             )?;
-            commands::generation::commands::cmd_generation_switch(number, reboot)
+            commands::generation::commands::cmd_generation_switch(&host_root, number, reboot)
         }
         cli::GenerationCommands::Rollback { yes } => {
             require_live_mutation(
@@ -110,7 +117,7 @@ pub(super) fn dispatch_system_generation_command(gen_cmd: cli::GenerationCommand
                 LiveMutationClass::AlwaysLive,
                 false,
             )?;
-            commands::generation::commands::cmd_generation_rollback()
+            commands::generation::commands::cmd_generation_rollback(&host_root)
         }
         cli::GenerationCommands::Gc { keep, yes, db } => {
             require_live_mutation(
@@ -122,7 +129,7 @@ pub(super) fn dispatch_system_generation_command(gen_cmd: cli::GenerationCommand
             commands::generation::gc::cmd_generation_gc(keep, &db.db_path)
         }
         cli::GenerationCommands::Info { number } => {
-            commands::generation::commands::cmd_generation_info(number)
+            commands::generation::commands::cmd_generation_info(&host_root, number)
         }
         cli::GenerationCommands::Recover { yes, db } => {
             require_live_mutation(

@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-09-24
-revision: 70
+last_updated: 2026-10-07
+revision: 71
 summary: Describe workspace ownership, release boundaries, package transactions, source and trust contracts, immutable catalogs, generation state, service boundaries, and operator surfaces.
 ---
 
@@ -538,6 +538,29 @@ Consolidating all three
 initramfs implementations and their tool inventories is tracked in
 [#863](https://github.com/FieldmouseWorks/Conary/issues/863).
 
+### Source Roots
+
+`crates/conary-core/src/source_root.rs` addresses source roots, the named
+per-profile runtime roots designed in #1208. A source root lives at
+`/var/lib/conary/roots/<name>/` and is an ordinary `ConaryRuntimeRoot` whose
+database is `<name>/conary.db`; its CAS, generations, `etc-state/`, GC roots,
+and keyring (`keys/`) are therefore disjoint from the host's and from every
+other root's. `ConaryRuntimeRoot::keys_dir` keeps the host keyring at
+`/var/lib/conary/keys` and gives every other runtime root `<root>/keys`.
+
+A name is 1 to 64 bytes of `[a-z0-9._-]` starting with `[a-z0-9]`, so it is
+both a source identity and a single safe path component. Creation assembles the
+`0700` root in a staging directory, records the pinned identity in the
+transaction that creates the schema, and renames the root into place without
+replacement. The pin is immutable in code and in SQL. The registry lists each
+entry as a root or as typed non-authority (invalid name, not a real directory,
+wrong owner or mode, missing or unreadable database, rebuild-required schema,
+missing or malformed pin, or a pin that differs from the directory name);
+non-authority entries are never opened for package work or reinterpreted. The
+CLI does not address source roots yet: generation `list`, `info`, `switch`,
+`rollback`, and export take an explicit runtime root, and dispatch passes the
+host root.
+
 ### Generation Lifecycle
 
 `root_manifest/delta.rs` owns the normalized changed-path contract and
@@ -758,9 +781,12 @@ The operational schema is split by ownership under
 `crates/conary-core/src/db/current_schema/sql/`: local package-manager state,
 repository/service state, and Remi conversion/administration state.
 
-Schema revision 57 is a rebuild-only hard cut. Installed CCS remove hooks and
-their rollback snapshots persist the hook's typed interpreter; revision 56
-rows carry none and are rebuilt rather than defaulted. Repository
+Schema revision 58 is a rebuild-only hard cut. It adds the immutable singleton
+`source_root_identity` pin (see Source Roots below); revision 57 databases are
+rebuilt rather than migrated, and the host database carries no pin row.
+Revision 57 made installed CCS remove hooks and their rollback snapshots
+persist the hook's typed interpreter; revision 56 rows carry none and are
+rebuilt rather than defaulted. Repository
 `security_advisory_support = supported` means explicit operator
 authorization to classify feed advisories as security updates; feed-authored
 `trust` and `source_trust` strings remain diagnostic only. Revision 55
@@ -847,7 +873,7 @@ portable fallback, and a full copy only when both faster providers are
 unavailable. Normal generation publication instead records a SQLite session
 changeset from before the package transaction through terminal publication.
 
-Schema revision 57 retains the immutable Remi source/profile resource graph and
+Schema revision 58 retains the immutable Remi source/profile resource graph and
 exact input-revision conversion pins, removes the false one-artifact-to-one-
 manifest constraint, binds each exact catalog to its host-local physical
 attestation, and keeps check/change/validation/publication facts separate.

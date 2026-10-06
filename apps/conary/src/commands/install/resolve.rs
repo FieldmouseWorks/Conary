@@ -20,8 +20,6 @@ use anyhow::Result;
 #[cfg(test)]
 use conary_core::db::models::ProvideEntry;
 use conary_core::db::models::Redirect;
-#[cfg(test)]
-use conary_core::db::paths::keyring_dir;
 use conary_core::repository::resolution_policy::ResolutionPolicy;
 use conary_core::repository::{
     PackageSource, RepositorySourceMetadata, ResolutionOptions, resolve_package,
@@ -334,8 +332,12 @@ mod tests {
 
     #[test]
     fn test_get_keyring_dir() {
-        let keyring = keyring_dir("/var/lib/conary/conary.db");
-        assert!(keyring.ends_with("keys"));
+        let host = conary_core::runtime_root::ConaryRuntimeRoot::default();
+        assert_eq!(
+            host.keys_dir(),
+            conary_core::db::paths::keyring_dir("/var/lib/conary/conary.db")
+        );
+        assert!(host.keys_dir().ends_with("keys"));
     }
 
     #[test]

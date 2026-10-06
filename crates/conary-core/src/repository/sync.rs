@@ -184,7 +184,8 @@ fn keyring_dir_for_connection(conn: &Connection) -> Result<PathBuf> {
         }
     }
 
-    Ok(crate::db::paths::keyring_dir("/var/lib/conary/conary.db"))
+    // An in-memory connection has no runtime root of its own.
+    Ok(crate::runtime_root::ConaryRuntimeRoot::default().keys_dir())
 }
 
 async fn fetch_repository_sync_snapshot(

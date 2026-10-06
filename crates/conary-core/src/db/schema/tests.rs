@@ -42,6 +42,7 @@ fn ensure_current_creates_schema_atomically() {
         "remi_active_universe_revision",
         "remi_runtime_sessions",
         "remi_profile_revision_pins",
+        "source_root_identity",
     ] {
         assert!(table_exists(&conn, table).unwrap(), "missing {table}");
     }

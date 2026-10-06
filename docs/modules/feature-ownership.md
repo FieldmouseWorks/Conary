@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-10-06
-revision: 131
+last_updated: 2026-10-07
+revision: 132
 summary: Route features to owned paths and proof, including guided and bounded unattended agent workflow tools, typed native persisted-SQL checks, autoremove preview and final state, installed-list, publication-debt, repository presentation, retained-survey requests, and workflow recovery.
 ---
 
@@ -552,9 +552,10 @@ Native lane proof: run `cargo test -p conary-core --features native-rpm-oracle r
 
 **Slug:** generation
 
-**Capability:** build generation artifacts, select complete generations for the
-next boot, recover publication debt, collect generations and local CAS objects,
-and export raw/qcow2/ISO carriers.
+**Capability:** address runtime roots and named source roots, build generation
+artifacts, select complete generations for the next boot, recover publication
+debt, collect generations and local CAS objects, and export raw/qcow2/ISO
+carriers.
 
 **Start here:** `crates/conary-core/src/generation/mod.rs`;
 `crates/conary-core/src/generation/builder.rs`;
@@ -570,6 +571,9 @@ SELinux/AppArmor provider interfaces, transaction commit, SQLite generation
 state, image building, bootstrap validation, conaryd route history.
 
 **Paths:** `crates/conary-core/src/generation/*`;
+`crates/conary-core/src/runtime_root.rs`;
+`crates/conary-core/src/source_root.rs`;
+`crates/conary-core/src/source_root/*`;
 `crates/conary-core/src/db/backup.rs`;
 `crates/conary-core/src/db/generation_backup_chain.rs`;
 `crates/conary-core/src/db/generation_delta.rs`;
@@ -595,7 +599,9 @@ state, image building, bootstrap validation, conaryd route history.
 `apps/conary/src/commands/provenance.rs`;
 `apps/conary/src/commands/provenance/*`.
 
-**Focused proof:** `cargo test -p conary-core generation::export`;
+**Focused proof:** `cargo test -p conary-core --lib source_root`;
+`cargo test -p conary-core --lib runtime_root`;
+`cargo test -p conary-core generation::export`;
 `cargo test -p conary-core generation::builder`;
 `cargo test -p conary-core --lib ccs::hooks::capabilities`;
 `cargo test -p conary-core generation::gc`;
@@ -634,7 +640,10 @@ OVMF firmware, currently remi-dev.
 `docs/llms/subsystem-map.md`.
 
 **Safety notes:** generation state and artifact formats are persisted behavior;
-schema or format changes require explicit compatibility decisions. Runtime
+schema or format changes require explicit compatibility decisions. A source
+root is an authority only when its `0700` directory name equals the immutable
+identity pinned in its current-schema database; every other registry entry is
+typed non-authority and is never opened for package work. Runtime
 generation GC resolves and validates surviving generation manifests,
 recoverable publication snapshots, the complete unreversed rollback stack,
 current installed/config/derived roots, current converted/public native chunk

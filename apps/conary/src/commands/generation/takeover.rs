@@ -12,7 +12,6 @@ use self::ownership::{OwnershipTransferReport, take_ownership, upgrade_to_cas_ba
 use super::super::open_db;
 use super::boot::{detect_bootloader, write_boot_entry};
 use super::builder::build_generation;
-use super::metadata::generations_dir;
 use super::takeover_state::{
     BootEntryOutcome, TakeoverInventory, TakeoverPhase, TakeoverRecord, TakeoverStatus,
 };
@@ -24,6 +23,7 @@ use conary_core::model;
 use conary_core::packages::{
     InstalledInventorySnapshot, InstalledPackageIdentity, SystemPackageManager,
 };
+use conary_core::runtime_root::ConaryRuntimeRoot;
 use std::collections::HashMap;
 use std::io::Write;
 use tracing::{info, warn};
@@ -190,7 +190,9 @@ pub fn cmd_system_takeover(
     }
 
     // -- Pre-flight -----------------------------------------------------------
-    preflight_checks(takeover_requires_composefs(level, dry_run))?;
+    // The same runtime root the generation builder derives from `db_path`.
+    let runtime_root = ConaryRuntimeRoot::from_db_path(db_path);
+    preflight_checks(&runtime_root, takeover_requires_composefs(level, dry_run))?;
 
     // -- Plan -----------------------------------------------------------------
     let incomplete_record = TakeoverRecord::load_latest_incomplete(db_path)?;
@@ -483,7 +485,7 @@ pub fn cmd_system_takeover(
     info!("Built generation {gen_number}");
 
     println!("  Writing boot entry ...");
-    let boot_entry_outcome = match write_boot_entry(gen_number, &bootloader) {
+    let boot_entry_outcome = match write_boot_entry(&runtime_root, gen_number, &bootloader) {
         Ok(()) => BootEntryOutcome::Written,
         Err(error) => {
             warn!("Failed to write boot entry: {error}");
@@ -679,7 +681,7 @@ fn bootloader_name(bootloader: &super::boot::BootLoader) -> &'static str {
 // ---------------------------------------------------------------------------
 
 /// Pre-flight safety checks before takeover.
-fn preflight_checks(check_composefs: bool) -> Result<()> {
+fn preflight_checks(runtime_root: &ConaryRuntimeRoot, check_composefs: bool) -> Result<()> {
     // Must be root
     if !nix::unistd::Uid::effective().is_root() {
         return Err(anyhow!(
@@ -688,13 +690,12 @@ fn preflight_checks(check_composefs: bool) -> Result<()> {
     }
 
     // Ensure generations directory exists
-    let gen_dir = generations_dir();
+    let gen_dir = runtime_root.generations_dir();
     std::fs::create_dir_all(&gen_dir).context("Failed to create generations directory")?;
 
     // Check composefs support only when we'll actually build a generation
     if check_composefs {
-        let default_cas = std::path::PathBuf::from("/conary/objects");
-        super::composefs::preflight_composefs(&default_cas)
+        super::composefs::preflight_composefs(&runtime_root.objects_dir())
             .context("Composefs preflight failed -- requires Linux 6.2+ with composefs support")?;
     }
 

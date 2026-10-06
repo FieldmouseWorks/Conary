@@ -538,7 +538,12 @@ pub(super) async fn dispatch_command(command: Option<Commands>) -> Result<()> {
             generation,
             output,
             objects_dir,
-        }) => commands::export_oci(generation, Path::new(&objects_dir), Path::new(&output)),
+        }) => commands::export_oci(
+            &conary_core::runtime_root::ConaryRuntimeRoot::default(),
+            generation,
+            Path::new(&objects_dir),
+            Path::new(&output),
+        ),
 
         // =====================================================================
         // Derivation Engine
