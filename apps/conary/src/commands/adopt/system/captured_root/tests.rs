@@ -142,7 +142,10 @@ fn full_capture_partitions_package_and_unowned_authority_exactly() {
     }
 
     let first_changeset = insert_changeset(&tx, "capture selected root");
-    let first = synchronize_captured_root(&tx, first_changeset, &captured).unwrap();
+    let mut package_rows = PackageTransactionStaging::begin(&tx).unwrap();
+    let first =
+        synchronize_captured_root(&tx, &mut package_rows, first_changeset, &captured).unwrap();
+    package_rows.finish().unwrap();
     assert!(first.changed);
     assert!(first.captured_entries > 0);
     assert!(first.package_entries >= 6);
@@ -226,7 +229,10 @@ fn full_capture_partitions_package_and_unowned_authority_exactly() {
     }
 
     let second_changeset = insert_changeset(&tx, "repeat selected-root capture");
-    let second = synchronize_captured_root(&tx, second_changeset, &captured).unwrap();
+    let mut package_rows = PackageTransactionStaging::begin(&tx).unwrap();
+    let second =
+        synchronize_captured_root(&tx, &mut package_rows, second_changeset, &captured).unwrap();
+    package_rows.finish().unwrap();
     assert!(!second.changed);
     assert_eq!(second.captured_entries, first.captured_entries);
     assert_eq!(second.package_entries, first.package_entries);
@@ -237,6 +243,116 @@ fn full_capture_partitions_package_and_unowned_authority_exactly() {
             .filter(|trove| trove.install_source == InstallSource::CapturedRoot)
             .count(),
         1
+    );
+    tx.commit().unwrap();
+}
+
+#[test]
+fn full_adoption_stages_packages_and_captured_root_through_one_authority() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("root");
+    let cas = CasStore::new(temp.path().join("objects")).unwrap();
+    for directory in ["etc", "usr/bin"] {
+        std::fs::create_dir_all(root.join(directory)).unwrap();
+    }
+    std::fs::write(root.join("usr/bin/owned"), b"package").unwrap();
+    std::fs::write(root.join("etc/unowned"), b"unowned").unwrap();
+
+    let captured =
+        scan_selected_root_with_exclusions(&root, &cas, &SelectedRootCaptureExclusions::empty())
+            .unwrap();
+    let entries = captured
+        .generation
+        .entries
+        .iter()
+        .chain(&captured.state.entries)
+        .map(|entry| (entry.path.as_str(), entry))
+        .collect::<std::collections::HashMap<_, _>>();
+
+    let db_path = temp.path().join("conary.db");
+    conary_core::db::init(&db_path).unwrap();
+    let mut conn = conary_core::db::open(&db_path).unwrap();
+    let tx = conn.transaction().unwrap();
+    let changeset_id = insert_changeset(&tx, "full adoption");
+
+    let mut package = Trove::new_with_source(
+        "native-package".to_string(),
+        "1-1".to_string(),
+        TroveType::Package,
+        InstallSource::AdoptedFull,
+        VersionScheme::Rpm,
+    );
+    package.architecture = Some("x86_64".to_string());
+    package.native_package_identity = Some(
+        conary_core::packages::InstalledPackageIdentity::rpm(
+            "native-package-1-1.x86_64",
+            "native-package",
+            None,
+            "1",
+            "1",
+            "x86_64",
+        )
+        .unwrap(),
+    );
+    package.installed_by_changeset_id = Some(changeset_id);
+    let package_id = package.insert(&tx).unwrap();
+
+    let owned = entries["/usr/bin/owned"];
+    let adopted = CapturedAdoptionFile {
+        source: (
+            "/usr/bin/owned".to_string(),
+            0,
+            0,
+            None,
+            None,
+            None,
+            None,
+            InstalledFileAbsencePolicy::Required,
+        ),
+        node: owned.node.clone(),
+        content: owned.content.clone(),
+    };
+
+    // Adoption order: one staging authority stages the package payload, then
+    // the captured root, then the transaction owner finishes it.
+    let mut package_rows = PackageTransactionStaging::begin(&tx).unwrap();
+    package_rows
+        .stage_payload(&StagedPayloadRow {
+            entry: adopted.file_entry(package_id),
+            package_name: "native-package".to_string(),
+            component_name: None,
+            directory_materialization: ExistingDirectoryMaterialization::ApplyIncoming,
+            disposition: StagedAnchorDisposition::Auto,
+            selected_root_node: None,
+            materialization_target_path: None,
+            history: None,
+        })
+        .unwrap();
+    package_rows.validate_and_reconcile().unwrap();
+
+    let sync = synchronize_captured_root(&tx, &mut package_rows, changeset_id, &captured).unwrap();
+    package_rows.finish().unwrap();
+
+    assert!(sync.changed);
+    let captured_trove = Trove::list_all(&tx)
+        .unwrap()
+        .into_iter()
+        .find(|trove| trove.install_source == InstallSource::CapturedRoot)
+        .unwrap();
+    assert_eq!(captured_trove.name, LIVE_ROOT_PACKAGE_NAME);
+    assert_eq!(
+        FileEntry::find_by_path(&tx, "/usr/bin/owned")
+            .unwrap()
+            .unwrap()
+            .trove_id,
+        package_id
+    );
+    assert_eq!(
+        FileEntry::find_by_path(&tx, "/etc/unowned")
+            .unwrap()
+            .unwrap()
+            .trove_id,
+        captured_trove.id.unwrap()
     );
     tx.commit().unwrap();
 }
