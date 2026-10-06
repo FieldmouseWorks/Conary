@@ -36,6 +36,17 @@ exit 0
 FIXTURE
 chmod 0755 "$fixture"
 
+# Digest-correct payload whose --version invocation fails with a known stderr.
+broken="$tmp/broken-tree"
+cat >"$broken" <<'BROKEN'
+#!/usr/bin/env bash
+printf 'broken says "no" with a backslash \\ and a\ttab\n' >&2
+exit 7
+BROKEN
+chmod 0755 "$broken"
+broken_sha_line="$(sha256sum "$broken")"
+broken_sha="${broken_sha_line%% *}"
+
 wrong="$tmp/wrong-tree"
 printf 'not the package payload\n' >"$wrong"
 
@@ -71,6 +82,12 @@ case "${1:-}" in
     ;;
   install)
     case "$mode" in
+      install_broken)
+        mkdir -p "$(dirname "$bin_path")"
+        cp "$MOCK_BROKEN" "$bin_path"
+        chmod 0755 "$bin_path"
+        exit 0
+        ;;
       install_noop) exit 0 ;;
       install_wrong)
         mkdir -p "$(dirname "$bin_path")"
@@ -129,7 +146,7 @@ new_root() {
 
 run_journey() {
   local mode="$1" host="$2" out="$3" root="$4"
-  MOCK_MODE="$mode" MOCK_FIXTURE="$fixture" MOCK_WRONG="$wrong" \
+  MOCK_MODE="$mode" MOCK_FIXTURE="$fixture" MOCK_WRONG="$wrong" MOCK_BROKEN="$broken" \
     JOURNEY_CONARY="$mock" JOURNEY_BIN_ROOT="$root" \
     bash "$journey" --host "$host" --packages "$tsv" --downloads "$downloads" \
     --evidence "$out"
@@ -233,6 +250,42 @@ if ! jq -e '
     ([.stages[] | select(.id == "run:fedora-44") | .reason] == ["ok"])
   ' "$adopt_out" >/dev/null 2>&1; then
   fail "adopt_fail: expected command_failed with later stages recorded"
+fi
+
+# execution failure: the digest matches but --version fails, so the exact exit
+# code and stderr tail must be recorded. A second row with the broken payload's
+# digest is used so the digest check passes.
+exec_tsv="$tmp/exec-packages.tsv"
+{
+  printf 'profile\tname\tformat\tfile\tsha256\turl\tbinary\tbinary_sha256\n'
+  printf 'fedora-44\ttree\trpm\ttree-2.2.1-4.fc44.x86_64.rpm\t%s\thttps://example.invalid/tree.rpm\t/usr/bin/tree\t%s\n' \
+    "$dummy_sha" "$broken_sha"
+} >"$exec_tsv"
+exec_root="$(new_root)"
+exec_out="$tmp/exec-fail.json"
+exec_status=0
+MOCK_MODE=install_broken MOCK_FIXTURE="$fixture" MOCK_WRONG="$wrong" MOCK_BROKEN="$broken" \
+  JOURNEY_CONARY="$mock" JOURNEY_BIN_ROOT="$exec_root" \
+  bash "$journey" --host fedora-44 --packages "$exec_tsv" --downloads "$downloads" \
+  --evidence "$exec_out" || exec_status=$?
+if [[ "$exec_status" -ne 1 ]]; then
+  fail "install_broken: expected exit 1, got $exec_status"
+fi
+exec_expected=$'broken says "no" with a backslash \\ and a\ttab'
+if ! jq -e --arg expected "$exec_expected" '
+    ([.stages[] | select(.id == "run:fedora-44") | .reason] == ["execution_failed"]) and
+    ([.stages[] | select(.id == "run:fedora-44") | .exit_code] == [7]) and
+    ([.stages[] | select(.id == "run:fedora-44") | .stderr_tail] == [$expected])
+  ' "$exec_out" >/dev/null 2>&1; then
+  fail "install_broken: execution_failed evidence lost its exit code or stderr tail"
+fi
+# Stages that ran nothing must not carry a tail.
+if ! jq -e '
+    ([.stages[] | select(.reason == "ok" or .reason == "binary_missing"
+      or .reason == "binary_digest_mismatch" or .reason == "still_present"
+      or .reason == "preexisting_binary") | has("stderr_tail")] | any | not)
+  ' "$exec_out" >/dev/null 2>&1; then
+  fail "install_broken: a non-process reason carried stderr_tail"
 fi
 
 if [[ "$failures" -ne 0 ]]; then

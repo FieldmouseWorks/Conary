@@ -79,7 +79,11 @@ record_stage() {
   {
     printf '{"id":"%s","passed":%s,"exit_code":%s,"reason":"%s"' \
       "$id" "$passed" "$exit_code" "$reason"
-    if [[ "$reason" == "$REASON_COMMAND_FAILED" ]]; then
+    # Only reasons produced by a stage that ran a process and captured its
+    # stderr carry a tail; the file-state reasons (binary_missing,
+    # binary_digest_mismatch, preexisting_binary, still_present) ran nothing.
+    if [[ "$reason" == "$REASON_COMMAND_FAILED" ||
+          "$reason" == "$REASON_EXECUTION_FAILED" ]]; then
       printf ',"stderr_tail":"%s"' "$(json_escape "$stderr_tail")"
     fi
     printf '}\n'
