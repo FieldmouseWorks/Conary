@@ -1,0 +1,17 @@
+{
+  "version": 2,
+  "images": {
+    "opensuse-tumbleweed": {
+      "source": "registry.opensuse.org/opensuse/tumbleweed:20260908@sha256:000f41d72d21563074c380c3f5d27c6d28c9f8aa5f593afaa923905e70c4a0f2",
+      "local": "127.0.0.1:55071/conary-ci-base-opensuse-tumbleweed@sha256:000f41d72d21563074c380c3f5d27c6d28c9f8aa5f593afaa923905e70c4a0f2",
+      "platform": "linux/amd64",
+      "release": {
+        "repository": "FieldmouseWorks/Conary",
+        "tag": "ci-base-971-tumbleweed-20260908",
+        "asset": "opensuse-tumbleweed-20260908-oci-dir.tar",
+        "sha256": "db4dce3794bc93d307dacac63905ab3c11d360a22b24b1cf0dce97f5e38e2824",
+        "size": 42803200
+      }
+    }
+  }
+}

@@ -22,9 +22,11 @@ pub(super) fn dispatch_query_command(query_cmd: cli::QueryCommands) -> Result<()
             depth,
         } => commands::cmd_deptree(&package_name, &db.db_path, reverse, depth),
 
-        cli::QueryCommands::Whatprovides { capability, db } => {
-            commands::cmd_whatprovides(&capability, &db.db_path)
-        }
+        cli::QueryCommands::Whatprovides {
+            capability,
+            db,
+            json,
+        } => commands::cmd_whatprovides(&capability, &db.db_path, json),
 
         cli::QueryCommands::Whatbreaks {
             package_name,

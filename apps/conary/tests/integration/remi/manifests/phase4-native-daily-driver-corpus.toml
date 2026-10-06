@@ -192,15 +192,18 @@ native_profile = "fedora-44"
 native_corpus_fixture_version = "1.0.0-1"
 native_corpus_update_version = "1.0.1-1"
 native_corpus_dependency_count = "4"
-native_corpus_dependency_probe = "phase4-repository-fixture"
-native_corpus_config_count = "3"
+native_corpus_requirement_text = "phase4-repository-fixture = 1.0.0"
+native_corpus_atom_text_type = "null"
+native_corpus_atom_text = ""
 native_corpus_config_source = "rpm"
 native_corpus_lifecycle_fidelity = "native-lifecycle"
+native_corpus_activation_entry = "rpm:%post"
 native_corpus_source_format = "rpm"
 native_corpus_capability_format = "rpm"
 native_corpus_target_architecture = "x86_64"
 native_corpus_payload_user = "numeric:0"
 native_corpus_payload_group = "numeric:0"
+native_corpus_regular_hardlink_path = "/usr/lib/phase4-corpus/hardlink-copy"
 
 [distro_overrides."ubuntu-26.04"]
 native_target = "deb"
@@ -211,15 +214,18 @@ native_profile = "ubuntu-26.04"
 native_corpus_fixture_version = "1.0.0-1"
 native_corpus_update_version = "1.0.1-1"
 native_corpus_dependency_count = "1"
-native_corpus_dependency_probe = "phase4-repository-fixture"
-native_corpus_config_count = "3"
+native_corpus_requirement_text = "phase4-repository-fixture (= 1.0.0)"
+native_corpus_atom_text_type = "text"
+native_corpus_atom_text = "phase4-repository-fixture (= 1.0.0)"
 native_corpus_config_source = "deb"
 native_corpus_lifecycle_fidelity = "native-lifecycle"
+native_corpus_activation_entry = "deb:postinst"
 native_corpus_source_format = "deb"
 native_corpus_capability_format = "debian"
 native_corpus_target_architecture = "x86_64"
 native_corpus_payload_user = "numeric:0"
 native_corpus_payload_group = "numeric:0"
+native_corpus_regular_hardlink_path = "/usr/lib/phase4-corpus/hardlink-anchor"
 
 [distro_overrides.arch]
 native_target = "arch"
@@ -230,15 +236,18 @@ native_profile = "arch"
 native_corpus_fixture_version = "1.0.0-1"
 native_corpus_update_version = "1.0.1-1"
 native_corpus_dependency_count = "1"
-native_corpus_dependency_probe = "phase4-repository-fixture"
-native_corpus_config_count = "3"
+native_corpus_requirement_text = "phase4-repository-fixture=1.0.0"
+native_corpus_atom_text_type = "null"
+native_corpus_atom_text = ""
 native_corpus_config_source = "arch"
 native_corpus_lifecycle_fidelity = "native-lifecycle"
+native_corpus_activation_entry = "arch:post_install"
 native_corpus_source_format = "alpm"
 native_corpus_capability_format = "alpm"
 native_corpus_target_architecture = "x86_64"
 native_corpus_payload_user = "numeric:0"
 native_corpus_payload_group = "numeric:0"
+native_corpus_regular_hardlink_path = "/usr/lib/phase4-corpus/hardlink-anchor"
 
 # --------------------------------------------------------------------------
 # TNPM13: daily-driver corpus build
@@ -315,11 +324,11 @@ exit_code = 0
 stdout_contains_any = ["Successfully installed", "Installed", "phase4-daily-driver-corpus"]
 
 [[test.step]]
-run = "sqlite3 ${DB_PATH} \"SELECT t.name || '|' || t.version || '|' || COALESCE(t.package_release, '') || '|' || COALESCE(t.architecture, '') || '|' || COALESCE(t.version_scheme, '') || '|' || COALESCE(r.name, '') || '|' || COALESCE(t.source_profile, '') || '|' || COALESCE(t.install_source, '') || '|' || COALESCE(t.install_reason, '') FROM troves t LEFT JOIN repositories r ON r.id = t.installed_from_repository_id WHERE t.name = 'phase4-repository-fixture'\""
+run = "sqlite3 -json ${DB_PATH} \"SELECT t.name AS name, t.version AS version, COALESCE(t.package_release, '') AS package_release, COALESCE(t.architecture, '') AS architecture, COALESCE(t.version_scheme, '') AS version_scheme, COALESCE(r.name, '') AS repository_name, COALESCE(t.source_profile, '') AS source_profile, COALESCE(t.install_source, '') AS install_source, COALESCE(t.install_reason, '') AS install_reason FROM troves t LEFT JOIN repositories r ON r.id = t.installed_from_repository_id WHERE t.name = 'phase4-repository-fixture' ORDER BY t.id\""
 
 [test.step.assert]
 exit_code = 0
-stdout_contains = "phase4-repository-fixture|1.0.0|1|${native_arch}|${native_scheme}|${REPO_NAME}|${native_profile}|repository|dependency"
+stdout_json = [{ pointer = "", equals_json = '''[{"name":"phase4-repository-fixture","version":"1.0.0","package_release":"1","architecture":"${native_arch}","version_scheme":"${native_scheme}","repository_name":"${REPO_NAME}","source_profile":"${native_profile}","install_source":"repository","install_reason":"dependency"}]''' }]
 
 [[test.step]]
 run = "/opt/remi-tests/fixtures/native/assert-selected-generation.py --root /conary --expect-sha256 /usr/bin/phase4-corpus=565d3f61ffdbbca53c7371588ce6884b680dfa1d1c1bd7fe3954b4ab957e0676 --expect-sha256 /usr/bin/phase4-corpus-alt=1c279f8af2faaed5ae4aad470ab37742b2cede45b42b65d961f2bb33233e5ad3 --expect-symlink /usr/bin/phase4-corpus-link=phase4-corpus --expect-directory /opt=0750 --expect-directory /usr/lib/phase4-corpus/state=0750 --expect-hardlink /usr/lib/phase4-corpus/hardlink-anchor=/usr/lib/phase4-corpus/hardlink-copy --expect-node-metadata /usr/lib/phase4-corpus/hardlink-anchor=${native_corpus_payload_user},${native_corpus_payload_group},1700000000,0 --expect-node-metadata /usr/lib/phase4-corpus/hardlink-copy=${native_corpus_payload_user},${native_corpus_payload_group},1700000000,0 --expect-sha256 /etc/phase4-corpus/app.conf=8b3ca388884ac9c33e5e1c849ac30bc59aa9d494e7afc5d91fb56c8a4e760eb2 --expect-sha256 /etc/phase4-corpus/app-local.conf=9773fc86d4e388ba3f5eba7408708b46ce20738acf98fc55a4e5f584bbe8af66 --expect-sha256 /etc/phase4-corpus/app-deleted.conf=d9697bd8e59efc7dc9863c9ae9b0c3745262015b3552a20712a9bcbfc3e47f79 --expect-sha256 /usr/lib/systemd/system/phase4-corpus.service=20200a86933288373c109a2e3289b2314ff6015886bfbad9bec6e613421e756a --expect-sha256 /usr/lib/kernel/install.d/95-phase4-corpus.install=8753356f470ea82416c2d7a71cbf8367d4cbe1a8b78f3276fe45035e114c3674 --present /usr/share/phase4-corpus/large-payload.bin --present /usr/share/phase4-repository-fixture/probe.txt --expect-sha256 /var/lib/phase4-corpus/scriptlet.marker=a51a6c19a1ffc7416827e89adf20749d23ad42452c396cf7e627409f2896922c --expect-user phase4-corpus-user=/var/lib/phase4-corpus,/bin/false,phase4-corpus-group || { sqlite3 ${DB_PATH} \"SELECT source_entry || '|' || failure_kind || '|' || message FROM lifecycle_events ORDER BY id\" >&2; exit 1; }"
@@ -341,74 +350,74 @@ fatal = true
 depends_on = ["TNPM14"]
 
 [[test.step]]
-run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' troves' FROM troves WHERE name = 'phase4-daily-driver-corpus'; SELECT name || '|' || version || '|' || COALESCE(architecture, '') || '|' || COALESCE(version_scheme, '') || '|' || COALESCE(source_profile, '') || '|' || COALESCE(install_source, '') || '|' || COALESCE(install_reason, '') FROM troves WHERE name = 'phase4-daily-driver-corpus'\""
+run = "sqlite3 -json ${DB_PATH} \"SELECT name, version, COALESCE(architecture, '') AS architecture, COALESCE(version_scheme, '') AS version_scheme, COALESCE(source_profile, '') AS source_profile, COALESCE(install_source, '') AS install_source, COALESCE(install_reason, '') AS install_reason FROM troves WHERE name = 'phase4-daily-driver-corpus' ORDER BY id\""
 
 [test.step.assert]
 exit_code = 0
-stdout_contains_all = ["1 troves", "phase4-daily-driver-corpus|${native_corpus_fixture_version}|${native_arch}|${native_scheme}|${native_profile}|file|explicit"]
+stdout_json = [{ pointer = "", equals_json = '''[{"name":"phase4-daily-driver-corpus","version":"${native_corpus_fixture_version}","architecture":"${native_arch}","version_scheme":"${native_scheme}","source_profile":"${native_profile}","install_source":"file","install_reason":"explicit"}]''' }]
 
 [[test.step]]
-run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' regular files' FROM files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus') AND json_extract(payload_node_json, '$.source.kind.type') = 'regular'; SELECT path || '|' || coalesce(content_size, '-') || '|' || json_extract(payload_node_json, '$.source.kind.type') FROM files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus') AND json_extract(payload_node_json, '$.source.kind.type') = 'regular' ORDER BY path\""
+run = "sqlite3 -json ${DB_PATH} \"SELECT path, json_extract(payload_node_json, '$.source.kind.type') AS kind, content_size, content_sha256 FROM files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus') AND json_extract(payload_node_json, '$.source.kind.type') = 'regular' ORDER BY path\""
 
 [test.step.assert]
 exit_code = 0
-stdout_contains_all = ["9 regular files", "/etc/phase4-corpus/app.conf", "/etc/phase4-corpus/app-deleted.conf", "/etc/phase4-corpus/app-local.conf", "/usr/bin/phase4-corpus-alt", "/usr/lib/kernel/install.d/95-phase4-corpus.install", "/usr/lib/systemd/system/phase4-corpus.service", "/usr/share/phase4-corpus/large-payload.bin|2097152|regular"]
+stdout_json = [{ pointer = "", equals_json = '''[{"path":"/etc/phase4-corpus/app-deleted.conf","kind":"regular","content_size":22,"content_sha256":"d9697bd8e59efc7dc9863c9ae9b0c3745262015b3552a20712a9bcbfc3e47f79"},{"path":"/etc/phase4-corpus/app-local.conf","kind":"regular","content_size":20,"content_sha256":"9773fc86d4e388ba3f5eba7408708b46ce20738acf98fc55a4e5f584bbe8af66"},{"path":"/etc/phase4-corpus/app.conf","kind":"regular","content_size":48,"content_sha256":"8b3ca388884ac9c33e5e1c849ac30bc59aa9d494e7afc5d91fb56c8a4e760eb2"},{"path":"/usr/bin/phase4-corpus","kind":"regular","content_size":48,"content_sha256":"565d3f61ffdbbca53c7371588ce6884b680dfa1d1c1bd7fe3954b4ab957e0676"},{"path":"/usr/bin/phase4-corpus-alt","kind":"regular","content_size":52,"content_sha256":"1c279f8af2faaed5ae4aad470ab37742b2cede45b42b65d961f2bb33233e5ad3"},{"path":"/usr/lib/kernel/install.d/95-phase4-corpus.install","kind":"regular","content_size":96,"content_sha256":"8753356f470ea82416c2d7a71cbf8367d4cbe1a8b78f3276fe45035e114c3674"},{"path":"${native_corpus_regular_hardlink_path}","kind":"regular","content_size":31,"content_sha256":"7c1e048a51efb4f45a2910924eac0cd847852cae01e252c0c1a9759d9d07480d"},{"path":"/usr/lib/systemd/system/phase4-corpus.service","kind":"regular","content_size":137,"content_sha256":"20200a86933288373c109a2e3289b2314ff6015886bfbad9bec6e613421e756a"},{"path":"/usr/share/phase4-corpus/large-payload.bin","kind":"regular","content_size":2097152,"content_sha256":"5647f05ec18958947d32874eeb788fa396a05d0bab7c1b71f112ceb7e9b31eee"}]''' }]
 
 [[test.step]]
-run = "sqlite3 ${DB_PATH} \"SELECT path || '|' || json_extract(payload_node_json, '$.source.kind.type') || '|' || printf('%04o', json_extract(payload_node_json, '$.source.mode') & 4095) FROM files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus') AND path IN ('/opt', '/usr/lib/phase4-corpus/state') ORDER BY path; SELECT path || '|' || json_extract(payload_node_json, '$.source.kind.type') || '|' || json_extract(payload_node_json, '$.source.kind.target') FROM files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus') AND path = '/usr/bin/phase4-corpus-link'\""
+run = "sqlite3 -json ${DB_PATH} \"SELECT path, json_extract(payload_node_json, '$.source.kind.type') AS kind, CASE WHEN json_extract(payload_node_json, '$.source.kind.type') = 'directory' THEN json_extract(payload_node_json, '$.source.mode') END AS directory_mode, CASE WHEN json_extract(payload_node_json, '$.source.kind.type') = 'symlink' THEN json_extract(payload_node_json, '$.source.kind.target') END AS symlink_target FROM files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus') AND path IN ('/opt', '/usr/bin/phase4-corpus-link', '/usr/lib/phase4-corpus/state') ORDER BY path\""
 
 [test.step.assert]
 exit_code = 0
-stdout_contains_all = ["/opt|directory|0750", "/usr/lib/phase4-corpus/state|directory|0750", "/usr/bin/phase4-corpus-link|symlink|phase4-corpus"]
+stdout_json = [{ pointer = "", equals_json = '''[{"path":"/opt","kind":"directory","directory_mode":16872,"symlink_target":null},{"path":"/usr/bin/phase4-corpus-link","kind":"symlink","directory_mode":null,"symlink_target":"phase4-corpus"},{"path":"/usr/lib/phase4-corpus/state","kind":"directory","directory_mode":16872,"symlink_target":null}]''' }]
 
 [[test.step]]
-run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' hardlinks' FROM files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus') AND json_extract(payload_node_json, '$.source.kind.type') = 'hardlink'; SELECT path || '|' || json_extract(payload_node_json, '$.source.kind.type') FROM files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus') AND path IN ('/usr/lib/phase4-corpus/hardlink-anchor', '/usr/lib/phase4-corpus/hardlink-copy') ORDER BY path\""
+run = "sqlite3 -json ${DB_PATH} \"WITH scoped AS (SELECT path, json_extract(payload_node_json, '$.source.kind.type') AS kind FROM files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus')) SELECT COUNT(CASE WHEN kind = 'hardlink' THEN 1 END) AS hardlink_count, COUNT(CASE WHEN path = '/usr/lib/phase4-corpus/hardlink-anchor' AND kind IN ('regular','hardlink') THEN 1 END) AS anchor_member, COUNT(CASE WHEN path = '/usr/lib/phase4-corpus/hardlink-copy' AND kind IN ('regular','hardlink') THEN 1 END) AS copy_member, COUNT(CASE WHEN path IN ('/usr/lib/phase4-corpus/hardlink-anchor','/usr/lib/phase4-corpus/hardlink-copy') AND kind = 'hardlink' THEN 1 END) AS named_hardlink_count FROM scoped\""
 
 [test.step.assert]
 exit_code = 0
-stdout_contains_all = ["1 hardlinks", "/usr/lib/phase4-corpus/hardlink-anchor|", "/usr/lib/phase4-corpus/hardlink-copy|"]
+stdout_json = [{ pointer = "", equals_json = '''[{"hardlink_count":1,"anchor_member":1,"copy_member":1,"named_hardlink_count":1}]''' }]
 
 [[test.step]]
-run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' requirement groups' FROM package_requirement_groups WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus'); SELECT COALESCE((SELECT group_concat(kind || '|' || version_scheme || '|' || requirement_json, char(10)) FROM package_requirement_groups WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus') ORDER BY id), 'no-deps'); SELECT json_extract(requirement_json, '$.expression.operands.name') || '|' || json_extract(requirement_json, '$.expression.operands.version_constraint') FROM package_requirement_groups WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus') AND json_extract(requirement_json, '$.expression.operands.name') = 'phase4-repository-fixture'\""
+run = "sqlite3 -json ${DB_PATH} \"SELECT t.name AS trove_name, t.version AS trove_version, t.type AS trove_type, COALESCE(t.architecture, '') AS trove_architecture, t.version_scheme AS trove_scheme, COALESCE(t.source_profile, '') AS source_profile, t.install_source AS install_source, t.install_reason AS install_reason, g.kind AS group_kind, g.version_scheme AS group_scheme, json_type(g.requirement_json) AS group_type, json_extract(g.requirement_json, '$.kind') AS payload_kind, json_extract(g.requirement_json, '$.behavior') AS behavior, json_type(g.requirement_json, '$.description') AS description_type, json_type(g.requirement_json, '$.expression') AS expression_type, json_extract(g.requirement_json, '$.expression.operator') AS expression_operator, json_type(g.requirement_json, '$.expression.operands') AS operand_type, json_extract(g.requirement_json, '$.expression.operands.name') AS expression_name, json_extract(g.requirement_json, '$.expression.operands.version_constraint') AS expression_constraint, json_type(g.requirement_json, '$.expression.operands.capability_kind') AS expression_capability_kind_type, json_extract(g.requirement_json, '$.expression.operands.capability_kind') AS expression_capability_kind, json_extract(g.requirement_json, '$.expression.operands.architecture_qualifier.kind') AS expression_architecture_kind, json_type(g.requirement_json, '$.expression.operands.native_text') AS expression_native_text_type, COALESCE(json_extract(g.requirement_json, '$.expression.operands.native_text'), '') AS expression_native_text, json_type(g.requirement_json, '$.alternatives') AS alternatives_type, json_array_length(g.requirement_json, '$.alternatives') AS alternatives_count, json_type(g.requirement_json, '$.alternatives[0]') AS alternative_type, json_extract(g.requirement_json, '$.alternatives[0].name') AS alternative_name, json_extract(g.requirement_json, '$.alternatives[0].version_constraint') AS alternative_constraint, json_type(g.requirement_json, '$.alternatives[0].capability_kind') AS alternative_capability_kind_type, json_extract(g.requirement_json, '$.alternatives[0].capability_kind') AS alternative_capability_kind, json_extract(g.requirement_json, '$.alternatives[0].architecture_qualifier.kind') AS alternative_architecture_kind, json_type(g.requirement_json, '$.alternatives[0].native_text') AS alternative_native_text_type, COALESCE(json_extract(g.requirement_json, '$.alternatives[0].native_text'), '') AS alternative_native_text, json_type(g.requirement_json, '$.native_text') AS native_text_type, json_extract(g.requirement_json, '$.native_text') AS native_text, (SELECT COUNT(*) - ${native_corpus_dependency_count} FROM package_requirement_groups AS all_groups WHERE all_groups.trove_id = t.id) AS count_delta FROM troves AS t LEFT JOIN package_requirement_groups AS g ON g.trove_id = t.id AND json_extract(g.requirement_json, '$.expression.operands.name') = 'phase4-repository-fixture' WHERE t.name = 'phase4-daily-driver-corpus' ORDER BY t.id, g.id\""
 
 [test.step.assert]
 exit_code = 0
-stdout_contains_all = ["${native_corpus_dependency_count} requirement groups", "${native_corpus_dependency_probe}", "phase4-repository-fixture|= 1.0.0"]
+stdout_json = [{ pointer = "", equals_json = '''[{"trove_name":"phase4-daily-driver-corpus","trove_version":"${native_corpus_fixture_version}","trove_type":"package","trove_architecture":"${native_arch}","trove_scheme":"${native_scheme}","source_profile":"${native_profile}","install_source":"file","install_reason":"explicit","group_kind":"depends","group_scheme":"${native_scheme}","group_type":"object","payload_kind":"Depends","behavior":"Hard","description_type":"null","expression_type":"object","expression_operator":"atom","operand_type":"object","expression_name":"phase4-repository-fixture","expression_constraint":"= 1.0.0","expression_capability_kind_type":"null","expression_capability_kind":null,"expression_architecture_kind":"unqualified","expression_native_text_type":"${native_corpus_atom_text_type}","expression_native_text":"${native_corpus_atom_text}","alternatives_type":"array","alternatives_count":1,"alternative_type":"object","alternative_name":"phase4-repository-fixture","alternative_constraint":"= 1.0.0","alternative_capability_kind_type":"null","alternative_capability_kind":null,"alternative_architecture_kind":"unqualified","alternative_native_text_type":"${native_corpus_atom_text_type}","alternative_native_text":"${native_corpus_atom_text}","native_text_type":"text","native_text":"${native_corpus_requirement_text}","count_delta":0}]''' }]
 
 [[test.step]]
-run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' config rows' FROM config_files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus'); SELECT path || '|' || noreplace || '|' || status || '|' || source FROM config_files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus') ORDER BY path\""
+run = "sqlite3 -json ${DB_PATH} \"SELECT path, noreplace, status, source FROM config_files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus') ORDER BY path\""
 
 [test.step.assert]
 exit_code = 0
-stdout_contains_all = ["${native_corpus_config_count} config rows", "/etc/phase4-corpus/app-deleted.conf|1|pristine|${native_corpus_config_source}", "/etc/phase4-corpus/app-local.conf|1|pristine|${native_corpus_config_source}", "/etc/phase4-corpus/app.conf|1|pristine|${native_corpus_config_source}"]
+stdout_json = [{ pointer = "", equals_json = '''[{"path":"/etc/phase4-corpus/app-deleted.conf","noreplace":1,"status":"pristine","source":"${native_corpus_config_source}"},{"path":"/etc/phase4-corpus/app-local.conf","noreplace":1,"status":"pristine","source":"${native_corpus_config_source}"},{"path":"/etc/phase4-corpus/app.conf","noreplace":1,"status":"pristine","source":"${native_corpus_config_source}"}]''' }]
 
 [[test.step]]
-run = "sqlite3 ${DB_PATH} \"SELECT capability || '|' || version || '|' || version_relation || '|' || kind || '|' || version_scheme || '|' || json_extract(provenance, '$.role') || '|' || COALESCE(json_extract(provenance, '$.format'), '') FROM provides WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus') AND capability = 'phase4-daily-driver-corpus' AND kind = 'package' ORDER BY json_extract(provenance, '$.role')\""
+run = "sqlite3 -json ${DB_PATH} \"SELECT t.name AS trove_name,t.version AS trove_version,p.capability,p.version,p.version_relation,p.kind,p.version_scheme,p.architecture_qualifier_kind,p.architecture_qualifier,json_extract(p.provenance,'$.role') AS provenance_role,json_type(p.provenance,'$.format') AS provenance_format_type,json_extract(p.provenance,'$.format') AS provenance_format,json_type(p.provenance,'$.record_index') AS provenance_record_index_type FROM troves AS t JOIN provides AS p ON p.trove_id=t.id WHERE t.name='phase4-daily-driver-corpus' AND p.capability=t.name AND p.kind='package' AND (p.version='1.0' OR json_extract(p.provenance,'$.role')='exact-identity') ORDER BY t.id,CASE WHEN json_extract(p.provenance,'$.role')='exact-identity' THEN 0 ELSE 1 END,p.id\""
 
 [test.step.assert]
 exit_code = 0
-stdout_contains_all = ["phase4-daily-driver-corpus|${native_corpus_fixture_version}|eq|package|${native_scheme}|exact-identity|", "phase4-daily-driver-corpus|1.0|eq|package|${native_scheme}|source-declared|${native_corpus_capability_format}"]
+stdout_json = [{ pointer = "", equals_json = '''[{"trove_name":"phase4-daily-driver-corpus","trove_version":"${native_corpus_fixture_version}","capability":"phase4-daily-driver-corpus","version":"${native_corpus_fixture_version}","version_relation":"eq","kind":"package","version_scheme":"${native_scheme}","architecture_qualifier_kind":"implicit","architecture_qualifier":null,"provenance_role":"exact-identity","provenance_format_type":null,"provenance_format":null,"provenance_record_index_type":null},{"trove_name":"phase4-daily-driver-corpus","trove_version":"${native_corpus_fixture_version}","capability":"phase4-daily-driver-corpus","version":"1.0","version_relation":"eq","kind":"package","version_scheme":"${native_scheme}","architecture_qualifier_kind":"implicit","architecture_qualifier":null,"provenance_role":"source-declared","provenance_format_type":"text","provenance_format":"${native_corpus_capability_format}","provenance_record_index_type":"integer"}]''' }]
 
 [[test.step]]
-run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' lifecycle bundles' FROM installed_native_lifecycle_bundles WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus'); SELECT source_format || '|' || source_package || '|' || source_version || '|' || scriptlet_fidelity || '|' || lifecycle_state FROM installed_native_lifecycle_bundles WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus')\""
+run = "sqlite3 -json ${DB_PATH} \"SELECT t.name AS trove_name,t.version AS trove_version,t.architecture AS trove_architecture,t.source_profile AS trove_source_profile,b.source_format,b.source_family,b.source_profile,b.source_arch,b.source_package,b.source_version,b.scriptlet_fidelity,b.lifecycle_state,(b.installed_changeset_id = t.installed_by_changeset_id) AS same_changeset FROM troves AS t LEFT JOIN installed_native_lifecycle_bundles AS b ON b.trove_id=t.id WHERE t.name='phase4-daily-driver-corpus' ORDER BY t.id\""
 
 [test.step.assert]
 exit_code = 0
-stdout_contains_all = ["1 lifecycle bundles", "${native_target}|phase4-daily-driver-corpus|${native_corpus_fixture_version}|${native_corpus_lifecycle_fidelity}|installed"]
+stdout_json = [{ pointer = "", equals_json = '''[{"trove_name":"phase4-daily-driver-corpus","trove_version":"${native_corpus_fixture_version}","trove_architecture":"${native_arch}","trove_source_profile":"${native_profile}","source_format":"${native_target}","source_family":"${native_target}","source_profile":"${native_profile}","source_arch":"${native_arch}","source_package":"phase4-daily-driver-corpus","source_version":"${native_corpus_fixture_version}","scriptlet_fidelity":"${native_corpus_lifecycle_fidelity}","lifecycle_state":"installed","same_changeset":1}]''' }]
 
 [[test.step]]
-run = "sqlite3 ${DB_PATH} \"SELECT source_kind || '|' || source_package || '|' || json_extract(invocation_json, '$.kind') || '|' || COALESCE(json_extract(invocation_json, '$.invocation.action'), json_extract(invocation_json, '$.invocation.program')) || '|' || COALESCE(json_extract(invocation_json, '$.invocation.units[0]'), json_extract(invocation_json, '$.invocation.arguments[0]')) FROM activation_requests WHERE source_package = 'phase4-daily-driver-corpus' ORDER BY id; SELECT status || '|' || COUNT(*) FROM generation_activation_intents WHERE request_id IN (SELECT id FROM activation_requests WHERE source_package = 'phase4-daily-driver-corpus') GROUP BY status\""
+run = "sqlite3 -json ${DB_PATH} \"SELECT t.name AS trove_name,t.version AS trove_version,r.source_kind,r.source_package,r.source_version,r.source_entry,json_extract(r.invocation_json,'$.kind') AS invocation_kind,json_extract(r.invocation_json,'$.invocation.action') AS systemd_action,json_array_length(r.invocation_json,'$.invocation.units') AS systemd_unit_count,json_extract(r.invocation_json,'$.invocation.units[0]') AS systemd_unit,json_extract(r.invocation_json,'$.invocation.program') AS boot_program,json_array_length(r.invocation_json,'$.invocation.arguments') AS boot_argument_count,json_extract(r.invocation_json,'$.invocation.arguments[0]') AS boot_argument,json_type(r.invocation_json,'$.invocation.schema_version') AS boot_schema_version_type,json_extract(r.invocation_json,'$.invocation.schema_version') AS boot_schema_version,json_extract(r.invocation_json,'$.invocation.executable.invoked_path') AS boot_invoked_path,gp.phase AS publication_phase,gp.status AS publication_status,(gp.published_through_changeset_id >= r.changeset_id) AS published_request,(gp.generation_number = i.generation_number) AS same_generation,i.status AS intent_status,i.attempt_count AS intent_attempt_count,i.last_error AS intent_last_error,i.started_at AS intent_started_at,i.completed_at AS intent_completed_at FROM troves AS t LEFT JOIN activation_requests AS r ON r.changeset_id=t.installed_by_changeset_id AND r.source_package=t.name LEFT JOIN generation_publications AS gp ON gp.trigger_changeset_id=t.installed_by_changeset_id AND gp.phase='database_backed_up' AND gp.status='complete' AND gp.recoverable=0 LEFT JOIN generation_activation_intents AS i ON i.request_id=r.id AND i.generation_number=gp.generation_number WHERE t.name='phase4-daily-driver-corpus' ORDER BY t.id,r.sequence,r.id,gp.id\""
 
 [test.step.assert]
 exit_code = 0
-stdout_contains_all = ["captured-systemctl|phase4-daily-driver-corpus|systemd|start|phase4-corpus.service", "captured-boot-runtime|phase4-daily-driver-corpus|boot-runtime|depmod|-a", "pending|2"]
+stdout_json = [{ pointer = "", equals_json = '''[{"trove_name":"phase4-daily-driver-corpus","trove_version":"${native_corpus_fixture_version}","source_kind":"captured-systemctl","source_package":"phase4-daily-driver-corpus","source_version":"${native_corpus_fixture_version}","source_entry":"${native_corpus_activation_entry}","invocation_kind":"systemd","systemd_action":"start","systemd_unit_count":1,"systemd_unit":"phase4-corpus.service","boot_program":null,"boot_argument_count":null,"boot_argument":null,"boot_schema_version_type":null,"boot_schema_version":null,"boot_invoked_path":null,"publication_phase":"database_backed_up","publication_status":"complete","published_request":1,"same_generation":1,"intent_status":"pending","intent_attempt_count":0,"intent_last_error":null,"intent_started_at":null,"intent_completed_at":null},{"trove_name":"phase4-daily-driver-corpus","trove_version":"${native_corpus_fixture_version}","source_kind":"captured-boot-runtime","source_package":"phase4-daily-driver-corpus","source_version":"${native_corpus_fixture_version}","source_entry":"${native_corpus_activation_entry}","invocation_kind":"boot-runtime","systemd_action":null,"systemd_unit_count":null,"systemd_unit":null,"boot_program":"depmod","boot_argument_count":1,"boot_argument":"-a","boot_schema_version_type":"integer","boot_schema_version":1,"boot_invoked_path":"/usr/sbin/depmod","publication_phase":"database_backed_up","publication_status":"complete","published_request":1,"same_generation":1,"intent_status":"pending","intent_attempt_count":0,"intent_last_error":null,"intent_started_at":null,"intent_completed_at":null}]''' }]
 
 [[test.step]]
-run = "sqlite3 ${DB_PATH} \"SELECT t.name || '|' || ct.status || '|' || ct.matched_files FROM changeset_triggers ct JOIN triggers t ON t.id = ct.trigger_id WHERE t.name = 'phase4-corpus-trigger' ORDER BY ct.id DESC LIMIT 1\""
+run = "sqlite3 -json ${DB_PATH} \"SELECT t.name AS name, ct.status AS status, ct.matched_files AS matched_files FROM changeset_triggers ct JOIN triggers t ON t.id = ct.trigger_id WHERE t.name = 'phase4-corpus-trigger' ORDER BY ct.id DESC LIMIT 1\""
 
 [test.step.assert]
 exit_code = 0
-stdout_contains = "phase4-corpus-trigger|completed|1"
+stdout_json = [{ pointer = "", equals_json = '''[{"name":"phase4-corpus-trigger","status":"completed","matched_files":1}]''' }]
 
 # --------------------------------------------------------------------------
 # TNPM16: daily-driver corpus query surface
@@ -523,18 +532,50 @@ exit_code = 0
 stdout_contains_all = ["phase4-daily-driver-corpus ${native_corpus_fixture_version} provides:", "/usr/lib/kernel/install.d/95-phase4-corpus.install"]
 
 [[test.step]]
-conary = "query whatprovides phase4-daily-driver-corpus"
+conary = "query whatprovides phase4-daily-driver-corpus --json"
 
 [test.step.assert]
 exit_code = 0
-stdout_contains_all = ["Capability 'phase4-daily-driver-corpus' is provided by:", "phase4-daily-driver-corpus ${native_corpus_fixture_version}", "provides version: ${native_corpus_fixture_version}", "provides version: 1.0", "Total: 1 provider(s)"]
+stdout_json = [{ pointer = "", equals_json = '''{
+  "schema_version": 1,
+  "capability": "phase4-daily-driver-corpus",
+  "providers": [{
+    "source_kind": "installed",
+    "package": {
+      "name": "phase4-daily-driver-corpus",
+      "version": "${native_corpus_fixture_version}",
+      "release": "1",
+      "architecture": "${native_arch}",
+      "version_scheme": "${native_scheme}"
+    },
+    "repository": null,
+    "capability_versions": ["1.0", "${native_corpus_fixture_version}"]
+  }],
+  "provider_count": 1
+}''' }]
 
 [[test.step]]
-conary = "query whatprovides 'virtual(phase4-corpus-tool)'"
+conary = "query whatprovides 'virtual(phase4-corpus-tool)' --json"
 
 [test.step.assert]
 exit_code = 0
-stdout_contains_all = ["Capability 'virtual(phase4-corpus-tool)' is provided by:", "phase4-daily-driver-corpus ${native_corpus_fixture_version}"]
+stdout_json = [{ pointer = "", equals_json = '''{
+  "schema_version": 1,
+  "capability": "virtual(phase4-corpus-tool)",
+  "providers": [{
+    "source_kind": "installed",
+    "package": {
+      "name": "phase4-daily-driver-corpus",
+      "version": "${native_corpus_fixture_version}",
+      "release": "1",
+      "architecture": "${native_arch}",
+      "version_scheme": "${native_scheme}"
+    },
+    "repository": null,
+    "capability_versions": []
+  }],
+  "provider_count": 1
+}''' }]
 
 [[test.step]]
 run = "/opt/remi-tests/fixtures/native/write-corpus-evidence.py /tmp/native-pm-corpus/native-fixture-manifest.json /tmp/conary-corpus-daily-driver-install.json ${native_profile} ${native_corpus_source_format} phase4-daily-driver-corpus ${native_corpus_fixture_version} ${native_arch} resolution installation --dependency-fixture-manifest /tmp/native-pm-corpus-repo/pinned-binary-fixture-manifest.json --dependency-name phase4-repository-fixture --dependency-version 1.0.0-1 --dependency-architecture ${native_arch}"
@@ -590,11 +631,11 @@ run = "/opt/remi-tests/fixtures/native/assert-selected-generation.py --root /con
 exit_code = 0
 
 [[test.step]]
-run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' installed' FROM troves WHERE name IN ('phase4-daily-driver-corpus', 'phase4-corpus-conflict'); SELECT COUNT(*) || ' conflicts' FROM troves WHERE name = 'phase4-corpus-conflict'\""
+run = "sqlite3 -json ${DB_PATH} \"SELECT (SELECT COUNT(*) FROM troves WHERE name IN ('phase4-daily-driver-corpus', 'phase4-corpus-conflict')) AS installed, (SELECT COUNT(*) FROM troves WHERE name = 'phase4-corpus-conflict') AS conflicts\""
 
 [test.step.assert]
 exit_code = 0
-stdout_contains_all = ["1 installed", "0 conflicts"]
+stdout_json = [{ pointer = "", equals_json = '''[{"installed":1,"conflicts":0}]''' }]
 
 [[test.step]]
 run = "/opt/remi-tests/fixtures/native/write-corpus-evidence.py /tmp/native-pm-corpus-conflict/native-fixture-manifest.json /tmp/conary-corpus-w7-payload-mutation-failure.json ${native_profile} ${native_corpus_source_format} phase4-corpus-conflict ${native_corpus_fixture_version} ${native_arch} transaction_preflight"
@@ -650,10 +691,11 @@ run = "CONARY_BIN=${CONARY_BIN} /opt/remi-tests/fixtures/native/prepare-native-u
 exit_code = 0
 
 [[test.step]]
-run = ". /tmp/native-update-repository/native-update-repository.env && sqlite3 ${DB_PATH} \"SELECT r.name || '|' || r.default_strategy || '|' || r.source_profile || '|' || rp.name || '|' || rp.version || '|' || rp.version_scheme || '|' || rp.architecture || '|' || rp.checksum || '|' || k.status FROM repositories r JOIN repository_packages rp ON rp.repository_id = r.id JOIN repository_package_keys k ON k.repository_id = r.id WHERE r.name = '$NATIVE_UPDATE_REPOSITORY'\" | grep -Fx \"$NATIVE_UPDATE_REPOSITORY|binary|${native_profile}|phase4-daily-driver-corpus|${native_corpus_update_version}|${native_scheme}|${native_arch}|$NATIVE_UPDATE_CCS_SHA256|active\""
+run = ". /tmp/native-update-repository/native-update-repository.env && sqlite3 -json ${DB_PATH} \"SELECT r.name AS repository_name, r.default_strategy AS default_strategy, r.source_profile AS source_profile, rp.name AS package_name, rp.version AS package_version, rp.version_scheme AS version_scheme, rp.architecture AS architecture, (rp.checksum = '$NATIVE_UPDATE_CCS_SHA256') AS checksum_matches_fixture, k.status AS key_status FROM repositories r JOIN repository_packages rp ON rp.repository_id = r.id JOIN repository_package_keys k ON k.repository_id = r.id WHERE r.name = '$NATIVE_UPDATE_REPOSITORY' ORDER BY rp.id, k.public_key\""
 
 [test.step.assert]
 exit_code = 0
+stdout_json = [{ pointer = "", equals_json = '''[{"repository_name":"w7-native-update","default_strategy":"binary","source_profile":"${native_profile}","package_name":"phase4-daily-driver-corpus","package_version":"${native_corpus_update_version}","version_scheme":"${native_scheme}","architecture":"${native_arch}","checksum_matches_fixture":1,"key_status":"active"}]''' }]
 
 [[test.step]]
 run = "current_generation=$(readlink /conary/current) && current_generation=${current_generation##*/} && config_upper=/conary/etc-state/${current_generation} && test -d \"${config_upper}/phase4-corpus\" && scratch_upper=/dev/shm/conary-config-upper-${current_generation} && rm -rf \"${scratch_upper}\" && mkdir -p \"${scratch_upper}\" && cp -a \"${config_upper}/.\" \"${scratch_upper}/\" && mount --bind \"${scratch_upper}\" \"${config_upper}\" && printf 'local = \"locally-edited\"\\nuser = \"phase4\"\\n' > \"${config_upper}/phase4-corpus/app-local.conf\" && printf 'unmatched = \"user-edited\"\\nuser = \"phase4\"\\n' > \"${config_upper}/phase4-corpus/app-unmatched.conf\" && rm -f \"${config_upper}/phase4-corpus/app-deleted.conf\" && mknod \"${config_upper}/phase4-corpus/app-deleted.conf\" c 0 0 && test \"$(sha256sum \"${config_upper}/phase4-corpus/app-local.conf\" | awk '{print $1}')\" = 5f23c18d1ce79fd01be76b4fbb43cc20a1406193880a2797b46ed5cd9fd50731 && test \"$(sha256sum \"${config_upper}/phase4-corpus/app-unmatched.conf\" | awk '{print $1}')\" = 09f55aa386292b9525a334ba15a6a5e1922d08f3013772ae3b61c009b057b510 && test -c \"${config_upper}/phase4-corpus/app-deleted.conf\" && test \"$(stat -c %t:%T \"${config_upper}/phase4-corpus/app-deleted.conf\")\" = 0:0"
@@ -687,17 +729,52 @@ run = "case \"${native_target}\" in rpm) rows=\"$(sqlite3 ${DB_PATH} \"SELECT pa
 exit_code = 0
 
 [[test.step]]
-run = "sqlite3 ${DB_PATH} \"SELECT t.name || '|' || t.version || '|' || COALESCE(t.architecture, '') || '|' || t.version_scheme || '|' || COALESCE(t.source_profile, '') || '|' || COALESCE(r.name, '') || '|' || t.install_source || '|' || t.install_reason FROM troves t LEFT JOIN repositories r ON r.id = t.installed_from_repository_id WHERE t.name = 'phase4-daily-driver-corpus'; SELECT path || '|' || original_hash || '|' || COALESCE(current_hash, '') || '|' || noreplace || '|' || status || '|' || source FROM config_files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus') AND path = '/etc/phase4-corpus/app.conf'\""
+run = "sqlite3 -json ${DB_PATH} \"SELECT t.name AS trove_name, t.version AS trove_version, t.architecture AS trove_architecture, t.version_scheme AS trove_version_scheme, t.source_profile AS trove_source_profile, r.name AS repository_name, t.install_source AS install_source, t.install_reason AS install_reason, c.path AS config_path, c.package_name AS config_package_name, c.package_version AS config_package_version, c.package_architecture AS config_package_architecture, c.original_hash AS original_hash, c.current_hash AS current_hash, c.noreplace AS noreplace, c.status AS status, c.source AS source, CASE WHEN c.trove_id = t.id THEN 1 ELSE 0 END AS config_owner_match, (SELECT COUNT(*) FROM config_files x WHERE x.trove_id = t.id OR x.package_name = t.name) AS related_config_rows FROM troves t LEFT JOIN repositories r ON r.id = t.installed_from_repository_id LEFT JOIN config_files c ON c.path = '/etc/phase4-corpus/app.conf' WHERE t.name = 'phase4-daily-driver-corpus' ORDER BY t.id\""
 
 [test.step.assert]
 exit_code = 0
-stdout_contains_all = ["phase4-daily-driver-corpus|${native_corpus_update_version}|${native_arch}|${native_scheme}|${native_profile}|w7-native-update|repository|explicit", "/etc/phase4-corpus/app.conf|97d836d4bf6c4c49fa763836c117d738fef15b7d995bc2cf82e2a02704364d27|97d836d4bf6c4c49fa763836c117d738fef15b7d995bc2cf82e2a02704364d27|1|pristine|${native_corpus_config_source}"]
+stdout_json = [{ pointer = "", equals_json = '''[{"trove_name":"phase4-daily-driver-corpus","trove_version":"${native_corpus_update_version}","trove_architecture":"${native_arch}","trove_version_scheme":"${native_scheme}","trove_source_profile":"${native_profile}","repository_name":"w7-native-update","install_source":"repository","install_reason":"explicit","config_path":"/etc/phase4-corpus/app.conf","config_package_name":"phase4-daily-driver-corpus","config_package_version":"${native_corpus_update_version}","config_package_architecture":"${native_arch}","original_hash":"97d836d4bf6c4c49fa763836c117d738fef15b7d995bc2cf82e2a02704364d27","current_hash":"97d836d4bf6c4c49fa763836c117d738fef15b7d995bc2cf82e2a02704364d27","noreplace":1,"status":"pristine","source":"${native_corpus_config_source}","config_owner_match":1,"related_config_rows":4}]''' }]
 
 [[test.step]]
-run = ". /tmp/native-update-repository/native-update-repository.env && test \"$(sqlite3 ${DB_PATH} \"SELECT source_format || '|' || source_package || '|' || source_version || '|' || lifecycle_state FROM installed_native_lifecycle_bundles WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus')\")\" = \"${native_target}|phase4-daily-driver-corpus|${native_corpus_update_version}|installed\" && sqlite3 ${DB_PATH} \"SELECT bundle_toml FROM installed_native_lifecycle_bundles WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus')\" | grep -F \"source_checksum = \\\"sha256:$NATIVE_UPDATE_SOURCE_SHA256\\\"\""
+run = '''
+. /tmp/native-update-repository/native-update-repository.env &&
+python3 -c '
+import json
+import sqlite3
+import sys
+import tomllib
+
+rows = sqlite3.connect(sys.argv[1]).execute(
+    "SELECT t.name, t.version, t.architecture, t.version_scheme, t.source_profile, "
+    "b.source_format, b.source_package, b.source_version, b.lifecycle_state, b.bundle_toml "
+    "FROM troves AS t LEFT JOIN installed_native_lifecycle_bundles AS b ON b.trove_id = t.id "
+    "WHERE t.name = ? ORDER BY t.id",
+    ("phase4-daily-driver-corpus",),
+).fetchall()
+result = []
+for name, version, architecture, scheme, profile, source_format, source_package, source_version, lifecycle_state, bundle_toml in rows:
+    bundle = tomllib.loads(bundle_toml) if bundle_toml is not None else None
+    result.append({
+        "trove_name": name,
+        "trove_version": version,
+        "trove_architecture": architecture,
+        "trove_version_scheme": scheme,
+        "trove_source_profile": profile,
+        "source_format": source_format,
+        "source_package": source_package,
+        "source_version": source_version,
+        "lifecycle_state": lifecycle_state,
+        "bundle_schema": bundle["schema"] if bundle is not None else None,
+        "bundle_schema_revision": bundle["schema_revision"] if bundle is not None else None,
+        "source_checksum_matches_fixture": int(bundle["source_checksum"] == "sha256:" + sys.argv[2]) if bundle is not None else 0,
+    })
+print(json.dumps(result))
+' "${DB_PATH}" "$NATIVE_UPDATE_SOURCE_SHA256"
+'''
 
 [test.step.assert]
 exit_code = 0
+stdout_json = [{ pointer = "", equals_json = '''[{"trove_name":"phase4-daily-driver-corpus","trove_version":"${native_corpus_update_version}","trove_architecture":"${native_arch}","trove_version_scheme":"${native_scheme}","trove_source_profile":"${native_profile}","source_format":"${native_target}","source_package":"phase4-daily-driver-corpus","source_version":"${native_corpus_update_version}","lifecycle_state":"installed","bundle_schema":"conary.native-lifecycles.v1","bundle_schema_revision":20,"source_checksum_matches_fixture":1}]''' }]
 
 [[test.step]]
 run = "/opt/remi-tests/fixtures/native/write-corpus-evidence.py /tmp/native-pm-corpus/native-fixture-manifest.json /tmp/conary-corpus-daily-driver-update.json ${native_profile} ${native_corpus_source_format} phase4-daily-driver-corpus ${native_corpus_fixture_version} ${native_arch} installation update --update-fixture-manifest /tmp/native-pm-corpus-v2/native-fixture-manifest.json --update-name phase4-daily-driver-corpus --update-version ${native_corpus_update_version} --update-architecture ${native_arch}"
@@ -755,11 +832,11 @@ run = "case \"${native_target}\" in rpm) /opt/remi-tests/fixtures/native/assert-
 exit_code = 0
 
 [[test.step]]
-run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' installed' FROM troves WHERE name = 'phase4-daily-driver-corpus'; SELECT COUNT(*) || ' config rows' FROM config_files WHERE path IN ('/etc/phase4-corpus/app.conf', '/etc/phase4-corpus/app-local.conf', '/etc/phase4-corpus/app-deleted.conf', '/etc/phase4-corpus/app-unmatched.conf')\""
+run = "sqlite3 -json ${DB_PATH} \"SELECT (SELECT COUNT(*) FROM troves WHERE name = 'phase4-daily-driver-corpus') AS installed, (SELECT COUNT(*) FROM config_files WHERE path IN ('/etc/phase4-corpus/app.conf', '/etc/phase4-corpus/app-local.conf', '/etc/phase4-corpus/app-deleted.conf', '/etc/phase4-corpus/app-unmatched.conf')) AS config_rows\""
 
 [test.step.assert]
 exit_code = 0
-stdout_contains_all = ["0 installed", "0 config rows"]
+stdout_json = [{ pointer = "", equals_json = '''[{"installed":0,"config_rows":0}]''' }]
 
 [[test.step]]
 run = "/opt/remi-tests/fixtures/native/write-corpus-evidence.py /tmp/native-pm-corpus/native-fixture-manifest.json /tmp/conary-corpus-daily-driver-removal.json ${native_profile} ${native_corpus_source_format} phase4-daily-driver-corpus ${native_corpus_fixture_version} ${native_arch} removal --update-fixture-manifest /tmp/native-pm-corpus-v2/native-fixture-manifest.json --update-name phase4-daily-driver-corpus --update-version ${native_corpus_update_version} --update-architecture ${native_arch}"
@@ -884,11 +961,13 @@ exit_code = 0
 stdout_contains_any = ["Successfully installed", "Installed", "phase4-w7-capability-corpus"]
 
 [[test.step]]
-run = "sqlite3 ${DB_PATH} \"SELECT path || '|' || capabilities_json || '|' || permitted || '|' || effective || '|' || inheritable FROM installed_file_capabilities WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-w7-capability-corpus')\""
+run = "sqlite3 -json ${DB_PATH} \"SELECT installed_file_capabilities.path AS path, json_type(installed_file_capabilities.capabilities_json) AS capabilities_type, json_array_length(installed_file_capabilities.capabilities_json) AS capabilities_count, capability.value AS capability, installed_file_capabilities.permitted AS permitted, installed_file_capabilities.effective AS effective, installed_file_capabilities.inheritable AS inheritable FROM installed_file_capabilities LEFT JOIN json_each(installed_file_capabilities.capabilities_json) AS capability WHERE installed_file_capabilities.trove_id IN (SELECT id FROM troves WHERE name = 'phase4-w7-capability-corpus') ORDER BY installed_file_capabilities.path, capability.key\""
 
 [test.step.assert]
 exit_code = 0
-stdout_contains = "/usr/bin/phase4-w7-capability|[\"cap_net_bind_service\"]|1|1|0"
+stdout_json = [{ pointer = "", equals = [
+    { path = "/usr/bin/phase4-w7-capability", capabilities_type = "array", capabilities_count = 1, capability = "cap_net_bind_service", permitted = 1, effective = 1, inheritable = 0 },
+] }]
 
 [[test.step]]
 run = "/opt/remi-tests/fixtures/native/assert-selected-generation.py --root /conary --expect-xattr-hex /usr/bin/phase4-w7-capability=security.capability,0100000200040000000000000000000000000000"
@@ -962,11 +1041,80 @@ exit_code = 0
 stdout_contains_any = ["Successfully installed", "Installed", "phase4-w7-rpm-semantics"]
 
 [[test.step]]
-run = "sqlite3 ${DB_PATH} \"SELECT kind || '|' || json_extract(requirement_json, '$.expression.operands.name') || '|' || json_extract(requirement_json, '$.expression.operands.version_constraint') FROM package_requirement_groups WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-w7-rpm-semantics') AND kind IN ('conflict', 'obsolete') ORDER BY kind\""
+run = """
+sqlite3 -json ${DB_PATH} "SELECT
+    t.name AS trove_name,
+    t.version AS trove_version,
+    t.type AS trove_type,
+    t.architecture AS trove_architecture,
+    t.version_scheme AS trove_scheme,
+    t.source_profile AS source_profile,
+    t.install_source AS install_source,
+    t.install_reason AS install_reason,
+    g.kind AS group_kind,
+    g.version_scheme AS group_scheme,
+    json_type(g.requirement_json) AS group_type,
+    json_extract(g.requirement_json, '$.kind') AS payload_kind,
+    json_extract(g.requirement_json, '$.behavior') AS behavior,
+    json_type(g.requirement_json, '$.expression') AS expression_type,
+    json_extract(g.requirement_json, '$.expression.operator') AS expression_operator,
+    json_type(g.requirement_json, '$.expression.operands') AS operand_type,
+    json_extract(g.requirement_json, '$.expression.operands.name') AS expression_name,
+    json_extract(g.requirement_json, '$.expression.operands.version_constraint') AS expression_constraint,
+    json_type(g.requirement_json, '$.expression.operands.capability_kind') AS expression_capability_kind_type,
+    json_extract(g.requirement_json, '$.expression.operands.architecture_qualifier.kind') AS expression_architecture_kind,
+    json_type(g.requirement_json, '$.expression.operands.native_text') AS expression_native_text_type,
+    json_type(g.requirement_json, '$.alternatives') AS alternatives_type,
+    json_array_length(g.requirement_json, '$.alternatives') AS alternatives_count,
+    json_type(g.requirement_json, '$.alternatives[0]') AS alternative_type,
+    json_extract(g.requirement_json, '$.alternatives[0].name') AS alternative_name,
+    json_extract(g.requirement_json, '$.alternatives[0].version_constraint') AS alternative_constraint,
+    json_type(g.requirement_json, '$.alternatives[0].capability_kind') AS alternative_capability_kind_type,
+    json_extract(g.requirement_json, '$.alternatives[0].architecture_qualifier.kind') AS alternative_architecture_kind,
+    json_type(g.requirement_json, '$.alternatives[0].native_text') AS alternative_native_text_type,
+    json_extract(g.requirement_json, '$.native_text') AS native_text
+FROM troves AS t
+LEFT JOIN package_requirement_groups AS g
+    ON g.trove_id = t.id AND g.kind IN ('conflict', 'breaks', 'replace', 'obsolete')
+WHERE t.name = 'phase4-w7-rpm-semantics'
+ORDER BY t.id, g.kind, g.id"
+"""
 
 [test.step.assert]
 exit_code = 0
-stdout_contains_all = ["conflict|phase4-w7-conflict|< 2", "obsolete|phase4-w7-replaced|<= 1"]
+stdout_json = [{
+  pointer = "",
+  equals_json = '''[
+    {
+      "trove_name": "phase4-w7-rpm-semantics", "trove_version": "1.0.0-1", "trove_type": "package",
+      "trove_architecture": "x86_64", "trove_scheme": "rpm", "source_profile": "fedora-44",
+      "install_source": "file", "install_reason": "explicit", "group_kind": "conflict", "group_scheme": "rpm",
+      "group_type": "object", "payload_kind": "Conflict", "behavior": "Hard",
+      "expression_type": "object", "expression_operator": "atom", "operand_type": "object",
+      "expression_name": "phase4-w7-conflict", "expression_constraint": "< 2",
+      "expression_capability_kind_type": "null", "expression_architecture_kind": "unqualified",
+      "expression_native_text_type": "null", "alternatives_type": "array", "alternatives_count": 1,
+      "alternative_type": "object", "alternative_name": "phase4-w7-conflict",
+      "alternative_constraint": "< 2", "alternative_capability_kind_type": "null",
+      "alternative_architecture_kind": "unqualified", "alternative_native_text_type": "null",
+      "native_text": "phase4-w7-conflict < 2"
+    },
+    {
+      "trove_name": "phase4-w7-rpm-semantics", "trove_version": "1.0.0-1", "trove_type": "package",
+      "trove_architecture": "x86_64", "trove_scheme": "rpm", "source_profile": "fedora-44",
+      "install_source": "file", "install_reason": "explicit", "group_kind": "obsolete", "group_scheme": "rpm",
+      "group_type": "object", "payload_kind": "Obsolete", "behavior": "Hard",
+      "expression_type": "object", "expression_operator": "atom", "operand_type": "object",
+      "expression_name": "phase4-w7-replaced", "expression_constraint": "<= 1",
+      "expression_capability_kind_type": "null", "expression_architecture_kind": "unqualified",
+      "expression_native_text_type": "null", "alternatives_type": "array", "alternatives_count": 1,
+      "alternative_type": "object", "alternative_name": "phase4-w7-replaced",
+      "alternative_constraint": "<= 1", "alternative_capability_kind_type": "null",
+      "alternative_architecture_kind": "unqualified", "alternative_native_text_type": "null",
+      "native_text": "phase4-w7-replaced <= 1"
+    }
+  ]'''
+}]
 
 [[test.step]]
 run = "/opt/remi-tests/fixtures/native/assert-selected-generation.py --root /conary --expect-sha256 /var/lib/phase4-w7-rpm-semantics/non-shell.marker=3205d86da0fc907a4ad85e8a9f1db8448816c034dde7161f044d819004345da6 --expect-sha256 /var/lib/phase4-w7-rpm-semantics/transaction.marker=489c47f8a3ba3293737ac7bdbaa4e1f0e71c0211ece5d5093091a92fa358c851 --expect-sha256 /var/lib/phase4-w7-rpm-semantics/trigger.marker=dc7f6d4c8a327e433ae1cf601ed6efb965d6ac81e505ea97691451765b805a2c"

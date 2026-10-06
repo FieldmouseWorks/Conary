@@ -309,6 +309,21 @@ jobs:
       - name: Test Remi static-site deploy wrapper
         run: bash scripts/test-deploy-sites.sh
 
+  ci-base-image-policy:
+    name: ci-base-image-policy
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Install CI base image proof tools
+        run: bash scripts/ci-install-ubuntu-packages.sh skopeo docker-registry python3-yaml
+      - name: Test release-backed CI base image contract
+        run: python3 scripts/test-ci-base-image.py
+
   docs-truth:
     name: docs-truth
     runs-on: ubuntu-latest
@@ -451,7 +466,7 @@ jobs:
   workspace-test-shards:
     name: workspace-test (${{ matrix.shard }})
     runs-on: ubuntu-latest
-    needs: gnu-compiler-cache
+    needs: [gnu-compiler-cache, ci-base-image-policy]
     if: ${{ always() }}
     strategy:
       fail-fast: false
@@ -464,6 +479,10 @@ jobs:
           - shard: remaining
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Require CI base image policy
+        env:
+          IMAGE_POLICY_RESULT: ${{ needs.ci-base-image-policy.result }}
+        run: test "$IMAGE_POLICY_RESULT" = success
       - name: Require exact compiler-cache seed
         env:
           PRIMER_RESULT: ${{ needs.gnu-compiler-cache.result }}
@@ -647,6 +666,9 @@ jobs:
           commit-sha: ${{ github.sha }}
           run-id: ${{ github.run_id }}
           event-name: ${{ github.event_name }}
+      - name: Install release-backed base image transport
+        if: ${{ matrix.distro == 'opensuse-tumbleweed' }}
+        run: bash scripts/ci-install-ubuntu-packages.sh skopeo docker-registry
       - uses: ./.github/actions/cache-base-image
         with:
           distro: ${{ matrix.distro }}
@@ -767,6 +789,9 @@ jobs:
               select(.role == "signing_root") |
               (.fingerprints | length > 0)] | all)
           ' "$result"
+      - name: Stop the release-backed local registry
+        if: ${{ always() && matrix.distro == 'opensuse-tumbleweed' }}
+        run: python3 scripts/ci-base-image.py cleanup --workdir "$RUNNER_TEMP/conary-ci-base-opensuse-tumbleweed"
 
   native-cross-source-lifecycle-gate:
     name: native-cross-source-lifecycle
