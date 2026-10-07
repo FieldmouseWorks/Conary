@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-10-07
-revision: 10
+revision: 11
 summary: Define guided and bounded unattended execution, task graphs, evidence, authorization, recovery, and closeout for Conary work
 ---
 
@@ -124,7 +124,9 @@ current scope and effort policy. Historical effort limits do not carry forward.
 Each graph node records:
 
 - stable ID and concrete outcome;
-- dependencies, model/effort, accountable owner, and file or task ownership;
+- dependencies, the role and effort policy that apply, accountable owner, and
+  file or task ownership — never a model identifier (a run envelope's pinned
+  model is that invocation's private record, not graph state);
 - input references and an observable acceptance check;
 - state, evidence locator, and applicable effort or repair policy, including
   any explicit user or harness budget or waiver.
