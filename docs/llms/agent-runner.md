@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-10-03
-revision: 6
+last_updated: 2026-10-07
+revision: 7
 summary: Specify the validated one-slice agent runner, indexed graph comments, hosted observation order, bounded reviewer-result recovery, and read-only promotion check
 ---
 
@@ -75,7 +75,8 @@ The strict JSON envelope records:
   model/effort pair, launch fails without substitution. The controller checks
   the requested effort in launcher metadata; it does not attest the provider's
   effective effort. An unavailable or unlisted model is a hard stop. The
-  current #1070 pilot pins Sol/max for both roles.
+  pinned values are an invocation's record, not guidance; tracked docs name
+  no model.
 - `limits`: finite wall-clock seconds and causal repair count (zero is
   allowed). On the first claim, the journal records an absolute deadline no
   later than `wall_seconds` from that claim. Later invocations use the same

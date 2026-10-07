@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-10-03
-revision: 9
+last_updated: 2026-10-07
+revision: 11
 summary: Define guided and bounded unattended execution, task graphs, evidence, authorization, recovery, and closeout for Conary work
 ---
 
@@ -124,7 +124,9 @@ current scope and effort policy. Historical effort limits do not carry forward.
 Each graph node records:
 
 - stable ID and concrete outcome;
-- dependencies, model/effort, accountable owner, and file or task ownership;
+- dependencies, the role and effort policy that apply, accountable owner, and
+  file or task ownership — never a model identifier (a run envelope's pinned
+  model is that invocation's private record, not graph state);
 - input references and an observable acceptance check;
 - state, evidence locator, and applicable effort or repair policy, including
   any explicit user or harness budget or waiver.
@@ -139,7 +141,14 @@ dependent node until its parent verifies the dependency. On batch failure,
 inspect every completed child and keep independent results.
 
 Conary names no required model or agent tool; each contributor's session
-chooses its own. Dispatch only useful, bounded work; state exact inputs,
+chooses its own. Guidance speaks of roles, and a session maps them to whatever
+it runs: the **integrator** owns the graph, selection, review, and integration;
+an **implementer** makes a judgment-heavy change from a fixed brief; a
+**reviewer** reads an exact candidate independently and edits nothing; a
+**worker** does bounded work a command can accept; a **verifier** runs named
+proof and writes receipts; a **scout** answers read-only questions of fact.
+Route by how a node's acceptance is decided, not by how hard it looks.
+Dispatch only useful, bounded work; state exact inputs,
 acceptance, owner, and file ownership. Confirm concurrent owners do not overlap
 and tell them to preserve existing edits. The primary integrator owns
 architecture, graph changes, queue and selection policy, review, and
@@ -147,8 +156,9 @@ integration. In bounded mode, the controller applies only the recorded
 selection policy; delegated helpers never alter it. If a requested model is
 unavailable, report it without silent substitution; do not claim a model or
 effort that the harness cannot show.
-Record which model did delegated work, its independent verification, results,
-and corrections in the existing work record. Do not create evaluation-only
+Record which role did delegated work, its independent verification, results,
+and corrections in the existing work record; model identifiers stay out of
+tracked records. Do not create evaluation-only
 tasks.
 
 ## Read-Only Intake
