@@ -6,7 +6,9 @@ set -euo pipefail
 script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ci-require-prerequisite.sh"
 failures=0
 
-# expect_exit EXPECTED_CODE STDERR_SUBSTRING... -- ARGS...
+# check EXPECTED_EXIT STDERR_SUBSTRING ARGS...: run the helper with ARGS and
+# require EXPECTED_EXIT and, unless STDERR_SUBSTRING is empty, that substring
+# in its stderr.
 check() {
   local want="$1" needle="$2"
   shift 2
@@ -35,7 +37,7 @@ done
 
 check 2 "invalid prerequisite job id" "Bad_Id" success
 check 2 "invalid prerequisite job id" "-lead" success
-check 2 "invalid prerequisite job result" job-a "" 
+check 2 "invalid prerequisite job result" job-a ""
 check 2 "invalid prerequisite job result" job-a weird
 check 2 "usage:"
 check 2 "usage:" job-a

@@ -37,17 +37,23 @@ fi
 # SIGKILL after the grace period). The outer bound is the hard limit: apt's
 # own inactivity timeout restarts on every received byte, so a mirror that
 # trickles data is stopped only by it. The acquire options pin apt's
-# per-fetch inactivity timeout and retry count to the hosted runner's own
+# per-fetch inactivity timeout and retry count to the hosted x64 runner's own
 # mirror-failover values (15 seconds, 1 retry), so they hold even where no
-# runner apt.conf.d sets them. On apt 2.8 one silent fetch costs about
-# (Retries + 1) x 2 x Timeout seconds (about 60) before apt reports it,
-# inside the update bound.
+# runner apt.conf.d sets them. Source: actions/runner-images
+# images/ubuntu/scripts/build/configure-apt.sh (as of c03600ca, 2026-09-29)
+# writes `Acquire::Retries "1"; Acquire::http::Timeout "15";
+# Acquire::https::Timeout "15";` to /etc/apt/apt.conf.d/zz-retries on x64
+# images (22.04 and 24.04 arm64 keep 3 retries and 30 seconds). On apt 2.8
+# one silent fetch costs about (Retries + 1) x 2 x Timeout seconds (about
+# 60) before apt reports it, inside the update bound.
 #
 # Budget: update + install bounds plus both kill grace periods total 410
 # seconds, leaving more than three minutes of the smallest consuming job
 # budget (ci-base-image-policy, timeout-minutes: 10) for checkout and the
 # job's own proof, so a stalled mirror fails here with its own message
-# instead of as a job cancellation.
+# instead of as a job cancellation. The budget is per helper call, and
+# scripts/check-github-action-runtimes.sh enforces it only against that
+# smallest consuming job.
 #
 # `--error-on=any` makes a failed index fetch an update failure instead of a
 # warning followed by installation from incomplete indexes. Failures are not

@@ -43,6 +43,26 @@ is_pinned_external_ref() {
   [[ "$1" =~ @[0-9a-f]{40}$ ]]
 }
 
+# Positive policy rules match code, never commentary. Each rule reads the
+# file through code_view, which blanks full-line comments and trailing
+# ` #` comments, so a comment quoting a required command (for example a
+# `# was: sudo timeout ...` note above an unbounded call) cannot satisfy its
+# rule. Blanking keeps line numbers; a ` #` inside a quoted string is also
+# blanked, which can only make a rule fail closed.
+code_view() {
+  sed -E -e 's/^[[:space:]]*#.*$//' -e 's/[[:space:]]+#.*$//' "$1"
+}
+
+# Process substitution, not a pipe: under pipefail an early `rg -q` exit
+# could surface code_view's SIGPIPE as a false violation.
+code_has_match() {
+  rg -q --multiline -- "$2" < <(code_view "$1")
+}
+
+code_has_fixed() {
+  rg -q --fixed-strings -- "$2" < <(code_view "$1")
+}
+
 mapfile -t action_files < <(find_action_files)
 if [[ "${#action_files[@]}" -eq 0 ]]; then
   echo "ERROR: no GitHub workflow or action files found under $scan_root" >&2
@@ -86,7 +106,7 @@ else
     local pattern="$1"
     local description="$2"
 
-    if ! rg -q --multiline -- "$pattern" "$shell_policy_action"; then
+    if ! code_has_match "$shell_policy_action" "$pattern"; then
       violations+=("${shell_policy_action}: ${description}")
     fi
   }
@@ -110,7 +130,7 @@ else
     local pattern="$1"
     local description="$2"
 
-    if ! rg -q --multiline -- "$pattern" "$ubuntu_package_helper"; then
+    if ! code_has_match "$ubuntu_package_helper" "$pattern"; then
       violations+=("${ubuntu_package_helper}: ${description}")
     fi
   }
@@ -175,7 +195,7 @@ ubuntu_package_callers=(
 for caller in "${ubuntu_package_callers[@]}"; do
   if [[ ! -f "$caller" ]]; then
     violations+=("${caller}: missing hosted-Ubuntu package bootstrap caller")
-  elif ! rg -q --fixed-strings 'bash scripts/ci-install-ubuntu-packages.sh' "$caller"; then
+  elif ! code_has_fixed "$caller" 'bash scripts/ci-install-ubuntu-packages.sh'; then
     violations+=("${caller}: must use the shared hosted-Ubuntu package bootstrap")
   fi
 done
@@ -190,7 +210,7 @@ else
     local pattern="$1"
     local description="$2"
 
-    if ! rg -q --multiline -- "$pattern" "$compiler_cache_action"; then
+    if ! code_has_match "$compiler_cache_action" "$pattern"; then
       violations+=("${compiler_cache_action}: ${description}")
     fi
   }
@@ -229,7 +249,7 @@ else
     local pattern="$1"
     local description="$2"
 
-    if ! rg -q --multiline -- "$pattern" "$compiler_cache_summary_action"; then
+    if ! code_has_match "$compiler_cache_summary_action" "$pattern"; then
       violations+=("${compiler_cache_summary_action}: ${description}")
     fi
   }
@@ -249,7 +269,7 @@ else
     local needle="$1"
     local description="$2"
 
-    if ! rg -q --fixed-strings -- "$needle" "$native_compiler_cache_action"; then
+    if ! code_has_fixed "$native_compiler_cache_action" "$needle"; then
       violations+=("${native_compiler_cache_action}: ${description}")
     fi
   }
@@ -314,7 +334,7 @@ if [[ -f "$native_matrix_workflow" ]]; then
     local needle="$1"
     local description="$2"
 
-    if ! rg -q --fixed-strings -- "$needle" "$native_matrix_workflow"; then
+    if ! code_has_fixed "$native_matrix_workflow" "$needle"; then
       violations+=("${native_matrix_workflow}: ${description}")
     fi
   }
@@ -351,7 +371,7 @@ if [[ -f "$trusted_seed_workflow" ]]; then
     local pattern="$1"
     local description="$2"
 
-    if ! rg -q --multiline -- "$pattern" "$trusted_seed_workflow"; then
+    if ! code_has_match "$trusted_seed_workflow" "$pattern"; then
       violations+=("${trusted_seed_workflow}: ${description}")
     fi
   }
@@ -372,7 +392,7 @@ else
     local needle="$1"
     local description="$2"
 
-    if ! rg -q --fixed-strings -- "$needle" "$pr_cache_cleanup_workflow"; then
+    if ! code_has_fixed "$pr_cache_cleanup_workflow" "$needle"; then
       violations+=("${pr_cache_cleanup_workflow}: ${description}")
     fi
   }
@@ -426,10 +446,19 @@ for workflow in .github/workflows/pr-gate.yml .github/workflows/merge-validation
   fi
 done
 
-# A job that checks out the repository has scripts/ci-require-prerequisite.sh
-# on disk, so it must report a failed prerequisite through that helper instead
-# of a bare `test "$X_RESULT" = success`. Jobs without a checkout cannot reach
-# the helper and keep the bare form. Decided from parsed YAML, not text.
+# Prerequisite reporting, decided from parsed YAML, not text. Scope: jobs in
+# .github/workflows/*.y*ml only; composite actions and step-outcome checks
+# (steps.<id>.outcome) are out of scope.
+# 1. A step after the job's actions/checkout whose whole `run:` is a single
+#    command comparing a `*_RESULT` env variable to success (`test "$X" =
+#    success` or `[[ ... ]]`) must instead call
+#    scripts/ci-require-prerequisite.sh, which is on disk after checkout.
+#    Jobs without a checkout cannot reach the helper and keep the bare form.
+# 2. Every `run: bash scripts/ci-require-prerequisite.sh JOB_ID "$VAR"` must
+#    bind VAR (step env, else job env, else workflow env) to exactly
+#    `${{ needs.<id>.result }}` with <id> equal to JOB_ID, so the annotation
+#    names the job whose result it reports. Any other invocation form is a
+#    violation.
 while IFS= read -r violation; do
   [[ -n "$violation" ]] && violations+=("$violation")
 done < <(
@@ -443,6 +472,51 @@ VALUE = r'"?\$\{?[A-Za-z0-9_]+_RESULT\}?"?\s+==?\s+"?success"?'
 BARE_PREREQUISITE = re.compile(
     rf'^(?:test\s+{VALUE}|\[\[?\s+{VALUE}\s+\]\]?)$'
 )
+HELPER = "scripts/ci-require-prerequisite.sh"
+INVOKES_HELPER = re.compile(
+    r'(?:^|\s)(?:\./)?scripts/ci-require-prerequisite\.sh(?:\s|$)'
+)
+HELPER_CALL = re.compile(
+    r'^bash\s+scripts/ci-require-prerequisite\.sh\s+([a-z0-9][a-z0-9-]*)\s+'
+    r'"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?"$'
+)
+NEEDS_RESULT = re.compile(r'^\$\{\{\s*needs\.([A-Za-z0-9_-]+)\.result\s*\}\}$')
+
+
+def env_of(node):
+    env = node.get("env") if isinstance(node, dict) else None
+    return env if isinstance(env, dict) else {}
+
+
+def check_helper_call(path, workflow, job_id, job, step, run):
+    where = f"{path}: job '{job_id}' step '{step.get('name', '<unnamed>')}'"
+    call = HELPER_CALL.match(run)
+    if not call:
+        return (
+            f"{where}: unrecognized {HELPER} invocation; use "
+            f'bash {HELPER} JOB_ID "$VAR" with VAR bound to '
+            "${{ needs.JOB_ID.result }}"
+        )
+    named_job, variable = call.groups()
+    for scope in (env_of(step), env_of(job), env_of(workflow)):
+        if variable in scope:
+            binding = scope[variable]
+            break
+    else:
+        return f"{where}: {HELPER} reads ${variable}, which no env binds"
+    bound = NEEDS_RESULT.match(binding) if isinstance(binding, str) else None
+    if not bound:
+        return (
+            f"{where}: {HELPER} reads ${variable}, bound to {binding!r} "
+            "instead of ${{ needs.<id>.result }}"
+        )
+    if bound.group(1) != named_job:
+        return (
+            f"{where}: {HELPER} names job '{named_job}' but ${variable} "
+            f"is ${{{{ needs.{bound.group(1)}.result }}}}"
+        )
+    return None
+
 
 for path in sorted(glob.glob(".github/workflows/*.y*ml")):
     try:
@@ -464,16 +538,24 @@ for path in sorted(glob.glob(".github/workflows/*.y*ml")):
             if isinstance(uses, str) and uses.split("@", 1)[0] == "actions/checkout":
                 checkout_index = index
                 break
-        if checkout_index is None:
-            continue
-        for step in steps[checkout_index + 1:]:
+        for index, step in enumerate(steps):
             run = step.get("run") if isinstance(step, dict) else None
-            if isinstance(run, str) and BARE_PREREQUISITE.match(run.strip()):
-                name = step.get("name", "<unnamed>")
+            if not isinstance(run, str):
+                continue
+            run = run.strip()
+            if INVOKES_HELPER.search(run):
+                violation = check_helper_call(path, workflow, job_id, job, step, run)
+                if violation:
+                    print(violation)
+            elif (
+                checkout_index is not None
+                and index > checkout_index
+                and BARE_PREREQUISITE.match(run)
+            ):
                 print(
-                    f"{path}: job '{job_id}' step '{name}': bare prerequisite "
-                    "comparison after checkout; use "
-                    "bash scripts/ci-require-prerequisite.sh JOB_ID RESULT"
+                    f"{path}: job '{job_id}' step '{step.get('name', '<unnamed>')}': "
+                    "bare prerequisite comparison after checkout; use "
+                    f"bash {HELPER} JOB_ID RESULT"
                 )
 PY
 )

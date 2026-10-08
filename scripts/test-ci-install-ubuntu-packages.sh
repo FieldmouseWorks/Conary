@@ -5,8 +5,9 @@
 # image (the hosted ubuntu-latest release) with its canonical apt source
 # pointed at host-local endpoints. No case needs the internet once the image
 # is present:
-#   stall-silent  accepts connections and never answers; the outer update
-#                 bound must stop apt.
+#   stall-silent  accepts connections and never answers; apt's own acquire
+#                 timeout and retry count (the helper's Acquire options) must
+#                 fail the update with exit 100 well inside the outer bound.
 #   stall-trickle answers and then sends one body byte every few seconds, so
 #                 apt's inactivity timeout never fires; only the outer update
 #                 bound can stop it.
@@ -17,21 +18,31 @@
 # The container uses host networking so 127.0.0.1 reaches the host listeners,
 # and a root `sudo` shim stands in for the runner's passwordless sudo.
 #
-# Requires python3, dpkg-deb, and a container engine on the host.
-# CONTAINER_ENGINE selects docker (default) or podman.
+# Requires python3, dpkg-deb, and a container engine on the host. A set
+# CONTAINER_ENGINE must be docker or podman; unset, the test uses docker when
+# it is on PATH (the hosted-runner path), else podman.
 set -euo pipefail
 
 repo_root=$(git rev-parse --show-toplevel)
 cd "$repo_root"
 
-engine="${CONTAINER_ENGINE:-docker}"
-case "$engine" in
-  docker | podman) ;;
-  *)
-    echo "CONTAINER_ENGINE must be docker or podman, got: $engine" >&2
-    exit 2
-    ;;
-esac
+if [[ -n "${CONTAINER_ENGINE+set}" ]]; then
+  engine="$CONTAINER_ENGINE"
+  case "$engine" in
+    docker | podman) ;;
+    *)
+      echo "CONTAINER_ENGINE must be docker or podman, got: '$engine'" >&2
+      exit 2
+      ;;
+  esac
+elif command -v docker >/dev/null; then
+  engine=docker
+elif command -v podman >/dev/null; then
+  engine=podman
+else
+  echo "no container engine: neither docker nor podman is on PATH" >&2
+  exit 2
+fi
 for tool in "$engine" python3 dpkg-deb timeout; do
   if ! command -v "$tool" >/dev/null; then
     echo "required host tool is missing: $tool" >&2
@@ -56,11 +67,34 @@ read_helper_seconds() {
   fi
   printf '%s\n' "$value"
 }
+# Reads one `-o "Acquire::<name>=<n>"` element of the helper's apt_options.
+read_helper_acquire_option() {
+  local name="$1"
+  local values
+
+  values="$(sed -n "s/^[[:space:]]*-o \"Acquire::${name}=\([0-9][0-9]*\)\"\$/\1/p" "$helper")"
+  if [[ ! "$values" =~ ^[0-9]+$ ]]; then
+    echo "${helper}: expected exactly one -o \"Acquire::${name}=<integer>\" apt option" >&2
+    exit 1
+  fi
+  printf '%s\n' "$values"
+}
 update_bound="$(read_helper_seconds apt_update_timeout_seconds)"
 install_bound="$(read_helper_seconds apt_install_timeout_seconds)"
 kill_grace="$(read_helper_seconds apt_kill_grace_seconds)"
+# The local endpoints are plain http, so Acquire::http::Timeout governs them.
+acquire_timeout="$(read_helper_acquire_option http::Timeout)"
+acquire_retries="$(read_helper_acquire_option Retries)"
 # Container start, apt list parsing, and one-second clock granularity.
 margin_seconds=20
+# On apt 2.8 one silent fetch costs about (Retries + 1) x 2 x Timeout seconds
+# before apt reports it; the helper relies on that ending inside the update
+# bound, with room to tell the two failures apart.
+acquire_ceiling=$(( (acquire_retries + 1) * 2 * acquire_timeout + margin_seconds ))
+if (( acquire_timeout < 1 || acquire_ceiling >= update_bound )); then
+  echo "${helper}: a silent fetch may take up to ${acquire_ceiling}s (Acquire::http::Timeout=${acquire_timeout}, Acquire::Retries=${acquire_retries}), which does not end inside the ${update_bound}s update bound" >&2
+  exit 1
+fi
 error_title='::error title=Ubuntu package bootstrap failed::'
 
 tmpdir="$(mktemp -d)"
@@ -316,6 +350,28 @@ assert_no_downstream_install_error() {
   fi
 }
 
+# stall-silent: apt's own acquire timeout must end the update, so the helper
+# reports apt's failure, not the outer bound. The floor proves the endpoint
+# actually stalled: a dead listener refuses at once with the same exit 100.
+assert_acquire_failure() {
+  local name="$1"
+  local expected="${error_title}apt-get update failed with exit status 100 within its ${update_bound}-second bound"
+  local timeout_message="${error_title}apt-get update did not finish"
+
+  read_case_result "$name" || return 0
+  if [[ "$case_status" -ne 1 ]]; then
+    fail_case "$name" "helper exited ${case_status}, expected 1"
+  elif (( case_elapsed < acquire_timeout || case_elapsed > acquire_ceiling )); then
+    fail_case "$name" "elapsed ${case_elapsed}s, expected ${acquire_timeout}..${acquire_ceiling}s from Acquire::http::Timeout=${acquire_timeout} and Acquire::Retries=${acquire_retries}"
+  elif grep -qF -- "$timeout_message" "$tmpdir/${name}.log"; then
+    fail_case "$name" "the outer update bound stopped apt instead of its acquire timeout"
+  elif ! grep -qF -- "$expected" "$tmpdir/${name}.log"; then
+    fail_case "$name" "missing helper message: ${expected}"
+  elif assert_no_downstream_install_error "$name"; then
+    echo "[ok] ${name}: apt's acquire timeout failed the update after ${case_elapsed}s (ceiling ${acquire_ceiling}s)"
+  fi
+}
+
 assert_update_timeout() {
   local name="$1"
   local expected="${error_title}apt-get update did not finish within its ${update_bound}-second bound"
@@ -333,7 +389,8 @@ assert_update_timeout() {
   fi
 }
 
-# Both stall cases wait out the full update bound, so run them concurrently.
+# The stall cases wait out apt's acquire timeout and the full update bound,
+# so run them concurrently with the fast cases.
 run_case stall-silent &
 silent_job=$!
 run_case stall-trickle &
@@ -370,7 +427,7 @@ fi
 
 wait "$silent_job" || true
 wait "$trickle_job" || true
-assert_update_timeout stall-silent
+assert_acquire_failure stall-silent
 assert_update_timeout stall-trickle
 
 if [[ "$failures" -ne 0 ]]; then
