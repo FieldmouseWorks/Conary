@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-10-06
-revision: 111
+last_updated: 2026-10-08
+revision: 112
 summary: Define the Podman integration harness and proof contracts, including immutable release-backed base-image acquisition, TNPM05 whole-root provider JSON, TNPM14, TNPM15, and TNPM18 persisted rows, and Group I and J exact package rows
 ---
 
@@ -1639,6 +1639,22 @@ skips apt when every package is already installed, and otherwise restricts both
 update and install to the plain canonical
 `/etc/apt/sources.list.d/ubuntu.sources` file with runner-provided source parts
 disabled. Image-provided third-party apt feeds are never CI authority.
+Both apt calls pin apt's per-fetch inactivity timeout and retry count to the
+hosted x64 runner's values (15 seconds, 1 retry), and run under a root-owned
+outer `timeout` (150 seconds for update, 240 for install) sized to fit the
+10-minute `ci-base-image-policy` job. `apt-get update --error-on=any` fails on
+any failed index instead of installing from incomplete indexes. A hit bound or
+failed fetch ends the helper with a typed `Ubuntu package bootstrap failed`
+error naming the step and its bound as a CI infrastructure (mirror) failure;
+nothing retries until green. `scripts/test-ci-install-ubuntu-packages.sh` runs
+the helper in the pinned Ubuntu 24.04 image against local endpoints: a silent
+mirror must fail the update through apt's own acquire timeout (exit 100,
+within a ceiling derived from the helper's timeout and retry values and well
+inside the update bound), a mirror that trickles bytes must be stopped by the
+150-second outer bound, a closed port must fail the update itself, and a
+responding local mirror is the positive control. It uses `CONTAINER_ENGINE`
+(`docker` or `podman`) when set, otherwise docker when it is on `PATH`, else
+podman.
 Package installation inside a pinned Fedora, Ubuntu, Arch, or test-container
 image remains owned by that image's native bootstrap.
 

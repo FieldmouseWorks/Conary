@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-10-06
-revision: 131
+last_updated: 2026-10-08
+revision: 132
 summary: Route features to owned paths and proof, including guided and bounded unattended agent workflow tools, typed native persisted-SQL checks, autoremove preview and final state, installed-list, publication-debt, repository presentation, retained-survey requests, and workflow recovery.
 ---
 
@@ -1141,6 +1141,9 @@ static-site deployment, and production health proof.
 `.github/actions/summarize-rust-cache/action.yml`;
 `.github/actions/test-generation-db-reflink/action.yml`;
 `scripts/ci-install-ubuntu-packages.sh`;
+`scripts/test-ci-install-ubuntu-packages.sh`;
+`scripts/ci-require-prerequisite.sh`;
+`scripts/test-ci-require-prerequisite.sh`;
 `scripts/check-github-action-runtimes.sh`;
 `scripts/test-github-action-runtimes.sh`;
 `Cargo.toml`; `apps/*/Cargo.toml`; `crates/*/Cargo.toml`; `Cargo.lock`;
@@ -1157,6 +1160,8 @@ static-site deployment, and production health proof.
 `bash scripts/test-remi-candidate-artifact.sh`;
 `bash scripts/check-github-action-runtimes.sh`;
 `bash scripts/test-github-action-runtimes.sh`;
+`bash scripts/test-ci-install-ubuntu-packages.sh`;
+`bash scripts/test-ci-require-prerequisite.sh`;
 `cargo test -p conary-core --example sign_hash`;
 `cargo test -p conary --test release_ccs_manifest`;
 `cargo test -p conary-test container::image`.

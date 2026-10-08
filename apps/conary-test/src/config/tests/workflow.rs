@@ -496,7 +496,7 @@ fn assert_protected_compiler_cache_reader(
     );
     assert_eq!(
         require.run.as_deref(),
-        Some("test \"$PRIMER_RESULT\" = success")
+        Some("bash scripts/ci-require-prerequisite.sh gnu-compiler-cache \"$PRIMER_RESULT\"")
     );
 
     let setup = action_step(&job.steps, COMPILER_CACHE_SETUP_ACTION);
@@ -1130,7 +1130,9 @@ fn workspace_gate_provisions_the_exact_namespace_test_boundary() {
     );
     assert_eq!(
         policy.run.as_deref(),
-        Some("test \"$IMAGE_POLICY_RESULT\" = success")
+        Some(
+            "bash scripts/ci-require-prerequisite.sh ci-base-image-policy \"$IMAGE_POLICY_RESULT\""
+        )
     );
     assert_eq!(policy.condition, None);
     assert!(!policy.continue_on_error);

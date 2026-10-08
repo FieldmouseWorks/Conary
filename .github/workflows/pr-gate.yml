@@ -274,6 +274,7 @@ jobs:
   workflow-runtime-policy:
     name: workflow-runtime-policy
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Prepare shell policy tools
@@ -282,6 +283,10 @@ jobs:
         run: bash scripts/check-github-action-runtimes.sh
       - name: Test GitHub Actions runtime policy checker
         run: bash scripts/test-github-action-runtimes.sh
+      - name: Test bounded Ubuntu package bootstrap
+        run: bash scripts/test-ci-install-ubuntu-packages.sh
+      - name: Test prerequisite result helper
+        run: bash scripts/test-ci-require-prerequisite.sh
       - name: Test pull-request change-scope classification
         run: bash scripts/test-pr-gate-scope.sh
 
@@ -359,7 +364,7 @@ jobs:
       - name: Require exact compiler-cache seed
         env:
           PRIMER_RESULT: ${{ needs.gnu-compiler-cache.result }}
-        run: test "$PRIMER_RESULT" = success
+        run: bash scripts/ci-require-prerequisite.sh gnu-compiler-cache "$PRIMER_RESULT"
       - uses: ./.github/actions/setup-rust-workspace
         with:
           compiler-cache: reader
@@ -450,7 +455,7 @@ jobs:
       - name: Require exact compiler-cache seed
         env:
           PRIMER_RESULT: ${{ needs.gnu-compiler-cache.result }}
-        run: test "$PRIMER_RESULT" = success
+        run: bash scripts/ci-require-prerequisite.sh gnu-compiler-cache "$PRIMER_RESULT"
       - uses: ./.github/actions/setup-rust-workspace
         with:
           components: clippy
@@ -482,11 +487,11 @@ jobs:
       - name: Require CI base image policy
         env:
           IMAGE_POLICY_RESULT: ${{ needs.ci-base-image-policy.result }}
-        run: test "$IMAGE_POLICY_RESULT" = success
+        run: bash scripts/ci-require-prerequisite.sh ci-base-image-policy "$IMAGE_POLICY_RESULT"
       - name: Require exact compiler-cache seed
         env:
           PRIMER_RESULT: ${{ needs.gnu-compiler-cache.result }}
-        run: test "$PRIMER_RESULT" = success
+        run: bash scripts/ci-require-prerequisite.sh gnu-compiler-cache "$PRIMER_RESULT"
       - uses: ./.github/actions/setup-rust-workspace
         with:
           compiler-cache: reader
@@ -614,7 +619,7 @@ jobs:
       - name: Require exact compiler-cache seed
         env:
           PRIMER_RESULT: ${{ needs.gnu-compiler-cache.result }}
-        run: test "$PRIMER_RESULT" = success
+        run: bash scripts/ci-require-prerequisite.sh gnu-compiler-cache "$PRIMER_RESULT"
       - uses: ./.github/actions/setup-rust-workspace
         with:
           compiler-cache: reader
@@ -635,7 +640,7 @@ jobs:
       - name: Require exact compiler-cache seed
         env:
           PRIMER_RESULT: ${{ needs.gnu-compiler-cache.result }}
-        run: test "$PRIMER_RESULT" = success
+        run: bash scripts/ci-require-prerequisite.sh gnu-compiler-cache "$PRIMER_RESULT"
       - uses: ./.github/actions/setup-rust-workspace
         with:
           compiler-cache: reader
@@ -1035,7 +1040,7 @@ jobs:
       - name: Require exact compiler-cache seed
         env:
           PRIMER_RESULT: ${{ needs.gnu-compiler-cache.result }}
-        run: test "$PRIMER_RESULT" = success
+        run: bash scripts/ci-require-prerequisite.sh gnu-compiler-cache "$PRIMER_RESULT"
       - uses: ./.github/actions/setup-rust-workspace
         with:
           compiler-cache: reader

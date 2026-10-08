@@ -675,7 +675,9 @@ class ConsumerWorkflowTests(unittest.TestCase):
                     if step.get('name') == 'Require CI base image policy')
         self.assertEqual(gate['env']['IMAGE_POLICY_RESULT'],
                          '${{ needs.ci-base-image-policy.result }}')
-        self.assertEqual(gate['run'], 'test "$IMAGE_POLICY_RESULT" = success')
+        self.assertEqual(
+            gate['run'],
+            'bash scripts/ci-require-prerequisite.sh ci-base-image-policy "$IMAGE_POLICY_RESULT"')
         required = workflow['jobs']['workspace-tests']
         self.assertEqual(required['name'], 'workspace-tests')
         self.assertEqual(required['needs'], 'workspace-test-shards')
