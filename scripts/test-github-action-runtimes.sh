@@ -42,6 +42,27 @@ jobs:
       - uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7
 EOF
 
+  cat > "$root/.github/workflows/prerequisite.yml" <<EOF
+name: prerequisite
+on: workflow_dispatch
+jobs:
+  with-checkout:
+    runs-on: ubuntu-latest
+    env:
+      PRIMER_RESULT: success
+    steps:
+      - uses: ${uses_ref}
+      - name: Require exact compiler-cache seed
+        run: bash scripts/ci-require-prerequisite.sh primer "\$PRIMER_RESULT"
+  without-checkout:
+    runs-on: ubuntu-latest
+    env:
+      PRIMER_RESULT: success
+    steps:
+      - name: Require exact compiler-cache seed
+        run: test "\$PRIMER_RESULT" = success
+EOF
+
   cat > "$root/.github/workflows/release-build.yml" <<'EOF'
 name: release-build
 on: workflow_dispatch
@@ -100,6 +121,9 @@ unsafe_shell_root="$tmpdir/unsafe-shell"
 unsafe_python_yaml_root="$tmpdir/unsafe-python-yaml"
 unsafe_apt_root="$tmpdir/unsafe-apt"
 unsafe_source_root="$tmpdir/unsafe-source"
+unsafe_prereq_root="$tmpdir/unsafe-prerequisite"
+unsafe_apt_bound_root="$tmpdir/unsafe-apt-bound"
+unsafe_apt_budget_root="$tmpdir/unsafe-apt-budget"
 unsafe_cache_root="$tmpdir/unsafe-cache"
 unsafe_native_cache_root="$tmpdir/unsafe-native-cache"
 unsafe_pr_cleanup_root="$tmpdir/unsafe-pr-cleanup"
@@ -110,6 +134,9 @@ write_fixture "$unsafe_shell_root" "actions/checkout@de0fac2e4500dabe0009e67214f
 write_fixture "$unsafe_python_yaml_root" "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd"
 write_fixture "$unsafe_apt_root" "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd"
 write_fixture "$unsafe_source_root" "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd"
+write_fixture "$unsafe_prereq_root" "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd"
+write_fixture "$unsafe_apt_bound_root" "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd"
+write_fixture "$unsafe_apt_budget_root" "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd"
 write_fixture "$unsafe_cache_root" "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd"
 write_fixture "$unsafe_native_cache_root" "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd"
 write_fixture "$unsafe_pr_cleanup_root" "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd"
@@ -124,6 +151,18 @@ sed -i \
 sed -i \
   's#/etc/apt/sources.list.d/ubuntu.sources#/etc/apt/sources.list#' \
   "$unsafe_source_root/scripts/ci-install-ubuntu-packages.sh"
+# The fixture edit intentionally matches literal shell variables.
+# shellcheck disable=SC2016
+sed -i \
+  's#^sudo timeout --kill-after="${apt_kill_grace_seconds}s" "${apt_update_timeout_seconds}s" \\$#sudo \\#' \
+  "$unsafe_apt_bound_root/scripts/ci-install-ubuntu-packages.sh"
+# Revert the checkout job's step to the bare comparison.
+# shellcheck disable=SC2016
+sed -i \
+  's#bash scripts/ci-require-prerequisite.sh primer "$PRIMER_RESULT"#test "$PRIMER_RESULT" = success#' \
+  "$unsafe_prereq_root/.github/workflows/prerequisite.yml"
+sed -i 's/^apt_install_timeout_seconds=[0-9]*$/apt_install_timeout_seconds=3600/' \
+  "$unsafe_apt_budget_root/scripts/ci-install-ubuntu-packages.sh"
 sed -i 's/version: v0\.16\.0/version: latest/' \
   "$unsafe_cache_root/.github/actions/setup-rust-workspace/action.yml"
 sed -i \
@@ -208,6 +247,57 @@ if ! rg -q 'must require the canonical Ubuntu source as a plain file' \
   "$tmpdir/unsafe-source.err"; then
   echo "expected failure to name the noncanonical Ubuntu apt source" >&2
   cat "$tmpdir/unsafe-source.err" >&2
+  exit 1
+fi
+
+if bash scripts/check-github-action-runtimes.sh "$unsafe_prereq_root" \
+  >"$tmpdir/unsafe-prerequisite.out" 2>"$tmpdir/unsafe-prerequisite.err"; then
+  echo "expected bare prerequisite comparison fixture to fail" >&2
+  cat "$tmpdir/unsafe-prerequisite.out" >&2
+  cat "$tmpdir/unsafe-prerequisite.err" >&2
+  exit 1
+fi
+
+if ! rg -q "prerequisite.yml: job 'with-checkout' step 'Require exact compiler-cache seed': bare prerequisite comparison" \
+  "$tmpdir/unsafe-prerequisite.err"; then
+  echo "expected failure to name the workflow, job, and step with the bare prerequisite comparison" >&2
+  cat "$tmpdir/unsafe-prerequisite.err" >&2
+  exit 1
+fi
+
+if rg -q "job 'without-checkout'" "$tmpdir/unsafe-prerequisite.err"; then
+  echo "a job without a checkout must keep the bare prerequisite comparison" >&2
+  cat "$tmpdir/unsafe-prerequisite.err" >&2
+  exit 1
+fi
+
+if bash scripts/check-github-action-runtimes.sh "$unsafe_apt_bound_root" \
+  >"$tmpdir/unsafe-apt-bound.out" 2>"$tmpdir/unsafe-apt-bound.err"; then
+  echo "expected unbounded apt-get update fixture to fail" >&2
+  cat "$tmpdir/unsafe-apt-bound.out" >&2
+  cat "$tmpdir/unsafe-apt-bound.err" >&2
+  exit 1
+fi
+
+if ! rg -q 'must run apt-get update under a root-owned outer timeout' \
+  "$tmpdir/unsafe-apt-bound.err"; then
+  echo "expected failure to name the missing outer apt-get update timeout" >&2
+  cat "$tmpdir/unsafe-apt-bound.err" >&2
+  exit 1
+fi
+
+if bash scripts/check-github-action-runtimes.sh "$unsafe_apt_budget_root" \
+  >"$tmpdir/unsafe-apt-budget.out" 2>"$tmpdir/unsafe-apt-budget.err"; then
+  echo "expected over-budget apt bound fixture to fail" >&2
+  cat "$tmpdir/unsafe-apt-budget.out" >&2
+  cat "$tmpdir/unsafe-apt-budget.err" >&2
+  exit 1
+fi
+
+if ! rg -q 'apt bounds total 3770s, above the 480s budget of the smallest consuming job' \
+  "$tmpdir/unsafe-apt-budget.err"; then
+  echo "expected failure to name the over-budget apt bounds" >&2
+  cat "$tmpdir/unsafe-apt-budget.err" >&2
   exit 1
 fi
 

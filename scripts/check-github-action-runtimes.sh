@@ -133,6 +133,36 @@ else
   require_ubuntu_package_match \
     'apt-get "\$\{apt_options\[@\]\}" update[\s\S]*apt-get "\$\{apt_options\[@\]\}" install -y --no-install-recommends' \
     'must use the isolated apt options for update and installation'
+  require_ubuntu_package_match \
+    'apt_options=\([^)]*"Acquire::http::Timeout=[1-9][0-9]*"[^)]*"Acquire::https::Timeout=[1-9][0-9]*"[^)]*"Acquire::Retries=[0-9]+"[^)]*\)' \
+    'must pin apt fetch inactivity timeouts and retry count in the isolated apt options'
+  # shellcheck disable=SC2016
+  require_ubuntu_package_match \
+    'sudo timeout --kill-after="\$\{apt_kill_grace_seconds\}s" "\$\{apt_update_timeout_seconds\}s"[\s\\]*apt-get "\$\{apt_options\[@\]\}" update' \
+    'must run apt-get update under a root-owned outer timeout'
+  # shellcheck disable=SC2016
+  require_ubuntu_package_match \
+    'sudo timeout --kill-after="\$\{apt_kill_grace_seconds\}s" "\$\{apt_install_timeout_seconds\}s"[\s\\]*env DEBIAN_FRONTEND=noninteractive[\s\\]*apt-get "\$\{apt_options\[@\]\}" install' \
+    'must run apt-get install under a root-owned outer timeout'
+  require_ubuntu_package_match \
+    'apt-get "\$\{apt_options\[@\]\}" update --error-on=any' \
+    'must fail apt-get update on any failed index fetch'
+
+  # The bounds must fit the smallest consuming job budget
+  # (ci-base-image-policy, timeout-minutes: 10) with two minutes left for
+  # checkout and the job's own proof.
+  ubuntu_package_apt_budget_seconds=480
+  ubuntu_package_bound() {
+    sed -n "s/^$1=\([1-9][0-9]*\)\$/\1/p" "$ubuntu_package_helper"
+  }
+  update_bound="$(ubuntu_package_bound apt_update_timeout_seconds)"
+  install_bound="$(ubuntu_package_bound apt_install_timeout_seconds)"
+  kill_grace="$(ubuntu_package_bound apt_kill_grace_seconds)"
+  if [[ ! "$update_bound" =~ ^[0-9]+$ || ! "$install_bound" =~ ^[0-9]+$ || ! "$kill_grace" =~ ^[0-9]+$ ]]; then
+    violations+=("${ubuntu_package_helper}: must define apt_update_timeout_seconds, apt_install_timeout_seconds, and apt_kill_grace_seconds as single positive integers")
+  elif (( update_bound + install_bound + 2 * kill_grace > ubuntu_package_apt_budget_seconds )); then
+    violations+=("${ubuntu_package_helper}: apt bounds total $(( update_bound + install_bound + 2 * kill_grace ))s, above the ${ubuntu_package_apt_budget_seconds}s budget of the smallest consuming job")
+  fi
 fi
 
 ubuntu_package_callers=(
@@ -395,6 +425,58 @@ for workflow in .github/workflows/pr-gate.yml .github/workflows/merge-validation
     violations+=("${workflow}: duplicated or unrestricted shell-policy apt bootstrap")
   fi
 done
+
+# A job that checks out the repository has scripts/ci-require-prerequisite.sh
+# on disk, so it must report a failed prerequisite through that helper instead
+# of a bare `test "$X_RESULT" = success`. Jobs without a checkout cannot reach
+# the helper and keep the bare form. Decided from parsed YAML, not text.
+while IFS= read -r violation; do
+  [[ -n "$violation" ]] && violations+=("$violation")
+done < <(
+  python3 -I - <<'PY'
+import glob
+import re
+
+import yaml
+
+VALUE = r'"?\$\{?[A-Za-z0-9_]+_RESULT\}?"?\s+==?\s+"?success"?'
+BARE_PREREQUISITE = re.compile(
+    rf'^(?:test\s+{VALUE}|\[\[?\s+{VALUE}\s+\]\]?)$'
+)
+
+for path in sorted(glob.glob(".github/workflows/*.y*ml")):
+    try:
+        with open(path, encoding="utf-8") as handle:
+            workflow = yaml.safe_load(handle)
+    except (OSError, yaml.YAMLError) as error:
+        print(f"{path}: cannot parse workflow for prerequisite policy: {error}")
+        continue
+    jobs = workflow.get("jobs") if isinstance(workflow, dict) else None
+    if not isinstance(jobs, dict):
+        continue
+    for job_id, job in jobs.items():
+        steps = job.get("steps") if isinstance(job, dict) else None
+        if not isinstance(steps, list):
+            continue
+        checkout_index = None
+        for index, step in enumerate(steps):
+            uses = step.get("uses") if isinstance(step, dict) else None
+            if isinstance(uses, str) and uses.split("@", 1)[0] == "actions/checkout":
+                checkout_index = index
+                break
+        if checkout_index is None:
+            continue
+        for step in steps[checkout_index + 1:]:
+            run = step.get("run") if isinstance(step, dict) else None
+            if isinstance(run, str) and BARE_PREREQUISITE.match(run.strip()):
+                name = step.get("name", "<unnamed>")
+                print(
+                    f"{path}: job '{job_id}' step '{name}': bare prerequisite "
+                    "comparison after checkout; use "
+                    "bash scripts/ci-require-prerequisite.sh JOB_ID RESULT"
+                )
+PY
+)
 
 if [[ "${#violations[@]}" -ne 0 ]]; then
   printf 'ERROR: GitHub Actions policy violations found:\n' >&2
