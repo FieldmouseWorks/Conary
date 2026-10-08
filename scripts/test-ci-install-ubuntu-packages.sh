@@ -285,8 +285,20 @@ write_sources unreachable "http://127.0.0.1:${endpoint_port}/ubuntu/" noble main
 start_endpoint repo "$repo_dir"
 write_sources mirror "http://127.0.0.1:${endpoint_port}/" ./ ""
 
+# The pinned image is the test's only network fetch; bound it so a stalled
+# registry fails here with its own message instead of as a job timeout.
+pull_timeout_seconds=300
 if ! "$engine" image inspect "$image" >/dev/null 2>&1; then
-  "$engine" pull "$image" >/dev/null
+  pull_status=0
+  timeout --kill-after=10s "${pull_timeout_seconds}s" \
+    "$engine" pull "$image" >/dev/null || pull_status=$?
+  if [[ "$pull_status" -eq 124 || "$pull_status" -eq 137 ]]; then
+    echo "[fail] ${engine} pull of ${image} did not finish within ${pull_timeout_seconds}s (timeout exit ${pull_status})" >&2
+    exit 1
+  elif [[ "$pull_status" -ne 0 ]]; then
+    echo "[fail] ${engine} pull of ${image} failed with exit status ${pull_status}" >&2
+    exit 1
+  fi
 fi
 
 # Generous enough for a full update and install; a case that reaches it has

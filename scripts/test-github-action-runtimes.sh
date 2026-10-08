@@ -46,6 +46,8 @@ write_fixture() {
     "$root/.github/actions/summarize-rust-cache/action.yml"
   cp .github/workflows/cleanup-pr-caches.yml \
     "$root/.github/workflows/cleanup-pr-caches.yml"
+  # The apt budget is derived from this workflow's ci-base-image-policy job.
+  cp .github/workflows/pr-gate.yml "$root/.github/workflows/pr-gate.yml"
   cat > "$root/.github/workflows/policy.yml" <<EOF
 name: policy
 on: workflow_dispatch
@@ -146,6 +148,11 @@ unsafe_source_root="$tmpdir/unsafe-source"
 unsafe_prereq_root="$tmpdir/unsafe-prerequisite"
 unsafe_prereq_id_root="$tmpdir/unsafe-prerequisite-id"
 unsafe_apt_comment_root="$tmpdir/unsafe-apt-comment"
+unsafe_apt_continuation_root="$tmpdir/unsafe-apt-continuation"
+unsafe_prereq_path_root="$tmpdir/unsafe-prerequisite-path"
+unsafe_workflow_read_root="$tmpdir/unsafe-workflow-read"
+unsafe_budget_job_root="$tmpdir/unsafe-budget-job"
+unsafe_budget_type_root="$tmpdir/unsafe-budget-type"
 unsafe_apt_bound_root="$tmpdir/unsafe-apt-bound"
 unsafe_apt_budget_root="$tmpdir/unsafe-apt-budget"
 unsafe_cache_root="$tmpdir/unsafe-cache"
@@ -161,6 +168,10 @@ write_fixture "$unsafe_source_root" "actions/checkout@de0fac2e4500dabe0009e67214
 write_fixture "$unsafe_prereq_root" "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd"
 write_fixture "$unsafe_prereq_id_root" "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd"
 write_fixture "$unsafe_apt_comment_root" "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd"
+for root in "$unsafe_apt_continuation_root" "$unsafe_prereq_path_root" \
+  "$unsafe_workflow_read_root" "$unsafe_budget_job_root" "$unsafe_budget_type_root"; do
+  write_fixture "$root" "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd"
+done
 write_fixture "$unsafe_apt_bound_root" "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd"
 write_fixture "$unsafe_apt_budget_root" "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd"
 write_fixture "$unsafe_cache_root" "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd"
@@ -200,6 +211,51 @@ replace_once "$unsafe_apt_comment_root/scripts/ci-install-ubuntu-packages.sh" \
   apt-get "${apt_options[@]}" update --error-on=any || update_status=$?' \
   '# was: sudo timeout --kill-after="${apt_kill_grace_seconds}s" "${apt_update_timeout_seconds}s" apt-get "${apt_options[@]}" update --error-on=any
 sudo apt-get "${apt_options[@]}" update || update_status=$?'
+# A comment line inside the `\` continuation ends the bounded command, so
+# apt-get on the next line runs unbounded.
+# shellcheck disable=SC2016
+replace_once "$unsafe_apt_continuation_root/scripts/ci-install-ubuntu-packages.sh" \
+  '"${apt_update_timeout_seconds}s" \
+  apt-get "${apt_options[@]}" update --error-on=any' \
+  '"${apt_update_timeout_seconds}s" \
+  # bounded update
+  apt-get "${apt_options[@]}" update --error-on=any'
+# The helper reached through another path must still be the exact form.
+# shellcheck disable=SC2016
+replace_once "$unsafe_prereq_path_root/.github/workflows/prerequisite.yml" \
+  'bash scripts/ci-require-prerequisite.sh primer "$PRIMER_RESULT"' \
+  'bash "$GITHUB_WORKSPACE/scripts/ci-require-prerequisite.sh" primer "$PRIMER_RESULT"'
+# Unparseable and non-UTF-8 workflows sort before prerequisite.yml, whose
+# bare comparison must still be reported.
+printf 'name: broken\njobs: [unclosed\n' \
+  > "$unsafe_workflow_read_root/.github/workflows/broken.yml"
+printf 'name: bad-\377-utf8\non: workflow_dispatch\n' \
+  > "$unsafe_workflow_read_root/.github/workflows/bad-utf8.yml"
+# shellcheck disable=SC2016
+replace_once "$unsafe_workflow_read_root/.github/workflows/prerequisite.yml" \
+  'bash scripts/ci-require-prerequisite.sh primer "$PRIMER_RESULT"' \
+  'test "$PRIMER_RESULT" = success'
+budget_job_header='  ci-base-image-policy:
+    name: ci-base-image-policy
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+'
+replace_once "$unsafe_budget_job_root/.github/workflows/pr-gate.yml" \
+  "$budget_job_header" "${budget_job_header%10?}7
+"
+replace_once "$unsafe_budget_type_root/.github/workflows/pr-gate.yml" \
+  "$budget_job_header" "${budget_job_header%10?}ten
+"
+# python3 that cannot run the structural scans.
+python_shim="$tmpdir/python-shim"
+mkdir -p "$python_shim"
+printf '#!/bin/sh\nexit 1\n' > "$python_shim/python3"
+chmod +x "$python_shim/python3"
+# rg that fails every scan with an error status.
+rg_shim="$tmpdir/rg-shim"
+mkdir -p "$rg_shim"
+printf '#!/bin/sh\nexit 2\n' > "$rg_shim/rg"
+chmod +x "$rg_shim/rg"
 sed -i 's/^apt_install_timeout_seconds=[0-9]*$/apt_install_timeout_seconds=3600/' \
   "$unsafe_apt_budget_root/scripts/ci-install-ubuntu-packages.sh"
 sed -i 's/version: v0\.16\.0/version: latest/' \
@@ -432,6 +488,52 @@ if ! rg -q 'composite-action description contains an unquoted mapping colon' \
   cat "$tmpdir/unsafe-action-yaml.err" >&2
   exit 1
 fi
+
+# expect_violations LABEL ROOT MESSAGE...: the checker must fail on ROOT and
+# report every MESSAGE (fixed strings). PATH_PREFIX, when set, is prepended
+# to PATH for that checker run only.
+expect_violations() {
+  local label="$1"
+  local root="$2"
+  local message
+  shift 2
+
+  if PATH="${PATH_PREFIX:+${PATH_PREFIX}:}$PATH" \
+    bash scripts/check-github-action-runtimes.sh "$root" \
+    >"$tmpdir/${label}.out" 2>"$tmpdir/${label}.err"; then
+    echo "expected ${label} fixture to fail" >&2
+    cat "$tmpdir/${label}.out" "$tmpdir/${label}.err" >&2
+    exit 1
+  fi
+  for message in "$@"; do
+    if ! rg -q --fixed-strings -- "$message" "$tmpdir/${label}.err"; then
+      echo "expected ${label} failure to report: ${message}" >&2
+      cat "$tmpdir/${label}.err" >&2
+      exit 1
+    fi
+  done
+}
+
+expect_violations apt-continuation "$unsafe_apt_continuation_root" \
+  'scripts/ci-install-ubuntu-packages.sh: must run apt-get update under a root-owned outer timeout'
+expect_violations prerequisite-path "$unsafe_prereq_path_root" \
+  "prerequisite.yml: job 'with-checkout' step 'Require exact compiler-cache seed': unrecognized scripts/ci-require-prerequisite.sh invocation"
+expect_violations workflow-read "$unsafe_workflow_read_root" \
+  '.github/workflows/bad-utf8.yml: cannot read or parse workflow for prerequisite policy: UnicodeDecodeError' \
+  '.github/workflows/broken.yml: cannot read or parse workflow for prerequisite policy:' \
+  "prerequisite.yml: job 'with-checkout' step 'Require exact compiler-cache seed': bare prerequisite comparison"
+PATH_PREFIX="$python_shim" expect_violations python-unavailable "$good_root" \
+  'prerequisite structural policy scan did not complete (python3 exit 1)' \
+  '.github/workflows/pr-gate.yml: cannot derive the apt budget from job ci-base-image-policy: python3 did not run'
+PATH_PREFIX="$rg_shim" expect_violations rg-unavailable "$good_root" \
+  'policy scan failed: rg -q --fixed-strings SCCACHE_GHA_ENABLED' \
+  'policy scan failed: composite-action description scan of .github/actions' \
+  'policy scan failed: hosted-runner apt scan of .github/actions and .github/workflows' \
+  'scripts/ci-install-ubuntu-packages.sh: must reject untyped package arguments'
+expect_violations budget-job "$unsafe_budget_job_root" \
+  'apt bounds total 410s, above the 300s budget of the smallest consuming job (ci-base-image-policy timeout-minutes less 120s)'
+expect_violations budget-type "$unsafe_budget_type_root" \
+  "cannot derive the apt budget from job ci-base-image-policy: error jobs.ci-base-image-policy.timeout-minutes is 'ten', not a positive integer"
 
 echo "GitHub Actions runtime policy fixtures passed."
 

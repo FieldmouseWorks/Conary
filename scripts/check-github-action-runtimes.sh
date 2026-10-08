@@ -43,24 +43,53 @@ is_pinned_external_ref() {
   [[ "$1" =~ @[0-9a-f]{40}$ ]]
 }
 
-# Positive policy rules match code, never commentary. Each rule reads the
-# file through code_view, which blanks full-line comments and trailing
-# ` #` comments, so a comment quoting a required command (for example a
-# `# was: sudo timeout ...` note above an unbounded call) cannot satisfy its
-# rule. Blanking keeps line numbers; a ` #` inside a quoted string is also
-# blanked, which can only make a rule fail closed.
-code_view() {
-  sed -E -e 's/^[[:space:]]*#.*$//' -e 's/[[:space:]]+#.*$//' "$1"
+# Every scan fails closed: a producer or scanner that cannot run records a
+# violation instead of yielding empty input that reads as a pass. scan_rg
+# returns rg's own status (0 match, 1 no match); any other status is recorded
+# as a violation and returned, so `if scan_rg ...` and `if ! scan_rg ...`
+# both treat it as a failed scan.
+scan_rg() {
+  local status=0
+  rg "$@" || status=$?
+  if (( status > 1 )); then
+    violations+=("policy scan failed: rg $* exited ${status}")
+  fi
+  return "$status"
 }
 
-# Process substitution, not a pipe: under pipefail an early `rg -q` exit
-# could surface code_view's SIGPIPE as a false violation.
+# Positive policy rules match code, never commentary. Each rule reads the
+# file through code_view, which replaces the text of full-line comments and
+# trailing ` #` comments with a bare `#`, so a comment quoting a required
+# command (for example a `# was: sudo timeout ...` note above an unbounded
+# call) cannot satisfy its rule. The kept `#` also stops a rule from matching
+# across a comment line inside a `\` continuation, where the shell ends the
+# command at the comment. This is a text view, not a shell parse: a ` #`
+# inside a quoted string is truncated too, which can make a rule fail, and
+# the helper's runtime behaviour is proven by
+# scripts/test-ci-install-ubuntu-packages.sh, not by these rules.
+code_view() {
+  sed -E -e 's/^([[:space:]]*)#.*$/\1#/' -e 's/([[:space:]])#.*$/\1#/' "$1"
+}
+
+code_has() {
+  local mode="$1"
+  local file="$2"
+  local pattern="$3"
+  local view
+
+  if ! view="$(code_view "$file")"; then
+    violations+=("${file}: cannot read for policy matching")
+    return 2
+  fi
+  scan_rg -q "$mode" -- "$pattern" <<<"$view"
+}
+
 code_has_match() {
-  rg -q --multiline -- "$2" < <(code_view "$1")
+  code_has --multiline "$1" "$2"
 }
 
 code_has_fixed() {
-  rg -q --fixed-strings -- "$2" < <(code_view "$1")
+  code_has --fixed-strings "$1" "$2"
 }
 
 mapfile -t action_files < <(find_action_files)
@@ -70,7 +99,17 @@ if [[ "${#action_files[@]}" -eq 0 ]]; then
 fi
 
 violations=()
+all_uses_refs() {
+  local file
+  for file in "${action_files[@]}"; do
+    extract_uses_refs "$file" || return 1
+  done
+}
+if ! uses_refs="$(all_uses_refs)"; then
+  violations+=("cannot extract action references from workflow and action files")
+fi
 while IFS= read -r entry; do
+  [[ -n "$entry" ]] || continue
   file="${entry%%:*}"
   rest="${entry#*:}"
   line="${rest%%:*}"
@@ -84,19 +123,18 @@ while IFS= read -r entry; do
   fi
 
   violations+=("${file}:${line}: unpinned external action ${ref}")
-done < <(
-  for file in "${action_files[@]}"; do
-    extract_uses_refs "$file"
-  done
-)
+done <<<"$uses_refs"
 
-while IFS=: read -r file line _; do
-  violations+=("${file}:${line}: composite-action description contains an unquoted mapping colon")
-done < <(
-  rg -n --no-heading -- \
-    "^[[:space:]]*description:[[:space:]]+[^\"'|>].*:[[:space:]]" \
-    .github/actions 2>/dev/null || true
-)
+description_hits=""
+if description_hits="$(rg -n --no-heading -- \
+  "^[[:space:]]*description:[[:space:]]+[^\"'|>].*:[[:space:]]" \
+  .github/actions)"; then
+  while IFS=: read -r file line _; do
+    violations+=("${file}:${line}: composite-action description contains an unquoted mapping colon")
+  done <<<"$description_hits"
+elif (( $? > 1 )); then
+  violations+=("policy scan failed: composite-action description scan of .github/actions")
+fi
 
 shell_policy_action=".github/actions/setup-shell-policy-tools/action.yml"
 if [[ ! -f "$shell_policy_action" ]]; then
@@ -168,10 +206,38 @@ else
     'apt-get "\$\{apt_options\[@\]\}" update --error-on=any' \
     'must fail apt-get update on any failed index fetch'
 
-  # The bounds must fit the smallest consuming job budget
-  # (ci-base-image-policy, timeout-minutes: 10) with two minutes left for
-  # checkout and the job's own proof.
-  ubuntu_package_apt_budget_seconds=480
+  # The bounds must fit the smallest consuming job, ci-base-image-policy in
+  # pr-gate.yml, with two minutes of its parsed timeout-minutes left for
+  # checkout and the job's own proof. A missing or non-integer timeout fails
+  # closed.
+  budget_workflow=".github/workflows/pr-gate.yml"
+  budget_job="ci-base-image-policy"
+  budget_margin_seconds=120
+  budget_reply="$(
+    python3 -I - "$budget_workflow" "$budget_job" <<'PY'
+import sys
+
+import yaml
+
+path, job_id = sys.argv[1:3]
+try:
+    with open(path, encoding="utf-8") as handle:
+        minutes = yaml.safe_load(handle)["jobs"][job_id]["timeout-minutes"]
+except Exception as error:
+    print(f"error cannot read jobs.{job_id}.timeout-minutes: {type(error).__name__}: {error}")
+else:
+    if type(minutes) is int and minutes > 0:
+        print(f"minutes {minutes}")
+    else:
+        print(f"error jobs.{job_id}.timeout-minutes is {minutes!r}, not a positive integer")
+PY
+  )" || true
+  ubuntu_package_apt_budget_seconds=""
+  if [[ "$budget_reply" =~ ^minutes\ ([1-9][0-9]*)$ ]]; then
+    ubuntu_package_apt_budget_seconds=$(( BASH_REMATCH[1] * 60 - budget_margin_seconds ))
+  else
+    violations+=("${budget_workflow}: cannot derive the apt budget from job ${budget_job}: ${budget_reply:-python3 did not run}")
+  fi
   ubuntu_package_bound() {
     sed -n "s/^$1=\([1-9][0-9]*\)\$/\1/p" "$ubuntu_package_helper"
   }
@@ -180,8 +246,9 @@ else
   kill_grace="$(ubuntu_package_bound apt_kill_grace_seconds)"
   if [[ ! "$update_bound" =~ ^[0-9]+$ || ! "$install_bound" =~ ^[0-9]+$ || ! "$kill_grace" =~ ^[0-9]+$ ]]; then
     violations+=("${ubuntu_package_helper}: must define apt_update_timeout_seconds, apt_install_timeout_seconds, and apt_kill_grace_seconds as single positive integers")
-  elif (( update_bound + install_bound + 2 * kill_grace > ubuntu_package_apt_budget_seconds )); then
-    violations+=("${ubuntu_package_helper}: apt bounds total $(( update_bound + install_bound + 2 * kill_grace ))s, above the ${ubuntu_package_apt_budget_seconds}s budget of the smallest consuming job")
+  elif [[ -n "$ubuntu_package_apt_budget_seconds" ]] &&
+    (( update_bound + install_bound + 2 * kill_grace > ubuntu_package_apt_budget_seconds )); then
+    violations+=("${ubuntu_package_helper}: apt bounds total $(( update_bound + install_bound + 2 * kill_grace ))s, above the ${ubuntu_package_apt_budget_seconds}s budget of the smallest consuming job (${budget_job} timeout-minutes less ${budget_margin_seconds}s)")
   fi
 fi
 
@@ -323,7 +390,7 @@ else
   require_native_cache_action_fixed \
     'uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba' \
     'native matrix cache must install the pinned sccache action'
-  if rg -q --fixed-strings 'SCCACHE_GHA_ENABLED' "$native_compiler_cache_action"; then
+  if scan_rg -q --fixed-strings 'SCCACHE_GHA_ENABLED' "$native_compiler_cache_action"; then
     violations+=("${native_compiler_cache_action}: native matrix cache must not use the per-object GitHub backend")
   fi
 fi
@@ -418,30 +485,36 @@ else
   require_pr_cache_cleanup_fixed \
     'gh api --method DELETE "repos/${GH_REPO}/actions/caches/${cache_id}"' \
     'cache cleanup must delete only validated cache IDs from that ref'
-  if rg -q --fixed-strings -- '--all' "$pr_cache_cleanup_workflow"; then
+  if scan_rg -q --fixed-strings -- '--all' "$pr_cache_cleanup_workflow"; then
     violations+=("${pr_cache_cleanup_workflow}: cache cleanup must never use a repository-wide delete")
   fi
-  if rg -q -- 'actions/checkout|pull_request\.head' "$pr_cache_cleanup_workflow"; then
+  if scan_rg -q -- 'actions/checkout|pull_request\.head' "$pr_cache_cleanup_workflow"; then
     violations+=("${pr_cache_cleanup_workflow}: privileged cache cleanup must not consume pull request code")
   fi
 fi
 
-while IFS=: read -r file line _; do
-  violations+=("${file}:${line}: unrestricted hosted-runner apt bootstrap")
-done < <(
-  rg -n --no-heading -- 'sudo[[:space:]]+(env[[:space:]]+[^[:space:]]+[[:space:]]+)?apt-get' \
-    .github/actions .github/workflows 2>/dev/null || true
-)
+apt_hits=""
+if apt_hits="$(rg -n --no-heading -- \
+  'sudo[[:space:]]+(env[[:space:]]+[^[:space:]]+[[:space:]]+)?apt-get' \
+  .github/actions .github/workflows)"; then
+  while IFS=: read -r file line _; do
+    violations+=("${file}:${line}: unrestricted hosted-runner apt bootstrap")
+  done <<<"$apt_hits"
+elif (( $? > 1 )); then
+  violations+=("policy scan failed: hosted-runner apt scan of .github/actions and .github/workflows")
+fi
 
 for workflow in .github/workflows/pr-gate.yml .github/workflows/merge-validation.yml; do
   [[ -f "$workflow" ]] || continue
-  uses_count="$(rg -c --fixed-strings \
-    'uses: ./.github/actions/setup-shell-policy-tools' "$workflow" || true)"
-  uses_count="${uses_count:-0}"
-  if [[ "$uses_count" -ne 3 ]]; then
+  uses_count=0
+  if ! uses_count="$(rg -c --fixed-strings \
+    'uses: ./.github/actions/setup-shell-policy-tools' "$workflow")"; then
+    uses_count="${uses_count:-0}"
+  fi
+  if [[ "$uses_count" != 3 ]]; then
     violations+=("${workflow}: expected 3 shared shell-policy bootstrap uses, found ${uses_count}")
   fi
-  if rg -q -- 'Install shell policy tools|apt-get install -y ripgrep' "$workflow"; then
+  if scan_rg -q -- 'Install shell policy tools|apt-get install -y ripgrep' "$workflow"; then
     violations+=("${workflow}: duplicated or unrestricted shell-policy apt bootstrap")
   fi
 done
@@ -457,14 +530,18 @@ done
 # 2. Every `run: bash scripts/ci-require-prerequisite.sh JOB_ID "$VAR"` must
 #    bind VAR (step env, else job env, else workflow env) to exactly
 #    `${{ needs.<id>.result }}` with <id> equal to JOB_ID, so the annotation
-#    names the job whose result it reports. Any other invocation form is a
-#    violation.
-while IFS= read -r violation; do
-  [[ -n "$violation" ]] && violations+=("$violation")
-done < <(
-  python3 -I - <<'PY'
+#    names the job whose result it reports. Any `run:` naming the helper in
+#    any other form (another path, extra arguments) is a violation.
+# A workflow that cannot be read or parsed is a violation and the scan moves
+# on to the next one. The check fails closed: unless python exits 0 and its
+# last line is the completion sentinel, the whole check is a violation.
+prerequisite_sentinel="prerequisite-policy-scan-complete"
+prerequisite_status=0
+prerequisite_output="$(
+  python3 -I - "$prerequisite_sentinel" <<'PY'
 import glob
 import re
+import sys
 
 import yaml
 
@@ -473,9 +550,9 @@ BARE_PREREQUISITE = re.compile(
     rf'^(?:test\s+{VALUE}|\[\[?\s+{VALUE}\s+\]\]?)$'
 )
 HELPER = "scripts/ci-require-prerequisite.sh"
-INVOKES_HELPER = re.compile(
-    r'(?:^|\s)(?:\./)?scripts/ci-require-prerequisite\.sh(?:\s|$)'
-)
+# Any mention of the helper other than its self-test; HELPER_CALL then
+# accepts only the exact form.
+INVOKES_HELPER = re.compile(r'(?<!test-)ci-require-prerequisite\.sh')
 HELPER_CALL = re.compile(
     r'^bash\s+scripts/ci-require-prerequisite\.sh\s+([a-z0-9][a-z0-9-]*)\s+'
     r'"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?"$'
@@ -518,16 +595,12 @@ def check_helper_call(path, workflow, job_id, job, step, run):
     return None
 
 
-for path in sorted(glob.glob(".github/workflows/*.y*ml")):
-    try:
-        with open(path, encoding="utf-8") as handle:
-            workflow = yaml.safe_load(handle)
-    except (OSError, yaml.YAMLError) as error:
-        print(f"{path}: cannot parse workflow for prerequisite policy: {error}")
-        continue
+def check_workflow(path):
+    with open(path, encoding="utf-8") as handle:
+        workflow = yaml.safe_load(handle)
     jobs = workflow.get("jobs") if isinstance(workflow, dict) else None
     if not isinstance(jobs, dict):
-        continue
+        return
     for job_id, job in jobs.items():
         steps = job.get("steps") if isinstance(job, dict) else None
         if not isinstance(steps, list):
@@ -557,8 +630,27 @@ for path in sorted(glob.glob(".github/workflows/*.y*ml")):
                     "bare prerequisite comparison after checkout; use "
                     f"bash {HELPER} JOB_ID RESULT"
                 )
+
+
+for path in sorted(glob.glob(".github/workflows/*.y*ml")):
+    try:
+        check_workflow(path)
+    # Any failure to read, decode, or parse one workflow is its violation.
+    except Exception as error:
+        print(
+            f"{path}: cannot read or parse workflow for prerequisite policy: "
+            f"{type(error).__name__}: {error}".replace("\n", " ")
+        )
+
+print(sys.argv[1])
 PY
-)
+)" || prerequisite_status=$?
+if [[ "$prerequisite_status" -ne 0 || "${prerequisite_output##*$'\n'}" != "$prerequisite_sentinel" ]]; then
+  violations+=("prerequisite structural policy scan did not complete (python3 exit ${prerequisite_status}); its workflow results are incomplete")
+fi
+while IFS= read -r violation; do
+  [[ -n "$violation" && "$violation" != "$prerequisite_sentinel" ]] && violations+=("$violation")
+done <<<"$prerequisite_output"
 
 if [[ "${#violations[@]}" -ne 0 ]]; then
   printf 'ERROR: GitHub Actions policy violations found:\n' >&2
