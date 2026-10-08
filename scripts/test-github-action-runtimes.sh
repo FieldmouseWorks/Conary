@@ -294,7 +294,10 @@ chmod +x "$find_shim/find"
 find_workflows_shim="$tmpdir/find-workflows-shim"
 find_actions_shim="$tmpdir/find-actions-shim"
 mkdir -p "$find_workflows_shim" "$find_actions_shim"
+# The shim bodies intentionally keep $1 and $@ literal for the generated script.
+# shellcheck disable=SC2016
 printf '#!/bin/sh\n"%s" "$@" || exit\n[ "$1" = .github/workflows ] && exit 1\nexit 0\n' "$(command -v find)" > "$find_workflows_shim/find"
+# shellcheck disable=SC2016
 printf '#!/bin/sh\n"%s" "$@" || exit\n[ "$1" = .github/actions ] && exit 1\nexit 0\n' "$(command -v find)" > "$find_actions_shim/find"
 chmod +x "$find_workflows_shim/find" "$find_actions_shim/find"
 # python3 that cannot run the structural scans.
