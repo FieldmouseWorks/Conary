@@ -301,9 +301,23 @@ if ! "$engine" image inspect "$image" >/dev/null 2>&1; then
   fi
 fi
 
-# Generous enough for a full update and install; a case that reaches it has
-# lost the helper's own bound.
-watchdog_seconds=$(( update_bound + install_bound + 2 * kill_grace + margin_seconds ))
+# Per-case watchdogs; a case that reaches its watchdog has lost the helper's
+# own bound. The stall cases get a full update and install. unreachable and
+# mirror must finish inside the update bound (their assertions require it),
+# so they get the update bound only, which keeps the whole test inside the
+# workflow-runtime-policy job's timeout even when every case hangs.
+full_watchdog_seconds=$(( update_bound + install_bound + 2 * kill_grace + margin_seconds ))
+fast_watchdog_seconds=$(( update_bound + kill_grace + margin_seconds ))
+case_watchdog_seconds() {
+  case "$1" in
+    stall-silent | stall-trickle) echo "$full_watchdog_seconds" ;;
+    unreachable | mirror) echo "$fast_watchdog_seconds" ;;
+    *)
+      echo "no watchdog for case: $1" >&2
+      exit 1
+      ;;
+  esac
+}
 
 case_names=(stall-silent stall-trickle unreachable mirror)
 for name in "${case_names[@]}"; do
@@ -314,8 +328,10 @@ run_case() {
   local name="$1"
   local container="conary-bounded-apt-$$-${name}"
   local status=0
+  local watchdog
 
-  timeout --kill-after=10s "${watchdog_seconds}s" \
+  watchdog="$(case_watchdog_seconds "$name")"
+  timeout --kill-after=10s "${watchdog}s" \
     "$engine" run --rm --name "$container" --network host \
     -v "$harness:/harness:ro" \
     "$image" bash /harness/entry.sh "$name" \
@@ -340,7 +356,7 @@ read_case_result() {
 
   engine_status="$(cat "$tmpdir/${name}.engine-status")"
   if [[ "$engine_status" -ne 0 ]]; then
-    fail_case "$name" "container run exited ${engine_status} (watchdog ${watchdog_seconds}s)"
+    fail_case "$name" "container run exited ${engine_status} (watchdog $(case_watchdog_seconds "$name")s)"
     return 1
   fi
   line="$(grep -E '^bounded-apt-result ' "$tmpdir/${name}.log" | tail -n 1 || true)"

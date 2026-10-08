@@ -153,6 +153,8 @@ unsafe_prereq_path_root="$tmpdir/unsafe-prerequisite-path"
 unsafe_workflow_read_root="$tmpdir/unsafe-workflow-read"
 unsafe_budget_job_root="$tmpdir/unsafe-budget-job"
 unsafe_budget_type_root="$tmpdir/unsafe-budget-type"
+unsafe_apt_semicolon_root="$tmpdir/unsafe-apt-semicolon"
+unsafe_prereq_order_root="$tmpdir/unsafe-prerequisite-order"
 unsafe_apt_bound_root="$tmpdir/unsafe-apt-bound"
 unsafe_apt_budget_root="$tmpdir/unsafe-apt-budget"
 unsafe_cache_root="$tmpdir/unsafe-cache"
@@ -169,7 +171,8 @@ write_fixture "$unsafe_prereq_root" "actions/checkout@de0fac2e4500dabe0009e67214
 write_fixture "$unsafe_prereq_id_root" "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd"
 write_fixture "$unsafe_apt_comment_root" "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd"
 for root in "$unsafe_apt_continuation_root" "$unsafe_prereq_path_root" \
-  "$unsafe_workflow_read_root" "$unsafe_budget_job_root" "$unsafe_budget_type_root"; do
+  "$unsafe_workflow_read_root" "$unsafe_budget_job_root" "$unsafe_budget_type_root" \
+  "$unsafe_apt_semicolon_root" "$unsafe_prereq_order_root"; do
   write_fixture "$root" "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd"
 done
 write_fixture "$unsafe_apt_bound_root" "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd"
@@ -246,6 +249,46 @@ replace_once "$unsafe_budget_job_root/.github/workflows/pr-gate.yml" \
 replace_once "$unsafe_budget_type_root/.github/workflows/pr-gate.yml" \
   "$budget_job_header" "${budget_job_header%10?}ten
 "
+# A `;#` comment after an unbounded update quotes the bounded one.
+# shellcheck disable=SC2016
+replace_once "$unsafe_apt_semicolon_root/scripts/ci-install-ubuntu-packages.sh" \
+  'sudo timeout --kill-after="${apt_kill_grace_seconds}s" "${apt_update_timeout_seconds}s" \
+  apt-get "${apt_options[@]}" update --error-on=any || update_status=$?' \
+  'sudo apt-get "${apt_options[@]}" update --error-on=any || update_status=$?;#sudo timeout --kill-after="${apt_kill_grace_seconds}s" "${apt_update_timeout_seconds}s" apt-get "${apt_options[@]}" update'
+# Correctly bound helper calls where the helper is not on disk: before the
+# checkout, and in a job without one.
+cat > "$unsafe_prereq_order_root/.github/workflows/prerequisite-order.yml" <<EOF
+name: prerequisite-order
+on: workflow_dispatch
+jobs:
+  primer:
+    runs-on: ubuntu-latest
+    steps:
+      - run: "true"
+  helper-before-checkout:
+    runs-on: ubuntu-latest
+    needs: primer
+    steps:
+      - name: Require primer before checkout
+        env:
+          PRIMER_RESULT: \${{ needs.primer.result }}
+        run: bash scripts/ci-require-prerequisite.sh primer "\$PRIMER_RESULT"
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+  helper-without-checkout:
+    runs-on: ubuntu-latest
+    needs: primer
+    steps:
+      - name: Require primer without checkout
+        env:
+          PRIMER_RESULT: \${{ needs.primer.result }}
+        run: bash scripts/ci-require-prerequisite.sh primer "\$PRIMER_RESULT"
+EOF
+# find that lists everything but reports an error, as for an unreadable
+# action directory.
+find_shim="$tmpdir/find-shim"
+mkdir -p "$find_shim"
+printf '#!/bin/sh\n"%s" "$@"\nexit 1\n' "$(command -v find)" > "$find_shim/find"
+chmod +x "$find_shim/find"
 # python3 that cannot run the structural scans.
 python_shim="$tmpdir/python-shim"
 mkdir -p "$python_shim"
@@ -524,7 +567,14 @@ expect_violations workflow-read "$unsafe_workflow_read_root" \
   "prerequisite.yml: job 'with-checkout' step 'Require exact compiler-cache seed': bare prerequisite comparison"
 PATH_PREFIX="$python_shim" expect_violations python-unavailable "$good_root" \
   'prerequisite structural policy scan did not complete (python3 exit 1)' \
-  '.github/workflows/pr-gate.yml: cannot derive the apt budget from job ci-base-image-policy: python3 did not run'
+  '.github/workflows/pr-gate.yml: cannot derive the apt budget from job ci-base-image-policy: python3 exited 1'
+expect_violations apt-semicolon "$unsafe_apt_semicolon_root" \
+  'scripts/ci-install-ubuntu-packages.sh: must run apt-get update under a root-owned outer timeout'
+expect_violations prerequisite-order "$unsafe_prereq_order_root" \
+  "prerequisite-order.yml: job 'helper-before-checkout' step 'Require primer before checkout': scripts/ci-require-prerequisite.sh runs before the job's actions/checkout" \
+  "prerequisite-order.yml: job 'helper-without-checkout' step 'Require primer without checkout': scripts/ci-require-prerequisite.sh runs in a job without actions/checkout"
+PATH_PREFIX="$find_shim" expect_violations find-error "$good_root" \
+  'cannot list every workflow and action file (find failed); the action pin scan is incomplete'
 PATH_PREFIX="$rg_shim" expect_violations rg-unavailable "$good_root" \
   'policy scan failed: rg -q --fixed-strings SCCACHE_GHA_ENABLED' \
   'policy scan failed: composite-action description scan of .github/actions' \

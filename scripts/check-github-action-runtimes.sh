@@ -11,12 +11,19 @@ fi
 
 cd "$scan_root"
 
+# Lists workflow and composite-action files. A missing directory lists
+# nothing; any find error (for example an unreadable action directory) is a
+# failed listing, so no file silently drops out of the scans below.
 find_action_files() {
-  {
-    find .github/workflows -maxdepth 1 -type f \( -name '*.yml' -o -name '*.yaml' \) -print 2>/dev/null || true
-    find .github/actions -mindepth 2 -maxdepth 2 -type f -name action.yml -print 2>/dev/null || true
-    find .github/actions -mindepth 2 -maxdepth 2 -type f -name action.yaml -print 2>/dev/null || true
-  } | LC_ALL=C sort
+  local status=0
+
+  if [[ -d .github/workflows ]]; then
+    find .github/workflows -maxdepth 1 -type f \( -name '*.yml' -o -name '*.yaml' \) -print || status=1
+  fi
+  if [[ -d .github/actions ]]; then
+    find .github/actions -mindepth 2 -maxdepth 2 -type f \( -name action.yml -o -name action.yaml \) -print || status=1
+  fi
+  return "$status"
 }
 
 extract_uses_refs() {
@@ -43,8 +50,10 @@ is_pinned_external_ref() {
   [[ "$1" =~ @[0-9a-f]{40}$ ]]
 }
 
-# Every scan fails closed: a producer or scanner that cannot run records a
-# violation instead of yielding empty input that reads as a pass. scan_rg
+# Scans fail closed: the file listing, the action-reference extraction, the
+# code_view reads, every rg scan, and both python3 policy probes record a
+# violation when they cannot run instead of yielding empty input that reads
+# as a pass. scan_rg
 # returns rg's own status (0 match, 1 no match); any other status is recorded
 # as a violation and returned, so `if scan_rg ...` and `if ! scan_rg ...`
 # both treat it as a failed scan.
@@ -57,18 +66,21 @@ scan_rg() {
   return "$status"
 }
 
-# Positive policy rules match code, never commentary. Each rule reads the
-# file through code_view, which replaces the text of full-line comments and
-# trailing ` #` comments with a bare `#`, so a comment quoting a required
-# command (for example a `# was: sudo timeout ...` note above an unbounded
-# call) cannot satisfy its rule. The kept `#` also stops a rule from matching
-# across a comment line inside a `\` continuation, where the shell ends the
-# command at the comment. This is a text view, not a shell parse: a ` #`
-# inside a quoted string is truncated too, which can make a rule fail, and
-# the helper's runtime behaviour is proven by
-# scripts/test-ci-install-ubuntu-packages.sh, not by these rules.
+# Positive policy rules are matched against code_view, which replaces every
+# `#` that starts a line or follows whitespace or a shell metacharacter
+# (`;`, `&`, `|`, `(`, `)`, `<`, `>`), and the rest of that line, with a bare
+# `#`. Those are the positions where an unquoted shell word, and so a shell
+# comment, can begin, and they include every YAML comment start, so the text
+# of a comment (for example a `# was: sudo timeout ...` note, or `;#...`
+# after an unbounded call) cannot satisfy a rule. The kept `#` also stops a
+# rule from matching across a comment line inside a `\` continuation, where
+# the shell ends the command at the comment. This is a text view, not a shell
+# parse: a `#` in one of those positions inside a quoted string is truncated
+# too, which can make a rule fail, and text that is not a comment (a quoted
+# string, a heredoc) can still satisfy a rule. The helper's runtime behaviour
+# is proven by scripts/test-ci-install-ubuntu-packages.sh, not by these rules.
 code_view() {
-  sed -E -e 's/^([[:space:]]*)#.*$/\1#/' -e 's/([[:space:]])#.*$/\1#/' "$1"
+  sed -E -e 's/(^|[[:space:];&|()<>])#.*$/\1#/' "$1"
 }
 
 code_has() {
@@ -92,13 +104,17 @@ code_has_fixed() {
   code_has --fixed-strings "$1" "$2"
 }
 
-mapfile -t action_files < <(find_action_files)
-if [[ "${#action_files[@]}" -eq 0 ]]; then
+violations=()
+action_file_list=""
+if ! action_file_list="$(find_action_files | LC_ALL=C sort)"; then
+  violations+=("cannot list every workflow and action file (find failed); the action pin scan is incomplete")
+fi
+if [[ -z "$action_file_list" ]]; then
   echo "ERROR: no GitHub workflow or action files found under $scan_root" >&2
   exit 1
 fi
+mapfile -t action_files <<<"$action_file_list"
 
-violations=()
 all_uses_refs() {
   local file
   for file in "${action_files[@]}"; do
@@ -213,6 +229,7 @@ else
   budget_workflow=".github/workflows/pr-gate.yml"
   budget_job="ci-base-image-policy"
   budget_margin_seconds=120
+  budget_status=0
   budget_reply="$(
     python3 -I - "$budget_workflow" "$budget_job" <<'PY'
 import sys
@@ -231,12 +248,14 @@ else:
     else:
         print(f"error jobs.{job_id}.timeout-minutes is {minutes!r}, not a positive integer")
 PY
-  )" || true
+  )" || budget_status=$?
   ubuntu_package_apt_budget_seconds=""
-  if [[ "$budget_reply" =~ ^minutes\ ([1-9][0-9]*)$ ]]; then
+  if [[ "$budget_status" -eq 0 && "$budget_reply" =~ ^minutes\ ([1-9][0-9]*)$ ]]; then
     ubuntu_package_apt_budget_seconds=$(( BASH_REMATCH[1] * 60 - budget_margin_seconds ))
+  elif [[ "$budget_status" -ne 0 ]]; then
+    violations+=("${budget_workflow}: cannot derive the apt budget from job ${budget_job}: python3 exited ${budget_status}")
   else
-    violations+=("${budget_workflow}: cannot derive the apt budget from job ${budget_job}: ${budget_reply:-python3 did not run}")
+    violations+=("${budget_workflow}: cannot derive the apt budget from job ${budget_job}: ${budget_reply:-python3 printed no budget}")
   fi
   ubuntu_package_bound() {
     sed -n "s/^$1=\([1-9][0-9]*\)\$/\1/p" "$ubuntu_package_helper"
@@ -531,7 +550,9 @@ done
 #    bind VAR (step env, else job env, else workflow env) to exactly
 #    `${{ needs.<id>.result }}` with <id> equal to JOB_ID, so the annotation
 #    names the job whose result it reports. Any `run:` naming the helper in
-#    any other form (another path, extra arguments) is a violation.
+#    any other form (another path, extra arguments) is a violation, and so is
+#    a call before the job's actions/checkout or in a job without one, where
+#    the helper is not on disk.
 # A workflow that cannot be read or parsed is a violation and the scan moves
 # on to the next one. The check fails closed: unless python exits 0 and its
 # last line is the completion sentinel, the whole check is a violation.
@@ -565,8 +586,12 @@ def env_of(node):
     return env if isinstance(env, dict) else {}
 
 
-def check_helper_call(path, workflow, job_id, job, step, run):
+def check_helper_call(path, workflow, job_id, job, step, run, index, checkout_index):
     where = f"{path}: job '{job_id}' step '{step.get('name', '<unnamed>')}'"
+    if checkout_index is None:
+        return f"{where}: {HELPER} runs in a job without actions/checkout, so the helper is not on disk"
+    if index < checkout_index:
+        return f"{where}: {HELPER} runs before the job's actions/checkout, so the helper is not on disk"
     call = HELPER_CALL.match(run)
     if not call:
         return (
@@ -617,7 +642,9 @@ def check_workflow(path):
                 continue
             run = run.strip()
             if INVOKES_HELPER.search(run):
-                violation = check_helper_call(path, workflow, job_id, job, step, run)
+                violation = check_helper_call(
+                    path, workflow, job_id, job, step, run, index, checkout_index
+                )
                 if violation:
                     print(violation)
             elif (
