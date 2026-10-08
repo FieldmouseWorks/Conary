@@ -289,6 +289,14 @@ find_shim="$tmpdir/find-shim"
 mkdir -p "$find_shim"
 printf '#!/bin/sh\n"%s" "$@"\nexit 1\n' "$(command -v find)" > "$find_shim/find"
 chmod +x "$find_shim/find"
+# find that fails only for one listed directory, so each listing's own status
+# check is proven separately.
+find_workflows_shim="$tmpdir/find-workflows-shim"
+find_actions_shim="$tmpdir/find-actions-shim"
+mkdir -p "$find_workflows_shim" "$find_actions_shim"
+printf '#!/bin/sh\n"%s" "$@" || exit\n[ "$1" = .github/workflows ] && exit 1\nexit 0\n' "$(command -v find)" > "$find_workflows_shim/find"
+printf '#!/bin/sh\n"%s" "$@" || exit\n[ "$1" = .github/actions ] && exit 1\nexit 0\n' "$(command -v find)" > "$find_actions_shim/find"
+chmod +x "$find_workflows_shim/find" "$find_actions_shim/find"
 # python3 that cannot run the structural scans.
 python_shim="$tmpdir/python-shim"
 mkdir -p "$python_shim"
@@ -574,6 +582,10 @@ expect_violations prerequisite-order "$unsafe_prereq_order_root" \
   "prerequisite-order.yml: job 'helper-before-checkout' step 'Require primer before checkout': scripts/ci-require-prerequisite.sh runs before the job's actions/checkout" \
   "prerequisite-order.yml: job 'helper-without-checkout' step 'Require primer without checkout': scripts/ci-require-prerequisite.sh runs in a job without actions/checkout"
 PATH_PREFIX="$find_shim" expect_violations find-error "$good_root" \
+  'cannot list every workflow and action file (find failed); the action pin scan is incomplete'
+PATH_PREFIX="$find_workflows_shim" expect_violations find-workflows-error "$good_root" \
+  'cannot list every workflow and action file (find failed); the action pin scan is incomplete'
+PATH_PREFIX="$find_actions_shim" expect_violations find-actions-error "$good_root" \
   'cannot list every workflow and action file (find failed); the action pin scan is incomplete'
 PATH_PREFIX="$rg_shim" expect_violations rg-unavailable "$good_root" \
   'policy scan failed: rg -q --fixed-strings SCCACHE_GHA_ENABLED' \

@@ -76,8 +76,10 @@ scan_rg() {
 # rule from matching across a comment line inside a `\` continuation, where
 # the shell ends the command at the comment. This is a text view, not a shell
 # parse: a `#` in one of those positions inside a quoted string is truncated
-# too, which can make a rule fail, and text that is not a comment (a quoted
-# string, a heredoc) can still satisfy a rule. The helper's runtime behaviour
+# too. That usually makes a rule fail, but it can also delete a closing
+# delimiter (for example the `)` that ends `apt_options=(...)`) and let a rule
+# built on a negated class match past it; and text that is not a comment (a
+# quoted string, a heredoc) can still satisfy a rule. The helper's runtime behaviour
 # is proven by scripts/test-ci-install-ubuntu-packages.sh, not by these rules.
 code_view() {
   sed -E -e 's/(^|[[:space:];&|()<>])#.*$/\1#/' "$1"
@@ -552,7 +554,9 @@ done
 #    names the job whose result it reports. Any `run:` naming the helper in
 #    any other form (another path, extra arguments) is a violation, and so is
 #    a call before the job's actions/checkout or in a job without one, where
-#    the helper is not on disk.
+#    the helper is not on disk. Any actions/checkout step counts; a checkout
+#    into another `path:` or a sparse checkout that omits scripts/ is not
+#    distinguished, so such a job still fails at runtime rather than here.
 # A workflow that cannot be read or parsed is a violation and the scan moves
 # on to the next one. The check fails closed: unless python exits 0 and its
 # last line is the completion sentinel, the whole check is a violation.
