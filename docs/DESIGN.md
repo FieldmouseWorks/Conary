@@ -158,7 +158,7 @@ Three rules make evidence trustworthy:
 
 1. **Agents don't grade their own work.** Evidence counts only when it is signed by a runner outside the agent's sandbox. An agent can run tests for its own feedback, but those results don't land anything.
 2. **New tests must fail on the old code.** A check marked as a new test must have a `negative` result of fail on the parent tree. A test that passes either way proves nothing.
-3. **Reuse beats re-running.** Evidence for a revision stays valid on a new base when the patch applies to it unchanged and none of the files in the check's footprint changed. The footprint starts as the touched files plus their direct importers. Test-impact data refines it later. Otherwise the check runs again.
+3. **Reuse beats re-running, but only when it's safe.** Evidence stays valid on a new base when the patch applies to it unchanged and nothing in the check's footprint changed. The footprint is everything the check could have read: the full transitive dependency closure of the touched files and the check's own files, plus the toolchain (via `env`). Until Conary can compute that closure for a language, the footprint is the whole tree, so any base change re-runs the check. Test-impact data recorded from real runs narrows it later. When in doubt, the check runs again.
 
 ## 6. Interfaces
 
@@ -210,9 +210,9 @@ events.subscribe(land | bounce | revert | conflict | decision)
 
 ## 8. Git interop
 
-- **Import:** each git commit becomes a landed changeset. Intent comes from the commit message, the author is mapped, and the SHA is kept in a mapping table. Merge commits become lanes landing.
+- **Baseline import:** when a repository is first brought into Conary, its existing git history becomes landed changesets, once, as the starting trunk. Intent comes from the commit message, the author is mapped, and the SHA is kept in a mapping table. Merge commits become lanes landing. This is the only path that creates a landed changeset without a `land` operation.
 - **Export:** trunk exports to git deterministically, so the same Conary state always gives the same SHAs. Each exported commit carries trailers: `Conary-Change: <id>`, `Conary-Intent: <summary>`, `Conary-Class: R0`. Lanes can optionally export as branches.
-- **Inbound:** commits that arrive from GitHub (other people, bots) import as changesets and go through the same landing rules.
+- **Inbound:** commits that arrive from GitHub after the baseline (other people, bots) import as `proposed` changesets in their own lane. They get a class from policy, need the same evidence, and reach trunk only through a `land` operation like everything else.
 - **Colocated mode:** a `.git` directory sits next to `.conary` during the transition, so editors, CI and existing scripts keep working.
 
 ## 9. Build strategy
@@ -245,7 +245,7 @@ Don't write a storage engine first. The new ideas are intent, classes, evidence,
 
 ## 12. Open questions
 
-1. **Evidence footprint precision.** Touched files plus importers is safe but re-runs too much. When is test-impact data good enough to trust?
+1. **Evidence footprint precision.** The whole tree is safe but re-runs almost everything. Which languages get a computed dependency closure first, and when is recorded test-impact data good enough to trust?
 2. **Changeset granularity.** One changeset per task is the default. Should agents split by logical step automatically?
 3. **Offline laptops.** Jujutsu already merges concurrent operation logs. Is that enough for a laptop that edits offline and syncs with remi later?
 4. **Class policy format.** Is it a file of path globs and action rules, or code? It probably starts as TOML and grows a small rule language.
