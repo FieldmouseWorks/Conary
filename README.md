@@ -6,4 +6,13 @@ The unit of work is a changeset that knows why it exists, carries its own proof,
 
 Status: design. See [docs/DESIGN.md](docs/DESIGN.md).
 
-MIT licensed.
+## Building
+
+There's no code yet. The build and its checks run through Nix:
+
+    nix develop        # a shell with the toolchains
+    nix flake check    # the gate CI runs
+
+## License
+
+MIT licensed. See [LICENSE](LICENSE).
