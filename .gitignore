@@ -1,0 +1,17 @@
+# Rust
+/target/
+
+# Nix
+/result
+/result-*
+/.direnv/
+
+# Editors and OS
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store
+
+# Machine-local notes for Claude
+CLAUDE.local.md
