@@ -1,5 +1,5 @@
 {
-  description = "Conary: version control built for coding agents";
+  description = "Conary: the ledger and landing engine for code that agents write";
 
   inputs.burrow.url = "git+https://github.com/FieldmouseWorks/burrow";
 
