@@ -1,10 +1,35 @@
 # The gate is the flake: CI only runs `nix flake check`, through burrow's
-# shared workflow. Jobs the flake can't hold (browsers, VMs) go alongside.
+# shared workflow, on Conary's own runner on remi (remi's modules/jobs.nix). A
+# hosted runner bills this private repo by the minute, and the org's Actions
+# budget is $0. Jobs the flake can't hold (browsers, VMs) go alongside.
 name: flake
 on:
   pull_request:
   push:
     branches: [main]
+permissions:
+  contents: read
+# A self-hosted runner serves only a private repository's own branches:
+# anyone else's PR (a public repo's, or a fork's) would run on remi. Such a PR
+# gets a failing `refused` job instead, so it never passes unchecked (a
+# skipped job counts as a pass). The two conditions are each other's negation.
 jobs:
+  refused:
+    if: >-
+      !(github.event.repository.private &&
+      (github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository))
+    runs-on: ubuntu-24.04
+    steps:
+      - run: |
+          echo "::error::Conary's CI runs only on this private repo's own branches; this one can't be checked here."
+          exit 1
   check:
+    if: >-
+      github.event.repository.private &&
+      (github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository)
     uses: FieldmouseWorks/burrow/.github/workflows/flake-check.yml@9dd4bc5fc7716525b0f0148d7bc3311db0084803 # main
+    with:
+      runner: conary
+      install-nix: false
