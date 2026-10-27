@@ -87,17 +87,14 @@ fn publish_dir(dir: &Path) -> io::Result<()> {
     if !parent.as_os_str().is_empty() {
         publish_dir(parent)?;
     }
-    let made = match fs::create_dir(dir) {
-        Ok(()) => true,
-        Err(e) if e.kind() == io::ErrorKind::AlreadyExists && dir.is_dir() => false,
+    match fs::create_dir(dir) {
+        Ok(()) => {}
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists && dir.is_dir() => {}
         Err(e) => return Err(e),
-    };
-    match sync_dir(parent_of(dir)) {
-        // An ancestor this user can't open isn't one it, or another caller
-        // running as it, could have made, so there's no sync of ours pending.
-        Err(e) if !made && e.kind() == io::ErrorKind::PermissionDenied => Ok(()),
-        r => r,
     }
+    // No exceptions, an ancestor this user can write to but not open
+    // included: an entry made there can't be synced, so it isn't durable.
+    sync_dir(parent_of(dir))
 }
 
 fn load_key(path: &Path, bytes: Vec<u8>) -> Result<SigningKey, LogError> {
@@ -940,5 +937,32 @@ mod tests {
         let synced = take_synced();
         assert_published(&synced, key_path.parent().unwrap());
         assert_published(&synced, &log_dir);
+    }
+
+    #[test]
+    fn an_ancestor_that_cant_be_opened_to_sync_is_an_error_every_time() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let blind = root.path().join("blind");
+        fs::create_dir(&blind).unwrap();
+        // Writable and searchable, but not readable: entries can be made in
+        // it, and it can't be opened to sync them.
+        fs::set_permissions(&blind, fs::Permissions::from_mode(0o300)).unwrap();
+        if File::open(&blind).is_ok() {
+            return; // Run as root, which permissions don't stop.
+        }
+        let dir = blind.join("ledger");
+        let key_path = blind.join("keys/key");
+        for _ in 0..2 {
+            // The retry finds the directory made, and still can't sync it.
+            let err = OpLog::open(&dir, key(), None).err().unwrap();
+            assert!(matches!(&err, LogError::Io(e) if e.kind() == io::ErrorKind::PermissionDenied));
+            let err = load_or_create_key(&key_path).err().unwrap();
+            assert!(matches!(&err, LogError::Io(e) if e.kind() == io::ErrorKind::PermissionDenied));
+        }
+        assert!(dir.is_dir());
+        fs::set_permissions(&blind, fs::Permissions::from_mode(0o700)).unwrap();
+        OpLog::open(&dir, key(), None).unwrap();
+        load_or_create_key(&key_path).unwrap();
     }
 }
