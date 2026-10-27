@@ -56,6 +56,8 @@ pub struct Change {
     pub author: Actor,
     pub seen: i64,
     pub intent: Option<Intent>,
+    /// Each revision once, in the order first seen. A head that comes back
+    /// after a force-push is the revision it already was.
     pub revisions: Vec<Revision>,
     pub evidence: Vec<Evidence>,
     pub landing: Option<Landing>,

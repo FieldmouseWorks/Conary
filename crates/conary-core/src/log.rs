@@ -33,6 +33,9 @@ pub enum LogError {
     },
     /// The key file isn't a 32-byte ed25519 secret key.
     Key(PathBuf),
+    /// An earlier append failed partway, so the file may not end where this
+    /// writer thinks it does. Reopening reconciles it.
+    Poisoned,
 }
 
 impl std::fmt::Display for LogError {
@@ -41,6 +44,7 @@ impl std::fmt::Display for LogError {
             Self::Io(e) => write!(f, "op log: {e}"),
             Self::Corrupt { line, reason } => write!(f, "op log line {line}: {reason}"),
             Self::Key(path) => write!(f, "{}: not an ed25519 secret key", path.display()),
+            Self::Poisoned => f.write_str("op log: an earlier append failed; reopen the log"),
         }
     }
 }
@@ -53,28 +57,79 @@ impl From<io::Error> for LogError {
     }
 }
 
+/// The directory a path is in.
+fn parent_of(path: &Path) -> &Path {
+    path.parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."))
+}
+
+/// Makes a directory's entries (a new file, a rename, a link) survive power
+/// loss: syncing a file doesn't sync the directory that names it.
+fn sync_dir(dir: &Path) -> io::Result<()> {
+    File::open(dir)?.sync_all()
+}
+
+/// Creates `dir` and any missing ancestors, syncing each new entry into the
+/// directory that holds it.
+fn create_dir_durably(dir: &Path) -> io::Result<()> {
+    if dir.is_dir() {
+        return Ok(());
+    }
+    let parent = parent_of(dir);
+    if parent != dir {
+        create_dir_durably(parent)?;
+    }
+    match fs::create_dir(dir) {
+        Ok(()) => sync_dir(parent),
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists && dir.is_dir() => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
+fn load_key(path: &Path, bytes: Vec<u8>) -> Result<SigningKey, LogError> {
+    let secret: [u8; 32] = bytes
+        .try_into()
+        .map_err(|_| LogError::Key(path.to_owned()))?;
+    Ok(SigningKey::from_bytes(&secret))
+}
+
 /// The ledger's signing key: loaded from `path`, or made there (readable by
 /// its owner only) the first time.
 pub fn load_or_create_key(path: &Path) -> Result<SigningKey, LogError> {
     match fs::read(path) {
-        Ok(bytes) => {
-            let secret: [u8; 32] = bytes
-                .try_into()
-                .map_err(|_| LogError::Key(path.to_owned()))?;
+        Ok(bytes) => return load_key(path, bytes),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e.into()),
+    }
+    let dir = parent_of(path);
+    create_dir_durably(dir)?;
+    let mut secret = [0u8; 32];
+    let mut nonce = [0u8; 8];
+    getrandom::fill(&mut secret).map_err(|e| LogError::Io(io::Error::other(e)))?;
+    getrandom::fill(&mut nonce).map_err(|e| LogError::Io(io::Error::other(e)))?;
+    // Written whole under a name of its own, then linked into place, so the
+    // key's path never holds part of a key. When two callers race, the first
+    // link wins and the other loads it.
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    let tmp = dir.join(format!(".{name}.{}.new", hex(&nonce)));
+    let written = (|| {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&tmp)?;
+        file.write_all(&secret)?;
+        file.sync_all()?;
+        fs::hard_link(&tmp, path)
+    })();
+    let _ = fs::remove_file(&tmp);
+    match written {
+        Ok(()) => {
+            sync_dir(dir)?;
             Ok(SigningKey::from_bytes(&secret))
         }
-        Err(e) if e.kind() == io::ErrorKind::NotFound => {
-            let mut secret = [0u8; 32];
-            getrandom::fill(&mut secret).map_err(|e| LogError::Io(io::Error::other(e)))?;
-            let mut file = OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .open(path)?;
-            file.write_all(&secret)?;
-            file.sync_all()?;
-            Ok(SigningKey::from_bytes(&secret))
-        }
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => load_key(path, fs::read(path)?),
         Err(e) => Err(e.into()),
     }
 }
@@ -87,37 +142,61 @@ struct Line<'a> {
     op: &'a RawValue,
 }
 
-/// Every op in `text`, verified against `key` and its chain. A last line
-/// with no newline is a write that never finished (its caller was never told
-/// it succeeded), so it's left out; `torn` says where it starts.
-fn verify(text: &str, key: &VerifyingKey) -> Result<(Vec<Op>, Option<usize>), LogError> {
-    let (whole, torn) = match text.rfind('\n') {
-        Some(end) if end + 1 == text.len() => (text, None),
-        Some(end) => (&text[..=end], Some(end + 1)),
-        None if text.is_empty() => (text, None),
-        None => ("", Some(0)),
+/// How the log's bytes end.
+#[derive(Debug, PartialEq, Eq)]
+enum Tail {
+    /// On a newline.
+    Whole,
+    /// On a complete op with no newline after it. It's kept: its bytes are
+    /// all there and they verify.
+    Unterminated,
+    /// On part of a line from `at`: a write that never finished, whose caller
+    /// was never told it succeeded, so it's left out.
+    Torn { at: usize },
+}
+
+/// Verifies one line, the `n`th, as the op after `ops`.
+fn verify_line(n: usize, raw: &[u8], ops: &[Op], key: &VerifyingKey) -> Result<Op, LogError> {
+    let corrupt = |reason: &str| LogError::Corrupt {
+        line: n,
+        reason: reason.to_owned(),
     };
-    let mut ops: Vec<Op> = Vec::new();
-    for (i, raw) in whole.lines().enumerate() {
-        let corrupt = |reason: &str| LogError::Corrupt {
-            line: i + 1,
-            reason: reason.to_owned(),
-        };
-        let line: Line = serde_json::from_str(raw).map_err(|e| corrupt(&e.to_string()))?;
-        if OpId::of(line.op.get().as_bytes()) != line.id {
-            return Err(corrupt("id doesn't match the op"));
-        }
-        let sig = parse_sig(line.sig).ok_or_else(|| corrupt("signature isn't 64 hex bytes"))?;
-        key.verify_strict(line.id.as_bytes(), &sig)
-            .map_err(|_| corrupt("signature doesn't verify against the ledger's key"))?;
-        let op: Unsigned =
-            serde_json::from_str(line.op.get()).map_err(|e| corrupt(&e.to_string()))?;
-        if op.parent != ops.last().map(|o| o.id) {
-            return Err(corrupt("parent isn't the op before it"));
-        }
-        ops.push(Op { id: line.id, op });
+    let raw = std::str::from_utf8(raw).map_err(|_| corrupt("not UTF-8"))?;
+    let line: Line = serde_json::from_str(raw).map_err(|e| corrupt(&e.to_string()))?;
+    if OpId::of(line.op.get().as_bytes()) != line.id {
+        return Err(corrupt("id doesn't match the op"));
     }
-    Ok((ops, torn))
+    let sig = parse_sig(line.sig).ok_or_else(|| corrupt("signature isn't 64 hex bytes"))?;
+    key.verify_strict(line.id.as_bytes(), &sig)
+        .map_err(|_| corrupt("signature doesn't verify against the ledger's key"))?;
+    let op: Unsigned = serde_json::from_str(line.op.get()).map_err(|e| corrupt(&e.to_string()))?;
+    if op.parent != ops.last().map(|o| o.id) {
+        return Err(corrupt("parent isn't the op before it"));
+    }
+    Ok(Op { id: line.id, op })
+}
+
+/// Every op in the log's bytes, verified against `key` and its chain.
+fn verify(bytes: &[u8], key: &VerifyingKey) -> Result<(Vec<Op>, Tail), LogError> {
+    let end = bytes.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1);
+    let (whole, rest) = bytes.split_at(end);
+    let mut ops: Vec<Op> = Vec::new();
+    let lines = whole.strip_suffix(b"\n").map(|w| w.split(|&b| b == b'\n'));
+    for (i, raw) in lines.into_iter().flatten().enumerate() {
+        let op = verify_line(i + 1, raw, &ops, key)?;
+        ops.push(op);
+    }
+    if rest.is_empty() {
+        return Ok((ops, Tail::Whole));
+    }
+    // Whatever bytes a torn write left, split characters included.
+    match verify_line(ops.len() + 1, rest, &ops, key) {
+        Ok(op) => {
+            ops.push(op);
+            Ok((ops, Tail::Unterminated))
+        }
+        Err(_) => Ok((ops, Tail::Torn { at: end })),
+    }
 }
 
 fn parse_sig(text: &str) -> Option<Signature> {
@@ -139,8 +218,8 @@ fn hex(bytes: &[u8]) -> String {
 /// A reader takes no lock: a write still in progress is only a torn last
 /// line, which it leaves out.
 pub fn read(dir: &Path, key: &VerifyingKey) -> Result<Vec<Op>, LogError> {
-    match fs::read_to_string(dir.join(LOG_FILE)) {
-        Ok(text) => Ok(verify(&text, key)?.0),
+    match fs::read(dir.join(LOG_FILE)) {
+        Ok(bytes) => Ok(verify(&bytes, key)?.0),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),
         Err(e) => Err(e.into()),
     }
@@ -153,13 +232,16 @@ pub struct OpLog {
     _lock: File,
     key: SigningKey,
     head: Option<OpId>,
+    poisoned: bool,
+    #[cfg(test)]
+    fail_next_write: bool,
 }
 
 impl OpLog {
     /// Opens (or starts) the log at `dir`, verifies every op in it against
     /// `key`, and returns them with the log ready to append after them.
     pub fn open(dir: &Path, key: SigningKey) -> Result<(Self, Vec<Op>), LogError> {
-        fs::create_dir_all(dir)?;
+        create_dir_durably(dir)?;
         let lock = OpenOptions::new()
             .create(true)
             .truncate(false)
@@ -171,14 +253,23 @@ impl OpLog {
             .read(true)
             .append(true)
             .open(dir.join(LOG_FILE))?;
-        let mut text = String::new();
-        file.read_to_string(&mut text)?;
-        let (ops, torn) = verify(&text, &key.verifying_key())?;
-        if let Some(at) = torn {
-            // Never a recorded op: its append didn't finish, so nobody was
-            // told it happened. Cutting it keeps the next line whole.
-            file.set_len(at as u64)?;
-            file.sync_all()?;
+        // The log's entry, if it's new, before any op in it is acknowledged.
+        sync_dir(dir)?;
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes)?;
+        let (ops, tail) = verify(&bytes, &key.verifying_key())?;
+        match tail {
+            Tail::Whole => {}
+            Tail::Unterminated => {
+                file.write_all(b"\n")?;
+                file.sync_data()?;
+            }
+            Tail::Torn { at } => {
+                // Never a recorded op: its append didn't finish, so nobody
+                // was told it happened. Cutting it keeps the next line whole.
+                file.set_len(at as u64)?;
+                file.sync_all()?;
+            }
         }
         file.seek(SeekFrom::End(0))?;
         let head = ops.last().map(|o| o.id);
@@ -188,6 +279,9 @@ impl OpLog {
                 _lock: lock,
                 key,
                 head,
+                poisoned: false,
+                #[cfg(test)]
+                fail_next_write: false,
             },
             ops,
         ))
@@ -200,6 +294,9 @@ impl OpLog {
     /// Appends one op after the last, signed, and returns it once it's on
     /// disk.
     pub fn append(&mut self, body: Body, at: i64) -> Result<Op, LogError> {
+        if self.poisoned {
+            return Err(LogError::Poisoned);
+        }
         let op = Unsigned {
             parent: self.head,
             at,
@@ -212,10 +309,25 @@ impl OpLog {
             "{{\"id\":\"{id}\",\"sig\":\"{}\",\"op\":{json}}}\n",
             hex(&sig.to_bytes())
         );
-        self.file.write_all(line.as_bytes())?;
-        self.file.sync_data()?;
+        if let Err(e) = self.write(line.as_bytes()) {
+            // The line may be on disk whole, in part or not at all, and only
+            // reopening, which verifies the file again, can tell which.
+            self.poisoned = true;
+            return Err(e.into());
+        }
         self.head = Some(id);
         Ok(Op { id, op })
+    }
+
+    fn write(&mut self, line: &[u8]) -> io::Result<()> {
+        #[cfg(test)]
+        if std::mem::take(&mut self.fail_next_write) {
+            // Half the line reaches the file, then the write fails.
+            self.file.write_all(&line[..line.len() / 2])?;
+            return Err(io::Error::other("injected"));
+        }
+        self.file.write_all(line)?;
+        self.file.sync_data()
     }
 }
 
@@ -307,6 +419,108 @@ mod tests {
         log.append(close(), 3).unwrap();
         drop(log);
         assert_eq!(read(dir.path(), &key().verifying_key()).unwrap().len(), 3);
+    }
+
+    fn intent(summary: &str) -> Body {
+        Body::Intent {
+            change: ChangeId::new().unwrap(),
+            summary: summary.into(),
+            body: String::new(),
+            task: None,
+        }
+    }
+
+    #[test]
+    fn a_write_torn_inside_a_character_is_left_out_then_cut() {
+        let dir = two_ops();
+        let path = dir.path().join(LOG_FILE);
+        let whole = fs::read(&path).unwrap();
+        let (mut log, _) = OpLog::open(dir.path(), key()).unwrap();
+        log.append(intent("café"), 3).unwrap();
+        drop(log);
+        let full = fs::read(&path).unwrap();
+        let e = full[whole.len()..]
+            .windows(2)
+            .position(|w| w == "é".as_bytes())
+            .unwrap();
+        // A line cut halfway through the two bytes of "é".
+        let cut = whole.len() + e + 1;
+        assert!(std::str::from_utf8(&full[..cut]).is_err());
+        fs::write(&path, &full[..cut]).unwrap();
+        assert_eq!(read(dir.path(), &key().verifying_key()).unwrap().len(), 2);
+        let (mut log, ops) = OpLog::open(dir.path(), key()).unwrap();
+        assert_eq!(ops.len(), 2);
+        log.append(close(), 4).unwrap();
+        drop(log);
+        assert_eq!(read(dir.path(), &key().verifying_key()).unwrap().len(), 3);
+
+        // A torn first op, too.
+        fs::write(&path, &whole[..10]).unwrap();
+        assert!(read(dir.path(), &key().verifying_key()).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_complete_line_that_isnt_utf8_is_refused() {
+        let dir = two_ops();
+        let path = dir.path().join(LOG_FILE);
+        let mut bytes = fs::read(&path).unwrap();
+        bytes[3] = 0xff;
+        fs::write(&path, bytes).unwrap();
+        let err = read(dir.path(), &key().verifying_key()).unwrap_err();
+        assert!(matches!(err, LogError::Corrupt { line: 1, .. }), "{err}");
+    }
+
+    #[test]
+    fn a_last_op_missing_only_its_newline_is_kept() {
+        let dir = two_ops();
+        let path = dir.path().join(LOG_FILE);
+        let whole = fs::read_to_string(&path).unwrap();
+        fs::write(&path, whole.strip_suffix('\n').unwrap()).unwrap();
+        assert_eq!(read(dir.path(), &key().verifying_key()).unwrap().len(), 2);
+        let (mut log, ops) = OpLog::open(dir.path(), key()).unwrap();
+        assert_eq!(ops.len(), 2);
+        log.append(close(), 3).unwrap();
+        drop(log);
+        assert_eq!(read(dir.path(), &key().verifying_key()).unwrap().len(), 3);
+    }
+
+    #[test]
+    fn a_failed_append_stops_the_writer_until_the_log_is_reopened() {
+        let dir = two_ops();
+        let (mut log, _) = OpLog::open(dir.path(), key()).unwrap();
+        log.fail_next_write = true;
+        assert!(matches!(log.append(close(), 3), Err(LogError::Io(_))));
+        assert!(matches!(log.append(close(), 4), Err(LogError::Poisoned)));
+        drop(log);
+        // Reopening cuts the half line, and the next op chains onto the last
+        // one that was written whole.
+        let (mut log, ops) = OpLog::open(dir.path(), key()).unwrap();
+        assert_eq!(ops.len(), 2);
+        log.append(close(), 5).unwrap();
+        drop(log);
+        let ops = read(dir.path(), &key().verifying_key()).unwrap();
+        assert_eq!(ops.len(), 3);
+        assert_eq!(ops[2].op.at, 5);
+    }
+
+    #[test]
+    fn racing_first_users_all_get_the_one_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("deep/er/key");
+        let keys: Vec<[u8; 32]> = std::thread::scope(|s| {
+            let handles: Vec<_> = (0..8)
+                .map(|_| s.spawn(|| load_or_create_key(&path).unwrap().to_bytes()))
+                .collect();
+            handles.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+        assert!(keys.iter().all(|k| *k == keys[0]));
+        assert_eq!(load_or_create_key(&path).unwrap().to_bytes(), keys[0]);
+        // No half-made key is left lying around.
+        let names: Vec<_> = fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(names, ["key"]);
     }
 
     #[test]
