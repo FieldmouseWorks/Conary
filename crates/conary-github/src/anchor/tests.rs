@@ -8,15 +8,19 @@ use std::path::Path;
 
 use super::*;
 
-/// Refs as GitHub keeps them: each move a commit on the one before. With
-/// `ledger` set, every read checks the ledger's lock is held, and with
-/// `fail` set, the next move fails before it's made.
+/// Refs as GitHub keeps them: each move a commit on the one before, kept in
+/// `commits`. With `ledger` set, every read checks the ledger's lock is held;
+/// with `fail` set, the next move fails before it's made; and with
+/// `write_after_get` set, a whole write to that ledger runs just after the
+/// next read of the ref.
 #[derive(Default)]
 struct Fake {
     refs: RefCell<HashMap<String, Kept>>,
+    commits: RefCell<HashMap<String, Kept>>,
     moves: RefCell<usize>,
     ledger: RefCell<Option<std::path::PathBuf>>,
     fail: RefCell<bool>,
+    write_after_get: RefCell<Option<std::path::PathBuf>>,
 }
 
 impl Anchors for Fake {
@@ -31,7 +35,19 @@ impl Anchors for Fake {
                 "the anchor was read without the ledger's lock"
             );
         }
-        Ok(self.refs.borrow().get(name).cloned())
+        let kept = self.refs.borrow().get(name).cloned();
+        if let Some(dir) = self.write_after_get.take() {
+            write(&dir, self, &[100]).unwrap();
+        }
+        Ok(kept)
+    }
+
+    fn commit(&self, _: &str, sha: &str) -> Result<Kept, ApiError> {
+        self.commits
+            .borrow()
+            .get(sha)
+            .cloned()
+            .ok_or_else(|| ApiError(format!("no commit {sha}")))
     }
 
     fn set(
@@ -49,14 +65,15 @@ impl Anchors for Fake {
             return Err(ApiError(format!("{name} isn't at {parent:?}")));
         }
         *self.moves.borrow_mut() += 1;
-        let commit = format!("{:040}", *self.moves.borrow());
-        refs.insert(
-            name.into(),
-            Kept {
-                commit,
-                message: message.into(),
-            },
-        );
+        let kept = Kept {
+            commit: format!("{:040}", *self.moves.borrow()),
+            message: message.into(),
+            parent: parent.map(str::to_owned),
+        };
+        self.commits
+            .borrow_mut()
+            .insert(kept.commit.clone(), kept.clone());
+        refs.insert(name.into(), kept);
         Ok(())
     }
 }
@@ -290,6 +307,7 @@ fn an_anchor_commit_that_isnt_one_is_refused() {
             Kept {
                 commit: "a".repeat(40),
                 message: message.into(),
+                parent: None,
             },
         );
         assert!(matches!(
@@ -326,7 +344,7 @@ fn an_anchor_moved_back_on_github_is_refused() {
             .unwrap();
         assert!(matches!(
             write(dir.path(), &f, &[]),
-            Err(AnchorError::Lost(why)) if why.contains("behind")
+            Err(AnchorError::Lost(why)) if why.contains("last checked at op 2")
         ));
         assert!(matches!(
             verify(dir.path(), &key, &f, REPO),
@@ -338,4 +356,197 @@ fn an_anchor_moved_back_on_github_is_refused() {
         ));
     }
     assert_eq!(std::fs::read(&log_file).unwrap(), &whole[..=cut]);
+}
+
+/// Puts the copy beside the log back to what it said before a write: a write
+/// that moved the ref and stopped before it kept the copy.
+fn stale_copy(dir: &Path, was: &str) {
+    std::fs::write(dir.join("anchor"), was).unwrap();
+}
+
+#[test]
+fn a_write_that_moved_the_ref_but_kept_no_copy_is_caught_up() {
+    let f = Fake::default();
+    let dir = tempfile::tempdir().unwrap();
+    let key = init(dir.path(), &key_path(dir.path()), &f, REPO)
+        .unwrap()
+        .key;
+    write(dir.path(), &f, &[1, 2]).unwrap();
+    let was = std::fs::read_to_string(dir.path().join("anchor")).unwrap();
+    write(dir.path(), &f, &[3]).unwrap();
+    write(dir.path(), &f, &[4]).unwrap();
+    stale_copy(dir.path(), &was);
+    assert_eq!(
+        verify(dir.path(), &key, &f, REPO).unwrap(),
+        remote(&f).anchor
+    );
+    write(dir.path(), &f, &[5]).unwrap();
+    assert_eq!(remote(&f).anchor.map(|a| a.seq), Some(5));
+    assert_eq!(log::load_anchor(dir.path()).unwrap(), remote(&f).anchor);
+    // So does setting up again with the copy stale, or gone.
+    stale_copy(dir.path(), &was);
+    init(dir.path(), &key_path(dir.path()), &f, REPO).unwrap();
+    std::fs::remove_file(dir.path().join("anchor")).unwrap();
+    init(dir.path(), &key_path(dir.path()), &f, REPO).unwrap();
+    assert_eq!(log::load_anchor(dir.path()).unwrap(), remote(&f).anchor);
+
+    // A copy far behind is from somewhere else; with it gone, setting up
+    // again checks the whole history instead.
+    for pr in 6..6 + MAX_AHEAD as u64 + 1 {
+        write(dir.path(), &f, &[pr]).unwrap();
+    }
+    stale_copy(dir.path(), &was);
+    assert!(matches!(
+        write(dir.path(), &f, &[]),
+        Err(AnchorError::Lost(why)) if why.contains("moves ahead")
+    ));
+    std::fs::remove_file(dir.path().join("anchor")).unwrap();
+    init(dir.path(), &key_path(dir.path()), &f, REPO).unwrap();
+    write(dir.path(), &f, &[]).unwrap();
+}
+
+/// A ledger whose ref moved to op 3 after the copy beside the log named op
+/// 2: the log as it was at op 2, and the copy then.
+struct Published {
+    f: Fake,
+    dir: tempfile::TempDir,
+    key: VerifyingKey,
+    two: Vec<u8>,
+    was: String,
+}
+
+impl Published {
+    fn new() -> Self {
+        let f = Fake::default();
+        let dir = tempfile::tempdir().unwrap();
+        let key = init(dir.path(), &key_path(dir.path()), &f, REPO)
+            .unwrap()
+            .key;
+        write(dir.path(), &f, &[1, 2]).unwrap();
+        let two = std::fs::read(dir.path().join("ops.jsonl")).unwrap();
+        let was = std::fs::read_to_string(dir.path().join("anchor")).unwrap();
+        write(dir.path(), &f, &[3]).unwrap();
+        stale_copy(dir.path(), &was);
+        Self {
+            f,
+            dir,
+            key,
+            two,
+            was,
+        }
+    }
+
+    fn at_two(&self) -> Anchor {
+        self.was.trim().parse().unwrap()
+    }
+
+    /// The log put back to op 2 and taken on to op 5 with the ledger's own
+    /// key, in place of the op 3 that was published.
+    fn rewrite(&self) -> Option<Anchor> {
+        std::fs::write(self.dir.path().join("ops.jsonl"), &self.two).unwrap();
+        let signing = log::load_signing_key(&key_path(self.dir.path())).unwrap();
+        let lock = Lock::take(self.dir.path()).unwrap();
+        let mut store = Store::open(lock, signing, Some(self.at_two())).unwrap();
+        for pr in [30, 40, 50] {
+            observe(&mut store, pr);
+        }
+        store.head()
+    }
+
+    /// A fast-forward of the ref, by whoever can push to it.
+    fn moved(&self, to: Option<Anchor>) {
+        let parent = self.f.refs.borrow()[REF].commit.clone();
+        self.f
+            .set(REPO, REF, Some(&parent), &message(&self.key, to))
+            .unwrap();
+    }
+
+    fn refused(&self, why: &str) {
+        let (dir, f) = (self.dir.path(), &self.f);
+        for (what, r) in [
+            ("write", write(dir, f, &[])),
+            ("verify", verify(dir, &self.key, f, REPO).map(|_| ())),
+            ("init", init(dir, &key_path(dir), f, REPO).map(|_| ())),
+        ] {
+            assert!(
+                matches!(
+                    r,
+                    Err(AnchorError::Log(LogError::Unanchored(_)))
+                        | Err(AnchorError::Store(StoreError::Log(LogError::Unanchored(_))))
+                        | Err(AnchorError::Lost(_))
+                ),
+                "{why}: {what} gave {r:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_history_that_drops_an_acknowledged_op_is_refused() {
+    // The log cut back to op 2, and a fast-forward naming op 2 again: op 3
+    // was published, so it's refused.
+    let p = Published::new();
+    std::fs::write(p.dir.path().join("ops.jsonl"), &p.two).unwrap();
+    p.moved(Some(p.at_two()));
+    p.refused("op 2 named again");
+
+    // Op 3 rewritten and the log taken further, and the ref fast-forwarded
+    // to it: the move naming the first op 3 is still in the ref's history,
+    // and the log no longer holds it.
+    let p = Published::new();
+    let rewritten = p.rewrite();
+    p.moved(rewritten);
+    stale_copy(p.dir.path(), &p.was);
+    p.refused("a longer history in place of op 3");
+    let refused = |r: Result<(), AnchorError>| {
+        assert!(
+            matches!(r, Err(AnchorError::Log(LogError::Unanchored(_)))),
+            "{r:?}"
+        );
+    };
+    // Each on its own: a write with the copy stale, and with no copy, set
+    // up again or verified, the whole history checked.
+    refused(write(p.dir.path(), &p.f, &[]));
+    std::fs::remove_file(p.dir.path().join("anchor")).unwrap();
+    refused(init(p.dir.path(), &key_path(p.dir.path()), &p.f, REPO).map(|_| ()));
+    refused(verify(p.dir.path(), &p.key, &p.f, REPO).map(|_| ()));
+}
+
+#[test]
+fn verify_beside_a_writer_never_reports_a_false_loss() {
+    let f = Fake::default();
+    let dir = tempfile::tempdir().unwrap();
+    let key = init(dir.path(), &key_path(dir.path()), &f, REPO)
+        .unwrap()
+        .key;
+    write(dir.path(), &f, &[1]).unwrap();
+    // A writer finishes a whole write just after verify reads the ref.
+    *f.write_after_get.borrow_mut() = Some(dir.path().to_owned());
+    let seen = verify(dir.path(), &key, &f, REPO).unwrap();
+    assert_eq!(seen.map(|a| a.seq), Some(1));
+    assert_eq!(remote(&f).anchor.map(|a| a.seq), Some(2));
+}
+
+#[test]
+fn setting_up_again_puts_back_a_lost_or_wrong_public_key() {
+    let f = Fake::default();
+    let dir = tempfile::tempdir().unwrap();
+    let key = init(dir.path(), &key_path(dir.path()), &f, REPO)
+        .unwrap()
+        .key;
+    write(dir.path(), &f, &[1]).unwrap();
+    let public = log::public_path(&key_path(dir.path()));
+    let right = std::fs::read(&public).unwrap();
+    let secret = std::fs::read(key_path(dir.path())).unwrap();
+    for broken in [None, Some("00\n"), Some(&*"ab".repeat(32))] {
+        match broken {
+            None => std::fs::remove_file(&public).unwrap(),
+            Some(text) => std::fs::write(&public, text).unwrap(),
+        }
+        init(dir.path(), &key_path(dir.path()), &f, REPO).unwrap();
+        assert_eq!(std::fs::read(&public).unwrap(), right);
+    }
+    assert_eq!(std::fs::read(key_path(dir.path())).unwrap(), secret);
+    assert_eq!(remote(&f).key, key);
+    assert_eq!(log::read_anchored(dir.path(), &key).unwrap().len(), 1);
 }

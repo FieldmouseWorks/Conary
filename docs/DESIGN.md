@@ -222,6 +222,12 @@ the evidence it landed on. An automation that writes trunk itself, like
 remi-update pushing its lock bumps, lands through the same call with the
 evidence its own gate produced, so its pushes are landings too.
 
+Until M5, a merge is read as the steward's landing only when the steward's
+own logins said `review-settled` success on that head after any retarget and
+before GitHub merged it, and trunk's commit is the PR's own: GitHub's merge
+of that head, or a commit GitHub ties to that PR. A word that came after the
+merge can't have authorized it.
+
 GitHub can't make that absolute: a repo admin can merge past the ruleset from
 the PR page, and anyone with the owner's token can push. So anything else that
 moves trunk is recorded as an **`outside`** op. An outside op is a violation,
@@ -270,6 +276,12 @@ names. Each move is a commit naming the ledger's key and its newest op.
   key's ref or a log that doesn't hold the ref's op, before it changes a byte
   of the log. After writing it moves the ref on, fast-forward only, and keeps
   a copy beside the log.
+- Every move on the ref since that copy, and the move before it, must name
+  the ledger's key, go forward and be held by the log, so a ref moved back,
+  even to an op it named before, or a longer history in place of one the log
+  acknowledged, is refused. A write stopped before it kept the copy is caught
+  up by the next; a copy many moves behind is refused, and `cn init` without
+  one checks the ref's whole history.
 - Readers check that copy, so a read never waits on GitHub, and refuse a log
   with none. The copy is only as good as the box: whoever can rewrite the log
   can rewrite it too. The next write, or `cn verify` from anyone who can read

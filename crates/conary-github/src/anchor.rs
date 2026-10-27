@@ -20,16 +20,21 @@ use conary_core::store::StoreError;
 
 use crate::api::ApiError;
 
-/// An anchor as GitHub keeps it: the commit the ref names and its message.
+/// An anchor as GitHub keeps it: a commit on the ref, its message, and the
+/// move before it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Kept {
     pub commit: String,
     pub message: String,
+    pub parent: Option<String>,
 }
 
 /// Where anchors are kept: refs in a repository.
 pub trait Anchors {
+    /// The commit `name` is at, if there's one.
     fn get(&self, repo: &str, name: &str) -> Result<Option<Kept>, ApiError>;
+    /// One commit of a ref's history.
+    fn commit(&self, repo: &str, sha: &str) -> Result<Kept, ApiError>;
     /// Moves `name` to a new commit on `parent` (making it when there's
     /// none) with `message`, only if it's still at `parent`.
     fn set(
@@ -156,28 +161,104 @@ fn same_ledger(repo: &str, remote: &Remote, key: &VerifyingKey) -> Result<(), An
     )))
 }
 
-/// Refuses an anchor on GitHub that's behind the copy beside the log. The
-/// copy is only written after the ref moves, so the ref going back means
-/// something other than the ledger's writer moved it, and that it no longer
-/// names ops it once did. Rewriting both takes the box and GitHub.
-fn not_behind(repo: &str, remote: &Remote, local: Option<Anchor>) -> Result<(), AnchorError> {
-    let Some(kept) = local else {
-        return Ok(());
+/// Most moves the ref may be ahead of the copy beside the log for a write.
+/// It's one after a write that stopped between moving the ref and keeping
+/// the copy, and the next write catches the copy up; more than a few means
+/// the copy is from somewhere else, and `cn init` with it removed checks the
+/// ref's whole history instead.
+const MAX_AHEAD: usize = 16;
+
+/// The checkpoints the log must hold besides `tip`'s: every move on the ref
+/// since the one the copy beside the log names (`local`, with `None` for no
+/// copy, and `Some(None)` for a copy kept before the ledger had ops). The
+/// writer keeps that copy only once the ref has moved and the log was checked
+/// against it. With no copy, it's every move back to the one that set the
+/// ledger up. Each must name this ledger's key and come before the one after
+/// it, down to and including the move before the copy's, so a ref moved
+/// back, even to a move naming the copy's op again, or a longer history in
+/// place of one the log acknowledged, is refused; checking each against the
+/// log refuses a log rewritten past one of them.
+fn checkpoints(
+    anchors: &dyn Anchors,
+    repo: &str,
+    tip: &Kept,
+    remote: &Remote,
+    local: Option<Option<Anchor>>,
+) -> Result<Vec<Anchor>, AnchorError> {
+    let lost = |what: String| {
+        let checked = match local {
+            None => "never".to_owned(),
+            Some(None) => "with no ops".to_owned(),
+            Some(Some(a)) => format!("at op {a}"),
+        };
+        AnchorError::Lost(format!(
+            "{repo}'s {REF} {what}, and the log was last checked {checked}"
+        ))
     };
-    match remote.anchor {
-        Some(a) if a == kept || a.seq > kept.seq => Ok(()),
-        a => Err(AnchorError::Lost(format!(
-            "{repo}'s {REF} names {}, behind op {kept} it named before",
-            a.map_or_else(|| "no op".to_owned(), |a| format!("op {a}"))
-        ))),
+    let named = |a: Option<Anchor>| a.map_or_else(|| "no op".to_owned(), |a| format!("op {a}"));
+    let mut held = Vec::new();
+    let mut at = tip.clone();
+    let mut newer = None;
+    let mut reached = false;
+    loop {
+        let r = parse(&at)?;
+        same_ledger(repo, &r, &remote.key)?;
+        let seq = r.anchor.map_or(0, |a| a.seq);
+        if newer.is_some_and(|n| seq >= n) {
+            return Err(lost(format!("went back at commit {}", at.commit)));
+        }
+        if reached {
+            return Ok(held);
+        }
+        reached = local == Some(r.anchor);
+        if let Some(l) = local.filter(|l| !reached && seq <= l.map_or(0, |a| a.seq)) {
+            return Err(lost(format!(
+                "names {} by commit {}, never {}",
+                named(r.anchor),
+                at.commit,
+                named(l)
+            )));
+        }
+        if newer.is_some() {
+            held.extend(r.anchor);
+        }
+        newer = Some(seq);
+        let Some(parent) = at.parent.clone() else {
+            return match r.anchor {
+                None => Ok(held),
+                Some(_) => Err(lost(format!(
+                    "starts at commit {}, not a new ledger",
+                    at.commit
+                ))),
+            };
+        };
+        if local.is_some() && held.len() > MAX_AHEAD {
+            return Err(lost(format!("is more than {MAX_AHEAD} moves ahead")));
+        }
+        at = anchors.commit(repo, &parent)?;
     }
+}
+
+/// Reads the log at `dir`, checked against the ref's `tip` and the
+/// `checkpoints` before it.
+fn read_holding(
+    dir: &Path,
+    key: &VerifyingKey,
+    tip: Option<Anchor>,
+    checkpoints: &[Anchor],
+) -> Result<(), AnchorError> {
+    let ops = log::read(dir, key, tip)?;
+    for a in checkpoints {
+        a.check(&ops)?;
+    }
+    Ok(())
 }
 
 /// The copy beside the log, when there's one: a reader's, or a set-up's
 /// that may be finishing one that stopped partway.
-fn kept(dir: &Path) -> Result<Option<Anchor>, AnchorError> {
+fn kept(dir: &Path) -> Result<Option<Option<Anchor>>, AnchorError> {
     Ok(if log::has_anchor(dir) {
-        log::load_anchor(dir)?
+        Some(log::load_anchor(dir)?)
     } else {
         None
     })
@@ -197,7 +278,7 @@ pub fn init(
 ) -> Result<Remote, AnchorError> {
     let lock = Lock::take(dir)?;
     let remote = match fetch(anchors, repo)? {
-        Some((_, remote)) => {
+        Some((tip, remote)) => {
             let key = log::load_signing_key(key_path).map_err(|e| match e {
                 LogError::NoKey(path) => AnchorError::Lost(format!(
                     "{repo} anchors the ledger signed by {}; put its key back at {}",
@@ -207,8 +288,8 @@ pub fn init(
                 e => e.into(),
             })?;
             same_ledger(repo, &remote, &key.verifying_key())?;
-            not_behind(repo, &remote, kept(dir)?)?;
-            log::read(dir, &remote.key, remote.anchor)?;
+            let held = checkpoints(anchors, repo, &tip, &remote, kept(dir)?)?;
+            read_holding(dir, &remote.key, remote.anchor, &held)?;
             remote
         }
         None => {
@@ -227,9 +308,9 @@ pub fn init(
 }
 
 /// The ledger, open for writing, once the anchor on GitHub is found to be
-/// its own, no further back than the copy beside the log, and held by the
-/// log. The anchor is read under the ledger's lock and the log isn't touched
-/// until it's checked against it.
+/// its own, every move on it since the copy beside the log goes forward, and
+/// the log holds each of them. The anchor is read under the ledger's lock and
+/// the log isn't touched until it's checked against it.
 pub struct Anchored {
     pub store: Store,
     repo: String,
@@ -246,7 +327,12 @@ pub fn open(
     let lock = Lock::take(dir)?;
     let (kept, remote) = fetch(anchors, repo)?.ok_or_else(|| not_set_up(repo))?;
     same_ledger(repo, &remote, &key.verifying_key())?;
-    not_behind(repo, &remote, log::load_anchor(dir)?)?;
+    let local = log::load_anchor(dir)?;
+    let held = checkpoints(anchors, repo, &kept, &remote, Some(local))?;
+    // The store checks the tip's when it opens.
+    if !held.is_empty() {
+        read_holding(dir, &remote.key, None, &held)?;
+    }
     let store = Store::open(lock, key, remote.anchor)?;
     Ok(Anchored {
         store,
@@ -271,18 +357,21 @@ impl Anchored {
 }
 
 /// Checks the log at `dir` against the anchor on GitHub: the remote check,
-/// on demand, for anyone who can read the log. The anchor is read first, so
-/// a writer at work can only have added to the log since.
+/// on demand, for anyone who can read the log. The copy beside the log is
+/// read first, then the anchor, then the log, the order a writer moves them
+/// in reverse, so a writer at work can only have moved each one on since
+/// the one before it was read.
 pub fn verify(
     dir: &Path,
     key: &VerifyingKey,
     anchors: &dyn Anchors,
     repo: &str,
 ) -> Result<Option<Anchor>, AnchorError> {
-    let (_, remote) = fetch(anchors, repo)?.ok_or_else(|| not_set_up(repo))?;
+    let local = kept(dir)?;
+    let (tip, remote) = fetch(anchors, repo)?.ok_or_else(|| not_set_up(repo))?;
     same_ledger(repo, &remote, key)?;
-    not_behind(repo, &remote, kept(dir)?)?;
-    log::read(dir, key, remote.anchor)?;
+    let held = checkpoints(anchors, repo, &tip, &remote, local)?;
+    read_holding(dir, key, remote.anchor, &held)?;
     Ok(remote.anchor)
 }
 

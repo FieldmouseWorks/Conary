@@ -292,8 +292,14 @@ fn record(
         }
     }
     // Newest first: the steward's latest word on this head since the last
-    // retarget. Anyone who can push can post its context; only the steward's
-    // own logins say it.
+    // retarget and before it merged, so a merge it hadn't settled yet (an
+    // administrator's) stays a bypass whatever it says after. Anyone who can
+    // push can post its context; only the steward's own logins say it.
+    let before_merge = |at: Option<&str>| {
+        pr.merged_at
+            .as_deref()
+            .is_some_and(|m| at.is_some_and(|t| t <= m))
+    };
     let settled = statuses
         .iter()
         .filter(|s| config.own_contexts.contains(&s.context))
@@ -302,6 +308,7 @@ fn record(
                 .as_ref()
                 .is_some_and(|u| config.reviewers.contains(&u.login))
         })
+        .filter(|s| before_merge(s.created_at.as_deref()))
         .find(|s| current(s.created_at.as_deref()))
         .is_some_and(|s| s.state == "success");
     for review in source.reviews(&full, pr.number)? {

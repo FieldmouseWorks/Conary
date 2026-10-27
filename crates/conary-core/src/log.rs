@@ -122,14 +122,19 @@ fn load_key(path: &Path, bytes: Vec<u8>) -> Result<SigningKey, LogError> {
     Ok(SigningKey::from_bytes(&secret))
 }
 
-/// The ledger's signing key, from `path`. It's never made here: a key made
-/// in place of a lost one would start another ledger.
+/// The ledger's signing key, from `path`, with its public half put back
+/// beside it if that's gone or wrong. It's never made here: a key made in
+/// place of a lost one would start another ledger.
 pub fn load_signing_key(path: &Path) -> Result<SigningKey, LogError> {
-    match fs::read(path) {
-        Ok(bytes) => load_key(path, bytes),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Err(LogError::NoKey(path.to_owned())),
-        Err(e) => Err(e.into()),
-    }
+    let key = match fs::read(path) {
+        Ok(bytes) => load_key(path, bytes)?,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            return Err(LogError::NoKey(path.to_owned()));
+        }
+        Err(e) => return Err(e.into()),
+    };
+    write_public_key(path, &key)?;
+    Ok(key)
 }
 
 /// The ledger's signing key: loaded from `path`, or made there (readable by
@@ -258,7 +263,8 @@ impl std::str::FromStr for Anchor {
 }
 
 impl Anchor {
-    fn check(self, ops: &[Op]) -> Result<(), LogError> {
+    /// Whether `ops`, a whole log, holds this anchor.
+    pub fn check(self, ops: &[Op]) -> Result<(), LogError> {
         match self.seq.checked_sub(1).and_then(|i| ops.get(i)) {
             Some(op) if op.id == self.op => Ok(()),
             _ => Err(LogError::Unanchored(self)),

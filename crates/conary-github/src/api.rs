@@ -360,6 +360,7 @@ struct GitObject {
 struct GitCommit {
     sha: String,
     message: String,
+    parents: Vec<GitObject>,
 }
 
 impl crate::anchor::Anchors for Api {
@@ -368,11 +369,16 @@ impl crate::anchor::Anchors for Api {
         let Some(r) = self.get_found::<GitRef>(&format!("/repos/{repo}/git/ref/{short}"))? else {
             return Ok(None);
         };
-        let c: GitCommit = self.get(&format!("/repos/{repo}/git/commits/{}", r.object.sha))?;
-        Ok(Some(crate::anchor::Kept {
+        crate::anchor::Anchors::commit(self, repo, &r.object.sha).map(Some)
+    }
+
+    fn commit(&self, repo: &str, sha: &str) -> Result<crate::anchor::Kept, ApiError> {
+        let c: GitCommit = self.get(&format!("/repos/{repo}/git/commits/{sha}"))?;
+        Ok(crate::anchor::Kept {
             commit: c.sha,
             message: c.message,
-        }))
+            parent: c.parents.into_iter().next().map(|p| p.sha),
+        })
     }
 
     fn set(

@@ -170,7 +170,7 @@ fn fake() -> Fake {
         json!([
             {"context": "gate", "state": "success", "target_url": "https://remi/gate/2"},
             {"context": "review-settled", "state": "success", "target_url": null,
-             "creator": {"login": STEWARD, "type": "User"}},
+             "creator": {"login": STEWARD, "type": "User"}, "created_at": "2026-10-27T11:59:00Z"},
             {"context": "gate", "state": "failure", "target_url": "https://remi/gate/1"},
             {"context": "gate", "state": "pending", "target_url": null},
         ]),
@@ -456,6 +456,26 @@ fn a_merge_the_steward_didnt_settle_is_outside_not_a_landing() {
         );
         f.retargeted = Some("2026-10-27T11:30:00Z".into());
     };
+    // Merged while the steward was still reviewing, and settled after: it
+    // wasn't the steward's merge, and an undated word can't be placed.
+    let late = |f: &mut Fake| {
+        f.statuses.insert(
+            HEAD.into(),
+            json!([{"context": "review-settled", "state": "success", "target_url": null,
+                 "creator": {"login": STEWARD, "type": "User"},
+                 "created_at": "2026-10-27T12:05:00Z"},
+                {"context": "review-settled", "state": "pending", "target_url": null,
+                 "creator": {"login": STEWARD, "type": "User"},
+                 "created_at": "2026-10-27T11:50:00Z"}]),
+        );
+    };
+    let undated = |f: &mut Fake| {
+        f.statuses.insert(
+            HEAD.into(),
+            json!([{"context": "review-settled", "state": "success", "target_url": null,
+                 "creator": {"login": STEWARD, "type": "User"}}]),
+        );
+    };
     // Merged locally and pushed: a merge commit of another head, or of this
     // one that GitHub didn't make, though the steward settled the head.
     let local = |f: &mut Fake| {
@@ -473,6 +493,8 @@ fn a_merge_the_steward_didnt_settle_is_outside_not_a_landing() {
         ("pushed", &pushed),
         ("forged", &forged),
         ("stale", &stale),
+        ("late", &late),
+        ("undated", &undated),
         ("local", &local),
         ("local same head", &local_same_head),
     ] {
@@ -647,7 +669,7 @@ fn sync_reads_a_closed_pr_again_when_it_changed_since() {
     f.statuses.insert(
         HEAD2.into(),
         json!([{"context": "review-settled", "state": "success", "target_url": null,
-             "creator": {"login": STEWARD, "type": "User"}}]),
+             "creator": {"login": STEWARD, "type": "User"}, "created_at": "2026-10-27T11:59:00Z"}]),
     );
     f.pulls = vec![pr(9, HEAD2, "closed", true)];
     assert_eq!(sync(&mut store, &f, &config(), &repo()).unwrap().len(), 1);
