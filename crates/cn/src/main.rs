@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 use conary_core::Ledger;
 use conary_core::ledger::Change;
 use conary_core::log;
-use conary_core::op::Repo;
+use conary_core::op::{Authority, Repo};
 use conary_core::why::{self, Why};
 use conary_github::anchor::{self, Anchored};
 use conary_github::{Api, Config, Ingested, ingest};
@@ -334,6 +334,11 @@ fn print_why(cli: &Cli, why: &Why) {
     }
     let session = c.author.session.as_deref().unwrap_or("no session");
     println!("  by {} ({session})", c.author.login);
+    match &l.by {
+        Authority::Status { login } => {
+            println!("  landed on {login}'s settled status (unattested)");
+        }
+    }
     for e in c.evidence.iter().filter(|e| e.revision == l.revision) {
         println!(
             "  {} {}: {} ({})",

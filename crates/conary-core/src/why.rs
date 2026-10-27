@@ -58,7 +58,7 @@ mod tests {
     use super::*;
     use crate::Store;
     use crate::id::{ChangeId, RevisionId};
-    use crate::op::{Actor, ActorKind, Body};
+    use crate::op::{Actor, ActorKind, Authority, Body};
 
     fn c(n: &str) -> CommitId {
         n.repeat(40 / n.len()).parse().unwrap()
@@ -106,6 +106,9 @@ mod tests {
                     revision: RevisionId::new(&c(before), &c("f")),
                     before: c(before),
                     after: c(after),
+                    by: Authority::Status {
+                        login: "steward".into(),
+                    },
                 },
             ] {
                 store.record(body).unwrap();

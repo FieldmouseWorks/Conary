@@ -291,6 +291,13 @@ fn a_merged_pr_lands_on_the_commit_it_made() {
     let landing = c.landing.as_ref().unwrap();
     assert_eq!(landing.before, sha(BASE));
     assert_eq!(landing.revision, RevisionId::new(&sha(FORK), &sha(HEAD)));
+    // What it landed on, and no more: a status GitHub shows from that login.
+    assert_eq!(
+        landing.by,
+        Authority::Status {
+            login: STEWARD.into()
+        }
+    );
     assert_eq!(
         pull(&mut store, &f, &config(), &repo(), 9)
             .unwrap()

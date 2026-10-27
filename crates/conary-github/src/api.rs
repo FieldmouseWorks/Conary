@@ -387,7 +387,7 @@ impl crate::anchor::Anchors for Api {
         name: &str,
         parent: Option<&str>,
         message: &str,
-    ) -> Result<(), ApiError> {
+    ) -> Result<String, ApiError> {
         let tree: GitObject = self.send(
             false,
             &format!("/repos/{repo}/git/trees"),
@@ -417,6 +417,6 @@ impl crate::anchor::Anchors for Api {
                 &serde_json::json!({"ref": name, "sha": commit.sha}),
             )?,
         };
-        Ok(())
+        Ok(commit.sha)
     }
 }

@@ -11,7 +11,7 @@ use std::sync::LazyLock;
 use regex::Regex;
 
 use conary_core::ledger::{Change, Invalid, Ledger, Status};
-use conary_core::op::{Actor, ActorKind, Body, CheckKind, Outcome, Repo};
+use conary_core::op::{Actor, ActorKind, Authority, Body, CheckKind, Outcome, Repo};
 use conary_core::store::StoreError;
 use conary_core::{ChangeId, CommitId, RevisionId, Store};
 
@@ -310,7 +310,11 @@ fn record(
         })
         .filter(|s| before_merge(s.created_at.as_deref()))
         .find(|s| current(s.created_at.as_deref()))
-        .is_some_and(|s| s.state == "success");
+        .filter(|s| s.state == "success")
+        .and_then(|s| s.creator.as_ref())
+        .map(|u| Authority::Status {
+            login: u.login.clone(),
+        });
     for review in source.reviews(&full, pr.number)? {
         if current(review.submitted_at.as_deref()) {
             evidence.extend(review_marker(config, pr, change, revision, &review));
@@ -389,7 +393,7 @@ fn merged(
     change: ChangeId,
     revision: RevisionId,
     status: Status,
-    settled: bool,
+    settled: Option<Authority>,
 ) -> Result<(), IngestError> {
     if status == Status::Landed {
         return Ok(());
@@ -418,7 +422,7 @@ fn merged(
     if !own && linked.iter().any(|&n| n != pr.number) {
         return close(w);
     }
-    if settled && own {
+    if let (Some(by), true) = (settled, own) {
         let before = trunk_before(source, &full, pr.number, &landed)?;
         if status == Status::Closed {
             w.record(Body::Reopen { change })?;
@@ -428,6 +432,7 @@ fn merged(
             revision,
             before,
             after,
+            by,
         });
     }
     // This PR's merge, read again, is the same movement.

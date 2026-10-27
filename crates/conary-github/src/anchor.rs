@@ -37,13 +37,14 @@ pub trait Anchors {
     fn commit(&self, repo: &str, sha: &str) -> Result<Kept, ApiError>;
     /// Moves `name` to a new commit on `parent` (making it when there's
     /// none) with `message`, only if it's still at `parent`.
+    /// Returns the new commit.
     fn set(
         &self,
         repo: &str,
         name: &str,
         parent: Option<&str>,
         message: &str,
-    ) -> Result<(), ApiError>;
+    ) -> Result<String, ApiError>;
 }
 
 #[derive(Debug)]
@@ -161,68 +162,36 @@ fn same_ledger(repo: &str, remote: &Remote, key: &VerifyingKey) -> Result<(), An
     )))
 }
 
-/// Most moves the ref may be ahead of the copy beside the log for a write.
-/// It's one after a write that stopped between moving the ref and keeping
-/// the copy, and the next write catches the copy up; more than a few means
-/// the copy is from somewhere else, and `cn init` with it removed checks the
-/// ref's whole history instead.
-const MAX_AHEAD: usize = 16;
-
 /// The checkpoints the log must hold besides `tip`'s: every move on the ref
-/// since the one the copy beside the log names (`local`, with `None` for no
-/// copy, and `Some(None)` for a copy kept before the ledger had ops). The
-/// writer keeps that copy only once the ref has moved and the log was checked
-/// against it. With no copy, it's every move back to the one that set the
-/// ledger up. Each must name this ledger's key, have one parent, and come
-/// before the one after it, down to and including the move before the copy's, so a ref moved
-/// back, even to a move naming the copy's op again, or a longer history in
-/// place of one the log acknowledged, is refused; checking each against the
-/// log refuses a log rewritten past one of them.
+/// since `checked`, the commit the copy beside the log says the writer last
+/// checked it against (it keeps the copy only once the log was checked and
+/// the ref moved), or back to the move that set the ledger up when there's
+/// none. Every move walked, `checked`'s included, must name this ledger's
+/// key, have one parent, and come before the one after it, so a ref moved
+/// back, by however many moves and whatever ops they name, or a longer
+/// history in place of one the log acknowledged, is refused; checking each
+/// against the log refuses a log rewritten past one of them. The walk stops
+/// at that commit, never at an op it names, which a later move can name
+/// again.
 fn checkpoints(
     anchors: &dyn Anchors,
     repo: &str,
     tip: &Kept,
     remote: &Remote,
-    local: Option<Option<Anchor>>,
+    checked: Option<&str>,
 ) -> Result<Vec<Anchor>, AnchorError> {
     let lost = |what: String| {
-        let checked = match local {
-            None => "never".to_owned(),
-            Some(None) => "with no ops".to_owned(),
-            Some(Some(a)) => format!("at op {a}"),
-        };
+        let since = checked.map_or_else(|| "never".to_owned(), |c| format!("at commit {c}"));
         AnchorError::Lost(format!(
-            "{repo}'s {REF} {what}, and the log was last checked {checked}"
+            "{repo}'s {REF} {what}, and the log was last checked {since}"
         ))
     };
-    let named = |a: Option<Anchor>| a.map_or_else(|| "no op".to_owned(), |a| format!("op {a}"));
     let mut held = Vec::new();
     let mut at = tip.clone();
     let mut newer = None;
-    let mut reached = false;
     loop {
         let r = parse(&at)?;
         same_ledger(repo, &r, &remote.key)?;
-        let seq = r.anchor.map_or(0, |a| a.seq);
-        if newer.is_some_and(|n| seq >= n) {
-            return Err(lost(format!("went back at commit {}", at.commit)));
-        }
-        if reached {
-            return Ok(held);
-        }
-        reached = local == Some(r.anchor);
-        if let Some(l) = local.filter(|l| !reached && seq <= l.map_or(0, |a| a.seq)) {
-            return Err(lost(format!(
-                "names {} by commit {}, never {}",
-                named(r.anchor),
-                at.commit,
-                named(l)
-            )));
-        }
-        if newer.is_some() {
-            held.extend(r.anchor);
-        }
-        newer = Some(seq);
         if at.parents.len() > 1 {
             return Err(lost(format!(
                 "merges {} histories at commit {}",
@@ -230,18 +199,28 @@ fn checkpoints(
                 at.commit
             )));
         }
+        let seq = r.anchor.map_or(0, |a| a.seq);
+        if newer.is_some_and(|n| seq >= n) {
+            return Err(lost(format!("went back at commit {}", at.commit)));
+        }
+        // The store checks the tip's when it opens.
+        if newer.is_some() {
+            held.extend(r.anchor);
+        }
+        if checked == Some(at.commit.as_str()) {
+            return Ok(held);
+        }
+        newer = Some(seq);
         let Some(parent) = at.parents.first().cloned() else {
-            return match r.anchor {
-                None => Ok(held),
-                Some(_) => Err(lost(format!(
+            return match (checked, r.anchor) {
+                (None, None) => Ok(held),
+                (None, Some(_)) => Err(lost(format!(
                     "starts at commit {}, not a new ledger",
                     at.commit
                 ))),
+                (Some(_), _) => Err(lost("never passed that commit".into())),
             };
         };
-        if local.is_some() && held.len() > MAX_AHEAD {
-            return Err(lost(format!("is more than {MAX_AHEAD} moves ahead")));
-        }
         at = anchors.commit(repo, &parent)?;
     }
 }
@@ -263,9 +242,9 @@ fn read_holding(
 
 /// The copy beside the log, when there's one: a reader's, or a set-up's
 /// that may be finishing one that stopped partway.
-fn kept(dir: &Path) -> Result<Option<Option<Anchor>>, AnchorError> {
+fn kept(dir: &Path) -> Result<Option<String>, AnchorError> {
     Ok(if log::has_anchor(dir) {
-        Some(log::load_anchor(dir)?)
+        log::load_checked(dir)?.at
     } else {
         None
     })
@@ -284,7 +263,7 @@ pub fn init(
     repo: &str,
 ) -> Result<Remote, AnchorError> {
     let lock = Lock::take(dir)?;
-    let remote = match fetch(anchors, repo)? {
+    let (remote, at) = match fetch(anchors, repo)? {
         Some((tip, remote)) => {
             let key = log::load_signing_key(key_path).map_err(|e| match e {
                 LogError::NoKey(path) => AnchorError::Lost(format!(
@@ -295,9 +274,9 @@ pub fn init(
                 e => e.into(),
             })?;
             same_ledger(repo, &remote, &key.verifying_key())?;
-            let held = checkpoints(anchors, repo, &tip, &remote, kept(dir)?)?;
+            let held = checkpoints(anchors, repo, &tip, &remote, kept(dir)?.as_deref())?;
             read_holding(dir, &remote.key, remote.anchor, &held)?;
-            remote
+            (remote, tip.commit)
         }
         None => {
             let key = log::load_or_create_key(key_path)?.verifying_key();
@@ -306,11 +285,11 @@ pub fn init(
                     "{repo} has no {REF}, but the log has ops"
                 )));
             }
-            anchors.set(repo, REF, None, &message(&key, None))?;
-            Remote { key, anchor: None }
+            let at = anchors.set(repo, REF, None, &message(&key, None))?;
+            (Remote { key, anchor: None }, at)
         }
     };
-    log::save_anchor(&lock, remote.anchor)?;
+    log::save_anchor(&lock, remote.anchor, &at)?;
     Ok(remote)
 }
 
@@ -334,8 +313,8 @@ pub fn open(
     let lock = Lock::take(dir)?;
     let (kept, remote) = fetch(anchors, repo)?.ok_or_else(|| not_set_up(repo))?;
     same_ledger(repo, &remote, &key.verifying_key())?;
-    let local = log::load_anchor(dir)?;
-    let held = checkpoints(anchors, repo, &kept, &remote, Some(local))?;
+    let checked = log::load_checked(dir)?;
+    let held = checkpoints(anchors, repo, &kept, &remote, checked.at.as_deref())?;
     // The store checks the tip's when it opens.
     if !held.is_empty() {
         read_holding(dir, &remote.key, None, &held)?;
@@ -354,11 +333,13 @@ impl Anchored {
     /// the log for readers. Nothing to move when nothing was written.
     pub fn publish(&self, anchors: &dyn Anchors) -> Result<(), AnchorError> {
         let head = self.store.head();
-        if head != self.remote.anchor {
+        let at = if head == self.remote.anchor {
+            self.kept.commit.clone()
+        } else {
             let msg = message(&self.remote.key, head);
-            anchors.set(&self.repo, REF, Some(&self.kept.commit), &msg)?;
-        }
-        log::save_anchor(self.store.lock(), head)?;
+            anchors.set(&self.repo, REF, Some(&self.kept.commit), &msg)?
+        };
+        log::save_anchor(self.store.lock(), head, &at)?;
         Ok(())
     }
 }
@@ -374,10 +355,10 @@ pub fn verify(
     anchors: &dyn Anchors,
     repo: &str,
 ) -> Result<Option<Anchor>, AnchorError> {
-    let local = kept(dir)?;
+    let checked = kept(dir)?;
     let (tip, remote) = fetch(anchors, repo)?.ok_or_else(|| not_set_up(repo))?;
     same_ledger(repo, &remote, key)?;
-    let held = checkpoints(anchors, repo, &tip, &remote, local)?;
+    let held = checkpoints(anchors, repo, &tip, &remote, checked.as_deref())?;
     read_holding(dir, key, remote.anchor, &held)?;
     Ok(remote.anchor)
 }

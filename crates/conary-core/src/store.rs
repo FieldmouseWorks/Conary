@@ -93,7 +93,7 @@ mod tests {
     use crate::id::{ChangeId, CommitId, RevisionId};
     use crate::ledger::Status;
     use crate::log;
-    use crate::op::{Actor, ActorKind, CheckKind, Outcome, Repo};
+    use crate::op::{Actor, ActorKind, Authority, CheckKind, Outcome, Repo};
 
     fn key() -> SigningKey {
         SigningKey::from_bytes(&[3; 32])
@@ -156,6 +156,9 @@ mod tests {
                 revision,
                 before: commit('a'),
                 after: commit('c'),
+                by: Authority::Status {
+                    login: "steward".into(),
+                },
             })
             .unwrap();
         drop(store);
@@ -193,6 +196,9 @@ mod tests {
                 revision: unknown,
                 before: commit('a'),
                 after: commit('c'),
+                by: Authority::Status {
+                    login: "steward".into(),
+                },
             },
             Body::Reopen { change },
             Body::Observe {
@@ -222,6 +228,9 @@ mod tests {
             revision,
             before: commit('a'),
             after: commit('c'),
+            by: Authority::Status {
+                login: "steward".into(),
+            },
         };
         assert!(matches!(
             store.record(land),
@@ -263,6 +272,9 @@ mod tests {
                 revision: RevisionId::new(&commit('a'), &commit('b')),
                 before: commit('a'),
                 after: commit('c'),
+                by: Authority::Status {
+                    login: "steward".into(),
+                },
             });
             assert_eq!(land.is_ok(), pr == 1);
         }
@@ -288,6 +300,9 @@ mod tests {
                 revision: RevisionId::new(&commit('a'), &commit('b')),
                 before: commit('a'),
                 after: commit('d'),
+                by: Authority::Status {
+                    login: "steward".into(),
+                },
             })
             .unwrap();
         for after in ['c', 'e', 'c', 'd'] {

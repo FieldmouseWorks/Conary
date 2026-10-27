@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, HashMap};
 use serde::Serialize;
 
 use crate::id::{ChangeId, CommitId, OpId, RevisionId};
-use crate::op::{Actor, Body, CheckKind, Op, Outcome, Repo};
+use crate::op::{Actor, Authority, Body, CheckKind, Op, Outcome, Repo};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Intent {
@@ -40,6 +40,7 @@ pub struct Landing {
     pub revision: RevisionId,
     pub before: CommitId,
     pub after: CommitId,
+    pub by: Authority,
     pub at: i64,
 }
 
@@ -349,6 +350,7 @@ impl Ledger {
                 revision,
                 before,
                 after,
+                by,
                 ..
             } => {
                 self.by_trunk.insert((c.repo.clone(), after.clone()), c.id);
@@ -356,6 +358,7 @@ impl Ledger {
                     revision: *revision,
                     before: before.clone(),
                     after: after.clone(),
+                    by: by.clone(),
                     at,
                 });
             }

@@ -217,8 +217,8 @@ commands an agent runs, not changes that land.
 
 Trunk moves only through **`land`**: Conary (or, until M5, the steward)
 merges a change whose evidence and class allow it. The landing records the
-change, the revision that was checked, the trunk commit before and after, and
-the evidence it landed on. An automation that writes trunk itself, like
+change, the revision that was checked, the trunk commit before and after,
+what authorized it, and the evidence it landed on. An automation that writes trunk itself, like
 remi-update pushing its lock bumps, lands through the same call with the
 evidence its own gate produced, so its pushes are landings too.
 
@@ -226,7 +226,9 @@ Until M5, a merge is read as the steward's landing only when the steward's
 own logins said `review-settled` success on that head after any retarget and
 before GitHub merged it, and trunk's commit is the PR's own: GitHub's merge
 of that head, or a commit GitHub ties to that PR. A word that came after the
-merge can't have authorized it.
+merge can't have authorized it. The landing records that status's login as
+what authorized it, which says what GitHub shows and no more: the login is
+shared with agent sessions until [#14](https://github.com/FieldmouseWorks/Conary/issues/14).
 
 GitHub can't make that absolute: a repo admin can merge past the ruleset from
 the PR page, and anyone with the owner's token can push. So anything else that
@@ -276,12 +278,13 @@ names. Each move is a commit naming the ledger's key and its newest op.
   key's ref or a log that doesn't hold the ref's op, before it changes a byte
   of the log. After writing it moves the ref on, fast-forward only, and keeps
   a copy beside the log.
-- Every move on the ref since that copy, and the move before it, must name
-  the ledger's key, go forward and be held by the log, so a ref moved back,
-  even to an op it named before, or a longer history in place of one the log
-  acknowledged, is refused. A write stopped before it kept the copy is caught
-  up by the next; a copy many moves behind is refused, and `cn init` without
-  one checks the ref's whole history.
+- The copy names the ref's commit it was checked against. Every move on the
+  ref since that commit, and the commit itself, must name the ledger's key,
+  have one parent, go forward and be held by the log, so a ref moved back, by
+  any number of moves naming any ops, or a longer history in place of one the
+  log acknowledged, is refused. A write stopped before it kept the copy is
+  caught up by the next; `cn init` and `cn verify` without a copy check the
+  ref's whole history.
 - Readers check that copy, so a read never waits on GitHub, and refuse a log
   with none. The copy is only as good as the box: whoever can rewrite the log
   can rewrite it too. The next write, or `cn verify` from anyone who can read

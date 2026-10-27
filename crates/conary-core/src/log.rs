@@ -385,30 +385,63 @@ pub fn read(dir: &Path, key: &VerifyingKey, anchor: Option<Anchor>) -> Result<Ve
 
 const NO_OPS: &str = "none";
 
-/// Keeps `anchor` in the ledger's directory as the newest one its writer
-/// checked against or published, `None` for a ledger set up with no ops
-/// yet. Only a writer holding the [`Lock`] keeps one, so it never goes back.
-/// It's only as good as that writer's check: whoever can cut the log can
-/// rewrite it too, so it spares readers a round trip to the anchor kept off
-/// the box, and stands in for it only there.
-pub fn save_anchor(lock: &Lock, anchor: Option<Anchor>) -> Result<(), LogError> {
-    let text = anchor.map_or_else(|| NO_OPS.to_owned(), |a| a.to_string());
-    replace(&lock.dir.join(ANCHOR_FILE), &format!("{text}\n"))
+/// The copy of the anchor kept beside the log: the newest anchor its writer
+/// checked the log against or published (`None` for a ledger set up with no
+/// ops yet), and where the anchor kept off the box was when it did, in that
+/// store's own terms. It's only as good as that writer's check: whoever can
+/// cut the log can rewrite it too, so it spares readers a round trip to the
+/// anchor kept off the box, and stands in for it only there.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Checked {
+    pub anchor: Option<Anchor>,
+    /// Missing in a copy kept before it was recorded.
+    pub at: Option<String>,
 }
 
-/// The anchor [`save_anchor`] kept. None is kept for a ledger never set
-/// up, or one whose anchor was removed, so that's refused.
-pub fn load_anchor(dir: &Path) -> Result<Option<Anchor>, LogError> {
+/// Keeps the copy beside the log. Only a writer holding the [`Lock`] keeps
+/// one, so it never goes back. `at` is one word.
+pub fn save_anchor(lock: &Lock, anchor: Option<Anchor>, at: &str) -> Result<(), LogError> {
+    if at.is_empty() || at.contains(char::is_whitespace) {
+        return Err(LogError::Io(io::Error::other(format!(
+            "{at:?} isn't where an anchor is"
+        ))));
+    }
+    let text = anchor.map_or_else(|| NO_OPS.to_owned(), |a| a.to_string());
+    replace(&lock.dir.join(ANCHOR_FILE), &format!("{text} {at}\n"))
+}
+
+/// The copy [`save_anchor`] kept. None is kept for a ledger never set up, or
+/// one whose copy was removed, so that's refused.
+pub fn load_checked(dir: &Path) -> Result<Checked, LogError> {
     let path = dir.join(ANCHOR_FILE);
     let text = match fs::read_to_string(&path) {
         Ok(text) => text,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Err(LogError::NoAnchor(path)),
         Err(e) => return Err(e.into()),
     };
-    match text.trim() {
-        NO_OPS => Ok(None),
-        a => a.parse().map(Some).map_err(|()| LogError::NoAnchor(path)),
+    let bad = || LogError::NoAnchor(path.clone());
+    let words: Vec<&str> = text.split_whitespace().collect();
+    let (anchor, rest) = match words.as_slice() {
+        [NO_OPS, rest @ ..] => (None, rest),
+        [seq, op, rest @ ..] => (
+            Some(format!("{seq} {op}").parse().map_err(|()| bad())?),
+            rest,
+        ),
+        _ => return Err(bad()),
+    };
+    match rest {
+        [] => Ok(Checked { anchor, at: None }),
+        [at] => Ok(Checked {
+            anchor,
+            at: Some((*at).to_owned()),
+        }),
+        _ => Err(bad()),
     }
+}
+
+/// The anchor in the copy [`save_anchor`] kept.
+pub fn load_anchor(dir: &Path) -> Result<Option<Anchor>, LogError> {
+    load_checked(dir).map(|c| c.anchor)
 }
 
 /// Whether there's an anchor file beside the log at `dir`, readable or not.

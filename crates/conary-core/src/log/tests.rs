@@ -574,7 +574,8 @@ fn readers_check_the_log_against_the_anchor_kept_beside_it() {
     let got = read_anchored(dir.path(), &public);
     assert!(matches!(got, Err(LogError::NoAnchor(_))), "{got:?}");
     let lock = Lock::take(dir.path()).unwrap();
-    save_anchor(&lock, None).unwrap();
+    assert!(save_anchor(&lock, None, "two words").is_err());
+    save_anchor(&lock, None, "c0").unwrap();
     assert_eq!(load_anchor(dir.path()).unwrap(), None);
     assert!(read_anchored(dir.path(), &public).unwrap().is_empty());
 
@@ -584,9 +585,15 @@ fn readers_check_the_log_against_the_anchor_kept_beside_it() {
     assert_eq!(read_anchored(dir.path(), &public).unwrap().len(), 1);
     log.append(close(), 2).unwrap();
     let head = log.head().unwrap();
-    save_anchor(log.lock(), Some(head)).unwrap();
+    save_anchor(log.lock(), Some(head), "c2").unwrap();
     drop(log);
-    assert_eq!(load_anchor(dir.path()).unwrap(), Some(head));
+    assert_eq!(
+        load_checked(dir.path()).unwrap(),
+        Checked {
+            anchor: Some(head),
+            at: Some("c2".into())
+        }
+    );
     assert_eq!(head.to_string().parse::<Anchor>(), Ok(head));
     assert_eq!(read_anchored(dir.path(), &public).unwrap().len(), 2);
 
@@ -614,11 +621,13 @@ fn readers_check_the_log_against_the_anchor_kept_beside_it() {
         read_anchored(dir.path(), &public),
         Err(LogError::NoAnchor(_))
     ));
-    fs::write(dir.path().join(ANCHOR_FILE), "not an anchor\n").unwrap();
-    assert!(matches!(
-        read_anchored(dir.path(), &public),
-        Err(LogError::NoAnchor(_))
-    ));
+    for bad in ["not an anchor\n", "none c0 c1\n", "\n"] {
+        fs::write(dir.path().join(ANCHOR_FILE), bad).unwrap();
+        assert!(matches!(
+            read_anchored(dir.path(), &public),
+            Err(LogError::NoAnchor(_))
+        ));
+    }
 }
 
 #[test]

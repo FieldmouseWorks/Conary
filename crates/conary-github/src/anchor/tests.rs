@@ -56,7 +56,7 @@ impl Anchors for Fake {
         name: &str,
         parent: Option<&str>,
         message: &str,
-    ) -> Result<(), ApiError> {
+    ) -> Result<String, ApiError> {
         if std::mem::take(&mut *self.fail.borrow_mut()) {
             return Err(ApiError("injected".into()));
         }
@@ -73,8 +73,9 @@ impl Anchors for Fake {
         self.commits
             .borrow_mut()
             .insert(kept.commit.clone(), kept.clone());
+        let commit = kept.commit.clone();
         refs.insert(name.into(), kept);
-        Ok(())
+        Ok(commit)
     }
 }
 
@@ -344,7 +345,7 @@ fn an_anchor_moved_back_on_github_is_refused() {
             .unwrap();
         assert!(matches!(
             write(dir.path(), &f, &[]),
-            Err(AnchorError::Lost(why)) if why.contains("last checked at op 2")
+            Err(AnchorError::Lost(why)) if why.contains("went back")
         ));
         assert!(matches!(
             verify(dir.path(), &key, &f, REPO),
@@ -390,19 +391,13 @@ fn a_write_that_moved_the_ref_but_kept_no_copy_is_caught_up() {
     init(dir.path(), &key_path(dir.path()), &f, REPO).unwrap();
     assert_eq!(log::load_anchor(dir.path()).unwrap(), remote(&f).anchor);
 
-    // A copy far behind is from somewhere else; with it gone, setting up
-    // again checks the whole history instead.
-    for pr in 6..6 + MAX_AHEAD as u64 + 1 {
+    // However far behind, every move since is checked and the copy caught up.
+    for pr in 6..30 {
         write(dir.path(), &f, &[pr]).unwrap();
     }
     stale_copy(dir.path(), &was);
-    assert!(matches!(
-        write(dir.path(), &f, &[]),
-        Err(AnchorError::Lost(why)) if why.contains("moves ahead")
-    ));
-    std::fs::remove_file(dir.path().join("anchor")).unwrap();
-    init(dir.path(), &key_path(dir.path()), &f, REPO).unwrap();
     write(dir.path(), &f, &[]).unwrap();
+    assert_eq!(log::load_anchor(dir.path()).unwrap(), remote(&f).anchor);
 }
 
 /// A ledger whose ref moved to op 3 after the copy beside the log named op
@@ -437,7 +432,8 @@ impl Published {
     }
 
     fn at_two(&self) -> Anchor {
-        self.was.trim().parse().unwrap()
+        let words: Vec<&str> = self.was.split_whitespace().collect();
+        format!("{} {}", words[0], words[1]).parse().unwrap()
     }
 
     /// The log put back to op 2 and taken on to op 5 with the ledger's own
@@ -513,6 +509,22 @@ fn a_history_that_drops_an_acknowledged_op_is_refused() {
 }
 
 #[test]
+fn moves_that_name_the_copys_op_again_never_hide_a_later_one() {
+    // Op 3 published, the copy still at op 2, and moves naming op 1 and then
+    // op 2 again on top, with the log cut back to op 2: the walk goes on to
+    // the commit the copy names, past the op it names.
+    let p = Published::new();
+    std::fs::write(p.dir.path().join("ops.jsonl"), &p.two).unwrap();
+    let one = Anchor {
+        seq: 1,
+        op: log::read(p.dir.path(), &p.key, None).unwrap()[0].id,
+    };
+    p.moved(Some(one));
+    p.moved(Some(p.at_two()));
+    p.refused("op 1 then op 2 named again");
+}
+
+#[test]
 fn an_anchor_that_merges_histories_is_refused() {
     // A commit naming op 2 with the moves for op 1 and op 3 as parents: its
     // first parent alone would hide that op 3 was published.
@@ -535,6 +547,16 @@ fn an_anchor_that_merges_histories_is_refused() {
         p.f.refs.borrow_mut().insert(REF.into(), merge);
         p.refused("a merge");
     }
+    // At the commit the copy names, where the walk stops.
+    let p = Published::new();
+    let tip = p.f.refs.borrow()[REF].clone();
+    p.f.commits
+        .borrow_mut()
+        .get_mut(&tip.parents[0])
+        .unwrap()
+        .parents
+        .push("f".repeat(40));
+    p.refused("a merge where the walk stops");
     // Further back in the history too.
     let p = Published::new();
     let tip = p.f.refs.borrow()[REF].clone();

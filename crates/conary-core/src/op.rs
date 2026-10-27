@@ -109,6 +109,16 @@ pub enum Outcome {
     Error,
 }
 
+/// What a landing's authorization rests on, as strong as it is and no more.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Authority {
+    /// The steward's settled status, as GitHub shows it from `login` before
+    /// the merge. Unattested: anyone holding that login's token can post one,
+    /// so it says what GitHub shows, never that the steward decided it.
+    Status { login: String },
+}
+
 /// The body of an operation: what happened.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
@@ -151,6 +161,8 @@ pub enum Body {
         revision: RevisionId,
         before: CommitId,
         after: CommitId,
+        /// What says it landed through `land`.
+        by: Authority,
     },
     /// Trunk moved some other way. A violation, listed for the owner.
     Outside {
