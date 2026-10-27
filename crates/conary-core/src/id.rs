@@ -1,7 +1,6 @@
-//! The ids that name things in the ledger (`docs/DESIGN.md` sections 4.1 and
-//! 4.2). A change id is random and assigned by Conary; a revision id is the
-//! hash of the two commits that make the revision, so it can't drift from
-//! what it names.
+//! The ids that name things in the ledger (`docs/DESIGN.md` sections 4.1,
+//! 4.2 and 4.6). A change id is random and assigned by Conary; revision and op
+//! ids are hashes of what they name, so they can't drift from it.
 
 use std::fmt;
 use std::str::FromStr;
@@ -148,11 +147,76 @@ impl RevisionId {
     }
 }
 
-impl fmt::Display for RevisionId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.iter().try_for_each(|b| write!(f, "{b:02x}"))
+/// An operation's id: the BLAKE3 hash of the operation's bytes as the op log
+/// holds them (`op.rs`), so an op that's been tampered with no longer matches
+/// its id, and the next op's parent no longer matches either.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct OpId([u8; 32]);
+
+/// The context string for op ids, frozen like [`REVISION_CONTEXT`].
+const OP_CONTEXT: &str = "conary 2026-10-27 op id v1";
+
+impl OpId {
+    pub fn of(bytes: &[u8]) -> Self {
+        Self(blake3::derive_key(OP_CONTEXT, bytes))
+    }
+
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
     }
 }
+
+/// The 32-byte ids print as 64 lowercase hex characters.
+macro_rules! hex32 {
+    ($($id:ident),*) => {$(
+        impl fmt::Display for $id {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                self.0.iter().try_for_each(|b| write!(f, "{b:02x}"))
+            }
+        }
+
+        impl FromStr for $id {
+            type Err = ParseIdError;
+
+            fn from_str(s: &str) -> Result<Self, Self::Err> {
+                if s.len() != 64 {
+                    return Err(ParseIdError::Length { expected: "64", got: s.len() });
+                }
+                let mut out = [0u8; 32];
+                for (i, c) in s.chars().enumerate() {
+                    let nibble = match c {
+                        '0'..='9' => c as u8 - b'0',
+                        'a'..='f' => c as u8 - b'a' + 10,
+                        _ => return Err(ParseIdError::Character(c)),
+                    };
+                    out[i / 2] |= nibble << if i % 2 == 0 { 4 } else { 0 };
+                }
+                Ok(Self(out))
+            }
+        }
+    )*};
+}
+hex32!(RevisionId, OpId);
+
+/// Every id is stored as its text, so the op log reads the same in a terminal
+/// as it does to Conary.
+macro_rules! as_text {
+    ($($id:ident),*) => {$(
+        impl serde::Serialize for $id {
+            fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+                s.collect_str(self)
+            }
+        }
+
+        impl<'de> serde::Deserialize<'de> for $id {
+            fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+                let text = <std::borrow::Cow<'de, str>>::deserialize(d)?;
+                text.parse().map_err(serde::de::Error::custom)
+            }
+        }
+    )*};
+}
+as_text!(ChangeId, CommitId, RevisionId, OpId);
 
 #[cfg(test)]
 mod tests {
@@ -215,6 +279,18 @@ mod tests {
         assert_eq!(ab, RevisionId::new(&commit(A), &commit(B)));
         assert_ne!(ab, RevisionId::new(&commit(B), &commit(A)));
         assert_ne!(ab, RevisionId::new(&commit(A), &commit(A)));
+    }
+
+    #[test]
+    fn hex_ids_round_trip_and_refuse_bad_text() {
+        let id = RevisionId::new(&commit(A), &commit(B));
+        assert_eq!(id.to_string().parse::<RevisionId>(), Ok(id));
+        assert_eq!(
+            "A".repeat(64).parse::<OpId>(),
+            Err(ParseIdError::Character('A'))
+        );
+        let json = serde_json::to_string(&id).unwrap();
+        assert_eq!(serde_json::from_str::<RevisionId>(&json).unwrap(), id);
     }
 
     /// Ids in the ledger outlive any one build, so the format is frozen: if

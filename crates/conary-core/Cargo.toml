@@ -1,7 +1,7 @@
 [package]
 name = "conary-core"
 version = "0.0.0"
-description = "Conary's core model: changes, revisions and the ids that name them"
+description = "Conary's core: the model, the ids that name it, and the signed op log it lives in"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -9,7 +9,13 @@ publish = false
 
 [dependencies]
 blake3 = "1.8.7"
+ed25519-dalek = "3.0.0"
 getrandom = "0.4.3"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { version = "1.0.154", features = ["raw_value"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"
 
 [lints]
 workspace = true
