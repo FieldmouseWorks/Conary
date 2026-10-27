@@ -1,0 +1,22 @@
+[package]
+name = "conary-cli"
+version = "0.0.0"
+description = "cn, Conary's command line"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "cn"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4.6.7", features = ["derive", "env"] }
+conary-core = { version = "0.0.0", path = "../conary-core" }
+conary-github = { version = "0.0.0", path = "../conary-github" }
+serde = "1.0.229"
+serde_json = "1.0.154"
+
+[lints]
+workspace = true

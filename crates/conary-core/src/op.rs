@@ -5,11 +5,65 @@ use serde::{Deserialize, Serialize};
 
 use crate::id::{ChangeId, CommitId, OpId, RevisionId};
 
-/// A GitHub repository, as `owner/name`.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+/// A GitHub repository, as `owner/name`. GitHub ignores case in both, so two
+/// spellings of one repository are equal: an op keeps the spelling it was
+/// recorded with.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Repo {
     pub owner: String,
     pub name: String,
+}
+
+impl Repo {
+    fn key(&self) -> (String, String) {
+        (
+            self.owner.to_ascii_lowercase(),
+            self.name.to_ascii_lowercase(),
+        )
+    }
+}
+
+impl PartialEq for Repo {
+    fn eq(&self, other: &Self) -> bool {
+        self.owner.eq_ignore_ascii_case(&other.owner) && self.name.eq_ignore_ascii_case(&other.name)
+    }
+}
+
+impl Eq for Repo {}
+
+impl std::hash::Hash for Repo {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.key().hash(state);
+    }
+}
+
+impl PartialOrd for Repo {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Repo {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.key().cmp(&other.key())
+    }
+}
+
+impl std::str::FromStr for Repo {
+    type Err = String;
+
+    /// `owner/name`.
+    fn from_str(s: &str) -> Result<Self, String> {
+        match s.split_once('/') {
+            Some((owner, name)) if !owner.is_empty() && !name.is_empty() && !name.contains('/') => {
+                Ok(Self {
+                    owner: owner.to_owned(),
+                    name: name.to_owned(),
+                })
+            }
+            _ => Err(format!("{s:?} isn't owner/name")),
+        }
+    }
 }
 
 impl std::fmt::Display for Repo {
@@ -55,6 +109,16 @@ pub enum Outcome {
     Error,
 }
 
+/// What a landing's authorization rests on, as strong as it is and no more.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Authority {
+    /// The steward's settled status, as GitHub shows it from `login` before
+    /// the merge. Unattested: anyone holding that login's token can post one,
+    /// so it says what GitHub shows, never that the steward decided it.
+    Status { login: String },
+}
+
 /// The body of an operation: what happened.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
@@ -97,6 +161,8 @@ pub enum Body {
         revision: RevisionId,
         before: CommitId,
         after: CommitId,
+        /// What says it landed through `land`.
+        by: Authority,
     },
     /// Trunk moved some other way. A violation, listed for the owner.
     Outside {

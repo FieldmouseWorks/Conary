@@ -152,6 +152,11 @@ revision. Trees are named by their own git IDs, and two revisions sharing a
 tree is a fact Conary can report, never a reason to count one's evidence for
 the other.
 
+For a GitHub PR the base is the merge base of the head and the base branch:
+the tree its diff and its review are against, which trunk moving doesn't
+change. A new head is a new revision, as is a retarget that moves the merge
+base; trunk moving under an open PR is not.
+
 ### 4.3 Evidence
 
 Evidence is one result of one check on one revision:
@@ -212,10 +217,18 @@ commands an agent runs, not changes that land.
 
 Trunk moves only through **`land`**: Conary (or, until M5, the steward)
 merges a change whose evidence and class allow it. The landing records the
-change, the revision that was checked, the trunk commit before and after, and
-the evidence it landed on. An automation that writes trunk itself, like
+change, the revision that was checked, the trunk commit before and after,
+what authorized it, and the evidence it landed on. An automation that writes trunk itself, like
 remi-update pushing its lock bumps, lands through the same call with the
 evidence its own gate produced, so its pushes are landings too.
+
+Until M5, a merge is read as the steward's landing only when the steward's
+own logins said `review-settled` success on that head after any retarget and
+before GitHub merged it, and trunk's commit is the PR's own: GitHub's merge
+of that head, or a commit GitHub ties to that PR. A word that came after the
+merge can't have authorized it. The landing records that status's login as
+what authorized it, which says what GitHub shows and no more: the login is
+shared with agent sessions until [#14](https://github.com/FieldmouseWorks/Conary/issues/14).
 
 GitHub can't make that absolute: a repo admin can merge past the ruleset from
 the PR page, and anyone with the owner's token can push. So anything else that
@@ -253,9 +266,34 @@ kept if it verifies. Only a line whose JSON stops short is a write that never
 finished (its caller was never told it succeeded), so the next writer cuts it.
 A writer whose append fails partway stops until the log is reopened and
 verified again. A log cut short by whole lines still chains, so its head is
-anchored off the box: each note on GitHub (section 7) names the op it was
-written at, and readers and the writer refuse a log that doesn't hold the
-newest note's op, before cutting anything.
+anchored off the box, at `refs/conary/anchor` in a repository the machine
+names. Each move is a commit naming the ledger's key and its newest op.
+
+- `cn init` sets a ledger up once: its key, then the ref. It's the ledger's
+  identity. Run again it finishes a set-up that stopped partway, and with a
+  ref already there it takes only the key that ref names, so a lost key or
+  directory is refused until the key is back, never replaced by a new
+  ledger. A writer never makes a key.
+- Each write takes the ledger's lock, then reads the ref, and refuses another
+  key's ref or a log that doesn't hold the ref's op, before it changes a byte
+  of the log. After writing it moves the ref on, fast-forward only, and keeps
+  a copy beside the log.
+- The copy names the ref's commit it was checked against. Every move on the
+  ref since that commit, and the commit itself, must name the ledger's key,
+  have one parent, go forward and be held by the log, so a ref moved back, by
+  any number of moves naming any ops, or a longer history in place of one the
+  log acknowledged, is refused. A write stopped before it kept the copy is
+  caught up by the next.
+- Readers check that copy, so a read never waits on GitHub, and refuse a log
+  with none. The copy is only as good as the box: whoever can rewrite the log
+  can rewrite it too, and the commit it names with it. A write trusts it as
+  where to start, since the writer is the box. `cn init`, which is how a
+  ledger is recovered, and `cn verify`, which anyone who can read the log can
+  run off the box, trust nothing there but the log and check every move since
+  the ledger was set up, so they catch the box rewritten with the copy. Nothing holds against someone with the box and a
+  token that can force-push the ref: they hold the signing key too and can
+  write a whole new history. The ref's history is only as append-only as
+  GitHub keeps it.
 
 ## 5. Undo
 
@@ -296,7 +334,7 @@ never on a timer.
 
 | Interface | Used by | Notes |
 | --- | --- | --- |
-| `conary-core` (Rust library) | conaryd, tests, tools | All logic lives here. |
+| `conary-core` and `conary-github` (Rust libraries) | conaryd, tests, tools | All logic lives here; `conary-github` reads GitHub into ledger ops. |
 | `conaryd` (daemon on remi, JSON-RPC over a Unix socket) | The steward, Claude jobs, the CLI | One per host. Serialises writes, serves reads concurrently, streams events. |
 | MCP server | Agents on remi | The same calls as tools, with schemas. |
 | `cn` CLI | People and scripts | JSON output by default, `--human` for people. |
@@ -370,7 +408,7 @@ Targets on remi, warm cache, a year of ledger across every repo:
   holding that token could post a status that looks like the steward's. The
   judge's seals already guard verdicts against that. A GitHub App for Conary
   would let `review-settled` and landings be pinned to one integration ID
-  instead (section 11).
+  instead (section 11, [#14](https://github.com/FieldmouseWorks/Conary/issues/14)).
 
 ## 10. Where a layer on git runs out
 
