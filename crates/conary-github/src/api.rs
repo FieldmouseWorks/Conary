@@ -96,11 +96,21 @@ impl std::fmt::Display for ApiError {
 
 impl std::error::Error for ApiError {}
 
+/// Which of a repo's PRs to list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Pulls {
+    /// Every one, all states, oldest first.
+    All,
+    /// The open ones.
+    Open,
+    /// The hundred closed most recently updated, newest first.
+    RecentlyClosed,
+}
+
 /// Where ingest reads GitHub from.
 pub trait Source {
     fn pull(&self, repo: &str, number: u64) -> Result<PullRequest, ApiError>;
-    /// Every PR in the repo, all states, oldest first.
-    fn pulls(&self, repo: &str) -> Result<Vec<PullRequest>, ApiError>;
+    fn pulls(&self, repo: &str, which: Pulls) -> Result<Vec<PullRequest>, ApiError>;
     fn check_runs(&self, repo: &str, sha: &str) -> Result<Vec<CheckRun>, ApiError>;
     fn statuses(&self, repo: &str, sha: &str) -> Result<Vec<Status>, ApiError>;
     fn reviews(&self, repo: &str, number: u64) -> Result<Vec<Review>, ApiError>;
@@ -170,10 +180,16 @@ impl Source for Api {
         self.get(&format!("/repos/{repo}/pulls/{number}"))
     }
 
-    fn pulls(&self, repo: &str) -> Result<Vec<PullRequest>, ApiError> {
-        self.pages(&format!(
-            "/repos/{repo}/pulls?state=all&sort=created&direction=asc"
-        ))
+    fn pulls(&self, repo: &str, which: Pulls) -> Result<Vec<PullRequest>, ApiError> {
+        match which {
+            Pulls::All => self.pages(&format!(
+                "/repos/{repo}/pulls?state=all&sort=created&direction=asc"
+            )),
+            Pulls::Open => self.pages(&format!("/repos/{repo}/pulls?state=open")),
+            Pulls::RecentlyClosed => self.get(&format!(
+                "/repos/{repo}/pulls?state=closed&sort=updated&direction=desc&per_page=100"
+            )),
+        }
     }
 
     fn check_runs(&self, repo: &str, sha: &str) -> Result<Vec<CheckRun>, ApiError> {

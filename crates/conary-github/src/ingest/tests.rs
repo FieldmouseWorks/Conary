@@ -4,7 +4,7 @@ use ed25519_dalek::SigningKey;
 use serde_json::{Value, json};
 
 use super::*;
-use crate::api::Commit;
+use crate::api::{Commit, Pulls};
 
 const BASE: &str = "1111111111111111111111111111111111111111";
 const FORK: &str = "2222222222222222222222222222222222222222";
@@ -35,8 +35,13 @@ impl Source for Fake {
             .ok_or_else(|| ApiError(format!("no PR {number}")))
     }
 
-    fn pulls(&self, _: &str) -> Result<Vec<PullRequest>, ApiError> {
-        Ok(self.pulls.iter().map(parse).collect())
+    fn pulls(&self, _: &str, which: Pulls) -> Result<Vec<PullRequest>, ApiError> {
+        let all = self.pulls.iter().map(parse::<PullRequest>);
+        Ok(match which {
+            Pulls::All => all.collect(),
+            Pulls::Open => all.filter(|p| p.state == "open").collect(),
+            Pulls::RecentlyClosed => all.filter(|p| p.state == "closed").rev().collect(),
+        })
     }
 
     fn check_runs(&self, _: &str, sha: &str) -> Result<Vec<CheckRun>, ApiError> {
@@ -317,4 +322,34 @@ fn tasks_are_read_from_the_body() {
     let body = format!("_Requested by **Peter** · [project thread]({thread})_");
     assert_eq!(task(&r, &body).as_deref(), Some(thread));
     assert_eq!(task(&r, "issue #7, see #8"), None);
+}
+
+#[test]
+fn sync_takes_open_prs_and_closed_ones_it_hasnt_finished() {
+    let (_dir, mut store) = open();
+    let mut f = fake();
+    f.pulls = vec![pr(9, HEAD, "open", false), pr(10, HEAD2, "open", false)];
+    assert_eq!(sync(&mut store, &f, &config(), &repo()).unwrap().len(), 2);
+
+    // 9 merged and 11 opened and closed between two syncs; 10 is still open.
+    f.pulls = vec![
+        pr(9, HEAD, "closed", true),
+        pr(10, HEAD2, "open", false),
+        pr(11, HEAD2, "closed", false),
+    ];
+    let got = sync(&mut store, &f, &config(), &repo()).unwrap();
+    let prs: Vec<u64> = got
+        .iter()
+        .map(|g| store.ledger().change(g.change).unwrap().pr)
+        .collect();
+    assert_eq!(prs, [10, 9, 11]);
+    let status = |n| store.ledger().by_pr(&repo(), n).unwrap().status();
+    assert_eq!(
+        (status(9), status(10), status(11)),
+        (Status::Landed, Status::Open, Status::Closed)
+    );
+
+    // Finished PRs aren't read again.
+    let got = sync(&mut store, &f, &config(), &repo()).unwrap();
+    assert_eq!(got.len(), 1);
 }

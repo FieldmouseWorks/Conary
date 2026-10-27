@@ -59,6 +59,14 @@ enum Command {
         #[command(flatten)]
         github: GithubArgs,
     },
+    /// Bring a repository's open and recently closed pull requests up to
+    /// date: what to run on each of its PR events.
+    Sync {
+        /// The repository, as owner/name.
+        repo: Repo,
+        #[command(flatten)]
+        github: GithubArgs,
+    },
     /// Record every pull request in a repository.
     Backfill {
         /// The repository, as owner/name.
@@ -110,9 +118,13 @@ fn run(cli: &Cli) -> Result<()> {
             let got = ingest::pull(&mut store, &api, &config, repo, *pr)?;
             print_ingested(cli, repo, *pr, got, store.ledger());
         }
-        Command::Backfill { repo, github } => {
+        Command::Sync { repo, github } | Command::Backfill { repo, github } => {
             let (mut store, api, config) = write(cli, github)?;
-            let got = ingest::backfill(&mut store, &api, &config, repo)?;
+            let got = if matches!(cli.command, Command::Sync { .. }) {
+                ingest::sync(&mut store, &api, &config, repo)?
+            } else {
+                ingest::backfill(&mut store, &api, &config, repo)?
+            };
             if cli.human {
                 let recorded: usize = got.iter().map(|g| g.recorded).sum();
                 println!("{repo}: {} PRs, {recorded} new ops", got.len());

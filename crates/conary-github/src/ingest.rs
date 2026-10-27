@@ -15,7 +15,7 @@ use conary_core::op::{Actor, ActorKind, Body, CheckKind, Outcome, Repo};
 use conary_core::store::StoreError;
 use conary_core::{ChangeId, CommitId, RevisionId, Store};
 
-use crate::api::{ApiError, CheckRun, PullRequest, Review, Source, Status as CommitStatus};
+use crate::api::{ApiError, CheckRun, PullRequest, Pulls, Review, Source, Status as CommitStatus};
 
 /// What ingest trusts, from the machine's configuration.
 #[derive(Debug, Clone, Default)]
@@ -91,10 +91,37 @@ pub fn backfill(
     repo: &Repo,
 ) -> Result<Vec<Ingested>, IngestError> {
     source
-        .pulls(&repo.to_string())?
+        .pulls(&repo.to_string(), Pulls::All)?
         .iter()
         .map(|pr| record(store, source, config, repo, pr))
         .collect()
+}
+
+/// Brings the ledger up to date with what's happening in a repo: every open
+/// PR, since its checks and reviews come and go, and every recently closed
+/// one the ledger doesn't hold as landed or closed yet. A PR the ledger
+/// already holds as finished costs nothing.
+pub fn sync(
+    store: &mut Store,
+    source: &dyn Source,
+    config: &Config,
+    repo: &Repo,
+) -> Result<Vec<Ingested>, IngestError> {
+    let full = repo.to_string();
+    let mut got = Vec::new();
+    for pr in source.pulls(&full, Pulls::Open)? {
+        got.push(record(store, source, config, repo, &pr)?);
+    }
+    for pr in source.pulls(&full, Pulls::RecentlyClosed)?.iter().rev() {
+        let finished = store
+            .ledger()
+            .by_pr(repo, pr.number)
+            .is_some_and(|c| c.status() != Status::Open);
+        if !finished {
+            got.push(record(store, source, config, repo, pr)?);
+        }
+    }
+    Ok(got)
 }
 
 fn commit(sha: &str) -> Result<CommitId, IngestError> {
