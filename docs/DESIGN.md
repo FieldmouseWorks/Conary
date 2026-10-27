@@ -295,12 +295,18 @@ Targets on remi, warm cache, a year of ledger across every repo:
   this session do" a question with a trustworthy answer.
 - Evidence counts by its producer's attestation, never by what it says about
   itself or by conaryd having recorded it:
-  - CI on GitHub Actions: GitHub's own record of the check run, read from its
-    API, for a configured workflow on a configured runner at that exact head,
-    plus an OIDC-backed attestation from the job where the workflow makes one.
+  - CI on GitHub Actions: a signed attestation the job itself makes with its
+    GitHub OIDC identity (Sigstore, keyless), over the result, the revision's
+    head and base commits and the log hash. It binds the result to the
+    workflow, the commit and the run that made it. burrow's shared
+    `flake-check.yml` makes one, so every repo's gate does. GitHub's API
+    record of the check run is where Conary finds it, never a substitute
+    for it.
   - Jobs on remi (reviewers, proof and judge jobs, negative runs): a signature
     by that runner service's own key, which no authoring session or sandbox
     can read, over the result, the revision and the run's log hash.
+  - Anything without a valid attestation doesn't count, whatever its source:
+    a missing or unverifiable one fails closed.
 - Today the steward acts on GitHub as the owner's own login, so any session
   holding that token could post a status that looks like the steward's. The
   judge's seals already guard verdicts against that. A GitHub App for Conary
