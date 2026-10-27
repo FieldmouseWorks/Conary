@@ -245,8 +245,8 @@ fn print_why(cli: &Cli, why: &Why) {
         let out = json!({
             "repo": why.repo.to_string(),
             "commit": why.commit.to_string(),
-            "trunk": why.trunk.to_string(),
-            "change": why.change.map(|c| {
+            "trunk": why.landed.map(|(_, l)| l.after.to_string()),
+            "change": why.landed.map(|(c, _)| {
                 let mut v = serde_json::to_value(c).expect("a change serializes");
                 v["url"] = json!(url(c));
                 v["status"] = json!(c.status());
@@ -256,14 +256,14 @@ fn print_why(cli: &Cli, why: &Why) {
         println!("{out}");
         return;
     }
-    let Some(c) = why.change else {
+    let Some((c, l)) = why.landed else {
         println!(
-            "{}: no change in the ledger landed it (not ingested, or trunk moved outside Conary)",
-            why.trunk
+            "{}: no landing in the ledger brought it onto trunk (not landed, not ingested, or trunk moved outside Conary)",
+            why.commit
         );
         return;
     };
-    println!("{}: {}", why.trunk, url(c));
+    println!("{}: {}", l.after, url(c));
     if let Some(i) = &c.intent {
         println!("  {}", i.summary);
         if let Some(task) = &i.task {
@@ -272,15 +272,13 @@ fn print_why(cli: &Cli, why: &Why) {
     }
     let session = c.author.session.as_deref().unwrap_or("no session");
     println!("  by {} ({session})", c.author.login);
-    if let Some(l) = &c.landing {
-        for e in c.evidence.iter().filter(|e| e.revision == l.revision) {
-            println!(
-                "  {} {}: {} ({})",
-                word(e.kind),
-                e.check,
-                word(e.result),
-                e.source
-            );
-        }
+    for e in c.evidence.iter().filter(|e| e.revision == l.revision) {
+        println!(
+            "  {} {}: {} ({})",
+            word(e.kind),
+            e.check,
+            word(e.result),
+            e.source
+        );
     }
 }

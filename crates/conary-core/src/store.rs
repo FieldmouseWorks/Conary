@@ -265,6 +265,46 @@ mod tests {
     }
 
     #[test]
+    fn a_trunk_commit_is_a_landing_or_outside_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(dir.path(), key(), None).unwrap();
+        let outside = |after| Body::Outside {
+            repo: repo(),
+            before: Some(commit('a')),
+            after,
+        };
+        store.record(outside(commit('c'))).unwrap();
+        assert!(matches!(
+            store.record(outside(commit('c'))),
+            Err(StoreError::Invalid(Invalid::Duplicate))
+        ));
+        let change = observe(&mut store, 1);
+        store
+            .record(Body::Revision {
+                change,
+                base: commit('a'),
+                head: commit('b'),
+            })
+            .unwrap();
+        let land = |after| Body::Land {
+            change,
+            revision: RevisionId::new(&commit('a'), &commit('b')),
+            before: commit('a'),
+            after,
+        };
+        assert!(matches!(
+            store.record(land(commit('c'))),
+            Err(StoreError::Invalid(Invalid::TrunkCommitTaken(_)))
+        ));
+        store.record(land(commit('d'))).unwrap();
+        assert!(matches!(
+            store.record(outside(commit('d'))),
+            Err(StoreError::Invalid(Invalid::TrunkCommitTaken(_)))
+        ));
+        assert_eq!(store.ledger().outside().len(), 1);
+    }
+
+    #[test]
     fn a_store_whose_log_lost_its_anchored_op_is_refused() {
         let dir = tempfile::tempdir().unwrap();
         let mut store = Store::open(dir.path(), key(), None).unwrap();

@@ -2,6 +2,7 @@
 //! and which GitHub repository the checkout is of. Git itself is run as a
 //! command; what it prints is parsed here.
 
+use std::collections::HashSet;
 use std::path::Path;
 use std::process::Command;
 
@@ -70,31 +71,17 @@ fn parse_blame(porcelain: &str) -> Result<CommitId, GitError> {
         .map_err(|_| GitError::Git(format!("blame printed {sha:?} as a commit")))
 }
 
-/// The merge on the checked-out branch's first-parent line that brought
-/// `commit` in, when it came in through a merge rather than being on that
-/// line itself: a PR merged with a merge commit lands as the merge, while
-/// blame names the PR's own commit.
-pub fn merged_by(dir: &Path, commit: &CommitId) -> Result<Option<CommitId>, GitError> {
+/// `commit` and every commit after it that the checked-out head holds: those
+/// that descend from it and are ancestors of the head, from wherever on the
+/// way they're reached.
+pub fn descendants(dir: &Path, commit: &CommitId) -> Result<HashSet<String>, GitError> {
     let range = format!("{commit}..HEAD");
-    let descendants = git(dir, &["rev-list", "--ancestry-path", &range])?;
-    let line = git(dir, &["rev-list", "--first-parent", "--parents", &range])?;
-    Ok(pick_merge(commit, &descendants, &line))
-}
-
-/// The oldest commit on the first-parent line (`sha parent…` per line,
-/// newest first) that descends from `commit`, if `commit` isn't its first
-/// parent.
-fn pick_merge(commit: &CommitId, descendants: &str, line: &str) -> Option<CommitId> {
-    let descendants: std::collections::HashSet<&str> = descendants.lines().collect();
-    let oldest = line
+    let out = git(dir, &["rev-list", "--ancestry-path", &range])?;
+    Ok(out
         .lines()
-        .rfind(|l| l.split(' ').next().is_some_and(|c| descendants.contains(c)))?;
-    let mut shas = oldest.split(' ');
-    let (merge, first_parent) = (shas.next()?, shas.next()?);
-    if first_parent == commit.as_str() {
-        return None;
-    }
-    merge.parse().ok()
+        .map(str::to_owned)
+        .chain([commit.to_string()])
+        .collect())
 }
 
 /// The GitHub repository the checkout's `origin` points at.
@@ -103,8 +90,24 @@ pub fn github_repo(dir: &Path) -> Result<Repo, GitError> {
     parse_remote(url.trim())
 }
 
+/// A remote's URL without its userinfo, which can hold a token: fit to
+/// print.
+fn redact(url: &str) -> String {
+    let (scheme, rest) = url.split_once("://").map_or(("", url), |(s, r)| (s, r));
+    let authority_end = rest.find('/').unwrap_or(rest.len());
+    let host = match rest[..authority_end].rsplit_once('@') {
+        Some((_, host)) => format!("{host}{}", &rest[authority_end..]),
+        None => rest.to_owned(),
+    };
+    if scheme.is_empty() {
+        host
+    } else {
+        format!("{scheme}://{host}")
+    }
+}
+
 fn parse_remote(url: &str) -> Result<Repo, GitError> {
-    let not = || GitError::NotGithub(url.to_owned());
+    let not = || GitError::NotGithub(redact(url));
     let path = match ["https://", "ssh://"]
         .iter()
         .find_map(|scheme| url.strip_prefix(scheme))
@@ -148,28 +151,6 @@ mod tests {
     }
 
     #[test]
-    fn a_commit_merged_in_is_found_by_its_merge() {
-        let c = |n: char| n.to_string().repeat(40);
-        let pr = c('1').parse().unwrap();
-        // Trunk: 0 <- a (merging 1) <- 2 <- 3, newest first.
-        let line = [c('3'), c('2'), c('2'), c('a'), c('a'), c('0'), c('1')];
-        let line = format!(
-            "{} {}\n{} {}\n{} {} {}\n",
-            line[0], line[1], line[2], line[3], line[4], line[5], line[6]
-        );
-        let descendants = format!("{}\n{}\n{}\n", c('3'), c('2'), c('a'));
-        assert_eq!(
-            pick_merge(&pr, &descendants, &line).unwrap().as_str(),
-            c('a')
-        );
-        // 2 is on trunk itself: its child is no merge of it.
-        let on_trunk = c('2').parse().unwrap();
-        let line = format!("{} {}\n", c('3'), c('2'));
-        assert_eq!(pick_merge(&on_trunk, &c('3'), &line), None);
-        assert_eq!(pick_merge(&pr, "", ""), None);
-    }
-
-    #[test]
     fn origin_is_read_in_every_form_github_hands_out() {
         for url in [
             "https://github.com/FieldmouseWorks/burrow",
@@ -195,5 +176,24 @@ mod tests {
         ] {
             assert!(parse_remote(url).is_err(), "{url}");
         }
+    }
+
+    #[test]
+    fn a_refused_origin_is_named_without_its_credentials() {
+        for url in [
+            "https://user:TOKEN@github.example/owner/repo",
+            "https://TOKEN@github.example:8443/owner/repo",
+            "ssh://git:TOKEN@gitlab.com/owner/repo.git",
+            "https://user:TOKEN@github.com",
+            "TOKEN@github.example:owner/repo",
+            "https://a@b:TOKEN@github.example/owner/repo",
+        ] {
+            let e = parse_remote(url).unwrap_err().to_string();
+            assert!(!e.contains("TOKEN"), "{url}: {e}");
+        }
+        assert_eq!(
+            redact("https://user:TOKEN@github.example:8443/owner/repo"),
+            "https://github.example:8443/owner/repo"
+        );
     }
 }
