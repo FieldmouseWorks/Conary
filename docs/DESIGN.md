@@ -319,6 +319,10 @@ events.subscribe(land | outside | red | undo | owner)
 - **Code:** stays in git. Conary stores commit and tree IDs, never contents.
 - **On remi:** the ledger is state that has to survive the root wipe, so remi
   persists its directory and backs it up with the rest of remi's state.
+- **Anywhere else:** nothing in Conary depends on NixOS, ZFS or remi. It builds
+  with plain cargo, and the ledger's directory, the socket and the keys are
+  configuration. remi's Nix module is one thin wrapper over the binary, and a
+  systemd unit or another distro's package is another.
 
 Targets on remi, warm cache, a year of ledger across every repo:
 

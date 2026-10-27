@@ -48,9 +48,16 @@ The gate is the flake, the same locally, in a sandbox and in CI:
     nix develop        # the toolchains
     nix flake check    # the gate; CI runs only this
 
-There's no code yet. The Rust workspace (milestone M0 in the design) adds
-`rust = { };` to `flake.nix` in the same change, which brings rustfmt, clippy
-with warnings as errors, and the workspace's tests into the gate.
+That covers rustfmt, clippy on all targets with warnings as errors, and the
+tests of the Cargo workspace in `crates/`, on the toolchain
+`rust-toolchain.toml` pins. The same checks run with plain cargo
+([README](README.md#building)). All logic lives in `conary-core`; conaryd, the
+MCP server and the `cn` CLI stay thin layers over it.
+
+Nix is how remi builds and checks Conary, never something the code needs.
+Paths, the socket, keys and the service manager are configuration the binary
+reads, so a systemd unit or another distro's package is a small wrapper, the
+way remi's Nix module is.
 
 ## Pull requests
 
