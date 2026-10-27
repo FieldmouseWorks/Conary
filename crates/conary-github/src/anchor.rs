@@ -240,16 +240,6 @@ fn read_holding(
     Ok(())
 }
 
-/// The copy beside the log, when there's one: a reader's, or a set-up's
-/// that may be finishing one that stopped partway.
-fn kept(dir: &Path) -> Result<Option<String>, AnchorError> {
-    Ok(if log::has_anchor(dir) {
-        log::load_checked(dir)?.at
-    } else {
-        None
-    })
-}
-
 /// Sets up the ledger at `dir`, its key at `key_path`, anchored in `repo`,
 /// and returns its anchor. Run again, it finishes a set-up that stopped
 /// partway and changes nothing on one that's done. With an anchor already in
@@ -274,7 +264,9 @@ pub fn init(
                 e => e.into(),
             })?;
             same_ledger(repo, &remote, &key.verifying_key())?;
-            let held = checkpoints(anchors, repo, &tip, &remote, kept(dir)?.as_deref())?;
+            // Setting up again is how a ledger is recovered, so it takes
+            // nothing from the box but the log and checks every move.
+            let held = checkpoints(anchors, repo, &tip, &remote, None)?;
             read_holding(dir, &remote.key, remote.anchor, &held)?;
             (remote, tip.commit)
         }

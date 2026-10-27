@@ -525,7 +525,7 @@ fn moves_that_name_the_copys_op_again_never_hide_a_later_one() {
 }
 
 #[test]
-fn verify_holds_against_a_copy_rewritten_with_the_log() {
+fn init_and_verify_hold_against_a_copy_rewritten_with_the_log() {
     // Op 3 published; then the log cut back to op 2, a move naming op 2 on
     // top, and the copy rewritten to name that move, all from the box.
     let p = Published::new();
@@ -537,9 +537,13 @@ fn verify_holds_against_a_copy_rewritten_with_the_log() {
         format!("{} {at}\n", p.at_two()),
     )
     .unwrap();
-    // Verify takes nothing from the box but the log.
+    // Neither takes anything from the box but the log.
     assert!(matches!(
         verify(p.dir.path(), &p.key, &p.f, REPO),
+        Err(AnchorError::Lost(why)) if why.contains("went back")
+    ));
+    assert!(matches!(
+        init(p.dir.path(), &key_path(p.dir.path()), &p.f, REPO),
         Err(AnchorError::Lost(why)) if why.contains("went back")
     ));
 }
