@@ -3,5 +3,11 @@
 //! CLI are thin layers over it.
 
 pub mod id;
+pub mod ledger;
+pub mod log;
+pub mod op;
+pub mod store;
 
-pub use id::{ChangeId, CommitId, ParseIdError, RevisionId};
+pub use id::{ChangeId, CommitId, OpId, ParseIdError, RevisionId};
+pub use ledger::Ledger;
+pub use store::Store;

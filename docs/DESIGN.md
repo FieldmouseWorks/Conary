@@ -231,19 +231,31 @@ Every write to the ledger is one operation:
 
 ```
 Op {
-  id:      hash of (parent op, kind, payload, at)
-  parent:  the previous op
-  kind:    observe | intent | evidence | classify | land | outside | undo | backfill
-  payload: kind-specific
+  id:      hash of the op's bytes exactly as written
+  parent:  the previous op's id
   at:      timestamp
-  sig:     conaryd's key
+  body:    what happened (`Body` in crates/conary-core/src/op.rs): observe,
+           intent, revision, evidence, land, outside, close, reopen; classify
+           and undo join with M4 and M3
+  sig:     the ledger key's signature over the id
 }
 ```
 
-The log is one hash-chained, append-only file, signed by conaryd. It's the
-source of truth: the SQLite tables are an index of it and can be rebuilt by
-replaying it. Nothing in the log is ever edited or deleted. A correction is a
-new op that supersedes the old one.
+The log is one hash-chained, append-only file, signed by the ledger's key.
+It's the source of truth: everything else is rebuilt by replaying it, and an
+op the ledger can't apply is refused before it's written. Nothing in the log
+is ever edited or deleted. A correction is a new op that supersedes the old
+one.
+
+The log is refused whole if any line fails its id, its signature, its
+parent or its schema, the last line included. A last line with no newline is
+kept if it verifies. Only a line whose JSON stops short is a write that never
+finished (its caller was never told it succeeded), so the next writer cuts it.
+A writer whose append fails partway stops until the log is reopened and
+verified again. A log cut short by whole lines still chains, so its head is
+anchored off the box: each note on GitHub (section 7) names the op it was
+written at, and readers and the writer refuse a log that doesn't hold the
+newest note's op, before cutting anything.
 
 ## 5. Undo
 
@@ -314,8 +326,10 @@ events.subscribe(land | outside | red | undo | owner)
 
 - **Op log:** one append-only, hash-chained file per host, the source of
   truth.
-- **Index:** SQLite in WAL mode for changes, revisions, evidence, landings and
-  sessions, with FTS5 over intent text. Rebuilt from the op log when in doubt.
+- **Index:** the ledger is replayed from the op log into memory when it's
+  opened. SQLite in WAL mode (with FTS5 over intent text) takes over once
+  replay stops being fast or intent search needs it, and is rebuilt from the
+  op log when in doubt.
 - **Code:** stays in git. Conary stores commit and tree IDs, never contents.
 - **On remi:** the ledger is state that has to survive the root wipe, so remi
   persists its directory and backs it up with the rest of remi's state.
@@ -401,8 +415,8 @@ trust and undo across many small repos for one owner, which git serves fine.
 | Milestone | Delivers | Exit check |
 | --- | --- | --- |
 | M0 | Rust workspace, `rust = { };` in the flake, CI | `nix flake check` runs the workspace's tests in CI |
-| M1 | conaryd on remi, recording every PR event the steward sees, read-only, plus a backfill of merged PRs. `cn log`, `cn why` | `cn why` on a line in burrow returns the PR, its intent, session and evidence |
-| M2 | The notes ref and the MCP server | A cloud session answers `why` from a fresh clone |
+| M1 | `cn` on remi, recording every PR event the steward sees, read-only, plus a backfill of merged PRs. `cn log`, `cn why`. Each write takes the ledger's writer lock | `cn why` on a line in burrow returns the PR, its intent, session and evidence |
+| M2 | conaryd serving the ledger over its socket, the notes ref and the MCP server | A cloud session answers `why` from a fresh clone |
 | M3 | `undo` by change, session and time, through the landing flow | A deliberately bad session's changes in two repos are reverted by `undo --actor` and land with no person involved |
 | M4 | Class policy in Conary; the steward reads classes from conaryd | `oneWay` is gone from burrow's autoland config |
 | M5 | conaryd runs the landing flow, and R0 changes land before review, with review after landing | `steward.py` is deleted, and a week of PRs across every repo lands through conaryd, R0 ones with no wait on a reviewer |
