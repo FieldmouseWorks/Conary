@@ -29,7 +29,7 @@ jobs:
       github.event.repository.private &&
       (github.event_name != 'pull_request' ||
       github.event.pull_request.head.repo.full_name == github.repository)
-    uses: FieldmouseWorks/burrow/.github/workflows/flake-check.yml@9dd4bc5fc7716525b0f0148d7bc3311db0084803 # main
+    uses: FieldmouseWorks/burrow/.github/workflows/flake-check.yml@ee3442ac6b475a166a4d4e726ed2c1650268af15 # main
     with:
       runner: conary
       install-nix: false
