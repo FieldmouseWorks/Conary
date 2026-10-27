@@ -48,7 +48,7 @@ Its type is `https://github.com/FieldmouseWorks/Conary/blob/main/docs/ci-attesta
   "revision": { "base": "<merge base>", "head": "<PR head>" },
   "tree": "<tree id of the commit checked>",
   "skipped": ["agents"],
-  "log": { "sha256": "<hex>", "artifact": "flake-log-1" }
+  "log": { "sha256": "<hex>", "artifact": "flake-log-<uuid>" }
 }
 ```
 
@@ -62,7 +62,8 @@ Its type is `https://github.com/FieldmouseWorks/Conary/blob/main/docs/ci-attesta
 - `skipped`: checks the caller asked to evaluate but not build (its
   `build-skip`). They passed evaluation only, and their evidence comes from
   wherever the caller says they do run.
-- `log`: the SHA-256 of the gate's output, kept as that run's artifact.
+- `log`: the SHA-256 of the gate's output, and the name of the run's
+  artifact that keeps it, its own for each job.
 
 ## What doesn't get one
 
