@@ -68,7 +68,7 @@ impl Anchors for Fake {
         let kept = Kept {
             commit: format!("{:040}", *self.moves.borrow()),
             message: message.into(),
-            parent: parent.map(str::to_owned),
+            parents: parent.into_iter().map(str::to_owned).collect(),
         };
         self.commits
             .borrow_mut()
@@ -307,7 +307,7 @@ fn an_anchor_commit_that_isnt_one_is_refused() {
             Kept {
                 commit: "a".repeat(40),
                 message: message.into(),
-                parent: None,
+                parents: Vec::new(),
             },
         );
         assert!(matches!(
@@ -510,6 +510,43 @@ fn a_history_that_drops_an_acknowledged_op_is_refused() {
     std::fs::remove_file(p.dir.path().join("anchor")).unwrap();
     refused(init(p.dir.path(), &key_path(p.dir.path()), &p.f, REPO).map(|_| ()));
     refused(verify(p.dir.path(), &p.key, &p.f, REPO).map(|_| ()));
+}
+
+#[test]
+fn an_anchor_that_merges_histories_is_refused() {
+    // A commit naming op 2 with the moves for op 1 and op 3 as parents: its
+    // first parent alone would hide that op 3 was published.
+    let p = Published::new();
+    std::fs::write(p.dir.path().join("ops.jsonl"), &p.two).unwrap();
+    let three = p.f.refs.borrow()[REF].clone();
+    let one = p.f.commits.borrow()[&three.parents[0]].parents[0].clone();
+    for parents in [
+        vec![one.clone(), three.commit.clone()],
+        vec![three.commit.clone(), one],
+    ] {
+        let merge = Kept {
+            commit: "m".repeat(40),
+            message: message(&p.key, Some(p.at_two())),
+            parents,
+        };
+        p.f.commits
+            .borrow_mut()
+            .insert(merge.commit.clone(), merge.clone());
+        p.f.refs.borrow_mut().insert(REF.into(), merge);
+        p.refused("a merge");
+    }
+    // Further back in the history too.
+    let p = Published::new();
+    let tip = p.f.refs.borrow()[REF].clone();
+    let mut merged = p.f.commits.borrow()[&tip.parents[0]].clone();
+    merged.parents.push("f".repeat(40));
+    p.f.commits
+        .borrow_mut()
+        .insert(merged.commit.clone(), merged);
+    assert!(matches!(
+        write(p.dir.path(), &p.f, &[]),
+        Err(AnchorError::Lost(why)) if why.contains("merges 2 histories")
+    ));
 }
 
 #[test]

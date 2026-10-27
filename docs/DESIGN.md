@@ -400,7 +400,7 @@ Targets on remi, warm cache, a year of ledger across every repo:
   holding that token could post a status that looks like the steward's. The
   judge's seals already guard verdicts against that. A GitHub App for Conary
   would let `review-settled` and landings be pinned to one integration ID
-  instead (section 11).
+  instead (section 11, [#14](https://github.com/FieldmouseWorks/Conary/issues/14)).
 
 ## 10. Where a layer on git runs out
 

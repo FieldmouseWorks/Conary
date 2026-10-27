@@ -20,13 +20,13 @@ use conary_core::store::StoreError;
 
 use crate::api::ApiError;
 
-/// An anchor as GitHub keeps it: a commit on the ref, its message, and the
-/// move before it.
+/// An anchor as GitHub keeps it: a commit on the ref, its message, and its
+/// parents, the move before it (a move is never a merge).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Kept {
     pub commit: String,
     pub message: String,
-    pub parent: Option<String>,
+    pub parents: Vec<String>,
 }
 
 /// Where anchors are kept: refs in a repository.
@@ -173,8 +173,8 @@ const MAX_AHEAD: usize = 16;
 /// copy, and `Some(None)` for a copy kept before the ledger had ops). The
 /// writer keeps that copy only once the ref has moved and the log was checked
 /// against it. With no copy, it's every move back to the one that set the
-/// ledger up. Each must name this ledger's key and come before the one after
-/// it, down to and including the move before the copy's, so a ref moved
+/// ledger up. Each must name this ledger's key, have one parent, and come
+/// before the one after it, down to and including the move before the copy's, so a ref moved
 /// back, even to a move naming the copy's op again, or a longer history in
 /// place of one the log acknowledged, is refused; checking each against the
 /// log refuses a log rewritten past one of them.
@@ -223,7 +223,14 @@ fn checkpoints(
             held.extend(r.anchor);
         }
         newer = Some(seq);
-        let Some(parent) = at.parent.clone() else {
+        if at.parents.len() > 1 {
+            return Err(lost(format!(
+                "merges {} histories at commit {}",
+                at.parents.len(),
+                at.commit
+            )));
+        }
+        let Some(parent) = at.parents.first().cloned() else {
             return match r.anchor {
                 None => Ok(held),
                 Some(_) => Err(lost(format!(

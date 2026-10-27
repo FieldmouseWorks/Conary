@@ -377,7 +377,7 @@ impl crate::anchor::Anchors for Api {
         Ok(crate::anchor::Kept {
             commit: c.sha,
             message: c.message,
-            parent: c.parents.into_iter().next().map(|p| p.sha),
+            parents: c.parents.into_iter().map(|p| p.sha).collect(),
         })
     }
 
