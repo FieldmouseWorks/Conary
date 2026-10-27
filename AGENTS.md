@@ -71,15 +71,17 @@ For reviewers, Codex included. Flag as P1:
 - an op log entry, revision or evidence record that can be rewritten or
   deleted: undo is always a new operation, never a removal
 - a change ID that can change after creation or that its author chooses, or a
-  revision ID that isn't the hash of its trees
+  revision ID that isn't the hash of its base and head commits
 - a change's class set or lowered by its author, rather than by policy (the
   author may only raise it)
-- trunk moving without the ledger recording it (as a `land` or an `outside`
-  op), or an R2 change landing without a person
-- evidence counted when the authoring session produced it or it comes from a
-  source Conary doesn't trust; a new test accepted without a failing
-  `negative` result
+- trunk moving by any path other than a `land` operation, or an `outside` op
+  treated as anything but a violation for the owner; an R2 change landing
+  without a person
+- evidence counted when it was produced inside the authoring session's
+  sandbox or lacks its producer's attestation (conaryd's signature on the op
+  doesn't count); a new test accepted without a failing `negative` result
 - evidence counted for a tree it didn't run on: a PR's evidence proves its
-  revision, never the landed tree
+  revision, never the landed tree, and an R2 change lands only on evidence
+  for the exact candidate tree
 - a ledger note carrying prompt text, or anything the repo's own rules keep
   out of its history

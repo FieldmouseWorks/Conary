@@ -103,11 +103,14 @@ change lands, closes or is reverted.
 
 ### 3.2 Revision
 
-A revision is one head of a change on one base: `(base commit, head commit)`,
-plus the trees they point at. Its ID is the hash of the two tree IDs, so it
-names exactly the content that was checked, and two revisions with the same
-trees are the same revision however they were reached. Every push, rebase or
-retarget adds a revision.
+A revision is one head of a change on one base: `(base commit, head commit)`.
+Its ID is the hash of those two commit IDs. A git commit ID already hashes its
+tree, parents and message, so the revision ID changes with anything about the
+revision: a reworded commit, new ancestry, a rebase or a retarget all give a
+new revision, and none of them overwrites an old one. Evidence binds to the
+revision. Trees are named by their own git IDs, and two revisions sharing a
+tree is a fact Conary can report, never a reason to count one's evidence for
+the other.
 
 ### 3.3 Evidence
 
@@ -120,7 +123,8 @@ Evidence {
   result:    pass | fail | error, plus findings for a review
   env:       environment digest when the check reports one (the flake's lock)
   source:    what produced it: a check run id and app, a reviewer, a proof job
-  signer:    the identity Conary trusts it from (section 8)
+  attest:    the producer's own attestation that this result came from this
+             run on this revision (section 8)
   log:       link to, or hash of, its output
   at:        when it finished
 }
@@ -128,9 +132,11 @@ Evidence {
 
 Three rules make it trustworthy:
 
-1. **Agents don't grade their own work.** Evidence counts only when it comes
-   from a source the agent's session couldn't produce: CI on a configured
-   runner, the steward's reviewers, or a proof or judge job Conary started.
+1. **Agents don't grade their own work.** Evidence counts only when it was
+   produced outside the authoring session's sandbox and carries its
+   producer's attestation: CI on a configured runner, the steward's
+   reviewers, or a proof or judge job Conary started. conaryd's signature on
+   the op that records a result doesn't stand in for that attestation.
    Anything the authoring session posts itself is feedback, not evidence.
 2. **New tests must fail on the old code.** A change that adds a test needs a
    `negative` record: the new test run against the base's code, failing. How
@@ -141,7 +147,12 @@ Three rules make it trustworthy:
    first ([why](https://github.com/FieldmouseWorks/burrow/blob/main/docs/repo-baseline.md#settings-the-steward)).
    So Conary never records pre-land evidence as proof of the landed tree. The
    landed tree gets its own evidence from trunk's CI, recorded against the
-   landing, and a red result there starts an undo or a fix (section 5).
+   landing, and a red result there starts an undo or a fix (section 5). That
+   is the owner's call for R0 and R1, where a revert undoes the damage. R2 is
+   different: undo can't help, so an R2 change lands only on evidence for the
+   candidate tree itself (its head merged onto the trunk commit it lands
+   on), and if trunk moves before the merge, that evidence no longer counts
+   and the checks run again.
 
 ### 3.4 Class
 
@@ -159,15 +170,20 @@ commands an agent runs, not changes that land.
 
 ### 3.5 Landing
 
-Trunk moves in one of two ways, and the ledger records both:
+Trunk moves only through **`land`**: Conary (or, until M5, the steward)
+merges a change whose evidence and class allow it. The landing records the
+change, the revision that was checked, the trunk commit before and after, and
+the evidence it landed on. An automation that writes trunk itself, like
+remi-update pushing its lock bumps, lands through the same call with the
+evidence its own gate produced, so its pushes are landings too.
 
-- **`land`**: Conary (or, until M5, the steward) merges a change whose
-  evidence and class allow it. The landing records the change, the revision
-  that was checked, the trunk commit before and after, and the evidence it
-  landed on.
-- **`outside`**: anything else that moves trunk: a person merging from the PR
-  page, a repo with `directPush` automation, a force-push. Conary can't stop
-  these on GitHub. It records them, and `why` says so plainly.
+GitHub can't make that absolute: a repo admin can merge past the ruleset from
+the PR page, and anyone with the owner's token can push. So anything else that
+moves trunk is recorded as an **`outside`** op. An outside op is a violation,
+never a second way in: it's listed for the owner straight away, its commits
+get the class check and the evidence a landing would have needed, after the
+fact, and an R2 path among them is the owner's at once. `why` says plainly
+that the change never landed.
 
 ### 3.6 Op log
 
@@ -277,9 +293,14 @@ Targets on remi, warm cache, a year of ledger across every repo:
 
 - Every op is signed by conaryd's key. The log's hash chain makes "what did
   this session do" a question with a trustworthy answer.
-- Evidence counts by its source, never by what it says about itself: a check
-  run from a configured app on a configured runner, a reviewer the steward ran,
-  a proof or judge job Conary started and sealed.
+- Evidence counts by its producer's attestation, never by what it says about
+  itself or by conaryd having recorded it:
+  - CI on GitHub Actions: GitHub's own record of the check run, read from its
+    API, for a configured workflow on a configured runner at that exact head,
+    plus an OIDC-backed attestation from the job where the workflow makes one.
+  - Jobs on remi (reviewers, proof and judge jobs, negative runs): a signature
+    by that runner service's own key, which no authoring session or sandbox
+    can read, over the result, the revision and the run's log hash.
 - Today the steward acts on GitHub as the owner's own login, so any session
   holding that token could post a status that looks like the steward's. The
   judge's seals already guard verdicts against that. A GitHub App for Conary
