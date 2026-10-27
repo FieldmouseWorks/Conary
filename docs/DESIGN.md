@@ -152,6 +152,11 @@ revision. Trees are named by their own git IDs, and two revisions sharing a
 tree is a fact Conary can report, never a reason to count one's evidence for
 the other.
 
+For a GitHub PR the base is the merge base of the head and the base branch:
+the tree its diff and its review are against, which trunk moving doesn't
+change. A new head is a new revision, as is a retarget that moves the merge
+base; trunk moving under an open PR is not.
+
 ### 4.3 Evidence
 
 Evidence is one result of one check on one revision:
