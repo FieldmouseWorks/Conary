@@ -1,9 +1,9 @@
 # AGENTS.md
 
-Conary is version control built for coding agents: changesets that carry their
-intent and proof, land on their own when the proof is green, and can always be
-undone. It's at the design stage; [docs/DESIGN.md](docs/DESIGN.md) is the spec
-everything here builds toward.
+Conary is the ledger and landing engine for code that agents write, on top of
+git and GitHub: every change carries its intent and proof, lands when the proof
+is green, and can always be undone. It's at the design stage;
+[docs/DESIGN.md](docs/DESIGN.md) is the spec everything here builds toward.
 
 <!-- house:rules v1 begin. Copied from FieldmouseWorks/burrow house/rules.md, verbatim. Change it there, not here: burrow's house sync rewrites everything between these markers. -->
 ## House rules
@@ -68,17 +68,20 @@ For reviewers, Codex included. Flag as P1:
 - tests or checks weakened, skipped or deleted to get green
 - secrets, tokens or personal data in the diff or the logs it adds
 - behavior changed beyond what the PR says it does
-- an operation log entry, revision or evidence record that can be rewritten or
+- an op log entry, revision or evidence record that can be rewritten or
   deleted: undo is always a new operation, never a removal
-- a changeset ID that can change after creation, or a revision ID that isn't
-  the hash of its contents
-- a changeset's class set or lowered by its author, rather than by policy
-  (the author may only raise it)
-- trunk moving by any path other than a `land` operation (the one-time
-  baseline git import aside), or an R2 change landing without a person
-- evidence counted when it was produced inside the agent's sandbox or isn't
-  signed by a runner; a new test accepted without a failing `negative` result
-- evidence reused on a new base when anything in the check's footprint may
-  have changed: when in doubt, it runs again
-- git export that isn't deterministic (the same Conary state must give the
-  same SHAs)
+- a change ID that can change after creation or that its author chooses, or a
+  revision ID that isn't the hash of its base and head commits
+- a change's class set or lowered by its author, rather than by policy (the
+  author may only raise it)
+- trunk moving by any path other than a `land` operation, or an `outside` op
+  treated as anything but a violation for the owner; an R2 change landing
+  without a person
+- evidence counted when it was produced inside the authoring session's
+  sandbox or lacks its producer's attestation (conaryd's signature on the op
+  doesn't count); a new test accepted without a failing `negative` result
+- evidence counted for a tree it didn't run on: a PR's evidence proves its
+  revision, never the landed tree, and an R2 change lands only on evidence
+  for the exact candidate tree
+- a ledger note carrying prompt text, or anything the repo's own rules keep
+  out of its history

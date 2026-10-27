@@ -1,252 +1,405 @@
 # Conary design
 
-Draft 0.1 · 2026-10-22 · MIT licensed
+Draft 0.2 · 2026-10-27 · MIT licensed
 
-Conary is version control built for coding agents rather than humans. Its unit of work is a **changeset** that knows why it exists, carries its own proof, and can always be rolled back. Changesets land on their own when the proof is green. Every state the repository has ever been in stays one command away.
+Software process is built on two assumptions that aren't true any more:
+writing code is slow, and undoing it is expensive. Code review, approvals,
+merge queues, up-to-date branches and release trains all exist because a bad
+change cost days to write and days to unwind, so it was worth stopping
+everything to check it first. With agents, a change takes minutes to write
+and a revert takes minutes to land. Gates that cost more than the mistakes
+they catch should go, and cheap, trustworthy undo is what lets them go.
 
-Git assumes one human typing slowly. It has a staging area, hand-named branches, a hash that changes on every rebase, and a merge button at the end. Conary assumes hundreds of agents producing changes in minutes. In that world, undo is cheap and attention is expensive.
+Conary is that undo, and the landing engine that leans on it. It records why
+every change exists, who made it, what proved it and what it would cost to get
+wrong. It lands a change the moment its proof allows, and it can undo any
+change, any agent session's work, or everything since a point in time. Only
+what undo can't fix (R2: secrets, migrations, the owner's decisions) waits for
+a person.
+
+Conary works on top of git and GitHub. Trunk is the default branch on GitHub,
+and agents keep using plain git. Every gate in section 2 can go on that
+footing: none of them needed a new VCS, they needed undo that's cheap and a
+record good enough to trust it. Section 10 names the places where a layer on
+git would run out, and what Conary would have to own then.
+
+Conary adds the record git doesn't keep and the questions git can't answer:
+
+- **Why** does this line look like this? The change that last touched it, the
+  task and session behind that change, and the evidence it landed with.
+- **What did that agent session do**, across every repo, and undo all of it.
+- **Is this proof still good**, on this head, against this base, from a runner
+  the agent couldn't touch?
+
+Draft 0.1 proposed a git replacement built on jj-lib. 0.2 puts that on hold.
+Since 0.1 was written, the machine grew most of the landing pipeline on top of
+git (the autoland steward), and nearly every agent works from a cloud session
+that only reaches GitHub. What's missing is the record underneath, undo built
+on it, and a Rust home for the steward once it settles.
 
 ## 1. Goals and non-goals
 
 **Goals**
 
-1. **Agent-first interface.** Every operation is an API call with structured input and output. The CLI is a thin client over the same API.
-2. **Nothing is ever lost.** Every mutation is an entry in an append-only operation log. Undo is a new entry, never a deletion.
-3. **The changeset is the unit.** A changeset has a stable identity from birth, no matter how often it is amended or moved.
-4. **Landing without humans.** Changes that can be undone land when their evidence is green. Only irreversible actions wait for a person.
-5. **Hundreds of concurrent lanes.** Parallel work is cheap, has no names to manage, and rarely conflicts.
-6. **Evidence is bound to the change.** Test results attach to the changeset and the base they were checked against, and survive a rebase when the base didn't change what matters.
-7. **Git interop.** Import any git history, and export to git so GitHub, CI and other people keep working.
-8. **Fast.** Snapshot, query and land operations finish in milliseconds. Only verification takes real time.
+1. **No gate that undo makes cheap.** Every check that exists only because
+   mistakes used to be expensive goes (section 2). What stays has a reason
+   undo can't answer.
+2. **One record of every change.** Intent, author and session, class,
+   evidence and landing, for every PR in every repo the steward covers, kept
+   on remi, append-only.
+3. **`why`, from anywhere.** Any agent, including a cloud session that can
+   only reach GitHub, can ask why a line or symbol is the way it is.
+4. **Undo by change, by session and by time.** Every undo is a new change that
+   lands through the same flow. Nothing is rewritten.
+5. **The steward, in Rust.** Conary takes over the steward's landing flow one
+   piece at a time, deleting the Python for each piece as it goes.
+6. **Evidence that means something.** Agents don't grade their own work, new
+   tests must fail on the old code, and evidence names exactly what it ran on.
+7. **Agent-first interface.** Every call takes structured input and returns
+   structured output. The CLI is a thin client over the same API.
 
-**Non-goals for v1**
+**Non-goals**
 
-- Federated multi-user collaboration. GitHub stays the place other people meet the code.
-- Storing large binaries or build output in history. Those go to a separate content-addressed store with retention.
-- Windows support.
-- Replacing the build or test system. Conary records evidence. Runners produce it.
+- Replacing git, its object store or its wire format. Agents keep cloning,
+  committing and pushing as they do today.
+- Replacing GitHub as the place people and bots meet the code.
+- Semantic merge and commutation (parked, with the condition that unparks
+  them, in section 10).
+- Working-copy undo. Files on remi already have that: the guard's ZFS
+  snapshots before anything deletes or rewrites them
+  ([burrow's undo module](https://github.com/FieldmouseWorks/burrow/blob/main/modules/undo.nix)).
+- Replacing the build or test system. Conary records evidence. Runners
+  produce it.
+- Windows.
 
-## 2. Core model
+## 2. Gates, and what replaces them
 
-The model has six parts.
+Each gate below exists because a mistake used to be expensive. For each one,
+this is what makes it cheap now, and what's left of the gate.
+
+| Gate | Why it existed | What replaces it | Where it stands |
+| --- | --- | --- | --- |
+| A person reviews and approves | A bad change cost days, so a second person checked it first | Agent reviewers; nothing below R2 waits for a person | Done (autoland) |
+| A person presses merge | The merge was the commit point | `land` the moment evidence and class allow | Done (autoland) |
+| Up-to-date branches, merge queues | A broken combination on trunk was slow to find and unwind | Trunk's own CI after each landing, and an `undo` or fix on red | Done 2026-10-26; Conary makes the revert an `undo` (M3) |
+| Review rounds before landing | Catching a bug before trunk was cheaper than after | R0: lands on green CI and attested evidence; the reviewers read the landed change, a finding opens a fix change on its own, and a P1 that can't be fixed fast is reverted. R1 keeps review before landing until the ledger shows review after landing catches as much | Proposed (M5) |
+| Release trains, freeze windows | Shipping a bad build was slow to roll back | R1 lands live and reverts as fast as it landed; remi's own switch keeps its dead man's switch and health check | Done for remi, the site and the profile |
+| Permission prompts | Any command might be the one you can't take back | The guard asks only for R2 commands and snapshots before anything destructive | Done (burrow) |
+
+Two gates stay, because undo doesn't make them cheap:
+
+- **CI before landing.** A red trunk breaks every other agent's base at once,
+  so R0 still lands only on green evidence. Conary makes it cheaper instead
+  of skipping it: evidence reuse where a check's footprint is known, and only
+  the checks a change can affect.
+- **A person for R2.** Undo can't bring back a leaked secret or dropped data.
+  R2 is kept as narrow as policy can make it.
+
+## 3. What Conary grows out of
+
+Most of 0.1's model already runs, spread across burrow's modules. Conary owns
+the record of it first, then takes over the jobs one at a time.
+
+| 0.1 idea | What does it today | What Conary does with it |
+| --- | --- | --- |
+| Landing queue | The autoland steward ([PR flow](https://github.com/FieldmouseWorks/burrow/blob/main/docs/repo-baseline.md#the-pr-flow-the-steward)) | Records every step (M1), then becomes it (M5) |
+| Evidence | CI check runs, the reviewers' verdicts, proof jobs, judge verdicts, `review-settled` | One evidence record per result, keyed to head and base |
+| R0/R1/R2 classes | The guard's R2 commands, the steward's `oneWay` paths | Owns the class of a change (commands stay with the guard) |
+| R1 auto-revert | The red-default-branch fix job (PR flow step 8) | Records it, then runs it as `undo` |
+| Intent | PR title and body, the linked issue, the Claude session link | One intent record per change |
+| Undo | `git revert` by hand, ZFS snapshots for files | `undo` by change, session or time, through the landing flow |
+
+Until Conary takes a job over, that job's home stays where it is, and this
+doc links to it rather than restating it. When Conary takes one over, the old
+path is deleted in the same change.
+
+## 4. Core model
 
 ```
-Operation log  ──records every change to──▶  View
-View           = { trunk head, lane heads, changeset → latest revision }
-Lane           = an ordered stack of changesets for one task
-Changeset      = stable id + revisions + intent + class + evidence + status
-Revision       = one immutable snapshot of a changeset (tree before, tree after)
-Object store   = content-addressed blobs and trees (BLAKE3)
+Op log    ──records every change to──▶  Ledger
+Ledger    = { changes, revisions, evidence, landings, sessions }
+Change    = stable id + intent + author + class + revisions + evidence + status
+Revision  = one head of a change, on one base (git commit ids)
+Evidence  = one result of one check on one revision
+Landing   = trunk moving, and what moved it
 ```
 
-### 2.1 Changeset
+### 4.1 Change
 
-A changeset is created when a task starts and keeps its ID until it lands or is abandoned.
+A change is one unit of work that lands or doesn't: today, a pull request.
+Conary creates it the first time it sees the PR and keeps its ID until the
+change lands, closes or is reverted.
 
 | Field | Meaning |
 | --- | --- |
-| `id` | 128-bit random ID, shown as a short prefix (like `kq7tmz`). Never changes. |
-| `revisions` | Ordered list of immutable revisions. Every amend, rebase or resolution adds one. |
-| `lane` | The lane it belongs to. |
-| `intent` | Why it exists: task ID, a one-line summary, and a hash of the originating prompt or issue, with the full text in the object store. |
-| `author` | Who made it: actor kind (agent or human), session ID, tool, and model. Signed by the actor's key. |
-| `class` | Reversibility class. **R0**: undo in seconds, nothing leaves the box. **R1**: leaves the box but is easy to revert. **R2**: irreversible, needs a person. Set by policy from paths and actions, never by the author alone. |
-| `evidence` | References to evidence records (section 5). |
-| `status` | `draft`, `proposed`, `queued`, `landed`, `reverted`, `abandoned`. |
-| `links` | Optional: depends-on, supersedes, reverts. |
+| `id` | 128-bit random, shown as a short prefix (`kq7tmz`). Assigned by Conary, never by the author, and never changes. |
+| `repo`, `pr` | Where it lives on GitHub. A PR is one change for its whole life, however often it's pushed, rebased or retargeted. |
+| `intent` | Why it exists: the task (issue or project thread), a one-line summary, and the PR body. The full text lives in the ledger. |
+| `author` | Who made it: actor kind (agent, person, bot), the session that opened it, the tool and the model when known. |
+| `class` | R0, R1 or R2, set by policy (section 4.4). The author can raise it, never lower it. |
+| `revisions` | Every head Conary saw, in order. |
+| `status` | `open`, `landed`, `closed`, `reverted`. |
+| `links` | `reverts`, `fixes` (a red trunk), `supersedes`, `depends-on`. |
 
-Each revision stores the tree before, the tree after, and a semantic patch between them (section 4). Its revision ID is the hash of those contents, so identical work deduplicates.
+### 4.2 Revision
 
-### 2.2 Lane
+A revision is one head of a change on one base: `(base commit, head commit)`.
+Its ID is the hash of those two commit IDs. A git commit ID already hashes its
+tree, parents and message, so the revision ID changes with anything about the
+revision: a reworded commit, new ancestry, a rebase or a retarget all give a
+new revision, and none of them overwrites an old one. Evidence binds to the
+revision. Trees are named by their own git IDs, and two revisions sharing a
+tree is a fact Conary can report, never a reason to count one's evidence for
+the other.
 
-A lane is a stack of changesets for one piece of work, usually one agent task. The control plane creates a lane when it starts a task and closes it when the task's changesets land or die. Lanes have IDs, not names, but can carry an optional label for humans. Trunk is a lane with special landing rules.
+### 4.3 Evidence
 
-Thousands of open lanes is normal and costs only metadata.
-
-### 2.3 Working copy
-
-The working copy is always the tip revision of one changeset, as in Jujutsu. There is no staging area and no "uncommitted changes" state. The working copy is snapshotted:
-
-- after every agent tool call, via a hook from the control plane, and
-- on file-change events from fanotify or inotify, coalesced at 1 second.
-
-Each snapshot that changes the tree adds a revision and an operation. Snapshots coalesce in the log view but stay individually addressable.
-
-### 2.4 Operation log
-
-Every mutation appends one operation:
-
-```
-Op {
-  id:        hash of (parent ops, actor, kind, payload, timestamp)
-  parents:   [op id]          // more than one when concurrent ops merge
-  actor:     actor id, signed
-  kind:      snapshot | new | amend | move | propose | land | revert | undo | resolve | import | export | ...
-  payload:   kind-specific
-  view:      hash of the resulting View
-  at:        timestamp
-}
-```
-
-The log is hash-chained and signed, so it is tamper-evident. The current View can always be rebuilt by replaying the log, and is cached.
-
-Undo comes in four forms, all implemented as new operations:
-
-| Command | What it does |
-| --- | --- |
-| `undo <op>` | Restore the View from before that op. |
-| `undo --since 10m` | Restore the View as it was 10 minutes ago. |
-| `undo --actor <session> [--since T]` | Revert everything one agent session did. Uses inverse ops, and any conflicts with later work become conflict objects for an agent to resolve. |
-| `at <time or op> <command>` | Run any read-only query against a past View without changing anything. |
-
-### 2.5 Conflicts
-
-Conflicts are data, not a stop sign. A tree can contain a conflict object that records the base and each side. Conflicts can be stored and moved like any other state. A conflicted changeset can stay in its lane indefinitely, but can't land on trunk. Resolving one is a `resolve` operation that adds a revision, and the control plane hands the job to an agent by default.
-
-## 3. Lanes, trunk and landing
-
-```
-lane A:  a1 ─ a2 ─ a3 ─┐
-lane B:  b1 ───────────┼─▶ queue ─▶ verify candidate trunk ─▶ land ─▶ trunk
-lane C:  c1 ─ c2 ──────┘                    │
-                                            └─ fail ─▶ bisect ─▶ bounce culprit back to its lane with evidence
-```
-
-Trunk moves only through `land` operations. The landing policy depends on class:
-
-| Class | Landing rule |
-| --- | --- |
-| R0 | Lands automatically when required evidence on the candidate trunk tree is green. |
-| R1 | Lands the same way, then a post-land check runs. If it fails, Conary creates the revert changeset and lands it. |
-| R2 | Waits in the decision inbox for a person to approve. The evidence must still be green. |
-
-The queue builds speculative batches. A failing batch is bisected, the culprit changeset goes back to its lane with the failure evidence attached, and its agent is notified. The rest of the batch lands.
-
-A revert is an ordinary changeset whose patch is the inverse, with intent `revert <id>: <reason>` and a link to the evidence that triggered it. Nothing is rewritten.
-
-## 4. Semantic patches and commutation
-
-Line-based diffs are why git conflicts so often under parallel agents. Two agents editing different functions in the same file shouldn't need a rebase.
-
-**Representation.** A revision's patch is stored per file:
-
-- **Structured files** (any language with a tree-sitter grammar) are diffed as edit operations on syntax nodes, addressed by a stable path such as `module › impl Foo › fn parse` plus the node kind. Moves and renames are recognised as such.
-- **Everything else**, or a file that fails to parse, falls back to a text diff.
-
-**Commutation.** Two changesets commute when their touched node sets are disjoint and they don't both add the same identifier in the same scope. Commuting changesets apply in either order and give the same tree, so they land without a rebase. Overlapping changes go through structured three-way merge (Mergiraf as the engine), then text merge, and anything still unresolved becomes a conflict object.
-
-**The honest caveat.** Two changes can be syntactically independent and still break each other, for example by changing a function and its caller's assumptions. That is why the queue always verifies the final candidate trunk tree, never just each changeset alone. Commutation removes the rebase chore, not the verification.
-
-## 5. Evidence
-
-Evidence is a record that a check ran against a specific tree in a specific environment:
+Evidence is one result of one check on one revision:
 
 ```
 Evidence {
-  changeset, revision
-  base_tree:     tree hash it was checked against
-  env:           environment digest (Nix derivation hash of the toolchain)
-  check:         name and command
-  result:        pass | fail | error, exit code, duration
-  log:           object hash of output
-  runner:        id of the runner that produced it, signed
-  negative:      result of the same check on the parent tree (for new tests)
+  change, revision
+  check:     kind (ci | review | proof | judge | negative) and name
+  result:    pass | fail | error, plus findings for a review
+  env:       environment digest when the check reports one (the flake's lock)
+  source:    what produced it: a check run id and app, a reviewer, a proof job
+  attest:    the producer's own attestation that this result came from this
+             run on this revision (section 9)
+  log:       link to, or hash of, its output
+  at:        when it finished
 }
 ```
 
-Three rules make evidence trustworthy:
+Three rules make it trustworthy:
 
-1. **Agents don't grade their own work.** Evidence counts only when it is signed by a runner outside the agent's sandbox. An agent can run tests for its own feedback, but those results don't land anything.
-2. **New tests must fail on the old code.** A check marked as a new test must have a `negative` result of fail on the parent tree. A test that passes either way proves nothing.
-3. **Reuse beats re-running, but only when it's safe.** Evidence stays valid on a new base when the patch applies to it unchanged and nothing in the check's footprint changed. The footprint is everything the check could have read: the full transitive dependency closure of the touched files and the check's own files, plus the toolchain (via `env`). Until Conary can compute that closure for a language, the footprint is the whole tree, so any base change re-runs the check. Test-impact data recorded from real runs narrows it later. When in doubt, the check runs again.
+1. **Agents don't grade their own work.** Evidence counts only when it was
+   produced outside the authoring session's sandbox and carries its
+   producer's attestation: CI on a configured runner, the steward's
+   reviewers, or a proof or judge job Conary started. conaryd's signature on
+   the op that records a result doesn't stand in for that attestation.
+   Anything the authoring session posts itself is feedback, not evidence.
+2. **New tests must fail on the old code.** A change that adds a test needs a
+   `negative` record: the new test run against the base's code, failing. How
+   a repo names its new tests is open (section 11).
+3. **Evidence is about the tree it ran on, and says so.** A PR's evidence
+   proves its revision: that head on that base. Landing squashes it onto a
+   newer trunk, and the default branch is never required to be up to date
+   first ([why](https://github.com/FieldmouseWorks/burrow/blob/main/docs/repo-baseline.md#settings-the-steward)).
+   So Conary never records pre-land evidence as proof of the landed tree. The
+   landed tree gets its own evidence from trunk's CI, recorded against the
+   landing, and a red result there starts an undo or a fix (section 6). That
+   is the owner's call for R0 and R1, where a revert undoes the damage. R2 is
+   different: undo can't help, so an R2 change lands only on evidence for the
+   candidate tree itself (its head merged onto the trunk commit it lands
+   on), and if trunk moves before the merge, that evidence no longer counts
+   and the checks run again.
 
-## 6. Interfaces
+### 4.4 Class
 
-One core, four ways in:
+| Class | Meaning | Examples |
+| --- | --- | --- |
+| R0 | Landing changes nothing outside the repo. A revert undoes it fully. | Most code in a repo that doesn't deploy on merge |
+| R1 | Landing goes live, but a revert undoes it. | remi (deploys main within 15 minutes), the website, the profile |
+| R2 | Landing can't be fully undone, or is the owner's to decide. | Secrets, migrations, CODEOWNERS, nomos decisions, consolebook ADRs |
+
+Policy sets the class from the repo and the paths a change touches, renames
+and copies included. The policy starts as today's `oneWay` patterns and
+per-repo settings, moved into Conary (M4), and grows rules only when a real
+change needs one. The guard's R2 command list stays where it is: it classifies
+commands an agent runs, not changes that land.
+
+### 4.5 Landing
+
+Trunk moves only through **`land`**: Conary (or, until M5, the steward)
+merges a change whose evidence and class allow it. The landing records the
+change, the revision that was checked, the trunk commit before and after, and
+the evidence it landed on. An automation that writes trunk itself, like
+remi-update pushing its lock bumps, lands through the same call with the
+evidence its own gate produced, so its pushes are landings too.
+
+GitHub can't make that absolute: a repo admin can merge past the ruleset from
+the PR page, and anyone with the owner's token can push. So anything else that
+moves trunk is recorded as an **`outside`** op. An outside op is a violation,
+never a second way in: it's listed for the owner straight away, its commits
+get the class check and the evidence a landing would have needed, after the
+fact, and an R2 path among them is the owner's at once. `why` says plainly
+that the change never landed.
+
+### 4.6 Op log
+
+Every write to the ledger is one operation:
+
+```
+Op {
+  id:      hash of (parent op, kind, payload, at)
+  parent:  the previous op
+  kind:    observe | intent | evidence | classify | land | outside | undo | backfill
+  payload: kind-specific
+  at:      timestamp
+  sig:     conaryd's key
+}
+```
+
+The log is one hash-chained, append-only file, signed by conaryd. It's the
+source of truth: the SQLite tables are an index of it and can be rebuilt by
+replaying it. Nothing in the log is ever edited or deleted. A correction is a
+new op that supersedes the old one.
+
+## 5. Undo
+
+Every undo is a new change: a revert PR that goes through the same landing
+flow as any other, under the class of what it reverts. Conary never rewrites
+trunk.
+
+| Call | What it does |
+| --- | --- |
+| `undo <change>` | Opens a PR that reverts one landed change. |
+| `undo --actor <session>` | Reverts every change one agent session landed, newest first, one PR per repo. |
+| `undo --since <time> --repo <repo>` | Reverts everything that landed on one repo's trunk after that time. |
+| `at <time> <query>` | Answers any read-only query as the ledger stood at that time. |
+
+A revert that doesn't apply cleanly, because later work built on what it
+undoes, still opens its PR with the conflict, and a Claude job resolves it
+like any other finding. Undo of an R2 change waits for the owner like the
+change did.
+
+## 6. The landing flow
+
+The flow itself is burrow's: [the PR flow](https://github.com/FieldmouseWorks/burrow/blob/main/docs/repo-baseline.md#the-pr-flow-the-steward)
+says what happens from a ready PR to a merge, and stays the one home of that
+until conaryd takes it over. What Conary adds before then:
+
+- every step is an op in the ledger, so "why did this land" and "why is this
+  stuck" have one answer;
+- trunk's CI after each landing is evidence on that landing, and the
+  red-default-branch job's revert or fix links back to the change that broke
+  trunk.
+
+When conaryd runs the flow (M5), the flow's description moves here, burrow's
+doc links to it, and `steward.py` goes. conaryd keeps the steward's rules on
+event-triggered passes: it acts on webhooks and on waits it booked itself,
+never on a timer.
+
+## 7. Interfaces
 
 | Interface | Used by | Notes |
 | --- | --- | --- |
 | `conary-core` (Rust library) | conaryd, tests, tools | All logic lives here. |
-| `conaryd` (daemon, JSON-RPC over a Unix socket) | Control plane, CLI | One per host. Serialises writes, serves reads concurrently, streams events. |
-| MCP server | Agents | The same calls as tools, with schemas. |
-| `cn` CLI | Humans and scripts | JSON output by default, `--human` for people. |
+| `conaryd` (daemon on remi, JSON-RPC over a Unix socket) | The steward, Claude jobs, the CLI | One per host. Serialises writes, serves reads concurrently, streams events. |
+| MCP server | Agents on remi | The same calls as tools, with schemas. |
+| `cn` CLI | People and scripts | JSON output by default, `--human` for people. |
+| `refs/notes/conary` on GitHub | Any clone, cloud sessions included | The public-safe slice of the ledger, pushed after every op. |
 
-The core calls are:
+The notes ref is how a cloud session reads the ledger: it can't reach remi,
+but it can fetch a git ref. Each landed trunk commit carries a note with its
+change ID, intent summary, class, session, and links to its evidence. Notes
+hold no prompt text, and nothing a repo's own rules keep out of its history
+(LoK-web refuses session links, for one), so a note is never more public than
+the repo it's in. `cn why` reads the notes when
+conaryd isn't reachable.
+
+The core calls:
 
 ```
-lane.open(task, base) / lane.close
-change.new(lane, intent) / change.describe / change.split / change.squash
-change.snapshot                       // usually automatic
-change.propose(class?)                // class is computed; the author can only raise it
-evidence.add / evidence.query
-land(changes | lane) / queue.status
-undo(op | since | actor) / at(time | op, query)
-log.query(path?, symbol?, actor?, intent~text?, since?, class?, status?)
-why(path, symbol | line)              // the changeset, its intent and evidence that last touched it
-diff(a, b, semantic=true)
-conflicts.list / resolve(change, tree)
-events.subscribe(land | bounce | revert | conflict | decision)
+change.get(id | repo#pr) / change.list(repo?, session?, status?, class?, since?)
+evidence.add / evidence.query(change | revision)
+land(change)                      // M5; until then the steward lands and reports
+undo(change | actor | since) / at(time, query)
+log.query(repo?, path?, symbol?, session?, intent~text?, since?, class?)
+why(repo, path, line | symbol)    // the change, its intent, session and evidence
+events.subscribe(land | outside | red | undo | owner)
 ```
 
-`why` is the call that git can't answer well. Asking why `parse_config` behaves a certain way returns the changeset that last changed it, the task and prompt that caused it, and the evidence it landed with.
+## 8. Storage
 
-## 7. Storage
+- **Op log:** one append-only, hash-chained file per host, the source of
+  truth.
+- **Index:** SQLite in WAL mode for changes, revisions, evidence, landings and
+  sessions, with FTS5 over intent text. Rebuilt from the op log when in doubt.
+- **Code:** stays in git. Conary stores commit and tree IDs, never contents.
+- **On remi:** the ledger is state that has to survive the root wipe, so remi
+  persists its directory and backs it up with the rest of remi's state.
 
-- **Objects:** BLAKE3 content-addressed blobs and trees in a local store, packed in the background. Large blobs over a threshold are chunked.
-- **Metadata:** SQLite in WAL mode for changesets, revisions, lanes, evidence and indexes (path, symbol, actor, intent text via FTS5).
-- **Operation log:** an append-only, hash-chained file plus an index in SQLite. The file is the source of truth, and the index can be rebuilt.
-- **Out of history:** build output, VM images and evidence logs past retention live in a separate store with TTL-based garbage collection.
-- **On remi:** the control plane materialises workspaces as ZFS clones. Conary tracks content, not filesystems, so it works the same on a laptop without ZFS.
-
-**Performance targets** (100k-file repo, warm cache):
+Targets on remi, warm cache, a year of ledger across every repo:
 
 | Operation | Target |
 | --- | --- |
-| Snapshot with 10 changed files | under 50 ms |
-| `log.query` / `why` | under 50 ms |
-| `land` bookkeeping, excluding verification | under 100 ms |
-| `undo --since` | under 200 ms |
-| Open a new lane | under 20 ms |
+| Record an op | under 10 ms |
+| `why` / `log.query` | under 50 ms |
+| `undo` bookkeeping, excluding the PR it opens | under 200 ms |
+| Notes push after a landing | under 5 s |
 
-## 8. Git interop
+## 9. Security and identity
 
-- **Baseline import:** when a repository is first brought into Conary, its existing git history becomes landed changesets, once, as the starting trunk. Intent comes from the commit message, the author is mapped, and the SHA is kept in a mapping table. Merge commits become lanes landing. This is the only path that creates a landed changeset without a `land` operation.
-- **Export:** trunk exports to git deterministically, so the same Conary state always gives the same SHAs. Each exported commit carries trailers: `Conary-Change: <id>`, `Conary-Intent: <summary>`, `Conary-Class: R0`. Lanes can optionally export as branches.
-- **Inbound:** commits that arrive from GitHub after the baseline (other people, bots) import as `proposed` changesets in their own lane. They get a class from policy, need the same evidence, and reach trunk only through a `land` operation like everything else.
-- **Colocated mode:** a `.git` directory sits next to `.conary` during the transition, so editors, CI and existing scripts keep working.
+- Every op is signed by conaryd's key. The log's hash chain makes "what did
+  this session do" a question with a trustworthy answer.
+- Evidence counts by its producer's attestation, never by what it says about
+  itself or by conaryd having recorded it:
+  - CI on GitHub Actions: a signed attestation the job itself makes with its
+    GitHub OIDC identity (Sigstore, keyless), over the result, the revision's
+    head and base commits and the log hash. It binds the result to the
+    workflow, the commit and the run that made it. Making it is a step to add
+    to burrow's shared `flake-check.yml` (at M1), so every repo's gate makes
+    one without its own change. GitHub's API
+    record of the check run is where Conary finds it, never a substitute
+    for it.
+  - Jobs on remi (reviewers, proof and judge jobs, negative runs): a signature
+    by that runner service's own key, which no authoring session or sandbox
+    can read, over the result, the revision and the run's log hash.
+  - Anything without a valid attestation doesn't count, whatever its source:
+    a missing or unverifiable one fails closed.
+- Today the steward acts on GitHub as the owner's own login, so any session
+  holding that token could post a status that looks like the steward's. The
+  judge's seals already guard verdicts against that. A GitHub App for Conary
+  would let `review-settled` and landings be pinned to one integration ID
+  instead (section 11).
 
-## 9. Build strategy
+## 10. Where a layer on git runs out
 
-Don't write a storage engine first. The new ideas are intent, classes, evidence, landing, commutation and per-actor undo. None of them needs a new object store on day one.
+Each of these would need Conary to own more than a layer on git. None of them
+is needed for the gates above, so each waits for a measured reason.
 
-| Stage | What | Why |
+[Anthropic's Scion](https://www.anthropic.com/engineering/redesigning-source-control)
+shows what the first row looks like at 30,000 merges a day in one monorepo: a
+server that owns every commit, merge and query, with no merge queue, testing
+after merge and an agent fixing what collides. It reached the same verdict on
+merge queues that section 2 does, but its problem was scale. Conary's is
+trust and undo across many small repos for one owner, which git serves fine.
+
+| Idea | Parked because | Unparked when |
 | --- | --- | --- |
-| A | Build on `jj-lib`. A jj change ID is the changeset ID. Jujutsu supplies the op log, working-copy snapshots and conflict objects. `conaryd` adds lanes, intent, classes, evidence, the queue and per-actor undo, stored in its own SQLite next to the repo. | Reaches a usable tool in weeks instead of months, on a proven core. |
-| B | Replace the merge path with semantic patches and commutation. Mergiraf is the structured merge engine. | This is the biggest win for parallel agents, and it fits behind jj's merge interface. |
-| C | Go standalone (own object store, BLAKE3, own op log format) only if jj's model blocks something specific. Per-actor undo and evidence-keyed reuse are the likely triggers. | Avoids a rewrite until there's a concrete reason for one. |
+| Conary as trunk's source of truth, GitHub a mirror | A PR per change is fine at today's rate, and GitHub is where cloud agents reach the code | PR overhead or the shared GitHub API quota starts limiting how fast changes land |
+| Own object store, Conary as a standalone VCS | git does the storage fine, and every agent already speaks it | Something in this design can't be built on git, with the case written down |
+| Semantic patches and commutation (tree-sitter diffs, Mergiraf) | The measured waits are review, CI and bots, not conflicts | The ledger shows conflict and rebase work costing real time each week |
+| jj as the working-copy layer | Nothing here needs it, and cloud sessions use plain git | Agents need undo inside a working copy finer than the guard's ZFS snapshots (every tool call, by operation), or agents on remi want it for themselves |
+| Offline laptops syncing a ledger | One ledger on remi covers how the work happens today | A second machine writes changes Conary has to record |
 
-## 10. Security
+## 11. Open questions
 
-- Every operation is signed by its actor. Agent sandboxes get an ephemeral key from the secret broker, scoped to one lane.
-- An agent's key can only write to its own lane. Landing on trunk is done by `conaryd` under its own key, after the policy check.
-- Evidence counts only when it is signed by a runner key outside the sandbox.
-- The hash-chained op log means "what did this agent do" has a trustworthy answer, and `undo --actor` can act on it.
+1. **A GitHub App for Conary.** It would make the settle status and landings
+   unforgeable by a session with the owner's token. It costs a setup step the
+   owner has to do on GitHub. Worth it at M5 at the latest.
+2. **Naming new tests.** The negative-control rule needs to know which tests a
+   change added. Per-language detection (new `#[test]` functions, new test
+   files) or a list the PR declares and a judge checks?
+3. **How much intent to keep.** The session link and PR body are always
+   there. A session's own prompt usually isn't readable by the steward. Is the
+   link enough, or should a Claude job's prompt be recorded when Conary
+   started the job?
+4. **Backfill depth.** Every merged PR since autoland went live is cheap. All
+   of git history is possible, but most of it has no intent or evidence to
+   record.
+5. **CLI name.** `cn` is short and doesn't clash with common Unix tools.
+   Check before M1.
 
-## 11. Milestones
+## 12. Milestones
 
 | Milestone | Delivers | Exit check |
 | --- | --- | --- |
-| M0 | This doc, a Rust workspace skeleton, CI, MIT license | `cargo test` passes in CI |
-| M1 | `conaryd` on jj-lib: lanes, changesets with intent and class, op-log queries, `undo --since`, `undo --actor`, `why` | Conary's own repo is developed in Conary |
-| M2 | Evidence store, signed runners, negative-control rule, local landing queue with bisect and auto-revert, MCP server | An agent lands an R0 change on Conary with no human involved, and a deliberately broken change gets reverted automatically |
-| M3 | Semantic patches and commutation for Rust, Python and TypeScript. Deterministic git export to GitHub | Two agents edit different functions in one file at the same time and both land with no rebase |
-| M4 | wend and LoK-web move onto Conary, and the lok-* scripts are retired | A full working day on both projects where Peter only answers R2 asks |
-| M5 | Decide whether to go standalone (stage C) based on M1–M4 pain | A written decision |
-
-## 12. Open questions
-
-1. **Evidence footprint precision.** The whole tree is safe but re-runs almost everything. Which languages get a computed dependency closure first, and when is recorded test-impact data good enough to trust?
-2. **Changeset granularity.** One changeset per task is the default. Should agents split by logical step automatically?
-3. **Offline laptops.** Jujutsu already merges concurrent operation logs. Is that enough for a laptop that edits offline and syncs with remi later?
-4. **Class policy format.** Is it a file of path globs and action rules, or code? It probably starts as TOML and grows a small rule language.
-5. **CLI name.** `cn` is short and doesn't clash with common Unix tools. Check before M1.
+| M0 | Rust workspace, `rust = { };` in the flake, CI | `nix flake check` runs the workspace's tests in CI |
+| M1 | conaryd on remi, recording every PR event the steward sees, read-only, plus a backfill of merged PRs. `cn log`, `cn why` | `cn why` on a line in burrow returns the PR, its intent, session and evidence |
+| M2 | The notes ref and the MCP server | A cloud session answers `why` from a fresh clone |
+| M3 | `undo` by change, session and time, through the landing flow | A deliberately bad session's changes in two repos are reverted by `undo --actor` and land with no person involved |
+| M4 | Class policy in Conary; the steward reads classes from conaryd | `oneWay` is gone from burrow's autoland config |
+| M5 | conaryd runs the landing flow, and R0 changes land before review, with review after landing | `steward.py` is deleted, and a week of PRs across every repo lands through conaryd, R0 ones with no wait on a reviewer |
+| M6 | A written decision on each parked idea, from ledger data | The decision |

@@ -1,8 +1,8 @@
 # Conary
 
-Version control built for coding agents rather than humans.
+The ledger and landing engine for code that agents write, on top of git and GitHub.
 
-The unit of work is a changeset that knows why it exists, carries its own proof, and can always be rolled back. Changesets land on their own when the proof is green, and every state the repository has ever been in is one command away.
+Every change carries why it exists, who made it and what proved it. It lands when that proof is green, and any change, any agent session's work, or everything since a point in time can be undone, always as a new change.
 
 Status: design. See [docs/DESIGN.md](docs/DESIGN.md).
 
