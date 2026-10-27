@@ -247,28 +247,11 @@ impl Ledger {
                 if c.revision(*revision).is_none() {
                     return Err(Invalid::UnknownRevision(*revision));
                 }
-                if self.by_trunk.contains_key(&(c.repo.clone(), after.clone()))
-                    || self
-                        .outside
-                        .iter()
-                        .any(|o| o.repo == c.repo && &o.after == after)
-                {
+                if self.by_trunk.contains_key(&(c.repo.clone(), after.clone())) {
                     return Err(Invalid::TrunkCommitTaken(after.clone()));
                 }
             }
-            Body::Outside { repo, after, .. } => {
-                // Each trunk commit is accounted for once.
-                if self
-                    .outside
-                    .iter()
-                    .any(|o| &o.repo == repo && &o.after == after)
-                {
-                    return Err(Invalid::Duplicate);
-                }
-                if self.by_trunk.contains_key(&(repo.clone(), after.clone())) {
-                    return Err(Invalid::TrunkCommitTaken(after.clone()));
-                }
-            }
+            Body::Outside { .. } => {}
             Body::Close { change } => match self.existing(*change)?.status() {
                 Status::Landed => return Err(Invalid::AlreadyLanded),
                 Status::Closed => return Err(Invalid::Closed),

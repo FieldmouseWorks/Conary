@@ -265,19 +265,11 @@ mod tests {
     }
 
     #[test]
-    fn a_trunk_commit_is_a_landing_or_outside_once() {
+    fn trunk_can_move_to_the_same_commit_more_than_once() {
+        // Trunk at c, moved away, then reset to c, and reset to a landed
+        // commit: each is a movement of its own.
         let dir = tempfile::tempdir().unwrap();
         let mut store = Store::open(dir.path(), key(), None).unwrap();
-        let outside = |after| Body::Outside {
-            repo: repo(),
-            before: Some(commit('a')),
-            after,
-        };
-        store.record(outside(commit('c'))).unwrap();
-        assert!(matches!(
-            store.record(outside(commit('c'))),
-            Err(StoreError::Invalid(Invalid::Duplicate))
-        ));
         let change = observe(&mut store, 1);
         store
             .record(Body::Revision {
@@ -286,22 +278,24 @@ mod tests {
                 head: commit('b'),
             })
             .unwrap();
-        let land = |after| Body::Land {
-            change,
-            revision: RevisionId::new(&commit('a'), &commit('b')),
-            before: commit('a'),
-            after,
-        };
-        assert!(matches!(
-            store.record(land(commit('c'))),
-            Err(StoreError::Invalid(Invalid::TrunkCommitTaken(_)))
-        ));
-        store.record(land(commit('d'))).unwrap();
-        assert!(matches!(
-            store.record(outside(commit('d'))),
-            Err(StoreError::Invalid(Invalid::TrunkCommitTaken(_)))
-        ));
-        assert_eq!(store.ledger().outside().len(), 1);
+        store
+            .record(Body::Land {
+                change,
+                revision: RevisionId::new(&commit('a'), &commit('b')),
+                before: commit('a'),
+                after: commit('d'),
+            })
+            .unwrap();
+        for after in ['c', 'e', 'c', 'd'] {
+            store
+                .record(Body::Outside {
+                    repo: repo(),
+                    before: None,
+                    after: commit(after),
+                })
+                .unwrap();
+        }
+        assert_eq!(store.ledger().outside().len(), 4);
     }
 
     #[test]

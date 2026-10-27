@@ -14,11 +14,6 @@ pub struct User {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct Login {
-    pub login: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
 pub struct Ref {
     pub sha: String,
     #[serde(rename = "ref")]
@@ -67,7 +62,7 @@ pub struct CheckRun {
     pub status: String,
     pub conclusion: Option<String>,
     pub html_url: Option<String>,
-    pub completed_at: Option<String>,
+    pub started_at: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -102,35 +97,6 @@ pub struct Parent {
 pub struct Commit {
     pub sha: String,
     pub parents: Vec<Parent>,
-    /// The GitHub account the committer's email belongs to.
-    pub committer: Option<Login>,
-    pub commit: CommitDetail,
-}
-
-impl Commit {
-    /// GitHub made this commit itself, merging a PR (by merge, squash or
-    /// rebase, from the web or the API): committed as `web-flow` and signed
-    /// with GitHub's key, which a push can't forge.
-    pub fn made_by_github(&self) -> bool {
-        self.committer
-            .as_ref()
-            .is_some_and(|c| c.login == "web-flow")
-            && self
-                .commit
-                .verification
-                .as_ref()
-                .is_some_and(|v| v.verified)
-    }
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct CommitDetail {
-    pub verification: Option<Verification>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct Verification {
-    pub verified: bool,
 }
 
 #[derive(Debug, Deserialize)]

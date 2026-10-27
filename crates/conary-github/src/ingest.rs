@@ -25,8 +25,9 @@ pub struct Config {
     /// Logins whose review markers are recorded as reviews: the steward's
     /// account. Anyone else's marker is text in a comment.
     pub reviewers: Vec<String>,
-    /// Status contexts that aren't checks: the steward's own "settled" status
-    /// is its landing decision, not evidence about the change.
+    /// The steward's own status contexts. Its "settled" status is its landing
+    /// decision, not evidence about the change, and a merge into trunk is a
+    /// landing only on a head it settled.
     pub own_contexts: Vec<String>,
 }
 
@@ -228,16 +229,23 @@ fn record(
     let current = |at: Option<&str>| since.as_deref().is_none_or(|s| at.is_some_and(|t| t >= s));
     let mut evidence = Vec::new();
     for run in source.check_runs(&full, head.as_str())? {
-        if current(run.completed_at.as_deref()) {
+        // Started after the retarget, so it can't have run on the old base.
+        if current(run.started_at.as_deref()) {
             evidence.extend(check_run(change, revision, &run));
         }
     }
     // Newest first from GitHub; recorded in the order they happened.
-    for status in source.statuses(&full, head.as_str())?.iter().rev() {
+    let statuses = source.statuses(&full, head.as_str())?;
+    for status in statuses.iter().rev() {
         if !config.own_contexts.contains(&status.context) && current(status.created_at.as_deref()) {
             evidence.extend(commit_status(change, revision, status));
         }
     }
+    // Newest first: the steward's latest word on this head.
+    let settled = statuses
+        .iter()
+        .find(|s| config.own_contexts.contains(&s.context))
+        .is_some_and(|s| s.state == "success");
     for review in source.reviews(&full, pr.number)? {
         if current(review.submitted_at.as_deref()) {
             evidence.extend(review_marker(config, pr, change, revision, &review));
@@ -257,7 +265,7 @@ fn record(
         .map(|c| c.status())
         .expect("observed above");
     if pr.is_merged() {
-        merged(&mut w, source, repo, pr, change, revision, status)?;
+        merged(&mut w, source, repo, pr, change, revision, status, settled)?;
     } else {
         match (pr.state.as_str(), status) {
             ("closed", Status::Open) => w.record(Body::Close { change })?,
@@ -292,11 +300,15 @@ fn bound_elsewhere(c: &Change, revision: RevisionId, head: &CommitId, body: &Bod
     })
 }
 
-/// A merged PR landed only if GitHub merged it into trunk: by merge, squash
-/// or rebase, from the web or the API. Merged into another branch, it closed
-/// without landing on trunk; its commits land with that branch. Marked merged
-/// because its commits were pushed to trunk directly, trunk moved outside a
-/// landing: that's recorded as a violation, and the change closes.
+/// A merged PR landed only if the steward settled its head and GitHub merged
+/// it into trunk: the ruleset holds every merge into trunk to the steward's
+/// status, and a merge, squash or rebase always makes a commit of its own.
+/// Merged into another branch, it closed without landing on trunk; its
+/// commits land with that branch. Anything else that put it on trunk, an
+/// admin's bypass or a push straight to trunk, moved trunk outside a landing:
+/// that's recorded as a violation, from a trunk before GitHub doesn't say,
+/// and the change closes.
+#[allow(clippy::too_many_arguments)]
 fn merged(
     w: &mut Writer,
     source: &dyn Source,
@@ -305,51 +317,64 @@ fn merged(
     change: ChangeId,
     revision: RevisionId,
     status: Status,
+    settled: bool,
 ) -> Result<(), IngestError> {
     if status == Status::Landed {
         return Ok(());
     }
+    let close = |w: &mut Writer| match status {
+        Status::Open => w.record(Body::Close { change }),
+        _ => Ok(()),
+    };
     if !pr.targets_trunk() {
-        if status == Status::Open {
-            w.record(Body::Close { change })?;
-        }
-        return Ok(());
+        return close(w);
     }
     let full = repo.to_string();
     let sha = pr
         .merge_commit_sha
         .as_deref()
         .ok_or_else(|| IngestError::Malformed("a merged PR with no merge commit".into()))?;
-    let landed = source.commit(&full, sha)?;
-    let before = trunk_before(source, &full, pr.number, &landed)?;
     let after = commit(sha)?;
-    if landed.made_by_github() {
+    let ledger = w.store.ledger();
+    if ledger
+        .landed_as(repo, &after)
+        .is_some_and(|c| c.id != change)
+    {
+        // Merged along with another PR's landing, which is the movement.
+        return close(w);
+    }
+    if settled && sha != pr.head.sha {
+        let landed = source.commit(&full, sha)?;
+        let before = trunk_before(source, &full, pr.number, &landed)?;
         if status == Status::Closed {
             w.record(Body::Reopen { change })?;
         }
-        w.record(Body::Land {
+        return w.record(Body::Land {
             change,
             revision,
             before,
             after,
-        })
-    } else {
+        });
+    }
+    // This PR's merge, read again, is the same movement.
+    let seen = ledger
+        .outside()
+        .iter()
+        .any(|o| &o.repo == repo && o.after == after);
+    if !seen {
         w.record(Body::Outside {
             repo: repo.clone(),
-            before: Some(before),
+            before: None,
             after,
         })?;
-        if status == Status::Open {
-            w.record(Body::Close { change })?;
-        }
-        Ok(())
     }
+    close(w)
 }
 
 /// GitHub merges at most 250 commits; a walk longer than this isn't a landing.
 const MAX_LANDED: usize = 300;
 
-/// Trunk just before the commits that `landed` tops. A merge commit's first
+/// Trunk just before the commits a landing made, `landed` on top. A merge commit's first
 /// parent is. A squash or rebase lays the PR's commits on trunk in a line,
 /// each linked to the PR, so trunk before is the first commit back that
 /// isn't; counting the PR's own commits would miss the empty ones a rebase
