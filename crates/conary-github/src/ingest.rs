@@ -18,17 +18,34 @@ use conary_core::{ChangeId, CommitId, RevisionId, Store};
 use crate::api::{
     ApiError, CheckRun, Commit, PullRequest, Pulls, Review, Source, Status as CommitStatus,
 };
+use crate::bases::{BasesError, MergeBases};
 
-/// What ingest trusts, from the machine's configuration.
+/// What ingest trusts, from the machine's configuration. Both are needed:
+/// without them no merge could be told from a bypass.
 #[derive(Debug, Clone, Default)]
 pub struct Config {
-    /// Logins whose review markers are recorded as reviews: the steward's
-    /// account. Anyone else's marker is text in a comment.
+    /// The steward's logins: their review markers are recorded as reviews,
+    /// and only their own statuses are its word. Anyone else's marker is
+    /// text in a comment.
     pub reviewers: Vec<String>,
     /// The steward's own status contexts. Its "settled" status is its landing
     /// decision, not evidence about the change, and a merge into trunk is a
     /// landing only on a head it settled.
     pub own_contexts: Vec<String>,
+}
+
+impl Config {
+    fn check(&self) -> Result<(), IngestError> {
+        if self.reviewers.is_empty() {
+            return Err(IngestError::Config("no reviewer logins: the steward's"));
+        }
+        if self.own_contexts.is_empty() {
+            return Err(IngestError::Config(
+                "no own status contexts: the steward's settled status",
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug)]
@@ -39,6 +56,10 @@ pub enum IngestError {
     Malformed(String),
     /// No randomness for a new change id.
     Random(String),
+    /// What ingest needs to know isn't configured; nothing was read.
+    Config(&'static str),
+    /// The merge-base cache beside the ledger can't be read or added to.
+    Cache(std::io::Error),
 }
 
 impl std::fmt::Display for IngestError {
@@ -48,6 +69,8 @@ impl std::fmt::Display for IngestError {
             Self::Store(e) => e.fmt(f),
             Self::Malformed(what) => write!(f, "GitHub sent {what}"),
             Self::Random(e) => write!(f, "no randomness for a change id: {e}"),
+            Self::Config(what) => write!(f, "{what} isn't configured"),
+            Self::Cache(e) => write!(f, "merge-base cache: {e}"),
         }
     }
 }
@@ -63,6 +86,15 @@ impl From<ApiError> for IngestError {
 impl From<StoreError> for IngestError {
     fn from(e: StoreError) -> Self {
         Self::Store(e)
+    }
+}
+
+impl From<BasesError> for IngestError {
+    fn from(e: BasesError) -> Self {
+        match e {
+            BasesError::Api(e) => Self::Api(e),
+            BasesError::Io(e) => Self::Cache(e),
+        }
     }
 }
 
@@ -82,8 +114,16 @@ pub fn pull(
     repo: &Repo,
     number: u64,
 ) -> Result<Ingested, IngestError> {
+    config.check()?;
     let pr = source.pull(&repo.to_string(), number)?;
-    record(store, source, config, repo, &pr)
+    let base = base(source, repo, &pr)?;
+    record(store, source, config, repo, &pr, base)
+}
+
+/// Where the head branched from the base branch: the tree the PR's diff and
+/// its review are against, which trunk moving doesn't change.
+fn base(source: &dyn Source, repo: &Repo, pr: &PullRequest) -> Result<CommitId, IngestError> {
+    commit(&source.merge_base(&repo.to_string(), &pr.base.sha, &pr.head.sha)?)
 }
 
 /// Ingests every PR in the repo, oldest first.
@@ -93,44 +133,56 @@ pub fn backfill(
     config: &Config,
     repo: &Repo,
 ) -> Result<Vec<Ingested>, IngestError> {
+    config.check()?;
     source
         .pulls(&repo.to_string(), Pulls::All)?
         .iter()
-        .map(|pr| record(store, source, config, repo, pr))
+        .map(|pr| {
+            let base = base(source, repo, pr)?;
+            record(store, source, config, repo, pr, base)
+        })
         .collect()
 }
 
 /// Brings the ledger up to date with what's happening in a repo: every open
 /// PR, since its checks and reviews come and go, and every recently closed
-/// one the ledger doesn't hold as it finished yet. A PR the ledger already
-/// holds as GitHub shows it costs nothing.
+/// one the ledger doesn't hold as it finished yet. A closed PR's base and
+/// head don't move, so their merge base comes from the cache beside the
+/// ledger, and a PR the ledger already holds as GitHub shows it costs no
+/// calls.
 pub fn sync(
     store: &mut Store,
     source: &dyn Source,
     config: &Config,
     repo: &Repo,
 ) -> Result<Vec<Ingested>, IngestError> {
+    config.check()?;
     let full = repo.to_string();
+    let mut bases = MergeBases::load(store.lock()).map_err(IngestError::Cache)?;
     let mut got = Vec::new();
     for pr in source.pulls(&full, Pulls::Open)? {
-        got.push(record(store, source, config, repo, &pr)?);
+        let base = base(source, repo, &pr)?;
+        got.push(record(store, source, config, repo, &pr, base)?);
     }
     for pr in source.pulls(&full, Pulls::RecentlyClosed)?.iter().rev() {
+        let base = commit(&bases.get(source, &full, &pr.base.sha, &pr.head.sha)?)?;
+        let revision = RevisionId::new(&base, &commit(&pr.head.sha)?);
         let ledger = store.ledger();
         let settled = ledger
             .by_pr(repo, pr.number)
-            .is_some_and(|c| settled(ledger, c, pr));
+            .is_some_and(|c| settled(ledger, c, pr, revision));
         if !settled {
-            got.push(record(store, source, config, repo, pr)?);
+            got.push(record(store, source, config, repo, pr, base)?);
         }
     }
     Ok(got)
 }
 
 /// Whether the ledger already holds a closed PR as GitHub shows it: how it
-/// finished, its head and its intent. A PR reopened, pushed to and closed
-/// again, or reopened and merged, between two syncs is read again.
-fn settled(ledger: &Ledger, c: &Change, pr: &PullRequest) -> bool {
+/// finished, its whole revision and its intent. A PR reopened, retargeted or
+/// pushed to and closed again, or reopened and merged, between two syncs is
+/// read again.
+fn settled(ledger: &Ledger, c: &Change, pr: &PullRequest, revision: RevisionId) -> bool {
     let finished = match c.status() {
         Status::Open => false,
         Status::Landed => pr.is_merged(),
@@ -149,7 +201,7 @@ fn settled(ledger: &Ledger, c: &Change, pr: &PullRequest) -> bool {
     };
     let body = pr.body.as_deref().unwrap_or_default();
     finished
-        && c.revisions.iter().any(|r| r.head.as_str() == pr.head.sha)
+        && c.revision(revision).is_some()
         && c.intent
             .as_ref()
             .is_some_and(|i| i.summary == pr.title && i.body == body)
@@ -185,6 +237,7 @@ fn record(
     config: &Config,
     repo: &Repo,
     pr: &PullRequest,
+    base: CommitId,
 ) -> Result<Ingested, IngestError> {
     let full = repo.to_string();
     let mut w = Writer { store, recorded: 0 };
@@ -210,10 +263,7 @@ fn record(
         task: task(repo, &body),
     })?;
 
-    // The base is where the head branched from the base branch: the tree the
-    // PR's diff and its review are against, which trunk moving doesn't change.
     let head = commit(&pr.head.sha)?;
-    let base = commit(&source.merge_base(&full, &pr.base.sha, &pr.head.sha)?)?;
     let revision = RevisionId::new(&base, &head);
     w.record(Body::Revision {
         change,
@@ -241,10 +291,18 @@ fn record(
             evidence.extend(commit_status(change, revision, status));
         }
     }
-    // Newest first: the steward's latest word on this head.
+    // Newest first: the steward's latest word on this head since the last
+    // retarget. Anyone who can push can post its context; only the steward's
+    // own logins say it.
     let settled = statuses
         .iter()
-        .find(|s| config.own_contexts.contains(&s.context))
+        .filter(|s| config.own_contexts.contains(&s.context))
+        .filter(|s| {
+            s.creator
+                .as_ref()
+                .is_some_and(|u| config.reviewers.contains(&u.login))
+        })
+        .find(|s| current(s.created_at.as_deref()))
         .is_some_and(|s| s.state == "success");
     for review in source.reviews(&full, pr.number)? {
         if current(review.submitted_at.as_deref()) {
@@ -300,14 +358,17 @@ fn bound_elsewhere(c: &Change, revision: RevisionId, head: &CommitId, body: &Bod
     })
 }
 
-/// A merged PR landed only if the steward settled its head and GitHub merged
-/// it into trunk: the ruleset holds every merge into trunk to the steward's
-/// status, and a merge, squash or rebase always makes a commit of its own.
-/// Merged into another branch, it closed without landing on trunk; its
-/// commits land with that branch. Anything else that put it on trunk, an
-/// admin's bypass or a push straight to trunk, moved trunk outside a landing:
-/// that's recorded as a violation, from a trunk before GitHub doesn't say,
-/// and the change closes.
+/// A merged PR landed only if the steward settled its head and the trunk
+/// commit is this PR's own merge: the ruleset holds every merge into trunk to
+/// the steward's status, and a merge, squash or rebase always makes a commit
+/// of its own, which a merge commit shows by its second parent and GitHub
+/// links to the PR otherwise. Merged into another branch, it closed without
+/// landing on trunk; its commits land with that branch. Brought onto trunk
+/// by another PR's merge, it closed, and that PR records the movement. Anything
+/// else that put it on trunk, an admin's bypass or a push straight to trunk,
+/// moved trunk outside a landing: that's recorded as a violation, from a
+/// trunk before GitHub doesn't say, and the change closes. None of it
+/// depends on which PR is read first.
 #[allow(clippy::too_many_arguments)]
 fn merged(
     w: &mut Writer,
@@ -335,16 +396,18 @@ fn merged(
         .as_deref()
         .ok_or_else(|| IngestError::Malformed("a merged PR with no merge commit".into()))?;
     let after = commit(sha)?;
-    let ledger = w.store.ledger();
-    if ledger
-        .landed_as(repo, &after)
-        .is_some_and(|c| c.id != change)
-    {
-        // Merged along with another PR's landing, which is the movement.
+    let landed = source.commit(&full, sha)?;
+    let linked = source.commit_pulls(&full, sha)?;
+    let own = sha != pr.head.sha
+        && match landed.parents.as_slice() {
+            [_, merged] => merged.sha == pr.head.sha,
+            [_] => linked.contains(&pr.number),
+            _ => false,
+        };
+    if !own && linked.iter().any(|&n| n != pr.number) {
         return close(w);
     }
-    if settled && sha != pr.head.sha {
-        let landed = source.commit(&full, sha)?;
+    if settled && own {
         let before = trunk_before(source, &full, pr.number, &landed)?;
         if status == Status::Closed {
             w.record(Body::Reopen { change })?;
@@ -357,7 +420,9 @@ fn merged(
         });
     }
     // This PR's merge, read again, is the same movement.
-    let seen = ledger
+    let seen = w
+        .store
+        .ledger()
         .outside()
         .iter()
         .any(|o| &o.repo == repo && o.after == after);

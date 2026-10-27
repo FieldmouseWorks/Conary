@@ -10,10 +10,12 @@ Status: milestone M1, recording PRs and answering `why`. See
 ## Using it
 
 `cn` keeps the ledger in `$XDG_STATE_HOME/conary` (or `--ledger`) and reads
-GitHub with `GH_TOKEN`. Every write anchors the ledger's head at a ref in
-the repository `CONARY_ANCHOR_REPO` names (the token writes it), so a log
-that loses ops is refused. It prints JSON; add `--human` for people.
+GitHub with `GH_TOKEN`. The ledger is anchored at a ref in the repository
+`CONARY_ANCHOR_REPO` names (the token writes it): `cn init` sets it up once,
+and every write moves it on, so a log that loses ops is refused. It prints
+JSON; add `--human` for people.
 
+    cn init
     cn backfill FieldmouseWorks/burrow --reviewer <steward login>
     cn ingest FieldmouseWorks/burrow 61 --reviewer <steward login>
     cn log --human

@@ -27,6 +27,8 @@ struct Fake {
     /// The PRs each commit is linked to; none when it isn't listed.
     linked: HashMap<String, Vec<u64>>,
     retargeted: Option<String>,
+    /// How many merge bases were asked for.
+    asked: std::cell::Cell<usize>,
 }
 
 fn parse<T: serde::de::DeserializeOwned>(v: &Value) -> T {
@@ -76,6 +78,7 @@ impl Source for Fake {
     }
 
     fn merge_base(&self, _: &str, a: &str, _: &str) -> Result<String, ApiError> {
+        self.asked.set(self.asked.get() + 1);
         // Each base branch has moved on since the head branched off it.
         Ok(match a {
             BASE => FORK,
@@ -158,7 +161,8 @@ fn fake() -> Fake {
         HEAD.into(),
         json!([
             {"context": "gate", "state": "success", "target_url": "https://remi/gate/2"},
-            {"context": "review-settled", "state": "success", "target_url": null},
+            {"context": "review-settled", "state": "success", "target_url": null,
+             "creator": {"login": STEWARD, "type": "User"}},
             {"context": "gate", "state": "failure", "target_url": "https://remi/gate/1"},
             {"context": "gate", "state": "pending", "target_url": null},
         ]),
@@ -179,7 +183,8 @@ fn fake() -> Fake {
 
 fn open() -> (tempfile::TempDir, Store) {
     let dir = tempfile::tempdir().unwrap();
-    let store = Store::open(dir.path(), SigningKey::from_bytes(&[5; 32]), None).unwrap();
+    let lock = conary_core::log::Lock::take(dir.path()).unwrap();
+    let store = Store::open(lock, SigningKey::from_bytes(&[5; 32]), None).unwrap();
     (dir, store)
 }
 
@@ -422,10 +427,39 @@ fn a_merge_the_steward_didnt_settle_is_outside_not_a_landing() {
     };
     let pushed = |f: &mut Fake| {
         f.pulls[0]["merge_commit_sha"] = json!(HEAD);
+        f.commits.insert(HEAD.into(), trunk_commit(HEAD, &[BASE]));
+        f.linked.insert(HEAD.into(), vec![9]);
+    };
+    // Its status posted by someone other than the steward, or only before
+    // the PR was retargeted onto trunk.
+    let forged = |f: &mut Fake| {
+        f.statuses.insert(
+            HEAD.into(),
+            json!([{"context": "review-settled", "state": "success", "target_url": null,
+                 "creator": {"login": "TusanHomichi", "type": "User"}}]),
+        );
+    };
+    let stale = |f: &mut Fake| {
+        f.statuses.insert(
+            HEAD.into(),
+            json!([{"context": "review-settled", "state": "success", "target_url": null,
+                 "creator": {"login": STEWARD, "type": "User"},
+                 "created_at": "2026-10-27T11:00:00Z"}]),
+        );
+        f.retargeted = Some("2026-10-27T11:30:00Z".into());
+    };
+    // Merged locally and pushed: a merge commit, but not of this head.
+    let local = |f: &mut Fake| {
+        f.commits
+            .insert(MERGE.into(), trunk_commit(MERGE, &[BASE, HEAD2]));
+        f.linked.remove(MERGE);
     };
     for (how, change_it) in [
         ("bypass", &bypass as &dyn Fn(&mut Fake)),
         ("pushed", &pushed),
+        ("forged", &forged),
+        ("stale", &stale),
+        ("local", &local),
     ] {
         let (_dir, mut store) = open();
         let mut f = fake();
@@ -460,17 +494,51 @@ fn a_merge_the_steward_didnt_settle_is_outside_not_a_landing() {
 
 #[test]
 fn a_pr_merged_in_another_prs_landing_closes_without_a_second_one() {
+    // 10's head came onto trunk in 9's landing, which GitHub links to 9.
+    // Either read first, 9 lands and 10 closes.
+    for order in [[9, 10], [10, 9]] {
+        let (_dir, mut store) = open();
+        let mut f = fake();
+        f.pulls = vec![pr(9, HEAD, "closed", true), pr(10, HEAD, "closed", true)];
+        for n in order {
+            pull(&mut store, &f, &config(), &repo(), n).unwrap();
+        }
+        let ledger = store.ledger();
+        assert_eq!(ledger.landed_as(&repo(), &sha(MERGE)).unwrap().pr, 9);
+        let ten = ledger.by_pr(&repo(), 10).unwrap();
+        assert_eq!(ten.status(), Status::Closed, "{order:?}");
+        assert!(ledger.outside().is_empty());
+    }
+}
+
+#[test]
+fn ingest_refuses_to_run_without_the_steward_configured() {
     let (_dir, mut store) = open();
-    let mut f = fake();
-    f.pulls = vec![pr(9, HEAD, "closed", true), pr(10, HEAD, "closed", true)];
-    let got = backfill(&mut store, &f, &config(), &repo()).unwrap();
-    let ledger = store.ledger();
-    assert_eq!(ledger.landed_as(&repo(), &sha(MERGE)).unwrap().pr, 9);
-    assert_eq!(
-        ledger.change(got[1].change).unwrap().status(),
-        Status::Closed
-    );
-    assert!(ledger.outside().is_empty());
+    let f = fake();
+    for config in [
+        Config {
+            reviewers: vec![],
+            ..config()
+        },
+        Config {
+            own_contexts: vec![],
+            ..config()
+        },
+    ] {
+        assert!(matches!(
+            pull(&mut store, &f, &config, &repo(), 9),
+            Err(IngestError::Config(_))
+        ));
+        assert!(matches!(
+            sync(&mut store, &f, &config, &repo()),
+            Err(IngestError::Config(_))
+        ));
+        assert!(matches!(
+            backfill(&mut store, &f, &config, &repo()),
+            Err(IngestError::Config(_))
+        ));
+    }
+    assert!(store.head().is_none());
 }
 
 #[test]
@@ -563,10 +631,35 @@ fn sync_reads_a_closed_pr_again_when_it_changed_since() {
     // Reopened, settled and merged between two syncs.
     f.statuses.insert(
         HEAD2.into(),
-        json!([{"context": "review-settled", "state": "success", "target_url": null}]),
+        json!([{"context": "review-settled", "state": "success", "target_url": null,
+             "creator": {"login": STEWARD, "type": "User"}}]),
     );
     f.pulls = vec![pr(9, HEAD2, "closed", true)];
     assert_eq!(sync(&mut store, &f, &config(), &repo()).unwrap().len(), 1);
     assert_eq!(status(&store), Status::Landed);
+    assert!(sync(&mut store, &f, &config(), &repo()).unwrap().is_empty());
+}
+
+#[test]
+fn sync_reads_a_closed_pr_again_when_its_base_changed_and_asks_github_once() {
+    let (_dir, mut store) = open();
+    let mut f = fake();
+    f.pulls = vec![pr(9, HEAD, "closed", false)];
+    sync(&mut store, &f, &config(), &repo()).unwrap();
+    // Each closed PR's merge base is asked for once, then kept.
+    let asked = f.asked.get();
+    assert!(sync(&mut store, &f, &config(), &repo()).unwrap().is_empty());
+    assert_eq!(f.asked.get(), asked);
+
+    // Reopened, retargeted and closed again, its head and intent the same.
+    let mut on_dev = pr(9, HEAD, "closed", false);
+    on_dev["base"] = json!({"sha": DEV, "ref": "dev", "repo": {"default_branch": "main"}});
+    f.pulls = vec![on_dev];
+    assert_eq!(sync(&mut store, &f, &config(), &repo()).unwrap().len(), 1);
+    let c = store.ledger().by_pr(&repo(), 9).unwrap();
+    assert!(
+        c.revision(RevisionId::new(&sha(DEV_FORK), &sha(HEAD)))
+            .is_some()
+    );
     assert!(sync(&mut store, &f, &config(), &repo()).unwrap().is_empty());
 }

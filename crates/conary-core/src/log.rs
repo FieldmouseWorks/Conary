@@ -41,9 +41,12 @@ pub enum LogError {
     /// An earlier append failed partway, so the file may not end where this
     /// writer thinks it does. Reopening reconciles it.
     Poisoned,
-    /// The log holds ops but no anchor says which of them were written, or
-    /// the anchor file isn't one.
+    /// No anchor beside the log says which of its ops were written: the
+    /// ledger was never set up, or the anchor file was removed or isn't one.
     NoAnchor(PathBuf),
+    /// No signing key: a writer only ever uses the ledger's own, which
+    /// `cn init` makes once.
+    NoKey(PathBuf),
 }
 
 impl std::fmt::Display for LogError {
@@ -56,7 +59,12 @@ impl std::fmt::Display for LogError {
             Self::Poisoned => f.write_str("op log: an earlier append failed; reopen the log"),
             Self::NoAnchor(path) => write!(
                 f,
-                "{}: no anchor for the op log; `cn verify` checks it against the one on GitHub",
+                "{}: no anchor for the op log; `cn init` sets a ledger up, and `cn verify` checks one against GitHub",
+                path.display()
+            ),
+            Self::NoKey(path) => write!(
+                f,
+                "{}: no signing key; `cn init` makes a new ledger's, and a ledger that has one needs it back",
                 path.display()
             ),
         }
@@ -114,9 +122,19 @@ fn load_key(path: &Path, bytes: Vec<u8>) -> Result<SigningKey, LogError> {
     Ok(SigningKey::from_bytes(&secret))
 }
 
+/// The ledger's signing key, from `path`. It's never made here: a key made
+/// in place of a lost one would start another ledger.
+pub fn load_signing_key(path: &Path) -> Result<SigningKey, LogError> {
+    match fs::read(path) {
+        Ok(bytes) => load_key(path, bytes),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Err(LogError::NoKey(path.to_owned())),
+        Err(e) => Err(e.into()),
+    }
+}
+
 /// The ledger's signing key: loaded from `path`, or made there (readable by
 /// its owner only) the first time. Either way it's on disk, and named there,
-/// before it's returned.
+/// before it's returned. Only setting a ledger up makes one.
 pub fn load_or_create_key(path: &Path) -> Result<SigningKey, LogError> {
     let dir = parent_of(path);
     publish_dir(dir)?;
@@ -359,43 +377,73 @@ pub fn read(dir: &Path, key: &VerifyingKey, anchor: Option<Anchor>) -> Result<Ve
     Ok(ops)
 }
 
+const NO_OPS: &str = "none";
+
 /// Keeps `anchor` in the ledger's directory as the newest one its writer
-/// checked against or published. It's only as good as that writer's check:
-/// whoever can cut the log can rewrite it too, so it spares readers a round
-/// trip to the anchor kept off the box, and stands in for it only there.
-pub fn save_anchor(dir: &Path, anchor: Anchor) -> Result<(), LogError> {
-    replace(&dir.join(ANCHOR_FILE), &format!("{anchor}\n"))
+/// checked against or published, `None` for a ledger set up with no ops
+/// yet. Only a writer holding the [`Lock`] keeps one, so it never goes back.
+/// It's only as good as that writer's check: whoever can cut the log can
+/// rewrite it too, so it spares readers a round trip to the anchor kept off
+/// the box, and stands in for it only there.
+pub fn save_anchor(lock: &Lock, anchor: Option<Anchor>) -> Result<(), LogError> {
+    let text = anchor.map_or_else(|| NO_OPS.to_owned(), |a| a.to_string());
+    replace(&lock.dir.join(ANCHOR_FILE), &format!("{text}\n"))
 }
 
-/// The anchor [`save_anchor`] kept, if there is one.
+/// The anchor [`save_anchor`] kept. None is kept for a ledger never set
+/// up, or one whose anchor was removed, so that's refused.
 pub fn load_anchor(dir: &Path) -> Result<Option<Anchor>, LogError> {
     let path = dir.join(ANCHOR_FILE);
-    match fs::read_to_string(&path) {
-        Ok(text) => text
-            .parse()
-            .map(Some)
-            .map_err(|()| LogError::NoAnchor(path)),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(e.into()),
+    let text = match fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Err(LogError::NoAnchor(path)),
+        Err(e) => return Err(e.into()),
+    };
+    match text.trim() {
+        NO_OPS => Ok(None),
+        a => a.parse().map(Some).map_err(|()| LogError::NoAnchor(path)),
     }
 }
 
 /// Every op in the log at `dir`, checked against the anchor kept beside it.
-/// A log with ops and no anchor is refused: nothing says it's whole.
 pub fn read_anchored(dir: &Path, key: &VerifyingKey) -> Result<Vec<Op>, LogError> {
     let anchor = load_anchor(dir)?;
-    let ops = read(dir, key, anchor)?;
-    if anchor.is_none() && !ops.is_empty() {
-        return Err(LogError::NoAnchor(dir.join(ANCHOR_FILE)));
-    }
-    Ok(ops)
+    read(dir, key, anchor)
 }
 
-/// The log, open for appending. Only one writer at a time: opening takes an
-/// exclusive lock on the directory's lock file and holds it until dropped.
+/// The ledger's writer lock, on the lock file in its directory: one writer
+/// at a time, until it's dropped. A writer takes it before it reads what it
+/// checks the log against, so neither can change under it.
+pub struct Lock {
+    dir: PathBuf,
+    _file: File,
+}
+
+impl Lock {
+    /// Makes `dir` if it isn't there yet, and waits for any other writer.
+    pub fn take(dir: &Path) -> Result<Self, LogError> {
+        publish_dir(dir)?;
+        let file = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(dir.join(LOCK_FILE))?;
+        file.lock()?;
+        Ok(Self {
+            dir: dir.to_owned(),
+            _file: file,
+        })
+    }
+
+    pub fn dir(&self) -> &Path {
+        &self.dir
+    }
+}
+
+/// The log, open for appending, under its directory's [`Lock`].
 pub struct OpLog {
     file: File,
-    _lock: File,
+    lock: Lock,
     key: SigningKey,
     head: Option<Anchor>,
     poisoned: bool,
@@ -404,22 +452,16 @@ pub struct OpLog {
 }
 
 impl OpLog {
-    /// Opens (or starts) the log at `dir`, verifies every op in it against
-    /// `key` and, when there is one, the newest anchor its caller holds, and
-    /// returns them with the log ready to append after them. Nothing in the
-    /// file changes until it has verified.
+    /// Opens (or starts) the log in `lock`'s directory, verifies every op in
+    /// it against `key` and, when there is one, the newest anchor its caller
+    /// holds, and returns them with the log ready to append after them.
+    /// Nothing in the file changes until it has verified.
     pub fn open(
-        dir: &Path,
+        lock: Lock,
         key: SigningKey,
         anchor: Option<Anchor>,
     ) -> Result<(Self, Vec<Op>), LogError> {
-        publish_dir(dir)?;
-        let lock = OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(dir.join(LOCK_FILE))?;
-        lock.lock()?;
+        let dir = lock.dir.clone();
         let mut file = OpenOptions::new()
             .create(true)
             .read(true)
@@ -428,7 +470,7 @@ impl OpLog {
         // The log and its entry, before any op in it is acknowledged: a
         // writer before this one may have failed to sync either.
         file.sync_all()?;
-        sync_dir(dir)?;
+        sync_dir(&dir)?;
         let mut bytes = Vec::new();
         file.read_to_end(&mut bytes)?;
         let (ops, tail) = verify(&bytes, &key.verifying_key())?;
@@ -454,7 +496,7 @@ impl OpLog {
         Ok((
             Self {
                 file,
-                _lock: lock,
+                lock,
                 key,
                 head,
                 poisoned: false,
@@ -463,6 +505,10 @@ impl OpLog {
             },
             ops,
         ))
+    }
+
+    pub fn lock(&self) -> &Lock {
+        &self.lock
     }
 
     pub fn verifying_key(&self) -> VerifyingKey {

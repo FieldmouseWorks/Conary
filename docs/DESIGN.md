@@ -258,12 +258,22 @@ kept if it verifies. Only a line whose JSON stops short is a write that never
 finished (its caller was never told it succeeded), so the next writer cuts it.
 A writer whose append fails partway stops until the log is reopened and
 verified again. A log cut short by whole lines still chains, so its head is
-anchored off the box: after each write the writer moves a ref on GitHub
-(`refs/conary/anchor/<key>`, in a repository the machine names) to a commit
-naming its newest op, and before each write it refuses a log that doesn't
-hold that op, before cutting anything, or a log with ops and no anchor.
-Readers check the copy the writer keeps beside the log, so a read never
-waits on GitHub; `cn verify` checks against GitHub itself.
+anchored off the box, at `refs/conary/anchor` in a repository the machine
+names. Each move is a commit naming the ledger's key and its newest op.
+
+- `cn init` sets a ledger up once: its key, then the ref. It's the ledger's
+  identity. Run again it finishes a set-up that stopped partway, and with a
+  ref already there it takes only the key that ref names, so a lost key or
+  directory is refused until the key is back, never replaced by a new
+  ledger. A writer never makes a key.
+- Each write takes the ledger's lock, then reads the ref, and refuses another
+  key's ref or a log that doesn't hold the ref's op, before it changes a byte
+  of the log. After writing it moves the ref on, fast-forward only, and keeps
+  a copy beside the log.
+- Readers check that copy, so a read never waits on GitHub, and refuse a log
+  with none. The copy is only as good as the box: whoever can rewrite the log
+  can rewrite it too. The next write, or `cn verify` from anyone who can read
+  the log, checks against GitHub itself.
 
 ## 5. Undo
 

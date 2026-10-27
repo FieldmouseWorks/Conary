@@ -37,8 +37,9 @@ struct Remote {
     /// The GitHub API's root.
     #[arg(long, env = "GITHUB_API_URL", default_value = "https://api.github.com")]
     api: String,
-    /// The repository, as owner/name, whose ref anchors the ledger: every
-    /// write checks the log against it first and moves it on after.
+    /// The repository, as owner/name, whose ref anchors the ledger: `init`
+    /// makes it, and every write checks the log against it first and moves
+    /// it on after.
     #[arg(long, env = "CONARY_ANCHOR_REPO")]
     anchor_repo: String,
 }
@@ -61,6 +62,13 @@ struct GithubArgs {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Set the ledger up: its key, and its anchor on GitHub. Run again, it
+    /// finishes a set-up that stopped partway; a ledger whose key was lost
+    /// is refused until the key is back.
+    Init {
+        #[command(flatten)]
+        remote: Remote,
+    },
     /// Record a pull request's current state in the ledger.
     Ingest {
         /// The repository, as owner/name.
@@ -91,8 +99,7 @@ enum Command {
         #[arg(long)]
         repo: Option<Repo>,
     },
-    /// Check the log against its anchor on GitHub, and keep that anchor
-    /// beside it for readers.
+    /// Check the log against its anchor on GitHub.
     Verify {
         #[command(flatten)]
         remote: Remote,
@@ -134,7 +141,7 @@ fn run(cli: &Cli) -> Result<()> {
             let (mut a, api, config) = write(cli, github)?;
             let got = ingest::pull(&mut a.store, &api, &config, repo, *pr);
             // What was recorded before a failure is anchored all the same.
-            a.publish(&api, &cli.ledger)?;
+            a.publish(&api)?;
             print_ingested(cli, repo, *pr, got?, a.store.ledger());
         }
         Command::Sync { repo, github } | Command::Backfill { repo, github } => {
@@ -144,7 +151,7 @@ fn run(cli: &Cli) -> Result<()> {
             } else {
                 ingest::backfill(&mut a.store, &api, &config, repo)
             };
-            a.publish(&api, &cli.ledger)?;
+            a.publish(&api)?;
             let (got, store) = (got?, &a.store);
             if cli.human {
                 let recorded: usize = got.iter().map(|g| g.recorded).sum();
@@ -152,6 +159,23 @@ fn run(cli: &Cli) -> Result<()> {
             } else {
                 let all: Vec<Value> = got.iter().map(|g| ingested(g, store.ledger())).collect();
                 println!("{}", Value::Array(all));
+            }
+        }
+        Command::Init { remote } => {
+            let api = Api::new(&remote.api, token()?);
+            let made = anchor::init(&cli.ledger, &key_path(cli), &api, &remote.anchor_repo)?;
+            let seq = made.anchor.map_or(0, |a| a.seq);
+            if cli.human {
+                println!(
+                    "{}: the ledger, anchored on {} at op {seq}",
+                    cli.ledger.display(),
+                    remote.anchor_repo
+                );
+            } else {
+                println!(
+                    "{}",
+                    json!({"anchored": made.anchor.map(|a| a.to_string()), "ops": seq})
+                );
             }
         }
         Command::Verify { remote } => {
@@ -209,8 +233,7 @@ fn token() -> Result<String> {
 /// The ledger, open for writing once its log holds the anchor on GitHub.
 fn write(cli: &Cli, github: &GithubArgs) -> Result<(Anchored, Api, Config)> {
     let api = Api::new(&github.remote.api, token()?);
-    std::fs::create_dir_all(&cli.ledger)?;
-    let key = log::load_or_create_key(&key_path(cli))?;
+    let key = log::load_signing_key(&key_path(cli))?;
     let anchored = anchor::open(&cli.ledger, key, &api, &github.remote.anchor_repo)?;
     let config = Config {
         reviewers: github.reviewers.clone(),
@@ -222,12 +245,8 @@ fn write(cli: &Cli, github: &GithubArgs) -> Result<(Anchored, Api, Config)> {
 /// The ledger, verified against its public key and the anchor its writer
 /// kept beside it. Reading takes no lock and never leaves the box.
 fn read(cli: &Cli) -> Result<Ledger> {
-    let key = log::load_public_key(&log::public_path(&key_path(cli))).map_err(|e| {
-        format!(
-            "{e} (has anything been ingested into {}?)",
-            cli.ledger.display()
-        )
-    })?;
+    let key = log::load_public_key(&log::public_path(&key_path(cli)))
+        .map_err(|e| format!("{e} (has `cn init` set up {}?)", cli.ledger.display()))?;
     let ops = log::read_anchored(&cli.ledger, &key)?;
     Ledger::replay(&ops).map_err(|(id, e)| format!("op {id} in the log doesn't apply: {e}").into())
 }

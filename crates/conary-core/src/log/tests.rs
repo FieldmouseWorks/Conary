@@ -43,7 +43,7 @@ fn close() -> Body {
 #[test]
 fn appended_ops_replay_in_order_and_chain() {
     let dir = tempfile::tempdir().unwrap();
-    let (mut log, ops) = OpLog::open(dir.path(), key(), None).unwrap();
+    let (mut log, ops) = OpLog::open(Lock::take(dir.path()).unwrap(), key(), None).unwrap();
     assert!(ops.is_empty());
     let a = log.append(close(), 1).unwrap();
     let b = log.append(close(), 2).unwrap();
@@ -51,7 +51,7 @@ fn appended_ops_replay_in_order_and_chain() {
     let ops = read(dir.path(), &key().verifying_key(), None).unwrap();
     assert_eq!(ops, vec![a.clone(), b.clone()]);
     assert_eq!(ops[1].op.parent, Some(a.id));
-    let (_, reopened) = OpLog::open(dir.path(), key(), None).unwrap();
+    let (_, reopened) = OpLog::open(Lock::take(dir.path()).unwrap(), key(), None).unwrap();
     assert_eq!(reopened.len(), 2);
 }
 
@@ -63,7 +63,7 @@ fn tamper(dir: &Path, edit: impl Fn(String) -> String) -> LogError {
 
 fn two_ops() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
-    let (mut log, _) = OpLog::open(dir.path(), key(), None).unwrap();
+    let (mut log, _) = OpLog::open(Lock::take(dir.path()).unwrap(), key(), None).unwrap();
     log.append(close(), 1).unwrap();
     log.append(close(), 2).unwrap();
     dir
@@ -113,7 +113,7 @@ fn a_torn_last_line_is_left_out_then_cut_by_the_writer() {
             .len(),
         2
     );
-    let (mut log, ops) = OpLog::open(dir.path(), key(), None).unwrap();
+    let (mut log, ops) = OpLog::open(Lock::take(dir.path()).unwrap(), key(), None).unwrap();
     assert_eq!(ops.len(), 2);
     log.append(close(), 3).unwrap();
     drop(log);
@@ -139,7 +139,7 @@ fn a_write_torn_inside_a_character_is_left_out_then_cut() {
     let dir = two_ops();
     let path = dir.path().join(LOG_FILE);
     let whole = fs::read(&path).unwrap();
-    let (mut log, _) = OpLog::open(dir.path(), key(), None).unwrap();
+    let (mut log, _) = OpLog::open(Lock::take(dir.path()).unwrap(), key(), None).unwrap();
     log.append(intent("café"), 3).unwrap();
     drop(log);
     let full = fs::read(&path).unwrap();
@@ -157,7 +157,7 @@ fn a_write_torn_inside_a_character_is_left_out_then_cut() {
             .len(),
         2
     );
-    let (mut log, ops) = OpLog::open(dir.path(), key(), None).unwrap();
+    let (mut log, ops) = OpLog::open(Lock::take(dir.path()).unwrap(), key(), None).unwrap();
     assert_eq!(ops.len(), 2);
     log.append(close(), 4).unwrap();
     drop(log);
@@ -200,7 +200,7 @@ fn a_last_op_missing_only_its_newline_is_kept() {
             .len(),
         2
     );
-    let (mut log, ops) = OpLog::open(dir.path(), key(), None).unwrap();
+    let (mut log, ops) = OpLog::open(Lock::take(dir.path()).unwrap(), key(), None).unwrap();
     assert_eq!(ops.len(), 2);
     log.append(close(), 3).unwrap();
     drop(log);
@@ -215,14 +215,14 @@ fn a_last_op_missing_only_its_newline_is_kept() {
 #[test]
 fn a_failed_append_stops_the_writer_until_the_log_is_reopened() {
     let dir = two_ops();
-    let (mut log, _) = OpLog::open(dir.path(), key(), None).unwrap();
+    let (mut log, _) = OpLog::open(Lock::take(dir.path()).unwrap(), key(), None).unwrap();
     log.fail_next_write = true;
     assert!(matches!(log.append(close(), 3), Err(LogError::Io(_))));
     assert!(matches!(log.append(close(), 4), Err(LogError::Poisoned)));
     drop(log);
     // Reopening cuts the half line, and the next op chains onto the last
     // one that was written whole.
-    let (mut log, ops) = OpLog::open(dir.path(), key(), None).unwrap();
+    let (mut log, ops) = OpLog::open(Lock::take(dir.path()).unwrap(), key(), None).unwrap();
     assert_eq!(ops.len(), 2);
     log.append(close(), 5).unwrap();
     drop(log);
@@ -289,7 +289,7 @@ fn assert_refused(dir: &Path, anchor: Option<Anchor>) -> LogError {
     let path = dir.join(LOG_FILE);
     let before = fs::read(&path).ok();
     let read_err = read(dir, &key().verifying_key(), anchor).unwrap_err();
-    let Err(open_err) = OpLog::open(dir, key(), anchor) else {
+    let Err(open_err) = OpLog::open(Lock::take(dir).unwrap(), key(), anchor) else {
         panic!("the writer opened a log the reader refused: {read_err}");
     };
     assert_eq!(read_err.to_string(), open_err.to_string());
@@ -308,7 +308,12 @@ fn unterminate(dir: &Path) {
 #[test]
 fn an_unterminated_first_op_under_another_key_is_refused_not_cut() {
     let dir = tempfile::tempdir().unwrap();
-    let (mut log, _) = OpLog::open(dir.path(), SigningKey::from_bytes(&[8; 32]), None).unwrap();
+    let (mut log, _) = OpLog::open(
+        Lock::take(dir.path()).unwrap(),
+        SigningKey::from_bytes(&[8; 32]),
+        None,
+    )
+    .unwrap();
     log.append(close(), 1).unwrap();
     drop(log);
     unterminate(dir.path());
@@ -372,7 +377,7 @@ fn a_signed_op_of_an_unknown_schema_is_refused() {
 
 fn anchored_two_ops() -> (tempfile::TempDir, Anchor) {
     let dir = tempfile::tempdir().unwrap();
-    let (mut log, _) = OpLog::open(dir.path(), key(), None).unwrap();
+    let (mut log, _) = OpLog::open(Lock::take(dir.path()).unwrap(), key(), None).unwrap();
     assert_eq!(log.head(), None);
     let a = log.append(close(), 1).unwrap();
     assert_eq!(log.head(), Some(Anchor { seq: 1, op: a.id }));
@@ -381,7 +386,7 @@ fn anchored_two_ops() -> (tempfile::TempDir, Anchor) {
     assert_eq!(head, Anchor { seq: 2, op: b.id });
     drop(log);
     // Reopening finds the same head.
-    let (log, _) = OpLog::open(dir.path(), key(), Some(head)).unwrap();
+    let (log, _) = OpLog::open(Lock::take(dir.path()).unwrap(), key(), Some(head)).unwrap();
     assert_eq!(log.head(), Some(head));
     (dir, head)
 }
@@ -457,7 +462,7 @@ fn a_log_grown_past_its_anchor_opens_and_a_torn_tail_is_still_cut() {
             2
         );
     }
-    let (mut log, ops) = OpLog::open(dir.path(), key(), Some(anchor)).unwrap();
+    let (mut log, ops) = OpLog::open(Lock::take(dir.path()).unwrap(), key(), Some(anchor)).unwrap();
     assert_eq!(ops.len(), 2);
     log.append(close(), 3).unwrap();
     let head = log.head().unwrap();
@@ -483,7 +488,7 @@ fn a_directory_someone_else_made_is_still_synced_into_its_parent() {
     // Made by another initializer that hasn't synced anything yet.
     fs::create_dir_all(&dir).unwrap();
     take_synced();
-    OpLog::open(&dir, key(), None).unwrap();
+    OpLog::open(Lock::take(&dir).unwrap(), key(), None).unwrap();
     assert_published(&take_synced(), &dir);
 }
 
@@ -492,14 +497,11 @@ fn a_retry_after_a_failed_sync_completes_it() {
     let root = tempfile::tempdir().unwrap();
     let dir = root.path().join("a/b");
     FAIL_SYNC.set(Some(root.path().join("a")));
-    assert!(matches!(
-        OpLog::open(&dir, key(), None),
-        Err(LogError::Io(_))
-    ));
+    assert!(matches!(Lock::take(&dir), Err(LogError::Io(_))));
     // The directory was made, but its entry in `a` was never synced.
     assert!(dir.is_dir());
     take_synced();
-    OpLog::open(&dir, key(), None).unwrap();
+    OpLog::open(Lock::take(&dir).unwrap(), key(), None).unwrap();
     assert_published(&take_synced(), &dir);
 
     let path = root.path().join("keys/key");
@@ -530,7 +532,7 @@ fn a_key_and_a_log_in_different_directories_are_both_published() {
     let log_dir = root.path().join("var/lib/conary");
     take_synced();
     let key = load_or_create_key(&key_path).unwrap();
-    let (mut log, _) = OpLog::open(&log_dir, key, None).unwrap();
+    let (mut log, _) = OpLog::open(Lock::take(&log_dir).unwrap(), key, None).unwrap();
     log.append(close(), 1).unwrap();
     let synced = take_synced();
     assert_published(&synced, key_path.parent().unwrap());
@@ -553,14 +555,14 @@ fn an_ancestor_that_cant_be_opened_to_sync_is_an_error_every_time() {
     let key_path = blind.join("keys/key");
     for _ in 0..2 {
         // The retry finds the directory made, and still can't sync it.
-        let err = OpLog::open(&dir, key(), None).err().unwrap();
+        let err = Lock::take(&dir).err().unwrap();
         assert!(matches!(&err, LogError::Io(e) if e.kind() == io::ErrorKind::PermissionDenied));
         let err = load_or_create_key(&key_path).err().unwrap();
         assert!(matches!(&err, LogError::Io(e) if e.kind() == io::ErrorKind::PermissionDenied));
     }
     assert!(dir.is_dir());
     fs::set_permissions(&blind, fs::Permissions::from_mode(0o700)).unwrap();
-    OpLog::open(&dir, key(), None).unwrap();
+    OpLog::open(Lock::take(&dir).unwrap(), key(), None).unwrap();
     load_or_create_key(&key_path).unwrap();
 }
 
@@ -568,20 +570,22 @@ fn an_ancestor_that_cant_be_opened_to_sync_is_an_error_every_time() {
 fn readers_check_the_log_against_the_anchor_kept_beside_it() {
     let dir = tempfile::tempdir().unwrap();
     let public = key().verifying_key();
-    // A new ledger has nothing to anchor.
+    // A ledger never set up has no anchor, so nothing says what it holds.
+    let got = read_anchored(dir.path(), &public);
+    assert!(matches!(got, Err(LogError::NoAnchor(_))), "{got:?}");
+    let lock = Lock::take(dir.path()).unwrap();
+    save_anchor(&lock, None).unwrap();
+    assert_eq!(load_anchor(dir.path()).unwrap(), None);
     assert!(read_anchored(dir.path(), &public).unwrap().is_empty());
 
-    let (mut log, _) = OpLog::open(dir.path(), key(), None).unwrap();
+    let (mut log, _) = OpLog::open(lock, key(), None).unwrap();
     log.append(close(), 1).unwrap();
-    // Ops with no anchor: nothing says the log is whole.
-    assert!(matches!(
-        read_anchored(dir.path(), &public),
-        Err(LogError::NoAnchor(_))
-    ));
+    // Ops past the anchor: written since it was kept, which is fine.
+    assert_eq!(read_anchored(dir.path(), &public).unwrap().len(), 1);
     log.append(close(), 2).unwrap();
     let head = log.head().unwrap();
+    save_anchor(log.lock(), Some(head)).unwrap();
     drop(log);
-    save_anchor(dir.path(), head).unwrap();
     assert_eq!(load_anchor(dir.path()).unwrap(), Some(head));
     assert_eq!(head.to_string().parse::<Anchor>(), Ok(head));
     assert_eq!(read_anchored(dir.path(), &public).unwrap().len(), 2);
@@ -603,10 +607,26 @@ fn readers_check_the_log_against_the_anchor_kept_beside_it() {
         read_anchored(dir.path(), &public),
         Err(LogError::Unanchored(_))
     ));
-    // An anchor file that isn't one is refused, not skipped.
+    // The anchor removed with it, or one that isn't one: refused, not
+    // taken for a new ledger.
+    fs::remove_file(dir.path().join(ANCHOR_FILE)).unwrap();
+    assert!(matches!(
+        read_anchored(dir.path(), &public),
+        Err(LogError::NoAnchor(_))
+    ));
     fs::write(dir.path().join(ANCHOR_FILE), "not an anchor\n").unwrap();
     assert!(matches!(
         read_anchored(dir.path(), &public),
         Err(LogError::NoAnchor(_))
     ));
+}
+
+#[test]
+fn a_writer_never_makes_a_key_in_place_of_a_lost_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("key");
+    assert!(matches!(load_signing_key(&path), Err(LogError::NoKey(p)) if p == path));
+    assert!(!path.exists());
+    let made = load_or_create_key(&path).unwrap();
+    assert_eq!(load_signing_key(&path).unwrap().to_bytes(), made.to_bytes());
 }

@@ -76,7 +76,7 @@ mod tests {
         };
         let dir = tempfile::tempdir().unwrap();
         let mut store = Store::open(
-            dir.path(),
+            crate::log::Lock::take(dir.path()).unwrap(),
             ed25519_dalek::SigningKey::from_bytes(&[4; 32]),
             None,
         )

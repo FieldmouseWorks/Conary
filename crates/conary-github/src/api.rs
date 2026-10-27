@@ -77,6 +77,8 @@ pub struct Status {
     pub state: String,
     pub target_url: Option<String>,
     pub created_at: Option<String>,
+    /// Who posted it: anyone who can push can post any context.
+    pub creator: Option<User>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -145,8 +147,8 @@ pub trait Source {
     fn statuses(&self, repo: &str, sha: &str) -> Result<Vec<Status>, ApiError>;
     fn reviews(&self, repo: &str, number: u64) -> Result<Vec<Review>, ApiError>;
     fn commit(&self, repo: &str, sha: &str) -> Result<Commit, ApiError>;
-    /// The PRs GitHub links a commit to: the one that landed it, for a
-    /// commit on trunk.
+    /// The PRs GitHub links a commit to: the one whose merge, squash or
+    /// rebase made it, for a commit on trunk.
     fn commit_pulls(&self, repo: &str, sha: &str) -> Result<Vec<u64>, ApiError>;
     /// When the PR's base branch was last changed, if it ever was.
     fn retargeted(&self, repo: &str, number: u64) -> Result<Option<String>, ApiError>;

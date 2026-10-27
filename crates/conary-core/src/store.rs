@@ -2,14 +2,13 @@
 //! kept in step. Every write is checked against the ledger before it's
 //! appended, so the log only ever holds ops that apply.
 
-use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use ed25519_dalek::SigningKey;
 
 use crate::id::OpId;
 use crate::ledger::{Invalid, Ledger};
-use crate::log::{Anchor, LogError, OpLog};
+use crate::log::{Anchor, Lock, LogError, OpLog};
 use crate::op::Body;
 
 #[derive(Debug)]
@@ -45,11 +44,11 @@ pub struct Store {
 }
 
 impl Store {
-    /// Opens the ledger at `dir` for writing, refusing a log that doesn't
-    /// hold `anchor`, the newest one its caller holds. Waits for any other
-    /// writer to finish first.
-    pub fn open(dir: &Path, key: SigningKey, anchor: Option<Anchor>) -> Result<Self, StoreError> {
-        let (log, ops) = OpLog::open(dir, key, anchor)?;
+    /// Opens the ledger in `lock`'s directory for writing, refusing a log
+    /// that doesn't hold `anchor`, the newest one its caller holds (and read
+    /// under that lock, so no other writer moved it since).
+    pub fn open(lock: Lock, key: SigningKey, anchor: Option<Anchor>) -> Result<Self, StoreError> {
+        let (log, ops) = OpLog::open(lock, key, anchor)?;
         let ledger = Ledger::replay(&ops).map_err(|(id, e)| StoreError::Replay(id, e))?;
         Ok(Self { log, ledger })
     }
@@ -61,6 +60,11 @@ impl Store {
     /// The last op recorded, to anchor the log at.
     pub fn head(&self) -> Option<Anchor> {
         self.log.head()
+    }
+
+    /// The writer lock this store holds.
+    pub fn lock(&self) -> &Lock {
+        self.log.lock()
     }
 
     /// Records one op, now.
@@ -126,7 +130,7 @@ mod tests {
     #[test]
     fn a_change_is_seen_revised_checked_and_landed() {
         let dir = tempfile::tempdir().unwrap();
-        let mut store = Store::open(dir.path(), key(), None).unwrap();
+        let mut store = Store::open(Lock::take(dir.path()).unwrap(), key(), None).unwrap();
         let change = observe(&mut store, 9);
         store
             .record(Body::Revision {
@@ -175,7 +179,7 @@ mod tests {
     #[test]
     fn ops_that_dont_apply_are_refused_and_never_written() {
         let dir = tempfile::tempdir().unwrap();
-        let mut store = Store::open(dir.path(), key(), None).unwrap();
+        let mut store = Store::open(Lock::take(dir.path()).unwrap(), key(), None).unwrap();
         let change = observe(&mut store, 1);
         let unknown = RevisionId::new(&commit('a'), &commit('d'));
         let refused = [
@@ -235,7 +239,7 @@ mod tests {
     #[test]
     fn changes_are_listed_in_the_order_they_were_seen() {
         let dir = tempfile::tempdir().unwrap();
-        let mut store = Store::open(dir.path(), key(), None).unwrap();
+        let mut store = Store::open(Lock::take(dir.path()).unwrap(), key(), None).unwrap();
         let seen: Vec<ChangeId> = (1..=20).map(|pr| observe(&mut store, pr)).collect();
         let listed: Vec<ChangeId> = store.ledger().changes().map(|c| c.id).collect();
         assert_eq!(listed, seen);
@@ -244,7 +248,7 @@ mod tests {
     #[test]
     fn two_changes_cant_claim_one_trunk_commit() {
         let dir = tempfile::tempdir().unwrap();
-        let mut store = Store::open(dir.path(), key(), None).unwrap();
+        let mut store = Store::open(Lock::take(dir.path()).unwrap(), key(), None).unwrap();
         for pr in [1, 2] {
             let change = observe(&mut store, pr);
             store
@@ -269,7 +273,7 @@ mod tests {
         // Trunk at c, moved away, then reset to c, and reset to a landed
         // commit: each is a movement of its own.
         let dir = tempfile::tempdir().unwrap();
-        let mut store = Store::open(dir.path(), key(), None).unwrap();
+        let mut store = Store::open(Lock::take(dir.path()).unwrap(), key(), None).unwrap();
         let change = observe(&mut store, 1);
         store
             .record(Body::Revision {
@@ -301,14 +305,14 @@ mod tests {
     #[test]
     fn a_store_whose_log_lost_its_anchored_op_is_refused() {
         let dir = tempfile::tempdir().unwrap();
-        let mut store = Store::open(dir.path(), key(), None).unwrap();
+        let mut store = Store::open(Lock::take(dir.path()).unwrap(), key(), None).unwrap();
         observe(&mut store, 1);
         let anchor = store.head().unwrap();
         drop(store);
-        Store::open(dir.path(), key(), Some(anchor)).unwrap();
+        Store::open(Lock::take(dir.path()).unwrap(), key(), Some(anchor)).unwrap();
         std::fs::remove_file(dir.path().join("ops.jsonl")).unwrap();
         assert!(matches!(
-            Store::open(dir.path(), key(), Some(anchor)),
+            Store::open(Lock::take(dir.path()).unwrap(), key(), Some(anchor)),
             Err(StoreError::Log(LogError::Unanchored(_)))
         ));
     }
