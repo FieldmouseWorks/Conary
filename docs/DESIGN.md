@@ -394,11 +394,13 @@ Targets on remi, warm cache, a year of ledger across every repo:
   - CI on GitHub Actions: a signed attestation the job itself makes with its
     GitHub OIDC identity (Sigstore, keyless), over the result, the revision's
     head and base commits and the log hash. It binds the result to the
-    workflow, the commit and the run that made it. Making it is a step to add
-    to burrow's shared `flake-check.yml` (at M1), so every repo's gate makes
-    one without its own change. GitHub's API
-    record of the check run is where Conary finds it, never a substitute
-    for it.
+    workflow, the commit and the run that made it. burrow's shared
+    `flake-check.yml` makes it after the gate, so every public repo's gate
+    makes one; the caller only grants the job the permissions to sign.
+    [CI attestations](ci-attestation.md) is the format and how to check one.
+    GitHub's API keeps it, by the revision's digest; the check run's own
+    record is never a substitute for it. GitHub attests for private repos
+    only on Enterprise Cloud, so theirs need remi's runner key (below).
   - Jobs on remi (reviewers, proof and judge jobs, negative runs): a signature
     by that runner service's own key, which no authoring session or sandbox
     can read, over the result, the revision and the run's log hash.
