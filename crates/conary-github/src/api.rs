@@ -14,10 +14,22 @@ pub struct User {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct Login {
+    pub login: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct Ref {
     pub sha: String,
     #[serde(rename = "ref")]
     pub name: String,
+    /// The repository the branch is in; null for a deleted fork's head.
+    pub repo: Option<RefRepo>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RefRepo {
+    pub default_branch: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -39,6 +51,14 @@ impl PullRequest {
     pub fn is_merged(&self) -> bool {
         self.merged.unwrap_or(false) || self.merged_at.is_some()
     }
+
+    /// Whether the PR is against its repository's trunk, the default branch.
+    pub fn targets_trunk(&self) -> bool {
+        self.base
+            .repo
+            .as_ref()
+            .is_some_and(|r| r.default_branch == self.base.name)
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -47,10 +67,12 @@ pub struct CheckRun {
     pub status: String,
     pub conclusion: Option<String>,
     pub html_url: Option<String>,
+    pub completed_at: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct CheckRuns {
+    total_count: usize,
     check_runs: Vec<CheckRun>,
 }
 
@@ -59,6 +81,7 @@ pub struct Status {
     pub context: String,
     pub state: String,
     pub target_url: Option<String>,
+    pub created_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -67,6 +90,7 @@ pub struct Review {
     pub body: Option<String>,
     pub commit_id: Option<String>,
     pub html_url: Option<String>,
+    pub submitted_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -78,6 +102,46 @@ pub struct Parent {
 pub struct Commit {
     pub sha: String,
     pub parents: Vec<Parent>,
+    /// The GitHub account the committer's email belongs to.
+    pub committer: Option<Login>,
+    pub commit: CommitDetail,
+}
+
+impl Commit {
+    /// GitHub made this commit itself, merging a PR (by merge, squash or
+    /// rebase, from the web or the API): committed as `web-flow` and signed
+    /// with GitHub's key, which a push can't forge.
+    pub fn made_by_github(&self) -> bool {
+        self.committer
+            .as_ref()
+            .is_some_and(|c| c.login == "web-flow")
+            && self
+                .commit
+                .verification
+                .as_ref()
+                .is_some_and(|v| v.verified)
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct CommitDetail {
+    pub verification: Option<Verification>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Verification {
+    pub verified: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct PullNumber {
+    number: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct TimelineEvent {
+    event: Option<String>,
+    created_at: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -115,6 +179,11 @@ pub trait Source {
     fn statuses(&self, repo: &str, sha: &str) -> Result<Vec<Status>, ApiError>;
     fn reviews(&self, repo: &str, number: u64) -> Result<Vec<Review>, ApiError>;
     fn commit(&self, repo: &str, sha: &str) -> Result<Commit, ApiError>;
+    /// The PRs GitHub links a commit to: the one that landed it, for a
+    /// commit on trunk.
+    fn commit_pulls(&self, repo: &str, sha: &str) -> Result<Vec<u64>, ApiError>;
+    /// When the PR's base branch was last changed, if it ever was.
+    fn retargeted(&self, repo: &str, number: u64) -> Result<Option<String>, ApiError>;
     /// The best common ancestor of two commits.
     fn merge_base(&self, repo: &str, a: &str, b: &str) -> Result<String, ApiError>;
 }
@@ -193,10 +262,19 @@ impl Source for Api {
     }
 
     fn check_runs(&self, repo: &str, sha: &str) -> Result<Vec<CheckRun>, ApiError> {
-        let runs: CheckRuns = self.get(&format!(
-            "/repos/{repo}/commits/{sha}/check-runs?per_page=100"
-        ))?;
-        Ok(runs.check_runs)
+        // Every run, reruns included, not only each check's latest; the runs
+        // come wrapped with their count rather than as a bare page.
+        let path = format!("/repos/{repo}/commits/{sha}/check-runs?filter=all");
+        let mut all = Vec::new();
+        for page in 1..=MAX_PAGES {
+            let got: CheckRuns = self.get(&format!("{path}&per_page=100&page={page}"))?;
+            let short = got.check_runs.len() < 100;
+            all.extend(got.check_runs);
+            if short || all.len() >= got.total_count {
+                return Ok(all);
+            }
+        }
+        Err(ApiError(format!("{path}: more than {MAX_PAGES} pages")))
     }
 
     fn statuses(&self, repo: &str, sha: &str) -> Result<Vec<Status>, ApiError> {
@@ -209,6 +287,21 @@ impl Source for Api {
 
     fn commit(&self, repo: &str, sha: &str) -> Result<Commit, ApiError> {
         self.get(&format!("/repos/{repo}/commits/{sha}"))
+    }
+
+    fn commit_pulls(&self, repo: &str, sha: &str) -> Result<Vec<u64>, ApiError> {
+        let pulls: Vec<PullNumber> = self.pages(&format!("/repos/{repo}/commits/{sha}/pulls"))?;
+        Ok(pulls.into_iter().map(|p| p.number).collect())
+    }
+
+    fn retargeted(&self, repo: &str, number: u64) -> Result<Option<String>, ApiError> {
+        let events: Vec<TimelineEvent> =
+            self.pages(&format!("/repos/{repo}/issues/{number}/timeline"))?;
+        Ok(events
+            .into_iter()
+            .filter(|e| e.event.as_deref() == Some("base_ref_changed"))
+            .filter_map(|e| e.created_at)
+            .max())
     }
 
     fn merge_base(&self, repo: &str, a: &str, b: &str) -> Result<String, ApiError> {

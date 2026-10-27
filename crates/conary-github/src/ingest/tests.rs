@@ -11,6 +11,9 @@ const FORK: &str = "2222222222222222222222222222222222222222";
 const HEAD: &str = "3333333333333333333333333333333333333333";
 const HEAD2: &str = "4444444444444444444444444444444444444444";
 const MERGE: &str = "5555555555555555555555555555555555555555";
+const REBASED: &str = "6666666666666666666666666666666666666666";
+const DEV: &str = "7777777777777777777777777777777777777777";
+const DEV_FORK: &str = "8888888888888888888888888888888888888888";
 const STEWARD: &str = "fieldmouse-steward";
 
 /// GitHub as recorded answers, in the shapes the REST API sends.
@@ -20,6 +23,10 @@ struct Fake {
     checks: HashMap<String, Value>,
     statuses: HashMap<String, Value>,
     reviews: HashMap<u64, Value>,
+    commits: HashMap<String, Value>,
+    /// The PRs each commit is linked to; none when it isn't listed.
+    linked: HashMap<String, Vec<u64>>,
+    retargeted: Option<String>,
 }
 
 fn parse<T: serde::de::DeserializeOwned>(v: &Value) -> T {
@@ -57,14 +64,25 @@ impl Source for Fake {
     }
 
     fn commit(&self, _: &str, sha: &str) -> Result<Commit, ApiError> {
-        assert_eq!(sha, MERGE);
-        Ok(parse(&json!({"sha": MERGE, "parents": [{"sha": BASE}]})))
+        Ok(parse(&self.commits[sha]))
+    }
+
+    fn commit_pulls(&self, _: &str, sha: &str) -> Result<Vec<u64>, ApiError> {
+        Ok(self.linked.get(sha).cloned().unwrap_or_default())
+    }
+
+    fn retargeted(&self, _: &str, _: u64) -> Result<Option<String>, ApiError> {
+        Ok(self.retargeted.clone())
     }
 
     fn merge_base(&self, _: &str, a: &str, _: &str) -> Result<String, ApiError> {
-        // The base branch has moved on since the head branched off it.
-        assert_eq!(a, BASE);
-        Ok(FORK.into())
+        // Each base branch has moved on since the head branched off it.
+        Ok(match a {
+            BASE => FORK,
+            DEV => DEV_FORK,
+            _ => panic!("no merge base for {a}"),
+        }
+        .into())
     }
 }
 
@@ -91,7 +109,7 @@ fn pr(number: u64, head: &str, state: &str, merged: bool) -> Value {
         "user": {"login": "TusanHomichi", "type": "User"},
         "merged_at": if merged { json!("2026-10-27T12:00:00Z") } else { Value::Null },
         "merge_commit_sha": if merged { json!(MERGE) } else { Value::Null },
-        "base": {"sha": BASE, "ref": "main"},
+        "base": {"sha": BASE, "ref": "main", "repo": {"default_branch": "main"}},
         "head": {"sha": head, "ref": "claude/x"},
     })
 }
@@ -111,11 +129,26 @@ fn review(id: u64, login: &str, head: &str, body: String) -> Value {
     })
 }
 
+/// A trunk commit, by `committer`, signed or not.
+fn trunk_commit(sha: &str, parents: &[&str], committer: &str, verified: bool) -> Value {
+    json!({
+        "sha": sha,
+        "parents": parents.iter().map(|p| json!({"sha": p})).collect::<Vec<_>>(),
+        "committer": {"login": committer},
+        "commit": {"verification": {"verified": verified}},
+    })
+}
+
 fn fake() -> Fake {
     let mut f = Fake {
         pulls: vec![pr(9, HEAD, "open", false)],
         ..Fake::default()
     };
+    // 9 squashed onto trunk, after 8.
+    f.commits
+        .insert(MERGE.into(), trunk_commit(MERGE, &[BASE], "web-flow", true));
+    f.linked.insert(MERGE.into(), vec![9]);
+    f.linked.insert(BASE.into(), vec![8]);
     f.checks.insert(
         HEAD.into(),
         json!([
@@ -352,4 +385,166 @@ fn sync_takes_open_prs_and_closed_ones_it_hasnt_finished() {
     // Finished PRs aren't read again.
     let got = sync(&mut store, &f, &config(), &repo()).unwrap();
     assert_eq!(got.len(), 1);
+}
+
+#[test]
+fn a_rebase_lands_from_trunk_before_its_first_commit() {
+    let (_dir, mut store) = open();
+    let mut f = fake();
+    f.pulls = vec![pr(9, HEAD, "closed", true)];
+    // 9's two commits rebased onto 8: REBASED, then MERGE on top of it.
+    f.commits.insert(
+        MERGE.into(),
+        trunk_commit(MERGE, &[REBASED], "web-flow", true),
+    );
+    f.commits.insert(
+        REBASED.into(),
+        trunk_commit(REBASED, &[BASE], "web-flow", true),
+    );
+    f.linked.insert(REBASED.into(), vec![9]);
+    pull(&mut store, &f, &config(), &repo(), 9).unwrap();
+    let landing = store.ledger().by_pr(&repo(), 9).unwrap().landing.clone();
+    assert_eq!(landing.unwrap().before, sha(BASE));
+}
+
+#[test]
+fn a_merge_commit_lands_from_its_first_parent() {
+    let (_dir, mut store) = open();
+    let mut f = fake();
+    f.pulls = vec![pr(9, HEAD, "closed", true)];
+    // Linked to 9 or not, a merge's first parent is trunk before it.
+    f.commits.insert(
+        MERGE.into(),
+        trunk_commit(MERGE, &[BASE, HEAD], "web-flow", true),
+    );
+    f.linked.insert(BASE.into(), vec![9]);
+    pull(&mut store, &f, &config(), &repo(), 9).unwrap();
+    let landing = store.ledger().by_pr(&repo(), 9).unwrap().landing.clone();
+    assert_eq!(landing.unwrap().before, sha(BASE));
+}
+
+#[test]
+fn commits_pushed_straight_to_trunk_are_outside_not_a_landing() {
+    for (committer, verified) in [("TusanHomichi", true), ("web-flow", false)] {
+        let (_dir, mut store) = open();
+        let mut f = fake();
+        f.pulls = vec![pr(9, HEAD, "closed", true)];
+        f.commits.insert(
+            MERGE.into(),
+            trunk_commit(MERGE, &[BASE], committer, verified),
+        );
+        let change = pull(&mut store, &f, &config(), &repo(), 9).unwrap().change;
+        let ledger = store.ledger();
+        let c = ledger.change(change).unwrap();
+        assert_eq!(c.status(), Status::Closed, "{committer}");
+        assert!(ledger.landed_as(&repo(), &sha(MERGE)).is_none());
+        let outside = ledger.outside();
+        assert_eq!(outside.len(), 1);
+        assert_eq!(
+            (outside[0].before.as_ref(), &outside[0].after),
+            (Some(&sha(BASE)), &sha(MERGE))
+        );
+        assert_eq!(
+            pull(&mut store, &f, &config(), &repo(), 9)
+                .unwrap()
+                .recorded,
+            0
+        );
+        // And sync leaves it be.
+        assert!(sync(&mut store, &f, &config(), &repo()).unwrap().is_empty());
+    }
+}
+
+#[test]
+fn a_pr_merged_into_another_branch_closes_without_landing() {
+    let (_dir, mut store) = open();
+    let mut f = fake();
+    let mut into_dev = pr(9, HEAD, "closed", true);
+    into_dev["base"] = json!({"sha": DEV, "ref": "dev", "repo": {"default_branch": "main"}});
+    f.pulls = vec![into_dev];
+    let change = pull(&mut store, &f, &config(), &repo(), 9).unwrap().change;
+    let ledger = store.ledger();
+    assert_eq!(ledger.change(change).unwrap().status(), Status::Closed);
+    assert!(ledger.landed_as(&repo(), &sha(MERGE)).is_none() && ledger.outside().is_empty());
+    assert!(sync(&mut store, &f, &config(), &repo()).unwrap().is_empty());
+}
+
+/// 9 retargeted from main to dev with its head unchanged: a new revision.
+fn retarget(f: &mut Fake) {
+    let mut on_dev = pr(9, HEAD, "open", false);
+    on_dev["base"] = json!({"sha": DEV, "ref": "dev", "repo": {"default_branch": "dev"}});
+    f.pulls = vec![on_dev];
+}
+
+#[test]
+fn results_from_before_a_retarget_stay_on_the_old_revision() {
+    let (_dir, mut store) = open();
+    let mut f = fake();
+    let change = pull(&mut store, &f, &config(), &repo(), 9).unwrap().change;
+    let old = RevisionId::new(&sha(FORK), &sha(HEAD));
+    let new = RevisionId::new(&sha(DEV_FORK), &sha(HEAD));
+
+    // Seen on the old revision already: not bound to the new one, though
+    // nothing says when they came. The marker about 9 on dev is the new
+    // revision's own.
+    retarget(&mut f);
+    assert_eq!(
+        pull(&mut store, &f, &config(), &repo(), 9)
+            .unwrap()
+            .recorded,
+        2
+    );
+    let c = store.ledger().change(change).unwrap();
+    assert!(c.revision(new).is_some());
+    let on = |c: &conary_core::ledger::Change, r| -> Vec<String> {
+        c.evidence
+            .iter()
+            .filter(|e| e.revision == r)
+            .map(|e| e.check.clone())
+            .collect()
+    };
+    assert_eq!(on(c, new), ["codex"]);
+    assert_eq!(on(c, old).len(), 5);
+
+    // Never seen, from before the retarget: left out. After it: bound.
+    f.retargeted = Some("2026-10-27T13:00:00Z".into());
+    f.checks.insert(
+        HEAD.into(),
+        json!([
+            {"name": "before", "status": "completed", "conclusion": "success",
+             "html_url": "https://github.com/x/y/actions/runs/2/job/2",
+             "completed_at": "2026-10-27T12:59:59Z"},
+            {"name": "unknown", "status": "completed", "conclusion": "success",
+             "html_url": "https://github.com/x/y/actions/runs/3/job/3"},
+            {"name": "after", "status": "completed", "conclusion": "success",
+             "html_url": "https://github.com/x/y/actions/runs/4/job/4",
+             "completed_at": "2026-10-27T13:00:01Z"},
+        ]),
+    );
+    pull(&mut store, &f, &config(), &repo(), 9).unwrap();
+    let c = store.ledger().change(change).unwrap();
+    assert_eq!(on(c, new), ["codex", "after"]);
+}
+
+#[test]
+fn sync_reads_a_closed_pr_again_when_it_changed_since() {
+    let (_dir, mut store) = open();
+    let mut f = fake();
+    f.pulls = vec![pr(9, HEAD, "closed", false)];
+    sync(&mut store, &f, &config(), &repo()).unwrap();
+    let status = |s: &Store| s.ledger().by_pr(&repo(), 9).unwrap().status();
+    assert_eq!(status(&store), Status::Closed);
+    assert!(sync(&mut store, &f, &config(), &repo()).unwrap().is_empty());
+
+    // Reopened, pushed to and closed again between two syncs.
+    f.pulls = vec![pr(9, HEAD2, "closed", false)];
+    assert_eq!(sync(&mut store, &f, &config(), &repo()).unwrap().len(), 1);
+    let c = store.ledger().by_pr(&repo(), 9).unwrap();
+    assert_eq!(c.revisions.len(), 2);
+
+    // Reopened and merged between two syncs.
+    f.pulls = vec![pr(9, HEAD2, "closed", true)];
+    assert_eq!(sync(&mut store, &f, &config(), &repo()).unwrap().len(), 1);
+    assert_eq!(status(&store), Status::Landed);
+    assert!(sync(&mut store, &f, &config(), &repo()).unwrap().is_empty());
 }

@@ -10,12 +10,14 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
-use conary_core::ledger::{Invalid, Status};
+use conary_core::ledger::{Change, Invalid, Ledger, Status};
 use conary_core::op::{Actor, ActorKind, Body, CheckKind, Outcome, Repo};
 use conary_core::store::StoreError;
 use conary_core::{ChangeId, CommitId, RevisionId, Store};
 
-use crate::api::{ApiError, CheckRun, PullRequest, Pulls, Review, Source, Status as CommitStatus};
+use crate::api::{
+    ApiError, CheckRun, Commit, PullRequest, Pulls, Review, Source, Status as CommitStatus,
+};
 
 /// What ingest trusts, from the machine's configuration.
 #[derive(Debug, Clone, Default)]
@@ -99,8 +101,8 @@ pub fn backfill(
 
 /// Brings the ledger up to date with what's happening in a repo: every open
 /// PR, since its checks and reviews come and go, and every recently closed
-/// one the ledger doesn't hold as landed or closed yet. A PR the ledger
-/// already holds as finished costs nothing.
+/// one the ledger doesn't hold as it finished yet. A PR the ledger already
+/// holds as GitHub shows it costs nothing.
 pub fn sync(
     store: &mut Store,
     source: &dyn Source,
@@ -113,15 +115,43 @@ pub fn sync(
         got.push(record(store, source, config, repo, &pr)?);
     }
     for pr in source.pulls(&full, Pulls::RecentlyClosed)?.iter().rev() {
-        let finished = store
-            .ledger()
+        let ledger = store.ledger();
+        let settled = ledger
             .by_pr(repo, pr.number)
-            .is_some_and(|c| c.status() != Status::Open);
-        if !finished {
+            .is_some_and(|c| settled(ledger, c, pr));
+        if !settled {
             got.push(record(store, source, config, repo, pr)?);
         }
     }
     Ok(got)
+}
+
+/// Whether the ledger already holds a closed PR as GitHub shows it: how it
+/// finished, its head and its intent. A PR reopened, pushed to and closed
+/// again, or reopened and merged, between two syncs is read again.
+fn settled(ledger: &Ledger, c: &Change, pr: &PullRequest) -> bool {
+    let finished = match c.status() {
+        Status::Open => false,
+        Status::Landed => pr.is_merged(),
+        // Closed without landing, or merged without a landing: into another
+        // branch, or pushed to trunk outside a merge.
+        Status::Closed => {
+            !pr.is_merged()
+                || !pr.targets_trunk()
+                || pr.merge_commit_sha.as_deref().is_some_and(|sha| {
+                    ledger
+                        .outside()
+                        .iter()
+                        .any(|o| o.repo == c.repo && o.after.as_str() == sha)
+                })
+        }
+    };
+    let body = pr.body.as_deref().unwrap_or_default();
+    finished
+        && c.revisions.iter().any(|r| r.head.as_str() == pr.head.sha)
+        && c.intent
+            .as_ref()
+            .is_some_and(|i| i.summary == pr.title && i.body == body)
 }
 
 fn commit(sha: &str) -> Result<CommitId, IngestError> {
@@ -190,21 +220,32 @@ fn record(
         head: head.clone(),
     })?;
 
+    // Results are read by head, and a head keeps its results when the PR is
+    // retargeted, so they're bound to this revision only when they came
+    // after the last retarget and aren't bound to another revision of this
+    // head already. One whose revision can't be told is left out.
+    let since = source.retargeted(&full, pr.number)?;
+    let current = |at: Option<&str>| since.as_deref().is_none_or(|s| at.is_some_and(|t| t >= s));
+    let mut evidence = Vec::new();
     for run in source.check_runs(&full, head.as_str())? {
-        if let Some(body) = check_run(change, revision, &run) {
-            w.record(body)?;
+        if current(run.completed_at.as_deref()) {
+            evidence.extend(check_run(change, revision, &run));
         }
     }
     // Newest first from GitHub; recorded in the order they happened.
     for status in source.statuses(&full, head.as_str())?.iter().rev() {
-        if !config.own_contexts.contains(&status.context)
-            && let Some(body) = commit_status(change, revision, status)
-        {
-            w.record(body)?;
+        if !config.own_contexts.contains(&status.context) && current(status.created_at.as_deref()) {
+            evidence.extend(commit_status(change, revision, status));
         }
     }
     for review in source.reviews(&full, pr.number)? {
-        if let Some(body) = review_marker(config, pr, change, revision, &review) {
+        if current(review.submitted_at.as_deref()) {
+            evidence.extend(review_marker(config, pr, change, revision, &review));
+        }
+    }
+    for body in evidence {
+        let c = w.store.ledger().change(change).expect("observed above");
+        if !bound_elsewhere(c, revision, &head, &body) {
             w.record(body)?;
         }
     }
@@ -215,36 +256,123 @@ fn record(
         .change(change)
         .map(|c| c.status())
         .expect("observed above");
-    match (pr.is_merged(), pr.state.as_str(), status) {
-        (true, _, Status::Open | Status::Closed) => {
-            if status == Status::Closed {
-                w.record(Body::Reopen { change })?;
-            }
-            let sha = pr
-                .merge_commit_sha
-                .as_deref()
-                .ok_or_else(|| IngestError::Malformed("a merged PR with no merge commit".into()))?;
-            let after = commit(sha)?;
-            let landed = source.commit(&full, sha)?;
-            let before = landed.parents.first().ok_or_else(|| {
-                IngestError::Malformed(format!("merge commit {sha} with no parent"))
-            })?;
-            w.record(Body::Land {
-                change,
-                revision,
-                before: commit(&before.sha)?,
-                after,
-            })?;
+    if pr.is_merged() {
+        merged(&mut w, source, repo, pr, change, revision, status)?;
+    } else {
+        match (pr.state.as_str(), status) {
+            ("closed", Status::Open) => w.record(Body::Close { change })?,
+            ("open", Status::Closed) => w.record(Body::Reopen { change })?,
+            _ => {}
         }
-        (false, "closed", Status::Open) => w.record(Body::Close { change })?,
-        (false, "open", Status::Closed) => w.record(Body::Reopen { change })?,
-        _ => {}
     }
 
     Ok(Ingested {
         change,
         recorded: w.recorded,
     })
+}
+
+/// Whether a result is already bound to another revision with the same head:
+/// a PR's earlier base, before it was retargeted or its base branch rewritten.
+fn bound_elsewhere(c: &Change, revision: RevisionId, head: &CommitId, body: &Body) -> bool {
+    let Body::Evidence {
+        kind,
+        check,
+        result,
+        source,
+        ..
+    } = body
+    else {
+        return false;
+    };
+    c.evidence.iter().any(|e| {
+        e.revision != revision
+            && c.revision(e.revision).is_some_and(|r| &r.head == head)
+            && (&e.kind, &e.check, &e.result, &e.source) == (kind, check, result, source)
+    })
+}
+
+/// A merged PR landed only if GitHub merged it into trunk: by merge, squash
+/// or rebase, from the web or the API. Merged into another branch, it closed
+/// without landing on trunk; its commits land with that branch. Marked merged
+/// because its commits were pushed to trunk directly, trunk moved outside a
+/// landing: that's recorded as a violation, and the change closes.
+fn merged(
+    w: &mut Writer,
+    source: &dyn Source,
+    repo: &Repo,
+    pr: &PullRequest,
+    change: ChangeId,
+    revision: RevisionId,
+    status: Status,
+) -> Result<(), IngestError> {
+    if status == Status::Landed {
+        return Ok(());
+    }
+    if !pr.targets_trunk() {
+        if status == Status::Open {
+            w.record(Body::Close { change })?;
+        }
+        return Ok(());
+    }
+    let full = repo.to_string();
+    let sha = pr
+        .merge_commit_sha
+        .as_deref()
+        .ok_or_else(|| IngestError::Malformed("a merged PR with no merge commit".into()))?;
+    let landed = source.commit(&full, sha)?;
+    let before = trunk_before(source, &full, pr.number, &landed)?;
+    let after = commit(sha)?;
+    if landed.made_by_github() {
+        if status == Status::Closed {
+            w.record(Body::Reopen { change })?;
+        }
+        w.record(Body::Land {
+            change,
+            revision,
+            before,
+            after,
+        })
+    } else {
+        w.record(Body::Outside {
+            repo: repo.clone(),
+            before: Some(before),
+            after,
+        })?;
+        if status == Status::Open {
+            w.record(Body::Close { change })?;
+        }
+        Ok(())
+    }
+}
+
+/// GitHub merges at most 250 commits; a walk longer than this isn't a landing.
+const MAX_LANDED: usize = 300;
+
+/// Trunk just before the commits that `landed` tops. A merge commit's first
+/// parent is. A squash or rebase lays the PR's commits on trunk in a line,
+/// each linked to the PR, so trunk before is the first commit back that
+/// isn't; counting the PR's own commits would miss the empty ones a rebase
+/// drops.
+fn trunk_before(
+    source: &dyn Source,
+    repo: &str,
+    number: u64,
+    landed: &Commit,
+) -> Result<CommitId, IngestError> {
+    let mut at = landed.clone();
+    for _ in 0..MAX_LANDED {
+        let parent = at.parents.first().ok_or_else(|| {
+            IngestError::Malformed(format!("trunk commit {} with no parent", at.sha))
+        })?;
+        if landed.parents.len() > 1 || !source.commit_pulls(repo, &parent.sha)?.contains(&number) {
+            return commit(&parent.sha);
+        }
+        at = source.commit(repo, &parent.sha)?;
+    }
+    Err(IngestError::Malformed(format!(
+        "#{number} landing more than {MAX_LANDED} commits"
+    )))
 }
 
 static SESSION: LazyLock<Regex> =
