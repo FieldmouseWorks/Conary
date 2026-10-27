@@ -145,7 +145,7 @@ fn fake() -> Fake {
 
 fn open() -> (tempfile::TempDir, Store) {
     let dir = tempfile::tempdir().unwrap();
-    let store = Store::open(dir.path(), SigningKey::from_bytes(&[5; 32])).unwrap();
+    let store = Store::open(dir.path(), SigningKey::from_bytes(&[5; 32]), None).unwrap();
     (dir, store)
 }
 
@@ -311,5 +311,10 @@ fn tasks_are_read_from_the_body() {
         task(&r, "fixes FieldmouseWorks/remi#37 and refs #2").as_deref(),
         Some("FieldmouseWorks/remi#37")
     );
+    let thread = "https://claude.ai/code/project/chan_01Ad?thread=cmsg_01Ad";
+    let body = format!("_Requested by **Peter** · [project thread]({thread})_\n\nRefs #3");
+    assert_eq!(task(&r, &body).as_deref(), Some("FieldmouseWorks/burrow#3"));
+    let body = format!("_Requested by **Peter** · [project thread]({thread})_");
+    assert_eq!(task(&r, &body).as_deref(), Some(thread));
     assert_eq!(task(&r, "issue #7, see #8"), None);
 }

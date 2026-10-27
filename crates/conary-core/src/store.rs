@@ -164,6 +164,12 @@ mod tests {
         assert_eq!(landed.status(), Status::Landed);
         assert_eq!(landed.evidence.len(), 1);
         assert_eq!(ledger.by_pr(&repo(), 9).unwrap().id, change);
+        // GitHub ignores case in a repository's name, and so does the ledger.
+        let spelled = Repo {
+            owner: "fieldmouseworks".into(),
+            name: "Burrow".into(),
+        };
+        assert_eq!(ledger.landed_as(&spelled, &commit('c')).unwrap().id, change);
     }
 
     #[test]
@@ -224,6 +230,15 @@ mod tests {
                 .len(),
             3
         );
+    }
+
+    #[test]
+    fn changes_are_listed_in_the_order_they_were_seen() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(dir.path(), key(), None).unwrap();
+        let seen: Vec<ChangeId> = (1..=20).map(|pr| observe(&mut store, pr)).collect();
+        let listed: Vec<ChangeId> = store.ledger().changes().map(|c| c.id).collect();
+        assert_eq!(listed, seen);
     }
 
     #[test]

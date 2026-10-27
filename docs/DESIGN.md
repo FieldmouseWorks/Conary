@@ -301,7 +301,7 @@ never on a timer.
 
 | Interface | Used by | Notes |
 | --- | --- | --- |
-| `conary-core` (Rust library) | conaryd, tests, tools | All logic lives here. |
+| `conary-core` and `conary-github` (Rust libraries) | conaryd, tests, tools | All logic lives here; `conary-github` reads GitHub into ledger ops. |
 | `conaryd` (daemon on remi, JSON-RPC over a Unix socket) | The steward, Claude jobs, the CLI | One per host. Serialises writes, serves reads concurrently, streams events. |
 | MCP server | Agents on remi | The same calls as tools, with schemas. |
 | `cn` CLI | People and scripts | JSON output by default, `--human` for people. |

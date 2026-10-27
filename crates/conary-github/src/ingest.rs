@@ -247,13 +247,19 @@ static TASK: LazyLock<Regex> = LazyLock::new(|| {
     .unwrap()
 });
 
-/// The first issue the body closes or refers to, as `owner/name#N`.
+static THREAD: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"https://claude\.ai/code/project/\w+\?thread=\w+").unwrap());
+
+/// What the work came from: the first issue the body closes or refers to,
+/// as `owner/name#N`, or else the project thread it links.
 fn task(repo: &Repo, body: &str) -> Option<String> {
-    let m = TASK.captures(body)?;
-    let on = m
-        .get(1)
-        .map_or_else(|| repo.to_string(), |r| r.as_str().to_owned());
-    Some(format!("{on}#{}", &m[2]))
+    if let Some(m) = TASK.captures(body) {
+        let on = m
+            .get(1)
+            .map_or_else(|| repo.to_string(), |r| r.as_str().to_owned());
+        return Some(format!("{on}#{}", &m[2]));
+    }
+    THREAD.find(body).map(|m| m.as_str().to_owned())
 }
 
 fn check_run(change: ChangeId, revision: RevisionId, run: &CheckRun) -> Option<Body> {

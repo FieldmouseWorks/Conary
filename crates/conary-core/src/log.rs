@@ -31,7 +31,8 @@ pub enum LogError {
         line: usize,
         reason: String,
     },
-    /// The key file isn't a 32-byte ed25519 secret key.
+    /// The key file isn't a 32-byte ed25519 secret key, or the public key
+    /// file isn't its 64 hex digits.
     Key(PathBuf),
     /// The log doesn't hold the op its caller anchored it at: whole lines
     /// were cut from its end, or it was removed or replaced.
@@ -46,7 +47,7 @@ impl std::fmt::Display for LogError {
         match self {
             Self::Io(e) => write!(f, "op log: {e}"),
             Self::Corrupt { line, reason } => write!(f, "op log line {line}: {reason}"),
-            Self::Key(path) => write!(f, "{}: not an ed25519 secret key", path.display()),
+            Self::Key(path) => write!(f, "{}: not an ed25519 key", path.display()),
             Self::Unanchored(a) => write!(f, "op log: op {} isn't op {} of the log", a.op, a.seq),
             Self::Poisoned => f.write_str("op log: an earlier append failed; reopen the log"),
         }
@@ -119,7 +120,50 @@ pub fn load_or_create_key(path: &Path) -> Result<SigningKey, LogError> {
     // syncing it.
     File::open(path)?.sync_all()?;
     sync_dir(dir)?;
+    write_public_key(path, &key)?;
     Ok(key)
+}
+
+/// Keeps the key's public half beside it, at [`public_path`], for readers
+/// that only verify: renamed into place, so a reader never sees part of it.
+fn write_public_key(path: &Path, key: &SigningKey) -> Result<(), LogError> {
+    let public = public_path(path);
+    let text = format!("{}\n", hex(key.verifying_key().as_bytes()));
+    if fs::read_to_string(&public).ok().as_deref() == Some(text.as_str()) {
+        return Ok(());
+    }
+    let mut nonce = [0u8; 8];
+    getrandom::fill(&mut nonce).map_err(|e| LogError::Io(io::Error::other(e)))?;
+    let mut tmp = public.clone().into_os_string();
+    tmp.push(format!(".{}.new", hex(&nonce)));
+    fs::write(&tmp, text)?;
+    File::open(&tmp)?.sync_all()?;
+    fs::rename(&tmp, &public)?;
+    sync_dir(parent_of(path))?;
+    Ok(())
+}
+
+/// Where the public half of the key at `path` is kept.
+pub fn public_path(path: &Path) -> PathBuf {
+    let mut name = path.as_os_str().to_owned();
+    name.push(".pub");
+    PathBuf::from(name)
+}
+
+/// The ledger's public key, from the file [`load_or_create_key`] keeps.
+pub fn load_public_key(path: &Path) -> Result<VerifyingKey, LogError> {
+    let bad = || LogError::Key(path.to_owned());
+    let text = fs::read_to_string(path)?;
+    let text = text.trim();
+    if text.len() != 64 {
+        return Err(bad());
+    }
+    let mut bytes = [0u8; 32];
+    for (i, byte) in bytes.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(text.get(2 * i..2 * i + 2).ok_or_else(bad)?, 16)
+            .map_err(|_| bad())?;
+    }
+    VerifyingKey::from_bytes(&bytes).map_err(|_| bad())
 }
 
 fn create_key(path: &Path, dir: &Path) -> Result<SigningKey, LogError> {
@@ -666,7 +710,9 @@ mod tests {
             .unwrap()
             .map(|e| e.unwrap().file_name())
             .collect();
-        assert_eq!(names, ["key"]);
+        let mut names: Vec<_> = names.iter().map(|n| n.to_str().unwrap()).collect();
+        names.sort();
+        assert_eq!(names, ["key", "key.pub"]);
     }
 
     #[test]
@@ -683,6 +729,13 @@ mod tests {
             fs::metadata(&path).unwrap().permissions().mode() & 0o777,
             0o600
         );
+        let public = load_public_key(&public_path(&path)).unwrap();
+        assert_eq!(public, made.verifying_key());
+        fs::write(public_path(&path), "ab\n").unwrap();
+        assert!(load_public_key(&public_path(&path)).is_err());
+        // Loading the key again puts its public half back.
+        load_or_create_key(&path).unwrap();
+        assert_eq!(load_public_key(&public_path(&path)).unwrap(), public);
     }
 
     /// Asserts the log at `dir` is refused, by readers and the writer

@@ -5,17 +5,19 @@
 
 use std::collections::{BTreeMap, HashMap};
 
+use serde::Serialize;
+
 use crate::id::{ChangeId, CommitId, OpId, RevisionId};
 use crate::op::{Actor, Body, CheckKind, Op, Outcome, Repo};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Intent {
     pub summary: String,
     pub body: String,
     pub task: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Revision {
     pub id: RevisionId,
     pub base: CommitId,
@@ -23,7 +25,7 @@ pub struct Revision {
     pub at: i64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Evidence {
     pub revision: RevisionId,
     pub kind: CheckKind,
@@ -33,7 +35,7 @@ pub struct Evidence {
     pub at: i64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Landing {
     pub revision: RevisionId,
     pub before: CommitId,
@@ -41,14 +43,15 @@ pub struct Landing {
     pub at: i64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Status {
     Open,
     Closed,
     Landed,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Change {
     pub id: ChangeId,
     pub repo: Repo,
@@ -61,6 +64,7 @@ pub struct Change {
     pub revisions: Vec<Revision>,
     pub evidence: Vec<Evidence>,
     pub landing: Option<Landing>,
+    #[serde(skip)]
     closed: bool,
 }
 
@@ -79,7 +83,7 @@ impl Change {
 }
 
 /// Trunk moving some way other than `land`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Outside {
     pub repo: Repo,
     pub before: Option<CommitId>,
@@ -123,6 +127,8 @@ impl std::error::Error for Invalid {}
 #[derive(Debug, Default, Clone)]
 pub struct Ledger {
     changes: BTreeMap<ChangeId, Change>,
+    /// Change ids in the order they were observed.
+    seen: Vec<ChangeId>,
     by_pr: HashMap<(Repo, u64), ChangeId>,
     by_trunk: HashMap<(Repo, CommitId), ChangeId>,
     outside: Vec<Outside>,
@@ -163,8 +169,9 @@ impl Ledger {
             .and_then(|id| self.changes.get(id))
     }
 
+    /// Every change, in the order the ledger first saw them.
     pub fn changes(&self) -> impl Iterator<Item = &Change> {
-        self.changes.values()
+        self.seen.iter().map(|id| &self.changes[id])
     }
 
     pub fn outside(&self) -> &[Outside] {
@@ -273,6 +280,7 @@ impl Ledger {
                     author,
                 } => {
                     self.by_pr.insert((repo.clone(), *pr), *change);
+                    self.seen.push(*change);
                     self.changes.insert(
                         *change,
                         Change {

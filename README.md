@@ -4,7 +4,21 @@ The ledger and landing engine for code that agents write, on top of git and GitH
 
 Every change carries why it exists, who made it and what proved it. It lands when that proof is green, and any change, any agent session's work, or everything since a point in time can be undone, always as a new change.
 
-Status: design, and the first crate. See [docs/DESIGN.md](docs/DESIGN.md).
+Status: milestone M1, recording PRs and answering `why`. See
+[docs/DESIGN.md](docs/DESIGN.md).
+
+## Using it
+
+`cn` keeps the ledger in `$XDG_STATE_HOME/conary` (or `--ledger`) and reads
+GitHub with `GH_TOKEN`. It prints JSON; add `--human` for people.
+
+    cn backfill FieldmouseWorks/burrow --reviewer <steward login>
+    cn ingest FieldmouseWorks/burrow 61 --reviewer <steward login>
+    cn log --human
+    cn why -C ~/src/burrow modules/claude.nix:40 --human
+
+`cn --help` and each command's `--help` list the rest, environment variables
+included.
 
 ## Building
 

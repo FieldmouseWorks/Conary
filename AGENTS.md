@@ -51,8 +51,9 @@ The gate is the flake, the same locally, in a sandbox and in CI:
 That covers rustfmt, clippy on all targets with warnings as errors, and the
 tests of the Cargo workspace in `crates/`, on the toolchain
 `rust-toolchain.toml` pins. The same checks run with plain cargo
-([README](README.md#building)). All logic lives in `conary-core`; conaryd, the
-MCP server and the `cn` CLI stay thin layers over it.
+([README](README.md#building)). All logic lives in the libraries, `conary-core`
+and `conary-github` (its GitHub side); conaryd, the MCP server and the `cn` CLI
+stay thin layers over them.
 
 Nix is how remi builds and checks Conary, never something the code needs.
 Paths, the socket, keys and the service manager are configuration the binary
