@@ -361,8 +361,12 @@ fn bound_elsewhere(c: &Change, revision: RevisionId, head: &CommitId, body: &Bod
 /// A merged PR landed only if the steward settled its head and the trunk
 /// commit is this PR's own merge: the ruleset holds every merge into trunk to
 /// the steward's status, and a merge, squash or rebase always makes a commit
-/// of its own, which a merge commit shows by its second parent and GitHub
-/// links to the PR otherwise. Merged into another branch, it closed without
+/// of its own. A merge commit is one when its second parent is the PR's
+/// head and GitHub made and signed it: a local merge of the same head,
+/// pushed, has the same shape. A squash or rebase is one when GitHub links
+/// it to the PR, which it doesn't for commits made locally. (GitHub doesn't
+/// sign a rebase's commits as itself, so a signature can't be asked of all
+/// three.) Merged into another branch, it closed without
 /// landing on trunk; its commits land with that branch. Brought onto trunk
 /// by another PR's merge, it closed, and that PR records the movement. Anything
 /// else that put it on trunk, an admin's bypass or a push straight to trunk,
@@ -400,7 +404,7 @@ fn merged(
     let linked = source.commit_pulls(&full, sha)?;
     let own = sha != pr.head.sha
         && match landed.parents.as_slice() {
-            [_, merged] => merged.sha == pr.head.sha,
+            [_, merged] => merged.sha == pr.head.sha && landed.made_by_github(),
             [_] => linked.contains(&pr.number),
             _ => false,
         };

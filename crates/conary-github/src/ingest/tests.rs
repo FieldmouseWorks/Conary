@@ -139,6 +139,14 @@ fn trunk_commit(sha: &str, parents: &[&str]) -> Value {
     })
 }
 
+/// A merge commit GitHub made and signed, merging a PR.
+fn github_merge(sha: &str, parents: &[&str]) -> Value {
+    let mut c = trunk_commit(sha, parents);
+    c["committer"] = json!({"login": "web-flow"});
+    c["commit"] = json!({"verification": {"verified": true}});
+    c
+}
+
 fn fake() -> Fake {
     let mut f = Fake {
         pulls: vec![pr(9, HEAD, "open", false)],
@@ -411,7 +419,7 @@ fn a_merge_commit_lands_from_its_first_parent() {
     f.pulls = vec![pr(9, HEAD, "closed", true)];
     // Linked to 9 or not, a merge's first parent is trunk before it.
     f.commits
-        .insert(MERGE.into(), trunk_commit(MERGE, &[BASE, HEAD]));
+        .insert(MERGE.into(), github_merge(MERGE, &[BASE, HEAD]));
     f.linked.insert(BASE.into(), vec![9]);
     pull(&mut store, &f, &config(), &repo(), 9).unwrap();
     let landing = store.ledger().by_pr(&repo(), 9).unwrap().landing.clone();
@@ -448,10 +456,16 @@ fn a_merge_the_steward_didnt_settle_is_outside_not_a_landing() {
         );
         f.retargeted = Some("2026-10-27T11:30:00Z".into());
     };
-    // Merged locally and pushed: a merge commit, but not of this head.
+    // Merged locally and pushed: a merge commit of another head, or of this
+    // one that GitHub didn't make, though the steward settled the head.
     let local = |f: &mut Fake| {
         f.commits
-            .insert(MERGE.into(), trunk_commit(MERGE, &[BASE, HEAD2]));
+            .insert(MERGE.into(), github_merge(MERGE, &[BASE, HEAD2]));
+        f.linked.remove(MERGE);
+    };
+    let local_same_head = |f: &mut Fake| {
+        f.commits
+            .insert(MERGE.into(), trunk_commit(MERGE, &[BASE, HEAD]));
         f.linked.remove(MERGE);
     };
     for (how, change_it) in [
@@ -460,6 +474,7 @@ fn a_merge_the_steward_didnt_settle_is_outside_not_a_landing() {
         ("forged", &forged),
         ("stale", &stale),
         ("local", &local),
+        ("local same head", &local_same_head),
     ] {
         let (_dir, mut store) = open();
         let mut f = fake();

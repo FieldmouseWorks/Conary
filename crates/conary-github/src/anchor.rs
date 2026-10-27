@@ -156,6 +156,33 @@ fn same_ledger(repo: &str, remote: &Remote, key: &VerifyingKey) -> Result<(), An
     )))
 }
 
+/// Refuses an anchor on GitHub that's behind the copy beside the log. The
+/// copy is only written after the ref moves, so the ref going back means
+/// something other than the ledger's writer moved it, and that it no longer
+/// names ops it once did. Rewriting both takes the box and GitHub.
+fn not_behind(repo: &str, remote: &Remote, local: Option<Anchor>) -> Result<(), AnchorError> {
+    let Some(kept) = local else {
+        return Ok(());
+    };
+    match remote.anchor {
+        Some(a) if a == kept || a.seq > kept.seq => Ok(()),
+        a => Err(AnchorError::Lost(format!(
+            "{repo}'s {REF} names {}, behind op {kept} it named before",
+            a.map_or_else(|| "no op".to_owned(), |a| format!("op {a}"))
+        ))),
+    }
+}
+
+/// The copy beside the log, when there's one: a reader's, or a set-up's
+/// that may be finishing one that stopped partway.
+fn kept(dir: &Path) -> Result<Option<Anchor>, AnchorError> {
+    Ok(if log::has_anchor(dir) {
+        log::load_anchor(dir)?
+    } else {
+        None
+    })
+}
+
 /// Sets up the ledger at `dir`, its key at `key_path`, anchored in `repo`,
 /// and returns its anchor. Run again, it finishes a set-up that stopped
 /// partway and changes nothing on one that's done. With an anchor already in
@@ -180,6 +207,7 @@ pub fn init(
                 e => e.into(),
             })?;
             same_ledger(repo, &remote, &key.verifying_key())?;
+            not_behind(repo, &remote, kept(dir)?)?;
             log::read(dir, &remote.key, remote.anchor)?;
             remote
         }
@@ -199,8 +227,9 @@ pub fn init(
 }
 
 /// The ledger, open for writing, once the anchor on GitHub is found to be
-/// its own and its log holds it. The anchor is read under the ledger's lock
-/// and the log isn't touched until it's checked against it.
+/// its own, no further back than the copy beside the log, and held by the
+/// log. The anchor is read under the ledger's lock and the log isn't touched
+/// until it's checked against it.
 pub struct Anchored {
     pub store: Store,
     repo: String,
@@ -217,6 +246,7 @@ pub fn open(
     let lock = Lock::take(dir)?;
     let (kept, remote) = fetch(anchors, repo)?.ok_or_else(|| not_set_up(repo))?;
     same_ledger(repo, &remote, &key.verifying_key())?;
+    not_behind(repo, &remote, log::load_anchor(dir)?)?;
     let store = Store::open(lock, key, remote.anchor)?;
     Ok(Anchored {
         store,
@@ -251,6 +281,7 @@ pub fn verify(
 ) -> Result<Option<Anchor>, AnchorError> {
     let (_, remote) = fetch(anchors, repo)?.ok_or_else(|| not_set_up(repo))?;
     same_ledger(repo, &remote, key)?;
+    not_behind(repo, &remote, kept(dir)?)?;
     log::read(dir, key, remote.anchor)?;
     Ok(remote.anchor)
 }

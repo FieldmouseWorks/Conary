@@ -155,7 +155,7 @@ fn a_log_that_lost_ops_or_its_anchor_is_refused() {
     std::fs::remove_file(dir.path().join("anchor")).unwrap();
     assert!(matches!(
         write(dir.path(), &f, &[1]),
-        Err(AnchorError::Store(StoreError::Log(LogError::Unanchored(_))))
+        Err(AnchorError::Log(LogError::NoAnchor(_)))
     ));
     assert!(matches!(
         verify(dir.path(), &key, &f, REPO),
@@ -166,7 +166,9 @@ fn a_log_that_lost_ops_or_its_anchor_is_refused() {
         Err(AnchorError::Log(LogError::Unanchored(_)))
     ));
 
-    // Its last op cut.
+    // Its last op cut, the copy beside it intact.
+    let head = remote(&f).anchor.unwrap();
+    std::fs::write(dir.path().join("anchor"), format!("{head}\n")).unwrap();
     let cut = whole[..whole.len() - 1]
         .iter()
         .rposition(|&b| b == b'\n')
@@ -295,4 +297,45 @@ fn an_anchor_commit_that_isnt_one_is_refused() {
             Err(AnchorError::Lost(_))
         ));
     }
+}
+
+#[test]
+fn an_anchor_moved_back_on_github_is_refused() {
+    let f = Fake::default();
+    let dir = tempfile::tempdir().unwrap();
+    let key = init(dir.path(), &key_path(dir.path()), &f, REPO)
+        .unwrap()
+        .key;
+    write(dir.path(), &f, &[1, 2]).unwrap();
+    let log_file = dir.path().join("ops.jsonl");
+    let whole = std::fs::read(&log_file).unwrap();
+    let cut = whole[..whole.len() - 1]
+        .iter()
+        .rposition(|&b| b == b'\n')
+        .unwrap();
+    let one = Anchor {
+        seq: 1,
+        op: log::read(dir.path(), &key, None).unwrap()[0].id,
+    };
+    // The log cut to its first op, and a fast-forward on GitHub naming that
+    // op, or none: the copy beside the log still names op 2.
+    std::fs::write(&log_file, &whole[..=cut]).unwrap();
+    for back in [Some(one), None] {
+        let parent = f.refs.borrow()[REF].commit.clone();
+        f.set(REPO, REF, Some(&parent), &message(&key, back))
+            .unwrap();
+        assert!(matches!(
+            write(dir.path(), &f, &[]),
+            Err(AnchorError::Lost(why)) if why.contains("behind")
+        ));
+        assert!(matches!(
+            verify(dir.path(), &key, &f, REPO),
+            Err(AnchorError::Lost(_))
+        ));
+        assert!(matches!(
+            init(dir.path(), &key_path(dir.path()), &f, REPO),
+            Err(AnchorError::Lost(_))
+        ));
+    }
+    assert_eq!(std::fs::read(&log_file).unwrap(), &whole[..=cut]);
 }

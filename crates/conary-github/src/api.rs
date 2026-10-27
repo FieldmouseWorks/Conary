@@ -99,6 +99,40 @@ pub struct Parent {
 pub struct Commit {
     pub sha: String,
     pub parents: Vec<Parent>,
+    /// The GitHub account the committer's email belongs to.
+    pub committer: Option<Login>,
+    pub commit: Option<CommitDetail>,
+}
+
+impl Commit {
+    /// Whether GitHub itself made this commit, merging a PR from the web or
+    /// the API: committed as `web-flow` and signed with GitHub's key. A merge
+    /// made locally and pushed can't be.
+    pub fn made_by_github(&self) -> bool {
+        self.committer
+            .as_ref()
+            .is_some_and(|c| c.login == "web-flow")
+            && self
+                .commit
+                .as_ref()
+                .and_then(|c| c.verification.as_ref())
+                .is_some_and(|v| v.verified)
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Login {
+    pub login: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct CommitDetail {
+    pub verification: Option<Verification>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Verification {
+    pub verified: bool,
 }
 
 #[derive(Debug, Deserialize)]

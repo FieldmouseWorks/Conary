@@ -405,6 +405,11 @@ pub fn load_anchor(dir: &Path) -> Result<Option<Anchor>, LogError> {
     }
 }
 
+/// Whether there's an anchor file beside the log at `dir`, readable or not.
+pub fn has_anchor(dir: &Path) -> bool {
+    dir.join(ANCHOR_FILE).exists()
+}
+
 /// Every op in the log at `dir`, checked against the anchor kept beside it.
 pub fn read_anchored(dir: &Path, key: &VerifyingKey) -> Result<Vec<Op>, LogError> {
     let anchor = load_anchor(dir)?;
