@@ -20,7 +20,7 @@ JSON; add `--human` for people.
     cn ingest FieldmouseWorks/burrow 61 --reviewer <steward login>
     cn log --human
     cn why -C ~/src/burrow modules/claude.nix:40 --human
-    cn verify    # the log against the anchor on GitHub
+    cn verify    # the log against the anchor on GitHub (--whole: its whole history)
 
 `cn --help` and each command's `--help` list the rest, environment variables
 included.
