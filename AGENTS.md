@@ -54,11 +54,11 @@ with warnings as errors, and the workspace's tests into the gate.
 
 ## Pull requests
 
-Open PRs as drafts and leave them to the steward: it asks Codex for a review,
-and once Codex finds nothing on your head, every review thread is resolved and
-CI is green, it marks the PR ready and merges it. Fix or answer every finding:
-push the fix and reply with the commit, or reply with why it's wrong, then
-resolve the thread. Don't merge or mark ready yourself.
+Open PRs ready for review, never as drafts, and leave them to the steward: it
+asks Codex for a review, and once Codex finds nothing on your head, every
+review thread is resolved and CI is green, it merges the PR. Fix or answer
+every finding: push the fix and reply with the commit, or reply with why it's
+wrong, then resolve the thread. Don't merge it yourself.
 
 ## Code Review Rules
 
