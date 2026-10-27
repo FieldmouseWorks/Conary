@@ -247,13 +247,15 @@ op the ledger can't apply is refused before it's written. Nothing in the log
 is ever edited or deleted. A correction is a new op that supersedes the old
 one.
 
-The log is refused whole if any line fails its id, its signature or its
-parent. A last line with no newline is kept if it verifies, and otherwise is a
-write that never finished (its caller was never told it succeeded), so the next
-writer cuts it. A writer whose append fails partway stops until the log is
-reopened and verified again. A log cut short by whole lines still chains, so
-its head is anchored off the box: each note on GitHub (section 7) names the op
-it was written at, and a log missing the newest note's op is refused.
+The log is refused whole if any line fails its id, its signature, its
+parent or its schema, the last line included. A last line with no newline is
+kept if it verifies. Only a line whose JSON stops short is a write that never
+finished (its caller was never told it succeeded), so the next writer cuts it.
+A writer whose append fails partway stops until the log is reopened and
+verified again. A log cut short by whole lines still chains, so its head is
+anchored off the box: each note on GitHub (section 7) names the op it was
+written at, and readers and the writer refuse a log that doesn't hold the
+newest note's op, before cutting anything.
 
 ## 5. Undo
 

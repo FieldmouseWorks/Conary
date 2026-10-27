@@ -33,6 +33,9 @@ pub enum LogError {
     },
     /// The key file isn't a 32-byte ed25519 secret key.
     Key(PathBuf),
+    /// The log doesn't hold the op its caller anchored it at: whole lines
+    /// were cut from its end, or it was removed or replaced.
+    Unanchored(Anchor),
     /// An earlier append failed partway, so the file may not end where this
     /// writer thinks it does. Reopening reconciles it.
     Poisoned,
@@ -44,6 +47,7 @@ impl std::fmt::Display for LogError {
             Self::Io(e) => write!(f, "op log: {e}"),
             Self::Corrupt { line, reason } => write!(f, "op log line {line}: {reason}"),
             Self::Key(path) => write!(f, "{}: not an ed25519 secret key", path.display()),
+            Self::Unanchored(a) => write!(f, "op log: op {} isn't op {} of the log", a.op, a.seq),
             Self::Poisoned => f.write_str("op log: an earlier append failed; reopen the log"),
         }
     }
@@ -67,23 +71,32 @@ fn parent_of(path: &Path) -> &Path {
 /// Makes a directory's entries (a new file, a rename, a link) survive power
 /// loss: syncing a file doesn't sync the directory that names it.
 fn sync_dir(dir: &Path) -> io::Result<()> {
+    #[cfg(test)]
+    tests::synced(dir)?;
     File::open(dir)?.sync_all()
 }
 
-/// Creates `dir` and any missing ancestors, syncing each new entry into the
-/// directory that holds it.
-fn create_dir_durably(dir: &Path) -> io::Result<()> {
-    if dir.is_dir() {
-        return Ok(());
+/// Creates `dir` and any missing ancestors, and syncs every entry on the way
+/// down to it into the directory that holds it. That includes entries that
+/// already exist: another caller may have made one and not synced it yet, or
+/// failed to, and seeing it there doesn't make it durable.
+fn publish_dir(dir: &Path) -> io::Result<()> {
+    let Some(parent) = dir.parent() else {
+        return Ok(()); // The root, which nothing names.
+    };
+    if !parent.as_os_str().is_empty() {
+        publish_dir(parent)?;
     }
-    let parent = parent_of(dir);
-    if parent != dir {
-        create_dir_durably(parent)?;
-    }
-    match fs::create_dir(dir) {
-        Ok(()) => sync_dir(parent),
-        Err(e) if e.kind() == io::ErrorKind::AlreadyExists && dir.is_dir() => Ok(()),
-        Err(e) => Err(e),
+    let made = match fs::create_dir(dir) {
+        Ok(()) => true,
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists && dir.is_dir() => false,
+        Err(e) => return Err(e),
+    };
+    match sync_dir(parent_of(dir)) {
+        // An ancestor this user can't open isn't one it, or another caller
+        // running as it, could have made, so there's no sync of ours pending.
+        Err(e) if !made && e.kind() == io::ErrorKind::PermissionDenied => Ok(()),
+        r => r,
     }
 }
 
@@ -95,15 +108,24 @@ fn load_key(path: &Path, bytes: Vec<u8>) -> Result<SigningKey, LogError> {
 }
 
 /// The ledger's signing key: loaded from `path`, or made there (readable by
-/// its owner only) the first time.
+/// its owner only) the first time. Either way it's on disk, and named there,
+/// before it's returned.
 pub fn load_or_create_key(path: &Path) -> Result<SigningKey, LogError> {
-    match fs::read(path) {
-        Ok(bytes) => return load_key(path, bytes),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-        Err(e) => return Err(e.into()),
-    }
     let dir = parent_of(path);
-    create_dir_durably(dir)?;
+    publish_dir(dir)?;
+    let key = match fs::read(path) {
+        Ok(bytes) => load_key(path, bytes)?,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => create_key(path, dir)?,
+        Err(e) => return Err(e.into()),
+    };
+    // Whoever made it, this caller or one racing it, may not have finished
+    // syncing it.
+    File::open(path)?.sync_all()?;
+    sync_dir(dir)?;
+    Ok(key)
+}
+
+fn create_key(path: &Path, dir: &Path) -> Result<SigningKey, LogError> {
     let mut secret = [0u8; 32];
     let mut nonce = [0u8; 8];
     getrandom::fill(&mut secret).map_err(|e| LogError::Io(io::Error::other(e)))?;
@@ -125,12 +147,29 @@ pub fn load_or_create_key(path: &Path) -> Result<SigningKey, LogError> {
     })();
     let _ = fs::remove_file(&tmp);
     match written {
-        Ok(()) => {
-            sync_dir(dir)?;
-            Ok(SigningKey::from_bytes(&secret))
-        }
+        Ok(()) => Ok(SigningKey::from_bytes(&secret)),
         Err(e) if e.kind() == io::ErrorKind::AlreadyExists => load_key(path, fs::read(path)?),
         Err(e) => Err(e.into()),
+    }
+}
+
+/// A point in the log that its caller knows was written: the `seq`th op
+/// (from 1) is `op`. Hash chains can't show that whole lines were cut from
+/// the end, so the caller keeps an anchor somewhere the log's own writer
+/// can't rewrite (the GitHub notes, `docs/DESIGN.md` section 4.6), and a
+/// log that doesn't hold it is refused.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Anchor {
+    pub seq: usize,
+    pub op: OpId,
+}
+
+impl Anchor {
+    fn check(self, ops: &[Op]) -> Result<(), LogError> {
+        match self.seq.checked_sub(1).and_then(|i| ops.get(i)) {
+            Some(op) if op.id == self.op => Ok(()),
+            _ => Err(LogError::Unanchored(self)),
+        }
     }
 }
 
@@ -151,7 +190,9 @@ enum Tail {
     /// all there and they verify.
     Unterminated,
     /// On part of a line from `at`: a write that never finished, whose caller
-    /// was never told it succeeded, so it's left out.
+    /// was never told it succeeded, so it's left out. Only the start of a
+    /// line, cut short, counts: bytes that could never become a whole line
+    /// that verifies are refused like any other bad line.
     Torn { at: usize },
 }
 
@@ -189,14 +230,29 @@ fn verify(bytes: &[u8], key: &VerifyingKey) -> Result<(Vec<Op>, Tail), LogError>
     if rest.is_empty() {
         return Ok((ops, Tail::Whole));
     }
-    // Whatever bytes a torn write left, split characters included.
-    match verify_line(ops.len() + 1, rest, &ops, key) {
-        Ok(op) => {
-            ops.push(op);
-            Ok((ops, Tail::Unterminated))
-        }
-        Err(_) => Ok((ops, Tail::Torn { at: end })),
+    if is_cut_short(rest) {
+        return Ok((ops, Tail::Torn { at: end }));
     }
+    // Complete, so it verifies like any other line or the log is refused.
+    let op = verify_line(ops.len() + 1, rest, &ops, key)?;
+    ops.push(op);
+    Ok((ops, Tail::Unterminated))
+}
+
+/// Whether `rest` is the start of a line that ends before its JSON does,
+/// a character split at the end included: what a torn write leaves.
+fn is_cut_short(rest: &[u8]) -> bool {
+    let text = match std::str::from_utf8(rest) {
+        Ok(text) => text,
+        Err(e) if e.error_len().is_none() => {
+            std::str::from_utf8(&rest[..e.valid_up_to()]).expect("valid up to here")
+        }
+        Err(_) => return false,
+    };
+    matches!(
+        serde_json::from_str::<Line>(text),
+        Err(e) if e.classify() == serde_json::error::Category::Eof
+    )
 }
 
 fn parse_sig(text: &str) -> Option<Signature> {
@@ -214,15 +270,18 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// Every op in the log at `dir`, verified against the ledger's public key.
-/// A reader takes no lock: a write still in progress is only a torn last
-/// line, which it leaves out.
-pub fn read(dir: &Path, key: &VerifyingKey) -> Result<Vec<Op>, LogError> {
-    match fs::read(dir.join(LOG_FILE)) {
-        Ok(bytes) => Ok(verify(&bytes, key)?.0),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),
-        Err(e) => Err(e.into()),
-    }
+/// Every op in the log at `dir`, verified against the ledger's public key
+/// and, when there is one, the newest anchor its caller holds. A reader
+/// takes no lock: a write still in progress is only a torn last line, which
+/// it leaves out.
+pub fn read(dir: &Path, key: &VerifyingKey, anchor: Option<Anchor>) -> Result<Vec<Op>, LogError> {
+    let ops = match fs::read(dir.join(LOG_FILE)) {
+        Ok(bytes) => verify(&bytes, key)?.0,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Vec::new(),
+        Err(e) => return Err(e.into()),
+    };
+    anchor.map_or(Ok(()), |a| a.check(&ops))?;
+    Ok(ops)
 }
 
 /// The log, open for appending. Only one writer at a time: opening takes an
@@ -231,7 +290,7 @@ pub struct OpLog {
     file: File,
     _lock: File,
     key: SigningKey,
-    head: Option<OpId>,
+    head: Option<Anchor>,
     poisoned: bool,
     #[cfg(test)]
     fail_next_write: bool,
@@ -239,9 +298,15 @@ pub struct OpLog {
 
 impl OpLog {
     /// Opens (or starts) the log at `dir`, verifies every op in it against
-    /// `key`, and returns them with the log ready to append after them.
-    pub fn open(dir: &Path, key: SigningKey) -> Result<(Self, Vec<Op>), LogError> {
-        create_dir_durably(dir)?;
+    /// `key` and, when there is one, the newest anchor its caller holds, and
+    /// returns them with the log ready to append after them. Nothing in the
+    /// file changes until it has verified.
+    pub fn open(
+        dir: &Path,
+        key: SigningKey,
+        anchor: Option<Anchor>,
+    ) -> Result<(Self, Vec<Op>), LogError> {
+        publish_dir(dir)?;
         let lock = OpenOptions::new()
             .create(true)
             .truncate(false)
@@ -253,11 +318,14 @@ impl OpLog {
             .read(true)
             .append(true)
             .open(dir.join(LOG_FILE))?;
-        // The log's entry, if it's new, before any op in it is acknowledged.
+        // The log and its entry, before any op in it is acknowledged: a
+        // writer before this one may have failed to sync either.
+        file.sync_all()?;
         sync_dir(dir)?;
         let mut bytes = Vec::new();
         file.read_to_end(&mut bytes)?;
         let (ops, tail) = verify(&bytes, &key.verifying_key())?;
+        anchor.map_or(Ok(()), |a| a.check(&ops))?;
         match tail {
             Tail::Whole => {}
             Tail::Unterminated => {
@@ -272,7 +340,10 @@ impl OpLog {
             }
         }
         file.seek(SeekFrom::End(0))?;
-        let head = ops.last().map(|o| o.id);
+        let head = ops.last().map(|o| Anchor {
+            seq: ops.len(),
+            op: o.id,
+        });
         Ok((
             Self {
                 file,
@@ -291,6 +362,11 @@ impl OpLog {
         self.key.verifying_key()
     }
 
+    /// The last op written, to anchor the log at.
+    pub fn head(&self) -> Option<Anchor> {
+        self.head
+    }
+
     /// Appends one op after the last, signed, and returns it once it's on
     /// disk.
     pub fn append(&mut self, body: Body, at: i64) -> Result<Op, LogError> {
@@ -298,7 +374,7 @@ impl OpLog {
             return Err(LogError::Poisoned);
         }
         let op = Unsigned {
-            parent: self.head,
+            parent: self.head.map(|h| h.op),
             at,
             body,
         };
@@ -315,7 +391,10 @@ impl OpLog {
             self.poisoned = true;
             return Err(e.into());
         }
-        self.head = Some(id);
+        self.head = Some(Anchor {
+            seq: self.head.map_or(1, |h| h.seq + 1),
+            op: id,
+        });
         Ok(Op { id, op })
     }
 
@@ -335,6 +414,35 @@ impl OpLog {
 mod tests {
     use super::*;
     use crate::id::ChangeId;
+    use std::cell::RefCell;
+
+    thread_local! {
+        /// Every directory this thread synced, in order.
+        static SYNCED: RefCell<Vec<PathBuf>> = const { RefCell::new(Vec::new()) };
+        /// A directory whose next sync on this thread fails.
+        static FAIL_SYNC: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+    }
+
+    pub(super) fn synced(dir: &Path) -> io::Result<()> {
+        if FAIL_SYNC.with_borrow(|f| f.as_deref() == Some(dir)) {
+            FAIL_SYNC.set(None);
+            return Err(io::Error::other("injected"));
+        }
+        SYNCED.with_borrow_mut(|s| s.push(dir.to_owned()));
+        Ok(())
+    }
+
+    fn take_synced() -> Vec<PathBuf> {
+        SYNCED.take()
+    }
+
+    /// Asserts `dir`'s entry, and every ancestor's, was synced into the
+    /// directory holding it, and `dir` itself for what's in it.
+    fn assert_published(synced: &[PathBuf], dir: &Path) {
+        for d in dir.ancestors().skip(1).chain([dir]) {
+            assert!(synced.iter().any(|s| s == d), "{} not synced", d.display());
+        }
+    }
 
     fn key() -> SigningKey {
         SigningKey::from_bytes(&[7; 32])
@@ -349,27 +457,27 @@ mod tests {
     #[test]
     fn appended_ops_replay_in_order_and_chain() {
         let dir = tempfile::tempdir().unwrap();
-        let (mut log, ops) = OpLog::open(dir.path(), key()).unwrap();
+        let (mut log, ops) = OpLog::open(dir.path(), key(), None).unwrap();
         assert!(ops.is_empty());
         let a = log.append(close(), 1).unwrap();
         let b = log.append(close(), 2).unwrap();
         drop(log);
-        let ops = read(dir.path(), &key().verifying_key()).unwrap();
+        let ops = read(dir.path(), &key().verifying_key(), None).unwrap();
         assert_eq!(ops, vec![a.clone(), b.clone()]);
         assert_eq!(ops[1].op.parent, Some(a.id));
-        let (_, reopened) = OpLog::open(dir.path(), key()).unwrap();
+        let (_, reopened) = OpLog::open(dir.path(), key(), None).unwrap();
         assert_eq!(reopened.len(), 2);
     }
 
     fn tamper(dir: &Path, edit: impl Fn(String) -> String) -> LogError {
         let path = dir.join(LOG_FILE);
         fs::write(&path, edit(fs::read_to_string(&path).unwrap())).unwrap();
-        read(dir, &key().verifying_key()).unwrap_err()
+        read(dir, &key().verifying_key(), None).unwrap_err()
     }
 
     fn two_ops() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
-        let (mut log, _) = OpLog::open(dir.path(), key()).unwrap();
+        let (mut log, _) = OpLog::open(dir.path(), key(), None).unwrap();
         log.append(close(), 1).unwrap();
         log.append(close(), 2).unwrap();
         dir
@@ -403,7 +511,7 @@ mod tests {
     fn a_log_signed_by_another_key_is_refused() {
         let dir = two_ops();
         let other = SigningKey::from_bytes(&[8; 32]).verifying_key();
-        let err = read(dir.path(), &other).unwrap_err();
+        let err = read(dir.path(), &other, None).unwrap_err();
         assert!(matches!(err, LogError::Corrupt { line: 1, .. }), "{err}");
     }
 
@@ -413,12 +521,22 @@ mod tests {
         let path = dir.path().join(LOG_FILE);
         let whole = fs::read_to_string(&path).unwrap();
         fs::write(&path, format!("{whole}{{\"id\":\"ab")).unwrap();
-        assert_eq!(read(dir.path(), &key().verifying_key()).unwrap().len(), 2);
-        let (mut log, ops) = OpLog::open(dir.path(), key()).unwrap();
+        assert_eq!(
+            read(dir.path(), &key().verifying_key(), None)
+                .unwrap()
+                .len(),
+            2
+        );
+        let (mut log, ops) = OpLog::open(dir.path(), key(), None).unwrap();
         assert_eq!(ops.len(), 2);
         log.append(close(), 3).unwrap();
         drop(log);
-        assert_eq!(read(dir.path(), &key().verifying_key()).unwrap().len(), 3);
+        assert_eq!(
+            read(dir.path(), &key().verifying_key(), None)
+                .unwrap()
+                .len(),
+            3
+        );
     }
 
     fn intent(summary: &str) -> Body {
@@ -435,7 +553,7 @@ mod tests {
         let dir = two_ops();
         let path = dir.path().join(LOG_FILE);
         let whole = fs::read(&path).unwrap();
-        let (mut log, _) = OpLog::open(dir.path(), key()).unwrap();
+        let (mut log, _) = OpLog::open(dir.path(), key(), None).unwrap();
         log.append(intent("café"), 3).unwrap();
         drop(log);
         let full = fs::read(&path).unwrap();
@@ -447,16 +565,30 @@ mod tests {
         let cut = whole.len() + e + 1;
         assert!(std::str::from_utf8(&full[..cut]).is_err());
         fs::write(&path, &full[..cut]).unwrap();
-        assert_eq!(read(dir.path(), &key().verifying_key()).unwrap().len(), 2);
-        let (mut log, ops) = OpLog::open(dir.path(), key()).unwrap();
+        assert_eq!(
+            read(dir.path(), &key().verifying_key(), None)
+                .unwrap()
+                .len(),
+            2
+        );
+        let (mut log, ops) = OpLog::open(dir.path(), key(), None).unwrap();
         assert_eq!(ops.len(), 2);
         log.append(close(), 4).unwrap();
         drop(log);
-        assert_eq!(read(dir.path(), &key().verifying_key()).unwrap().len(), 3);
+        assert_eq!(
+            read(dir.path(), &key().verifying_key(), None)
+                .unwrap()
+                .len(),
+            3
+        );
 
         // A torn first op, too.
         fs::write(&path, &whole[..10]).unwrap();
-        assert!(read(dir.path(), &key().verifying_key()).unwrap().is_empty());
+        assert!(
+            read(dir.path(), &key().verifying_key(), None)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -466,7 +598,7 @@ mod tests {
         let mut bytes = fs::read(&path).unwrap();
         bytes[3] = 0xff;
         fs::write(&path, bytes).unwrap();
-        let err = read(dir.path(), &key().verifying_key()).unwrap_err();
+        let err = read(dir.path(), &key().verifying_key(), None).unwrap_err();
         assert!(matches!(err, LogError::Corrupt { line: 1, .. }), "{err}");
     }
 
@@ -476,29 +608,39 @@ mod tests {
         let path = dir.path().join(LOG_FILE);
         let whole = fs::read_to_string(&path).unwrap();
         fs::write(&path, whole.strip_suffix('\n').unwrap()).unwrap();
-        assert_eq!(read(dir.path(), &key().verifying_key()).unwrap().len(), 2);
-        let (mut log, ops) = OpLog::open(dir.path(), key()).unwrap();
+        assert_eq!(
+            read(dir.path(), &key().verifying_key(), None)
+                .unwrap()
+                .len(),
+            2
+        );
+        let (mut log, ops) = OpLog::open(dir.path(), key(), None).unwrap();
         assert_eq!(ops.len(), 2);
         log.append(close(), 3).unwrap();
         drop(log);
-        assert_eq!(read(dir.path(), &key().verifying_key()).unwrap().len(), 3);
+        assert_eq!(
+            read(dir.path(), &key().verifying_key(), None)
+                .unwrap()
+                .len(),
+            3
+        );
     }
 
     #[test]
     fn a_failed_append_stops_the_writer_until_the_log_is_reopened() {
         let dir = two_ops();
-        let (mut log, _) = OpLog::open(dir.path(), key()).unwrap();
+        let (mut log, _) = OpLog::open(dir.path(), key(), None).unwrap();
         log.fail_next_write = true;
         assert!(matches!(log.append(close(), 3), Err(LogError::Io(_))));
         assert!(matches!(log.append(close(), 4), Err(LogError::Poisoned)));
         drop(log);
         // Reopening cuts the half line, and the next op chains onto the last
         // one that was written whole.
-        let (mut log, ops) = OpLog::open(dir.path(), key()).unwrap();
+        let (mut log, ops) = OpLog::open(dir.path(), key(), None).unwrap();
         assert_eq!(ops.len(), 2);
         log.append(close(), 5).unwrap();
         drop(log);
-        let ops = read(dir.path(), &key().verifying_key()).unwrap();
+        let ops = read(dir.path(), &key().verifying_key(), None).unwrap();
         assert_eq!(ops.len(), 3);
         assert_eq!(ops[2].op.at, 5);
     }
@@ -509,7 +651,14 @@ mod tests {
         let path = dir.path().join("deep/er/key");
         let keys: Vec<[u8; 32]> = std::thread::scope(|s| {
             let handles: Vec<_> = (0..8)
-                .map(|_| s.spawn(|| load_or_create_key(&path).unwrap().to_bytes()))
+                .map(|_| {
+                    s.spawn(|| {
+                        let key = load_or_create_key(&path).unwrap().to_bytes();
+                        // Every caller, winner or not, saw the key's entry synced.
+                        assert_published(&take_synced(), path.parent().unwrap());
+                        key
+                    })
+                })
                 .collect();
             handles.into_iter().map(|h| h.join().unwrap()).collect()
         });
@@ -537,5 +686,259 @@ mod tests {
             fs::metadata(&path).unwrap().permissions().mode() & 0o777,
             0o600
         );
+    }
+
+    /// Asserts the log at `dir` is refused, by readers and the writer
+    /// alike, and that refusing it changed nothing in it.
+    fn assert_refused(dir: &Path, anchor: Option<Anchor>) -> LogError {
+        let path = dir.join(LOG_FILE);
+        let before = fs::read(&path).ok();
+        let read_err = read(dir, &key().verifying_key(), anchor).unwrap_err();
+        let Err(open_err) = OpLog::open(dir, key(), anchor) else {
+            panic!("the writer opened a log the reader refused: {read_err}");
+        };
+        assert_eq!(read_err.to_string(), open_err.to_string());
+        if let Some(before) = before {
+            assert_eq!(fs::read(&path).unwrap(), before, "refusing changed the log");
+        }
+        read_err
+    }
+
+    fn unterminate(dir: &Path) {
+        let path = dir.join(LOG_FILE);
+        let whole = fs::read_to_string(&path).unwrap();
+        fs::write(&path, whole.strip_suffix('\n').unwrap()).unwrap();
+    }
+
+    #[test]
+    fn an_unterminated_first_op_under_another_key_is_refused_not_cut() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut log, _) = OpLog::open(dir.path(), SigningKey::from_bytes(&[8; 32]), None).unwrap();
+        log.append(close(), 1).unwrap();
+        drop(log);
+        unterminate(dir.path());
+        let err = assert_refused(dir.path(), None);
+        assert!(matches!(err, LogError::Corrupt { line: 1, .. }), "{err}");
+    }
+
+    #[test]
+    fn an_unterminated_last_op_that_doesnt_verify_is_refused_not_cut() {
+        type Edit = fn(&str, &str) -> String;
+        let edits: [(&str, Edit); 4] = [
+            ("id", |first, last| {
+                format!("{first}\n{}", last.replacen("\"at\":2", "\"at\":9", 1))
+            }),
+            ("signature", |first, last| {
+                let at = last.find("\"sig\":\"").unwrap() + 7;
+                let flip = if &last[at..at + 1] == "0" { "1" } else { "0" };
+                format!("{first}\n{}{flip}{}", &last[..at], &last[at + 1..])
+            }),
+            ("parent", |first, _| format!("{first}\n{first}")),
+            ("not JSON at all", |first, _| format!("{first}\nnot a line")),
+        ];
+        for (what, edit) in edits {
+            let dir = two_ops();
+            let path = dir.path().join(LOG_FILE);
+            let text = fs::read_to_string(&path).unwrap();
+            let lines: Vec<&str> = text.lines().collect();
+            fs::write(&path, edit(lines[0], lines[1])).unwrap();
+            let err = assert_refused(dir.path(), None);
+            assert!(
+                matches!(err, LogError::Corrupt { line: 2, .. }),
+                "{what}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unfinished_tail_with_bytes_that_cant_be_utf8_is_refused() {
+        let dir = two_ops();
+        let path = dir.path().join(LOG_FILE);
+        let mut bytes = fs::read(&path).unwrap();
+        bytes.extend_from_slice(b"{\"id\":\"\xff\xfeab");
+        fs::write(&path, bytes).unwrap();
+        let err = assert_refused(dir.path(), None);
+        assert!(matches!(err, LogError::Corrupt { line: 3, .. }), "{err}");
+    }
+
+    #[test]
+    fn a_signed_op_of_an_unknown_schema_is_refused() {
+        let json = r#"{"parent":null,"at":1,"body":{"kind":"unheard_of"}}"#;
+        let id = OpId::of(json.as_bytes());
+        let sig = hex(&key().sign(id.as_bytes()).to_bytes());
+        let line = format!("{{\"id\":\"{id}\",\"sig\":\"{sig}\",\"op\":{json}}}");
+        for ending in ["\n", ""] {
+            let dir = tempfile::tempdir().unwrap();
+            fs::write(dir.path().join(LOG_FILE), format!("{line}{ending}")).unwrap();
+            let err = assert_refused(dir.path(), None);
+            assert!(matches!(err, LogError::Corrupt { line: 1, .. }), "{err}");
+        }
+    }
+
+    fn anchored_two_ops() -> (tempfile::TempDir, Anchor) {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut log, _) = OpLog::open(dir.path(), key(), None).unwrap();
+        assert_eq!(log.head(), None);
+        let a = log.append(close(), 1).unwrap();
+        assert_eq!(log.head(), Some(Anchor { seq: 1, op: a.id }));
+        let b = log.append(close(), 2).unwrap();
+        let head = log.head().unwrap();
+        assert_eq!(head, Anchor { seq: 2, op: b.id });
+        drop(log);
+        // Reopening finds the same head.
+        let (log, _) = OpLog::open(dir.path(), key(), Some(head)).unwrap();
+        assert_eq!(log.head(), Some(head));
+        (dir, head)
+    }
+
+    #[test]
+    fn a_log_cut_short_by_whole_lines_is_refused_against_its_anchor() {
+        let (dir, anchor) = anchored_two_ops();
+        let path = dir.path().join(LOG_FILE);
+        let text = fs::read_to_string(&path).unwrap();
+        fs::write(&path, text.lines().next().unwrap().to_owned() + "\n").unwrap();
+        let err = assert_refused(dir.path(), Some(anchor));
+        assert!(
+            matches!(err, LogError::Unanchored(a) if a == anchor),
+            "{err}"
+        );
+        // Without the anchor it still chains: why the anchor lives off the box.
+        assert_eq!(
+            read(dir.path(), &key().verifying_key(), None)
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn an_anchored_op_cut_partway_is_refused_not_trimmed() {
+        let (dir, anchor) = anchored_two_ops();
+        let path = dir.path().join(LOG_FILE);
+        let bytes = fs::read(&path).unwrap();
+        // It now looks like a torn write, but it was acknowledged.
+        fs::write(&path, &bytes[..bytes.len() - 10]).unwrap();
+        let err = assert_refused(dir.path(), Some(anchor));
+        assert!(matches!(err, LogError::Unanchored(_)), "{err}");
+    }
+
+    #[test]
+    fn a_missing_log_is_refused_against_its_anchor() {
+        let (dir, anchor) = anchored_two_ops();
+        fs::remove_file(dir.path().join(LOG_FILE)).unwrap();
+        let err = assert_refused(dir.path(), Some(anchor));
+        assert!(matches!(err, LogError::Unanchored(_)), "{err}");
+        let err = read(
+            &dir.path().join("elsewhere"),
+            &key().verifying_key(),
+            Some(anchor),
+        );
+        assert!(matches!(err, Err(LogError::Unanchored(_))));
+    }
+
+    #[test]
+    fn a_replaced_log_is_refused_against_its_anchor() {
+        let (dir, anchor) = anchored_two_ops();
+        // Another history, as long and signed by the same key.
+        let other = two_ops();
+        fs::copy(other.path().join(LOG_FILE), dir.path().join(LOG_FILE)).unwrap();
+        let err = assert_refused(dir.path(), Some(anchor));
+        assert!(matches!(err, LogError::Unanchored(_)), "{err}");
+    }
+
+    #[test]
+    fn a_log_grown_past_its_anchor_opens_and_a_torn_tail_is_still_cut() {
+        let (dir, anchor) = anchored_two_ops();
+        let first = read(dir.path(), &key().verifying_key(), None).unwrap()[0].id;
+        let earlier = Anchor { seq: 1, op: first };
+        let path = dir.path().join(LOG_FILE);
+        let whole = fs::read_to_string(&path).unwrap();
+        fs::write(&path, format!("{whole}{{\"id\":\"ab")).unwrap();
+        for a in [earlier, anchor] {
+            assert_eq!(
+                read(dir.path(), &key().verifying_key(), Some(a))
+                    .unwrap()
+                    .len(),
+                2
+            );
+        }
+        let (mut log, ops) = OpLog::open(dir.path(), key(), Some(anchor)).unwrap();
+        assert_eq!(ops.len(), 2);
+        log.append(close(), 3).unwrap();
+        let head = log.head().unwrap();
+        drop(log);
+        assert_eq!(head.seq, 3);
+        assert_eq!(
+            read(dir.path(), &key().verifying_key(), Some(head))
+                .unwrap()
+                .len(),
+            3
+        );
+        // An anchor past the end, or at op 0, is never held.
+        for a in [Anchor { seq: 4, ..head }, Anchor { seq: 0, ..head }] {
+            let err = read(dir.path(), &key().verifying_key(), Some(a));
+            assert!(matches!(err, Err(LogError::Unanchored(_))));
+        }
+    }
+
+    #[test]
+    fn a_directory_someone_else_made_is_still_synced_into_its_parent() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("a/b");
+        // Made by another initializer that hasn't synced anything yet.
+        fs::create_dir_all(&dir).unwrap();
+        take_synced();
+        OpLog::open(&dir, key(), None).unwrap();
+        assert_published(&take_synced(), &dir);
+    }
+
+    #[test]
+    fn a_retry_after_a_failed_sync_completes_it() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("a/b");
+        FAIL_SYNC.set(Some(root.path().join("a")));
+        assert!(matches!(
+            OpLog::open(&dir, key(), None),
+            Err(LogError::Io(_))
+        ));
+        // The directory was made, but its entry in `a` was never synced.
+        assert!(dir.is_dir());
+        take_synced();
+        OpLog::open(&dir, key(), None).unwrap();
+        assert_published(&take_synced(), &dir);
+
+        let path = root.path().join("keys/key");
+        FAIL_SYNC.set(Some(root.path().join("keys")));
+        assert!(matches!(load_or_create_key(&path), Err(LogError::Io(_))));
+        // The key was linked into place, but its entry was never synced.
+        assert!(path.exists());
+        take_synced();
+        load_or_create_key(&path).unwrap();
+        assert_published(&take_synced(), path.parent().unwrap());
+    }
+
+    #[test]
+    fn a_key_someone_else_made_is_synced_before_it_is_loaded() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("deep/er/key");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, [9u8; 32]).unwrap();
+        take_synced();
+        assert_eq!(load_or_create_key(&path).unwrap().to_bytes(), [9u8; 32]);
+        assert_published(&take_synced(), path.parent().unwrap());
+    }
+
+    #[test]
+    fn a_key_and_a_log_in_different_directories_are_both_published() {
+        let root = tempfile::tempdir().unwrap();
+        let key_path = root.path().join("etc/conary/key");
+        let log_dir = root.path().join("var/lib/conary");
+        take_synced();
+        let key = load_or_create_key(&key_path).unwrap();
+        let (mut log, _) = OpLog::open(&log_dir, key, None).unwrap();
+        log.append(close(), 1).unwrap();
+        let synced = take_synced();
+        assert_published(&synced, key_path.parent().unwrap());
+        assert_published(&synced, &log_dir);
     }
 }
