@@ -17,6 +17,8 @@ pub enum GitError {
     Uncommitted,
     /// The checkout's origin isn't a GitHub repository.
     NotGithub(String),
+    /// What the notes ref holds for a commit isn't a note.
+    NotANote { commit: String, error: String },
 }
 
 impl std::fmt::Display for GitError {
@@ -25,19 +27,24 @@ impl std::fmt::Display for GitError {
             Self::Git(e) => write!(f, "git: {e}"),
             Self::Uncommitted => f.write_str("that line isn't committed yet"),
             Self::NotGithub(url) => write!(f, "origin {url:?} isn't a GitHub repository"),
+            Self::NotANote { commit, error } => write!(f, "the note on {commit}: {error}"),
         }
     }
 }
 
 impl std::error::Error for GitError {}
 
-fn git(dir: &Path, args: &[&str]) -> Result<String, GitError> {
-    let out = Command::new("git")
+fn run(dir: &Path, args: &[&str]) -> Result<std::process::Output, GitError> {
+    Command::new("git")
         .arg("-C")
         .arg(dir)
         .args(args)
         .output()
-        .map_err(|e| GitError::Git(e.to_string()))?;
+        .map_err(|e| GitError::Git(e.to_string()))
+}
+
+fn git(dir: &Path, args: &[&str]) -> Result<String, GitError> {
+    let out = run(dir, args)?;
     if !out.status.success() {
         return Err(GitError::Git(
             String::from_utf8_lossy(&out.stderr).trim().to_owned(),
@@ -84,10 +91,56 @@ pub fn descendants(dir: &Path, commit: &CommitId) -> Result<HashSet<String>, Git
         .collect())
 }
 
-/// The GitHub repository the checkout's `origin` points at.
+/// The GitHub repository the checkout's `origin` names: its URL as
+/// configured, before any `insteadOf` sends the fetches somewhere else (a
+/// mirror, a proxy).
 pub fn github_repo(dir: &Path) -> Result<Repo, GitError> {
-    let url = git(dir, &["remote", "get-url", "origin"])?;
+    let url = git(dir, &["config", "--get", "remote.origin.url"])?;
     parse_remote(url.trim())
+}
+
+/// Fetches `origin`'s `notes_ref` over the checkout's own, and says whether
+/// `origin` has one.
+pub fn fetch_notes(dir: &Path, notes_ref: &str) -> Result<bool, GitError> {
+    let found = run(dir, &["ls-remote", "--exit-code", "origin", notes_ref])?;
+    // `--exit-code` exits 2 when nothing matched.
+    if found.status.code() == Some(2) {
+        return Ok(false);
+    }
+    if !found.status.success() {
+        return Err(GitError::Git(
+            String::from_utf8_lossy(&found.stderr).trim().to_owned(),
+        ));
+    }
+    let refspec = format!("+{notes_ref}:{notes_ref}");
+    git(dir, &["fetch", "--quiet", "--no-tags", "origin", &refspec])?;
+    Ok(true)
+}
+
+/// The notes on `notes_ref` for the commits in `commits`: each one's text,
+/// by the commit it's on.
+pub fn notes(
+    dir: &Path,
+    notes_ref: &str,
+    commits: &HashSet<String>,
+) -> Result<Vec<(String, String)>, GitError> {
+    let list = git(dir, &["notes", "--ref", notes_ref, "list"])?;
+    parse_notes_list(&list)?
+        .into_iter()
+        .filter(|(_, commit)| commits.contains(commit))
+        .map(|(blob, commit)| Ok((commit, git(dir, &["cat-file", "blob", &blob])?)))
+        .collect()
+}
+
+/// `git notes list`'s lines, `<note blob> <commit>`, as pairs.
+fn parse_notes_list(list: &str) -> Result<Vec<(String, String)>, GitError> {
+    list.lines()
+        .map(|l| {
+            l.split_once(' ')
+                .map(|(blob, commit)| (blob.to_owned(), commit.to_owned()))
+                .ok_or_else(|| GitError::Git(format!("notes list printed {l:?}")))
+        })
+        .collect()
 }
 
 /// A remote's URL without its userinfo, which can hold a token: fit to
@@ -148,6 +201,15 @@ mod tests {
             Err(GitError::Uncommitted)
         ));
         assert!(parse_blame("").is_err());
+    }
+
+    #[test]
+    fn notes_list_pairs_each_note_with_its_commit() {
+        let (blob, commit) = ("1".repeat(40), "2".repeat(40));
+        let pairs = parse_notes_list(&format!("{blob} {commit}\n")).unwrap();
+        assert_eq!(pairs, [(blob, commit)]);
+        assert!(parse_notes_list("").unwrap().is_empty());
+        assert!(parse_notes_list("garbage\n").is_err());
     }
 
     #[test]

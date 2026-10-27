@@ -400,23 +400,128 @@ impl crate::anchor::Anchors for Api {
             &format!("/repos/{repo}/git/commits"),
             &serde_json::json!({"message": message, "tree": tree.sha, "parents": parent.into_iter().collect::<Vec<_>>()}),
         )?;
-        // Moved only from the parent read: a fast-forward, never a force,
-        // so a writer racing another, or an anchor moved by hand, fails here.
-        let _: serde_json::Value = match parent {
-            Some(_) => self.send(
+        self.move_ref(repo, name, parent.is_some(), &commit.sha)?;
+        Ok(commit.sha)
+    }
+}
+
+impl Api {
+    /// Moves `name` to `commit`, a commit on the one it's at (`existing`),
+    /// or makes it. A fast-forward, never a force, so a writer racing
+    /// another, or a ref moved by hand, fails here.
+    fn move_ref(
+        &self,
+        repo: &str,
+        name: &str,
+        existing: bool,
+        commit: &str,
+    ) -> Result<(), ApiError> {
+        let _: serde_json::Value = if existing {
+            self.send(
                 true,
                 &format!(
                     "/repos/{repo}/git/refs/{}",
                     name.strip_prefix("refs/").unwrap_or(name)
                 ),
-                &serde_json::json!({"sha": commit.sha, "force": false}),
-            )?,
-            None => self.send(
+                &serde_json::json!({"sha": commit, "force": false}),
+            )?
+        } else {
+            self.send(
                 false,
                 &format!("/repos/{repo}/git/refs"),
-                &serde_json::json!({"ref": name, "sha": commit.sha}),
-            )?,
+                &serde_json::json!({"ref": name, "sha": commit}),
+            )?
         };
-        Ok(commit.sha)
+        Ok(())
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct TreeCommit {
+    tree: GitObject,
+}
+
+#[derive(Debug, Deserialize)]
+struct Tree {
+    tree: Vec<TreeEntry>,
+    truncated: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct TreeEntry {
+    path: String,
+    #[serde(rename = "type")]
+    kind: String,
+    sha: String,
+}
+
+impl crate::notes::Notes for Api {
+    fn get(&self, repo: &str, name: &str) -> Result<Option<crate::notes::Kept>, ApiError> {
+        let short = name.strip_prefix("refs/").unwrap_or(name);
+        let Some(r) = self.get_found::<GitRef>(&format!("/repos/{repo}/git/ref/{short}"))? else {
+            return Ok(None);
+        };
+        let commit: TreeCommit =
+            self.get(&format!("/repos/{repo}/git/commits/{}", r.object.sha))?;
+        let tree: Tree = self.get(&format!(
+            "/repos/{repo}/git/trees/{}?recursive=1",
+            commit.tree.sha
+        ))?;
+        if tree.truncated {
+            return Err(ApiError(format!(
+                "{repo}'s {name} holds more notes than one read of its tree returns"
+            )));
+        }
+        let notes = tree
+            .tree
+            .into_iter()
+            .filter(|e| e.kind == "blob")
+            .filter_map(|e| {
+                // A note's path is the commit it's on, maybe fanned out.
+                let on: String = e.path.chars().filter(|&c| c != '/').collect();
+                let commit =
+                    matches!(on.len(), 40 | 64) && on.bytes().all(|b| b.is_ascii_hexdigit());
+                commit.then_some((on, (e.path, e.sha)))
+            })
+            .collect();
+        Ok(Some(crate::notes::Kept {
+            commit: r.object.sha,
+            tree: commit.tree.sha,
+            notes,
+        }))
+    }
+
+    fn set(
+        &self,
+        repo: &str,
+        name: &str,
+        parent: Option<&crate::notes::Kept>,
+        files: &[(String, String)],
+    ) -> Result<(), ApiError> {
+        let entries: Vec<_> = files
+            .iter()
+            .map(|(path, text)| {
+                serde_json::json!({"path": path, "mode": "100644", "type": "blob", "content": text})
+            })
+            .collect();
+        let mut tree = serde_json::json!({"tree": entries});
+        if let Some(p) = parent {
+            tree["base_tree"] = serde_json::json!(p.tree);
+        }
+        let tree: GitObject = self.send(false, &format!("/repos/{repo}/git/trees"), &tree)?;
+        let message = match files.len() {
+            1 => "conary: one landing's note".to_owned(),
+            n => format!("conary: {n} landings' notes"),
+        };
+        let commit: GitObject = self.send(
+            false,
+            &format!("/repos/{repo}/git/commits"),
+            &serde_json::json!({
+                "message": message,
+                "tree": tree.sha,
+                "parents": parent.map(|p| &p.commit).into_iter().collect::<Vec<_>>(),
+            }),
+        )?;
+        self.move_ref(repo, name, parent.is_some(), &commit.sha)
     }
 }

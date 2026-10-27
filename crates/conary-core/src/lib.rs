@@ -6,6 +6,7 @@ pub mod git;
 pub mod id;
 pub mod ledger;
 pub mod log;
+pub mod notes;
 pub mod op;
 pub mod store;
 pub mod why;
