@@ -29,7 +29,14 @@ Commit ids are lowercase hex, and every line ends in `\n`. So Conary finds a
 revision's attestations by hashing that text and asking
 `GET /repos/{owner}/{repo}/attestations/sha256:{digest}`, and anyone can check
 one with stock tools: write the text to a file and run
-`gh attestation verify <file> --repo <owner>/<repo> --signer-workflow FieldmouseWorks/burrow/.github/workflows/flake-check.yml`.
+
+```sh
+gh attestation verify <file> --repo <owner>/<repo> \
+  --signer-workflow FieldmouseWorks/burrow/.github/workflows/flake-check.yml \
+  --predicate-type https://github.com/FieldmouseWorks/Conary/blob/main/docs/ci-attestation.md#v1
+```
+
+(`gh` looks for SLSA provenance unless it's given the predicate type.)
 
 ### Predicate
 
