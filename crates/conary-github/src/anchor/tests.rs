@@ -153,10 +153,7 @@ fn every_write_checks_the_anchor_on_github_and_moves_it_on() {
     assert_eq!(*f.moves.borrow(), 3);
     // Anyone can verify, so it takes no lock.
     f.ledger.take();
-    assert_eq!(
-        verify(dir.path(), &made.key, &f, REPO, false).unwrap(),
-        Some(head)
-    );
+    assert_eq!(verify(dir.path(), &made.key, &f, REPO).unwrap(), Some(head));
 }
 
 #[test]
@@ -179,7 +176,7 @@ fn a_log_that_lost_ops_or_its_anchor_is_refused() {
         Err(AnchorError::Log(LogError::NoAnchor(_)))
     ));
     assert!(matches!(
-        verify(dir.path(), &key, &f, REPO, false),
+        verify(dir.path(), &key, &f, REPO),
         Err(AnchorError::Log(LogError::Unanchored(_)))
     ));
     assert!(matches!(
@@ -209,7 +206,7 @@ fn a_log_that_lost_ops_or_its_anchor_is_refused() {
         Err(AnchorError::Lost(_))
     ));
     assert!(matches!(
-        verify(dir.path(), &key, &f, REPO, false),
+        verify(dir.path(), &key, &f, REPO),
         Err(AnchorError::Lost(_))
     ));
     assert!(matches!(
@@ -253,8 +250,7 @@ fn a_lost_key_or_directory_never_starts_another_ledger() {
             dir.path(),
             &SigningKey::from_bytes(&[7; 32]).verifying_key(),
             &f,
-            REPO,
-            false
+            REPO
         ),
         Err(AnchorError::Lost(_))
     ));
@@ -352,7 +348,7 @@ fn an_anchor_moved_back_on_github_is_refused() {
             Err(AnchorError::Lost(why)) if why.contains("went back")
         ));
         assert!(matches!(
-            verify(dir.path(), &key, &f, REPO, false),
+            verify(dir.path(), &key, &f, REPO),
             Err(AnchorError::Lost(_))
         ));
         assert!(matches!(
@@ -382,7 +378,7 @@ fn a_write_that_moved_the_ref_but_kept_no_copy_is_caught_up() {
     write(dir.path(), &f, &[4]).unwrap();
     stale_copy(dir.path(), &was);
     assert_eq!(
-        verify(dir.path(), &key, &f, REPO, false).unwrap(),
+        verify(dir.path(), &key, &f, REPO).unwrap(),
         remote(&f).anchor
     );
     write(dir.path(), &f, &[5]).unwrap();
@@ -465,7 +461,7 @@ impl Published {
         let (dir, f) = (self.dir.path(), &self.f);
         for (what, r) in [
             ("write", write(dir, f, &[])),
-            ("verify", verify(dir, &self.key, f, REPO, false).map(|_| ())),
+            ("verify", verify(dir, &self.key, f, REPO).map(|_| ())),
             ("init", init(dir, &key_path(dir), f, REPO).map(|_| ())),
         ] {
             assert!(
@@ -509,7 +505,7 @@ fn a_history_that_drops_an_acknowledged_op_is_refused() {
     refused(write(p.dir.path(), &p.f, &[]));
     std::fs::remove_file(p.dir.path().join("anchor")).unwrap();
     refused(init(p.dir.path(), &key_path(p.dir.path()), &p.f, REPO).map(|_| ()));
-    refused(verify(p.dir.path(), &p.key, &p.f, REPO, false).map(|_| ()));
+    refused(verify(p.dir.path(), &p.key, &p.f, REPO).map(|_| ()));
 }
 
 #[test]
@@ -529,7 +525,7 @@ fn moves_that_name_the_copys_op_again_never_hide_a_later_one() {
 }
 
 #[test]
-fn only_the_whole_check_holds_against_a_copy_rewritten_with_the_log() {
+fn verify_holds_against_a_copy_rewritten_with_the_log() {
     // Op 3 published; then the log cut back to op 2, a move naming op 2 on
     // top, and the copy rewritten to name that move, all from the box.
     let p = Published::new();
@@ -541,10 +537,9 @@ fn only_the_whole_check_holds_against_a_copy_rewritten_with_the_log() {
         format!("{} {at}\n", p.at_two()),
     )
     .unwrap();
-    // The copy is on the box: checks that start from it can't see past it.
-    verify(p.dir.path(), &p.key, &p.f, REPO, false).unwrap();
+    // Verify takes nothing from the box but the log.
     assert!(matches!(
-        verify(p.dir.path(), &p.key, &p.f, REPO, true),
+        verify(p.dir.path(), &p.key, &p.f, REPO),
         Err(AnchorError::Lost(why)) if why.contains("went back")
     ));
 }
@@ -606,7 +601,7 @@ fn verify_beside_a_writer_never_reports_a_false_loss() {
     write(dir.path(), &f, &[1]).unwrap();
     // A writer finishes a whole write just after verify reads the ref.
     *f.write_after_get.borrow_mut() = Some(dir.path().to_owned());
-    let seen = verify(dir.path(), &key, &f, REPO, false).unwrap();
+    let seen = verify(dir.path(), &key, &f, REPO).unwrap();
     assert_eq!(seen.map(|a| a.seq), Some(1));
     assert_eq!(remote(&f).anchor.map(|a| a.seq), Some(2));
 }

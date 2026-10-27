@@ -283,18 +283,18 @@ names. Each move is a commit naming the ledger's key and its newest op.
   have one parent, go forward and be held by the log, so a ref moved back, by
   any number of moves naming any ops, or a longer history in place of one the
   log acknowledged, is refused. A write stopped before it kept the copy is
-  caught up by the next; `cn init` and `cn verify` without a copy check the
-  ref's whole history.
+  caught up by the next; `cn init` without a copy checks the ref's whole
+  history.
 - Readers check that copy, so a read never waits on GitHub, and refuse a log
   with none. The copy is only as good as the box: whoever can rewrite the log
-  can rewrite it too, and the commit it names with it. So the next write, or
-  `cn verify` from anyone who can read the log, checks against GitHub from
-  that commit, which catches a log or ref that lost ops on its own, and
-  `cn verify --whole` checks every move since the ledger was set up, which
-  catches the box rewritten with the copy. Neither holds against someone with
-  the box and a token that can force-push the ref, who holds the signing key
-  too and can write a whole new history: the ref's history is only as
-  append-only as GitHub keeps it.
+  can rewrite it too, and the commit it names with it. A write trusts it as
+  where to start, since the writer is the box. `cn verify`, which anyone who
+  can read the log can run off the box, trusts nothing there but the log and
+  checks every move since the ledger was set up, so it catches the box
+  rewritten with the copy. Nothing holds against someone with the box and a
+  token that can force-push the ref: they hold the signing key too and can
+  write a whole new history. The ref's history is only as append-only as
+  GitHub keeps it.
 
 ## 5. Undo
 

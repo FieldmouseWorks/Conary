@@ -99,14 +99,10 @@ enum Command {
         #[arg(long)]
         repo: Option<Repo>,
     },
-    /// Check the log against its anchor on GitHub.
+    /// Check the log against its anchor on GitHub, all of its history.
     Verify {
         #[command(flatten)]
         remote: Remote,
-        /// Check every move on the anchor since the ledger was set up, not
-        /// only those since the copy beside the log.
-        #[arg(long)]
-        whole: bool,
     },
     /// Why a line is the way it is: the change that landed it.
     Why {
@@ -182,10 +178,10 @@ fn run(cli: &Cli) -> Result<()> {
                 );
             }
         }
-        Command::Verify { remote, whole } => {
+        Command::Verify { remote } => {
             let key = log::load_public_key(&log::public_path(&key_path(cli)))?;
             let api = Api::new(&remote.api, token()?);
-            let anchor = anchor::verify(&cli.ledger, &key, &api, &remote.anchor_repo, *whole)?;
+            let anchor = anchor::verify(&cli.ledger, &key, &api, &remote.anchor_repo)?;
             let seq = anchor.map_or(0, |a| a.seq);
             if cli.human {
                 println!(

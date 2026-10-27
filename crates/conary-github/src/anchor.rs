@@ -345,24 +345,20 @@ impl Anchored {
 }
 
 /// Checks the log at `dir` against the anchor on GitHub: the remote check,
-/// on demand, for anyone who can read the log. The copy beside the log is
-/// read first, then the anchor, then the log, the order a writer moves them
-/// in reverse, so a writer at work can only have moved each one on since
-/// the one before it was read. With `whole`, the copy's commit is ignored
-/// and every move since the ledger was set up is checked: the copy is on the
-/// box, so only this check holds against someone who rewrote it with the
-/// log.
+/// on demand, for anyone who can read the log. It takes nothing from the
+/// box but the log: every move since the ledger was set up is checked, so a
+/// copy beside the log rewritten with the log can't shorten it. The anchor
+/// is read before the log, so a writer at work can only have added to the
+/// log since.
 pub fn verify(
     dir: &Path,
     key: &VerifyingKey,
     anchors: &dyn Anchors,
     repo: &str,
-    whole: bool,
 ) -> Result<Option<Anchor>, AnchorError> {
-    let checked = kept(dir)?.filter(|_| !whole);
     let (tip, remote) = fetch(anchors, repo)?.ok_or_else(|| not_set_up(repo))?;
     same_ledger(repo, &remote, key)?;
-    let held = checkpoints(anchors, repo, &tip, &remote, checked.as_deref())?;
+    let held = checkpoints(anchors, repo, &tip, &remote, None)?;
     read_holding(dir, key, remote.anchor, &held)?;
     Ok(remote.anchor)
 }
