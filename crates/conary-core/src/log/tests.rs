@@ -563,3 +563,50 @@ fn an_ancestor_that_cant_be_opened_to_sync_is_an_error_every_time() {
     OpLog::open(&dir, key(), None).unwrap();
     load_or_create_key(&key_path).unwrap();
 }
+
+#[test]
+fn readers_check_the_log_against_the_anchor_kept_beside_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let public = key().verifying_key();
+    // A new ledger has nothing to anchor.
+    assert!(read_anchored(dir.path(), &public).unwrap().is_empty());
+
+    let (mut log, _) = OpLog::open(dir.path(), key(), None).unwrap();
+    log.append(close(), 1).unwrap();
+    // Ops with no anchor: nothing says the log is whole.
+    assert!(matches!(
+        read_anchored(dir.path(), &public),
+        Err(LogError::NoAnchor(_))
+    ));
+    log.append(close(), 2).unwrap();
+    let head = log.head().unwrap();
+    drop(log);
+    save_anchor(dir.path(), head).unwrap();
+    assert_eq!(load_anchor(dir.path()).unwrap(), Some(head));
+    assert_eq!(head.to_string().parse::<Anchor>(), Ok(head));
+    assert_eq!(read_anchored(dir.path(), &public).unwrap().len(), 2);
+
+    // The last whole line cut, or the log removed: refused.
+    let path = dir.path().join(LOG_FILE);
+    let bytes = fs::read(&path).unwrap();
+    let cut = bytes[..bytes.len() - 1]
+        .iter()
+        .rposition(|&b| b == b'\n')
+        .unwrap();
+    fs::write(&path, &bytes[..=cut]).unwrap();
+    assert!(matches!(
+        read_anchored(dir.path(), &public),
+        Err(LogError::Unanchored(a)) if a == head
+    ));
+    fs::remove_file(&path).unwrap();
+    assert!(matches!(
+        read_anchored(dir.path(), &public),
+        Err(LogError::Unanchored(_))
+    ));
+    // An anchor file that isn't one is refused, not skipped.
+    fs::write(dir.path().join(ANCHOR_FILE), "not an anchor\n").unwrap();
+    assert!(matches!(
+        read_anchored(dir.path(), &public),
+        Err(LogError::NoAnchor(_))
+    ));
+}

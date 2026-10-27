@@ -21,6 +21,7 @@ use crate::op::{Body, Op, Unsigned};
 
 const LOG_FILE: &str = "ops.jsonl";
 const LOCK_FILE: &str = "lock";
+const ANCHOR_FILE: &str = "anchor";
 
 #[derive(Debug)]
 pub enum LogError {
@@ -40,6 +41,9 @@ pub enum LogError {
     /// An earlier append failed partway, so the file may not end where this
     /// writer thinks it does. Reopening reconciles it.
     Poisoned,
+    /// The log holds ops but no anchor says which of them were written, or
+    /// the anchor file isn't one.
+    NoAnchor(PathBuf),
 }
 
 impl std::fmt::Display for LogError {
@@ -50,6 +54,11 @@ impl std::fmt::Display for LogError {
             Self::Key(path) => write!(f, "{}: not an ed25519 key", path.display()),
             Self::Unanchored(a) => write!(f, "op log: op {} isn't op {} of the log", a.op, a.seq),
             Self::Poisoned => f.write_str("op log: an earlier append failed; reopen the log"),
+            Self::NoAnchor(path) => write!(
+                f,
+                "{}: no anchor for the op log; `cn verify` checks it against the one on GitHub",
+                path.display()
+            ),
         }
     }
 }
@@ -132,13 +141,19 @@ fn write_public_key(path: &Path, key: &SigningKey) -> Result<(), LogError> {
     if fs::read_to_string(&public).ok().as_deref() == Some(text.as_str()) {
         return Ok(());
     }
+    replace(&public, &text)
+}
+
+/// Puts `text` at `path` whole: written under a name of its own, synced and
+/// renamed into place, so a reader never sees part of it.
+fn replace(path: &Path, text: &str) -> Result<(), LogError> {
     let mut nonce = [0u8; 8];
     getrandom::fill(&mut nonce).map_err(|e| LogError::Io(io::Error::other(e)))?;
-    let mut tmp = public.clone().into_os_string();
+    let mut tmp = path.as_os_str().to_owned();
     tmp.push(format!(".{}.new", hex(&nonce)));
     fs::write(&tmp, text)?;
     File::open(&tmp)?.sync_all()?;
-    fs::rename(&tmp, &public)?;
+    fs::rename(&tmp, path)?;
     sync_dir(parent_of(path))?;
     Ok(())
 }
@@ -203,6 +218,25 @@ fn create_key(path: &Path, dir: &Path) -> Result<SigningKey, LogError> {
 pub struct Anchor {
     pub seq: usize,
     pub op: OpId,
+}
+
+impl std::fmt::Display for Anchor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} {}", self.seq, self.op)
+    }
+}
+
+impl std::str::FromStr for Anchor {
+    type Err = ();
+
+    /// `SEQ OP`, as [`Anchor`] prints.
+    fn from_str(s: &str) -> Result<Self, ()> {
+        let (seq, op) = s.trim().split_once(' ').ok_or(())?;
+        Ok(Self {
+            seq: seq.parse().map_err(|_| ())?,
+            op: op.parse().map_err(|_| ())?,
+        })
+    }
 }
 
 impl Anchor {
@@ -322,6 +356,38 @@ pub fn read(dir: &Path, key: &VerifyingKey, anchor: Option<Anchor>) -> Result<Ve
         Err(e) => return Err(e.into()),
     };
     anchor.map_or(Ok(()), |a| a.check(&ops))?;
+    Ok(ops)
+}
+
+/// Keeps `anchor` in the ledger's directory as the newest one its writer
+/// checked against or published. It's only as good as that writer's check:
+/// whoever can cut the log can rewrite it too, so it spares readers a round
+/// trip to the anchor kept off the box, and stands in for it only there.
+pub fn save_anchor(dir: &Path, anchor: Anchor) -> Result<(), LogError> {
+    replace(&dir.join(ANCHOR_FILE), &format!("{anchor}\n"))
+}
+
+/// The anchor [`save_anchor`] kept, if there is one.
+pub fn load_anchor(dir: &Path) -> Result<Option<Anchor>, LogError> {
+    let path = dir.join(ANCHOR_FILE);
+    match fs::read_to_string(&path) {
+        Ok(text) => text
+            .parse()
+            .map(Some)
+            .map_err(|()| LogError::NoAnchor(path)),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Every op in the log at `dir`, checked against the anchor kept beside it.
+/// A log with ops and no anchor is refused: nothing says it's whole.
+pub fn read_anchored(dir: &Path, key: &VerifyingKey) -> Result<Vec<Op>, LogError> {
+    let anchor = load_anchor(dir)?;
+    let ops = read(dir, key, anchor)?;
+    if anchor.is_none() && !ops.is_empty() {
+        return Err(LogError::NoAnchor(dir.join(ANCHOR_FILE)));
+    }
     Ok(ops)
 }
 

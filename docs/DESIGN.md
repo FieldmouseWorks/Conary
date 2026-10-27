@@ -258,9 +258,12 @@ kept if it verifies. Only a line whose JSON stops short is a write that never
 finished (its caller was never told it succeeded), so the next writer cuts it.
 A writer whose append fails partway stops until the log is reopened and
 verified again. A log cut short by whole lines still chains, so its head is
-anchored off the box: each note on GitHub (section 7) names the op it was
-written at, and readers and the writer refuse a log that doesn't hold the
-newest note's op, before cutting anything.
+anchored off the box: after each write the writer moves a ref on GitHub
+(`refs/conary/anchor/<key>`, in a repository the machine names) to a commit
+naming its newest op, and before each write it refuses a log that doesn't
+hold that op, before cutting anything, or a log with ops and no anchor.
+Readers check the copy the writer keeps beside the log, so a read never
+waits on GitHub; `cn verify` checks against GitHub itself.
 
 ## 5. Undo
 

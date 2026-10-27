@@ -8,11 +8,12 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use serde_json::{Value, json};
 
+use conary_core::Ledger;
 use conary_core::ledger::Change;
 use conary_core::log;
 use conary_core::op::Repo;
 use conary_core::why::{self, Why};
-use conary_core::{Ledger, Store};
+use conary_github::anchor::{self, Anchored};
 use conary_github::{Api, Config, Ingested, ingest};
 
 #[derive(Parser)]
@@ -32,10 +33,20 @@ struct Cli {
 }
 
 #[derive(clap::Args)]
-struct GithubArgs {
+struct Remote {
     /// The GitHub API's root.
     #[arg(long, env = "GITHUB_API_URL", default_value = "https://api.github.com")]
     api: String,
+    /// The repository, as owner/name, whose ref anchors the ledger: every
+    /// write checks the log against it first and moves it on after.
+    #[arg(long, env = "CONARY_ANCHOR_REPO")]
+    anchor_repo: String,
+}
+
+#[derive(clap::Args)]
+struct GithubArgs {
+    #[command(flatten)]
+    remote: Remote,
     /// Logins whose review markers are reviews: the steward's account.
     #[arg(long = "reviewer", env = "CONARY_REVIEWERS", value_delimiter = ',')]
     reviewers: Vec<String>,
@@ -80,6 +91,12 @@ enum Command {
         #[arg(long)]
         repo: Option<Repo>,
     },
+    /// Check the log against its anchor on GitHub, and keep that anchor
+    /// beside it for readers.
+    Verify {
+        #[command(flatten)]
+        remote: Remote,
+    },
     /// Why a line is the way it is: the change that landed it.
     Why {
         /// FILE:LINE, in the checkout at -C.
@@ -114,23 +131,44 @@ fn main() -> ExitCode {
 fn run(cli: &Cli) -> Result<()> {
     match &cli.command {
         Command::Ingest { repo, pr, github } => {
-            let (mut store, api, config) = write(cli, github)?;
-            let got = ingest::pull(&mut store, &api, &config, repo, *pr)?;
-            print_ingested(cli, repo, *pr, got, store.ledger());
+            let (mut a, api, config) = write(cli, github)?;
+            let got = ingest::pull(&mut a.store, &api, &config, repo, *pr);
+            // What was recorded before a failure is anchored all the same.
+            a.publish(&api, &cli.ledger)?;
+            print_ingested(cli, repo, *pr, got?, a.store.ledger());
         }
         Command::Sync { repo, github } | Command::Backfill { repo, github } => {
-            let (mut store, api, config) = write(cli, github)?;
+            let (mut a, api, config) = write(cli, github)?;
             let got = if matches!(cli.command, Command::Sync { .. }) {
-                ingest::sync(&mut store, &api, &config, repo)?
+                ingest::sync(&mut a.store, &api, &config, repo)
             } else {
-                ingest::backfill(&mut store, &api, &config, repo)?
+                ingest::backfill(&mut a.store, &api, &config, repo)
             };
+            a.publish(&api, &cli.ledger)?;
+            let (got, store) = (got?, &a.store);
             if cli.human {
                 let recorded: usize = got.iter().map(|g| g.recorded).sum();
                 println!("{repo}: {} PRs, {recorded} new ops", got.len());
             } else {
                 let all: Vec<Value> = got.iter().map(|g| ingested(g, store.ledger())).collect();
                 println!("{}", Value::Array(all));
+            }
+        }
+        Command::Verify { remote } => {
+            let key = log::load_public_key(&log::public_path(&key_path(cli)))?;
+            let api = Api::new(&remote.api, token()?);
+            let anchor = anchor::verify(&cli.ledger, &key, &api, &remote.anchor_repo)?;
+            let seq = anchor.map_or(0, |a| a.seq);
+            if cli.human {
+                println!(
+                    "the log holds op {seq}, the anchor on {}",
+                    remote.anchor_repo
+                );
+            } else {
+                println!(
+                    "{}",
+                    json!({"anchored": anchor.map(|a| a.to_string()), "ops": seq})
+                );
             }
         }
         Command::Log { repo } => {
@@ -162,22 +200,27 @@ fn key_path(cli: &Cli) -> PathBuf {
     cli.ledger.join("key")
 }
 
-fn write(cli: &Cli, github: &GithubArgs) -> Result<(Store, Api, Config)> {
-    let token = std::env::var("GH_TOKEN")
+fn token() -> Result<String> {
+    Ok(std::env::var("GH_TOKEN")
         .or_else(|_| std::env::var("GITHUB_TOKEN"))
-        .map_err(|_| "set GH_TOKEN (or GITHUB_TOKEN) to read GitHub")?;
+        .map_err(|_| "set GH_TOKEN (or GITHUB_TOKEN) to reach GitHub")?)
+}
+
+/// The ledger, open for writing once its log holds the anchor on GitHub.
+fn write(cli: &Cli, github: &GithubArgs) -> Result<(Anchored, Api, Config)> {
+    let api = Api::new(&github.remote.api, token()?);
     std::fs::create_dir_all(&cli.ledger)?;
     let key = log::load_or_create_key(&key_path(cli))?;
-    // No anchor yet: the GitHub notes that hold one come with M2.
-    let store = Store::open(&cli.ledger, key, None)?;
+    let anchored = anchor::open(&cli.ledger, key, &api, &github.remote.anchor_repo)?;
     let config = Config {
         reviewers: github.reviewers.clone(),
         own_contexts: github.own_contexts.clone(),
     };
-    Ok((store, Api::new(&github.api, token), config))
+    Ok((anchored, api, config))
 }
 
-/// The ledger, verified against its public key. Reading takes no lock.
+/// The ledger, verified against its public key and the anchor its writer
+/// kept beside it. Reading takes no lock and never leaves the box.
 fn read(cli: &Cli) -> Result<Ledger> {
     let key = log::load_public_key(&log::public_path(&key_path(cli))).map_err(|e| {
         format!(
@@ -185,7 +228,7 @@ fn read(cli: &Cli) -> Result<Ledger> {
             cli.ledger.display()
         )
     })?;
-    let ops = log::read(&cli.ledger, &key, None)?;
+    let ops = log::read_anchored(&cli.ledger, &key)?;
     Ledger::replay(&ops).map_err(|(id, e)| format!("op {id} in the log doesn't apply: {e}").into())
 }
 

@@ -9,13 +9,13 @@ publish = false
 
 [dependencies]
 conary-core = { version = "0.0.0", path = "../conary-core" }
+ed25519-dalek = "3.0.0"
 regex = "1.13.1"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 ureq = { version = "3.5.0", features = ["json", "platform-verifier"] }
 
 [dev-dependencies]
-ed25519-dalek = "3.0.0"
 tempfile = "3.27.0"
 
 [lints]

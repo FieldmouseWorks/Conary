@@ -10,12 +10,15 @@ Status: milestone M1, recording PRs and answering `why`. See
 ## Using it
 
 `cn` keeps the ledger in `$XDG_STATE_HOME/conary` (or `--ledger`) and reads
-GitHub with `GH_TOKEN`. It prints JSON; add `--human` for people.
+GitHub with `GH_TOKEN`. Every write anchors the ledger's head at a ref in
+the repository `CONARY_ANCHOR_REPO` names (the token writes it), so a log
+that loses ops is refused. It prints JSON; add `--human` for people.
 
     cn backfill FieldmouseWorks/burrow --reviewer <steward login>
     cn ingest FieldmouseWorks/burrow 61 --reviewer <steward login>
     cn log --human
     cn why -C ~/src/burrow modules/claude.nix:40 --human
+    cn verify    # the log against the anchor on GitHub
 
 `cn --help` and each command's `--help` list the rest, environment variables
 included.

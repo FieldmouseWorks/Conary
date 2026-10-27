@@ -183,15 +183,48 @@ impl Api {
     }
 
     fn get<T: DeserializeOwned>(&self, path: &str) -> Result<T, ApiError> {
+        self.get_found(path)?
+            .ok_or_else(|| ApiError(format!("{}{path}: not found", self.base)))
+    }
+
+    /// `None` for a 404.
+    fn get_found<T: DeserializeOwned>(&self, path: &str) -> Result<Option<T>, ApiError> {
         let url = format!("{}{path}", self.base);
-        self.agent
+        let got = self
+            .agent
             .get(&url)
             .header("Authorization", &format!("Bearer {}", self.token))
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", "2022-11-28")
             .call()
-            .and_then(|mut r| r.body_mut().read_json())
+            .and_then(|mut r| r.body_mut().read_json());
+        match got {
+            Ok(v) => Ok(Some(v)),
+            Err(ureq::Error::StatusCode(404)) => Ok(None),
             // The error names the URL, never the token.
+            Err(e) => Err(ApiError(format!("{url}: {e}"))),
+        }
+    }
+
+    /// A write: `POST`, or `PATCH` when `patch`, with a JSON body.
+    fn send<T: DeserializeOwned>(
+        &self,
+        patch: bool,
+        path: &str,
+        body: &serde_json::Value,
+    ) -> Result<T, ApiError> {
+        let url = format!("{}{path}", self.base);
+        let request = if patch {
+            self.agent.patch(&url)
+        } else {
+            self.agent.post(&url)
+        };
+        request
+            .header("Authorization", &format!("Bearer {}", self.token))
+            .header("Accept", "application/vnd.github+json")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .send_json(body)
+            .and_then(|mut r| r.body_mut().read_json())
             .map_err(|e| ApiError(format!("{url}: {e}")))
     }
 
@@ -274,5 +307,74 @@ impl Source for Api {
         // One page of files is all a comparison costs; only its base is read.
         let c: Comparison = self.get(&format!("/repos/{repo}/compare/{a}...{b}?per_page=1"))?;
         Ok(c.merge_base_commit.sha)
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct GitRef {
+    object: GitObject,
+}
+
+#[derive(Debug, Deserialize)]
+struct GitObject {
+    sha: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct GitCommit {
+    sha: String,
+    message: String,
+}
+
+impl crate::anchor::Anchors for Api {
+    fn get(&self, repo: &str, name: &str) -> Result<Option<crate::anchor::Kept>, ApiError> {
+        let short = name.strip_prefix("refs/").unwrap_or(name);
+        let Some(r) = self.get_found::<GitRef>(&format!("/repos/{repo}/git/ref/{short}"))? else {
+            return Ok(None);
+        };
+        let c: GitCommit = self.get(&format!("/repos/{repo}/git/commits/{}", r.object.sha))?;
+        Ok(Some(crate::anchor::Kept {
+            commit: c.sha,
+            message: c.message,
+        }))
+    }
+
+    fn set(
+        &self,
+        repo: &str,
+        name: &str,
+        parent: Option<&str>,
+        message: &str,
+    ) -> Result<(), ApiError> {
+        let tree: GitObject = self.send(
+            false,
+            &format!("/repos/{repo}/git/trees"),
+            &serde_json::json!({"tree": [
+                {"path": "anchor", "mode": "100644", "type": "blob", "content": message}
+            ]}),
+        )?;
+        let commit: GitObject = self.send(
+            false,
+            &format!("/repos/{repo}/git/commits"),
+            &serde_json::json!({"message": message, "tree": tree.sha, "parents": parent.into_iter().collect::<Vec<_>>()}),
+        )?;
+        // Moved only from the parent read: a fast-forward, never a force,
+        // so a writer racing another, or an anchor moved by hand, fails here.
+        let _: serde_json::Value = match parent {
+            Some(_) => self.send(
+                true,
+                &format!(
+                    "/repos/{repo}/git/refs/{}",
+                    name.strip_prefix("refs/").unwrap_or(name)
+                ),
+                &serde_json::json!({"sha": commit.sha, "force": false}),
+            )?,
+            None => self.send(
+                false,
+                &format!("/repos/{repo}/git/refs"),
+                &serde_json::json!({"ref": name, "sha": commit.sha}),
+            )?,
+        };
+        Ok(())
     }
 }
