@@ -1,0 +1,41 @@
+{
+  "conary": "note v1",
+  "change": "64qyqfykn5wj5rdxwx8q7wxfdx",
+  "repo": {
+    "owner": "fieldmouseworks",
+    "name": "conary"
+  },
+  "pr": 21,
+  "url": "https://github.com/fieldmouseworks/conary/pull/21",
+  "summary": "readme: say M1 and M2 are done, and what's still to come",
+  "task": null,
+  "author": {
+    "kind": "agent",
+    "login": "TusanHomichi",
+    "session": "https://claude.ai/code/session_01BkHcyDYaKnE7mRRMdYCFVC"
+  },
+  "landing": {
+    "revision": "c9822a89cadee0d11e885a47189a3537dd67e6e6dd98753addc06a61f6ef82fa",
+    "before": "3fa41d3d7125b38300d04841043d498c13a0b5a2",
+    "after": "d794c3f4d9fd5fc0b76737f75bee9ab229cb2f3e",
+    "by": {
+      "kind": "status",
+      "login": "TusanHomichi"
+    },
+    "at": 1793154842219
+  },
+  "evidence": [
+    {
+      "kind": "ci",
+      "check": "check / check",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/40621463644/job/122596250717"
+    },
+    {
+      "kind": "review",
+      "check": "codex",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/pull/21#pullrequestreview-5677053915"
+    }
+  ]
+}
