@@ -14,6 +14,7 @@ use conary_core::id::ChangeId;
 use conary_core::log;
 use conary_core::op::{Actor, ActorKind, Body};
 use conary_core::reader::Reader;
+use conaryd::Limits;
 
 fn observe(store: &mut Store, pr: u64) {
     store
@@ -32,6 +33,10 @@ fn observe(store: &mut Store, pr: u64) {
 
 /// A ledger holding PR 1, and conaryd serving it at `socket`.
 fn daemon(dir: &Path, socket: &Path) -> Store {
+    daemon_with(dir, socket, Limits::default())
+}
+
+fn daemon_with(dir: &Path, socket: &Path, limits: Limits) -> Store {
     let key = ed25519_dalek::SigningKey::from_bytes(&[4; 32]);
     let public = key.verifying_key();
     let lock = log::Lock::take(dir).unwrap();
@@ -39,8 +44,8 @@ fn daemon(dir: &Path, socket: &Path) -> Store {
     let mut store = Store::open(lock, key, None).unwrap();
     observe(&mut store, 1);
     let reader = Reader::open(dir, public).unwrap();
-    let listener = conaryd::bind(socket).unwrap();
-    thread::spawn(move || conaryd::serve(&listener, reader));
+    let bound = conaryd::bind(socket).unwrap();
+    thread::spawn(move || conaryd::serve(&bound.listener, reader, limits));
     store
 }
 
@@ -126,17 +131,79 @@ fn a_line_too_long_is_refused_and_the_connection_closed() {
 }
 
 #[test]
+fn a_connection_over_the_limit_is_refused_and_one_left_idle_is_closed() {
+    let dir = tempfile::tempdir().unwrap();
+    let socket = dir.path().join("conaryd.sock");
+    let limits = Limits {
+        connections: 1,
+        idle: Duration::from_millis(300),
+        ..Limits::default()
+    };
+    let _store = daemon_with(&dir.path().join("ledger"), &socket, limits);
+    let mut one = Client::connect(&socket);
+    assert_eq!(one.prs(1), [1]);
+    // One more than it takes: refused, and closed.
+    let mut two = Client::connect(&socket);
+    assert_eq!(two.reply()["error"]["code"], -32700);
+    let mut rest = Vec::new();
+    two.lines.read_to_end(&mut rest).unwrap();
+    assert!(rest.is_empty());
+    // The first, left idle, is closed, which frees its place.
+    let mut line = String::new();
+    assert_eq!(one.lines.read_line(&mut line).unwrap(), 0);
+    let mut three = Client::connect(&socket);
+    assert_eq!(three.prs(2), [1]);
+}
+
+#[test]
+fn of_conaryds_starting_at_once_one_listens() {
+    let dir = tempfile::tempdir().unwrap();
+    let socket = dir.path().join("conaryd.sock");
+    // Left behind by one that's gone, for all of them to find at once.
+    drop(UnixListener::bind(&socket).unwrap());
+    let starts: Vec<_> = (0..8)
+        .map(|_| {
+            let socket = socket.clone();
+            thread::spawn(move || conaryd::bind(&socket))
+        })
+        .collect();
+    let bound: Vec<_> = starts.into_iter().map(|t| t.join().unwrap()).collect();
+    let (listening, refused): (Vec<_>, Vec<_>) = bound.into_iter().partition(Result::is_ok);
+    assert_eq!(listening.len(), 1);
+    for e in refused {
+        assert_eq!(e.err().unwrap().kind(), std::io::ErrorKind::AddrInUse);
+    }
+    // The one that listens is the one answering.
+    UnixStream::connect(&socket).unwrap();
+
+    // While it runs, what's at its path looks like a socket left behind
+    // (what a second start probing before the first binds would see): the
+    // second is still refused, by the lock.
+    std::fs::remove_file(&socket).unwrap();
+    drop(UnixListener::bind(&socket).unwrap());
+    let e = conaryd::bind(&socket).unwrap_err();
+    assert_eq!(e.kind(), std::io::ErrorKind::AddrInUse, "{e}");
+    drop(listening);
+}
+
+#[test]
 fn a_socket_is_taken_over_only_from_a_daemon_thats_gone() {
     let dir = tempfile::tempdir().unwrap();
     let socket = dir.path().join("conaryd.sock");
     // Left behind by one that's gone: taken over.
     drop(UnixListener::bind(&socket).unwrap());
     let live = conaryd::bind(&socket).unwrap();
-    // Still answered on: refused, and left alone.
+    // Held by a conaryd that runs: refused, and left alone.
     let e = conaryd::bind(&socket).unwrap_err();
     assert_eq!(e.kind(), std::io::ErrorKind::AddrInUse, "{e}");
     UnixStream::connect(&socket).unwrap();
     drop(live);
+    // Answered on by something that isn't a conaryd holding the lock:
+    // refused too.
+    let other = UnixListener::bind(dir.path().join("other.sock")).unwrap();
+    let e = conaryd::bind(&dir.path().join("other.sock")).unwrap_err();
+    assert_eq!(e.kind(), std::io::ErrorKind::AddrInUse, "{e}");
+    drop(other);
 
     // Not a socket at all: refused, and kept.
     let file = dir.path().join("notes.txt");

@@ -7,6 +7,7 @@ use clap::Parser;
 
 use conary_core::log;
 use conary_core::reader::Reader;
+use conaryd::Limits;
 
 #[derive(Parser)]
 #[command(
@@ -26,14 +27,14 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     let key = log::load_public_key(&log::public_path(&log::key_path(&cli.ledger)))
         .map_err(|e| format!("{e} (has `cn init` set up {}?)", cli.ledger.display()))?;
     let reader = Reader::open(&cli.ledger, key)?;
-    let listener = conaryd::bind(&cli.socket)
+    let bound = conaryd::bind(&cli.socket)
         .map_err(|e| format!("listening at {}: {e}", cli.socket.display()))?;
     eprintln!(
         "conaryd: the ledger in {}, at {}",
         cli.ledger.display(),
         cli.socket.display()
     );
-    Ok(conaryd::serve(&listener, reader)?)
+    conaryd::serve(&bound.listener, reader, Limits::default())
 }
 
 fn main() -> ExitCode {

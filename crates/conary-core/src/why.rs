@@ -55,9 +55,7 @@ fn blamed(
 pub fn why(ledger: &Ledger, dir: &Path, file: &Path, line: u32) -> Result<Why, GitError> {
     let (repo, commit, after) = blamed(dir, file, line)?;
     // The ledger is read on its own box, so nothing is left out.
-    let notes = ledger
-        .changes()
-        .filter_map(|c| Some(Note::of(c, c.landing.as_ref()?, Links::Kept)));
+    let notes = notes::landed(ledger, &repo, Links::Kept);
     Ok(Why {
         landed: landing(&repo, notes, &after),
         repo,

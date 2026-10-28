@@ -1,15 +1,18 @@
 //! conaryd (`docs/conaryd.md`): the ledger's calls ([`conary_core::rpc`])
 //! over a Unix socket, one JSON-RPC request per line, each connection on its
 //! own thread. It reads the ledger and never writes it: `cn` and the steward
-//! still record the ops, and conaryd reads the log again when it moves.
+//! still record the ops, and conaryd reads the log again when it moves. It
+//! runs no git, and nothing else a caller could point it at.
 
-use std::fs;
+use std::fs::{self, File, TryLockError};
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::os::unix::fs::FileTypeExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
+use std::time::Duration;
 
 use conary_core::reader::Reader;
 use conary_core::rpc;
@@ -17,6 +20,29 @@ use conary_core::rpc;
 /// The longest request line conaryd reads. A longer one is refused, and the
 /// connection closed: no call needs more.
 pub const MAX_LINE: u64 = 1 << 20;
+
+/// What one conaryd takes on, so no client, or many, can use it up.
+#[derive(Debug, Clone, Copy)]
+pub struct Limits {
+    /// Connections served at once. One more is refused and closed.
+    pub connections: usize,
+    /// How long a connection may send nothing before it's closed. A client
+    /// that keeps one open, like the MCP server, connects again.
+    pub idle: Duration,
+    /// How long a response may take to write, to a client that stopped
+    /// reading, before its connection is closed.
+    pub write: Duration,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Self {
+            connections: 64,
+            idle: Duration::from_secs(60),
+            write: Duration::from_secs(10),
+        }
+    }
+}
 
 /// Where conaryd listens when nothing says otherwise: in the XDG runtime
 /// directory, or `/run/conary` for a system service.
@@ -26,10 +52,41 @@ pub fn default_socket() -> PathBuf {
         .join("conary/conaryd.sock")
 }
 
-/// Listens at `path`, making its directory if there's none. A socket left
-/// there by a conaryd that's gone is taken over; one that another conaryd
-/// still answers on, or a file that isn't a socket, is refused.
-pub fn bind(path: &Path) -> io::Result<UnixListener> {
+/// conaryd's hold on its socket: the listener, and the lock beside the
+/// socket that keeps any other conaryd off it while this one runs.
+#[derive(Debug)]
+pub struct Bound {
+    pub listener: UnixListener,
+    _lock: File,
+}
+
+fn in_use(message: String) -> io::Error {
+    io::Error::new(io::ErrorKind::AddrInUse, message)
+}
+
+/// Listens at `path`, making its directory if there's none. The lock file
+/// beside it (`path` with `.lock` on the end) is taken first, so of any
+/// conaryds starting at once one listens and the rest are refused. A socket
+/// left there by a conaryd that's gone is taken over; one something still
+/// answers on, or a file that isn't a socket, is refused.
+pub fn bind(path: &Path) -> io::Result<Bound> {
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir)?;
+    }
+    let mut name = path.as_os_str().to_owned();
+    name.push(".lock");
+    let lock = File::options()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(PathBuf::from(name))?;
+    match lock.try_lock() {
+        Ok(()) => {}
+        Err(TryLockError::WouldBlock) => {
+            return Err(in_use(format!("another conaryd holds {}", path.display())));
+        }
+        Err(TryLockError::Error(e)) => return Err(e),
+    }
     match fs::symlink_metadata(path) {
         Ok(m) if !m.file_type().is_socket() => {
             return Err(io::Error::new(
@@ -38,45 +95,82 @@ pub fn bind(path: &Path) -> io::Result<UnixListener> {
             ));
         }
         Ok(_) => match UnixStream::connect(path) {
-            Ok(_) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::AddrInUse,
-                    format!("another conaryd answers at {}", path.display()),
-                ));
-            }
+            Ok(_) => return Err(in_use(format!("{} is answered on", path.display()))),
             Err(e) if e.kind() == io::ErrorKind::ConnectionRefused => fs::remove_file(path)?,
             Err(e) => return Err(e),
         },
         Err(e) if e.kind() == io::ErrorKind::NotFound => {}
         Err(e) => return Err(e),
     }
-    if let Some(dir) = path.parent() {
-        fs::create_dir_all(dir)?;
-    }
-    UnixListener::bind(path)
+    Ok(Bound {
+        listener: UnixListener::bind(path)?,
+        _lock: lock,
+    })
 }
 
-/// Answers every connection to `listener` from `reader`, until accepting
-/// one fails.
-pub fn serve(listener: &UnixListener, reader: Reader) -> io::Result<()> {
+/// One of the connections [`Limits::connections`] allows, given back when
+/// it's dropped.
+struct Slot(Arc<AtomicUsize>);
+
+impl Slot {
+    fn take(open: &Arc<AtomicUsize>, most: usize) -> Option<Self> {
+        open.try_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
+            (n < most).then_some(n + 1)
+        })
+        .ok()
+        .map(|_| Self(Arc::clone(open)))
+    }
+}
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// Answers every connection to `listener` from `reader`, for as long as
+/// conaryd runs. A connection it can't take on (one over the limit, or one
+/// it can't start a thread for) is closed, and the rest go on being served.
+pub fn serve(listener: &UnixListener, reader: Reader, limits: Limits) -> ! {
     let reader = Arc::new(Mutex::new(reader));
-    for stream in listener.incoming() {
-        let stream = match stream {
-            Ok(s) => s,
-            Err(e) if e.kind() == io::ErrorKind::ConnectionAborted => continue,
-            Err(e) => return Err(e),
+    let open = Arc::new(AtomicUsize::new(0));
+    loop {
+        let stream = match listener.accept() {
+            Ok((stream, _)) => stream,
+            Err(e) => {
+                // Out of descriptors, say: what's open is still served, and
+                // the next accept waits a moment for some to close.
+                eprintln!("conaryd: accepting a connection: {e}");
+                thread::sleep(Duration::from_millis(100));
+                continue;
+            }
+        };
+        let Some(slot) = Slot::take(&open, limits.connections) else {
+            let _ = refuse(&stream, limits, "conaryd is serving all it takes");
+            continue;
         };
         let reader = Arc::clone(&reader);
-        thread::spawn(move || {
+        let started = thread::Builder::new().spawn(move || {
+            let _slot = slot;
             // A client that goes away mid-answer is its own business.
-            let _ = connection(&stream, &reader);
+            let _ = connection(&stream, &reader, limits);
         });
+        if let Err(e) = started {
+            // The connection and its slot went with the thread.
+            eprintln!("conaryd: starting a connection's thread: {e}");
+        }
     }
-    Ok(())
+}
+
+fn refuse(stream: &UnixStream, limits: Limits, message: &str) -> io::Result<()> {
+    stream.set_write_timeout(Some(limits.write))?;
+    writeln!(&*stream, "{}", rpc::refused(message))
 }
 
 /// Answers one connection's requests, a line each, in order.
-fn connection(stream: &UnixStream, reader: &Mutex<Reader>) -> io::Result<()> {
+fn connection(stream: &UnixStream, reader: &Mutex<Reader>, limits: Limits) -> io::Result<()> {
+    stream.set_read_timeout(Some(limits.idle))?;
+    stream.set_write_timeout(Some(limits.write))?;
     let mut lines = BufReader::new(stream);
     let mut out = stream;
     let mut line = Vec::new();
@@ -90,8 +184,7 @@ fn connection(stream: &UnixStream, reader: &Mutex<Reader>) -> io::Result<()> {
             return Ok(());
         }
         if line.len() as u64 > MAX_LINE {
-            let refused = rpc::refused(&format!("a request over {MAX_LINE} bytes"));
-            return writeln!(out, "{refused}");
+            return refuse(stream, limits, &format!("a request over {MAX_LINE} bytes"));
         }
         let text = String::from_utf8_lossy(&line);
         if text.trim().is_empty() {

@@ -9,7 +9,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 use crate::id::{ChangeId, CommitId, RevisionId};
-use crate::ledger::{Change, Landing};
+use crate::ledger::{Change, Landing, Ledger};
 use crate::op::{Actor, Authority, CheckKind, Outcome, Repo};
 
 /// The ref the notes are kept on, in each change's own repository.
@@ -126,6 +126,19 @@ impl Note {
         }
         Ok(note)
     }
+}
+
+/// The note of every change in `repo` that `ledger` holds as landed, oldest
+/// first.
+pub fn landed<'a>(
+    ledger: &'a Ledger,
+    repo: &'a Repo,
+    links: Links,
+) -> impl Iterator<Item = Note> + 'a {
+    ledger
+        .changes()
+        .filter(move |c| &c.repo == repo)
+        .filter_map(move |c| Some(Note::of(c, c.landing.as_ref()?, links)))
 }
 
 /// What a field that links somewhere other than GitHub reads as in a note

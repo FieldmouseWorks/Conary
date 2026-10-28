@@ -3,9 +3,13 @@
 //! one request per line and one response per line. Each call is in
 //! [`METHODS`], with the JSON Schema of its params, so every transport
 //! offers the same ones.
+//!
+//! Every call reads the ledger and nothing else. None runs git: a caller
+//! names checkouts conaryd's user has no reason to trust, and git runs what
+//! a checkout's config tells it to. `why` blames the line in the caller's
+//! own process, and asks for the repository's `landings` here.
 
 use std::ops::Deref;
-use std::path::Path;
 
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
@@ -13,8 +17,8 @@ use serde_json::{Value, json};
 
 use crate::id::{ChangeId, RevisionId};
 use crate::ledger::{Change, Ledger, Status};
+use crate::notes::{self, Links};
 use crate::op::Repo;
-use crate::why;
 
 /// A call, as `tools/list` and the docs describe it.
 pub struct Method {
@@ -72,17 +76,15 @@ pub const METHODS: &[Method] = &[
         },
     },
     Method {
-        name: "why",
-        description: "Why a line is the way it is: the change whose landing brought it onto trunk, its intent, session and evidence. In a checkout on the ledger's machine.",
+        name: "landings",
+        description: "The note of every change landed in a repository, oldest first: its change, intent summary, author and session, landing and the landed revision's evidence. What why answers from.",
         params: || {
             json!({
                 "type": "object",
                 "properties": {
-                    "dir": {"type": "string", "description": "The checkout, as an absolute path."},
-                    "path": {"type": "string", "description": "The file, relative to the checkout."},
-                    "line": {"type": "integer", "minimum": 1},
+                    "repo": {"type": "string", "description": "owner/name"},
                 },
-                "required": ["dir", "path", "line"],
+                "required": ["repo"],
                 "additionalProperties": false,
             })
         },
@@ -101,10 +103,10 @@ impl Error {
     pub const INVALID_REQUEST: i64 = -32600;
     pub const NO_METHOD: i64 = -32601;
     pub const INVALID_PARAMS: i64 = -32602;
-    /// The call was well formed, and failed: git said no, say.
+    /// The call was well formed, and failed: the log didn't verify, say.
     pub const FAILED: i64 = -32000;
 
-    fn new(code: i64, message: impl Into<String>) -> Self {
+    pub fn new(code: i64, message: impl Into<String>) -> Self {
         Self {
             code,
             message: message.into(),
@@ -180,10 +182,8 @@ struct EvidenceParams {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct WhyParams {
-    dir: String,
-    path: String,
-    line: u32,
+struct LandingsParams {
+    repo: String,
 }
 
 /// The result of calling `method` with `params` on `ledger`. A change that
@@ -228,15 +228,12 @@ pub fn call(ledger: &Ledger, method: &str, raw: &Value) -> Result<Value, Error> 
                 None => Value::Null,
             })
         }
-        "why" => {
-            let p: WhyParams = params(raw)?;
-            let dir = Path::new(&p.dir);
-            if !dir.is_absolute() {
-                return Err(Error::params("dir must be an absolute path"));
-            }
-            let why = why::why(ledger, dir, Path::new(&p.path), p.line)
-                .map_err(|e| Error::new(Error::FAILED, e.to_string()))?;
-            Ok(serde_json::to_value(why).expect("a why serializes"))
+        "landings" => {
+            let p: LandingsParams = params(raw)?;
+            // The socket is on the ledger's own box, so nothing is left out.
+            let on = repo(&p.repo)?;
+            let landed: Vec<_> = notes::landed(ledger, &on, Links::Kept).collect();
+            Ok(json!(landed))
         }
         _ => Err(Error::new(
             Error::NO_METHOD,
@@ -245,14 +242,17 @@ pub fn call(ledger: &Ledger, method: &str, raw: &Value) -> Result<Value, Error> 
     }
 }
 
+/// A well-formed request, as [`parse`] reads it.
 #[derive(Deserialize)]
-struct Request {
+pub struct Request {
     jsonrpc: String,
-    /// Absent for a notification, which gets no response.
-    id: Option<Value>,
-    method: String,
+    /// Absent for a notification, which gets no response. A request's is a
+    /// string, a number or null.
+    #[serde(skip)]
+    pub id: Option<Value>,
+    pub method: String,
     #[serde(default)]
-    params: Value,
+    pub params: Value,
 }
 
 fn error(id: Value, e: &Error) -> String {
@@ -265,6 +265,42 @@ pub fn refused(message: &str) -> String {
     error(Value::Null, &Error::new(Error::PARSE, message))
 }
 
+/// One request line read as a request, or the response that refuses it.
+pub fn parse(line: &str) -> Result<Request, String> {
+    let value: Value = serde_json::from_str(line).map_err(|e| refused(&e.to_string()))?;
+    let invalid =
+        |id: Value, message: &str| error(id, &Error::new(Error::INVALID_REQUEST, message));
+    let Value::Object(fields) = &value else {
+        return Err(invalid(Value::Null, "a request is an object"));
+    };
+    // A null id is a request's: only an absent one makes a notification.
+    let id = fields.get("id").cloned();
+    if id
+        .as_ref()
+        .is_some_and(|i| !(i.is_null() || i.is_string() || i.is_number()))
+    {
+        return Err(invalid(Value::Null, "an id is a string, a number or null"));
+    }
+    let shown = id.clone().unwrap_or(Value::Null);
+    let mut request: Request =
+        serde_json::from_value(value).map_err(|e| invalid(shown.clone(), &e.to_string()))?;
+    if request.jsonrpc != "2.0" {
+        return Err(invalid(shown, "jsonrpc must be \"2.0\""));
+    }
+    request.id = id;
+    Ok(request)
+}
+
+/// The response to `request` that `result` gives, or `None` for a
+/// notification.
+pub fn respond(request: Request, result: Result<Value, Error>) -> Option<String> {
+    let id = request.id?;
+    Some(match result {
+        Ok(result) => json!({"jsonrpc": "2.0", "id": id, "result": result}).to_string(),
+        Err(e) => error(id, &e),
+    })
+}
+
 /// The response to one request line, or `None` for a notification.
 /// `ledger` is called only once the request is well formed, so a caller
 /// can refresh the ledger in it.
@@ -272,32 +308,14 @@ pub fn answer<L: Deref<Target = Ledger>>(
     line: &str,
     ledger: impl FnOnce() -> Result<L, String>,
 ) -> Option<String> {
-    let value: Value = match serde_json::from_str(line) {
-        Ok(v) => v,
-        Err(e) => return Some(refused(&e.to_string())),
-    };
-    let id = value.get("id").cloned().unwrap_or(Value::Null);
-    let request: Request = match serde_json::from_value(value) {
+    let request = match parse(line) {
         Ok(r) => r,
-        Err(e) => {
-            return Some(error(
-                id,
-                &Error::new(Error::INVALID_REQUEST, e.to_string()),
-            ));
-        }
+        Err(refusal) => return Some(refusal),
     };
-    if request.jsonrpc != "2.0" {
-        let e = Error::new(Error::INVALID_REQUEST, "jsonrpc must be \"2.0\"");
-        return Some(error(id, &e));
-    }
     let result = ledger()
         .map_err(|e| Error::new(Error::FAILED, e))
         .and_then(|l| call(&l, &request.method, &request.params));
-    let id = request.id?;
-    Some(match result {
-        Ok(result) => json!({"jsonrpc": "2.0", "id": id, "result": result}).to_string(),
-        Err(e) => error(id, &e),
-    })
+    respond(request, result)
 }
 
 #[cfg(test)]

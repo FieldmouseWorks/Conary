@@ -5,7 +5,6 @@ use std::fs;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::SystemTime;
 
 use ed25519_dalek::VerifyingKey;
 
@@ -36,10 +35,13 @@ impl From<LogError> for ReadError {
     }
 }
 
-/// The log's and the anchor copy's file, size and modification time: when
-/// neither moved, neither did the ledger. The anchor copy is renamed into
-/// place, so a new one is a new file even when the clock hasn't ticked.
-type Stamp = [Option<(u64, u64, SystemTime)>; 2];
+/// The log's and the anchor copy's file, size and change time: when
+/// neither moved, neither did the ledger. The change time is the kernel's,
+/// moved by every write and every change of times, and no writer sets it
+/// back, so an edit that keeps the size and puts the modification time back
+/// still moves it. The anchor copy is renamed into place, so a new one is
+/// a new file as well.
+type Stamp = [Option<(u64, u64, i64, i64)>; 2];
 
 pub struct Reader {
     dir: PathBuf,
@@ -52,7 +54,7 @@ fn stamp(dir: &Path) -> Stamp {
     [log::log_path(dir), log::anchor_path(dir)].map(|path| {
         fs::metadata(path)
             .ok()
-            .and_then(|m| Some((m.ino(), m.len(), m.modified().ok()?)))
+            .map(|m| (m.ino(), m.len(), m.ctime(), m.ctime_nsec()))
     })
 }
 
@@ -168,6 +170,28 @@ mod tests {
             matches!(got, Err(ReadError::Log(LogError::Unanchored(_)))),
             "{got:?}"
         );
+    }
+
+    #[test]
+    fn an_edit_in_place_that_keeps_the_size_and_the_time_is_still_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = ed25519_dalek::SigningKey::from_bytes(&[4; 32]);
+        let public = key.verifying_key();
+        let lock = log::Lock::take(dir.path()).unwrap();
+        log::save_anchor(&lock, None, "c0").unwrap();
+        let mut store = Store::open(lock, key, None).unwrap();
+        observe(&mut store, 1);
+        let mut reader = Reader::open(dir.path(), public).unwrap();
+        let log = log::log_path(dir.path());
+        let was = fs::metadata(&log).unwrap().modified().unwrap();
+        let text = fs::read_to_string(&log).unwrap();
+        let mut file = fs::File::options().write(true).open(&log).unwrap();
+        std::io::Write::write_all(&mut file, text.replace("someone", "somebdy").as_bytes())
+            .unwrap();
+        file.set_modified(was).unwrap();
+        drop(file);
+        assert_eq!(fs::metadata(&log).unwrap().modified().unwrap(), was);
+        assert!(reader.refresh().is_err());
     }
 
     #[test]

@@ -102,13 +102,35 @@ fn bad_params_are_refused_as_bad_params() {
         ("change.list", json!({"status": "merged"})),
         ("change.list", json!({"author": "someone"})),
         ("evidence.query", json!(null)),
-        ("why", json!({"dir": "relative", "path": "f", "line": 1})),
+        ("landings", json!({})),
+        ("landings", json!({"repo": "not a repo"})),
     ] {
         let e = call(&ledger, method, &params).unwrap_err();
         assert_eq!(e.code, Error::INVALID_PARAMS, "{method} {params}: {e:?}");
     }
     let e = call(&ledger, "change.delete", &json!({})).unwrap_err();
     assert_eq!(e.code, Error::NO_METHOD);
+}
+
+#[test]
+fn landings_are_the_notes_of_a_repos_landed_changes() {
+    let (ledger, one, landed) = ledger();
+    let got = call(&ledger, "landings", &json!({"repo": "O/R"})).unwrap();
+    let notes: Vec<crate::notes::Note> = serde_json::from_value(got).unwrap();
+    // The open change has no landing, so no note.
+    assert_eq!(notes.len(), 1);
+    assert_eq!((notes[0].change, notes[0].landing.revision), (one, landed));
+    let elsewhere = call(&ledger, "landings", &json!({"repo": "o/other"})).unwrap();
+    assert_eq!(elsewhere, json!([]));
+}
+
+#[test]
+fn nothing_is_served_that_runs_git() {
+    let (ledger, _, _) = ledger();
+    let params = json!({"dir": "/", "path": "f", "line": 1});
+    let e = call(&ledger, "why", &params).unwrap_err();
+    assert_eq!(e.code, Error::NO_METHOD);
+    assert!(METHODS.iter().all(|m| m.name != "why"));
 }
 
 #[test]
@@ -176,6 +198,17 @@ fn a_line_gets_a_response_with_its_id() {
 }
 
 #[test]
+fn a_null_id_is_a_request_and_gets_its_response() {
+    let (ledger, _, _) = ledger();
+    let r = reply(
+        r#"{"jsonrpc":"2.0","id":null,"method":"change.list"}"#,
+        &ledger,
+    );
+    assert!(r.as_object().unwrap().contains_key("id"), "{r}");
+    assert_eq!((&r["id"], &r["result"][0]["pr"]), (&Value::Null, &json!(1)));
+}
+
+#[test]
 fn a_malformed_line_is_answered_without_reading_the_ledger() {
     for (line, code) in [
         ("{not json", Error::PARSE),
@@ -185,6 +218,18 @@ fn a_malformed_line_is_answered_without_reading_the_ledger() {
             Error::INVALID_REQUEST,
         ),
         (r#"[1]"#, Error::INVALID_REQUEST),
+        (
+            r#"{"jsonrpc":"2.0","id":true,"method":"change.list"}"#,
+            Error::INVALID_REQUEST,
+        ),
+        (
+            r#"{"jsonrpc":"2.0","id":[1],"method":"change.list"}"#,
+            Error::INVALID_REQUEST,
+        ),
+        (
+            r#"{"jsonrpc":"2.0","id":{},"method":"change.list"}"#,
+            Error::INVALID_REQUEST,
+        ),
     ] {
         let r = answer::<&Ledger>(line, || panic!("read the ledger for {line}")).unwrap();
         let r: Value = serde_json::from_str(&r).unwrap();
