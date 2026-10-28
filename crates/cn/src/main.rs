@@ -14,6 +14,7 @@ use conary_core::log;
 use conary_core::notes::Links;
 use conary_core::op::{Authority, Repo};
 use conary_core::why::{self, Why};
+use conary_core::{reader, rpc};
 use conary_github::anchor::{self, Anchored};
 use conary_github::{Api, Config, Ingested, ingest, notes};
 
@@ -24,7 +25,7 @@ use conary_github::{Api, Config, Ingested, ingest, notes};
 )]
 struct Cli {
     /// The ledger's directory.
-    #[arg(long, global = true, env = "CONARY_LEDGER", default_value_os_t = default_ledger())]
+    #[arg(long, global = true, env = "CONARY_LEDGER", default_value_os_t = log::default_dir())]
     ledger: PathBuf,
     /// Print for people instead of JSON.
     #[arg(long, global = true)]
@@ -127,14 +128,6 @@ enum Command {
     },
 }
 
-fn default_ledger() -> PathBuf {
-    std::env::var_os("XDG_STATE_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| Path::new(&h).join(".local/state")))
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("conary")
-}
-
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 fn main() -> ExitCode {
@@ -178,7 +171,12 @@ fn run(cli: &Cli) -> Result<()> {
         }
         Command::Init { remote } => {
             let api = Api::new(&remote.api, token()?);
-            let made = anchor::init(&cli.ledger, &key_path(cli), &api, &remote.anchor_repo)?;
+            let made = anchor::init(
+                &cli.ledger,
+                &log::key_path(&cli.ledger),
+                &api,
+                &remote.anchor_repo,
+            )?;
             let seq = made.anchor.map_or(0, |a| a.seq);
             if cli.human {
                 println!(
@@ -194,7 +192,7 @@ fn run(cli: &Cli) -> Result<()> {
             }
         }
         Command::Verify { remote } => {
-            let key = log::load_public_key(&log::public_path(&key_path(cli)))?;
+            let key = log::load_public_key(&log::public_path(&log::key_path(&cli.ledger)))?;
             let api = Api::new(&remote.api, token()?);
             let anchor = anchor::verify(&cli.ledger, &key, &api, &remote.anchor_repo)?;
             let seq = anchor.map_or(0, |a| a.seq);
@@ -220,7 +218,7 @@ fn run(cli: &Cli) -> Result<()> {
                     println!("{}", line(c));
                 }
             } else {
-                println!("{}", Value::Array(changes.map(summary).collect()));
+                println!("{}", Value::Array(changes.map(rpc::summary).collect()));
             }
         }
         Command::Why { at, dir } => {
@@ -229,7 +227,7 @@ fn run(cli: &Cli) -> Result<()> {
                 .and_then(|(f, n)| Some((f, n.parse::<u32>().ok()?)))
                 .ok_or("give the line as FILE:LINE")?;
             let file = Path::new(file);
-            let why = if log::public_path(&key_path(cli)).exists() {
+            let why = if log::public_path(&log::key_path(&cli.ledger)).exists() {
                 why::why(&read(cli)?, dir, file, n)?
             } else {
                 why::why_from_notes(dir, file, n)?
@@ -238,10 +236,6 @@ fn run(cli: &Cli) -> Result<()> {
         }
     }
     Ok(())
-}
-
-fn key_path(cli: &Cli) -> PathBuf {
-    cli.ledger.join("key")
 }
 
 fn token() -> Result<String> {
@@ -253,7 +247,7 @@ fn token() -> Result<String> {
 /// The ledger, open for writing once its log holds the anchor on GitHub.
 fn write(cli: &Cli, github: &GithubArgs) -> Result<(Anchored, Api, Config)> {
     let api = Api::new(&github.remote.api, token()?);
-    let key = log::load_signing_key(&key_path(cli))?;
+    let key = log::load_signing_key(&log::key_path(&cli.ledger))?;
     let anchored = anchor::open(&cli.ledger, key, &api, &github.remote.anchor_repo)?;
     let config = Config {
         reviewers: github.reviewers.clone(),
@@ -276,28 +270,9 @@ fn write_notes(api: &Api, a: &Anchored, github: &GithubArgs, repo: &Repo) -> Res
 /// The ledger, verified against its public key and the anchor its writer
 /// kept beside it. Reading takes no lock and never leaves the box.
 fn read(cli: &Cli) -> Result<Ledger> {
-    let key = log::load_public_key(&log::public_path(&key_path(cli)))
+    let key = log::load_public_key(&log::public_path(&log::key_path(&cli.ledger)))
         .map_err(|e| format!("{e} (has `cn init` set up {}?)", cli.ledger.display()))?;
-    let ops = log::read_anchored(&cli.ledger, &key)?;
-    Ledger::replay(&ops).map_err(|(id, e)| format!("op {id} in the log doesn't apply: {e}").into())
-}
-
-fn url(c: &Change) -> String {
-    format!("https://github.com/{}/pull/{}", c.repo, c.pr)
-}
-
-fn summary(c: &Change) -> Value {
-    json!({
-        "change": c.id.to_string(),
-        "repo": c.repo.to_string(),
-        "pr": c.pr,
-        "url": url(c),
-        "status": c.status(),
-        "author": c.author,
-        "summary": c.intent.as_ref().map(|i| &i.summary),
-        "task": c.intent.as_ref().and_then(|i| i.task.as_ref()),
-        "landed": c.landing.as_ref().map(|l| l.after.to_string()),
-    })
+    Ok(reader::read(&cli.ledger, &key)?)
 }
 
 /// A unit enum as the ledger spells it: `landed`, `ci`, `pass`.
@@ -319,7 +294,7 @@ fn line(c: &Change) -> String {
 
 fn ingested(got: &Ingested, ledger: &Ledger) -> Value {
     let c = ledger.change(got.change).expect("ingest recorded it");
-    json!({"change": c.id.to_string(), "pr": c.pr, "url": url(c), "recorded": got.recorded})
+    json!({"change": c.id.to_string(), "pr": c.pr, "url": c.url(), "recorded": got.recorded})
 }
 
 fn print_ingested(cli: &Cli, repo: &Repo, pr: u64, got: Ingested, ledger: &Ledger) {

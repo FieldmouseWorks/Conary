@@ -6,6 +6,7 @@ use conary_core::op::{Actor, ActorKind, Authority, Body, CheckKind, Outcome};
 use conary_core::{Store, notes::REF};
 
 use super::*;
+use conary_core::notes::Note;
 
 /// A notes ref in memory: its files, and how many commits it has had.
 #[derive(Default)]

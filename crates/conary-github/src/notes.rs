@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use sha1::{Digest, Sha1};
 
 use conary_core::Ledger;
-use conary_core::notes::{Links, Note};
+use conary_core::notes::{self, Links};
 use conary_core::op::Repo;
 
 use crate::api::ApiError;
@@ -57,14 +57,11 @@ pub fn publish(
     links: Links,
 ) -> Result<usize, ApiError> {
     let full = repo.to_string();
-    let kept = notes.get(&full, conary_core::notes::REF)?;
+    let kept = notes.get(&full, notes::REF)?;
     let mut files = Vec::new();
-    for c in ledger.changes().filter(|c| &c.repo == repo) {
-        let Some(landing) = &c.landing else {
-            continue;
-        };
-        let text = Note::of(c, landing, links).text();
-        let on = landing.after.to_string();
+    for note in notes::landed(ledger, repo, links) {
+        let text = note.text();
+        let on = note.landing.after.to_string();
         // A note already there is written over where it is: git keeps a
         // ref with many notes in a fan-out of directories.
         match kept.as_ref().and_then(|k| k.notes.get(&on)) {
@@ -74,7 +71,7 @@ pub fn publish(
         }
     }
     if !files.is_empty() {
-        notes.set(&full, conary_core::notes::REF, kept.as_ref(), &files)?;
+        notes.set(&full, notes::REF, kept.as_ref(), &files)?;
     }
     Ok(files.len())
 }

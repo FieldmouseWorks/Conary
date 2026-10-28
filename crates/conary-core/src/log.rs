@@ -22,6 +22,7 @@ use crate::op::{Body, Op, Unsigned};
 const LOG_FILE: &str = "ops.jsonl";
 const LOCK_FILE: &str = "lock";
 const ANCHOR_FILE: &str = "anchor";
+const KEY_FILE: &str = "key";
 
 #[derive(Debug)]
 pub enum LogError {
@@ -442,6 +443,32 @@ pub fn load_checked(dir: &Path) -> Result<Checked, LogError> {
 /// The anchor in the copy [`save_anchor`] kept.
 pub fn load_anchor(dir: &Path) -> Result<Option<Anchor>, LogError> {
     load_checked(dir).map(|c| c.anchor)
+}
+
+/// Where the ledger is when nothing says otherwise: `conary` in the XDG
+/// state directory.
+pub fn default_dir() -> PathBuf {
+    std::env::var_os("XDG_STATE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| Path::new(&h).join(".local/state")))
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("conary")
+}
+
+/// The signing key's file in the ledger at `dir`. Its public key is beside
+/// it, at [`public_path`].
+pub fn key_path(dir: &Path) -> PathBuf {
+    dir.join(KEY_FILE)
+}
+
+/// The log's file in the ledger at `dir`.
+pub fn log_path(dir: &Path) -> PathBuf {
+    dir.join(LOG_FILE)
+}
+
+/// The anchor copy's file in the ledger at `dir`.
+pub fn anchor_path(dir: &Path) -> PathBuf {
+    dir.join(ANCHOR_FILE)
 }
 
 /// Whether there's an anchor file beside the log at `dir`, readable or not.

@@ -5,7 +5,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::id::{ChangeId, CommitId, OpId, RevisionId};
 use crate::op::{Actor, Authority, Body, CheckKind, Op, Outcome, Repo};
@@ -44,7 +44,7 @@ pub struct Landing {
     pub at: i64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Status {
     Open,
@@ -76,6 +76,11 @@ impl Change {
             (None, true) => Status::Closed,
             (None, false) => Status::Open,
         }
+    }
+
+    /// The change's pull request on GitHub.
+    pub fn url(&self) -> String {
+        format!("https://github.com/{}/pull/{}", self.repo, self.pr)
     }
 
     pub fn revision(&self, id: RevisionId) -> Option<&Revision> {
