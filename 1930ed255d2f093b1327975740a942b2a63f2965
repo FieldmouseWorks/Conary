@@ -1,0 +1,41 @@
+{
+  "conary": "note v1",
+  "change": "144kv34sz6n3qzv8r4e4mx2bpg",
+  "repo": {
+    "owner": "fieldmouseworks",
+    "name": "conary"
+  },
+  "pr": 18,
+  "url": "https://github.com/fieldmouseworks/conary/pull/18",
+  "summary": "conaryd: serve the ledger's calls over a Unix socket",
+  "task": null,
+  "author": {
+    "kind": "agent",
+    "login": "TusanHomichi",
+    "session": "https://claude.ai/code/session_01BkHcyDYaKnE7mRRMdYCFVC"
+  },
+  "landing": {
+    "revision": "27a492a62bf83827b619946ceb95c8ff23564a4ac68473741abfa2c85ee76191",
+    "before": "aac50ecc8df2a02c540b9d0b66684f3c51078361",
+    "after": "1930ed255d2f093b1327975740a942b2a63f2965",
+    "by": {
+      "kind": "status",
+      "login": "TusanHomichi"
+    },
+    "at": 1793150374769
+  },
+  "evidence": [
+    {
+      "kind": "ci",
+      "check": "check / check",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/40613223759/job/122569553288"
+    },
+    {
+      "kind": "review",
+      "check": "codex",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/pull/18#pullrequestreview-5676578968"
+    }
+  ]
+}

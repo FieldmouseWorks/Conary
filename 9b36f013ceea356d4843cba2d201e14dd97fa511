@@ -1,0 +1,41 @@
+{
+  "conary": "note v1",
+  "change": "0145azqvztyx6rearbhcy6m82r",
+  "repo": {
+    "owner": "FieldmouseWorks",
+    "name": "Conary"
+  },
+  "pr": 5,
+  "url": "https://github.com/FieldmouseWorks/Conary/pull/5",
+  "summary": "agents: open PRs ready for review, never as drafts",
+  "task": null,
+  "author": {
+    "kind": "agent",
+    "login": "TusanHomichi",
+    "session": "https://claude.ai/code/session_01A8jL6BSB2M5KUufXQefcf9"
+  },
+  "landing": {
+    "revision": "3b6d239372555d7d10f0237d9ee55afac5c98b95a7c89c9f0c02d08027f8570b",
+    "before": "6a70cbbc8bb9655c6f89eac38cd511f2e5481d28",
+    "after": "9b36f013ceea356d4843cba2d201e14dd97fa511",
+    "by": {
+      "kind": "status",
+      "login": "TusanHomichi"
+    },
+    "at": 1793141547200
+  },
+  "evidence": [
+    {
+      "kind": "ci",
+      "check": "check / check",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/40541497320/job/122320785814"
+    },
+    {
+      "kind": "review",
+      "check": "codex",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/pull/5#pullrequestreview-5670748568"
+    }
+  ]
+}

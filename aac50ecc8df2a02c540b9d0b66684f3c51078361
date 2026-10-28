@@ -1,0 +1,41 @@
+{
+  "conary": "note v1",
+  "change": "0xvqat8cyv1sn8yw3v2h7tazm1",
+  "repo": {
+    "owner": "fieldmouseworks",
+    "name": "conary"
+  },
+  "pr": 17,
+  "url": "https://github.com/fieldmouseworks/conary/pull/17",
+  "summary": "notes: answer why from any clone through refs/notes/conary",
+  "task": null,
+  "author": {
+    "kind": "agent",
+    "login": "TusanHomichi",
+    "session": "https://claude.ai/code/session_01BkHcyDYaKnE7mRRMdYCFVC"
+  },
+  "landing": {
+    "revision": "fcee63ade6ea956a88520b1777bedadb4f77ecfa035eefe8768416e76d44b95d",
+    "before": "542982db1dd66ecc85cac2cf7efd3cedf6b6b820",
+    "after": "aac50ecc8df2a02c540b9d0b66684f3c51078361",
+    "by": {
+      "kind": "status",
+      "login": "TusanHomichi"
+    },
+    "at": 1793147036915
+  },
+  "evidence": [
+    {
+      "kind": "ci",
+      "check": "check / check",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/40608245522/job/122553054963"
+    },
+    {
+      "kind": "review",
+      "check": "codex",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/pull/17#pullrequestreview-5676279001"
+    }
+  ]
+}

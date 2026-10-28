@@ -1,0 +1,41 @@
+{
+  "conary": "note v1",
+  "change": "3481e8kfcqynak58wqgbejj0mt",
+  "repo": {
+    "owner": "FieldmouseWorks",
+    "name": "Conary"
+  },
+  "pr": 11,
+  "url": "https://github.com/FieldmouseWorks/Conary/pull/11",
+  "summary": "core: a signed, hash-chained op log and the ledger it replays to",
+  "task": "https://claude.ai/code/project/chan_01Ad4f4oDXfFTCEzLHzMTD8q?thread=cmsg_01Ad4f4oDXfFTCEzLHzMTD8q97LzkhxA9G1SdrVpgaY4cX",
+  "author": {
+    "kind": "agent",
+    "login": "TusanHomichi",
+    "session": "https://claude.ai/code/session_01BkHcyDYaKnE7mRRMdYCFVC"
+  },
+  "landing": {
+    "revision": "73e5a2a7e22f0a5304589cfcfbfe8a2f341a59aa5bcc375b3277a159df927e55",
+    "before": "1c60b2464a6c487660d3251d9eadf7c4c49bd5b8",
+    "after": "ba348e7b964e5950a865446462e50600c55b9382",
+    "by": {
+      "kind": "status",
+      "login": "TusanHomichi"
+    },
+    "at": 1793141560958
+  },
+  "evidence": [
+    {
+      "kind": "ci",
+      "check": "check / check",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/40559422766/job/122384116892"
+    },
+    {
+      "kind": "review",
+      "check": "codex",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/pull/11#pullrequestreview-5672289666"
+    }
+  ]
+}

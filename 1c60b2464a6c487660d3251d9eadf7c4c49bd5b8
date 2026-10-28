@@ -1,0 +1,41 @@
+{
+  "conary": "note v1",
+  "change": "2as0112hx1q0zfx151gv0m0yww",
+  "repo": {
+    "owner": "FieldmouseWorks",
+    "name": "Conary"
+  },
+  "pr": 10,
+  "url": "https://github.com/FieldmouseWorks/Conary/pull/10",
+  "summary": "core: start the Rust workspace with the ids the ledger names things by",
+  "task": "https://claude.ai/code/project/chan_01Ad4f4oDXfFTCEzLHzMTD8q?thread=cmsg_01Ad4f4oDXfFTCEzLHzMTD8q97LzkhxA9G1SdrVpgaY4cX",
+  "author": {
+    "kind": "agent",
+    "login": "TusanHomichi",
+    "session": "https://claude.ai/code/session_01BkHcyDYaKnE7mRRMdYCFVC"
+  },
+  "landing": {
+    "revision": "22aaffd52763340dd8c7ed1a8be1f0e74b57dc935a4e602abe1aa205c0e13592",
+    "before": "3c03a8191b23d05e883e72744d6fbbd7e782e6a2",
+    "after": "1c60b2464a6c487660d3251d9eadf7c4c49bd5b8",
+    "by": {
+      "kind": "status",
+      "login": "TusanHomichi"
+    },
+    "at": 1793141557161
+  },
+  "evidence": [
+    {
+      "kind": "ci",
+      "check": "check / check",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/40547145310/job/122340676632"
+    },
+    {
+      "kind": "review",
+      "check": "codex",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/pull/10#pullrequestreview-5671261834"
+    }
+  ]
+}

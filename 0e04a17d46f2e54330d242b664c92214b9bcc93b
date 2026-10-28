@@ -1,0 +1,41 @@
+{
+  "conary": "note v1",
+  "change": "5v3bv1wy4bcaek996mevjgzp3q",
+  "repo": {
+    "owner": "FieldmouseWorks",
+    "name": "Conary"
+  },
+  "pr": 8,
+  "url": "https://github.com/FieldmouseWorks/Conary/pull/8",
+  "summary": "Lock file maintenance (nix)",
+  "task": null,
+  "author": {
+    "kind": "person",
+    "login": "TusanHomichi",
+    "session": null
+  },
+  "landing": {
+    "revision": "868e25243fd7830b9b6559ce69228993831ff284ace95645dc747283f851a268",
+    "before": "9b36f013ceea356d4843cba2d201e14dd97fa511",
+    "after": "0e04a17d46f2e54330d242b664c92214b9bcc93b",
+    "by": {
+      "kind": "status",
+      "login": "TusanHomichi"
+    },
+    "at": 1793141550721
+  },
+  "evidence": [
+    {
+      "kind": "ci",
+      "check": "check / check",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/40541509989/job/122320827527"
+    },
+    {
+      "kind": "review",
+      "check": "codex",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/pull/8#pullrequestreview-5670758531"
+    }
+  ]
+}

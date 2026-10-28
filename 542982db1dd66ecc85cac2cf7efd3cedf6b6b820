@@ -1,0 +1,41 @@
+{
+  "conary": "note v1",
+  "change": "0ffnzyatvv76yjj2a7dfew59mj",
+  "repo": {
+    "owner": "FieldmouseWorks",
+    "name": "Conary"
+  },
+  "pr": 16,
+  "url": "https://github.com/FieldmouseWorks/Conary/pull/16",
+  "summary": "docs: the format CI attests the gate's result in",
+  "task": "FieldmouseWorks/Conary#15",
+  "author": {
+    "kind": "agent",
+    "login": "TusanHomichi",
+    "session": "https://claude.ai/code/session_01BkHcyDYaKnE7mRRMdYCFVC"
+  },
+  "landing": {
+    "revision": "a24b11ea6db5807c394923d45e6b161c63aa38b60b3956b5e4e8e5a1be271478",
+    "before": "03c17a356a9635800356656658f8c103ba722973",
+    "after": "542982db1dd66ecc85cac2cf7efd3cedf6b6b820",
+    "by": {
+      "kind": "status",
+      "login": "TusanHomichi"
+    },
+    "at": 1793143236199
+  },
+  "evidence": [
+    {
+      "kind": "ci",
+      "check": "check / check",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/40598657344/job/122520929086"
+    },
+    {
+      "kind": "review",
+      "check": "codex",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/pull/16#pullrequestreview-5675539995"
+    }
+  ]
+}

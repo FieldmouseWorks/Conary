@@ -1,0 +1,41 @@
+{
+  "conary": "note v1",
+  "change": "3qg8hgk9ccxts39fyggr176snn",
+  "repo": {
+    "owner": "FieldmouseWorks",
+    "name": "Conary"
+  },
+  "pr": 7,
+  "url": "https://github.com/FieldmouseWorks/Conary/pull/7",
+  "summary": "ci: pin burrow's flake check at a commit that takes a runner",
+  "task": "FieldmouseWorks/remi#80",
+  "author": {
+    "kind": "person",
+    "login": "TusanHomichi",
+    "session": null
+  },
+  "landing": {
+    "revision": "357dbb43a15dec7a79431b66ef7f7b9c36d3ce7c4e53e66ab5687195670ab664",
+    "before": "a7b2e4e1255ec2ad132ed3749fe1076aff162cce",
+    "after": "6a70cbbc8bb9655c6f89eac38cd511f2e5481d28",
+    "by": {
+      "kind": "status",
+      "login": "TusanHomichi"
+    },
+    "at": 1793141543411
+  },
+  "evidence": [
+    {
+      "kind": "ci",
+      "check": "check / check",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/40448409212/job/122005092506"
+    },
+    {
+      "kind": "review",
+      "check": "codex",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/pull/7#pullrequestreview-5662133948"
+    }
+  ]
+}
