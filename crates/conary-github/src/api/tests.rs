@@ -1,7 +1,7 @@
 //! The REST client against a stand-in GitHub on a local port: what it asks,
 //! and how it reads each answer.
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::sync::mpsc;
 use std::thread;
@@ -9,7 +9,9 @@ use std::thread;
 use super::*;
 
 /// Serves `answers` in turn, one per connection, and sends back each
-/// request's head (its request line and headers, lower-cased).
+/// request's head (its request line and headers, lower-cased). A request's
+/// body is read before the answer goes out. An answer the client stops
+/// reading, past its size limit, is let go.
 fn github(answers: Vec<&'static str>) -> (String, mpsc::Receiver<String>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
@@ -27,8 +29,13 @@ fn github(answers: Vec<&'static str>) -> (String, mpsc::Receiver<String>) {
                 }
                 head.push_str(&line.to_lowercase());
             }
-            conn.write_all(answer.as_bytes()).unwrap();
-            tx.send(head).unwrap();
+            let length = head
+                .lines()
+                .find_map(|l| l.strip_prefix("content-length: "))
+                .map_or(0, |n| n.trim().parse().unwrap());
+            reader.read_exact(&mut vec![0; length]).unwrap();
+            _ = conn.write_all(answer.as_bytes());
+            _ = tx.send(head);
         }
     });
     (base, rx)
@@ -132,4 +139,111 @@ fn a_request_that_can_never_be_made_is_not_github_unavailable() {
     let (base, _heads) = github(vec![]);
     let err = Api::new(&base, "t\nx".into()).pull("o/r", 7).unwrap_err();
     assert!(!err.unavailable, "{err}");
+}
+
+/// What a read and a write each make of `answer`.
+fn both(answer: String) -> [ApiError; 2] {
+    let answer: &'static str = answer.leak();
+    let (base, _heads) = github(vec![answer, answer]);
+    let api = Api::new(&base, "t".into());
+    let read = api.pull("o/r", 7).unwrap_err();
+    let write = api
+        .send::<serde_json::Value>(false, "/repos/o/r/git/trees", &serde_json::json!({}))
+        .unwrap_err();
+    [read, write]
+}
+
+/// An answer whose body ends, connection closed, before its length says.
+fn cut_off(status: &str, headers: &str, body: &str) -> String {
+    format!(
+        "HTTP/1.1 {status}\r\n{headers}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len() + 100
+    )
+}
+
+fn whole(status: &str, body: &str) -> String {
+    format!(
+        "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )
+}
+
+#[test]
+fn an_answer_cut_off_is_github_unavailable() {
+    // An answer, or a 403's message that would tell a secondary limit from a
+    // refusal, lost partway: the network's doing, so ask again.
+    for answer in [
+        cut_off("200 OK", "", "{\"number\":"),
+        cut_off("403 Forbidden", "", "{\"message\":\"You have exc"),
+        cut_off("403 Forbidden", "X-RateLimit-Remaining: 4990\r\n", ""),
+    ] {
+        for err in both(answer.clone()) {
+            assert!(err.unavailable, "{answer:?}: {err}");
+        }
+    }
+}
+
+#[test]
+fn an_answer_too_big_or_not_json_stays_failed() {
+    // A refusal whose message is past what's read of it, an answer past the
+    // client's size limit, or one that isn't what was asked for: the same
+    // next time.
+    let long_refusal = format!(r#"{{"message":"{}"}}"#, "x".repeat(MAX_MESSAGE as usize));
+    let huge = format!(r#"{{"x":"{}"}}"#, "x".repeat(11 * 1024 * 1024));
+    for answer in [
+        whole("403 Forbidden", &long_refusal),
+        whole("200 OK", &huge),
+        whole("200 OK", "not json"),
+    ] {
+        for err in both(answer) {
+            assert!(!err.unavailable, "{err}");
+        }
+    }
+}
+
+/// What a read and a write each make of a proxy that answers a tunnel with
+/// `answer`.
+fn through_proxy(answer: &'static str) -> [ApiError; 2] {
+    let (proxy, heads) = github(vec![answer, answer]);
+    let api = Api::through(
+        "https://127.0.0.1:1",
+        "t".into(),
+        Some(ureq::Proxy::new(&proxy).unwrap()),
+    );
+    let read = api.pull("o/r", 7).unwrap_err();
+    assert!(heads.recv().unwrap().starts_with("connect "));
+    let write = api
+        .send::<serde_json::Value>(false, "/repos/o/r/git/trees", &serde_json::json!({}))
+        .unwrap_err();
+    assert!(heads.recv().unwrap().starts_with("connect "));
+    [read, write]
+}
+
+#[test]
+fn a_proxy_that_refuses_is_not_github_unavailable() {
+    // Credentials missing or wrong, or the proxy's policy: asking again gets
+    // the same refusal.
+    for answer in [
+        "HTTP/1.1 407 Proxy Authentication Required\r\nContent-Length: 0\r\n\r\n",
+        "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n",
+    ] {
+        for err in through_proxy(answer) {
+            assert!(!err.unavailable, "{answer:?}: {err}");
+        }
+    }
+}
+
+#[test]
+fn a_proxy_in_trouble_or_gone_is_github_unavailable() {
+    // The proxy can't reach GitHub, is overloaded, or drops the connection
+    // without an answer.
+    for answer in [
+        "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n",
+        "HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\n\r\n",
+        "",
+    ] {
+        for err in through_proxy(answer) {
+            assert!(err.unavailable, "{answer:?}: {err}");
+        }
+    }
 }

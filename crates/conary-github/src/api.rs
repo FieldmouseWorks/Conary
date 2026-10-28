@@ -227,7 +227,13 @@ const MAX_PAGES: usize = 50;
 impl Api {
     /// `base` is the API root, `https://api.github.com` on github.com.
     pub fn new(base: &str, token: String) -> Self {
+        Self::through(base, token, ureq::Proxy::try_from_env())
+    }
+
+    /// Through `proxy`, or straight to GitHub when `None`.
+    fn through(base: &str, token: String, proxy: Option<ureq::Proxy>) -> Self {
         let config = ureq::Agent::config_builder()
+            .proxy(proxy)
             .tls_config(
                 TlsConfig::builder()
                     .root_certs(RootCerts::PlatformVerifier)
@@ -336,25 +342,44 @@ impl Api {
 type Response = ureq::http::Response<ureq::Body>;
 
 /// A request that got no answer. Only what asking again can fix is GitHub
-/// unavailable: the network, DNS, a timeout, a connection dropped or stalled.
-/// A bad URL, header or proxy, a TLS setup or an answer past the size limit
-/// stays as wrong the next time. The error names the URL, never the token.
+/// unavailable: the network, DNS, a timeout, a connection dropped or stalled,
+/// a proxy that didn't answer or is itself unavailable. A bad URL or header, a
+/// proxy that refuses (its credentials, its policy), a TLS setup or an answer
+/// past the size limit stays as wrong the next time. The error names the URL,
+/// never the token.
 fn unreachable(url: &str, e: ureq::Error) -> ApiError {
-    let passing = matches!(
-        e,
+    let passing = match &e {
         ureq::Error::Io(_)
-            | ureq::Error::Timeout(_)
-            | ureq::Error::HostNotFound
-            | ureq::Error::ConnectionFailed
-            | ureq::Error::ConnectProxyFailed(_)
-            | ureq::Error::BodyStalled
-    );
+        | ureq::Error::Timeout(_)
+        | ureq::Error::HostNotFound
+        | ureq::Error::ConnectionFailed
+        | ureq::Error::BodyStalled => true,
+        ureq::Error::ConnectProxyFailed(reason) => proxy_status(reason).is_none_or(passing_status),
+        _ => false,
+    };
     let what = format!("{url}: {e}");
     if passing {
         ApiError::unavailable(what)
     } else {
         ApiError::new(what)
     }
+}
+
+/// The status a proxy refused a tunnel with, `None` when it gave none.
+/// ureq carries it only in its reason, "proxy server responded 407/...".
+fn proxy_status(reason: &str) -> Option<u16> {
+    reason
+        .strip_prefix("proxy server responded ")?
+        .split('/')
+        .next()?
+        .parse()
+        .ok()
+}
+
+/// Whether an error status, GitHub's or a proxy's, is a server too busy or in
+/// trouble to answer just now, rather than the request refused.
+fn passing_status(status: u16) -> bool {
+    status == 429 || status >= 500
 }
 
 fn read(url: &str, response: &mut Response) -> Result<Vec<u8>, ApiError> {
@@ -380,37 +405,50 @@ fn etag(response: &Response) -> Option<&str> {
 /// GitHub is unavailable, not the request wrong. A limit is a 403 or 429
 /// whose headers say so (the primary one spent, a secondary one's
 /// Retry-After) or whose message does: a secondary limit can come with
-/// neither header. Anything else refused, a permission or validation
+/// neither header, and a message lost to the network leaves it unknown, so
+/// unavailable too. Anything else refused, a permission or validation
 /// failure, stays refused.
 fn failed(url: &str, response: &mut Response) -> ApiError {
     let status = response.status().as_u16();
-    let limited = header(response, "x-ratelimit-remaining") == Some("0")
-        || header(response, "retry-after").is_some()
-        || status == 403 && says_rate_limit(response);
     let what = format!("{url}: http status: {status}");
-    if status == 429 || status >= 500 || (status == 403 && limited) {
-        ApiError::unavailable(what)
-    } else {
-        ApiError::new(what)
+    let limited = header(response, "x-ratelimit-remaining") == Some("0")
+        || header(response, "retry-after").is_some();
+    if passing_status(status) || status == 403 && limited {
+        return ApiError::unavailable(what);
+    }
+    if status != 403 {
+        return ApiError::new(what);
+    }
+    match says_rate_limit(url, response) {
+        Ok(true) => ApiError::unavailable(what),
+        Ok(false) => ApiError::new(what),
+        Err(e) if e.unavailable => {
+            ApiError::unavailable(format!("{what}, its message unread: {e}"))
+        }
+        Err(e) => ApiError::new(format!("{what}, its message unread: {e}")),
     }
 }
 
 /// Whether an error answer's message is GitHub's about a rate limit
 /// ("API rate limit exceeded", "You have exceeded a secondary rate limit").
-fn says_rate_limit(response: &mut Response) -> bool {
+/// One that isn't JSON isn't GitHub's; one that can't be read is an error.
+fn says_rate_limit(url: &str, response: &mut Response) -> Result<bool, ApiError> {
     #[derive(Deserialize)]
     struct Message {
         message: String,
     }
-    response
+    let body = response
         .body_mut()
         .with_config()
-        .limit(64 * 1024)
+        .limit(MAX_MESSAGE)
         .read_to_vec()
-        .ok()
-        .and_then(|b| serde_json::from_slice::<Message>(&b).ok())
-        .is_some_and(|m| m.message.to_lowercase().contains("rate limit"))
+        .map_err(|e| unreachable(url, e))?;
+    Ok(serde_json::from_slice::<Message>(&body)
+        .is_ok_and(|m| m.message.to_lowercase().contains("rate limit")))
 }
+
+/// The most of an error answer read for its message.
+const MAX_MESSAGE: u64 = 64 * 1024;
 
 impl Source for Api {
     fn pull(&self, repo: &str, number: u64) -> Result<PullRequest, ApiError> {
