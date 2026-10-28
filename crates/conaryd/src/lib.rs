@@ -6,7 +6,7 @@
 
 use std::fs::{self, File, TryLockError};
 use std::io::{self, BufRead, BufReader, Read, Write};
-use std::os::unix::fs::FileTypeExt;
+use std::os::unix::fs::{FileTypeExt, OpenOptionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -16,6 +16,7 @@ use std::time::Duration;
 
 use conary_core::reader::Reader;
 use conary_core::rpc;
+use serde_json::{Value, json};
 
 /// The longest request line conaryd reads. A longer one is refused, and the
 /// connection closed: no call needs more.
@@ -75,10 +76,13 @@ pub fn bind(path: &Path) -> io::Result<Bound> {
     }
     let mut name = path.as_os_str().to_owned();
     name.push(".lock");
+    // Only conaryd's own user opens it: the socket's mode is left to the
+    // umask, so others may connect, but none may hold the lock.
     let lock = File::options()
         .create(true)
         .truncate(false)
         .write(true)
+        .mode(0o600)
         .open(PathBuf::from(name))?;
     match lock.try_lock() {
         Ok(()) => {}
@@ -199,5 +203,93 @@ fn connection(stream: &UnixStream, reader: &Mutex<Reader>, limits: Limits) -> io
         if let Some(response) = rpc::answer(&text, ledger) {
             writeln!(out, "{response}")?;
         }
+    }
+}
+
+/// A connection to conaryd, made when it's first needed and made again when
+/// it drops: conaryd restarting costs a client nothing.
+pub struct Client {
+    socket: PathBuf,
+    conn: Option<(BufReader<UnixStream>, UnixStream)>,
+    next: u64,
+}
+
+/// What went wrong with a call: conaryd couldn't be reached, or it answered
+/// with an error.
+#[derive(Debug)]
+pub enum CallError {
+    Io(io::Error),
+    Rpc(rpc::Error),
+}
+
+impl std::fmt::Display for CallError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Io(e) => write!(f, "conaryd isn't reachable: {e}"),
+            Self::Rpc(e) => write!(f, "conaryd: {} ({})", e.message, e.code),
+        }
+    }
+}
+
+impl std::error::Error for CallError {}
+
+impl Client {
+    pub fn new(socket: &Path) -> Self {
+        Self {
+            socket: socket.to_owned(),
+            conn: None,
+            next: 0,
+        }
+    }
+
+    /// `method`'s result, from conaryd. Every call only reads, so one that
+    /// fails on a connection that dropped is made once more on a new one.
+    pub fn call(&mut self, method: &str, params: &Value) -> Result<Value, CallError> {
+        let had = self.conn.is_some();
+        match self.once(method, params) {
+            Err(CallError::Io(_)) if had => {
+                self.conn = None;
+                self.once(method, params)
+            }
+            other => other,
+        }
+    }
+
+    fn once(&mut self, method: &str, params: &Value) -> Result<Value, CallError> {
+        let got = self.exchange(method, params);
+        if got.is_err() {
+            self.conn = None;
+        }
+        let reply = got.map_err(CallError::Io)?;
+        if let Some(e) = reply.get("error") {
+            let code = e["code"].as_i64().unwrap_or(rpc::Error::FAILED);
+            let message = e["message"].as_str().unwrap_or("an error").to_owned();
+            return Err(CallError::Rpc(rpc::Error::new(code, message)));
+        }
+        Ok(reply.get("result").cloned().unwrap_or(Value::Null))
+    }
+
+    fn exchange(&mut self, method: &str, params: &Value) -> io::Result<Value> {
+        if self.conn.is_none() {
+            let out = UnixStream::connect(&self.socket)?;
+            self.conn = Some((BufReader::new(out.try_clone()?), out));
+        }
+        let (lines, out) = self.conn.as_mut().expect("connected above");
+        self.next += 1;
+        let id = self.next;
+        let request = json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params});
+        writeln!(out, "{request}")?;
+        let mut line = String::new();
+        if lines.read_line(&mut line)? == 0 {
+            return Err(io::ErrorKind::UnexpectedEof.into());
+        }
+        let reply: Value = serde_json::from_str(&line).map_err(io::Error::other)?;
+        if reply["id"] != id {
+            return Err(io::Error::other(format!(
+                "a reply to {}, not {id}",
+                reply["id"]
+            )));
+        }
+        Ok(reply)
     }
 }

@@ -1,7 +1,7 @@
 [package]
 name = "conaryd"
 version = "0.0.0"
-description = "conaryd, Conary's daemon: the ledger's calls over a Unix socket"
+description = "conaryd, Conary's daemon: the ledger's calls over a Unix socket, and conary-mcp, the same calls as MCP tools"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -10,10 +10,10 @@ publish = false
 [dependencies]
 clap = { version = "4.6.7", features = ["derive", "env"] }
 conary-core = { version = "0.0.0", path = "../conary-core" }
+serde_json = "1.0.154"
 
 [dev-dependencies]
 ed25519-dalek = "3.0.0"
-serde_json = "1.0.154"
 tempfile = "3.27.0"
 
 [lints]

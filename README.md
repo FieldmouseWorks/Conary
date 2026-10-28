@@ -31,7 +31,8 @@ clone with no ledger beside it answers from them ([notes](docs/notes.md)).
 included.
 
 `conaryd` serves the same ledger over a Unix socket, as JSON-RPC, for
-anything on the box ([conaryd](docs/conaryd.md)).
+anything on the box ([conaryd](docs/conaryd.md)), and `conary-mcp` offers it
+to agents as MCP tools ([the MCP server](docs/mcp.md)).
 
 ## Building
 
