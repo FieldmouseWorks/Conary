@@ -14,8 +14,9 @@ use crate::rpc::{self, Error, METHODS};
 use crate::why::{self, Source};
 
 /// The MCP versions this server speaks, newest first. A client asking for
-/// another gets the newest, and decides for itself.
-pub const VERSIONS: &[&str] = &["2025-11-25", "2025-06-18", "2025-03-26"];
+/// another gets the newest, and decides for itself. None older than
+/// 2025-06-18: those take JSON-RPC batches, and a line here is one message.
+pub const VERSIONS: &[&str] = &["2025-11-25", "2025-06-18"];
 
 const INSTRUCTIONS: &str = "Conary's ledger: every PR on this machine's repos, \
 with its intent, author and session, revisions, evidence and landing. Use why \
@@ -184,8 +185,11 @@ mod tests {
         assert_eq!(r["result"]["protocolVersion"], "2025-06-18");
         assert_eq!(r["result"]["serverInfo"]["name"], "conary");
         assert!(r["result"]["capabilities"]["tools"].is_object());
-        let r = reply(&line("1999-01-01"), never);
-        assert_eq!(r["result"]["protocolVersion"], VERSIONS[0]);
+        // Older versions take batches, which a line here never is.
+        for older in ["2025-03-26", "2024-11-05", "1999-01-01"] {
+            let r = reply(&line(older), never);
+            assert_eq!(r["result"]["protocolVersion"], VERSIONS[0], "{older}");
+        }
     }
 
     #[test]
