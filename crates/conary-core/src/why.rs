@@ -36,41 +36,59 @@ pub struct Why {
     pub landed: Option<Note>,
 }
 
-/// The line's repository, the commit that last changed it, and every
-/// commit from that one to the checked-out head.
-fn blamed(
-    dir: &Path,
-    file: &Path,
-    line: u32,
-) -> Result<(Repo, CommitId, HashSet<String>), GitError> {
+/// What git says about a line: its repository, the commit that last
+/// changed it, and every commit from that one to the checked-out head.
+#[derive(Debug, Clone)]
+pub struct Blamed {
+    pub repo: Repo,
+    pub commit: CommitId,
+    after: HashSet<String>,
+}
+
+/// Blames `line` (from 1) of `file` in the checkout at `dir`. The checkout
+/// can be trunk, a branch that merged trunk in, or any commit that holds
+/// the landing. Git runs here, as whoever calls it, on that checkout's
+/// config: never in conaryd for a caller.
+pub fn blame(dir: &Path, file: &Path, line: u32) -> Result<Blamed, GitError> {
     let repo = git::github_repo(dir)?;
     let commit = git::blame(dir, file, line)?;
     let after = git::descendants(dir, &commit)?;
-    Ok((repo, commit, after))
+    Ok(Blamed {
+        repo,
+        commit,
+        after,
+    })
+}
+
+impl Blamed {
+    /// What `source` says about the line, given the notes of the landings
+    /// it holds.
+    pub fn why(self, source: Source, notes: impl IntoIterator<Item = Note>) -> Why {
+        Why {
+            landed: landing(&self.repo, notes, &self.after),
+            repo: self.repo,
+            commit: self.commit,
+            source,
+        }
+    }
 }
 
 /// Why `line` (from 1) of `file` in the checkout at `dir` is the way it is,
-/// as the ledger says. The checkout can be trunk, a branch that merged trunk
-/// in, or any commit that holds the landing.
+/// as the ledger says.
 pub fn why(ledger: &Ledger, dir: &Path, file: &Path, line: u32) -> Result<Why, GitError> {
-    let (repo, commit, after) = blamed(dir, file, line)?;
+    let blamed = blame(dir, file, line)?;
     // The ledger is read on its own box, so nothing is left out.
-    let notes = notes::landed(ledger, &repo, Links::Kept);
-    Ok(Why {
-        landed: landing(&repo, notes, &after),
-        repo,
-        commit,
-        source: Source::Ledger,
-    })
+    let notes: Vec<_> = notes::landed(ledger, &blamed.repo, Links::Kept).collect();
+    Ok(blamed.why(Source::Ledger, notes))
 }
 
 /// Why `line` of `file` is the way it is, as the notes on the checkout's
 /// origin say: fetched first, so a fresh clone can answer.
 pub fn why_from_notes(dir: &Path, file: &Path, line: u32) -> Result<Why, GitError> {
-    let (repo, commit, after) = blamed(dir, file, line)?;
+    let blamed = blame(dir, file, line)?;
     let mut held = Vec::new();
     if git::fetch_notes(dir, notes::REF)? {
-        for (on, text) in git::notes(dir, notes::REF, &after)? {
+        for (on, text) in git::notes(dir, notes::REF, &blamed.after)? {
             let note = Note::parse(&text).map_err(|error| GitError::NotANote {
                 commit: on.clone(),
                 error,
@@ -85,12 +103,7 @@ pub fn why_from_notes(dir: &Path, file: &Path, line: u32) -> Result<Why, GitErro
             held.push(note);
         }
     }
-    Ok(Why {
-        landed: landing(&repo, held, &after),
-        repo,
-        commit,
-        source: Source::Notes,
-    })
+    Ok(blamed.why(Source::Notes, held))
 }
 
 /// The landing that brought a commit onto trunk, given the commit and what

@@ -1,7 +1,7 @@
 # conaryd
 
 The ledger's calls over a Unix socket ([DESIGN section 7](DESIGN.md#7-interfaces)),
-for anything on the ledger's box: the MCP server, Claude jobs, scripts. One
+for anything on the ledger's box: [the MCP server](mcp.md), Claude jobs, scripts. One
 per host. It only reads: `cn` and the steward still record the ops, and
 conaryd reads the log again whenever it or its anchor copy has moved, so an
 answer is never older than the last op written before it was asked.
