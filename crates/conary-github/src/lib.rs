@@ -5,8 +5,10 @@
 pub mod anchor;
 pub mod api;
 pub mod bases;
+pub mod etags;
 pub mod ingest;
 pub mod notes;
 
-pub use api::{Api, Source};
+pub use api::{Api, ApiError, Source};
+pub use etags::Etags;
 pub use ingest::{Config, IngestError, Ingested};

@@ -6,6 +6,8 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use ureq::tls::{RootCerts, TlsConfig};
 
+use crate::etags::Etags;
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct User {
     pub login: String,
@@ -152,11 +154,32 @@ struct Comparison {
 }
 
 #[derive(Debug)]
-pub struct ApiError(pub String);
+pub struct ApiError {
+    what: String,
+    /// GitHub couldn't be asked just now: its rate limit, its own errors, or
+    /// the network. Asking again later is the whole fix.
+    pub unavailable: bool,
+}
+
+impl ApiError {
+    pub fn new(what: impl Into<String>) -> Self {
+        Self {
+            what: what.into(),
+            unavailable: false,
+        }
+    }
+
+    pub fn unavailable(what: impl Into<String>) -> Self {
+        Self {
+            what: what.into(),
+            unavailable: true,
+        }
+    }
+}
 
 impl std::fmt::Display for ApiError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "GitHub: {}", self.0)
+        write!(f, "GitHub: {}", self.what)
     }
 }
 
@@ -190,11 +213,12 @@ pub trait Source {
     fn merge_base(&self, repo: &str, a: &str, b: &str) -> Result<String, ApiError>;
 }
 
-/// The REST API, with a token.
+/// The REST API, with a token, and the writer's [`Etags`] if it keeps them.
 pub struct Api {
     agent: ureq::Agent,
     base: String,
     token: String,
+    etags: Option<Etags>,
 }
 
 /// Pages are read until one comes back short, up to this many.
@@ -203,43 +227,74 @@ const MAX_PAGES: usize = 50;
 impl Api {
     /// `base` is the API root, `https://api.github.com` on github.com.
     pub fn new(base: &str, token: String) -> Self {
+        Self::through(base, token, ureq::Proxy::try_from_env())
+    }
+
+    /// Through `proxy`, or straight to GitHub when `None`.
+    fn through(base: &str, token: String, proxy: Option<ureq::Proxy>) -> Self {
         let config = ureq::Agent::config_builder()
+            .proxy(proxy)
             .tls_config(
                 TlsConfig::builder()
                     .root_certs(RootCerts::PlatformVerifier)
                     .build(),
             )
             .user_agent("conary")
+            // Every status is read here: a 304 is an answer, and which
+            // errors are GitHub's limits is told from their headers.
+            .http_status_as_error(false)
             .build();
         Self {
             agent: ureq::Agent::new_with_config(config),
             base: base.trim_end_matches('/').to_owned(),
             token,
+            etags: None,
         }
+    }
+
+    /// Reads ask GitHub whether what's kept in `etags` is still current, and
+    /// an answer that it is costs none of the rate limit.
+    pub fn with_etags(mut self, etags: Etags) -> Self {
+        self.etags = Some(etags);
+        self
     }
 
     fn get<T: DeserializeOwned>(&self, path: &str) -> Result<T, ApiError> {
         self.get_found(path)?
-            .ok_or_else(|| ApiError(format!("{}{path}: not found", self.base)))
+            .ok_or_else(|| ApiError::new(format!("{}{path}: not found", self.base)))
     }
 
     /// `None` for a 404.
     fn get_found<T: DeserializeOwned>(&self, path: &str) -> Result<Option<T>, ApiError> {
         let url = format!("{}{path}", self.base);
-        let got = self
+        let kept = self.etags.as_ref().and_then(|e| e.get(&url));
+        let mut request = self
             .agent
             .get(&url)
             .header("Authorization", &format!("Bearer {}", self.token))
             .header("Accept", "application/vnd.github+json")
-            .header("X-GitHub-Api-Version", "2022-11-28")
-            .call()
-            .and_then(|mut r| r.body_mut().read_json());
-        match got {
-            Ok(v) => Ok(Some(v)),
-            Err(ureq::Error::StatusCode(404)) => Ok(None),
-            // The error names the URL, never the token.
-            Err(e) => Err(ApiError(format!("{url}: {e}"))),
+            .header("X-GitHub-Api-Version", "2022-11-28");
+        if let Some((etag, _)) = &kept {
+            request = request.header("If-None-Match", etag);
         }
+        let mut response = request.call().map_err(|e| unreachable(&url, e))?;
+        let body = match response.status().as_u16() {
+            304 => match kept {
+                Some((_, body)) => body,
+                None => return Err(ApiError::new(format!("{url}: 304 for nothing asked"))),
+            },
+            404 => return Ok(None),
+            200..=299 => {
+                let body = read(&url, &mut response)?;
+                if let (Some(etags), Some(etag)) = (&self.etags, etag(&response)) {
+                    // Only a cache: one that can't be written costs calls later.
+                    _ = etags.put(&url, etag, &body);
+                }
+                body
+            }
+            _ => return Err(failed(&url, &mut response)),
+        };
+        parse(&url, &body).map(Some)
     }
 
     /// A write: `POST`, or `PATCH` when `patch`, with a JSON body.
@@ -255,13 +310,16 @@ impl Api {
         } else {
             self.agent.post(&url)
         };
-        request
+        let mut response = request
             .header("Authorization", &format!("Bearer {}", self.token))
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", "2022-11-28")
             .send_json(body)
-            .and_then(|mut r| r.body_mut().read_json())
-            .map_err(|e| ApiError(format!("{url}: {e}")))
+            .map_err(|e| unreachable(&url, e))?;
+        if !response.status().is_success() {
+            return Err(failed(&url, &mut response));
+        }
+        parse(&url, &read(&url, &mut response)?)
     }
 
     fn pages<T: DeserializeOwned>(&self, path: &str) -> Result<Vec<T>, ApiError> {
@@ -275,9 +333,122 @@ impl Api {
                 return Ok(all);
             }
         }
-        Err(ApiError(format!("{path}: more than {MAX_PAGES} pages")))
+        Err(ApiError::new(format!(
+            "{path}: more than {MAX_PAGES} pages"
+        )))
     }
 }
+
+type Response = ureq::http::Response<ureq::Body>;
+
+/// A request that got no answer. Only what asking again can fix is GitHub
+/// unavailable: the network, DNS, a timeout, a connection dropped or stalled,
+/// a proxy that didn't answer or is itself unavailable. A bad URL or header, a
+/// proxy that refuses (its credentials, its policy), a TLS setup or an answer
+/// past the size limit stays as wrong the next time. The error names the URL,
+/// never the token.
+fn unreachable(url: &str, e: ureq::Error) -> ApiError {
+    let passing = match &e {
+        ureq::Error::Io(_)
+        | ureq::Error::Timeout(_)
+        | ureq::Error::HostNotFound
+        | ureq::Error::ConnectionFailed
+        | ureq::Error::BodyStalled => true,
+        ureq::Error::ConnectProxyFailed(reason) => proxy_status(reason).is_none_or(passing_status),
+        _ => false,
+    };
+    let what = format!("{url}: {e}");
+    if passing {
+        ApiError::unavailable(what)
+    } else {
+        ApiError::new(what)
+    }
+}
+
+/// The status a proxy refused a tunnel with, `None` when it gave none.
+/// ureq carries it only in its reason, "proxy server responded 407/...".
+fn proxy_status(reason: &str) -> Option<u16> {
+    reason
+        .strip_prefix("proxy server responded ")?
+        .split('/')
+        .next()?
+        .parse()
+        .ok()
+}
+
+/// Whether an error status, GitHub's or a proxy's, is a server too busy or in
+/// trouble to answer just now, rather than the request refused.
+fn passing_status(status: u16) -> bool {
+    status == 429 || status >= 500
+}
+
+fn read(url: &str, response: &mut Response) -> Result<Vec<u8>, ApiError> {
+    response
+        .body_mut()
+        .read_to_vec()
+        .map_err(|e| unreachable(url, e))
+}
+
+fn parse<T: DeserializeOwned>(url: &str, body: &[u8]) -> Result<T, ApiError> {
+    serde_json::from_slice(body).map_err(|e| ApiError::new(format!("{url}: {e}")))
+}
+
+fn header<'a>(response: &'a Response, name: &str) -> Option<&'a str> {
+    response.headers().get(name).and_then(|v| v.to_str().ok())
+}
+
+fn etag(response: &Response) -> Option<&str> {
+    header(response, "etag")
+}
+
+/// An error status. GitHub's limits, a 429 and its own 5xx are passing:
+/// GitHub is unavailable, not the request wrong. A limit is a 403 or 429
+/// whose headers say so (the primary one spent, a secondary one's
+/// Retry-After) or whose message does: a secondary limit can come with
+/// neither header, and a message lost to the network leaves it unknown, so
+/// unavailable too. Anything else refused, a permission or validation
+/// failure, stays refused.
+fn failed(url: &str, response: &mut Response) -> ApiError {
+    let status = response.status().as_u16();
+    let what = format!("{url}: http status: {status}");
+    let limited = header(response, "x-ratelimit-remaining") == Some("0")
+        || header(response, "retry-after").is_some();
+    if passing_status(status) || status == 403 && limited {
+        return ApiError::unavailable(what);
+    }
+    if status != 403 {
+        return ApiError::new(what);
+    }
+    match says_rate_limit(url, response) {
+        Ok(true) => ApiError::unavailable(what),
+        Ok(false) => ApiError::new(what),
+        Err(e) if e.unavailable => {
+            ApiError::unavailable(format!("{what}, its message unread: {e}"))
+        }
+        Err(e) => ApiError::new(format!("{what}, its message unread: {e}")),
+    }
+}
+
+/// Whether an error answer's message is GitHub's about a rate limit
+/// ("API rate limit exceeded", "You have exceeded a secondary rate limit").
+/// One that isn't JSON isn't GitHub's; one that can't be read is an error.
+fn says_rate_limit(url: &str, response: &mut Response) -> Result<bool, ApiError> {
+    #[derive(Deserialize)]
+    struct Message {
+        message: String,
+    }
+    let body = response
+        .body_mut()
+        .with_config()
+        .limit(MAX_MESSAGE)
+        .read_to_vec()
+        .map_err(|e| unreachable(url, e))?;
+    Ok(serde_json::from_slice::<Message>(&body)
+        .is_ok_and(|m| m.message.to_lowercase().contains("rate limit")))
+}
+
+/// The most of an error answer read for its message.
+const MAX_MESSAGE: u64 = 64 * 1024;
 
 impl Source for Api {
     fn pull(&self, repo: &str, number: u64) -> Result<PullRequest, ApiError> {
@@ -309,7 +480,9 @@ impl Source for Api {
                 return Ok(all);
             }
         }
-        Err(ApiError(format!("{path}: more than {MAX_PAGES} pages")))
+        Err(ApiError::new(format!(
+            "{path}: more than {MAX_PAGES} pages"
+        )))
     }
 
     fn statuses(&self, repo: &str, sha: &str) -> Result<Vec<Status>, ApiError> {
@@ -468,7 +641,7 @@ impl crate::notes::Notes for Api {
             commit.tree.sha
         ))?;
         if tree.truncated {
-            return Err(ApiError(format!(
+            return Err(ApiError::new(format!(
                 "{repo}'s {name} holds more notes than one read of its tree returns"
             )));
         }
@@ -525,3 +698,6 @@ impl crate::notes::Notes for Api {
         self.move_ref(repo, name, parent.is_some(), &commit.sha)
     }
 }
+
+#[cfg(test)]
+mod tests;

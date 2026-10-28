@@ -50,7 +50,7 @@ impl Notes for Fake {
             *self.commits.borrow_mut() += 1;
         }
         if parent.map(|p| &p.commit) != self.kept().as_ref().map(|k| &k.commit) {
-            return Err(ApiError("the ref moved".into()));
+            return Err(ApiError::new("the ref moved"));
         }
         self.files.borrow_mut().extend(files.iter().cloned());
         *self.commits.borrow_mut() += 1;

@@ -16,12 +16,13 @@ use conary_core::op::{Authority, Repo};
 use conary_core::why::{self, Why};
 use conary_core::{reader, rpc};
 use conary_github::anchor::{self, Anchored};
-use conary_github::{Api, Config, Ingested, ingest, notes};
+use conary_github::{Api, ApiError, Config, Etags, Ingested, ingest, notes};
 
 #[derive(Parser)]
 #[command(
     name = "cn",
-    about = "Conary: the ledger of every change and why it was made"
+    about = "Conary: the ledger of every change and why it was made",
+    after_help = "Exits 75 when GitHub couldn't be asked just now (its rate limit, its own errors, the network): run it again later."
 )]
 struct Cli {
     /// The ledger's directory.
@@ -130,15 +131,31 @@ enum Command {
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
+/// The exit status when GitHub couldn't be asked just now (its rate limit,
+/// its own errors, the network), BSD's EX_TEMPFAIL: running it again later
+/// is the whole fix, so a caller can book that instead of calling it a
+/// failure.
+const UNAVAILABLE: u8 = 75;
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
     match run(&cli) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("cn: {e}");
-            ExitCode::FAILURE
+            if unavailable(&*e) {
+                ExitCode::from(UNAVAILABLE)
+            } else {
+                ExitCode::FAILURE
+            }
         }
     }
+}
+
+/// Whether the error comes down to GitHub being unavailable.
+fn unavailable(e: &(dyn std::error::Error + 'static)) -> bool {
+    std::iter::successors(Some(e), |e| e.source())
+        .any(|e| e.downcast_ref::<ApiError>().is_some_and(|a| a.unavailable))
 }
 
 fn run(cli: &Cli) -> Result<()> {
@@ -246,7 +263,7 @@ fn token() -> Result<String> {
 
 /// The ledger, open for writing once its log holds the anchor on GitHub.
 fn write(cli: &Cli, github: &GithubArgs) -> Result<(Anchored, Api, Config)> {
-    let api = Api::new(&github.remote.api, token()?);
+    let api = Api::new(&github.remote.api, token()?).with_etags(Etags::open(&cli.ledger)?);
     let key = log::load_signing_key(&log::key_path(&cli.ledger))?;
     let anchored = anchor::open(&cli.ledger, key, &api, &github.remote.anchor_repo)?;
     let config = Config {
@@ -346,5 +363,27 @@ fn print_why(cli: &Cli, why: &Why) {
     }
     if why.source == why::Source::Notes {
         println!("  (from the notes: unsigned, as the ledger said when they were written)");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use conary_github::IngestError;
+    use conary_github::anchor::AnchorError;
+
+    #[test]
+    fn github_unavailable_is_told_through_whatever_wraps_it() {
+        let boxed = |e: Box<dyn std::error::Error>| unavailable(&*e);
+        assert!(boxed(ApiError::unavailable("limit").into()));
+        assert!(boxed(
+            IngestError::Api(ApiError::unavailable("limit")).into()
+        ));
+        assert!(boxed(
+            AnchorError::Api(ApiError::unavailable("limit")).into()
+        ));
+        assert!(!boxed(IngestError::Api(ApiError::new("refused")).into()));
+        assert!(!boxed(AnchorError::Lost("gone".into()).into()));
+        assert!(!boxed("no token".into()));
     }
 }
