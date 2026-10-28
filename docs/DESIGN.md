@@ -205,7 +205,7 @@ Three rules make it trustworthy:
 | --- | --- | --- |
 | R0 | Landing changes nothing outside the repo. A revert undoes it fully. | Most code in a repo that doesn't deploy on merge |
 | R1 | Landing goes live, but a revert undoes it. | remi (deploys main within 15 minutes), the website, the profile |
-| R2 | Landing can't be fully undone, or is the owner's to decide. | Secrets, migrations, CODEOWNERS, nomos decisions, consolebook ADRs |
+| R2 | Landing can't be fully undone, or is the owner's to decide. | Secrets, migrations, CODEOWNERS, consolebook ADRs |
 
 Policy sets the class from the repo and the paths a change touches, renames
 and copies included. The policy starts as today's `oneWay` patterns and
