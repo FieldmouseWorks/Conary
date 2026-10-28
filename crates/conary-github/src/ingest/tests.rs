@@ -41,7 +41,7 @@ impl Source for Fake {
             .iter()
             .map(parse::<PullRequest>)
             .find(|p| p.number == number)
-            .ok_or_else(|| ApiError(format!("no PR {number}")))
+            .ok_or_else(|| ApiError::new(format!("no PR {number}")))
     }
 
     fn pulls(&self, _: &str, which: Pulls) -> Result<Vec<PullRequest>, ApiError> {
@@ -401,6 +401,24 @@ fn sync_takes_open_prs_and_closed_ones_it_hasnt_finished() {
     // Finished PRs aren't read again.
     let got = sync(&mut store, &f, &config(), &repo()).unwrap();
     assert_eq!(got.len(), 1);
+}
+
+#[test]
+fn sync_asks_an_open_pr_s_merge_base_once_until_it_moves() {
+    let (_dir, mut store) = open();
+    let mut f = fake();
+    f.pulls = vec![pr(9, HEAD, "open", false)];
+    sync(&mut store, &f, &config(), &repo()).unwrap();
+    let asked = f.asked.get();
+    assert_eq!(asked, 1);
+    // Every event on the repo syncs it again; its base and head haven't moved.
+    sync(&mut store, &f, &config(), &repo()).unwrap();
+    sync(&mut store, &f, &config(), &repo()).unwrap();
+    assert_eq!(f.asked.get(), asked);
+    // A push is a new pair.
+    f.pulls = vec![pr(9, HEAD2, "open", false)];
+    sync(&mut store, &f, &config(), &repo()).unwrap();
+    assert_eq!(f.asked.get(), asked + 1);
 }
 
 #[test]

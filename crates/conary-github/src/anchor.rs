@@ -67,7 +67,14 @@ impl std::fmt::Display for AnchorError {
     }
 }
 
-impl std::error::Error for AnchorError {}
+impl std::error::Error for AnchorError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Api(e) => Some(e),
+            _ => None,
+        }
+    }
+}
 
 impl From<ApiError> for AnchorError {
     fn from(e: ApiError) -> Self {

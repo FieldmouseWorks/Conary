@@ -75,7 +75,14 @@ impl std::fmt::Display for IngestError {
     }
 }
 
-impl std::error::Error for IngestError {}
+impl std::error::Error for IngestError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Api(e) => Some(e),
+            _ => None,
+        }
+    }
+}
 
 impl From<ApiError> for IngestError {
     fn from(e: ApiError) -> Self {
@@ -146,10 +153,10 @@ pub fn backfill(
 
 /// Brings the ledger up to date with what's happening in a repo: every open
 /// PR, since its checks and reviews come and go, and every recently closed
-/// one the ledger doesn't hold as it finished yet. A closed PR's base and
-/// head don't move, so their merge base comes from the cache beside the
-/// ledger, and a PR the ledger already holds as GitHub shows it costs no
-/// calls.
+/// one the ledger doesn't hold as it finished yet. The merge base of a
+/// PR's base and head never changes, so it comes from the cache beside the
+/// ledger, and a closed PR the ledger already holds as GitHub shows it
+/// costs no calls.
 pub fn sync(
     store: &mut Store,
     source: &dyn Source,
@@ -161,7 +168,7 @@ pub fn sync(
     let mut bases = MergeBases::load(store.lock()).map_err(IngestError::Cache)?;
     let mut got = Vec::new();
     for pr in source.pulls(&full, Pulls::Open)? {
-        let base = base(source, repo, &pr)?;
+        let base = commit(&bases.get(source, &full, &pr.base.sha, &pr.head.sha)?)?;
         got.push(record(store, source, config, repo, &pr, base)?);
     }
     for pr in source.pulls(&full, Pulls::RecentlyClosed)?.iter().rev() {

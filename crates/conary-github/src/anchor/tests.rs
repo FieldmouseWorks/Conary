@@ -47,7 +47,7 @@ impl Anchors for Fake {
             .borrow()
             .get(sha)
             .cloned()
-            .ok_or_else(|| ApiError(format!("no commit {sha}")))
+            .ok_or_else(|| ApiError::new(format!("no commit {sha}")))
     }
 
     fn set(
@@ -58,11 +58,11 @@ impl Anchors for Fake {
         message: &str,
     ) -> Result<String, ApiError> {
         if std::mem::take(&mut *self.fail.borrow_mut()) {
-            return Err(ApiError("injected".into()));
+            return Err(ApiError::new("injected"));
         }
         let mut refs = self.refs.borrow_mut();
         if refs.get(name).map(|k| k.commit.as_str()) != parent {
-            return Err(ApiError(format!("{name} isn't at {parent:?}")));
+            return Err(ApiError::new(format!("{name} isn't at {parent:?}")));
         }
         *self.moves.borrow_mut() += 1;
         let kept = Kept {
