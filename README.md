@@ -4,8 +4,10 @@ The ledger and landing engine for code that agents write, on top of git and GitH
 
 Every change carries why it exists, who made it and what proved it. It lands when that proof is green, and any change, any agent session's work, or everything since a point in time can be undone, always as a new change.
 
-Status: milestone M1, recording PRs and answering `why`. See
-[docs/DESIGN.md](docs/DESIGN.md).
+Status: milestone M2, under way. M1 records every PR and answers `why` on
+the box with the ledger; M2 takes `why` to any clone through
+[notes](docs/notes.md), then serves the ledger through conaryd and an MCP
+server. See [docs/DESIGN.md](docs/DESIGN.md).
 
 ## Using it
 
@@ -21,6 +23,9 @@ JSON; add `--human` for people.
     cn log --human
     cn why -C ~/src/burrow modules/claude.nix:40 --human
     cn verify    # the log against the anchor on GitHub, all of its history
+
+Each write also brings the repository's notes up to date, and `cn why` in a
+clone with no ledger beside it answers from them ([notes](docs/notes.md)).
 
 `cn --help` and each command's `--help` list the rest, environment variables
 included.

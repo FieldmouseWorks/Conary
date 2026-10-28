@@ -11,10 +11,11 @@ use serde_json::{Value, json};
 use conary_core::Ledger;
 use conary_core::ledger::Change;
 use conary_core::log;
+use conary_core::notes::Links;
 use conary_core::op::{Authority, Repo};
 use conary_core::why::{self, Why};
 use conary_github::anchor::{self, Anchored};
-use conary_github::{Api, Config, Ingested, ingest};
+use conary_github::{Api, Config, Ingested, ingest, notes};
 
 #[derive(Parser)]
 #[command(
@@ -58,6 +59,15 @@ struct GithubArgs {
         value_delimiter = ','
     )]
     own_contexts: Vec<String>,
+    /// Repositories whose notes may link the sessions and threads their
+    /// changes came from. Every other repository's notes leave them out,
+    /// since some repos' rules keep them out of their history.
+    #[arg(
+        long = "session-links",
+        env = "CONARY_SESSION_LINKS",
+        value_delimiter = ','
+    )]
+    session_links: Vec<Repo>,
 }
 
 #[derive(Subcommand)]
@@ -69,7 +79,8 @@ enum Command {
         #[command(flatten)]
         remote: Remote,
     },
-    /// Record a pull request's current state in the ledger.
+    /// Record a pull request's current state in the ledger. Every command
+    /// that records also brings the repository's notes up to date.
     Ingest {
         /// The repository, as owner/name.
         repo: Repo,
@@ -104,7 +115,9 @@ enum Command {
         #[command(flatten)]
         remote: Remote,
     },
-    /// Why a line is the way it is: the change that landed it.
+    /// Why a line is the way it is: the change that landed it. From the
+    /// ledger when it's set up here, otherwise from the notes on the
+    /// checkout's origin, which it fetches.
     Why {
         /// FILE:LINE, in the checkout at -C.
         at: String,
@@ -142,6 +155,7 @@ fn run(cli: &Cli) -> Result<()> {
             let got = ingest::pull(&mut a.store, &api, &config, repo, *pr);
             // What was recorded before a failure is anchored all the same.
             a.publish(&api)?;
+            write_notes(&api, &a, github, repo)?;
             print_ingested(cli, repo, *pr, got?, a.store.ledger());
         }
         Command::Sync { repo, github } | Command::Backfill { repo, github } => {
@@ -152,6 +166,7 @@ fn run(cli: &Cli) -> Result<()> {
                 ingest::backfill(&mut a.store, &api, &config, repo)
             };
             a.publish(&api)?;
+            write_notes(&api, &a, github, repo)?;
             let (got, store) = (got?, &a.store);
             if cli.human {
                 let recorded: usize = got.iter().map(|g| g.recorded).sum();
@@ -213,8 +228,13 @@ fn run(cli: &Cli) -> Result<()> {
                 .rsplit_once(':')
                 .and_then(|(f, n)| Some((f, n.parse::<u32>().ok()?)))
                 .ok_or("give the line as FILE:LINE")?;
-            let ledger = read(cli)?;
-            print_why(cli, &why::why(&ledger, dir, Path::new(file), n)?);
+            let file = Path::new(file);
+            let why = if log::public_path(&key_path(cli)).exists() {
+                why::why(&read(cli)?, dir, file, n)?
+            } else {
+                why::why_from_notes(dir, file, n)?
+            };
+            print_why(cli, &why);
         }
     }
     Ok(())
@@ -240,6 +260,17 @@ fn write(cli: &Cli, github: &GithubArgs) -> Result<(Anchored, Api, Config)> {
         own_contexts: github.own_contexts.clone(),
     };
     Ok((anchored, api, config))
+}
+
+/// Brings `repo`'s notes up to date with what the ledger now holds.
+fn write_notes(api: &Api, a: &Anchored, github: &GithubArgs, repo: &Repo) -> Result<()> {
+    let links = if github.session_links.contains(repo) {
+        Links::Kept
+    } else {
+        Links::Left
+    };
+    notes::publish(api, a.store.ledger(), repo, links)?;
+    Ok(())
 }
 
 /// The ledger, verified against its public key and the anchor its writer
@@ -304,42 +335,32 @@ fn print_ingested(cli: &Cli, repo: &Repo, pr: u64, got: Ingested, ledger: &Ledge
 
 fn print_why(cli: &Cli, why: &Why) {
     if !cli.human {
-        let out = json!({
-            "repo": why.repo.to_string(),
-            "commit": why.commit.to_string(),
-            "trunk": why.landed.map(|(_, l)| l.after.to_string()),
-            "change": why.landed.map(|(c, _)| {
-                let mut v = serde_json::to_value(c).expect("a change serializes");
-                v["url"] = json!(url(c));
-                v["status"] = json!(c.status());
-                v
-            }),
-        });
-        println!("{out}");
+        println!("{}", serde_json::to_value(why).expect("a why serializes"));
         return;
     }
-    let Some((c, l)) = why.landed else {
+    let Some(n) = &why.landed else {
         println!(
-            "{}: no landing in the ledger brought it onto trunk (not landed, not ingested, or trunk moved outside Conary)",
-            why.commit
+            "{}: no landing in the {} brought it onto trunk (not landed, not recorded, or trunk moved outside Conary)",
+            why.commit,
+            word(why.source)
         );
         return;
     };
-    println!("{}: {}", l.after, url(c));
-    if let Some(i) = &c.intent {
-        println!("  {}", i.summary);
-        if let Some(task) = &i.task {
-            println!("  task: {task}");
-        }
+    println!("{}: {}", n.landing.after, n.url);
+    if let Some(summary) = &n.summary {
+        println!("  {summary}");
     }
-    let session = c.author.session.as_deref().unwrap_or("no session");
-    println!("  by {} ({session})", c.author.login);
-    match &l.by {
+    if let Some(task) = &n.task {
+        println!("  task: {task}");
+    }
+    let session = n.author.session.as_deref().unwrap_or("no session");
+    println!("  by {} ({session})", n.author.login);
+    match &n.landing.by {
         Authority::Status { login } => {
             println!("  landed on {login}'s settled status (unattested)");
         }
     }
-    for e in c.evidence.iter().filter(|e| e.revision == l.revision) {
+    for e in &n.evidence {
         println!(
             "  {} {}: {} ({})",
             word(e.kind),
@@ -347,5 +368,8 @@ fn print_why(cli: &Cli, why: &Why) {
             word(e.result),
             e.source
         );
+    }
+    if why.source == why::Source::Notes {
+        println!("  (from the notes: unsigned, as the ledger said when they were written)");
     }
 }

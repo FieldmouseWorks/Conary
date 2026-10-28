@@ -5,9 +5,9 @@
 
   # `nix develop` for the toolchains, `nix flake check` for the gate:
   # rustfmt, clippy and the workspace's tests, on rust-toolchain.toml's
-  # toolchain (see burrow's lib/project.nix).
+  # toolchain (see burrow's lib/project.nix). The tests drive git.
   outputs = { self, burrow }: burrow.lib.project {
     inherit self;
-    rust = { };
+    rust.testInputs = pkgs: [ pkgs.git ];
   };
 }
