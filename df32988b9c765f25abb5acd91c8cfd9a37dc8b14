@@ -1,0 +1,41 @@
+{
+  "conary": "note v1",
+  "change": "7pzdm2ywk93mgfytek1sjvtqhe",
+  "repo": {
+    "owner": "fieldmouseworks",
+    "name": "conary"
+  },
+  "pr": 19,
+  "url": "https://github.com/fieldmouseworks/conary/pull/19",
+  "summary": "mcp: offer the ledger's calls to agents as MCP tools",
+  "task": null,
+  "author": {
+    "kind": "agent",
+    "login": "TusanHomichi",
+    "session": "https://claude.ai/code/session_01BkHcyDYaKnE7mRRMdYCFVC"
+  },
+  "landing": {
+    "revision": "24ad75230f1ae7b456067a068b09fa14e98c3aa025bc3e454e47d9f8720e9169",
+    "before": "1930ed255d2f093b1327975740a942b2a63f2965",
+    "after": "df32988b9c765f25abb5acd91c8cfd9a37dc8b14",
+    "by": {
+      "kind": "status",
+      "login": "TusanHomichi"
+    },
+    "at": 1793150672655
+  },
+  "evidence": [
+    {
+      "kind": "ci",
+      "check": "check / check",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/40614592590/job/122574006900"
+    },
+    {
+      "kind": "review",
+      "check": "codex",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/pull/19#pullrequestreview-5676648850"
+    }
+  ]
+}
