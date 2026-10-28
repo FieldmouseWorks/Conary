@@ -1,0 +1,41 @@
+{
+  "conary": "note v1",
+  "change": "5rd2qh1eerr87hzzqkht79a4q0",
+  "repo": {
+    "owner": "fieldmouseworks",
+    "name": "conary"
+  },
+  "pr": 20,
+  "url": "https://github.com/fieldmouseworks/conary/pull/20",
+  "summary": "design: drop nomos from the R2 examples",
+  "task": "https://claude.ai/code/project/chan_01Ad4f4oDXfFTCEzLHzMTD8q?thread=cmsg_01Ad4f4oDXfFTCEzLHzMTD8qDHGz7HGVkXVmpWc3KyAaeV",
+  "author": {
+    "kind": "agent",
+    "login": "TusanHomichi",
+    "session": "https://claude.ai/code/session_01BkHcyBa7nQpKXXAEX68JGv"
+  },
+  "landing": {
+    "revision": "b47cae97949f68200752ee7ea4bb18d33cf32cce6cd37a5359152fe472b212a0",
+    "before": "df32988b9c765f25abb5acd91c8cfd9a37dc8b14",
+    "after": "3fa41d3d7125b38300d04841043d498c13a0b5a2",
+    "by": {
+      "kind": "status",
+      "login": "TusanHomichi"
+    },
+    "at": 1793153437417
+  },
+  "evidence": [
+    {
+      "kind": "ci",
+      "check": "check / check",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/40619088635/job/122588432099"
+    },
+    {
+      "kind": "review",
+      "check": "codex",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/pull/20#pullrequestreview-5676916790"
+    }
+  ]
+}
