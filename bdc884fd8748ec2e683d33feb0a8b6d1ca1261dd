@@ -1,0 +1,41 @@
+{
+  "conary": "note v1",
+  "change": "5kfrt0mz3m2drhq98bb8n1wjr9",
+  "repo": {
+    "owner": "fieldmouseworks",
+    "name": "conary"
+  },
+  "pr": 22,
+  "url": "https://github.com/fieldmouseworks/conary/pull/22",
+  "summary": "sync: ask GitHub only what changed, and say when it's unavailable",
+  "task": null,
+  "author": {
+    "kind": "person",
+    "login": "TusanHomichi",
+    "session": null
+  },
+  "landing": {
+    "revision": "3ac5fbc5af4a35f18492bf3d87d8c020ad81323769230f71a58c376a4310dca5",
+    "before": "d794c3f4d9fd5fc0b76737f75bee9ab229cb2f3e",
+    "after": "bdc884fd8748ec2e683d33feb0a8b6d1ca1261dd",
+    "by": {
+      "kind": "status",
+      "login": "TusanHomichi"
+    },
+    "at": 1793160537096
+  },
+  "evidence": [
+    {
+      "kind": "ci",
+      "check": "check / check",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/40630412353/job/122625217873"
+    },
+    {
+      "kind": "review",
+      "check": "codex",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/pull/22#pullrequestreview-5677680454"
+    }
+  ]
+}
