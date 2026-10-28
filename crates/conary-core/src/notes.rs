@@ -138,9 +138,19 @@ static GITHUB: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)https://github\.com/[A-Za-z0-9._~/#%?=&+-]*").unwrap());
 
 /// Anything that may be a link: a scheme or a protocol-relative `//`, or a
-/// dotted host followed by a path (`claude.ai/code/...`).
-static LINK: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"//|[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/").unwrap());
+/// host followed by a path, the host dotted (maybe with DNS's trailing dot)
+/// or given a port (`claude.ai/code/...`, `claude.ai.:443/...`,
+/// `localhost:8080/...`).
+static LINK: LazyLock<Regex> = LazyLock::new(|| {
+    // A label is any letters or digits, a dot any of the ones IDNA reads as
+    // one (`claude。ai` is `claude.ai` to a browser).
+    let label = r"[\p{L}\p{N}_-]+";
+    let dot = r"[.\x{3002}\x{FF0E}\x{FF61}]";
+    Regex::new(&format!(
+        r"//|{label}(?:(?:{dot}{label})+{dot}?(?::[0-9]*)?|:[0-9]+)/"
+    ))
+    .unwrap()
+});
 
 /// `text`, or [`LEFT_OUT`] when anything in it but GitHub's own links may
 /// link somewhere else. The whole field goes, not the link alone: telling
@@ -291,6 +301,16 @@ mod tests {
             "https://github.com@claude.ai/code/session_x",
             "http://github.com/o/r",
             "http://localhost:8080/x",
+            "claude.ai:443/code/session_x",
+            "claude.ai.:443/code/session_x",
+            "claude.ai./code/session_x",
+            "(claude.ai:443/code/session_x)",
+            "[s](claude.ai:/code/session_x)",
+            "localhost:8080/x",
+            "127.0.0.1:8080/x",
+            "claude\u{3002}ai/code/session_x",
+            "claude\u{FF0E}ai/code/session_x",
+            "CLAUDE.AI/code/session_x",
         ] {
             assert_eq!(without_links(left), LEFT_OUT, "{left}");
         }
