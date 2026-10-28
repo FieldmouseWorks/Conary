@@ -8,6 +8,8 @@ pub mod ledger;
 pub mod log;
 pub mod notes;
 pub mod op;
+pub mod reader;
+pub mod rpc;
 pub mod store;
 pub mod why;
 

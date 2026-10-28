@@ -82,7 +82,7 @@ impl Note {
             change: change.id,
             repo: change.repo.clone(),
             pr: change.pr,
-            url: format!("https://github.com/{}/pull/{}", change.repo, change.pr),
+            url: change.url(),
             summary: intent.map(|i| text(&i.summary)),
             task,
             author,

@@ -30,6 +30,9 @@ clone with no ledger beside it answers from them ([notes](docs/notes.md)).
 `cn --help` and each command's `--help` list the rest, environment variables
 included.
 
+`conaryd` serves the same ledger over a Unix socket, as JSON-RPC, for
+anything on the box ([conaryd](docs/conaryd.md)).
+
 ## Building
 
 The Rust workspace is in `crates/`. It needs only rustup and cargo, on any
