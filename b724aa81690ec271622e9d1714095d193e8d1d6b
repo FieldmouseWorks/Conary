@@ -1,0 +1,41 @@
+{
+  "conary": "note v1",
+  "change": "6b7x1kw9k5ecvrq8ktq2br4xky",
+  "repo": {
+    "owner": "fieldmouseworks",
+    "name": "conary"
+  },
+  "pr": 23,
+  "url": "https://github.com/fieldmouseworks/conary/pull/23",
+  "summary": "house: the Pull requests section as burrow's house block",
+  "task": "FieldmouseWorks/burrow#87",
+  "author": {
+    "kind": "agent",
+    "login": "TusanHomichi",
+    "session": "https://claude.ai/code/session_01QzLmB1pT9Tck6N9Vf13a9M"
+  },
+  "landing": {
+    "revision": "08f768bd83b35770179a19229b7c30b5a2daf114c74b16478b9e6a4f10ae89b3",
+    "before": "bdc884fd8748ec2e683d33feb0a8b6d1ca1261dd",
+    "after": "b724aa81690ec271622e9d1714095d193e8d1d6b",
+    "by": {
+      "kind": "status",
+      "login": "TusanHomichi"
+    },
+    "at": 1793160826480
+  },
+  "evidence": [
+    {
+      "kind": "ci",
+      "check": "check / check",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/40630639758/job/122625942280"
+    },
+    {
+      "kind": "review",
+      "check": "codex",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/pull/23#pullrequestreview-5677689317"
+    }
+  ]
+}
