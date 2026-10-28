@@ -69,8 +69,14 @@ fn without_etags_it_asks_plainly() {
 }
 
 fn error(status: &str, headers: &str) -> ApiError {
-    let answer =
-        format!("HTTP/1.1 {status}\r\n{headers}Content-Length: 2\r\nConnection: close\r\n\r\n{{}}");
+    error_with(status, headers, "{}")
+}
+
+fn error_with(status: &str, headers: &str, body: &str) -> ApiError {
+    let answer = format!(
+        "HTTP/1.1 {status}\r\n{headers}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
     let (base, _heads) = github(vec![answer.leak()]);
     Api::new(&base, "t".into()).pull("o/r", 7).unwrap_err()
 }
@@ -83,7 +89,19 @@ fn tells_github_unavailable_from_a_request_refused() {
     assert!(error("403 Forbidden", "Retry-After: 60\r\n").unavailable);
     assert!(error("429 Too Many Requests", "").unavailable);
     assert!(error("502 Bad Gateway", "").unavailable);
+    // A secondary limit with neither header: its message says so.
+    let secondary = r#"{"message":"You have exceeded a secondary rate limit. Please wait a few minutes before you try again."}"#;
+    assert!(
+        error_with(
+            "403 Forbidden",
+            "X-RateLimit-Remaining: 4990\r\n",
+            secondary
+        )
+        .unavailable
+    );
     // Not allowed, or not a request GitHub takes: asking again won't help.
+    let refused = r#"{"message":"Resource not accessible by personal access token"}"#;
+    assert!(!error_with("403 Forbidden", "X-RateLimit-Remaining: 4990\r\n", refused).unavailable);
     assert!(!error("403 Forbidden", "X-RateLimit-Remaining: 4999\r\n").unavailable);
     assert!(!error("401 Unauthorized", "").unavailable);
     assert!(!error("422 Unprocessable Entity", "").unavailable);
@@ -101,4 +119,17 @@ fn no_answer_at_all_is_github_unavailable() {
             .unwrap_err()
             .unavailable
     );
+}
+
+#[test]
+fn a_request_that_can_never_be_made_is_not_github_unavailable() {
+    // A root that isn't a URL, and a token no header can carry: asking again
+    // fails the same way.
+    let err = Api::new("not a url", "t".into())
+        .pull("o/r", 7)
+        .unwrap_err();
+    assert!(!err.unavailable, "{err}");
+    let (base, _heads) = github(vec![]);
+    let err = Api::new(&base, "t\nx".into()).pull("o/r", 7).unwrap_err();
+    assert!(!err.unavailable, "{err}");
 }

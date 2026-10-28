@@ -335,17 +335,33 @@ impl Api {
 
 type Response = ureq::http::Response<ureq::Body>;
 
-/// No answer at all: the network, DNS, TLS, a timeout. The error names the
-/// URL, never the token.
+/// A request that got no answer. Only what asking again can fix is GitHub
+/// unavailable: the network, DNS, a timeout, a connection dropped or stalled.
+/// A bad URL, header or proxy, a TLS setup or an answer past the size limit
+/// stays as wrong the next time. The error names the URL, never the token.
 fn unreachable(url: &str, e: ureq::Error) -> ApiError {
-    ApiError::unavailable(format!("{url}: {e}"))
+    let passing = matches!(
+        e,
+        ureq::Error::Io(_)
+            | ureq::Error::Timeout(_)
+            | ureq::Error::HostNotFound
+            | ureq::Error::ConnectionFailed
+            | ureq::Error::ConnectProxyFailed(_)
+            | ureq::Error::BodyStalled
+    );
+    let what = format!("{url}: {e}");
+    if passing {
+        ApiError::unavailable(what)
+    } else {
+        ApiError::new(what)
+    }
 }
 
 fn read(url: &str, response: &mut Response) -> Result<Vec<u8>, ApiError> {
     response
         .body_mut()
         .read_to_vec()
-        .map_err(|e| ApiError::unavailable(format!("{url}: {e}")))
+        .map_err(|e| unreachable(url, e))
 }
 
 fn parse<T: DeserializeOwned>(url: &str, body: &[u8]) -> Result<T, ApiError> {
@@ -360,19 +376,40 @@ fn etag(response: &Response) -> Option<&str> {
     header(response, "etag")
 }
 
-/// An error status. GitHub's limits (the primary one spent, or a secondary
-/// one's Retry-After), a 429 and its own 5xx are passing: GitHub is
-/// unavailable, not the request wrong.
+/// An error status. GitHub's limits, a 429 and its own 5xx are passing:
+/// GitHub is unavailable, not the request wrong. A limit is a 403 or 429
+/// whose headers say so (the primary one spent, a secondary one's
+/// Retry-After) or whose message does: a secondary limit can come with
+/// neither header. Anything else refused, a permission or validation
+/// failure, stays refused.
 fn failed(url: &str, response: &mut Response) -> ApiError {
     let status = response.status().as_u16();
     let limited = header(response, "x-ratelimit-remaining") == Some("0")
-        || header(response, "retry-after").is_some();
+        || header(response, "retry-after").is_some()
+        || status == 403 && says_rate_limit(response);
     let what = format!("{url}: http status: {status}");
     if status == 429 || status >= 500 || (status == 403 && limited) {
         ApiError::unavailable(what)
     } else {
         ApiError::new(what)
     }
+}
+
+/// Whether an error answer's message is GitHub's about a rate limit
+/// ("API rate limit exceeded", "You have exceeded a secondary rate limit").
+fn says_rate_limit(response: &mut Response) -> bool {
+    #[derive(Deserialize)]
+    struct Message {
+        message: String,
+    }
+    response
+        .body_mut()
+        .with_config()
+        .limit(64 * 1024)
+        .read_to_vec()
+        .ok()
+        .and_then(|b| serde_json::from_slice::<Message>(&b).ok())
+        .is_some_and(|m| m.message.to_lowercase().contains("rate limit"))
 }
 
 impl Source for Api {
