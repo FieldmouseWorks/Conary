@@ -4,10 +4,13 @@ The ledger and landing engine for code that agents write, on top of git and GitH
 
 Every change carries why it exists, who made it and what proved it. It lands when that proof is green, and any change, any agent session's work, or everything since a point in time can be undone, always as a new change.
 
-Status: milestone M2, under way. M1 records every PR and answers `why` on
-the box with the ledger; M2 takes `why` to any clone through
-[notes](docs/notes.md), then serves the ledger through conaryd and an MCP
-server. See [docs/DESIGN.md](docs/DESIGN.md).
+Status: M1 and M2 are done. `cn` records every PR on the box with the
+ledger and answers `why` there, any clone answers it from the
+[notes](docs/notes.md), and conaryd and its MCP server serve the ledger to
+everything else on the box. Landing and undo, above, are where it's going:
+`undo` is M3, next, and Conary landing changes itself, in place of the
+steward, is M5. The milestones are in
+[docs/DESIGN.md](docs/DESIGN.md#12-milestones).
 
 ## Using it
 
