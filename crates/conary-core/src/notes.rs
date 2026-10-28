@@ -51,7 +51,8 @@ pub struct NoteEvidence {
 
 /// Whether a repository's notes may link the sessions and threads its
 /// changes came from. A repo whose own rules keep those links out of its
-/// history keeps them out of its notes too.
+/// history keeps them out of its notes too: with `Left`, a note links
+/// nowhere but GitHub, in any of its fields.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Links {
     Kept,
@@ -65,9 +66,13 @@ impl Note {
         let mut author = change.author.clone();
         // A task is an issue (`owner/name#N`) or a thread's URL.
         let mut task = intent.and_then(|i| i.task.clone());
+        let text = |t: &str| match links {
+            Links::Kept => t.to_owned(),
+            Links::Left => without_links(t),
+        };
         if links == Links::Left {
             author.session = None;
-            task = task.filter(|t| !t.contains("://"));
+            task = task.filter(|t| without_links(t) == *t);
         }
         Self {
             conary: FORMAT.to_owned(),
@@ -75,7 +80,7 @@ impl Note {
             repo: change.repo.clone(),
             pr: change.pr,
             url: format!("https://github.com/{}/pull/{}", change.repo, change.pr),
-            summary: intent.map(|i| i.summary.clone()),
+            summary: intent.map(|i| text(&i.summary)),
             task,
             author,
             landing: NoteLanding {
@@ -91,9 +96,9 @@ impl Note {
                 .filter(|e| e.revision == landing.revision)
                 .map(|e| NoteEvidence {
                     kind: e.kind,
-                    check: e.check.clone(),
+                    check: text(&e.check),
                     result: e.result,
-                    source: e.source.clone(),
+                    source: text(&e.source),
                 })
                 .collect(),
         }
@@ -118,6 +123,40 @@ impl Note {
         }
         Ok(note)
     }
+}
+
+/// What a link to somewhere other than GitHub reads as in a note that
+/// leaves links out.
+const LEFT_OUT: &str = "[link left out]";
+
+/// `text` with every word that links somewhere other than GitHub (with a
+/// scheme or without: `claude.ai/code/...`) left out.
+fn without_links(text: &str) -> String {
+    text.split_inclusive(char::is_whitespace)
+        .map(|piece| {
+            let word = piece.trim_end();
+            if links_off_github(word) {
+                format!("{LEFT_OUT}{}", &piece[word.len()..])
+            } else {
+                piece.to_owned()
+            }
+        })
+        .collect()
+}
+
+/// Whether `word` is a link to a host other than github.com: a scheme, or
+/// a dotted host followed by a path.
+fn links_off_github(word: &str) -> bool {
+    let (schemed, rest) = word
+        .split_once("://")
+        .map_or((false, word), |(_, rest)| (true, rest));
+    let Some((host, _)) = rest.split_once('/').or(schemed.then_some((rest, ""))) else {
+        return false;
+    };
+    let host = host.rsplit('@').next().unwrap_or(host);
+    let host = host.trim_start_matches(|c: char| !c.is_alphanumeric());
+    let host = host.split(':').next().unwrap_or(host);
+    (schemed || host.contains('.')) && !host.eq_ignore_ascii_case("github.com")
 }
 
 #[cfg(test)]
@@ -145,14 +184,15 @@ mod tests {
             RevisionId::new(&c("a"), &c("c")),
             RevisionId::new(&c("a"), &c("b")),
         );
-        let evidence = |revision, check: &str| Body::Evidence {
+        let evidence = |revision, check: &str, source: &str| Body::Evidence {
             change,
             revision,
             kind: CheckKind::Ci,
             check: check.into(),
             result: Outcome::Pass,
-            source: "https://github.com/o/r/runs/1".into(),
+            source: source.into(),
         };
+        let run = "https://github.com/o/r/runs/1";
         for body in [
             Body::Observe {
                 change,
@@ -166,7 +206,7 @@ mod tests {
             },
             Body::Intent {
                 change,
-                summary: "area: a plain sentence".into(),
+                summary: "area: a plain sentence from claude.ai/code/session_y".into(),
                 body: "the prompt-shaped body".into(),
                 task: Some(task.into()),
             },
@@ -175,13 +215,14 @@ mod tests {
                 base: c("a"),
                 head: c("c"),
             },
-            evidence(old, "stale"),
+            evidence(old, "stale", run),
             Body::Revision {
                 change,
                 base: c("a"),
                 head: c("b"),
             },
-            evidence(landed, "flake"),
+            evidence(landed, "flake", run),
+            evidence(landed, "status", "https://claude.ai/code/session_z"),
             Body::Land {
                 change,
                 revision: landed,
@@ -201,12 +242,15 @@ mod tests {
     #[test]
     fn a_note_holds_the_landed_revision_and_never_the_body() {
         let note = note("o/r#3", Links::Kept);
-        assert_eq!(note.summary.as_deref(), Some("area: a plain sentence"));
+        assert_eq!(
+            note.summary.as_deref(),
+            Some("area: a plain sentence from claude.ai/code/session_y")
+        );
         assert_eq!(note.task.as_deref(), Some("o/r#3"));
         assert_eq!(note.url, "https://github.com/o/r/pull/9");
         assert_eq!(note.landing.after, c("d"));
         let checks: Vec<_> = note.evidence.iter().map(|e| e.check.as_str()).collect();
-        assert_eq!(checks, ["flake"]);
+        assert_eq!(checks, ["flake", "status"]);
         let text = note.text();
         assert!(!text.contains("prompt-shaped"), "{text}");
         assert_eq!(Note::parse(&text).unwrap(), note);
@@ -218,10 +262,42 @@ mod tests {
         let kept = note(thread, Links::Kept).text();
         assert!(kept.contains("claude.ai/code/session_x"), "{kept}");
         assert!(kept.contains("thread=t"), "{kept}");
-        let left = note(thread, Links::Left).text();
-        assert!(!left.contains("claude.ai"), "{left}");
+        let left = note(thread, Links::Left);
+        let text = left.text();
+        assert!(!text.contains("claude.ai"), "{text}");
+        assert!(left.task.is_none() && left.author.session.is_none());
+        assert_eq!(
+            left.summary.as_deref(),
+            Some("area: a plain sentence from [link left out]")
+        );
+        // GitHub's own links stay.
+        assert_eq!(left.evidence[0].source, "https://github.com/o/r/runs/1");
         // An issue isn't a session link.
         assert_eq!(note("o/r#3", Links::Left).task.as_deref(), Some("o/r#3"));
+    }
+
+    #[test]
+    fn a_note_without_links_links_nowhere_but_github() {
+        for (text, want) in [
+            ("area: a plain sentence", "area: a plain sentence"),
+            (
+                "fix it (https://claude.ai/code/session_x) now",
+                "fix it [link left out] now",
+            ),
+            ("see claude.ai/code/session_x", "see [link left out]"),
+            ("chatgpt.com/c/abc", "[link left out]"),
+            (
+                "https://github.com/o/r/actions/runs/1/job/2",
+                "https://github.com/o/r/actions/runs/1/job/2",
+            ),
+            (
+                "lib/project.nix and docs/notes.md",
+                "lib/project.nix and docs/notes.md",
+            ),
+            ("http://localhost:8080/x", "[link left out]"),
+        ] {
+            assert_eq!(without_links(text), want, "{text}");
+        }
     }
 
     #[test]
