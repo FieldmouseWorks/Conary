@@ -6,7 +6,7 @@
 
 use std::fs::{self, File, TryLockError};
 use std::io::{self, BufRead, BufReader, Read, Write};
-use std::os::unix::fs::FileTypeExt;
+use std::os::unix::fs::{FileTypeExt, OpenOptionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -76,10 +76,13 @@ pub fn bind(path: &Path) -> io::Result<Bound> {
     }
     let mut name = path.as_os_str().to_owned();
     name.push(".lock");
+    // Only conaryd's own user opens it: the socket's mode is left to the
+    // umask, so others may connect, but none may hold the lock.
     let lock = File::options()
         .create(true)
         .truncate(false)
         .write(true)
+        .mode(0o600)
         .open(PathBuf::from(name))?;
     match lock.try_lock() {
         Ok(()) => {}

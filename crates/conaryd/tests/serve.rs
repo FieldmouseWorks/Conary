@@ -2,6 +2,7 @@
 //! moves while it serves.
 
 use std::io::{BufRead, BufReader, Read, Write};
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
 use std::thread;
@@ -173,8 +174,10 @@ fn of_conaryds_starting_at_once_one_listens() {
     for e in refused {
         assert_eq!(e.err().unwrap().kind(), std::io::ErrorKind::AddrInUse);
     }
-    // The one that listens is the one answering.
+    // The one that listens is the one answering, and its lock is its own.
     UnixStream::connect(&socket).unwrap();
+    let lock = std::fs::metadata(dir.path().join("conaryd.sock.lock")).unwrap();
+    assert_eq!(lock.permissions().mode() & 0o777, 0o600);
 
     // While it runs, what's at its path looks like a socket left behind
     // (what a second start probing before the first binds would see): the
