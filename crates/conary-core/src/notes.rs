@@ -3,6 +3,9 @@
 //! on the trunk commit its landing made, for any clone to read. A note is a
 //! readout: it says what the ledger says, and nothing signs it.
 
+use std::sync::LazyLock;
+
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 use crate::id::{ChangeId, CommitId, RevisionId};
@@ -125,38 +128,30 @@ impl Note {
     }
 }
 
-/// What a link to somewhere other than GitHub reads as in a note that
-/// leaves links out.
-const LEFT_OUT: &str = "[link left out]";
+/// What a field that links somewhere other than GitHub reads as in a note
+/// that leaves links out.
+const LEFT_OUT: &str = "[left out: it links off GitHub]";
 
-/// `text` with every word that links somewhere other than GitHub (with a
-/// scheme or without: `claude.ai/code/...`) left out.
+/// A link to github.com, through to the first character a URL path on
+/// GitHub doesn't need: what a note that leaves links out may keep.
+static GITHUB: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)https://github\.com/[A-Za-z0-9._~/#%?=&+-]*").unwrap());
+
+/// Anything that may be a link: a scheme or a protocol-relative `//`, or a
+/// dotted host followed by a path (`claude.ai/code/...`).
+static LINK: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"//|[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/").unwrap());
+
+/// `text`, or [`LEFT_OUT`] when anything in it but GitHub's own links may
+/// link somewhere else. The whole field goes, not the link alone: telling
+/// where a link ends in free text is guesswork, and a guess that's short
+/// leaks the rest.
 fn without_links(text: &str) -> String {
-    text.split_inclusive(char::is_whitespace)
-        .map(|piece| {
-            let word = piece.trim_end();
-            if links_off_github(word) {
-                format!("{LEFT_OUT}{}", &piece[word.len()..])
-            } else {
-                piece.to_owned()
-            }
-        })
-        .collect()
-}
-
-/// Whether `word` is a link to a host other than github.com: a scheme, or
-/// a dotted host followed by a path.
-fn links_off_github(word: &str) -> bool {
-    let (schemed, rest) = word
-        .split_once("://")
-        .map_or((false, word), |(_, rest)| (true, rest));
-    let Some((host, _)) = rest.split_once('/').or(schemed.then_some((rest, ""))) else {
-        return false;
-    };
-    let host = host.rsplit('@').next().unwrap_or(host);
-    let host = host.trim_start_matches(|c: char| !c.is_alphanumeric());
-    let host = host.split(':').next().unwrap_or(host);
-    (schemed || host.contains('.')) && !host.eq_ignore_ascii_case("github.com")
+    if LINK.is_match(&GITHUB.replace_all(text, "")) {
+        LEFT_OUT.to_owned()
+    } else {
+        text.to_owned()
+    }
 }
 
 #[cfg(test)]
@@ -266,10 +261,7 @@ mod tests {
         let text = left.text();
         assert!(!text.contains("claude.ai"), "{text}");
         assert!(left.task.is_none() && left.author.session.is_none());
-        assert_eq!(
-            left.summary.as_deref(),
-            Some("area: a plain sentence from [link left out]")
-        );
+        assert_eq!(left.summary.as_deref(), Some(LEFT_OUT));
         // GitHub's own links stay.
         assert_eq!(left.evidence[0].source, "https://github.com/o/r/runs/1");
         // An issue isn't a session link.
@@ -278,25 +270,29 @@ mod tests {
 
     #[test]
     fn a_note_without_links_links_nowhere_but_github() {
-        for (text, want) in [
-            ("area: a plain sentence", "area: a plain sentence"),
-            (
-                "fix it (https://claude.ai/code/session_x) now",
-                "fix it [link left out] now",
-            ),
-            ("see claude.ai/code/session_x", "see [link left out]"),
-            ("chatgpt.com/c/abc", "[link left out]"),
-            (
-                "https://github.com/o/r/actions/runs/1/job/2",
-                "https://github.com/o/r/actions/runs/1/job/2",
-            ),
-            (
-                "lib/project.nix and docs/notes.md",
-                "lib/project.nix and docs/notes.md",
-            ),
-            ("http://localhost:8080/x", "[link left out]"),
+        for kept in [
+            "area: a plain sentence",
+            "https://github.com/o/r/actions/runs/1/job/2",
+            "https://github.com/o/r.js/pull/1 and https://github.com/o/r/issues/2",
+            "lib/project.nix and docs/notes.md, why.rs:40",
+            "o/r#3",
         ] {
-            assert_eq!(without_links(text), want, "{text}");
+            assert_eq!(without_links(kept), kept);
+        }
+        for left in [
+            "fix it (https://claude.ai/code/session_x) now",
+            "see claude.ai/code/session_x",
+            "chatgpt.com/c/abc",
+            "https://github.com/o/r,https://claude.ai/code/session_x",
+            "https://github.com/o/r,claude.ai/code/session_x",
+            "//claude.ai/code/session_x",
+            "[the session](https://claude.ai/code/session_x)",
+            "https://github.com.evil.example/x",
+            "https://github.com@claude.ai/code/session_x",
+            "http://github.com/o/r",
+            "http://localhost:8080/x",
+        ] {
+            assert_eq!(without_links(left), LEFT_OUT, "{left}");
         }
     }
 

@@ -59,8 +59,11 @@ the ledger has one (M4).
   `--session-links` (or `CONARY_SESSION_LINKS`) names. Some repos' rules keep
   those links out of their history (LoK-web's, for one), so a repository
   that isn't named gets notes that link nowhere but GitHub: no
-  `author.session`, no `task` that is a link, and every other link, in the
-  summary or the evidence, read as `[link left out]`.
+  `author.session`, no `task` that is a link, and any other field (the
+  summary, an evidence check or source) that holds anything but GitHub's own
+  links reads `[left out: it links off GitHub]`. The whole field goes,
+  because where a link ends in free text is a guess, and a short guess
+  leaks the rest.
 
 So a note says nothing its repository doesn't already show to whoever can
 read it.
