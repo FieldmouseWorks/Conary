@@ -51,7 +51,7 @@ struct Remote {
 struct GithubArgs {
     #[command(flatten)]
     remote: Remote,
-    /// Logins whose review markers are reviews: the steward's account.
+    /// Logins whose review markers are reviews: the steward's App's bot, SLUG[bot].
     #[arg(long = "reviewer", env = "CONARY_REVIEWERS", value_delimiter = ',')]
     reviewers: Vec<String>,
     /// Status contexts that are the steward's own, not checks.

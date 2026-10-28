@@ -21,8 +21,8 @@ and every write moves it on, so a log that loses ops is refused. It prints
 JSON; add `--human` for people.
 
     cn init
-    cn backfill FieldmouseWorks/burrow --reviewer <steward login>
-    cn ingest FieldmouseWorks/burrow 61 --reviewer <steward login>
+    cn backfill FieldmouseWorks/burrow --reviewer <steward-app>[bot]
+    cn ingest FieldmouseWorks/burrow 61 --reviewer <steward-app>[bot]
     cn log --human
     cn why -C ~/src/burrow modules/claude.nix:40 --human
     cn verify    # the log against the anchor on GitHub, all of its history
