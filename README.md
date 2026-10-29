@@ -8,8 +8,9 @@ Status: M1 and M2 are done. `cn` records every PR on the box with the
 ledger and answers `why` there, any clone answers it from the
 [notes](docs/notes.md), and conaryd and its MCP server serve the ledger to
 everything else on the box. Landing and undo, above, are where it's going:
-`undo` is M3, next, and Conary landing changes itself, in place of the
-steward, is M5. The milestones are in
+the train, which gates every ready change with one run, is M3, next, then
+`undo` at M4, and Conary landing changes itself, in place of the steward,
+is M6. The milestones are in
 [docs/DESIGN.md](docs/DESIGN.md#12-milestones).
 
 ## Using it
