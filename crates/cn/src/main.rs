@@ -51,7 +51,8 @@ struct Remote {
     /// and run without a shell. A token it prints must stay good for five
     /// minutes, and it exits 75 when GitHub can't be asked just now. Without
     /// it, GH_TOKEN (or GITHUB_TOKEN) is every repository's.
-    #[arg(long, env = "CONARY_TOKEN_COMMAND")]
+    // Help never shows its value: a credential can be one of its arguments.
+    #[arg(long, env = "CONARY_TOKEN_COMMAND", hide_env_values = true)]
     token_command: Option<String>,
 }
 
@@ -401,6 +402,19 @@ mod tests {
     use super::*;
     use conary_github::IngestError;
     use conary_github::anchor::AnchorError;
+
+    #[test]
+    fn help_never_shows_the_token_command() {
+        use clap::CommandFactory;
+        let cli = Cli::command();
+        let args: Vec<_> = cli
+            .get_subcommands()
+            .flat_map(|c| c.get_arguments())
+            .filter(|a| a.get_id() == "token_command")
+            .collect();
+        assert!(!args.is_empty());
+        assert!(args.iter().all(|a| a.is_hide_env_values_set()));
+    }
 
     #[test]
     fn the_token_command_then_gh_token_then_github_token_and_an_empty_one_is_none() {

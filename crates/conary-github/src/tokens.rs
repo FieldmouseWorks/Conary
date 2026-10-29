@@ -79,9 +79,10 @@ impl Tokens {
 }
 
 /// What the command printed for `repo`: one token, nothing else. Errors name
-/// the command and the repository, never what it printed.
+/// the program and the repository, never the program's arguments (a
+/// credential can be one) or what it printed.
 fn run(argv: &[String], repo: &str) -> Result<String, ApiError> {
-    let asked = format!("`{} {repo}`", argv.join(" "));
+    let asked = format!("the token command ({}) for {repo}", argv[0]);
     let out = Command::new(&argv[0])
         .args(&argv[1..])
         .arg(repo)
@@ -178,6 +179,30 @@ mod tests {
         assert!(tokens.of("a/r").unwrap_err().unavailable);
         std::fs::write(format!("{}.ok", dir.path().join("token").display()), "").unwrap();
         assert_eq!(tokens.of("a/r").unwrap(), "t1-a/r");
+    }
+
+    #[test]
+    fn no_failure_quotes_the_command_s_arguments() {
+        // A credential can be one of them: `env KEY=... helper`.
+        let secret = "ghs_argument";
+        for then in ["", "exit 75", "exit 1", "exit 0"] {
+            let dir = tempfile::tempdir().unwrap();
+            let program = if then.is_empty() {
+                "/nonexistent/token".to_owned()
+            } else {
+                counting(dir.path(), then)
+            };
+            let err = Tokens::command(&format!("{program} {secret}"))
+                .unwrap()
+                .of("a/r")
+                .unwrap_err()
+                .to_string();
+            assert!(!err.contains(secret), "{then:?}: {err}");
+            assert!(
+                err.contains(&program) && err.contains("a/r"),
+                "{then:?}: {err}"
+            );
+        }
     }
 
     #[test]
