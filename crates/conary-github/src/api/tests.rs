@@ -289,3 +289,87 @@ fn reads_a_path_s_repository() {
         assert_eq!(repo_of(path), repo, "{path}");
     }
 }
+
+#[test]
+fn the_trains_merges_say_merged_already_there_or_conflict() {
+    use crate::train::{Forge, Merged};
+    let made = r#"{"sha":"m","commit":{"tree":{"sha":"t"}}}"#;
+    let answers: Vec<&'static str> = vec![
+        whole("201 Created", made).leak(),
+        whole("204 No Content", "").leak(),
+        whole("409 Conflict", r#"{"message":"Merge conflict"}"#).leak(),
+        whole("404 Not Found", r#"{"message":"Head does not exist"}"#).leak(),
+    ];
+    let (base, heads) = github(answers);
+    let api = Api::new(&base, Tokens::given("t"));
+    let merge = || api.merge("o/r", "conary/build/x", "h", "Merge #1");
+    assert_eq!(
+        merge().unwrap(),
+        Merged::Commit {
+            sha: "m".into(),
+            tree: "t".into()
+        }
+    );
+    assert!(heads.recv().unwrap().starts_with("post /repos/o/r/merges "));
+    assert_eq!(merge().unwrap(), Merged::Already);
+    assert_eq!(merge().unwrap(), Merged::Conflict);
+    assert!(merge().is_err());
+}
+
+#[test]
+fn the_trains_branches_are_read_made_and_deleted_by_name() {
+    use crate::train::Forge;
+    let refs = r#"[{"ref":"refs/heads/conary/train/a","object":{"sha":"s"}}]"#;
+    let answers: Vec<&'static str> = vec![
+        whole("200 OK", r#"{"object":{"sha":"s"}}"#).leak(),
+        whole("404 Not Found", "{}").leak(),
+        whole("200 OK", refs).leak(),
+        whole("201 Created", "{}").leak(),
+        whole("204 No Content", "").leak(),
+        whole(
+            "422 Unprocessable Entity",
+            r#"{"message":"Reference does not exist"}"#,
+        )
+        .leak(),
+        whole(
+            "403 Forbidden",
+            r#"{"message":"Resource not accessible by integration"}"#,
+        )
+        .leak(),
+    ];
+    let (base, heads) = github(answers);
+    let api = Api::new(&base, Tokens::given("t"));
+    assert_eq!(api.branch("o/r", "main").unwrap(), Some("s".into()));
+    assert!(
+        heads
+            .recv()
+            .unwrap()
+            .starts_with("get /repos/o/r/git/ref/heads/main ")
+    );
+    assert_eq!(api.branch("o/r", "gone").unwrap(), None);
+    heads.recv().unwrap();
+    assert_eq!(api.branches("o/r", "conary/").unwrap(), ["conary/train/a"]);
+    assert!(
+        heads
+            .recv()
+            .unwrap()
+            .starts_with("get /repos/o/r/git/matching-refs/heads/conary/ ")
+    );
+    api.create_branch("o/r", "conary/train/a", "s").unwrap();
+    assert!(
+        heads
+            .recv()
+            .unwrap()
+            .starts_with("post /repos/o/r/git/refs ")
+    );
+    api.delete_branch("o/r", "conary/train/a").unwrap();
+    assert!(
+        heads
+            .recv()
+            .unwrap()
+            .starts_with("delete /repos/o/r/git/refs/heads/conary/train/a ")
+    );
+    // Already gone is gone; refused isn't.
+    api.delete_branch("o/r", "conary/train/a").unwrap();
+    assert!(api.delete_branch("o/r", "conary/train/a").is_err());
+}

@@ -634,6 +634,101 @@ struct TreeCommit {
 }
 
 #[derive(Debug, Deserialize)]
+struct NamedRef {
+    #[serde(rename = "ref")]
+    name: String,
+}
+
+/// What the merges API answers a merge with: the commit, and in it its tree.
+#[derive(Debug, Deserialize)]
+struct MergeCommit {
+    sha: String,
+    commit: TreeCommit,
+}
+
+impl crate::train::Forge for Api {
+    fn branch(&self, repo: &str, name: &str) -> Result<Option<String>, ApiError> {
+        Ok(self
+            .get_found::<GitRef>(&format!("/repos/{repo}/git/ref/heads/{name}"))?
+            .map(|r| r.object.sha))
+    }
+
+    fn branches(&self, repo: &str, prefix: &str) -> Result<Vec<String>, ApiError> {
+        // One answer, every match: this endpoint doesn't page.
+        let refs: Vec<NamedRef> =
+            self.get(&format!("/repos/{repo}/git/matching-refs/heads/{prefix}"))?;
+        Ok(refs
+            .into_iter()
+            .filter_map(|r| r.name.strip_prefix("refs/heads/").map(str::to_owned))
+            .collect())
+    }
+
+    fn create_branch(&self, repo: &str, name: &str, sha: &str) -> Result<(), ApiError> {
+        let _: serde_json::Value = self.send(
+            false,
+            &format!("/repos/{repo}/git/refs"),
+            &serde_json::json!({"ref": format!("refs/heads/{name}"), "sha": sha}),
+        )?;
+        Ok(())
+    }
+
+    fn delete_branch(&self, repo: &str, name: &str) -> Result<(), ApiError> {
+        let path = format!("/repos/{repo}/git/refs/heads/{name}");
+        let url = format!("{}{path}", self.base);
+        let mut response = self
+            .agent
+            .delete(&url)
+            .header("Authorization", &self.authorization(&path)?)
+            .header("Accept", "application/vnd.github+json")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .call()
+            .map_err(|e| unreachable(&url, e))?;
+        match response.status().as_u16() {
+            // 422 is GitHub's answer for a ref that isn't there.
+            200..=299 | 404 | 422 => Ok(()),
+            _ => Err(failed(&url, &mut response)),
+        }
+    }
+
+    fn merge(
+        &self,
+        repo: &str,
+        into: &str,
+        head: &str,
+        message: &str,
+    ) -> Result<crate::train::Merged, ApiError> {
+        use crate::train::Merged;
+        let path = format!("/repos/{repo}/merges");
+        let url = format!("{}{path}", self.base);
+        let mut response = self
+            .agent
+            .post(&url)
+            .header("Authorization", &self.authorization(&path)?)
+            .header("Accept", "application/vnd.github+json")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .send_json(serde_json::json!({"base": into, "head": head, "commit_message": message}))
+            .map_err(|e| unreachable(&url, e))?;
+        match response.status().as_u16() {
+            201 => {
+                let made: MergeCommit = parse(&url, &read(&url, &mut response)?)?;
+                Ok(Merged::Commit {
+                    sha: made.sha,
+                    tree: made.commit.tree.sha,
+                })
+            }
+            204 => Ok(Merged::Already),
+            409 => Ok(Merged::Conflict),
+            _ => Err(failed(&url, &mut response)),
+        }
+    }
+
+    fn tree(&self, repo: &str, sha: &str) -> Result<String, ApiError> {
+        let commit: TreeCommit = self.get(&format!("/repos/{repo}/git/commits/{sha}"))?;
+        Ok(commit.tree.sha)
+    }
+}
+
+#[derive(Debug, Deserialize)]
 struct Tree {
     tree: Vec<TreeEntry>,
     truncated: bool,

@@ -18,6 +18,8 @@ use conary_core::{reader, rpc};
 use conary_github::anchor::{self, Anchored};
 use conary_github::{Api, ApiError, Config, Etags, Ingested, Tokens, ingest, notes};
 
+mod train;
+
 #[derive(Parser)]
 #[command(
     name = "cn",
@@ -125,6 +127,11 @@ enum Command {
     Verify {
         #[command(flatten)]
         remote: Remote,
+    },
+    /// A repo's train: the changes ready to land, gated together.
+    Train {
+        #[command(subcommand)]
+        command: train::TrainCommand,
     },
     /// Why a line is the way it is: the change that landed it. From the
     /// ledger when it's set up here, otherwise from the notes on the
@@ -247,6 +254,7 @@ fn run(cli: &Cli) -> Result<()> {
                 println!("{}", Value::Array(changes.map(rpc::summary).collect()));
             }
         }
+        Command::Train { command } => train::run(cli, command)?,
         Command::Why { at, dir } => {
             let (file, n) = at
                 .rsplit_once(':')

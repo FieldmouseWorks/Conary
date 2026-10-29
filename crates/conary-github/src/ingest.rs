@@ -110,6 +110,8 @@ impl From<BasesError> for IngestError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Ingested {
     pub change: ChangeId,
+    /// The PR's head on its base as GitHub shows it now.
+    pub revision: RevisionId,
     /// Ops written; 0 when the ledger already held everything.
     pub recorded: usize,
 }
@@ -289,14 +291,14 @@ fn record(
     for run in source.check_runs(&full, head.as_str())? {
         // Started after the retarget, so it can't have run on the old base.
         if current(run.started_at.as_deref()) {
-            evidence.extend(check_run(change, revision, &run));
+            evidence.extend(run_result(&run).map(|f| f.evidence(change, revision)));
         }
     }
     // Newest first from GitHub; recorded in the order they happened.
     let statuses = source.statuses(&full, head.as_str())?;
     for status in statuses.iter().rev() {
         if !config.own_contexts.contains(&status.context) && current(status.created_at.as_deref()) {
-            evidence.extend(commit_status(change, revision, status));
+            evidence.extend(status_result(status).map(|f| f.evidence(change, revision)));
         }
     }
     // Newest first: the steward's latest word on this head since the last
@@ -353,6 +355,7 @@ fn record(
 
     Ok(Ingested {
         change,
+        revision,
         recorded: w.recorded,
     })
 }
@@ -531,7 +534,28 @@ fn task(repo: &Repo, body: &str) -> Option<String> {
     THREAD.find(body).map(|m| m.as_str().to_owned())
 }
 
-fn check_run(change: ChangeId, revision: RevisionId, run: &CheckRun) -> Option<Body> {
+/// One CI result on a commit, as GitHub reports it: its check, its result
+/// and what produced it.
+pub(crate) struct Found {
+    pub check: String,
+    pub result: Outcome,
+    pub source: String,
+}
+
+impl Found {
+    fn evidence(self, change: ChangeId, revision: RevisionId) -> Body {
+        Body::Evidence {
+            change,
+            revision,
+            kind: CheckKind::Ci,
+            check: self.check,
+            result: self.result,
+            source: self.source,
+        }
+    }
+}
+
+pub(crate) fn run_result(run: &CheckRun) -> Option<Found> {
     if run.status != "completed" {
         return None;
     }
@@ -542,10 +566,7 @@ fn check_run(change: ChangeId, revision: RevisionId, run: &CheckRun) -> Option<B
         // Neutral, skipped, action_required: no result about the change.
         _ => return None,
     };
-    Some(Body::Evidence {
-        change,
-        revision,
-        kind: CheckKind::Ci,
+    Some(Found {
         check: run.name.clone(),
         result,
         source: run
@@ -555,17 +576,14 @@ fn check_run(change: ChangeId, revision: RevisionId, run: &CheckRun) -> Option<B
     })
 }
 
-fn commit_status(change: ChangeId, revision: RevisionId, status: &CommitStatus) -> Option<Body> {
+pub(crate) fn status_result(status: &CommitStatus) -> Option<Found> {
     let result = match status.state.as_str() {
         "success" => Outcome::Pass,
         "failure" => Outcome::Fail,
         "error" => Outcome::Error,
         _ => return None,
     };
-    Some(Body::Evidence {
-        change,
-        revision,
-        kind: CheckKind::Ci,
+    Some(Found {
         check: status.context.clone(),
         result,
         source: status
