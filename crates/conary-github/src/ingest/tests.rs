@@ -281,6 +281,32 @@ fn a_new_head_is_a_new_revision_and_the_old_evidence_stays_on_the_old_one() {
 }
 
 #[test]
+fn a_head_pushed_back_to_an_older_one_is_that_revision_again_and_current() {
+    let (_dir, mut store) = open();
+    let mut f = fake();
+    let change = pull(&mut store, &f, &config(), &repo(), 9).unwrap().change;
+    let old = RevisionId::new(&sha(FORK), &sha(HEAD));
+    f.pulls = vec![pr(9, HEAD2, "open", false)];
+    pull(&mut store, &f, &config(), &repo(), 9).unwrap();
+    f.pulls = vec![pr(9, HEAD, "open", false)];
+    assert_eq!(
+        pull(&mut store, &f, &config(), &repo(), 9)
+            .unwrap()
+            .recorded,
+        1
+    );
+    let c = store.ledger().change(change).unwrap();
+    assert_eq!(c.revisions.len(), 2);
+    assert_eq!(c.current, Some(old));
+    assert_eq!(
+        pull(&mut store, &f, &config(), &repo(), 9)
+            .unwrap()
+            .recorded,
+        0
+    );
+}
+
+#[test]
 fn a_merged_pr_lands_on_the_commit_it_made() {
     let (_dir, mut store) = open();
     let mut f = fake();
@@ -699,6 +725,36 @@ fn sync_reads_a_closed_pr_again_when_it_changed_since() {
     f.pulls = vec![pr(9, HEAD2, "closed", true)];
     assert_eq!(sync(&mut store, &f, &config(), &repo()).unwrap().len(), 1);
     assert_eq!(status(&store), Status::Landed);
+    assert!(sync(&mut store, &f, &config(), &repo()).unwrap().is_empty());
+}
+
+#[test]
+fn sync_reads_a_closed_pr_again_when_it_went_back_to_a_revision_it_had() {
+    let (_dir, mut store) = open();
+    let mut f = fake();
+    let current = |s: &Store| s.ledger().by_pr(&repo(), 9).unwrap().current;
+    let first = RevisionId::new(&sha(FORK), &sha(HEAD));
+    f.pulls = vec![pr(9, HEAD, "closed", false)];
+    sync(&mut store, &f, &config(), &repo()).unwrap();
+    f.pulls = vec![pr(9, HEAD2, "closed", false)];
+    sync(&mut store, &f, &config(), &repo()).unwrap();
+
+    // Reopened, pushed back to its first head and closed again between two
+    // syncs: that revision is current again, and nothing new is added.
+    f.pulls = vec![pr(9, HEAD, "closed", false)];
+    assert_eq!(sync(&mut store, &f, &config(), &repo()).unwrap().len(), 1);
+    assert_eq!(current(&store), Some(first));
+    assert_eq!(store.ledger().by_pr(&repo(), 9).unwrap().revisions.len(), 2);
+    assert!(sync(&mut store, &f, &config(), &repo()).unwrap().is_empty());
+
+    // Retargeted, then back onto main, the same way.
+    let mut on_dev = pr(9, HEAD, "closed", false);
+    on_dev["base"] = json!({"sha": DEV, "ref": "dev", "repo": {"default_branch": "main"}});
+    f.pulls = vec![on_dev];
+    sync(&mut store, &f, &config(), &repo()).unwrap();
+    f.pulls = vec![pr(9, HEAD, "closed", false)];
+    assert_eq!(sync(&mut store, &f, &config(), &repo()).unwrap().len(), 1);
+    assert_eq!(current(&store), Some(first));
     assert!(sync(&mut store, &f, &config(), &repo()).unwrap().is_empty());
 }
 

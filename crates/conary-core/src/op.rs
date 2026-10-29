@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::id::{ChangeId, CommitId, OpId, RevisionId};
+use crate::id::{CandidateId, ChangeId, CommitId, OpId, RevisionId, TreeId};
 
 /// A GitHub repository, as `owner/name`. GitHub ignores case in both, so two
 /// spellings of one repository are equal: an op keeps the spelling it was
@@ -119,6 +119,40 @@ pub enum Authority {
     Status { login: String },
 }
 
+/// One change in a train candidate, at the revision it joined at.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Member {
+    pub change: ChangeId,
+    pub revision: RevisionId,
+}
+
+/// Why a change left its repo's train without landing, when nothing else in
+/// the ledger says so. A new head, a close and a landing take a change out
+/// by themselves, as does its candidate going red with it alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Left {
+    /// It no longer can land but for the gate: a thread opened again, say.
+    Unready,
+    /// Its head won't merge onto trunk and the changes ahead of it.
+    Conflict,
+    /// GitHub refused its merge.
+    Refused,
+}
+
+/// How a candidate's gate ended (`docs/DESIGN.md` section 4.7).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Verdict {
+    /// Its changes land, in order.
+    Green,
+    /// It splits in two, older half first, or its one change leaves.
+    Red,
+    /// Its gate never finished: its changes wait in the train again, as
+    /// they joined.
+    Dropped,
+}
+
 /// The body of an operation: what happened.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
@@ -174,6 +208,52 @@ pub enum Body {
     Close { change: ChangeId },
     /// A closed change was opened again.
     Reopen { change: ChangeId },
+    /// The change joined its repo's train: everything but the gate says
+    /// this revision can land, the PR's head as it is now. Joining at
+    /// another revision than the one it's in at takes it out and puts it
+    /// at the back.
+    Join {
+        change: ChangeId,
+        revision: RevisionId,
+    },
+    /// The change left the train without landing.
+    Leave { change: ChangeId, why: Left },
+    /// A train candidate, whole: trunk at `base`, then each change's head
+    /// merged onto it in order, ending at `commit`, on the candidate's
+    /// train branch, where the gate runs. `of` is the red candidate it's a
+    /// half of.
+    Candidate {
+        candidate: CandidateId,
+        repo: Repo,
+        base: CommitId,
+        changes: Vec<Member>,
+        commit: CommitId,
+        tree: TreeId,
+        of: Option<CandidateId>,
+    },
+    /// One result of one check on a candidate's commit. Recorded like a
+    /// revision's evidence, and counted only as that is (design 4.3).
+    CandidateEvidence {
+        candidate: CandidateId,
+        kind: CheckKind,
+        check: String,
+        result: Outcome,
+        source: String,
+    },
+    /// How the candidate's gate ended. Until Conary counts attested
+    /// evidence itself, this is the steward's call from the candidate's CI,
+    /// as it reads a PR's.
+    Verdict {
+        candidate: CandidateId,
+        verdict: Verdict,
+    },
+    /// Every change in a green candidate landed, and trunk ended on `tree`,
+    /// the last landing's. When that's the candidate's tree, the
+    /// candidate's evidence is about that landing's tree.
+    Finish {
+        candidate: CandidateId,
+        tree: TreeId,
+    },
 }
 
 impl Body {
@@ -186,8 +266,14 @@ impl Body {
             | Self::Evidence { change, .. }
             | Self::Land { change, .. }
             | Self::Close { change }
-            | Self::Reopen { change } => Some(*change),
-            Self::Outside { .. } => None,
+            | Self::Reopen { change }
+            | Self::Join { change, .. }
+            | Self::Leave { change, .. } => Some(*change),
+            Self::Outside { .. }
+            | Self::Candidate { .. }
+            | Self::CandidateEvidence { .. }
+            | Self::Verdict { .. }
+            | Self::Finish { .. } => None,
         }
     }
 }

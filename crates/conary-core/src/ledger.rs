@@ -7,8 +7,12 @@ use std::collections::{BTreeMap, HashMap};
 
 use serde::{Deserialize, Serialize};
 
-use crate::id::{ChangeId, CommitId, OpId, RevisionId};
+use crate::id::{CandidateId, ChangeId, CommitId, OpId, RevisionId};
 use crate::op::{Actor, Authority, Body, CheckKind, Op, Outcome, Repo};
+
+mod train;
+
+pub use train::{Candidate, CandidateEvidence, Plan, State, Train};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Intent {
@@ -42,6 +46,9 @@ pub struct Landing {
     pub after: CommitId,
     pub by: Authority,
     pub at: i64,
+    /// The green candidate it landed through, when it came through the train.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub candidate: Option<CandidateId>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -63,6 +70,9 @@ pub struct Change {
     /// Each revision once, in the order first seen. A head that comes back
     /// after a force-push is the revision it already was.
     pub revisions: Vec<Revision>,
+    /// The revision the PR is at, as last seen: the one it came back to, if
+    /// it did.
+    pub current: Option<RevisionId>,
     pub evidence: Vec<Evidence>,
     pub landing: Option<Landing>,
     #[serde(skip)]
@@ -106,11 +116,23 @@ pub enum Invalid {
     /// The change id or the PR is already in the ledger.
     AlreadyObserved,
     UnknownRevision(RevisionId),
+    /// That revision isn't the PR's head now.
+    NotCurrent(RevisionId),
     AlreadyLanded,
     Closed,
     NotClosed,
     /// That trunk commit is already some other landing's.
     TrunkCommitTaken(CommitId),
+    UnknownCandidate(CandidateId),
+    NotInTrain,
+    /// The repo already has a candidate in flight.
+    TrainBusy,
+    /// Not the candidate the train builds next.
+    OutOfTurn,
+    /// The candidate's gate already ended.
+    NotGating,
+    /// Not every change in the candidate has landed through it.
+    NotLanded,
 }
 
 impl std::fmt::Display for Invalid {
@@ -120,10 +142,19 @@ impl std::fmt::Display for Invalid {
             Self::Duplicate => f.write_str("already recorded"),
             Self::AlreadyObserved => f.write_str("that change or PR is already in the ledger"),
             Self::UnknownRevision(id) => write!(f, "no revision {id} on that change"),
+            Self::NotCurrent(id) => write!(f, "revision {id} isn't the change's head now"),
             Self::AlreadyLanded => f.write_str("the change already landed"),
             Self::Closed => f.write_str("the change is closed"),
             Self::NotClosed => f.write_str("the change isn't closed"),
             Self::TrunkCommitTaken(c) => write!(f, "trunk commit {c} already belongs to a landing"),
+            Self::UnknownCandidate(id) => write!(f, "no candidate {id}"),
+            Self::NotInTrain => f.write_str("the change isn't in its repo's train"),
+            Self::TrainBusy => f.write_str("that repo's train already has a candidate in flight"),
+            Self::OutOfTurn => f.write_str("that isn't the candidate the train builds next"),
+            Self::NotGating => f.write_str("that candidate's gate already ended"),
+            Self::NotLanded => {
+                f.write_str("not every change in that candidate has landed through it")
+            }
         }
     }
 }
@@ -138,6 +169,8 @@ pub struct Ledger {
     by_pr: HashMap<(Repo, u64), ChangeId>,
     by_trunk: HashMap<(Repo, CommitId), ChangeId>,
     outside: Vec<Outside>,
+    trains: HashMap<Repo, Train>,
+    candidates: BTreeMap<CandidateId, Candidate>,
     head: Option<OpId>,
 }
 
@@ -213,8 +246,7 @@ impl Ledger {
                 }
             }
             Body::Revision { change, base, head } => {
-                let id = RevisionId::new(base, head);
-                if self.existing(*change)?.revision(id).is_some() {
+                if self.existing(*change)?.current == Some(RevisionId::new(base, head)) {
                     return Err(Invalid::Duplicate);
                 }
             }
@@ -268,6 +300,24 @@ impl Ledger {
                     return Err(Invalid::NotClosed);
                 }
             }
+            Body::Join { change, revision } => self.check_join(*change, *revision)?,
+            Body::Leave { change, .. } => self.check_leave(*change)?,
+            Body::Candidate {
+                candidate,
+                repo,
+                changes,
+                of,
+                ..
+            } => self.check_candidate(*candidate, repo, changes, *of)?,
+            Body::CandidateEvidence {
+                candidate,
+                kind,
+                check,
+                result,
+                source,
+            } => self.check_candidate_evidence(*candidate, *kind, check, *result, source)?,
+            Body::Verdict { candidate, .. } => self.check_verdict(*candidate)?,
+            Body::Finish { candidate, .. } => self.check_finish(*candidate)?,
         }
         Ok(())
     }
@@ -276,6 +326,20 @@ impl Ledger {
     pub(crate) fn apply(&mut self, op: &Op) {
         let at = op.op.at;
         self.head = Some(op.id);
+        if self.apply_train(&op.op.body, at) {
+            return;
+        }
+        // What a change's new head, close or landing does to its train.
+        let through = match &op.op.body {
+            Body::Revision { change, .. } | Body::Close { change } => {
+                self.unseat(*change);
+                None
+            }
+            Body::Land {
+                change, revision, ..
+            } => self.land_through_train(*change, *revision),
+            _ => None,
+        };
         let change = op.op.body.change();
         let Some(c) = change.and_then(|id| self.changes.get_mut(&id)) else {
             match &op.op.body {
@@ -297,6 +361,7 @@ impl Ledger {
                             seen: at,
                             intent: None,
                             revisions: Vec::new(),
+                            current: None,
                             evidence: Vec::new(),
                             landing: None,
                             closed: false,
@@ -330,12 +395,18 @@ impl Ledger {
                     task: task.clone(),
                 })
             }
-            Body::Revision { base, head, .. } => c.revisions.push(Revision {
-                id: RevisionId::new(base, head),
-                base: base.clone(),
-                head: head.clone(),
-                at,
-            }),
+            Body::Revision { base, head, .. } => {
+                let id = RevisionId::new(base, head);
+                if c.revision(id).is_none() {
+                    c.revisions.push(Revision {
+                        id,
+                        base: base.clone(),
+                        head: head.clone(),
+                        at,
+                    });
+                }
+                c.current = Some(id);
+            }
             Body::Evidence {
                 revision,
                 kind,
@@ -365,6 +436,7 @@ impl Ledger {
                     after: after.clone(),
                     by: by.clone(),
                     at,
+                    candidate: through,
                 });
             }
             Body::Close { .. } => c.closed = true,
@@ -372,6 +444,12 @@ impl Ledger {
             Body::Observe { .. } | Body::Outside { .. } => {
                 unreachable!("check refuses observing a change twice; outside names none")
             }
+            Body::Join { .. }
+            | Body::Leave { .. }
+            | Body::Candidate { .. }
+            | Body::CandidateEvidence { .. }
+            | Body::Verdict { .. }
+            | Body::Finish { .. } => unreachable!("apply_train applies the train's ops"),
         }
     }
 }

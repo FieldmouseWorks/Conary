@@ -187,9 +187,9 @@ pub fn sync(
 }
 
 /// Whether the ledger already holds a closed PR as GitHub shows it: how it
-/// finished, its whole revision and its intent. A PR reopened, retargeted or
-/// pushed to and closed again, or reopened and merged, between two syncs is
-/// read again.
+/// finished, the revision it's at and its intent. A PR reopened, retargeted or
+/// pushed to (back to an older head or base too) and closed again, or
+/// reopened and merged, between two syncs is read again.
 fn settled(ledger: &Ledger, c: &Change, pr: &PullRequest, revision: RevisionId) -> bool {
     let finished = match c.status() {
         Status::Open => false,
@@ -209,7 +209,7 @@ fn settled(ledger: &Ledger, c: &Change, pr: &PullRequest, revision: RevisionId) 
     };
     let body = pr.body.as_deref().unwrap_or_default();
     finished
-        && c.revision(revision).is_some()
+        && c.current == Some(revision)
         && c.intent
             .as_ref()
             .is_some_and(|i| i.summary == pr.title && i.body == body)
