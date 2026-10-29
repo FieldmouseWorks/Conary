@@ -255,14 +255,9 @@ fn a_proxy_in_trouble_or_gone_is_github_unavailable() {
 #[test]
 fn each_request_is_asked_with_its_repository_s_token() {
     let dir = tempfile::tempdir().unwrap();
-    let script = dir.path().join("token");
-    std::fs::write(&script, "#!/bin/sh\necho \"for-$1\" | tr / -\n").unwrap();
-    std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    let script = crate::tokens::tests::script(dir.path(), "echo \"for-$1\" | tr / -");
     let (base, heads) = github(vec![ok("\"v1\""), ok("\"v1\"")]);
-    let api = Api::new(
-        &base,
-        Tokens::command(&script.display().to_string()).unwrap(),
-    );
+    let api = Api::new(&base, Tokens::command(&script).unwrap());
     api.pull("a/r", 7).unwrap();
     assert!(
         heads
