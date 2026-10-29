@@ -363,7 +363,12 @@ so the wait is one run, however many are waiting.
   checks, which is how the steward knows to start that job.
 - **R2.** An R2 change rides in a candidate of its own, and lands only while
   trunk is still that candidate's base: on evidence for exactly the tree it
-  makes.
+  makes. It joins `alone`, and the changes before it go without it. Right
+  before its merge the train reads trunk again; if trunk has moved, the
+  candidate is dropped and built again on trunk as it is. A landing onto
+  any other base doesn't count as the candidate's, and stops it. Until
+  classes are the ledger's (M5), the steward says which changes join alone,
+  from its one-way paths.
 
 The ledger keeps each repo's train (`crates/conary-core/src/ledger/train.rs`)
 and refuses a candidate out of turn: a red candidate's halves first, each
@@ -378,12 +383,13 @@ were. A change that left red alone, on a conflict or on a refused merge is
 held: it can't join again at that revision, so it never rebuilds the
 candidate it failed in. A new head lets it go, and for a conflict or a
 refusal so does trunk moving, or, for a conflict, one of the changes it was
-merged after leaving. A candidate's `verdict` is green, red or dropped: dropped is a gate
-that never finished, the stall watchdog's last word, and its changes wait
-again as they joined. A landing is the candidate's when it lands the next
-of its changes, in order, at that revision, after the verdict said green;
-any other landing stops it. `finish` records the tree trunk ended on once
-the last of them has.
+merged after leaving. A candidate's `verdict` is green, red or dropped:
+dropped is a gate that never finished, the stall watchdog's last word, or a
+green candidate alone whose trunk moved before it landed, and its changes
+wait again as they joined. A landing is the candidate's when it lands the
+next of its changes, in order, at that revision (onto its base, for one
+alone), after the verdict said green; any other landing stops it. `finish`
+records the tree trunk ended on once the last of them has.
 
 Trunk's own CI still runs after each landing, and red there still starts an
 undo or a fix. After a train's landing it runs on a tree the gate has just

@@ -27,6 +27,10 @@ pub enum TrainCommand {
         /// The head that was settled.
         #[arg(long)]
         head: String,
+        /// It touches a one-way path (R2): it rides in a candidate of its
+        /// own, which lands only while trunk is still the candidate's base.
+        #[arg(long)]
+        alone: bool,
         #[command(flatten)]
         github: GithubArgs,
     },
@@ -104,7 +108,9 @@ pub fn run(cli: &Cli, command: &TrainCommand) -> Result<()> {
     let (mut a, api, config) = write(cli, github)?;
     let store = &mut a.store;
     let done: Result<(Value, String)> = match command {
-        TrainCommand::Join { pr, head, .. } => train::join(store, &api, &config, repo, *pr, head)
+        TrainCommand::Join {
+            pr, head, alone, ..
+        } => train::join(store, &api, &config, repo, *pr, head, *alone)
             .map(|joined| match joined {
                 Joined::Joined | Joined::Already => {
                     let new = joined == Joined::Joined;
@@ -266,6 +272,7 @@ fn candidate(ledger: &Ledger, c: &Candidate) -> Value {
         "base": c.base.to_string(),
         "commit": c.commit.to_string(),
         "of": c.of.map(|id| id.to_string()),
+        "alone": c.alone,
         "same_tree": c.same_tree(),
     })
 }
@@ -279,6 +286,7 @@ fn show(ledger: &Ledger, repo: &Repo) -> Value {
             "pr": pr_of(ledger, m.change),
             "change": m.change.to_string(),
             "revision": m.revision.to_string(),
+            "alone": t.alone(m.change),
         })).collect::<Vec<_>>(),
         "in_flight": t.in_flight().map(|id| id.to_string()),
         "candidates": t.candidates().iter()

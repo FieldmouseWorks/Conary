@@ -193,7 +193,8 @@ pub enum Joined {
 
 /// Puts a PR in its repo's train at `head`, the head everything but the
 /// gate said can land, once the ledger holds the PR as GitHub shows it now
-/// and that is its head.
+/// and that is its head. `alone`, it rides in a candidate of its own, which
+/// lands only while trunk is still its base: an R2 change.
 pub fn join(
     store: &mut Store,
     source: &dyn Source,
@@ -201,6 +202,7 @@ pub fn join(
     repo: &Repo,
     pr: u64,
     head: &str,
+    alone: bool,
 ) -> Result<Joined, TrainError> {
     let got = ingest::pull(store, source, config, repo, pr)?;
     let c = store
@@ -217,6 +219,7 @@ pub fn join(
     match store.record(Body::Join {
         change: got.change,
         revision: got.revision,
+        alone,
     }) {
         Ok(_) => Ok(Joined::Joined),
         Err(StoreError::Invalid(Invalid::Duplicate)) => Ok(Joined::Already),
@@ -423,8 +426,15 @@ pub fn step(
                 }
             }
             State::Green => {
-                if let Some(now) = land_next(store, forge, source, config, repo, &c, &mut stepped)?
-                {
+                if let Some(now) = land_next(
+                    store,
+                    forge,
+                    source,
+                    config,
+                    &settings.trunk,
+                    &c,
+                    &mut stepped,
+                )? {
                     break now;
                 }
             }
@@ -512,18 +522,21 @@ fn red_alone(
 
 /// Lands a green candidate's next change, through its PR's merge at the head
 /// the candidate holds. The PR is read first, so a merge made since the last
-/// step is recorded rather than tried again; then the train's status goes on
-/// its head, which the repo's rules can require, and GitHub merges it or
-/// refuses. `Some` when the train waits on GitHub showing the merge.
+/// step is recorded rather than tried again. A candidate alone lands only
+/// while trunk is still its base: once trunk has moved it's dropped, to be
+/// built again on trunk as it is. Then the train's status goes on its head,
+/// which the repo's rules can require, and GitHub merges it or refuses.
+/// `Some` when the train waits on GitHub showing the merge.
 fn land_next(
     store: &mut Store,
     forge: &dyn Forge,
     source: &dyn Source,
     config: &Config,
-    repo: &Repo,
+    trunk: &str,
     c: &Candidate,
     stepped: &mut Stepped,
 ) -> Result<Option<Now>, TrainError> {
+    let repo = &c.repo;
     let next = &c.changes[c.landed.len()];
     let pr = pr_of(store, next.change);
     let head = head_of(store, next);
@@ -538,6 +551,19 @@ fn land_next(
         return Ok(None);
     }
     let full = repo.to_string();
+    if c.alone {
+        let at = forge
+            .branch(&full, trunk)?
+            .ok_or_else(|| TrainError::NoTrunk(trunk.to_owned()))?;
+        if at != c.base.as_str() {
+            store.record(Body::Verdict {
+                candidate: c.id,
+                verdict: Verdict::Dropped,
+            })?;
+            stepped.verdicts.push((c.id, Verdict::Dropped));
+            return Ok(None);
+        }
+    }
     let description = format!("landing with candidate {}", c.id);
     forge.mark(&full, head.as_str(), Mark::Landing, &description, None)?;
     match forge.land(&full, pr, head.as_str())? {

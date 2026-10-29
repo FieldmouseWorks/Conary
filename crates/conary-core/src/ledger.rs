@@ -303,7 +303,9 @@ impl Ledger {
                     return Err(Invalid::NotClosed);
                 }
             }
-            Body::Join { change, revision } => self.check_join(*change, *revision)?,
+            Body::Join {
+                change, revision, ..
+            } => self.check_join(*change, *revision)?,
             Body::Leave { change, .. } => self.check_leave(*change)?,
             Body::Candidate {
                 candidate,
@@ -319,7 +321,7 @@ impl Ledger {
                 result,
                 source,
             } => self.check_candidate_evidence(*candidate, *kind, check, *result, source)?,
-            Body::Verdict { candidate, .. } => self.check_verdict(*candidate)?,
+            Body::Verdict { candidate, verdict } => self.check_verdict(*candidate, *verdict)?,
             Body::Finish { candidate, .. } => self.check_finish(*candidate)?,
         }
         Ok(())
@@ -339,8 +341,11 @@ impl Ledger {
                 None
             }
             Body::Land {
-                change, revision, ..
-            } => self.land_through_train(*change, *revision),
+                change,
+                revision,
+                before,
+                ..
+            } => self.land_through_train(*change, *revision, before),
             _ => None,
         };
         let change = op.op.body.change();

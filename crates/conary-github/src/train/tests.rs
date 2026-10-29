@@ -301,7 +301,7 @@ fn store(dir: &tempfile::TempDir) -> Store {
 fn join_all(store: &mut Store, hub: &Hub, prs: &[u64]) {
     for pr in prs {
         assert_eq!(
-            join(store, hub, &config(), &repo(), *pr, &head(*pr)).unwrap(),
+            join(store, hub, &config(), &repo(), *pr, &head(*pr), false).unwrap(),
             Joined::Joined
         );
     }
@@ -347,12 +347,12 @@ fn a_ready_pr_joins_at_its_head_as_github_shows_it() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
     let hub = Hub::new(&[3]);
-    let mut again = || join(&mut store, &hub, &config(), &repo(), 3, &head(3)).unwrap();
+    let mut again = || join(&mut store, &hub, &config(), &repo(), 3, &head(3), false).unwrap();
     assert_eq!(again(), Joined::Joined);
     assert_eq!(again(), Joined::Already);
     // Settled at a head it's since moved on from.
     hub.pulls.borrow_mut().insert(3, head(4));
-    match join(&mut store, &hub, &config(), &repo(), 3, &head(3)) {
+    match join(&mut store, &hub, &config(), &repo(), 3, &head(3), false) {
         Err(TrainError::Moved { pr: 3, head: now }) => assert_eq!(now, head(4)),
         other => panic!("{other:?}"),
     }
@@ -532,6 +532,56 @@ fn trunk_that_moved_meanwhile_isnt_the_candidates_tree() {
 }
 
 #[test]
+fn a_pr_alone_lands_only_while_trunk_is_its_base_and_is_built_again_once_it_moved() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = store(&dir);
+    let mut hub = Hub::new(&[3, 4, 9]);
+    join_all(&mut store, &hub, &[3]);
+    assert_eq!(
+        join(&mut store, &hub, &config(), &repo(), 4, &head(4), true).unwrap(),
+        Joined::Joined
+    );
+    // The PR ahead of it goes without it.
+    let (first, prs) = gating(&step_once(&mut store, &hub));
+    assert_eq!(prs, [3]);
+    hub.ci(&commit_of(&store, first), &[("check / check", "success")]);
+    let stepped = step_once(&mut store, &hub);
+    assert_eq!(stepped.landed, [3]);
+    // Then it's built by itself, on trunk as that landing left it.
+    let (id, prs) = gating(&stepped);
+    assert_eq!(prs, [4]);
+    assert!(store.ledger().candidate(id).unwrap().alone);
+
+    // Something else reached trunk before it landed: its green is for a
+    // tree it won't make, so it's dropped and built again on trunk as it is.
+    let moved = "e".repeat(40);
+    hub.holds
+        .borrow_mut()
+        .insert(moved.clone(), [3, 9].map(head).to_vec());
+    hub.branches
+        .borrow_mut()
+        .insert("main".into(), moved.clone());
+    hub.ci(&commit_of(&store, id), &[("check / check", "success")]);
+    let stepped = step_once(&mut store, &hub);
+    assert_eq!(
+        stepped.verdicts,
+        [(id, Verdict::Green), (id, Verdict::Dropped)]
+    );
+    assert!(stepped.landed.is_empty());
+    assert!(!hub.marked().contains(&(head(4), Mark::Landing)));
+    let (again, prs) = gating(&stepped);
+    assert_eq!(prs, [4]);
+    let c = store.ledger().candidate(again).unwrap();
+    assert_eq!(c.base.to_string(), moved);
+
+    // On the trunk it was built on, it lands, on its own tree.
+    hub.ci(&commit_of(&store, again), &[("check / check", "success")]);
+    let stepped = step_once(&mut store, &hub);
+    assert_eq!((stepped.landed, stepped.finished), (vec![4], vec![again]));
+    assert!(store.ledger().candidate(again).unwrap().same_tree());
+}
+
+#[test]
 fn the_gate_is_green_only_once_every_check_passed_and_the_required_ones_reported() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
@@ -650,12 +700,12 @@ fn red_alone_leaves_with_the_trains_failure_and_stays_out_until_its_head_moves()
     );
     assert_eq!(stepped.now, Now::Idle);
     assert_eq!(
-        join(&mut store, &hub, &config(), &repo(), 3, &head(3)).unwrap(),
+        join(&mut store, &hub, &config(), &repo(), 3, &head(3), false).unwrap(),
         Joined::Held(Held::Red)
     );
     hub.pulls.borrow_mut().insert(3, head(33));
     assert_eq!(
-        join(&mut store, &hub, &config(), &repo(), 3, &head(33)).unwrap(),
+        join(&mut store, &hub, &config(), &repo(), 3, &head(33), false).unwrap(),
         Joined::Joined
     );
 }
@@ -717,7 +767,7 @@ fn a_refused_merge_leaves_and_the_changes_after_it_go_again() {
     assert_eq!(prs, [5]);
     assert_eq!(hub.held(&train_branch(next)), [3, 5].map(head));
     assert_eq!(
-        join(&mut store, &hub, &config(), &repo(), 4, &head(4)).unwrap(),
+        join(&mut store, &hub, &config(), &repo(), 4, &head(4), false).unwrap(),
         Joined::Held(Held::Refused)
     );
     // Once trunk moves, it can try again.
@@ -766,7 +816,7 @@ fn a_pr_that_wont_merge_is_held_until_what_it_was_after_moves() {
     join_all(&mut store, &hub, &[3, 4]);
     let (id, _) = gating(&step_once(&mut store, &hub));
     assert_eq!(
-        join(&mut store, &hub, &config(), &repo(), 4, &head(4)).unwrap(),
+        join(&mut store, &hub, &config(), &repo(), 4, &head(4), false).unwrap(),
         Joined::Held(Held::Conflict)
     );
     hub.ci(&commit_of(&store, id), &[("check / check", "success")]);

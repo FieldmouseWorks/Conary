@@ -82,7 +82,21 @@ impl Book {
 
     fn join(&mut self, change: ChangeId) {
         let revision = self.current(change);
-        self.ok(Body::Join { change, revision });
+        self.ok(Body::Join {
+            change,
+            revision,
+            alone: false,
+        });
+    }
+
+    /// Joins in a candidate of its own, as an R2 change does.
+    fn join_alone(&mut self, change: ChangeId) {
+        let revision = self.current(change);
+        self.ok(Body::Join {
+            change,
+            revision,
+            alone: true,
+        });
     }
 
     fn candidate_of(&self, plan: &Plan) -> Body {
@@ -117,11 +131,17 @@ impl Book {
     }
 
     fn land(&mut self, change: ChangeId, after: char) -> Result<(), Invalid> {
+        self.land_on(change, '0', after)
+    }
+
+    /// Lands the change onto trunk at `before`: `'0'` is every candidate's
+    /// base.
+    fn land_on(&mut self, change: ChangeId, before: char, after: char) -> Result<(), Invalid> {
         let revision = self.current(change);
         self.record(Body::Land {
             change,
             revision,
-            before: commit('0'),
+            before: commit(before),
             after: commit(after),
             by: Authority::Status {
                 login: "fieldmouseworks-steward[bot]".into(),
@@ -171,7 +191,8 @@ fn a_change_joins_once_and_only_at_its_head_now() {
     assert_eq!(
         b.record(Body::Join {
             change: a,
-            revision: unknown
+            revision: unknown,
+            alone: false
         }),
         Err(Invalid::UnknownRevision(unknown))
     );
@@ -179,7 +200,8 @@ fn a_change_joins_once_and_only_at_its_head_now() {
     assert_eq!(
         b.record(Body::Join {
             change: a,
-            revision: old
+            revision: old,
+            alone: false
         }),
         Err(Invalid::NotCurrent(old))
     );
@@ -187,7 +209,8 @@ fn a_change_joins_once_and_only_at_its_head_now() {
     assert_eq!(
         b.record(Body::Join {
             change: a,
-            revision: new
+            revision: new,
+            alone: false
         }),
         Err(Invalid::Duplicate)
     );
@@ -197,7 +220,8 @@ fn a_change_joins_once_and_only_at_its_head_now() {
     assert_eq!(
         b.record(Body::Join {
             change: closed,
-            revision: b.current(closed)
+            revision: b.current(closed),
+            alone: false
         }),
         Err(Invalid::Closed)
     );
@@ -229,7 +253,8 @@ fn a_head_pushed_back_to_an_older_one_takes_the_change_out_and_rejoins_at_the_ba
     assert_eq!(
         b.record(Body::Join {
             change: a,
-            revision: new
+            revision: new,
+            alone: false
         }),
         Err(Invalid::NotCurrent(new))
     );
@@ -634,6 +659,7 @@ fn the_trains_ops_read_back_as_written() {
         Body::Join {
             change: a,
             revision,
+            alone: false,
         },
         Body::Leave {
             change: a,
@@ -684,7 +710,8 @@ fn a_change_red_alone_joins_again_only_at_a_new_head() {
     assert_eq!(
         b.record(Body::Join {
             change: p,
-            revision
+            revision,
+            alone: false
         }),
         Err(Invalid::Held(Held::Red))
     );
@@ -696,7 +723,8 @@ fn a_change_red_alone_joins_again_only_at_a_new_head() {
     assert_eq!(
         b.record(Body::Join {
             change: p,
-            revision
+            revision,
+            alone: false
         }),
         Err(Invalid::Held(Held::Red))
     );
@@ -722,6 +750,7 @@ fn a_change_that_wont_merge_joins_again_once_what_it_was_after_changes() {
         let held = Body::Join {
             change: q,
             revision,
+            alone: false,
         };
         assert_eq!(b.record(held.clone()), Err(Invalid::Held(Held::Conflict)));
         (b, [p, q, r], held)
@@ -783,6 +812,7 @@ fn a_refused_change_joins_again_once_trunk_moves() {
     let again = Body::Join {
         change: changes[1],
         revision,
+        alone: false,
     };
     assert_eq!(b.record(again.clone()), Err(Invalid::Held(Held::Refused)));
     let next = b.build(8);
@@ -790,4 +820,103 @@ fn a_refused_change_joins_again_once_trunk_moves() {
     b.land(changes[2], 'e').unwrap();
     b.ok(again);
     assert_eq!(b.joined(), [changes[1]]);
+}
+
+#[test]
+fn a_change_that_joined_alone_rides_in_a_candidate_of_its_own() {
+    let mut b = Book::default();
+    let a = b.change(1, 'a');
+    let r = b.change(2, 'b');
+    let c = b.change(3, 'c');
+    b.join(a);
+    b.join_alone(r);
+    b.join(c);
+    // The changes before it go without it.
+    assert_eq!(b.ledger.next(&repo(), 8).unwrap().changes, [b.member(a)]);
+    let with = b.candidate_of(&Plan {
+        changes: vec![b.member(a), b.member(r)],
+        of: None,
+    });
+    assert_eq!(b.record(with), Err(Invalid::OutOfTurn));
+    let first = b.build(8);
+    assert!(!b.ledger.candidate(first).unwrap().alone);
+    b.verdict(first, Verdict::Green);
+    b.land(a, 'd').unwrap();
+
+    // Then it goes by itself, and the changes after it wait for it.
+    assert_eq!(b.ledger.next(&repo(), 8).unwrap().changes, [b.member(r)]);
+    let with = b.candidate_of(&Plan {
+        changes: vec![b.member(r), b.member(c)],
+        of: None,
+    });
+    assert_eq!(b.record(with), Err(Invalid::OutOfTurn));
+    let alone = b.build(8);
+    assert!(b.ledger.candidate(alone).unwrap().alone);
+    b.verdict(alone, Verdict::Green);
+    b.land(r, 'e').unwrap();
+    assert_eq!(b.ledger.next(&repo(), 8).unwrap().changes, [b.member(c)]);
+}
+
+#[test]
+fn an_alone_candidate_lands_through_the_train_only_onto_its_base() {
+    let mut b = Book::default();
+    // Trunk moved after it was built: that landing isn't the candidate's,
+    // and it stops there.
+    let r = b.change(1, 'a');
+    b.join_alone(r);
+    let id = b.build(8);
+    b.verdict(id, Verdict::Green);
+    b.land_on(r, '9', 'd').unwrap();
+    assert_eq!(b.landing(r), None);
+    assert_eq!(
+        b.ledger.candidate(id).unwrap().state,
+        State::Broken { by: r }
+    );
+
+    let s = b.change(2, 'b');
+    b.join_alone(s);
+    let id = b.build(8);
+    b.verdict(id, Verdict::Green);
+    b.land(s, 'e').unwrap();
+    assert_eq!(b.landing(s), Some(id));
+    assert_eq!(b.ledger.candidate(id).unwrap().state, State::Landed);
+}
+
+#[test]
+fn only_a_green_candidate_alone_can_be_dropped() {
+    let mut b = Book::default();
+    let a = b.change(1, 'a');
+    b.join(a);
+    let id = b.build(8);
+    b.verdict(id, Verdict::Green);
+    let dropped = Body::Verdict {
+        candidate: id,
+        verdict: Verdict::Dropped,
+    };
+    assert_eq!(b.record(dropped), Err(Invalid::NotGating));
+    b.land(a, 'd').unwrap();
+
+    let r = b.change(2, 'b');
+    b.join_alone(r);
+    let id = b.build(8);
+    b.verdict(id, Verdict::Green);
+    let red = Body::Verdict {
+        candidate: id,
+        verdict: Verdict::Red,
+    };
+    assert_eq!(b.record(red), Err(Invalid::NotGating));
+    // Trunk moved before it landed: it waits again, alone, to be built on
+    // trunk as it is now.
+    b.verdict(id, Verdict::Dropped);
+    assert_eq!(b.ledger.candidate(id).unwrap().state, State::Dropped);
+    assert_eq!(b.ledger.next(&repo(), 8).unwrap().changes, [b.member(r)]);
+    let train = b.ledger.train(&repo()).unwrap();
+    assert!(train.alone(r));
+
+    // Out of the train, it's alone no more.
+    b.ok(Body::Leave {
+        change: r,
+        why: Left::Unready,
+    });
+    assert!(!b.ledger.train(&repo()).unwrap().alone(r));
 }

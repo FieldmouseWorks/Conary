@@ -211,10 +211,14 @@ pub enum Body {
     /// The change joined its repo's train: everything but the gate says
     /// this revision can land, the PR's head as it is now. Joining at
     /// another revision than the one it's in at takes it out and puts it
-    /// at the back.
+    /// at the back. An `alone` change rides in a candidate of its own and
+    /// lands only while trunk is still that candidate's base: an R2 change's
+    /// way (design 4.4). Until classes are the ledger's, the steward says
+    /// which changes those are, from its one-way paths.
     Join {
         change: ChangeId,
         revision: RevisionId,
+        alone: bool,
     },
     /// The change left the train without landing.
     Leave { change: ChangeId, why: Left },

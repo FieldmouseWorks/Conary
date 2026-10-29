@@ -4,7 +4,7 @@
 //! head, close or landing move it, so the ledger, replayed, says where every
 //! change stands in its train and why.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use serde::Serialize;
 
@@ -56,6 +56,8 @@ pub struct Candidate {
     pub tree: TreeId,
     /// The red candidate it's a half of.
     pub of: Option<CandidateId>,
+    /// Its one change joined alone: it lands only while trunk is `base`.
+    pub alone: bool,
     pub at: i64,
     pub evidence: Vec<CandidateEvidence>,
     /// The changes that have landed through it, in order.
@@ -127,6 +129,8 @@ pub struct Train {
     splits: VecDeque<(CandidateId, Vec<ChangeId>)>,
     /// Every candidate the train has built, oldest first.
     candidates: Vec<CandidateId>,
+    /// The changes in it that joined alone.
+    alone: BTreeSet<ChangeId>,
     /// The changes that left and can't join again as they are.
     held: BTreeMap<ChangeId, Hold>,
     /// How often trunk has moved since the train began: every landing and
@@ -145,6 +149,11 @@ impl Train {
 
     pub fn candidates(&self) -> &[CandidateId] {
         &self.candidates
+    }
+
+    /// Whether `change` is in the train alone: in a candidate of its own.
+    pub fn alone(&self, change: ChangeId) -> bool {
+        self.alone.contains(&change)
     }
 
     /// Why `change` can't join again at `revision`, if it can't.
@@ -186,6 +195,7 @@ impl Train {
     /// Takes a change out of the train and out of any half it's in.
     fn remove(&mut self, change: ChangeId) {
         self.joined.retain(|m| m.change != change);
+        self.alone.remove(&change);
         for (_, half) in &mut self.splits {
             half.retain(|c| *c != change);
         }
@@ -212,7 +222,9 @@ impl Ledger {
     /// The candidate `repo`'s train builds next, of at most `size` changes,
     /// if it builds one now: none while one is in flight or nothing waits.
     /// A red candidate's halves go first, older half first, each whole and
-    /// alone; then the changes waiting, in the order they joined.
+    /// alone; then the changes waiting, in the order they joined. A change
+    /// that joined alone goes by itself, and the changes before it go
+    /// without it.
     pub fn next(&self, repo: &Repo, size: usize) -> Option<Plan> {
         let train = self.trains.get(repo)?;
         if train.in_flight.is_some() {
@@ -228,7 +240,16 @@ impl Ledger {
                 of: Some(*of),
             });
         }
-        let changes: Vec<Member> = train.joined.iter().take(size).cloned().collect();
+        let changes: Vec<Member> = match train.joined.first() {
+            Some(m) if train.alone(m.change) => vec![m.clone()],
+            _ => train
+                .joined
+                .iter()
+                .take_while(|m| !train.alone(m.change))
+                .take(size)
+                .cloned()
+                .collect(),
+        };
         (!changes.is_empty()).then_some(Plan { changes, of: None })
     }
 
@@ -320,9 +341,17 @@ impl Ledger {
         Ok(())
     }
 
-    pub(super) fn check_verdict(&self, candidate: CandidateId) -> Result<(), Invalid> {
-        match self.existing_candidate(candidate)?.state {
-            State::Gating => Ok(()),
+    pub(super) fn check_verdict(
+        &self,
+        candidate: CandidateId,
+        verdict: Verdict,
+    ) -> Result<(), Invalid> {
+        let c = self.existing_candidate(candidate)?;
+        match (&c.state, verdict) {
+            (State::Gating, _) => Ok(()),
+            // Green alone, but trunk moved before it landed: its gate was
+            // for a tree it won't make, so it's built again.
+            (State::Green, Verdict::Dropped) if c.alone => Ok(()),
             _ => Err(Invalid::NotGating),
         }
     }
@@ -338,7 +367,11 @@ impl Ledger {
     /// accepted. False for any other op.
     pub(super) fn apply_train(&mut self, body: &Body, at: i64) -> bool {
         match body {
-            Body::Join { change, revision } => {
+            Body::Join {
+                change,
+                revision,
+                alone,
+            } => {
                 let repo = self.changes[change].repo.clone();
                 let train = self.trains.entry(repo).or_default();
                 train.held.remove(change);
@@ -346,6 +379,9 @@ impl Ledger {
                     change: *change,
                     revision: *revision,
                 });
+                if *alone {
+                    train.alone.insert(*change);
+                }
             }
             Body::Leave { change, why } => {
                 let repo = self.changes[change].repo.clone();
@@ -393,6 +429,7 @@ impl Ledger {
                 }
                 train.in_flight = Some(*candidate);
                 train.candidates.push(*candidate);
+                let alone = changes.iter().any(|m| train.alone(m.change));
                 self.candidates.insert(
                     *candidate,
                     Candidate {
@@ -403,6 +440,7 @@ impl Ledger {
                         commit: commit.clone(),
                         tree: tree.clone(),
                         of: *of,
+                        alone,
                         at,
                         evidence: Vec::new(),
                         landed: Vec::new(),
@@ -508,12 +546,13 @@ impl Ledger {
 
     /// The candidate a change's landing came through, if it did: the green
     /// candidate in flight lands its changes in order, and this was the next
-    /// of them, at the revision it holds. Any other landing takes it out of
-    /// the train like a new head would.
+    /// of them, at the revision it holds, onto its base if it's alone. Any
+    /// other landing takes it out of the train like a new head would.
     pub(super) fn land_through_train(
         &mut self,
         change: ChangeId,
         revision: RevisionId,
+        before: &CommitId,
     ) -> Option<CandidateId> {
         let repo = self.changes.get(&change)?.repo.clone();
         let train = self.trains.get_mut(&repo)?;
@@ -522,6 +561,7 @@ impl Ledger {
             let c = &self.candidates[id];
             c.state == State::Green
                 && c.changes.get(c.landed.len()) == Some(&Member { change, revision })
+                && (!c.alone || *before == c.base)
         });
         let Some(id) = through else {
             self.unseat(change);
