@@ -320,24 +320,30 @@ so the wait is one run, however many are waiting.
   commit, then the head of each change waiting, merged onto it in the order
   they joined, up to the train's `size` (eight unless the repo says
   otherwise). It's built on GitHub, with the merges API on a branch
-  `conary/train/ID`, so nothing on the box runs git, and recorded with its
-  base, its changes and their revisions, and its commit. Its branch goes once
-  it has landed or split. A change that won't merge onto those before it
-  leaves the train, and its PR is told so, as a conflict is today.
+  `conary/build/ID`, so nothing on the box runs git. Once it's whole, the
+  train makes `conary/train/ID` at its commit and records the candidate: its
+  base, its changes and their revisions, and that commit. The repo's CI runs
+  the gate on the train branch's creation and on nothing else of the
+  train's: not the build branch's merges, and not a branch deleted, so a
+  candidate of eight is one run. Both branches go once it has landed or
+  split. A change that won't merge onto those before it leaves the train,
+  and its PR is told so, as a conflict is today.
 - **Its evidence.** The gate runs on the candidate's commit: the repo's CI,
-  on the push to its branch, and the steward's proof jobs. Evidence on a
+  on the train branch's creation, and the steward's proof jobs. Evidence on a
   candidate is about that commit's tree, and counts by its producer's
   attestation like any other (section 9), and only for the commit the train
   recorded: whatever else is pushed to its branch counts for nothing.
 - **Green.** Each change lands in order, through its own PR's merge at the
   head the candidate holds. Once the last has, trunk's tree is checked
   against the candidate's. If it's the same tree, the candidate's evidence
-  is each of those landings' evidence for the trunk they landed in, the case
-  rule 3 already gives R2. (Trunk's commits between them were trunk only for
-  as long as the next merge took.) If it isn't (trunk moved meanwhile, or GitHub merged a change
-  some other way), trunk's own CI is the landed tree's evidence, as it is
-  without a train. A merge GitHub refuses partway puts the changes after it
-  back in the train.
+  is the last landing's, for the tree trunk ended on: the case rule 3
+  already gives R2. The landings before it made trees no gate ran on (trunk
+  with A but not yet B), so none of it is theirs. They have no evidence of
+  their own, as no landing has until trunk's CI reaches it, and trunk's next
+  run is on the candidate's tree. If trunk's tree isn't the candidate's
+  (trunk moved meanwhile, or GitHub merged a change some other way), trunk's
+  own CI is the landed tree's evidence, as it is without a train. A merge
+  GitHub refuses partway puts the changes after it back in the train.
 - **Red.** The failed check gets the one second try every failed test gets.
   Red again, the candidate splits in two: its older half goes first, as a
   candidate of its own on trunk as it stands, then the rest, so a half
@@ -535,7 +541,7 @@ trust and undo across many small repos for one owner, which git serves fine.
 | M0 | Rust workspace, `rust = { };` in the flake, CI | `nix flake check` runs the workspace's tests in CI |
 | M1 | `cn` on remi, recording every PR event the steward sees, read-only, plus a backfill of merged PRs. `cn log`, `cn why`. Each write takes the ledger's writer lock | `cn why` on a line in burrow returns the PR, its intent, session and evidence |
 | M2 | conaryd serving the ledger over its socket, the notes ref and the MCP server | A cloud session answers `why` from a fresh clone |
-| M3 | The train (section 4.7) on remi, with the evidence verifier it counts candidates by | For a day of remi's PRs: fewer gate runs than PRs landed, each of them landed on its candidate's evidence, and trunk's own CI green after every train landing |
+| M3 | The train (section 4.7) on remi, with the evidence verifier it counts candidates by | For a day of remi's PRs: fewer gate runs than PRs landed, every candidate's last landing on its evidence, and trunk's own CI green after every candidate landed |
 | M4 | `undo` by change, session and time, through the landing flow | A deliberately bad session's changes in two repos are reverted by `undo --actor` and land with no person involved |
 | M5 | Class policy in Conary; the steward reads classes from conaryd | `oneWay` is gone from burrow's autoland config |
 | M6 | conaryd runs the landing flow, and R0 changes land before review, with review after landing | `steward.py` is deleted, and a week of PRs across every repo lands through conaryd, R0 ones with no wait on a reviewer |
