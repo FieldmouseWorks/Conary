@@ -13,7 +13,7 @@ use conary_core::ledger::Status;
 /// alone lands only while trunk is still its base: once trunk has moved
 /// it's dropped, to be built again on trunk as it is. A PR that targets
 /// another branch than trunk now is refused, since its merge would land
-/// there. Then the train's status goes on its head, which the repo's rules
+/// there, read again just before the merge. Then the train's status goes on its head, which the repo's rules
 /// can require, and GitHub merges it or refuses. A refused PR's status says
 /// so before the ledger takes it out, so a step stopped in between comes
 /// back to it. The last landing's head is retired first ([`retired`]).
@@ -74,18 +74,27 @@ pub(super) fn land_next(
             &landing_with(c.id),
             None,
         )?;
-        match forge.land(&full, pr, head.as_str())? {
-            PrMerge::Merged => {
-                stepped.landed.push(pr);
-                ingest::pull(store, source, config, repo, pr)?;
-                if moved(store) {
-                    return Ok(None);
+        // Its base read again with the mark up, for a retarget since the
+        // read above: GitHub's merge pins the head, not the base, so this is
+        // the last the train can look before the merge lands somewhere.
+        let base = source.pull(&full, pr)?.base.name;
+        if base != trunk {
+            let why = format!("it targets {base}, not {trunk}");
+            (why.clone(), why)
+        } else {
+            match forge.land(&full, pr, head.as_str())? {
+                PrMerge::Merged => {
+                    stepped.landed.push(pr);
+                    ingest::pull(store, source, config, repo, pr)?;
+                    if moved(store) {
+                        return Ok(None);
+                    }
+                    return Ok(Some(landing(store, c)));
                 }
-                return Ok(Some(landing(store, c)));
-            }
-            PrMerge::Refused(why) => {
-                let description = format!("GitHub refused its merge: {why}");
-                (why, description)
+                PrMerge::Refused(why) => {
+                    let description = format!("GitHub refused its merge: {why}");
+                    (why, description)
+                }
             }
         }
     };

@@ -70,6 +70,8 @@ struct Hub {
     unmarked: Cell<Option<Mark>>,
     /// Each PR's base branch, when it isn't the default one.
     targets: RefCell<HashMap<u64, String>>,
+    /// A PR retargeted the moment its head says it's landing.
+    retarget: RefCell<Option<(u64, String)>>,
     /// Every status the train posted.
     marks: RefCell<Vec<Posted>>,
 }
@@ -322,6 +324,11 @@ impl Forge for Hub {
     ) -> Result<(), ApiError> {
         if self.unmarked.get() == Some(mark) {
             return Err(ApiError::unavailable("statuses"));
+        }
+        if mark == Mark::Landing
+            && let Some((pr, base)) = self.retarget.take()
+        {
+            self.targets.borrow_mut().insert(pr, base);
         }
         self.marks.borrow_mut().push(Posted {
             sha: sha.into(),

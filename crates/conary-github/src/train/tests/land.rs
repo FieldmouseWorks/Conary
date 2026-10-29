@@ -214,6 +214,27 @@ fn a_pr_against_another_branch_never_lands_through_the_train() {
 }
 
 #[test]
+fn a_pr_retargeted_as_its_landing_starts_isnt_merged_elsewhere() {
+    // Retargeted after the step read it, as its head said it was landing:
+    // its base is read again before the merge, which would land on release.
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = store(&dir);
+    let mut hub = Hub::new(&[3]);
+    hub.branches
+        .borrow_mut()
+        .insert("release".into(), TRUNK.into());
+    join_all(&mut store, &hub, &[3]);
+    let (id, _) = gating(&step_once(&mut store, &hub));
+    hub.ci(&commit_of(&store, id), &[("check / check", "success")]);
+    hub.retarget.replace(Some((3, "release".into())));
+    let stepped = step_once(&mut store, &hub);
+    assert!(stepped.landed.is_empty() && hub.merged.borrow().is_empty());
+    let why = "it targets release, not main".to_owned();
+    assert_eq!(stepped.refused, [Refused { pr: 3, why }]);
+    assert_eq!(hub.latest(&head(3)), Some(Mark::Refused));
+}
+
+#[test]
 fn a_refused_pr_leaves_the_train_only_once_its_head_says_so() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);

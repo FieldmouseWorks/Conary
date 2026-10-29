@@ -348,34 +348,38 @@ so the wait is one run, however many are waiting.
   head first. A train repo's rules require that status, so nothing lands its
   PRs but the train. That status is a success only on the head being landed
   now: a head's goes to pending as it joins and as it leaves, and before a
-  green candidate is dropped, ahead of the ledger each time, and once it
-  has landed, before the next head is marked or another candidate built,
-  so a PR opened again at a landed head lands only through the train. While a
-  landing is open (its head says so, and its merge may be on trunk unseen),
-  nothing leaves the candidate and nothing drops it: a step settles that
-  first. That holds for a candidate stopped mid-landing too (a change of it
-  left, closed or has a new head): before another is built, a merge GitHub
-  shows is recorded through it, one it doesn't show yet is waited for, and
-  only a merge never made sends its head to pending. Trunk is the repo's default branch as GitHub says it is at each
-  step, the branch join and ingest mean too, and a candidate records the
-  branch it was built on: it lands only onto that, and only while it's
-  still trunk. A PR against another branch never joins, and one retargeted
-  since is refused before its merge. A refused PR's status and a
-  red one's go up before the ledger moves on, so a step stopped in between
-  comes back to them. A merge GitHub took but doesn't show yet (its answer
-  lost, or the PR read again too soon) is waited for, never made again: the
-  head's status says it was landing with this candidate, and a commit on
-  trunk since the candidate's base is linked to the PR. Once the last has landed, trunk's tree is
-  checked against the candidate's. If it's the same tree, the candidate's evidence
-  is the last landing's, for the tree trunk ended on: the case rule 3
-  already gives R2. The landings before it made trees no gate ran on (trunk
-  with A but not yet B), so none of it is theirs. They have no evidence of
-  their own, as no landing has until trunk's CI reaches it, and trunk's next
-  run is on the candidate's tree. If trunk's tree isn't the candidate's
-  (trunk moved meanwhile, or GitHub merged a change some other way), trunk's
-  own CI is the landed tree's evidence, as it is without a train. A merge
-  GitHub refuses partway puts the changes after it back in the train, and
-  the refused PR's train status becomes an error, so nothing else lands it.
+  green candidate is dropped, ahead of the ledger each time, and once it has
+  landed, before the next head is marked or another candidate built, so a PR
+  opened again at a landed head lands only through the train. While a landing
+  is open (its head says so, and its merge may be on trunk unseen), nothing
+  leaves the candidate and nothing drops it: a step settles that first. That
+  holds for a candidate stopped mid-landing too (a change of it left, closed
+  or has a new head): before another is built, a merge GitHub shows is
+  recorded through it, one it doesn't show yet is waited for, and only a merge
+  never made sends its head to pending. Trunk is the repo's default branch as
+  GitHub says it is at each step, the branch join and ingest mean too, and a
+  candidate records the branch it was built on: it lands only onto that, and
+  only while it's still trunk. A PR against another branch never joins, and
+  one retargeted since is refused before its merge, its base read again just
+  before it: GitHub's merge pins a PR's head, not its base, so a retarget
+  inside that one call is the gap left, and its merge lands under the other
+  branch's own rules, never on trunk, until conaryd lands by moving trunk
+  itself (M6). A refused PR's status and a red one's go up before the ledger
+  moves on, so a step stopped in between comes back to them. A merge GitHub
+  took but doesn't show yet (its answer lost, or the PR read again too soon)
+  is waited for, never made again: the head's status says it was landing with
+  this candidate, and a commit on trunk since the candidate's base is linked
+  to the PR. Once the last has landed, trunk's tree is checked against the
+  candidate's. If it's the same tree, the candidate's evidence is the last
+  landing's, for the tree trunk ended on: the case rule 3 already gives R2.
+  The landings before it made trees no gate ran on (trunk with A but not yet
+  B), so none of it is theirs. They have no evidence of their own, as no
+  landing has until trunk's CI reaches it, and trunk's next run is on the
+  candidate's tree. If trunk's tree isn't the candidate's (trunk moved
+  meanwhile, or GitHub merged a change some other way), trunk's own CI is the
+  landed tree's evidence, as it is without a train. A merge GitHub refuses
+  partway puts the changes after it back in the train, and the refused PR's
+  train status becomes an error, so nothing else lands it.
 - **Red.** The failed check gets the one second try every failed test gets.
   Red again, the candidate splits in two: its older half goes first, as a
   candidate of its own on trunk as it stands, then the rest, so a half
