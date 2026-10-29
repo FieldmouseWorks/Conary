@@ -729,6 +729,36 @@ fn sync_reads_a_closed_pr_again_when_it_changed_since() {
 }
 
 #[test]
+fn sync_reads_a_closed_pr_again_when_it_went_back_to_a_revision_it_had() {
+    let (_dir, mut store) = open();
+    let mut f = fake();
+    let current = |s: &Store| s.ledger().by_pr(&repo(), 9).unwrap().current;
+    let first = RevisionId::new(&sha(FORK), &sha(HEAD));
+    f.pulls = vec![pr(9, HEAD, "closed", false)];
+    sync(&mut store, &f, &config(), &repo()).unwrap();
+    f.pulls = vec![pr(9, HEAD2, "closed", false)];
+    sync(&mut store, &f, &config(), &repo()).unwrap();
+
+    // Reopened, pushed back to its first head and closed again between two
+    // syncs: that revision is current again, and nothing new is added.
+    f.pulls = vec![pr(9, HEAD, "closed", false)];
+    assert_eq!(sync(&mut store, &f, &config(), &repo()).unwrap().len(), 1);
+    assert_eq!(current(&store), Some(first));
+    assert_eq!(store.ledger().by_pr(&repo(), 9).unwrap().revisions.len(), 2);
+    assert!(sync(&mut store, &f, &config(), &repo()).unwrap().is_empty());
+
+    // Retargeted, then back onto main, the same way.
+    let mut on_dev = pr(9, HEAD, "closed", false);
+    on_dev["base"] = json!({"sha": DEV, "ref": "dev", "repo": {"default_branch": "main"}});
+    f.pulls = vec![on_dev];
+    sync(&mut store, &f, &config(), &repo()).unwrap();
+    f.pulls = vec![pr(9, HEAD, "closed", false)];
+    assert_eq!(sync(&mut store, &f, &config(), &repo()).unwrap().len(), 1);
+    assert_eq!(current(&store), Some(first));
+    assert!(sync(&mut store, &f, &config(), &repo()).unwrap().is_empty());
+}
+
+#[test]
 fn sync_reads_a_closed_pr_again_when_its_base_changed_and_asks_github_once() {
     let (_dir, mut store) = open();
     let mut f = fake();
