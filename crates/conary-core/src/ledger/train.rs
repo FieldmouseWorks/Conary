@@ -86,7 +86,8 @@ pub enum Held {
     /// It was red alone in a candidate: until its PR has a new head.
     Red,
     /// Its head wouldn't merge onto trunk and the changes ahead of it: until
-    /// it has a new head, trunk moves, or one of those changes leaves.
+    /// it has a new head, trunk moves, or one of those changes leaves (for
+    /// good: coming back doesn't hold it again).
     Conflict,
     /// GitHub refused its merge: until it has a new head or trunk moves.
     Refused,
@@ -159,13 +160,11 @@ impl Train {
     /// Why `change` can't join again at `revision`, if it can't.
     pub fn held(&self, change: ChangeId, revision: RevisionId) -> Option<Held> {
         let h = self.held.get(&change)?;
+        // A conflict's hold is gone once a change it was after leaves.
         let still = h.revision == revision
             && match h.why {
                 Held::Red => true,
-                Held::Refused => h.moves == self.moves,
-                Held::Conflict => {
-                    h.moves == self.moves && h.ahead.iter().all(|c| self.seat(*c).is_some())
-                }
+                Held::Refused | Held::Conflict => h.moves == self.moves,
             };
         still.then_some(h.why)
     }
@@ -192,10 +191,12 @@ impl Train {
         self.joined.iter().find(|m| m.change == change)
     }
 
-    /// Takes a change out of the train and out of any half it's in.
+    /// Takes a change out of the train and out of any half it's in, and lets
+    /// go of the conflicts held for being merged after it.
     fn remove(&mut self, change: ChangeId) {
         self.joined.retain(|m| m.change != change);
         self.alone.remove(&change);
+        self.held.retain(|_, h| !h.ahead.contains(&change));
         for (_, half) in &mut self.splits {
             half.retain(|c| *c != change);
         }
@@ -255,6 +256,18 @@ impl Ledger {
 
     fn train_of(&self, change: ChangeId) -> Option<&Train> {
         self.trains.get(&self.changes.get(&change)?.repo)
+    }
+
+    /// The changes `change` would be merged after: the ones that joined
+    /// before it. Every candidate holds its changes in that order.
+    fn ahead_of(&self, repo: &Repo, change: ChangeId) -> Vec<ChangeId> {
+        self.trains.get(repo).map_or_else(Vec::new, |t| {
+            t.joined
+                .iter()
+                .map(|m| m.change)
+                .take_while(|c| *c != change)
+                .collect()
+        })
     }
 
     pub(super) fn check_join(&self, change: ChangeId, revision: RevisionId) -> Result<(), Invalid> {
@@ -388,18 +401,7 @@ impl Ledger {
                 match why {
                     Left::Unready => {}
                     Left::Conflict => {
-                        // The changes it would have merged after: the ones
-                        // ahead of it in the candidate it was being built in.
-                        let ahead = self
-                            .next(&repo, usize::MAX)
-                            .map(|p| {
-                                p.changes
-                                    .iter()
-                                    .map(|m| m.change)
-                                    .take_while(|c| c != change)
-                                    .collect()
-                            })
-                            .unwrap_or_default();
+                        let ahead = self.ahead_of(&repo, *change);
                         let train = self.trains.get_mut(&repo).expect("check: it's in it");
                         train.hold(*change, Held::Conflict, ahead);
                     }

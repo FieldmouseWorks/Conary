@@ -792,6 +792,44 @@ fn a_change_that_wont_merge_joins_again_once_what_it_was_after_changes() {
     });
     b.ok(held);
     assert!(b.joined().contains(&q));
+
+    // p leaving and joining again at once, before q is seen to: q isn't
+    // after the same p any more, so it's let go for good.
+    let (mut b, [p, q, _], held) = setup();
+    b.ok(Body::Leave {
+        change: p,
+        why: Left::Unready,
+    });
+    b.join(p);
+    b.ok(held);
+    assert!(b.joined().contains(&q));
+}
+
+#[test]
+fn a_conflict_left_while_a_candidate_is_in_flight_is_after_the_changes_ahead_of_it_there() {
+    let mut b = Book::default();
+    let [p, q]: [ChangeId; 2] = std::array::from_fn(|i| b.change(i as u64 + 1, 'a'));
+    b.join(p);
+    b.join(q);
+    let id = b.build(8);
+    assert_eq!(b.changes(id), [p, q]);
+    b.ok(Body::Leave {
+        change: q,
+        why: Left::Conflict,
+    });
+    let revision = b.current(q);
+    let held = Body::Join {
+        change: q,
+        revision,
+        alone: false,
+    };
+    assert_eq!(b.record(held.clone()), Err(Invalid::Held(Held::Conflict)));
+    // p was ahead of it there: p leaving lets it go.
+    b.ok(Body::Leave {
+        change: p,
+        why: Left::Unready,
+    });
+    b.ok(held);
 }
 
 #[test]

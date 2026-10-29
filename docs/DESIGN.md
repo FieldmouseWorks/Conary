@@ -337,12 +337,20 @@ so the wait is one run, however many are waiting.
   gate is green once every check on that commit has passed and the ones the
   repo requires (its proof jobs, which post nothing until they run) are among
   them, and red once any check's latest result failed. No check at all is no
-  pass.
+  pass. A check is a run's name in its suite, whose latest run (by GitHub's
+  id) is its word, or a status's context, whose latest status is; a run and
+  a status of one name are two checks. Until Conary counts attested
+  evidence itself (#48's last slice), the gate's word is the candidate's CI,
+  read as the steward reads a PR's today: the steward's verdict, recorded as
+  such.
 - **Green.** Each change lands in order, through its own PR's merge at the
   head the candidate holds, with the train's status, `conary/train`, on that
   head first. A train repo's rules require that status, so nothing lands its
-  PRs but the train. Once the last has, trunk's tree is checked
-  against the candidate's. If it's the same tree, the candidate's evidence
+  PRs but the train. A PR against another branch than trunk never joins, and
+  one retargeted since is refused before its merge. A refused PR's status
+  and a red one's go up before the ledger moves on, so a step stopped in
+  between comes back to them. Once the last has landed, trunk's tree is
+  checked against the candidate's. If it's the same tree, the candidate's evidence
   is the last landing's, for the tree trunk ended on: the case rule 3
   already gives R2. The landings before it made trees no gate ran on (trunk
   with A but not yet B), so none of it is theirs. They have no evidence of

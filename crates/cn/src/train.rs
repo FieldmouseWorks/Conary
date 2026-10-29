@@ -7,7 +7,7 @@ use clap::Subcommand;
 use serde_json::{Value, json};
 
 use conary_core::ledger::{Candidate, Ledger};
-use conary_core::op::{Left, Repo, Verdict};
+use conary_core::op::{Left, Repo};
 use conary_core::{CandidateId, ChangeId};
 use conary_github::train::{self, Joined, Now, Settings, Stepped};
 
@@ -18,7 +18,8 @@ pub enum TrainCommand {
     /// Put a PR in its repo's train: everything but the gate says its head
     /// can land. Refused when the PR's head on GitHub is another; held when
     /// it left as it is (red alone, a conflict, a refused merge) and nothing
-    /// has moved since.
+    /// has moved since; left out when it targets another branch than the
+    /// default one.
     Join {
         /// The repository, as owner/name.
         repo: Repo,
@@ -69,15 +70,12 @@ pub enum TrainCommand {
         #[command(flatten)]
         github: GithubArgs,
     },
-    /// Record how a candidate's gate ended, when `step` can't tell: dropped
-    /// (it never finished, and its changes wait again), or green or red by
-    /// hand.
-    Verdict {
+    /// Drop a candidate whose gate won't finish, the stall watchdog's last
+    /// word: its changes wait again, as they joined.
+    Drop {
         /// The repository, as owner/name.
         repo: Repo,
         candidate: CandidateId,
-        #[arg(value_parser = spelled::<Verdict>)]
-        verdict: Verdict,
         #[command(flatten)]
         github: GithubArgs,
     },
@@ -103,7 +101,7 @@ pub fn run(cli: &Cli, command: &TrainCommand) -> Result<()> {
         TrainCommand::Join { repo, github, .. }
         | TrainCommand::Leave { repo, github, .. }
         | TrainCommand::Step { repo, github, .. }
-        | TrainCommand::Verdict { repo, github, .. } => (repo, github),
+        | TrainCommand::Drop { repo, github, .. } => (repo, github),
     };
     let (mut a, api, config) = write(cli, github)?;
     let store = &mut a.store;
@@ -123,6 +121,12 @@ pub fn run(cli: &Cli, command: &TrainCommand) -> Result<()> {
                 Joined::Held(why) => (
                     json!({"pr": pr, "joined": false, "held": word(why)}),
                     format!("{repo}#{pr}: held out of the train: {why}"),
+                ),
+                Joined::Elsewhere(base) => (
+                    json!({"pr": pr, "joined": false, "targets": base}),
+                    format!(
+                        "{repo}#{pr}: not in the train: it targets {base}, not the default branch"
+                    ),
                 ),
             })
             .map_err(Into::into),
@@ -150,13 +154,11 @@ pub fn run(cli: &Cli, command: &TrainCommand) -> Result<()> {
                 .map(|s| (stepped(&s), human_stepped(repo, &s)))
                 .map_err(Into::into)
         }
-        TrainCommand::Verdict {
-            candidate, verdict, ..
-        } => train::verdict(store, repo, *candidate, *verdict)
+        TrainCommand::Drop { candidate, .. } => train::drop_candidate(store, repo, *candidate)
             .map(|()| {
                 (
-                    json!({"candidate": candidate.to_string(), "verdict": word(verdict)}),
-                    format!("{repo}: candidate {candidate} {}", word(verdict)),
+                    json!({"candidate": candidate.to_string(), "verdict": "dropped"}),
+                    format!("{repo}: candidate {candidate} dropped"),
                 )
             })
             .map_err(Into::into),

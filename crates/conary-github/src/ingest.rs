@@ -130,10 +130,21 @@ pub fn pull(
     repo: &Repo,
     number: u64,
 ) -> Result<Ingested, IngestError> {
+    pulled(store, source, config, repo, number).map(|(got, _)| got)
+}
+
+/// [`pull`], and the PR as GitHub showed it.
+pub(crate) fn pulled(
+    store: &mut Store,
+    source: &dyn Source,
+    config: &Config,
+    repo: &Repo,
+    number: u64,
+) -> Result<(Ingested, PullRequest), IngestError> {
     config.check()?;
     let pr = source.pull(&repo.to_string(), number)?;
     let base = base(source, repo, &pr)?;
-    record(store, source, config, repo, &pr, base)
+    Ok((record(store, source, config, repo, &pr, base)?, pr))
 }
 
 /// Where the head branched from the base branch: the tree the PR's diff and

@@ -9,7 +9,7 @@
 //!
 //! [`Ledger::next`]: conary_core::Ledger::next
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
 
@@ -182,13 +182,16 @@ fn change_of(store: &Store, repo: &Repo, pr: u64) -> Result<ChangeId, TrainError
 }
 
 /// What joining did.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Joined {
     Joined,
     /// It was already in at that head.
     Already,
     /// It left as it is, and can't join again until something moves.
     Held(Held),
+    /// It targets this branch, not the repo's default one, which is the
+    /// train's.
+    Elsewhere(String),
 }
 
 /// Puts a PR in its repo's train at `head`, the head everything but the
@@ -204,7 +207,10 @@ pub fn join(
     head: &str,
     alone: bool,
 ) -> Result<Joined, TrainError> {
-    let got = ingest::pull(store, source, config, repo, pr)?;
+    let (got, pull) = ingest::pulled(store, source, config, repo, pr)?;
+    if !pull.targets_trunk() {
+        return Ok(Joined::Elsewhere(pull.base.name));
+    }
     let c = store
         .ledger()
         .change(got.change)
@@ -238,12 +244,13 @@ pub fn leave(store: &mut Store, repo: &Repo, pr: u64, why: Left) -> Result<bool,
     }
 }
 
-/// Records how the candidate's gate ended.
-pub fn verdict(
+/// Drops a candidate whose gate won't finish, the stall watchdog's last
+/// word: its changes wait again as they joined. Green and red are the gate's
+/// word, which [`step`] reads, never a hand's.
+pub fn drop_candidate(
     store: &mut Store,
     repo: &Repo,
     candidate: CandidateId,
-    verdict: Verdict,
 ) -> Result<(), TrainError> {
     let here = store
         .ledger()
@@ -252,7 +259,10 @@ pub fn verdict(
     if !here {
         return Err(TrainError::NotHere(candidate));
     }
-    store.record(Body::Verdict { candidate, verdict })?;
+    store.record(Body::Verdict {
+        candidate,
+        verdict: Verdict::Dropped,
+    })?;
     Ok(())
 }
 
@@ -412,16 +422,18 @@ pub fn step(
                         stepped.verdicts.push((id, Verdict::Green));
                     }
                     Gate::Red(failed) => {
-                        store.record(Body::Verdict {
-                            candidate: id,
-                            verdict: Verdict::Red,
-                        })?;
-                        stepped.verdicts.push((id, Verdict::Red));
+                        // The PR red alone is told first: once the verdict
+                        // is in, no step comes back to the candidate.
                         if let [alone] = c.changes.as_slice() {
                             stepped
                                 .red
                                 .push(red_alone(store, forge, repo, id, alone, failed)?);
                         }
+                        store.record(Body::Verdict {
+                            candidate: id,
+                            verdict: Verdict::Red,
+                        })?;
+                        stepped.verdicts.push((id, Verdict::Red));
                     }
                 }
             }
@@ -524,9 +536,12 @@ fn red_alone(
 /// the candidate holds. The PR is read first, so a merge made since the last
 /// step is recorded rather than tried again. A candidate alone lands only
 /// while trunk is still its base: once trunk has moved it's dropped, to be
-/// built again on trunk as it is. Then the train's status goes on its head,
-/// which the repo's rules can require, and GitHub merges it or refuses.
-/// `Some` when the train waits on GitHub showing the merge.
+/// built again on trunk as it is. A PR that targets another branch than
+/// trunk now is refused, since its merge would land there. Then the train's
+/// status goes on its head, which the repo's rules can require, and GitHub
+/// merges it or refuses. A refused PR's status says so before the ledger
+/// takes it out, so a step stopped in between comes back to it. `Some` when
+/// the train waits on GitHub showing the merge.
 fn land_next(
     store: &mut Store,
     forge: &dyn Forge,
@@ -546,7 +561,7 @@ fn land_next(
             .candidate(c.id)
             .is_none_or(|now| now.state != State::Green || now.landed.len() > c.landed.len())
     };
-    ingest::pull(store, source, config, repo, pr)?;
+    let (_, pull) = ingest::pulled(store, source, config, repo, pr)?;
     if moved(store) {
         return Ok(None);
     }
@@ -564,39 +579,45 @@ fn land_next(
             return Ok(None);
         }
     }
-    let description = format!("landing with candidate {}", c.id);
-    forge.mark(&full, head.as_str(), Mark::Landing, &description, None)?;
-    match forge.land(&full, pr, head.as_str())? {
-        PrMerge::Merged => {
-            stepped.landed.push(pr);
-            ingest::pull(store, source, config, repo, pr)?;
-            if moved(store) {
-                return Ok(None);
+    let (why, description) = if pull.base.name != trunk {
+        let why = format!("it targets {}, not {trunk}", pull.base.name);
+        (why.clone(), why)
+    } else {
+        let description = format!("landing with candidate {}", c.id);
+        forge.mark(&full, head.as_str(), Mark::Landing, &description, None)?;
+        match forge.land(&full, pr, head.as_str())? {
+            PrMerge::Merged => {
+                stepped.landed.push(pr);
+                ingest::pull(store, source, config, repo, pr)?;
+                if moved(store) {
+                    return Ok(None);
+                }
+                return Ok(Some(Now::Landing {
+                    candidate: c.id,
+                    landings: c.changes[c.landed.len()..]
+                        .iter()
+                        .map(|m| Landing {
+                            pr: pr_of(store, m.change),
+                            change: m.change,
+                            head: head_of(store, m),
+                        })
+                        .collect(),
+                }));
             }
-            Ok(Some(Now::Landing {
-                candidate: c.id,
-                landings: c.changes[c.landed.len()..]
-                    .iter()
-                    .map(|m| Landing {
-                        pr: pr_of(store, m.change),
-                        change: m.change,
-                        head: head_of(store, m),
-                    })
-                    .collect(),
-            }))
+            PrMerge::Refused(why) => {
+                let description = format!("GitHub refused its merge: {why}");
+                (why, description)
+            }
         }
-        PrMerge::Refused(why) => {
-            store.record(Body::Leave {
-                change: next.change,
-                why: Left::Refused,
-            })?;
-            // Its head said it was landing; it isn't, and nothing else may.
-            let description = format!("GitHub refused its merge: {why}");
-            forge.mark(&full, head.as_str(), Mark::Refused, &description, None)?;
-            stepped.refused.push(Refused { pr, why });
-            Ok(None)
-        }
-    }
+    };
+    // Its head may say it's landing; it isn't, and nothing else may.
+    forge.mark(&full, head.as_str(), Mark::Refused, &description, None)?;
+    store.record(Body::Leave {
+        change: next.change,
+        why: Left::Refused,
+    })?;
+    stepped.refused.push(Refused { pr, why });
+    Ok(None)
 }
 
 /// Records the tree trunk ended on for each candidate whose landings all
@@ -757,36 +778,40 @@ fn gate(
         )?;
     }
 
-    // Each check's latest: a rerun replaces the run before it, and a status
-    // the one before it in its context. A run not started yet is the newest.
-    let mut latest: BTreeMap<&str, &CheckRun> = BTreeMap::new();
-    let newness = |r: &CheckRun| (r.started_at.is_none(), r.started_at.clone());
+    // Each check's latest word. A run gives way only to a rerun of it: a
+    // later run (GitHub's ids grow) with its name in its suite, so runs of
+    // one name from two workflows or Apps each count. A status gives way to
+    // a later one in its context, and statuses and runs never stand in for
+    // each other.
+    let mut latest: BTreeMap<(Option<u64>, &str), &CheckRun> = BTreeMap::new();
     for run in &runs {
-        let newer = latest
-            .get(run.name.as_str())
-            .is_none_or(|old| newness(run) >= newness(old));
-        if newer {
-            latest.insert(&run.name, run);
+        let check = (run.check_suite.as_ref().map(|s| s.id), run.name.as_str());
+        if latest.get(&check).is_none_or(|old| run.id > old.id) {
+            latest.insert(check, run);
         }
     }
-    let mut said: BTreeMap<&str, Said> = latest
-        .into_iter()
-        .map(|(name, run)| {
+    let mut said: Vec<(&str, Said)> = latest
+        .into_values()
+        .map(|run| {
             let s = match (run.status.as_str(), run.conclusion.as_deref()) {
                 ("completed", Some("success" | "neutral" | "skipped")) => Said::Pass,
                 ("completed", _) => Said::Fail(run.html_url.clone()),
                 _ => Said::Pending,
             };
-            (name, s)
+            (run.name.as_str(), s)
         })
         .collect();
+    // Newest first from GitHub: a context's first status is its latest.
+    let mut contexts = BTreeSet::new();
     for status in &statuses {
-        said.entry(&status.context)
-            .or_insert_with(|| match status.state.as_str() {
+        if contexts.insert(status.context.as_str()) {
+            let s = match status.state.as_str() {
                 "success" => Said::Pass,
                 "pending" => Said::Pending,
                 _ => Said::Fail(status.target_url.clone()),
-            });
+            };
+            said.push((&status.context, s));
+        }
     }
     let failed: Vec<Failed> = said
         .iter()
@@ -810,7 +835,7 @@ fn gate(
         settings
             .require
             .iter()
-            .filter(|r| !said.contains_key(r.as_str()))
+            .filter(|r| !said.iter().any(|(check, _)| check == r))
             .cloned(),
     );
     Ok(if said.is_empty() || !waiting.is_empty() {

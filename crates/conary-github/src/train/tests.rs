@@ -61,6 +61,10 @@ struct Hub {
     refuse: HashMap<u64, String>,
     /// GitHub not showing the merges it made yet.
     lagging: Cell<bool>,
+    /// Statuses of this kind GitHub doesn't take.
+    unmarked: Cell<Option<Mark>>,
+    /// Each PR's base branch, when it isn't main.
+    targets: RefCell<HashMap<u64, String>>,
     /// Every status the train posted.
     marks: RefCell<Vec<Posted>>,
 }
@@ -111,7 +115,7 @@ impl Hub {
             .iter()
             .enumerate()
             .map(|(i, (name, conclusion))| {
-                json!({"name": name, "status": "completed", "conclusion": conclusion,
+                json!({"id": i + 1, "name": name, "status": "completed", "conclusion": conclusion,
                        "html_url": format!("https://github.com/FieldmouseWorks/remi/actions/runs/{i}"),
                        "started_at": format!("2026-10-29T11:0{i}:00Z")})
             })
@@ -160,7 +164,8 @@ impl Source for Hub {
             "user": {"login": "TusanHomichi", "type": "User"},
             "merged_at": merged.as_ref().map(|_| "2026-10-29T12:00:00Z"),
             "merge_commit_sha": merged,
-            "base": {"sha": TRUNK, "ref": "main", "repo": {"default_branch": "main"}},
+            "base": {"sha": TRUNK, "ref": self.targets.borrow().get(&number).map_or("main", String::as_str),
+                     "repo": {"default_branch": "main"}},
             "head": {"sha": head, "ref": "claude/x"},
         })))
     }
@@ -260,6 +265,9 @@ impl Forge for Hub {
         description: &str,
         url: Option<&str>,
     ) -> Result<(), ApiError> {
+        if self.unmarked.get() == Some(mark) {
+            return Err(ApiError::unavailable("statuses"));
+        }
         self.marks.borrow_mut().push(Posted {
             sha: sha.into(),
             mark,
@@ -341,6 +349,8 @@ fn waiting(stepped: &Stepped) -> Vec<String> {
         other => panic!("not gating: {other:?}"),
     }
 }
+
+mod land;
 
 #[test]
 fn a_ready_pr_joins_at_its_head_as_github_shows_it() {
@@ -432,9 +442,9 @@ fn the_gates_results_are_recorded_for_the_candidates_commit_alone() {
     hub.checks.insert(
         commit.clone(),
         json!([
-            {"name": "check / check", "status": "completed", "conclusion": "success",
+            {"id": 2, "name": "check / check", "status": "completed", "conclusion": "success",
              "html_url": "https://github.com/FieldmouseWorks/remi/actions/runs/1/job/1"},
-            {"name": "slow", "status": "in_progress", "conclusion": null, "html_url": null},
+            {"id": 3, "name": "slow", "status": "in_progress", "conclusion": null, "html_url": null},
         ]),
     );
     hub.statuses.insert(
@@ -448,7 +458,7 @@ fn the_gates_results_are_recorded_for_the_candidates_commit_alone() {
     let pushed = format!("{:0>40}", "dead");
     hub.checks.insert(
         pushed.clone(),
-        json!([{"name": "check / check", "status": "completed", "conclusion": "failure", "html_url": null}]),
+        json!([{"id": 4, "name": "check / check", "status": "completed", "conclusion": "failure", "html_url": null}]),
     );
     hub.branches.borrow_mut().insert(train_branch(id), pushed);
     step_once(&mut store, &hub);
@@ -481,107 +491,6 @@ fn a_train_branch_lost_before_it_was_made_is_made_at_the_recorded_commit() {
 }
 
 #[test]
-fn green_lands_in_order_with_the_trains_status_then_finishes_on_trunks_tree() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut store = store(&dir);
-    let mut hub = Hub::new(&[3, 4, 6]);
-    join_all(&mut store, &hub, &[3, 4]);
-    let (id, _) = gating(&step_once(&mut store, &hub));
-    hub.ci(&commit_of(&store, id), &[("check / check", "success")]);
-    // One that joins now waits for the next candidate.
-    join_all(&mut store, &hub, &[6]);
-    let stepped = step_once(&mut store, &hub);
-    assert_eq!(stepped.verdicts, [(id, Verdict::Green)]);
-    assert_eq!(stepped.landed, [3, 4]);
-    // Each head got the train's word before its merge, in order.
-    assert_eq!(
-        hub.marked(),
-        [(head(3), Mark::Landing), (head(4), Mark::Landing)]
-    );
-    assert_eq!(hub.held("main"), [3, 4].map(head));
-    for pr in [3, 4] {
-        let c = store.ledger().by_pr(&repo(), pr).unwrap();
-        let landing = c.landing.as_ref().unwrap();
-        assert_eq!(landing.candidate, Some(id));
-        assert_eq!(landing.after.to_string(), hub.merged.borrow()[&pr]);
-    }
-    assert_eq!(stepped.finished, [id]);
-    assert!(store.ledger().candidate(id).unwrap().same_tree());
-    // Its branch is gone, and the next candidate is the one that waited.
-    let (next, prs) = gating(&stepped);
-    assert_eq!(prs, [6]);
-    assert_eq!(hub.names(), [train_branch(next), "main".into()]);
-    assert_eq!(hub.held(&train_branch(next)), [3, 4, 6].map(head));
-}
-
-#[test]
-fn trunk_that_moved_meanwhile_isnt_the_candidates_tree() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut store = store(&dir);
-    let mut hub = Hub::new(&[3, 9]);
-    join_all(&mut store, &hub, &[3]);
-    let (id, _) = gating(&step_once(&mut store, &hub));
-    // Something else reached trunk first.
-    let moved = "e".repeat(40);
-    hub.holds.borrow_mut().insert(moved.clone(), vec![head(9)]);
-    hub.branches.borrow_mut().insert("main".into(), moved);
-    hub.ci(&commit_of(&store, id), &[("check / check", "success")]);
-    let stepped = step_once(&mut store, &hub);
-    assert_eq!((stepped.landed, stepped.finished), (vec![3], vec![id]));
-    assert!(!store.ledger().candidate(id).unwrap().same_tree());
-}
-
-#[test]
-fn a_pr_alone_lands_only_while_trunk_is_its_base_and_is_built_again_once_it_moved() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut store = store(&dir);
-    let mut hub = Hub::new(&[3, 4, 9]);
-    join_all(&mut store, &hub, &[3]);
-    assert_eq!(
-        join(&mut store, &hub, &config(), &repo(), 4, &head(4), true).unwrap(),
-        Joined::Joined
-    );
-    // The PR ahead of it goes without it.
-    let (first, prs) = gating(&step_once(&mut store, &hub));
-    assert_eq!(prs, [3]);
-    hub.ci(&commit_of(&store, first), &[("check / check", "success")]);
-    let stepped = step_once(&mut store, &hub);
-    assert_eq!(stepped.landed, [3]);
-    // Then it's built by itself, on trunk as that landing left it.
-    let (id, prs) = gating(&stepped);
-    assert_eq!(prs, [4]);
-    assert!(store.ledger().candidate(id).unwrap().alone);
-
-    // Something else reached trunk before it landed: its green is for a
-    // tree it won't make, so it's dropped and built again on trunk as it is.
-    let moved = "e".repeat(40);
-    hub.holds
-        .borrow_mut()
-        .insert(moved.clone(), [3, 9].map(head).to_vec());
-    hub.branches
-        .borrow_mut()
-        .insert("main".into(), moved.clone());
-    hub.ci(&commit_of(&store, id), &[("check / check", "success")]);
-    let stepped = step_once(&mut store, &hub);
-    assert_eq!(
-        stepped.verdicts,
-        [(id, Verdict::Green), (id, Verdict::Dropped)]
-    );
-    assert!(stepped.landed.is_empty());
-    assert!(!hub.marked().contains(&(head(4), Mark::Landing)));
-    let (again, prs) = gating(&stepped);
-    assert_eq!(prs, [4]);
-    let c = store.ledger().candidate(again).unwrap();
-    assert_eq!(c.base.to_string(), moved);
-
-    // On the trunk it was built on, it lands, on its own tree.
-    hub.ci(&commit_of(&store, again), &[("check / check", "success")]);
-    let stepped = step_once(&mut store, &hub);
-    assert_eq!((stepped.landed, stepped.finished), (vec![4], vec![again]));
-    assert!(store.ledger().candidate(again).unwrap().same_tree());
-}
-
-#[test]
 fn the_gate_is_green_only_once_every_check_passed_and_the_required_ones_reported() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
@@ -604,9 +513,9 @@ fn the_gate_is_green_only_once_every_check_passed_and_the_required_ones_reported
     hub.checks.insert(
         commit.clone(),
         json!([
-            {"name": "check / check", "status": "completed", "conclusion": "success",
+            {"id": 5, "name": "check / check", "status": "completed", "conclusion": "success",
              "html_url": null, "started_at": "2026-10-29T11:00:00Z"},
-            {"name": "slow", "status": "in_progress", "conclusion": null,
+            {"id": 6, "name": "slow", "status": "in_progress", "conclusion": null,
              "html_url": null, "started_at": "2026-10-29T11:00:00Z"},
         ]),
     );
@@ -639,29 +548,59 @@ fn the_gate_is_green_only_once_every_check_passed_and_the_required_ones_reported
 
 #[test]
 fn each_checks_latest_run_is_its_word() {
-    // A rerun's runs come in no order the train can count on.
-    let rerun = |first: &str, then: &str, newest_first: bool| {
+    // The verdict on a candidate whose commit has these runs and statuses,
+    // or none while it waits.
+    let gate = |runs: Vec<Value>, statuses: Value| {
         let dir = tempfile::tempdir().unwrap();
         let mut store = store(&dir);
         let mut hub = Hub::new(&[3]);
         join_all(&mut store, &hub, &[3]);
         let (id, _) = gating(&step_once(&mut store, &hub));
-        let mut runs = vec![
-            json!({"name": "check", "status": "completed", "conclusion": first,
-                   "html_url": null, "started_at": "2026-10-29T11:00:00Z"}),
-            json!({"name": "check", "status": "completed", "conclusion": then,
-                   "html_url": null, "started_at": "2026-10-29T11:30:00Z"}),
-        ];
-        if newest_first {
-            runs.reverse();
-        }
-        hub.checks.insert(commit_of(&store, id), Value::Array(runs));
-        step_once(&mut store, &hub).verdicts[0].1
+        let commit = commit_of(&store, id);
+        hub.checks.insert(commit.clone(), Value::Array(runs));
+        hub.statuses.insert(commit, statuses);
+        step_once(&mut store, &hub).verdicts.first().map(|v| v.1)
     };
-    for newest_first in [true, false] {
-        assert_eq!(rerun("failure", "success", newest_first), Verdict::Green);
-        assert_eq!(rerun("success", "failure", newest_first), Verdict::Red);
+    // A run of `check` in a suite: done with `conclusion`, else queued.
+    let run = |id: u64, suite: u64, conclusion: Option<&str>, started: Option<&str>| {
+        json!({"id": id, "name": "check", "check_suite": {"id": suite}, "html_url": null,
+               "status": if conclusion.is_some() { "completed" } else { "queued" },
+               "conclusion": conclusion, "started_at": started})
+    };
+    let at = Some("2026-10-29T11:00:00Z");
+
+    // A rerun's runs come in no order the train can count on: the later
+    // run is the check's word.
+    for (first, then, verdict) in [
+        ("failure", "success", Verdict::Green),
+        ("success", "failure", Verdict::Red),
+    ] {
+        let mut runs = vec![run(7, 1, Some(first), at), run(8, 1, Some(then), at)];
+        assert_eq!(gate(runs.clone(), json!([])), Some(verdict));
+        runs.reverse();
+        assert_eq!(gate(runs, json!([])), Some(verdict));
     }
+    // Whether it started says nothing about which is later: an earlier
+    // skipped run that never started doesn't hide the rerun that failed,
+    // and a rerun still queued keeps the gate waiting.
+    let skipped_then_failed = vec![
+        run(7, 1, Some("skipped"), None),
+        run(8, 1, Some("failure"), at),
+    ];
+    assert_eq!(gate(skipped_then_failed, json!([])), Some(Verdict::Red));
+    let failed_then_queued = vec![run(7, 1, Some("failure"), at), run(8, 1, None, None)];
+    assert_eq!(gate(failed_then_queued, json!([])), None);
+    // Runs of one name in two suites (two workflows, or two Apps) are two
+    // checks, and a status and a run of one name are too.
+    for (a, b) in [("success", "failure"), ("failure", "success")] {
+        let runs = vec![run(7, 1, Some(a), at), run(8, 2, Some(b), at)];
+        assert_eq!(gate(runs, json!([])), Some(Verdict::Red));
+    }
+    let failed = json!([{"context": "check", "state": "failure", "target_url": null}]);
+    assert_eq!(
+        gate(vec![run(7, 1, Some("success"), at)], failed),
+        Some(Verdict::Red)
+    );
 }
 
 #[test]
@@ -727,84 +666,20 @@ fn red_with_others_splits_and_builds_the_older_half_in_the_same_step() {
 }
 
 #[test]
-fn a_refused_merge_leaves_and_the_changes_after_it_go_again() {
+fn red_alone_is_recorded_only_once_its_head_has_the_failure() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let mut hub = Hub::new(&[3, 4, 5]);
-    hub.refuse.insert(
-        4,
-        "Required status check \"review-settled\" is expected.".into(),
-    );
-    join_all(&mut store, &hub, &[3, 4, 5]);
+    let mut hub = Hub::new(&[3]);
+    join_all(&mut store, &hub, &[3]);
     let (id, _) = gating(&step_once(&mut store, &hub));
-    hub.ci(&commit_of(&store, id), &[("check / check", "success")]);
+    hub.ci(&commit_of(&store, id), &[("check / check", "failure")]);
+    hub.unmarked.set(Some(Mark::Red));
+    assert!(step(&mut store, &hub, &hub, &config(), &repo(), &settings()).is_err());
+    assert_eq!(store.ledger().candidate(id).unwrap().state, State::Gating);
+    hub.unmarked.set(None);
     let stepped = step_once(&mut store, &hub);
-    assert_eq!(stepped.landed, [3]);
-    assert_eq!(
-        stepped.refused,
-        [Refused {
-            pr: 4,
-            why: "Required status check \"review-settled\" is expected.".into(),
-        }]
-    );
-    assert_eq!(
-        store.ledger().candidate(id).unwrap().state,
-        State::Broken {
-            by: store.ledger().by_pr(&repo(), 4).unwrap().id
-        }
-    );
-    // Its head said it was landing, and says now that it isn't.
-    assert_eq!(
-        hub.marked(),
-        [
-            (head(3), Mark::Landing),
-            (head(4), Mark::Landing),
-            (head(4), Mark::Refused)
-        ]
-    );
-    // 5 is built again, on trunk with 3, without 4.
-    let (next, prs) = gating(&stepped);
-    assert_eq!(prs, [5]);
-    assert_eq!(hub.held(&train_branch(next)), [3, 5].map(head));
-    assert_eq!(
-        join(&mut store, &hub, &config(), &repo(), 4, &head(4), false).unwrap(),
-        Joined::Held(Held::Refused)
-    );
-    // Once trunk moves, it can try again.
-    hub.ci(&commit_of(&store, next), &[("check / check", "success")]);
-    hub.refuse.clear();
-    assert_eq!(step_once(&mut store, &hub).landed, [5]);
-    join_all(&mut store, &hub, &[4]);
-}
-
-#[test]
-fn a_merge_github_hasnt_shown_yet_waits_for_the_next_step() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut store = store(&dir);
-    let mut hub = Hub::new(&[3, 4]);
-    join_all(&mut store, &hub, &[3, 4]);
-    let (id, _) = gating(&step_once(&mut store, &hub));
-    hub.ci(&commit_of(&store, id), &[("check / check", "success")]);
-    hub.lagging.set(true);
-    let stepped = step_once(&mut store, &hub);
-    assert_eq!(stepped.landed, [3]);
-    match &stepped.now {
-        Now::Landing {
-            candidate,
-            landings,
-        } => {
-            assert_eq!(*candidate, id);
-            let prs: Vec<u64> = landings.iter().map(|l| l.pr).collect();
-            assert_eq!(prs, [3, 4]);
-        }
-        other => panic!("{other:?}"),
-    }
-    // Its merge's event: the merge is read, never made again.
-    hub.lagging.set(false);
-    let stepped = step_once(&mut store, &hub);
-    assert_eq!(stepped.landed, [4]);
-    assert_eq!(stepped.finished, [id]);
-    assert_eq!(hub.held("main"), [3, 4].map(head));
+    assert_eq!(stepped.verdicts, [(id, Verdict::Red)]);
+    assert_eq!(hub.marked(), [(head(3), Mark::Red)]);
 }
 
 #[test]
@@ -843,7 +718,12 @@ fn red_splits_and_the_older_half_is_built_on_trunk_as_it_is() {
     let hub = Hub::new(&[3, 4, 5, 6]);
     join_all(&mut store, &hub, &[3, 4, 5, 6]);
     let (whole, _) = gating(&step_once(&mut store, &hub));
-    verdict(&mut store, &repo(), whole, Verdict::Red).unwrap();
+    store
+        .record(Body::Verdict {
+            candidate: whole,
+            verdict: Verdict::Red,
+        })
+        .unwrap();
     let stepped = step_once(&mut store, &hub);
     let (older, prs) = gating(&stepped);
     assert_eq!(prs, [3, 4]);
@@ -875,7 +755,7 @@ fn stray_branches_go_and_only_the_trains_own() {
 }
 
 #[test]
-fn a_verdict_is_only_for_its_own_repos_candidate() {
+fn a_candidate_is_dropped_only_in_its_own_repo_and_only_once() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
     let hub = Hub::new(&[3]);
@@ -883,14 +763,15 @@ fn a_verdict_is_only_for_its_own_repos_candidate() {
     let (id, _) = gating(&step_once(&mut store, &hub));
     let other: Repo = "FieldmouseWorks/burrow".parse().unwrap();
     assert!(matches!(
-        verdict(&mut store, &other, id, Verdict::Green),
+        drop_candidate(&mut store, &other, id),
         Err(TrainError::NotHere(_))
     ));
     let unknown = CandidateId::new().unwrap();
     assert!(matches!(
-        verdict(&mut store, &repo(), unknown, Verdict::Green),
+        drop_candidate(&mut store, &repo(), unknown),
         Err(TrainError::NotHere(_))
     ));
-    verdict(&mut store, &repo(), id, Verdict::Dropped).unwrap();
-    assert!(verdict(&mut store, &repo(), id, Verdict::Green).is_err());
+    drop_candidate(&mut store, &repo(), id).unwrap();
+    assert!(drop_candidate(&mut store, &repo(), id).is_err());
+    assert_eq!(joined(&store), [3]);
 }

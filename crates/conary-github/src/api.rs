@@ -61,11 +61,21 @@ impl PullRequest {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct CheckRun {
+    /// GitHub's id for the run. A rerun is a new run, with a higher id.
+    pub id: u64,
     pub name: String,
     pub status: String,
     pub conclusion: Option<String>,
     pub html_url: Option<String>,
     pub started_at: Option<String>,
+    /// The suite it ran in: one workflow run's, under GitHub Actions. A
+    /// rerun is in the suite of the run it reruns.
+    pub check_suite: Option<CheckSuite>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct CheckSuite {
+    pub id: u64,
 }
 
 #[derive(Debug, Deserialize)]
