@@ -333,28 +333,76 @@ so the wait is one run, however many are waiting.
   on the train branch's creation, and the steward's proof jobs. Evidence on a
   candidate is about that commit's tree, and counts by its producer's
   attestation like any other (section 9), and only for the commit the train
-  recorded: whatever else is pushed to its branch counts for nothing.
+  recorded: whatever else is pushed to its branch counts for nothing. The
+  gate is green once every check on that commit has passed and the ones the
+  repo requires (its proof jobs, which post nothing until they run) are among
+  them, and red once any check's latest result failed. No check at all is no
+  pass. A check is a run's name in its suite, whose latest run (by GitHub's
+  id) is its word, or a status's context, whose latest status is; a run and
+  a status of one name are two checks. Until Conary counts attested
+  evidence itself (#48's last slice), the gate's word is the candidate's CI,
+  read as the steward reads a PR's today: the steward's verdict, recorded as
+  such.
 - **Green.** Each change lands in order, through its own PR's merge at the
-  head the candidate holds. Once the last has, trunk's tree is checked
-  against the candidate's. If it's the same tree, the candidate's evidence
-  is the last landing's, for the tree trunk ended on: the case rule 3
-  already gives R2. The landings before it made trees no gate ran on (trunk
-  with A but not yet B), so none of it is theirs. They have no evidence of
-  their own, as no landing has until trunk's CI reaches it, and trunk's next
-  run is on the candidate's tree. If trunk's tree isn't the candidate's
-  (trunk moved meanwhile, or GitHub merged a change some other way), trunk's
-  own CI is the landed tree's evidence, as it is without a train. A merge
-  GitHub refuses partway puts the changes after it back in the train.
+  head the candidate holds, with the train's status, `conary/train`, on that
+  head first. A train repo's rules require that status, so nothing lands its
+  PRs but the train. That status is a success only on the head being landed
+  now: a head's goes to pending as it joins and as it leaves, and before a
+  green candidate is dropped, ahead of the ledger each time, and once it has
+  landed, before the next head is marked or another candidate built, so a PR
+  opened again at a landed head lands only through the train. While a landing
+  is open (its head says so, and its merge may be on trunk unseen), nothing
+  leaves the candidate and nothing drops it: a step settles that first. That
+  holds for a candidate stopped mid-landing too (a change of it left, closed
+  or has a new head): before another is built, a merge GitHub shows is
+  recorded through it, one it doesn't show yet is waited for, and only a merge
+  never made sends its head to pending. Trunk is the repo's default branch as
+  GitHub says it is at each step, the branch join and ingest mean too, and a
+  candidate records the branch it was built on: it lands only onto that, and
+  only while it's still trunk. A PR against another branch never joins, and
+  one retargeted since is refused before its merge, its base read again just
+  before it: GitHub's merge pins a PR's head, not its base, so a retarget
+  inside that one call is the gap left, and its merge lands under the other
+  branch's own rules, never on trunk, until conaryd lands by moving trunk
+  itself (M6). A refused PR's status and a red one's go up before the ledger
+  moves on, so a step stopped in between comes back to them. A merge GitHub
+  took but doesn't show yet (its answer lost, or the PR read again too soon)
+  is waited for, never made again: the head's status says it was landing with
+  this candidate, and a commit on trunk since the candidate's base is linked
+  to the PR. Once the last has landed, trunk's tree is checked against the
+  candidate's. If it's the same tree, the candidate's evidence is the last
+  landing's, for the tree trunk ended on: the case rule 3 already gives R2.
+  The landings before it made trees no gate ran on (trunk with A but not yet
+  B), so none of it is theirs. They have no evidence of their own, as no
+  landing has until trunk's CI reaches it, and trunk's next run is on the
+  candidate's tree. If trunk's tree isn't the candidate's (trunk moved
+  meanwhile, or GitHub merged a change some other way), trunk's own CI is the
+  landed tree's evidence, as it is without a train. A merge GitHub refuses
+  partway puts the changes after it back in the train, and the refused PR's
+  train status becomes an error, so nothing else lands it.
 - **Red.** The failed check gets the one second try every failed test gets.
   Red again, the candidate splits in two: its older half goes first, as a
   candidate of its own on trunk as it stands, then the rest, so a half
   that's green lands without waiting on the other. A change red on its own
   leaves the train and gets the fix job red CI gets today. One bad change in
   eight costs up to seven runs, still fewer than the eight it stands for, and
-  `size` is the knob if the ledger shows red candidates costing more.
+  `size` is the knob if the ledger shows red candidates costing more. The
+  change red on its own gets the train's status as a failure, naming the
+  checks, which is how the steward knows to start that job.
 - **R2.** An R2 change rides in a candidate of its own, and lands only while
   trunk is still that candidate's base: on evidence for exactly the tree it
-  makes.
+  makes. It joins `alone`, and the changes before it go without it. Right
+  before its merge the train reads trunk again; if trunk has moved, the
+  candidate is dropped and built again on trunk as it is. A landing onto
+  any other base doesn't count as the candidate's, and stops it. GitHub's
+  merge takes the head it merges, not the base, but nothing that follows
+  the repo's rules can move trunk between that read and the merge: each
+  merge into trunk needs the train's status, only the head being landed has
+  it, and a step holds the ledger's lock throughout. A write past the rules
+  is an `outside` op, a violation for the owner, and `finish` records that
+  trunk's tree isn't the candidate's. Until
+  classes are the ledger's (M5), the steward says which changes join alone,
+  from its one-way paths.
 
 The ledger keeps each repo's train (`crates/conary-core/src/ledger/train.rs`)
 and refuses a candidate out of turn: a red candidate's halves first, each
@@ -365,12 +413,17 @@ ready, its head won't merge, or GitHub refused its merge), and by itself
 with a new head (a head pushed back to an older one included), a close, a
 landing, or a red candidate it was alone in. One leaving a candidate in
 flight stops the candidate there, and its other changes wait again as they
-were. A candidate's `verdict` is green, red or dropped: dropped is a gate
-that never finished, the stall watchdog's last word, and its changes wait
-again as they joined. A landing is the candidate's when it lands the next
-of its changes, in order, at that revision, after the verdict said green;
-any other landing stops it. `finish` records the tree trunk ended on once
-the last of them has.
+were. A change that left red alone, on a conflict or on a refused merge is
+held: it can't join again at that revision, so it never rebuilds the
+candidate it failed in. A new head lets it go, and for a conflict or a
+refusal so does trunk moving, or, for a conflict, one of the changes it was
+merged after leaving. A candidate's `verdict` is green, red or dropped:
+dropped is a gate that never finished, the stall watchdog's last word, or a
+green candidate alone whose trunk moved before it landed, and its changes
+wait again as they joined. A landing is the candidate's when it lands the
+next of its changes, in order, at that revision (onto its base, for one
+alone), after the verdict said green; any other landing stops it. `finish`
+records the tree trunk ended on once the last of them has.
 
 Trunk's own CI still runs after each landing, and red there still starts an
 undo or a fix. After a train's landing it runs on a tree the gate has just
@@ -392,8 +445,8 @@ reviewed. The train acts on events (a change ready, a candidate's checks
 finished, a landing), each one a pass of the steward's, never on a timer,
 and a candidate whose checks never finish is a stall for the stall watchdog
 like any other wait. Until conaryd runs the flow (M6), the steward settles a change and hands it
-to `cn train`, which the steward runs as its App: it builds and splits the
-candidates and names the landings, and the steward makes them.
+to `cn train`, which runs in the steward's unit as its App: it builds and
+splits the candidates, reads their gates, and lands the green ones.
 
 ## 5. Undo
 
@@ -510,8 +563,8 @@ Targets on remi, warm cache, a year of ledger across every repo:
 - The steward acts on GitHub as its own GitHub App, never as the owner's
   login ([#14](https://github.com/FieldmouseWorks/Conary/issues/14)).
   `review-settled` and the reviewers' reviews count only from the App's bot
-  (`cn --reviewer SLUG[bot]`), and the repos' rules require that status from
-  the App's integration ID, so a session holding the owner's token can't post
+  (`cn --reviewer SLUG[bot]`), and the repos' rules require that status, and
+  in a train repo `conary/train`, from the App's integration ID, so a session holding the owner's token can't post
   one that counts, to Conary or to GitHub. The App's key reaches only the
   steward's units on the machine; a Claude running there as the machine
   user, with its sudo, can still read it.

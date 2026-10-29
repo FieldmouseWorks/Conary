@@ -12,7 +12,7 @@ use crate::op::{Actor, Authority, Body, CheckKind, Op, Outcome, Repo};
 
 mod train;
 
-pub use train::{Candidate, CandidateEvidence, Plan, State, Train};
+pub use train::{Candidate, CandidateEvidence, Held, Plan, State, Train};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Intent {
@@ -133,6 +133,8 @@ pub enum Invalid {
     NotGating,
     /// Not every change in the candidate has landed through it.
     NotLanded,
+    /// The change left its train and can't join again as it is.
+    Held(Held),
 }
 
 impl std::fmt::Display for Invalid {
@@ -155,6 +157,7 @@ impl std::fmt::Display for Invalid {
             Self::NotLanded => {
                 f.write_str("not every change in that candidate has landed through it")
             }
+            Self::Held(why) => write!(f, "the change can't join its train again: {why}"),
         }
     }
 }
@@ -300,7 +303,9 @@ impl Ledger {
                     return Err(Invalid::NotClosed);
                 }
             }
-            Body::Join { change, revision } => self.check_join(*change, *revision)?,
+            Body::Join {
+                change, revision, ..
+            } => self.check_join(*change, *revision)?,
             Body::Leave { change, .. } => self.check_leave(*change)?,
             Body::Candidate {
                 candidate,
@@ -316,7 +321,7 @@ impl Ledger {
                 result,
                 source,
             } => self.check_candidate_evidence(*candidate, *kind, check, *result, source)?,
-            Body::Verdict { candidate, .. } => self.check_verdict(*candidate)?,
+            Body::Verdict { candidate, verdict } => self.check_verdict(*candidate, *verdict)?,
             Body::Finish { candidate, .. } => self.check_finish(*candidate)?,
         }
         Ok(())
@@ -336,8 +341,11 @@ impl Ledger {
                 None
             }
             Body::Land {
-                change, revision, ..
-            } => self.land_through_train(*change, *revision),
+                change,
+                revision,
+                before,
+                ..
+            } => self.land_through_train(*change, *revision, before),
             _ => None,
         };
         let change = op.op.body.change();
@@ -372,12 +380,17 @@ impl Ledger {
                     repo,
                     before,
                     after,
-                } => self.outside.push(Outside {
-                    repo: repo.clone(),
-                    before: before.clone(),
-                    after: after.clone(),
-                    at,
-                }),
+                } => {
+                    if let Some(train) = self.trains.get_mut(repo) {
+                        train.moved();
+                    }
+                    self.outside.push(Outside {
+                        repo: repo.clone(),
+                        before: before.clone(),
+                        after: after.clone(),
+                        at,
+                    })
+                }
                 _ => unreachable!("check refuses an op about an unknown change"),
             }
             return;

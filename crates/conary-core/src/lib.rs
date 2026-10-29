@@ -14,6 +14,6 @@ pub mod rpc;
 pub mod store;
 pub mod why;
 
-pub use id::{ChangeId, CommitId, OpId, ParseIdError, RevisionId};
+pub use id::{CandidateId, ChangeId, CommitId, OpId, ParseIdError, RevisionId, TreeId};
 pub use ledger::Ledger;
 pub use store::Store;

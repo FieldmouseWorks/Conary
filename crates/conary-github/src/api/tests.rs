@@ -9,9 +9,9 @@ use std::thread;
 use super::*;
 
 /// Serves `answers` in turn, one per connection, and sends back each
-/// request's head (its request line and headers, lower-cased). A request's
-/// body is read before the answer goes out. An answer the client stops
-/// reading, past its size limit, is let go.
+/// request's head (its request line and headers, lower-cased), then a blank
+/// line and its body as it came. The body is read before the answer goes
+/// out. An answer the client stops reading, past its size limit, is let go.
 fn github(answers: Vec<&'static str>) -> (String, mpsc::Receiver<String>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
@@ -33,9 +33,10 @@ fn github(answers: Vec<&'static str>) -> (String, mpsc::Receiver<String>) {
                 .lines()
                 .find_map(|l| l.strip_prefix("content-length: "))
                 .map_or(0, |n| n.trim().parse().unwrap());
-            reader.read_exact(&mut vec![0; length]).unwrap();
+            let mut body = vec![0; length];
+            reader.read_exact(&mut body).unwrap();
             _ = conn.write_all(answer.as_bytes());
-            _ = tx.send(head);
+            _ = tx.send(format!("{head}\r\n{}", String::from_utf8(body).unwrap()));
         }
     });
     (base, rx)
@@ -288,4 +289,172 @@ fn reads_a_path_s_repository() {
     ] {
         assert_eq!(repo_of(path), repo, "{path}");
     }
+}
+
+#[test]
+fn the_trains_merges_say_merged_already_there_or_conflict() {
+    use crate::train::{Forge, Merged};
+    let made = r#"{"sha":"m","commit":{"tree":{"sha":"t"}}}"#;
+    let answers: Vec<&'static str> = vec![
+        whole("201 Created", made).leak(),
+        whole("204 No Content", "").leak(),
+        whole("409 Conflict", r#"{"message":"Merge conflict"}"#).leak(),
+        whole("404 Not Found", r#"{"message":"Head does not exist"}"#).leak(),
+    ];
+    let (base, heads) = github(answers);
+    let api = Api::new(&base, Tokens::given("t"));
+    let merge = || api.merge("o/r", "conary/build/x", "h", "Merge #1");
+    assert_eq!(
+        merge().unwrap(),
+        Merged::Commit {
+            sha: "m".into(),
+            tree: "t".into()
+        }
+    );
+    assert!(heads.recv().unwrap().starts_with("post /repos/o/r/merges "));
+    assert_eq!(merge().unwrap(), Merged::Already);
+    assert_eq!(merge().unwrap(), Merged::Conflict);
+    assert!(merge().is_err());
+}
+
+#[test]
+fn the_trains_branches_are_read_made_and_deleted_by_name() {
+    use crate::train::Forge;
+    let refs = r#"[{"ref":"refs/heads/conary/train/a","object":{"sha":"s"}}]"#;
+    let answers: Vec<&'static str> = vec![
+        whole("200 OK", r#"{"object":{"sha":"s"}}"#).leak(),
+        whole("404 Not Found", "{}").leak(),
+        whole("200 OK", refs).leak(),
+        whole("201 Created", "{}").leak(),
+        whole("204 No Content", "").leak(),
+        whole(
+            "422 Unprocessable Entity",
+            r#"{"message":"Reference does not exist"}"#,
+        )
+        .leak(),
+        whole(
+            "403 Forbidden",
+            r#"{"message":"Resource not accessible by integration"}"#,
+        )
+        .leak(),
+    ];
+    let (base, heads) = github(answers);
+    let api = Api::new(&base, Tokens::given("t"));
+    assert_eq!(api.branch("o/r", "main").unwrap(), Some("s".into()));
+    assert!(
+        heads
+            .recv()
+            .unwrap()
+            .starts_with("get /repos/o/r/git/ref/heads/main ")
+    );
+    assert_eq!(api.branch("o/r", "gone").unwrap(), None);
+    heads.recv().unwrap();
+    assert_eq!(api.branches("o/r", "conary/").unwrap(), ["conary/train/a"]);
+    assert!(
+        heads
+            .recv()
+            .unwrap()
+            .starts_with("get /repos/o/r/git/matching-refs/heads/conary/ ")
+    );
+    api.create_branch("o/r", "conary/train/a", "s").unwrap();
+    assert!(
+        heads
+            .recv()
+            .unwrap()
+            .starts_with("post /repos/o/r/git/refs ")
+    );
+    api.delete_branch("o/r", "conary/train/a").unwrap();
+    assert!(
+        heads
+            .recv()
+            .unwrap()
+            .starts_with("delete /repos/o/r/git/refs/heads/conary/train/a ")
+    );
+    // Already gone is gone; refused isn't.
+    api.delete_branch("o/r", "conary/train/a").unwrap();
+    assert!(api.delete_branch("o/r", "conary/train/a").is_err());
+}
+
+#[test]
+fn a_prs_merge_is_at_its_head_the_way_the_repo_merges_or_refused() {
+    use crate::train::{Forge, PrMerge};
+    let squash_only =
+        r#"{"allow_squash_merge":true,"allow_merge_commit":false,"allow_rebase_merge":false}"#;
+    let answers: Vec<&'static str> = vec![
+        whole("200 OK", squash_only).leak(),
+        whole("200 OK", r#"{"merged":true}"#).leak(),
+        whole("200 OK", "{}").leak(),
+        whole(
+            "405 Method Not Allowed",
+            r#"{"message":"Required status check \"conary/train\" is expected."}"#,
+        )
+        .leak(),
+        whole("200 OK", squash_only).leak(),
+        whole("502 Bad Gateway", "{}").leak(),
+    ];
+    let (base, heads) = github(answers);
+    let api = Api::new(&base, Tokens::given("t"));
+    assert_eq!(api.land("o/r", 7, "h").unwrap(), PrMerge::Merged);
+    assert!(heads.recv().unwrap().starts_with("get /repos/o/r "));
+    let merge = heads.recv().unwrap();
+    assert!(
+        merge.starts_with("put /repos/o/r/pulls/7/merge "),
+        "{merge}"
+    );
+    let body: serde_json::Value =
+        serde_json::from_str(merge.split("\r\n\r\n").last().unwrap()).unwrap();
+    assert_eq!(
+        body,
+        serde_json::json!({"sha": "h", "merge_method": "squash"})
+    );
+    // A repo whose methods GitHub didn't say gets GitHub's default.
+    assert_eq!(
+        api.land("o/r", 7, "h").unwrap(),
+        PrMerge::Refused("Required status check \"conary/train\" is expected.".into())
+    );
+    heads.recv().unwrap();
+    let merge = heads.recv().unwrap();
+    let body: serde_json::Value =
+        serde_json::from_str(merge.split("\r\n\r\n").last().unwrap()).unwrap();
+    assert_eq!(body, serde_json::json!({"sha": "h"}));
+    assert!(api.land("o/r", 7, "h").unwrap_err().unavailable);
+}
+
+#[test]
+fn the_trains_status_is_its_own_context() {
+    use crate::train::{Forge, Mark};
+    let answers: Vec<&'static str> = vec![
+        whole("201 Created", "{}").leak(),
+        whole("201 Created", "{}").leak(),
+        whole("201 Created", "{}").leak(),
+    ];
+    let (base, heads) = github(answers);
+    let api = Api::new(&base, Tokens::given("t"));
+    let long = "x".repeat(200);
+    api.mark("o/r", "h", Mark::Landing, &long, None).unwrap();
+    let posted = heads.recv().unwrap();
+    assert!(
+        posted.starts_with("post /repos/o/r/statuses/h "),
+        "{posted}"
+    );
+    let body: serde_json::Value =
+        serde_json::from_str(posted.split("\r\n\r\n").last().unwrap()).unwrap();
+    assert_eq!(
+        body,
+        serde_json::json!({"state": "success", "context": "conary/train", "description": "x".repeat(140)})
+    );
+    api.mark("o/r", "h", Mark::Red, "red", Some("https://ci/1"))
+        .unwrap();
+    let posted = heads.recv().unwrap();
+    let body: serde_json::Value =
+        serde_json::from_str(posted.split("\r\n\r\n").last().unwrap()).unwrap();
+    assert_eq!(
+        body,
+        serde_json::json!({"state": "failure", "context": "conary/train", "description": "red", "target_url": "https://ci/1"})
+    );
+    api.mark("o/r", "h", Mark::Refused, "no", None).unwrap();
+    let posted = heads.recv().unwrap();
+    let body: serde_json::Value =
+        serde_json::from_str(posted.split("\r\n\r\n").last().unwrap()).unwrap();
+    assert_eq!(body["state"], "error");
 }

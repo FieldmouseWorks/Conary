@@ -211,20 +211,28 @@ pub enum Body {
     /// The change joined its repo's train: everything but the gate says
     /// this revision can land, the PR's head as it is now. Joining at
     /// another revision than the one it's in at takes it out and puts it
-    /// at the back.
+    /// at the back. An `alone` change rides in a candidate of its own and
+    /// lands only while trunk is still that candidate's base: an R2 change's
+    /// way (design 4.4). Until classes are the ledger's, the steward says
+    /// which changes those are, from its one-way paths. A join that isn't
+    /// alone is written without the field, as joins were before it, so their
+    /// bytes, ids and signatures are the same either way.
     Join {
         change: ChangeId,
         revision: RevisionId,
+        #[serde(default, skip_serializing_if = "is_false")]
+        alone: bool,
     },
     /// The change left the train without landing.
     Leave { change: ChangeId, why: Left },
-    /// A train candidate, whole: trunk at `base`, then each change's head
-    /// merged onto it in order, ending at `commit`, on the candidate's
-    /// train branch, where the gate runs. `of` is the red candidate it's a
-    /// half of.
+    /// A train candidate, whole: `trunk`, the branch, at `base`, then each
+    /// change's head merged onto it in order, ending at `commit`, on the
+    /// candidate's train branch, where the gate runs. It lands onto that
+    /// branch alone. `of` is the red candidate it's a half of.
     Candidate {
         candidate: CandidateId,
         repo: Repo,
+        trunk: String,
         base: CommitId,
         changes: Vec<Member>,
         commit: CommitId,
@@ -276,6 +284,10 @@ impl Body {
             | Self::Finish { .. } => None,
         }
     }
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 /// The part of an op its id hashes and its signature covers.

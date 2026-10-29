@@ -159,15 +159,18 @@ fn fake() -> Fake {
     f.checks.insert(
         HEAD.into(),
         json!([
-            {"name": "check / check", "status": "completed", "conclusion": "success",
+            {"id": 1, "name": "check / check", "status": "completed", "conclusion": "success",
              "html_url": "https://github.com/x/y/actions/runs/1/job/1"},
-            {"name": "refused", "status": "completed", "conclusion": "skipped", "html_url": null},
-            {"name": "slow", "status": "in_progress", "conclusion": null, "html_url": null},
+            {"id": 2, "name": "refused", "status": "completed", "conclusion": "skipped", "html_url": null},
+            {"id": 3, "name": "slow", "status": "in_progress", "conclusion": null, "html_url": null},
         ]),
     );
     f.statuses.insert(
         HEAD.into(),
         json!([
+            // The train's word that it's landing this head: not a check.
+            {"context": "conary/train", "state": "success", "target_url": null,
+             "creator": {"login": STEWARD, "type": "User"}, "created_at": "2026-10-27T11:59:30Z"},
             {"context": "gate", "state": "success", "target_url": "https://remi/gate/2"},
             {"context": "review-settled", "state": "success", "target_url": null,
              "creator": {"login": STEWARD, "type": "User"}, "created_at": "2026-10-27T11:59:00Z"},
@@ -685,12 +688,12 @@ fn results_from_before_a_retarget_stay_on_the_old_revision() {
     f.checks.insert(
         HEAD.into(),
         json!([
-            {"name": "before", "status": "completed", "conclusion": "success",
+            {"id": 4, "name": "before", "status": "completed", "conclusion": "success",
              "html_url": "https://github.com/x/y/actions/runs/2/job/2",
              "started_at": "2026-10-27T12:59:59Z"},
-            {"name": "unknown", "status": "completed", "conclusion": "success",
+            {"id": 5, "name": "unknown", "status": "completed", "conclusion": "success",
              "html_url": "https://github.com/x/y/actions/runs/3/job/3"},
-            {"name": "after", "status": "completed", "conclusion": "success",
+            {"id": 6, "name": "after", "status": "completed", "conclusion": "success",
              "html_url": "https://github.com/x/y/actions/runs/4/job/4",
              "started_at": "2026-10-27T13:00:01Z"},
         ]),
