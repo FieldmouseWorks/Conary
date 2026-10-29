@@ -15,10 +15,11 @@ steward, is M5. The milestones are in
 ## Using it
 
 `cn` keeps the ledger in `$XDG_STATE_HOME/conary` (or `--ledger`) and reads
-GitHub with `GH_TOKEN`. The ledger is anchored at a ref in the repository
-`CONARY_ANCHOR_REPO` names (the token writes it): `cn init` sets it up once,
-and every write moves it on, so a log that loses ops is refused. It prints
-JSON; add `--human` for people.
+GitHub with `GH_TOKEN`, or with each repository's own token from a command
+(`CONARY_TOKEN_COMMAND`), as a GitHub App's are: one owner's each. The ledger
+is anchored at a ref in the repository `CONARY_ANCHOR_REPO` names (the token
+writes it): `cn init` sets it up once, and every write moves it on, so a log
+that loses ops is refused. It prints JSON; add `--human` for people.
 
     cn init
     cn backfill FieldmouseWorks/burrow --reviewer <steward-app>[bot]

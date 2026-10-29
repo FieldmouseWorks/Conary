@@ -57,7 +57,7 @@ const NOT_MODIFIED: &str = "HTTP/1.1 304 Not Modified\r\nConnection: close\r\n\r
 fn asks_whether_what_it_kept_is_current_and_reads_it_on_a_304() {
     let dir = tempfile::tempdir().unwrap();
     let (base, heads) = github(vec![ok("\"v1\""), NOT_MODIFIED]);
-    let api = Api::new(&base, "t".into()).with_etags(Etags::open(dir.path()).unwrap());
+    let api = Api::new(&base, Tokens::given("t")).with_etags(Etags::open(dir.path()).unwrap());
     assert_eq!(api.pull("o/r", 7).unwrap().head.sha, "h");
     assert!(!heads.recv().unwrap().contains("if-none-match"));
     // The second answer has no body: what it reads is what was kept.
@@ -68,7 +68,7 @@ fn asks_whether_what_it_kept_is_current_and_reads_it_on_a_304() {
 #[test]
 fn without_etags_it_asks_plainly() {
     let (base, heads) = github(vec![ok("\"v1\""), ok("\"v1\"")]);
-    let api = Api::new(&base, "t".into());
+    let api = Api::new(&base, Tokens::given("t"));
     api.pull("o/r", 7).unwrap();
     api.pull("o/r", 7).unwrap();
     assert!(!heads.recv().unwrap().contains("if-none-match"));
@@ -85,7 +85,9 @@ fn error_with(status: &str, headers: &str, body: &str) -> ApiError {
         body.len()
     );
     let (base, _heads) = github(vec![answer.leak()]);
-    Api::new(&base, "t".into()).pull("o/r", 7).unwrap_err()
+    Api::new(&base, Tokens::given("t"))
+        .pull("o/r", 7)
+        .unwrap_err()
 }
 
 #[test]
@@ -121,7 +123,7 @@ fn no_answer_at_all_is_github_unavailable() {
     let base = format!("http://{}", listener.local_addr().unwrap());
     drop(listener);
     assert!(
-        Api::new(&base, "t".into())
+        Api::new(&base, Tokens::given("t"))
             .pull("o/r", 7)
             .unwrap_err()
             .unavailable
@@ -132,12 +134,14 @@ fn no_answer_at_all_is_github_unavailable() {
 fn a_request_that_can_never_be_made_is_not_github_unavailable() {
     // A root that isn't a URL, and a token no header can carry: asking again
     // fails the same way.
-    let err = Api::new("not a url", "t".into())
+    let err = Api::new("not a url", Tokens::given("t"))
         .pull("o/r", 7)
         .unwrap_err();
     assert!(!err.unavailable, "{err}");
     let (base, _heads) = github(vec![]);
-    let err = Api::new(&base, "t\nx".into()).pull("o/r", 7).unwrap_err();
+    let err = Api::new(&base, Tokens::given("t\nx"))
+        .pull("o/r", 7)
+        .unwrap_err();
     assert!(!err.unavailable, "{err}");
 }
 
@@ -145,7 +149,7 @@ fn a_request_that_can_never_be_made_is_not_github_unavailable() {
 fn both(answer: String) -> [ApiError; 2] {
     let answer: &'static str = answer.leak();
     let (base, _heads) = github(vec![answer, answer]);
-    let api = Api::new(&base, "t".into());
+    let api = Api::new(&base, Tokens::given("t"));
     let read = api.pull("o/r", 7).unwrap_err();
     let write = api
         .send::<serde_json::Value>(false, "/repos/o/r/git/trees", &serde_json::json!({}))
@@ -207,7 +211,7 @@ fn through_proxy(answer: &'static str) -> [ApiError; 2] {
     let (proxy, heads) = github(vec![answer, answer]);
     let api = Api::through(
         "https://127.0.0.1:1",
-        "t".into(),
+        Tokens::given("t"),
         Some(ureq::Proxy::new(&proxy).unwrap()),
     );
     let read = api.pull("o/r", 7).unwrap_err();
@@ -245,5 +249,48 @@ fn a_proxy_in_trouble_or_gone_is_github_unavailable() {
         for err in through_proxy(answer) {
             assert!(err.unavailable, "{answer:?}: {err}");
         }
+    }
+}
+
+#[test]
+fn each_request_is_asked_with_its_repository_s_token() {
+    let dir = tempfile::tempdir().unwrap();
+    let script = dir.path().join("token");
+    std::fs::write(&script, "#!/bin/sh\necho \"for-$1\" | tr / -\n").unwrap();
+    std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    let (base, heads) = github(vec![ok("\"v1\""), ok("\"v1\"")]);
+    let api = Api::new(
+        &base,
+        Tokens::command(&script.display().to_string()).unwrap(),
+    );
+    api.pull("a/r", 7).unwrap();
+    assert!(
+        heads
+            .recv()
+            .unwrap()
+            .contains("authorization: bearer for-a-r\r\n")
+    );
+    api.pull("b/s", 7).unwrap();
+    assert!(
+        heads
+            .recv()
+            .unwrap()
+            .contains("authorization: bearer for-b-s\r\n")
+    );
+}
+
+#[test]
+fn reads_a_path_s_repository() {
+    for (path, repo) in [
+        ("/repos/o/r/pulls/7", Some("o/r")),
+        ("/repos/o/r", Some("o/r")),
+        ("/repos/o/r?x=1", Some("o/r")),
+        ("/repos/o/r/git/refs/notes/conary", Some("o/r")),
+        ("/repos/o", None),
+        ("/repos//r/pulls", None),
+        ("/repos/o//pulls", None),
+        ("/user", None),
+    ] {
+        assert_eq!(repo_of(path), repo, "{path}");
     }
 }

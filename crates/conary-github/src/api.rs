@@ -7,6 +7,7 @@ use serde::de::DeserializeOwned;
 use ureq::tls::{RootCerts, TlsConfig};
 
 use crate::etags::Etags;
+use crate::tokens::Tokens;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct User {
@@ -213,11 +214,11 @@ pub trait Source {
     fn merge_base(&self, repo: &str, a: &str, b: &str) -> Result<String, ApiError>;
 }
 
-/// The REST API, with a token, and the writer's [`Etags`] if it keeps them.
+/// The REST API, with its tokens, and the writer's [`Etags`] if it keeps them.
 pub struct Api {
     agent: ureq::Agent,
     base: String,
-    token: String,
+    tokens: Tokens,
     etags: Option<Etags>,
 }
 
@@ -226,12 +227,12 @@ const MAX_PAGES: usize = 50;
 
 impl Api {
     /// `base` is the API root, `https://api.github.com` on github.com.
-    pub fn new(base: &str, token: String) -> Self {
-        Self::through(base, token, ureq::Proxy::try_from_env())
+    pub fn new(base: &str, tokens: Tokens) -> Self {
+        Self::through(base, tokens, ureq::Proxy::try_from_env())
     }
 
     /// Through `proxy`, or straight to GitHub when `None`.
-    fn through(base: &str, token: String, proxy: Option<ureq::Proxy>) -> Self {
+    fn through(base: &str, tokens: Tokens, proxy: Option<ureq::Proxy>) -> Self {
         let config = ureq::Agent::config_builder()
             .proxy(proxy)
             .tls_config(
@@ -247,7 +248,7 @@ impl Api {
         Self {
             agent: ureq::Agent::new_with_config(config),
             base: base.trim_end_matches('/').to_owned(),
-            token,
+            tokens,
             etags: None,
         }
     }
@@ -257,6 +258,13 @@ impl Api {
     pub fn with_etags(mut self, etags: Etags) -> Self {
         self.etags = Some(etags);
         self
+    }
+
+    /// The Authorization header for `path`: its repository's token.
+    fn authorization(&self, path: &str) -> Result<String, ApiError> {
+        let repo = repo_of(path)
+            .ok_or_else(|| ApiError::new(format!("{}{path}: not a repository's", self.base)))?;
+        Ok(format!("Bearer {}", self.tokens.of(repo)?))
     }
 
     fn get<T: DeserializeOwned>(&self, path: &str) -> Result<T, ApiError> {
@@ -271,7 +279,7 @@ impl Api {
         let mut request = self
             .agent
             .get(&url)
-            .header("Authorization", &format!("Bearer {}", self.token))
+            .header("Authorization", &self.authorization(path)?)
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", "2022-11-28");
         if let Some((etag, _)) = &kept {
@@ -311,7 +319,7 @@ impl Api {
             self.agent.post(&url)
         };
         let mut response = request
-            .header("Authorization", &format!("Bearer {}", self.token))
+            .header("Authorization", &self.authorization(path)?)
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", "2022-11-28")
             .send_json(body)
@@ -337,6 +345,17 @@ impl Api {
             "{path}: more than {MAX_PAGES} pages"
         )))
     }
+}
+
+/// The repository (OWNER/NAME) a path is under, `/repos/OWNER/NAME/...`:
+/// every path asked here is.
+fn repo_of(path: &str) -> Option<&str> {
+    let rest = path.strip_prefix("/repos/")?;
+    let owner = rest.find('/')?;
+    let end = rest[owner + 1..]
+        .find(['/', '?'])
+        .map_or(rest.len(), |i| owner + 1 + i);
+    (owner > 0 && end > owner + 1).then(|| &rest[..end])
 }
 
 type Response = ureq::http::Response<ureq::Body>;
