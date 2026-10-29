@@ -68,7 +68,7 @@ struct Hub {
     lost: Cell<bool>,
     /// Statuses of this kind GitHub doesn't take.
     unmarked: Cell<Option<Mark>>,
-    /// Each PR's base branch, when it isn't main.
+    /// Each PR's base branch, when it isn't the default one.
     targets: RefCell<HashMap<u64, String>>,
     /// Every status the train posted.
     marks: RefCell<Vec<Posted>>,
@@ -99,6 +99,15 @@ impl Hub {
             .insert("main".into(), TRUNK.into());
         hub.holds.borrow_mut().insert(TRUNK.into(), Vec::new());
         hub
+    }
+
+    /// The branch a PR targets: the default one unless it was told another.
+    fn base_of(&self, pr: u64) -> String {
+        self.targets
+            .borrow()
+            .get(&pr)
+            .cloned()
+            .unwrap_or_else(|| self.default.borrow().clone())
     }
 
     fn branch_at(&self, name: &str) -> Option<String> {
@@ -168,6 +177,7 @@ fn parse<T: serde::de::DeserializeOwned>(v: &Value) -> T {
 impl Source for Hub {
     fn pull(&self, _: &str, number: u64) -> Result<PullRequest, ApiError> {
         let head = self.pulls.borrow()[&number].clone();
+        let base = self.base_of(number);
         let merged = self
             .merged
             .borrow()
@@ -182,7 +192,7 @@ impl Source for Hub {
             "user": {"login": "TusanHomichi", "type": "User"},
             "merged_at": merged.as_ref().map(|_| "2026-10-29T12:00:00Z"),
             "merge_commit_sha": merged,
-            "base": {"sha": TRUNK, "ref": self.targets.borrow().get(&number).map_or("main", String::as_str),
+            "base": {"sha": TRUNK, "ref": base,
                      "repo": {"default_branch": *self.default.borrow()}},
             "head": {"sha": head, "ref": "claude/x"},
         })))
@@ -335,16 +345,15 @@ impl Forge for Hub {
         if self.down.get() {
             return Err(ApiError::unavailable("merge"));
         }
-        let before = self.branch_at("main").unwrap();
+        let base = self.base_of(pr);
+        let before = self.branch_at(&base).unwrap();
         let mut holds = self.holds.borrow()[&before].clone();
         holds.push(at.into());
         let mut made = self.made.borrow_mut();
         *made += 1;
         let sha = format!("{:0>40x}", 0x00ba_5e00_0000_u64 + *made);
         self.holds.borrow_mut().insert(sha.clone(), holds);
-        self.branches
-            .borrow_mut()
-            .insert("main".into(), sha.clone());
+        self.branches.borrow_mut().insert(base, sha.clone());
         self.parents.borrow_mut().insert(sha.clone(), before);
         self.linked.borrow_mut().insert(sha.clone(), pr);
         self.merged.borrow_mut().insert(pr, sha);
@@ -433,7 +442,10 @@ fn a_ready_pr_joins_at_its_head_as_github_shows_it() {
     }
     // The new head took it out.
     assert!(store.ledger().train(&repo()).unwrap().joined().is_empty());
-    assert!(leave(&mut store, &hub, &repo(), 3, Left::Unready).is_ok_and(|left| !left));
+    assert!(
+        leave(&mut store, &hub, &hub, &repo(), 3, Left::Unready)
+            .is_ok_and(|left| left == Leaving::NotIn)
+    );
 }
 
 #[test]
@@ -828,15 +840,15 @@ fn a_candidate_is_dropped_only_in_its_own_repo_and_only_once() {
     let (id, _) = gating(&step_once(&mut store, &hub));
     let other: Repo = "FieldmouseWorks/burrow".parse().unwrap();
     assert!(matches!(
-        drop_candidate(&mut store, &hub, &other, id),
+        drop_candidate(&mut store, &hub, &hub, &other, id),
         Err(TrainError::NotHere(_))
     ));
     let unknown = CandidateId::new().unwrap();
     assert!(matches!(
-        drop_candidate(&mut store, &hub, &repo(), unknown),
+        drop_candidate(&mut store, &hub, &hub, &repo(), unknown),
         Err(TrainError::NotHere(_))
     ));
-    drop_candidate(&mut store, &hub, &repo(), id).unwrap();
-    assert!(drop_candidate(&mut store, &hub, &repo(), id).is_err());
+    drop_candidate(&mut store, &hub, &hub, &repo(), id).unwrap();
+    assert!(drop_candidate(&mut store, &hub, &hub, &repo(), id).is_err());
     assert_eq!(joined(&store), [3]);
 }

@@ -103,6 +103,7 @@ impl Book {
         Body::Candidate {
             candidate: CandidateId::new().unwrap(),
             repo: repo(),
+            trunk: "main".into(),
             base: commit('0'),
             changes: plan.changes.clone(),
             commit: commit('c'),
@@ -668,6 +669,7 @@ fn the_trains_ops_read_back_as_written() {
         Body::Candidate {
             candidate,
             repo: repo(),
+            trunk: "main".into(),
             base: commit('0'),
             changes: vec![Member {
                 change: a,

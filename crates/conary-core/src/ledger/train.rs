@@ -49,6 +49,8 @@ pub enum State {
 pub struct Candidate {
     pub id: CandidateId,
     pub repo: Repo,
+    /// The branch it was built on, trunk then, and the one it lands onto.
+    pub trunk: String,
     pub base: CommitId,
     /// Its changes, in the order they're merged and land.
     pub changes: Vec<Member>,
@@ -415,6 +417,7 @@ impl Ledger {
             Body::Candidate {
                 candidate,
                 repo,
+                trunk,
                 base,
                 changes,
                 commit,
@@ -437,6 +440,7 @@ impl Ledger {
                     Candidate {
                         id: *candidate,
                         repo: repo.clone(),
+                        trunk: trunk.clone(),
                         base: base.clone(),
                         changes: changes.clone(),
                         commit: commit.clone(),

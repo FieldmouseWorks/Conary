@@ -50,8 +50,17 @@ pub(super) fn land_next(
         stepped.verdicts.push((c.id, Verdict::Dropped));
         return Ok(None);
     }
-    let (why, description) = if pull.base.name != trunk {
-        let why = format!("it targets {}, not {trunk}", pull.base.name);
+    let elsewhere = if c.trunk != trunk {
+        Some(format!(
+            "candidate {} was built on {}, not {trunk}",
+            c.id, c.trunk
+        ))
+    } else if pull.base.name != trunk {
+        Some(format!("it targets {}, not {trunk}", pull.base.name))
+    } else {
+        None
+    };
+    let (why, description) = if let Some(why) = elsewhere {
         (why.clone(), why)
     } else {
         forge.mark(
@@ -106,6 +115,25 @@ fn landing(store: &Store, c: &Candidate) -> Now {
     }
 }
 
+/// Whether a head's train status says it's landing with `candidate`: a
+/// step marked it and went on to its merge, which may have happened.
+pub(super) fn landing_marked(
+    source: &dyn Source,
+    full: &str,
+    head: &str,
+    candidate: CandidateId,
+) -> Result<bool, TrainError> {
+    // Newest first from GitHub: the context's first status is its latest.
+    let landing = landing_with(candidate);
+    Ok(source
+        .statuses(full, head)?
+        .into_iter()
+        .find(|s| s.context == CONTEXT)
+        .is_some_and(|s| {
+            s.state == "success" && s.description.as_deref() == Some(landing.as_str())
+        }))
+}
+
 /// How far back trunk is read for a merge GitHub hasn't shown: past any
 /// candidate's own landings and the few that land outside it meanwhile.
 const UNSEEN: usize = 50;
@@ -124,16 +152,7 @@ fn merge_unseen(
     c: &Candidate,
     at: &str,
 ) -> Result<bool, TrainError> {
-    // Newest first from GitHub: the context's first status is its latest.
-    let landing = landing_with(c.id);
-    let marked = source
-        .statuses(full, head)?
-        .into_iter()
-        .find(|s| s.context == CONTEXT)
-        .is_some_and(|s| {
-            s.state == "success" && s.description.as_deref() == Some(landing.as_str())
-        });
-    if !marked {
+    if !landing_marked(source, full, head, c.id)? {
         return Ok(false);
     }
     let mut sha = at.to_owned();

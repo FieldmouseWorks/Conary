@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use conary_core::ledger::{Candidate, Ledger};
 use conary_core::op::{Left, Repo};
 use conary_core::{CandidateId, ChangeId};
-use conary_github::train::{self, Joined, Now, Settings, Stepped};
+use conary_github::train::{self, Joined, Leaving, Now, Settings, Stepped};
 
 use crate::{Cli, GithubArgs, Result, read, word, write, write_notes};
 
@@ -35,7 +35,9 @@ pub enum TrainCommand {
         #[command(flatten)]
         github: GithubArgs,
     },
-    /// Take a PR out of its repo's train.
+    /// Take a PR out of its repo's train. One in the candidate in flight
+    /// stays while that candidate's landing of a PR is open, until a step
+    /// settles it.
     Leave {
         /// The repository, as owner/name.
         repo: Repo,
@@ -128,13 +130,22 @@ pub fn run(cli: &Cli, command: &TrainCommand) -> Result<()> {
                 ),
             })
             .map_err(Into::into),
-        TrainCommand::Leave { pr, why, .. } => train::leave(store, &api, repo, *pr, *why)
-            .map(|left| {
-                let said = if left { "left" } else { "wasn't in" };
-                (
-                    json!({"pr": pr, "left": left}),
-                    format!("{repo}#{pr}: {said} the train"),
-                )
+        TrainCommand::Leave { pr, why, .. } => train::leave(store, &api, &api, repo, *pr, *why)
+            .map(|left| match left {
+                Leaving::Left | Leaving::NotIn => {
+                    let gone = left == Leaving::Left;
+                    let said = if gone { "left" } else { "wasn't in" };
+                    (
+                        json!({"pr": pr, "left": gone}),
+                        format!("{repo}#{pr}: {said} the train"),
+                    )
+                }
+                Leaving::Landing(landing) => (
+                    json!({"pr": pr, "left": false, "landing": landing}),
+                    format!(
+                        "{repo}#{pr}: still in the train: #{landing} is landing, and a step settles that first"
+                    ),
+                ),
             })
             .map_err(Into::into),
         TrainCommand::Step { size, require, .. } => {
@@ -147,7 +158,7 @@ pub fn run(cli: &Cli, command: &TrainCommand) -> Result<()> {
                 .map_err(Into::into)
         }
         TrainCommand::Drop { candidate, .. } => {
-            train::drop_candidate(store, &api, repo, *candidate)
+            train::drop_candidate(store, &api, &api, repo, *candidate)
                 .map(|()| {
                     (
                         json!({"candidate": candidate.to_string(), "verdict": "dropped"}),

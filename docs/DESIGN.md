@@ -348,10 +348,16 @@ so the wait is one run, however many are waiting.
   head first. A train repo's rules require that status, so nothing lands its
   PRs but the train. That status is a success only on the head being landed
   now: a head's goes to pending as it joins and as it leaves, and before a
-  green candidate is dropped, ahead of the ledger each time. Trunk is the
-  repo's default branch as GitHub says it is at each step, the branch join
-  and ingest mean too. A PR against another branch never joins, and one
-  retargeted since is refused before its merge. A refused PR's status and a
+  green candidate is dropped, ahead of the ledger each time, and a
+  candidate stopped mid-landing (a change of it left, closed or has a new
+  head) has its next head put to pending before another is built. While a
+  landing is open (its head says so, and its merge may be on trunk unseen),
+  nothing leaves the candidate and nothing drops it: a step settles that
+  first. Trunk is the repo's default branch as GitHub says it is at each
+  step, the branch join and ingest mean too, and a candidate records the
+  branch it was built on: it lands only onto that, and only while it's
+  still trunk. A PR against another branch never joins, and one retargeted
+  since is refused before its merge. A refused PR's status and a
   red one's go up before the ledger moves on, so a step stopped in between
   comes back to them. A merge GitHub took but doesn't show yet (its answer
   lost, or the PR read again too soon) is waited for, never made again: the

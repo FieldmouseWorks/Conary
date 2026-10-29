@@ -128,6 +128,9 @@ pub enum TrainError {
     },
     /// That candidate isn't this repo's.
     NotHere(CandidateId),
+    /// That PR's landing has started and no step has settled it: its merge
+    /// may be on trunk already, unseen.
+    Landing(u64),
     /// The trunk branch isn't there.
     NoTrunk(String),
 }
@@ -143,6 +146,9 @@ impl std::fmt::Display for TrainError {
             Self::Unknown(pr) => write!(f, "#{pr} isn't in the ledger"),
             Self::Moved { pr, head } => write!(f, "#{pr}'s head is {head} now"),
             Self::NotHere(id) => write!(f, "candidate {id} isn't this repo's"),
+            Self::Landing(pr) => {
+                write!(f, "#{pr} is landing in it, and only a step can settle that")
+            }
             Self::NoTrunk(name) => write!(f, "no trunk branch {name}"),
         }
     }
@@ -260,21 +266,42 @@ pub fn join(
     Ok(Joined::Joined)
 }
 
+/// What leaving did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Leaving {
+    Left,
+    /// It wasn't in the train.
+    NotIn,
+    /// It's in the candidate in flight, whose landing of this PR has
+    /// started and isn't settled: it stays until a step settles that.
+    Landing(u64),
+}
+
 /// Takes a PR out of its repo's train, its head's train status pending
-/// first. False when it wasn't in it.
+/// first. One in the candidate in flight stays while a landing of that
+/// candidate is open ([`open_landing`]): leaving would stop the candidate
+/// with a merge of its maybe on trunk already.
 pub fn leave(
     store: &mut Store,
     forge: &dyn Forge,
+    source: &dyn Source,
     repo: &Repo,
     pr: u64,
     why: Left,
-) -> Result<bool, TrainError> {
+) -> Result<Leaving, TrainError> {
     let change = change_of(store, repo, pr)?;
     let body = Body::Leave { change, why };
     match store.ledger().check(&body) {
         Ok(()) => {}
-        Err(Invalid::NotInTrain) => return Ok(false),
+        Err(Invalid::NotInTrain) => return Ok(Leaving::NotIn),
         Err(e) => return Err(StoreError::Invalid(e).into()),
+    }
+    if let Some((c, landing)) = open_landing(store, source, repo)?
+        && c.changes[c.landed.len()..]
+            .iter()
+            .any(|m| m.change == change)
+    {
+        return Ok(Leaving::Landing(landing));
     }
     let member = store
         .ledger()
@@ -291,15 +318,43 @@ pub fn leave(
         None,
     )?;
     store.record(body)?;
-    Ok(true)
+    Ok(Leaving::Left)
+}
+
+/// The repo's green candidate in flight, and the PR whose landing it has
+/// started and no step has settled: that PR's head says it's landing with
+/// the candidate. Its merge may be on trunk, unseen, so nothing but a step
+/// may stop the candidate meanwhile.
+fn open_landing(
+    store: &Store,
+    source: &dyn Source,
+    repo: &Repo,
+) -> Result<Option<(Candidate, u64)>, TrainError> {
+    let ledger = store.ledger();
+    let Some(c) = ledger
+        .train(repo)
+        .and_then(|t| t.in_flight())
+        .and_then(|id| ledger.candidate(id))
+        .filter(|c| c.state == State::Green)
+    else {
+        return Ok(None);
+    };
+    let next = &c.changes[c.landed.len()];
+    let head = head_of(store, next);
+    Ok(
+        land::landing_marked(source, &repo.to_string(), head.as_str(), c.id)?
+            .then(|| (c.clone(), pr_of(store, next.change))),
+    )
 }
 
 /// Drops a candidate whose gate won't finish, the stall watchdog's last
 /// word: its changes wait again as they joined. Green and red are the gate's
-/// word, which [`step`] reads, never a hand's.
+/// word, which [`step`] reads, never a hand's. Not while a landing of it is
+/// open ([`open_landing`]): that's a step's to settle.
 pub fn drop_candidate(
     store: &mut Store,
     forge: &dyn Forge,
+    source: &dyn Source,
     repo: &Repo,
     candidate: CandidateId,
 ) -> Result<(), TrainError> {
@@ -318,6 +373,11 @@ pub fn drop_candidate(
             verdict: Verdict::Dropped,
         })
         .map_err(StoreError::Invalid)?;
+    if let Some((open, pr)) = open_landing(store, source, repo)?
+        && open.id == candidate
+    {
+        return Err(TrainError::Landing(pr));
+    }
     dropped(store, forge, &c, "dropped")
 }
 
@@ -473,7 +533,8 @@ pub fn step(
     let trunk = forge.default_branch(&repo.to_string())?;
     stepped.now = loop {
         stepped.finished.extend(finish(store, forge, repo)?);
-        let Some(id) = in_flight_or_built(store, forge, repo, &trunk, settings, &mut stepped)?
+        let Some(id) =
+            in_flight_or_built(store, forge, source, repo, &trunk, settings, &mut stepped)?
         else {
             break Now::Idle;
         };
@@ -552,9 +613,11 @@ fn head_of(store: &Store, m: &Member) -> CommitId {
 
 /// The candidate in flight, or the next one, built now; none when nothing
 /// waits. A change whose head won't merge leaves on the way.
+#[allow(clippy::too_many_arguments)]
 fn in_flight_or_built(
     store: &mut Store,
     forge: &dyn Forge,
+    source: &dyn Source,
     repo: &Repo,
     trunk: &str,
     settings: &Settings,
@@ -563,6 +626,7 @@ fn in_flight_or_built(
     if let Some(id) = store.ledger().train(repo).and_then(|t| t.in_flight()) {
         return Ok(Some(id));
     }
+    stopped_landing(store, forge, source, repo)?;
     loop {
         let Some(plan) = store.ledger().next(repo, settings.size) else {
             return Ok(None);
@@ -582,6 +646,34 @@ fn in_flight_or_built(
             }
         }
     }
+}
+
+/// The train's last candidate, stopped green with changes still to land (one
+/// of them left, closed or has a new head, as ingest saw it), may have left
+/// its next head saying it's landing. That goes to pending before another
+/// candidate is built, so only the head being landed ever has the success.
+fn stopped_landing(
+    store: &Store,
+    forge: &dyn Forge,
+    source: &dyn Source,
+    repo: &Repo,
+) -> Result<(), TrainError> {
+    let ledger = store.ledger();
+    let Some(c) = ledger
+        .train(repo)
+        .and_then(|t| t.candidates().last())
+        .and_then(|id| ledger.candidate(*id))
+        .filter(|c| matches!(c.state, State::Broken { .. }) && c.landed.len() < c.changes.len())
+    else {
+        return Ok(());
+    };
+    let full = repo.to_string();
+    let head = head_of(store, &c.changes[c.landed.len()]);
+    if land::landing_marked(source, &full, head.as_str(), c.id)? {
+        let description = format!("candidate {} stopped, so it isn't landing", c.id);
+        forge.mark(&full, head.as_str(), Mark::Waiting, &description, None)?;
+    }
+    Ok(())
 }
 
 /// Tells a PR red alone in a candidate why it left: the train's status on
@@ -707,6 +799,7 @@ fn build(
     store.record(Body::Candidate {
         candidate: id,
         repo: repo.clone(),
+        trunk: trunk.to_owned(),
         base: commit_id(&base)?,
         changes: plan.changes.clone(),
         commit: commit.clone(),

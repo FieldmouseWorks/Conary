@@ -225,13 +225,14 @@ pub enum Body {
     },
     /// The change left the train without landing.
     Leave { change: ChangeId, why: Left },
-    /// A train candidate, whole: trunk at `base`, then each change's head
-    /// merged onto it in order, ending at `commit`, on the candidate's
-    /// train branch, where the gate runs. `of` is the red candidate it's a
-    /// half of.
+    /// A train candidate, whole: `trunk`, the branch, at `base`, then each
+    /// change's head merged onto it in order, ending at `commit`, on the
+    /// candidate's train branch, where the gate runs. It lands onto that
+    /// branch alone. `of` is the red candidate it's a half of.
     Candidate {
         candidate: CandidateId,
         repo: Repo,
+        trunk: String,
         base: CommitId,
         changes: Vec<Member>,
         commit: CommitId,

@@ -237,24 +237,44 @@ fn the_train_lands_only_onto_the_default_branch_as_github_says_it_is() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
     let mut hub = Hub::new(&[3, 4]);
+    hub.targets.borrow_mut().insert(4, "main".into());
     join_all(&mut store, &hub, &[3]);
     let (id, _) = gating(&step_once(&mut store, &hub));
-    // The default branch changes while the candidate gates. Built for main,
-    // it lands nowhere else, whatever the last step was told.
+    // The default branch changes while the candidate gates, and its PR is
+    // retargeted there with the same merge base and head, so its revision
+    // is the same. Built and gated on main, it lands nowhere else.
     let release = "f".repeat(40);
     hub.holds.borrow_mut().insert(release.clone(), Vec::new());
     hub.branches.borrow_mut().insert("release".into(), release);
     hub.default.replace("release".into());
+    hub.targets.borrow_mut().insert(3, "release".into());
     hub.ci(&commit_of(&store, id), &[("check / check", "success")]);
     let stepped = step_once(&mut store, &hub);
     assert!(stepped.landed.is_empty() && hub.merged.borrow().is_empty());
-    let why = "it targets main, not release".to_owned();
+    let why = format!("candidate {id} was built on main, not release");
     assert_eq!(stepped.refused, [Refused { pr: 3, why }]);
-    // Nor does a PR against main join it now.
+    // A PR against main doesn't join now.
     assert_eq!(
         try_join(&mut store, &hub, 4, &head(4), false).unwrap(),
         Joined::Elsewhere("main".into())
     );
+}
+
+#[test]
+fn a_repo_whose_trunk_isnt_main_lands_onto_its_own() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = store(&dir);
+    let mut hub = Hub::new(&[3]);
+    let main = hub.branches.borrow_mut().remove("main").unwrap();
+    hub.branches.borrow_mut().insert("trunk".into(), main);
+    hub.default.replace("trunk".into());
+    join_all(&mut store, &hub, &[3]);
+    let (id, _) = gating(&step_once(&mut store, &hub));
+    assert_eq!(store.ledger().candidate(id).unwrap().trunk, "trunk");
+    hub.ci(&commit_of(&store, id), &[("check / check", "success")]);
+    let stepped = step_once(&mut store, &hub);
+    assert_eq!((stepped.landed, stepped.finished), (vec![3], vec![id]));
+    assert_eq!(hub.held("trunk"), [head(3)]);
 }
 
 /// The train's latest status on a head, with what it said.
@@ -310,29 +330,97 @@ fn a_heads_landing_success_never_outlives_its_landing() {
     // The watchdog dropping a green candidate does the same.
     let (again, _) = gating(&stepped);
     hub.ci(&commit_of(&store, again), &[("check / check", "success")]);
-    hub.down.set(true);
+    hub.unmarked.set(Some(Mark::Landing));
     assert!(step(&mut store, &hub, &hub, &config(), &repo(), &settings()).is_err());
-    assert_eq!(hub.latest(&head(4)), Some(Mark::Landing));
+    let state = |store: &Store, id| store.ledger().candidate(id).unwrap().state.clone();
+    assert_eq!(state(&store, again), State::Green);
     hub.unmarked.set(Some(Mark::Waiting));
-    assert!(drop_candidate(&mut store, &hub, &repo(), again).is_err());
-    assert_eq!(store.ledger().candidate(again).unwrap().state, State::Green);
+    assert!(drop_candidate(&mut store, &hub, &hub, &repo(), again).is_err());
+    assert_eq!(state(&store, again), State::Green);
     hub.unmarked.set(None);
-    drop_candidate(&mut store, &hub, &repo(), again).unwrap();
-    assert_eq!(
-        store.ledger().candidate(again).unwrap().state,
-        State::Dropped
-    );
+    drop_candidate(&mut store, &hub, &hub, &repo(), again).unwrap();
+    assert_eq!(state(&store, again), State::Dropped);
     assert_eq!(hub.latest(&head(4)), Some(Mark::Waiting));
 
-    // And so does leaving.
-    hub.unmarked.set(Some(Mark::Waiting));
-    assert!(leave(&mut store, &hub, &repo(), 4, Left::Unready).is_err());
-    assert_eq!(joined(&store), [4]);
-    hub.unmarked.set(None);
-    assert!(leave(&mut store, &hub, &repo(), 4, Left::Unready).unwrap());
+    // But not while a landing of it is open: its head says it's landing, so
+    // its merge may be on trunk. Nothing in it leaves then either. A step
+    // settles it.
+    let (third, _) = gating(&step_once(&mut store, &hub));
+    hub.ci(&commit_of(&store, third), &[("check / check", "success")]);
+    hub.down.set(true);
+    assert!(step(&mut store, &hub, &hub, &config(), &repo(), &settings()).is_err());
+    assert!(matches!(
+        drop_candidate(&mut store, &hub, &hub, &repo(), third),
+        Err(TrainError::Landing(4))
+    ));
     assert_eq!(
-        said(&hub, &head(4)),
+        leave(&mut store, &hub, &hub, &repo(), 4, Left::Unready).unwrap(),
+        Leaving::Landing(4)
+    );
+    assert_eq!(state(&store, third), State::Green);
+    hub.down.set(false);
+    assert_eq!(step_once(&mut store, &hub).landed, [4]);
+
+    // Leaving otherwise puts the head to pending first too.
+    assert_eq!(
+        try_join(&mut store, &hub, 3, &head(3), false).unwrap(),
+        Joined::Joined
+    );
+    hub.unmarked.set(Some(Mark::Waiting));
+    assert!(leave(&mut store, &hub, &hub, &repo(), 3, Left::Unready).is_err());
+    assert_eq!(joined(&store), [3]);
+    hub.unmarked.set(None);
+    assert_eq!(
+        leave(&mut store, &hub, &hub, &repo(), 3, Left::Unready).unwrap(),
+        Leaving::Left
+    );
+    assert_eq!(
+        said(&hub, &head(3)),
         Some((Mark::Waiting, "out of the train".into()))
+    );
+}
+
+#[test]
+fn a_candidate_stopped_while_landing_leaves_no_head_saying_its_landing() {
+    // The first of two fails its merge after its head said it was landing;
+    // then the second's PR gets a new head, which ingest sees, and that
+    // stops the candidate. Before the next is built, the first's head goes
+    // to pending: the train isn't landing it.
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = store(&dir);
+    let mut hub = Hub::new(&[3, 5]);
+    join_all(&mut store, &hub, &[3, 5]);
+    let (id, _) = gating(&step_once(&mut store, &hub));
+    hub.ci(&commit_of(&store, id), &[("check / check", "success")]);
+    hub.down.set(true);
+    assert!(step(&mut store, &hub, &hub, &config(), &repo(), &settings()).is_err());
+    hub.down.set(false);
+    assert_eq!(hub.latest(&head(3)), Some(Mark::Landing));
+    // Nothing in it leaves meanwhile, the second no more than the first.
+    assert_eq!(
+        leave(&mut store, &hub, &hub, &repo(), 5, Left::Unready).unwrap(),
+        Leaving::Landing(3)
+    );
+    hub.pulls.borrow_mut().insert(5, head(55));
+    ingest::pull(&mut store, &hub, &config(), &repo(), 5).unwrap();
+    assert!(matches!(
+        store.ledger().candidate(id).unwrap().state,
+        State::Broken { .. }
+    ));
+    // Until GitHub takes that, nothing new is built.
+    hub.unmarked.set(Some(Mark::Waiting));
+    assert!(step(&mut store, &hub, &hub, &config(), &repo(), &settings()).is_err());
+    assert_eq!(store.ledger().train(&repo()).unwrap().candidates().len(), 1);
+    hub.unmarked.set(None);
+    let (next, prs) = gating(&step_once(&mut store, &hub));
+    assert_ne!(next, id);
+    assert_eq!(prs, [3]);
+    assert_eq!(
+        said(&hub, &head(3)),
+        Some((
+            Mark::Waiting,
+            format!("candidate {id} stopped, so it isn't landing")
+        ))
     );
 }
 
