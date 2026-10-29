@@ -59,35 +59,29 @@ impl Book {
         change
     }
 
-    /// A new head on the change.
+    /// A new head on the change, or an old one again.
     fn push(&mut self, change: ChangeId, head: char) -> RevisionId {
         self.ok(Body::Revision {
             change,
             base: commit('0'),
             head: commit(head),
         });
-        self.newest(change)
+        self.current(change)
     }
 
-    fn newest(&self, change: ChangeId) -> RevisionId {
-        self.ledger
-            .change(change)
-            .unwrap()
-            .revisions
-            .last()
-            .unwrap()
-            .id
+    fn current(&self, change: ChangeId) -> RevisionId {
+        self.ledger.change(change).unwrap().current.unwrap()
     }
 
     fn member(&self, change: ChangeId) -> Member {
         Member {
             change,
-            revision: self.newest(change),
+            revision: self.current(change),
         }
     }
 
     fn join(&mut self, change: ChangeId) {
-        let revision = self.newest(change);
+        let revision = self.current(change);
         self.ok(Body::Join { change, revision });
     }
 
@@ -123,7 +117,7 @@ impl Book {
     }
 
     fn land(&mut self, change: ChangeId, after: char) -> Result<(), Invalid> {
-        let revision = self.newest(change);
+        let revision = self.current(change);
         self.record(Body::Land {
             change,
             revision,
@@ -169,10 +163,10 @@ impl Book {
 }
 
 #[test]
-fn a_change_joins_once_at_a_revision_and_again_at_another_at_the_back() {
+fn a_change_joins_once_and_only_at_its_head_now() {
     let mut b = Book::default();
     let a = b.change(1, 'a');
-    let old = b.newest(a);
+    let old = b.current(a);
     let unknown = RevisionId::new(&commit('0'), &commit('f'));
     assert_eq!(
         b.record(Body::Join {
@@ -182,6 +176,13 @@ fn a_change_joins_once_at_a_revision_and_again_at_another_at_the_back() {
         Err(Invalid::UnknownRevision(unknown))
     );
     let new = b.push(a, 'b');
+    assert_eq!(
+        b.record(Body::Join {
+            change: a,
+            revision: old
+        }),
+        Err(Invalid::NotCurrent(old))
+    );
     b.join(a);
     assert_eq!(
         b.record(Body::Join {
@@ -190,36 +191,74 @@ fn a_change_joins_once_at_a_revision_and_again_at_another_at_the_back() {
         }),
         Err(Invalid::Duplicate)
     );
-    let c = b.change(2, 'c');
-    b.join(c);
-
-    // Its head pushed back to an older one: a revision the ledger already
-    // holds, and the PR's head now.
-    b.ok(Body::Join {
-        change: a,
-        revision: old,
-    });
-    assert_eq!(b.joined(), [c, a]);
-    assert_eq!(b.ledger.train(&repo()).unwrap().joined()[1].revision, old);
-
-    // In a candidate in flight, it stops the candidate.
-    let id = b.build(8);
-    b.ok(Body::Join {
-        change: a,
-        revision: new,
-    });
-    assert_eq!(b.state(id), State::Broken { by: a });
-    assert_eq!(b.next(8).unwrap(), [c, a]);
 
     let closed = b.change(3, 'd');
     b.ok(Body::Close { change: closed });
     assert_eq!(
         b.record(Body::Join {
             change: closed,
-            revision: b.newest(closed)
+            revision: b.current(closed)
         }),
         Err(Invalid::Closed)
     );
+}
+
+#[test]
+fn a_head_pushed_back_to_an_older_one_takes_the_change_out_and_rejoins_at_the_back() {
+    let mut b = Book::default();
+    let a = b.change(1, 'a');
+    let old = b.current(a);
+    let new = b.push(a, 'b');
+    b.join(a);
+    let c = b.change(2, 'c');
+    b.join(c);
+
+    // Back to the head it had: the revision it already was, and its head
+    // now, recorded once more and no more than that.
+    assert_eq!(b.push(a, 'a'), old);
+    assert_eq!(b.ledger.change(a).unwrap().revisions.len(), 2);
+    assert_eq!(
+        b.record(Body::Revision {
+            change: a,
+            base: commit('0'),
+            head: commit('a'),
+        }),
+        Err(Invalid::Duplicate)
+    );
+    assert_eq!(b.joined(), [c]);
+    assert_eq!(
+        b.record(Body::Join {
+            change: a,
+            revision: new
+        }),
+        Err(Invalid::NotCurrent(new))
+    );
+    b.join(a);
+    assert_eq!(b.joined(), [c, a]);
+    assert_eq!(b.ledger.train(&repo()).unwrap().joined()[1].revision, old);
+
+    // In a candidate in flight, gating or green, it stops the candidate.
+    let id = b.build(8);
+    assert_eq!(b.push(a, 'b'), new);
+    assert_eq!(b.state(id), State::Broken { by: a });
+    assert_eq!(b.next(8).unwrap(), [c]);
+    b.join(a);
+    let id = b.build(8);
+    b.verdict(id, Verdict::Green);
+    // Seen again at its head now, it's nothing new.
+    assert_eq!(
+        b.record(Body::Revision {
+            change: c,
+            base: commit('0'),
+            head: commit('c'),
+        }),
+        Err(Invalid::Duplicate)
+    );
+    assert_eq!(b.state(id), State::Green);
+    b.push(c, 'e');
+    b.push(c, 'c');
+    assert_eq!(b.state(id), State::Broken { by: c });
+    assert_eq!(b.next(8).unwrap(), [a]);
 }
 
 #[test]
@@ -370,6 +409,59 @@ fn a_landing_before_the_gate_says_isnt_the_candidates_and_stops_it() {
     );
     // The rest wait again, where they joined.
     assert_eq!(b.next(8).unwrap(), [a]);
+}
+
+#[test]
+fn a_green_candidates_changes_land_in_its_order_or_stop_it() {
+    let mut b = Book::default();
+    let [p, q, r]: [ChangeId; 3] = std::array::from_fn(|i| b.change(i as u64 + 1, 'a'));
+    for c in [p, q, r] {
+        b.join(c);
+    }
+
+    // Out of order from the first.
+    let id = b.build(8);
+    b.verdict(id, Verdict::Green);
+    b.land(q, 'd').unwrap();
+    assert_eq!(b.landing(q), None);
+    assert_eq!(b.state(id), State::Broken { by: q });
+    assert_eq!(
+        b.record(Body::Finish {
+            candidate: id,
+            tree: tree('7')
+        }),
+        Err(Invalid::NotLanded)
+    );
+    assert_eq!(b.next(8).unwrap(), [p, r]);
+
+    // Out of order after the first landed through it.
+    let s = b.change(4, 'b');
+    b.join(s);
+    let id = b.build(8);
+    assert_eq!(b.changes(id), [p, r, s]);
+    b.verdict(id, Verdict::Green);
+    b.land(p, 'e').unwrap();
+    assert_eq!(b.landing(p), Some(id));
+    b.land(s, 'f').unwrap();
+    assert_eq!(b.landing(s), None);
+    assert_eq!(b.state(id), State::Broken { by: s });
+    assert_eq!(b.next(8).unwrap(), [r]);
+
+    // A half's rest goes back as what's left of the half.
+    let [t, u, v, w]: [ChangeId; 4] = std::array::from_fn(|i| b.change(i as u64 + 5, 'a'));
+    for c in [t, u, v, w] {
+        b.join(c);
+    }
+    let whole = b.build(8);
+    assert_eq!(b.changes(whole), [r, t, u, v, w]);
+    b.verdict(whole, Verdict::Red);
+    let older = b.build(8);
+    assert_eq!(b.changes(older), [r, t, u]);
+    b.verdict(older, Verdict::Green);
+    b.land(u, '9').unwrap();
+    assert_eq!(b.state(older), State::Broken { by: u });
+    assert_eq!(b.next(8).unwrap(), [r, t]);
+    assert_eq!(b.ledger.next(&repo(), 8).unwrap().of, Some(whole));
 }
 
 #[test]

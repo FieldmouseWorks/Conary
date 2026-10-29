@@ -281,6 +281,32 @@ fn a_new_head_is_a_new_revision_and_the_old_evidence_stays_on_the_old_one() {
 }
 
 #[test]
+fn a_head_pushed_back_to_an_older_one_is_that_revision_again_and_current() {
+    let (_dir, mut store) = open();
+    let mut f = fake();
+    let change = pull(&mut store, &f, &config(), &repo(), 9).unwrap().change;
+    let old = RevisionId::new(&sha(FORK), &sha(HEAD));
+    f.pulls = vec![pr(9, HEAD2, "open", false)];
+    pull(&mut store, &f, &config(), &repo(), 9).unwrap();
+    f.pulls = vec![pr(9, HEAD, "open", false)];
+    assert_eq!(
+        pull(&mut store, &f, &config(), &repo(), 9)
+            .unwrap()
+            .recorded,
+        1
+    );
+    let c = store.ledger().change(change).unwrap();
+    assert_eq!(c.revisions.len(), 2);
+    assert_eq!(c.current, Some(old));
+    assert_eq!(
+        pull(&mut store, &f, &config(), &repo(), 9)
+            .unwrap()
+            .recorded,
+        0
+    );
+}
+
+#[test]
 fn a_merged_pr_lands_on_the_commit_it_made() {
     let (_dir, mut store) = open();
     let mut f = fake();

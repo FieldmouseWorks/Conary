@@ -140,7 +140,7 @@ change lands, closes or is reverted.
 | `intent` | Why it exists: the task (issue or project thread), a one-line summary, and the PR body. The full text lives in the ledger. |
 | `author` | Who made it: actor kind (agent, person, bot), the session that opened it, the tool and the model when known. |
 | `class` | R0, R1 or R2, set by policy (section 4.4). The author can raise it, never lower it. |
-| `revisions` | Every head Conary saw, in order. |
+| `revisions` | Every head Conary saw, in order, and the one the PR is at now. |
 | `status` | `open`, `landed`, `closed`, `reverted`. |
 | `links` | `reverts`, `fixes` (a red trunk), `supersedes`, `depends-on`. |
 
@@ -150,10 +150,11 @@ A revision is one head of a change on one base: `(base commit, head commit)`.
 Its ID is the hash of those two commit IDs. A git commit ID already hashes its
 tree, parents and message, so the revision ID changes with anything about the
 revision: a reworded commit, new ancestry, a rebase or a retarget all give a
-new revision, and none of them overwrites an old one. Evidence binds to the
-revision. Trees are named by their own git IDs, and two revisions sharing a
-tree is a fact Conary can report, never a reason to count one's evidence for
-the other.
+new revision, and none of them overwrites an old one. A head pushed back to
+one Conary already saw is that revision again, and the PR's revision now.
+Evidence binds to the revision. Trees are named by their own git IDs, and two
+revisions sharing a tree is a fact Conary can report, never a reason to count
+one's evidence for the other.
 
 For a GitHub PR the base is the merge base of the head and the base branch:
 the tree its diff and its review are against, which trunk moving doesn't
@@ -358,18 +359,18 @@ so the wait is one run, however many are waiting.
 The ledger keeps each repo's train (`crates/conary-core/src/ledger/train.rs`)
 and refuses a candidate out of turn: a red candidate's halves first, each
 whole, then any number of the changes waiting, from the first to join. A
-change leaves by a `leave` op when nothing else says so (it's no longer
+change joins only at the PR's revision now, and joining again puts it at the
+back. It leaves by a `leave` op when nothing else says so (it's no longer
 ready, its head won't merge, or GitHub refused its merge), and by itself
-with a new head, a close, a landing, or a red candidate it was alone in.
-Joining again at another revision (a head pushed back to an older one is a
-revision the ledger already holds) puts it at the back. One
-leaving a candidate in flight stops the candidate there, and its other
-changes wait again as they were. A candidate's `verdict` is green, red or
-dropped: dropped is a gate that never finished, the stall watchdog's last
-word, and its changes wait again as they joined. A landing is the
-candidate's when it lands one of its changes, at that revision, after the
-verdict said green, and `finish` records the tree trunk ended on once the
-last of them has.
+with a new head (a head pushed back to an older one included), a close, a
+landing, or a red candidate it was alone in. One leaving a candidate in
+flight stops the candidate there, and its other changes wait again as they
+were. A candidate's `verdict` is green, red or dropped: dropped is a gate
+that never finished, the stall watchdog's last word, and its changes wait
+again as they joined. A landing is the candidate's when it lands the next
+of its changes, in order, at that revision, after the verdict said green;
+any other landing stops it. `finish` records the tree trunk ended on once
+the last of them has.
 
 Trunk's own CI still runs after each landing, and red there still starts an
 undo or a fix. After a train's landing it runs on a tree the gate has just

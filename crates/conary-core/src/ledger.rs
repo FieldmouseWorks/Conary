@@ -70,6 +70,9 @@ pub struct Change {
     /// Each revision once, in the order first seen. A head that comes back
     /// after a force-push is the revision it already was.
     pub revisions: Vec<Revision>,
+    /// The revision the PR is at, as last seen: the one it came back to, if
+    /// it did.
+    pub current: Option<RevisionId>,
     pub evidence: Vec<Evidence>,
     pub landing: Option<Landing>,
     #[serde(skip)]
@@ -113,6 +116,8 @@ pub enum Invalid {
     /// The change id or the PR is already in the ledger.
     AlreadyObserved,
     UnknownRevision(RevisionId),
+    /// That revision isn't the PR's head now.
+    NotCurrent(RevisionId),
     AlreadyLanded,
     Closed,
     NotClosed,
@@ -137,6 +142,7 @@ impl std::fmt::Display for Invalid {
             Self::Duplicate => f.write_str("already recorded"),
             Self::AlreadyObserved => f.write_str("that change or PR is already in the ledger"),
             Self::UnknownRevision(id) => write!(f, "no revision {id} on that change"),
+            Self::NotCurrent(id) => write!(f, "revision {id} isn't the change's head now"),
             Self::AlreadyLanded => f.write_str("the change already landed"),
             Self::Closed => f.write_str("the change is closed"),
             Self::NotClosed => f.write_str("the change isn't closed"),
@@ -240,8 +246,7 @@ impl Ledger {
                 }
             }
             Body::Revision { change, base, head } => {
-                let id = RevisionId::new(base, head);
-                if self.existing(*change)?.revision(id).is_some() {
+                if self.existing(*change)?.current == Some(RevisionId::new(base, head)) {
                     return Err(Invalid::Duplicate);
                 }
             }
@@ -356,6 +361,7 @@ impl Ledger {
                             seen: at,
                             intent: None,
                             revisions: Vec::new(),
+                            current: None,
                             evidence: Vec::new(),
                             landing: None,
                             closed: false,
@@ -389,12 +395,18 @@ impl Ledger {
                     task: task.clone(),
                 })
             }
-            Body::Revision { base, head, .. } => c.revisions.push(Revision {
-                id: RevisionId::new(base, head),
-                base: base.clone(),
-                head: head.clone(),
-                at,
-            }),
+            Body::Revision { base, head, .. } => {
+                let id = RevisionId::new(base, head);
+                if c.revision(id).is_none() {
+                    c.revisions.push(Revision {
+                        id,
+                        base: base.clone(),
+                        head: head.clone(),
+                        at,
+                    });
+                }
+                c.current = Some(id);
+            }
             Body::Evidence {
                 revision,
                 kind,

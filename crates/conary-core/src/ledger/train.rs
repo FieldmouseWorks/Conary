@@ -172,14 +172,12 @@ impl Ledger {
         if c.revision(revision).is_none() {
             return Err(Invalid::UnknownRevision(revision));
         }
-        // Which revision is the PR's head now is GitHub's to say, not the
-        // ledger's: a head pushed back to an older one is a revision it
-        // already holds.
-        if self
-            .train_of(change)
-            .and_then(|t| t.seat(change))
-            .is_some_and(|m| m.revision == revision)
-        {
+        if c.current != Some(revision) {
+            return Err(Invalid::NotCurrent(revision));
+        }
+        // A change in the train is in it at its head now: a new head takes
+        // it out.
+        if self.train_of(change).and_then(|t| t.seat(change)).is_some() {
             return Err(Invalid::Duplicate);
         }
         Ok(())
@@ -264,7 +262,6 @@ impl Ledger {
     pub(super) fn apply_train(&mut self, body: &Body, at: i64) -> bool {
         match body {
             Body::Join { change, revision } => {
-                self.unseat(*change);
                 let repo = self.changes[change].repo.clone();
                 self.trains.entry(repo).or_default().joined.push(Member {
                     change: *change,
@@ -401,9 +398,10 @@ impl Ledger {
         }
     }
 
-    /// The candidate a change's landing came through, if it did: it was in
-    /// the green candidate in flight, at the revision that landed. Any other
-    /// landing takes it out of the train like a new head would.
+    /// The candidate a change's landing came through, if it did: the green
+    /// candidate in flight lands its changes in order, and this was the next
+    /// of them, at the revision it holds. Any other landing takes it out of
+    /// the train like a new head would.
     pub(super) fn land_through_train(
         &mut self,
         change: ChangeId,
@@ -414,9 +412,7 @@ impl Ledger {
         let through = train.in_flight.filter(|id| {
             let c = &self.candidates[id];
             c.state == State::Green
-                && c.changes
-                    .iter()
-                    .any(|m| (m.change, m.revision) == (change, revision))
+                && c.changes.get(c.landed.len()) == Some(&Member { change, revision })
         });
         let Some(id) = through else {
             self.unseat(change);
