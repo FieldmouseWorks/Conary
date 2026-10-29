@@ -1,8 +1,7 @@
 //! `cn train`: a repo's train (`docs/DESIGN.md` section 4.7), for the
 //! steward to run as its App until conaryd runs the landing flow. It joins
-//! the changes the steward settled, builds and splits the candidates, and
-//! says which landings to make; the steward makes them, and says what the
-//! candidate's gate said.
+//! the changes the steward settled, builds and splits the candidates, reads
+//! their gates, and lands the green ones.
 
 use clap::Subcommand;
 use serde_json::{Value, json};
@@ -10,14 +9,16 @@ use serde_json::{Value, json};
 use conary_core::ledger::{Candidate, Ledger};
 use conary_core::op::{Left, Repo, Verdict};
 use conary_core::{CandidateId, ChangeId};
-use conary_github::train::{self, Now, Settings, Stepped};
+use conary_github::train::{self, Joined, Now, Settings, Stepped};
 
 use crate::{Cli, GithubArgs, Result, read, word, write, write_notes};
 
 #[derive(Subcommand)]
 pub enum TrainCommand {
     /// Put a PR in its repo's train: everything but the gate says its head
-    /// can land. Refused when the PR's head on GitHub is another.
+    /// can land. Refused when the PR's head on GitHub is another; held when
+    /// it left as it is (red alone, a conflict, a refused merge) and nothing
+    /// has moved since.
     Join {
         /// The repository, as owner/name.
         repo: Repo,
@@ -44,10 +45,10 @@ pub enum TrainCommand {
     },
     /// One step of a repo's train, to run on each of its events: finish the
     /// candidates whose landings all came through, build the next if none
-    /// is in flight, record the gate's results on the one that is, and
-    /// delete the branches of every other. Says where the train is: idle,
-    /// gating (on its train branch) or landing (the PRs to merge, in order,
-    /// each at its head).
+    /// is in flight, read the gate of the one that is and say its verdict,
+    /// land a green one's PRs in order, and delete the branches of every
+    /// other. Says what it did and where the train is: idle, gating (on its
+    /// train branch) or landing (waiting on GitHub to show a merge).
     Step {
         /// The repository, as owner/name.
         repo: Repo,
@@ -57,12 +58,16 @@ pub enum TrainCommand {
         /// The most changes a candidate holds.
         #[arg(long, default_value_t = 8, value_parser = clap::value_parser!(u64).range(1..))]
         size: u64,
+        /// A check the gate waits for before it can be green, even before it
+        /// reports: a proof job's. Repeat for each.
+        #[arg(long = "require", value_name = "CHECK")]
+        require: Vec<String>,
         #[command(flatten)]
         github: GithubArgs,
     },
-    /// Record how a candidate's gate ended: green (its changes land), red
-    /// (it splits, or its one change leaves) or dropped (it never finished,
-    /// and its changes wait again).
+    /// Record how a candidate's gate ended, when `step` can't tell: dropped
+    /// (it never finished, and its changes wait again), or green or red by
+    /// hand.
     Verdict {
         /// The repository, as owner/name.
         repo: Repo,
@@ -100,12 +105,19 @@ pub fn run(cli: &Cli, command: &TrainCommand) -> Result<()> {
     let store = &mut a.store;
     let done: Result<(Value, String)> = match command {
         TrainCommand::Join { pr, head, .. } => train::join(store, &api, &config, repo, *pr, head)
-            .map(|joined| {
-                let said = if joined { "joined" } else { "already in" };
-                (
-                    json!({"pr": pr, "joined": joined}),
-                    format!("{repo}#{pr}: {said} the train at {head}"),
-                )
+            .map(|joined| match joined {
+                Joined::Joined | Joined::Already => {
+                    let new = joined == Joined::Joined;
+                    let said = if new { "joined" } else { "already in" };
+                    (
+                        json!({"pr": pr, "joined": new}),
+                        format!("{repo}#{pr}: {said} the train at {head}"),
+                    )
+                }
+                Joined::Held(why) => (
+                    json!({"pr": pr, "joined": false, "held": word(why)}),
+                    format!("{repo}#{pr}: held out of the train: {why}"),
+                ),
             })
             .map_err(Into::into),
         TrainCommand::Leave { pr, why, .. } => train::leave(store, repo, *pr, *why)
@@ -117,10 +129,16 @@ pub fn run(cli: &Cli, command: &TrainCommand) -> Result<()> {
                 )
             })
             .map_err(Into::into),
-        TrainCommand::Step { trunk, size, .. } => {
+        TrainCommand::Step {
+            trunk,
+            size,
+            require,
+            ..
+        } => {
             let settings = Settings {
                 trunk: trunk.clone(),
                 size: usize::try_from(*size)?,
+                require: require.clone(),
             };
             train::step(store, &api, &api, &config, repo, &settings)
                 .map(|s| (stepped(&s), human_stepped(repo, &s)))
@@ -171,6 +189,26 @@ fn human_stepped(repo: &Repo, s: &Stepped) -> String {
             c.pr, c.base
         ));
     }
+    for (id, verdict) in &s.verdicts {
+        lines.push(format!("{repo}: candidate {id} {}", word(verdict)));
+    }
+    for r in &s.red {
+        let checks: Vec<&str> = r.failed.iter().map(|f| f.check.as_str()).collect();
+        lines.push(format!(
+            "{repo}#{}: red alone ({}), left the train",
+            r.pr,
+            checks.join(", ")
+        ));
+    }
+    for pr in &s.landed {
+        lines.push(format!("{repo}#{pr}: merged"));
+    }
+    for r in &s.refused {
+        lines.push(format!(
+            "{repo}#{}: GitHub refused its merge ({}), left the train",
+            r.pr, r.why
+        ));
+    }
     for id in &s.finished {
         lines.push(format!("{repo}: candidate {id} landed whole"));
     }
@@ -180,18 +218,27 @@ fn human_stepped(repo: &Repo, s: &Stepped) -> String {
             candidate,
             branch,
             prs,
+            waiting,
             ..
-        } => format!(
-            "{repo}: candidate {candidate} gating on {branch}: {}",
-            list(prs)
-        ),
+        } => {
+            let on = if waiting.is_empty() {
+                "no check yet".to_owned()
+            } else {
+                waiting.join(", ")
+            };
+            format!(
+                "{repo}: candidate {candidate} gating on {branch}: {}, waiting on {on}",
+                list(prs)
+            )
+        }
         Now::Landing {
             candidate,
             landings,
         } => {
             let prs: Vec<u64> = landings.iter().map(|l| l.pr).collect();
+            let first = list(&prs[..prs.len().min(1)]);
             format!(
-                "{repo}: candidate {candidate} green, to land: {}",
+                "{repo}: candidate {candidate} green, landing {}: waiting on GitHub to show {first} merged",
                 list(&prs)
             )
         }

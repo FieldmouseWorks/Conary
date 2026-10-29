@@ -33,14 +33,16 @@ Each write also brings the repository's notes up to date, and `cn why` in a
 clone with no ledger beside it answers from them ([notes](docs/notes.md)).
 
 `cn train` runs a repository's train ([the
-train](docs/DESIGN.md#47-the-train)) for the steward: `join` puts a settled
-PR in at its head, `step`, on each of the repository's events, builds the
-next candidate, records its gate's results and names the PRs to merge, in
-order, and `verdict` says how a candidate's gate ended.
+train](docs/DESIGN.md#47-the-train)) for the steward, as its App: `join` puts
+a settled PR in at its head, and `step`, on each of the repository's events,
+builds the next candidate, reads its gate, and lands a green one's PRs in
+order. `--require` names the checks the gate waits for even before they
+report. `verdict` records one `step` can't tell: `dropped`, for a gate that
+never finished.
 
     cn train join FieldmouseWorks/remi 174 --head <sha>
-    cn train step FieldmouseWorks/remi
-    cn train verdict FieldmouseWorks/remi <candidate> green
+    cn train step FieldmouseWorks/remi --require gate
+    cn train verdict FieldmouseWorks/remi <candidate> dropped
     cn train show FieldmouseWorks/remi --human
 
 `cn --help` and each command's `--help` list the rest, environment variables

@@ -12,7 +12,7 @@ use crate::op::{Actor, Authority, Body, CheckKind, Op, Outcome, Repo};
 
 mod train;
 
-pub use train::{Candidate, CandidateEvidence, Plan, State, Train};
+pub use train::{Candidate, CandidateEvidence, Held, Plan, State, Train};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Intent {
@@ -133,6 +133,8 @@ pub enum Invalid {
     NotGating,
     /// Not every change in the candidate has landed through it.
     NotLanded,
+    /// The change left its train and can't join again as it is.
+    Held(Held),
 }
 
 impl std::fmt::Display for Invalid {
@@ -155,6 +157,7 @@ impl std::fmt::Display for Invalid {
             Self::NotLanded => {
                 f.write_str("not every change in that candidate has landed through it")
             }
+            Self::Held(why) => write!(f, "the change can't join its train again: {why}"),
         }
     }
 }
@@ -372,12 +375,17 @@ impl Ledger {
                     repo,
                     before,
                     after,
-                } => self.outside.push(Outside {
-                    repo: repo.clone(),
-                    before: before.clone(),
-                    after: after.clone(),
-                    at,
-                }),
+                } => {
+                    if let Some(train) = self.trains.get_mut(repo) {
+                        train.moved();
+                    }
+                    self.outside.push(Outside {
+                        repo: repo.clone(),
+                        before: before.clone(),
+                        after: after.clone(),
+                        at,
+                    })
+                }
                 _ => unreachable!("check refuses an op about an unknown change"),
             }
             return;

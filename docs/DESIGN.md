@@ -333,9 +333,15 @@ so the wait is one run, however many are waiting.
   on the train branch's creation, and the steward's proof jobs. Evidence on a
   candidate is about that commit's tree, and counts by its producer's
   attestation like any other (section 9), and only for the commit the train
-  recorded: whatever else is pushed to its branch counts for nothing.
+  recorded: whatever else is pushed to its branch counts for nothing. The
+  gate is green once every check on that commit has passed and the ones the
+  repo requires (its proof jobs, which post nothing until they run) are among
+  them, and red once any check's latest result failed. No check at all is no
+  pass.
 - **Green.** Each change lands in order, through its own PR's merge at the
-  head the candidate holds. Once the last has, trunk's tree is checked
+  head the candidate holds, with the train's status, `conary/train`, on that
+  head first. A train repo's rules require that status, so nothing lands its
+  PRs but the train. Once the last has, trunk's tree is checked
   against the candidate's. If it's the same tree, the candidate's evidence
   is the last landing's, for the tree trunk ended on: the case rule 3
   already gives R2. The landings before it made trees no gate ran on (trunk
@@ -344,14 +350,17 @@ so the wait is one run, however many are waiting.
   run is on the candidate's tree. If trunk's tree isn't the candidate's
   (trunk moved meanwhile, or GitHub merged a change some other way), trunk's
   own CI is the landed tree's evidence, as it is without a train. A merge
-  GitHub refuses partway puts the changes after it back in the train.
+  GitHub refuses partway puts the changes after it back in the train, and
+  the refused PR's train status becomes an error, so nothing else lands it.
 - **Red.** The failed check gets the one second try every failed test gets.
   Red again, the candidate splits in two: its older half goes first, as a
   candidate of its own on trunk as it stands, then the rest, so a half
   that's green lands without waiting on the other. A change red on its own
   leaves the train and gets the fix job red CI gets today. One bad change in
   eight costs up to seven runs, still fewer than the eight it stands for, and
-  `size` is the knob if the ledger shows red candidates costing more.
+  `size` is the knob if the ledger shows red candidates costing more. The
+  change red on its own gets the train's status as a failure, naming the
+  checks, which is how the steward knows to start that job.
 - **R2.** An R2 change rides in a candidate of its own, and lands only while
   trunk is still that candidate's base: on evidence for exactly the tree it
   makes.
@@ -365,7 +374,11 @@ ready, its head won't merge, or GitHub refused its merge), and by itself
 with a new head (a head pushed back to an older one included), a close, a
 landing, or a red candidate it was alone in. One leaving a candidate in
 flight stops the candidate there, and its other changes wait again as they
-were. A candidate's `verdict` is green, red or dropped: dropped is a gate
+were. A change that left red alone, on a conflict or on a refused merge is
+held: it can't join again at that revision, so it never rebuilds the
+candidate it failed in. A new head lets it go, and for a conflict or a
+refusal so does trunk moving, or, for a conflict, one of the changes it was
+merged after leaving. A candidate's `verdict` is green, red or dropped: dropped is a gate
 that never finished, the stall watchdog's last word, and its changes wait
 again as they joined. A landing is the candidate's when it lands the next
 of its changes, in order, at that revision, after the verdict said green;
@@ -392,8 +405,8 @@ reviewed. The train acts on events (a change ready, a candidate's checks
 finished, a landing), each one a pass of the steward's, never on a timer,
 and a candidate whose checks never finish is a stall for the stall watchdog
 like any other wait. Until conaryd runs the flow (M6), the steward settles a change and hands it
-to `cn train`, which the steward runs as its App: it builds and splits the
-candidates and names the landings, and the steward makes them.
+to `cn train`, which runs in the steward's unit as its App: it builds and
+splits the candidates, reads their gates, and lands the green ones.
 
 ## 5. Undo
 
@@ -510,8 +523,8 @@ Targets on remi, warm cache, a year of ledger across every repo:
 - The steward acts on GitHub as its own GitHub App, never as the owner's
   login ([#14](https://github.com/FieldmouseWorks/Conary/issues/14)).
   `review-settled` and the reviewers' reviews count only from the App's bot
-  (`cn --reviewer SLUG[bot]`), and the repos' rules require that status from
-  the App's integration ID, so a session holding the owner's token can't post
+  (`cn --reviewer SLUG[bot]`), and the repos' rules require that status, and
+  in a train repo `conary/train`, from the App's integration ID, so a session holding the owner's token can't post
   one that counts, to Conary or to GitHub. The App's key reaches only the
   steward's units on the machine; a Claude running there as the machine
   user, with its sudo, can still read it.

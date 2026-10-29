@@ -168,6 +168,9 @@ fn fake() -> Fake {
     f.statuses.insert(
         HEAD.into(),
         json!([
+            // The train's word that it's landing this head: not a check.
+            {"context": "conary/train", "state": "success", "target_url": null,
+             "creator": {"login": STEWARD, "type": "User"}, "created_at": "2026-10-27T11:59:30Z"},
             {"context": "gate", "state": "success", "target_url": "https://remi/gate/2"},
             {"context": "review-settled", "state": "success", "target_url": null,
              "creator": {"login": STEWARD, "type": "User"}, "created_at": "2026-10-27T11:59:00Z"},

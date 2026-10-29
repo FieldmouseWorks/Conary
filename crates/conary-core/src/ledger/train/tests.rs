@@ -672,3 +672,122 @@ fn the_trains_ops_read_back_as_written() {
     assert_eq!(json["op"], "leave");
     assert_eq!(json["why"], "refused");
 }
+
+#[test]
+fn a_change_red_alone_joins_again_only_at_a_new_head() {
+    let mut b = Book::default();
+    let [p, q]: [ChangeId; 2] = std::array::from_fn(|i| b.change(i as u64 + 1, 'a'));
+    b.join(p);
+    let alone = b.build(8);
+    b.verdict(alone, Verdict::Red);
+    let revision = b.current(p);
+    assert_eq!(
+        b.record(Body::Join {
+            change: p,
+            revision
+        }),
+        Err(Invalid::Held(Held::Red))
+    );
+    // Trunk moving doesn't make its head any less red.
+    b.join(q);
+    let next = b.build(8);
+    b.verdict(next, Verdict::Green);
+    b.land(q, 'd').unwrap();
+    assert_eq!(
+        b.record(Body::Join {
+            change: p,
+            revision
+        }),
+        Err(Invalid::Held(Held::Red))
+    );
+    b.push(p, 'b');
+    b.join(p);
+    assert_eq!(b.joined(), [p]);
+}
+
+#[test]
+fn a_change_that_wont_merge_joins_again_once_what_it_was_after_changes() {
+    // Built after p, q won't merge; r, behind it, has nothing to do with it.
+    let setup = || {
+        let mut b = Book::default();
+        let [p, q, r]: [ChangeId; 3] = std::array::from_fn(|i| b.change(i as u64 + 1, 'a'));
+        for c in [p, q, r] {
+            b.join(c);
+        }
+        b.ok(Body::Leave {
+            change: q,
+            why: Left::Conflict,
+        });
+        let revision = b.current(q);
+        let held = Body::Join {
+            change: q,
+            revision,
+        };
+        assert_eq!(b.record(held.clone()), Err(Invalid::Held(Held::Conflict)));
+        (b, [p, q, r], held)
+    };
+
+    let (mut b, [_, q, r], held) = setup();
+    b.ok(Body::Leave {
+        change: r,
+        why: Left::Unready,
+    });
+    assert_eq!(b.record(held), Err(Invalid::Held(Held::Conflict)));
+    b.push(q, 'b');
+    b.join(q);
+
+    // p leaving: q goes on trunk as it is.
+    let (mut b, [p, q, _], held) = setup();
+    b.ok(Body::Leave {
+        change: p,
+        why: Left::Unready,
+    });
+    b.ok(held);
+    assert!(b.joined().contains(&q));
+
+    // p landing: trunk moved.
+    let (mut b, [p, q, _], held) = setup();
+    let id = b.build(1);
+    assert_eq!(b.changes(id), [p]);
+    b.verdict(id, Verdict::Green);
+    b.land(p, 'd').unwrap();
+    b.ok(held);
+    assert!(b.joined().contains(&q));
+
+    // Something else reaching trunk moves it too.
+    let (mut b, [_, q, _], held) = setup();
+    b.ok(Body::Outside {
+        repo: repo(),
+        before: None,
+        after: commit('e'),
+    });
+    b.ok(held);
+    assert!(b.joined().contains(&q));
+}
+
+#[test]
+fn a_refused_change_joins_again_once_trunk_moves() {
+    let mut b = Book::default();
+    let changes: Vec<ChangeId> = (1..=3).map(|pr| b.change(pr, 'a')).collect();
+    for c in &changes {
+        b.join(*c);
+    }
+    let id = b.build(8);
+    b.verdict(id, Verdict::Green);
+    b.land(changes[0], 'd').unwrap();
+    b.ok(Body::Leave {
+        change: changes[1],
+        why: Left::Refused,
+    });
+    let revision = b.current(changes[1]);
+    let again = Body::Join {
+        change: changes[1],
+        revision,
+    };
+    assert_eq!(b.record(again.clone()), Err(Invalid::Held(Held::Refused)));
+    let next = b.build(8);
+    b.verdict(next, Verdict::Green);
+    b.land(changes[2], 'e').unwrap();
+    b.ok(again);
+    assert_eq!(b.joined(), [changes[1]]);
+}

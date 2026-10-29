@@ -639,6 +639,33 @@ struct NamedRef {
     name: String,
 }
 
+/// How a repo lets PRs be merged.
+#[derive(Debug, Deserialize)]
+struct MergeMethods {
+    allow_squash_merge: Option<bool>,
+    allow_merge_commit: Option<bool>,
+    allow_rebase_merge: Option<bool>,
+}
+
+impl MergeMethods {
+    /// The method the steward merges with too: squash, else a merge
+    /// commit, else rebase. None when GitHub didn't say, for its default.
+    fn first(&self) -> Option<&'static str> {
+        [
+            (self.allow_squash_merge, "squash"),
+            (self.allow_merge_commit, "merge"),
+            (self.allow_rebase_merge, "rebase"),
+        ]
+        .into_iter()
+        .find_map(|(allowed, method)| (allowed == Some(true)).then_some(method))
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct Refusal {
+    message: Option<String>,
+}
+
 /// What the merges API answers a merge with: the commit, and in it its tree.
 #[derive(Debug, Deserialize)]
 struct MergeCommit {
@@ -725,6 +752,66 @@ impl crate::train::Forge for Api {
     fn tree(&self, repo: &str, sha: &str) -> Result<String, ApiError> {
         let commit: TreeCommit = self.get(&format!("/repos/{repo}/git/commits/{sha}"))?;
         Ok(commit.tree.sha)
+    }
+
+    fn mark(
+        &self,
+        repo: &str,
+        sha: &str,
+        mark: crate::train::Mark,
+        description: &str,
+        url: Option<&str>,
+    ) -> Result<(), ApiError> {
+        use crate::train::{CONTEXT, Mark};
+        let state = match mark {
+            Mark::Landing => "success",
+            Mark::Red => "failure",
+            Mark::Refused => "error",
+        };
+        // GitHub takes a description of up to 140 characters.
+        let description: String = description.chars().take(140).collect();
+        let mut body =
+            serde_json::json!({"state": state, "context": CONTEXT, "description": description});
+        if let Some(url) = url {
+            body["target_url"] = serde_json::json!(url);
+        }
+        let _: serde_json::Value =
+            self.send(false, &format!("/repos/{repo}/statuses/{sha}"), &body)?;
+        Ok(())
+    }
+
+    fn land(&self, repo: &str, pr: u64, head: &str) -> Result<crate::train::PrMerge, ApiError> {
+        use crate::train::PrMerge;
+        let methods: MergeMethods = self.get(&format!("/repos/{repo}"))?;
+        // The head that was checked, or nothing: a push since makes the sha
+        // stale, and GitHub refuses it.
+        let mut body = serde_json::json!({"sha": head});
+        if let Some(method) = methods.first() {
+            body["merge_method"] = serde_json::json!(method);
+        }
+        let path = format!("/repos/{repo}/pulls/{pr}/merge");
+        let url = format!("{}{path}", self.base);
+        let mut response = self
+            .agent
+            .put(&url)
+            .header("Authorization", &self.authorization(&path)?)
+            .header("Accept", "application/vnd.github+json")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .send_json(body)
+            .map_err(|e| unreachable(&url, e))?;
+        match response.status().as_u16() {
+            200 => Ok(PrMerge::Merged),
+            // Not mergeable, a rule it doesn't meet, or the head moved.
+            status @ (405 | 409 | 422) => {
+                let said: Refusal =
+                    parse(&url, &read(&url, &mut response)?).unwrap_or(Refusal { message: None });
+                Ok(PrMerge::Refused(
+                    said.message
+                        .unwrap_or_else(|| format!("http status {status}")),
+                ))
+            }
+            _ => Err(failed(&url, &mut response)),
+        }
     }
 }
 

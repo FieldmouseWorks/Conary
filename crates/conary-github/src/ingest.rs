@@ -36,6 +36,12 @@ pub struct Config {
 }
 
 impl Config {
+    /// Whether a status in `context` is a check's result about its commit:
+    /// neither the steward's word nor the train's own status.
+    pub(crate) fn is_check(&self, context: &str) -> bool {
+        !self.own_contexts.iter().any(|c| c == context) && context != crate::train::CONTEXT
+    }
+
     fn check(&self) -> Result<(), IngestError> {
         if self.reviewers.is_empty() {
             return Err(IngestError::Config("no reviewer logins: the steward's"));
@@ -297,7 +303,7 @@ fn record(
     // Newest first from GitHub; recorded in the order they happened.
     let statuses = source.statuses(&full, head.as_str())?;
     for status in statuses.iter().rev() {
-        if !config.own_contexts.contains(&status.context) && current(status.created_at.as_deref()) {
+        if config.is_check(&status.context) && current(status.created_at.as_deref()) {
             evidence.extend(status_result(status).map(|f| f.evidence(change, revision)));
         }
     }
