@@ -24,9 +24,10 @@ use crate::bases::{BasesError, MergeBases};
 /// without them no merge could be told from a bypass.
 #[derive(Debug, Clone, Default)]
 pub struct Config {
-    /// The steward's logins: their review markers are recorded as reviews,
-    /// and only their own statuses are its word. Anyone else's marker is
-    /// text in a comment.
+    /// The steward's logins, as REST spells them: its GitHub App's bot,
+    /// `SLUG[bot]`, which no user's login can be. Their review markers are
+    /// recorded as reviews, and only their own statuses are its word.
+    /// Anyone else's marker is text in a comment.
     pub reviewers: Vec<String>,
     /// The steward's own status contexts. Its "settled" status is its landing
     /// decision, not evidence about the change, and a merge into trunk is a

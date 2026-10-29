@@ -16,7 +16,7 @@ use conary_core::op::{Authority, Repo};
 use conary_core::why::{self, Why};
 use conary_core::{reader, rpc};
 use conary_github::anchor::{self, Anchored};
-use conary_github::{Api, ApiError, Config, Etags, Ingested, ingest, notes};
+use conary_github::{Api, ApiError, Config, Etags, Ingested, Tokens, ingest, notes};
 
 #[derive(Parser)]
 #[command(
@@ -45,13 +45,22 @@ struct Remote {
     /// it on after.
     #[arg(long, env = "CONARY_ANCHOR_REPO")]
     anchor_repo: String,
+    /// A command that prints a token for the repository it's given (as
+    /// OWNER/NAME, its last argument), for when each repository's can
+    /// differ: a GitHub App's are one owner's each. It's split on whitespace
+    /// and run without a shell. A token it prints must stay good for five
+    /// minutes, and it exits 75 when GitHub can't be asked just now. Without
+    /// it, GH_TOKEN (or GITHUB_TOKEN) is every repository's.
+    // Help never shows its value: a credential can be one of its arguments.
+    #[arg(long, env = "CONARY_TOKEN_COMMAND", hide_env_values = true)]
+    token_command: Option<String>,
 }
 
 #[derive(clap::Args)]
 struct GithubArgs {
     #[command(flatten)]
     remote: Remote,
-    /// Logins whose review markers are reviews: the steward's account.
+    /// Logins whose review markers are reviews: the steward's App's bot, SLUG[bot].
     #[arg(long = "reviewer", env = "CONARY_REVIEWERS", value_delimiter = ',')]
     reviewers: Vec<String>,
     /// Status contexts that are the steward's own, not checks.
@@ -187,7 +196,7 @@ fn run(cli: &Cli) -> Result<()> {
             }
         }
         Command::Init { remote } => {
-            let api = Api::new(&remote.api, token()?);
+            let api = Api::new(&remote.api, tokens(remote)?);
             let made = anchor::init(
                 &cli.ledger,
                 &log::key_path(&cli.ledger),
@@ -210,7 +219,7 @@ fn run(cli: &Cli) -> Result<()> {
         }
         Command::Verify { remote } => {
             let key = log::load_public_key(&log::public_path(&log::key_path(&cli.ledger)))?;
-            let api = Api::new(&remote.api, token()?);
+            let api = Api::new(&remote.api, tokens(remote)?);
             let anchor = anchor::verify(&cli.ledger, &key, &api, &remote.anchor_repo)?;
             let seq = anchor.map_or(0, |a| a.seq);
             if cli.human {
@@ -255,15 +264,37 @@ fn run(cli: &Cli) -> Result<()> {
     Ok(())
 }
 
-fn token() -> Result<String> {
-    Ok(std::env::var("GH_TOKEN")
-        .or_else(|_| std::env::var("GITHUB_TOKEN"))
-        .map_err(|_| "set GH_TOKEN (or GITHUB_TOKEN) to reach GitHub")?)
+fn tokens(remote: &Remote) -> Result<Tokens> {
+    choose_tokens(
+        remote.token_command.as_deref(),
+        std::env::var("GH_TOKEN").ok().as_deref(),
+        std::env::var("GITHUB_TOKEN").ok().as_deref(),
+    )
+}
+
+/// The token command's, or else GH_TOKEN's, or else GITHUB_TOKEN's. An empty
+/// one is none, as gh reads them.
+fn choose_tokens(
+    command: Option<&str>,
+    gh_token: Option<&str>,
+    github_token: Option<&str>,
+) -> Result<Tokens> {
+    fn set(v: Option<&str>) -> Option<&str> {
+        v.filter(|v| !v.trim().is_empty())
+    }
+    if let Some(command) = set(command) {
+        return Ok(Tokens::command(command)?);
+    }
+    let token = set(gh_token)
+        .or(set(github_token))
+        .ok_or("set GH_TOKEN (or GITHUB_TOKEN, or a token command) to reach GitHub")?;
+    Ok(Tokens::given(token))
 }
 
 /// The ledger, open for writing once its log holds the anchor on GitHub.
 fn write(cli: &Cli, github: &GithubArgs) -> Result<(Anchored, Api, Config)> {
-    let api = Api::new(&github.remote.api, token()?).with_etags(Etags::open(&cli.ledger)?);
+    let api =
+        Api::new(&github.remote.api, tokens(&github.remote)?).with_etags(Etags::open(&cli.ledger)?);
     let key = log::load_signing_key(&log::key_path(&cli.ledger))?;
     let anchored = anchor::open(&cli.ledger, key, &api, &github.remote.anchor_repo)?;
     let config = Config {
@@ -371,6 +402,42 @@ mod tests {
     use super::*;
     use conary_github::IngestError;
     use conary_github::anchor::AnchorError;
+
+    #[test]
+    fn help_never_shows_the_token_command() {
+        use clap::CommandFactory;
+        let cli = Cli::command();
+        let args: Vec<_> = cli
+            .get_subcommands()
+            .flat_map(|c| c.get_arguments())
+            .filter(|a| a.get_id() == "token_command")
+            .collect();
+        assert!(!args.is_empty());
+        assert!(args.iter().all(|a| a.is_hide_env_values_set()));
+    }
+
+    #[test]
+    fn the_token_command_then_gh_token_then_github_token_and_an_empty_one_is_none() {
+        let token = |command, gh, github| {
+            choose_tokens(command, gh, github)
+                .map(|t| t.of("o/r").unwrap())
+                .map_err(|e| e.to_string())
+        };
+        assert_eq!(
+            token(Some("printf c-%s"), Some("g"), None),
+            Ok("c-o/r".into())
+        );
+        assert_eq!(token(Some(" "), Some("g"), Some("h")), Ok("g".into()));
+        assert_eq!(token(None, Some(""), Some("h")), Ok("h".into()));
+        assert_eq!(token(None, Some("g"), Some("h")), Ok("g".into()));
+        for (gh, github) in [(None, None), (Some(""), Some(" "))] {
+            assert!(
+                token(None, gh, github)
+                    .unwrap_err()
+                    .contains("set GH_TOKEN")
+            );
+        }
+    }
 
     #[test]
     fn github_unavailable_is_told_through_whatever_wraps_it() {

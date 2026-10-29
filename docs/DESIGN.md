@@ -227,8 +227,9 @@ own logins said `review-settled` success on that head after any retarget and
 before GitHub merged it, and trunk's commit is the PR's own: GitHub's merge
 of that head, or a commit GitHub ties to that PR. A word that came after the
 merge can't have authorized it. The landing records that status's login as
-what authorized it, which says what GitHub shows and no more: the login is
-shared with agent sessions until [#14](https://github.com/FieldmouseWorks/Conary/issues/14).
+what authorized it: the steward's GitHub App's bot, the one login that only
+the App's key can post as, and the one the repos' rules take the status from
+([#14](https://github.com/FieldmouseWorks/Conary/issues/14)).
 
 GitHub can't make that absolute: a repo admin can merge past the ruleset from
 the PR page, and anyone with the owner's token can push. So anything else that
@@ -406,11 +407,14 @@ Targets on remi, warm cache, a year of ledger across every repo:
     can read, over the result, the revision and the run's log hash.
   - Anything without a valid attestation doesn't count, whatever its source:
     a missing or unverifiable one fails closed.
-- Today the steward acts on GitHub as the owner's own login, so any session
-  holding that token could post a status that looks like the steward's. The
-  judge's seals already guard verdicts against that. A GitHub App for Conary
-  would let `review-settled` and landings be pinned to one integration ID
-  instead (section 11, [#14](https://github.com/FieldmouseWorks/Conary/issues/14)).
+- The steward acts on GitHub as its own GitHub App, never as the owner's
+  login ([#14](https://github.com/FieldmouseWorks/Conary/issues/14)).
+  `review-settled` and the reviewers' reviews count only from the App's bot
+  (`cn --reviewer SLUG[bot]`), and the repos' rules require that status from
+  the App's integration ID, so a session holding the owner's token can't post
+  one that counts, to Conary or to GitHub. The App's key reaches only the
+  steward's units on the machine; a Claude running there as the machine
+  user, with its sudo, can still read it.
 
 ## 10. Where a layer on git runs out
 
@@ -434,20 +438,17 @@ trust and undo across many small repos for one owner, which git serves fine.
 
 ## 11. Open questions
 
-1. **A GitHub App for Conary.** It would make the settle status and landings
-   unforgeable by a session with the owner's token. It costs a setup step the
-   owner has to do on GitHub. Worth it at M5 at the latest.
-2. **Naming new tests.** The negative-control rule needs to know which tests a
+1. **Naming new tests.** The negative-control rule needs to know which tests a
    change added. Per-language detection (new `#[test]` functions, new test
    files) or a list the PR declares and a judge checks?
-3. **How much intent to keep.** The session link and PR body are always
+2. **How much intent to keep.** The session link and PR body are always
    there. A session's own prompt usually isn't readable by the steward. Is the
    link enough, or should a Claude job's prompt be recorded when Conary
    started the job?
-4. **Backfill depth.** Every merged PR since autoland went live is cheap. All
+3. **Backfill depth.** Every merged PR since autoland went live is cheap. All
    of git history is possible, but most of it has no intent or evidence to
    record.
-5. **CLI name.** `cn` is short and doesn't clash with common Unix tools.
+4. **CLI name.** `cn` is short and doesn't clash with common Unix tools.
    Check before M1.
 
 ## 12. Milestones
