@@ -104,24 +104,36 @@ fn run(argv: &[String], repo: &str) -> Result<String, ApiError> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+
+    /// A token command at `dir/token` that runs `body` with /bin/sh. A child
+    /// writes it: were it written here, a test on another thread forking at
+    /// that moment would hold it open for writing until its exec, and running
+    /// it would fail with ETXTBSY.
+    pub(crate) fn script(dir: &std::path::Path, body: &str) -> String {
+        let script = dir.join("token");
+        let written = Command::new("/bin/sh")
+            .arg("-c")
+            .arg(r#"printf '#!/bin/sh\n%s\n' "$1" > "$0" && chmod 755 "$0""#)
+            .arg(&script)
+            .arg(body)
+            .status()
+            .unwrap();
+        assert!(written.success(), "{written}");
+        script.display().to_string()
+    }
 
     /// A command that prints a new token each time it's run (a count kept in
     /// `dir`) for the repository it's given, after `then`.
     fn counting(dir: &std::path::Path, then: &str) -> String {
-        let script = dir.join("token");
-        std::fs::write(
-            &script,
-            format!(
-                "#!/bin/sh\n{then}\nn=$(($(cat {count} 2>/dev/null || echo 0) + 1))\necho $n > {count}\necho \"t$n-$1\"\n",
+        script(
+            dir,
+            &format!(
+                "{then}\nn=$(($(cat {count} 2>/dev/null || echo 0) + 1))\necho $n > {count}\necho \"t$n-$1\"",
                 count = dir.join("count").display()
             ),
         )
-        .unwrap();
-        std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755))
-            .unwrap();
-        script.display().to_string()
     }
 
     #[test]
@@ -209,11 +221,7 @@ mod tests {
     fn anything_but_one_token_is_refused_without_quoting_it() {
         for printed in ["", "   ", "two words", "two\nlines"] {
             let dir = tempfile::tempdir().unwrap();
-            let script = dir.path().join("token");
-            std::fs::write(&script, format!("#!/bin/sh\nprintf '{printed}'\n")).unwrap();
-            std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755))
-                .unwrap();
-            let err = Tokens::command(&script.display().to_string())
+            let err = Tokens::command(&script(dir.path(), &format!("printf '{printed}'")))
                 .unwrap()
                 .of("a/r")
                 .unwrap_err();
