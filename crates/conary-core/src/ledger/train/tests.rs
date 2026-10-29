@@ -169,18 +169,10 @@ impl Book {
 }
 
 #[test]
-fn a_change_joins_once_at_its_newest_revision_while_open() {
+fn a_change_joins_once_at_a_revision_and_again_at_another_at_the_back() {
     let mut b = Book::default();
     let a = b.change(1, 'a');
     let old = b.newest(a);
-    b.push(a, 'b');
-    assert_eq!(
-        b.record(Body::Join {
-            change: a,
-            revision: old
-        }),
-        Err(Invalid::NotNewest(old))
-    );
     let unknown = RevisionId::new(&commit('0'), &commit('f'));
     assert_eq!(
         b.record(Body::Join {
@@ -189,16 +181,37 @@ fn a_change_joins_once_at_its_newest_revision_while_open() {
         }),
         Err(Invalid::UnknownRevision(unknown))
     );
+    let new = b.push(a, 'b');
     b.join(a);
     assert_eq!(
         b.record(Body::Join {
             change: a,
-            revision: b.newest(a)
+            revision: new
         }),
         Err(Invalid::Duplicate)
     );
+    let c = b.change(2, 'c');
+    b.join(c);
 
-    let closed = b.change(2, 'c');
+    // Its head pushed back to an older one: a revision the ledger already
+    // holds, and the PR's head now.
+    b.ok(Body::Join {
+        change: a,
+        revision: old,
+    });
+    assert_eq!(b.joined(), [c, a]);
+    assert_eq!(b.ledger.train(&repo()).unwrap().joined()[1].revision, old);
+
+    // In a candidate in flight, it stops the candidate.
+    let id = b.build(8);
+    b.ok(Body::Join {
+        change: a,
+        revision: new,
+    });
+    assert_eq!(b.state(id), State::Broken { by: a });
+    assert_eq!(b.next(8).unwrap(), [c, a]);
+
+    let closed = b.change(3, 'd');
     b.ok(Body::Close { change: closed });
     assert_eq!(
         b.record(Body::Join {
@@ -207,7 +220,6 @@ fn a_change_joins_once_at_its_newest_revision_while_open() {
         }),
         Err(Invalid::Closed)
     );
-    assert_eq!(b.joined(), [a]);
 }
 
 #[test]

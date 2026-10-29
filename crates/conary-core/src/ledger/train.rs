@@ -172,12 +172,13 @@ impl Ledger {
         if c.revision(revision).is_none() {
             return Err(Invalid::UnknownRevision(revision));
         }
-        if c.revisions.last().map(|r| r.id) != Some(revision) {
-            return Err(Invalid::NotNewest(revision));
-        }
+        // Which revision is the PR's head now is GitHub's to say, not the
+        // ledger's: a head pushed back to an older one is a revision it
+        // already holds.
         if self
             .train_of(change)
-            .is_some_and(|t| t.seat(change).is_some())
+            .and_then(|t| t.seat(change))
+            .is_some_and(|m| m.revision == revision)
         {
             return Err(Invalid::Duplicate);
         }
@@ -263,6 +264,7 @@ impl Ledger {
     pub(super) fn apply_train(&mut self, body: &Body, at: i64) -> bool {
         match body {
             Body::Join { change, revision } => {
+                self.unseat(*change);
                 let repo = self.changes[change].repo.clone();
                 self.trains.entry(repo).or_default().joined.push(Member {
                     change: *change,

@@ -360,7 +360,9 @@ and refuses a candidate out of turn: a red candidate's halves first, each
 whole, then any number of the changes waiting, from the first to join. A
 change leaves by a `leave` op when nothing else says so (it's no longer
 ready, its head won't merge, or GitHub refused its merge), and by itself
-with a new head, a close, a landing, or a red candidate it was alone in. One
+with a new head, a close, a landing, or a red candidate it was alone in.
+Joining again at another revision (a head pushed back to an older one is a
+revision the ledger already holds) puts it at the back. One
 leaving a candidate in flight stops the candidate there, and its other
 changes wait again as they were. A candidate's `verdict` is green, red or
 dropped: dropped is a gate that never finished, the stall watchdog's last

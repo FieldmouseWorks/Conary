@@ -119,8 +119,6 @@ pub enum Invalid {
     /// That trunk commit is already some other landing's.
     TrunkCommitTaken(CommitId),
     UnknownCandidate(CandidateId),
-    /// A change joins the train only at its newest revision.
-    NotNewest(RevisionId),
     NotInTrain,
     /// The repo already has a candidate in flight.
     TrainBusy,
@@ -144,7 +142,6 @@ impl std::fmt::Display for Invalid {
             Self::NotClosed => f.write_str("the change isn't closed"),
             Self::TrunkCommitTaken(c) => write!(f, "trunk commit {c} already belongs to a landing"),
             Self::UnknownCandidate(id) => write!(f, "no candidate {id}"),
-            Self::NotNewest(id) => write!(f, "revision {id} isn't the change's newest"),
             Self::NotInTrain => f.write_str("the change isn't in its repo's train"),
             Self::TrainBusy => f.write_str("that repo's train already has a candidate in flight"),
             Self::OutOfTurn => f.write_str("that isn't the candidate the train builds next"),

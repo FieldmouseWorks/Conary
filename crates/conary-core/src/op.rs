@@ -209,7 +209,9 @@ pub enum Body {
     /// A closed change was opened again.
     Reopen { change: ChangeId },
     /// The change joined its repo's train: everything but the gate says
-    /// this revision, its newest, can land.
+    /// this revision can land, the PR's head as it is now. Joining at
+    /// another revision than the one it's in at takes it out and puts it
+    /// at the back.
     Join {
         change: ChangeId,
         revision: RevisionId,
