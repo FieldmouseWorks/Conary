@@ -1,6 +1,7 @@
 //! The ids that name things in the ledger (`docs/DESIGN.md` sections 4.1,
-//! 4.2 and 4.6). A change id is random and assigned by Conary; revision and op
-//! ids are hashes of what they name, so they can't drift from it.
+//! 4.2, 4.6 and 4.7). Change and candidate ids are random and assigned by
+//! Conary; revision and op ids are hashes of what they name, so they can't
+//! drift from it.
 
 use std::fmt;
 use std::str::FromStr;
@@ -43,85 +44,109 @@ const CHANGE_ID_LEN: usize = 26;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ChangeId(u128);
 
-impl ChangeId {
-    /// A fresh id from the operating system's random source.
-    pub fn new() -> Result<Self, getrandom::Error> {
-        let mut bytes = [0u8; 16];
-        getrandom::fill(&mut bytes)?;
-        Ok(Self(u128::from_be_bytes(bytes)))
-    }
-}
+/// A train candidate's id (`docs/DESIGN.md` section 4.7), random like a
+/// change's: Conary makes one before it builds the candidate, since the
+/// candidate's branches are named by it, and records it once the candidate
+/// is whole.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct CandidateId(u128);
 
-impl fmt::Display for ChangeId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut out = [0u8; CHANGE_ID_LEN];
-        for (i, c) in out.iter_mut().enumerate() {
-            let shift = 5 * (CHANGE_ID_LEN - 1 - i);
-            *c = ALPHABET[((self.0 >> shift) & 0x1f) as usize];
-        }
-        // Every byte comes from ALPHABET, which is ASCII.
-        f.write_str(std::str::from_utf8(&out).map_err(|_| fmt::Error)?)
-    }
-}
-
-impl FromStr for ChangeId {
-    type Err = ParseIdError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if s.len() != CHANGE_ID_LEN {
-            return Err(ParseIdError::Length {
-                expected: "26",
-                got: s.len(),
-            });
-        }
-        let mut value: u128 = 0;
-        for c in s.chars() {
-            let digit = ALPHABET
-                .iter()
-                .position(|&a| char::from(a) == c)
-                .ok_or(ParseIdError::Character(c))?;
-            if value >> 123 != 0 {
-                return Err(ParseIdError::Overflow);
+/// The random ids print as [`ALPHABET`] text, 5 bits a character.
+macro_rules! base32 {
+    ($($id:ident),*) => {$(
+        impl $id {
+            /// A fresh id from the operating system's random source.
+            pub fn new() -> Result<Self, getrandom::Error> {
+                let mut bytes = [0u8; 16];
+                getrandom::fill(&mut bytes)?;
+                Ok(Self(u128::from_be_bytes(bytes)))
             }
-            value = (value << 5) | digit as u128;
         }
-        Ok(Self(value))
-    }
+
+        impl fmt::Display for $id {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                let mut out = [0u8; CHANGE_ID_LEN];
+                for (i, c) in out.iter_mut().enumerate() {
+                    let shift = 5 * (CHANGE_ID_LEN - 1 - i);
+                    *c = ALPHABET[((self.0 >> shift) & 0x1f) as usize];
+                }
+                // Every byte comes from ALPHABET, which is ASCII.
+                f.write_str(std::str::from_utf8(&out).map_err(|_| fmt::Error)?)
+            }
+        }
+
+        impl FromStr for $id {
+            type Err = ParseIdError;
+
+            fn from_str(s: &str) -> Result<Self, Self::Err> {
+                if s.len() != CHANGE_ID_LEN {
+                    return Err(ParseIdError::Length {
+                        expected: "26",
+                        got: s.len(),
+                    });
+                }
+                let mut value: u128 = 0;
+                for c in s.chars() {
+                    let digit = ALPHABET
+                        .iter()
+                        .position(|&a| char::from(a) == c)
+                        .ok_or(ParseIdError::Character(c))?;
+                    if value >> 123 != 0 {
+                        return Err(ParseIdError::Overflow);
+                    }
+                    value = (value << 5) | digit as u128;
+                }
+                Ok(Self(value))
+            }
+        }
+    )*};
 }
+base32!(ChangeId, CandidateId);
 
 /// A git commit id: lowercase hex, 40 characters for SHA-1 repositories or 64
 /// for SHA-256 ones.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct CommitId(String);
 
-impl CommitId {
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
+/// A git tree id, in the same form as a commit's: what a commit holds,
+/// whatever its history.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct TreeId(String);
 
-impl fmt::Display for CommitId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-impl FromStr for CommitId {
-    type Err = ParseIdError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if s.len() != 40 && s.len() != 64 {
-            return Err(ParseIdError::Length {
-                expected: "40 or 64",
-                got: s.len(),
-            });
+/// Git's object ids, as git prints them.
+macro_rules! git_object {
+    ($($id:ident),*) => {$(
+        impl $id {
+            pub fn as_str(&self) -> &str {
+                &self.0
+            }
         }
-        if let Some(c) = s.chars().find(|c| !matches!(c, '0'..='9' | 'a'..='f')) {
-            return Err(ParseIdError::Character(c));
+
+        impl fmt::Display for $id {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str(&self.0)
+            }
         }
-        Ok(Self(s.to_owned()))
-    }
+
+        impl FromStr for $id {
+            type Err = ParseIdError;
+
+            fn from_str(s: &str) -> Result<Self, Self::Err> {
+                if s.len() != 40 && s.len() != 64 {
+                    return Err(ParseIdError::Length {
+                        expected: "40 or 64",
+                        got: s.len(),
+                    });
+                }
+                if let Some(c) = s.chars().find(|c| !matches!(c, '0'..='9' | 'a'..='f')) {
+                    return Err(ParseIdError::Character(c));
+                }
+                Ok(Self(s.to_owned()))
+            }
+        }
+    )*};
 }
+git_object!(CommitId, TreeId);
 
 /// The context string for revision ids. Changing it changes every revision
 /// id there is, so it's frozen; a new id format gets a new context.
@@ -216,7 +241,7 @@ macro_rules! as_text {
         }
     )*};
 }
-as_text!(ChangeId, CommitId, RevisionId, OpId);
+as_text!(ChangeId, CandidateId, CommitId, TreeId, RevisionId, OpId);
 
 #[cfg(test)]
 mod tests {

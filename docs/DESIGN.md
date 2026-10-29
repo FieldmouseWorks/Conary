@@ -255,8 +255,8 @@ Op {
   at:      timestamp
   body:    what happened (`Body` in crates/conary-core/src/op.rs): observe,
            intent, revision, evidence, land, outside, close, reopen; the
-           train's join, leave and candidate join with M3, undo with M4 and
-           classify with M5
+           train's join, leave, candidate, candidate_evidence, verdict and
+           finish (section 4.7); undo joins with M4 and classify with M5
   sig:     the ledger key's signature over the id
 }
 ```
@@ -354,6 +354,20 @@ so the wait is one run, however many are waiting.
 - **R2.** An R2 change rides in a candidate of its own, and lands only while
   trunk is still that candidate's base: on evidence for exactly the tree it
   makes.
+
+The ledger keeps each repo's train (`crates/conary-core/src/ledger/train.rs`)
+and refuses a candidate out of turn: a red candidate's halves first, each
+whole, then any number of the changes waiting, from the first to join. A
+change leaves by a `leave` op when nothing else says so (it's no longer
+ready, its head won't merge, or GitHub refused its merge), and by itself
+with a new head, a close, a landing, or a red candidate it was alone in. One
+leaving a candidate in flight stops the candidate there, and its other
+changes wait again as they were. A candidate's `verdict` is green, red or
+dropped: dropped is a gate that never finished, the stall watchdog's last
+word, and its changes wait again as they joined. A landing is the
+candidate's when it lands one of its changes, at that revision, after the
+verdict said green, and `finish` records the tree trunk ended on once the
+last of them has.
 
 Trunk's own CI still runs after each landing, and red there still starts an
 undo or a fix. After a train's landing it runs on a tree the gate has just

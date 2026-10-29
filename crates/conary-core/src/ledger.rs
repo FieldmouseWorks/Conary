@@ -7,8 +7,12 @@ use std::collections::{BTreeMap, HashMap};
 
 use serde::{Deserialize, Serialize};
 
-use crate::id::{ChangeId, CommitId, OpId, RevisionId};
+use crate::id::{CandidateId, ChangeId, CommitId, OpId, RevisionId};
 use crate::op::{Actor, Authority, Body, CheckKind, Op, Outcome, Repo};
+
+mod train;
+
+pub use train::{Candidate, CandidateEvidence, Plan, State, Train};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Intent {
@@ -42,6 +46,9 @@ pub struct Landing {
     pub after: CommitId,
     pub by: Authority,
     pub at: i64,
+    /// The green candidate it landed through, when it came through the train.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub candidate: Option<CandidateId>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -111,6 +118,18 @@ pub enum Invalid {
     NotClosed,
     /// That trunk commit is already some other landing's.
     TrunkCommitTaken(CommitId),
+    UnknownCandidate(CandidateId),
+    /// A change joins the train only at its newest revision.
+    NotNewest(RevisionId),
+    NotInTrain,
+    /// The repo already has a candidate in flight.
+    TrainBusy,
+    /// Not the candidate the train builds next.
+    OutOfTurn,
+    /// The candidate's gate already ended.
+    NotGating,
+    /// Not every change in the candidate has landed through it.
+    NotLanded,
 }
 
 impl std::fmt::Display for Invalid {
@@ -124,6 +143,15 @@ impl std::fmt::Display for Invalid {
             Self::Closed => f.write_str("the change is closed"),
             Self::NotClosed => f.write_str("the change isn't closed"),
             Self::TrunkCommitTaken(c) => write!(f, "trunk commit {c} already belongs to a landing"),
+            Self::UnknownCandidate(id) => write!(f, "no candidate {id}"),
+            Self::NotNewest(id) => write!(f, "revision {id} isn't the change's newest"),
+            Self::NotInTrain => f.write_str("the change isn't in its repo's train"),
+            Self::TrainBusy => f.write_str("that repo's train already has a candidate in flight"),
+            Self::OutOfTurn => f.write_str("that isn't the candidate the train builds next"),
+            Self::NotGating => f.write_str("that candidate's gate already ended"),
+            Self::NotLanded => {
+                f.write_str("not every change in that candidate has landed through it")
+            }
         }
     }
 }
@@ -138,6 +166,8 @@ pub struct Ledger {
     by_pr: HashMap<(Repo, u64), ChangeId>,
     by_trunk: HashMap<(Repo, CommitId), ChangeId>,
     outside: Vec<Outside>,
+    trains: HashMap<Repo, Train>,
+    candidates: BTreeMap<CandidateId, Candidate>,
     head: Option<OpId>,
 }
 
@@ -268,6 +298,24 @@ impl Ledger {
                     return Err(Invalid::NotClosed);
                 }
             }
+            Body::Join { change, revision } => self.check_join(*change, *revision)?,
+            Body::Leave { change, .. } => self.check_leave(*change)?,
+            Body::Candidate {
+                candidate,
+                repo,
+                changes,
+                of,
+                ..
+            } => self.check_candidate(*candidate, repo, changes, *of)?,
+            Body::CandidateEvidence {
+                candidate,
+                kind,
+                check,
+                result,
+                source,
+            } => self.check_candidate_evidence(*candidate, *kind, check, *result, source)?,
+            Body::Verdict { candidate, .. } => self.check_verdict(*candidate)?,
+            Body::Finish { candidate, .. } => self.check_finish(*candidate)?,
         }
         Ok(())
     }
@@ -276,6 +324,20 @@ impl Ledger {
     pub(crate) fn apply(&mut self, op: &Op) {
         let at = op.op.at;
         self.head = Some(op.id);
+        if self.apply_train(&op.op.body, at) {
+            return;
+        }
+        // What a change's new head, close or landing does to its train.
+        let through = match &op.op.body {
+            Body::Revision { change, .. } | Body::Close { change } => {
+                self.unseat(*change);
+                None
+            }
+            Body::Land {
+                change, revision, ..
+            } => self.land_through_train(*change, *revision),
+            _ => None,
+        };
         let change = op.op.body.change();
         let Some(c) = change.and_then(|id| self.changes.get_mut(&id)) else {
             match &op.op.body {
@@ -365,6 +427,7 @@ impl Ledger {
                     after: after.clone(),
                     by: by.clone(),
                     at,
+                    candidate: through,
                 });
             }
             Body::Close { .. } => c.closed = true,
@@ -372,6 +435,12 @@ impl Ledger {
             Body::Observe { .. } | Body::Outside { .. } => {
                 unreachable!("check refuses observing a change twice; outside names none")
             }
+            Body::Join { .. }
+            | Body::Leave { .. }
+            | Body::Candidate { .. }
+            | Body::CandidateEvidence { .. }
+            | Body::Verdict { .. }
+            | Body::Finish { .. } => unreachable!("apply_train applies the train's ops"),
         }
     }
 }
