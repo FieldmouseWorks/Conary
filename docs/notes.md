@@ -50,7 +50,7 @@ Each note is one JSON document. `conary` names the format:
 
 `evidence` is the landed revision's, as the ledger records it: recorded, not
 counted ([section 4.3](DESIGN.md#43-evidence)). The class joins the note when
-the ledger has one (M4).
+the ledger has one (M5).
 
 ## What a note leaves out
 

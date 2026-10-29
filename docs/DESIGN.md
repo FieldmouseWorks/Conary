@@ -81,8 +81,8 @@ this is what makes it cheap now, and what's left of the gate.
 | --- | --- | --- | --- |
 | A person reviews and approves | A bad change cost days, so a second person checked it first | Agent reviewers; nothing below R2 waits for a person | Done (autoland) |
 | A person presses merge | The merge was the commit point | `land` the moment evidence and class allow | Done (autoland) |
-| Up-to-date branches, merge queues | A broken combination on trunk was slow to find and unwind | Trunk's own CI after each landing, and an `undo` or fix on red | Done 2026-10-26; Conary makes the revert an `undo` (M3) |
-| Review rounds before landing | Catching a bug before trunk was cheaper than after | R0: lands on green CI and attested evidence; the reviewers read the landed change, a finding opens a fix change on its own, and a P1 that can't be fixed fast is reverted. R1 keeps review before landing until the ledger shows review after landing catches as much | Proposed (M5) |
+| Up-to-date branches, merge queues | A broken combination on trunk was slow to find and unwind | Trunk's own CI after each landing, and an `undo` or fix on red | Done 2026-10-26; Conary makes the revert an `undo` (M4). The train (section 4.7) brings neither back: no author updates a branch and no PR waits its turn |
+| Review rounds before landing | Catching a bug before trunk was cheaper than after | R0: lands on green CI and attested evidence; the reviewers read the landed change, a finding opens a fix change on its own, and a P1 that can't be fixed fast is reverted. R1 keeps review before landing until the ledger shows review after landing catches as much | Proposed (M6) |
 | Release trains, freeze windows | Shipping a bad build was slow to roll back | R1 lands live and reverts as fast as it landed; remi's own switch keeps its dead man's switch and health check | Done for remi, the site and the profile |
 | Permission prompts | Any command might be the one you can't take back | The guard asks only for R2 commands and snapshots before anything destructive | Done (burrow) |
 
@@ -90,8 +90,11 @@ Two gates stay, because undo doesn't make them cheap:
 
 - **CI before landing.** A red trunk breaks every other agent's base at once,
   so R0 still lands only on green evidence. Conary makes it cheaper instead
-  of skipping it: evidence reuse where a check's footprint is known, and only
-  the checks a change can affect.
+  of skipping it: the train (section 4.7) checks every change that's ready
+  with one run, so the gate stops costing a run for every head of every PR.
+  Running only the checks a change can affect is what a Nix-built repo's
+  store does already: a check whose inputs didn't change is never run
+  again.
 - **A person for R2.** Undo can't bring back a leaked secret or dropped data.
   R2 is kept as narrow as policy can make it.
 
@@ -102,7 +105,7 @@ the record of it first, then takes over the jobs one at a time.
 
 | 0.1 idea | What does it today | What Conary does with it |
 | --- | --- | --- |
-| Landing queue | The autoland steward ([PR flow](https://github.com/FieldmouseWorks/burrow/blob/main/docs/repo-baseline.md#the-pr-flow-the-steward)) | Records every step (M1), then becomes it (M5) |
+| Landing queue | The autoland steward ([PR flow](https://github.com/FieldmouseWorks/burrow/blob/main/docs/repo-baseline.md#the-pr-flow-the-steward)) | Records every step (M1), runs its train (M3), then becomes it (M6) |
 | Evidence | CI check runs, the reviewers' verdicts, proof jobs, judge verdicts, `review-settled` | One evidence record per result, keyed to head and base |
 | R0/R1/R2 classes | The guard's R2 commands, the steward's `oneWay` paths | Owns the class of a change (commands stay with the guard) |
 | R1 auto-revert | The red-default-branch fix job (PR flow step 8) | Records it, then runs it as `undo` |
@@ -163,7 +166,7 @@ Evidence is one result of one check on one revision:
 
 ```
 Evidence {
-  change, revision
+  change, revision    or the train's candidate it ran on (section 4.7)
   check:     kind (ci | review | proof | judge | negative) and name
   result:    pass | fail | error, plus findings for a review
   env:       environment digest when the check reports one (the flake's lock)
@@ -190,14 +193,15 @@ Three rules make it trustworthy:
    proves its revision: that head on that base. Landing squashes it onto a
    newer trunk, and the default branch is never required to be up to date
    first ([why](https://github.com/FieldmouseWorks/burrow/blob/main/docs/repo-baseline.md#settings-the-steward)).
-   So Conary never records pre-land evidence as proof of the landed tree. The
-   landed tree gets its own evidence from trunk's CI, recorded against the
-   landing, and a red result there starts an undo or a fix (section 6). That
-   is the owner's call for R0 and R1, where a revert undoes the damage. R2 is
-   different: undo can't help, so an R2 change lands only on evidence for the
-   candidate tree itself (its head merged onto the trunk commit it lands
-   on), and if trunk moves before the merge, that evidence no longer counts
-   and the checks run again.
+   So Conary never records a PR's pre-land evidence as proof of the landed
+   tree. The landed tree gets its own: its train's candidate's, when trunk's
+   tree after the landing is the candidate's (section 4.7), and otherwise
+   trunk's CI's, recorded against the landing. A red result there starts an
+   undo or a fix (section 6). That is the owner's call for R0 and R1, where
+   a revert undoes the damage. R2 is different: undo can't help, so an R2
+   change lands only on evidence for the candidate tree itself (its head
+   merged onto the trunk commit it lands on), and if trunk moves before the
+   merge, that evidence no longer counts and the checks run again.
 
 ### 4.4 Class
 
@@ -209,20 +213,21 @@ Three rules make it trustworthy:
 
 Policy sets the class from the repo and the paths a change touches, renames
 and copies included. The policy starts as today's `oneWay` patterns and
-per-repo settings, moved into Conary (M4), and grows rules only when a real
+per-repo settings, moved into Conary (M5), and grows rules only when a real
 change needs one. The guard's R2 command list stays where it is: it classifies
 commands an agent runs, not changes that land.
 
 ### 4.5 Landing
 
-Trunk moves only through **`land`**: Conary (or, until M5, the steward)
+Trunk moves only through **`land`**: Conary (or, until M6, the steward)
 merges a change whose evidence and class allow it. The landing records the
 change, the revision that was checked, the trunk commit before and after,
-what authorized it, and the evidence it landed on. An automation that writes trunk itself, like
+what authorized it, the evidence it landed on, and its train's candidate
+when it came through one. An automation that writes trunk itself, like
 remi-update pushing its lock bumps, lands through the same call with the
 evidence its own gate produced, so its pushes are landings too.
 
-Until M5, a merge is read as the steward's landing only when the steward's
+Until M6, a merge is read as the steward's landing only when the steward's
 own logins said `review-settled` success on that head after any retarget and
 before GitHub merged it, and trunk's commit is the PR's own: GitHub's merge
 of that head, or a commit GitHub ties to that PR. A word that came after the
@@ -249,8 +254,9 @@ Op {
   parent:  the previous op's id
   at:      timestamp
   body:    what happened (`Body` in crates/conary-core/src/op.rs): observe,
-           intent, revision, evidence, land, outside, close, reopen; classify
-           and undo join with M4 and M3
+           intent, revision, evidence, land, outside, close, reopen; the
+           train's join, leave and candidate join with M3, undo with M4 and
+           classify with M5
   sig:     the ledger key's signature over the id
 }
 ```
@@ -296,6 +302,76 @@ names. Each move is a commit naming the ledger's key and its newest op.
   write a whole new history. The ref's history is only as append-only as
   GitHub keeps it.
 
+### 4.7 The train
+
+CI before landing stays (section 2), but it needn't cost a run for every
+head. A repo whose gate runs on one runner, as remi's does, pays for every
+head of every PR and then for trunk after each landing. From 2026-10-26 to
+28 remi ran about three and a half gate runs for each PR it landed, and on
+the 29th a remi PR's median time from push to merge was 146 minutes, 139 of
+them waiting on CI. A train runs the gate once for everything that's ready,
+so the wait is one run, however many are waiting.
+
+- **Ready.** A change joins its repo's train once everything but the gate
+  says it can land: its reviews are clean, no thread is open, and its class
+  allows it (an R2 change, once its person has said yes). It joins at that
+  revision. A new head takes it out until it's ready again.
+- **The candidate.** With none in flight, the train makes one: trunk's
+  commit, then the head of each change waiting, merged onto it in the order
+  they joined, up to the train's `size` (eight unless the repo says
+  otherwise). It's built on GitHub, with the merges API on a branch
+  `conary/train/ID`, so nothing on the box runs git, and recorded with its
+  base, its changes and their revisions, and its commit. Its branch goes once
+  it has landed or split. A change that won't merge onto those before it
+  leaves the train, and its PR is told so, as a conflict is today.
+- **Its evidence.** The gate runs on the candidate's commit: the repo's CI,
+  on the push to its branch, and the steward's proof jobs. Evidence on a
+  candidate is about that commit's tree, and counts by its producer's
+  attestation like any other (section 9), and only for the commit the train
+  recorded: whatever else is pushed to its branch counts for nothing.
+- **Green.** Each change lands in order, through its own PR's merge at the
+  head the candidate holds. Once the last has, trunk's tree is checked
+  against the candidate's. If it's the same tree, the candidate's evidence
+  is each of those landings' evidence for the trunk they landed in, the case
+  rule 3 already gives R2. (Trunk's commits between them were trunk only for
+  as long as the next merge took.) If it isn't (trunk moved meanwhile, or GitHub merged a change
+  some other way), trunk's own CI is the landed tree's evidence, as it is
+  without a train. A merge GitHub refuses partway puts the changes after it
+  back in the train.
+- **Red.** The failed check gets the one second try every failed test gets.
+  Red again, the candidate splits in two: its older half goes first, as a
+  candidate of its own on trunk as it stands, then the rest, so a half
+  that's green lands without waiting on the other. A change red on its own
+  leaves the train and gets the fix job red CI gets today. One bad change in
+  eight costs up to seven runs, still fewer than the eight it stands for, and
+  `size` is the knob if the ledger shows red candidates costing more.
+- **R2.** An R2 change rides in a candidate of its own, and lands only while
+  trunk is still that candidate's base: on evidence for exactly the tree it
+  makes.
+
+Trunk's own CI still runs after each landing, and red there still starts an
+undo or a fix. After a train's landing it runs on a tree the gate has just
+built, so on a runner that keeps its store, as remi's does, Nix has the
+result of every check that doesn't read the commit itself, and the run costs
+little more than the evaluation.
+
+It isn't the merge queue section 2 retired. That made each landing put every
+other PR behind, to be brought up to date by its author, run again and
+reviewed again, one at a time. Here no author sees a candidate or touches a
+branch, a PR waits at most for the candidate already in flight, never for
+its turn behind every other, and the head that lands is the one its
+reviewers read.
+
+A repo opts in in the steward's config, remi first. Its gate then leaves the
+PR's own pushes: CI's `pull_request` trigger keeps only checks cheap enough
+for every head (remi's gate is one job, so none), and every head is still
+reviewed. The train acts on events (a change ready, a candidate's checks
+finished, a landing), each one a pass of the steward's, never on a timer,
+and a candidate whose checks never finish is a stall for the stall watchdog
+like any other wait. Until conaryd runs the flow (M6), the steward settles a change and hands it
+to `cn train`, which the steward runs as its App: it builds and splits the
+candidates and names the landings, and the steward makes them.
+
 ## 5. Undo
 
 Every undo is a new change: a revert PR that goes through the same landing
@@ -326,7 +402,7 @@ until conaryd takes it over. What Conary adds before then:
   red-default-branch job's revert or fix links back to the change that broke
   trunk.
 
-When conaryd runs the flow (M5), the flow's description moves here, burrow's
+When conaryd runs the flow (M6), the flow's description moves here, burrow's
 doc links to it, and `steward.py` goes. conaryd keeps the steward's rules on
 event-triggered passes: it acts on webhooks and on waits it booked itself,
 never on a timer.
@@ -354,7 +430,8 @@ The core calls:
 ```
 change.get(id | repo#pr) / change.list(repo?, session?, status?, class?, since?)
 evidence.add / evidence.query(change | revision)
-land(change)                      // M5; until then the steward lands and reports
+train.join(change) / train.step(repo)   // M3: the train (section 4.7)
+land(change)                      // M6; until then the steward lands and reports
 undo(change | actor | since) / at(time, query)
 log.query(repo?, path?, symbol?, session?, intent~text?, since?, class?)
 why(repo, path, line | symbol)    // the change, its intent, session and evidence
@@ -458,7 +535,8 @@ trust and undo across many small repos for one owner, which git serves fine.
 | M0 | Rust workspace, `rust = { };` in the flake, CI | `nix flake check` runs the workspace's tests in CI |
 | M1 | `cn` on remi, recording every PR event the steward sees, read-only, plus a backfill of merged PRs. `cn log`, `cn why`. Each write takes the ledger's writer lock | `cn why` on a line in burrow returns the PR, its intent, session and evidence |
 | M2 | conaryd serving the ledger over its socket, the notes ref and the MCP server | A cloud session answers `why` from a fresh clone |
-| M3 | `undo` by change, session and time, through the landing flow | A deliberately bad session's changes in two repos are reverted by `undo --actor` and land with no person involved |
-| M4 | Class policy in Conary; the steward reads classes from conaryd | `oneWay` is gone from burrow's autoland config |
-| M5 | conaryd runs the landing flow, and R0 changes land before review, with review after landing | `steward.py` is deleted, and a week of PRs across every repo lands through conaryd, R0 ones with no wait on a reviewer |
-| M6 | A written decision on each parked idea, from ledger data | The decision |
+| M3 | The train (section 4.7) on remi, with the evidence verifier it counts candidates by | For a day of remi's PRs: fewer gate runs than PRs landed, each of them landed on its candidate's evidence, and trunk's own CI green after every train landing |
+| M4 | `undo` by change, session and time, through the landing flow | A deliberately bad session's changes in two repos are reverted by `undo --actor` and land with no person involved |
+| M5 | Class policy in Conary; the steward reads classes from conaryd | `oneWay` is gone from burrow's autoland config |
+| M6 | conaryd runs the landing flow, and R0 changes land before review, with review after landing | `steward.py` is deleted, and a week of PRs across every repo lands through conaryd, R0 ones with no wait on a reviewer |
+| M7 | A written decision on each parked idea, from ledger data | The decision |
