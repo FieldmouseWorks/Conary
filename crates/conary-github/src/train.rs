@@ -22,7 +22,7 @@ use crate::api::{ApiError, CheckRun, Source};
 use crate::ingest::{self, Config, IngestError, run_result, status_result};
 
 mod land;
-use land::land_next;
+use land::{land_next, open_landing, stopped_landing};
 
 /// Every candidate's branches are under here, so a step can tell its own
 /// from anyone else's.
@@ -278,9 +278,11 @@ pub enum Leaving {
 }
 
 /// Takes a PR out of its repo's train, its head's train status pending
-/// first. One in the candidate in flight stays while a landing of that
-/// candidate is open ([`open_landing`]): leaving would stop the candidate
-/// with a merge of its maybe on trunk already.
+/// first. Not while a landing is open, its head saying it's landing with
+/// the candidate it's next in, its merge maybe on trunk unseen: then every
+/// change the candidate in flight has left to land stays, since leaving
+/// would stop the candidate, and of one that stopped while landing, the
+/// change it was landing. Only a step settles that.
 pub fn leave(
     store: &mut Store,
     forge: &dyn Forge,
@@ -296,10 +298,15 @@ pub fn leave(
         Err(Invalid::NotInTrain) => return Ok(Leaving::NotIn),
         Err(e) => return Err(StoreError::Invalid(e).into()),
     }
+    // In flight, every change the candidate has left to land stays in, as
+    // its leaving would stop the candidate; stopped, the one landing.
     if let Some((c, landing)) = open_landing(store, source, repo)?
-        && c.changes[c.landed.len()..]
-            .iter()
-            .any(|m| m.change == change)
+        && let left = if c.state == State::Green {
+            &c.changes[c.landed.len()..]
+        } else {
+            &c.changes[c.landed.len()..=c.landed.len()]
+        }
+        && left.iter().any(|m| m.change == change)
     {
         return Ok(Leaving::Landing(landing));
     }
@@ -321,36 +328,10 @@ pub fn leave(
     Ok(Leaving::Left)
 }
 
-/// The repo's green candidate in flight, and the PR whose landing it has
-/// started and no step has settled: that PR's head says it's landing with
-/// the candidate. Its merge may be on trunk, unseen, so nothing but a step
-/// may stop the candidate meanwhile.
-fn open_landing(
-    store: &Store,
-    source: &dyn Source,
-    repo: &Repo,
-) -> Result<Option<(Candidate, u64)>, TrainError> {
-    let ledger = store.ledger();
-    let Some(c) = ledger
-        .train(repo)
-        .and_then(|t| t.in_flight())
-        .and_then(|id| ledger.candidate(id))
-        .filter(|c| c.state == State::Green)
-    else {
-        return Ok(None);
-    };
-    let next = &c.changes[c.landed.len()];
-    let head = head_of(store, next);
-    Ok(
-        land::landing_marked(source, &repo.to_string(), head.as_str(), c.id)?
-            .then(|| (c.clone(), pr_of(store, next.change))),
-    )
-}
-
 /// Drops a candidate whose gate won't finish, the stall watchdog's last
 /// word: its changes wait again as they joined. Green and red are the gate's
 /// word, which [`step`] reads, never a hand's. Not while a landing of it is
-/// open ([`open_landing`]): that's a step's to settle.
+/// open, its next head saying it's landing: that's a step's to settle.
 pub fn drop_candidate(
     store: &mut Store,
     forge: &dyn Forge,
@@ -381,9 +362,10 @@ pub fn drop_candidate(
     dropped(store, forge, &c, "dropped")
 }
 
-/// Records a candidate dropped. A green one's next head may say it's
-/// landing, from a step stopped before its merge: that goes to pending
-/// first, since the candidate isn't landing it any more.
+/// Records a candidate dropped. A green one (alone, with nothing landed)
+/// may have its head saying it's landing, from a step stopped before its
+/// merge: that goes to pending first, since the candidate isn't landing it
+/// any more.
 fn dropped(
     store: &mut Store,
     forge: &dyn Forge,
@@ -442,7 +424,8 @@ pub enum Now {
         waiting: Vec<String>,
     },
     /// Green, and these are still to land, in this order, each at its head:
-    /// GitHub took the first's merge and hasn't shown it merged yet.
+    /// GitHub took the first's merge and hasn't shown it merged yet. A
+    /// candidate that stopped while landing has only that one.
     Landing {
         candidate: CandidateId,
         landings: Vec<Landing>,
@@ -532,9 +515,11 @@ pub fn step(
     };
     let trunk = forge.default_branch(&repo.to_string())?;
     stepped.now = loop {
-        stepped.finished.extend(finish(store, forge, repo)?);
-        let Some(id) =
-            in_flight_or_built(store, forge, source, repo, &trunk, settings, &mut stepped)?
+        stepped.finished.extend(finish(store, forge, source, repo)?);
+        if let Some(now) = stopped_landing(store, forge, source, config, repo, &trunk)? {
+            break now;
+        }
+        let Some(id) = in_flight_or_built(store, forge, repo, &trunk, settings, &mut stepped)?
         else {
             break Now::Idle;
         };
@@ -613,11 +598,9 @@ fn head_of(store: &Store, m: &Member) -> CommitId {
 
 /// The candidate in flight, or the next one, built now; none when nothing
 /// waits. A change whose head won't merge leaves on the way.
-#[allow(clippy::too_many_arguments)]
 fn in_flight_or_built(
     store: &mut Store,
     forge: &dyn Forge,
-    source: &dyn Source,
     repo: &Repo,
     trunk: &str,
     settings: &Settings,
@@ -626,7 +609,6 @@ fn in_flight_or_built(
     if let Some(id) = store.ledger().train(repo).and_then(|t| t.in_flight()) {
         return Ok(Some(id));
     }
-    stopped_landing(store, forge, source, repo)?;
     loop {
         let Some(plan) = store.ledger().next(repo, settings.size) else {
             return Ok(None);
@@ -646,34 +628,6 @@ fn in_flight_or_built(
             }
         }
     }
-}
-
-/// The train's last candidate, stopped green with changes still to land (one
-/// of them left, closed or has a new head, as ingest saw it), may have left
-/// its next head saying it's landing. That goes to pending before another
-/// candidate is built, so only the head being landed ever has the success.
-fn stopped_landing(
-    store: &Store,
-    forge: &dyn Forge,
-    source: &dyn Source,
-    repo: &Repo,
-) -> Result<(), TrainError> {
-    let ledger = store.ledger();
-    let Some(c) = ledger
-        .train(repo)
-        .and_then(|t| t.candidates().last())
-        .and_then(|id| ledger.candidate(*id))
-        .filter(|c| matches!(c.state, State::Broken { .. }) && c.landed.len() < c.changes.len())
-    else {
-        return Ok(());
-    };
-    let full = repo.to_string();
-    let head = head_of(store, &c.changes[c.landed.len()]);
-    if land::landing_marked(source, &full, head.as_str(), c.id)? {
-        let description = format!("candidate {} stopped, so it isn't landing", c.id);
-        forge.mark(&full, head.as_str(), Mark::Waiting, &description, None)?;
-    }
-    Ok(())
 }
 
 /// Tells a PR red alone in a candidate why it left: the train's status on
@@ -704,10 +658,12 @@ fn red_alone(
 }
 
 /// Records the tree trunk ended on for each candidate whose landings all
-/// came through: its last landing's.
+/// came through: its last landing's. That landing is retired first
+/// ([`land::retired`]).
 fn finish(
     store: &mut Store,
     forge: &dyn Forge,
+    source: &dyn Source,
     repo: &Repo,
 ) -> Result<Vec<CandidateId>, TrainError> {
     let ledger = store.ledger();
@@ -729,6 +685,8 @@ fn finish(
         .collect();
     let mut finished = Vec::new();
     for (id, after) in landed {
+        let c = store.ledger().candidate(id).expect("landed").clone();
+        land::retired(store, forge, source, &c)?;
         let tree = tree_id(&forge.tree(&repo.to_string(), after.as_str())?)?;
         store.record(Body::Finish {
             candidate: id,

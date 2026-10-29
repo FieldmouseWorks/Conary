@@ -128,7 +128,8 @@ fn a_refused_merge_leaves_and_the_changes_after_it_go_again() {
     assert_eq!(
         store.ledger().candidate(id).unwrap().state,
         State::Broken {
-            by: store.ledger().by_pr(&repo(), 4).unwrap().id
+            by: store.ledger().by_pr(&repo(), 4).unwrap().id,
+            green: true,
         }
     );
     // Its head said it was landing, and says now that it isn't.
@@ -470,4 +471,132 @@ fn a_merge_whose_answer_was_lost_is_never_made_again() {
     let stepped = step_once(&mut store, &hub);
     assert_eq!((stepped.landed, stepped.finished), (vec![5], vec![id]));
     assert_eq!(hub.held("main"), [3, 5].map(head));
+}
+
+#[test]
+fn a_landed_heads_success_is_retired_before_the_next_head_says_its_landing() {
+    // Once a head has landed, its train status says so, as pending: another
+    // PR at that head (opened again after a revert, say) can't merge on it.
+    // GitHub not taking that stops the next landing until it does.
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = store(&dir);
+    let mut hub = Hub::new(&[3, 5]);
+    join_all(&mut store, &hub, &[3, 5]);
+    let (id, _) = gating(&step_once(&mut store, &hub));
+    hub.ci(&commit_of(&store, id), &[("check / check", "success")]);
+    hub.unmarked.set(Some(Mark::Waiting));
+    assert!(step(&mut store, &hub, &hub, &config(), &repo(), &settings()).is_err());
+    assert_eq!(hub.held("main"), [head(3)]);
+    assert_eq!(hub.latest(&head(5)), Some(Mark::Waiting));
+    hub.unmarked.set(None);
+    let stepped = step_once(&mut store, &hub);
+    assert_eq!((stepped.landed, stepped.finished), (vec![5], vec![id]));
+    let landed = Some((Mark::Waiting, format!("landed with candidate {id}")));
+    assert_eq!(said(&hub, &head(3)), landed);
+    assert_eq!(said(&hub, &head(5)), landed);
+    // The first was retired before the second said it was landing.
+    let at = |sha: &str, mark: Mark| {
+        hub.marks
+            .borrow()
+            .iter()
+            .position(|p| p.sha == sha && p.mark == mark)
+            .unwrap()
+    };
+    assert!(at(&head(3), Mark::Waiting) < at(&head(5), Mark::Landing));
+}
+
+#[test]
+fn a_merge_unseen_when_its_candidate_stopped_is_waited_for_and_lands_through_it() {
+    // GitHub took the first's merge and doesn't show it yet when the
+    // second's new head stops the candidate. The train builds nothing
+    // until the merge shows, and then it lands through the candidate it
+    // came through, merged once.
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = store(&dir);
+    let mut hub = Hub::new(&[3, 5, 7]);
+    join_all(&mut store, &hub, &[3, 5, 7]);
+    let (id, _) = gating(&step_once(&mut store, &hub));
+    hub.ci(&commit_of(&store, id), &[("check / check", "success")]);
+    hub.lagging.set(true);
+    assert_eq!(step_once(&mut store, &hub).landed, [3]);
+    hub.pulls.borrow_mut().insert(5, head(55));
+    ingest::pull(&mut store, &hub, &config(), &repo(), 5).unwrap();
+    assert_eq!(
+        store.ledger().candidate(id).unwrap().state,
+        State::Broken {
+            by: store.ledger().by_pr(&repo(), 5).unwrap().id,
+            green: true,
+        }
+    );
+    // Only the one landing stays in: the rest may leave.
+    assert_eq!(
+        leave(&mut store, &hub, &hub, &repo(), 3, Left::Unready).unwrap(),
+        Leaving::Landing(3)
+    );
+    assert_eq!(
+        leave(&mut store, &hub, &hub, &repo(), 7, Left::Unready).unwrap(),
+        Leaving::Left
+    );
+    let stepped = step_once(&mut store, &hub);
+    assert!(
+        matches!(stepped.now, Now::Landing { candidate, ref landings }
+        if candidate == id && landings.iter().map(|l| l.pr).collect::<Vec<_>>() == [3])
+    );
+    assert_eq!(store.ledger().train(&repo()).unwrap().candidates().len(), 1);
+    assert_eq!(hub.latest(&head(3)), Some(Mark::Landing));
+    hub.lagging.set(false);
+    let stepped = step_once(&mut store, &hub);
+    assert!(stepped.landed.is_empty() && stepped.now == Now::Idle);
+    let three = store.ledger().by_pr(&repo(), 3).unwrap();
+    assert_eq!(three.landing.as_ref().unwrap().candidate, Some(id));
+    assert_eq!(
+        said(&hub, &head(3)),
+        Some((Mark::Waiting, format!("landed with candidate {id}")))
+    );
+    assert_eq!(hub.held("main"), [head(3)]);
+}
+
+#[test]
+fn a_head_its_stopped_candidate_was_landing_says_so_no_longer_once_its_pr_is_merged_otherwise() {
+    // The first's merge failed after its head said it was landing; the
+    // second's new head stopped the candidate; then the first was merged
+    // at a new head of its own, outside the candidate: settled there, a
+    // landing that isn't the candidate's, and otherwise not a landing at
+    // all. Either way its old head isn't left saying it's landing, and
+    // nothing waits on it.
+    for settled in [true, false] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = store(&dir);
+        let mut hub = Hub::new(&[3, 5]);
+        if settled {
+            let theirs = hub.statuses[&head(3)].clone();
+            hub.statuses.insert(head(33), theirs);
+        }
+        join_all(&mut store, &hub, &[3, 5]);
+        let (id, _) = gating(&step_once(&mut store, &hub));
+        hub.ci(&commit_of(&store, id), &[("check / check", "success")]);
+        hub.down.set(true);
+        assert!(step(&mut store, &hub, &hub, &config(), &repo(), &settings()).is_err());
+        hub.down.set(false);
+        hub.pulls.borrow_mut().insert(5, head(55));
+        ingest::pull(&mut store, &hub, &config(), &repo(), 5).unwrap();
+        hub.pulls.borrow_mut().insert(3, head(33));
+        assert_eq!(
+            hub.land("FieldmouseWorks/remi", 3, &head(33)).unwrap(),
+            PrMerge::Merged
+        );
+        assert_eq!(step_once(&mut store, &hub).now, Now::Idle);
+        let three = store.ledger().by_pr(&repo(), 3).unwrap();
+        assert_eq!(
+            three.landing.as_ref().map(|l| l.candidate),
+            settled.then_some(None)
+        );
+        let says = if settled {
+            format!("landed, though not with candidate {id}")
+        } else {
+            format!("closed, so candidate {id} isn't landing it")
+        };
+        assert_eq!(said(&hub, &head(3)), Some((Mark::Waiting, says)));
+        assert_eq!(hub.held("main"), [head(33)]);
+    }
 }

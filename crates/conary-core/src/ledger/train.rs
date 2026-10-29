@@ -39,9 +39,11 @@ pub enum State {
     Red,
     Dropped,
     /// It stopped in flight: `by` left the train, or landed while the gate
-    /// was still running.
+    /// was still running. `green` when its gate had said green, so it
+    /// stopped landing.
     Broken {
         by: ChangeId,
+        green: bool,
     },
 }
 
@@ -538,7 +540,10 @@ impl Ledger {
             .get_mut(&id)
             .expect("the candidate in flight is in the ledger");
         if c.changes.iter().any(|m| m.change == change) {
-            c.state = State::Broken { by: change };
+            c.state = State::Broken {
+                by: change,
+                green: c.state == State::Green,
+            };
             let rest: Vec<ChangeId> = c
                 .changes
                 .iter()
@@ -552,8 +557,12 @@ impl Ledger {
 
     /// The candidate a change's landing came through, if it did: the green
     /// candidate in flight lands its changes in order, and this was the next
-    /// of them, at the revision it holds, onto its base if it's alone. Any
-    /// other landing takes it out of the train like a new head would.
+    /// of them, at the revision it holds, onto its base if it's alone. With
+    /// none in flight, the last candidate, stopped while it was landing with
+    /// this change next and still in the train, is the one it came through:
+    /// GitHub took the merge before the candidate stopped and showed it only
+    /// after, and the train builds nothing until it's shown. Any other
+    /// landing takes it out of the train like a new head would.
     pub(super) fn land_through_train(
         &mut self,
         change: ChangeId,
@@ -563,11 +572,17 @@ impl Ledger {
         let repo = self.changes.get(&change)?.repo.clone();
         let train = self.trains.get_mut(&repo)?;
         train.moved();
-        let through = train.in_flight.filter(|id| {
+        let through = match train.in_flight {
+            Some(id) => Some(id).filter(|id| self.candidates[id].state == State::Green),
+            None => train.candidates.last().copied().filter(|id| {
+                matches!(self.candidates[id].state, State::Broken { green: true, .. })
+            }),
+        }
+        .filter(|id| {
             let c = &self.candidates[id];
-            c.state == State::Green
-                && c.changes.get(c.landed.len()) == Some(&Member { change, revision })
+            c.changes.get(c.landed.len()) == Some(&Member { change, revision })
                 && (!c.alone || *before == c.base)
+                && train.seat(change).is_some()
         });
         let Some(id) = through else {
             self.unseat(change);
@@ -577,7 +592,7 @@ impl Ledger {
         let c = self
             .candidates
             .get_mut(&id)
-            .expect("the candidate in flight is in the ledger");
+            .expect("a train's candidates are in the ledger");
         c.landed.push(change);
         if c.landed.len() == c.changes.len() {
             c.state = State::Landed;
