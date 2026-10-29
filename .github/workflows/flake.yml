@@ -12,7 +12,7 @@ permissions:
   contents: read
 jobs:
   check:
-    uses: FieldmouseWorks/burrow/.github/workflows/flake-check.yml@2742a38d0d6e575d2305389103ce744d7db4864b # main
+    uses: FieldmouseWorks/burrow/.github/workflows/flake-check.yml@337b375352b5bd6c555d5fd667309d1942a84e64 # main
     # What the shared workflow needs to attest its result.
     permissions:
       contents: read
