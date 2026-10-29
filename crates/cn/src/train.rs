@@ -53,13 +53,11 @@ pub enum TrainCommand {
     /// is in flight, read the gate of the one that is and say its verdict,
     /// land a green one's PRs in order, and delete the branches of every
     /// other. Says what it did and where the train is: idle, gating (on its
-    /// train branch) or landing (waiting on GitHub to show a merge).
+    /// train branch) or landing (waiting on GitHub to show a merge). Trunk
+    /// is the repo's default branch, as GitHub says it is.
     Step {
         /// The repository, as owner/name.
         repo: Repo,
-        /// The trunk branch candidates are built on.
-        #[arg(long, default_value = "main")]
-        trunk: String,
         /// The most changes a candidate holds.
         #[arg(long, default_value_t = 8, value_parser = clap::value_parser!(u64).range(1..))]
         size: u64,
@@ -108,7 +106,7 @@ pub fn run(cli: &Cli, command: &TrainCommand) -> Result<()> {
     let done: Result<(Value, String)> = match command {
         TrainCommand::Join {
             pr, head, alone, ..
-        } => train::join(store, &api, &config, repo, *pr, head, *alone)
+        } => train::join(store, &api, &api, &config, repo, *pr, head, *alone)
             .map(|joined| match joined {
                 Joined::Joined | Joined::Already => {
                     let new = joined == Joined::Joined;
@@ -130,7 +128,7 @@ pub fn run(cli: &Cli, command: &TrainCommand) -> Result<()> {
                 ),
             })
             .map_err(Into::into),
-        TrainCommand::Leave { pr, why, .. } => train::leave(store, repo, *pr, *why)
+        TrainCommand::Leave { pr, why, .. } => train::leave(store, &api, repo, *pr, *why)
             .map(|left| {
                 let said = if left { "left" } else { "wasn't in" };
                 (
@@ -139,14 +137,8 @@ pub fn run(cli: &Cli, command: &TrainCommand) -> Result<()> {
                 )
             })
             .map_err(Into::into),
-        TrainCommand::Step {
-            trunk,
-            size,
-            require,
-            ..
-        } => {
+        TrainCommand::Step { size, require, .. } => {
             let settings = Settings {
-                trunk: trunk.clone(),
                 size: usize::try_from(*size)?,
                 require: require.clone(),
             };
@@ -154,14 +146,16 @@ pub fn run(cli: &Cli, command: &TrainCommand) -> Result<()> {
                 .map(|s| (stepped(&s), human_stepped(repo, &s)))
                 .map_err(Into::into)
         }
-        TrainCommand::Drop { candidate, .. } => train::drop_candidate(store, repo, *candidate)
-            .map(|()| {
-                (
-                    json!({"candidate": candidate.to_string(), "verdict": "dropped"}),
-                    format!("{repo}: candidate {candidate} dropped"),
-                )
-            })
-            .map_err(Into::into),
+        TrainCommand::Drop { candidate, .. } => {
+            train::drop_candidate(store, &api, repo, *candidate)
+                .map(|()| {
+                    (
+                        json!({"candidate": candidate.to_string(), "verdict": "dropped"}),
+                        format!("{repo}: candidate {candidate} dropped"),
+                    )
+                })
+                .map_err(Into::into)
+        }
         TrainCommand::Show { .. } => unreachable!("shown above"),
     };
     // What was recorded before a failure is anchored all the same.

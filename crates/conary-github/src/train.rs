@@ -21,6 +21,9 @@ use conary_core::{CandidateId, ChangeId, CommitId, Store, TreeId};
 use crate::api::{ApiError, CheckRun, Source};
 use crate::ingest::{self, Config, IngestError, run_result, status_result};
 
+mod land;
+use land::land_next;
+
 /// Every candidate's branches are under here, so a step can tell its own
 /// from anyone else's.
 pub const BRANCHES: &str = "conary/";
@@ -40,11 +43,17 @@ pub fn train_branch(id: CandidateId) -> String {
 /// repo's PR but the train.
 pub const CONTEXT: &str = "conary/train";
 
-/// What the train's status on a PR's head says.
+/// What the train's status on a PR's head says. Only the one it's landing
+/// now is a success, which a train repo's rules require: every other head
+/// the train has had is pending, red or refused, so nothing can merge it
+/// outside the train.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mark {
     /// Green in its candidate and landing now: a success.
     Landing,
+    /// In the train or out of it, and not landing: pending. It goes on a
+    /// head as it joins and leaves, and before its candidate is dropped.
+    Waiting,
     /// Red alone in its candidate: a failure.
     Red,
     /// GitHub refused its merge, so it isn't landing after all: an error,
@@ -74,6 +83,9 @@ pub enum Merged {
 /// The train's writes on GitHub, and the reads it needs that ingest
 /// doesn't. Branches are named without `refs/heads/`.
 pub trait Forge {
+    /// The repo's default branch: trunk, which the train builds on and lands
+    /// onto, as GitHub says it is now.
+    fn default_branch(&self, repo: &str) -> Result<String, ApiError>;
     /// The commit a branch is at, if it's there.
     fn branch(&self, repo: &str, name: &str) -> Result<Option<String>, ApiError>;
     /// Every branch whose name starts with `prefix`.
@@ -197,9 +209,13 @@ pub enum Joined {
 /// Puts a PR in its repo's train at `head`, the head everything but the
 /// gate said can land, once the ledger holds the PR as GitHub shows it now
 /// and that is its head. `alone`, it rides in a candidate of its own, which
-/// lands only while trunk is still its base: an R2 change.
+/// lands only while trunk is still its base: an R2 change. Its head's train
+/// status goes to pending first, so a success left from an earlier time
+/// in the train can't let anything merge it.
+#[allow(clippy::too_many_arguments)]
 pub fn join(
     store: &mut Store,
+    forge: &dyn Forge,
     source: &dyn Source,
     config: &Config,
     repo: &Repo,
@@ -222,26 +238,60 @@ pub fn join(
             head: now.to_string(),
         });
     }
-    match store.record(Body::Join {
+    let body = Body::Join {
         change: got.change,
         revision: got.revision,
         alone,
-    }) {
-        Ok(_) => Ok(Joined::Joined),
-        Err(StoreError::Invalid(Invalid::Duplicate)) => Ok(Joined::Already),
-        Err(StoreError::Invalid(Invalid::Held(why))) => Ok(Joined::Held(why)),
-        Err(e) => Err(e.into()),
+    };
+    match store.ledger().check(&body) {
+        Ok(()) => {}
+        Err(Invalid::Duplicate) => return Ok(Joined::Already),
+        Err(Invalid::Held(why)) => return Ok(Joined::Held(why)),
+        Err(e) => return Err(StoreError::Invalid(e).into()),
     }
+    forge.mark(
+        &repo.to_string(),
+        head,
+        Mark::Waiting,
+        "in the train, waiting to land",
+        None,
+    )?;
+    store.record(body)?;
+    Ok(Joined::Joined)
 }
 
-/// Takes a PR out of its repo's train. False when it wasn't in it.
-pub fn leave(store: &mut Store, repo: &Repo, pr: u64, why: Left) -> Result<bool, TrainError> {
+/// Takes a PR out of its repo's train, its head's train status pending
+/// first. False when it wasn't in it.
+pub fn leave(
+    store: &mut Store,
+    forge: &dyn Forge,
+    repo: &Repo,
+    pr: u64,
+    why: Left,
+) -> Result<bool, TrainError> {
     let change = change_of(store, repo, pr)?;
-    match store.record(Body::Leave { change, why }) {
-        Ok(_) => Ok(true),
-        Err(StoreError::Invalid(Invalid::NotInTrain)) => Ok(false),
-        Err(e) => Err(e.into()),
+    let body = Body::Leave { change, why };
+    match store.ledger().check(&body) {
+        Ok(()) => {}
+        Err(Invalid::NotInTrain) => return Ok(false),
+        Err(e) => return Err(StoreError::Invalid(e).into()),
     }
+    let member = store
+        .ledger()
+        .train(repo)
+        .and_then(|t| t.joined().iter().find(|m| m.change == change))
+        .expect("check: it's in it")
+        .clone();
+    let head = head_of(store, &member);
+    forge.mark(
+        &repo.to_string(),
+        head.as_str(),
+        Mark::Waiting,
+        "out of the train",
+        None,
+    )?;
+    store.record(body)?;
+    Ok(true)
 }
 
 /// Drops a candidate whose gate won't finish, the stall watchdog's last
@@ -249,18 +299,50 @@ pub fn leave(store: &mut Store, repo: &Repo, pr: u64, why: Left) -> Result<bool,
 /// word, which [`step`] reads, never a hand's.
 pub fn drop_candidate(
     store: &mut Store,
+    forge: &dyn Forge,
     repo: &Repo,
     candidate: CandidateId,
 ) -> Result<(), TrainError> {
-    let here = store
+    let Some(c) = store
         .ledger()
         .candidate(candidate)
-        .is_some_and(|c| &c.repo == repo);
-    if !here {
+        .filter(|c| &c.repo == repo)
+        .cloned()
+    else {
         return Err(TrainError::NotHere(candidate));
+    };
+    store
+        .ledger()
+        .check(&Body::Verdict {
+            candidate,
+            verdict: Verdict::Dropped,
+        })
+        .map_err(StoreError::Invalid)?;
+    dropped(store, forge, &c, "dropped")
+}
+
+/// Records a candidate dropped. A green one's next head may say it's
+/// landing, from a step stopped before its merge: that goes to pending
+/// first, since the candidate isn't landing it any more.
+fn dropped(
+    store: &mut Store,
+    forge: &dyn Forge,
+    c: &Candidate,
+    why: &str,
+) -> Result<(), TrainError> {
+    if c.state == State::Green {
+        let next = &c.changes[c.landed.len()];
+        let description = format!("candidate {} {why}, waiting in the train again", c.id);
+        forge.mark(
+            &c.repo.to_string(),
+            head_of(store, next).as_str(),
+            Mark::Waiting,
+            &description,
+            None,
+        )?;
     }
     store.record(Body::Verdict {
-        candidate,
+        candidate: c.id,
         verdict: Verdict::Dropped,
     })?;
     Ok(())
@@ -269,8 +351,6 @@ pub fn drop_candidate(
 /// What a step needs to know about the repo.
 #[derive(Debug, Clone)]
 pub struct Settings {
-    /// The trunk branch, the one candidates are built on.
-    pub trunk: String,
     /// The most changes a candidate holds.
     pub size: usize,
     /// Checks a candidate's gate waits for even before they report: the
@@ -370,7 +450,9 @@ pub struct Stepped {
 /// order, and deletes the branches of every candidate that isn't in flight.
 /// It goes on until the train waits on something: a gate still running, a
 /// merge GitHub hasn't shown yet, or nothing to do. It holds the ledger's
-/// lock throughout, so two steps never build or land at once.
+/// lock throughout, so two steps never build or land at once. Trunk is the
+/// repo's default branch as GitHub says it is when the step starts: the
+/// branch join, landing and ingest all mean, never a setting of its own.
 pub fn step(
     store: &mut Store,
     forge: &dyn Forge,
@@ -388,9 +470,11 @@ pub fn step(
         finished: Vec::new(),
         now: Now::Idle,
     };
+    let trunk = forge.default_branch(&repo.to_string())?;
     stepped.now = loop {
         stepped.finished.extend(finish(store, forge, repo)?);
-        let Some(id) = in_flight_or_built(store, forge, repo, settings, &mut stepped)? else {
+        let Some(id) = in_flight_or_built(store, forge, repo, &trunk, settings, &mut stepped)?
+        else {
             break Now::Idle;
         };
         let c = store.ledger().candidate(id).expect("in flight").clone();
@@ -438,15 +522,9 @@ pub fn step(
                 }
             }
             State::Green => {
-                if let Some(now) = land_next(
-                    store,
-                    forge,
-                    source,
-                    config,
-                    &settings.trunk,
-                    &c,
-                    &mut stepped,
-                )? {
+                if let Some(now) =
+                    land_next(store, forge, source, config, &trunk, &c, &mut stepped)?
+                {
                     break now;
                 }
             }
@@ -478,6 +556,7 @@ fn in_flight_or_built(
     store: &mut Store,
     forge: &dyn Forge,
     repo: &Repo,
+    trunk: &str,
     settings: &Settings,
     stepped: &mut Stepped,
 ) -> Result<Option<CandidateId>, TrainError> {
@@ -488,7 +567,7 @@ fn in_flight_or_built(
         let Some(plan) = store.ledger().next(repo, settings.size) else {
             return Ok(None);
         };
-        match build(store, forge, repo, &settings.trunk, &plan)? {
+        match build(store, forge, repo, trunk, &plan)? {
             Built::Candidate(id) => return Ok(Some(id)),
             Built::Conflict { change, onto, base } => {
                 stepped.conflicts.push(Conflict {
@@ -530,94 +609,6 @@ fn red_alone(
         candidate,
         failed,
     })
-}
-
-/// Lands a green candidate's next change, through its PR's merge at the head
-/// the candidate holds. The PR is read first, so a merge made since the last
-/// step is recorded rather than tried again. A candidate alone lands only
-/// while trunk is still its base: once trunk has moved it's dropped, to be
-/// built again on trunk as it is. A PR that targets another branch than
-/// trunk now is refused, since its merge would land there. Then the train's
-/// status goes on its head, which the repo's rules can require, and GitHub
-/// merges it or refuses. A refused PR's status says so before the ledger
-/// takes it out, so a step stopped in between comes back to it. `Some` when
-/// the train waits on GitHub showing the merge.
-fn land_next(
-    store: &mut Store,
-    forge: &dyn Forge,
-    source: &dyn Source,
-    config: &Config,
-    trunk: &str,
-    c: &Candidate,
-    stepped: &mut Stepped,
-) -> Result<Option<Now>, TrainError> {
-    let repo = &c.repo;
-    let next = &c.changes[c.landed.len()];
-    let pr = pr_of(store, next.change);
-    let head = head_of(store, next);
-    let moved = |store: &Store| {
-        store
-            .ledger()
-            .candidate(c.id)
-            .is_none_or(|now| now.state != State::Green || now.landed.len() > c.landed.len())
-    };
-    let (_, pull) = ingest::pulled(store, source, config, repo, pr)?;
-    if moved(store) {
-        return Ok(None);
-    }
-    let full = repo.to_string();
-    if c.alone {
-        let at = forge
-            .branch(&full, trunk)?
-            .ok_or_else(|| TrainError::NoTrunk(trunk.to_owned()))?;
-        if at != c.base.as_str() {
-            store.record(Body::Verdict {
-                candidate: c.id,
-                verdict: Verdict::Dropped,
-            })?;
-            stepped.verdicts.push((c.id, Verdict::Dropped));
-            return Ok(None);
-        }
-    }
-    let (why, description) = if pull.base.name != trunk {
-        let why = format!("it targets {}, not {trunk}", pull.base.name);
-        (why.clone(), why)
-    } else {
-        let description = format!("landing with candidate {}", c.id);
-        forge.mark(&full, head.as_str(), Mark::Landing, &description, None)?;
-        match forge.land(&full, pr, head.as_str())? {
-            PrMerge::Merged => {
-                stepped.landed.push(pr);
-                ingest::pull(store, source, config, repo, pr)?;
-                if moved(store) {
-                    return Ok(None);
-                }
-                return Ok(Some(Now::Landing {
-                    candidate: c.id,
-                    landings: c.changes[c.landed.len()..]
-                        .iter()
-                        .map(|m| Landing {
-                            pr: pr_of(store, m.change),
-                            change: m.change,
-                            head: head_of(store, m),
-                        })
-                        .collect(),
-                }));
-            }
-            PrMerge::Refused(why) => {
-                let description = format!("GitHub refused its merge: {why}");
-                (why, description)
-            }
-        }
-    };
-    // Its head may say it's landing; it isn't, and nothing else may.
-    forge.mark(&full, head.as_str(), Mark::Refused, &description, None)?;
-    store.record(Body::Leave {
-        change: next.change,
-        why: Left::Refused,
-    })?;
-    stepped.refused.push(Refused { pr, why });
-    Ok(None)
 }
 
 /// Records the tree trunk ended on for each candidate whose landings all

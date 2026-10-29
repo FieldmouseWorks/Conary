@@ -214,10 +214,13 @@ pub enum Body {
     /// at the back. An `alone` change rides in a candidate of its own and
     /// lands only while trunk is still that candidate's base: an R2 change's
     /// way (design 4.4). Until classes are the ledger's, the steward says
-    /// which changes those are, from its one-way paths.
+    /// which changes those are, from its one-way paths. A join that isn't
+    /// alone is written without the field, as joins were before it, so their
+    /// bytes, ids and signatures are the same either way.
     Join {
         change: ChangeId,
         revision: RevisionId,
+        #[serde(default, skip_serializing_if = "is_false")]
         alone: bool,
     },
     /// The change left the train without landing.
@@ -280,6 +283,10 @@ impl Body {
             | Self::Finish { .. } => None,
         }
     }
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 /// The part of an op its id hashes and its signature covers.

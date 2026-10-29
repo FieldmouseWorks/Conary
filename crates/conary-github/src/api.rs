@@ -88,6 +88,7 @@ struct CheckRuns {
 pub struct Status {
     pub context: String,
     pub state: String,
+    pub description: Option<String>,
     pub target_url: Option<String>,
     pub created_at: Option<String>,
     /// Who posted it: anyone who can push can post any context.
@@ -649,6 +650,12 @@ struct NamedRef {
     name: String,
 }
 
+/// The repo's default branch, as its own record says.
+#[derive(Debug, Deserialize)]
+struct Defaults {
+    default_branch: String,
+}
+
 /// How a repo lets PRs be merged.
 #[derive(Debug, Deserialize)]
 struct MergeMethods {
@@ -684,6 +691,11 @@ struct MergeCommit {
 }
 
 impl crate::train::Forge for Api {
+    fn default_branch(&self, repo: &str) -> Result<String, ApiError> {
+        let r: Defaults = self.get(&format!("/repos/{repo}"))?;
+        Ok(r.default_branch)
+    }
+
     fn branch(&self, repo: &str, name: &str) -> Result<Option<String>, ApiError> {
         Ok(self
             .get_found::<GitRef>(&format!("/repos/{repo}/git/ref/heads/{name}"))?
@@ -775,6 +787,7 @@ impl crate::train::Forge for Api {
         use crate::train::{CONTEXT, Mark};
         let state = match mark {
             Mark::Landing => "success",
+            Mark::Waiting => "pending",
             Mark::Red => "failure",
             Mark::Refused => "error",
         };

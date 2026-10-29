@@ -29,7 +29,6 @@ const STEWARD: &str = "fieldmouseworks-steward[bot]";
 
 fn settings() -> Settings {
     Settings {
-        trunk: "main".into(),
         size: 8,
         require: Vec::new(),
     }
@@ -42,6 +41,8 @@ fn settings() -> Settings {
 /// head onto trunk.
 #[derive(Default)]
 struct Hub {
+    /// The repo's default branch.
+    default: RefCell<String>,
     pulls: RefCell<BTreeMap<u64, String>>,
     checks: HashMap<String, Value>,
     statuses: HashMap<String, Value>,
@@ -61,6 +62,10 @@ struct Hub {
     refuse: HashMap<u64, String>,
     /// GitHub not showing the merges it made yet.
     lagging: Cell<bool>,
+    /// A PR's merge failing before GitHub makes it, or once it's made with
+    /// GitHub's answer lost.
+    down: Cell<bool>,
+    lost: Cell<bool>,
     /// Statuses of this kind GitHub doesn't take.
     unmarked: Cell<Option<Mark>>,
     /// Each PR's base branch, when it isn't main.
@@ -88,6 +93,7 @@ impl Hub {
                         "created_at": "2026-10-29T10:00:00Z", "creator": {"login": STEWARD, "type": "Bot"}}]),
             );
         }
+        hub.default.replace("main".into());
         hub.branches
             .borrow_mut()
             .insert("main".into(), TRUNK.into());
@@ -123,13 +129,25 @@ impl Hub {
         self.checks.insert(sha.into(), Value::Array(runs));
     }
 
-    /// The trains's statuses, as (commit, mark).
+    /// What the train's statuses said became of each head, as (commit,
+    /// mark): landing, red or refused, the pending ones aside.
     fn marked(&self) -> Vec<(String, Mark)> {
         self.marks
             .borrow()
             .iter()
+            .filter(|p| p.mark != Mark::Waiting)
             .map(|p| (p.sha.clone(), p.mark))
             .collect()
+    }
+
+    /// The train's latest status on a commit.
+    fn latest(&self, sha: &str) -> Option<Mark> {
+        self.marks
+            .borrow()
+            .iter()
+            .rev()
+            .find(|p| p.sha == sha)
+            .map(|p| p.mark)
     }
 }
 
@@ -165,7 +183,7 @@ impl Source for Hub {
             "merged_at": merged.as_ref().map(|_| "2026-10-29T12:00:00Z"),
             "merge_commit_sha": merged,
             "base": {"sha": TRUNK, "ref": self.targets.borrow().get(&number).map_or("main", String::as_str),
-                     "repo": {"default_branch": "main"}},
+                     "repo": {"default_branch": *self.default.borrow()}},
             "head": {"sha": head, "ref": "claude/x"},
         })))
     }
@@ -178,8 +196,31 @@ impl Source for Hub {
         Ok(self.checks.get(sha).map_or_else(Vec::new, parse))
     }
 
+    /// The train's own, newest first, then the rest.
     fn statuses(&self, _: &str, sha: &str) -> Result<Vec<CommitStatus>, ApiError> {
-        Ok(self.statuses.get(sha).map_or_else(Vec::new, parse))
+        let state = |m: Mark| match m {
+            Mark::Landing => "success",
+            Mark::Waiting => "pending",
+            Mark::Red => "failure",
+            Mark::Refused => "error",
+        };
+        let mut all: Vec<CommitStatus> = self
+            .marks
+            .borrow()
+            .iter()
+            .rev()
+            .filter(|p| p.sha == sha)
+            .map(|p| {
+                parse(&json!({"context": CONTEXT, "state": state(p.mark),
+                              "description": p.description, "target_url": p.url}))
+            })
+            .collect();
+        all.extend(
+            self.statuses
+                .get(sha)
+                .map_or_else(Vec::new, parse::<Vec<CommitStatus>>),
+        );
+        Ok(all)
     }
 
     fn reviews(&self, _: &str, _: u64) -> Result<Vec<Review>, ApiError> {
@@ -205,6 +246,10 @@ impl Source for Hub {
 }
 
 impl Forge for Hub {
+    fn default_branch(&self, _: &str) -> Result<String, ApiError> {
+        Ok(self.default.borrow().clone())
+    }
+
     fn branch(&self, _: &str, name: &str) -> Result<Option<String>, ApiError> {
         Ok(self.branch_at(name))
     }
@@ -284,6 +329,12 @@ impl Forge for Hub {
         if self.pulls.borrow()[&pr] != at {
             return Ok(PrMerge::Refused("Head branch was modified".into()));
         }
+        if self.merged.borrow().contains_key(&pr) {
+            return Ok(PrMerge::Refused("Pull Request is not mergeable".into()));
+        }
+        if self.down.get() {
+            return Err(ApiError::unavailable("merge"));
+        }
         let before = self.branch_at("main").unwrap();
         let mut holds = self.holds.borrow()[&before].clone();
         holds.push(at.into());
@@ -297,6 +348,9 @@ impl Forge for Hub {
         self.parents.borrow_mut().insert(sha.clone(), before);
         self.linked.borrow_mut().insert(sha.clone(), pr);
         self.merged.borrow_mut().insert(pr, sha);
+        if self.lost.get() {
+            return Err(ApiError::unavailable("merge"));
+        }
         Ok(PrMerge::Merged)
     }
 }
@@ -309,10 +363,21 @@ fn store(dir: &tempfile::TempDir) -> Store {
 fn join_all(store: &mut Store, hub: &Hub, prs: &[u64]) {
     for pr in prs {
         assert_eq!(
-            join(store, hub, &config(), &repo(), *pr, &head(*pr), false).unwrap(),
+            join(store, hub, hub, &config(), &repo(), *pr, &head(*pr), false).unwrap(),
             Joined::Joined
         );
     }
+}
+
+/// Joins PR `pr` at `at`, as the steward asks once it's settled there.
+fn try_join(
+    store: &mut Store,
+    hub: &Hub,
+    pr: u64,
+    at: &str,
+    alone: bool,
+) -> Result<Joined, TrainError> {
+    join(store, hub, hub, &config(), &repo(), pr, at, alone)
 }
 
 fn joined(store: &Store) -> Vec<u64> {
@@ -357,18 +422,18 @@ fn a_ready_pr_joins_at_its_head_as_github_shows_it() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
     let hub = Hub::new(&[3]);
-    let mut again = || join(&mut store, &hub, &config(), &repo(), 3, &head(3), false).unwrap();
+    let mut again = || try_join(&mut store, &hub, 3, &head(3), false).unwrap();
     assert_eq!(again(), Joined::Joined);
     assert_eq!(again(), Joined::Already);
     // Settled at a head it's since moved on from.
     hub.pulls.borrow_mut().insert(3, head(4));
-    match join(&mut store, &hub, &config(), &repo(), 3, &head(3), false) {
+    match try_join(&mut store, &hub, 3, &head(3), false) {
         Err(TrainError::Moved { pr: 3, head: now }) => assert_eq!(now, head(4)),
         other => panic!("{other:?}"),
     }
     // The new head took it out.
     assert!(store.ledger().train(&repo()).unwrap().joined().is_empty());
-    assert!(leave(&mut store, &repo(), 3, Left::Unready).is_ok_and(|left| !left));
+    assert!(leave(&mut store, &hub, &repo(), 3, Left::Unready).is_ok_and(|left| !left));
 }
 
 #[test]
@@ -629,22 +694,22 @@ fn red_alone_leaves_with_the_trains_failure_and_stays_out_until_its_head_moves()
         }]
     );
     assert_eq!(
-        *hub.marks.borrow(),
-        [Posted {
+        hub.marks.borrow().last(),
+        Some(&Posted {
             sha: head(3),
             mark: Mark::Red,
             description: format!("red alone in candidate {id}: check / check"),
             url: Some(url),
-        }]
+        })
     );
     assert_eq!(stepped.now, Now::Idle);
     assert_eq!(
-        join(&mut store, &hub, &config(), &repo(), 3, &head(3), false).unwrap(),
+        try_join(&mut store, &hub, 3, &head(3), false).unwrap(),
         Joined::Held(Held::Red)
     );
     hub.pulls.borrow_mut().insert(3, head(33));
     assert_eq!(
-        join(&mut store, &hub, &config(), &repo(), 3, &head(33), false).unwrap(),
+        try_join(&mut store, &hub, 3, &head(33), false).unwrap(),
         Joined::Joined
     );
 }
@@ -691,7 +756,7 @@ fn a_pr_that_wont_merge_is_held_until_what_it_was_after_moves() {
     join_all(&mut store, &hub, &[3, 4]);
     let (id, _) = gating(&step_once(&mut store, &hub));
     assert_eq!(
-        join(&mut store, &hub, &config(), &repo(), 4, &head(4), false).unwrap(),
+        try_join(&mut store, &hub, 4, &head(4), false).unwrap(),
         Joined::Held(Held::Conflict)
     );
     hub.ci(&commit_of(&store, id), &[("check / check", "success")]);
@@ -763,15 +828,15 @@ fn a_candidate_is_dropped_only_in_its_own_repo_and_only_once() {
     let (id, _) = gating(&step_once(&mut store, &hub));
     let other: Repo = "FieldmouseWorks/burrow".parse().unwrap();
     assert!(matches!(
-        drop_candidate(&mut store, &other, id),
+        drop_candidate(&mut store, &hub, &other, id),
         Err(TrainError::NotHere(_))
     ));
     let unknown = CandidateId::new().unwrap();
     assert!(matches!(
-        drop_candidate(&mut store, &repo(), unknown),
+        drop_candidate(&mut store, &hub, &repo(), unknown),
         Err(TrainError::NotHere(_))
     ));
-    drop_candidate(&mut store, &repo(), id).unwrap();
-    assert!(drop_candidate(&mut store, &repo(), id).is_err());
+    drop_candidate(&mut store, &hub, &repo(), id).unwrap();
+    assert!(drop_candidate(&mut store, &hub, &repo(), id).is_err());
     assert_eq!(joined(&store), [3]);
 }

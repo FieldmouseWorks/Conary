@@ -346,10 +346,17 @@ so the wait is one run, however many are waiting.
 - **Green.** Each change lands in order, through its own PR's merge at the
   head the candidate holds, with the train's status, `conary/train`, on that
   head first. A train repo's rules require that status, so nothing lands its
-  PRs but the train. A PR against another branch than trunk never joins, and
-  one retargeted since is refused before its merge. A refused PR's status
-  and a red one's go up before the ledger moves on, so a step stopped in
-  between comes back to them. Once the last has landed, trunk's tree is
+  PRs but the train. That status is a success only on the head being landed
+  now: a head's goes to pending as it joins and as it leaves, and before a
+  green candidate is dropped, ahead of the ledger each time. Trunk is the
+  repo's default branch as GitHub says it is at each step, the branch join
+  and ingest mean too. A PR against another branch never joins, and one
+  retargeted since is refused before its merge. A refused PR's status and a
+  red one's go up before the ledger moves on, so a step stopped in between
+  comes back to them. A merge GitHub took but doesn't show yet (its answer
+  lost, or the PR read again too soon) is waited for, never made again: the
+  head's status says it was landing with this candidate, and a commit on
+  trunk since the candidate's base is linked to the PR. Once the last has landed, trunk's tree is
   checked against the candidate's. If it's the same tree, the candidate's evidence
   is the last landing's, for the tree trunk ended on: the case rule 3
   already gives R2. The landings before it made trees no gate ran on (trunk
@@ -374,7 +381,13 @@ so the wait is one run, however many are waiting.
   makes. It joins `alone`, and the changes before it go without it. Right
   before its merge the train reads trunk again; if trunk has moved, the
   candidate is dropped and built again on trunk as it is. A landing onto
-  any other base doesn't count as the candidate's, and stops it. Until
+  any other base doesn't count as the candidate's, and stops it. GitHub's
+  merge takes the head it merges, not the base, but nothing that follows
+  the repo's rules can move trunk between that read and the merge: each
+  merge into trunk needs the train's status, only the head being landed has
+  it, and a step holds the ledger's lock throughout. A write past the rules
+  is an `outside` op, a violation for the owner, and `finish` records that
+  trunk's tree isn't the candidate's. Until
   classes are the ledger's (M5), the steward says which changes join alone,
   from its one-way paths.
 

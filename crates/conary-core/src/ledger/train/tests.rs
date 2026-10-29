@@ -697,6 +697,26 @@ fn the_trains_ops_read_back_as_written() {
     .unwrap();
     assert_eq!(json["op"], "leave");
     assert_eq!(json["why"], "refused");
+    // A join that isn't alone is written as joins were before there was
+    // `alone`, and one written then reads as not alone.
+    let join = Body::Join {
+        change: a,
+        revision,
+        alone: false,
+    };
+    let json = serde_json::to_value(&join).unwrap();
+    assert_eq!(
+        json,
+        serde_json::json!({"op": "join", "change": a, "revision": revision})
+    );
+    assert_eq!(serde_json::from_value::<Body>(json).unwrap(), join);
+    let alone = serde_json::to_value(Body::Join {
+        change: a,
+        revision,
+        alone: true,
+    })
+    .unwrap();
+    assert_eq!(alone["alone"], true);
 }
 
 #[test]
