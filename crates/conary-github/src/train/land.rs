@@ -46,6 +46,12 @@ pub(super) fn land_next(
     if moved(store) {
         return Ok(None);
     }
+    // Merged, though ingest can't place the merge yet: GitHub links a squash
+    // or rebase to its PR a moment after it shows the PR merged. It's waited
+    // for, never merged again.
+    if pull.is_merged() {
+        return Ok(Some(landing(store, c)));
+    }
     let full = repo.to_string();
     let at = forge
         .branch(&full, trunk)?
@@ -168,8 +174,9 @@ pub(super) fn open_landing(
 /// landing (a change of it left, closed or has a new head, as ingest saw
 /// it), before another candidate is built: its next head may say it's
 /// landing, from a step that went on to its merge. A merge GitHub shows is
-/// recorded, through that candidate. One GitHub took and doesn't show yet is
-/// waited for (`Some`), still the candidate's: nothing is built meanwhile.
+/// recorded, through that candidate. One GitHub took and doesn't show yet,
+/// or shows before linking it to its PR, is waited for (`Some`), still the
+/// candidate's: nothing is built meanwhile.
 /// Otherwise, or once it landed some other way or closed, the head goes to
 /// pending, since the candidate isn't landing it any more. Either way its
 /// last landing's head is retired ([`retired`]).
@@ -189,7 +196,7 @@ pub(super) fn stopped_landing(
     let head = head_of(store, &next);
     if landing_marked(source, &full, head.as_str(), c.id)? {
         let pr = pr_of(store, next.change);
-        ingest::pull(store, source, config, repo, pr)?;
+        let (_, pull) = ingest::pulled(store, source, config, repo, pr)?;
         let now = store.ledger().change(next.change).expect("in its train");
         let description = match (now.status(), now.landing.as_ref()) {
             // Through it: retired below, as its last landing.
@@ -200,7 +207,7 @@ pub(super) fn stopped_landing(
                 let at = forge
                     .branch(&full, trunk)?
                     .ok_or_else(|| TrainError::NoTrunk(trunk.to_owned()))?;
-                if merge_unseen(source, &full, pr, head.as_str(), &c, &at)? {
+                if pull.is_merged() || merge_unseen(source, &full, pr, head.as_str(), &c, &at)? {
                     return Ok(Some(Now::Landing {
                         candidate: c.id,
                         landings: vec![Landing {

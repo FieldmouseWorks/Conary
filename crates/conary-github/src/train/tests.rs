@@ -62,6 +62,8 @@ struct Hub {
     refuse: HashMap<u64, String>,
     /// GitHub not showing the merges it made yet.
     lagging: Cell<bool>,
+    /// GitHub showing them, but not linking their commits to their PRs yet.
+    unlinked: Cell<bool>,
     /// A PR's merge failing before GitHub makes it, or once it's made with
     /// GitHub's answer lost.
     down: Cell<bool>,
@@ -245,7 +247,14 @@ impl Source for Hub {
     }
 
     fn commit_pulls(&self, _: &str, sha: &str) -> Result<Vec<u64>, ApiError> {
-        Ok(self.linked.borrow().get(sha).into_iter().copied().collect())
+        Ok(self
+            .linked
+            .borrow()
+            .get(sha)
+            .filter(|_| !self.unlinked.get())
+            .into_iter()
+            .copied()
+            .collect())
     }
 
     fn retargeted(&self, _: &str, _: u64) -> Result<Option<String>, ApiError> {
