@@ -1,0 +1,47 @@
+{
+  "conary": "note v1",
+  "change": "2w824wtp5n2aexbwjqp3y59b5q",
+  "repo": {
+    "owner": "fieldmouseworks",
+    "name": "conary"
+  },
+  "pr": 55,
+  "url": "https://github.com/fieldmouseworks/conary/pull/55",
+  "summary": "train: land only a head the steward still says is settled",
+  "task": "fieldmouseworks/conary#48",
+  "author": {
+    "kind": "agent",
+    "login": "TusanHomichi",
+    "session": "https://claude.ai/code/session_01BkHcyDYaKnE7mRRMdYCFVC"
+  },
+  "landing": {
+    "revision": "2c6538c180dd3f4059dca603deb1dff1266d1be7f35b579f618723ff4020a3cd",
+    "before": "40141726dd280f57e5a0eb4a19d5b9726715a569",
+    "after": "459e715002f2c26f4d63dfc93c5bed8a3fcf9fc4",
+    "by": {
+      "kind": "status",
+      "login": "fieldmouseworks-steward[bot]"
+    },
+    "at": 1793321268763
+  },
+  "evidence": [
+    {
+      "kind": "ci",
+      "check": "check / commits",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/40981566022/job/123822611074"
+    },
+    {
+      "kind": "ci",
+      "check": "check / check",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/40981566022/job/123822610794"
+    },
+    {
+      "kind": "review",
+      "check": "codex",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/pull/55#pullrequestreview-5706803896"
+    }
+  ]
+}
