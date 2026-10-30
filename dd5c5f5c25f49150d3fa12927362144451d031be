@@ -1,0 +1,47 @@
+{
+  "conary": "note v1",
+  "change": "3tq1y6dywfy09s6wyq1jbj29hq",
+  "repo": {
+    "owner": "fieldmouseworks",
+    "name": "conary"
+  },
+  "pr": 79,
+  "url": "https://github.com/fieldmouseworks/conary/pull/79",
+  "summary": "train: wait for GitHub to link a merge before saying what it was",
+  "task": "fieldmouseworks/conary#48",
+  "author": {
+    "kind": "agent",
+    "login": "TusanHomichi",
+    "session": "https://claude.ai/code/session_01BkHcyDYaKnE7mRRMdYCFVC"
+  },
+  "landing": {
+    "revision": "9a3dc942a968944541a1483d008ca880bade8e10a348168b28e60ceb6eac0b97",
+    "before": "c332e4ecb0d088c61ae11aeb11ec8040cd0de164",
+    "after": "dd5c5f5c25f49150d3fa12927362144451d031be",
+    "by": {
+      "kind": "status",
+      "login": "fieldmouseworks-steward[bot]"
+    },
+    "at": 1793378990410
+  },
+  "evidence": [
+    {
+      "kind": "ci",
+      "check": "check / check",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/41092796702/job/124190742104"
+    },
+    {
+      "kind": "ci",
+      "check": "check / commits",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/41092796702/job/124190741320"
+    },
+    {
+      "kind": "review",
+      "check": "codex",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/pull/79#pullrequestreview-5715638767"
+    }
+  ]
+}
