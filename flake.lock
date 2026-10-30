@@ -9,11 +9,11 @@
         "rust-overlay": "rust-overlay"
       },
       "locked": {
-        "lastModified": 1793267626,
-        "narHash": "sha256-IPceqsd+av1Fx/mTQivmr7h5CjuHXhtHxSRsUWMK1fU=",
+        "lastModified": 1793339436,
+        "narHash": "sha256-rBA9KA4aSE9kfu9E4ysXPv1oEp2pcmdqc5ANEmAUl1g=",
         "ref": "refs/heads/main",
-        "rev": "c4b676658ab6937626d806b90a2487405e5a9885",
-        "revCount": 180,
+        "rev": "d6a9e656e8d38839b878dddcd8173fa96641b1cc",
+        "revCount": 219,
         "type": "git",
         "url": "https://github.com/FieldmouseWorks/burrow"
       },
@@ -47,10 +47,10 @@
         "spectrum": "spectrum"
       },
       "locked": {
-        "lastModified": 1792810338,
-        "narHash": "sha256-0DS+A3BsygKRpKe0qmUWVDSfKqpIHZCpHJagAklE0o4=",
+        "lastModified": 1793225170,
+        "narHash": "sha256-G/iL0mroLP5etLwYs55uyOyffMS4t+gpyXF06haba4w=",
         "ref": "refs/heads/main",
-        "rev": "4876e2ae2de6ce225f4ccf664ae441128aa3f03a",
+        "rev": "c37d37a876a3c4bd7ff78fcc716b2e4fac770360",
         "shallow": true,
         "type": "git",
         "url": "https://github.com/microvm-nix/microvm.nix"
@@ -63,10 +63,10 @@
     },
     "nixpkgs": {
       "locked": {
-        "lastModified": 1793015021,
-        "narHash": "sha256-Ee5BWo8sh3pGt70QUdRajnaginqFmWvrtdBc4gJzhks=",
+        "lastModified": 1793183032,
+        "narHash": "sha256-56mFMf8heLNfYhcgbrh4GpN5x+G9JOfTFXZC3n6w0qM=",
         "ref": "nixos-26.05",
-        "rev": "718f670e845328e9c2cecdd832835712b2cbd065",
+        "rev": "08d3a97586f6b6343b3b5e799980773629432610",
         "shallow": true,
         "type": "git",
         "url": "https://github.com/NixOS/nixpkgs"
