@@ -565,9 +565,17 @@ Targets on remi, warm cache, a year of ledger across every repo:
     Never a key on the runner: a candidate's own workflow can run anything
     as the runner's user, so a key that user could read would sign whatever
     the candidate liked, while the token names the workflow that asked for
-    it. A token taken from one run can say only what that run's check run
-    concluded. Root on a self-hosted runner's machine can still change what
-    a job does, as it can read the steward's key (below).
+    it. The same holds for the token's request credentials, which the job's
+    environment carries: on a runner that takes job after job, a job the
+    candidate adds can leave a process that asks for a token in the next
+    job's name, or take the runner's own credentials and its jobs. So the
+    signing job counts only from a runner started fresh for it, a
+    GitHub-hosted one or a self-hosted one registered for that one job in a
+    user nothing ran as before, and the verifier checks GitHub's record of
+    which runner took the job. On such a runner, a token taken from one run
+    can say only what that run's check run concluded. Root on a self-hosted
+    runner's machine can still change what a job does, as it can read the
+    steward's key (below).
   - Jobs on remi (reviewers, proof and judge jobs, negative runs): a signature
     by that runner service's own key, which no authoring session or sandbox
     can read, over the result, the revision and the run's log hash.

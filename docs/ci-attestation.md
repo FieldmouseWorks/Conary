@@ -112,17 +112,44 @@ these hold:
    about, and the predicate's `revision` says the same.
 4. It's this page's `#v1`: the bundle's predicate type, or the token's
    audience.
+5. The job ran on a runner started fresh for it, which nothing the
+   candidate controls ran on before it or runs beside it as its user:
+   - a GitHub-hosted runner, a VM of its own for each job (the token's
+     `runner_environment`, which the certificate carries too, is
+     `github-hosted`); or
+   - a self-hosted runner registered just in time for that one job, in a
+     user and a state directory nothing ran in before, which the repo's
+     policy names as fresh. GitHub's record of the job
+     (`GET /repos/{owner}/{repo}/actions/jobs/{job}`) says which runner took
+     it, and only the launcher that starts fresh runners registers ones with
+     a name the policy takes: registering a runner takes the repo's or the
+     organization's runner administration, which no workflow has.
+
+   A runner that takes job after job runs each as the same user. Any job
+   before the signing one, such as one the candidate's own workflow adds,
+   can leave a process behind that reads the next job's token request
+   credentials from its environment and asks for a token in that job's name
+   with any audience, or change files the next job runs, or read the
+   runner's own credentials and take its jobs. Nothing in the token tells
+   those apart from the job's own, so nothing from such a runner counts.
 
 A token also has to bind its statement to its run:
 
-5. Its audience is the one for the statement it came with.
-6. Its `check_run_id` is the check run being counted. That check run, as
+6. Its audience is the one for the statement it came with.
+7. Its `check_run_id` is the check run being counted. That check run, as
    GitHub reports it, is on the subject's commit (a PR's is on its head), has
    completed, and concluded `success` when the result is `pass`. So a token
    taken from one run can't say another passed: the run's own conclusion has
    to agree.
-7. For a push, its `sha` is the subject's commit too. (A PR's is GitHub's
+8. For a push, its `sha` is the subject's commit too. (A PR's is GitHub's
    merge as the event found it, which the job doesn't check.)
+
+Inside the signing job, nothing of the candidate's runs as the job's user:
+the workflow evaluates its flake and builds it in nix-daemon's sandbox, as
+Nix's build users, and runs only burrow's own steps and actions pinned to
+commits. That is part of what rule 2's signer workflow guarantees, so a
+change to `flake-check.yml` that ran the candidate's code outside Nix would
+break rule 5's reason for counting it.
 
 A token expires minutes after the job asks for it; that only stops it being
 used to sign in somewhere, and doesn't bear on checking it. GitHub can drop a
