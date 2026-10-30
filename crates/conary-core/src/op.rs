@@ -144,6 +144,17 @@ pub enum Left {
     Refused,
 }
 
+/// A producer's own word that a result came from its run on what it ran
+/// on, kept as it was checked (`docs/ci-attestation.md`), so it can be
+/// checked again for as long as its signer's key is published.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Attest {
+    /// A private repo's CI: the statement its job attested, and the job's
+    /// GitHub OIDC token, whose audience names the statement's digest.
+    GithubToken { statement: String, token: String },
+}
+
 /// How a candidate's gate ended (`docs/DESIGN.md` section 4.7).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -244,17 +255,19 @@ pub enum Body {
         of: Option<CandidateId>,
     },
     /// One result of one check on a candidate's commit. Recorded like a
-    /// revision's evidence, and counted only as that is (design 4.3).
+    /// revision's evidence, and counted only as that is (design 4.3): by
+    /// its producer's attestation, checked when it was recorded.
     CandidateEvidence {
         candidate: CandidateId,
         kind: CheckKind,
         check: String,
         result: Outcome,
         source: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        attest: Option<Attest>,
     },
-    /// How the candidate's gate ended. Until Conary counts attested
-    /// evidence itself, this is the steward's call from the candidate's CI,
-    /// as it reads a PR's.
+    /// How the candidate's gate ended: green on its attested evidence
+    /// (design 4.7).
     Verdict {
         candidate: CandidateId,
         verdict: Verdict,

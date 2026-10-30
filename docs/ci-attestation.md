@@ -96,8 +96,10 @@ fails closed.
 
 ## Checking one
 
-A verifier, Conary's at M3, takes an attestation as evidence only when all of
-these hold:
+A verifier takes an attestation as evidence only when all of these hold.
+Conary's train checks a private repo's token on its candidate's commit this
+way (`conary-github`'s `attest`); nothing checks a bundle, or a PR's
+revision, yet.
 
 1. GitHub signed it: the bundle verifies against Sigstore's public trust
    root, or the token against GitHub's published keys
@@ -159,4 +161,4 @@ records it, and the ledger keeps the token with the evidence.
 The caller's own workflow can change what it passes in (`build-skip` among
 them), and a PR's run takes that workflow from the PR. So the predicate says
 what was skipped, and the policy that counts the evidence decides whether a
-result with skipped checks is enough.
+result with skipped checks is enough. The train's counts none.

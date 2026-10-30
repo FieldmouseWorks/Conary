@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 
 use super::*;
 use crate::api::{CheckRun, Commit, PullRequest, Pulls, Review, Status as CommitStatus};
+use crate::attest::{ARTIFACT, Artifact, FILE, Job, Key, SIGNER_REPO, testing};
 
 const TRUNK: &str = "1111111111111111111111111111111111111111";
 const FORK: &str = "2222222222222222222222222222222222222222";
@@ -27,10 +28,14 @@ fn config() -> Config {
 
 const STEWARD: &str = "fieldmouseworks-steward[bot]";
 
+/// What the tests' fresh runners' names start with.
+const FRESH: &str = "fresh-remi-";
+
 fn settings() -> Settings {
     Settings {
         size: 8,
-        require: Vec::new(),
+        require: vec!["check / check".into()],
+        fresh: Some(FRESH.into()),
     }
 }
 
@@ -41,7 +46,9 @@ fn settings() -> Settings {
 /// just what another head does, so merged where that one is already it
 /// leaves the tree as it was. A head in `stacked` is on another's branch:
 /// merging it, or landing it, brings that head too. A PR's merge squashes
-/// its head onto trunk.
+/// its head onto trunk. Each check run is a GitHub Actions job, and burrow's
+/// shared CI, at the signer commit on burrow's main, attests the passes it
+/// is told to.
 #[derive(Default)]
 struct Hub {
     /// The repo's default branch.
@@ -83,7 +90,20 @@ struct Hub {
     retarget: RefCell<Option<(u64, String)>>,
     /// Every status the train posted.
     marks: RefCell<Vec<Posted>>,
+    /// The last check run id given out: GitHub's are unique.
+    runs: Cell<u64>,
+    /// Each job's run's attestation artifacts, by the job's check run id.
+    attestations: RefCell<HashMap<u64, Vec<Kept>>>,
+    /// The commits on burrow's default branch, its tip first.
+    signer: RefCell<Vec<String>>,
+    /// How many artifacts were downloaded.
+    downloads: Cell<u64>,
+    /// The runner each job ran on, when it isn't a fresh one of its own.
+    runners: RefCell<HashMap<u64, String>>,
 }
+
+/// An artifact a run kept: its name and GitHub's zip of it.
+type Kept = (String, Vec<u8>);
 
 #[derive(Debug, PartialEq, Eq)]
 struct Posted {
@@ -109,6 +129,7 @@ impl Hub {
             .borrow_mut()
             .insert("main".into(), TRUNK.into());
         hub.holds.borrow_mut().insert(TRUNK.into(), Vec::new());
+        hub.signer.replace(vec![testing::SIGNER_SHA.into()]);
         hub
     }
 
@@ -147,18 +168,53 @@ impl Hub {
         self.holds.borrow()[&at].clone()
     }
 
-    /// CI on a commit: each check's name and conclusion, all completed.
+    /// CI on a commit: each check's name and conclusion, all completed,
+    /// and each pass attested.
     fn ci(&mut self, sha: &str, runs: &[(&str, &str)]) {
         let runs: Vec<Value> = runs
             .iter()
             .enumerate()
             .map(|(i, (name, conclusion))| {
-                json!({"id": i + 1, "name": name, "status": "completed", "conclusion": conclusion,
+                json!({"id": self.run_id(), "name": name, "status": "completed", "conclusion": conclusion,
                        "html_url": format!("https://github.com/FieldmouseWorks/remi/actions/runs/{i}"),
                        "started_at": format!("2026-10-29T11:0{i}:00Z")})
             })
             .collect();
         self.checks.insert(sha.into(), Value::Array(runs));
+        self.attest_passes(sha);
+    }
+
+    fn run_id(&self) -> u64 {
+        self.runs.set(self.runs.get() + 1);
+        self.runs.get()
+    }
+
+    /// Each completed, successful run on a commit attested, as its job
+    /// attests: its statement and token in an artifact of its run.
+    fn attest_passes(&self, sha: &str) {
+        let runs: Vec<CheckRun> = self.checks.get(sha).map_or_else(Vec::new, parse);
+        for run in runs
+            .iter()
+            .filter(|r| r.conclusion.as_deref() == Some("success"))
+        {
+            self.attest(run.id, &self.attestation(sha, run.id));
+        }
+    }
+
+    /// An honest attestation of a pass on a commit by its check run.
+    fn attestation(&self, sha: &str, run: u64) -> String {
+        let tree = tree_of(&self.holds.borrow()[sha]);
+        let statement = testing::statement(sha, &tree, "pass");
+        let claims = testing::claims(&repo().to_string(), sha, run, &statement);
+        testing::file(&statement, &testing::token(&claims))
+    }
+
+    /// Keeps `file` as an attestation in a run's artifacts.
+    fn attest(&self, run: u64, file: &str) {
+        let mut all = self.attestations.borrow_mut();
+        let kept = all.entry(run).or_default();
+        let name = format!("{ARTIFACT}{}", kept.len());
+        kept.push((name, testing::zipped(FILE, file.as_bytes())));
     }
 
     /// What the train's statuses said became of each head, as (commit,
@@ -280,17 +336,72 @@ impl Source for Hub {
         Ok(None)
     }
 
-    fn merge_base(&self, _: &str, _: &str, _: &str) -> Result<String, ApiError> {
+    /// On burrow, a commit on its default branch is behind the tip; the
+    /// rest is a fork's.
+    fn merge_base(&self, repo: &str, a: &str, _: &str) -> Result<String, ApiError> {
+        if repo == SIGNER_REPO && self.signer.borrow().iter().any(|c| c == a) {
+            return Ok(a.into());
+        }
         Ok(FORK.into())
     }
 }
 
+/// A check run's job ran in the run of ten times its id, and an
+/// artifact's id is its run's and its place among them.
+impl Actions for Hub {
+    fn job(&self, _: &str, job: u64) -> Result<Option<Job>, ApiError> {
+        Ok(Some(Job {
+            run_id: job * 10,
+            runner_name: Some(
+                self.runners
+                    .borrow()
+                    .get(&job)
+                    .cloned()
+                    .unwrap_or_else(|| format!("{FRESH}{job}")),
+            ),
+        }))
+    }
+
+    fn artifacts(&self, _: &str, run: u64) -> Result<Vec<Artifact>, ApiError> {
+        Ok(self
+            .attestations
+            .borrow()
+            .get(&(run / 10))
+            .into_iter()
+            .flatten()
+            .enumerate()
+            .map(|(i, (name, _))| Artifact {
+                id: run * 10 + i as u64,
+                name: name.clone(),
+                expired: false,
+            })
+            .collect())
+    }
+
+    fn artifact(&self, _: &str, id: u64) -> Result<Vec<u8>, ApiError> {
+        self.downloads.set(self.downloads.get() + 1);
+        Ok(self.attestations.borrow()[&(id / 100)][(id % 100) as usize]
+            .1
+            .clone())
+    }
+
+    fn keys(&self) -> Result<Vec<Key>, ApiError> {
+        Ok(vec![testing::key()])
+    }
+}
+
 impl Forge for Hub {
-    fn default_branch(&self, _: &str) -> Result<String, ApiError> {
+    fn default_branch(&self, repo: &str) -> Result<String, ApiError> {
+        if repo == SIGNER_REPO {
+            return Ok("main".into());
+        }
         Ok(self.default.borrow().clone())
     }
 
-    fn branch(&self, _: &str, name: &str) -> Result<Option<String>, ApiError> {
+    fn branch(&self, repo: &str, name: &str) -> Result<Option<String>, ApiError> {
+        if repo == SIGNER_REPO {
+            return Ok((name == "main").then(|| self.signer.borrow()[0].clone()));
+        }
         Ok(self.branch_at(name))
     }
 
@@ -462,6 +573,7 @@ fn waiting(stepped: &Stepped) -> Vec<String> {
 }
 
 mod empty;
+mod gate;
 mod land;
 
 #[test]
@@ -547,53 +659,6 @@ fn a_head_that_wont_merge_leaves_and_the_rest_are_built_without_it() {
 }
 
 #[test]
-fn the_gates_results_are_recorded_for_the_candidates_commit_alone() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut store = store(&dir);
-    let mut hub = Hub::new(&[3]);
-    join_all(&mut store, &hub, &[3]);
-    let (id, _) = gating(&step_once(&mut store, &hub));
-    let commit = store.ledger().candidate(id).unwrap().commit.to_string();
-    hub.checks.insert(
-        commit.clone(),
-        json!([
-            {"id": 2, "name": "check / check", "status": "completed", "conclusion": "success",
-             "html_url": "https://github.com/FieldmouseWorks/remi/actions/runs/1/job/1"},
-            {"id": 3, "name": "slow", "status": "in_progress", "conclusion": null, "html_url": null},
-        ]),
-    );
-    hub.statuses.insert(
-        commit.clone(),
-        json!([
-            {"context": "review-settled", "state": "success", "target_url": null},
-            {"context": "proof", "state": "failure", "target_url": "https://remi/proof/1"},
-        ]),
-    );
-    // Something else pushed to the train branch counts for nothing.
-    let pushed = format!("{:0>40}", "dead");
-    hub.checks.insert(
-        pushed.clone(),
-        json!([{"id": 4, "name": "check / check", "status": "completed", "conclusion": "failure", "html_url": null}]),
-    );
-    hub.branches.borrow_mut().insert(train_branch(id), pushed);
-    step_once(&mut store, &hub);
-    step_once(&mut store, &hub);
-    let evidence: Vec<(String, conary_core::op::Outcome)> = store
-        .ledger()
-        .candidate(id)
-        .unwrap()
-        .evidence
-        .iter()
-        .map(|e| (e.check.clone(), e.result))
-        .collect();
-    use conary_core::op::Outcome::{Fail, Pass};
-    assert_eq!(
-        evidence,
-        [("check / check".into(), Pass), ("proof".into(), Fail)]
-    );
-}
-
-#[test]
 fn a_train_branch_lost_before_it_was_made_is_made_at_the_recorded_commit() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
@@ -603,119 +668,6 @@ fn a_train_branch_lost_before_it_was_made_is_made_at_the_recorded_commit() {
     let commit = hub.branches.borrow_mut().remove(&train_branch(id)).unwrap();
     step_once(&mut store, &hub);
     assert_eq!(hub.branch_at(&train_branch(id)), Some(commit));
-}
-
-#[test]
-fn the_gate_is_green_only_once_every_check_passed_and_the_required_ones_reported() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut store = store(&dir);
-    let mut hub = Hub::new(&[3]);
-    join_all(&mut store, &hub, &[3]);
-    let required = Settings {
-        require: vec!["proof".into()],
-        ..settings()
-    };
-    let step_req = |store: &mut Store, hub: &Hub| {
-        step(store, hub, hub, &config(), &repo(), &required).unwrap()
-    };
-    // No check at all is no pass, and names nothing to wait on but what's
-    // required.
-    let stepped = step_once(&mut store, &hub);
-    let (id, _) = gating(&stepped);
-    assert!(waiting(&stepped).is_empty());
-    assert_eq!(waiting(&step_req(&mut store, &hub)), ["proof"]);
-    let commit = commit_of(&store, id);
-    hub.checks.insert(
-        commit.clone(),
-        json!([
-            {"id": 5, "name": "check / check", "status": "completed", "conclusion": "success",
-             "html_url": null, "started_at": "2026-10-29T11:00:00Z"},
-            {"id": 6, "name": "slow", "status": "in_progress", "conclusion": null,
-             "html_url": null, "started_at": "2026-10-29T11:00:00Z"},
-        ]),
-    );
-    assert_eq!(waiting(&step_req(&mut store, &hub)), ["slow", "proof"]);
-    hub.ci(
-        &commit,
-        &[("check / check", "success"), ("slow", "skipped")],
-    );
-    // The proof job hasn't posted, and the steward's own word isn't a check.
-    hub.statuses.insert(
-        commit.clone(),
-        json!([{"context": "review-settled", "state": "success", "target_url": null},
-               {"context": CONTEXT, "state": "pending", "target_url": null}]),
-    );
-    assert_eq!(waiting(&step_req(&mut store, &hub)), ["proof"]);
-    hub.statuses.insert(
-        commit.clone(),
-        json!([{"context": "proof", "state": "pending", "target_url": null}]),
-    );
-    assert_eq!(waiting(&step_req(&mut store, &hub)), ["proof"]);
-    hub.statuses.insert(
-        commit,
-        json!([{"context": "proof", "state": "success", "target_url": null},
-               {"context": "proof", "state": "pending", "target_url": null}]),
-    );
-    let stepped = step_req(&mut store, &hub);
-    assert_eq!(stepped.verdicts, [(id, Verdict::Green)]);
-    assert_eq!(stepped.landed, [3]);
-}
-
-#[test]
-fn each_checks_latest_run_is_its_word() {
-    // The verdict on a candidate whose commit has these runs and statuses,
-    // or none while it waits.
-    let gate = |runs: Vec<Value>, statuses: Value| {
-        let dir = tempfile::tempdir().unwrap();
-        let mut store = store(&dir);
-        let mut hub = Hub::new(&[3]);
-        join_all(&mut store, &hub, &[3]);
-        let (id, _) = gating(&step_once(&mut store, &hub));
-        let commit = commit_of(&store, id);
-        hub.checks.insert(commit.clone(), Value::Array(runs));
-        hub.statuses.insert(commit, statuses);
-        step_once(&mut store, &hub).verdicts.first().map(|v| v.1)
-    };
-    // A run of `check` in a suite: done with `conclusion`, else queued.
-    let run = |id: u64, suite: u64, conclusion: Option<&str>, started: Option<&str>| {
-        json!({"id": id, "name": "check", "check_suite": {"id": suite}, "html_url": null,
-               "status": if conclusion.is_some() { "completed" } else { "queued" },
-               "conclusion": conclusion, "started_at": started})
-    };
-    let at = Some("2026-10-29T11:00:00Z");
-
-    // A rerun's runs come in no order the train can count on: the later
-    // run is the check's word.
-    for (first, then, verdict) in [
-        ("failure", "success", Verdict::Green),
-        ("success", "failure", Verdict::Red),
-    ] {
-        let mut runs = vec![run(7, 1, Some(first), at), run(8, 1, Some(then), at)];
-        assert_eq!(gate(runs.clone(), json!([])), Some(verdict));
-        runs.reverse();
-        assert_eq!(gate(runs, json!([])), Some(verdict));
-    }
-    // Whether it started says nothing about which is later: an earlier
-    // skipped run that never started doesn't hide the rerun that failed,
-    // and a rerun still queued keeps the gate waiting.
-    let skipped_then_failed = vec![
-        run(7, 1, Some("skipped"), None),
-        run(8, 1, Some("failure"), at),
-    ];
-    assert_eq!(gate(skipped_then_failed, json!([])), Some(Verdict::Red));
-    let failed_then_queued = vec![run(7, 1, Some("failure"), at), run(8, 1, None, None)];
-    assert_eq!(gate(failed_then_queued, json!([])), None);
-    // Runs of one name in two suites (two workflows, or two Apps) are two
-    // checks, and a status and a run of one name are too.
-    for (a, b) in [("success", "failure"), ("failure", "success")] {
-        let runs = vec![run(7, 1, Some(a), at), run(8, 2, Some(b), at)];
-        assert_eq!(gate(runs, json!([])), Some(Verdict::Red));
-    }
-    let failed = json!([{"context": "check", "state": "failure", "target_url": null}]);
-    assert_eq!(
-        gate(vec![run(7, 1, Some("success"), at)], failed),
-        Some(Verdict::Red)
-    );
 }
 
 #[test]

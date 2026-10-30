@@ -506,6 +506,20 @@ fn a_dropped_candidate_waits_again_as_it_was() {
 }
 
 #[test]
+fn candidate_evidence_recorded_before_attestations_reads_as_unattested_and_writes_the_same() {
+    let id = CandidateId::new().unwrap();
+    let before = format!(
+        r#"{{"op":"candidate_evidence","candidate":"{id}","kind":"ci","check":"check / check","result":"pass","source":"https://github.com/FieldmouseWorks/remi/actions/runs/1/job/2"}}"#
+    );
+    let body: Body = serde_json::from_str(&before).unwrap();
+    assert!(matches!(
+        &body,
+        Body::CandidateEvidence { attest: None, .. }
+    ));
+    assert_eq!(serde_json::to_string(&body).unwrap(), before);
+}
+
+#[test]
 fn evidence_on_a_candidate_is_recorded_once() {
     let mut b = Book::default();
     let a = b.change(1, 'a');
@@ -517,9 +531,21 @@ fn evidence_on_a_candidate_is_recorded_once() {
         check: "flake".into(),
         result: Outcome::Pass,
         source: "https://github.com/FieldmouseWorks/remi/actions/runs/1".into(),
+        attest: None,
     };
     b.ok(evidence.clone());
-    assert_eq!(b.record(evidence), Err(Invalid::Duplicate));
+    assert_eq!(b.record(evidence.clone()), Err(Invalid::Duplicate));
+    // The same result with its attestation, once checked, is more than
+    // was known.
+    let mut attested = evidence;
+    if let Body::CandidateEvidence { attest, .. } = &mut attested {
+        *attest = Some(Attest::GithubToken {
+            statement: "conary commit v1\n".into(),
+            token: "a.b.c".into(),
+        });
+    }
+    b.ok(attested.clone());
+    assert_eq!(b.record(attested), Err(Invalid::Duplicate));
     let unknown = CandidateId::new().unwrap();
     assert_eq!(
         b.record(Body::Verdict {
@@ -528,7 +554,7 @@ fn evidence_on_a_candidate_is_recorded_once() {
         }),
         Err(Invalid::UnknownCandidate(unknown))
     );
-    assert_eq!(b.ledger.candidate(id).unwrap().evidence.len(), 1);
+    assert_eq!(b.ledger.candidate(id).unwrap().evidence.len(), 2);
 }
 
 #[test]
@@ -558,6 +584,17 @@ fn the_trains_ops_read_back_as_written() {
             commit: commit('c'),
             tree: tree('7'),
             of: None,
+        },
+        Body::CandidateEvidence {
+            candidate,
+            kind: CheckKind::Ci,
+            check: "check / check".into(),
+            result: Outcome::Pass,
+            source: "https://github.com/FieldmouseWorks/remi/actions/runs/1/job/2".into(),
+            attest: Some(Attest::GithubToken {
+                statement: "conary commit v1\n".into(),
+                token: "a.b.c".into(),
+            }),
         },
         Body::Verdict {
             candidate,

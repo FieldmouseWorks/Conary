@@ -37,11 +37,15 @@ train](docs/DESIGN.md#47-the-train)) for the steward, as its App: `join` puts
 a settled PR in at its head, and `step`, on each of the repository's events,
 builds the next candidate, reads its gate, and lands a green one's PRs in
 order. `--require` names the checks the gate waits for even before they
-report. `verdict` records one `step` can't tell: `dropped`, for a gate that
-never finished.
+report, and a step needs one: jobs of burrow's shared CI, whose passes count
+only with the job's own attestation ([CI attestations](docs/ci-attestation.md)),
+made on one of GitHub's runners or on a self-hosted one started fresh for that
+job, whose name starts with `--fresh-runners`.
+`verdict` records one `step` can't tell: `dropped`, for a gate that never
+finished.
 
     cn train join FieldmouseWorks/remi 174 --head <sha>
-    cn train step FieldmouseWorks/remi --require gate
+    cn train step FieldmouseWorks/remi --require 'check / check' --fresh-runners fresh-remi-
     cn train verdict FieldmouseWorks/remi <candidate> dropped
     cn train show FieldmouseWorks/remi --human
 

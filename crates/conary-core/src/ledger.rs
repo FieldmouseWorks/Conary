@@ -320,7 +320,15 @@ impl Ledger {
                 check,
                 result,
                 source,
-            } => self.check_candidate_evidence(*candidate, *kind, check, *result, source)?,
+                attest,
+            } => self.check_candidate_evidence(
+                *candidate,
+                *kind,
+                check,
+                *result,
+                source,
+                attest.as_ref(),
+            )?,
             Body::Verdict { candidate, verdict } => self.check_verdict(*candidate, *verdict)?,
             Body::Finish { candidate, .. } => self.check_finish(*candidate)?,
         }

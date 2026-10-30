@@ -337,15 +337,19 @@ so the wait is one run, however many are waiting.
   candidate is about that commit's tree, and counts by its producer's
   attestation like any other (section 9), and only for the commit the train
   recorded: whatever else is pushed to its branch counts for nothing. The
-  gate is green once every check on that commit has passed and the ones the
-  repo requires (its proof jobs, which post nothing until they run) are among
-  them, and red once any check's latest result failed. No check at all is no
-  pass. A check is a run's name in its suite, whose latest run (by GitHub's
-  id) is its word, or a status's context, whose latest status is; a run and
-  a status of one name are two checks. Until Conary counts attested
-  evidence itself (#48's last slice), the gate's word is the candidate's CI,
-  read as the steward reads a PR's today: the steward's verdict, recorded as
-  such.
+  gate is red once any check's latest result failed, which takes no
+  attestation. It's green once every check on that commit has passed and the
+  ones the repo requires are among them, each required one's latest run a
+  success its job attests on a runner started fresh for it
+  ([CI attestations](ci-attestation.md)), checked as it's recorded and kept
+  in the candidate's evidence. A status carries no
+  attestation, so a required check is a job of the repo's CI until remi's
+  proof jobs sign theirs, and a train that requires nothing doesn't step.
+  No check at all is no pass, and a required pass with no attestation that
+  holds waits, so a gate that never attests is a stall, never a landing. A
+  check is a run's name in its suite, whose latest run (by GitHub's id) is
+  its word, or a status's context, whose latest status is; a run and a
+  status of one name are two checks.
 - **Green.** Each change lands in order, through its own PR's merge at the
   head the candidate holds, with the train's status, `conary/train`, on that
   head first. A train repo's rules require that status, so nothing lands its

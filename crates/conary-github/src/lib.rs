@@ -5,6 +5,7 @@
 
 pub mod anchor;
 pub mod api;
+pub mod attest;
 pub mod bases;
 pub mod etags;
 pub mod ingest;

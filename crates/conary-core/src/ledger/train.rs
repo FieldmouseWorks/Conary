@@ -10,7 +10,7 @@ use serde::Serialize;
 
 use super::{Invalid, Ledger, Status};
 use crate::id::{CandidateId, ChangeId, CommitId, RevisionId, TreeId};
-use crate::op::{Body, CheckKind, Left, Member, Outcome, Repo, Verdict};
+use crate::op::{Attest, Body, CheckKind, Left, Member, Outcome, Repo, Verdict};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CandidateEvidence {
@@ -18,6 +18,8 @@ pub struct CandidateEvidence {
     pub check: String,
     pub result: Outcome,
     pub source: String,
+    /// Its producer's attestation, when it had one that held.
+    pub attest: Option<Attest>,
     pub at: i64,
 }
 
@@ -356,10 +358,17 @@ impl Ledger {
         check: &str,
         result: Outcome,
         source: &str,
+        attest: Option<&Attest>,
     ) -> Result<(), Invalid> {
         let c = self.existing_candidate(candidate)?;
         if c.evidence.iter().any(|e| {
-            (e.kind, e.check.as_str(), e.result, e.source.as_str()) == (kind, check, result, source)
+            (
+                e.kind,
+                e.check.as_str(),
+                e.result,
+                e.source.as_str(),
+                e.attest.as_ref(),
+            ) == (kind, check, result, source, attest)
         }) {
             return Err(Invalid::Duplicate);
         }
@@ -475,6 +484,7 @@ impl Ledger {
                 check,
                 result,
                 source,
+                attest,
             } => self
                 .candidates
                 .get_mut(candidate)
@@ -485,6 +495,7 @@ impl Ledger {
                     check: check.clone(),
                     result: *result,
                     source: source.clone(),
+                    attest: attest.clone(),
                     at,
                 }),
             Body::Verdict { candidate, verdict } => self.verdict(*candidate, *verdict),

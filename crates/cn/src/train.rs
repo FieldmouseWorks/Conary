@@ -65,9 +65,17 @@ pub enum TrainCommand {
         #[arg(long, default_value_t = 8, value_parser = clap::value_parser!(u64).range(1..))]
         size: u64,
         /// A check the gate waits for before it can be green, even before it
-        /// reports: a proof job's. Repeat for each.
+        /// reports, whose pass counts only with its job's attestation: the
+        /// repo's gate, as burrow's shared CI runs it. Repeat for each; a
+        /// step needs one.
         #[arg(long = "require", value_name = "CHECK")]
         require: Vec<String>,
+        /// What the name of each self-hosted runner started fresh for one
+        /// job starts with, as the launcher of such runners names them. A
+        /// required pass counts only from such a runner or one of GitHub's
+        /// own: one that took a job before it could have signed in its name.
+        #[arg(long = "fresh-runners", value_name = "PREFIX", value_parser = clap::builder::NonEmptyStringValueParser::new())]
+        fresh: Option<String>,
         #[command(flatten)]
         github: GithubArgs,
     },
@@ -149,10 +157,16 @@ pub fn run(cli: &Cli, command: &TrainCommand) -> Result<()> {
                 ),
             })
             .map_err(Into::into),
-        TrainCommand::Step { size, require, .. } => {
+        TrainCommand::Step {
+            size,
+            require,
+            fresh,
+            ..
+        } => {
             let settings = Settings {
                 size: usize::try_from(*size)?,
                 require: require.clone(),
+                fresh: fresh.clone(),
             };
             train::step(store, &api, &api, &config, repo, &settings)
                 .map(|s| (stepped(&s), human_stepped(repo, &s)))
