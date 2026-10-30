@@ -621,3 +621,52 @@ fn a_head_its_stopped_candidate_was_landing_says_so_no_longer_once_its_pr_is_mer
         assert_eq!(hub.held("main"), [head(33)]);
     }
 }
+
+/// The steward's word on a head, newest first, then the success it said
+/// when the PR joined.
+fn then_said(hub: &mut Hub, pr: u64, state: &str, by: &str) {
+    hub.statuses.insert(
+        head(pr),
+        json!([{"context": "review-settled", "state": state, "target_url": null,
+                "created_at": "2026-10-29T12:00:00Z", "creator": {"login": by, "type": "Bot"}},
+               {"context": "review-settled", "state": "success", "target_url": null,
+                "created_at": "2026-10-29T10:00:00Z", "creator": {"login": STEWARD, "type": "Bot"}}]),
+    );
+}
+
+#[test]
+fn a_pr_the_steward_no_longer_settles_leaves_instead_of_landing_whatever_the_rules() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = store(&dir);
+    let mut hub = Hub::new(&[3, 4, 6]);
+    join_all(&mut store, &hub, &[3, 4, 6]);
+    let (id, _) = gating(&step_once(&mut store, &hub));
+    hub.ci(&commit_of(&store, id), &[("check / check", "success")]);
+    // Held once its candidate was green: GitHub would merge it all the same.
+    then_said(&mut hub, 4, "pending", STEWARD);
+    let stepped = step_once(&mut store, &hub);
+    assert_eq!(
+        (&stepped.landed[..], &stepped.unready[..]),
+        (&[3][..], &[4][..])
+    );
+    assert_eq!(hub.held("main"), [head(3)]);
+    assert_eq!(hub.latest(&head(4)), Some(Mark::Waiting));
+    assert!(!hub.marked().contains(&(head(4), Mark::Landing)));
+    // The one after it waits again, and is built without it.
+    assert_eq!(joined(&store), [6]);
+    assert_eq!(gating(&stepped).1, [6]);
+}
+
+#[test]
+fn only_the_stewards_own_word_takes_a_pr_out() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = store(&dir);
+    let mut hub = Hub::new(&[3, 4]);
+    join_all(&mut store, &hub, &[3, 4]);
+    let (id, _) = gating(&step_once(&mut store, &hub));
+    hub.ci(&commit_of(&store, id), &[("check / check", "success")]);
+    // Anyone who can push can post the steward's context.
+    then_said(&mut hub, 4, "pending", "someone");
+    let stepped = step_once(&mut store, &hub);
+    assert_eq!((stepped.landed, stepped.unready), (vec![3, 4], vec![]));
+}

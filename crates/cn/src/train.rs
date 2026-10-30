@@ -222,6 +222,11 @@ fn human_stepped(repo: &Repo, s: &Stepped) -> String {
             r.pr, r.why
         ));
     }
+    for pr in &s.unready {
+        lines.push(format!(
+            "{repo}#{pr}: the steward no longer says it's settled, left the train"
+        ));
+    }
     for id in &s.finished {
         lines.push(format!("{repo}: candidate {id} landed whole"));
     }

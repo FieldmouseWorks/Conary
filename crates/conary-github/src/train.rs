@@ -480,6 +480,9 @@ pub struct Stepped {
     /// The PRs it merged, in order.
     pub landed: Vec<u64>,
     pub refused: Vec<Refused>,
+    /// The PRs it took out instead of landing them, as the steward no
+    /// longer says they're settled.
+    pub unready: Vec<u64>,
     /// Candidates whose landings all came through, with the tree trunk
     /// ended on recorded.
     pub finished: Vec<CandidateId>,
@@ -510,6 +513,7 @@ pub fn step(
         red: Vec::new(),
         landed: Vec::new(),
         refused: Vec::new(),
+        unready: Vec::new(),
         finished: Vec::new(),
         now: Now::Idle,
     };
