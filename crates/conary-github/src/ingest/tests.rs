@@ -451,6 +451,27 @@ fn sync_asks_an_open_pr_s_merge_base_once_until_it_moves() {
 }
 
 #[test]
+fn a_squash_github_hasnt_linked_to_its_pr_yet_is_recorded_once_it_has() {
+    // GitHub shows the PR merged a moment before it links its squash to
+    // the PR: nothing is said of the merge until then, and then it lands.
+    let (_dir, mut store) = open();
+    let mut f = fake();
+    f.pulls = vec![pr(9, HEAD, "closed", true)];
+    f.linked.remove(MERGE);
+    let change = pull(&mut store, &f, &config(), &repo(), 9).unwrap().change;
+    let ledger = store.ledger();
+    assert_eq!(ledger.change(change).unwrap().status(), Status::Open);
+    assert!(ledger.outside().is_empty());
+    assert!(ledger.landed_as(&repo(), &sha(MERGE)).is_none());
+    f.linked.insert(MERGE.into(), vec![9]);
+    let synced = sync(&mut store, &f, &config(), &repo()).unwrap();
+    assert_eq!(synced.len(), 1);
+    let ledger = store.ledger();
+    assert_eq!(ledger.landed_as(&repo(), &sha(MERGE)).unwrap().id, change);
+    assert!(ledger.outside().is_empty());
+}
+
+#[test]
 fn a_rebase_lands_from_trunk_before_its_first_commit() {
     let (_dir, mut store) = open();
     let mut f = fake();
@@ -491,6 +512,11 @@ fn a_merge_the_steward_didnt_settle_is_outside_not_a_landing() {
         f.pulls[0]["merge_commit_sha"] = json!(HEAD);
         f.commits.insert(HEAD.into(), trunk_commit(HEAD, &[BASE]));
         f.linked.insert(HEAD.into(), vec![9]);
+    };
+    // A push is no merge GitHub has yet to link: its head isn't linked.
+    let pushed_unlinked = |f: &mut Fake| {
+        pushed(f);
+        f.linked.remove(HEAD);
     };
     // Its status posted by someone other than the steward, or only before
     // the PR was retargeted onto trunk.
@@ -545,6 +571,7 @@ fn a_merge_the_steward_didnt_settle_is_outside_not_a_landing() {
     for (how, change_it) in [
         ("bypass", &bypass as &dyn Fn(&mut Fake)),
         ("pushed", &pushed),
+        ("pushed, unlinked", &pushed_unlinked),
         ("forged", &forged),
         ("stale", &stale),
         ("late", &late),

@@ -472,6 +472,73 @@ fn a_merge_github_hasnt_shown_is_waited_for_even_alone() {
 }
 
 #[test]
+fn a_merge_github_shows_before_linking_it_is_waited_for_and_lands_through_its_candidate() {
+    // GitHub shows the PR merged a moment before it links the squash to
+    // the PR, as it did for remi's first two landings through its train.
+    // That's no outside merge: the train neither lets it go nor merges it
+    // again, and it lands through its candidate once GitHub links it.
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = store(&dir);
+    let mut hub = Hub::new(&[3, 5]);
+    join_all(&mut store, &hub, &[3, 5]);
+    let (id, _) = gating(&step_once(&mut store, &hub));
+    hub.ci(&commit_of(&store, id), &[("check / check", "success")]);
+    hub.unlinked.set(true);
+    for (landed, verdicts) in [(vec![3], vec![(id, Verdict::Green)]), (vec![], vec![])] {
+        let stepped = step_once(&mut store, &hub);
+        assert_eq!((stepped.landed, stepped.verdicts), (landed, verdicts));
+        assert!(stepped.refused.is_empty());
+        assert!(matches!(stepped.now, Now::Landing { candidate, .. } if candidate == id));
+        assert_eq!(hub.latest(&head(3)), Some(Mark::Landing));
+    }
+    hub.unlinked.set(false);
+    let stepped = step_once(&mut store, &hub);
+    assert_eq!((stepped.landed, stepped.finished), (vec![5], vec![id]));
+    for pr in [3, 5] {
+        let c = store.ledger().by_pr(&repo(), pr).unwrap();
+        assert_eq!(c.landing.as_ref().unwrap().candidate, Some(id));
+    }
+    assert_eq!(
+        said(&hub, &head(3)),
+        Some((Mark::Waiting, format!("landed with candidate {id}")))
+    );
+    assert!(store.ledger().outside().is_empty());
+    assert_eq!(hub.held("main"), [3, 5].map(head));
+}
+
+#[test]
+fn a_merge_github_shows_before_linking_it_when_its_candidate_stopped_lands_through_it() {
+    // The same, with the second's new head stopping the candidate while
+    // GitHub hasn't linked the first's merge yet.
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = store(&dir);
+    let mut hub = Hub::new(&[3, 5]);
+    join_all(&mut store, &hub, &[3, 5]);
+    let (id, _) = gating(&step_once(&mut store, &hub));
+    hub.ci(&commit_of(&store, id), &[("check / check", "success")]);
+    hub.unlinked.set(true);
+    assert_eq!(step_once(&mut store, &hub).landed, [3]);
+    hub.pulls.borrow_mut().insert(5, head(55));
+    ingest::pull(&mut store, &hub, &config(), &repo(), 5).unwrap();
+    let stepped = step_once(&mut store, &hub);
+    assert!(
+        matches!(stepped.now, Now::Landing { candidate, ref landings }
+        if candidate == id && landings.iter().map(|l| l.pr).collect::<Vec<_>>() == [3])
+    );
+    assert_eq!(hub.latest(&head(3)), Some(Mark::Landing));
+    hub.unlinked.set(false);
+    step_once(&mut store, &hub);
+    let three = store.ledger().by_pr(&repo(), 3).unwrap();
+    assert_eq!(three.landing.as_ref().unwrap().candidate, Some(id));
+    assert_eq!(
+        said(&hub, &head(3)),
+        Some((Mark::Waiting, format!("landed with candidate {id}")))
+    );
+    assert!(store.ledger().outside().is_empty());
+    assert_eq!(hub.held("main"), [head(3)]);
+}
+
+#[test]
 fn a_merge_whose_answer_was_lost_is_never_made_again() {
     // GitHub's answer to the merge lost, and the merge not shown yet when
     // the next step comes: it waits for GitHub to show it.

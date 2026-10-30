@@ -410,7 +410,11 @@ fn bound_elsewhere(c: &Change, revision: RevisionId, head: &CommitId, body: &Bod
 /// pushed, has the same shape. A squash or rebase is one when GitHub links
 /// it to the PR, which it doesn't for commits made locally. (GitHub doesn't
 /// sign a rebase's commits as itself, so a signature can't be asked of all
-/// three.) Merged into another branch, it closed without
+/// three.) GitHub shows a PR merged a moment before it links the squash or
+/// rebase to it, and only its own merge leaves a PR merged at a commit of
+/// one parent that isn't its head (a push that merges it is its head), so
+/// until that commit is linked to some PR nothing is recorded: the next read
+/// records it. Merged into another branch, it closed without
 /// landing on trunk; its commits land with that branch. Brought onto trunk
 /// by another PR's merge, it closed, and that PR records the movement. Anything
 /// else that put it on trunk, an admin's bypass or a push straight to trunk,
@@ -446,6 +450,9 @@ fn merged(
     let after = commit(sha)?;
     let landed = source.commit(&full, sha)?;
     let linked = source.commit_pulls(&full, sha)?;
+    if sha != pr.head.sha && landed.parents.len() == 1 && linked.is_empty() {
+        return Ok(());
+    }
     let own = sha != pr.head.sha
         && match landed.parents.as_slice() {
             [_, merged] => merged.sha == pr.head.sha && landed.made_by_github(),
