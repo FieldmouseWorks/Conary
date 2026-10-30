@@ -550,15 +550,32 @@ Targets on remi, warm cache, a year of ledger across every repo:
 - Evidence counts by its producer's attestation, never by what it says about
   itself or by conaryd having recorded it:
   - CI on GitHub Actions: a signed attestation the job itself makes with its
-    GitHub OIDC identity (Sigstore, keyless), over the result, the revision's
-    head and base commits and the log hash. It binds the result to the
-    workflow, the commit and the run that made it. burrow's shared
-    `flake-check.yml` makes it after the gate, so every public repo's gate
-    makes one; the caller only grants the job the permissions to sign.
+    GitHub OIDC identity (keyless), over the result, the revision's head and
+    base commits and the log hash. It binds the result to the workflow, the
+    commit and the run that made it. burrow's shared `flake-check.yml` makes
+    it after the gate, so every repo's gate makes one; the caller only grants
+    the job the permissions to sign. A public repo's is a Sigstore bundle,
+    which GitHub's API keeps by the revision's digest. GitHub makes those for
+    private repos only on Enterprise Cloud, and Sigstore's public log would
+    publish a private repo's names and commits, so a private repo's job signs
+    with its OIDC token itself, the token's audience naming the digest of
+    what it attests, and keeps it in an artifact of its run.
     [CI attestations](ci-attestation.md) is the format and how to check one.
-    GitHub's API keeps it, by the revision's digest; the check run's own
-    record is never a substitute for it. GitHub attests for private repos
-    only on Enterprise Cloud, so theirs need remi's runner key (below).
+    The check run's own record is never a substitute for it.
+    Never a key on the runner: a candidate's own workflow can run anything
+    as the runner's user, so a key that user could read would sign whatever
+    the candidate liked, while the token names the workflow that asked for
+    it. The same holds for the token's request credentials, which the job's
+    environment carries: on a runner that takes job after job, a job the
+    candidate adds can leave a process that asks for a token in the next
+    job's name, or take the runner's own credentials and its jobs. So the
+    signing job counts only from a runner started fresh for it, a
+    GitHub-hosted one or a self-hosted one registered for that one job in a
+    user nothing ran as before, and the verifier checks GitHub's record of
+    which runner took the job. On such a runner, a token taken from one run
+    can say only what that run's check run concluded. Root on a self-hosted
+    runner's machine can still change what a job does, as it can read the
+    steward's key (below).
   - Jobs on remi (reviewers, proof and judge jobs, negative runs): a signature
     by that runner service's own key, which no authoring session or sandbox
     can read, over the result, the revision and the run's log hash.
