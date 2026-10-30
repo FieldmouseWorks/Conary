@@ -1,0 +1,47 @@
+{
+  "conary": "note v1",
+  "change": "0x8pfwr7dfxbgb2f5mstc17nqe",
+  "repo": {
+    "owner": "fieldmouseworks",
+    "name": "conary"
+  },
+  "pr": 81,
+  "url": "https://github.com/fieldmouseworks/conary/pull/81",
+  "summary": "docs: sign a private repo's CI result with the job's own token",
+  "task": "fieldmouseworks/conary#48",
+  "author": {
+    "kind": "agent",
+    "login": "TusanHomichi",
+    "session": "https://claude.ai/code/session_01BkHcyDYaKnE7mRRMdYCFVC"
+  },
+  "landing": {
+    "revision": "484165a0b6be50ec1ccfd179257be13a4b21eb430757ef777f6aac6114e6b289",
+    "before": "cf4c88cf75561711af74452a201643c9aa1b35fc",
+    "after": "4bbf4abcfc4b1dffd116d892c89d1c54a924dfae",
+    "by": {
+      "kind": "status",
+      "login": "fieldmouseworks-steward[bot]"
+    },
+    "at": 1793383116473
+  },
+  "evidence": [
+    {
+      "kind": "review",
+      "check": "codex",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/pull/81#pullrequestreview-5716286870"
+    },
+    {
+      "kind": "ci",
+      "check": "check / check",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/41100597835/job/124217064843"
+    },
+    {
+      "kind": "ci",
+      "check": "check / commits",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/41100597835/job/124217064416"
+    }
+  ]
+}
