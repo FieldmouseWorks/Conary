@@ -346,7 +346,11 @@ so the wait is one run, however many are waiting.
 - **Green.** Each change lands in order, through its own PR's merge at the
   head the candidate holds, with the train's status, `conary/train`, on that
   head first. A train repo's rules require that status, so nothing lands its
-  PRs but the train. That status is a success only on the head being landed
+  PRs but the train. The train doesn't lean on the rules for the steward's
+  word: right before a head's landing it reads the steward's latest status
+  on it, and a change the steward no longer says is settled (a hold, a
+  finding) leaves instead, as its merge would be no landing but an outside
+  op. That status is a success only on the head being landed
   now: a head's goes to pending as it joins and as it leaves, and before a
   green candidate is dropped, ahead of the ledger each time, and once it has
   landed, before the next head is marked or another candidate built, so a PR

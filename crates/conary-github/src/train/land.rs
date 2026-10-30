@@ -6,6 +6,10 @@
 use super::*;
 use conary_core::ledger::Status;
 
+/// The train's status on a head it took out because the steward no longer
+/// says it's settled.
+pub(super) const UNSETTLED: &str = "out of the train: the steward no longer says it's settled";
+
 /// Lands a green candidate's next change, through its PR's merge at the head
 /// the candidate holds. The PR is read first, so a merge made since the last
 /// step is recorded rather than tried again, and so is one GitHub took but
@@ -38,7 +42,7 @@ pub(super) fn land_next(
             .candidate(c.id)
             .is_none_or(|now| now.state != State::Green || now.landed.len() > c.landed.len())
     };
-    let (_, pull) = ingest::pulled(store, source, config, repo, pr)?;
+    let (got, pull) = ingest::pulled(store, source, config, repo, pr)?;
     if moved(store) {
         return Ok(None);
     }
@@ -52,6 +56,19 @@ pub(super) fn land_next(
     if c.alone && at != c.base.as_str() {
         dropped(store, forge, c, "was built on a trunk that has moved")?;
         stepped.verdicts.push((c.id, Verdict::Dropped));
+        return Ok(None);
+    }
+    // The steward's word on its head, read with it just now: one it no
+    // longer says is settled (a hold, a finding, a draft) leaves instead,
+    // whatever the branch's rules, as its merge would be no landing of the
+    // steward's but an outside op (DESIGN 4.5).
+    if !got.settled {
+        forge.mark(&full, head.as_str(), Mark::Waiting, UNSETTLED, None)?;
+        store.record(Body::Leave {
+            change: next.change,
+            why: Left::Unready,
+        })?;
+        stepped.unready.push(pr);
         return Ok(None);
     }
     let elsewhere = if c.trunk != trunk {

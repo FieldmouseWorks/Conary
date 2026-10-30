@@ -120,6 +120,9 @@ pub struct Ingested {
     pub revision: RevisionId,
     /// Ops written; 0 when the ledger already held everything.
     pub recorded: usize,
+    /// Whether the steward's latest word on the head, since the PR's last
+    /// retarget and before its merge, is that it's settled.
+    pub settled: bool,
 }
 
 /// Ingests one PR, read fresh from GitHub.
@@ -321,11 +324,11 @@ fn record(
     // Newest first: the steward's latest word on this head since the last
     // retarget and before it merged, so a merge it hadn't settled yet (an
     // administrator's) stays a bypass whatever it says after. Anyone who can
-    // push can post its context; only the steward's own logins say it.
-    let before_merge = |at: Option<&str>| {
-        pr.merged_at
-            .as_deref()
-            .is_some_and(|m| at.is_some_and(|t| t <= m))
+    // push can post its context; only the steward's own logins say it. An
+    // open PR's is its latest, which the train lands on.
+    let before_merge = |at: Option<&str>| match pr.merged_at.as_deref() {
+        Some(m) => at.is_some_and(|t| t <= m),
+        None => !pr.is_merged(),
     };
     let settled = statuses
         .iter()
@@ -360,6 +363,7 @@ fn record(
         .change(change)
         .map(|c| c.status())
         .expect("observed above");
+    let is_settled = settled.is_some();
     if pr.is_merged() {
         merged(&mut w, source, repo, pr, change, revision, status, settled)?;
     } else {
@@ -374,6 +378,7 @@ fn record(
         change,
         revision,
         recorded: w.recorded,
+        settled: is_settled,
     })
 }
 
