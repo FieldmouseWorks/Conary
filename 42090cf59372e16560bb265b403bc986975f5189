@@ -1,0 +1,41 @@
+{
+  "conary": "note v1",
+  "change": "7wy1e28twgsx9t01mgbb9d686t",
+  "repo": {
+    "owner": "fieldmouseworks",
+    "name": "conary"
+  },
+  "pr": 102,
+  "url": "https://github.com/fieldmouseworks/conary/pull/102",
+  "summary": "chore: update fieldmouseworks/burrow digest to 7f3da33",
+  "task": null,
+  "author": {
+    "kind": "bot",
+    "login": "fieldmouseworks-workers[bot]",
+    "session": null
+  },
+  "landing": {
+    "revision": "6021510f4170637cfd8556f3aeb2c8cdf75bdace11c6bccba51e465ff87ca1c3",
+    "before": "5f64003262131f45cbaeb106102172b55b4c72e1",
+    "after": "42090cf59372e16560bb265b403bc986975f5189",
+    "by": {
+      "kind": "status",
+      "login": "fieldmouseworks-steward[bot]"
+    },
+    "at": 1793440227592
+  },
+  "evidence": [
+    {
+      "kind": "ci",
+      "check": "check / commits",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/41190014475/job/124504683557"
+    },
+    {
+      "kind": "ci",
+      "check": "check / check",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/41190014475/job/124504683667"
+    }
+  ]
+}
