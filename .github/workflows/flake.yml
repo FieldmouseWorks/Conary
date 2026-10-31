@@ -17,7 +17,7 @@ jobs:
   check:
     # Of the edits, only a new base: a title or body changes nothing checked.
     if: github.event.action != 'edited' || github.event.changes.base
-    uses: FieldmouseWorks/burrow/.github/workflows/flake-check.yml@bff40f1a4f1fea7cba38841464b71fd44216c1b5 # main
+    uses: FieldmouseWorks/burrow/.github/workflows/flake-check.yml@63322a9829c8a49678db893b23d533c0f9a510af # main
     # What the shared workflow needs to attest its result.
     permissions:
       contents: read
