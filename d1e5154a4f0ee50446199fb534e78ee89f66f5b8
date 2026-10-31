@@ -1,0 +1,47 @@
+{
+  "conary": "note v1",
+  "change": "6kjn4x4me7naj8tezb660eaw6p",
+  "repo": {
+    "owner": "fieldmouseworks",
+    "name": "conary"
+  },
+  "pr": 114,
+  "url": "https://github.com/fieldmouseworks/conary/pull/114",
+  "summary": "chore: update fieldmouseworks/burrow digest to 4fbe8b1",
+  "task": null,
+  "author": {
+    "kind": "bot",
+    "login": "fieldmouseworks-workers[bot]",
+    "session": null
+  },
+  "landing": {
+    "revision": "247bb11f994f80bc89f0025527ab05a8d4687ba69489a0e2d7954a539999fb1d",
+    "before": "0428ce3920625625db793a6f63962c64b46bee9f",
+    "after": "d1e5154a4f0ee50446199fb534e78ee89f66f5b8",
+    "by": {
+      "kind": "status",
+      "login": "fieldmouseworks-steward[bot]"
+    },
+    "at": 1793458769798
+  },
+  "evidence": [
+    {
+      "kind": "ci",
+      "check": "check / lane into main",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/41212314037/job/124569691801"
+    },
+    {
+      "kind": "ci",
+      "check": "check / commits",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/41212314037/job/124569691588"
+    },
+    {
+      "kind": "ci",
+      "check": "check / check",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/41212314037/job/124569710054"
+    }
+  ]
+}
