@@ -1,0 +1,47 @@
+{
+  "conary": "note v1",
+  "change": "7ras4ds273b02we8rdm8mdwkbn",
+  "repo": {
+    "owner": "FieldmouseWorks",
+    "name": "Conary"
+  },
+  "pr": 113,
+  "url": "https://github.com/FieldmouseWorks/Conary/pull/113",
+  "summary": "ci: run the flake gate again when a PR's base changes",
+  "task": "https://claude.ai/code/project/chan_01Ad4f4oDXfFTCEzLHzMTD8q?thread=cmsg_01Ad4f4oDXfFTCEzLHzMTD8q44tUrWuRekRs3fR3f6j9A6",
+  "author": {
+    "kind": "agent",
+    "login": "TusanHomichi",
+    "session": "https://claude.ai/code/session_01BkHcyEnVW8sqvYR8o1Cd9h"
+  },
+  "landing": {
+    "revision": "2213221a69b6b3b8871ba9de36bd4cd6ae6546273802f73713df9a13b7fa0e09",
+    "before": "8355a36dfef2c86da4d10355fb1d94f18b392da9",
+    "after": "0428ce3920625625db793a6f63962c64b46bee9f",
+    "by": {
+      "kind": "status",
+      "login": "fieldmouseworks-steward[bot]"
+    },
+    "at": 1793458382130
+  },
+  "evidence": [
+    {
+      "kind": "ci",
+      "check": "check / commits",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/41211937029/job/124568568591"
+    },
+    {
+      "kind": "ci",
+      "check": "check / check",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/41211937029/job/124568568891"
+    },
+    {
+      "kind": "review",
+      "check": "codex",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/pull/113#pullrequestreview-5723397339"
+    }
+  ]
+}
