@@ -5,18 +5,14 @@
 # alongside.
 name: flake
 on:
-  # `edited` for a PR retargeted onto another branch: the shared workflow's
-  # run counts only for the base it judged, so a new base needs a run.
+  # A PR retargeted onto another branch runs from flake-retarget.yml.
   pull_request:
-    types: [opened, synchronize, reopened, edited]
   push:
     branches: [main]
 permissions:
   contents: read
 jobs:
   check:
-    # Of the edits, only a new base: a title or body changes nothing checked.
-    if: github.event.action != 'edited' || github.event.changes.base
     uses: FieldmouseWorks/burrow/.github/workflows/flake-check.yml@3fca792c2ec77ee4191f36b40796a2a4949f8177 # main
     # What the shared workflow needs to attest its result.
     permissions:
