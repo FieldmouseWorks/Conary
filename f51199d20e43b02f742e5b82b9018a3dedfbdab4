@@ -1,0 +1,41 @@
+{
+  "conary": "note v1",
+  "change": "1bmkzypvwxsvxzkpj2va8v0dr7",
+  "repo": {
+    "owner": "fieldmouseworks",
+    "name": "conary"
+  },
+  "pr": 88,
+  "url": "https://github.com/fieldmouseworks/conary/pull/88",
+  "summary": "chore(deps): update fieldmouseworks/burrow digest to d2deed8",
+  "task": null,
+  "author": {
+    "kind": "bot",
+    "login": "fieldmouseworks-workers[bot]",
+    "session": null
+  },
+  "landing": {
+    "revision": "a774ff82be37ce83ec102f57b900c7b64ab252b338a4783346a396126aeb8603",
+    "before": "73b32f8bb64b1749b6585698621985b3c8fb8034",
+    "after": "f51199d20e43b02f742e5b82b9018a3dedfbdab4",
+    "by": {
+      "kind": "status",
+      "login": "fieldmouseworks-steward[bot]"
+    },
+    "at": 1793408913370
+  },
+  "evidence": [
+    {
+      "kind": "ci",
+      "check": "check / check",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/41153251194/job/124394318556"
+    },
+    {
+      "kind": "ci",
+      "check": "check / commits",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/41153251194/job/124394317673"
+    }
+  ]
+}
