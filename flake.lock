@@ -9,11 +9,11 @@
         "rust-overlay": "rust-overlay"
       },
       "locked": {
-        "lastModified": 1793522041,
-        "narHash": "sha256-gcdVLl5qbp1OiEQRnIfeX4RpOZ5MECwmtVomNPSnn2Y=",
+        "lastModified": 1793522392,
+        "narHash": "sha256-VAhnDFjGgKZnDjY/LKbMnKRL2LxXuM+PNCchZBT46r8=",
         "ref": "refs/heads/main",
-        "rev": "59729067140d1b4827334f2261a3a59d53f2d2f2",
-        "revCount": 350,
+        "rev": "639e6e22bcb7db67f30fa6a4505257f2d7241ae9",
+        "revCount": 351,
         "type": "git",
         "url": "https://github.com/FieldmouseWorks/burrow"
       },
