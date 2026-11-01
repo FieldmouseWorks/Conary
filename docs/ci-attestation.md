@@ -135,6 +135,15 @@ revision, yet.
    runner's own credentials and take its jobs. Nothing in the token tells
    those apart from the job's own, so nothing from such a runner counts.
 
+   That is all a fresh runner guards against: a stale or poisoned CI job.
+   It doesn't hold against a session on the runner's machine that wants to
+   cheat, wherever that session can become the launcher's user (on remi
+   every session can, with passwordless sudo): such a session can register
+   its own runner under a name the policy takes, or take a registration
+   before its runner does, and sign whatever it likes. Root on the machine
+   is outside what any attestation from it proves
+   ([section 9](DESIGN.md#9-security-and-identity)).
+
 A token also has to bind its statement to its run:
 
 6. Its audience is the one for the statement it came with.
