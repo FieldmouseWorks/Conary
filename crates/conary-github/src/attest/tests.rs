@@ -168,12 +168,19 @@ fn a_token_counts_only_for_its_own_statement_run_and_commit() {
         "FieldmouseWorks/burrow's",
     );
     // Asked for by any workflow but burrow's shared CI: the repo's own,
-    // which a candidate can change, or one that only starts like it.
+    // which a candidate can change, or one that only starts like it. The
+    // token's text is anyone's: one as long as the signer's name, shorter,
+    // or with a character that crosses where it ends, is refused too.
+    let signer = format!("{SIGNER_REPO}/{SIGNER_WORKFLOW}");
     for workflow in [
-        "FieldmouseWorks/remi/.github/workflows/flake.yml@refs/heads/conary/train/x",
-        "FieldmouseWorks/burrow/.github/workflows/flake-check.yml.old@refs/heads/main",
-        "FieldmouseWorks/burrow-fork/.github/workflows/flake-check.yml@refs/heads/main",
-        "",
+        "FieldmouseWorks/remi/.github/workflows/flake.yml@refs/heads/conary/train/x".into(),
+        "FieldmouseWorks/burrow/.github/workflows/flake-check.yml.old@refs/heads/main".into(),
+        "FieldmouseWorks/burrow-fork/.github/workflows/flake-check.yml@refs/heads/main".into(),
+        String::new(),
+        signer.clone(),
+        format!("{}x@", &signer[..signer.len() - 1]),
+        format!("{signer}é@refs/heads/main"),
+        format!("{}é", &signer[..signer.len() - 1]),
     ] {
         let why = with_claims(|c| c["job_workflow_ref"] = json!(workflow)).unwrap_err();
         assert!(why.contains("asked for by"), "{workflow}: {why}");

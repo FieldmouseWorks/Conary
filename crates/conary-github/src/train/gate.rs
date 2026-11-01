@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use conary_core::Store;
 use conary_core::ledger::Candidate;
-use conary_core::op::{Attest, Body, CheckKind};
+use conary_core::op::{Attest, Body, CheckKind, Outcome};
 
 use super::{Failed, Forge, Settings, TrainError, record};
 use crate::api::{CheckRun, Source};
@@ -172,6 +172,18 @@ pub(super) fn gate(
         Gate::Waiting(waiting)
     } else {
         Gate::Green
+    })
+}
+
+/// Whether a green candidate's evidence holds an attested pass of each
+/// required check, as a green the gate says does. One said green before a
+/// pass counted only attested has none, and is gated again before it lands
+/// anything ([`super::land_next`]).
+pub(super) fn green_attested(c: &Candidate, settings: &Settings) -> bool {
+    settings.require.iter().all(|required| {
+        c.evidence
+            .iter()
+            .any(|e| &e.check == required && e.result == Outcome::Pass && e.attest.is_some())
     })
 }
 

@@ -20,13 +20,18 @@ pub(super) const UNSETTLED: &str = "out of the train: the steward no longer says
 /// there, read again just before the merge. Then the train's status goes on its head, which the repo's rules
 /// can require, and GitHub merges it or refuses. A refused PR's status says
 /// so before the ledger takes it out, so a step stopped in between comes
-/// back to it. The last landing's head is retired first ([`retired`]).
-/// `Some` when the train waits on GitHub showing the merge.
+/// back to it. Nothing is merged on a green its required checks' passes
+/// don't attest ([`green_attested`]): one said green before they had to is
+/// gated again, and waits with no head saying it's landing until they do.
+/// The last landing's head is retired first ([`retired`]). `Some` when the
+/// train waits on GitHub showing the merge, or on the attestations.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn land_next(
     store: &mut Store,
     forge: &dyn Forge,
     source: &dyn Source,
     config: &Config,
+    settings: &Settings,
     trunk: &str,
     c: &Candidate,
     stepped: &mut Stepped,
@@ -76,6 +81,27 @@ pub(super) fn land_next(
         })?;
         stepped.unready.push(pr);
         return Ok(None);
+    }
+    if !green_attested(c, settings) {
+        let waiting = match gate(store, forge, source, config, settings, c)? {
+            Gate::Green => None,
+            Gate::Waiting(waiting) => Some(waiting),
+            Gate::Red(failed) => Some(
+                failed
+                    .into_iter()
+                    .map(|f| format!("{}: failed since its green", f.check))
+                    .collect(),
+            ),
+        };
+        if let Some(waiting) = waiting {
+            // From a step that stopped after marking it, before its merge,
+            // which trunk doesn't hold (above).
+            if landing_marked(source, &full, head.as_str(), c.id)? {
+                let description = format!("candidate {} is gated again before it lands", c.id);
+                forge.mark(&full, head.as_str(), Mark::Waiting, &description, None)?;
+            }
+            return Ok(Some(gating(store, c, waiting)));
+        }
     }
     let elsewhere = if c.trunk != trunk {
         Some(format!(

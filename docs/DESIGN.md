@@ -347,7 +347,9 @@ so the wait is one run, however many are waiting.
   proof jobs sign theirs, and a train that requires nothing doesn't step.
   No check at all is no pass, and a required pass with no attestation that
   holds waits, so a gate that never attests is a stall, never a landing. A
-  check is a run's name in its suite, whose latest run (by GitHub's id) is
+  green whose evidence holds no such attestation, said before passes needed
+  one, is gated again before anything of it merges, and waits the same way.
+  A check is a run's name in its suite, whose latest run (by GitHub's id) is
   its word, or a status's context, whose latest status is; a run and a
   status of one name are two checks.
 - **Green.** Each change lands in order, through its own PR's merge at the

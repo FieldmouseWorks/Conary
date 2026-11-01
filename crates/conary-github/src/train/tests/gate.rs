@@ -466,3 +466,109 @@ fn a_train_with_nothing_required_doesnt_step() {
     // Nothing was built.
     assert_eq!(hub.names(), ["main"]);
 }
+
+/// A candidate a train said green before a required check's pass counted
+/// only attested: its commit's runs passed, and the green is in the ledger
+/// without an attestation in its evidence.
+fn green_unattested(store: &mut Store, hub: &mut Hub, prs: &[u64]) -> (CandidateId, String) {
+    join_all(store, hub, prs);
+    let (id, _) = gating(&step_once(store, hub));
+    let commit = commit_of(store, id);
+    hub.ci(&commit, &[("check / check", "success")]);
+    hub.attestations.borrow_mut().clear();
+    store
+        .record(Body::Verdict {
+            candidate: id,
+            verdict: Verdict::Green,
+        })
+        .unwrap();
+    (id, commit)
+}
+
+#[test]
+fn a_green_said_without_attested_passes_is_gated_again_and_lands_only_once_they_are() {
+    // A step stopped as it went to land the first: its head says it's
+    // landing, and nothing's merged.
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = store(&dir);
+    let mut hub = Hub::new(&[3, 5]);
+    let (id, commit) = green_unattested(&mut store, &mut hub, &[3, 5]);
+    let full = repo().to_string();
+    let landing = format!("landing with candidate {id}");
+    hub.mark(&full, &head(3), Mark::Landing, &landing, None)
+        .unwrap();
+    let stepped = step_once(&mut store, &hub);
+    // Waiting on its pass's attestation: nothing merged, and no head says
+    // it's landing.
+    assert_eq!(gating(&stepped).0, id);
+    let waits = waiting(&stepped);
+    assert!(
+        waits.len() == 1 && waits[0].starts_with("check / check: "),
+        "{waits:?}"
+    );
+    assert!(stepped.landed.is_empty() && stepped.refused.is_empty());
+    assert_eq!(hub.held("main"), Vec::<String>::new());
+    assert_eq!(hub.latest(&head(3)), Some(Mark::Waiting));
+    assert_eq!(hub.marked(), [(head(3), Mark::Landing)]);
+    assert_eq!(store.ledger().candidate(id).unwrap().state, State::Green);
+    // And on the step after.
+    let again = step_once(&mut store, &hub);
+    assert!(again.landed.is_empty());
+    assert_eq!(hub.held("main"), Vec::<String>::new());
+    // Once its job's attestation is there, it lands, and on that.
+    hub.attest_passes(&commit);
+    let stepped = step_once(&mut store, &hub);
+    assert_eq!((stepped.landed, stepped.finished), (vec![3, 5], vec![id]));
+    assert!(
+        store
+            .ledger()
+            .candidate(id)
+            .unwrap()
+            .evidence
+            .iter()
+            .any(|e| e.check == "check / check" && e.attest.is_some())
+    );
+}
+
+#[test]
+fn a_green_said_without_attested_passes_has_a_merge_it_made_recorded_but_makes_no_more() {
+    // A step landed the first and stopped before the second.
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = store(&dir);
+    let mut hub = Hub::new(&[3, 5]);
+    let (id, commit) = green_unattested(&mut store, &mut hub, &[3, 5]);
+    let full = repo().to_string();
+    let landing = format!("landing with candidate {id}");
+    hub.mark(&full, &head(3), Mark::Landing, &landing, None)
+        .unwrap();
+    assert_eq!(hub.land(&full, 3, &head(3)).unwrap(), PrMerge::Merged);
+    let stepped = step_once(&mut store, &hub);
+    // Its merge is recorded through the candidate, never made again; the
+    // second waits on the attestation.
+    let three = store.ledger().by_pr(&repo(), 3).unwrap();
+    assert_eq!(three.landing.as_ref().unwrap().candidate, Some(id));
+    assert!(stepped.landed.is_empty() && stepped.refused.is_empty());
+    assert_eq!(gating(&stepped).0, id);
+    assert_eq!(hub.held("main"), [head(3)]);
+    assert_ne!(hub.latest(&head(5)), Some(Mark::Landing));
+    hub.attest_passes(&commit);
+    let stepped = step_once(&mut store, &hub);
+    assert_eq!((stepped.landed, stepped.finished), (vec![5], vec![id]));
+    assert_eq!(hub.held("main"), [3, 5].map(head));
+}
+
+#[test]
+fn a_green_said_without_attested_passes_whose_check_failed_since_never_lands() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = store(&dir);
+    let mut hub = Hub::new(&[3]);
+    let (id, commit) = green_unattested(&mut store, &mut hub, &[3]);
+    // Run again, and failed.
+    hub.ci(&commit, &[("check / check", "failure")]);
+    let stepped = step_once(&mut store, &hub);
+    assert_eq!(gating(&stepped).0, id);
+    assert_eq!(waiting(&stepped), ["check / check: failed since its green"]);
+    assert!(stepped.landed.is_empty() && stepped.red.is_empty());
+    assert_eq!(hub.held("main"), Vec::<String>::new());
+    assert_eq!(store.ledger().candidate(id).unwrap().state, State::Green);
+}

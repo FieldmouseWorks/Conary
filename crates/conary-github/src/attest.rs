@@ -221,7 +221,11 @@ fn check(
     }
     let signer = format!("{SIGNER_REPO}/{SIGNER_WORKFLOW}@");
     let workflow = said("job_workflow_ref");
-    if workflow.len() < signer.len() || !workflow[..signer.len()].eq_ignore_ascii_case(&signer) {
+    // Anyone's text: cut only where a character ends.
+    let signed = workflow
+        .get(..signer.len())
+        .is_some_and(|by| by.eq_ignore_ascii_case(&signer));
+    if !signed {
         return Err(format!("its token was asked for by {workflow:?}"));
     }
     let workflow_sha = said("job_workflow_sha");
