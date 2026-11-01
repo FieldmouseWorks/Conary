@@ -3,25 +3,27 @@
 //! behind [`Forge`], and records each step. A candidate is built with the
 //! merges API on its build branch, so nothing on the box runs git, and the
 //! gate runs on its train branch, made at the finished commit. Green is the
-//! train branch's CI, read as the steward reads a PR's, until Conary counts
-//! attested evidence itself; a green candidate's changes land through their
-//! PRs' merges, in order, with the train's status ([`CONTEXT`]) on each head.
+//! train branch's CI with every required check's pass attested by its
+//! producer ([`crate::attest`]); a green candidate's changes land through
+//! their PRs' merges, in order, with the train's status ([`CONTEXT`]) on
+//! each head.
 //!
 //! [`Ledger::next`]: conary_core::Ledger::next
-
-use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
 
 use conary_core::ledger::{Candidate, Held, Invalid, State};
-use conary_core::op::{Body, CheckKind, Left, Member, Repo, Verdict};
+use conary_core::op::{Body, Left, Member, Repo, Verdict};
 use conary_core::store::StoreError;
 use conary_core::{CandidateId, ChangeId, CommitId, Store, TreeId};
 
-use crate::api::{ApiError, CheckRun, Source};
-use crate::ingest::{self, Config, IngestError, run_result, status_result};
+use crate::api::{ApiError, Source};
+use crate::attest::Actions;
+use crate::ingest::{self, Config, IngestError};
 
+mod gate;
 mod land;
+use gate::{Gate, gate};
 use land::{land_next, open_landing, stopped_landing};
 
 /// Every candidate's branches are under here, so a step can tell its own
@@ -81,8 +83,9 @@ pub enum Merged {
 }
 
 /// The train's writes on GitHub, and the reads it needs that ingest
-/// doesn't. Branches are named without `refs/heads/`.
-pub trait Forge {
+/// doesn't: its [`Actions`] ones too, to check its candidates'
+/// attestations. Branches are named without `refs/heads/`.
+pub trait Forge: Actions {
     /// The repo's default branch: trunk, which the train builds on and lands
     /// onto, as GitHub says it is now.
     fn default_branch(&self, repo: &str) -> Result<String, ApiError>;
@@ -133,6 +136,9 @@ pub enum TrainError {
     Landing(u64),
     /// The trunk branch isn't there.
     NoTrunk(String),
+    /// A step with no check required: nothing attested would say a
+    /// candidate is green.
+    NothingRequired,
 }
 
 impl std::fmt::Display for TrainError {
@@ -150,6 +156,10 @@ impl std::fmt::Display for TrainError {
                 write!(f, "#{pr} is landing in it, and only a step can settle that")
             }
             Self::NoTrunk(name) => write!(f, "no trunk branch {name}"),
+            Self::NothingRequired => write!(
+                f,
+                "no check is required, so no attested pass could make a candidate green"
+            ),
         }
     }
 }
@@ -362,10 +372,10 @@ pub fn drop_candidate(
     dropped(store, forge, &c, "dropped")
 }
 
-/// Records a candidate dropped. A green one (alone, with nothing landed)
-/// may have its head saying it's landing, from a step stopped before its
-/// merge: that goes to pending first, since the candidate isn't landing it
-/// any more.
+/// Records a candidate dropped. A green one (alone, or green on passes
+/// nobody attested) may have its next head saying it's landing, from a step
+/// stopped before its merge: that goes to pending first, since the
+/// candidate isn't landing it any more.
 fn dropped(
     store: &mut Store,
     forge: &dyn Forge,
@@ -395,9 +405,14 @@ fn dropped(
 pub struct Settings {
     /// The most changes a candidate holds.
     pub size: usize,
-    /// Checks a candidate's gate waits for even before they report: the
-    /// steward's proof jobs, which post nothing until they run.
+    /// Checks a candidate's gate waits for even before they report, and
+    /// whose passes count only with their producer's attestation: the
+    /// repo's gate, as burrow's shared CI runs it.
     pub require: Vec<String>,
+    /// What the name of each self-hosted runner started fresh for one job
+    /// starts with, which only the launcher of such runners gives one. A
+    /// required pass counts only from such a runner or one of GitHub's.
+    pub fresh: Option<String>,
 }
 
 /// A change to land, at the head its candidate merged.
@@ -514,7 +529,8 @@ pub struct Stepped {
 /// merge GitHub hasn't shown yet, or nothing to do. It holds the ledger's
 /// lock throughout, so two steps never build or land at once. Trunk is the
 /// repo's default branch as GitHub says it is when the step starts: the
-/// branch join, landing and ingest all mean, never a setting of its own.
+/// branch join, landing and ingest all mean, never a setting of its own. A
+/// step with no check required is refused before it does anything.
 pub fn step(
     store: &mut Store,
     forge: &dyn Forge,
@@ -523,6 +539,9 @@ pub fn step(
     repo: &Repo,
     settings: &Settings,
 ) -> Result<Stepped, TrainError> {
+    if settings.require.is_empty() {
+        return Err(TrainError::NothingRequired);
+    }
     let mut stepped = Stepped {
         conflicts: Vec::new(),
         empty: Vec::new(),
@@ -555,7 +574,7 @@ pub fn step(
                 if forge.branch(&full, &branch)?.is_none() {
                     forge.create_branch(&full, &branch, c.commit.as_str())?;
                 }
-                match gate(store, source, config, settings, &c)? {
+                match gate(store, forge, source, config, settings, &c)? {
                     Gate::Waiting(waiting) => {
                         break Now::Gating {
                             candidate: id,
@@ -797,125 +816,6 @@ fn build(
     })?;
     forge.create_branch(&full, &train_branch(id), commit.as_str())?;
     Ok(Built::Candidate(id))
-}
-
-/// What a candidate's checks say so far.
-enum Gate {
-    /// The checks it hasn't heard from yet: none named when no check has
-    /// reported at all.
-    Waiting(Vec<String>),
-    Green,
-    Red(Vec<Failed>),
-}
-
-/// A check's latest word on a commit.
-enum Said {
-    Pass,
-    Pending,
-    Fail(Option<String>),
-}
-
-/// Records the CI results on the candidate's commit, as ingest records a
-/// PR's, and says what they add up to. Red once any check's latest result
-/// is a failure: a failed test has had its second try inside its run
-/// (`docs/DESIGN.md` section 4.7). Green once every check has passed and the
-/// required ones are among them. Waiting otherwise, with no check at all
-/// too, so a gate that never starts is a stall, never a pass.
-fn gate(
-    store: &mut Store,
-    source: &dyn Source,
-    config: &Config,
-    settings: &Settings,
-    c: &Candidate,
-) -> Result<Gate, TrainError> {
-    let full = c.repo.to_string();
-    let runs = source.check_runs(&full, c.commit.as_str())?;
-    // Newest first from GitHub; recorded in the order they happened.
-    let statuses: Vec<_> = source
-        .statuses(&full, c.commit.as_str())?
-        .into_iter()
-        .filter(|s| config.is_check(&s.context))
-        .collect();
-    let mut found: Vec<_> = runs.iter().filter_map(run_result).collect();
-    found.extend(statuses.iter().rev().filter_map(status_result));
-    for f in found {
-        record(
-            store,
-            Body::CandidateEvidence {
-                candidate: c.id,
-                kind: CheckKind::Ci,
-                check: f.check,
-                result: f.result,
-                source: f.source,
-            },
-        )?;
-    }
-
-    // Each check's latest word. A run gives way only to a rerun of it: a
-    // later run (GitHub's ids grow) with its name in its suite, so runs of
-    // one name from two workflows or Apps each count. A status gives way to
-    // a later one in its context, and statuses and runs never stand in for
-    // each other.
-    let mut latest: BTreeMap<(Option<u64>, &str), &CheckRun> = BTreeMap::new();
-    for run in &runs {
-        let check = (run.check_suite.as_ref().map(|s| s.id), run.name.as_str());
-        if latest.get(&check).is_none_or(|old| run.id > old.id) {
-            latest.insert(check, run);
-        }
-    }
-    let mut said: Vec<(&str, Said)> = latest
-        .into_values()
-        .map(|run| {
-            let s = match (run.status.as_str(), run.conclusion.as_deref()) {
-                ("completed", Some("success" | "neutral" | "skipped")) => Said::Pass,
-                ("completed", _) => Said::Fail(run.html_url.clone()),
-                _ => Said::Pending,
-            };
-            (run.name.as_str(), s)
-        })
-        .collect();
-    // Newest first from GitHub: a context's first status is its latest.
-    let mut contexts = BTreeSet::new();
-    for status in &statuses {
-        if contexts.insert(status.context.as_str()) {
-            let s = match status.state.as_str() {
-                "success" => Said::Pass,
-                "pending" => Said::Pending,
-                _ => Said::Fail(status.target_url.clone()),
-            };
-            said.push((&status.context, s));
-        }
-    }
-    let failed: Vec<Failed> = said
-        .iter()
-        .filter_map(|(check, s)| match s {
-            Said::Fail(url) => Some(Failed {
-                check: (*check).to_owned(),
-                url: url.clone(),
-            }),
-            _ => None,
-        })
-        .collect();
-    if !failed.is_empty() {
-        return Ok(Gate::Red(failed));
-    }
-    let mut waiting: Vec<String> = said
-        .iter()
-        .filter(|(_, s)| matches!(s, Said::Pending))
-        .map(|(check, _)| (*check).to_owned())
-        .collect();
-    waiting.extend(
-        settings
-            .require
-            .iter()
-            .filter(|r| !said.iter().any(|(check, _)| check == r))
-            .cloned(),
-    );
-    Ok(if said.is_empty() || !waiting.is_empty() {
-        Gate::Waiting(waiting)
-    } else {
-        Gate::Green
-    })
 }
 
 /// Deletes the branches of every candidate that isn't in flight: a build

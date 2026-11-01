@@ -923,5 +923,7 @@ impl crate::notes::Notes for Api {
     }
 }
 
+mod actions;
+
 #[cfg(test)]
 mod tests;

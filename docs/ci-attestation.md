@@ -96,8 +96,10 @@ fails closed.
 
 ## Checking one
 
-A verifier, Conary's at M3, takes an attestation as evidence only when all of
-these hold:
+A verifier takes an attestation as evidence only when all of these hold.
+Conary's train checks a private repo's token on its candidate's commit this
+way (`conary-github`'s `attest`); nothing checks a bundle, or a PR's
+revision, yet.
 
 1. GitHub signed it: the bundle verifies against Sigstore's public trust
    root, or the token against GitHub's published keys
@@ -118,11 +120,13 @@ these hold:
      `runner_environment`, which the certificate carries too, is
      `github-hosted`); or
    - a self-hosted runner registered just in time for that one job, in a
-     user and a state directory nothing ran in before, which the repo's
-     policy names as fresh. GitHub's record of the job
+     user and a state directory nothing ran in before, whose name starts
+     with what the machine running the train names its fresh runners by
+     (`CONARY_FRESH_RUNNERS`, or `cn train step --fresh-runners`). GitHub's
+     record of the job
      (`GET /repos/{owner}/{repo}/actions/jobs/{job}`) says which runner took
      it, and only the launcher that starts fresh runners registers ones with
-     a name the policy takes: registering a runner takes the repo's or the
+     such a name: registering a runner takes the repo's or the
      organization's runner administration, which no workflow has.
 
    A runner that takes job after job runs each as the same user. Any job
@@ -132,6 +136,15 @@ these hold:
    with any audience, or change files the next job runs, or read the
    runner's own credentials and take its jobs. Nothing in the token tells
    those apart from the job's own, so nothing from such a runner counts.
+
+   That is all a fresh runner guards against: a stale or poisoned CI job.
+   It doesn't hold against a session on the runner's machine that wants to
+   cheat, wherever that session can become the launcher's user (on remi
+   every session can, with passwordless sudo): such a session can register
+   its own runner under such a name, or take a registration
+   before its runner does, and sign whatever it likes. Root on the machine
+   is outside what any attestation from it proves
+   ([section 9](DESIGN.md#9-security-and-identity)).
 
 A token also has to bind its statement to its run:
 
@@ -159,4 +172,4 @@ records it, and the ledger keeps the token with the evidence.
 The caller's own workflow can change what it passes in (`build-skip` among
 them), and a PR's run takes that workflow from the PR. So the predicate says
 what was skipped, and the policy that counts the evidence decides whether a
-result with skipped checks is enough.
+result with skipped checks is enough. The train's counts none.

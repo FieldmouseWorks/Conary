@@ -131,6 +131,22 @@ impl Book {
         self.ok(Body::Verdict { candidate, verdict });
     }
 
+    /// An attested pass on a candidate, as a gate keeps one before it says
+    /// green now.
+    fn attested(&mut self, candidate: CandidateId) {
+        self.ok(Body::CandidateEvidence {
+            candidate,
+            kind: CheckKind::Ci,
+            check: "check / check".into(),
+            result: Outcome::Pass,
+            source: "https://github.com/FieldmouseWorks/remi/actions/runs/1/job/2".into(),
+            attest: Some(Attest::GithubToken {
+                statement: "conary commit v1\n".into(),
+                token: "a.b.c".into(),
+            }),
+        });
+    }
+
     fn land(&mut self, change: ChangeId, after: char) -> Result<(), Invalid> {
         self.land_on(change, '0', after)
     }
@@ -506,6 +522,20 @@ fn a_dropped_candidate_waits_again_as_it_was() {
 }
 
 #[test]
+fn candidate_evidence_recorded_before_attestations_reads_as_unattested_and_writes_the_same() {
+    let id = CandidateId::new().unwrap();
+    let before = format!(
+        r#"{{"op":"candidate_evidence","candidate":"{id}","kind":"ci","check":"check / check","result":"pass","source":"https://github.com/FieldmouseWorks/remi/actions/runs/1/job/2"}}"#
+    );
+    let body: Body = serde_json::from_str(&before).unwrap();
+    assert!(matches!(
+        &body,
+        Body::CandidateEvidence { attest: None, .. }
+    ));
+    assert_eq!(serde_json::to_string(&body).unwrap(), before);
+}
+
+#[test]
 fn evidence_on_a_candidate_is_recorded_once() {
     let mut b = Book::default();
     let a = b.change(1, 'a');
@@ -517,9 +547,21 @@ fn evidence_on_a_candidate_is_recorded_once() {
         check: "flake".into(),
         result: Outcome::Pass,
         source: "https://github.com/FieldmouseWorks/remi/actions/runs/1".into(),
+        attest: None,
     };
     b.ok(evidence.clone());
-    assert_eq!(b.record(evidence), Err(Invalid::Duplicate));
+    assert_eq!(b.record(evidence.clone()), Err(Invalid::Duplicate));
+    // The same result with its attestation, once checked, is more than
+    // was known.
+    let mut attested = evidence;
+    if let Body::CandidateEvidence { attest, .. } = &mut attested {
+        *attest = Some(Attest::GithubToken {
+            statement: "conary commit v1\n".into(),
+            token: "a.b.c".into(),
+        });
+    }
+    b.ok(attested.clone());
+    assert_eq!(b.record(attested), Err(Invalid::Duplicate));
     let unknown = CandidateId::new().unwrap();
     assert_eq!(
         b.record(Body::Verdict {
@@ -528,7 +570,7 @@ fn evidence_on_a_candidate_is_recorded_once() {
         }),
         Err(Invalid::UnknownCandidate(unknown))
     );
-    assert_eq!(b.ledger.candidate(id).unwrap().evidence.len(), 1);
+    assert_eq!(b.ledger.candidate(id).unwrap().evidence.len(), 2);
 }
 
 #[test]
@@ -558,6 +600,17 @@ fn the_trains_ops_read_back_as_written() {
             commit: commit('c'),
             tree: tree('7'),
             of: None,
+        },
+        Body::CandidateEvidence {
+            candidate,
+            kind: CheckKind::Ci,
+            check: "check / check".into(),
+            result: Outcome::Pass,
+            source: "https://github.com/FieldmouseWorks/remi/actions/runs/1/job/2".into(),
+            attest: Some(Attest::GithubToken {
+                statement: "conary commit v1\n".into(),
+                token: "a.b.c".into(),
+            }),
         },
         Body::Verdict {
             candidate,
@@ -823,12 +876,14 @@ fn an_alone_candidate_lands_through_the_train_only_onto_its_base() {
 }
 
 #[test]
-fn only_a_green_candidate_alone_can_be_dropped() {
+fn a_green_candidate_can_be_dropped_only_alone_or_on_passes_nobody_attested() {
     let mut b = Book::default();
     let a = b.change(1, 'a');
     b.join(a);
     let id = b.build(8);
+    b.attested(id);
     b.verdict(id, Verdict::Green);
+    assert!(!b.ledger.candidate(id).unwrap().green_unattested());
     let dropped = Body::Verdict {
         candidate: id,
         verdict: Verdict::Dropped,
@@ -862,3 +917,23 @@ fn only_a_green_candidate_alone_can_be_dropped() {
 }
 
 mod land;
+
+#[test]
+fn a_green_on_passes_nobody_attested_drops_keeping_what_it_landed_and_the_rest_waits_again() {
+    let mut b = Book::default();
+    let (a, c) = (b.change(1, 'a'), b.change(2, 'b'));
+    b.join(a);
+    b.join(c);
+    let id = b.build(8);
+    // Green before a pass counted only attested: its evidence holds none.
+    b.verdict(id, Verdict::Green);
+    assert!(b.ledger.candidate(id).unwrap().green_unattested());
+    b.land(a, 'd').unwrap();
+    assert_eq!(b.landing(a), Some(id));
+    b.verdict(id, Verdict::Dropped);
+    assert_eq!(b.state(id), State::Dropped);
+    assert_eq!(b.ledger.candidate(id).unwrap().landed, [a]);
+    assert_eq!(b.landing(a), Some(id));
+    assert_eq!(b.next(8), Some(vec![c]));
+    assert!(!b.ledger.candidate(id).unwrap().green_unattested());
+}

@@ -10,7 +10,7 @@ use serde::Serialize;
 
 use super::{Invalid, Ledger, Status};
 use crate::id::{CandidateId, ChangeId, CommitId, RevisionId, TreeId};
-use crate::op::{Body, CheckKind, Left, Member, Outcome, Repo, Verdict};
+use crate::op::{Attest, Body, CheckKind, Left, Member, Outcome, Repo, Verdict};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CandidateEvidence {
@@ -18,6 +18,8 @@ pub struct CandidateEvidence {
     pub check: String,
     pub result: Outcome,
     pub source: String,
+    /// Its producer's attestation, when it had one that held.
+    pub attest: Option<Attest>,
     pub at: i64,
 }
 
@@ -72,6 +74,15 @@ pub struct Candidate {
 impl Candidate {
     pub fn in_flight(&self) -> bool {
         matches!(self.state, State::Gating | State::Green)
+    }
+
+    /// Whether it's green on passes nobody attested: its gate said so before
+    /// a required check's pass counted only with its producer's
+    /// attestation. A gate says green now only with each required check's
+    /// pass attested and kept in the evidence, and a train requires at
+    /// least one, so such a green holds none.
+    pub fn green_unattested(&self) -> bool {
+        self.state == State::Green && self.evidence.iter().all(|e| e.attest.is_none())
     }
 
     /// Whether trunk ended on the candidate's own tree after its last
@@ -356,10 +367,17 @@ impl Ledger {
         check: &str,
         result: Outcome,
         source: &str,
+        attest: Option<&Attest>,
     ) -> Result<(), Invalid> {
         let c = self.existing_candidate(candidate)?;
         if c.evidence.iter().any(|e| {
-            (e.kind, e.check.as_str(), e.result, e.source.as_str()) == (kind, check, result, source)
+            (
+                e.kind,
+                e.check.as_str(),
+                e.result,
+                e.source.as_str(),
+                e.attest.as_ref(),
+            ) == (kind, check, result, source, attest)
         }) {
             return Err(Invalid::Duplicate);
         }
@@ -375,8 +393,10 @@ impl Ledger {
         match (&c.state, verdict) {
             (State::Gating, _) => Ok(()),
             // Green alone, but trunk moved before it landed: its gate was
-            // for a tree it won't make, so it's built again.
-            (State::Green, Verdict::Dropped) if c.alone => Ok(()),
+            // for a tree it won't make, so it's built again. Or green on
+            // passes nobody attested: what's left of it is built again, and
+            // gated as a candidate is now.
+            (State::Green, Verdict::Dropped) if c.alone || c.green_unattested() => Ok(()),
             _ => Err(Invalid::NotGating),
         }
     }
@@ -475,6 +495,7 @@ impl Ledger {
                 check,
                 result,
                 source,
+                attest,
             } => self
                 .candidates
                 .get_mut(candidate)
@@ -485,6 +506,7 @@ impl Ledger {
                     check: check.clone(),
                     result: *result,
                     source: source.clone(),
+                    attest: attest.clone(),
                     at,
                 }),
             Body::Verdict { candidate, verdict } => self.verdict(*candidate, *verdict),

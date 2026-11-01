@@ -20,8 +20,11 @@ pub(super) const UNSETTLED: &str = "out of the train: the steward no longer says
 /// there, read again just before the merge. Then the train's status goes on its head, which the repo's rules
 /// can require, and GitHub merges it or refuses. A refused PR's status says
 /// so before the ledger takes it out, so a step stopped in between comes
-/// back to it. The last landing's head is retired first ([`retired`]).
-/// `Some` when the train waits on GitHub showing the merge.
+/// back to it. A candidate green on passes nobody attested
+/// ([`Candidate::green_unattested`]) merges nothing more: once a merge it
+/// made is recorded, it's dropped, and what's left of it is built again.
+/// The last landing's head is retired first ([`retired`]). `Some` when the
+/// train waits on GitHub showing the merge.
 pub(super) fn land_next(
     store: &mut Store,
     forge: &dyn Forge,
@@ -59,8 +62,15 @@ pub(super) fn land_next(
     if merge_unseen(source, &full, pr, head.as_str(), c, &at)? {
         return Ok(Some(landing(store, c)));
     }
-    if c.alone && at != c.base.as_str() {
-        dropped(store, forge, c, "was built on a trunk that has moved")?;
+    let drop = if c.green_unattested() {
+        Some("was green on passes nobody attested")
+    } else if c.alone && at != c.base.as_str() {
+        Some("was built on a trunk that has moved")
+    } else {
+        None
+    };
+    if let Some(why) = drop {
+        dropped(store, forge, c, why)?;
         stepped.verdicts.push((c.id, Verdict::Dropped));
         return Ok(None);
     }
