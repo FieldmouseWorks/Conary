@@ -763,14 +763,15 @@ fn build(
             .head;
         let message = format!("Merge #{} into the train's candidate {id}", c.pr);
         let left = match forge.merge(&full, &build, head.as_str(), &message)? {
-            // The same tree as before it: what it does is there already,
-            // and landing it after these would be an empty merge.
+            // The same tree as before it, or its head there already (on
+            // trunk, or in a PR ahead of it stacked on it): what it does is
+            // there, and landing it after these would be an empty merge.
             Merged::Commit { tree: after, .. } if after == tree => Some(Left::Empty),
+            Merged::Already => Some(Left::Empty),
             Merged::Commit { sha, tree: after } => {
                 (commit, tree) = (sha, after);
                 None
             }
-            Merged::Already => None,
             Merged::Conflict => Some(Left::Conflict),
         };
         if let Some(why) = left {

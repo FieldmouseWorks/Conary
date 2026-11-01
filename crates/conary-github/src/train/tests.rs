@@ -39,7 +39,9 @@ fn settings() -> Settings {
 /// move, each holding the heads merged into it. A head in `conflicts` won't
 /// merge onto anything that holds another head, and one in `same` changes
 /// just what another head does, so merged where that one is already it
-/// leaves the tree as it was. A PR's merge squashes its head onto trunk.
+/// leaves the tree as it was. A head in `stacked` is on another's branch:
+/// merging it, or landing it, brings that head too. A PR's merge squashes
+/// its head onto trunk.
 #[derive(Default)]
 struct Hub {
     /// The repo's default branch.
@@ -50,6 +52,8 @@ struct Hub {
     conflicts: HashSet<String>,
     /// A head that does what the head it maps to does.
     same: HashMap<String, String>,
+    /// A head and the head of the PR its branch was made on.
+    stacked: HashMap<String, String>,
     branches: RefCell<BTreeMap<String, String>>,
     /// What each commit holds: the heads merged into it.
     holds: RefCell<HashMap<String, Vec<String>>>,
@@ -324,6 +328,7 @@ impl Forge for Hub {
             return Ok(Merged::Conflict);
         }
         self.merges.borrow_mut().push((into.into(), head.into()));
+        holds.extend(self.stacked.get(head).cloned());
         holds.push(head.into());
         let mut made = self.made.borrow_mut();
         *made += 1;
@@ -379,6 +384,7 @@ impl Forge for Hub {
         let base = self.base_of(pr);
         let before = self.branch_at(&base).unwrap();
         let mut holds = self.holds.borrow()[&before].clone();
+        holds.extend(self.stacked.get(at).cloned());
         holds.push(at.into());
         let mut made = self.made.borrow_mut();
         *made += 1;
@@ -455,6 +461,7 @@ fn waiting(stepped: &Stepped) -> Vec<String> {
     }
 }
 
+mod empty;
 mod land;
 
 #[test]
@@ -537,53 +544,6 @@ fn a_head_that_wont_merge_leaves_and_the_rest_are_built_without_it() {
     // Only the candidate's own branch is left.
     assert_eq!(hub.names(), [train_branch(id), "main".into()]);
     assert_eq!(joined(&store), [3, 5]);
-}
-
-#[test]
-fn a_head_that_changes_nothing_after_the_ones_ahead_leaves_and_is_never_merged() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut store = store(&dir);
-    let mut hub = Hub::new(&[3, 4, 5]);
-    // 4 is the same fix as 3: merged after it, it changes nothing.
-    hub.same.insert(head(4), head(3));
-    join_all(&mut store, &hub, &[3, 4, 5]);
-    let stepped = step_once(&mut store, &hub);
-    assert_eq!(
-        stepped.empty,
-        [Empty {
-            pr: 4,
-            onto: vec![3],
-            base: TRUNK.parse().unwrap(),
-        }]
-    );
-    assert!(stepped.conflicts.is_empty());
-    let (id, prs) = gating(&stepped);
-    assert_eq!(prs, [3, 5]);
-    // Only the candidate's own branch is left.
-    assert_eq!(hub.names(), [train_branch(id), "main".into()]);
-    assert_eq!(joined(&store), [3, 5]);
-    // Held while 3 is on its way to trunk ahead of it.
-    assert_eq!(
-        try_join(&mut store, &hub, 4, &head(4), false).unwrap(),
-        Joined::Held(Held::Empty)
-    );
-    hub.ci(&commit_of(&store, id), &[("check / check", "success")]);
-    assert_eq!(step_once(&mut store, &hub).landed, [3, 5]);
-    // Trunk moved: it goes again, and changes nothing on trunk itself now,
-    // which has what it does.
-    join_all(&mut store, &hub, &[4]);
-    let stepped = step_once(&mut store, &hub);
-    assert_eq!(
-        stepped.empty,
-        [Empty {
-            pr: 4,
-            onto: vec![],
-            base: hub.branch_at("main").unwrap().parse().unwrap(),
-        }]
-    );
-    assert_eq!(stepped.now, Now::Idle);
-    assert!(joined(&store).is_empty());
-    assert!(!hub.merged.borrow().contains_key(&4));
 }
 
 #[test]
