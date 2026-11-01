@@ -444,6 +444,20 @@ pub struct Conflict {
     pub base: CommitId,
 }
 
+/// A PR whose head merged onto trunk and the changes ahead of it in a
+/// candidate without changing their tree: what it does is there already, so
+/// its landing would be an empty merge. It left the train, for the steward
+/// to close once trunk has what it does.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Empty {
+    pub pr: u64,
+    /// The PRs merged onto trunk ahead of it: none when trunk has what it
+    /// does already.
+    pub onto: Vec<u64>,
+    /// Trunk's commit then.
+    pub base: CommitId,
+}
+
 /// A failed check on a candidate's commit.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Failed {
@@ -474,6 +488,8 @@ pub struct Stepped {
     /// The PRs that left because their heads wouldn't merge, for their PRs
     /// to be told.
     pub conflicts: Vec<Conflict>,
+    /// The PRs that left because their merges changed nothing.
+    pub empty: Vec<Empty>,
     /// Each candidate whose gate said, in the order they did.
     pub verdicts: Vec<(CandidateId, Verdict)>,
     pub red: Vec<Red>,
@@ -509,6 +525,7 @@ pub fn step(
 ) -> Result<Stepped, TrainError> {
     let mut stepped = Stepped {
         conflicts: Vec::new(),
+        empty: Vec::new(),
         verdicts: Vec::new(),
         red: Vec::new(),
         landed: Vec::new(),
@@ -601,7 +618,8 @@ fn head_of(store: &Store, m: &Member) -> CommitId {
 }
 
 /// The candidate in flight, or the next one, built now; none when nothing
-/// waits. A change whose head won't merge leaves on the way.
+/// waits. A change whose head won't merge, or whose merge changes nothing,
+/// leaves on the way.
 fn in_flight_or_built(
     store: &mut Store,
     forge: &dyn Forge,
@@ -619,16 +637,19 @@ fn in_flight_or_built(
         };
         match build(store, forge, repo, trunk, &plan)? {
             Built::Candidate(id) => return Ok(Some(id)),
-            Built::Conflict { change, onto, base } => {
-                stepped.conflicts.push(Conflict {
-                    pr: pr_of(store, change),
-                    onto,
-                    base,
-                });
-                store.record(Body::Leave {
-                    change,
-                    why: Left::Conflict,
-                })?;
+            Built::Left {
+                change,
+                why,
+                onto,
+                base,
+            } => {
+                let pr = pr_of(store, change);
+                if why == Left::Empty {
+                    stepped.empty.push(Empty { pr, onto, base });
+                } else {
+                    stepped.conflicts.push(Conflict { pr, onto, base });
+                }
+                store.record(Body::Leave { change, why })?;
             }
         }
     }
@@ -703,9 +724,12 @@ fn finish(
 
 enum Built {
     Candidate(CandidateId),
-    /// This change's head won't merge onto `base` and the PRs `onto`.
-    Conflict {
+    /// This change leaves, `why`: its head won't merge onto `base` and the
+    /// PRs `onto` (a conflict), or merges onto them without changing their
+    /// tree (empty).
+    Left {
         change: ChangeId,
+        why: Left,
         onto: Vec<u64>,
         base: CommitId,
     },
@@ -728,7 +752,8 @@ fn build(
         .ok_or_else(|| TrainError::NoTrunk(trunk.to_owned()))?;
     let build = build_branch(id);
     forge.create_branch(&full, &build, &base)?;
-    let mut at = None;
+    // The candidate so far: trunk's commit, then each merge's.
+    let (mut commit, mut tree) = (base.clone(), forge.tree(&full, &base)?);
     let mut onto = Vec::new();
     for m in &plan.changes {
         let c = store.ledger().change(m.change).expect("in its train");
@@ -737,26 +762,28 @@ fn build(
             .expect("joined at a revision it has")
             .head;
         let message = format!("Merge #{} into the train's candidate {id}", c.pr);
-        match forge.merge(&full, &build, head.as_str(), &message)? {
-            Merged::Commit { sha, tree } => at = Some((sha, tree)),
-            Merged::Already => {}
-            Merged::Conflict => {
-                return Ok(Built::Conflict {
-                    change: m.change,
-                    onto,
-                    base: commit_id(&base)?,
-                });
+        let left = match forge.merge(&full, &build, head.as_str(), &message)? {
+            // The same tree as before it, or its head there already (on
+            // trunk, or in a PR ahead of it stacked on it): what it does is
+            // there, and landing it after these would be an empty merge.
+            Merged::Commit { tree: after, .. } if after == tree => Some(Left::Empty),
+            Merged::Already => Some(Left::Empty),
+            Merged::Commit { sha, tree: after } => {
+                (commit, tree) = (sha, after);
+                None
             }
+            Merged::Conflict => Some(Left::Conflict),
+        };
+        if let Some(why) = left {
+            return Ok(Built::Left {
+                change: m.change,
+                why,
+                onto,
+                base: commit_id(&base)?,
+            });
         }
         onto.push(c.pr);
     }
-    let (commit, tree) = match at {
-        Some(at) => at,
-        None => {
-            let tree = forge.tree(&full, &base)?;
-            (base.clone(), tree)
-        }
-    };
     let commit = commit_id(&commit)?;
     store.record(Body::Candidate {
         candidate: id,

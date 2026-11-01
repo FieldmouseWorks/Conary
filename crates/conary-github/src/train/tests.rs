@@ -37,8 +37,11 @@ fn settings() -> Settings {
 /// GitHub, as far as the train can tell: PRs at their heads, each settled
 /// by the steward, CI results by commit, and branches that merges really
 /// move, each holding the heads merged into it. A head in `conflicts` won't
-/// merge onto anything that holds another head. A PR's merge squashes its
-/// head onto trunk.
+/// merge onto anything that holds another head, and one in `same` changes
+/// just what another head does, so merged where that one is already it
+/// leaves the tree as it was. A head in `stacked` is on another's branch:
+/// merging it, or landing it, brings that head too. A PR's merge squashes
+/// its head onto trunk.
 #[derive(Default)]
 struct Hub {
     /// The repo's default branch.
@@ -47,6 +50,10 @@ struct Hub {
     checks: HashMap<String, Value>,
     statuses: HashMap<String, Value>,
     conflicts: HashSet<String>,
+    /// A head that does what the head it maps to does.
+    same: HashMap<String, String>,
+    /// A head and the head of the PR its branch was made on.
+    stacked: HashMap<String, String>,
     branches: RefCell<BTreeMap<String, String>>,
     /// What each commit holds: the heads merged into it.
     holds: RefCell<HashMap<String, Vec<String>>>,
@@ -106,6 +113,18 @@ impl Hub {
     }
 
     /// The branch a PR targets: the default one unless it was told another.
+    /// The tree of a commit holding these heads: what they do, each once.
+    fn tree_holding(&self, holds: &[String]) -> String {
+        let mut does: Vec<String> = Vec::new();
+        for h in holds {
+            let d = self.same.get(h).unwrap_or(h);
+            if !does.contains(d) {
+                does.push(d.clone());
+            }
+        }
+        tree_of(&does)
+    }
+
     fn base_of(&self, pr: u64) -> String {
         self.targets
             .borrow()
@@ -309,18 +328,19 @@ impl Forge for Hub {
             return Ok(Merged::Conflict);
         }
         self.merges.borrow_mut().push((into.into(), head.into()));
+        holds.extend(self.stacked.get(head).cloned());
         holds.push(head.into());
         let mut made = self.made.borrow_mut();
         *made += 1;
         let sha = format!("{:0>40x}", 0x00c0_ffee_0000_u64 + *made);
-        let tree = tree_of(&holds);
+        let tree = self.tree_holding(&holds);
         self.holds.borrow_mut().insert(sha.clone(), holds);
         self.branches.borrow_mut().insert(into.into(), sha.clone());
         Ok(Merged::Commit { sha, tree })
     }
 
     fn tree(&self, _: &str, sha: &str) -> Result<String, ApiError> {
-        Ok(tree_of(&self.holds.borrow()[sha]))
+        Ok(self.tree_holding(&self.holds.borrow()[sha]))
     }
 
     fn mark(
@@ -364,6 +384,7 @@ impl Forge for Hub {
         let base = self.base_of(pr);
         let before = self.branch_at(&base).unwrap();
         let mut holds = self.holds.borrow()[&before].clone();
+        holds.extend(self.stacked.get(at).cloned());
         holds.push(at.into());
         let mut made = self.made.borrow_mut();
         *made += 1;
@@ -440,6 +461,7 @@ fn waiting(stepped: &Stepped) -> Vec<String> {
     }
 }
 
+mod empty;
 mod land;
 
 #[test]

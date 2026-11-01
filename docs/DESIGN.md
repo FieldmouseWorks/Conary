@@ -328,7 +328,10 @@ so the wait is one run, however many are waiting.
   train's: not the build branch's merges, and not a branch deleted, so a
   candidate of eight is one run. Both branches go once it has landed or
   split. A change that won't merge onto those before it leaves the train,
-  and its PR is told so, as a conflict is today.
+  and its PR is told so, as a conflict is today. So does one whose merge
+  leaves the tree as it was: what it does is there already, through trunk
+  or a change ahead of it, and landing it would add an empty merge. The
+  steward closes its PR once trunk has what it does.
 - **Its evidence.** The gate runs on the candidate's commit: the repo's CI,
   on the train branch's creation, and the steward's proof jobs. Evidence on a
   candidate is about that commit's tree, and counts by its producer's
@@ -413,15 +416,16 @@ and refuses a candidate out of turn: a red candidate's halves first, each
 whole, then any number of the changes waiting, from the first to join. A
 change joins only at the PR's revision now, and joining again puts it at the
 back. It leaves by a `leave` op when nothing else says so (it's no longer
-ready, its head won't merge, or GitHub refused its merge), and by itself
+ready, its head won't merge, its merge changes nothing, or GitHub refused
+its merge), and by itself
 with a new head (a head pushed back to an older one included), a close, a
 landing, or a red candidate it was alone in. One leaving a candidate in
 flight stops the candidate there, and its other changes wait again as they
-were. A change that left red alone, on a conflict or on a refused merge is
-held: it can't join again at that revision, so it never rebuilds the
-candidate it failed in. A new head lets it go, and for a conflict or a
-refusal so does trunk moving, or, for a conflict, one of the changes it was
-merged after leaving. A candidate's `verdict` is green, red or dropped:
+were. A change that left red alone, on a conflict, on an empty merge or on
+a refused merge is held: it can't join again at that revision, so it never
+rebuilds the candidate it failed in. A new head lets it go, and for a
+conflict, an empty merge or a refusal so does trunk moving, or, for a
+conflict or an empty merge, one of the changes it was merged after leaving. A candidate's `verdict` is green, red or dropped:
 dropped is a gate that never finished, the stall watchdog's last word, or a
 green candidate alone whose trunk moved before it landed, and its changes
 wait again as they joined. A landing is the candidate's when it lands the
