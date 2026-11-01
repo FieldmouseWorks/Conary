@@ -126,7 +126,7 @@ revision, yet.
      record of the job
      (`GET /repos/{owner}/{repo}/actions/jobs/{job}`) says which runner took
      it, and only the launcher that starts fresh runners registers ones with
-     a name the policy takes: registering a runner takes the repo's or the
+     such a name: registering a runner takes the repo's or the
      organization's runner administration, which no workflow has.
 
    A runner that takes job after job runs each as the same user. Any job
@@ -141,7 +141,7 @@ revision, yet.
    It doesn't hold against a session on the runner's machine that wants to
    cheat, wherever that session can become the launcher's user (on remi
    every session can, with passwordless sudo): such a session can register
-   its own runner under a name the policy takes, or take a registration
+   its own runner under such a name, or take a registration
    before its runner does, and sign whatever it likes. Root on the machine
    is outside what any attestation from it proves
    ([section 9](DESIGN.md#9-security-and-identity)).
