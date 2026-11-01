@@ -136,6 +136,10 @@ pub enum Left {
     Unready,
     /// Its head won't merge onto trunk and the changes ahead of it.
     Conflict,
+    /// Its head merges onto trunk and the changes ahead of it without
+    /// changing their tree: what it does is there already, so landing it
+    /// would only add an empty merge.
+    Empty,
     /// GitHub refused its merge.
     Refused,
 }

@@ -93,6 +93,10 @@ pub enum Held {
     /// it has a new head, trunk moves, or one of those changes leaves (for
     /// good: coming back doesn't hold it again).
     Conflict,
+    /// Its merge onto trunk and the changes ahead of it changed nothing: as
+    /// long as a conflict's, since what it does came with one of those
+    /// changes or is on trunk already.
+    Empty,
     /// GitHub refused its merge: until it has a new head or trunk moves.
     Refused,
 }
@@ -103,6 +107,9 @@ impl std::fmt::Display for Held {
             Self::Red => "it was red alone, until its head moves",
             Self::Conflict => {
                 "its head wouldn't merge, until its head or trunk moves or a change it was after leaves"
+            }
+            Self::Empty => {
+                "its merge would change nothing, until its head or trunk moves or a change it was after leaves"
             }
             Self::Refused => "GitHub refused its merge, until its head or trunk moves",
         })
@@ -116,7 +123,7 @@ struct Hold {
     revision: RevisionId,
     /// How often trunk had moved under the train when it left.
     moves: u64,
-    /// The changes it wouldn't merge after.
+    /// The changes it wouldn't merge after, or merged after to no effect.
     ahead: Vec<ChangeId>,
 }
 
@@ -164,11 +171,12 @@ impl Train {
     /// Why `change` can't join again at `revision`, if it can't.
     pub fn held(&self, change: ChangeId, revision: RevisionId) -> Option<Held> {
         let h = self.held.get(&change)?;
-        // A conflict's hold is gone once a change it was after leaves.
+        // A conflict's hold, or an empty merge's, is gone once a change it
+        // was after leaves.
         let still = h.revision == revision
             && match h.why {
                 Held::Red => true,
-                Held::Refused | Held::Conflict => h.moves == self.moves,
+                Held::Refused | Held::Conflict | Held::Empty => h.moves == self.moves,
             };
         still.then_some(h.why)
     }
@@ -196,7 +204,7 @@ impl Train {
     }
 
     /// Takes a change out of the train and out of any half it's in, and lets
-    /// go of the conflicts held for being merged after it.
+    /// go of the conflicts and empty merges held for being merged after it.
     fn remove(&mut self, change: ChangeId) {
         self.joined.retain(|m| m.change != change);
         self.alone.remove(&change);
@@ -404,10 +412,15 @@ impl Ledger {
                 let repo = self.changes[change].repo.clone();
                 match why {
                     Left::Unready => {}
-                    Left::Conflict => {
+                    Left::Conflict | Left::Empty => {
                         let ahead = self.ahead_of(&repo, *change);
                         let train = self.trains.get_mut(&repo).expect("check: it's in it");
-                        train.hold(*change, Held::Conflict, ahead);
+                        let why = if *why == Left::Empty {
+                            Held::Empty
+                        } else {
+                            Held::Conflict
+                        };
+                        train.hold(*change, why, ahead);
                     }
                     Left::Refused => {
                         let train = self.trains.get_mut(&repo).expect("check: it's in it");

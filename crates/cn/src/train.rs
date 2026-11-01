@@ -17,9 +17,9 @@ use crate::{Cli, GithubArgs, Result, read, word, write, write_notes};
 pub enum TrainCommand {
     /// Put a PR in its repo's train: everything but the gate says its head
     /// can land. Refused when the PR's head on GitHub is another; held when
-    /// it left as it is (red alone, a conflict, a refused merge) and nothing
-    /// has moved since; left out when it targets another branch than the
-    /// default one.
+    /// it left as it is (red alone, a conflict, an empty merge, a refused
+    /// merge) and nothing has moved since; left out when it targets another
+    /// branch than the default one.
     Join {
         /// The repository, as owner/name.
         repo: Repo,
@@ -44,7 +44,8 @@ pub enum TrainCommand {
         /// The PR's number.
         pr: u64,
         /// unready (it can't land but for the gate any more), conflict (its
-        /// head won't merge) or refused (GitHub refused its merge).
+        /// head won't merge), empty (its merge would change nothing) or
+        /// refused (GitHub refused its merge).
         #[arg(long, value_parser = spelled::<Left>)]
         why: Left,
         #[command(flatten)]
@@ -200,6 +201,17 @@ fn human_stepped(repo: &Repo, s: &Stepped) -> String {
         lines.push(format!(
             "{repo}#{}: won't merge onto {}{onto}, left the train",
             c.pr, c.base
+        ));
+    }
+    for e in &s.empty {
+        let onto = if e.onto.is_empty() {
+            String::new()
+        } else {
+            format!(" and {}", list(&e.onto))
+        };
+        lines.push(format!(
+            "{repo}#{}: changes nothing on {}{onto}, left the train",
+            e.pr, e.base
         ));
     }
     for (id, verdict) in &s.verdicts {

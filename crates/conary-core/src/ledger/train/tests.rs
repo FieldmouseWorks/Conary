@@ -636,75 +636,75 @@ fn a_change_red_alone_joins_again_only_at_a_new_head() {
 }
 
 #[test]
-fn a_change_that_wont_merge_joins_again_once_what_it_was_after_changes() {
-    // Built after p, q won't merge; r, behind it, has nothing to do with it.
-    let setup = || {
-        let mut b = Book::default();
-        let [p, q, r]: [ChangeId; 3] = std::array::from_fn(|i| b.change(i as u64 + 1, 'a'));
-        for c in [p, q, r] {
-            b.join(c);
-        }
-        b.ok(Body::Leave {
-            change: q,
-            why: Left::Conflict,
-        });
-        let revision = b.current(q);
-        let held = Body::Join {
-            change: q,
-            revision,
-            alone: false,
+fn a_change_that_wont_merge_or_changes_nothing_joins_again_once_what_it_was_after_changes() {
+    // Built after p, q won't merge, or merges to no effect; r, behind it, has
+    // nothing to do with it. Both hold q as long as each other.
+    for (why, as_held) in [(Left::Conflict, Held::Conflict), (Left::Empty, Held::Empty)] {
+        let setup = || {
+            let mut b = Book::default();
+            let [p, q, r]: [ChangeId; 3] = std::array::from_fn(|i| b.change(i as u64 + 1, 'a'));
+            for c in [p, q, r] {
+                b.join(c);
+            }
+            b.ok(Body::Leave { change: q, why });
+            let revision = b.current(q);
+            let held = Body::Join {
+                change: q,
+                revision,
+                alone: false,
+            };
+            assert_eq!(b.record(held.clone()), Err(Invalid::Held(as_held)));
+            (b, [p, q, r], held)
         };
-        assert_eq!(b.record(held.clone()), Err(Invalid::Held(Held::Conflict)));
-        (b, [p, q, r], held)
-    };
 
-    let (mut b, [_, q, r], held) = setup();
-    b.ok(Body::Leave {
-        change: r,
-        why: Left::Unready,
-    });
-    assert_eq!(b.record(held), Err(Invalid::Held(Held::Conflict)));
-    b.push(q, 'b');
-    b.join(q);
+        let (mut b, [_, q, r], held) = setup();
+        b.ok(Body::Leave {
+            change: r,
+            why: Left::Unready,
+        });
+        assert_eq!(b.record(held), Err(Invalid::Held(as_held)));
+        b.push(q, 'b');
+        b.join(q);
 
-    // p leaving: q goes on trunk as it is.
-    let (mut b, [p, q, _], held) = setup();
-    b.ok(Body::Leave {
-        change: p,
-        why: Left::Unready,
-    });
-    b.ok(held);
-    assert!(b.joined().contains(&q));
+        // p leaving: q goes on trunk as it is.
+        let (mut b, [p, q, _], held) = setup();
+        b.ok(Body::Leave {
+            change: p,
+            why: Left::Unready,
+        });
+        b.ok(held);
+        assert!(b.joined().contains(&q));
 
-    // p landing: trunk moved.
-    let (mut b, [p, q, _], held) = setup();
-    let id = b.build(1);
-    assert_eq!(b.changes(id), [p]);
-    b.verdict(id, Verdict::Green);
-    b.land(p, 'd').unwrap();
-    b.ok(held);
-    assert!(b.joined().contains(&q));
+        // p landing: trunk moved.
+        let (mut b, [p, q, _], held) = setup();
+        let id = b.build(1);
+        assert_eq!(b.changes(id), [p]);
+        b.verdict(id, Verdict::Green);
+        b.land(p, 'd').unwrap();
+        b.ok(held);
+        assert!(b.joined().contains(&q));
 
-    // Something else reaching trunk moves it too.
-    let (mut b, [_, q, _], held) = setup();
-    b.ok(Body::Outside {
-        repo: repo(),
-        before: None,
-        after: commit('e'),
-    });
-    b.ok(held);
-    assert!(b.joined().contains(&q));
+        // Something else reaching trunk moves it too.
+        let (mut b, [_, q, _], held) = setup();
+        b.ok(Body::Outside {
+            repo: repo(),
+            before: None,
+            after: commit('e'),
+        });
+        b.ok(held);
+        assert!(b.joined().contains(&q));
 
-    // p leaving and joining again at once, before q is seen to: q isn't
-    // after the same p any more, so it's let go for good.
-    let (mut b, [p, q, _], held) = setup();
-    b.ok(Body::Leave {
-        change: p,
-        why: Left::Unready,
-    });
-    b.join(p);
-    b.ok(held);
-    assert!(b.joined().contains(&q));
+        // p leaving and joining again at once, before q is seen to: q isn't
+        // after the same p any more, so it's let go for good.
+        let (mut b, [p, q, _], held) = setup();
+        b.ok(Body::Leave {
+            change: p,
+            why: Left::Unready,
+        });
+        b.join(p);
+        b.ok(held);
+        assert!(b.joined().contains(&q));
+    }
 }
 
 #[test]
