@@ -23,7 +23,7 @@ use crate::ingest::{self, Config, IngestError};
 
 mod gate;
 mod land;
-use gate::{Gate, gate, green_attested};
+use gate::{Gate, gate};
 use land::{land_next, open_landing, stopped_landing};
 
 /// Every candidate's branches are under here, so a step can tell its own
@@ -372,10 +372,10 @@ pub fn drop_candidate(
     dropped(store, forge, &c, "dropped")
 }
 
-/// Records a candidate dropped. A green one (alone, with nothing landed)
-/// may have its head saying it's landing, from a step stopped before its
-/// merge: that goes to pending first, since the candidate isn't landing it
-/// any more.
+/// Records a candidate dropped. A green one (alone, or green on passes
+/// nobody attested) may have its next head saying it's landing, from a step
+/// stopped before its merge: that goes to pending first, since the
+/// candidate isn't landing it any more.
 fn dropped(
     store: &mut Store,
     forge: &dyn Forge,
@@ -429,8 +429,7 @@ pub struct Landing {
 pub enum Now {
     /// Nothing waits and nothing's in flight.
     Idle,
-    /// The candidate's gate is running, on its train branch: a green one's
-    /// again when its green came without its passes attested.
+    /// The candidate's gate is running, on its train branch.
     Gating {
         candidate: CandidateId,
         branch: String,
@@ -576,7 +575,15 @@ pub fn step(
                     forge.create_branch(&full, &branch, c.commit.as_str())?;
                 }
                 match gate(store, forge, source, config, settings, &c)? {
-                    Gate::Waiting(waiting) => break gating(store, &c, waiting),
+                    Gate::Waiting(waiting) => {
+                        break Now::Gating {
+                            candidate: id,
+                            prs: c.changes.iter().map(|m| pr_of(store, m.change)).collect(),
+                            branch,
+                            commit: c.commit.clone(),
+                            waiting,
+                        };
+                    }
                     Gate::Green => {
                         store.record(Body::Verdict {
                             candidate: id,
@@ -601,16 +608,9 @@ pub fn step(
                 }
             }
             State::Green => {
-                if let Some(now) = land_next(
-                    store,
-                    forge,
-                    source,
-                    config,
-                    settings,
-                    &trunk,
-                    &c,
-                    &mut stepped,
-                )? {
+                if let Some(now) =
+                    land_next(store, forge, source, config, &trunk, &c, &mut stepped)?
+                {
                     break now;
                 }
             }
@@ -619,18 +619,6 @@ pub fn step(
     };
     clean(store, forge, repo)?;
     Ok(stepped)
-}
-
-/// A candidate whose gate is running, on its train branch, waiting on
-/// these.
-fn gating(store: &Store, c: &Candidate, waiting: Vec<String>) -> Now {
-    Now::Gating {
-        candidate: c.id,
-        branch: train_branch(c.id),
-        commit: c.commit.clone(),
-        prs: c.changes.iter().map(|m| pr_of(store, m.change)).collect(),
-        waiting,
-    }
 }
 
 fn pr_of(store: &Store, change: ChangeId) -> u64 {

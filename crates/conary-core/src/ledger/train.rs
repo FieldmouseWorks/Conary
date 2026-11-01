@@ -76,6 +76,15 @@ impl Candidate {
         matches!(self.state, State::Gating | State::Green)
     }
 
+    /// Whether it's green on passes nobody attested: its gate said so before
+    /// a required check's pass counted only with its producer's
+    /// attestation. A gate says green now only with each required check's
+    /// pass attested and kept in the evidence, and a train requires at
+    /// least one, so such a green holds none.
+    pub fn green_unattested(&self) -> bool {
+        self.state == State::Green && self.evidence.iter().all(|e| e.attest.is_none())
+    }
+
     /// Whether trunk ended on the candidate's own tree after its last
     /// landing, so that its evidence is about that landing's tree. The
     /// landings before it made trees no gate ran on.
@@ -384,8 +393,10 @@ impl Ledger {
         match (&c.state, verdict) {
             (State::Gating, _) => Ok(()),
             // Green alone, but trunk moved before it landed: its gate was
-            // for a tree it won't make, so it's built again.
-            (State::Green, Verdict::Dropped) if c.alone => Ok(()),
+            // for a tree it won't make, so it's built again. Or green on
+            // passes nobody attested: what's left of it is built again, and
+            // gated as a candidate is now.
+            (State::Green, Verdict::Dropped) if c.alone || c.green_unattested() => Ok(()),
             _ => Err(Invalid::NotGating),
         }
     }

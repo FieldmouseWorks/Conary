@@ -347,11 +347,11 @@ so the wait is one run, however many are waiting.
   proof jobs sign theirs, and a train that requires nothing doesn't step.
   No check at all is no pass, and a required pass with no attestation that
   holds waits, so a gate that never attests is a stall, never a landing. A
-  green whose evidence holds no such attestation, said before passes needed
-  one, is gated again before anything of it merges, and waits the same way.
-  A check is a run's name in its suite, whose latest run (by GitHub's id) is
-  its word, or a status's context, whose latest status is; a run and a
-  status of one name are two checks.
+  green whose evidence holds no attestation at all, said before passes
+  needed one, merges nothing more: it's dropped, and what's left of it is
+  built and gated again. A check is a run's name in its suite, whose latest
+  run (by GitHub's id) is its word, or a status's context, whose latest
+  status is; a run and a status of one name are two checks.
 - **Green.** Each change lands in order, through its own PR's merge at the
   head the candidate holds, with the train's status, `conary/train`, on that
   head first. A train repo's rules require that status, so nothing lands its
@@ -432,9 +432,10 @@ a refused merge is held: it can't join again at that revision, so it never
 rebuilds the candidate it failed in. A new head lets it go, and for a
 conflict, an empty merge or a refusal so does trunk moving, or, for a
 conflict or an empty merge, one of the changes it was merged after leaving. A candidate's `verdict` is green, red or dropped:
-dropped is a gate that never finished, the stall watchdog's last word, or a
-green candidate alone whose trunk moved before it landed, and its changes
-wait again as they joined. A landing is the candidate's when it lands the
+dropped is a gate that never finished, the stall watchdog's last word, a
+green candidate alone whose trunk moved before it landed, or a green one on
+passes nobody attested, and its changes that haven't landed wait again as
+they joined. A landing is the candidate's when it lands the
 next of its changes, in order, at that revision (onto its base, for one
 alone), after the verdict said green; any other landing stops it. `finish`
 records the tree trunk ended on once the last of them has.
