@@ -1,0 +1,89 @@
+{
+  "conary": "note v1",
+  "change": "3ysb5qsx9t8nxbgs8fv8wwnjkd",
+  "repo": {
+    "owner": "fieldmouseworks",
+    "name": "conary"
+  },
+  "pr": 150,
+  "url": "https://github.com/fieldmouseworks/conary/pull/150",
+  "summary": "deps: lock file maintenance (nix)",
+  "task": null,
+  "author": {
+    "kind": "bot",
+    "login": "fieldmouseworks-workers[bot]",
+    "session": null
+  },
+  "landing": {
+    "revision": "cf5488a9d989602e201878e2d0d85c867404fce22ea58988fd6e1489d0d3a142",
+    "before": "2455c41f2f382159af2057eb425e36e6460078e0",
+    "after": "76447730a0545ac4d4396fe2fb0014916587f1af",
+    "by": {
+      "kind": "status",
+      "login": "fieldmouseworks-steward[bot]"
+    },
+    "at": 1793528154329
+  },
+  "evidence": [
+    {
+      "kind": "ci",
+      "check": "renovate/stability-days",
+      "result": "pass",
+      "source": "https://docs.renovatebot.com/key-concepts/minimum-release-age/"
+    },
+    {
+      "kind": "ci",
+      "check": "check / lane into main",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/41296208139/job/124817484210"
+    },
+    {
+      "kind": "ci",
+      "check": "check / commits",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/41296208139/job/124817484016"
+    },
+    {
+      "kind": "ci",
+      "check": "house",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/41296207869/job/124817482991"
+    },
+    {
+      "kind": "ci",
+      "check": "house/title (#150)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/41296207869"
+    },
+    {
+      "kind": "ci",
+      "check": "house/rust-first (#150)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/41296207869"
+    },
+    {
+      "kind": "ci",
+      "check": "house/timers (#150)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/41296207869"
+    },
+    {
+      "kind": "ci",
+      "check": "house/file-size (#150)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/41296207869"
+    },
+    {
+      "kind": "ci",
+      "check": "house/model-names (#150)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/41296207869"
+    },
+    {
+      "kind": "ci",
+      "check": "check / check",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/41296208139/job/124817504093"
+    }
+  ]
+}
