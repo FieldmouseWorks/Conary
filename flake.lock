@@ -9,11 +9,11 @@
         "rust-overlay": "rust-overlay"
       },
       "locked": {
-        "lastModified": 1793517176,
-        "narHash": "sha256-BYkbQtk8+wksuohvNh+o+XddwTAXuq0PkQuPpCMVRbg=",
+        "lastModified": 1793518727,
+        "narHash": "sha256-C2067KaG0SSqQVKVMRbH3PHqXJjkyWMlq/rtDN10nto=",
         "ref": "refs/heads/main",
-        "rev": "804637ac4a366b94b057c49637bef665fdabfd83",
-        "revCount": 347,
+        "rev": "2011dee49251fe58ea9378ac0aa8e0a1c053953c",
+        "revCount": 349,
         "type": "git",
         "url": "https://github.com/FieldmouseWorks/burrow"
       },
@@ -63,10 +63,10 @@
     },
     "nixpkgs": {
       "locked": {
-        "lastModified": 1793294725,
-        "narHash": "sha256-loLMnbbS4KhmG2ln9EY6f0YMNCA273Yx02oWYQ9IMeE=",
+        "lastModified": 1793410479,
+        "narHash": "sha256-HzgjxrLY4AEc0044ZuM5CHbLSWLZgDlay1idmzvvpJs=",
         "ref": "nixos-26.05",
-        "rev": "6f06d204d8f2d8761d9da78778745974a3216381",
+        "rev": "fa1373130d5a21c040a47c5dbe1913d59ed91808",
         "shallow": true,
         "type": "git",
         "url": "https://github.com/NixOS/nixpkgs"
