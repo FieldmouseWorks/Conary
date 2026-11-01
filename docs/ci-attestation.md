@@ -120,8 +120,10 @@ revision, yet.
      `runner_environment`, which the certificate carries too, is
      `github-hosted`); or
    - a self-hosted runner registered just in time for that one job, in a
-     user and a state directory nothing ran in before, which the repo's
-     policy names as fresh. GitHub's record of the job
+     user and a state directory nothing ran in before, whose name starts
+     with what the machine running the train names its fresh runners by
+     (`CONARY_FRESH_RUNNERS`, or `cn train step --fresh-runners`). GitHub's
+     record of the job
      (`GET /repos/{owner}/{repo}/actions/jobs/{job}`) says which runner took
      it, and only the launcher that starts fresh runners registers ones with
      a name the policy takes: registering a runner takes the repo's or the
