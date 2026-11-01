@@ -424,6 +424,27 @@ mod tests {
         assert!(args.iter().all(|a| a.is_hide_env_values_set()));
     }
 
+    // Which runners were started fresh is the machine's to say, for every
+    // cn it runs: a cn that doesn't count by it yet ignores it, where it
+    // would refuse a flag it doesn't know.
+    #[test]
+    fn the_fresh_runners_are_a_machine_setting() {
+        use clap::CommandFactory;
+        let cli = Cli::command();
+        let step = cli
+            .find_subcommand("train")
+            .and_then(|t| t.find_subcommand("step"))
+            .expect("cn train step");
+        let fresh = step
+            .get_arguments()
+            .find(|a| a.get_long() == Some("fresh-runners"))
+            .expect("--fresh-runners");
+        assert_eq!(
+            fresh.get_env().and_then(|e| e.to_str()),
+            Some("CONARY_FRESH_RUNNERS")
+        );
+    }
+
     #[test]
     fn the_token_command_then_gh_token_then_github_token_and_an_empty_one_is_none() {
         let token = |command, gh, github| {

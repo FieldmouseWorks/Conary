@@ -74,7 +74,9 @@ pub enum TrainCommand {
         /// job starts with, as the launcher of such runners names them. A
         /// required pass counts only from such a runner or one of GitHub's
         /// own: one that took a job before it could have signed in its name.
-        #[arg(long = "fresh-runners", value_name = "PREFIX", value_parser = clap::builder::NonEmptyStringValueParser::new())]
+        /// A machine setting, like the ledger's: one with such runners sets
+        /// it for every `cn`.
+        #[arg(long = "fresh-runners", env = "CONARY_FRESH_RUNNERS", value_name = "PREFIX", value_parser = clap::builder::NonEmptyStringValueParser::new())]
         fresh: Option<String>,
         #[command(flatten)]
         github: GithubArgs,
