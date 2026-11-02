@@ -168,6 +168,20 @@ pub enum Verdict {
     Dropped,
 }
 
+/// What asked for an undo (`docs/DESIGN.md` section 5), which is what its
+/// revert reverts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "by", rename_all = "snake_case")]
+pub enum Asked {
+    /// One change.
+    Change,
+    /// Every change one agent session landed, in its repo.
+    Actor { session: String },
+    /// Everything that landed on its repo's trunk after `since`
+    /// (milliseconds since the Unix epoch, as the landings' ops say it).
+    Since { since: i64 },
+}
+
 /// The body of an operation: what happened.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
@@ -279,6 +293,14 @@ pub enum Body {
         candidate: CandidateId,
         tree: TreeId,
     },
+    /// `change` is an undo: its PR reverts `reverts`, landed changes in its
+    /// repo, because `asked` asked for them. Once it lands they're
+    /// reverted, and they're landed again if it's undone in turn.
+    Undo {
+        change: ChangeId,
+        reverts: Vec<ChangeId>,
+        asked: Asked,
+    },
 }
 
 impl Body {
@@ -293,7 +315,8 @@ impl Body {
             | Self::Close { change }
             | Self::Reopen { change }
             | Self::Join { change, .. }
-            | Self::Leave { change, .. } => Some(*change),
+            | Self::Leave { change, .. }
+            | Self::Undo { change, .. } => Some(*change),
             Self::Outside { .. }
             | Self::Candidate { .. }
             | Self::CandidateEvidence { .. }

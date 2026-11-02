@@ -211,7 +211,9 @@ pub(super) fn stopped_landing(
         let description = match (now.status(), now.landing.as_ref()) {
             // Through it: retired below, as its last landing.
             (_, Some(l)) if l.candidate == Some(c.id) => None,
-            (Status::Landed, _) => Some(format!("landed, though not with candidate {}", c.id)),
+            (Status::Landed | Status::Reverted, _) => {
+                Some(format!("landed, though not with candidate {}", c.id))
+            }
             (Status::Closed, _) => Some(format!("closed, so candidate {} isn't landing it", c.id)),
             (Status::Open, _) => {
                 let at = forge

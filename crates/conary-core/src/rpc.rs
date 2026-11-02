@@ -153,6 +153,8 @@ pub fn summary(c: &Change) -> Value {
         "summary": c.intent.as_ref().map(|i| &i.summary),
         "task": c.intent.as_ref().and_then(|i| i.task.as_ref()),
         "landed": c.landing.as_ref().map(|l| l.after.to_string()),
+        "reverts": c.undo.as_ref().map(|u| &u.reverts),
+        "reverted_by": c.reverted_by,
     })
 }
 

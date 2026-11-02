@@ -10,6 +10,13 @@ fn c(n: &str) -> CommitId {
 /// A ledger holding two changes on o/r: 1, landed with evidence on two
 /// revisions, from session s; and 2, open, by a person.
 fn ledger() -> (Ledger, ChangeId, RevisionId) {
+    ledger_then(|_, _| Vec::new())
+}
+
+/// [`ledger`]'s, then what `more` gives for changes 1 and 2.
+fn ledger_then(
+    more: impl FnOnce(ChangeId, ChangeId) -> Vec<Body>,
+) -> (Ledger, ChangeId, RevisionId) {
     let dir = tempfile::tempdir().unwrap();
     let mut store = Store::open(
         crate::log::Lock::take(dir.path()).unwrap(),
@@ -64,7 +71,10 @@ fn ledger() -> (Ledger, ChangeId, RevisionId) {
             },
         },
         observe(two, 2, ActorKind::Person, None),
-    ] {
+    ]
+    .into_iter()
+    .chain(more(one, two))
+    {
         store.record(body).unwrap();
     }
     (store.ledger().clone(), one, landed)
@@ -255,4 +265,39 @@ fn a_notification_gets_no_response() {
     assert!(answer(line, || Ok(&ledger)).is_none());
     // Not even when it fails.
     assert!(answer(r#"{"jsonrpc":"2.0","method":"nope"}"#, || Ok(&ledger)).is_none());
+}
+
+#[test]
+fn an_undo_and_what_it_reverts_name_each_other() {
+    // Change 2 is the undo of 1, and has landed.
+    let (ledger, one, _) = ledger_then(|one, two| {
+        vec![
+            Body::Revision {
+                change: two,
+                base: c("d"),
+                head: c("e"),
+            },
+            Body::Undo {
+                change: two,
+                reverts: vec![one],
+                asked: crate::op::Asked::Change,
+            },
+            Body::Land {
+                change: two,
+                revision: RevisionId::new(&c("d"), &c("e")),
+                before: c("d"),
+                after: c("f"),
+                by: Authority::Status {
+                    login: "steward".into(),
+                },
+            },
+        ]
+    });
+    let two = ledger.by_pr(&"o/r".parse().unwrap(), 2).unwrap().id;
+    let list = call(&ledger, "change.list", &json!(null)).unwrap();
+    assert_eq!(list[0]["status"], "reverted");
+    assert_eq!(list[0]["reverted_by"], two.to_string());
+    assert_eq!(list[1]["reverts"], json!([one.to_string()]));
+    let reverted = call(&ledger, "change.list", &json!({"status": "reverted"})).unwrap();
+    assert_eq!(prs(&reverted), [1]);
 }
