@@ -296,7 +296,7 @@ impl Ledger {
     pub(super) fn check_join(&self, change: ChangeId, revision: RevisionId) -> Result<(), Invalid> {
         let c = self.existing(change)?;
         match c.status() {
-            Status::Landed => return Err(Invalid::AlreadyLanded),
+            Status::Landed | Status::Reverted => return Err(Invalid::AlreadyLanded),
             Status::Closed => return Err(Invalid::Closed),
             Status::Open => {}
         }

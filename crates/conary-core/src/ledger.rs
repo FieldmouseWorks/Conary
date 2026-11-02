@@ -11,8 +11,10 @@ use crate::id::{CandidateId, ChangeId, CommitId, OpId, RevisionId};
 use crate::op::{Actor, Authority, Body, CheckKind, Op, Outcome, Repo};
 
 mod train;
+mod undo;
 
 pub use train::{Candidate, CandidateEvidence, Held, Plan, State, Train};
+pub use undo::Undo;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Intent {
@@ -57,6 +59,8 @@ pub enum Status {
     Open,
     Closed,
     Landed,
+    /// Landed, and an undo of it has landed since, itself not undone.
+    Reverted,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -75,6 +79,15 @@ pub struct Change {
     pub current: Option<RevisionId>,
     pub evidence: Vec<Evidence>,
     pub landing: Option<Landing>,
+    /// What it reverts, when it's an undo.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub undo: Option<Undo>,
+    /// The undos recorded of it, oldest first, landed or not.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub undone_by: Vec<ChangeId>,
+    /// The landed undo of it in effect, one that hasn't been undone itself.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reverted_by: Option<ChangeId>,
     #[serde(skip)]
     closed: bool,
 }
@@ -82,6 +95,7 @@ pub struct Change {
 impl Change {
     pub fn status(&self) -> Status {
         match (&self.landing, self.closed) {
+            (Some(_), _) if self.reverted_by.is_some() => Status::Reverted,
             (Some(_), _) => Status::Landed,
             (None, true) => Status::Closed,
             (None, false) => Status::Open,
@@ -135,6 +149,23 @@ pub enum Invalid {
     NotLanded,
     /// The change left its train and can't join again as it is.
     Held(Held),
+    /// An undo that reverts nothing.
+    NothingToUndo,
+    /// The change is an undo already.
+    AlreadyUndo,
+    /// An undo can't revert itself, or a change twice.
+    UndoRepeats(ChangeId),
+    /// That change is in another repo than its undo.
+    OtherRepo(ChangeId),
+    /// That change hasn't landed, so there's nothing to revert.
+    NotLandedYet(ChangeId),
+    /// That change already has an undo, open or landed and in effect.
+    AlreadyUndone {
+        change: ChangeId,
+        by: ChangeId,
+    },
+    /// That change isn't one of the ones the undo was asked for.
+    NotAsked(ChangeId),
 }
 
 impl std::fmt::Display for Invalid {
@@ -158,6 +189,15 @@ impl std::fmt::Display for Invalid {
                 f.write_str("not every change in that candidate has landed through it")
             }
             Self::Held(why) => write!(f, "the change can't join its train again: {why}"),
+            Self::NothingToUndo => f.write_str("the undo reverts nothing"),
+            Self::AlreadyUndo => f.write_str("the change is an undo already"),
+            Self::UndoRepeats(id) => write!(f, "the undo names {id} twice, or itself"),
+            Self::OtherRepo(id) => write!(f, "change {id} is in another repo than its undo"),
+            Self::NotLandedYet(id) => write!(f, "change {id} hasn't landed"),
+            Self::AlreadyUndone { change, by } => {
+                write!(f, "change {change} already has an undo, {by}")
+            }
+            Self::NotAsked(id) => write!(f, "change {id} isn't what the undo was asked for"),
         }
     }
 }
@@ -281,7 +321,7 @@ impl Ledger {
             } => {
                 let c = self.existing(*change)?;
                 match c.status() {
-                    Status::Landed => return Err(Invalid::AlreadyLanded),
+                    Status::Landed | Status::Reverted => return Err(Invalid::AlreadyLanded),
                     Status::Closed => return Err(Invalid::Closed),
                     Status::Open => {}
                 }
@@ -294,7 +334,7 @@ impl Ledger {
             }
             Body::Outside { .. } => {}
             Body::Close { change } => match self.existing(*change)?.status() {
-                Status::Landed => return Err(Invalid::AlreadyLanded),
+                Status::Landed | Status::Reverted => return Err(Invalid::AlreadyLanded),
                 Status::Closed => return Err(Invalid::Closed),
                 Status::Open => {}
             },
@@ -331,6 +371,11 @@ impl Ledger {
             )?,
             Body::Verdict { candidate, verdict } => self.check_verdict(*candidate, *verdict)?,
             Body::Finish { candidate, .. } => self.check_finish(*candidate)?,
+            Body::Undo {
+                change,
+                reverts,
+                asked,
+            } => self.check_undo(*change, reverts, asked)?,
         }
         Ok(())
     }
@@ -339,7 +384,7 @@ impl Ledger {
     pub(crate) fn apply(&mut self, op: &Op) {
         let at = op.op.at;
         self.head = Some(op.id);
-        if self.apply_train(&op.op.body, at) {
+        if self.apply_train(&op.op.body, at) || self.apply_undo(&op.op.body, at) {
             return;
         }
         // What a change's new head, close or landing does to its train.
@@ -380,6 +425,9 @@ impl Ledger {
                             current: None,
                             evidence: Vec::new(),
                             landing: None,
+                            undo: None,
+                            undone_by: Vec::new(),
+                            reverted_by: None,
                             closed: false,
                         },
                     );
@@ -471,6 +519,11 @@ impl Ledger {
             | Body::CandidateEvidence { .. }
             | Body::Verdict { .. }
             | Body::Finish { .. } => unreachable!("apply_train applies the train's ops"),
+            Body::Undo { .. } => unreachable!("apply_undo applies undo"),
+        }
+        // An undo that lands reverts what it names.
+        if let Body::Land { change, .. } = &op.op.body {
+            self.landed_undo(*change);
         }
     }
 }

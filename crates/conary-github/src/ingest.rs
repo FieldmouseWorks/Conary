@@ -215,7 +215,7 @@ pub fn sync(
 fn settled(ledger: &Ledger, c: &Change, pr: &PullRequest, revision: RevisionId) -> bool {
     let finished = match c.status() {
         Status::Open => false,
-        Status::Landed => pr.is_merged(),
+        Status::Landed | Status::Reverted => pr.is_merged(),
         // Closed without landing, or merged without a landing: into another
         // branch, or pushed to trunk outside a merge.
         Status::Closed => {
