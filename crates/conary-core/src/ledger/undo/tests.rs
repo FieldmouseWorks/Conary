@@ -238,6 +238,19 @@ fn a_change_takes_another_undo_only_once_its_last_closed_without_landing() {
     );
     b.ok(Body::Close { change: third });
     b.ok(Body::Reopen { change: dropped });
+    // One closed without landing reverts nothing, so it's recorded beside
+    // the one in its place, and can't reopen while that one is open.
+    let late = b.change();
+    b.ok(Body::Close { change: late });
+    b.undo(late, &[y], Asked::Change).unwrap();
+    assert_eq!(b.status(y), Status::Landed);
+    assert_eq!(
+        b.record(Body::Reopen { change: late }),
+        Err(Invalid::AlreadyUndone {
+            change: y,
+            by: dropped
+        })
+    );
 }
 
 #[test]

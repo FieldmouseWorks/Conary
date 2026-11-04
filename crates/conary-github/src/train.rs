@@ -19,16 +19,13 @@ use conary_core::{CandidateId, ChangeId, CommitId, Store, TreeId};
 
 use crate::api::{ApiError, Source};
 use crate::attest::Actions;
+use crate::branches::{BRANCHES, Branches, Merged};
 use crate::ingest::{self, Config, IngestError};
 
 mod gate;
 mod land;
 use gate::{Gate, gate};
 use land::{land_next, open_landing, stopped_landing};
-
-/// Every candidate's branches are under here, so a step can tell its own
-/// from anyone else's.
-pub const BRANCHES: &str = "conary/";
 
 /// Where a candidate is built, one merge at a time.
 pub fn build_branch(id: CandidateId) -> String {
@@ -71,35 +68,10 @@ pub enum PrMerge {
     Refused(String),
 }
 
-/// What a merge onto a branch did.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Merged {
-    /// The merge commit, and its tree.
-    Commit { sha: String, tree: String },
-    /// The branch already holds that head.
-    Already,
-    /// It won't merge.
-    Conflict,
-}
-
 /// The train's writes on GitHub, and the reads it needs that ingest
-/// doesn't: its [`Actions`] ones too, to check its candidates'
-/// attestations. Branches are named without `refs/heads/`.
-pub trait Forge: Actions {
-    /// The repo's default branch: trunk, which the train builds on and lands
-    /// onto, as GitHub says it is now.
-    fn default_branch(&self, repo: &str) -> Result<String, ApiError>;
-    /// The commit a branch is at, if it's there.
-    fn branch(&self, repo: &str, name: &str) -> Result<Option<String>, ApiError>;
-    /// Every branch whose name starts with `prefix`.
-    fn branches(&self, repo: &str, prefix: &str) -> Result<Vec<String>, ApiError>;
-    fn create_branch(&self, repo: &str, name: &str, sha: &str) -> Result<(), ApiError>;
-    /// Deletes a branch; one that's already gone is fine.
-    fn delete_branch(&self, repo: &str, name: &str) -> Result<(), ApiError>;
-    /// Merges `head`, a commit, into the branch `into`.
-    fn merge(&self, repo: &str, into: &str, head: &str, message: &str) -> Result<Merged, ApiError>;
-    /// A commit's tree.
-    fn tree(&self, repo: &str, sha: &str) -> Result<String, ApiError>;
+/// doesn't: a repo's [`Branches`], and its [`Actions`] ones too, to check
+/// its candidates' attestations.
+pub trait Forge: Branches + Actions {
     /// Puts the train's status ([`CONTEXT`]) on a commit.
     fn mark(
         &self,

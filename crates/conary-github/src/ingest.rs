@@ -11,12 +11,12 @@ use std::sync::LazyLock;
 use regex::Regex;
 
 use conary_core::ledger::{Change, Invalid, Ledger, Status};
-use conary_core::op::{Actor, ActorKind, Authority, Body, CheckKind, Outcome, Repo};
+use conary_core::op::{Actor, ActorKind, Asked, Authority, Body, CheckKind, Outcome, Repo};
 use conary_core::store::StoreError;
 use conary_core::{ChangeId, CommitId, RevisionId, Store};
 
 use crate::api::{
-    ApiError, CheckRun, Commit, PullRequest, Pulls, Review, Source, Status as CommitStatus,
+    ApiError, CheckRun, Commit, Event, PullRequest, Pulls, Review, Source, Status as CommitStatus,
 };
 use crate::bases::{BasesError, MergeBases};
 
@@ -246,6 +246,10 @@ fn commit(sha: &str) -> Result<CommitId, IngestError> {
 struct Writer<'a> {
     store: &'a mut Store,
     recorded: usize,
+    /// Where the PR came from, so a competing undo can be read again.
+    source: &'a dyn Source,
+    config: &'a Config,
+    repo: &'a Repo,
 }
 
 impl Writer<'_> {
@@ -260,11 +264,105 @@ impl Writer<'_> {
         }
     }
 
-    /// Records the change reopened: true unless it's an undo whose changes
-    /// took another undo while it was closed. That one stays closed here,
-    /// so the train never takes it, and its merge, if it comes, is trunk
-    /// moving outside Conary.
-    fn reopen(&mut self, change: ChangeId) -> Result<bool, IngestError> {
+    /// Records the change as `x`'s undo, as its branch says, unless it's
+    /// recorded as one already. Another undo of `x` in effect, it's closed
+    /// first, so it's recorded beside that one and has to make way to land.
+    /// A branch naming what can't be undone is only a name.
+    fn undo(&mut self, change: ChangeId, x: ChangeId) -> Result<(), IngestError> {
+        let held = self.store.ledger().change(change);
+        if held.is_some_and(|c| c.undo.is_some()) {
+            return Ok(());
+        }
+        let undo = || Body::Undo {
+            change,
+            reverts: vec![x],
+            asked: Asked::Change,
+        };
+        let refused = |e: &IngestError| matches!(e, IngestError::Store(StoreError::Invalid(_)));
+        match self.record(undo()) {
+            Err(IngestError::Store(StoreError::Invalid(Invalid::AlreadyUndone { .. }))) => {
+                self.record(Body::Close { change })?;
+                self.record(undo())
+                    .or_else(|e| if refused(&e) { Ok(()) } else { Err(e) })
+            }
+            Err(e) if refused(&e) => Ok(()),
+            got => got,
+        }
+    }
+
+    /// Whether the change can take effect: true unless it's an undo with
+    /// another undo of what it reverts in its way, and recorded reopened if
+    /// the ledger holds it closed. One in its way stays closed here, so the
+    /// train never takes it, and its merge, if it comes, is trunk moving
+    /// outside Conary.
+    ///
+    /// Landing at `merged`, another undo is in its way if it landed on trunk
+    /// first, by the ledger or by GitHub's merge times. Held closed here, one
+    /// open on GitHub then is in its way too: it was in effect, or racing
+    /// this one. GitHub's timelines say which, so the order PRs are read in
+    /// can't let a later closing make way for a merge it didn't, or a later
+    /// merge win over an earlier one. Reopened as an open PR, another is in
+    /// its way if it's landed, or the ledger holds it open and GitHub
+    /// doesn't show it closed now: a sync reads open PRs before closed ones,
+    /// so the ledger's word alone is no reason to keep this one closed. One
+    /// the ledger holds open that GitHub shows out of the way is recorded
+    /// closed first.
+    fn make_way(&mut self, change: ChangeId, merged: Option<&str>) -> Result<bool, IngestError> {
+        let ledger = self.store.ledger();
+        let held = ledger.change(change).expect("observed");
+        let held_open = held.status() == Status::Open;
+        let mut rivals: Vec<(ChangeId, u64, Status)> = Vec::new();
+        for &id in held.undo.as_ref().map_or(&[][..], |u| &u.reverts) {
+            let undos = &ledger
+                .change(id)
+                .expect("an undo's changes are held")
+                .undone_by;
+            for &u in undos {
+                let c = ledger.change(u).expect("its undos are held");
+                if u != change && !rivals.iter().any(|&(r, ..)| r == u) {
+                    rivals.push((u, c.pr, c.status()));
+                }
+            }
+        }
+        let full = self.repo.to_string();
+        let mut stale = Vec::new();
+        for (rival, number, status) in rivals {
+            match status {
+                Status::Landed | Status::Reverted => return Ok(false),
+                Status::Closed if merged.is_none() => continue,
+                Status::Open | Status::Closed => {}
+            }
+            let pr = self.source.pull(&full, number)?;
+            // A merge in the same second could be either side: it may have.
+            let first = pr.is_merged()
+                && pr.targets_trunk()
+                && merged.is_none_or(|at| pr.merged_at.as_deref().is_none_or(|m| m <= at));
+            let open = !held_open
+                && match merged {
+                    Some(at) => open_at(&pr, &self.source.timeline(&full, number)?, at),
+                    None => pr.state == "open",
+                };
+            if first || open {
+                return Ok(false);
+            }
+            if status == Status::Open {
+                stale.push((rival, number, pr.state == "open"));
+            }
+        }
+        if held_open {
+            return Ok(true);
+        }
+        for (rival, number, open) in stale {
+            if open {
+                // Closed when this one merged, it reopened since, too late
+                // to stand in its way: read then, its reopening would have
+                // been refused.
+                self.record(Body::Close { change: rival })?;
+            } else {
+                let (source, config, repo) = (self.source, self.config, self.repo);
+                self.recorded += pull(self.store, source, config, repo, number)?.recorded;
+            }
+        }
         match self.record(Body::Reopen { change }) {
             Err(IngestError::Store(StoreError::Invalid(Invalid::AlreadyUndone { .. }))) => {
                 Ok(false)
@@ -272,6 +370,40 @@ impl Writer<'_> {
             got => got.map(|()| true),
         }
     }
+}
+
+/// When the PR's base branch was last changed, if it ever was.
+fn retargeted(timeline: &[Event]) -> Option<String> {
+    timeline
+        .iter()
+        .filter(|e| e.event.as_deref() == Some("base_ref_changed"))
+        .filter_map(|e| e.created_at.clone())
+        .max()
+}
+
+/// Whether a PR may have been open at `at`, by its timeline: opened by then,
+/// and reopened since it last closed before then, or never closed. GitHub
+/// gives times to the second, so a turn in that second, or one it gives no
+/// time for, could be either side, and it may have been.
+fn open_at(pr: &PullRequest, timeline: &[Event], at: &str) -> bool {
+    if pr.created_at.as_deref().is_some_and(|c| c > at) {
+        return false;
+    }
+    let mut last: Option<(&str, bool)> = None;
+    for e in timeline {
+        let open = match e.event.as_deref() {
+            Some("closed") => false,
+            Some("reopened") => true,
+            _ => continue,
+        };
+        let Some(t) = e.created_at.as_deref().filter(|&t| t != at) else {
+            return true;
+        };
+        if t < at && last.is_none_or(|(l, _)| t >= l) {
+            last = Some((t, open));
+        }
+    }
+    last.is_none_or(|(_, open)| open)
 }
 
 fn record(
@@ -283,7 +415,13 @@ fn record(
     base: CommitId,
 ) -> Result<Ingested, IngestError> {
     let full = repo.to_string();
-    let mut w = Writer { store, recorded: 0 };
+    let mut w = Writer {
+        store,
+        recorded: 0,
+        source,
+        config,
+        repo,
+    };
     let body = pr.body.clone().unwrap_or_default();
 
     let change = match w.store.ledger().by_pr(repo, pr.number) {
@@ -313,12 +451,24 @@ fn record(
         base: base.clone(),
         head: head.clone(),
     })?;
+    // `cn undo` names what its PR reverts in its branch, so the PR is read
+    // as an undo whatever reads it first. A fork's branch is anyone's to
+    // name.
+    let own = |r: &crate::api::RefRepo| {
+        let name = r.full_name.as_deref().and_then(|n| n.parse::<Repo>().ok());
+        name.as_ref() == Some(repo)
+    };
+    if pr.head.repo.as_ref().is_some_and(own)
+        && let Some(x) = crate::undo::branch_undoes(&pr.head.name)
+    {
+        w.undo(change, x)?;
+    }
 
     // Results are read by head, and a head keeps its results when the PR is
     // retargeted, so they're bound to this revision only when they came
     // after the last retarget and aren't bound to another revision of this
     // head already. One whose revision can't be told is left out.
-    let since = source.retargeted(&full, pr.number)?;
+    let since = retargeted(&source.timeline(&full, pr.number)?);
     let current = |at: Option<&str>| since.as_deref().is_none_or(|s| at.is_some_and(|t| t >= s));
     let mut evidence = Vec::new();
     for run in source.check_runs(&full, head.as_str())? {
@@ -382,7 +532,7 @@ fn record(
     } else {
         match (pr.state.as_str(), status) {
             ("closed", Status::Open) => w.record(Body::Close { change })?,
-            ("open", Status::Closed) => _ = w.reopen(change)?,
+            ("open", Status::Closed) => _ = w.make_way(change, None)?,
             _ => {}
         }
     }
@@ -433,8 +583,8 @@ fn bound_elsewhere(c: &Change, revision: RevisionId, head: &CommitId, body: &Bod
 /// else that put it on trunk, an admin's bypass or a push straight to trunk,
 /// moved trunk outside a landing: that's recorded as a violation, from a
 /// trunk before GitHub doesn't say, and the change closes. So is the merge
-/// of an undo the ledger holds closed because what it reverts took another
-/// undo meanwhile. None of it depends on which PR is read first.
+/// of an undo with another undo of what it reverts in its way
+/// ([`Writer::make_way`]). None of it depends on which PR is read first.
 #[allow(clippy::too_many_arguments)]
 fn merged(
     w: &mut Writer,
@@ -490,7 +640,11 @@ fn merged(
     }
     if let (Some(by), true) = (settled, own) {
         let before = trunk_before(source, &full, pr.number, &landed)?;
-        if status != Status::Closed || w.reopen(change)? {
+        let at = pr
+            .merged_at
+            .as_deref()
+            .ok_or_else(|| IngestError::Malformed("a merged PR with no merge time".into()))?;
+        if w.make_way(change, Some(at))? {
             return w.record(Body::Land {
                 change,
                 revision,

@@ -27,6 +27,8 @@ pub struct Ref {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct RefRepo {
+    /// `owner/name`.
+    pub full_name: Option<String>,
     pub default_branch: String,
 }
 
@@ -38,6 +40,7 @@ pub struct PullRequest {
     pub body: Option<String>,
     pub user: User,
     pub merged: Option<bool>,
+    pub created_at: Option<String>,
     pub merged_at: Option<String>,
     pub merge_commit_sha: Option<String>,
     pub base: Ref,
@@ -154,10 +157,12 @@ struct PullNumber {
     number: u64,
 }
 
-#[derive(Debug, Deserialize)]
-struct TimelineEvent {
-    event: Option<String>,
-    created_at: Option<String>,
+/// Something that happened to a PR, from its timeline: retargeted, closed or
+/// reopened among the rest.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Event {
+    pub event: Option<String>,
+    pub created_at: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -219,8 +224,8 @@ pub trait Source {
     /// The PRs GitHub links a commit to: the one whose merge, squash or
     /// rebase made it, for a commit on trunk.
     fn commit_pulls(&self, repo: &str, sha: &str) -> Result<Vec<u64>, ApiError>;
-    /// When the PR's base branch was last changed, if it ever was.
-    fn retargeted(&self, repo: &str, number: u64) -> Result<Option<String>, ApiError>;
+    /// What happened to the PR, oldest first.
+    fn timeline(&self, repo: &str, number: u64) -> Result<Vec<Event>, ApiError>;
     /// The best common ancestor of two commits.
     fn merge_base(&self, repo: &str, a: &str, b: &str) -> Result<String, ApiError>;
 }
@@ -532,14 +537,8 @@ impl Source for Api {
         Ok(pulls.into_iter().map(|p| p.number).collect())
     }
 
-    fn retargeted(&self, repo: &str, number: u64) -> Result<Option<String>, ApiError> {
-        let events: Vec<TimelineEvent> =
-            self.pages(&format!("/repos/{repo}/issues/{number}/timeline"))?;
-        Ok(events
-            .into_iter()
-            .filter(|e| e.event.as_deref() == Some("base_ref_changed"))
-            .filter_map(|e| e.created_at)
-            .max())
+    fn timeline(&self, repo: &str, number: u64) -> Result<Vec<Event>, ApiError> {
+        self.pages(&format!("/repos/{repo}/issues/{number}/timeline"))
     }
 
     fn merge_base(&self, repo: &str, a: &str, b: &str) -> Result<String, ApiError> {
@@ -690,7 +689,7 @@ struct MergeCommit {
     commit: TreeCommit,
 }
 
-impl crate::train::Forge for Api {
+impl crate::branches::Branches for Api {
     fn default_branch(&self, repo: &str) -> Result<String, ApiError> {
         let r: Defaults = self.get(&format!("/repos/{repo}"))?;
         Ok(r.default_branch)
@@ -745,8 +744,8 @@ impl crate::train::Forge for Api {
         into: &str,
         head: &str,
         message: &str,
-    ) -> Result<crate::train::Merged, ApiError> {
-        use crate::train::Merged;
+    ) -> Result<crate::branches::Merged, ApiError> {
+        use crate::branches::Merged;
         let path = format!("/repos/{repo}/merges");
         let url = format!("{}{path}", self.base);
         let mut response = self
@@ -775,7 +774,9 @@ impl crate::train::Forge for Api {
         let commit: TreeCommit = self.get(&format!("/repos/{repo}/git/commits/{sha}"))?;
         Ok(commit.tree.sha)
     }
+}
 
+impl crate::train::Forge for Api {
     fn mark(
         &self,
         repo: &str,
@@ -835,6 +836,50 @@ impl crate::train::Forge for Api {
             }
             _ => Err(failed(&url, &mut response)),
         }
+    }
+}
+
+impl crate::undo::Reverts for Api {
+    fn make_commit(
+        &self,
+        repo: &str,
+        tree: &str,
+        parent: &str,
+        message: &str,
+    ) -> Result<String, ApiError> {
+        let made: GitObject = self.send(
+            false,
+            &format!("/repos/{repo}/git/commits"),
+            &serde_json::json!({"message": message, "tree": tree, "parents": [parent]}),
+        )?;
+        Ok(made.sha)
+    }
+
+    fn open_pull(
+        &self,
+        repo: &str,
+        head: &str,
+        base: &str,
+        title: &str,
+        body: &str,
+    ) -> Result<u64, ApiError> {
+        let made: PullNumber = self.send(
+            false,
+            &format!("/repos/{repo}/pulls"),
+            &serde_json::json!({"title": title, "head": head, "base": base, "body": body}),
+        )?;
+        Ok(made.number)
+    }
+
+    fn pulls_from(&self, repo: &str, head: &str) -> Result<Vec<u64>, ApiError> {
+        // `head` filters by OWNER:BRANCH, so a fork's branch of the same
+        // name is never taken for the repo's own. It matches a PR's head as
+        // it was opened, so a merged PR's deleted branch still finds it.
+        let owner = repo.split('/').next().unwrap_or(repo);
+        let found: Vec<PullNumber> = self.pages(&format!(
+            "/repos/{repo}/pulls?state=all&head={owner}:{head}&sort=created&direction=asc"
+        ))?;
+        Ok(found.into_iter().map(|p| p.number).collect())
     }
 }
 

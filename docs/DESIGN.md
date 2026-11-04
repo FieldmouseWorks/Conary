@@ -481,6 +481,19 @@ undoes, still opens its PR with the conflict, and a Claude job resolves it
 like any other finding. Undo of an R2 change waits for the owner like the
 change did.
 
+The revert is built the way the train builds a candidate, through GitHub's
+API, so nothing on the box runs git: a commit of the tree trunk had before
+the change landed, made on its landing, reverts that landing and nothing
+after it, and trunk is then merged into its branch,
+`conary/undo/<change>/<attempt>`. Where that merge conflicts, the PR opens
+at the bare revert. It takes its title from what it reverts, as
+`area: undo #N, sentence`. Before anything else, `undo` reads the change's
+undos as GitHub has them now, and theirs in turn, since an undo of an undo
+puts the change back: each one the ledger holds, closed ones too, and any
+PR a run that stopped before recording it left, open, closed or merged.
+So asked again, it finds the undo it opened rather than make another, and
+a closed one makes way for the next.
+
 The ledger records each undo as an op on its revert change: the changes it
 reverts, all landed in its repo, and what asked for it (a change, a session
 or a time, which each of them has to match). Once the undo lands, what it
@@ -488,7 +501,15 @@ reverts is `reverted`; undone in turn, they're landed again. A change takes
 one undo at a time, and once one has landed it's the only one: the change
 goes back and forth by undoing that undo, and undoing that, so no undo can
 come back into effect beside another. Only an undo closed without landing
-makes way for the next, and it can't reopen once one has taken its place.
+makes way for the next, and it can't reopen while one in its place is open
+or landed. An undo's merge lands only if no other undo of what it reverts
+landed on trunk first, and, for one held closed, none was open on GitHub
+when it merged, as their timelines tell, whatever order the PRs are read
+in: one that closed only after doesn't make way for it, and one that merged
+after doesn't win. Reverting nothing, a closed one is recorded whenever
+it's found, beside whatever took its place. Ingest knows an undo's PR by
+the branch `undo` made it on, in the repo itself, so one read before `undo`
+records it is judged as an undo all the same.
 An undo that leads back to itself through what its undos revert is refused.
 
 ## 6. The landing flow

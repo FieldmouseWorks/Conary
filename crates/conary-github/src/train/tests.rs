@@ -5,7 +5,7 @@ use ed25519_dalek::SigningKey;
 use serde_json::{Value, json};
 
 use super::*;
-use crate::api::{CheckRun, Commit, PullRequest, Pulls, Review, Status as CommitStatus};
+use crate::api::{CheckRun, Commit, Event, PullRequest, Pulls, Review, Status as CommitStatus};
 use crate::attest::{ARTIFACT, Artifact, FILE, Job, Key, SIGNER_REPO, testing};
 
 const TRUNK: &str = "1111111111111111111111111111111111111111";
@@ -332,8 +332,8 @@ impl Source for Hub {
             .collect())
     }
 
-    fn retargeted(&self, _: &str, _: u64) -> Result<Option<String>, ApiError> {
-        Ok(None)
+    fn timeline(&self, _: &str, _: u64) -> Result<Vec<Event>, ApiError> {
+        Ok(Vec::new())
     }
 
     /// On burrow, a commit on its default branch is behind the tip; the
@@ -390,7 +390,7 @@ impl Actions for Hub {
     }
 }
 
-impl Forge for Hub {
+impl Branches for Hub {
     fn default_branch(&self, repo: &str) -> Result<String, ApiError> {
         if repo == SIGNER_REPO {
             return Ok("main".into());
@@ -453,7 +453,9 @@ impl Forge for Hub {
     fn tree(&self, _: &str, sha: &str) -> Result<String, ApiError> {
         Ok(self.tree_holding(&self.holds.borrow()[sha]))
     }
+}
 
+impl Forge for Hub {
     fn mark(
         &self,
         _: &str,

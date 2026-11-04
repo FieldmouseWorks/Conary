@@ -21,7 +21,8 @@ pub struct Undo {
 
 impl Ledger {
     /// An undo's record is refused unless every change it reverts landed in
-    /// its repo, has no other undo open or landed, is what `asked` names
+    /// its repo, has no other undo open or landed (while this one isn't
+    /// closed), is what `asked` names
     /// (each the session's, or each landed after the time), and doesn't
     /// lead back to the undo through what its own undos revert.
     pub(super) fn check_undo(
@@ -60,7 +61,11 @@ impl Ledger {
             let Some(landing) = &c.landing else {
                 return Err(Invalid::NotLandedYet(id));
             };
-            if let Some(by) = self.undo_of(id) {
+            // One closed without landing reverts nothing, so it's recorded
+            // whatever else has taken its place; it can't reopen beside that.
+            if !matches!(undo.status(), Status::Closed)
+                && let Some(by) = self.undo_of(id)
+            {
                 return Err(Invalid::AlreadyUndone { change: id, by });
             }
             let asked_for = match asked {

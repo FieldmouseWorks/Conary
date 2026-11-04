@@ -8,14 +8,15 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use serde_json::{Value, json};
 
-use conary_core::Ledger;
 use conary_core::ledger::Change;
 use conary_core::log;
 use conary_core::notes::Links;
 use conary_core::op::{Authority, Repo};
 use conary_core::why::{self, Why};
+use conary_core::{ChangeId, Ledger};
 use conary_core::{reader, rpc};
 use conary_github::anchor::{self, Anchored};
+use conary_github::undo::{self, How, Undone};
 use conary_github::{Api, ApiError, Config, Etags, Ingested, Tokens, ingest, notes};
 
 mod train;
@@ -127,6 +128,16 @@ enum Command {
     Verify {
         #[command(flatten)]
         remote: Remote,
+    },
+    /// Open the PR that reverts a landed change's landing, as trunk is now,
+    /// and record it as the change's undo. A revert that conflicts with
+    /// what came after opens all the same, for its conflict to be resolved.
+    /// Run again, it finds that PR rather than open another.
+    Undo {
+        /// The change: its id, or its PR as OWNER/NAME#N.
+        change: String,
+        #[command(flatten)]
+        github: GithubArgs,
     },
     /// A repo's train: the changes ready to land, gated together.
     Train {
@@ -254,6 +265,16 @@ fn run(cli: &Cli) -> Result<()> {
                 println!("{}", Value::Array(changes.map(rpc::summary).collect()));
             }
         }
+        Command::Undo { change, github } => {
+            let (mut a, api, config) = write(cli, github)?;
+            let id = named(a.store.ledger(), change)?;
+            let got = undo::undo(&mut a.store, &api, &api, &config, id);
+            a.publish(&api)?;
+            if let Some(c) = a.store.ledger().change(id) {
+                write_notes(&api, &a, github, &c.repo.clone())?;
+            }
+            print_undone(cli, &got?, a.store.ledger());
+        }
         Command::Train { command } => train::run(cli, command)?,
         Command::Why { at, dir } => {
             let (file, n) = at
@@ -372,6 +393,48 @@ fn print_ingested(cli: &Cli, repo: &Repo, pr: u64, got: Ingested, ledger: &Ledge
     }
 }
 
+/// A change named by its id, or by its PR as OWNER/NAME#N.
+fn named(ledger: &Ledger, said: &str) -> Result<ChangeId> {
+    let Some((repo, pr)) = said.split_once('#') else {
+        return said
+            .parse()
+            .map_err(|e| format!("{said:?} as a change id: {e}").into());
+    };
+    let repo: Repo = repo
+        .parse()
+        .map_err(|e| format!("{repo:?} as OWNER/NAME: {e}"))?;
+    let pr: u64 = pr.parse().map_err(|e| format!("{pr:?} as a PR: {e}"))?;
+    Ok(ledger
+        .by_pr(&repo, pr)
+        .ok_or_else(|| format!("{repo}#{pr} isn't in the ledger"))?
+        .id)
+}
+
+fn print_undone(cli: &Cli, got: &Undone, ledger: &Ledger) {
+    let u = ledger.change(got.change).expect("undo recorded it");
+    let reverts: Vec<String> = got.reverts.iter().map(|id| id.to_string()).collect();
+    if cli.human {
+        let how = match got.how {
+            How::Opened { conflicts: false } => "opened",
+            How::Opened { conflicts: true } => {
+                "opened, conflicting with trunk: what came after builds on it"
+            }
+            How::Found => "open already",
+        };
+        println!("{}: reverts {}, {how}", u.url(), reverts.join(", "));
+        return;
+    }
+    let (opened, conflicts) = match got.how {
+        How::Opened { conflicts } => (true, Some(conflicts)),
+        How::Found => (false, None),
+    };
+    println!(
+        "{}",
+        json!({"change": u.id.to_string(), "pr": u.pr, "url": u.url(), "reverts": reverts,
+               "opened": opened, "conflicts": conflicts, "recorded": got.recorded})
+    );
+}
+
 fn print_why(cli: &Cli, why: &Why) {
     if !cli.human {
         println!("{}", serde_json::to_value(why).expect("a why serializes"));
@@ -474,6 +537,18 @@ mod tests {
                     .contains("set GH_TOKEN")
             );
         }
+    }
+
+    #[test]
+    fn a_change_is_named_by_its_id_or_its_pr() {
+        let ledger = Ledger::default();
+        let id = ChangeId::new().unwrap();
+        assert_eq!(named(&ledger, &id.to_string()).unwrap(), id);
+        let refused = |said: &str| named(&ledger, said).unwrap_err().to_string();
+        assert!(refused("o/r#5").contains("o/r#5 isn't in the ledger"));
+        assert!(refused("o#5").contains("as OWNER/NAME"));
+        assert!(refused("o/r#five").contains("as a PR"));
+        assert!(refused("five").contains("as a change id"));
     }
 
     #[test]
