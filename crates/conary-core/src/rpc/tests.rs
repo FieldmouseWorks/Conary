@@ -301,3 +301,16 @@ fn an_undo_and_what_it_reverts_name_each_other() {
     let reverted = call(&ledger, "change.list", &json!({"status": "reverted"})).unwrap();
     assert_eq!(prs(&reverted), [1]);
 }
+
+#[test]
+fn the_list_offers_every_status_it_filters_by() {
+    let list = METHODS.iter().find(|m| m.name == "change.list").unwrap();
+    let offered = &(list.params)()["properties"]["status"]["enum"];
+    let every: Vec<Value> = Status::ALL.iter().map(|s| json!(s)).collect();
+    assert_eq!(offered, &json!(every));
+    assert!(every.contains(&json!("reverted")));
+    let ledger = Ledger::default();
+    for status in every {
+        call(&ledger, "change.list", &json!({"status": status})).unwrap();
+    }
+}

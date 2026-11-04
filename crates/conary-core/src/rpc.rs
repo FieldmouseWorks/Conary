@@ -53,7 +53,7 @@ pub const METHODS: &[Method] = &[
                 "properties": {
                     "repo": {"type": "string", "description": "owner/name"},
                     "session": {"type": "string", "description": "The agent session that made it."},
-                    "status": {"enum": ["open", "closed", "landed"]},
+                    "status": {"enum": Status::ALL},
                     "since": {"type": "integer", "description": "First seen at or after this, in milliseconds since the Unix epoch."},
                 },
                 "additionalProperties": false,

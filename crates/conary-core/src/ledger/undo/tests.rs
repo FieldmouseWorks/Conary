@@ -200,7 +200,7 @@ fn an_undo_reverts_only_landed_changes_of_its_repo_each_once() {
 }
 
 #[test]
-fn a_change_takes_another_undo_only_once_its_last_is_closed_or_undone() {
+fn a_change_takes_another_undo_only_once_its_last_closed_without_landing() {
     let mut b = Book::default();
     let x = b.landed();
     let first = b.undo_of(x);
@@ -213,16 +213,57 @@ fn a_change_takes_another_undo_only_once_its_last_is_closed_or_undone() {
     // Landed, it's in effect: still taken.
     b.land(first);
     assert_eq!(b.undo(second, &[x], Asked::Change), taken);
-    // Undone, it's no bar.
+    // Undone, it's still the one: the change goes back out by undoing its
+    // undo's undo, never by a second undo that could stand beside the first.
     let redo = b.undo_of(first);
     b.land(redo);
-    b.undo(second, &[x], Asked::Change).unwrap();
-    // Closed, neither is an open one.
+    assert_eq!(b.status(x), Status::Landed);
+    assert_eq!(b.undo(second, &[x], Asked::Change), taken);
+    let again = b.undo_of(redo);
+    b.land(again);
+    assert_eq!(b.status(x), Status::Reverted);
+    // Closed without landing, it makes way.
     let y = b.landed();
     let dropped = b.undo_of(y);
     b.ok(Body::Close { change: dropped });
     let third = b.change();
     b.undo(third, &[y], Asked::Change).unwrap();
+    // And it can't reopen beside the one that took its place.
+    assert_eq!(
+        b.record(Body::Reopen { change: dropped }),
+        Err(Invalid::AlreadyUndone {
+            change: y,
+            by: third
+        })
+    );
+    b.ok(Body::Close { change: third });
+    b.ok(Body::Reopen { change: dropped });
+}
+
+#[test]
+fn undos_that_revert_each_other_round_a_cycle_are_refused() {
+    let mut b = Book::default();
+    let (x, y, z) = (b.landed(), b.landed(), b.landed());
+    // Each landed already, each recorded as the next one's undo.
+    b.undo(x, &[y], Asked::Change).unwrap();
+    b.undo(y, &[z], Asked::Change).unwrap();
+    assert_eq!(b.undo(z, &[x], Asked::Change), Err(Invalid::UndoCycle(x)));
+    // Through an undo of several too.
+    let w = b.landed();
+    let since = Asked::Since { since: 0 };
+    assert_eq!(b.undo(z, &[w, x], since), Err(Invalid::UndoCycle(x)));
+    // Down a chain without a cycle, it's an undo like any other: x reverts
+    // y, so y's undo of z is out of effect, and z's of w stands.
+    b.undo(z, &[w], Asked::Change).unwrap();
+    assert_eq!(
+        (b.status(w), b.status(z), b.status(y), b.status(x)),
+        (
+            Status::Reverted,
+            Status::Landed,
+            Status::Reverted,
+            Status::Landed
+        )
+    );
 }
 
 #[test]

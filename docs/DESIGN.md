@@ -483,9 +483,13 @@ change did.
 
 The ledger records each undo as an op on its revert change: the changes it
 reverts, all landed in its repo, and what asked for it (a change, a session
-or a time, which each of them has to match). A change with an undo open, or
-landed and in effect, takes no other. Once the undo lands, what it reverts is
-`reverted`; undone in turn, they're landed again.
+or a time, which each of them has to match). Once the undo lands, what it
+reverts is `reverted`; undone in turn, they're landed again. A change takes
+one undo at a time, and once one has landed it's the only one: the change
+goes back and forth by undoing that undo, and undoing that, so no undo can
+come back into effect beside another. Only an undo closed without landing
+makes way for the next, and it can't reopen once one has taken its place.
+An undo that leads back to itself through what its undos revert is refused.
 
 ## 6. The landing flow
 

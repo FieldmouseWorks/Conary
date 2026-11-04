@@ -21,8 +21,9 @@ pub struct Undo {
 
 impl Ledger {
     /// An undo's record is refused unless every change it reverts landed in
-    /// its repo, has no other undo open or in effect, and is what `asked`
-    /// names: each the session's, or each landed after the time.
+    /// its repo, has no other undo open or landed, is what `asked` names
+    /// (each the session's, or each landed after the time), and doesn't
+    /// lead back to the undo through what its own undos revert.
     pub(super) fn check_undo(
         &self,
         change: ChangeId,
@@ -49,13 +50,17 @@ impl Ledger {
                 return Err(Invalid::UndoRepeats(id));
             }
             let c = self.existing(id)?;
+            // A cycle of undos would leave each reverted only while it isn't.
+            if self.reverts_down_to(id, change) {
+                return Err(Invalid::UndoCycle(id));
+            }
             if c.repo != undo.repo {
                 return Err(Invalid::OtherRepo(id));
             }
             let Some(landing) = &c.landing else {
                 return Err(Invalid::NotLandedYet(id));
             };
-            if let Some(by) = self.live_undo(id) {
+            if let Some(by) = self.undo_of(id) {
                 return Err(Invalid::AlreadyUndone { change: id, by });
             }
             let asked_for = match asked {
@@ -70,14 +75,47 @@ impl Ledger {
         Ok(())
     }
 
-    /// An undo of `id` that's still to be reckoned with: open, or landed
-    /// and in effect. A closed one, or one that's been undone itself, is no
-    /// bar to another.
-    fn live_undo(&self, id: ChangeId) -> Option<ChangeId> {
-        self.changes[&id].undone_by.iter().copied().find(|u| {
+    /// The undo of `id` that's open or has landed, if any. A change takes
+    /// one at a time, and once one has landed it's the only one: undoing
+    /// it, and undoing that in turn, is how the change goes back and forth,
+    /// so no undo it was reverted by can come back into effect beside
+    /// another. Only one closed without landing makes way for the next.
+    pub fn undo_of(&self, id: ChangeId) -> Option<ChangeId> {
+        self.changes.get(&id)?.undone_by.iter().copied().find(|u| {
             let u = &self.changes[u];
-            matches!(u.status(), Status::Open | Status::Landed)
+            !matches!(u.status(), Status::Closed)
         })
+    }
+
+    /// Whether `to` is `from`, or what `from`'s undo reverts, followed down.
+    fn reverts_down_to(&self, from: ChangeId, to: ChangeId) -> bool {
+        let mut todo = vec![from];
+        let mut seen = BTreeSet::new();
+        while let Some(id) = todo.pop() {
+            if id == to {
+                return true;
+            }
+            if seen.insert(id)
+                && let Some(undo) = self.changes.get(&id).and_then(|c| c.undo.as_ref())
+            {
+                todo.extend(undo.reverts.iter().copied());
+            }
+        }
+        false
+    }
+
+    /// A closed undo reopens only while what it reverts has taken no other
+    /// undo since: two open would race to revert it.
+    pub(super) fn check_reopen(&self, change: ChangeId) -> Result<(), Invalid> {
+        let Some(undo) = &self.existing(change)?.undo else {
+            return Ok(());
+        };
+        for &id in &undo.reverts {
+            if let Some(by) = self.undo_of(id) {
+                return Err(Invalid::AlreadyUndone { change: id, by });
+            }
+        }
+        Ok(())
     }
 
     /// Applies an undo op [`Ledger::check`] has accepted: `true` if it was

@@ -63,6 +63,16 @@ pub enum Status {
     Reverted,
 }
 
+impl Status {
+    /// Every status, as the RPC's filter takes them.
+    pub const ALL: [Status; 4] = [
+        Status::Open,
+        Status::Closed,
+        Status::Landed,
+        Status::Reverted,
+    ];
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Change {
     pub id: ChangeId,
@@ -159,11 +169,13 @@ pub enum Invalid {
     OtherRepo(ChangeId),
     /// That change hasn't landed, so there's nothing to revert.
     NotLandedYet(ChangeId),
-    /// That change already has an undo, open or landed and in effect.
+    /// That change already has an undo, open or landed.
     AlreadyUndone {
         change: ChangeId,
         by: ChangeId,
     },
+    /// That change's undos, followed down, revert the undo itself.
+    UndoCycle(ChangeId),
     /// That change isn't one of the ones the undo was asked for.
     NotAsked(ChangeId),
 }
@@ -198,6 +210,12 @@ impl std::fmt::Display for Invalid {
                 write!(f, "change {change} already has an undo, {by}")
             }
             Self::NotAsked(id) => write!(f, "change {id} isn't what the undo was asked for"),
+            Self::UndoCycle(id) => {
+                write!(
+                    f,
+                    "change {id}'s undos, followed down, revert the undo itself"
+                )
+            }
         }
     }
 }
@@ -342,6 +360,7 @@ impl Ledger {
                 if self.existing(*change)?.status() != Status::Closed {
                     return Err(Invalid::NotClosed);
                 }
+                self.check_reopen(*change)?;
             }
             Body::Join {
                 change, revision, ..
