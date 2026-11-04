@@ -462,6 +462,18 @@ fn merged(
         .as_deref()
         .ok_or_else(|| IngestError::Malformed("a merged PR with no merge commit".into()))?;
     let after = commit(sha)?;
+    // Recorded as trunk moving outside Conary, it stays that: nothing that
+    // happens since (another undo closing, the PR's text changing) makes it
+    // a landing.
+    let seen = w
+        .store
+        .ledger()
+        .outside()
+        .iter()
+        .any(|o| &o.repo == repo && o.after == after);
+    if seen {
+        return close(w);
+    }
     let landed = source.commit(&full, sha)?;
     let linked = source.commit_pulls(&full, sha)?;
     if sha != pr.head.sha && landed.parents.len() == 1 && linked.is_empty() {
@@ -488,20 +500,11 @@ fn merged(
             });
         }
     }
-    // This PR's merge, read again, is the same movement.
-    let seen = w
-        .store
-        .ledger()
-        .outside()
-        .iter()
-        .any(|o| &o.repo == repo && o.after == after);
-    if !seen {
-        w.record(Body::Outside {
-            repo: repo.clone(),
-            before: None,
-            after,
-        })?;
-    }
+    w.record(Body::Outside {
+        repo: repo.clone(),
+        before: None,
+        after,
+    })?;
     close(w)
 }
 

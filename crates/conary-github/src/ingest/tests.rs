@@ -891,4 +891,12 @@ fn an_undo_reopened_beside_another_stays_closed_and_its_merge_is_outside() {
     let outside = store.ledger().outside();
     assert_eq!(outside.len(), 1);
     assert_eq!(outside[0].after, sha(REBASED));
+    // And it stays outside once the other undo closes, read again any way.
+    f.pulls[2]["state"] = json!("closed");
+    pull(&mut store, &f, &config(), &repo(), 11).unwrap();
+    pull(&mut store, &f, &config(), &repo(), 10).unwrap();
+    backfill(&mut store, &f, &config(), &repo()).unwrap();
+    assert_eq!(status(&store, first), Status::Closed);
+    assert_eq!(status(&store, x), Status::Landed);
+    assert_eq!(store.ledger().outside().len(), 1);
 }
