@@ -64,8 +64,9 @@ steward's jobs over one at a time.
   offers it to agents.
 - **In progress:** the train (M3) has landed remi's PRs since 2026-10-30,
   counting only attested results; its exit check waits on a day busy enough
-  to batch them. `undo` (M4) reverts a landed change by its PR; by session
-  and by time come next.
+  to batch them. `undo` (M4) reverts a landed change by its PR, a
+  session's changes or everything since a time; the steward settling its
+  PRs comes next.
 - **Next:** class policy (M5), then Conary running the whole landing flow in
   place of the steward (M6).
 
@@ -122,10 +123,13 @@ finished.
     cn train show FieldmouseWorks/remi --human
 
 `cn undo` opens the PR that reverts a landed change and records it as the
-change's undo ([undo](docs/DESIGN.md#5-undo)). A revert that conflicts with
+change's undo ([undo](docs/DESIGN.md#5-undo)); by session or time, one PR
+per repo reverts each change, newest first. A revert that conflicts with
 what came after it opens all the same, for its conflict to be resolved.
 
     cn undo FieldmouseWorks/remi#174
+    cn undo --actor https://claude.ai/code/session_01...
+    cn undo --since 1793750400000 --repo FieldmouseWorks/remi
 
 `cn --help` and each command's `--help` list the rest, environment variables
 included.

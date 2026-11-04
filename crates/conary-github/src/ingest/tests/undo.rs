@@ -262,6 +262,15 @@ fn an_undo_lands_over_a_rival_that_merged_elsewhere_or_after_it() {
     }
 }
 
+/// The body `cn undo` gives `x`'s undo, its marker last.
+fn marked(x: ChangeId) -> String {
+    let marker = crate::undo::Marker {
+        reverts: vec![x],
+        asked: conary_core::op::Asked::Change,
+    };
+    format!("Undoes #9.\n\n{}", marker.line())
+}
+
 /// 9 landed, and PR `number` from the branch of its `attempt`th undo in
 /// `head_repo`, merged as REBASED and settled, with no undo recorded.
 fn from_undo_branch(f: &mut Fake, store: &mut Store, number: u64, head_repo: &str) -> ChangeId {
@@ -270,6 +279,7 @@ fn from_undo_branch(f: &mut Fake, store: &mut Store, number: u64, head_repo: &st
     let mut p = pr(number, HEAD2, "closed", true);
     p["merge_commit_sha"] = json!(REBASED);
     p["head"]["ref"] = json!(crate::undo::undo_branch(x, 1));
+    p["body"] = json!(marked(x));
     p["head"]["repo"] = json!({"full_name": head_repo, "default_branch": "main"});
     f.pulls.push(p);
     f.statuses.insert(HEAD2.into(), f.statuses[HEAD].clone());
@@ -316,6 +326,7 @@ fn a_pr_from_an_undo_branch_beside_a_landed_undo_is_recorded_closed_and_its_merg
     let mut p = pr(11, DEV, "closed", true);
     p["merge_commit_sha"] = json!(LATER);
     p["head"]["ref"] = json!(crate::undo::undo_branch(x, 2));
+    p["body"] = json!(marked(x));
     p["head"]["repo"] = json!({"full_name": "FieldmouseWorks/burrow", "default_branch": "main"});
     f.pulls.push(p);
     f.statuses.insert(DEV.into(), f.statuses[HEAD].clone());

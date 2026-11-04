@@ -16,7 +16,7 @@ use conary_core::why::{self, Why};
 use conary_core::{ChangeId, Ledger};
 use conary_core::{reader, rpc};
 use conary_github::anchor::{self, Anchored};
-use conary_github::undo::{self, How, Undone};
+use conary_github::undo::{self, How, Undid, Undone};
 use conary_github::{Api, ApiError, Config, Etags, Ingested, Tokens, ingest, notes};
 
 mod train;
@@ -130,12 +130,25 @@ enum Command {
         remote: Remote,
     },
     /// Open the PR that reverts a landed change's landing, as trunk is now,
-    /// and record it as the change's undo. A revert that conflicts with
-    /// what came after opens all the same, for its conflict to be resolved.
-    /// Run again, it finds that PR rather than open another.
+    /// and record it as the change's undo; or, by session or time, one PR
+    /// per repo reverting each change newest first. A revert that conflicts
+    /// with what came after opens all the same, for its conflict to be
+    /// resolved; one that conflicts with the others' is left out, for an
+    /// undo of its own. Run again, it finds those PRs rather than open more.
+    #[command(group(clap::ArgGroup::new("what").required(true).args(["change", "actor", "since"])))]
     Undo {
         /// The change: its id, or its PR as OWNER/NAME#N.
-        change: String,
+        change: Option<String>,
+        /// Every change this agent session landed, in every repo.
+        #[arg(long)]
+        actor: Option<String>,
+        /// Everything that landed on `--repo`'s trunk after this time, in
+        /// milliseconds since the Unix epoch.
+        #[arg(long, requires = "repo")]
+        since: Option<i64>,
+        /// The repo `--since` reverts, as OWNER/NAME.
+        #[arg(long, requires = "since")]
+        repo: Option<Repo>,
         #[command(flatten)]
         github: GithubArgs,
     },
@@ -265,15 +278,56 @@ fn run(cli: &Cli) -> Result<()> {
                 println!("{}", Value::Array(changes.map(rpc::summary).collect()));
             }
         }
-        Command::Undo { change, github } => {
+        Command::Undo {
+            change,
+            actor,
+            since,
+            repo,
+            github,
+        } => {
             let (mut a, api, config) = write(cli, github)?;
-            let id = named(a.store.ledger(), change)?;
-            let got = undo::undo(&mut a.store, &api, &api, &config, id);
+            let got = match (change, actor, since.zip(repo.as_ref())) {
+                (Some(change), ..) => {
+                    let id = named(a.store.ledger(), change)?;
+                    undo::undo(&mut a.store, &api, &api, &config, id).map(|u| Undid {
+                        undos: vec![u],
+                        gone: Vec::new(),
+                    })
+                }
+                (_, Some(session), _) => {
+                    undo::undo_actor(&mut a.store, &api, &api, &config, session)
+                }
+                (_, _, Some((since, repo))) => {
+                    undo::undo_since(&mut a.store, &api, &api, &config, repo, since)
+                }
+                _ => unreachable!("clap asks for one of them"),
+            };
             a.publish(&api)?;
-            if let Some(c) = a.store.ledger().change(id) {
-                write_notes(&api, &a, github, &c.repo.clone())?;
+            // Whatever was recorded before a failure is published, and so
+            // are its repos' notes.
+            let mut repos: Vec<Repo> = got
+                .iter()
+                .flat_map(|g| &g.undos)
+                .filter_map(|u| a.store.ledger().change(u.change).map(|c| c.repo.clone()))
+                .collect();
+            if let Some(id) = change
+                .as_ref()
+                .and_then(|c| named(a.store.ledger(), c).ok())
+                && let Some(c) = a.store.ledger().change(id)
+            {
+                repos.push(c.repo.clone());
             }
-            print_undone(cli, &got?, a.store.ledger());
+            repos.extend(repo.clone());
+            repos.sort();
+            repos.dedup();
+            for r in &repos {
+                write_notes(&api, &a, github, r)?;
+            }
+            let got = got?;
+            for u in &got.undos {
+                print_undone(cli, u, a.store.ledger());
+            }
+            print_gone(cli, &got.gone);
         }
         Command::Train { command } => train::run(cli, command)?,
         Command::Why { at, dir } => {
@@ -422,6 +476,13 @@ fn print_undone(cli: &Cli, got: &Undone, ledger: &Ledger) {
             How::Found => "open already",
         };
         println!("{}: reverts {}, {how}", u.url(), reverts.join(", "));
+        if !got.left.is_empty() {
+            let left: Vec<String> = got.left.iter().map(|id| id.to_string()).collect();
+            println!(
+                "  left out, conflicting with the others: {}",
+                left.join(", ")
+            );
+        }
         return;
     }
     let (opened, conflicts) = match got.how {
@@ -431,8 +492,24 @@ fn print_undone(cli: &Cli, got: &Undone, ledger: &Ledger) {
     println!(
         "{}",
         json!({"change": u.id.to_string(), "pr": u.pr, "url": u.url(), "reverts": reverts,
+               "left": got.left.iter().map(|id| id.to_string()).collect::<Vec<_>>(),
                "opened": opened, "conflicts": conflicts, "recorded": got.recorded})
     );
+}
+
+fn print_gone(cli: &Cli, gone: &[ChangeId]) {
+    if gone.is_empty() {
+        return;
+    }
+    let gone: Vec<String> = gone.iter().map(ChangeId::to_string).collect();
+    if cli.human {
+        println!(
+            "trunk already lacks what these brought: {}",
+            gone.join(", ")
+        );
+    } else {
+        println!("{}", json!({"gone": gone}));
+    }
 }
 
 fn print_why(cli: &Cli, why: &Why) {
