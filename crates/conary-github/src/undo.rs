@@ -51,6 +51,14 @@ pub fn undo_branch(change: ChangeId, attempt: usize) -> String {
     format!("{BRANCHES}undo/{change}/{attempt}")
 }
 
+/// The change an [`undo_branch`] reverts, if `name` is one.
+pub(crate) fn branch_undoes(name: &str) -> Option<ChangeId> {
+    let rest = name.strip_prefix(BRANCHES)?.strip_prefix("undo/")?;
+    let (change, attempt) = rest.split_once('/')?;
+    attempt.parse::<usize>().ok()?;
+    change.parse().ok()
+}
+
 #[derive(Debug)]
 pub enum UndoError {
     Api(ApiError),
@@ -330,8 +338,8 @@ fn undone_by(store: &Store, change: ChangeId) -> usize {
         .map_or(0, |c| c.undone_by.len())
 }
 
-/// Ingests the undo's PR and records it as `reverts`' undo: its change, and
-/// the ops written.
+/// Ingests the undo's PR, which its branch names `reverts`' undo, and makes
+/// sure it's recorded as one: its change, and the ops written.
 fn record(
     store: &mut Store,
     source: &dyn Source,

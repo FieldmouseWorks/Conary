@@ -256,7 +256,8 @@ impl Reverts for Hub {
             "user": {"login": STEWARD, "type": "Bot"},
             "merged_at": null, "merge_commit_sha": null,
             "base": {"sha": TRUNK, "ref": base, "repo": {"default_branch": "main"}},
-            "head": {"sha": sha, "ref": head},
+            "head": {"sha": sha, "ref": head,
+                "repo": {"full_name": "FieldmouseWorks/remi", "default_branch": "main"}},
         }));
         Ok(number)
     }
@@ -783,4 +784,50 @@ fn a_stopped_run_closed_is_recorded_beside_the_undo_that_reopened() {
     let again = undo_of(&mut store, &hub, x).unwrap();
     assert_eq!((again.change, again.recorded), (first.change, 0));
     assert_eq!(hub.pulls.borrow().len(), 2);
+}
+
+#[test]
+fn a_stopped_run_that_merged_after_its_rival_landed_is_trunk_moving_outside() {
+    // The next attempt's run stopped before recording its PR, which closed;
+    // the first reopened and landed, then the second reopened and merged
+    // too. Taken up by `undo` itself, or after a sync read it first, or
+    // after the second alone was read: the first is the undo, and the
+    // second's merge reverted it again outside Conary.
+    for read_first in [None, Some(true), Some(false)] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = store(&dir);
+        let hub = Hub::new();
+        let x = landed(&mut store, Some("tools: a plain sentence"));
+        let first = undo_of(&mut store, &hub, x).unwrap();
+        hub.close(first.pr);
+        ingest::pull(&mut store, &hub, &config(), &repo(), first.pr).unwrap();
+        let second = stopped_at(&hub, x, 2);
+        hub.close(second);
+        hub.reopen(first.pr);
+        hub.land(first.pr);
+        hub.reopen(second);
+        let again = hub.land(second);
+        match read_first {
+            Some(true) => _ = ingest::sync(&mut store, &hub, &config(), &repo()).unwrap(),
+            Some(false) => _ = ingest::pull(&mut store, &hub, &config(), &repo(), second).unwrap(),
+            None => {}
+        }
+        let err = undo_of(&mut store, &hub, x).unwrap_err();
+        assert!(
+            matches!(err, UndoError::Reverted { change, by } if change == x && by == first.change),
+            "{read_first:?}: {err}"
+        );
+        let held = store.ledger().by_pr(&repo(), second).unwrap();
+        assert_eq!(held.status(), Kept::Closed, "{read_first:?}");
+        assert_eq!(
+            store.ledger().change(x).unwrap().undone_by,
+            [first.change, held.id]
+        );
+        let outside = store.ledger().outside();
+        assert_eq!(outside.len(), 1, "{read_first:?}");
+        assert_eq!(outside[0].after.as_str(), again);
+        // Taken up again, nothing's new.
+        let err = undo_of(&mut store, &hub, x).unwrap_err();
+        assert!(matches!(err, UndoError::Reverted { .. }), "{err}");
+    }
 }

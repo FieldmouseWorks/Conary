@@ -200,3 +200,137 @@ fn an_undo_merged_while_its_rival_was_open_is_outside_whatever_closed_after() {
         }
     }
 }
+
+const LATER: &str = "9999999999999999999999999999999999999999";
+
+/// The second undo merged at `at`: onto trunk as LATER, settled, or into
+/// another branch.
+fn second_merged(f: &mut Fake, at: &str, onto_trunk: bool) {
+    let p = &mut f.pulls[2];
+    p["state"] = json!("closed");
+    p["merged_at"] = json!(at);
+    if onto_trunk {
+        p["merge_commit_sha"] = json!(LATER);
+        f.commits
+            .insert(LATER.into(), trunk_commit(LATER, &[REBASED]));
+        f.linked.insert(LATER.into(), vec![11]);
+        f.statuses.insert(DEV.into(), f.statuses[HEAD].clone());
+    } else {
+        p["base"]["ref"] = json!("dev");
+        p["merge_commit_sha"] = json!(LATER);
+    }
+}
+
+#[test]
+fn an_undo_lands_over_a_rival_that_merged_elsewhere_or_after_it() {
+    // The second closed before the first reopened and landed at noon. Then
+    // it merged into another branch before that, or reopened and merged
+    // onto trunk after: neither was in the first's way, and the second's
+    // merge onto trunk is a second revert, outside, whichever is read first.
+    for onto_trunk in [false, true] {
+        let got = read_every_way(|f| {
+            if onto_trunk {
+                f.turns.insert(
+                    11,
+                    vec![
+                        ("2026-10-27T11:50:00Z", "closed"),
+                        ("2026-10-27T12:10:00Z", "reopened"),
+                        ("2026-10-27T12:20:00Z", "closed"),
+                    ],
+                );
+                second_merged(f, "2026-10-27T12:20:00Z", true);
+            } else {
+                f.turns.insert(11, vec![("2026-10-27T11:50:00Z", "closed")]);
+                second_merged(f, "2026-10-27T11:50:00Z", false);
+            }
+            f.pulls[1]["state"] = json!("open");
+            merged_as(f, 10, REBASED);
+        });
+        for ((_dir, store), [x, first, second]) in got {
+            let status = |c| store.ledger().change(c).unwrap().status();
+            assert_eq!(status(first), Status::Landed, "{onto_trunk}");
+            assert_eq!(status(second), Status::Closed, "{onto_trunk}");
+            assert_eq!(store.ledger().change(x).unwrap().reverted_by, Some(first));
+            let outside: Vec<_> = store
+                .ledger()
+                .outside()
+                .iter()
+                .map(|o| o.after.clone())
+                .collect();
+            assert_eq!(outside, if onto_trunk { vec![sha(LATER)] } else { vec![] });
+        }
+    }
+}
+
+/// 9 landed, and PR `number` from the branch of its `attempt`th undo in
+/// `head_repo`, merged as REBASED and settled, with no undo recorded.
+fn from_undo_branch(f: &mut Fake, store: &mut Store, number: u64, head_repo: &str) -> ChangeId {
+    f.pulls = vec![pr(9, HEAD, "closed", true)];
+    let x = pull(store, f, &config(), &repo(), 9).unwrap().change;
+    let mut p = pr(number, HEAD2, "closed", true);
+    p["merge_commit_sha"] = json!(REBASED);
+    p["head"]["ref"] = json!(crate::undo::undo_branch(x, 1));
+    p["head"]["repo"] = json!({"full_name": head_repo, "default_branch": "main"});
+    f.pulls.push(p);
+    f.statuses.insert(HEAD2.into(), f.statuses[HEAD].clone());
+    f.commits
+        .insert(REBASED.into(), trunk_commit(REBASED, &[MERGE]));
+    f.linked.insert(REBASED.into(), vec![number]);
+    x
+}
+
+#[test]
+fn a_pr_from_an_undo_branch_is_its_undo_whatever_reads_it() {
+    let reads: [fn(&mut Store, &Fake); 3] = [
+        |s, f| _ = pull(s, f, &config(), &repo(), 10).unwrap(),
+        |s, f| _ = sync(s, f, &config(), &repo()).unwrap(),
+        |s, f| _ = backfill(s, f, &config(), &repo()).unwrap(),
+    ];
+    for read in reads {
+        let (_dir, mut store) = open();
+        let mut f = fake();
+        let x = from_undo_branch(&mut f, &mut store, 10, "fieldmouseworks/BURROW");
+        read(&mut store, &f);
+        let u = store.ledger().by_pr(&repo(), 10).unwrap();
+        assert_eq!(u.undo.as_ref().map(|u| u.reverts.clone()), Some(vec![x]));
+        assert_eq!(u.status(), Status::Landed);
+        assert_eq!(store.ledger().change(x).unwrap().reverted_by, Some(u.id));
+    }
+    // A fork's branch of that name is anyone's to give: only a PR.
+    let (_dir, mut store) = open();
+    let mut f = fake();
+    let x = from_undo_branch(&mut f, &mut store, 10, "someone/burrow");
+    pull(&mut store, &f, &config(), &repo(), 10).unwrap();
+    assert!(store.ledger().by_pr(&repo(), 10).unwrap().undo.is_none());
+    assert_eq!(store.ledger().change(x).unwrap().status(), Status::Landed);
+}
+
+#[test]
+fn a_pr_from_an_undo_branch_beside_a_landed_undo_is_recorded_closed_and_its_merge_outside() {
+    let (_dir, mut store) = open();
+    let mut f = fake();
+    let (x, first) = with_undo(&mut store, &mut f, 10);
+    merged_as(&mut f, 10, REBASED);
+    pull(&mut store, &f, &config(), &repo(), 10).unwrap();
+    // A run that stopped before recording its PR, merged since.
+    let mut p = pr(11, DEV, "closed", true);
+    p["merge_commit_sha"] = json!(LATER);
+    p["head"]["ref"] = json!(crate::undo::undo_branch(x, 2));
+    p["head"]["repo"] = json!({"full_name": "FieldmouseWorks/burrow", "default_branch": "main"});
+    f.pulls.push(p);
+    f.statuses.insert(DEV.into(), f.statuses[HEAD].clone());
+    f.commits
+        .insert(LATER.into(), trunk_commit(LATER, &[REBASED]));
+    f.linked.insert(LATER.into(), vec![11]);
+    sync(&mut store, &f, &config(), &repo()).unwrap();
+    let second = store.ledger().by_pr(&repo(), 11).unwrap();
+    assert_eq!(second.status(), Status::Closed);
+    assert_eq!(
+        store.ledger().change(x).unwrap().undone_by,
+        [first, second.id]
+    );
+    assert_eq!(store.ledger().change(x).unwrap().reverted_by, Some(first));
+    let outside = store.ledger().outside();
+    assert_eq!(outside.len(), 1);
+    assert_eq!(outside[0].after, sha(LATER));
+}

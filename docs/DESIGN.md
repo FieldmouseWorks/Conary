@@ -502,11 +502,14 @@ one undo at a time, and once one has landed it's the only one: the change
 goes back and forth by undoing that undo, and undoing that, so no undo can
 come back into effect beside another. Only an undo closed without landing
 makes way for the next, and it can't reopen while one in its place is open
-or landed. Merged anyway, it lands only if no other undo of what it reverts
-had merged, or was open on GitHub when it merged, as their timelines tell,
-whatever order the PRs are read in: one that closed only after doesn't make
-way for it. Reverting nothing, a closed one is recorded whenever it's found,
-beside whatever took its place.
+or landed. An undo's merge lands only if no other undo of what it reverts
+landed on trunk first, and, for one held closed, none was open on GitHub
+when it merged, as their timelines tell, whatever order the PRs are read
+in: one that closed only after doesn't make way for it, and one that merged
+after doesn't win. Reverting nothing, a closed one is recorded whenever
+it's found, beside whatever took its place. Ingest knows an undo's PR by
+the branch `undo` made it on, in the repo itself, so one read before `undo`
+records it is judged as an undo all the same.
 An undo that leads back to itself through what its undos revert is refused.
 
 ## 6. The landing flow

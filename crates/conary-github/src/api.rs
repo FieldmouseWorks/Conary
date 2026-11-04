@@ -27,6 +27,8 @@ pub struct Ref {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct RefRepo {
+    /// `owner/name`.
+    pub full_name: Option<String>,
     pub default_branch: String,
 }
 
