@@ -8,6 +8,8 @@
 //! conflicts, and the PR opens without it, conflicting with trunk, for a
 //! job to resolve like any PR's conflict.
 
+use std::collections::BTreeSet;
+
 use conary_core::ledger::{Change, Invalid};
 use conary_core::op::{Asked, Body, Repo};
 use conary_core::store::StoreError;
@@ -245,11 +247,12 @@ pub fn undo(
 }
 
 /// Brings the ledger up to what GitHub holds of `change`'s undos, so what
-/// `undo` does next is decided on them as they are now: the undo it holds
-/// that isn't closed, which may have closed or landed since it was read,
-/// and every PR from the branch of the attempt after the last it holds,
-/// which a run that stopped before recording its undo left behind, open,
-/// closed or merged. Ops written.
+/// `undo` does next is decided on them as they are now. Whether the change
+/// is reverted turns on each of its undos and, an undo of an undo putting
+/// it back, on theirs in turn, so each one down the tree is read again,
+/// closed ones too (a closed PR can reopen), and so is every PR from the
+/// branch of each one's next attempt, which a run that stopped before
+/// recording its undo left behind, open, closed or merged. Ops written.
 fn refresh(
     store: &mut Store,
     forge: &dyn Reverts,
@@ -257,24 +260,62 @@ fn refresh(
     config: &Config,
     change: ChangeId,
 ) -> Result<usize, UndoError> {
-    let ledger = store.ledger();
-    let x = ledger.change(change).ok_or(UndoError::Unknown(change))?;
-    let repo = x.repo.clone();
-    let held = ledger
-        .undo_of(change)
-        .and_then(|u| ledger.change(u))
-        .map(|u| u.pr);
+    let repo = store
+        .ledger()
+        .change(change)
+        .ok_or(UndoError::Unknown(change))?
+        .repo
+        .clone();
     let mut recorded = 0;
-    if let Some(pr) = held {
-        recorded += ingest::pull(store, source, config, &repo, pr)?.recorded;
+    let mut todo = vec![change];
+    // The ledger refuses a cycle of undos, so this is a tree.
+    let mut seen = BTreeSet::new();
+    while let Some(id) = todo.pop() {
+        if !seen.insert(id) {
+            continue;
+        }
+        let ledger = store.ledger();
+        let held: Vec<u64> = ledger
+            .change(id)
+            .expect("in the ledger")
+            .undone_by
+            .iter()
+            .map(|u| ledger.change(*u).expect("in the ledger").pr)
+            .collect();
+        for pr in held {
+            recorded += ingest::pull(store, source, config, &repo, pr)?.recorded;
+        }
+        recorded += stopped(store, forge, source, config, &repo, id)?;
+        todo.extend(
+            store
+                .ledger()
+                .change(id)
+                .expect("in the ledger")
+                .undone_by
+                .iter(),
+        );
     }
-    // One recorded moves the next attempt on to a branch of its own, which
-    // a later stopped run may have left too.
+    Ok(recorded)
+}
+
+/// Records as `change`'s undo every PR from the branch of its next attempt:
+/// a run that stopped before recording it left it. One recorded moves the
+/// next attempt on to a branch of its own, which a later stopped run may
+/// have left too. Ops written.
+fn stopped(
+    store: &mut Store,
+    forge: &dyn Reverts,
+    source: &dyn Source,
+    config: &Config,
+    repo: &Repo,
+    change: ChangeId,
+) -> Result<usize, UndoError> {
+    let mut recorded = 0;
     loop {
         let attempts = undone_by(store, change);
         let branch = undo_branch(change, attempts + 1);
         for pr in forge.pulls_from(&repo.to_string(), &branch)? {
-            recorded += record(store, source, config, &repo, pr, change)?.1;
+            recorded += record(store, source, config, repo, pr, change)?.1;
         }
         if undone_by(store, change) == attempts {
             return Ok(recorded);

@@ -108,6 +108,14 @@ impl Hub {
         }
     }
 
+    fn reopen(&self, number: u64) {
+        for p in self.pulls.borrow_mut().iter_mut() {
+            if p["number"] == number {
+                p["state"] = json!("open");
+            }
+        }
+    }
+
     /// The steward lands PR `number`, settled, squashed onto trunk, and
     /// its branch goes: trunk's new tip.
     fn land(&self, number: u64) -> String {
@@ -582,8 +590,8 @@ fn a_stopped_run_s_pr_is_its_undo_whatever_became_of_it() {
         .unwrap()
         .change;
     let w = undo_of(&mut store, &hub, u).unwrap();
+    // Landed, and nothing has read that since.
     hub.land(w.pr);
-    ingest::pull(&mut store, &hub, &config(), &repo(), w.pr).unwrap();
     let err = undo_of(&mut store, &hub, z).unwrap_err();
     assert!(
         matches!(err, UndoError::UndoneUndo { change, undo, by }
@@ -666,4 +674,55 @@ fn an_undo_is_titled_in_the_style_of_what_it_reverts() {
         let x = landed(&mut store, said);
         assert_eq!(super::title(store.ledger().change(x).unwrap()), title);
     }
+}
+
+#[test]
+fn an_undo_reopened_on_github_is_found_not_made_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = store(&dir);
+    let hub = Hub::new();
+    let x = landed(&mut store, Some("tools: a plain sentence"));
+    let first = undo_of(&mut store, &hub, x).unwrap();
+    let read = |store: &mut Store| {
+        ingest::pull(store, &hub, &config(), &repo(), first.pr).unwrap();
+    };
+    hub.close(first.pr);
+    read(&mut store);
+    // Reopened since it was read closed.
+    hub.reopen(first.pr);
+    let got = undo_of(&mut store, &hub, x).unwrap();
+    assert_eq!((got.change, got.how), (first.change, How::Found));
+    // And landed since, unread.
+    hub.close(first.pr);
+    read(&mut store);
+    hub.reopen(first.pr);
+    hub.land(first.pr);
+    assert!(matches!(
+        undo_of(&mut store, &hub, x),
+        Err(UndoError::Reverted { change, by }) if change == x && by == first.change
+    ));
+    assert_eq!(hub.pulls.borrow().len(), 1);
+}
+
+#[test]
+fn an_undo_s_own_undo_is_read_down_the_tree() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = store(&dir);
+    let hub = Hub::new();
+    let x = landed(&mut store, Some("tools: a plain sentence"));
+    let u = undo_of(&mut store, &hub, x).unwrap();
+    hub.land(u.pr);
+    ingest::pull(&mut store, &hub, &config(), &repo(), u.pr).unwrap();
+    // The undo of the undo, from a run that stopped before recording it,
+    // landed: nothing has read either.
+    let pr = stopped(&hub, u.change);
+    hub.land(pr);
+    let err = undo_of(&mut store, &hub, x).unwrap_err();
+    let w = store.ledger().by_pr(&repo(), pr).unwrap().id;
+    assert!(
+        matches!(err, UndoError::UndoneUndo { change, undo, by }
+            if change == x && undo == u.change && by == w),
+        "{err}"
+    );
+    assert_eq!(store.ledger().change(x).unwrap().status(), Kept::Landed);
 }
