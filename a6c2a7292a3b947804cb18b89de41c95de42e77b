@@ -1,0 +1,89 @@
+{
+  "conary": "note v1",
+  "change": "2t5w5c60brnfx6mfqn3m6rhqj1",
+  "repo": {
+    "owner": "fieldmouseworks",
+    "name": "conary"
+  },
+  "pr": 193,
+  "url": "https://github.com/fieldmouseworks/conary/pull/193",
+  "summary": "flake: pin burrow by commit, so its bumps come with the workflow pins",
+  "task": "FieldmouseWorks/burrow#427",
+  "author": {
+    "kind": "agent",
+    "login": "TusanHomichi",
+    "session": "https://claude.ai/code/session_01BkHcyE5F3T8RN53rpiJfiw"
+  },
+  "landing": {
+    "revision": "7a15acf6347a384949c3eb1c0fde1386246fca128e161e4cea4a6f7fce74d716",
+    "before": "57e7700caa14067913236c390639aa319c2a91ec",
+    "after": "a6c2a7292a3b947804cb18b89de41c95de42e77b",
+    "by": {
+      "kind": "status",
+      "login": "fieldmouseworks-steward[bot]"
+    },
+    "at": 1793828006929
+  },
+  "evidence": [
+    {
+      "kind": "ci",
+      "check": "check / commits",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/41915138007/job/126872685463"
+    },
+    {
+      "kind": "ci",
+      "check": "check / lane into main",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/41915138007/job/126872685396"
+    },
+    {
+      "kind": "ci",
+      "check": "house",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/41915137382/job/126872681646"
+    },
+    {
+      "kind": "ci",
+      "check": "house/title (#193)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/41915137382"
+    },
+    {
+      "kind": "ci",
+      "check": "house/rust-first (#193)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/41915137382"
+    },
+    {
+      "kind": "ci",
+      "check": "house/timers (#193)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/41915137382"
+    },
+    {
+      "kind": "ci",
+      "check": "house/file-size (#193)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/41915137382"
+    },
+    {
+      "kind": "ci",
+      "check": "house/model-names (#193)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/41915137382"
+    },
+    {
+      "kind": "ci",
+      "check": "check / check",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/41915138007/job/126872741457"
+    },
+    {
+      "kind": "review",
+      "check": "codex",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/pull/193#pullrequestreview-5776100160"
+    }
+  ]
+}
