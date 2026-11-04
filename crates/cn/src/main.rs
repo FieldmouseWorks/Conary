@@ -16,7 +16,7 @@ use conary_core::why::{self, Why};
 use conary_core::{ChangeId, Ledger};
 use conary_core::{reader, rpc};
 use conary_github::anchor::{self, Anchored};
-use conary_github::undo::{self, How, Stopped, Undid, Undone};
+use conary_github::undo::{self, How, Stopped, Undid, Undone, Unrecorded};
 use conary_github::{Api, ApiError, Config, Etags, Ingested, Tokens, ingest, notes};
 
 mod train;
@@ -314,12 +314,10 @@ fn run(cli: &Cli) -> Result<()> {
             let got = match (change, actor, since.zip(repo.as_ref())) {
                 (Some(change), ..) => {
                     let id = named(a.store.ledger(), change)?;
-                    undo::undo(&mut a.store, &api, &api, &config, id)
-                        .map(|u| Undid {
-                            undos: vec![u],
-                            gone: Vec::new(),
-                        })
-                        .map_err(Stopped::from)
+                    undo::undo(&mut a.store, &api, &api, &config, id).map(|u| Undid {
+                        undos: vec![u],
+                        gone: Vec::new(),
+                    })
                 }
                 (_, Some(session), _) => {
                     undo::undo_actor(&mut a.store, &api, &api, &config, session)
@@ -332,36 +330,31 @@ fn run(cli: &Cli) -> Result<()> {
             // What it opened is told first, the undos a run that stopped
             // had by then included: they're PRs on GitHub, whatever stops
             // it after them.
-            let done = match &got {
-                Ok(done) => done,
-                Err(stopped) => &*stopped.done,
+            let (done, unrecorded) = match &got {
+                Ok(done) => (done, None),
+                Err(stopped) => (&*stopped.done, stopped.unrecorded.as_ref()),
             };
             for u in &done.undos {
                 print_undone(cli, u, a.store.ledger());
+            }
+            if let Some(u) = unrecorded {
+                print_unrecorded(cli, u);
             }
             print_gone(cli, &done.gone);
             a.publish(&api)?;
             // Whatever was recorded before a failure is published, and so
             // are its repos' notes.
-            let mut repos: Vec<Repo> = done
-                .undos
-                .iter()
-                .filter_map(|u| a.store.ledger().change(u.change).map(|c| c.repo.clone()))
-                .collect();
-            if let Some(id) = change
+            let named_id = change
                 .as_ref()
-                .and_then(|c| named(a.store.ledger(), c).ok())
-                && let Some(c) = a.store.ledger().change(id)
-            {
-                repos.push(c.repo.clone());
-            }
-            repos.extend(repo.clone());
-            repos.sort();
-            repos.dedup();
-            for r in &repos {
-                write_notes(&api, &a, github, r)?;
-            }
+                .and_then(|c| named(a.store.ledger(), c).ok());
+            let repos = noted(a.store.ledger(), done, named_id, repo.as_ref());
+            let notes = repos
+                .iter()
+                .try_for_each(|r| write_notes(&api, &a, github, r));
+            // The run's own failure is what it exits with: notes it
+            // couldn't write after it are the next run's to write.
             got?;
+            notes?;
         }
         Command::Train { command } => train::run(cli, command)?,
         Command::Why { at, dir } => {
@@ -533,6 +526,40 @@ fn print_undone(cli: &Cli, got: &Undone, ledger: &Ledger) {
     );
 }
 
+/// The repos an undo writes the notes of: those of what it found or
+/// opened, and of what was asked, that the ledger keeps. One it keeps
+/// nothing of has no notes, and isn't asked about.
+fn noted(
+    ledger: &Ledger,
+    done: &Undid,
+    change: Option<ChangeId>,
+    repo: Option<&Repo>,
+) -> Vec<Repo> {
+    let mut repos: Vec<Repo> = done
+        .undos
+        .iter()
+        .map(|u| u.change)
+        .chain(change)
+        .filter_map(|id| ledger.change(id).map(|c| c.repo.clone()))
+        .chain(repo.cloned())
+        .filter(|r| ledger.changes().any(|c| &c.repo == r))
+        .collect();
+    repos.sort();
+    repos.dedup();
+    repos
+}
+
+fn print_unrecorded(cli: &Cli, u: &Unrecorded) {
+    if cli.human {
+        println!(
+            "{}: opened, and stopped before it was recorded: run it again to record it",
+            u.url()
+        );
+    } else {
+        println!("{}", json!({"unrecorded": u.url(), "pr": u.pr}));
+    }
+}
+
 fn print_gone(cli: &Cli, gone: &[ChangeId]) {
     if gone.is_empty() {
         return;
@@ -651,6 +678,38 @@ mod tests {
                     .contains("set GH_TOKEN")
             );
         }
+    }
+
+    #[test]
+    fn notes_are_written_only_for_repos_the_ledger_keeps() {
+        use conary_core::op::{Actor, ActorKind, Body};
+        let dir = tempfile::tempdir().unwrap();
+        let lock = log::Lock::take(dir.path()).unwrap();
+        let key = ed25519_dalek::SigningKey::from_bytes(&[5; 32]);
+        let mut store = conary_core::Store::open(lock, key, None).unwrap();
+        let kept: Repo = "o/kept".parse().unwrap();
+        let change = ChangeId::new().unwrap();
+        store
+            .record(Body::Observe {
+                change,
+                repo: kept.clone(),
+                pr: 5,
+                author: Actor {
+                    kind: ActorKind::Agent,
+                    login: "a".into(),
+                    session: None,
+                },
+            })
+            .unwrap();
+        let stranger: Repo = "o/stranger".parse().unwrap();
+        let done = Undid::default();
+        let ledger = store.ledger();
+        assert_eq!(
+            noted(ledger, &done, Some(change), Some(&kept)),
+            std::slice::from_ref(&kept)
+        );
+        assert!(noted(ledger, &done, None, Some(&stranger)).is_empty());
+        assert_eq!(noted(ledger, &done, Some(change), Some(&stranger)), [kept]);
     }
 
     #[test]

@@ -247,20 +247,42 @@ pub struct Undid {
     pub gone: Vec<ChangeId>,
 }
 
-/// A run by session or time that stopped: the undos it had opened or found
-/// by then, in the repos before the one it stopped in, and why it stopped.
-/// Run again, it finds them rather than open more.
+/// A run that stopped: the undos it had found or opened by then, the PR it
+/// opened and stopped before recording, if it got that far, and why it
+/// stopped. Run again, it finds them rather than open more.
 #[derive(Debug)]
 pub struct Stopped {
     pub done: Box<Undid>,
-    pub error: UndoError,
+    pub unrecorded: Option<Unrecorded>,
+    pub error: Box<UndoError>,
+}
+
+/// An undo's PR, opened, that the run stopped before recording: the next
+/// run reads it from its branch and records it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Unrecorded {
+    pub repo: Repo,
+    pub pr: u64,
+}
+
+impl Unrecorded {
+    pub fn url(&self) -> String {
+        format!("https://github.com/{}/pull/{}", self.repo, self.pr)
+    }
 }
 
 impl Stopped {
-    /// Whether it undid nothing because the ledger refused what was asked
-    /// ([`UndoError::refused`]).
+    /// Whether it did nothing because the ledger refused what was asked
+    /// ([`UndoError::refused`]): it found no undo and opened none.
     pub fn refused(&self) -> bool {
-        self.done.undos.is_empty() && self.error.refused()
+        self.done.undos.is_empty() && self.unrecorded.is_none() && self.error.refused()
+    }
+
+    /// The same stop, after `undos` and `gone` from earlier in the run.
+    fn after(mut self, undos: Vec<Undone>, gone: Vec<ChangeId>) -> Self {
+        self.done.undos.splice(0..0, undos);
+        self.done.gone.splice(0..0, gone);
+        self
     }
 }
 
@@ -268,8 +290,27 @@ impl From<UndoError> for Stopped {
     fn from(error: UndoError) -> Self {
         Self {
             done: Box::default(),
-            error,
+            unrecorded: None,
+            error: Box::new(error),
         }
+    }
+}
+
+impl From<ApiError> for Stopped {
+    fn from(e: ApiError) -> Self {
+        UndoError::from(e).into()
+    }
+}
+
+impl From<StoreError> for Stopped {
+    fn from(e: StoreError) -> Self {
+        UndoError::from(e).into()
+    }
+}
+
+impl From<IngestError> for Stopped {
+    fn from(e: IngestError) -> Self {
+        UndoError::from(e).into()
     }
 }
 
@@ -294,7 +335,7 @@ pub fn undo(
     source: &dyn Source,
     config: &Config,
     change: ChangeId,
-) -> Result<Undone, UndoError> {
+) -> Result<Undone, Stopped> {
     let repo = store
         .ledger()
         .change(change)
@@ -305,10 +346,10 @@ pub fn undo(
     let ledger = store.ledger();
     let x = ledger.change(change).expect("in the ledger");
     if x.landing.is_none() {
-        return Err(UndoError::NotLanded(change));
+        return Err(UndoError::NotLanded(change).into());
     }
     if let Some(by) = x.reverted_by {
-        return Err(UndoError::Reverted { change, by });
+        return Err(UndoError::Reverted { change, by }.into());
     }
     if let Some(found) = found(ledger, change, recorded)? {
         return Ok(found);
@@ -361,12 +402,7 @@ pub fn undo_actor(
                 got.undos.extend(one.undos);
                 got.gone.extend(one.gone);
             }
-            Err(error) => {
-                return Err(Stopped {
-                    done: Box::new(got),
-                    error,
-                });
-            }
+            Err(stopped) => return Err(stopped.after(got.undos, got.gone)),
         }
     }
     if got.undos.is_empty() && got.gone.is_empty() {
@@ -409,7 +445,7 @@ fn group(
     repo: &Repo,
     asked: &Asked,
     pick: &dyn Fn(&Change) -> bool,
-) -> Result<Undid, UndoError> {
+) -> Result<Undid, Stopped> {
     let picked = |store: &Store| -> Vec<ChangeId> {
         let mut picked: Vec<&Change> = store
             .ledger()
@@ -436,14 +472,17 @@ fn group(
             Ok(None) => todo.push(id),
             // Its undo landed and was undone: undoing that is what reverts it.
             Err(UndoError::UndoneUndo { .. }) => {}
-            Err(e) => return Err(e),
+            Err(e) => return Err(Stopped::from(e).after(got, Vec::new())),
         }
     }
     let mut gone = Vec::new();
-    if !todo.is_empty()
-        && let Some(opened) = open(store, forge, source, config, repo, &todo, asked, &mut gone)?
-    {
-        got.push(opened);
+    if !todo.is_empty() {
+        match open(store, forge, source, config, repo, &todo, asked, &mut gone) {
+            Ok(Some(opened)) => got.push(opened),
+            Ok(None) => {}
+            // What it found is told all the same.
+            Err(stopped) => return Err(stopped.after(got, gone)),
+        }
     }
     if let Some(first) = got.first_mut() {
         first.recorded += recorded;
@@ -502,7 +541,7 @@ fn open(
     changes: &[ChangeId],
     asked: &Asked,
     gone: &mut Vec<ChangeId>,
-) -> Result<Option<Undone>, UndoError> {
+) -> Result<Option<Undone>, Stopped> {
     let from = gone.len();
     let full = repo.to_string();
     let trunk_name = forge.default_branch(&full)?;
@@ -597,7 +636,14 @@ fn open(
         &marker,
     );
     let pr = forge.open_pull(&full, &branch, &trunk_name, &title, &body)?;
-    let (undo, recorded) = record(store, source, config, repo, pr, &marker)?;
+    let (undo, recorded) =
+        record(store, source, config, repo, pr, &marker).map_err(|error| Stopped {
+            unrecorded: Some(Unrecorded {
+                repo: repo.clone(),
+                pr,
+            }),
+            ..error.into()
+        })?;
     Ok(Some(Undone {
         change: undo,
         pr,

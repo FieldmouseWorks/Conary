@@ -507,13 +507,13 @@ any of what it reverts, it
 finds the undo it opened rather than make another, and a closed one makes
 way for the next.
 
-A run by session that stops partway, GitHub erring in one repo, tells the
-undos it opened in the repos before it all the same, and exits as failed,
-for it to be asked again. `cn` exits 75 when GitHub couldn't be asked, and
+A run that stops partway, GitHub erring in one repo, tells the undos it
+found or opened before then all the same, and a PR it opened and stopped
+before recording, and exits as failed, for it to be asked again. `cn` exits 75 when GitHub couldn't be asked, and
 65 when the ledger refused what was asked before anything was done: no such
 change, one not landed or reverted already, nothing landed by the session or
 since the time, or a repo the ledger keeps no change of, which an undo by
-time asks nothing of GitHub about. Any other failure may have stopped
+time asks nothing of GitHub about, its notes included. Any other failure may have stopped
 partway.
 
 The ledger records each undo as an op on its revert change: the changes it

@@ -52,6 +52,8 @@ struct Hub {
     turns: RefCell<HashMap<u64, Vec<(String, &'static str)>>>,
     /// Repos GitHub errs for.
     down: RefCell<Vec<String>>,
+    /// PRs GitHub errs for when they're read.
+    lost: RefCell<Vec<u64>>,
     n: Cell<u64>,
     /// Seconds since noon, a tick for each thing that happens.
     clock: Cell<u64>,
@@ -81,6 +83,7 @@ impl Hub {
             settled: RefCell::new(Vec::new()),
             turns: RefCell::new(HashMap::new()),
             down: RefCell::new(Vec::new()),
+            lost: RefCell::new(Vec::new()),
             n: Cell::new(0),
             clock: Cell::new(0),
         }
@@ -310,6 +313,9 @@ fn parse<T: serde::de::DeserializeOwned>(v: &Value) -> T {
 
 impl Source for Hub {
     fn pull(&self, _: &str, number: u64) -> Result<PullRequest, ApiError> {
+        if self.lost.borrow().contains(&number) {
+            return Err(ApiError::new(format!("#{number}: Server Error")));
+        }
         Ok(parse(&self.pull_json(number)))
     }
 
@@ -421,7 +427,7 @@ fn land(store: &mut Store, change: ChangeId, before: &str, after: &str) {
         .unwrap();
 }
 
-fn undo_of(store: &mut Store, hub: &Hub, x: ChangeId) -> Result<Undone, UndoError> {
+fn undo_of(store: &mut Store, hub: &Hub, x: ChangeId) -> Result<Undone, Stopped> {
     undo(store, hub, hub, &config(), x)
 }
 
@@ -521,7 +527,7 @@ fn a_revert_that_changes_nothing_opens_nothing() {
     // Trunk took the change out some other way.
     hub.merging.replace(Some("trunk".into()));
     let x = landed(&mut store, Some("tools: a plain sentence"));
-    let err = undo_of(&mut store, &hub, x).unwrap_err();
+    let err = *undo_of(&mut store, &hub, x).unwrap_err().error;
     assert!(matches!(err, UndoError::Nothing(c) if c == x), "{err}");
     assert!(hub.pulls.borrow().is_empty());
     assert!(hub.branch("", &undo_branch(x, 1)).unwrap().is_none());
@@ -587,7 +593,7 @@ fn an_undo_landed_on_github_is_read_before_another_is_made() {
     let first = undo_of(&mut store, &hub, x).unwrap();
     hub.land(first.pr);
     assert!(matches!(
-        undo_of(&mut store, &hub, x),
+        undo_of(&mut store, &hub, x).map_err(|s| *s.error),
         Err(UndoError::Reverted { change, by }) if change == x && by == first.change
     ));
     assert_eq!(store.ledger().change(x).unwrap().status(), Kept::Reverted);
@@ -622,7 +628,7 @@ fn a_stopped_run_s_pr_is_its_undo_whatever_became_of_it() {
     let x = landed(&mut store, Some("tools: a plain sentence"));
     let pr = stopped(&hub, x);
     hub.land(pr);
-    let err = undo_of(&mut store, &hub, x).unwrap_err();
+    let err = *undo_of(&mut store, &hub, x).unwrap_err().error;
     let u = store.ledger().by_pr(&repo(), pr).unwrap().id;
     assert!(
         matches!(err, UndoError::Reverted { change, by } if change == x && by == u),
@@ -660,7 +666,7 @@ fn a_stopped_run_s_pr_is_its_undo_whatever_became_of_it() {
     let w = undo_of(&mut store, &hub, u).unwrap();
     // Landed, and nothing has read that since.
     hub.land(w.pr);
-    let err = undo_of(&mut store, &hub, z).unwrap_err();
+    let err = *undo_of(&mut store, &hub, z).unwrap_err().error;
     assert!(
         matches!(err, UndoError::UndoneUndo { change, undo, by }
             if change == z && undo == u && by == w.change),
@@ -676,7 +682,7 @@ fn only_a_landed_change_not_yet_reverted_is_undone() {
     let hub = Hub::new();
     let unknown = ChangeId::new().unwrap();
     assert!(matches!(
-        undo_of(&mut store, &hub, unknown),
+        undo_of(&mut store, &hub, unknown).map_err(|s| *s.error),
         Err(UndoError::Unknown(c)) if c == unknown
     ));
     let open = ChangeId::new().unwrap();
@@ -693,7 +699,7 @@ fn only_a_landed_change_not_yet_reverted_is_undone() {
         })
         .unwrap();
     assert!(matches!(
-        undo_of(&mut store, &hub, open),
+        undo_of(&mut store, &hub, open).map_err(|s| *s.error),
         Err(UndoError::NotLanded(c)) if c == open
     ));
     let x = landed(&mut store, Some("tools: a plain sentence"));
@@ -706,7 +712,7 @@ fn only_a_landed_change_not_yet_reverted_is_undone() {
     );
     assert_eq!(store.ledger().change(x).unwrap().status(), Kept::Reverted);
     assert!(matches!(
-        undo_of(&mut store, &hub, x),
+        undo_of(&mut store, &hub, x).map_err(|s| *s.error),
         Err(UndoError::Reverted { change, by }) if change == x && by == u.change
     ));
     assert_eq!(hub.pulls.borrow().len(), 1);
@@ -720,7 +726,7 @@ fn only_a_landed_change_not_yet_reverted_is_undone() {
     );
     assert_eq!(store.ledger().change(x).unwrap().status(), Kept::Landed);
     assert!(matches!(
-        undo_of(&mut store, &hub, x),
+        undo_of(&mut store, &hub, x).map_err(|s| *s.error),
         Err(UndoError::UndoneUndo { change, undo, by })
             if change == x && undo == u.change && by == w.change
     ));
@@ -766,7 +772,7 @@ fn an_undo_reopened_on_github_is_found_not_made_again() {
     hub.reopen(first.pr);
     hub.land(first.pr);
     assert!(matches!(
-        undo_of(&mut store, &hub, x),
+        undo_of(&mut store, &hub, x).map_err(|s| *s.error),
         Err(UndoError::Reverted { change, by }) if change == x && by == first.change
     ));
     assert_eq!(hub.pulls.borrow().len(), 1);
@@ -785,7 +791,7 @@ fn an_undo_s_own_undo_is_read_down_the_tree() {
     // landed: nothing has read either.
     let pr = stopped(&hub, u.change);
     hub.land(pr);
-    let err = undo_of(&mut store, &hub, x).unwrap_err();
+    let err = *undo_of(&mut store, &hub, x).unwrap_err().error;
     let w = store.ledger().by_pr(&repo(), pr).unwrap().id;
     assert!(
         matches!(err, UndoError::UndoneUndo { change, undo, by }
@@ -849,7 +855,7 @@ fn a_stopped_run_that_merged_after_its_rival_landed_is_trunk_moving_outside() {
             Some(false) => _ = ingest::pull(&mut store, &hub, &config(), &repo(), second).unwrap(),
             None => {}
         }
-        let err = undo_of(&mut store, &hub, x).unwrap_err();
+        let err = *undo_of(&mut store, &hub, x).unwrap_err().error;
         assert!(
             matches!(err, UndoError::Reverted { change, by } if change == x && by == first.change),
             "{read_first:?}: {err}"
@@ -864,7 +870,7 @@ fn a_stopped_run_that_merged_after_its_rival_landed_is_trunk_moving_outside() {
         assert_eq!(outside.len(), 1, "{read_first:?}");
         assert_eq!(outside[0].after.as_str(), again);
         // Taken up again, nothing's new.
-        let err = undo_of(&mut store, &hub, x).unwrap_err();
+        let err = *undo_of(&mut store, &hub, x).unwrap_err().error;
         assert!(matches!(err, UndoError::Reverted { .. }), "{err}");
     }
 }

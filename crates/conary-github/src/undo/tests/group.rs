@@ -202,7 +202,7 @@ fn since_undoes_what_landed_on_the_repo_after_the_time() {
         .unwrap()
         .at;
     let err = undo_since(&mut store, &hub, &hub, &config(), &repo(), last).unwrap_err();
-    assert!(matches!(err.error, UndoError::NoneLanded(_)), "{err}");
+    assert!(matches!(*err.error, UndoError::NoneLanded(_)), "{err}");
     assert!(err.refused());
 }
 
@@ -217,7 +217,7 @@ fn a_session_s_run_that_stops_in_one_repo_keeps_the_undos_it_opened_before() {
     // burrow's turn comes first; then GitHub errs for remi.
     hub.down.borrow_mut().push(repo().to_string());
     let err = actor(&mut store, &hub).unwrap_err();
-    assert!(matches!(err.error, UndoError::Api(_)), "{err}");
+    assert!(matches!(*err.error, UndoError::Api(_)), "{err}");
     assert!(!err.refused());
     assert_eq!(err.done.undos.len(), 1);
     let opened = &err.done.undos[0];
@@ -237,6 +237,65 @@ fn a_session_s_run_that_stops_in_one_repo_keeps_the_undos_it_opened_before() {
 }
 
 #[test]
+fn a_run_that_stops_in_a_repo_keeps_the_undo_it_found_there() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = store(&dir);
+    let hub = Hub::new();
+    let s = Some(SESSION);
+    chain(&mut store, &hub, &repo(), 10, &[s]);
+    let first = actor(&mut store, &hub).unwrap().undos[0].clone();
+    // The session landed another; opening its undo, GitHub errs.
+    chain(&mut store, &hub, &repo(), 11, &[s]);
+    hub.down.borrow_mut().push(repo().to_string());
+    let err = actor(&mut store, &hub).unwrap_err();
+    assert!(matches!(*err.error, UndoError::Api(_)), "{err}");
+    assert_eq!(err.done.undos.len(), 1);
+    assert_eq!(err.done.undos[0].pr, first.pr);
+    assert_eq!(err.done.undos[0].how, How::Found);
+    assert!(!err.refused());
+}
+
+#[test]
+fn a_pr_opened_and_not_recorded_is_told_and_recorded_when_asked_again() {
+    for by_change in [true, false] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = store(&dir);
+        let hub = Hub::new();
+        let ids = chain(&mut store, &hub, &repo(), 10, &[Some(SESSION)]);
+        // The PR it opens next can't be read back to record it.
+        let next = 100 + hub.pulls.borrow().len() as u64;
+        hub.lost.borrow_mut().push(next);
+        let run = |store: &mut Store| {
+            if by_change {
+                undo(store, &hub, &hub, &config(), ids[0]).map(|u| u.pr)
+            } else {
+                actor(store, &hub).map(|u| u.undos[0].pr)
+            }
+        };
+        let err = run(&mut store).unwrap_err();
+        assert!(matches!(*err.error, UndoError::Ingest(_)), "{err}");
+        assert_eq!(
+            err.unrecorded,
+            Some(Unrecorded {
+                repo: repo(),
+                pr: next
+            })
+        );
+        assert_eq!(
+            err.unrecorded.as_ref().unwrap().url(),
+            format!("https://github.com/FieldmouseWorks/remi/pull/{next}")
+        );
+        assert!(!err.refused());
+        assert_eq!(store.ledger().undo_of(ids[0]), None);
+        // Asked again, it reads that PR from its branch and records it.
+        hub.lost.borrow_mut().clear();
+        assert_eq!(run(&mut store).unwrap(), next);
+        assert!(store.ledger().undo_of(ids[0]).is_some());
+        assert_eq!(hub.pulls.borrow().len(), 1);
+    }
+}
+
+#[test]
 fn a_time_s_undo_in_a_repo_the_ledger_keeps_nothing_of_is_refused() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
@@ -248,7 +307,7 @@ fn a_time_s_undo_in_a_repo_the_ledger_keeps_nothing_of_is_refused() {
     hub.pulls.borrow_mut().clear();
     let err = undo_since(&mut store, &hub, &hub, &config(), &stranger, 0).unwrap_err();
     assert!(
-        matches!(&err.error, UndoError::Unkept(r) if r == &stranger),
+        matches!(&*err.error, UndoError::Unkept(r) if r == &stranger),
         "{err}"
     );
     assert!(err.refused());
@@ -277,8 +336,15 @@ fn what_the_ledger_refuses_is_told_apart_from_what_stopped_a_run() {
         assert!(Stopped::from(e).refused());
     }
     assert!(!UndoError::Api(ApiError::new("Server Error")).refused());
-    // A refusal after an undo was opened is a run that stopped partway.
+    // A refusal after an undo was opened, recorded or not, is a run that
+    // stopped partway.
     let mut stopped = Stopped::from(UndoError::NoTrunk("main".into()));
+    stopped.unrecorded = Some(Unrecorded {
+        repo: repo(),
+        pr: 7,
+    });
+    assert!(!stopped.refused());
+    stopped.unrecorded = None;
     stopped.done.undos.push(Undone {
         change: id,
         pr: 7,
@@ -338,7 +404,7 @@ fn an_actor_s_undo_isn_t_the_actor_s_change_once_it_lands() {
     // Landed, the session has nothing left to undo: the undo isn't its.
     let err = actor(&mut store, &hub).unwrap_err();
     assert!(
-        matches!(err.error, UndoError::NoneLanded(Asked::Actor { .. })),
+        matches!(*err.error, UndoError::NoneLanded(Asked::Actor { .. })),
         "{err}"
     );
     assert_eq!(hub.pulls.borrow().len(), 1);
@@ -396,7 +462,9 @@ fn a_stopped_run_s_pr_merged_and_its_branch_gone_is_found_all_the_same() {
     // same.
     hub.land(pr);
     assert!(hub.branches("", "conary/").unwrap().is_empty());
-    let err = undo(&mut store, &hub, &hub, &config(), ids[0]).unwrap_err();
+    let err = *undo(&mut store, &hub, &hub, &config(), ids[0])
+        .unwrap_err()
+        .error;
     let by = store.ledger().by_pr(&repo(), pr).unwrap().id;
     assert!(
         matches!(err, UndoError::Reverted { change, by: b } if change == ids[0] && b == by),
@@ -417,7 +485,9 @@ fn a_pr_from_the_branch_that_isn_t_an_undo_keeps_it() {
     let pr = hub
         .open_pull("", &branch, "main", "t", "its marker taken out")
         .unwrap();
-    let err = undo(&mut store, &hub, &hub, &config(), ids[0]).unwrap_err();
+    let err = *undo(&mut store, &hub, &hub, &config(), ids[0])
+        .unwrap_err()
+        .error;
     assert!(
         matches!(&err, UndoError::Taken { branch: b, pr: p } if b == &branch && *p == pr),
         "{err}"
@@ -513,7 +583,7 @@ fn a_session_that_landed_nothing_has_nothing_to_undo() {
     chain(&mut store, &hub, &repo(), 10, &[Some("other")]);
     let err = actor(&mut store, &hub).unwrap_err();
     assert!(
-        matches!(err.error, UndoError::NoneLanded(Asked::Actor { .. })),
+        matches!(*err.error, UndoError::NoneLanded(Asked::Actor { .. })),
         "{err}"
     );
 }

@@ -18,5 +18,9 @@ conary-github = { version = "0.0.0", path = "../conary-github" }
 serde = "1.0.229"
 serde_json = "1.0.154"
 
+[dev-dependencies]
+ed25519-dalek = "3.0.0"
+tempfile = "3.27.0"
+
 [lints]
 workspace = true
