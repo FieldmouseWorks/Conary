@@ -424,6 +424,25 @@ fn record(
         repo,
     };
     let body = pr.body.clone().unwrap_or_default();
+    // `cn undo` marks what its PR reverts, so the PR is read as an undo
+    // whatever reads it first. A fork's branch is anyone's to name.
+    let own = |r: &crate::api::RefRepo| {
+        let name = r.full_name.as_deref().and_then(|n| n.parse::<Repo>().ok());
+        name.as_ref() == Some(repo)
+    };
+    let undo = pr
+        .head
+        .repo
+        .as_ref()
+        .is_some_and(own)
+        .then(|| Undo::read(&pr.head.name, &body))
+        .flatten();
+    // Who wrote it and what for are the author's words, not the marker's.
+    let said = if undo.is_some() {
+        Undo::without(&body)
+    } else {
+        body.clone()
+    };
 
     let change = match w.store.ledger().by_pr(repo, pr.number) {
         Some(c) => c.id,
@@ -433,7 +452,7 @@ fn record(
                 change,
                 repo: repo.clone(),
                 pr: pr.number,
-                author: actor(pr, &body),
+                author: actor(pr, &said),
             })?;
             change
         }
@@ -442,7 +461,7 @@ fn record(
         change,
         summary: pr.title.clone(),
         body: body.clone(),
-        task: task(repo, &body),
+        task: task(repo, &said),
     })?;
 
     let head = commit(&pr.head.sha)?;
@@ -452,15 +471,7 @@ fn record(
         base: base.clone(),
         head: head.clone(),
     })?;
-    // `cn undo` marks what its PR reverts, so the PR is read as an undo
-    // whatever reads it first. A fork's branch is anyone's to name.
-    let own = |r: &crate::api::RefRepo| {
-        let name = r.full_name.as_deref().and_then(|n| n.parse::<Repo>().ok());
-        name.as_ref() == Some(repo)
-    };
-    if pr.head.repo.as_ref().is_some_and(own)
-        && let Some(marker) = Undo::read(&pr.head.name, &body)
-    {
+    if let Some(marker) = undo {
         w.undo(change, marker)?;
     }
 

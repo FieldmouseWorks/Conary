@@ -16,7 +16,7 @@ use conary_core::why::{self, Why};
 use conary_core::{ChangeId, Ledger};
 use conary_core::{reader, rpc};
 use conary_github::anchor::{self, Anchored};
-use conary_github::undo::{self, How, Undone};
+use conary_github::undo::{self, How, Undid, Undone};
 use conary_github::{Api, ApiError, Config, Etags, Ingested, Tokens, ingest, notes};
 
 mod train;
@@ -289,7 +289,10 @@ fn run(cli: &Cli) -> Result<()> {
             let got = match (change, actor, since.zip(repo.as_ref())) {
                 (Some(change), ..) => {
                     let id = named(a.store.ledger(), change)?;
-                    undo::undo(&mut a.store, &api, &api, &config, id).map(|u| vec![u])
+                    undo::undo(&mut a.store, &api, &api, &config, id).map(|u| Undid {
+                        undos: vec![u],
+                        gone: Vec::new(),
+                    })
                 }
                 (_, Some(session), _) => {
                     undo::undo_actor(&mut a.store, &api, &api, &config, session)
@@ -304,7 +307,7 @@ fn run(cli: &Cli) -> Result<()> {
             // are its repos' notes.
             let mut repos: Vec<Repo> = got
                 .iter()
-                .flatten()
+                .flat_map(|g| &g.undos)
                 .filter_map(|u| a.store.ledger().change(u.change).map(|c| c.repo.clone()))
                 .collect();
             if let Some(id) = change
@@ -320,9 +323,11 @@ fn run(cli: &Cli) -> Result<()> {
             for r in &repos {
                 write_notes(&api, &a, github, r)?;
             }
-            for u in got? {
-                print_undone(cli, &u, a.store.ledger());
+            let got = got?;
+            for u in &got.undos {
+                print_undone(cli, u, a.store.ledger());
             }
+            print_gone(cli, &got.gone);
         }
         Command::Train { command } => train::run(cli, command)?,
         Command::Why { at, dir } => {
@@ -490,6 +495,21 @@ fn print_undone(cli: &Cli, got: &Undone, ledger: &Ledger) {
                "left": got.left.iter().map(|id| id.to_string()).collect::<Vec<_>>(),
                "opened": opened, "conflicts": conflicts, "recorded": got.recorded})
     );
+}
+
+fn print_gone(cli: &Cli, gone: &[ChangeId]) {
+    if gone.is_empty() {
+        return;
+    }
+    let gone: Vec<String> = gone.iter().map(ChangeId::to_string).collect();
+    if cli.human {
+        println!(
+            "trunk already lacks what these brought: {}",
+            gone.join(", ")
+        );
+    } else {
+        println!("{}", json!({"gone": gone}));
+    }
 }
 
 fn print_why(cli: &Cli, why: &Why) {

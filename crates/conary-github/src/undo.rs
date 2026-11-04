@@ -55,6 +55,13 @@ pub fn undo_branch(change: ChangeId, attempt: usize) -> String {
     format!("{BRANCHES}undo/{change}/{attempt}")
 }
 
+/// The change and attempt an [`undo_branch`] is named for.
+fn attempt_of(branch: &str) -> Option<(ChangeId, usize)> {
+    let rest = branch.strip_prefix(BRANCHES)?.strip_prefix("undo/")?;
+    let (change, attempt) = rest.split_once('/')?;
+    Some((change.parse().ok()?, attempt.parse().ok()?))
+}
+
 /// What an undo's PR reverts and what asked for it, on a line of its body
 /// that `undo` writes, so ingest knows the PR for an undo whatever reads it
 /// first. Only a PR from an [`undo_branch`] in the repo itself is read for
@@ -75,14 +82,22 @@ impl Marker {
 
     /// The marker of a PR from `branch` with `body`, if it's an undo's.
     pub(crate) fn read(branch: &str, body: &str) -> Option<Self> {
-        let rest = branch.strip_prefix(BRANCHES)?.strip_prefix("undo/")?;
-        let (_, attempt) = rest.split_once('/')?;
-        attempt.parse::<usize>().ok()?;
+        attempt_of(branch)?;
         let line = body
             .lines()
             .rev()
             .find_map(|l| l.trim().strip_prefix(MARKER))?;
         serde_json::from_str(line.strip_suffix("-->")?.trim()).ok()
+    }
+
+    /// The body without its marker: what the PR's author says, not what it
+    /// reverts or who asked for that. An actor's undo names its session in
+    /// its marker, and that session isn't the undo's author.
+    pub(crate) fn without(body: &str) -> String {
+        body.lines()
+            .filter(|l| !l.trim().starts_with(MARKER))
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 }
 
@@ -113,6 +128,12 @@ pub enum UndoError {
     Nothing(ChangeId),
     /// Nothing that landed is what was asked for.
     NoneLanded(Asked),
+    /// A PR from the branch the undo is made on isn't an undo: its body
+    /// has lost its marker.
+    Taken {
+        branch: String,
+        pr: u64,
+    },
 }
 
 impl std::fmt::Display for UndoError {
@@ -143,6 +164,10 @@ impl std::fmt::Display for UndoError {
                 write!(f, "nothing to undo has landed since {}", time(*since))
             }
             Self::NoneLanded(Asked::Change) => write!(f, "nothing to undo"),
+            Self::Taken { branch, pr } => write!(
+                f,
+                "#{pr}, from {branch}, has no undo marker in its body: put it back or close #{pr}"
+            ),
         }
     }
 }
@@ -200,6 +225,15 @@ pub struct Undone {
     pub recorded: usize,
 }
 
+/// The undos of what a session or a time asked for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Undid {
+    pub undos: Vec<Undone>,
+    /// What was asked for and trunk already lacks, newest first: its revert
+    /// changes nothing, so no undo takes it.
+    pub gone: Vec<ChangeId>,
+}
+
 /// Opens the PR that reverts `change`'s landing, and records it as its
 /// undo. It reads the change's undos as GitHub has them first,
 /// so run again, it finds the undo it opened rather than open another.
@@ -210,9 +244,16 @@ pub fn undo(
     config: &Config,
     change: ChangeId,
 ) -> Result<Undone, UndoError> {
-    let recorded = refresh(store, forge, source, config, change)?;
+    let repo = store
+        .ledger()
+        .change(change)
+        .ok_or(UndoError::Unknown(change))?
+        .repo
+        .clone();
+    let recorded = strays(store, forge, source, config, &repo)?
+        + refresh(store, forge, source, config, change)?;
     let ledger = store.ledger();
-    let x = ledger.change(change).ok_or(UndoError::Unknown(change))?;
+    let x = ledger.change(change).expect("in the ledger");
     if x.landing.is_none() {
         return Err(UndoError::NotLanded(change));
     }
@@ -222,7 +263,6 @@ pub fn undo(
     if let Some(found) = found(ledger, change, recorded)? {
         return Ok(found);
     }
-    let repo = x.repo.clone();
     let mut got = open(
         store,
         forge,
@@ -230,8 +270,10 @@ pub fn undo(
         config,
         &repo,
         &[change],
-        Asked::Change,
-    )?;
+        &Asked::Change,
+        &mut Vec::new(),
+    )?
+    .ok_or(UndoError::Nothing(change))?;
     got.recorded += recorded;
     Ok(got)
 }
@@ -246,7 +288,7 @@ pub fn undo_actor(
     source: &dyn Source,
     config: &Config,
     session: &str,
-) -> Result<Vec<Undone>, UndoError> {
+) -> Result<Undid, UndoError> {
     let asked = Asked::Actor {
         session: session.to_owned(),
     };
@@ -259,13 +301,16 @@ pub fn undo_actor(
         .collect();
     repos.sort();
     repos.dedup();
-    let mut got = Vec::new();
+    let mut got = Undid {
+        undos: Vec::new(),
+        gone: Vec::new(),
+    };
     for repo in repos {
-        got.extend(group(store, forge, source, config, &repo, &asked, &|c| {
-            by(c)
-        })?);
+        let one = group(store, forge, source, config, &repo, &asked, &|c| by(c))?;
+        got.undos.extend(one.undos);
+        got.gone.extend(one.gone);
     }
-    if got.is_empty() {
+    if got.undos.is_empty() && got.gone.is_empty() {
         return Err(UndoError::NoneLanded(asked));
     }
     Ok(got)
@@ -282,11 +327,11 @@ pub fn undo_since(
     config: &Config,
     repo: &Repo,
     since: i64,
-) -> Result<Vec<Undone>, UndoError> {
+) -> Result<Undid, UndoError> {
     let asked = Asked::Since { since };
     let after = |c: &Change| c.landing.as_ref().is_some_and(|l| l.at > since);
     let got = group(store, forge, source, config, repo, &asked, &after)?;
-    if got.is_empty() {
+    if got.undos.is_empty() && got.gone.is_empty() {
         return Err(UndoError::NoneLanded(asked));
     }
     Ok(got)
@@ -302,7 +347,7 @@ fn group(
     repo: &Repo,
     asked: &Asked,
     pick: &dyn Fn(&Change) -> bool,
-) -> Result<Vec<Undone>, UndoError> {
+) -> Result<Undid, UndoError> {
     let picked = |store: &Store| -> Vec<ChangeId> {
         let mut picked: Vec<&Change> = store
             .ledger()
@@ -313,7 +358,7 @@ fn group(
         picked.sort_by_key(|c| std::cmp::Reverse((c.landing.as_ref().map(|l| l.at), c.pr)));
         picked.into_iter().map(|c| c.id).collect()
     };
-    let mut recorded = 0;
+    let mut recorded = strays(store, forge, source, config, repo)?;
     for id in picked(store) {
         recorded += refresh(store, forge, source, config, id)?;
     }
@@ -332,17 +377,16 @@ fn group(
             Err(e) => return Err(e),
         }
     }
-    if !todo.is_empty() {
-        match open(store, forge, source, config, repo, &todo, asked.clone()) {
-            Ok(opened) => got.push(opened),
-            Err(UndoError::Nothing(_)) if !got.is_empty() => {}
-            Err(e) => return Err(e),
-        }
+    let mut gone = Vec::new();
+    if !todo.is_empty()
+        && let Some(opened) = open(store, forge, source, config, repo, &todo, asked, &mut gone)?
+    {
+        got.push(opened);
     }
     if let Some(first) = got.first_mut() {
         first.recorded += recorded;
     }
-    Ok(got)
+    Ok(Undid { undos: got, gone })
 }
 
 /// The undo of `change` that's open, if any. One landed and undone in turn
@@ -380,10 +424,13 @@ fn found(
 }
 
 /// Opens the PR that reverts `changes`, newest first, as trunk is now, and
-/// records it as their undo, asked by `asked`. The newest one's revert is
-/// the branch's base, trunk merged in; each older one's is merged in after,
-/// so what landed between them stays. One whose revert conflicts is left
-/// out, for an undo of its own.
+/// records it as their undo, asked by `asked`. The newest one whose revert
+/// changes trunk is the branch's base, trunk merged in; each older one's is
+/// merged in after, so what landed between them stays. One whose revert
+/// changes nothing, trunk lacking what it brought already, goes to `gone`;
+/// one whose revert conflicts is left out, for an undo of its own. None
+/// when there's nothing to revert.
+#[allow(clippy::too_many_arguments)]
 fn open(
     store: &mut Store,
     forge: &dyn Reverts,
@@ -391,12 +438,17 @@ fn open(
     config: &Config,
     repo: &Repo,
     changes: &[ChangeId],
-    asked: Asked,
-) -> Result<Undone, UndoError> {
-    let ledger = store.ledger();
-    let newest = ledger.change(changes[0]).expect("picked from the ledger");
+    asked: &Asked,
+    gone: &mut Vec<ChangeId>,
+) -> Result<Option<Undone>, UndoError> {
+    let from = gone.len();
     let full = repo.to_string();
-    let branch = undo_branch(newest.id, newest.undone_by.len() + 1);
+    let trunk_name = forge.default_branch(&full)?;
+    let trunk = forge
+        .branch(&full, &trunk_name)?
+        .ok_or_else(|| UndoError::NoTrunk(trunk_name.clone()))?;
+    let trunk_tree = forge.tree(&full, &trunk)?;
+    let ledger = store.ledger();
     let revert = |x: &Change| -> Result<String, UndoError> {
         let landing = x.landing.as_ref().expect("picked as landed");
         let before = forge.tree(&full, landing.before.as_str())?;
@@ -409,45 +461,61 @@ fn open(
         Ok(forge.make_commit(&full, &before, landing.after.as_str(), &message)?)
     };
 
-    let trunk_name = forge.default_branch(&full)?;
-    let trunk = forge
-        .branch(&full, &trunk_name)?
-        .ok_or_else(|| UndoError::NoTrunk(trunk_name.clone()))?;
-    // A branch already there is an earlier run's, which stopped before its
-    // PR: the same revert, on what trunk was then.
-    if forge.branch(&full, &branch)?.is_none() {
-        forge.create_branch(&full, &branch, &revert(newest)?)?;
-    }
-    let message = format!("Merge {trunk_name} into {branch}");
-    let conflicts = match forge.merge(&full, &branch, &trunk, &message)? {
-        Merged::Commit { .. } | Merged::Already => false,
-        Merged::Conflict => true,
+    let mut rest = changes.iter().copied();
+    let (newest, branch, mut at, conflicts) = loop {
+        let Some(id) = rest.next() else {
+            return Ok(None);
+        };
+        let x = ledger.change(id).expect("picked from the ledger");
+        let branch = undo_branch(id, x.undone_by.len() + 1);
+        afresh(forge, &full, &branch)?;
+        let made = revert(x)?;
+        forge.create_branch(&full, &branch, &made)?;
+        let message = format!("Merge {trunk_name} into {branch}");
+        let tree = match forge.merge(&full, &branch, &trunk, &message)? {
+            Merged::Commit { tree, .. } => Some(tree),
+            Merged::Already => Some(forge.tree(&full, &made)?),
+            Merged::Conflict => None,
+        };
+        match tree {
+            Some(tree) if tree == trunk_tree => {
+                forge.delete_branch(&full, &branch)?;
+                gone.push(id);
+            }
+            Some(tree) => break (x, branch, tree, false),
+            None => break (x, branch, forge.tree(&full, &made)?, true),
+        }
     };
     let (mut reverts, mut left) = (vec![newest.id], Vec::new());
-    for &id in &changes[1..] {
+    for id in rest {
         let x = ledger.change(id).expect("picked from the ledger");
         let message = format!("Revert #{} onto {branch}", x.pr);
         match forge.merge(&full, &branch, &revert(x)?, &message)? {
-            Merged::Commit { .. } | Merged::Already => reverts.push(id),
+            Merged::Commit { tree, .. } if tree != at => {
+                reverts.push(id);
+                at = tree;
+            }
+            Merged::Commit { .. } | Merged::Already => gone.push(id),
             Merged::Conflict => left.push(id),
         }
     }
-    let head = forge
-        .branch(&full, &branch)?
-        .ok_or_else(|| ApiError::new(format!("{full}'s {branch} went as it was made")))?;
-    if !conflicts && forge.tree(&full, &head)? == forge.tree(&full, &trunk)? {
+    if !conflicts && at == trunk_tree {
+        // Together they change nothing; what conflicted with them is
+        // reverted on its own.
         forge.delete_branch(&full, &branch)?;
-        return Err(UndoError::Nothing(newest.id));
+        gone.extend(reverts);
+        return open(store, forge, source, config, repo, &left, asked, gone);
     }
     let x: Vec<&Change> = reverts
         .iter()
         .map(|id| ledger.change(*id).expect("picked"))
         .collect();
-    let skipped: Vec<&Change> = left
-        .iter()
-        .map(|id| ledger.change(*id).expect("picked"))
-        .collect();
-    let title = match &asked {
+    let named = |ids: &[ChangeId]| -> Vec<&Change> {
+        ids.iter()
+            .map(|id| ledger.change(*id).expect("picked"))
+            .collect()
+    };
+    let title = match asked {
         Asked::Change => title(newest),
         Asked::Actor { session } => {
             format!("undo: revert {} from session {session}", count(x.len()))
@@ -456,19 +524,43 @@ fn open(
     };
     let marker = Marker {
         reverts: reverts.clone(),
-        asked,
+        asked: asked.clone(),
     };
-    let body = body(&x, &skipped, &trunk_name, conflicts, &marker);
+    let body = body(
+        &x,
+        &named(&left),
+        &named(&gone[from..]),
+        &trunk_name,
+        conflicts,
+        &marker,
+    );
     let pr = forge.open_pull(&full, &branch, &trunk_name, &title, &body)?;
     let (undo, recorded) = record(store, source, config, repo, pr, &marker)?;
-    Ok(Undone {
+    Ok(Some(Undone {
         change: undo,
         pr,
         reverts,
         left,
         how: How::Opened { conflicts },
         recorded,
-    })
+    }))
+}
+
+/// Clears `branch` for the undo to be made on afresh. One that's there is
+/// a run's that stopped before its PR, made of the reverts it chose then,
+/// which needn't be these. A PR from it would be read as its undo already,
+/// from its marker, so one that isn't keeps its branch.
+fn afresh(forge: &dyn Reverts, full: &str, branch: &str) -> Result<(), UndoError> {
+    if forge.branch(full, branch)?.is_none() {
+        return Ok(());
+    }
+    if let Some(&pr) = forge.pulls_from(full, branch)?.first() {
+        return Err(UndoError::Taken {
+            branch: branch.to_owned(),
+            pr,
+        });
+    }
+    Ok(forge.delete_branch(full, branch)?)
 }
 
 fn count(n: usize) -> String {
@@ -578,6 +670,42 @@ fn stopped(
     }
 }
 
+/// Records every undo a run that stopped before recording it opened in
+/// `repo`, from the branches of attempts the ledger doesn't hold yet. A
+/// group's PR is on its newest change's branch, so this is how each of the
+/// others it reverts finds it. An open PR keeps its branch; one that's
+/// closed is no rival to a new undo, and one that's merged left trunk
+/// without what it reverts, so a new one finds those `gone`. Ops written.
+fn strays(
+    store: &mut Store,
+    forge: &dyn Reverts,
+    source: &dyn Source,
+    config: &Config,
+    repo: &Repo,
+) -> Result<usize, UndoError> {
+    let full = repo.to_string();
+    let mut branches: Vec<(ChangeId, usize, String)> = forge
+        .branches(&full, &format!("{BRANCHES}undo/"))?
+        .into_iter()
+        .filter_map(|b| attempt_of(&b).map(|(change, n)| (change, n, b)))
+        .collect();
+    branches.sort();
+    let mut recorded = 0;
+    for (change, attempt, branch) in branches {
+        let held = store
+            .ledger()
+            .change(change)
+            .is_none_or(|c| &c.repo != repo || c.undone_by.len() >= attempt);
+        if held {
+            continue;
+        }
+        for pr in forge.pulls_from(&full, &branch)? {
+            recorded += ingest::pull(store, source, config, repo, pr)?.recorded;
+        }
+    }
+    Ok(recorded)
+}
+
 fn undone_by(store: &Store, change: ChangeId) -> usize {
     store
         .ledger()
@@ -624,6 +752,7 @@ fn title(x: &Change) -> String {
 fn body(
     reverts: &[&Change],
     left: &[&Change],
+    gone: &[&Change],
     trunk: &str,
     conflicts: bool,
     marker: &Marker,
@@ -653,6 +782,12 @@ fn body(
         body += "\n\nLeft out, since each one's revert conflicts with the ones above: run the \
                  undo again for one of their own.\n";
         for x in left {
+            body += &format!("\n- {}", line(x));
+        }
+    }
+    if !gone.is_empty() {
+        body += &format!("\n\nNot reverted, since {trunk} already lacks what each brought:\n");
+        for x in gone {
             body += &format!("\n- {}", line(x));
         }
     }

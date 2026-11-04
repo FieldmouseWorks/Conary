@@ -61,7 +61,7 @@ fn burrow() -> Repo {
     "FieldmouseWorks/burrow".parse().unwrap()
 }
 
-fn actor(store: &mut Store, hub: &Hub) -> Result<Vec<Undone>, UndoError> {
+fn actor(store: &mut Store, hub: &Hub) -> Result<Undid, UndoError> {
     undo_actor(store, hub, hub, &config(), SESSION)
 }
 
@@ -75,9 +75,10 @@ fn a_session_s_changes_are_undone_by_one_pr_in_each_repo_newest_first() {
     let remi = chain(&mut store, &hub, &repo(), 10, &[s, Some("other"), s]);
     let burrow_ids = chain(&mut store, &hub, &burrow(), 20, &[s]);
     let got = actor(&mut store, &hub).unwrap();
-    assert_eq!(got.len(), 2);
+    assert_eq!(got.undos.len(), 2);
     let in_repo = |r: &Repo| {
-        got.iter()
+        got.undos
+            .iter()
             .find(|g| &store.ledger().change(g.change).unwrap().repo == r)
             .unwrap()
     };
@@ -118,7 +119,7 @@ fn a_session_s_changes_are_undone_by_one_pr_in_each_repo_newest_first() {
     assert_eq!(pr["head"]["ref"], undo_branch(remi[2], 1));
     // Run again, it finds both.
     let again = actor(&mut store, &hub).unwrap();
-    assert!(again.iter().all(|g| g.how == How::Found), "{again:?}");
+    assert!(again.undos.iter().all(|g| g.how == How::Found), "{again:?}");
     assert_eq!(hub.pulls.borrow().len(), 2);
 }
 
@@ -141,13 +142,13 @@ fn a_revert_that_conflicts_with_the_others_is_left_for_an_undo_of_its_own() {
     let tree = hub.trees.borrow()[before.as_str()].clone();
     hub.conflicting.borrow_mut().push(tree);
     let got = actor(&mut store, &hub).unwrap();
-    assert_eq!(got.len(), 1);
+    assert_eq!(got.undos.len(), 1);
     assert_eq!(
-        (got[0].reverts.clone(), got[0].left.clone()),
+        (got.undos[0].reverts.clone(), got.undos[0].left.clone()),
         (vec![ids[2], ids[1]], vec![ids[0]])
     );
     assert_eq!(store.ledger().undo_of(ids[0]), None);
-    let body = hub.pull_json(got[0].pr)["body"]
+    let body = hub.pull_json(got.undos[0].pr)["body"]
         .as_str()
         .unwrap()
         .to_owned();
@@ -157,10 +158,10 @@ fn a_revert_that_conflicts_with_the_others_is_left_for_an_undo_of_its_own() {
     // its revert the branch's base.
     hub.conflicting.borrow_mut().clear();
     let again = actor(&mut store, &hub).unwrap();
-    assert_eq!(again.len(), 2);
-    assert_eq!(again[0].how, How::Found);
-    assert_eq!(again[1].reverts, [ids[0]]);
-    assert_eq!(store.ledger().undo_of(ids[0]), Some(again[1].change));
+    assert_eq!(again.undos.len(), 2);
+    assert_eq!(again.undos[0].how, How::Found);
+    assert_eq!(again.undos[1].reverts, [ids[0]]);
+    assert_eq!(store.ledger().undo_of(ids[0]), Some(again.undos[1].change));
 }
 
 #[test]
@@ -179,11 +180,11 @@ fn since_undoes_what_landed_on_the_repo_after_the_time() {
         .unwrap()
         .at;
     let got = undo_since(&mut store, &hub, &hub, &config(), &repo(), since).unwrap();
-    assert_eq!(got.len(), 1);
-    assert_eq!(got[0].reverts, [ids[2], ids[1]]);
-    let u = store.ledger().change(got[0].change).unwrap();
+    assert_eq!(got.undos.len(), 1);
+    assert_eq!(got.undos[0].reverts, [ids[2], ids[1]]);
+    let u = store.ledger().change(got.undos[0].change).unwrap();
     assert_eq!(u.undo.as_ref().unwrap().asked, Asked::Since { since });
-    let title = hub.pull_json(got[0].pr)["title"]
+    let title = hub.pull_json(got.undos[0].pr)["title"]
         .as_str()
         .unwrap()
         .to_owned();
@@ -225,10 +226,141 @@ fn a_stopped_run_s_pr_for_a_session_is_its_undo_read_from_its_marker() {
         .open_pull("", &undo_branch(ids[1], 1), "main", "t", &marker.line())
         .unwrap();
     let got = actor(&mut store, &hub).unwrap();
-    assert_eq!(got.len(), 1);
-    assert_eq!((got[0].pr, got[0].how), (pr, How::Found));
-    assert_eq!(got[0].reverts, [ids[1], ids[0]]);
-    assert_eq!(store.ledger().undo_of(ids[0]), Some(got[0].change));
+    assert_eq!(got.undos.len(), 1);
+    assert_eq!((got.undos[0].pr, got.undos[0].how), (pr, How::Found));
+    assert_eq!(got.undos[0].reverts, [ids[1], ids[0]]);
+    assert_eq!(store.ledger().undo_of(ids[0]), Some(got.undos[0].change));
+}
+
+/// The tree `id`'s revert makes: trunk's before it landed.
+fn reverted(store: &Store, hub: &Hub, id: ChangeId) -> String {
+    let landing = store.ledger().change(id).unwrap().landing.clone().unwrap();
+    hub.trees.borrow()[landing.before.as_str()].clone()
+}
+
+#[test]
+fn an_actor_s_undo_isn_t_the_actor_s_change_once_it_lands() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = store(&dir);
+    let hub = Hub::new();
+    let s = Some(SESSION);
+    chain(&mut store, &hub, &repo(), 10, &[s, s]);
+    let got = actor(&mut store, &hub).unwrap();
+    let undo = store.ledger().change(got.undos[0].change).unwrap();
+    // Its marker names the session it reverts; its author is who opened it.
+    assert_eq!(undo.author.session, None);
+    hub.land(got.undos[0].pr);
+    // Landed, the session has nothing left to undo: the undo isn't its.
+    let err = actor(&mut store, &hub).unwrap_err();
+    assert!(
+        matches!(err, UndoError::NoneLanded(Asked::Actor { .. })),
+        "{err}"
+    );
+    assert_eq!(hub.pulls.borrow().len(), 1);
+}
+
+#[test]
+fn a_stopped_run_s_pr_is_found_through_any_change_it_reverts() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = store(&dir);
+    let hub = Hub::new();
+    let s = Some(SESSION);
+    let ids = chain(&mut store, &hub, &repo(), 10, &[s, s]);
+    // A run opened the PR on the newest's branch and stopped before
+    // recording it; the older one is asked for alone.
+    let marker = Marker {
+        reverts: vec![ids[1], ids[0]],
+        asked: Asked::Actor {
+            session: SESSION.into(),
+        },
+    };
+    let revert = hub.make_commit("", "x", AFTER, "m").unwrap();
+    hub.create_branch("", &undo_branch(ids[1], 1), &revert)
+        .unwrap();
+    let pr = hub
+        .open_pull("", &undo_branch(ids[1], 1), "main", "t", &marker.line())
+        .unwrap();
+    let got = undo(&mut store, &hub, &hub, &config(), ids[0]).unwrap();
+    assert_eq!((got.pr, got.how), (pr, How::Found));
+    assert_eq!(got.reverts, [ids[1], ids[0]]);
+    assert_eq!(store.ledger().undo_of(ids[1]), Some(got.change));
+    assert_eq!(hub.pulls.borrow().len(), 1);
+}
+
+#[test]
+fn a_pr_from_the_branch_that_isn_t_an_undo_keeps_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = store(&dir);
+    let hub = Hub::new();
+    let ids = chain(&mut store, &hub, &repo(), 10, &[None]);
+    let branch = undo_branch(ids[0], 1);
+    let made = hub.make_commit("", "x", AFTER, "m").unwrap();
+    hub.create_branch("", &branch, &made).unwrap();
+    let pr = hub
+        .open_pull("", &branch, "main", "t", "its marker taken out")
+        .unwrap();
+    let err = undo(&mut store, &hub, &hub, &config(), ids[0]).unwrap_err();
+    assert!(
+        matches!(&err, UndoError::Taken { branch: b, pr: p } if b == &branch && *p == pr),
+        "{err}"
+    );
+    assert_eq!(hub.branch("", &branch).unwrap(), Some(made));
+}
+
+#[test]
+fn what_trunk_already_lacks_is_gone_and_holds_up_nothing_else() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = store(&dir);
+    let hub = Hub::new();
+    let s = Some(SESSION);
+    // Others took out burrow's, and on remi the newest's and the oldest's.
+    let b = chain(&mut store, &hub, &burrow(), 20, &[s]);
+    let r = chain(&mut store, &hub, &repo(), 10, &[s, s, s, Some("other")]);
+    for id in [b[0], r[2], r[0]] {
+        let tree = reverted(&store, &hub, id);
+        hub.gone.borrow_mut().push(tree);
+    }
+    let got = actor(&mut store, &hub).unwrap();
+    assert_eq!(got.gone, [b[0], r[2], r[0]]);
+    assert_eq!(got.undos.len(), 1);
+    // The middle one's revert is the branch's base, and it alone is undone.
+    assert_eq!(got.undos[0].reverts, [r[1]]);
+    assert_eq!(
+        hub.pull_json(got.undos[0].pr)["head"]["ref"],
+        undo_branch(r[1], 1)
+    );
+    for id in [r[2], r[0]] {
+        assert_eq!(store.ledger().undo_of(id), None);
+    }
+    let body = hub.pull_json(got.undos[0].pr)["body"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(body.contains("already lacks") && body.contains(&r[0].to_string()));
+    // Nothing that's gone is left a branch.
+    assert_eq!(hub.branches("", "conary/").unwrap(), [undo_branch(r[1], 1)]);
+}
+
+#[test]
+fn reverts_that_together_change_nothing_leave_what_conflicted_its_own() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = store(&dir);
+    let hub = Hub::new();
+    let s = Some(SESSION);
+    let ids = chain(&mut store, &hub, &repo(), 10, &[s, s, s, Some("other")]);
+    // The newer two's reverts make trunk as it is, and the oldest's
+    // conflicts with them.
+    let trunk = hub.branches.borrow()["main"].clone();
+    let merging = hub.merging.borrow().clone().unwrap();
+    let net = format!("{merging}, then {}", reverted(&store, &hub, ids[1]));
+    hub.trees.borrow_mut().insert(trunk, net);
+    let tree = reverted(&store, &hub, ids[0]);
+    hub.conflicting.borrow_mut().push(tree);
+    let got = actor(&mut store, &hub).unwrap();
+    assert_eq!(got.gone, [ids[2], ids[1]]);
+    assert_eq!(got.undos.len(), 1);
+    assert_eq!(got.undos[0].reverts, [ids[0]]);
+    assert_eq!(store.ledger().undo_of(ids[2]), None);
 }
 
 #[test]

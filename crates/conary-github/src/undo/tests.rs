@@ -29,7 +29,9 @@ fn config() -> Config {
 /// GitHub, as far as undo can tell: commits with their trees and
 /// parents, branches, and the PRs opened from them. Merging trunk into a
 /// revert's branch makes `merging`'s tree, or conflicts when it's `None`;
-/// a branch that holds trunk already is merged already.
+/// a branch that holds trunk already is merged already. Merging another
+/// revert in makes a tree of both. A revert whose tree is `gone` changes
+/// nothing: trunk already lacks what its change brought.
 struct Hub {
     trees: RefCell<HashMap<String, String>>,
     parents: RefCell<HashMap<String, Vec<String>>>,
@@ -37,6 +39,8 @@ struct Hub {
     merging: RefCell<Option<String>>,
     /// Trees whose commit conflicts when it's merged into a branch.
     conflicting: RefCell<Vec<String>>,
+    /// Trees of reverts that change nothing.
+    gone: RefCell<Vec<String>>,
     /// Every commit made, as (tree, parent, message).
     made: RefCell<Vec<(String, String, String)>>,
     pulls: RefCell<Vec<Value>>,
@@ -68,6 +72,7 @@ impl Hub {
             branches: RefCell::new(BTreeMap::from([("main".into(), TRUNK.into())])),
             merging: RefCell::new(Some("trunk without the change".into())),
             conflicting: RefCell::new(Vec::new()),
+            gone: RefCell::new(Vec::new()),
             made: RefCell::new(Vec::new()),
             pulls: RefCell::new(Vec::new()),
             linked: RefCell::new(HashMap::new()),
@@ -198,16 +203,25 @@ impl Branches for Hub {
         if self.holds(&at, head) {
             return Ok(Merged::Already);
         }
-        let Some(tree) = self.merging.borrow().clone() else {
+        let Some(merging) = self.merging.borrow().clone() else {
             return Ok(Merged::Conflict);
         };
-        if self
-            .conflicting
-            .borrow()
-            .contains(&self.trees.borrow()[head])
-        {
+        let (here, there) = {
+            let trees = self.trees.borrow();
+            (trees[&at].clone(), trees[head].clone())
+        };
+        if self.conflicting.borrow().contains(&there) {
             return Ok(Merged::Conflict);
         }
+        let trunk = head == self.branches.borrow()["main"];
+        let gone = self.gone.borrow();
+        let tree = match (trunk, gone.contains(&here)) {
+            (true, true) => there,
+            (true, false) => merging,
+            (false, _) if gone.contains(&there) => here,
+            (false, _) => format!("{here}, then {there}"),
+        };
+        drop(gone);
         let sha = self.sha();
         self.trees.borrow_mut().insert(sha.clone(), tree.clone());
         self.parents
@@ -514,12 +528,18 @@ fn a_run_that_stopped_partway_is_taken_up_where_it_stopped() {
     let mut store = store(&dir);
     let hub = Hub::new();
     let x = landed(&mut store, Some("tools: a plain sentence"));
-    // Its branch made, and no PR: the PR is opened from it as it is.
+    // Its branch made, and no PR: it's made again, since what a stopped
+    // run put on it needn't be what's asked for now.
     let earlier = hub.make_commit("", "before", AFTER, "m").unwrap();
     hub.create_branch("", &undo_branch(x, 1), &earlier).unwrap();
     let got = undo_of(&mut store, &hub, x).unwrap();
     assert_eq!(got.how, How::Opened { conflicts: false });
-    assert_eq!(hub.made.borrow().len(), 1);
+    let head = hub.pull_json(got.pr)["head"]["sha"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(!hub.holds(&head, &earlier));
+    assert_eq!(hub.made.borrow().len(), 2);
 
     // Its PR opened, and not recorded: it's recorded.
     let dir = tempfile::tempdir().unwrap();

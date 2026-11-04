@@ -489,17 +489,22 @@ after it, and trunk is then merged into its branch,
 at the bare revert. It takes its title from what it reverts, as
 `area: undo #N, sentence`. By session or time, the undo reverts each
 change that nothing reverts or is undoing yet, newest first: the newest
-one's revert is the branch's base, named for it, with trunk merged in, and
-each older one's revert is merged in after it, so what others landed
-between them stays. One whose revert conflicts with the rest is left out,
-named in the PR, for an undo of its own when it's asked again; the undo
-records only what it reverts. A session's changes in several repos take an
-undo in each. Before anything else, `undo` reads each change's undos as
-GitHub has them now, and theirs in turn, since an undo of an undo puts the
-change back: each one the ledger holds, closed ones too, and any PR a run
-that stopped before recording it left, open, closed or merged. So asked
-again, it finds the undo it opened rather than make another, and a closed
-one makes way for the next.
+one whose revert changes trunk is the branch's base, named for it, with
+trunk merged in, and each older one's revert is merged in after it, so what
+others landed between them stays. One whose revert conflicts with the rest
+is left out, named in the PR, for an undo of its own when it's asked again;
+one whose revert changes nothing, trunk lacking what it brought already, is
+named as gone and takes no undo; the undo records only what it reverts. A
+session's changes in several repos take an undo in each. A branch is made
+afresh each time: one a stopped run left without a PR holds the reverts it
+chose, which needn't be these. Before anything else, `undo` reads each
+change's undos as GitHub has them now, and theirs in turn, since an undo of
+an undo puts the change back: each one the ledger holds, closed ones too,
+and any PR a run that stopped before recording it left, open, closed or
+merged, from the change's own next branch or, for a group's, from any undo
+branch still in the repo. So asked again, by any of what it reverts, it
+finds the undo it opened rather than make another, and a closed one makes
+way for the next.
 
 The ledger records each undo as an op on its revert change: the changes it
 reverts, all landed in its repo, and what asked for it (a change, a session
@@ -517,7 +522,9 @@ after doesn't win. Reverting nothing, a closed one is recorded whenever
 it's found, beside whatever took its place. Ingest knows an undo's PR by
 the marker line `undo` writes in its body, saying what it reverts and what
 asked for it, on a branch `undo` made in the repo itself, so one read
-before `undo` records it is judged as an undo all the same.
+before `undo` records it is judged as an undo all the same. The marker is
+the undo's own: its author and task are read from the body without it, so
+a session's undo is never taken for that session's change.
 An undo that leads back to itself through what its undos revert is refused.
 
 ## 6. The landing flow
