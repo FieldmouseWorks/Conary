@@ -204,8 +204,10 @@ dependencies = [
  "clap",
  "conary-core",
  "conary-github",
+ "ed25519-dalek",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
