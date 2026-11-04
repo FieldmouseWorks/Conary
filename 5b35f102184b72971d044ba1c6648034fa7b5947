@@ -1,0 +1,131 @@
+{
+  "conary": "note v1",
+  "change": "0y4jngtt0g2xeqb3ww24y140j3",
+  "repo": {
+    "owner": "fieldmouseworks",
+    "name": "conary"
+  },
+  "pr": 198,
+  "url": "https://github.com/fieldmouseworks/conary/pull/198",
+  "summary": "undo: tell what a stopped run opened, and a refusal apart from a stop",
+  "task": "fieldmouseworks/conary#173",
+  "author": {
+    "kind": "agent",
+    "login": "TusanHomichi",
+    "session": "https://claude.ai/code/session_01BkHcyDYaKnE7mRRMdYCFVC"
+  },
+  "landing": {
+    "revision": "8d2dfb6b7efb1e22310e2ffed1e673e289e68c6dc9b3d173d0dd6a0f272fb3e9",
+    "before": "a857a15691ab3b7d1cc15c9c2772e324c68655bf",
+    "after": "5b35f102184b72971d044ba1c6648034fa7b5947",
+    "by": {
+      "kind": "status",
+      "login": "fieldmouseworks-steward[bot]"
+    },
+    "at": 1793836356376
+  },
+  "evidence": [
+    {
+      "kind": "ci",
+      "check": "check / lane into main",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/41935658464/job/126943340817"
+    },
+    {
+      "kind": "ci",
+      "check": "check / commits",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/41935658464/job/126943340444"
+    },
+    {
+      "kind": "ci",
+      "check": "house",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/41935658078/job/126943339084"
+    },
+    {
+      "kind": "ci",
+      "check": "house/title (#198)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/41935658078"
+    },
+    {
+      "kind": "ci",
+      "check": "house/rust-first (#198)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/41935658078"
+    },
+    {
+      "kind": "ci",
+      "check": "house/timers (#198)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/41935658078"
+    },
+    {
+      "kind": "ci",
+      "check": "house/file-size (#198)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/41935658078"
+    },
+    {
+      "kind": "ci",
+      "check": "house/model-names (#198)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/41935658078"
+    },
+    {
+      "kind": "ci",
+      "check": "check / check",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/41935658464/job/126943384893"
+    },
+    {
+      "kind": "review",
+      "check": "codex",
+      "result": "fail",
+      "source": "https://github.com/FieldmouseWorks/Conary/pull/198#pullrequestreview-5777604078"
+    },
+    {
+      "kind": "ci",
+      "check": "house",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/41936267456/job/126945355784"
+    },
+    {
+      "kind": "ci",
+      "check": "house/title (#198)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/41936267456"
+    },
+    {
+      "kind": "ci",
+      "check": "house/rust-first (#198)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/41936267456"
+    },
+    {
+      "kind": "ci",
+      "check": "house/timers (#198)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/41936267456"
+    },
+    {
+      "kind": "ci",
+      "check": "house/file-size (#198)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/41936267456"
+    },
+    {
+      "kind": "ci",
+      "check": "house/model-names (#198)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/41936267456"
+    },
+    {
+      "kind": "review",
+      "check": "codex",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/pull/198#pullrequestreview-5777668728"
+    }
+  ]
+}
