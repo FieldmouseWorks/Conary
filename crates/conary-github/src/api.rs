@@ -872,14 +872,15 @@ impl crate::undo::Reverts for Api {
         Ok(made.number)
     }
 
-    fn pull_from(&self, repo: &str, head: &str) -> Result<Option<u64>, ApiError> {
+    fn pulls_from(&self, repo: &str, head: &str) -> Result<Vec<u64>, ApiError> {
         // `head` filters by OWNER:BRANCH, so a fork's branch of the same
-        // name is never taken for the repo's own.
+        // name is never taken for the repo's own. It matches a PR's head as
+        // it was opened, so a merged PR's deleted branch still finds it.
         let owner = repo.split('/').next().unwrap_or(repo);
-        let open: Vec<PullNumber> = self.get(&format!(
-            "/repos/{repo}/pulls?state=open&head={owner}:{head}"
+        let found: Vec<PullNumber> = self.pages(&format!(
+            "/repos/{repo}/pulls?state=all&head={owner}:{head}&sort=created&direction=asc"
         ))?;
-        Ok(open.first().map(|p| p.number))
+        Ok(found.into_iter().map(|p| p.number).collect())
     }
 }
 

@@ -36,8 +36,9 @@ pub trait Reverts: Branches {
         title: &str,
         body: &str,
     ) -> Result<u64, ApiError>;
-    /// The open PR from the repo's own branch `head`, if there is one.
-    fn pull_from(&self, repo: &str, head: &str) -> Result<Option<u64>, ApiError>;
+    /// Every PR from the repo's own branch `head`, open, closed or merged,
+    /// whether the branch is there still or not: oldest first.
+    fn pulls_from(&self, repo: &str, head: &str) -> Result<Vec<u64>, ApiError>;
 }
 
 /// Where the `attempt`th undo of `change` is made. A run that stops
@@ -150,8 +151,8 @@ pub struct Undone {
 }
 
 /// Opens the PR that reverts `change`'s landing, and records it as its
-/// undo. Run again, it finds the undo it opened, in the ledger or on
-/// GitHub, rather than open another.
+/// undo. It reads the change's undos as GitHub has them first,
+/// so run again, it finds the undo it opened rather than open another.
 pub fn undo(
     store: &mut Store,
     forge: &dyn Reverts,
@@ -159,6 +160,7 @@ pub fn undo(
     config: &Config,
     change: ChangeId,
 ) -> Result<Undone, UndoError> {
+    let mut recorded = refresh(store, forge, source, config, change)?;
     let ledger = store.ledger();
     let x = ledger.change(change).ok_or(UndoError::Unknown(change))?;
     let landing = x.landing.clone().ok_or(UndoError::NotLanded(change))?;
@@ -181,7 +183,7 @@ pub fn undo(
             pr: u.pr,
             reverts: vec![change],
             how: How::Found,
-            recorded: 0,
+            recorded,
         });
     }
     let repo = x.repo.clone();
@@ -189,9 +191,6 @@ pub fn undo(
     let branch = undo_branch(change, x.undone_by.len() + 1);
     let title = title(x);
     let pr_of_x = x.pr;
-    if let Some(pr) = forge.pull_from(&full, &branch)? {
-        return record(store, source, config, &repo, pr, change, How::Found);
-    }
 
     let trunk_name = forge.default_branch(&full)?;
     let trunk = forge
@@ -234,18 +233,64 @@ pub fn undo(
         conflicts,
     );
     let pr = forge.open_pull(&full, &branch, &trunk_name, &title, &body)?;
-    record(
-        store,
-        source,
-        config,
-        &repo,
+    let (undo, more) = record(store, source, config, &repo, pr, change)?;
+    recorded += more;
+    Ok(Undone {
+        change: undo,
         pr,
-        change,
-        How::Opened { conflicts },
-    )
+        reverts: vec![change],
+        how: How::Opened { conflicts },
+        recorded,
+    })
 }
 
-/// Ingests the undo's PR and records it as `reverts`' undo.
+/// Brings the ledger up to what GitHub holds of `change`'s undos, so what
+/// `undo` does next is decided on them as they are now: the undo it holds
+/// that isn't closed, which may have closed or landed since it was read,
+/// and every PR from the branch of the attempt after the last it holds,
+/// which a run that stopped before recording its undo left behind, open,
+/// closed or merged. Ops written.
+fn refresh(
+    store: &mut Store,
+    forge: &dyn Reverts,
+    source: &dyn Source,
+    config: &Config,
+    change: ChangeId,
+) -> Result<usize, UndoError> {
+    let ledger = store.ledger();
+    let x = ledger.change(change).ok_or(UndoError::Unknown(change))?;
+    let repo = x.repo.clone();
+    let held = ledger
+        .undo_of(change)
+        .and_then(|u| ledger.change(u))
+        .map(|u| u.pr);
+    let mut recorded = 0;
+    if let Some(pr) = held {
+        recorded += ingest::pull(store, source, config, &repo, pr)?.recorded;
+    }
+    // One recorded moves the next attempt on to a branch of its own, which
+    // a later stopped run may have left too.
+    loop {
+        let attempts = undone_by(store, change);
+        let branch = undo_branch(change, attempts + 1);
+        for pr in forge.pulls_from(&repo.to_string(), &branch)? {
+            recorded += record(store, source, config, &repo, pr, change)?.1;
+        }
+        if undone_by(store, change) == attempts {
+            return Ok(recorded);
+        }
+    }
+}
+
+fn undone_by(store: &Store, change: ChangeId) -> usize {
+    store
+        .ledger()
+        .change(change)
+        .map_or(0, |c| c.undone_by.len())
+}
+
+/// Ingests the undo's PR and records it as `reverts`' undo: its change, and
+/// the ops written.
 fn record(
     store: &mut Store,
     source: &dyn Source,
@@ -253,8 +298,7 @@ fn record(
     repo: &Repo,
     pr: u64,
     reverts: ChangeId,
-    how: How,
-) -> Result<Undone, UndoError> {
+) -> Result<(ChangeId, usize), UndoError> {
     let got = ingest::pull(store, source, config, repo, pr)?;
     let mut recorded = got.recorded;
     match store.record(Body::Undo {
@@ -266,13 +310,7 @@ fn record(
         Err(StoreError::Invalid(Invalid::Duplicate)) => {}
         Err(e) => return Err(e.into()),
     }
-    Ok(Undone {
-        change: got.change,
-        pr,
-        reverts: vec![reverts],
-        how,
-        recorded,
-    })
+    Ok((got.change, recorded))
 }
 
 /// The undo's title, in the style of what it reverts: `area: sentence`

@@ -487,8 +487,11 @@ the change landed, made on its landing, reverts that landing and nothing
 after it, and trunk is then merged into its branch,
 `conary/undo/<change>/<attempt>`. Where that merge conflicts, the PR opens
 at the bare revert. It takes its title from what it reverts, as
-`area: undo #N, sentence`. Asked again, `undo` finds the PR it opened, or
-the branch a run that stopped left, rather than make another.
+`area: undo #N, sentence`. Before anything else, `undo` reads the change's
+undos as GitHub has them now: the one the ledger holds, and any PR a run
+that stopped before recording it left, open, closed or merged. So asked
+again, it finds the undo it opened rather than make another, and a
+closed one makes way for the next.
 
 The ledger records each undo as an op on its revert change: the changes it
 reverts, all landed in its repo, and what asked for it (a change, a session

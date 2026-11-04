@@ -460,12 +460,12 @@ fn the_trains_status_is_its_own_context() {
 }
 
 #[test]
-fn an_undo_makes_its_revert_opens_its_pr_and_finds_it_by_branch() {
+fn an_undo_makes_its_revert_opens_its_pr_and_finds_every_one_from_its_branch() {
     use crate::undo::Reverts;
     let answers: Vec<&'static str> = vec![
         whole("201 Created", r#"{"sha":"r"}"#).leak(),
         whole("201 Created", r#"{"number":9}"#).leak(),
-        whole("200 OK", r#"[{"number":9}]"#).leak(),
+        whole("200 OK", r#"[{"number":7},{"number":9}]"#).leak(),
         whole("200 OK", "[]").leak(),
     ];
     let (base, heads) = github(answers);
@@ -488,13 +488,11 @@ fn an_undo_makes_its_revert_opens_its_pr_and_finds_it_by_branch() {
         body(opened),
         serde_json::json!({"title": "ti", "head": branch, "base": "main", "body": "bo"})
     );
-    // Only the repo's own branch: GitHub filters by OWNER:BRANCH.
-    assert_eq!(api.pull_from("o/r", branch).unwrap(), Some(9));
-    assert!(
-        heads
-            .recv()
-            .unwrap()
-            .starts_with(&format!("get /repos/o/r/pulls?state=open&head=o:{branch} "))
-    );
-    assert_eq!(api.pull_from("o/r", branch).unwrap(), None);
+    // Only the repo's own branch, GitHub filtering by OWNER:BRANCH, and
+    // every PR from it, closed and merged too, oldest first.
+    assert_eq!(api.pulls_from("o/r", branch).unwrap(), [7, 9]);
+    assert!(heads.recv().unwrap().starts_with(&format!(
+        "get /repos/o/r/pulls?state=all&head=o:{branch}&sort=created&direction=asc&per_page=100&page=1 "
+    )));
+    assert!(api.pulls_from("o/r", branch).unwrap().is_empty());
 }

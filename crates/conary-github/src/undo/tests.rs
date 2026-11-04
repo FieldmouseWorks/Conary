@@ -38,6 +38,10 @@ struct Hub {
     /// Every commit made, as (tree, parent, message).
     made: RefCell<Vec<(String, String, String)>>,
     pulls: RefCell<Vec<Value>>,
+    /// The PRs each trunk commit a merge made is linked to.
+    linked: RefCell<HashMap<String, Vec<u64>>>,
+    /// The heads the steward settled, before they merged.
+    settled: RefCell<Vec<String>>,
     n: Cell<u64>,
 }
 
@@ -59,6 +63,8 @@ impl Hub {
             merging: RefCell::new(Some("trunk without the change".into())),
             made: RefCell::new(Vec::new()),
             pulls: RefCell::new(Vec::new()),
+            linked: RefCell::new(HashMap::new()),
+            settled: RefCell::new(Vec::new()),
             n: Cell::new(0),
         }
     }
@@ -100,6 +106,30 @@ impl Hub {
                 p["state"] = json!("closed");
             }
         }
+    }
+
+    /// The steward lands PR `number`, settled, squashed onto trunk, and
+    /// its branch goes: trunk's new tip.
+    fn land(&self, number: u64) -> String {
+        let sha = self.sha();
+        let trunk = self.branches.borrow()["main"].clone();
+        let mut pulls = self.pulls.borrow_mut();
+        let p = pulls.iter_mut().find(|p| p["number"] == number).unwrap();
+        let head = p["head"]["sha"].as_str().unwrap().to_owned();
+        let tree = self.trees.borrow()[&head].clone();
+        self.trees.borrow_mut().insert(sha.clone(), tree);
+        self.parents.borrow_mut().insert(sha.clone(), vec![trunk]);
+        self.linked.borrow_mut().insert(sha.clone(), vec![number]);
+        self.settled.borrow_mut().push(head);
+        self.branches
+            .borrow_mut()
+            .insert("main".into(), sha.clone());
+        let branch = p["head"]["ref"].as_str().unwrap().to_owned();
+        self.branches.borrow_mut().remove(&branch);
+        p["state"] = json!("closed");
+        p["merged_at"] = json!("2026-10-27T12:00:00Z");
+        p["merge_commit_sha"] = json!(sha);
+        sha
     }
 }
 
@@ -185,7 +215,12 @@ impl Reverts for Hub {
         title: &str,
         body: &str,
     ) -> Result<u64, ApiError> {
-        if self.pull_from("", head)?.is_some() {
+        let open = self
+            .pulls
+            .borrow()
+            .iter()
+            .any(|p| p["state"] == "open" && p["head"]["ref"] == head);
+        if open {
             return Err(ApiError::new("A pull request already exists"));
         }
         let number = 100 + self.pulls.borrow().len() as u64;
@@ -200,13 +235,14 @@ impl Reverts for Hub {
         Ok(number)
     }
 
-    fn pull_from(&self, _: &str, head: &str) -> Result<Option<u64>, ApiError> {
+    fn pulls_from(&self, _: &str, head: &str) -> Result<Vec<u64>, ApiError> {
         Ok(self
             .pulls
             .borrow()
             .iter()
-            .find(|p| p["state"] == "open" && p["head"]["ref"] == head)
-            .and_then(|p| p["number"].as_u64()))
+            .filter(|p| p["head"]["ref"] == head)
+            .filter_map(|p| p["number"].as_u64())
+            .collect())
     }
 }
 
@@ -227,8 +263,15 @@ impl Source for Hub {
         Ok(Vec::new())
     }
 
-    fn statuses(&self, _: &str, _: &str) -> Result<Vec<Status>, ApiError> {
-        Ok(Vec::new())
+    fn statuses(&self, _: &str, sha: &str) -> Result<Vec<Status>, ApiError> {
+        let settled = self.settled.borrow().iter().any(|s| s == sha);
+        Ok(parse(&json!(if settled {
+            vec![json!({"context": "review-settled", "state": "success",
+                "creator": {"login": STEWARD, "type": "Bot"},
+                "created_at": "2026-10-27T11:00:00Z"})]
+        } else {
+            Vec::new()
+        })))
     }
 
     fn reviews(&self, _: &str, _: u64) -> Result<Vec<Review>, ApiError> {
@@ -236,13 +279,15 @@ impl Source for Hub {
     }
 
     fn commit(&self, _: &str, sha: &str) -> Result<Commit, ApiError> {
-        Err(ApiError::new(format!(
-            "no commit {sha} asked of an open PR"
-        )))
+        let parents = self.parents.borrow().get(sha).cloned().unwrap_or_default();
+        Ok(parse(&json!({
+            "sha": sha,
+            "parents": parents.iter().map(|p| json!({"sha": p})).collect::<Vec<_>>(),
+        })))
     }
 
-    fn commit_pulls(&self, _: &str, _: &str) -> Result<Vec<u64>, ApiError> {
-        Ok(Vec::new())
+    fn commit_pulls(&self, _: &str, sha: &str) -> Result<Vec<u64>, ApiError> {
+        Ok(self.linked.borrow().get(sha).cloned().unwrap_or_default())
     }
 
     fn retargeted(&self, _: &str, _: u64) -> Result<Option<String>, ApiError> {
@@ -454,15 +499,98 @@ fn an_undo_closed_leaves_the_next_a_branch_of_its_own() {
     let hub = Hub::new();
     let x = landed(&mut store, Some("tools: a plain sentence"));
     let first = undo_of(&mut store, &hub, x).unwrap();
+    // Closed on GitHub, and asked again before anything reads it: it's read
+    // first, so no closed PR is taken for the open undo.
     hub.close(first.pr);
-    ingest::pull(&mut store, &hub, &config(), &repo(), first.pr).unwrap();
+    let second = undo_of(&mut store, &hub, x).unwrap();
     assert_eq!(
         store.ledger().change(first.change).unwrap().status(),
         Kept::Closed
     );
-    let second = undo_of(&mut store, &hub, x).unwrap();
     assert_ne!(second.change, first.change);
+    assert_eq!(second.how, How::Opened { conflicts: false });
     assert_eq!(hub.pull_json(second.pr)["head"]["ref"], undo_branch(x, 2));
+}
+
+#[test]
+fn an_undo_landed_on_github_is_read_before_another_is_made() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = store(&dir);
+    let hub = Hub::new();
+    let x = landed(&mut store, Some("tools: a plain sentence"));
+    let first = undo_of(&mut store, &hub, x).unwrap();
+    hub.land(first.pr);
+    assert!(matches!(
+        undo_of(&mut store, &hub, x),
+        Err(UndoError::Reverted { change, by }) if change == x && by == first.change
+    ));
+    assert_eq!(store.ledger().change(x).unwrap().status(), Kept::Reverted);
+    assert_eq!(hub.pulls.borrow().len(), 1);
+}
+
+/// A run that opened its PR and stopped before recording it: the PR, on
+/// `x`'s first undo branch, with its revert.
+fn stopped(hub: &Hub, x: ChangeId) -> u64 {
+    let revert = hub.make_commit("", "before", AFTER, "m").unwrap();
+    hub.create_branch("", &undo_branch(x, 1), &revert).unwrap();
+    hub.open_pull("", &undo_branch(x, 1), "main", "t", "b")
+        .unwrap()
+}
+
+#[test]
+fn a_stopped_run_s_pr_is_its_undo_whatever_became_of_it() {
+    // Landed since, its branch gone: it's what reverted the change.
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = store(&dir);
+    let hub = Hub::new();
+    let x = landed(&mut store, Some("tools: a plain sentence"));
+    let pr = stopped(&hub, x);
+    hub.land(pr);
+    let err = undo_of(&mut store, &hub, x).unwrap_err();
+    let u = store.ledger().by_pr(&repo(), pr).unwrap().id;
+    assert!(
+        matches!(err, UndoError::Reverted { change, by } if change == x && by == u),
+        "{err}"
+    );
+    assert_eq!(store.ledger().undo_of(x), Some(u));
+    assert_eq!(hub.pulls.borrow().len(), 1);
+
+    // Closed since: the next attempt takes a branch of its own.
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = self::store(&dir);
+    let hub = Hub::new();
+    let y = landed(&mut store, Some("tools: a plain sentence"));
+    let pr = stopped(&hub, y);
+    hub.close(pr);
+    let got = undo_of(&mut store, &hub, y).unwrap();
+    let closed = store.ledger().by_pr(&repo(), pr).unwrap();
+    assert_eq!(closed.status(), Kept::Closed);
+    assert_eq!(
+        store.ledger().change(y).unwrap().undone_by,
+        [closed.id, got.change]
+    );
+    assert_eq!(hub.pull_json(got.pr)["head"]["ref"], undo_branch(y, 2));
+
+    // Landed, and undone in turn: undoing that is what reverts it again.
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = self::store(&dir);
+    let hub = Hub::new();
+    let z = landed(&mut store, Some("tools: a plain sentence"));
+    let pr = stopped(&hub, z);
+    hub.land(pr);
+    let u = ingest::pull(&mut store, &hub, &config(), &repo(), pr)
+        .unwrap()
+        .change;
+    let w = undo_of(&mut store, &hub, u).unwrap();
+    hub.land(w.pr);
+    ingest::pull(&mut store, &hub, &config(), &repo(), w.pr).unwrap();
+    let err = undo_of(&mut store, &hub, z).unwrap_err();
+    assert!(
+        matches!(err, UndoError::UndoneUndo { change, undo, by }
+            if change == z && undo == u && by == w.change),
+        "{err}"
+    );
+    assert_eq!(store.ledger().change(z).unwrap().status(), Kept::Landed);
 }
 
 #[test]
