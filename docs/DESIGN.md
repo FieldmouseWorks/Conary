@@ -501,8 +501,9 @@ chose, which needn't be these. Before anything else, `undo` reads each
 change's undos as GitHub has them now, and theirs in turn, since an undo of
 an undo puts the change back: each one the ledger holds, closed ones too,
 and any PR a run that stopped before recording it left, open, closed or
-merged, from the change's own next branch or, for a group's, from any undo
-branch still in the repo. So asked again, by any of what it reverts, it
+merged: each PR from one of the repo's own undo branches that the ledger
+doesn't hold as an undo, its branch there still or not. So asked again, by
+any of what it reverts, it
 finds the undo it opened rather than make another, and a closed one makes
 way for the next.
 

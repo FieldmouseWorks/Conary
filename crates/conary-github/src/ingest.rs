@@ -426,15 +426,7 @@ fn record(
     let body = pr.body.clone().unwrap_or_default();
     // `cn undo` marks what its PR reverts, so the PR is read as an undo
     // whatever reads it first. A fork's branch is anyone's to name.
-    let own = |r: &crate::api::RefRepo| {
-        let name = r.full_name.as_deref().and_then(|n| n.parse::<Repo>().ok());
-        name.as_ref() == Some(repo)
-    };
-    let undo = pr
-        .head
-        .repo
-        .as_ref()
-        .is_some_and(own)
+    let undo = own_head(pr, repo)
         .then(|| Undo::read(&pr.head.name, &body))
         .flatten();
     // Who wrote it and what for are the author's words, not the marker's.
@@ -700,6 +692,12 @@ fn trunk_before(
     Err(IngestError::Malformed(format!(
         "#{number} landing more than {MAX_LANDED} commits"
     )))
+}
+
+/// Whether the PR's head is a branch of `repo` itself, not a fork's.
+pub(crate) fn own_head(pr: &PullRequest, repo: &Repo) -> bool {
+    let name = pr.head.repo.as_ref().and_then(|r| r.full_name.as_deref());
+    name.and_then(|n| n.parse::<Repo>().ok()).as_ref() == Some(repo)
 }
 
 static SESSION: LazyLock<Regex> =

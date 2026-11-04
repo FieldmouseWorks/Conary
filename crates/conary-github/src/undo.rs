@@ -19,7 +19,7 @@ use conary_core::{ChangeId, Store};
 
 use serde::{Deserialize, Serialize};
 
-use crate::api::{ApiError, Source};
+use crate::api::{ApiError, Pulls, Source};
 use crate::branches::{BRANCHES, Branches, Merged};
 use crate::ingest::{self, Config, IngestError};
 
@@ -250,8 +250,7 @@ pub fn undo(
         .ok_or(UndoError::Unknown(change))?
         .repo
         .clone();
-    let recorded = strays(store, forge, source, config, &repo)?
-        + refresh(store, forge, source, config, change)?;
+    let recorded = strays(store, source, config, &repo)? + refresh(store, source, config, change)?;
     let ledger = store.ledger();
     let x = ledger.change(change).expect("in the ledger");
     if x.landing.is_none() {
@@ -358,9 +357,9 @@ fn group(
         picked.sort_by_key(|c| std::cmp::Reverse((c.landing.as_ref().map(|l| l.at), c.pr)));
         picked.into_iter().map(|c| c.id).collect()
     };
-    let mut recorded = strays(store, forge, source, config, repo)?;
+    let mut recorded = strays(store, source, config, repo)?;
     for id in picked(store) {
-        recorded += refresh(store, forge, source, config, id)?;
+        recorded += refresh(store, source, config, id)?;
     }
     let mut got: Vec<Undone> = Vec::new();
     let mut todo = Vec::new();
@@ -499,9 +498,9 @@ fn open(
             Merged::Conflict => left.push(id),
         }
     }
-    if !conflicts && at == trunk_tree {
-        // Together they change nothing; what conflicted with them is
-        // reverted on its own.
+    if at == trunk_tree {
+        // Together they change nothing, whether or not trunk merged into
+        // the first; what conflicted with them is reverted on its own.
         forge.delete_branch(&full, &branch)?;
         gone.extend(reverts);
         return open(store, forge, source, config, repo, &left, asked, gone);
@@ -597,12 +596,10 @@ fn time(ms: i64) -> String {
 /// `undo` does next is decided on them as they are now. Whether the change
 /// is reverted turns on each of its undos and, an undo of an undo putting
 /// it back, on theirs in turn, so each one down the tree is read again,
-/// closed ones too (a closed PR can reopen), and so is every PR from the
-/// branch of each one's next attempt, which a run that stopped before
-/// recording its undo left behind, open, closed or merged. Ops written.
+/// closed ones too (a closed PR can reopen). What a run that stopped before
+/// recording its undo left is [`strays`]'. Ops written.
 fn refresh(
     store: &mut Store,
-    forge: &dyn Reverts,
     source: &dyn Source,
     config: &Config,
     change: ChangeId,
@@ -632,7 +629,6 @@ fn refresh(
         for pr in held {
             recorded += ingest::pull(store, source, config, &repo, pr)?.recorded;
         }
-        recorded += stopped(store, forge, source, config, &repo, id)?;
         todo.extend(
             store
                 .ledger()
@@ -645,72 +641,29 @@ fn refresh(
     Ok(recorded)
 }
 
-/// Records as `change`'s undo every PR from the branch of its next attempt:
-/// a run that stopped before recording it left it. One recorded moves the
-/// next attempt on to a branch of its own, which a later stopped run may
-/// have left too. Ops written.
-fn stopped(
-    store: &mut Store,
-    forge: &dyn Reverts,
-    source: &dyn Source,
-    config: &Config,
-    repo: &Repo,
-    change: ChangeId,
-) -> Result<usize, UndoError> {
-    let mut recorded = 0;
-    loop {
-        let attempts = undone_by(store, change);
-        let branch = undo_branch(change, attempts + 1);
-        for pr in forge.pulls_from(&repo.to_string(), &branch)? {
-            recorded += ingest::pull(store, source, config, repo, pr)?.recorded;
-        }
-        if undone_by(store, change) == attempts {
-            return Ok(recorded);
-        }
-    }
-}
-
 /// Records every undo a run that stopped before recording it opened in
-/// `repo`, from the branches of attempts the ledger doesn't hold yet. A
-/// group's PR is on its newest change's branch, so this is how each of the
-/// others it reverts finds it. An open PR keeps its branch; one that's
-/// closed is no rival to a new undo, and one that's merged left trunk
-/// without what it reverts, so a new one finds those `gone`. Ops written.
+/// `repo`: each PR from one of the repo's own undo branches the ledger
+/// doesn't hold as an undo yet, open, closed or merged, its branch there
+/// still or not. A group's PR is on its newest change's branch, so this is
+/// how each of the others it reverts finds it. Ops written.
 fn strays(
     store: &mut Store,
-    forge: &dyn Reverts,
     source: &dyn Source,
     config: &Config,
     repo: &Repo,
 ) -> Result<usize, UndoError> {
-    let full = repo.to_string();
-    let mut branches: Vec<(ChangeId, usize, String)> = forge
-        .branches(&full, &format!("{BRANCHES}undo/"))?
-        .into_iter()
-        .filter_map(|b| attempt_of(&b).map(|(change, n)| (change, n, b)))
-        .collect();
-    branches.sort();
     let mut recorded = 0;
-    for (change, attempt, branch) in branches {
+    for pr in source.pulls(&repo.to_string(), Pulls::All)? {
         let held = store
             .ledger()
-            .change(change)
-            .is_none_or(|c| &c.repo != repo || c.undone_by.len() >= attempt);
-        if held {
+            .by_pr(repo, pr.number)
+            .is_some_and(|c| c.undo.is_some());
+        if held || !ingest::own_head(&pr, repo) || attempt_of(&pr.head.name).is_none() {
             continue;
         }
-        for pr in forge.pulls_from(&full, &branch)? {
-            recorded += ingest::pull(store, source, config, repo, pr)?.recorded;
-        }
+        recorded += ingest::pull(store, source, config, repo, pr.number)?.recorded;
     }
     Ok(recorded)
-}
-
-fn undone_by(store: &Store, change: ChangeId) -> usize {
-    store
-        .ledger()
-        .change(change)
-        .map_or(0, |c| c.undone_by.len())
 }
 
 /// Ingests the undo's PR, whose marker says what it reverts, and makes

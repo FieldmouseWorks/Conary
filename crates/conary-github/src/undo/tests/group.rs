@@ -288,6 +288,39 @@ fn a_stopped_run_s_pr_is_found_through_any_change_it_reverts() {
 }
 
 #[test]
+fn a_stopped_run_s_pr_merged_and_its_branch_gone_is_found_all_the_same() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = store(&dir);
+    let hub = Hub::new();
+    let s = Some(SESSION);
+    let ids = chain(&mut store, &hub, &repo(), 10, &[s, s]);
+    let marker = Marker {
+        reverts: vec![ids[1], ids[0]],
+        asked: Asked::Actor {
+            session: SESSION.into(),
+        },
+    };
+    let revert = hub.make_commit("", "x", AFTER, "m").unwrap();
+    hub.create_branch("", &undo_branch(ids[1], 1), &revert)
+        .unwrap();
+    let pr = hub
+        .open_pull("", &undo_branch(ids[1], 1), "main", "t", &marker.line())
+        .unwrap();
+    // It landed and its branch went, and trunk has what the older one
+    // brought, as far as a revert of it can tell: its undo landed all the
+    // same.
+    hub.land(pr);
+    assert!(hub.branches("", "conary/").unwrap().is_empty());
+    let err = undo(&mut store, &hub, &hub, &config(), ids[0]).unwrap_err();
+    let by = store.ledger().by_pr(&repo(), pr).unwrap().id;
+    assert!(
+        matches!(err, UndoError::Reverted { change, by: b } if change == ids[0] && b == by),
+        "{err}"
+    );
+    assert_eq!(hub.pulls.borrow().len(), 1);
+}
+
+#[test]
 fn a_pr_from_the_branch_that_isn_t_an_undo_keeps_it() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
@@ -361,6 +394,30 @@ fn reverts_that_together_change_nothing_leave_what_conflicted_its_own() {
     assert_eq!(got.undos.len(), 1);
     assert_eq!(got.undos[0].reverts, [ids[0]]);
     assert_eq!(store.ledger().undo_of(ids[2]), None);
+}
+
+#[test]
+fn reverts_that_change_nothing_together_are_gone_though_trunk_conflicted_with_the_first() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = store(&dir);
+    let hub = Hub::new();
+    let s = Some(SESSION);
+    let ids = chain(&mut store, &hub, &repo(), 10, &[s, s, Some("other")]);
+    // Trunk won't merge into the newer one's revert, and with the older
+    // one's merged in, the branch is trunk as it is.
+    let net = format!(
+        "{}, then {}",
+        reverted(&store, &hub, ids[1]),
+        reverted(&store, &hub, ids[0])
+    );
+    let trunk = hub.branches.borrow()["main"].clone();
+    hub.trees.borrow_mut().insert(trunk, net.clone());
+    hub.conflicting.borrow_mut().push(net);
+    let got = actor(&mut store, &hub).unwrap();
+    assert!(got.undos.is_empty(), "{got:?}");
+    assert_eq!(got.gone, [ids[1], ids[0]]);
+    assert!(hub.pulls.borrow().is_empty());
+    assert!(hub.branches("", "conary/").unwrap().is_empty());
 }
 
 #[test]
