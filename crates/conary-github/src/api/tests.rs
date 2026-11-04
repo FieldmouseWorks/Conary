@@ -132,6 +132,39 @@ fn no_answer_at_all_is_github_unavailable() {
 }
 
 #[test]
+fn an_answer_that_stalls_is_cut_off_as_github_unavailable() {
+    // Each connection is held open, and answered with `start` at most.
+    for start in [
+        "",
+        "HTTP/1.1 200 OK\r\ncontent-length: 100\r\n\r\n{\"number\"",
+    ] {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        thread::spawn(move || {
+            let (mut conn, _) = listener.accept().unwrap();
+            let mut head = [0; 1024];
+            _ = conn.read(&mut head);
+            conn.write_all(start.as_bytes()).unwrap();
+            thread::sleep(std::time::Duration::from_secs(30));
+        });
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            let api = Api::through(
+                &base,
+                Tokens::given("t"),
+                None,
+                std::time::Duration::from_millis(300),
+            );
+            _ = tx.send(api.pull("o/r", 7));
+        });
+        let got = rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("a stalled call is cut off");
+        assert!(got.unwrap_err().unavailable, "{start:?}");
+    }
+}
+
+#[test]
 fn a_request_that_can_never_be_made_is_not_github_unavailable() {
     // A root that isn't a URL, and a token no header can carry: asking again
     // fails the same way.
@@ -214,6 +247,7 @@ fn through_proxy(answer: &'static str) -> [ApiError; 2] {
         "https://127.0.0.1:1",
         Tokens::given("t"),
         Some(ureq::Proxy::new(&proxy).unwrap()),
+        CALL_FOR,
     );
     let read = api.pull("o/r", 7).unwrap_err();
     assert!(heads.recv().unwrap().starts_with("connect "));
