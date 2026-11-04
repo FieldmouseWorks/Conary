@@ -257,7 +257,7 @@ Op {
   body:    what happened (`Body` in crates/conary-core/src/op.rs): observe,
            intent, revision, evidence, land, outside, close, reopen; the
            train's join, leave, candidate, candidate_evidence, verdict and
-           finish (section 4.7); undo joins with M4 and classify with M5
+           finish (section 4.7); undo (section 5); classify joins with M5
   sig:     the ledger key's signature over the id
 }
 ```
@@ -480,6 +480,16 @@ A revert that doesn't apply cleanly, because later work built on what it
 undoes, still opens its PR with the conflict, and a Claude job resolves it
 like any other finding. Undo of an R2 change waits for the owner like the
 change did.
+
+The ledger records each undo as an op on its revert change: the changes it
+reverts, all landed in its repo, and what asked for it (a change, a session
+or a time, which each of them has to match). Once the undo lands, what it
+reverts is `reverted`; undone in turn, they're landed again. A change takes
+one undo at a time, and once one has landed it's the only one: the change
+goes back and forth by undoing that undo, and undoing that, so no undo can
+come back into effect beside another. Only an undo closed without landing
+makes way for the next, and it can't reopen once one has taken its place.
+An undo that leads back to itself through what its undos revert is refused.
 
 ## 6. The landing flow
 

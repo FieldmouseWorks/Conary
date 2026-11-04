@@ -215,7 +215,7 @@ pub fn sync(
 fn settled(ledger: &Ledger, c: &Change, pr: &PullRequest, revision: RevisionId) -> bool {
     let finished = match c.status() {
         Status::Open => false,
-        Status::Landed => pr.is_merged(),
+        Status::Landed | Status::Reverted => pr.is_merged(),
         // Closed without landing, or merged without a landing: into another
         // branch, or pushed to trunk outside a merge.
         Status::Closed => {
@@ -257,6 +257,19 @@ impl Writer<'_> {
             }
             Err(StoreError::Invalid(Invalid::Duplicate)) => Ok(()),
             Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Records the change reopened: true unless it's an undo whose changes
+    /// took another undo while it was closed. That one stays closed here,
+    /// so the train never takes it, and its merge, if it comes, is trunk
+    /// moving outside Conary.
+    fn reopen(&mut self, change: ChangeId) -> Result<bool, IngestError> {
+        match self.record(Body::Reopen { change }) {
+            Err(IngestError::Store(StoreError::Invalid(Invalid::AlreadyUndone { .. }))) => {
+                Ok(false)
+            }
+            got => got.map(|()| true),
         }
     }
 }
@@ -369,7 +382,7 @@ fn record(
     } else {
         match (pr.state.as_str(), status) {
             ("closed", Status::Open) => w.record(Body::Close { change })?,
-            ("open", Status::Closed) => w.record(Body::Reopen { change })?,
+            ("open", Status::Closed) => _ = w.reopen(change)?,
             _ => {}
         }
     }
@@ -419,8 +432,9 @@ fn bound_elsewhere(c: &Change, revision: RevisionId, head: &CommitId, body: &Bod
 /// by another PR's merge, it closed, and that PR records the movement. Anything
 /// else that put it on trunk, an admin's bypass or a push straight to trunk,
 /// moved trunk outside a landing: that's recorded as a violation, from a
-/// trunk before GitHub doesn't say, and the change closes. None of it
-/// depends on which PR is read first.
+/// trunk before GitHub doesn't say, and the change closes. So is the merge
+/// of an undo the ledger holds closed because what it reverts took another
+/// undo meanwhile. None of it depends on which PR is read first.
 #[allow(clippy::too_many_arguments)]
 fn merged(
     w: &mut Writer,
@@ -432,7 +446,7 @@ fn merged(
     status: Status,
     settled: Option<Authority>,
 ) -> Result<(), IngestError> {
-    if status == Status::Landed {
+    if matches!(status, Status::Landed | Status::Reverted) {
         return Ok(());
     }
     let close = |w: &mut Writer| match status {
@@ -448,6 +462,18 @@ fn merged(
         .as_deref()
         .ok_or_else(|| IngestError::Malformed("a merged PR with no merge commit".into()))?;
     let after = commit(sha)?;
+    // Recorded as trunk moving outside Conary, it stays that: nothing that
+    // happens since (another undo closing, the PR's text changing) makes it
+    // a landing.
+    let seen = w
+        .store
+        .ledger()
+        .outside()
+        .iter()
+        .any(|o| &o.repo == repo && o.after == after);
+    if seen {
+        return close(w);
+    }
     let landed = source.commit(&full, sha)?;
     let linked = source.commit_pulls(&full, sha)?;
     if sha != pr.head.sha && landed.parents.len() == 1 && linked.is_empty() {
@@ -464,31 +490,21 @@ fn merged(
     }
     if let (Some(by), true) = (settled, own) {
         let before = trunk_before(source, &full, pr.number, &landed)?;
-        if status == Status::Closed {
-            w.record(Body::Reopen { change })?;
+        if status != Status::Closed || w.reopen(change)? {
+            return w.record(Body::Land {
+                change,
+                revision,
+                before,
+                after,
+                by,
+            });
         }
-        return w.record(Body::Land {
-            change,
-            revision,
-            before,
-            after,
-            by,
-        });
     }
-    // This PR's merge, read again, is the same movement.
-    let seen = w
-        .store
-        .ledger()
-        .outside()
-        .iter()
-        .any(|o| &o.repo == repo && o.after == after);
-    if !seen {
-        w.record(Body::Outside {
-            repo: repo.clone(),
-            before: None,
-            after,
-        })?;
-    }
+    w.record(Body::Outside {
+        repo: repo.clone(),
+        before: None,
+        after,
+    })?;
     close(w)
 }
 

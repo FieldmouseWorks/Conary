@@ -811,3 +811,92 @@ fn sync_reads_a_closed_pr_again_when_its_base_changed_and_asks_github_once() {
     );
     assert!(sync(&mut store, &f, &config(), &repo()).unwrap().is_empty());
 }
+
+/// PR 9 landed as MERGE, with an undo of it recorded on PR `undo`, whose
+/// head is HEAD2: open, or merged as REBASED on top.
+fn with_undo(store: &mut Store, f: &mut Fake, undo: u64) -> (ChangeId, ChangeId) {
+    f.pulls = vec![pr(9, HEAD, "closed", true)];
+    let x = pull(store, f, &config(), &repo(), 9).unwrap().change;
+    f.pulls.push(pr(undo, HEAD2, "open", false));
+    f.statuses.insert(HEAD2.into(), f.statuses[HEAD].clone());
+    f.commits
+        .insert(REBASED.into(), trunk_commit(REBASED, &[MERGE]));
+    f.linked.insert(REBASED.into(), vec![undo]);
+    let u = pull(store, f, &config(), &repo(), undo).unwrap().change;
+    store
+        .record(Body::Undo {
+            change: u,
+            reverts: vec![x],
+            asked: conary_core::op::Asked::Change,
+        })
+        .unwrap();
+    (x, u)
+}
+
+fn merged_as(f: &mut Fake, number: u64, sha: &str) {
+    let p = f.pulls.iter_mut().find(|p| p["number"] == number).unwrap();
+    p["state"] = json!("closed");
+    p["merged_at"] = json!("2026-10-27T12:00:00Z");
+    p["merge_commit_sha"] = json!(sha);
+}
+
+#[test]
+fn a_reverted_pr_read_again_is_landed_still() {
+    let (_dir, mut store) = open();
+    let mut f = fake();
+    let (x, u) = with_undo(&mut store, &mut f, 10);
+    merged_as(&mut f, 10, REBASED);
+    pull(&mut store, &f, &config(), &repo(), 10).unwrap();
+    let status = |s: &Store| s.ledger().change(x).unwrap().status();
+    assert_eq!(status(&store), Status::Reverted);
+    // Its title changed since, so it's read again: no second landing, and
+    // no violation for the merge it landed with.
+    f.pulls[0]["title"] = json!("autoland: merge only what was checked");
+    let got = pull(&mut store, &f, &config(), &repo(), 9).unwrap();
+    assert_eq!(got.recorded, 1);
+    assert_eq!(status(&store), Status::Reverted);
+    assert!(store.ledger().outside().is_empty());
+    assert_eq!(store.ledger().change(x).unwrap().reverted_by, Some(u));
+    assert!(sync(&mut store, &f, &config(), &repo()).is_ok());
+}
+
+#[test]
+fn an_undo_reopened_beside_another_stays_closed_and_its_merge_is_outside() {
+    let (_dir, mut store) = open();
+    let mut f = fake();
+    let (x, first) = with_undo(&mut store, &mut f, 10);
+    f.pulls[1]["state"] = json!("closed");
+    pull(&mut store, &f, &config(), &repo(), 10).unwrap();
+    // Another undo of it took the first's place.
+    f.pulls.push(pr(11, DEV, "open", false));
+    let second = pull(&mut store, &f, &config(), &repo(), 11).unwrap().change;
+    store
+        .record(Body::Undo {
+            change: second,
+            reverts: vec![x],
+            asked: conary_core::op::Asked::Change,
+        })
+        .unwrap();
+    let status = |s: &Store, c| s.ledger().change(c).unwrap().status();
+    // The first reopened on GitHub stays closed here.
+    f.pulls[1]["state"] = json!("open");
+    pull(&mut store, &f, &config(), &repo(), 10).unwrap();
+    assert_eq!(status(&store, first), Status::Closed);
+    assert_eq!(store.ledger().undo_of(x), Some(second));
+    // Merged anyway, it's trunk moving outside Conary.
+    merged_as(&mut f, 10, REBASED);
+    pull(&mut store, &f, &config(), &repo(), 10).unwrap();
+    assert_eq!(status(&store, first), Status::Closed);
+    assert_eq!(status(&store, x), Status::Landed);
+    let outside = store.ledger().outside();
+    assert_eq!(outside.len(), 1);
+    assert_eq!(outside[0].after, sha(REBASED));
+    // And it stays outside once the other undo closes, read again any way.
+    f.pulls[2]["state"] = json!("closed");
+    pull(&mut store, &f, &config(), &repo(), 11).unwrap();
+    pull(&mut store, &f, &config(), &repo(), 10).unwrap();
+    backfill(&mut store, &f, &config(), &repo()).unwrap();
+    assert_eq!(status(&store, first), Status::Closed);
+    assert_eq!(status(&store, x), Status::Landed);
+    assert_eq!(store.ledger().outside().len(), 1);
+}

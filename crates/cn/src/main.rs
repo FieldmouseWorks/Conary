@@ -342,10 +342,18 @@ fn word(v: impl serde::Serialize) -> String {
 fn line(c: &Change) -> String {
     let status = word(c.status());
     let summary = c.intent.as_ref().map_or("", |i| i.summary.as_str());
-    format!(
-        "{}#{} {status:<6} {} {summary}",
+    let mut line = format!(
+        "{}#{} {status:<8} {} {summary}",
         c.repo, c.pr, c.author.login
-    )
+    );
+    if let Some(undo) = &c.undo {
+        let ids: Vec<String> = undo.reverts.iter().map(|id| id.to_string()).collect();
+        line += &format!(" (reverts {})", ids.join(", "));
+    }
+    if let Some(by) = c.reverted_by {
+        line += &format!(" (reverted by {by})");
+    }
+    line
 }
 
 fn ingested(got: &Ingested, ledger: &Ledger) -> Value {
