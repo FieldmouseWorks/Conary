@@ -11,7 +11,7 @@ use std::sync::LazyLock;
 use regex::Regex;
 
 use conary_core::ledger::{Change, Invalid, Ledger, Status};
-use conary_core::op::{Actor, ActorKind, Asked, Authority, Body, CheckKind, Outcome, Repo};
+use conary_core::op::{Actor, ActorKind, Authority, Body, CheckKind, Outcome, Repo};
 use conary_core::store::StoreError;
 use conary_core::{ChangeId, CommitId, RevisionId, Store};
 
@@ -19,6 +19,7 @@ use crate::api::{
     ApiError, CheckRun, Commit, Event, PullRequest, Pulls, Review, Source, Status as CommitStatus,
 };
 use crate::bases::{BasesError, MergeBases};
+use crate::undo::Marker as Undo;
 
 /// What ingest trusts, from the machine's configuration. Both are needed:
 /// without them no merge could be told from a bypass.
@@ -264,19 +265,19 @@ impl Writer<'_> {
         }
     }
 
-    /// Records the change as `x`'s undo, as its branch says, unless it's
-    /// recorded as one already. Another undo of `x` in effect, it's closed
-    /// first, so it's recorded beside that one and has to make way to land.
-    /// A branch naming what can't be undone is only a name.
-    fn undo(&mut self, change: ChangeId, x: ChangeId) -> Result<(), IngestError> {
+    /// Records the change as the undo its marker says, unless it's recorded
+    /// as one already. Another undo of what it reverts in effect, it's
+    /// closed first, so it's recorded beside that one and has to make way to
+    /// land. A marker naming what can't be undone is only text.
+    fn undo(&mut self, change: ChangeId, marker: Undo) -> Result<(), IngestError> {
         let held = self.store.ledger().change(change);
         if held.is_some_and(|c| c.undo.is_some()) {
             return Ok(());
         }
         let undo = || Body::Undo {
             change,
-            reverts: vec![x],
-            asked: Asked::Change,
+            reverts: marker.reverts.clone(),
+            asked: marker.asked.clone(),
         };
         let refused = |e: &IngestError| matches!(e, IngestError::Store(StoreError::Invalid(_)));
         match self.record(undo()) {
@@ -451,17 +452,16 @@ fn record(
         base: base.clone(),
         head: head.clone(),
     })?;
-    // `cn undo` names what its PR reverts in its branch, so the PR is read
-    // as an undo whatever reads it first. A fork's branch is anyone's to
-    // name.
+    // `cn undo` marks what its PR reverts, so the PR is read as an undo
+    // whatever reads it first. A fork's branch is anyone's to name.
     let own = |r: &crate::api::RefRepo| {
         let name = r.full_name.as_deref().and_then(|n| n.parse::<Repo>().ok());
         name.as_ref() == Some(repo)
     };
     if pr.head.repo.as_ref().is_some_and(own)
-        && let Some(x) = crate::undo::branch_undoes(&pr.head.name)
+        && let Some(marker) = Undo::read(&pr.head.name, &body)
     {
-        w.undo(change, x)?;
+        w.undo(change, marker)?;
     }
 
     // Results are read by head, and a head keeps its results when the PR is

@@ -35,6 +35,8 @@ struct Hub {
     parents: RefCell<HashMap<String, Vec<String>>>,
     branches: RefCell<BTreeMap<String, String>>,
     merging: RefCell<Option<String>>,
+    /// Trees whose commit conflicts when it's merged into a branch.
+    conflicting: RefCell<Vec<String>>,
     /// Every commit made, as (tree, parent, message).
     made: RefCell<Vec<(String, String, String)>>,
     pulls: RefCell<Vec<Value>>,
@@ -65,6 +67,7 @@ impl Hub {
             ])),
             branches: RefCell::new(BTreeMap::from([("main".into(), TRUNK.into())])),
             merging: RefCell::new(Some("trunk without the change".into())),
+            conflicting: RefCell::new(Vec::new()),
             made: RefCell::new(Vec::new()),
             pulls: RefCell::new(Vec::new()),
             linked: RefCell::new(HashMap::new()),
@@ -198,6 +201,13 @@ impl Branches for Hub {
         let Some(tree) = self.merging.borrow().clone() else {
             return Ok(Merged::Conflict);
         };
+        if self
+            .conflicting
+            .borrow()
+            .contains(&self.trees.borrow()[head])
+        {
+            return Ok(Merged::Conflict);
+        }
         let sha = self.sha();
         self.trees.borrow_mut().insert(sha.clone(), tree.clone());
         self.parents
@@ -233,7 +243,7 @@ impl Reverts for Hub {
 
     fn open_pull(
         &self,
-        _: &str,
+        repo: &str,
         head: &str,
         base: &str,
         title: &str,
@@ -257,7 +267,8 @@ impl Reverts for Hub {
             "merged_at": null, "merge_commit_sha": null,
             "base": {"sha": TRUNK, "ref": base, "repo": {"default_branch": "main"}},
             "head": {"sha": sha, "ref": head,
-                "repo": {"full_name": "FieldmouseWorks/remi", "default_branch": "main"}},
+                "repo": {"full_name": if repo.is_empty() { "FieldmouseWorks/remi" } else { repo },
+                    "default_branch": "main"}},
         }));
         Ok(number)
     }
@@ -514,11 +525,7 @@ fn a_run_that_stopped_partway_is_taken_up_where_it_stopped() {
     let dir = tempfile::tempdir().unwrap();
     let mut fresh = self::store(&dir);
     let y = landed(&mut fresh, Some("tools: a plain sentence"));
-    let open = hub.make_commit("", "before", AFTER, "m").unwrap();
-    hub.create_branch("", &undo_branch(y, 1), &open).unwrap();
-    let pr = hub
-        .open_pull("", &undo_branch(y, 1), "main", "t", "b")
-        .unwrap();
+    let pr = stopped(&hub, y);
     let got = undo_of(&mut fresh, &hub, y).unwrap();
     assert_eq!((got.pr, got.how), (pr, How::Found));
     assert!(got.recorded > 0);
@@ -572,7 +579,11 @@ fn stopped_at(hub: &Hub, x: ChangeId, attempt: usize) -> u64 {
     let revert = hub.make_commit("", "before", AFTER, "m").unwrap();
     hub.create_branch("", &undo_branch(x, attempt), &revert)
         .unwrap();
-    hub.open_pull("", &undo_branch(x, attempt), "main", "t", "b")
+    let marker = Marker {
+        reverts: vec![x],
+        asked: Asked::Change,
+    };
+    hub.open_pull("", &undo_branch(x, attempt), "main", "t", &marker.line())
         .unwrap()
 }
 
@@ -831,3 +842,5 @@ fn a_stopped_run_that_merged_after_its_rival_landed_is_trunk_moving_outside() {
         assert!(matches!(err, UndoError::Reverted { .. }), "{err}");
     }
 }
+
+mod group;
