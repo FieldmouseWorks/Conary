@@ -2,6 +2,8 @@
 //! feed it recorded answers. REST only: it's billed per call, not by the
 //! shape of the query, and every automation on the box shares the quota.
 
+use std::time::Duration;
+
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use ureq::tls::{RootCerts, TlsConfig};
@@ -241,15 +243,24 @@ pub struct Api {
 /// Pages are read until one comes back short, up to this many.
 const MAX_PAGES: usize = 50;
 
+/// The longest one call may take, its answer read whole. GitHub answers in
+/// seconds and gives up on a request itself after ten, so a call this long
+/// has stalled on a connection gone quiet. Waited on, it would hold what
+/// made it (a train's step, the ledger's lock) until its unit's own limit;
+/// cut off, it's GitHub unavailable, and asked again later.
+const CALL_FOR: Duration = Duration::from_secs(60);
+
 impl Api {
     /// `base` is the API root, `https://api.github.com` on github.com.
     pub fn new(base: &str, tokens: Tokens) -> Self {
-        Self::through(base, tokens, ureq::Proxy::try_from_env())
+        Self::through(base, tokens, ureq::Proxy::try_from_env(), CALL_FOR)
     }
 
-    /// Through `proxy`, or straight to GitHub when `None`.
-    fn through(base: &str, tokens: Tokens, proxy: Option<ureq::Proxy>) -> Self {
+    /// Through `proxy`, or straight to GitHub when `None`, each call cut
+    /// off at `call_for`.
+    fn through(base: &str, tokens: Tokens, proxy: Option<ureq::Proxy>, call_for: Duration) -> Self {
         let config = ureq::Agent::config_builder()
+            .timeout_global(Some(call_for))
             .proxy(proxy)
             .tls_config(
                 TlsConfig::builder()
