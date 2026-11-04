@@ -539,9 +539,15 @@ fn an_undo_landed_on_github_is_read_before_another_is_made() {
 /// A run that opened its PR and stopped before recording it: the PR, on
 /// `x`'s first undo branch, with its revert.
 fn stopped(hub: &Hub, x: ChangeId) -> u64 {
+    stopped_at(hub, x, 1)
+}
+
+/// The same, on the branch of `x`'s `attempt`th undo.
+fn stopped_at(hub: &Hub, x: ChangeId, attempt: usize) -> u64 {
     let revert = hub.make_commit("", "before", AFTER, "m").unwrap();
-    hub.create_branch("", &undo_branch(x, 1), &revert).unwrap();
-    hub.open_pull("", &undo_branch(x, 1), "main", "t", "b")
+    hub.create_branch("", &undo_branch(x, attempt), &revert)
+        .unwrap();
+    hub.open_pull("", &undo_branch(x, attempt), "main", "t", "b")
         .unwrap()
 }
 
@@ -725,4 +731,32 @@ fn an_undo_s_own_undo_is_read_down_the_tree() {
         "{err}"
     );
     assert_eq!(store.ledger().change(x).unwrap().status(), Kept::Landed);
+}
+
+#[test]
+fn a_stopped_run_closed_is_recorded_beside_the_undo_that_reopened() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = store(&dir);
+    let hub = Hub::new();
+    let x = landed(&mut store, Some("tools: a plain sentence"));
+    let first = undo_of(&mut store, &hub, x).unwrap();
+    hub.close(first.pr);
+    ingest::pull(&mut store, &hub, &config(), &repo(), first.pr).unwrap();
+    // The next attempt's run stopped before recording its PR, which closed,
+    // and then the first reopened.
+    let second = stopped_at(&hub, x, 2);
+    hub.close(second);
+    hub.reopen(first.pr);
+    let got = undo_of(&mut store, &hub, x).unwrap();
+    assert_eq!((got.change, got.how), (first.change, How::Found));
+    let closed = store.ledger().by_pr(&repo(), second).unwrap();
+    assert_eq!(closed.status(), Kept::Closed);
+    assert_eq!(
+        store.ledger().change(x).unwrap().undone_by,
+        [first.change, closed.id]
+    );
+    // Recorded once: run again, there's nothing new.
+    let again = undo_of(&mut store, &hub, x).unwrap();
+    assert_eq!((again.change, again.recorded), (first.change, 0));
+    assert_eq!(hub.pulls.borrow().len(), 2);
 }

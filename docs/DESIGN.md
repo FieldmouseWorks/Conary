@@ -501,7 +501,9 @@ reverts is `reverted`; undone in turn, they're landed again. A change takes
 one undo at a time, and once one has landed it's the only one: the change
 goes back and forth by undoing that undo, and undoing that, so no undo can
 come back into effect beside another. Only an undo closed without landing
-makes way for the next, and it can't reopen once one has taken its place.
+makes way for the next, and it can't reopen while one in its place is open
+or landed. Reverting nothing, a closed one is recorded whenever it's found,
+beside whatever took its place.
 An undo that leads back to itself through what its undos revert is refused.
 
 ## 6. The landing flow

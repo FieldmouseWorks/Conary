@@ -246,6 +246,10 @@ fn commit(sha: &str) -> Result<CommitId, IngestError> {
 struct Writer<'a> {
     store: &'a mut Store,
     recorded: usize,
+    /// Where the PR came from, so a competing undo can be read again.
+    source: &'a dyn Source,
+    config: &'a Config,
+    repo: &'a Repo,
 }
 
 impl Writer<'_> {
@@ -263,13 +267,27 @@ impl Writer<'_> {
     /// Records the change reopened: true unless it's an undo whose changes
     /// took another undo while it was closed. That one stays closed here,
     /// so the train never takes it, and its merge, if it comes, is trunk
-    /// moving outside Conary.
+    /// moving outside Conary. The other is read again first, if the ledger
+    /// holds it open: it may have closed on GitHub since, and a sync reads
+    /// open PRs before closed ones, so only the ledger's word that it's
+    /// open is no reason to keep this one closed.
     fn reopen(&mut self, change: ChangeId) -> Result<bool, IngestError> {
-        match self.record(Body::Reopen { change }) {
-            Err(IngestError::Store(StoreError::Invalid(Invalid::AlreadyUndone { .. }))) => {
-                Ok(false)
-            }
-            got => got.map(|()| true),
+        let mut read = Vec::new();
+        loop {
+            let by = match self.record(Body::Reopen { change }) {
+                Err(IngestError::Store(StoreError::Invalid(Invalid::AlreadyUndone {
+                    by, ..
+                }))) => by,
+                got => return got.map(|()| true),
+            };
+            let ledger = self.store.ledger();
+            let open = ledger.change(by).filter(|c| c.status() == Status::Open);
+            let Some(pr) = open.map(|c| c.pr).filter(|_| !read.contains(&by)) else {
+                return Ok(false);
+            };
+            read.push(by);
+            let (source, config, repo) = (self.source, self.config, self.repo);
+            self.recorded += pull(self.store, source, config, repo, pr)?.recorded;
         }
     }
 }
@@ -283,7 +301,13 @@ fn record(
     base: CommitId,
 ) -> Result<Ingested, IngestError> {
     let full = repo.to_string();
-    let mut w = Writer { store, recorded: 0 };
+    let mut w = Writer {
+        store,
+        recorded: 0,
+        source,
+        config,
+        repo,
+    };
     let body = pr.body.clone().unwrap_or_default();
 
     let change = match w.store.ledger().by_pr(repo, pr.number) {

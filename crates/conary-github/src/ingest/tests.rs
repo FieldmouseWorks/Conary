@@ -900,3 +900,32 @@ fn an_undo_reopened_beside_another_stays_closed_and_its_merge_is_outside() {
     assert_eq!(status(&store, x), Status::Landed);
     assert_eq!(store.ledger().outside().len(), 1);
 }
+
+#[test]
+fn an_undo_reopened_once_its_rival_closed_on_github_lands_whichever_is_read_first() {
+    let (_dir, mut store) = open();
+    let mut f = fake();
+    let (x, first) = with_undo(&mut store, &mut f, 10);
+    f.pulls[1]["state"] = json!("closed");
+    pull(&mut store, &f, &config(), &repo(), 10).unwrap();
+    f.pulls.push(pr(11, DEV, "open", false));
+    let second = pull(&mut store, &f, &config(), &repo(), 11).unwrap().change;
+    store
+        .record(Body::Undo {
+            change: second,
+            reverts: vec![x],
+            asked: conary_core::op::Asked::Change,
+        })
+        .unwrap();
+    // On GitHub the second closed, then the first reopened and landed: read
+    // first, the first finds the second closed, not as the ledger held it.
+    f.pulls[2]["state"] = json!("closed");
+    f.pulls[1]["state"] = json!("open");
+    merged_as(&mut f, 10, REBASED);
+    pull(&mut store, &f, &config(), &repo(), 10).unwrap();
+    let status = |s: &Store, c| s.ledger().change(c).unwrap().status();
+    assert_eq!(status(&store, second), Status::Closed);
+    assert_eq!(status(&store, first), Status::Landed);
+    assert_eq!(store.ledger().change(x).unwrap().reverted_by, Some(first));
+    assert!(store.ledger().outside().is_empty());
+}
