@@ -50,6 +50,8 @@ struct Hub {
     settled: RefCell<Vec<String>>,
     /// When each PR closed and reopened, oldest first.
     turns: RefCell<HashMap<u64, Vec<(String, &'static str)>>>,
+    /// Repos GitHub errs for.
+    down: RefCell<Vec<String>>,
     n: Cell<u64>,
     /// Seconds since noon, a tick for each thing that happens.
     clock: Cell<u64>,
@@ -78,6 +80,7 @@ impl Hub {
             linked: RefCell::new(HashMap::new()),
             settled: RefCell::new(Vec::new()),
             turns: RefCell::new(HashMap::new()),
+            down: RefCell::new(Vec::new()),
             n: Cell::new(0),
             clock: Cell::new(0),
         }
@@ -166,7 +169,10 @@ impl Hub {
 }
 
 impl Branches for Hub {
-    fn default_branch(&self, _: &str) -> Result<String, ApiError> {
+    fn default_branch(&self, repo: &str) -> Result<String, ApiError> {
+        if self.down.borrow().iter().any(|d| d == repo) {
+            return Err(ApiError::new(format!("{repo}: Server Error")));
+        }
         Ok("main".into())
     }
 

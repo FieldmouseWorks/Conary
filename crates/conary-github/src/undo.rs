@@ -134,6 +134,18 @@ pub enum UndoError {
         branch: String,
         pr: u64,
     },
+    /// The ledger holds no change of the repo, so nothing there is its to
+    /// undo.
+    Unkept(Repo),
+}
+
+impl UndoError {
+    /// Whether the ledger refused what was asked, as things stand: asked
+    /// again, it refuses again until they change. The rest are what
+    /// stopped a run, GitHub's errors or the store's.
+    pub fn refused(&self) -> bool {
+        !matches!(self, Self::Api(_) | Self::Store(_) | Self::Ingest(_))
+    }
 }
 
 impl std::fmt::Display for UndoError {
@@ -168,6 +180,7 @@ impl std::fmt::Display for UndoError {
                 f,
                 "#{pr}, from {branch}, has no undo marker in its body: put it back or close #{pr}"
             ),
+            Self::Unkept(repo) => write!(f, "the ledger keeps no change of {repo}"),
         }
     }
 }
@@ -226,12 +239,50 @@ pub struct Undone {
 }
 
 /// The undos of what a session or a time asked for.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Undid {
     pub undos: Vec<Undone>,
     /// What was asked for and trunk already lacks, newest first: its revert
     /// changes nothing, so no undo takes it.
     pub gone: Vec<ChangeId>,
+}
+
+/// A run by session or time that stopped: the undos it had opened or found
+/// by then, in the repos before the one it stopped in, and why it stopped.
+/// Run again, it finds them rather than open more.
+#[derive(Debug)]
+pub struct Stopped {
+    pub done: Box<Undid>,
+    pub error: UndoError,
+}
+
+impl Stopped {
+    /// Whether it undid nothing because the ledger refused what was asked
+    /// ([`UndoError::refused`]).
+    pub fn refused(&self) -> bool {
+        self.done.undos.is_empty() && self.error.refused()
+    }
+}
+
+impl From<UndoError> for Stopped {
+    fn from(error: UndoError) -> Self {
+        Self {
+            done: Box::default(),
+            error,
+        }
+    }
+}
+
+impl std::fmt::Display for Stopped {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.error.fmt(f)
+    }
+}
+
+impl std::error::Error for Stopped {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.error)
+    }
 }
 
 /// Opens the PR that reverts `change`'s landing, and records it as its
@@ -287,7 +338,7 @@ pub fn undo_actor(
     source: &dyn Source,
     config: &Config,
     session: &str,
-) -> Result<Undid, UndoError> {
+) -> Result<Undid, Stopped> {
     let asked = Asked::Actor {
         session: session.to_owned(),
     };
@@ -305,12 +356,21 @@ pub fn undo_actor(
         gone: Vec::new(),
     };
     for repo in repos {
-        let one = group(store, forge, source, config, &repo, &asked, &|c| by(c))?;
-        got.undos.extend(one.undos);
-        got.gone.extend(one.gone);
+        match group(store, forge, source, config, &repo, &asked, &|c| by(c)) {
+            Ok(one) => {
+                got.undos.extend(one.undos);
+                got.gone.extend(one.gone);
+            }
+            Err(error) => {
+                return Err(Stopped {
+                    done: Box::new(got),
+                    error,
+                });
+            }
+        }
     }
     if got.undos.is_empty() && got.gone.is_empty() {
-        return Err(UndoError::NoneLanded(asked));
+        return Err(UndoError::NoneLanded(asked).into());
     }
     Ok(got)
 }
@@ -326,12 +386,15 @@ pub fn undo_since(
     config: &Config,
     repo: &Repo,
     since: i64,
-) -> Result<Undid, UndoError> {
+) -> Result<Undid, Stopped> {
+    if !store.ledger().changes().any(|c| &c.repo == repo) {
+        return Err(UndoError::Unkept(repo.clone()).into());
+    }
     let asked = Asked::Since { since };
     let after = |c: &Change| c.landing.as_ref().is_some_and(|l| l.at > since);
     let got = group(store, forge, source, config, repo, &asked, &after)?;
     if got.undos.is_empty() && got.gone.is_empty() {
-        return Err(UndoError::NoneLanded(asked));
+        return Err(UndoError::NoneLanded(asked).into());
     }
     Ok(got)
 }

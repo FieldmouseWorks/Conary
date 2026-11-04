@@ -16,7 +16,7 @@ use conary_core::why::{self, Why};
 use conary_core::{ChangeId, Ledger};
 use conary_core::{reader, rpc};
 use conary_github::anchor::{self, Anchored};
-use conary_github::undo::{self, How, Undid, Undone};
+use conary_github::undo::{self, How, Stopped, Undid, Undone};
 use conary_github::{Api, ApiError, Config, Etags, Ingested, Tokens, ingest, notes};
 
 mod train;
@@ -25,7 +25,7 @@ mod train;
 #[command(
     name = "cn",
     about = "Conary: the ledger of every change and why it was made",
-    after_help = "Exits 75 when GitHub couldn't be asked just now (its rate limit, its own errors, the network): run it again later."
+    after_help = "Exits 75 when GitHub couldn't be asked just now (its rate limit, its own errors, the network): run it again later. Exits 65 when the ledger refused what was asked, so nothing was done: asked again, it refuses again until the ledger changes."
 )]
 struct Cli {
     /// The ledger's directory.
@@ -177,6 +177,12 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 /// failure.
 const UNAVAILABLE: u8 = 75;
 
+/// The exit status when the ledger refused what was asked (no such change,
+/// one that hasn't landed, a session that landed nothing), BSD's
+/// EX_DATAERR: nothing was done, and running it again refuses again until
+/// the ledger changes. Every other failure may have stopped partway.
+const REFUSED: u8 = 65;
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
     match run(&cli) {
@@ -185,12 +191,31 @@ fn main() -> ExitCode {
             eprintln!("cn: {e}");
             if unavailable(&*e) {
                 ExitCode::from(UNAVAILABLE)
+            } else if refused(&*e) {
+                ExitCode::from(REFUSED)
             } else {
                 ExitCode::FAILURE
             }
         }
     }
 }
+
+/// Whether the ledger refused what was asked, before anything was done.
+fn refused(e: &(dyn std::error::Error + 'static)) -> bool {
+    e.downcast_ref::<Stopped>().is_some_and(Stopped::refused) || e.is::<Unnamed>()
+}
+
+/// A change named by something the ledger has no change for.
+#[derive(Debug)]
+struct Unnamed(String);
+
+impl std::fmt::Display for Unnamed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Unnamed {}
 
 /// Whether the error comes down to GitHub being unavailable.
 fn unavailable(e: &(dyn std::error::Error + 'static)) -> bool {
@@ -289,10 +314,12 @@ fn run(cli: &Cli) -> Result<()> {
             let got = match (change, actor, since.zip(repo.as_ref())) {
                 (Some(change), ..) => {
                     let id = named(a.store.ledger(), change)?;
-                    undo::undo(&mut a.store, &api, &api, &config, id).map(|u| Undid {
-                        undos: vec![u],
-                        gone: Vec::new(),
-                    })
+                    undo::undo(&mut a.store, &api, &api, &config, id)
+                        .map(|u| Undid {
+                            undos: vec![u],
+                            gone: Vec::new(),
+                        })
+                        .map_err(Stopped::from)
                 }
                 (_, Some(session), _) => {
                     undo::undo_actor(&mut a.store, &api, &api, &config, session)
@@ -302,12 +329,23 @@ fn run(cli: &Cli) -> Result<()> {
                 }
                 _ => unreachable!("clap asks for one of them"),
             };
+            // What it opened is told first, the undos a run that stopped
+            // had by then included: they're PRs on GitHub, whatever stops
+            // it after them.
+            let done = match &got {
+                Ok(done) => done,
+                Err(stopped) => &*stopped.done,
+            };
+            for u in &done.undos {
+                print_undone(cli, u, a.store.ledger());
+            }
+            print_gone(cli, &done.gone);
             a.publish(&api)?;
             // Whatever was recorded before a failure is published, and so
             // are its repos' notes.
-            let mut repos: Vec<Repo> = got
+            let mut repos: Vec<Repo> = done
+                .undos
                 .iter()
-                .flat_map(|g| &g.undos)
                 .filter_map(|u| a.store.ledger().change(u.change).map(|c| c.repo.clone()))
                 .collect();
             if let Some(id) = change
@@ -323,11 +361,7 @@ fn run(cli: &Cli) -> Result<()> {
             for r in &repos {
                 write_notes(&api, &a, github, r)?;
             }
-            let got = got?;
-            for u in &got.undos {
-                print_undone(cli, u, a.store.ledger());
-            }
-            print_gone(cli, &got.gone);
+            got?;
         }
         Command::Train { command } => train::run(cli, command)?,
         Command::Why { at, dir } => {
@@ -448,19 +482,21 @@ fn print_ingested(cli: &Cli, repo: &Repo, pr: u64, got: Ingested, ledger: &Ledge
 }
 
 /// A change named by its id, or by its PR as OWNER/NAME#N.
-fn named(ledger: &Ledger, said: &str) -> Result<ChangeId> {
+fn named(ledger: &Ledger, said: &str) -> std::result::Result<ChangeId, Unnamed> {
     let Some((repo, pr)) = said.split_once('#') else {
         return said
             .parse()
-            .map_err(|e| format!("{said:?} as a change id: {e}").into());
+            .map_err(|e| Unnamed(format!("{said:?} as a change id: {e}")));
     };
     let repo: Repo = repo
         .parse()
-        .map_err(|e| format!("{repo:?} as OWNER/NAME: {e}"))?;
-    let pr: u64 = pr.parse().map_err(|e| format!("{pr:?} as a PR: {e}"))?;
+        .map_err(|e| Unnamed(format!("{repo:?} as OWNER/NAME: {e}")))?;
+    let pr: u64 = pr
+        .parse()
+        .map_err(|e| Unnamed(format!("{pr:?} as a PR: {e}")))?;
     Ok(ledger
         .by_pr(&repo, pr)
-        .ok_or_else(|| format!("{repo}#{pr} isn't in the ledger"))?
+        .ok_or_else(|| Unnamed(format!("{repo}#{pr} isn't in the ledger")))?
         .id)
 }
 
@@ -558,6 +594,7 @@ mod tests {
     use super::*;
     use conary_github::IngestError;
     use conary_github::anchor::AnchorError;
+    use conary_github::undo::UndoError;
 
     #[test]
     fn help_never_shows_the_token_command() {
@@ -626,6 +663,40 @@ mod tests {
         assert!(refused("o#5").contains("as OWNER/NAME"));
         assert!(refused("o/r#five").contains("as a PR"));
         assert!(refused("five").contains("as a change id"));
+    }
+
+    #[test]
+    fn a_refusal_exits_apart_from_a_run_that_stopped() {
+        let boxed = |e: Box<dyn std::error::Error>| (refused(&*e), unavailable(&*e));
+        let id = ChangeId::new().unwrap();
+        assert_eq!(
+            boxed(Stopped::from(UndoError::NotLanded(id)).into()),
+            (true, false)
+        );
+        assert_eq!(
+            boxed(Unnamed("o/r#5 isn't in the ledger".into()).into()),
+            (true, false)
+        );
+        assert_eq!(
+            boxed(Stopped::from(UndoError::Api(ApiError::new("Server Error"))).into()),
+            (false, false)
+        );
+        assert_eq!(
+            boxed(Stopped::from(UndoError::Api(ApiError::unavailable("limit"))).into()),
+            (false, true)
+        );
+        assert_eq!(boxed("no token".into()), (false, false));
+        // Refused in a repo after an undo opened in another: it stopped.
+        let mut stopped = Stopped::from(UndoError::NoTrunk("main".into()));
+        stopped.done.undos.push(Undone {
+            change: id,
+            pr: 7,
+            reverts: vec![id],
+            left: Vec::new(),
+            how: How::Opened { conflicts: false },
+            recorded: 1,
+        });
+        assert_eq!(boxed(stopped.into()), (false, false));
     }
 
     #[test]
