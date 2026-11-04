@@ -5,7 +5,7 @@ use ed25519_dalek::SigningKey;
 use serde_json::{Value, json};
 
 use super::*;
-use crate::api::{CheckRun, Commit, PullRequest, Pulls, Review, Status};
+use crate::api::{CheckRun, Commit, Event, PullRequest, Pulls, Review, Status};
 use conary_core::ledger::Status as Kept;
 use conary_core::op::{Actor, ActorKind, Authority};
 
@@ -42,7 +42,11 @@ struct Hub {
     linked: RefCell<HashMap<String, Vec<u64>>>,
     /// The heads the steward settled, before they merged.
     settled: RefCell<Vec<String>>,
+    /// When each PR closed and reopened, oldest first.
+    turns: RefCell<HashMap<u64, Vec<(String, &'static str)>>>,
     n: Cell<u64>,
+    /// Seconds since noon, a tick for each thing that happens.
+    clock: Cell<u64>,
 }
 
 impl Hub {
@@ -65,8 +69,27 @@ impl Hub {
             pulls: RefCell::new(Vec::new()),
             linked: RefCell::new(HashMap::new()),
             settled: RefCell::new(Vec::new()),
+            turns: RefCell::new(HashMap::new()),
             n: Cell::new(0),
+            clock: Cell::new(0),
         }
+    }
+
+    fn now(&self) -> String {
+        let t = self.clock.get() + 1;
+        self.clock.set(t);
+        format!("2026-10-27T12:{:02}:{:02}Z", t / 60, t % 60)
+    }
+
+    fn turn(&self, number: u64, state: &str, event: &'static str) {
+        let at = self.now();
+        for p in self.pulls.borrow_mut().iter_mut() {
+            if p["number"] == number {
+                p["state"] = json!(state);
+            }
+        }
+        let mut turns = self.turns.borrow_mut();
+        turns.entry(number).or_default().push((at, event));
     }
 
     fn sha(&self) -> String {
@@ -101,19 +124,11 @@ impl Hub {
     }
 
     fn close(&self, number: u64) {
-        for p in self.pulls.borrow_mut().iter_mut() {
-            if p["number"] == number {
-                p["state"] = json!("closed");
-            }
-        }
+        self.turn(number, "closed", "closed");
     }
 
     fn reopen(&self, number: u64) {
-        for p in self.pulls.borrow_mut().iter_mut() {
-            if p["number"] == number {
-                p["state"] = json!("open");
-            }
-        }
+        self.turn(number, "open", "reopened");
     }
 
     /// The steward lands PR `number`, settled, squashed onto trunk, and
@@ -134,9 +149,10 @@ impl Hub {
             .insert("main".into(), sha.clone());
         let branch = p["head"]["ref"].as_str().unwrap().to_owned();
         self.branches.borrow_mut().remove(&branch);
-        p["state"] = json!("closed");
-        p["merged_at"] = json!("2026-10-27T12:00:00Z");
+        p["merged_at"] = json!(self.now());
         p["merge_commit_sha"] = json!(sha);
+        drop(pulls);
+        self.turn(number, "closed", "closed");
         sha
     }
 }
@@ -233,8 +249,10 @@ impl Reverts for Hub {
         }
         let number = 100 + self.pulls.borrow().len() as u64;
         let sha = self.branches.borrow()[head].clone();
+        let at = self.now();
         self.pulls.borrow_mut().push(json!({
             "number": number, "state": "open", "title": title, "body": body,
+            "created_at": at,
             "user": {"login": STEWARD, "type": "Bot"},
             "merged_at": null, "merge_commit_sha": null,
             "base": {"sha": TRUNK, "ref": base, "repo": {"default_branch": "main"}},
@@ -298,8 +316,14 @@ impl Source for Hub {
         Ok(self.linked.borrow().get(sha).cloned().unwrap_or_default())
     }
 
-    fn retargeted(&self, _: &str, _: u64) -> Result<Option<String>, ApiError> {
-        Ok(None)
+    fn timeline(&self, _: &str, number: u64) -> Result<Vec<Event>, ApiError> {
+        let turns = self.turns.borrow();
+        Ok(turns
+            .get(&number)
+            .into_iter()
+            .flatten()
+            .map(|(at, event)| parse(&json!({"event": event, "created_at": at})))
+            .collect())
     }
 
     fn merge_base(&self, _: &str, a: &str, _: &str) -> Result<String, ApiError> {

@@ -93,7 +93,7 @@ impl MergeBases {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::{CheckRun, Commit, PullRequest, Pulls, Review, Status};
+    use crate::api::{CheckRun, Commit, Event, PullRequest, Pulls, Review, Status};
     use std::cell::Cell;
 
     /// GitHub, answering only merge bases, and counting them.
@@ -122,7 +122,7 @@ mod tests {
         fn commit_pulls(&self, _: &str, _: &str) -> Result<Vec<u64>, ApiError> {
             unimplemented!()
         }
-        fn retargeted(&self, _: &str, _: u64) -> Result<Option<String>, ApiError> {
+        fn timeline(&self, _: &str, _: u64) -> Result<Vec<Event>, ApiError> {
             unimplemented!()
         }
         fn merge_base(&self, _: &str, a: &str, _: &str) -> Result<String, ApiError> {

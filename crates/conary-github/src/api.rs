@@ -38,6 +38,7 @@ pub struct PullRequest {
     pub body: Option<String>,
     pub user: User,
     pub merged: Option<bool>,
+    pub created_at: Option<String>,
     pub merged_at: Option<String>,
     pub merge_commit_sha: Option<String>,
     pub base: Ref,
@@ -154,10 +155,12 @@ struct PullNumber {
     number: u64,
 }
 
-#[derive(Debug, Deserialize)]
-struct TimelineEvent {
-    event: Option<String>,
-    created_at: Option<String>,
+/// Something that happened to a PR, from its timeline: retargeted, closed or
+/// reopened among the rest.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Event {
+    pub event: Option<String>,
+    pub created_at: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -219,8 +222,8 @@ pub trait Source {
     /// The PRs GitHub links a commit to: the one whose merge, squash or
     /// rebase made it, for a commit on trunk.
     fn commit_pulls(&self, repo: &str, sha: &str) -> Result<Vec<u64>, ApiError>;
-    /// When the PR's base branch was last changed, if it ever was.
-    fn retargeted(&self, repo: &str, number: u64) -> Result<Option<String>, ApiError>;
+    /// What happened to the PR, oldest first.
+    fn timeline(&self, repo: &str, number: u64) -> Result<Vec<Event>, ApiError>;
     /// The best common ancestor of two commits.
     fn merge_base(&self, repo: &str, a: &str, b: &str) -> Result<String, ApiError>;
 }
@@ -532,14 +535,8 @@ impl Source for Api {
         Ok(pulls.into_iter().map(|p| p.number).collect())
     }
 
-    fn retargeted(&self, repo: &str, number: u64) -> Result<Option<String>, ApiError> {
-        let events: Vec<TimelineEvent> =
-            self.pages(&format!("/repos/{repo}/issues/{number}/timeline"))?;
-        Ok(events
-            .into_iter()
-            .filter(|e| e.event.as_deref() == Some("base_ref_changed"))
-            .filter_map(|e| e.created_at)
-            .max())
+    fn timeline(&self, repo: &str, number: u64) -> Result<Vec<Event>, ApiError> {
+        self.pages(&format!("/repos/{repo}/issues/{number}/timeline"))
     }
 
     fn merge_base(&self, repo: &str, a: &str, b: &str) -> Result<String, ApiError> {
