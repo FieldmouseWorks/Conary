@@ -390,7 +390,7 @@ impl Actions for Hub {
     }
 }
 
-impl Forge for Hub {
+impl Branches for Hub {
     fn default_branch(&self, repo: &str) -> Result<String, ApiError> {
         if repo == SIGNER_REPO {
             return Ok("main".into());
@@ -453,7 +453,9 @@ impl Forge for Hub {
     fn tree(&self, _: &str, sha: &str) -> Result<String, ApiError> {
         Ok(self.tree_holding(&self.holds.borrow()[sha]))
     }
+}
 
+impl Forge for Hub {
     fn mark(
         &self,
         _: &str,

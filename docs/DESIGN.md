@@ -481,6 +481,15 @@ undoes, still opens its PR with the conflict, and a Claude job resolves it
 like any other finding. Undo of an R2 change waits for the owner like the
 change did.
 
+The revert is built the way the train builds a candidate, through GitHub's
+API, so nothing on the box runs git: a commit of the tree trunk had before
+the change landed, made on its landing, reverts that landing and nothing
+after it, and trunk is then merged into its branch,
+`conary/undo/<change>/<attempt>`. Where that merge conflicts, the PR opens
+at the bare revert. It takes its title from what it reverts, as
+`area: undo #N, sentence`. Asked again, `undo` finds the PR it opened, or
+the branch a run that stopped left, rather than make another.
+
 The ledger records each undo as an op on its revert change: the changes it
 reverts, all landed in its repo, and what asked for it (a change, a session
 or a time, which each of them has to match). Once the undo lands, what it

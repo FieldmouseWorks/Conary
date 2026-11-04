@@ -62,11 +62,12 @@ steward's jobs over one at a time.
 - **Done:** the ledger records every PR on remi and answers `why`, there and
   from any clone (M1, M2). conaryd serves it over a socket, and an MCP server
   offers it to agents.
-- **In progress:** the train (M3). It has landed remi's PRs since
-  2026-10-30. What's left is the evidence verifier, so a candidate counts
-  only on attested results.
-- **Next:** `undo` by change, session and time (M4), then class policy (M5),
-  then Conary running the whole landing flow in place of the steward (M6).
+- **In progress:** the train (M3) has landed remi's PRs since 2026-10-30,
+  counting only attested results; its exit check waits on a day busy enough
+  to batch them. `undo` (M4) reverts a landed change by its PR; by session
+  and by time come next.
+- **Next:** class policy (M5), then Conary running the whole landing flow in
+  place of the steward (M6).
 
 The milestones and their exit checks are in
 [DESIGN section 12](docs/DESIGN.md#12-milestones).
@@ -119,6 +120,12 @@ finished.
     cn train step FieldmouseWorks/remi --require 'check / check' --fresh-runners fresh-remi-
     cn train verdict FieldmouseWorks/remi <candidate> dropped
     cn train show FieldmouseWorks/remi --human
+
+`cn undo` opens the PR that reverts a landed change and records it as the
+change's undo ([undo](docs/DESIGN.md#5-undo)). A revert that conflicts with
+what came after it opens all the same, for its conflict to be resolved.
+
+    cn undo FieldmouseWorks/remi#174
 
 `cn --help` and each command's `--help` list the rest, environment variables
 included.

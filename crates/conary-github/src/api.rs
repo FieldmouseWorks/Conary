@@ -690,7 +690,7 @@ struct MergeCommit {
     commit: TreeCommit,
 }
 
-impl crate::train::Forge for Api {
+impl crate::branches::Branches for Api {
     fn default_branch(&self, repo: &str) -> Result<String, ApiError> {
         let r: Defaults = self.get(&format!("/repos/{repo}"))?;
         Ok(r.default_branch)
@@ -745,8 +745,8 @@ impl crate::train::Forge for Api {
         into: &str,
         head: &str,
         message: &str,
-    ) -> Result<crate::train::Merged, ApiError> {
-        use crate::train::Merged;
+    ) -> Result<crate::branches::Merged, ApiError> {
+        use crate::branches::Merged;
         let path = format!("/repos/{repo}/merges");
         let url = format!("{}{path}", self.base);
         let mut response = self
@@ -775,7 +775,9 @@ impl crate::train::Forge for Api {
         let commit: TreeCommit = self.get(&format!("/repos/{repo}/git/commits/{sha}"))?;
         Ok(commit.tree.sha)
     }
+}
 
+impl crate::train::Forge for Api {
     fn mark(
         &self,
         repo: &str,
@@ -835,6 +837,49 @@ impl crate::train::Forge for Api {
             }
             _ => Err(failed(&url, &mut response)),
         }
+    }
+}
+
+impl crate::undo::Reverts for Api {
+    fn make_commit(
+        &self,
+        repo: &str,
+        tree: &str,
+        parent: &str,
+        message: &str,
+    ) -> Result<String, ApiError> {
+        let made: GitObject = self.send(
+            false,
+            &format!("/repos/{repo}/git/commits"),
+            &serde_json::json!({"message": message, "tree": tree, "parents": [parent]}),
+        )?;
+        Ok(made.sha)
+    }
+
+    fn open_pull(
+        &self,
+        repo: &str,
+        head: &str,
+        base: &str,
+        title: &str,
+        body: &str,
+    ) -> Result<u64, ApiError> {
+        let made: PullNumber = self.send(
+            false,
+            &format!("/repos/{repo}/pulls"),
+            &serde_json::json!({"title": title, "head": head, "base": base, "body": body}),
+        )?;
+        Ok(made.number)
+    }
+
+    fn pull_from(&self, repo: &str, head: &str) -> Result<Option<u64>, ApiError> {
+        // `head` filters by OWNER:BRANCH, so a fork's branch of the same
+        // name is never taken for the repo's own.
+        let owner = repo.split('/').next().unwrap_or(repo);
+        let open: Vec<PullNumber> = self.get(&format!(
+            "/repos/{repo}/pulls?state=open&head={owner}:{head}"
+        ))?;
+        Ok(open.first().map(|p| p.number))
     }
 }
 

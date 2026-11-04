@@ -293,7 +293,7 @@ fn reads_a_path_s_repository() {
 
 #[test]
 fn the_trains_merges_say_merged_already_there_or_conflict() {
-    use crate::train::{Forge, Merged};
+    use crate::branches::{Branches, Merged};
     let made = r#"{"sha":"m","commit":{"tree":{"sha":"t"}}}"#;
     let answers: Vec<&'static str> = vec![
         whole("201 Created", made).leak(),
@@ -319,7 +319,7 @@ fn the_trains_merges_say_merged_already_there_or_conflict() {
 
 #[test]
 fn the_trains_branches_are_read_made_and_deleted_by_name() {
-    use crate::train::Forge;
+    use crate::branches::Branches;
     let refs = r#"[{"ref":"refs/heads/conary/train/a","object":{"sha":"s"}}]"#;
     let answers: Vec<&'static str> = vec![
         whole("200 OK", r#"{"object":{"sha":"s"}}"#).leak(),
@@ -457,4 +457,44 @@ fn the_trains_status_is_its_own_context() {
     let body: serde_json::Value =
         serde_json::from_str(posted.split("\r\n\r\n").last().unwrap()).unwrap();
     assert_eq!(body["state"], "error");
+}
+
+#[test]
+fn an_undo_makes_its_revert_opens_its_pr_and_finds_it_by_branch() {
+    use crate::undo::Reverts;
+    let answers: Vec<&'static str> = vec![
+        whole("201 Created", r#"{"sha":"r"}"#).leak(),
+        whole("201 Created", r#"{"number":9}"#).leak(),
+        whole("200 OK", r#"[{"number":9}]"#).leak(),
+        whole("200 OK", "[]").leak(),
+    ];
+    let (base, heads) = github(answers);
+    let api = Api::new(&base, Tokens::given("t"));
+    let body = |request: String| -> serde_json::Value {
+        serde_json::from_str(request.split("\r\n\r\n").nth(1).unwrap()).unwrap()
+    };
+    assert_eq!(api.make_commit("o/r", "t", "a", "undo").unwrap(), "r");
+    let made = heads.recv().unwrap();
+    assert!(made.starts_with("post /repos/o/r/git/commits "));
+    assert_eq!(
+        body(made),
+        serde_json::json!({"message": "undo", "tree": "t", "parents": ["a"]})
+    );
+    let branch = "conary/undo/x/1";
+    assert_eq!(api.open_pull("o/r", branch, "main", "ti", "bo").unwrap(), 9);
+    let opened = heads.recv().unwrap();
+    assert!(opened.starts_with("post /repos/o/r/pulls "));
+    assert_eq!(
+        body(opened),
+        serde_json::json!({"title": "ti", "head": branch, "base": "main", "body": "bo"})
+    );
+    // Only the repo's own branch: GitHub filters by OWNER:BRANCH.
+    assert_eq!(api.pull_from("o/r", branch).unwrap(), Some(9));
+    assert!(
+        heads
+            .recv()
+            .unwrap()
+            .starts_with(&format!("get /repos/o/r/pulls?state=open&head=o:{branch} "))
+    );
+    assert_eq!(api.pull_from("o/r", branch).unwrap(), None);
 }
