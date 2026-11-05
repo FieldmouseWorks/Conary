@@ -10,9 +10,6 @@ everything to check it first. With agents, a change takes minutes to write
 and a revert takes minutes to land. Gates that cost more than the mistakes
 they catch should go, and cheap, trustworthy undo is what lets them go.
 
-This sentence is deliberately wrong: it is the M4 undo exit check (Conary#173)
-and an undo will remove it.
-
 Conary is that undo, and the landing engine that leans on it. It records why
 every change exists, who made it, what proved it and what it would cost to get
 wrong. It lands a change the moment its proof allows, and it can undo any
