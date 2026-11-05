@@ -46,6 +46,7 @@ fn ledger_then(
         check: check.into(),
         result: Outcome::Pass,
         source: "https://github.com/o/r/runs/1".into(),
+        attest: None,
     };
     for body in [
         observe(one, 1, ActorKind::Agent, Some("s")),

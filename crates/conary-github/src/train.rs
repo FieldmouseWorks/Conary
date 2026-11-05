@@ -24,8 +24,10 @@ use crate::ingest::{self, Config, IngestError};
 
 mod gate;
 mod land;
+mod negative;
 use gate::{Gate, gate};
 use land::{land_next, open_landing, stopped_landing};
+pub use negative::Negatives;
 
 /// Where a candidate is built, one merge at a time.
 pub fn build_branch(id: CandidateId) -> String {
@@ -192,14 +194,18 @@ pub enum Joined {
     /// It targets this branch, not the repo's default one, which is the
     /// train's.
     Elsewhere(String),
+    /// The train asks for a negative, and its revision has none that
+    /// counts yet: why.
+    Unproven(String),
 }
 
 /// Puts a PR in its repo's train at `head`, the head everything but the
 /// gate said can land, once the ledger holds the PR as GitHub shows it now
 /// and that is its head. `alone`, it rides in a candidate of its own, which
-/// lands only while trunk is still its base: an R2 change. Its head's train
-/// status goes to pending first, so a success left from an earlier time
-/// in the train can't let anything merge it.
+/// lands only while trunk is still its base: an R2 change. With
+/// `negatives`, only once its revision's negative counts ([`Negatives`]).
+/// Its head's train status goes to pending first, so a success left from an
+/// earlier time in the train can't let anything merge it.
 #[allow(clippy::too_many_arguments)]
 pub fn join(
     store: &mut Store,
@@ -210,6 +216,7 @@ pub fn join(
     pr: u64,
     head: &str,
     alone: bool,
+    negatives: Option<&Negatives>,
 ) -> Result<Joined, TrainError> {
     let (got, pull) = ingest::pulled(store, source, config, repo, pr)?;
     if !pull.targets_trunk() {
@@ -236,6 +243,12 @@ pub fn join(
         Err(Invalid::Duplicate) => return Ok(Joined::Already),
         Err(Invalid::Held(why)) => return Ok(Joined::Held(why)),
         Err(e) => return Err(StoreError::Invalid(e).into()),
+    }
+    if let Some(n) = negatives {
+        let proven = negative::negative(store, forge, source, repo, got.change, got.revision, n)?;
+        if let Err(why) = proven {
+            return Ok(Joined::Unproven(why));
+        }
     }
     forge.mark(
         &repo.to_string(),

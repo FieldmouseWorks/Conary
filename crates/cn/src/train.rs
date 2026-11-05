@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use conary_core::ledger::{Candidate, Ledger};
 use conary_core::op::{Left, Repo};
 use conary_core::{CandidateId, ChangeId};
-use conary_github::train::{self, Joined, Leaving, Now, Settings, Stepped};
+use conary_github::train::{self, Joined, Leaving, Negatives, Now, Settings, Stepped};
 
 use crate::{Cli, GithubArgs, Result, read, word, write, write_notes};
 
@@ -19,7 +19,8 @@ pub enum TrainCommand {
     /// can land. Refused when the PR's head on GitHub is another; held when
     /// it left as it is (red alone, a conflict, an empty merge, a refused
     /// merge) and nothing has moved since; left out when it targets another
-    /// branch than the default one.
+    /// branch than the default one; and, with --negative, unproven until
+    /// its revision's negative counts.
     Join {
         /// The repository, as owner/name.
         repo: Repo,
@@ -32,6 +33,16 @@ pub enum TrainCommand {
         /// own, which lands only while trunk is still the candidate's base.
         #[arg(long)]
         alone: bool,
+        /// The check run that runs a PR's new tests on its base's code
+        /// (burrow's shared CI's `negative`, under its caller's job). A PR
+        /// joins only once that run's attestation holds for its revision
+        /// and says they failed there, or that it adds no test to code.
+        #[arg(long, value_name = "CHECK", value_parser = clap::builder::NonEmptyStringValueParser::new())]
+        negative: Option<String>,
+        /// As for a step: the runners a negative's attestation counts from,
+        /// besides GitHub's own.
+        #[arg(long = "fresh-runners", env = "CONARY_FRESH_RUNNERS", value_name = "PREFIX", value_parser = clap::builder::NonEmptyStringValueParser::new())]
+        fresh: Option<String>,
         #[command(flatten)]
         github: GithubArgs,
     },
@@ -130,8 +141,28 @@ pub fn run(cli: &Cli, command: &TrainCommand) -> Result<()> {
     let store = &mut a.store;
     let done: Result<(Value, String)> = match command {
         TrainCommand::Join {
-            pr, head, alone, ..
-        } => train::join(store, &api, &api, &config, repo, *pr, head, *alone)
+            pr,
+            head,
+            alone,
+            negative,
+            fresh,
+            ..
+        } => {
+            let negatives = negative.as_ref().map(|check| Negatives {
+                check: check.clone(),
+                fresh: fresh.clone(),
+            });
+            train::join(
+                store,
+                &api,
+                &api,
+                &config,
+                repo,
+                *pr,
+                head,
+                *alone,
+                negatives.as_ref(),
+            )
             .map(|joined| match joined {
                 Joined::Joined | Joined::Already => {
                     let new = joined == Joined::Joined;
@@ -151,8 +182,13 @@ pub fn run(cli: &Cli, command: &TrainCommand) -> Result<()> {
                         "{repo}#{pr}: not in the train: it targets {base}, not the default branch"
                     ),
                 ),
+                Joined::Unproven(why) => (
+                    json!({"pr": pr, "joined": false, "unproven": why}),
+                    format!("{repo}#{pr}: not in the train yet: {why}"),
+                ),
             })
-            .map_err(Into::into),
+            .map_err(Into::into)
+        }
         TrainCommand::Leave { pr, why, .. } => train::leave(store, &api, &api, repo, *pr, *why)
             .map(|left| match left {
                 Leaving::Left | Leaving::NotIn => {

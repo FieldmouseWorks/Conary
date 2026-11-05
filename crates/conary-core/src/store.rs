@@ -93,7 +93,7 @@ mod tests {
     use crate::id::{ChangeId, CommitId, RevisionId};
     use crate::ledger::Status;
     use crate::log;
-    use crate::op::{Actor, ActorKind, Authority, CheckKind, Outcome, Repo};
+    use crate::op::{Actor, ActorKind, Attest, Authority, CheckKind, Outcome, Repo};
 
     fn key() -> SigningKey {
         SigningKey::from_bytes(&[3; 32])
@@ -148,6 +148,7 @@ mod tests {
                 check: "check / check".into(),
                 result: Outcome::Pass,
                 source: "https://github.com/x/y/actions/runs/1".into(),
+                attest: None,
             })
             .unwrap();
         store
@@ -177,6 +178,62 @@ mod tests {
             name: "Burrow".into(),
         };
         assert_eq!(ledger.landed_as(&spelled, &commit('c')).unwrap().id, change);
+    }
+
+    /// A result is written as results were before attestations, and reads
+    /// as unattested; the same result attested is recorded beside it, once,
+    /// and kept through a replay.
+    #[test]
+    fn a_result_keeps_its_attestation_and_is_written_as_before_without_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(Lock::take(dir.path()).unwrap(), key(), None).unwrap();
+        let change = observe(&mut store, 4);
+        store
+            .record(Body::Revision {
+                change,
+                base: commit('a'),
+                head: commit('b'),
+            })
+            .unwrap();
+        let revision = RevisionId::new(&commit('a'), &commit('b'));
+        let evidence = |attest| Body::Evidence {
+            change,
+            revision,
+            kind: CheckKind::Negative,
+            check: "check / negative".into(),
+            result: Outcome::Fail,
+            source: "https://github.com/x/y/actions/runs/1/job/2".into(),
+            attest,
+        };
+        let json = serde_json::to_value(evidence(None)).unwrap();
+        assert!(json.get("attest").is_none(), "{json}");
+        assert_eq!(
+            serde_json::from_value::<Body>(json).unwrap(),
+            evidence(None)
+        );
+        let attest = Attest::GithubToken {
+            statement: "conary negative v1\n".into(),
+            token: "t".into(),
+        };
+        store.record(evidence(None)).unwrap();
+        store.record(evidence(Some(attest.clone()))).unwrap();
+        assert!(matches!(
+            store.record(evidence(Some(attest.clone()))),
+            Err(StoreError::Invalid(Invalid::Duplicate))
+        ));
+        drop(store);
+        let ops = log::read(dir.path(), &key().verifying_key(), None).unwrap();
+        let ledger = Ledger::replay(&ops).unwrap();
+        let kept: Vec<_> = ledger
+            .change(change)
+            .unwrap()
+            .evidence
+            .iter()
+            .map(|e| e.attest.clone())
+            .collect();
+        assert_eq!(kept, [None, Some(attest)]);
+        // A negative run that found no test to run says so in its own word.
+        assert_eq!(serde_json::to_value(Outcome::None).unwrap(), "none");
     }
 
     #[test]

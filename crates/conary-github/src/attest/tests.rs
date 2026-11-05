@@ -1,12 +1,18 @@
 use serde_json::{Value, json};
 
-use super::testing::{KID, SIGNER_SHA, claims, file, key, statement, token, token_with, zipped};
+use super::testing::{
+    KID, SIGNER_SHA, claims, file, key, negative_statement, statement, token, token_with, zipped,
+};
 use super::*;
 use crate::api::CheckSuite;
 
 const COMMIT: &str = "c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0";
 const TREE: &str = "7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e";
 const RUN: u64 = 41;
+const PUSH: Subject = Subject::Commit {
+    commit: COMMIT,
+    tree: TREE,
+};
 
 fn repo() -> Repo {
     "FieldmouseWorks/remi".parse().unwrap()
@@ -36,14 +42,7 @@ fn honest() -> (String, Value) {
 
 /// Checks a file as the candidate's passing check run's attestation.
 fn checked(file: &str) -> Result<Claimed, String> {
-    check(
-        file.as_bytes(),
-        &[key()],
-        &repo(),
-        COMMIT,
-        TREE,
-        &run("success"),
-    )
+    check(file.as_bytes(), &[key()], &repo(), PUSH, &run("success"))
 }
 
 /// The honest attestation, with `change` made to its claims first: the
@@ -62,12 +61,13 @@ fn the_jobs_own_attestation_counts_and_is_kept_as_it_was_checked() {
     assert_eq!(claimed.workflow_sha, SIGNER_SHA);
     assert!(!claimed.hosted);
     assert_eq!(
-        claimed.attest,
+        claimed.attested.attest,
         Attest::GithubToken {
             statement: s,
             token: t
         }
     );
+    assert_eq!(claimed.attested.result, Outcome::Pass);
     // GitHub gives a token's ids as strings, but a number is the same id.
     with_claims(|c| c["check_run_id"] = json!(RUN)).unwrap();
     // An audience is a string or a list of them; one holding just this is
@@ -127,8 +127,7 @@ fn a_token_github_didnt_sign_doesnt_count() {
             file(&s, &t).as_bytes(),
             &[published],
             &repo(),
-            COMMIT,
-            TREE,
+            PUSH,
             &run("success"),
         )
         .unwrap_err();
@@ -206,8 +205,7 @@ fn a_statement_counts_only_for_a_pass_on_the_candidates_tree_with_nothing_skippe
             file(&s, &token(&c)).as_bytes(),
             &[key()],
             &repo(),
-            COMMIT,
-            TREE,
+            PUSH,
             &run,
         )
     };
@@ -256,8 +254,7 @@ fn a_file_is_its_statement_and_then_its_token() {
             &[0xff, b'\n', b'\n'],
             &[key()],
             &repo(),
-            COMMIT,
-            TREE,
+            PUSH,
             &run("success")
         )
         .is_err()
@@ -273,4 +270,99 @@ fn a_file_is_its_statement_and_then_its_token() {
     assert!(unzip(&bytes).unwrap_err().contains("not a zip"));
     let big = vec![b'a'; MOST as usize + 1];
     assert!(unzip(&zipped(FILE, &big)).unwrap_err().contains("past"));
+}
+
+const BASE: &str = "baba000000000000000000000000000000000000";
+const HEAD: &str = "eded000000000000000000000000000000000000";
+const PR: Subject = Subject::Negative {
+    base: BASE,
+    head: HEAD,
+};
+
+/// A negative run's statement, signed for as its job's token would be on a
+/// PR (whose `sha` is GitHub's merge, not the head), checked as `run`'s.
+fn negative_says(s: &str, run: &CheckRun) -> Result<Claimed, String> {
+    let mut c = claims("FieldmouseWorks/remi", &"3".repeat(40), RUN, s);
+    c["event_name"] = json!("pull_request");
+    check(file(s, &token(&c)).as_bytes(), &[key()], &repo(), PR, run)
+}
+
+#[test]
+fn a_negative_counts_for_its_revision_with_what_its_tests_did_on_the_old_code() {
+    // Caught, or nothing to catch: the check run's a success. Not caught:
+    // it's red, and says the tests passed there.
+    for (result, concluded, outcome) in [
+        ("fail", "success", Outcome::Fail),
+        ("none", "success", Outcome::None),
+        ("pass", "failure", Outcome::Pass),
+    ] {
+        let s = negative_statement(BASE, HEAD, result);
+        let claimed = negative_says(&s, &run(concluded)).unwrap();
+        assert_eq!(claimed.attested.result, outcome, "{result}");
+        assert!(matches!(
+            claimed.attested.attest,
+            Attest::GithubToken { ref statement, .. } if *statement == s
+        ));
+    }
+    // A conclusion that doesn't agree with what it says.
+    for (result, concluded) in [
+        ("fail", "failure"),
+        ("none", "failure"),
+        ("pass", "success"),
+    ] {
+        let why =
+            negative_says(&negative_statement(BASE, HEAD, result), &run(concluded)).unwrap_err();
+        assert!(why.contains("check run"), "{result} {concluded}: {why}");
+    }
+    let why =
+        negative_says(&negative_statement(BASE, HEAD, "fail"), &run("cancelled")).unwrap_err();
+    assert!(why.contains("check run cancelled"), "{why}");
+}
+
+#[test]
+fn a_negative_counts_only_for_its_own_revision_and_never_as_a_push() {
+    let honest = negative_statement(BASE, HEAD, "fail");
+    let why = |s: String| negative_says(&s, &run("success")).unwrap_err();
+    // Another head, or the same head on another base.
+    let other = "f".repeat(40);
+    assert!(why(negative_statement(BASE, &other, "fail")).contains("not"));
+    assert!(why(negative_statement(&other, HEAD, "fail")).contains("not"));
+    // The subject's lines and the predicate's revision have to agree.
+    let moved = honest.replacen(
+        &format!(r#""head":"{HEAD}""#),
+        &format!(r#""head":"{other}""#),
+        1,
+    );
+    assert_ne!(moved, honest);
+    assert!(why(moved).contains("predicate is about"));
+    // Some checks not built, or a result it doesn't know.
+    let skipped =
+        negative_statement(BASE, HEAD, "skipped").replace(r#""skipped":[]"#, r#""skipped":["vm"]"#);
+    assert!(why(skipped).contains("skipped vm"));
+    assert!(why(negative_statement(BASE, HEAD, "skipped")).contains("isn't a negative's"));
+    assert!(why(negative_statement(BASE, HEAD, "maybe")).contains("isn't a negative's"));
+    // A push's statement isn't a negative, nor is a negative a push's gate.
+    assert!(why(statement(HEAD, TREE, "pass")).contains("negative run's subject"));
+    let c = claims("FieldmouseWorks/remi", COMMIT, RUN, &honest);
+    let as_push = check(
+        file(&honest, &token(&c)).as_bytes(),
+        &[key()],
+        &repo(),
+        PUSH,
+        &run("success"),
+    )
+    .unwrap_err();
+    assert!(as_push.contains("commit's subject"), "{as_push}");
+    // The token's rules hold as they do for a push's.
+    let mut c = claims("FieldmouseWorks/remi", COMMIT, 42, &honest);
+    c["event_name"] = json!("pull_request");
+    let wrong_run = check(
+        file(&honest, &token(&c)).as_bytes(),
+        &[key()],
+        &repo(),
+        PR,
+        &run("success"),
+    )
+    .unwrap_err();
+    assert!(wrong_run.contains("check run"), "{wrong_run}");
 }

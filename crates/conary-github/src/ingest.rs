@@ -759,6 +759,7 @@ impl Found {
             check: self.check,
             result: self.result,
             source: self.source,
+            attest: None,
         }
     }
 }
@@ -853,6 +854,7 @@ fn review_marker(
             .html_url
             .clone()
             .unwrap_or_else(|| format!("{} review by {login}", &m[1])),
+        attest: None,
     })
 }
 

@@ -153,6 +153,14 @@ statement with the job's token as above, under the same audience format.
 Checking one is as for the gate's result, with this subject and predicate,
 and rule 7's conclusion reads `success` for `fail`, `skipped` or `none`.
 
+A train asked for negatives (`cn train join --negative CHECK`, CHECK being
+the caller's job and then `negative`) lets a change join only once the
+latest run of that check on its head is attested this way for the revision
+joining, and says `fail` or `none`. What it checked is recorded as that
+revision's `negative` evidence, with its attestation, and counted from the
+ledger after: `fail` and `pass` as what the new tests did on the old code,
+`none` as itself.
+
 ## What doesn't get one
 
 A run with no OIDC token, such as a fork's PR or one Dependabot opened. Its
@@ -162,9 +170,9 @@ fails closed.
 ## Checking one
 
 A verifier takes an attestation as evidence only when all of these hold.
-Conary's train checks a private repo's token on its candidate's commit this
-way (`conary-github`'s `attest`); nothing checks a bundle, a PR's
-revision or a negative run yet.
+Conary's train checks a private repo's token this way (`conary-github`'s
+`attest`): on its candidate's commit, and on a PR's negative run when it's
+asked to. Nothing checks a bundle, or a PR's revision's gate, yet.
 
 1. GitHub signed it: the bundle verifies against Sigstore's public trust
    root, or the token against GitHub's published keys

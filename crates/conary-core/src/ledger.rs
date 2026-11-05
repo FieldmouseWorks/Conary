@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, HashMap};
 use serde::{Deserialize, Serialize};
 
 use crate::id::{CandidateId, ChangeId, CommitId, OpId, RevisionId};
-use crate::op::{Actor, Authority, Body, CheckKind, Op, Outcome, Repo};
+use crate::op::{Actor, Attest, Authority, Body, CheckKind, Op, Outcome, Repo};
 
 mod train;
 mod undo;
@@ -38,6 +38,8 @@ pub struct Evidence {
     pub check: String,
     pub result: Outcome,
     pub source: String,
+    /// Its producer's attestation, when it had one that held.
+    pub attest: Option<Attest>,
     pub at: i64,
 }
 
@@ -318,14 +320,22 @@ impl Ledger {
                 check,
                 result,
                 source,
+                attest,
             } => {
                 let c = self.existing(*change)?;
                 if c.revision(*revision).is_none() {
                     return Err(Invalid::UnknownRevision(*revision));
                 }
+                // The same result attested is more than it was without.
                 let same = |e: &&Evidence| {
-                    (&e.revision, &e.kind, &e.check, &e.result, &e.source)
-                        == (revision, kind, check, result, source)
+                    (
+                        &e.revision,
+                        &e.kind,
+                        &e.check,
+                        &e.result,
+                        &e.source,
+                        &e.attest,
+                    ) == (revision, kind, check, result, source, attest)
                 };
                 if c.evidence.iter().any(|e| same(&e)) {
                     return Err(Invalid::Duplicate);
@@ -501,6 +511,7 @@ impl Ledger {
                 check,
                 result,
                 source,
+                attest,
                 ..
             } => c.evidence.push(Evidence {
                 revision: *revision,
@@ -508,6 +519,7 @@ impl Ledger {
                 check: check.clone(),
                 result: *result,
                 source: source.clone(),
+                attest: attest.clone(),
                 at,
             }),
             Body::Land {
