@@ -12,7 +12,7 @@ use conary_core::op::{Attest, Body, CheckKind};
 
 use super::{Failed, Forge, Settings, TrainError, record};
 use crate::api::{CheckRun, Source};
-use crate::attest::attested;
+use crate::attest::{Subject, attested};
 use crate::ingest::{Config, run_result, status_result};
 
 /// What a candidate's checks say so far.
@@ -200,13 +200,17 @@ fn attestation(
     if let Some(attest) = kept {
         return Ok(Ok(attest));
     }
+    let subject = Subject::Commit {
+        commit: c.commit.as_str(),
+        tree: c.tree.as_str(),
+    };
     Ok(attested(
         forge,
         source,
         &c.repo,
-        c.commit.as_str(),
-        c.tree.as_str(),
+        subject,
         run,
         settings.fresh.as_deref(),
-    )?)
+    )?
+    .map(|a| a.attest))
 }

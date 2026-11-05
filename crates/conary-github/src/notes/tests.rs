@@ -183,6 +183,7 @@ fn a_note_the_ledger_has_moved_on_from_is_written_over_where_it_is() {
             check: "flake".into(),
             result: Outcome::Pass,
             source: "https://github.com/FieldmouseWorks/burrow/runs/1".into(),
+            attest: None,
         })
         .unwrap();
     assert_eq!(

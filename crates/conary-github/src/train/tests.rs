@@ -522,7 +522,18 @@ fn store(dir: &tempfile::TempDir) -> Store {
 fn join_all(store: &mut Store, hub: &Hub, prs: &[u64]) {
     for pr in prs {
         assert_eq!(
-            join(store, hub, hub, &config(), &repo(), *pr, &head(*pr), false).unwrap(),
+            join(
+                store,
+                hub,
+                hub,
+                &config(),
+                &repo(),
+                *pr,
+                &head(*pr),
+                false,
+                None
+            )
+            .unwrap(),
             Joined::Joined
         );
     }
@@ -536,7 +547,7 @@ fn try_join(
     at: &str,
     alone: bool,
 ) -> Result<Joined, TrainError> {
-    join(store, hub, hub, &config(), &repo(), pr, at, alone)
+    join(store, hub, hub, &config(), &repo(), pr, at, alone, None)
 }
 
 fn joined(store: &Store) -> Vec<u64> {
@@ -577,6 +588,7 @@ fn waiting(stepped: &Stepped) -> Vec<String> {
 mod empty;
 mod gate;
 mod land;
+mod negative;
 
 #[test]
 fn a_ready_pr_joins_at_its_head_as_github_shows_it() {

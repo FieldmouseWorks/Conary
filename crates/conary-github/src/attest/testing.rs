@@ -67,6 +67,17 @@ pub(crate) fn statement(commit: &str, tree: &str, result: &str) -> String {
     format!("conary commit v1\n{commit}\n{predicate}\n")
 }
 
+/// The statement of a PR's negative run on `head`, whose merge base is
+/// `base`.
+pub(crate) fn negative_statement(base: &str, head: &str, result: &str) -> String {
+    let tree = (result != "none").then(|| "7".repeat(40));
+    let predicate = json!({"result": result, "revision": {"base": base, "head": head},
+                           "tree": tree, "tests": ["tests/new.rs"], "checks": ["crates"],
+                           "skipped": [],
+                           "log": {"sha256": "0".repeat(64), "artifact": "negative-log-1"}});
+    format!("conary negative v1\n{base}\n{head}\n{predicate}\n")
+}
+
 /// The claims GitHub gives the job of check run `run` in `repo`, pushed
 /// at `commit`, asking for `statement`'s audience.
 pub(crate) fn claims(repo: &str, commit: &str, run: u64, statement: &str) -> Value {

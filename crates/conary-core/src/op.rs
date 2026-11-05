@@ -107,6 +107,9 @@ pub enum Outcome {
     Pass,
     Fail,
     Error,
+    /// Nothing to run: a `negative` check's change adds no test to code
+    /// (`docs/ci-attestation.md`, "Negative runs"), so it needs none.
+    None,
 }
 
 /// What a landing's authorization rests on, as strong as it is and no more.
@@ -208,7 +211,9 @@ pub enum Body {
         head: CommitId,
     },
     /// One result of one check on one revision. Recorded, never counted for
-    /// landing until it carries its producer's attestation (design 4.3).
+    /// landing until it carries its producer's attestation (design 4.3). A
+    /// result without one is written without the field, as results were
+    /// before it, so their bytes, ids and signatures are the same either way.
     Evidence {
         change: ChangeId,
         revision: RevisionId,
@@ -217,6 +222,8 @@ pub enum Body {
         result: Outcome,
         /// What produced it: a check run's URL, a reviewer's name.
         source: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        attest: Option<Attest>,
     },
     /// Trunk moved to `after` by landing this revision of the change.
     Land {

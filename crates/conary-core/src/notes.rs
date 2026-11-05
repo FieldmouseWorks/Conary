@@ -209,6 +209,7 @@ mod tests {
             check: check.into(),
             result: Outcome::Pass,
             source: source.into(),
+            attest: None,
         };
         let run = "https://github.com/o/r/runs/1";
         for body in [
