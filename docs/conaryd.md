@@ -35,8 +35,11 @@ and its connection closed.
     {"jsonrpc":"2.0","id":1,"method":"change.get","params":{"repo":"FieldmouseWorks/burrow","pr":61}}
     {"jsonrpc":"2.0","id":1,"result":{"id":"...","url":"https://github.com/FieldmouseWorks/burrow/pull/61","status":"landed",...}}
 
-The calls are `change.get`, `change.list`, `evidence.query` and `landings`.
-Their params, as JSON Schema, are in
+The calls are `change.get`, `change.list`, `evidence.query` and `landings`,
+and `at`, which answers any of the others as the ledger stood at a time
+(`{"time": MS, "method": "change.list", "params": {...}}`; [DESIGN
+section 5](DESIGN.md#5-undo) says what it reads). An `at` reads the log on
+its own, holding up no other call. Their params, as JSON Schema, are in
 [`rpc.rs`](../crates/conary-core/src/rpc.rs) (`METHODS`), the one list every
 transport offers. A change that isn't in the ledger is `null`, not an error.
 Errors are JSON-RPC's own codes, and `-32000` for a call that was well formed

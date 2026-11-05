@@ -474,7 +474,7 @@ trunk.
 | `undo <change>` | Opens a PR that reverts one landed change. |
 | `undo --actor <session>` | Reverts every change one agent session landed, newest first, one PR per repo. |
 | `undo --since <time> --repo <repo>` | Reverts everything that landed on one repo's trunk after that time. |
-| `at <time> <query>` | Answers any read-only query as the ledger stood at that time. |
+| `at <time> <query>` | Answers any read-only query as the ledger stood at that time: `log`, `why` and `train show` in `cn`, and every other call of conaryd's. |
 
 A revert that doesn't apply cleanly, because later work built on what it
 undoes, still opens its PR with the conflict, and a Claude job resolves it
@@ -515,6 +515,14 @@ change, one not landed or reverted already, nothing landed by the session or
 since the time, or a repo the ledger keeps no change of, which an undo by
 time asks nothing of GitHub about, its notes included. Any other failure may have stopped
 partway.
+
+`at` reads the ledger as its log held it then, a time in milliseconds
+since the Unix epoch: the whole log verified against its anchor as any
+read is, and replayed only up to the first op recorded after that time.
+An op's time is when it was appended, so that's every op appended by
+then; one a clock stepped back put after a later one is left out with all
+that follows it, never taken out of order. `why` at a time needs the
+ledger itself: the notes hold what's landed now.
 
 The ledger records each undo as an op on its revert change: the changes it
 reverts, all landed in its repo, and what asked for it (a change, a session

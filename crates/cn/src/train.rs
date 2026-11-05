@@ -90,6 +90,13 @@ pub enum TrainCommand {
         #[command(flatten)]
         github: GithubArgs,
     },
+    #[command(flatten)]
+    Query(TrainQuery),
+}
+
+/// What `train` reads without writing, which `at` asks too.
+#[derive(Subcommand)]
+pub enum TrainQuery {
     /// The repo's train as the ledger holds it.
     Show {
         /// The repository, as owner/name.
@@ -102,13 +109,18 @@ fn spelled<T: serde::de::DeserializeOwned>(s: &str) -> std::result::Result<T, St
     serde_json::from_value(Value::String(s.to_owned())).map_err(|e| e.to_string())
 }
 
+/// A train query's answer, from the ledger as it is or as it stood `at` a
+/// time.
+pub fn query(cli: &Cli, q: &TrainQuery, at: Option<i64>) -> Result<()> {
+    let TrainQuery::Show { repo } = q;
+    let ledger = read(cli, at)?;
+    print(cli, show(&ledger, repo), || human_show(&ledger, repo));
+    Ok(())
+}
+
 pub fn run(cli: &Cli, command: &TrainCommand) -> Result<()> {
     let (repo, github) = match command {
-        TrainCommand::Show { repo } => {
-            let ledger = read(cli)?;
-            print(cli, show(&ledger, repo), || human_show(&ledger, repo));
-            return Ok(());
-        }
+        TrainCommand::Query(q) => return query(cli, q, None),
         TrainCommand::Join { repo, github, .. }
         | TrainCommand::Leave { repo, github, .. }
         | TrainCommand::Step { repo, github, .. }
@@ -184,7 +196,7 @@ pub fn run(cli: &Cli, command: &TrainCommand) -> Result<()> {
                 })
                 .map_err(Into::into)
         }
-        TrainCommand::Show { .. } => unreachable!("shown above"),
+        TrainCommand::Query(_) => unreachable!("answered above"),
     };
     // What was recorded before a failure is anchored all the same.
     a.publish(&api)?;

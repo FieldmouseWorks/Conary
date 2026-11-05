@@ -76,6 +76,22 @@ pub const METHODS: &[Method] = &[
         },
     },
     Method {
+        name: "at",
+        description: "Any other call, answered as the ledger stood at a time: from what its log held then.",
+        params: || {
+            json!({
+                "type": "object",
+                "properties": {
+                    "time": {"type": "integer", "description": "Milliseconds since the Unix epoch."},
+                    "method": {"enum": METHODS.iter().map(|m| m.name).filter(|m| *m != AT).collect::<Vec<_>>()},
+                    "params": {"type": "object", "description": "That call's params."},
+                },
+                "required": ["time", "method"],
+                "additionalProperties": false,
+            })
+        },
+    },
+    Method {
         name: "landings",
         description: "The note of every change landed in a repository, oldest first: its change, intent summary, author and session, landing and the landed revision's evidence. What why answers from.",
         params: || {
@@ -182,6 +198,35 @@ struct EvidenceParams {
     revision: Option<RevisionId>,
 }
 
+/// The call that answers another as the ledger stood at a time, which the
+/// ledger it's asked of can't: [`answer`] reads that ledger first.
+const AT: &str = "at";
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AtParams {
+    time: i64,
+    method: String,
+    #[serde(default)]
+    params: Value,
+}
+
+/// The call a request asks for, its params, and the time it asks the
+/// ledger at: `None` for now. An `at` names one of the other calls.
+fn asked(request: &Request) -> Result<(Option<i64>, String, Value), Error> {
+    if request.method != AT {
+        return Ok((None, request.method.clone(), request.params.clone()));
+    }
+    let p: AtParams = params(&request.params)?;
+    if p.method == AT || !METHODS.iter().any(|m| m.name == p.method) {
+        return Err(Error::params(format!(
+            "at answers one of the other calls, not {:?}",
+            p.method
+        )));
+    }
+    Ok((Some(p.time), p.method, p.params))
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct LandingsParams {
@@ -189,7 +234,8 @@ struct LandingsParams {
 }
 
 /// The result of calling `method` with `params` on `ledger`. A change that
-/// isn't there is `null`, not an error.
+/// isn't there is `null`, not an error. An `at` is [`answer`]'s, which
+/// reads the ledger it asks for first.
 pub fn call(ledger: &Ledger, method: &str, raw: &Value) -> Result<Value, Error> {
     match method {
         "change.get" => {
@@ -305,18 +351,20 @@ pub fn respond(request: Request, result: Result<Value, Error>) -> Option<String>
 
 /// The response to one request line, or `None` for a notification.
 /// `ledger` is called only once the request is well formed, so a caller
-/// can refresh the ledger in it.
+/// can refresh the ledger in it: with `None`, the ledger as it is now, and
+/// with a time, as it stood then (an `at`).
 pub fn answer<L: Deref<Target = Ledger>>(
     line: &str,
-    ledger: impl FnOnce() -> Result<L, String>,
+    ledger: impl FnOnce(Option<i64>) -> Result<L, String>,
 ) -> Option<String> {
     let request = match parse(line) {
         Ok(r) => r,
         Err(refusal) => return Some(refusal),
     };
-    let result = ledger()
-        .map_err(|e| Error::new(Error::FAILED, e))
-        .and_then(|l| call(&l, &request.method, &request.params));
+    let result = asked(&request).and_then(|(at, method, params)| {
+        let l = ledger(at).map_err(|e| Error::new(Error::FAILED, e))?;
+        call(&l, &method, &params)
+    });
     respond(request, result)
 }
 

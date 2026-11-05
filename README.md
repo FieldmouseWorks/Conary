@@ -100,6 +100,7 @@ that loses ops is refused. It prints JSON; add `--human` for people.
     cn ingest FieldmouseWorks/burrow 61 --reviewer <steward-app>[bot]
     cn log --human
     cn why -C ~/src/burrow modules/claude.nix:40 --human
+    cn at 1762300800000 log --human    # as the ledger stood then (ms since the epoch)
     cn verify    # the log against the anchor on GitHub, all of its history
 
 Each write also brings the repository's notes up to date, and `cn why` in a
