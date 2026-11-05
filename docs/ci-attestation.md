@@ -110,11 +110,13 @@ above, with a subject and a predicate of its own.
 - **The negative tree.** The merge base's tree with the head's version of
   each test file the PR changes: added, changed, or deleted.
 - **What it builds.** The flake's checks whose derivation on the negative
-  tree differs from the merge base's. Every other check reads no changed
-  test file and builds what it built on the base. If any of those checks
-  fails (a test failing, or the tests not compiling against the old code),
-  the new tests failed on the old code. If they all pass, or there are none,
-  the tests didn't.
+  tree differs from the merge base's: those that read a changed test file,
+  and any that take the whole tree as their source rather than a filtered
+  one. Every other check builds what it built on the base, which passed
+  there. If any of those checks fails (a test failing, a check that doesn't
+  evaluate, or the tests not compiling against the old code), the new tests
+  failed on the old code. If they all pass, or there are none, the tests
+  didn't. A check the caller's `build-skip` names isn't built here.
 
 The subject is `conary negative v1\n<base>\n<head>\n`, named
 `conary-negative`: the PR's revision, under a name of its own, so a negative
@@ -128,23 +130,28 @@ type is `https://github.com/FieldmouseWorks/Conary/blob/main/docs/ci-attestation
   "tree": "<the negative tree>",
   "tests": ["crates/conary-core/src/ledger/tests.rs"],
   "checks": ["crates"],
+  "skipped": [],
   "log": { "sha256": "<hex>", "artifact": "negative-log-<uuid>" }
 }
 ```
 
 - `result`: `fail` when a check failed on the negative tree, which is what
-  rule 2 asks for; `pass` when every one passed; `none` when the PR needs no
-  negative (`tree` is then `null`, and `checks` empty).
+  rule 2 asks for; `pass` when every one passed; `skipped` when every one
+  built passed but some that read the tests weren't built (`build-skip`),
+  so where they'd fail is for wherever the caller builds those; `none` when
+  the PR needs no negative (`tree` is then `null`, and the lists empty).
 - `tests`: the test files the PR changes.
-- `checks`: the checks it built, those whose derivation differs from the
-  base's.
+- `checks`: the checks it built (or that didn't evaluate), those whose
+  derivation differs from the base's.
+- `skipped`: those it would have built but `build-skip` names.
 
 The job's check run is named `negative`, and concludes `success` when the
-result is `fail` or `none`, and `failure` when it's `pass`: a red check that
-says the new tests don't test the change. A private repo signs the
+result is `fail`, `skipped` or `none`, and `failure` when it's `pass`: a red
+check that says the new tests don't test the change. Only `fail` and `none`
+count as a change's negative. A private repo signs the
 statement with the job's token as above, under the same audience format.
 Checking one is as for the gate's result, with this subject and predicate,
-and rule 7's conclusion reads `success` for `fail` or `none`.
+and rule 7's conclusion reads `success` for `fail`, `skipped` or `none`.
 
 ## What doesn't get one
 
