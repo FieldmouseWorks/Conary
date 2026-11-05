@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
 use std::time::Duration;
 
-use conary_core::reader::Reader;
+use conary_core::reader::{self, Reader};
 use conary_core::rpc;
 use serde_json::{Value, json};
 
@@ -196,9 +196,18 @@ fn connection(stream: &UnixStream, reader: &Mutex<Reader>, limits: Limits) -> io
         }
         // The lock is held only while the ledger is brought up to date: the
         // call reads its own snapshot, beside every other call.
-        let ledger = || {
+        // A call at a time reads the log on its own, holding no one up.
+        let ledger = |at: Option<i64>| {
             let mut reader = reader.lock().unwrap_or_else(PoisonError::into_inner);
-            reader.refresh().map_err(|e| e.to_string())
+            match at {
+                None => reader.refresh(),
+                Some(t) => {
+                    let (dir, key) = reader.source();
+                    drop(reader);
+                    reader::read_at(&dir, &key, t).map(Arc::new)
+                }
+            }
+            .map_err(|e| e.to_string())
         };
         if let Some(response) = rpc::answer(&text, ledger) {
             writeln!(out, "{response}")?;

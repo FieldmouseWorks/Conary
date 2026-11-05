@@ -10,6 +10,7 @@ use ed25519_dalek::VerifyingKey;
 
 use crate::ledger::{Invalid, Ledger};
 use crate::log::{self, LogError};
+use crate::op::Op;
 
 #[derive(Debug)]
 pub enum ReadError {
@@ -60,10 +61,30 @@ fn stamp(dir: &Path) -> Stamp {
 
 /// The ledger at `dir`, verified against `key` and the anchor beside it.
 pub fn read(dir: &Path, key: &VerifyingKey) -> Result<Ledger, ReadError> {
-    let ops = log::read_anchored(dir, key)?;
-    Ledger::replay(&ops).map_err(|(id, e): (_, Invalid)| {
+    replay(&log::read_anchored(dir, key)?)
+}
+
+/// The same, as it stood at `at`, in milliseconds since the Unix epoch
+/// (`at` in docs/DESIGN.md, section 5): the whole log verified as ever, and
+/// only what it held then replayed.
+pub fn read_at(dir: &Path, key: &VerifyingKey, at: i64) -> Result<Ledger, ReadError> {
+    replay(until(&log::read_anchored(dir, key)?, at))
+}
+
+fn replay(ops: &[Op]) -> Result<Ledger, ReadError> {
+    Ledger::replay(ops).map_err(|(id, e): (_, Invalid)| {
         ReadError::Invalid(format!("op {id} in the log doesn't apply: {e}"))
     })
+}
+
+/// What the log held at `at`: its ops up to the first one recorded after
+/// then. Each op's time is when it was appended, so that's every op
+/// appended by then. One that a clock stepped back put after a later one
+/// is left out with all that follows it, never taken out of order: the log
+/// is append-only, so nothing after an op recorded past `at` was there at
+/// `at`.
+fn until(ops: &[Op], at: i64) -> &[Op] {
+    &ops[..ops.iter().position(|o| o.op.at > at).unwrap_or(ops.len())]
 }
 
 impl Reader {
@@ -77,6 +98,13 @@ impl Reader {
             ledger,
             stamp,
         })
+    }
+
+    /// Where it reads the ledger from, and the key it checks it with: for
+    /// a read of its own, such as one at a time ([`read_at`]), that needn't
+    /// hold up whoever shares this reader.
+    pub fn source(&self) -> (PathBuf, VerifyingKey) {
+        (self.dir.clone(), self.key)
     }
 
     /// The ledger as the log now holds it, read again only if the log or
@@ -114,6 +142,65 @@ mod tests {
                 },
             })
             .unwrap();
+    }
+
+    fn observe_at(store: &mut Store, pr: u64, at: i64) {
+        store
+            .record_at(
+                Body::Observe {
+                    change: ChangeId::new().unwrap(),
+                    repo: "o/r".parse().unwrap(),
+                    pr,
+                    author: Actor {
+                        kind: ActorKind::Person,
+                        login: "someone".into(),
+                        session: None,
+                    },
+                },
+                at,
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn a_read_at_a_time_holds_what_the_log_held_then() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = ed25519_dalek::SigningKey::from_bytes(&[4; 32]);
+        let public = key.verifying_key();
+        let lock = log::Lock::take(dir.path()).unwrap();
+        log::save_anchor(&lock, None, "c0").unwrap();
+        let mut store = Store::open(lock, key, None).unwrap();
+        // The third is recorded at a time before the second's: a clock
+        // stepped back.
+        for (pr, at) in [(1, 100), (2, 300), (3, 200)] {
+            observe_at(&mut store, pr, at);
+        }
+        let prs = |at| -> Vec<u64> {
+            read_at(dir.path(), &public, at)
+                .unwrap()
+                .changes()
+                .map(|c| c.pr)
+                .collect()
+        };
+        assert_eq!(prs(99), Vec::<u64>::new());
+        assert_eq!(prs(100), [1]);
+        assert_eq!(prs(299), [1]);
+        // At 250 the log held only the first: the third was appended after
+        // the second, whatever its time says.
+        assert_eq!(prs(250), [1]);
+        assert_eq!(prs(300), [1, 2, 3]);
+        assert_eq!(prs(i64::MAX), [1, 2, 3]);
+        // The log is verified whole all the same: an op recorded after
+        // `at` that was edited fails it.
+        let log = log::log_path(dir.path());
+        let text = fs::read_to_string(&log).unwrap();
+        let (kept, last) = text.trim_end().rsplit_once('\n').unwrap();
+        fs::write(
+            &log,
+            format!("{kept}\n{}\n", last.replace("someone", "somebody")),
+        )
+        .unwrap();
+        assert!(read_at(dir.path(), &public, 100).is_err());
     }
 
     #[test]

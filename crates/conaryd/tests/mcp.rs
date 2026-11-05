@@ -137,6 +137,7 @@ fn an_agent_lists_the_tools_and_calls_them_through_conaryd() {
             "change_get",
             "change_list",
             "evidence_query",
+            "at",
             "landings",
             "why"
         ]
@@ -144,6 +145,17 @@ fn an_agent_lists_the_tools_and_calls_them_through_conaryd() {
 
     let changes = text(&ask(2, "tools/call", json!({"name": "change_list"})));
     assert_eq!(changes[0]["url"], "https://github.com/o/r/pull/1");
+    // At a time before anything was recorded, conaryd answers from the log
+    // as it held then: nothing. At one after, all of it.
+    let mut at_time = |time: i64| {
+        text(&ask(
+            2,
+            "tools/call",
+            json!({"name": "at", "arguments": {"time": time, "method": "change.list"}}),
+        ))
+    };
+    assert_eq!(at_time(0), json!([]));
+    assert_eq!(at_time(i64::MAX), changes);
 
     // why blames here and answers from conaryd's landings.
     let at =

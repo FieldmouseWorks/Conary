@@ -9,7 +9,7 @@ ledger of its own and needs nothing but conaryd's socket (`--socket`, or
     claude mcp add conary -- conary-mcp
 
 The tools are conaryd's calls, named with `_` for `.` (`change_get`,
-`change_list`, `evidence_query`, `landings`), with the same params and
+`change_list`, `evidence_query`, `at`, `landings`), with the same params and
 schemas ([`rpc.rs`](../crates/conary-core/src/rpc.rs), `METHODS`), and
 `why`. `why` takes an absolute checkout `dir`, a `path` in it and a `line`.
 It blames the line here, in the MCP server, as the agent that started it,

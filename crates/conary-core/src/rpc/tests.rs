@@ -178,18 +178,69 @@ fn every_method_listed_is_one_that_answers() {
     let (ledger, _, _) = ledger();
     for m in METHODS {
         assert_eq!((m.params)()["type"], "object", "{}", m.name);
-        let answered = call(&ledger, m.name, &json!({"nothing": 1}));
-        assert_eq!(
-            answered.unwrap_err().code,
-            Error::INVALID_PARAMS,
-            "{}",
-            m.name
-        );
+        let line = json!({"jsonrpc": "2.0", "id": 1, "method": m.name, "params": {"nothing": 1}});
+        let r = reply(&line.to_string(), &ledger);
+        assert_eq!(r["error"]["code"], Error::INVALID_PARAMS, "{}: {r}", m.name);
     }
 }
 
+#[test]
+fn at_answers_another_call_from_the_ledger_as_it_stood_then() {
+    let (now, _, _) = ledger();
+    let then = Ledger::replay(&[] as &[crate::op::Op]).unwrap();
+    let asked = std::cell::Cell::new(None);
+    let at = |line: &str| -> Value {
+        let r = answer(line, |t| {
+            asked.set(Some(t));
+            Ok(if t.is_some() { &then } else { &now })
+        });
+        serde_json::from_str(&r.unwrap()).unwrap()
+    };
+    let r = at(
+        r#"{"jsonrpc":"2.0","id":1,"method":"at","params":{"time":1700,"method":"change.list"}}"#,
+    );
+    assert_eq!((&r["result"], asked.get()), (&json!([]), Some(Some(1700))));
+    let r = at(
+        r#"{"jsonrpc":"2.0","id":1,"method":"at","params":{"time":5,"method":"change.get","params":{"repo":"o/r","pr":1}}}"#,
+    );
+    assert_eq!((&r["result"], asked.get()), (&Value::Null, Some(Some(5))));
+    // Without at, it's the ledger now.
+    let r = at(r#"{"jsonrpc":"2.0","id":1,"method":"change.get","params":{"repo":"o/r","pr":1}}"#);
+    assert_eq!((&r["result"]["pr"], asked.get()), (&json!(1), Some(None)));
+    // The call it names gets its params, and says what's wrong with them.
+    let r = at(
+        r#"{"jsonrpc":"2.0","id":1,"method":"at","params":{"time":5,"method":"change.get","params":{"pr":"x"}}}"#,
+    );
+    assert_eq!(r["error"]["code"], Error::INVALID_PARAMS, "{r}");
+}
+
+#[test]
+fn at_names_one_of_the_other_calls_and_a_time_before_the_ledger_is_read() {
+    for params in [
+        json!({"time": 1, "method": "at", "params": {"time": 1, "method": "change.list"}}),
+        json!({"time": 1, "method": "nope"}),
+        json!({"method": "change.list"}),
+        json!({"time": "yesterday", "method": "change.list"}),
+        json!({"time": 1, "method": "change.list", "extra": 1}),
+    ] {
+        let line = json!({"jsonrpc": "2.0", "id": 1, "method": "at", "params": params}).to_string();
+        let r = answer::<&Ledger>(&line, |_| panic!("read the ledger for {line}")).unwrap();
+        let r: Value = serde_json::from_str(&r).unwrap();
+        assert_eq!(r["error"]["code"], Error::INVALID_PARAMS, "{line}: {r}");
+    }
+    // What it says it names is every other call.
+    let at = METHODS.iter().find(|m| m.name == "at").unwrap();
+    let named = (at.params)()["properties"]["method"]["enum"].clone();
+    let others: Vec<_> = METHODS
+        .iter()
+        .map(|m| m.name)
+        .filter(|m| *m != "at")
+        .collect();
+    assert_eq!(named, json!(others));
+}
+
 fn reply(line: &str, ledger: &Ledger) -> Value {
-    serde_json::from_str(&answer(line, || Ok(ledger)).unwrap()).unwrap()
+    serde_json::from_str(&answer(line, |_| Ok(ledger)).unwrap()).unwrap()
 }
 
 #[test]
@@ -241,7 +292,7 @@ fn a_malformed_line_is_answered_without_reading_the_ledger() {
             Error::INVALID_REQUEST,
         ),
     ] {
-        let r = answer::<&Ledger>(line, || panic!("read the ledger for {line}")).unwrap();
+        let r = answer::<&Ledger>(line, |_| panic!("read the ledger for {line}")).unwrap();
         let r: Value = serde_json::from_str(&r).unwrap();
         assert_eq!(r["error"]["code"], code, "{line}");
     }
@@ -249,7 +300,7 @@ fn a_malformed_line_is_answered_without_reading_the_ledger() {
 
 #[test]
 fn a_ledger_that_cant_be_read_fails_the_call() {
-    let r = answer::<&Ledger>(r#"{"jsonrpc":"2.0","id":1,"method":"change.list"}"#, || {
+    let r = answer::<&Ledger>(r#"{"jsonrpc":"2.0","id":1,"method":"change.list"}"#, |_| {
         Err("the log doesn't verify".into())
     })
     .unwrap();
@@ -262,9 +313,9 @@ fn a_ledger_that_cant_be_read_fails_the_call() {
 fn a_notification_gets_no_response() {
     let (ledger, _, _) = ledger();
     let line = r#"{"jsonrpc":"2.0","method":"change.list"}"#;
-    assert!(answer(line, || Ok(&ledger)).is_none());
+    assert!(answer(line, |_| Ok(&ledger)).is_none());
     // Not even when it fails.
-    assert!(answer(r#"{"jsonrpc":"2.0","method":"nope"}"#, || Ok(&ledger)).is_none());
+    assert!(answer(r#"{"jsonrpc":"2.0","method":"nope"}"#, |_| Ok(&ledger)).is_none());
 }
 
 #[test]

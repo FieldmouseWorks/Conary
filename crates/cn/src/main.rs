@@ -118,11 +118,15 @@ enum Command {
         #[command(flatten)]
         github: GithubArgs,
     },
-    /// List the changes in the ledger.
-    Log {
-        /// Only this repository's.
-        #[arg(long)]
-        repo: Option<Repo>,
+    #[command(flatten)]
+    Query(Query),
+    /// Answer a query as the ledger stood at a time: from the ops its log
+    /// held then, the whole log verified as ever.
+    At {
+        /// In milliseconds since the Unix epoch.
+        time: i64,
+        #[command(subcommand)]
+        query: AtQuery,
     },
     /// Check the log against its anchor on GitHub, all of its history.
     Verify {
@@ -157,6 +161,17 @@ enum Command {
         #[command(subcommand)]
         command: train::TrainCommand,
     },
+}
+
+/// What `cn` reads without writing, which `at` asks too.
+#[derive(Subcommand)]
+enum Query {
+    /// List the changes in the ledger.
+    Log {
+        /// Only this repository's.
+        #[arg(long)]
+        repo: Option<Repo>,
+    },
     /// Why a line is the way it is: the change that landed it. From the
     /// ledger when it's set up here, otherwise from the notes on the
     /// checkout's origin, which it fetches.
@@ -166,6 +181,18 @@ enum Command {
         /// The checkout.
         #[arg(short = 'C', default_value = ".")]
         dir: PathBuf,
+    },
+}
+
+/// What `at` asks: any query.
+#[derive(Subcommand)]
+enum AtQuery {
+    #[command(flatten)]
+    Query(Query),
+    /// A repo's train.
+    Train {
+        #[command(subcommand)]
+        command: train::TrainQuery,
     },
 }
 
@@ -290,19 +317,11 @@ fn run(cli: &Cli) -> Result<()> {
                 );
             }
         }
-        Command::Log { repo } => {
-            let ledger = read(cli)?;
-            let changes = ledger
-                .changes()
-                .filter(|c| repo.as_ref().is_none_or(|r| &c.repo == r));
-            if cli.human {
-                for c in changes {
-                    println!("{}", line(c));
-                }
-            } else {
-                println!("{}", Value::Array(changes.map(rpc::summary).collect()));
-            }
-        }
+        Command::Query(q) => query(cli, q, None)?,
+        Command::At { time, query: q } => match q {
+            AtQuery::Query(q) => query(cli, q, Some(*time))?,
+            AtQuery::Train { command } => train::query(cli, command, Some(*time))?,
+        },
         Command::Undo {
             change,
             actor,
@@ -357,16 +376,40 @@ fn run(cli: &Cli) -> Result<()> {
             notes?;
         }
         Command::Train { command } => train::run(cli, command)?,
-        Command::Why { at, dir } => {
-            let (file, n) = at
+    }
+    Ok(())
+}
+
+/// A query's answer, from the ledger as it is or as it stood `at` a time.
+fn query(cli: &Cli, q: &Query, at: Option<i64>) -> Result<()> {
+    match q {
+        Query::Log { repo } => {
+            let ledger = read(cli, at)?;
+            let changes = ledger
+                .changes()
+                .filter(|c| repo.as_ref().is_none_or(|r| &c.repo == r));
+            if cli.human {
+                for c in changes {
+                    println!("{}", line(c));
+                }
+            } else {
+                println!("{}", Value::Array(changes.map(rpc::summary).collect()));
+            }
+        }
+        Query::Why { at: line, dir } => {
+            let (file, n) = line
                 .rsplit_once(':')
                 .and_then(|(f, n)| Some((f, n.parse::<u32>().ok()?)))
                 .ok_or("give the line as FILE:LINE")?;
             let file = Path::new(file);
             let why = if log::public_path(&log::key_path(&cli.ledger)).exists() {
-                why::why(&read(cli)?, dir, file, n)?
-            } else {
+                why::why(&read(cli, at)?, dir, file, n)?
+            } else if at.is_none() {
                 why::why_from_notes(dir, file, n)?
+            } else {
+                return Err(
+                    "at a time, why needs the ledger here: the notes hold what's landed now".into(),
+                );
             };
             print_why(cli, &why);
         }
@@ -426,11 +469,15 @@ fn write_notes(api: &Api, a: &Anchored, github: &GithubArgs, repo: &Repo) -> Res
 }
 
 /// The ledger, verified against its public key and the anchor its writer
-/// kept beside it. Reading takes no lock and never leaves the box.
-fn read(cli: &Cli) -> Result<Ledger> {
+/// kept beside it: as it is, or as it stood `at` a time. Reading takes no
+/// lock and never leaves the box.
+fn read(cli: &Cli, at: Option<i64>) -> Result<Ledger> {
     let key = log::load_public_key(&log::public_path(&log::key_path(&cli.ledger)))
         .map_err(|e| format!("{e} (has `cn init` set up {}?)", cli.ledger.display()))?;
-    Ok(reader::read(&cli.ledger, &key)?)
+    Ok(match at {
+        None => reader::read(&cli.ledger, &key)?,
+        Some(t) => reader::read_at(&cli.ledger, &key, t)?,
+    })
 }
 
 /// A unit enum as the ledger spells it: `landed`, `ci`, `pass`.
@@ -622,6 +669,66 @@ mod tests {
     use conary_github::IngestError;
     use conary_github::anchor::AnchorError;
     use conary_github::undo::UndoError;
+
+    // Every query, and only a query, is asked at a time; asked so, it
+    // reads the ledger as it stood then.
+    #[test]
+    fn at_asks_any_query_and_only_a_query_as_the_ledger_stood_then() {
+        use conary_core::op::{Actor, ActorKind, Body};
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = dir.path().to_str().unwrap();
+        let parse =
+            |args: &[&str]| Cli::try_parse_from([&["cn", "--ledger", ledger], args].concat());
+        for args in [
+            &["at", "200", "log", "--repo", "o/r"][..],
+            &["at", "200", "why", "f:1", "-C", "/"],
+            &["at", "200", "train", "show", "o/r"],
+            &["log"],
+            &["why", "f:1"],
+            &["train", "show", "o/r"],
+        ] {
+            assert!(parse(args).is_ok(), "{args:?}");
+        }
+        for args in [
+            &["at", "200", "undo", "o/r#1"][..],
+            &["at", "200", "sync", "o/r"],
+            &["at", "200", "train", "step", "o/r"],
+            &["at", "200", "at", "100", "log"],
+            &["at", "yesterday", "log"],
+            &["at", "200"],
+        ] {
+            assert!(parse(args).is_err(), "{args:?}");
+        }
+
+        let key = log::load_or_create_key(&log::key_path(dir.path())).unwrap();
+        let lock = log::Lock::take(dir.path()).unwrap();
+        log::save_anchor(&lock, None, "c0").unwrap();
+        let mut store = conary_core::Store::open(lock, key, None).unwrap();
+        for (pr, at) in [(1, 100), (2, 300)] {
+            let author = Actor {
+                kind: ActorKind::Person,
+                login: "someone".into(),
+                session: None,
+            };
+            let change = ChangeId::new().unwrap();
+            let repo = "o/r".parse().unwrap();
+            store
+                .record_at(
+                    Body::Observe {
+                        change,
+                        repo,
+                        pr,
+                        author,
+                    },
+                    at,
+                )
+                .unwrap();
+        }
+        let cli = parse(&["at", "200", "log"]).unwrap();
+        let prs = |at| -> Vec<u64> { read(&cli, at).unwrap().changes().map(|c| c.pr).collect() };
+        assert_eq!(prs(Some(200)), [1]);
+        assert_eq!(prs(None), [1, 2]);
+    }
 
     #[test]
     fn help_never_shows_the_token_command() {
