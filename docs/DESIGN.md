@@ -188,8 +188,16 @@ Three rules make it trustworthy:
    the op that records a result doesn't stand in for that attestation.
    Anything the authoring session posts itself is feedback, not evidence.
 2. **New tests must fail on the old code.** A change that adds a test needs a
-   `negative` record: the new test run against the base's code, failing. How
-   a repo names its new tests is open (section 11).
+   `negative` record: the new test run against the base's code, failing. A
+   test is a file, by its path (`tests/**`, `**/tests.rs`, `**/test_*.py`
+   and the like), so a change adds one when it adds or changes a test file
+   and changes anything else too: a change of tests alone has the base's
+   code as its own.
+   The record comes from burrow's shared CI, which builds the checks that
+   read those files on the base with the head's test files, and attests
+   whether they failed ([how](ci-attestation.md#negative-runs)). A test
+   inside a code file, such as an inline Rust `#[cfg(test)]` module, is
+   code here, so tests go in files of their own.
 3. **Evidence is about the tree it ran on, and says so.** A PR's evidence
    proves its revision: that head on that base. Landing squashes it onto a
    newer trunk, and the default branch is never required to be up to date
@@ -687,17 +695,14 @@ trust and undo across many small repos for one owner, which git serves fine.
 
 ## 11. Open questions
 
-1. **Naming new tests.** The negative-control rule needs to know which tests a
-   change added. Per-language detection (new `#[test]` functions, new test
-   files) or a list the PR declares and a judge checks?
-2. **How much intent to keep.** The session link and PR body are always
+1. **How much intent to keep.** The session link and PR body are always
    there. A session's own prompt usually isn't readable by the steward. Is the
    link enough, or should a Claude job's prompt be recorded when Conary
    started the job?
-3. **Backfill depth.** Every merged PR since autoland went live is cheap. All
+2. **Backfill depth.** Every merged PR since autoland went live is cheap. All
    of git history is possible, but most of it has no intent or evidence to
    record.
-4. **CLI name.** `cn` is short and doesn't clash with common Unix tools.
+3. **CLI name.** `cn` is short and doesn't clash with common Unix tools.
    Check before M1.
 
 ## 12. Milestones

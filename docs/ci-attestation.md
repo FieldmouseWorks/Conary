@@ -88,6 +88,64 @@ hex, and keeps the statement and the token, in that order, as the file
 `conary-attestation-<uuid>`, the same `<uuid>` as its log's. The token is the
 file's last line.
 
+## Negative runs
+
+[Rule 2](DESIGN.md#43-evidence) asks a change that adds a test for a
+`negative` record: its new tests run on the old code, failing.
+`flake-check.yml`'s `negative` job makes it on every same-repo PR, train
+repos' included, and attests it the way the gate's result is attested
+above, with a subject and a predicate of its own.
+
+- **Test files.** A path is a test file when it matches one of the patterns
+  in the workflow itself (`tests/**`, `**/tests.rs`, `**/tests/**`,
+  `**/test_*.py`, `**/*_test.*`, `**/*.test.ts`, `src/test/**`). They aren't
+  an input: the caller's workflow comes from the PR, and a PR mustn't choose
+  its own judge.
+- **Whether it needs one.** The PR's changes, from its merge base to its
+  head, renames as the path left and the path made: if they add or change a
+  test file and change anything else too, it needs a negative. Otherwise
+  (tests alone, no tests, or test files only deleted) it needs none, and the
+  job attests that. A change that tidies tests beside code no test of it
+  catches is two changes: the tidy alone needs none.
+- **The negative tree.** The merge base's tree with the head's version of
+  each test file the PR changes: added, changed, or deleted.
+- **What it builds.** The flake's checks whose derivation on the negative
+  tree differs from the merge base's. Every other check reads no changed
+  test file and builds what it built on the base. If any of those checks
+  fails (a test failing, or the tests not compiling against the old code),
+  the new tests failed on the old code. If they all pass, or there are none,
+  the tests didn't.
+
+The subject is `conary negative v1\n<base>\n<head>\n`, named
+`conary-negative`: the PR's revision, under a name of its own, so a negative
+can never be read as the gate's result for that revision. The predicate's
+type is `https://github.com/FieldmouseWorks/Conary/blob/main/docs/ci-attestation.md#negative-v1`:
+
+```json
+{
+  "result": "fail",
+  "revision": { "base": "<merge base>", "head": "<PR head>" },
+  "tree": "<the negative tree>",
+  "tests": ["crates/conary-core/src/ledger/tests.rs"],
+  "checks": ["crates"],
+  "log": { "sha256": "<hex>", "artifact": "negative-log-<uuid>" }
+}
+```
+
+- `result`: `fail` when a check failed on the negative tree, which is what
+  rule 2 asks for; `pass` when every one passed; `none` when the PR needs no
+  negative (`tree` is then `null`, and `checks` empty).
+- `tests`: the test files the PR changes.
+- `checks`: the checks it built, those whose derivation differs from the
+  base's.
+
+The job's check run is named `negative`, and concludes `success` when the
+result is `fail` or `none`, and `failure` when it's `pass`: a red check that
+says the new tests don't test the change. A private repo signs the
+statement with the job's token as above, under the same audience format.
+Checking one is as for the gate's result, with this subject and predicate,
+and rule 7's conclusion reads `success` for `fail` or `none`.
+
 ## What doesn't get one
 
 A run with no OIDC token, such as a fork's PR or one Dependabot opened. Its
@@ -98,8 +156,8 @@ fails closed.
 
 A verifier takes an attestation as evidence only when all of these hold.
 Conary's train checks a private repo's token on its candidate's commit this
-way (`conary-github`'s `attest`); nothing checks a bundle, or a PR's
-revision, yet.
+way (`conary-github`'s `attest`); nothing checks a bundle, a PR's
+revision or a negative run yet.
 
 1. GitHub signed it: the bundle verifies against Sigstore's public trust
    root, or the token against GitHub's published keys
