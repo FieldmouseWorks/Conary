@@ -152,6 +152,25 @@ fn a_pr_joins_once_its_new_tests_failed_on_its_base_and_its_job_attests_it() {
     leave(&mut store, &hub, &hub, &repo(), 3, Left::Unready).unwrap();
     let downloads = hub.downloads.get();
     hub.checks.remove(&head(3));
+    // Only for the check asked for: another's word is no negative of this.
+    let other = Negatives {
+        check: "other / negative".into(),
+        ..negatives()
+    };
+    let rejoined = join(
+        &mut store,
+        &hub,
+        &hub,
+        &config(),
+        &repo(),
+        3,
+        &head(3),
+        false,
+        Some(&other),
+    )
+    .unwrap();
+    let why = unproven(rejoined);
+    assert!(why.contains("other / negative hasn't run"), "{why}");
     assert_eq!(join_proven(&mut store, &hub, 3), Joined::Joined);
     assert_eq!(hub.downloads.get(), downloads);
 }

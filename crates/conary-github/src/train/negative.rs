@@ -48,7 +48,7 @@ pub(super) fn negative(
     n: &Negatives,
 ) -> Result<Result<(), String>, TrainError> {
     let c = store.ledger().change(change).expect("ingest recorded it");
-    if counted(c, revision) {
+    if counted(c, revision, &n.check) {
         return Ok(Ok(()));
     }
     let r = c.revision(revision).expect("ingest recorded it");
@@ -100,12 +100,13 @@ pub(super) fn negative(
     })
 }
 
-/// Whether the ledger holds an attested negative for the revision that
-/// counts.
-fn counted(c: &Change, revision: RevisionId) -> bool {
+/// Whether the ledger holds an attested negative for the revision, by the
+/// check asked for, that counts.
+fn counted(c: &Change, revision: RevisionId, check: &str) -> bool {
     c.evidence.iter().any(|e| {
         e.revision == revision
             && e.kind == CheckKind::Negative
+            && e.check == check
             && e.attest.is_some()
             && counts(e.result)
     })
