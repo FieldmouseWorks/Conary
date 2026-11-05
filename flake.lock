@@ -9,27 +9,27 @@
         "rust-overlay": "rust-overlay"
       },
       "locked": {
-        "lastModified": 1793865221,
-        "narHash": "sha256-hZTxOBD4yaZfVqDR7ifFB+tywBA16FVyUUrWLmR9KfI=",
+        "lastModified": 1793867262,
+        "narHash": "sha256-7bBwnSr7pzSm8UyT4Ptoxvu5X5tlG/dN2qTJejkSq9I=",
         "ref": "main",
-        "rev": "94f8526c9d0bdec0174c4175184adb82fc0e9bb2",
-        "revCount": 441,
+        "rev": "2a15246bf463a55349d13b29c4c9fcc8563455ac",
+        "revCount": 442,
         "type": "git",
         "url": "https://github.com/FieldmouseWorks/burrow"
       },
       "original": {
         "ref": "main",
-        "rev": "94f8526c9d0bdec0174c4175184adb82fc0e9bb2",
+        "rev": "2a15246bf463a55349d13b29c4c9fcc8563455ac",
         "type": "git",
         "url": "https://github.com/FieldmouseWorks/burrow"
       }
     },
     "crane": {
       "locked": {
-        "lastModified": 1793669695,
-        "narHash": "sha256-9EtV4I6Ohw0tjidL31TMOKHhW/QGVG8NuGiemzIaNCs=",
+        "lastModified": 1793836618,
+        "narHash": "sha256-TREenflwEjxOSq292FYwbc3kEm7TDRtXCZRNWEdjBmg=",
         "ref": "refs/heads/master",
-        "rev": "788369ed71ed9d84ef72cb056e4d920050d5b32c",
+        "rev": "79fd63528501446749c09f08cad486a58c7d173e",
         "shallow": true,
         "type": "git",
         "url": "https://github.com/ipetkov/crane"
