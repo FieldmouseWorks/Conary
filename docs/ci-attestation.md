@@ -115,8 +115,16 @@ above, with a subject and a predicate of its own.
   one. Every other check builds what it built on the base, which passed
   there. If any of those checks fails (a test failing, a check that doesn't
   evaluate, or the tests not compiling against the old code), the new tests
-  failed on the old code. If they all pass, or there are none, the tests
-  didn't. A check the caller's `build-skip` names isn't built here.
+  failed on the old code. A check the caller's `build-skip` names isn't
+  built here.
+- **What runs a test.** Reading a test file isn't running it: a formatter,
+  a lint or a secrets scan reads every file. A check says which tests it
+  runs as its `testFiles`, git glob pathspecs from the repo's root, in the
+  base's flake (burrow's `lib/project.nix` says how); one that doesn't say
+  runs every test it reads. If every check built passes, a new test passed
+  on the old code only where one of them runs it. A new test none of them
+  runs is `unrun`: the negative sees only the flake, and where that test
+  fails, if anywhere, is for the gate that runs it to say.
 
 The subject is `conary negative v1\n<base>\n<head>\n`, named
 `conary-negative`: the PR's revision, under a name of its own, so a negative
@@ -131,19 +139,23 @@ type is `https://github.com/FieldmouseWorks/Conary/blob/main/docs/ci-attestation
   "tests": ["crates/conary-core/src/ledger/tests.rs"],
   "checks": ["crates"],
   "skipped": [],
+  "unrun": [],
   "log": { "sha256": "<hex>", "artifact": "negative-log-<uuid>" }
 }
 ```
 
 - `result`: `fail` when a check failed on the negative tree, which is what
-  rule 2 asks for; `pass` when every one passed; `skipped` when every one
-  built passed but some that read the tests weren't built (`build-skip`),
-  so where they'd fail is for wherever the caller builds those; `none` when
-  the PR needs no negative (`tree` is then `null`, and the lists empty).
+  rule 2 asks for; `pass` when every one passed and each new test is run by
+  one of them; `skipped` when every one built passed but some that read the
+  tests weren't built (`build-skip`) or some new tests none of them runs
+  (`unrun`), so where they'd fail is for wherever those are built or run;
+  `none` when the PR needs no negative (`tree` is then `null`, and the
+  lists empty).
 - `tests`: the test files the PR changes.
 - `checks`: the checks it built (or that didn't evaluate), those whose
   derivation differs from the base's.
 - `skipped`: those it would have built but `build-skip` names.
+- `unrun`: the new tests no check that passed runs.
 
 The job's check run is named `negative`, and concludes `success` when the
 result is `fail`, `skipped` or `none`, and `failure` when it's `pass`: a red
