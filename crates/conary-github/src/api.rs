@@ -425,7 +425,7 @@ type Response = ureq::http::Response<ureq::Body>;
 /// proxy that refuses (its credentials, its policy), a TLS setup or an answer
 /// past the size limit stays as wrong the next time. The error names the URL,
 /// never the token.
-fn unreachable(url: &str, e: ureq::Error) -> ApiError {
+pub(crate) fn unreachable(url: &str, e: ureq::Error) -> ApiError {
     let passing = match &e {
         ureq::Error::Io(_)
         | ureq::Error::Timeout(_)
@@ -456,11 +456,11 @@ fn proxy_status(reason: &str) -> Option<u16> {
 
 /// Whether an error status, GitHub's or a proxy's, is a server too busy or in
 /// trouble to answer just now, rather than the request refused.
-fn passing_status(status: u16) -> bool {
+pub(crate) fn passing_status(status: u16) -> bool {
     status == 429 || status >= 500
 }
 
-fn read(url: &str, response: &mut Response) -> Result<Vec<u8>, ApiError> {
+pub(crate) fn read(url: &str, response: &mut Response) -> Result<Vec<u8>, ApiError> {
     response
         .body_mut()
         .read_to_vec()

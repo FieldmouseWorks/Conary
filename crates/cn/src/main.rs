@@ -20,6 +20,7 @@ use conary_github::class;
 use conary_github::undo::{self, How, Stopped, Undid, Undone, Unrecorded};
 use conary_github::{Api, ApiError, Config, Etags, Ingested, Tokens, ingest, notes};
 
+mod attest;
 mod train;
 
 #[derive(Parser)]
@@ -190,6 +191,12 @@ enum Command {
     Train {
         #[command(subcommand)]
         command: train::TrainCommand,
+    },
+    /// Attest a gate's or a negative run's result, as a CI job signs it
+    /// (docs/ci-attestation.md).
+    Attest {
+        #[command(subcommand)]
+        command: attest::AttestCommand,
     },
 }
 
@@ -463,6 +470,7 @@ fn run(cli: &Cli) -> Result<()> {
             notes?;
         }
         Command::Train { command } => train::run(cli, command)?,
+        Command::Attest { command } => attest::run(cli, command)?,
     }
     Ok(())
 }

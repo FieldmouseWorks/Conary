@@ -4,7 +4,9 @@ How a repo's CI attests its gate's result, so Conary can count it as evidence
 ([DESIGN section 9](DESIGN.md#9-security-and-identity)). burrow's shared
 [`flake-check.yml`](https://github.com/FieldmouseWorks/burrow/blob/main/.github/workflows/flake-check.yml)
 makes them, after `nix flake check`, on every push and same-repo PR. This page
-is the format; the workflow follows it.
+is the format; the workflow follows it. `cn attest` writes one in it for any
+job: its subject and `predicate.json`, for a bundle, and with `--sign` the
+statement and the job's token as `conary-attestation`.
 
 ## v1
 
