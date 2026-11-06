@@ -67,7 +67,8 @@ pub struct Classified {
 
 /// The labels that raise a change (`docs/DESIGN.md` section 4.4): `r2`
 /// makes it R2, and `review` asks for a review round. A label can only
-/// raise, so it doesn't matter who put it there; none lowers anything.
+/// raise, so it doesn't matter who put it there, and a raise stays with
+/// the change once it's recorded ([`Change::raised`](crate::ledger::Change::raised)).
 pub const RAISES: [&str; 2] = [R2_LABEL, REVIEW_LABEL];
 pub const R2_LABEL: &str = "r2";
 pub const REVIEW_LABEL: &str = "review";

@@ -232,9 +232,9 @@ fn a_head_that_moved_is_refused_and_nothing_is_classed() {
 
 /// Its labels raise it: `review` asks a docs change for a review round,
 /// `r2` makes it R2 and says so. Each set of labels is classed once and
-/// recorded; taking a label off gives back what the policy says.
+/// recorded, and taking a label off lowers nothing.
 #[test]
-fn labels_raise_a_class_and_never_lower_it() {
+fn labels_raise_a_class_and_taking_them_off_lowers_nothing() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
     let hub = Hub::new(vec![(HEAD, paths(&["docs/a.md"]))]);
@@ -260,10 +260,34 @@ fn labels_raise_a_class_and_never_lower_it() {
     let c = store.ledger().change(r2.change).unwrap();
     assert_eq!(c.class_of(r2.revision).unwrap().raised, ["r2", "review"]);
 
+    // Taken off, they stay: an author's raise is never undone by the PR.
     hub.labels.borrow_mut().clear();
-    let back = ask(&mut store);
-    assert!(back.recorded);
-    assert_eq!(back.said, plain.said);
+    let after = ask(&mut store);
+    assert!(!after.recorded);
+    assert_eq!(after.said, r2.said);
+}
+
+/// A raise stays with the change: a new head is classed raised too, labels
+/// or none.
+#[test]
+fn a_raise_holds_for_every_later_head() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = store(&dir);
+    let hub = Hub::new(vec![
+        (HEAD, paths(&["docs/a.md"])),
+        (HEAD2, paths(&["docs/b.md"])),
+    ]);
+    let p = policy(POLICY);
+    *hub.labels.borrow_mut() = vec!["r2"];
+    class(&mut store, &hub, &config(), &p, &repo(), 7, HEAD).unwrap();
+    hub.labels.borrow_mut().clear();
+    *hub.head.borrow_mut() = HEAD2;
+    let got = class(&mut store, &hub, &config(), &p, &repo(), 7, HEAD2).unwrap();
+    assert!(got.recorded);
+    assert_eq!(
+        (got.class(), got.said.raised.clone()),
+        (Class::R2, vec!["r2".to_owned()])
+    );
 }
 
 /// `r2` on a change the policy already makes R2 keeps the policy's reason.

@@ -253,10 +253,13 @@ tool draws the same line between comment-only and logical changes
 (section 10). An author can raise a change's class or ask for review, and
 never lower either: a PR labelled `r2` is R2 (because it says so, where
 the policy didn't make it R2), and one labelled `review` gets a review
-round. A label can only raise, so who put it there doesn't matter, and
-taking it off gives back what the policy says. The `classify` op names
-the labels that raised it, and the ledger refuses one whose labels don't
-match its class.
+round. A label can only raise, so who put it there doesn't matter. A
+raise stays with the change once it's recorded, at every later head:
+taking the label off lowers nothing. The `classify` op names the labels
+that raised it, and the ledger refuses one whose labels don't match its
+class or leave out an earlier raise. A PR labelled since it joined the
+train leaves it before its merge, to be classed with the label and
+settled again.
 
 ### 4.5 Landing
 

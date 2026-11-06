@@ -147,6 +147,17 @@ impl Change {
     pub fn class_of(&self, revision: RevisionId) -> Option<&Classed> {
         self.classes.iter().rev().find(|c| c.revision == revision)
     }
+
+    /// Every label that has raised the change, at any revision, sorted. A
+    /// raise stays once it's recorded: taking the label off lowers nothing.
+    pub fn raised(&self) -> Vec<String> {
+        crate::policy::raises(
+            self.classes
+                .iter()
+                .flat_map(|k| &k.raised)
+                .map(String::as_str),
+        )
+    }
 }
 
 /// Trunk moving some way other than `land`.
@@ -208,7 +219,8 @@ pub enum Invalid {
     /// A join below its revision's class: an R2 one that doesn't ride alone.
     BelowClass(RevisionId),
     /// A class its raise labels don't account for: one that isn't a raise
-    /// label, a list out of order, or `r2` on a class below R2.
+    /// label, a list out of order, `r2` on a class below R2, or a label
+    /// that raised the change before left out.
     NotRaised,
 }
 
@@ -403,6 +415,7 @@ impl Ledger {
                 }
                 if *raised != crate::policy::raises(raised.iter().map(String::as_str))
                     || (raised.iter().any(|l| l == crate::policy::R2_LABEL) && *class != Class::R2)
+                    || c.raised().iter().any(|l| !raised.contains(l))
                 {
                     return Err(Invalid::NotRaised);
                 }

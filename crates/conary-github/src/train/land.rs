@@ -10,6 +10,10 @@ use conary_core::ledger::Status;
 /// says it's settled.
 pub(super) const UNSETTLED: &str = "out of the train: the steward no longer says it's settled";
 
+/// The train's status on a head it took out because its PR was labelled
+/// to raise it since it was classed.
+pub(super) const RAISED: &str = "out of the train: labelled to raise its class since it joined";
+
 /// The train's status on a head it put back in alone, classed R2 since it
 /// joined.
 pub(super) const BELOW: &str = "back in the train alone, classed R2 since it joined";
@@ -81,9 +85,19 @@ pub(super) fn land_next(
     // The steward's word on its head, read with it just now: one it no
     // longer says is settled (a hold, a finding, a draft) leaves instead,
     // whatever the branch's rules, as its merge would be no landing of the
-    // steward's but an outside op (DESIGN 4.5).
-    if !got.settled {
-        forge.mark(&full, head.as_str(), Mark::Waiting, UNSETTLED, None)?;
+    // steward's but an outside op (DESIGN 4.5). So does one labelled to
+    // raise it (`r2`, `review`) since it was classed: what it joined on
+    // doesn't hold any more, until it's classed with the label and the
+    // steward settles it again.
+    let classed = store
+        .ledger()
+        .change(next.change)
+        .expect("a candidate's change")
+        .raised();
+    let raised = !pull.raises().iter().all(|l| classed.contains(l));
+    if !got.settled || raised {
+        let why = if raised { RAISED } else { UNSETTLED };
+        forge.mark(&full, head.as_str(), Mark::Waiting, why, None)?;
         store.record(Body::Leave {
             change: next.change,
             why: Left::Unready,

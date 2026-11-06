@@ -4,7 +4,7 @@
 
 use conary_core::ledger::Classed;
 use conary_core::op::{Body, Repo};
-use conary_core::policy::{Class, Classified, Policy};
+use conary_core::policy::{Class, Classified, Policy, raises};
 use conary_core::store::StoreError;
 use conary_core::{ChangeId, RevisionId, Store};
 
@@ -124,11 +124,12 @@ pub fn class(
 }
 
 /// The class of a revision the ledger holds, raised by its PR's labels
-/// (`raised`, [`PullRequest::raises`](crate::api::PullRequest::raises)).
-/// The ledger's word for it under this policy and these labels is the
-/// answer when it has one; otherwise the files the revision changes from
-/// its merge base are read, and what the policy says of them, raised, is
-/// recorded.
+/// (`raised`, [`PullRequest::raises`](crate::api::PullRequest::raises))
+/// and by every label that raised the change before: a raise stays once
+/// it's recorded. The ledger's word for it under this policy and these
+/// raises is the answer when it has one; otherwise the files the revision
+/// changes from its merge base are read, and what the policy says of them,
+/// raised, is recorded.
 pub(crate) fn of(
     store: &mut Store,
     source: &dyn Source,
@@ -139,6 +140,7 @@ pub(crate) fn of(
     raised: Vec<String>,
 ) -> Result<Classes, ClassError> {
     let c = store.ledger().change(change).expect("the caller's change");
+    let raised = raises(c.raised().iter().chain(&raised).map(String::as_str));
     if let Some(k) = c.class_of(revision)
         && k.policy == policy.digest()
         && k.raised == raised

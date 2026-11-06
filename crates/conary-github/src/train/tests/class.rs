@@ -232,3 +232,42 @@ fn a_pr_labelled_r2_rides_alone() {
     assert_eq!(stepped.reseated, [4]);
     assert!(alone(&store, 4));
 }
+
+/// Labelled to raise it while its candidate gated, with no class asked for
+/// since: the step that would merge it takes it out instead, whichever
+/// label, and the ones after it are built again without it.
+#[test]
+fn a_pr_labelled_since_it_joined_leaves_instead_of_landing() {
+    for label in ["r2", "Review"] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = store(&dir);
+        let mut hub = Hub::new(&[3, 4, 6]);
+        join_all(&mut store, &hub, &[3, 4, 6]);
+        let (id, _) = gating(&step_once(&mut store, &hub));
+        hub.ci(&commit_of(&store, id), &[("check / check", "success")]);
+        hub.labels.borrow_mut().insert(4, vec!["bug", label]);
+        let stepped = step_once(&mut store, &hub);
+        assert_eq!(
+            (&stepped.landed[..], &stepped.unready[..]),
+            (&[3][..], &[4][..]),
+            "{label}"
+        );
+        assert_eq!(hub.held("main"), [head(3)]);
+        assert_eq!(hub.latest(&head(4)), Some(Mark::Waiting));
+        assert_eq!(joined(&store), [6]);
+    }
+}
+
+/// A label already counted when it joined takes nothing out.
+#[test]
+fn a_label_it_joined_with_lands_it_as_classed() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = store(&dir);
+    let mut hub = Hub::new(&[3]);
+    hub.labels.borrow_mut().insert(3, vec!["review"]);
+    join_all(&mut store, &hub, &[3]);
+    let (id, _) = gating(&step_once(&mut store, &hub));
+    hub.ci(&commit_of(&store, id), &[("check / check", "success")]);
+    let stepped = step_once(&mut store, &hub);
+    assert_eq!((stepped.landed, stepped.unready), (vec![3], vec![]));
+}

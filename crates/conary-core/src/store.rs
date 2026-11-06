@@ -299,7 +299,22 @@ mod tests {
             );
         }
         store.record(labelled(Class::R0, &["review"])).unwrap();
-        store.record(classify(revision, Class::R2, "p2")).unwrap();
+        // A raise once recorded stays: a class without it is refused.
+        assert!(matches!(
+            store.record(classify(revision, Class::R2, "p2")),
+            Err(StoreError::Invalid(Invalid::NotRaised))
+        ));
+        store
+            .record(Body::Classify {
+                change,
+                revision,
+                class: Class::R2,
+                because: Some("CODEOWNERS".into()),
+                docs: false,
+                policy: "p2".into(),
+                raised: vec!["review".into()],
+            })
+            .unwrap();
         // R2 rides alone: a join may raise its class, never lower it.
         assert!(matches!(
             store.record(Body::Join {
