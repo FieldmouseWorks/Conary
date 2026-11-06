@@ -103,6 +103,10 @@ revision and policy, so asking again costs no more than reading the PR.
 
     cn class FieldmouseWorks/remi 174 --head <sha> --human
 
+`cn policy FILE` checks a policy file the way `cn class` reads it, refusing
+a key it doesn't know, so a machine that checks its file when it builds it
+can't pair a newer policy with an older cn.
+
 `cn train` runs a repository's train ([the
 train](docs/DESIGN.md#47-the-train)) for the steward, as its App: `join` puts
 a settled PR in at its head, classed by the same policy (an R2 one rides

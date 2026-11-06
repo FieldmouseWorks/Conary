@@ -540,10 +540,13 @@ fn answer(body: String) -> &'static str {
 }
 
 #[test]
-fn a_comparisons_files_are_read_with_where_renames_started() {
+fn a_comparisons_files_are_read_with_where_renames_started_and_which_paths_are_new() {
     let body = r#"{"merge_base_commit":{"sha":"b"},"files":[
         {"filename":"src/a.rs","status":"modified"},
-        {"filename":"CODEOWNERS.bak","previous_filename":"CODEOWNERS","status":"renamed"}]}"#;
+        {"filename":"CODEOWNERS.bak","previous_filename":"CODEOWNERS","status":"renamed"},
+        {"filename":"docs/new.md","status":"added"},
+        {"filename":"docs/copy.md","previous_filename":"docs/a.md","status":"copied"},
+        {"filename":"docs/gone.md","status":"removed"}]}"#;
     let (base, heads) = github(vec![answer(body.into())]);
     let api = Api::new(&base, Tokens::given("t"));
     let got = api.files("o/r", "b", "h").unwrap();
@@ -559,11 +562,28 @@ fn a_comparisons_files_are_read_with_where_renames_started() {
         [
             Touched {
                 path: "src/a.rs".into(),
-                from: None
+                from: None,
+                new: false,
             },
             Touched {
                 path: "CODEOWNERS.bak".into(),
-                from: Some("CODEOWNERS".into())
+                from: Some("CODEOWNERS".into()),
+                new: true,
+            },
+            Touched {
+                path: "docs/new.md".into(),
+                from: None,
+                new: true,
+            },
+            Touched {
+                path: "docs/copy.md".into(),
+                from: Some("docs/a.md".into()),
+                new: true,
+            },
+            Touched {
+                path: "docs/gone.md".into(),
+                from: None,
+                new: false,
             }
         ]
     );

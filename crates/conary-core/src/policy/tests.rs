@@ -11,6 +11,7 @@ fn paths(files: &[&str]) -> Paths {
             .map(|p| Touched {
                 path: (*p).to_owned(),
                 from: None,
+                new: false,
             })
             .collect(),
         cut: false,
@@ -44,6 +45,7 @@ fn a_rename_out_of_an_r2_path_is_r2() {
         files: vec![Touched {
             path: "CODEOWNERS.bak".into(),
             from: Some("CODEOWNERS".into()),
+            new: true,
         }],
         cut: false,
     };
@@ -143,6 +145,7 @@ fn a_rename_into_docs_from_code_isnt_docs() {
         files: vec![Touched {
             path: "docs/old.rs".into(),
             from: Some("src/old.rs".into()),
+            new: true,
         }],
         cut: false,
     };
@@ -193,4 +196,78 @@ fn the_digest_is_the_files_and_changes_with_it() {
     let b = Policy::parse(b"{ }").unwrap();
     assert_eq!(a.digest(), blake3::hash(b"{}").to_hex().as_str());
     assert_ne!(a.digest(), b.digest());
+}
+
+/// `hidden` hides what a reviewer's snapshot does, from documentation: a
+/// directory named with its trailing slash hides what's in it, a name is
+/// matched without its final newline too, and a rename's source counts. A
+/// repo's add to the machine's.
+#[test]
+fn hidden_paths_are_never_docs_as_a_snapshot_hides_them() {
+    let p = Policy::parse(
+        br#"{"docs": ["^docs/"], "hidden": ["^docs/private/$"],
+             "repos": {"o/own": {"hidden": ["^docs/x\\.md$"]}}}"#,
+    )
+    .unwrap();
+    let plain = repo("o/plain");
+    for path in ["docs/private/a.md", "docs/private/deep/b.md"] {
+        assert!(!p.classify(&plain, &paths(&[path])).docs, "{path:?}");
+    }
+    assert!(p.classify(&plain, &paths(&["docs/public/a.md"])).docs);
+    assert!(p.classify(&plain, &paths(&["docs/x.md\n"])).docs);
+    let own = repo("o/own");
+    assert!(!p.classify(&own, &paths(&["docs/x.md\n"])).docs);
+    assert!(!p.classify(&own, &paths(&["docs/private/a.md"])).docs);
+    let renamed = Paths {
+        files: vec![Touched {
+            path: "docs/public/a.md".into(),
+            from: Some("docs/private/a.md".into()),
+            new: true,
+        }],
+        cut: false,
+    };
+    assert!(!p.classify(&plain, &renamed).docs);
+    // Hidden isn't R2: it's reviewed, and the judge is told.
+    assert_eq!(
+        p.classify(&plain, &paths(&["docs/private/a.md"])).class,
+        Class::R0
+    );
+}
+
+/// A snapshot pairs each new path with a source by content, from anywhere
+/// in the tree, and a comparison may name another source or none: so where
+/// anything is hidden, a path new to the tree is reviewed, added, renamed or
+/// copied alike.
+#[test]
+fn where_anything_is_hidden_a_new_path_is_never_docs() {
+    let hiding = Policy::parse(br#"{"docs": ["^docs/"], "hidden": ["^docs/private/$"]}"#).unwrap();
+    let new = Paths {
+        files: vec![Touched {
+            path: "docs/public/a.md".into(),
+            from: None,
+            new: true,
+        }],
+        cut: false,
+    };
+    let plain = repo("o/plain");
+    assert!(!hiding.classify(&plain, &new).docs);
+    assert!(hiding.classify(&plain, &paths(&["docs/public/a.md"])).docs);
+    assert!(policy().classify(&plain, &new).docs);
+    // A repo's own hidden paths count, and only for that repo.
+    let own =
+        Policy::parse(br#"{"docs": ["^docs/"], "repos": {"o/own": {"hidden": ["^x$"]}}}"#).unwrap();
+    assert!(!own.classify(&repo("o/own"), &new).docs);
+    assert!(own.classify(&plain, &new).docs);
+    // A rename between visible docs: the snapshot may pair the far end
+    // with an identical hidden file instead.
+    let renamed = Paths {
+        files: vec![Touched {
+            path: "docs/new.md".into(),
+            from: Some("docs/old.md".into()),
+            new: true,
+        }],
+        cut: false,
+    };
+    assert!(!hiding.classify(&plain, &renamed).docs);
+    assert!(policy().classify(&plain, &renamed).docs);
 }

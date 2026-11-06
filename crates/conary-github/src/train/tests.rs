@@ -366,7 +366,11 @@ impl Source for Hub {
         Ok(Paths {
             files: files
                 .into_iter()
-                .map(|path| Touched { path, from: None })
+                .map(|path| Touched {
+                    path,
+                    from: None,
+                    new: false,
+                })
                 .collect(),
             cut: false,
         })
