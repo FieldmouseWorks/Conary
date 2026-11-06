@@ -369,7 +369,7 @@ impl Source for Hub {
                 .map(|path| Touched {
                     path,
                     from: None,
-                    added: false,
+                    new: false,
                 })
                 .collect(),
             cut: false,

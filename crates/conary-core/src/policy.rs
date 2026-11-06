@@ -35,10 +35,11 @@ impl std::fmt::Display for Class {
 pub struct Touched {
     pub path: String,
     pub from: Option<String>,
-    /// Whether the change adds it. A new file can be a copy of one a
-    /// reviewer's snapshot hides, which a comparison doesn't name: the
-    /// snapshot pairs copies by content, from every file in the tree.
-    pub added: bool,
+    /// Whether the path is new to the tree: added, or the far end of a
+    /// rename or a copy. A reviewer's snapshot pairs each new path with a
+    /// source by content, from every file in the tree, and may pick a
+    /// hidden one where the comparison names another or none.
+    pub new: bool,
 }
 
 /// The paths a change touches, as far as they could be read.
@@ -281,13 +282,13 @@ impl Policy {
             .flat_map(|l| &l.not_docs)
             .chain(&self.never_docs);
         let hidden = levels.clone().flat_map(|l| &l.hidden);
-        // Where anything is hidden, a new file is never documentation: it
-        // may be a copy of a hidden one, and the snapshot hides it too.
+        // Where anything is hidden, a new path is never documentation: the
+        // snapshot may pair it with a hidden source, and hide it too.
         let hiding = hidden.clone().next().is_some();
         let docs = !paths.cut
             && !paths.files.is_empty()
             && paths.files.iter().all(|t| {
-                !(hiding && t.added)
+                !(hiding && t.new)
                     && std::iter::once(&t.path).chain(&t.from).all(|path| {
                         docs_pats.clone().any(|p| p.is_match(path))
                             && !not_docs.clone().any(|p| p.is_match(path))

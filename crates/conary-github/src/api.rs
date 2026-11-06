@@ -593,7 +593,7 @@ fn compared(files: Vec<ComparedFile>) -> Paths {
         files: files
             .into_iter()
             .map(|f| Touched {
-                added: f.status.as_deref() == Some("added"),
+                new: matches!(f.status.as_deref(), Some("added" | "renamed" | "copied")),
                 path: f.filename,
                 from: f.previous_filename,
             })

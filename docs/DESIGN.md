@@ -229,8 +229,8 @@ regexes that make a change R2, that name its docs and that are never docs,
 what reviewers are never shown (`hidden`, never docs either, matched the way
 their snapshot hides a path: the path, its name without a final newline, or
 a directory holding it, with a trailing slash; where anything is hidden, a
-file the change adds isn't docs, since the snapshot may pair it as a copy of
-a hidden one and a comparison names no source for that), and whether landing goes
+path new to the tree, added, renamed or copied, isn't docs, since the
+snapshot may pair it with a hidden source the comparison doesn't name), and whether landing goes
 live, for the machine and per repo. A repo's lists only add to the
 machine's, so no repo takes a path off R2. A change whose
 paths can't all be read (GitHub lists 300 files of a comparison and says

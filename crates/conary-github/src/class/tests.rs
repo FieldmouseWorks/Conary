@@ -88,7 +88,7 @@ fn paths(files: &[&str]) -> Paths {
             .map(|p| Touched {
                 path: (*p).into(),
                 from: None,
-                added: false,
+                new: false,
             })
             .collect(),
         cut: false,

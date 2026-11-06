@@ -11,7 +11,7 @@ fn paths(files: &[&str]) -> Paths {
             .map(|p| Touched {
                 path: (*p).to_owned(),
                 from: None,
-                added: false,
+                new: false,
             })
             .collect(),
         cut: false,
@@ -45,7 +45,7 @@ fn a_rename_out_of_an_r2_path_is_r2() {
         files: vec![Touched {
             path: "CODEOWNERS.bak".into(),
             from: Some("CODEOWNERS".into()),
-            added: false,
+            new: true,
         }],
         cut: false,
     };
@@ -145,7 +145,7 @@ fn a_rename_into_docs_from_code_isnt_docs() {
         files: vec![Touched {
             path: "docs/old.rs".into(),
             from: Some("src/old.rs".into()),
-            added: false,
+            new: true,
         }],
         cut: false,
     };
@@ -222,7 +222,7 @@ fn hidden_paths_are_never_docs_as_a_snapshot_hides_them() {
         files: vec![Touched {
             path: "docs/public/a.md".into(),
             from: Some("docs/private/a.md".into()),
-            added: false,
+            new: true,
         }],
         cut: false,
     };
@@ -234,17 +234,18 @@ fn hidden_paths_are_never_docs_as_a_snapshot_hides_them() {
     );
 }
 
-/// A snapshot pairs a copy with its source by content, from anywhere in the
-/// tree, and a comparison names no source for a copy of a file that didn't
-/// change: so where anything is hidden, a file the change adds is reviewed.
+/// A snapshot pairs each new path with a source by content, from anywhere
+/// in the tree, and a comparison may name another source or none: so where
+/// anything is hidden, a path new to the tree is reviewed, added, renamed or
+/// copied alike.
 #[test]
-fn where_anything_is_hidden_a_new_file_is_never_docs() {
+fn where_anything_is_hidden_a_new_path_is_never_docs() {
     let hiding = Policy::parse(br#"{"docs": ["^docs/"], "hidden": ["^docs/private/$"]}"#).unwrap();
     let new = Paths {
         files: vec![Touched {
             path: "docs/public/a.md".into(),
             from: None,
-            added: true,
+            new: true,
         }],
         cut: false,
     };
@@ -257,4 +258,16 @@ fn where_anything_is_hidden_a_new_file_is_never_docs() {
         Policy::parse(br#"{"docs": ["^docs/"], "repos": {"o/own": {"hidden": ["^x$"]}}}"#).unwrap();
     assert!(!own.classify(&repo("o/own"), &new).docs);
     assert!(own.classify(&plain, &new).docs);
+    // A rename between visible docs: the snapshot may pair the far end
+    // with an identical hidden file instead.
+    let renamed = Paths {
+        files: vec![Touched {
+            path: "docs/new.md".into(),
+            from: Some("docs/old.md".into()),
+            new: true,
+        }],
+        cut: false,
+    };
+    assert!(!hiding.classify(&plain, &renamed).docs);
+    assert!(policy().classify(&plain, &renamed).docs);
 }
