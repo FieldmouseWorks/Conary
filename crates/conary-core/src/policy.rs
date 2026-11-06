@@ -3,8 +3,6 @@
 //! The policy is configuration the machine gives Conary, never something a
 //! change's author sets: an author can only raise a class.
 
-use std::collections::BTreeMap;
-
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
@@ -107,7 +105,35 @@ struct File {
     not_docs: Vec<String>,
     live: Option<bool>,
     #[serde(default)]
-    repos: BTreeMap<String, Rules>,
+    repos: Entries,
+}
+
+/// A JSON object's entries in order, a key that comes twice kept twice: a
+/// map would keep only the last, and a repo's restrictions with it.
+#[derive(Debug, Default)]
+struct Entries(Vec<(String, Rules)>);
+
+impl<'de> Deserialize<'de> for Entries {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct Visit;
+        impl<'de> serde::de::Visitor<'de> for Visit {
+            type Value = Entries;
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("an object of repos, as owner/name")
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> Result<Entries, A::Error> {
+                let mut all = Vec::new();
+                while let Some(entry) = map.next_entry()? {
+                    all.push(entry);
+                }
+                Ok(Entries(all))
+            }
+        }
+        d.deserialize_map(Visit)
+    }
 }
 
 /// Compiled rules: one level's.
@@ -169,7 +195,7 @@ impl Policy {
     pub fn parse(bytes: &[u8]) -> Result<Self, PolicyError> {
         let file: File = serde_json::from_slice(bytes).map_err(|e| PolicyError(e.to_string()))?;
         let mut repos = Vec::new();
-        for (name, rules) in file.repos {
+        for (name, rules) in file.repos.0 {
             let repo: Repo = name.parse().map_err(PolicyError)?;
             if repos.iter().any(|(r, _)| r == &repo) {
                 return Err(PolicyError(format!("repos: {repo} is named twice")));

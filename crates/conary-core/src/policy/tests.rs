@@ -175,6 +175,10 @@ fn unknown_keys_bad_patterns_and_repos_named_twice_are_refused() {
         r#"{"r2": ["("]}"#,
         r#"{"repos": {"o/x": {"docs": ["["]}}}"#,
         r#"{"repos": {"o/x": {}, "O/X": {}}}"#,
+        // The same key twice, as written or escaped: a map would keep the
+        // last, and drop the first's R2 paths.
+        r#"{"repos": {"o/x": {"r2": ["^docs/"]}, "o/x": {"docs": ["^docs/"]}}}"#,
+        r#"{"repos": {"o/x": {"r2": ["^docs/"]}, "o\/x": {}}}"#,
         r#"{"repos": {"nobody": {}}}"#,
         r#"{"repos": {"o/x": {"repos": {}}}}"#,
         "not json",
