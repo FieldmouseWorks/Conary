@@ -333,19 +333,23 @@ pub fn leave(
         &repo.to_string(),
         head.as_str(),
         Mark::Waiting,
-        "out of the train",
+        if why == Left::Below {
+            land::BELOW
+        } else {
+            "out of the train"
+        },
         None,
     )?;
     store.record(body)?;
     Ok(Leaving::Left)
 }
 
-/// Takes each change in the repo's train below its class (an R2 revision
-/// that isn't alone: [`conary_core::Ledger::below_class`]) out, and puts it
-/// back alone, at the back. Leaving takes it out of a gating candidate,
-/// which then waits again without it; one in a green candidate's open
-/// landing stays, since that candidate's gate ran on its exact tree. The
-/// PRs it reseated.
+/// Puts each change in the repo's train below its class (an R2 revision
+/// that isn't alone: [`conary_core::Ledger::below_class`]) back in alone, at
+/// the back ([`Left::Below`]). That takes it out of a gating candidate,
+/// which then waits again without it. One a green candidate has left to
+/// land stays for now: [`land_next`] reseats it instead of landing it, once
+/// the merges ahead of it are settled. The PRs it reseated.
 fn reseat(
     store: &mut Store,
     forge: &dyn Forge,
@@ -355,22 +359,9 @@ fn reseat(
     let mut reseated = Vec::new();
     for m in store.ledger().below_class(repo) {
         let pr = pr_of(store, m.change);
-        if leave(store, forge, source, repo, pr, Left::Below)? != Leaving::Left {
-            continue;
+        if leave(store, forge, source, repo, pr, Left::Below)? == Leaving::Left {
+            reseated.push(pr);
         }
-        forge.mark(
-            &repo.to_string(),
-            head_of(store, &m).as_str(),
-            Mark::Waiting,
-            "in the train alone, as R2, waiting to land",
-            None,
-        )?;
-        store.record(Body::Join {
-            change: m.change,
-            revision: m.revision,
-            alone: true,
-        })?;
-        reseated.push(pr);
     }
     Ok(reseated)
 }
@@ -594,12 +585,14 @@ pub fn step(
         now: Now::Idle,
     };
     let trunk = forge.default_branch(&repo.to_string())?;
-    stepped.reseated = reseat(store, forge, source, repo)?;
     stepped.now = loop {
         stepped.finished.extend(finish(store, forge, source, repo)?);
         if let Some(now) = stopped_landing(store, forge, source, config, repo, &trunk)? {
             break now;
         }
+        // Before anything is built or gated, every change below its class
+        // is alone.
+        stepped.reseated.extend(reseat(store, forge, source, repo)?);
         let Some(id) = in_flight_or_built(store, forge, repo, &trunk, settings, &mut stepped)?
         else {
             break Now::Idle;

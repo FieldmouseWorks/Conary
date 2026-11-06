@@ -902,6 +902,28 @@ fn a_change_in_the_train_below_its_class_replays_and_is_named() {
     let replayed = Ledger::replay(&b.ops).expect("the log replays");
     assert_eq!(replayed.below_class(&repo()), named);
     assert!(Ledger::default().below_class(&repo()).is_empty());
+
+    // Leaving below its class is one op that puts it back in alone, at the
+    // back, at the same revision, out of the candidate it was gating in.
+    let gating = b.build(8);
+    assert_eq!(
+        b.ledger.candidate(gating).unwrap().changes,
+        [b.member(old), b.member(later)]
+    );
+    b.ok(Body::Leave {
+        change: old,
+        why: Left::Below,
+    });
+    let train = b.ledger.train(&repo()).unwrap();
+    assert_eq!(train.in_flight(), None);
+    assert_eq!(
+        train.joined(),
+        [b.member(later), b.member(fine), b.member(old)]
+    );
+    assert!(train.alone(old));
+    assert_eq!(b.ledger.below_class(&repo()), [b.member(later)]);
+    let replayed = Ledger::replay(&b.ops).expect("the log replays");
+    assert_eq!(replayed.train(&repo()).unwrap().joined(), train.joined());
 }
 
 #[test]

@@ -76,14 +76,16 @@ fn a_seated_pr_joined_again_under_a_policy_that_makes_it_r2_rides_alone() {
     assert_eq!(prs, [4]);
 }
 
-/// One whose green candidate's landing is open stays: that candidate's gate
-/// ran on its exact tree.
+/// Classed R2 while its green candidate is landing: the merge ahead of it
+/// that GitHub hasn't shown yet is waited for, never undone, and then it
+/// goes back in alone rather than land on a tree no gate ran, wherever it is
+/// in the candidate. The ones after it wait again.
 #[test]
-fn a_pr_classed_r2_while_its_green_candidate_lands_stays_in_it() {
+fn a_pr_classed_r2_while_its_green_candidate_lands_is_reseated_before_its_merge() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let mut hub = Hub::new(&[3, 4]);
-    join_all(&mut store, &hub, &[3, 4]);
+    let mut hub = Hub::new(&[3, 4, 5, 6]);
+    join_all(&mut store, &hub, &[3, 4, 5, 6]);
     let (id, _) = gating(&step_once(&mut store, &hub));
     hub.ci(&commit_of(&store, id), &[("check / check", "success")]);
     // GitHub takes 3's merge and doesn't show it merged yet.
@@ -91,13 +93,77 @@ fn a_pr_classed_r2_while_its_green_candidate_lands_stays_in_it() {
     let stepped = step_once(&mut store, &hub);
     assert_eq!(stepped.landed, [3]);
     assert!(matches!(stepped.now, Now::Landing { .. }));
+    for pr in [4, 6] {
+        r2(&hub, pr);
+        let c = store.ledger().by_pr(&repo(), pr).unwrap();
+        let (change, revision) = (c.id, c.current.unwrap());
+        crate::class::of(&mut store, &hub, &new_policy(), &repo(), change, revision).unwrap();
+    }
+    hub.lagging.set(false);
+    let stepped = step_once(&mut store, &hub);
+    // 4 instead of its merge; then 5 and 6 wait again, and 6 goes back in
+    // alone before it's built with 5.
+    assert_eq!(stepped.reseated, [4, 6]);
+    assert!(stepped.landed.is_empty());
+    assert_eq!(hub.latest(&head(4)), Some(Mark::Waiting));
+    assert!(!hub.merged.borrow().contains_key(&4));
+    let (next, prs) = gating(&stepped);
+    assert_ne!(next, id);
+    assert_eq!(prs, [5]);
+    assert_eq!(joined(&store), [5, 4, 6]);
+    assert!(alone(&store, 4) && alone(&store, 6) && !alone(&store, 5));
+}
+
+/// GitHub not taking the reseat's status stops the step before anything is
+/// recorded: the PR is still in, and the next step reseats it.
+#[test]
+fn a_reseat_github_wont_mark_leaves_the_pr_in_for_the_next_step() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = store(&dir);
+    let hub = Hub::new(&[3, 4]);
+    join_all(&mut store, &hub, &[3, 4]);
+    let (first, _) = gating(&step_once(&mut store, &hub));
     r2(&hub, 4);
     let c = store.ledger().by_pr(&repo(), 4).unwrap();
     let (change, revision) = (c.id, c.current.unwrap());
     crate::class::of(&mut store, &hub, &new_policy(), &repo(), change, revision).unwrap();
-    hub.lagging.set(false);
+    hub.unmarked.set(Some(Mark::Waiting));
+    assert!(step(&mut store, &hub, &hub, &config(), &repo(), &settings()).is_err());
+    assert_eq!(joined(&store), [3, 4]);
+    assert_eq!(
+        store.ledger().train(&repo()).unwrap().in_flight(),
+        Some(first)
+    );
+    hub.unmarked.set(None);
     let stepped = step_once(&mut store, &hub);
-    assert!(stepped.reseated.is_empty());
-    assert_eq!(stepped.landed, [4]);
-    assert_eq!(stepped.finished, [id]);
+    assert_eq!(stepped.reseated, [4]);
+    assert_eq!(joined(&store), [3, 4]);
+    assert!(alone(&store, 4));
+}
+
+/// A landing open when it's classed R2, its head saying it's landing and its
+/// merge failed: nothing may take it out while its merge may be on trunk,
+/// so the step that finds it not merged reseats it then, instead of merging.
+#[test]
+fn a_pr_classed_r2_while_its_landing_is_open_is_reseated_once_its_not_merged() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = store(&dir);
+    let mut hub = Hub::new(&[3, 4]);
+    join_all(&mut store, &hub, &[3, 4]);
+    let (id, _) = gating(&step_once(&mut store, &hub));
+    hub.ci(&commit_of(&store, id), &[("check / check", "success")]);
+    hub.down.set(true);
+    assert!(step(&mut store, &hub, &hub, &config(), &repo(), &settings()).is_err());
+    assert_eq!(hub.latest(&head(3)), Some(Mark::Landing));
+    hub.down.set(false);
+    r2(&hub, 3);
+    let c = store.ledger().by_pr(&repo(), 3).unwrap();
+    let (change, revision) = (c.id, c.current.unwrap());
+    crate::class::of(&mut store, &hub, &new_policy(), &repo(), change, revision).unwrap();
+    let stepped = step_once(&mut store, &hub);
+    assert_eq!(stepped.reseated, [3]);
+    assert!(stepped.landed.is_empty() && hub.merged.borrow().is_empty());
+    assert_eq!(hub.latest(&head(3)), Some(Mark::Waiting));
+    assert_eq!(gating(&stepped).1, [4]);
+    assert!(alone(&store, 3));
 }

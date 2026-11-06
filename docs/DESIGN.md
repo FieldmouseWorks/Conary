@@ -446,10 +446,13 @@ so the wait is one run, however many are waiting.
   trunk's tree isn't the candidate's. Whether a change joins alone is its
   class, which the join reads from the policy and records: the ledger
   refuses a new R2 join that isn't alone (replay still applies a log's
-  older joins as written). A change classed R2 after it joined, under a
-  new policy, leaves and joins again alone on the next step or join,
-  taking it out of a gating candidate; one in a green candidate's open
-  landing stays, since that gate ran on its exact tree.
+  older joins as written). A change in below its class (classed R2 after
+  it joined, under a new policy, or seated by such an older join) is put
+  back in alone, at the back, by one `leave` op (`below`): by a step before
+  it builds or lands anything, and by a join of it. That takes it out of
+  a gating candidate, or out of a green one before its own merge, and the
+  rest wait again; only a merge already started, which may be on trunk,
+  is settled first.
 
 The ledger keeps each repo's train (`crates/conary-core/src/ledger/train.rs`)
 and refuses a candidate out of turn: a red candidate's halves first, each

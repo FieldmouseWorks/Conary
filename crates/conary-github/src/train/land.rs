@@ -10,6 +10,10 @@ use conary_core::ledger::Status;
 /// says it's settled.
 pub(super) const UNSETTLED: &str = "out of the train: the steward no longer says it's settled";
 
+/// The train's status on a head it put back in alone, classed R2 since it
+/// joined.
+pub(super) const BELOW: &str = "back in the train alone, classed R2 since it joined";
+
 /// Lands a green candidate's next change, through its PR's merge at the head
 /// the candidate holds. The PR is read first, so a merge made since the last
 /// step is recorded rather than tried again, and so is one GitHub took but
@@ -85,6 +89,23 @@ pub(super) fn land_next(
             why: Left::Unready,
         })?;
         stepped.unready.push(pr);
+        return Ok(None);
+    }
+    // Classed R2 since it joined: its landing here would be on a tree no
+    // gate ran, with changes after it in the candidate. It goes back in
+    // alone instead, and the rest wait again.
+    if store
+        .ledger()
+        .below_class(repo)
+        .iter()
+        .any(|m| m.change == next.change)
+    {
+        forge.mark(&full, head.as_str(), Mark::Waiting, BELOW, None)?;
+        store.record(Body::Leave {
+            change: next.change,
+            why: Left::Below,
+        })?;
+        stepped.reseated.push(pr);
         return Ok(None);
     }
     let elsewhere = if c.trunk != trunk {

@@ -339,7 +339,8 @@ impl Ledger {
     /// The changes in `repo`'s train below their class: R2 at the revision
     /// they're in at, and not alone. A join's class can't be lowered, but a
     /// revision can be classed R2 after it joined, under a new policy, and a
-    /// log may hold joins from before classes held them.
+    /// log may hold joins from before classes held them. Each leaves with
+    /// [`Left::Below`], which puts it back alone in the same op.
     pub fn below_class(&self, repo: &Repo) -> Vec<Member> {
         let Some(train) = self.trains.get(repo) else {
             return Vec::new();
@@ -487,7 +488,18 @@ impl Ledger {
                         train.hold(*change, Held::Refused, Vec::new());
                     }
                 }
-                self.unseat(*change)
+                let seat = self.trains[&repo]
+                    .seat(*change)
+                    .expect("check: it's in it")
+                    .clone();
+                self.unseat(*change);
+                // Below its class, it's back in at once, alone at the back:
+                // one op, so nothing can stop it between out and in.
+                if *why == Left::Below {
+                    let train = self.trains.get_mut(&repo).expect("it was in it");
+                    train.joined.push(seat);
+                    train.alone.insert(*change);
+                }
             }
             Body::Candidate {
                 candidate,
