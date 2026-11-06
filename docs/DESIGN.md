@@ -809,6 +809,15 @@ into one branch, and to stop running a PR's own CI on a head the batch's
 gate will check anyway. M6 delivers it, since that's when conaryd owns the
 flow that decides what runs.
 
+The grouping is deterministic: class and paths, which the ledger has
+already, so a batch costs no model call and the same work always proposes
+the same batches. A wrong batch costs little, because a red one splits the
+way a candidate does. A model gets only the question the paths can't
+answer, whether two changes are one intent and belong in one branch. It
+asks a cheap model, records the verdict as an op (never the prompt), stays
+off the landing path, and stays only if the ledger shows its verdicts save
+more gate runs than they cost.
+
 **What gets slotted in.** Work between milestones is a fix, a slice of the
 next milestone, or something an exit check showed it needs. Three rules keep
 it pointed at the finish line:
