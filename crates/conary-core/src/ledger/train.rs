@@ -155,6 +155,8 @@ pub struct Train {
     candidates: Vec<CandidateId>,
     /// The changes in it that joined alone.
     alone: BTreeSet<ChangeId>,
+    /// The labels each change in it was raised by when it joined.
+    raised: BTreeMap<ChangeId, Vec<String>>,
     /// The changes that left and can't join again as they are.
     held: BTreeMap<ChangeId, Hold>,
     /// How often trunk has moved since the train began: every landing and
@@ -178,6 +180,12 @@ impl Train {
     /// Whether `change` is in the train alone: in a candidate of its own.
     pub fn alone(&self, change: ChangeId) -> bool {
         self.alone.contains(&change)
+    }
+
+    /// The labels `change` was raised by when it joined: what the steward
+    /// settled it with. None for no raise, or when it isn't in the train.
+    pub fn raised(&self, change: ChangeId) -> &[String] {
+        self.raised.get(&change).map_or(&[], Vec::as_slice)
     }
 
     /// Why `change` can't join again at `revision`, if it can't.
@@ -220,6 +228,7 @@ impl Train {
     fn remove(&mut self, change: ChangeId) {
         self.joined.retain(|m| m.change != change);
         self.alone.remove(&change);
+        self.raised.remove(&change);
         self.held.retain(|_, h| !h.ahead.contains(&change));
         for (_, half) in &mut self.splits {
             half.retain(|c| *c != change);
@@ -294,7 +303,12 @@ impl Ledger {
         })
     }
 
-    pub(super) fn check_join(&self, change: ChangeId, revision: RevisionId) -> Result<(), Invalid> {
+    pub(super) fn check_join(
+        &self,
+        change: ChangeId,
+        revision: RevisionId,
+        raised: &[String],
+    ) -> Result<(), Invalid> {
         let c = self.existing(change)?;
         match c.status() {
             Status::Landed | Status::Reverted => return Err(Invalid::AlreadyLanded),
@@ -314,6 +328,11 @@ impl Ledger {
         }
         if let Some(why) = self.train_of(change).and_then(|t| t.held(change, revision)) {
             return Err(Invalid::Held(why));
+        }
+        // What the steward settled it with is every raise recorded so far:
+        // one recorded since is what [`Ledger::raised_since_join`] finds.
+        if raised != c.raised() {
+            return Err(Invalid::JoinRaised);
         }
         Ok(())
     }
@@ -350,12 +369,39 @@ impl Ledger {
             .iter()
             .filter(|m| {
                 !train.alone(m.change)
+                    && !self.raised_since(train, m.change)
                     && self.changes[&m.change]
                         .class_of(m.revision)
                         .is_some_and(|k| k.class == Class::R2)
             })
             .cloned()
             .collect()
+    }
+
+    /// The changes in `repo`'s train raised by a label recorded since they
+    /// joined (`docs/DESIGN.md` section 4.4): the steward settled them
+    /// without it, so each leaves before it lands, never reseated, to be
+    /// settled again with it. Below their class too, they're here rather
+    /// than in [`Ledger::below_class`]: an `r2` label asks for a person,
+    /// which going back in alone wouldn't.
+    pub fn raised_since_join(&self, repo: &Repo) -> Vec<Member> {
+        let Some(train) = self.trains.get(repo) else {
+            return Vec::new();
+        };
+        train
+            .joined()
+            .iter()
+            .filter(|m| self.raised_since(train, m.change))
+            .cloned()
+            .collect()
+    }
+
+    fn raised_since(&self, train: &Train, change: ChangeId) -> bool {
+        let joined = train.raised(change);
+        self.changes[&change]
+            .raised()
+            .iter()
+            .any(|l| !joined.contains(l))
     }
 
     pub(super) fn check_leave(&self, change: ChangeId) -> Result<(), Invalid> {
@@ -457,6 +503,7 @@ impl Ledger {
                 change,
                 revision,
                 alone,
+                raised,
             } => {
                 let repo = self.changes[change].repo.clone();
                 let train = self.trains.entry(repo).or_default();
@@ -467,6 +514,9 @@ impl Ledger {
                 });
                 if *alone {
                     train.alone.insert(*change);
+                }
+                if !raised.is_empty() {
+                    train.raised.insert(*change, raised.clone());
                 }
             }
             Body::Leave { change, why } => {
@@ -492,13 +542,18 @@ impl Ledger {
                     .seat(*change)
                     .expect("check: it's in it")
                     .clone();
+                let raised = self.trains[&repo].raised(*change).to_vec();
                 self.unseat(*change);
-                // Below its class, it's back in at once, alone at the back:
-                // one op, so nothing can stop it between out and in.
+                // Below its class, it's back in at once, alone at the back,
+                // with what it joined with: one op, so nothing can stop it
+                // between out and in.
                 if *why == Left::Below {
                     let train = self.trains.get_mut(&repo).expect("it was in it");
                     train.joined.push(seat);
                     train.alone.insert(*change);
+                    if !raised.is_empty() {
+                        train.raised.insert(*change, raised);
+                    }
                 }
             }
             Body::Candidate {

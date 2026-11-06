@@ -260,6 +260,16 @@ mod tests {
             because: (class == Class::R2).then(|| "CODEOWNERS".into()),
             docs: false,
             policy: policy.into(),
+            raised: Vec::new(),
+        };
+        let labelled = |class, raised: &[&str]| Body::Classify {
+            change,
+            revision,
+            class,
+            because: None,
+            docs: false,
+            policy: "p1".into(),
+            raised: raised.iter().map(|l| (*l).to_owned()).collect(),
         };
         store.record(classify(revision, Class::R0, "p1")).unwrap();
         assert!(matches!(
@@ -271,13 +281,58 @@ mod tests {
             store.record(classify(elsewhere, Class::R0, "p1")),
             Err(StoreError::Invalid(Invalid::UnknownRevision(_)))
         ));
-        store.record(classify(revision, Class::R2, "p2")).unwrap();
+        // A raise label says what it raised: `r2` only on R2, the names
+        // sorted, and nothing that isn't a raise label.
+        for (class, raised) in [
+            (Class::R0, vec!["r2"]),
+            (Class::R2, vec!["review", "r2"]),
+            (Class::R0, vec!["bug"]),
+            (Class::R0, vec!["Review"]),
+        ] {
+            let body = labelled(class, &raised);
+            assert!(
+                matches!(
+                    store.record(body),
+                    Err(StoreError::Invalid(Invalid::NotRaised))
+                ),
+                "{class:?}"
+            );
+        }
+        store.record(labelled(Class::R0, &["review"])).unwrap();
+        // A raise once recorded stays: a class without it is refused.
+        assert!(matches!(
+            store.record(classify(revision, Class::R2, "p2")),
+            Err(StoreError::Invalid(Invalid::NotRaised))
+        ));
+        store
+            .record(Body::Classify {
+                change,
+                revision,
+                class: Class::R2,
+                because: Some("CODEOWNERS".into()),
+                docs: false,
+                policy: "p2".into(),
+                raised: vec!["review".into()],
+            })
+            .unwrap();
+        // A join names what raised its change, as the steward settled it.
+        assert!(matches!(
+            store.record(Body::Join {
+                change,
+                revision,
+                alone: true,
+                raised: Vec::new(),
+            }),
+            Err(StoreError::Invalid(Invalid::JoinRaised))
+        ));
+        let review = || vec!["review".to_owned()];
         // R2 rides alone: a join may raise its class, never lower it.
         assert!(matches!(
             store.record(Body::Join {
                 change,
                 revision,
-                alone: false
+                alone: false,
+                raised: review(),
             }),
             Err(StoreError::Invalid(Invalid::BelowClass(r))) if r == revision
         ));
@@ -286,6 +341,7 @@ mod tests {
                 change,
                 revision,
                 alone: true,
+                raised: review(),
             })
             .unwrap();
         drop(store);
@@ -295,7 +351,8 @@ mod tests {
         let now = c.class_of(revision).unwrap();
         assert_eq!((now.class, now.policy.as_str()), (Class::R2, "p2"));
         assert_eq!(now.because.as_deref(), Some("CODEOWNERS"));
-        assert_eq!(c.classes.len(), 2);
+        assert_eq!(c.classes.len(), 3);
+        assert_eq!(c.classes[1].raised, ["review"]);
         assert!(c.class_of(elsewhere).is_none());
         assert!(ledger.train(&c.repo).unwrap().alone(change));
     }

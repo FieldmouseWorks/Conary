@@ -98,8 +98,10 @@ clone with no ledger beside it answers from them ([notes](docs/notes.md)).
 `cn class` says what a PR's class is at a head, and whether it's
 documentation only, so needs green CI and no review round
 ([class](docs/DESIGN.md#44-class)). The policy is a JSON file
-(`CONARY_POLICY`) the machine gives it; the class is recorded once per
-revision and policy, so asking again costs no more than reading the PR.
+(`CONARY_POLICY`) the machine gives it. The PR's labels can only raise
+it: `r2` makes it R2, and `review` asks for a review round, and a raise
+stays once it's recorded. The class is recorded once per revision,
+policy and labels, so asking again costs no more than reading the PR.
 
     cn class FieldmouseWorks/remi 174 --head <sha> --human
 
@@ -110,7 +112,8 @@ can't pair a newer policy with an older cn.
 `cn train` runs a repository's train ([the
 train](docs/DESIGN.md#47-the-train)) for the steward, as its App: `join` puts
 a settled PR in at its head, classed by the same policy (an R2 one rides
-alone), and `step`, on each of the repository's events,
+alone), once `--raised` names every raise label (`cn class`'s `raised`) it
+has, the ones the steward settled it with, and `step`, on each of the repository's events,
 builds the next candidate, reads its gate, and lands a green one's PRs in
 order. `--require` names the checks the gate waits for even before they
 report, and a step needs one: jobs of burrow's shared CI, whose passes count
@@ -120,7 +123,7 @@ job, whose name starts with `--fresh-runners`.
 `verdict` records one `step` can't tell: `dropped`, for a gate that never
 finished.
 
-    cn train join FieldmouseWorks/remi 174 --head <sha>
+    cn train join FieldmouseWorks/remi 174 --head <sha> --raised review
     cn train step FieldmouseWorks/remi --require 'check / check' --fresh-runners fresh-remi-
     cn train verdict FieldmouseWorks/remi <candidate> dropped
     cn train show FieldmouseWorks/remi --human

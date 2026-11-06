@@ -94,6 +94,8 @@ struct Hub {
     targets: RefCell<HashMap<u64, String>>,
     /// A PR retargeted the moment its head says it's landing.
     retarget: RefCell<Option<(u64, String)>>,
+    /// A PR labelled the moment its head says it's landing.
+    relabel: RefCell<Option<(u64, &'static str)>>,
     /// Every status the train posted.
     marks: RefCell<Vec<Posted>>,
     /// The last check run id given out: GitHub's are unique.
@@ -110,6 +112,8 @@ struct Hub {
     touched: RefCell<HashMap<String, Vec<String>>>,
     /// How many times the files a head changes were read.
     compared: Cell<u64>,
+    /// Each PR's labels.
+    labels: RefCell<HashMap<u64, Vec<&'static str>>>,
 }
 
 /// An artifact a run kept: its name and GitHub's zip of it.
@@ -284,6 +288,8 @@ impl Source for Hub {
             "base": {"sha": TRUNK, "ref": base,
                      "repo": {"default_branch": *self.default.borrow()}},
             "head": {"sha": head, "ref": "claude/x"},
+            "labels": self.labels.borrow().get(&number).into_iter().flatten()
+                .map(|l| json!({"name": l})).collect::<Vec<_>>(),
         })))
     }
 
@@ -503,6 +509,11 @@ impl Forge for Hub {
         {
             self.targets.borrow_mut().insert(pr, base);
         }
+        if mark == Mark::Landing
+            && let Some((pr, label)) = self.relabel.take()
+        {
+            self.labels.borrow_mut().insert(pr, vec![label]);
+        }
         self.marks.borrow_mut().push(Posted {
             sha: sha.into(),
             mark,
@@ -561,6 +572,7 @@ fn join_all(store: &mut Store, hub: &Hub, prs: &[u64]) {
                 &repo(),
                 *pr,
                 &head(*pr),
+                &[],
                 &policy(),
                 None
             )
@@ -579,7 +591,18 @@ fn r2(hub: &Hub, pr: u64) {
 
 /// Joins PR `pr` at `at`, as the steward asks once it's settled there.
 fn try_join(store: &mut Store, hub: &Hub, pr: u64, at: &str) -> Result<Joined, TrainError> {
-    join(store, hub, hub, &config(), &repo(), pr, at, &policy(), None)
+    join(
+        store,
+        hub,
+        hub,
+        &config(),
+        &repo(),
+        pr,
+        at,
+        &[],
+        &policy(),
+        None,
+    )
 }
 
 fn joined(store: &Store) -> Vec<u64> {

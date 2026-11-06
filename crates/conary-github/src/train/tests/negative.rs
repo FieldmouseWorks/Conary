@@ -25,6 +25,7 @@ fn join_proven(store: &mut Store, hub: &Hub, pr: u64) -> Joined {
         &repo(),
         pr,
         &head(pr),
+        &[],
         &policy(),
         Some(&negatives()),
     )
@@ -165,6 +166,7 @@ fn a_pr_joins_once_its_new_tests_failed_on_its_base_and_its_job_attests_it() {
         &repo(),
         3,
         &head(3),
+        &[],
         &policy(),
         Some(&other),
     )

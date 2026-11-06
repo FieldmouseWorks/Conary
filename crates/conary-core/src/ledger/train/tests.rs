@@ -58,6 +58,7 @@ impl Book {
             because: (class == Class::R2).then(|| "CODEOWNERS".into()),
             docs: false,
             policy: format!("{class:?}"),
+            raised: Vec::new(),
         });
     }
 
@@ -109,6 +110,7 @@ impl Book {
             change,
             revision,
             alone: false,
+            raised: Vec::new(),
         });
     }
 
@@ -119,6 +121,7 @@ impl Book {
             change,
             revision,
             alone: true,
+            raised: Vec::new(),
         });
     }
 
@@ -232,7 +235,8 @@ fn a_change_joins_once_and_only_at_its_head_now() {
         b.record(Body::Join {
             change: a,
             revision: unknown,
-            alone: false
+            alone: false,
+            raised: Vec::new(),
         }),
         Err(Invalid::UnknownRevision(unknown))
     );
@@ -241,7 +245,8 @@ fn a_change_joins_once_and_only_at_its_head_now() {
         b.record(Body::Join {
             change: a,
             revision: old,
-            alone: false
+            alone: false,
+            raised: Vec::new(),
         }),
         Err(Invalid::NotCurrent(old))
     );
@@ -250,7 +255,8 @@ fn a_change_joins_once_and_only_at_its_head_now() {
         b.record(Body::Join {
             change: a,
             revision: new,
-            alone: false
+            alone: false,
+            raised: Vec::new(),
         }),
         Err(Invalid::Duplicate)
     );
@@ -261,7 +267,8 @@ fn a_change_joins_once_and_only_at_its_head_now() {
         b.record(Body::Join {
             change: closed,
             revision: b.current(closed),
-            alone: false
+            alone: false,
+            raised: Vec::new(),
         }),
         Err(Invalid::Closed)
     );
@@ -294,7 +301,8 @@ fn a_head_pushed_back_to_an_older_one_takes_the_change_out_and_rejoins_at_the_ba
         b.record(Body::Join {
             change: a,
             revision: new,
-            alone: false
+            alone: false,
+            raised: Vec::new(),
         }),
         Err(Invalid::NotCurrent(new))
     );
@@ -606,6 +614,7 @@ fn the_trains_ops_read_back_as_written() {
             change: a,
             revision,
             alone: false,
+            raised: Vec::new(),
         },
         Body::Leave {
             change: a,
@@ -661,6 +670,7 @@ fn the_trains_ops_read_back_as_written() {
         change: a,
         revision,
         alone: false,
+        raised: Vec::new(),
     };
     let json = serde_json::to_value(&join).unwrap();
     assert_eq!(
@@ -672,6 +682,7 @@ fn the_trains_ops_read_back_as_written() {
         change: a,
         revision,
         alone: true,
+        raised: Vec::new(),
     })
     .unwrap();
     assert_eq!(alone["alone"], true);
@@ -689,7 +700,8 @@ fn a_change_red_alone_joins_again_only_at_a_new_head() {
         b.record(Body::Join {
             change: p,
             revision,
-            alone: false
+            alone: false,
+            raised: Vec::new(),
         }),
         Err(Invalid::Held(Held::Red))
     );
@@ -702,7 +714,8 @@ fn a_change_red_alone_joins_again_only_at_a_new_head() {
         b.record(Body::Join {
             change: p,
             revision,
-            alone: false
+            alone: false,
+            raised: Vec::new(),
         }),
         Err(Invalid::Held(Held::Red))
     );
@@ -728,6 +741,7 @@ fn a_change_that_wont_merge_or_changes_nothing_joins_again_once_what_it_was_afte
                 change: q,
                 revision,
                 alone: false,
+                raised: Vec::new(),
             };
             assert_eq!(b.record(held.clone()), Err(Invalid::Held(as_held)));
             (b, [p, q, r], held)
@@ -800,6 +814,7 @@ fn a_conflict_left_while_a_candidate_is_in_flight_is_after_the_changes_ahead_of_
         change: q,
         revision,
         alone: false,
+        raised: Vec::new(),
     };
     assert_eq!(b.record(held.clone()), Err(Invalid::Held(Held::Conflict)));
     // p was ahead of it there: p leaving lets it go.
@@ -829,6 +844,7 @@ fn a_refused_change_joins_again_once_trunk_moves() {
         change: changes[1],
         revision,
         alone: false,
+        raised: Vec::new(),
     };
     assert_eq!(b.record(again.clone()), Err(Invalid::Held(Held::Refused)));
     let next = b.build(8);

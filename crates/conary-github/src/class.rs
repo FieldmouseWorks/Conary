@@ -4,7 +4,7 @@
 
 use conary_core::ledger::Classed;
 use conary_core::op::{Body, Repo};
-use conary_core::policy::{Class, Classified, Policy};
+use conary_core::policy::{Class, Classified, Policy, raises};
 use conary_core::store::StoreError;
 use conary_core::{ChangeId, RevisionId, Store};
 
@@ -84,12 +84,13 @@ fn said(k: &Classed) -> Classified {
         class: k.class,
         because: k.because.clone(),
         docs: k.docs,
+        raised: k.raised.clone(),
     }
 }
 
 /// The class of a PR at `head`, once the ledger holds the PR as GitHub
-/// shows it now and that is its head ([`of`]). Asked again, it reads GitHub
-/// for the PR and nothing more.
+/// shows it now and that is its head ([`of`]), raised by the PR's labels as
+/// they are now. Asked again, it reads GitHub for the PR and nothing more.
 pub fn class(
     store: &mut Store,
     source: &dyn Source,
@@ -99,7 +100,7 @@ pub fn class(
     pr: u64,
     head: &str,
 ) -> Result<Classes, ClassError> {
-    let (got, _) = ingest::pulled(store, source, config, repo, pr)?;
+    let (got, pull) = ingest::pulled(store, source, config, repo, pr)?;
     let c = store
         .ledger()
         .change(got.change)
@@ -111,13 +112,24 @@ pub fn class(
             head: now.to_string(),
         });
     }
-    of(store, source, policy, repo, got.change, got.revision)
+    of(
+        store,
+        source,
+        policy,
+        repo,
+        got.change,
+        got.revision,
+        pull.raises(),
+    )
 }
 
-/// The class of a revision the ledger holds. The ledger's word for it under
-/// this policy is the answer when it has one; otherwise the files the
-/// revision changes from its merge base are read, and what the policy says
-/// of them is recorded.
+/// The class of a revision the ledger holds, raised by its PR's labels
+/// (`raised`, [`PullRequest::raises`](crate::api::PullRequest::raises))
+/// and by every label that raised the change before: a raise stays once
+/// it's recorded. The ledger's word for it under this policy and these
+/// raises is the answer when it has one; otherwise the files the revision
+/// changes from its merge base are read, and what the policy says of them,
+/// raised, is recorded.
 pub(crate) fn of(
     store: &mut Store,
     source: &dyn Source,
@@ -125,10 +137,13 @@ pub(crate) fn of(
     repo: &Repo,
     change: ChangeId,
     revision: RevisionId,
+    raised: Vec<String>,
 ) -> Result<Classes, ClassError> {
     let c = store.ledger().change(change).expect("the caller's change");
+    let raised = raises(c.raised().iter().chain(&raised).map(String::as_str));
     if let Some(k) = c.class_of(revision)
         && k.policy == policy.digest()
+        && k.raised == raised
     {
         return Ok(Classes {
             change,
@@ -139,7 +154,7 @@ pub(crate) fn of(
     }
     let r = c.revision(revision).expect("the caller's revision");
     let paths = source.files(&repo.to_string(), r.base.as_str(), r.head.as_str())?;
-    let said = policy.classify(repo, &paths);
+    let said = policy.classify(repo, &paths).raise(raised);
     store.record(Body::Classify {
         change,
         revision,
@@ -147,6 +162,7 @@ pub(crate) fn of(
         because: said.because.clone(),
         docs: said.docs,
         policy: policy.digest().to_owned(),
+        raised: said.raised.clone(),
     })?;
     Ok(Classes {
         change,

@@ -223,6 +223,7 @@ mod tests {
             because: None,
             docs: false,
             policy: "p".into(),
+            raised: Vec::new(),
         };
         let run = "https://github.com/o/r/runs/1";
         for body in [

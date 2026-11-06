@@ -55,6 +55,8 @@ pub struct Classed {
     pub docs: bool,
     /// The BLAKE3 hash of the policy file that said it.
     pub policy: String,
+    /// The labels its PR raised it with, sorted.
+    pub raised: Vec<String>,
     pub at: i64,
 }
 
@@ -145,6 +147,17 @@ impl Change {
     pub fn class_of(&self, revision: RevisionId) -> Option<&Classed> {
         self.classes.iter().rev().find(|c| c.revision == revision)
     }
+
+    /// Every label that has raised the change, at any revision, sorted. A
+    /// raise stays once it's recorded: taking the label off lowers nothing.
+    pub fn raised(&self) -> Vec<String> {
+        crate::policy::raises(
+            self.classes
+                .iter()
+                .flat_map(|k| &k.raised)
+                .map(String::as_str),
+        )
+    }
 }
 
 /// Trunk moving some way other than `land`.
@@ -205,6 +218,13 @@ pub enum Invalid {
     NotAsked(ChangeId),
     /// A join below its revision's class: an R2 one that doesn't ride alone.
     BelowClass(RevisionId),
+    /// A class its raise labels don't account for: one that isn't a raise
+    /// label, a list out of order, `r2` on a class below R2, or a label
+    /// that raised the change before left out.
+    NotRaised,
+    /// A join that doesn't name exactly the labels recorded as raising its
+    /// change.
+    JoinRaised,
 }
 
 impl std::fmt::Display for Invalid {
@@ -238,6 +258,10 @@ impl std::fmt::Display for Invalid {
             }
             Self::NotAsked(id) => write!(f, "change {id} isn't what the undo was asked for"),
             Self::BelowClass(id) => write!(f, "revision {id} is R2, so it rides alone"),
+            Self::NotRaised => f.write_str("its raise labels don't match its class"),
+            Self::JoinRaised => {
+                f.write_str("the join doesn't name the labels recorded as raising its change")
+            }
             Self::UndoCycle(id) => {
                 write!(
                     f,
@@ -320,6 +344,7 @@ impl Ledger {
                 change,
                 revision,
                 alone,
+                ..
             } => self.admit_join(*change, *revision, *alone),
             _ => Ok(()),
         }
@@ -389,13 +414,21 @@ impl Ledger {
                 because,
                 docs,
                 policy,
+                raised,
             } => {
                 let c = self.existing(*change)?;
                 if c.revision(*revision).is_none() {
                     return Err(Invalid::UnknownRevision(*revision));
                 }
+                if *raised != crate::policy::raises(raised.iter().map(String::as_str))
+                    || (raised.iter().any(|l| l == crate::policy::R2_LABEL) && *class != Class::R2)
+                    || c.raised().iter().any(|l| !raised.contains(l))
+                {
+                    return Err(Invalid::NotRaised);
+                }
                 if c.class_of(*revision).is_some_and(|k| {
-                    (&k.class, &k.because, &k.docs, &k.policy) == (class, because, docs, policy)
+                    (&k.class, &k.because, &k.docs, &k.policy, &k.raised)
+                        == (class, because, docs, policy, raised)
                 }) {
                     return Err(Invalid::Duplicate);
                 }
@@ -432,8 +465,11 @@ impl Ledger {
                 self.check_reopen(*change)?;
             }
             Body::Join {
-                change, revision, ..
-            } => self.check_join(*change, *revision)?,
+                change,
+                revision,
+                raised,
+                ..
+            } => self.check_join(*change, *revision, raised)?,
             Body::Leave { change, .. } => self.check_leave(*change)?,
             Body::Candidate {
                 candidate,
@@ -588,6 +624,7 @@ impl Ledger {
                 because,
                 docs,
                 policy,
+                raised,
                 ..
             } => c.classes.push(Classed {
                 revision: *revision,
@@ -595,6 +632,7 @@ impl Ledger {
                 because: because.clone(),
                 docs: *docs,
                 policy: policy.clone(),
+                raised: raised.clone(),
                 at,
             }),
             Body::Land {

@@ -271,3 +271,11 @@ fn where_anything_is_hidden_a_new_path_is_never_docs() {
     assert!(!hiding.classify(&plain, &renamed).docs);
     assert!(policy().classify(&plain, &renamed).docs);
 }
+
+#[test]
+fn raises_are_the_raise_labels_sorted_once_whatever_their_case() {
+    assert_eq!(raises(["bug", "Review", "R2", "review"]), ["r2", "review"]);
+    assert!(raises(["r1", "docs"]).is_empty());
+    let said = policy().classify(&repo("o/plain"), &paths(&["docs/a.md"]));
+    assert_eq!(said.clone().raise(Vec::new()), said);
+}
