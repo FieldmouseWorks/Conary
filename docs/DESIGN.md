@@ -784,10 +784,10 @@ toward it or fixes something.
 `backfill`, `why`, `undo`, `class`) already runs anywhere cargo does. Three
 things don't yet, and M7 closes them:
 
-- Evidence counts only when burrow's shared CI signed it: the signer is
-  fixed in [`attest.rs`](../crates/conary-github/src/attest.rs) as burrow's
-  `flake-check.yml`, so no other repository's CI can make evidence the train
-  counts.
+- Only burrow's shared CI makes attested evidence. Which workflow signs it
+  is the machine's setting ([rule 2](ci-attestation.md#checking-one)), but
+  no workflow of Conary's own makes attestations, so a repository without
+  burrow's CI has nothing to name.
 - The negative check for new tests runs in that same workflow.
 - Nothing in Conary hears a PR event. burrow's steward calls `cn` on each
   one; without it, someone runs `cn sync`.
