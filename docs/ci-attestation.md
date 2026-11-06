@@ -199,7 +199,10 @@ asked to. Nothing checks a bundle, or a PR's revision's gate, yet.
    --signer-workflow` takes it (`CONARY_SIGNER_WORKFLOW`, or `cn train
    --signer-workflow`), with no default; remi names burrow's
    `flake-check.yml`. A branch of the signer's repo, or a PR's own run of
-   the workflow it changes, can sign anything, so neither counts.
+   the workflow it changes, can sign anything, so neither counts. What the ledger kept counts again (a gate's pass read on a
+   later step, a revision's negative when it joins again) only while its
+   token names the signer the machine names now; a green verdict already
+   recorded stands as it was decided.
 3. The subject's digest is the one for the revision (or the commit) asked
    about, and the predicate's `revision` says the same.
 4. It's this page's `#v1`: the bundle's predicate type, or the token's

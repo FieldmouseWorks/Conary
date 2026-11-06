@@ -285,6 +285,40 @@ fn an_attestation_already_checked_isnt_read_again() {
 }
 
 #[test]
+fn an_attestation_kept_from_a_signer_the_machine_no_longer_names_counts_for_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = store(&dir);
+    let mut hub = Hub::new(&[3]);
+    let required = Settings {
+        require: vec!["check / check".into(), "proof".into()],
+        ..settings()
+    };
+    let (_, commit, run) = gating_unattested(&mut store, &mut hub);
+    hub.attest(run, &hub.attestation(&commit, run));
+    let stepped = step(&mut store, &hub, &hub, &config(), &repo(), &required).unwrap();
+    assert_eq!(waiting(&stepped), ["proof"]);
+    // Kept in the candidate's evidence, by the signer named then. Named
+    // another, the machine reads it again, and it's no pass of that one's.
+    let moved = Settings {
+        signer: "Acme/other/.github/workflows/gate.yml".parse().unwrap(),
+        ..required
+    };
+    let stepped = step(&mut store, &hub, &hub, &config(), &repo(), &moved).unwrap();
+    assert_eq!(
+        waiting(&stepped),
+        [
+            "proof".to_owned(),
+            format!(
+                "check / check: {ARTIFACT}0: its token was asked for by \"{}@{}\"",
+                testing::SIGNER,
+                testing::SIGNER_SHA
+            )
+        ]
+    );
+    assert_eq!(hub.downloads.get(), 2);
+}
+
+#[test]
 fn an_attestation_of_another_commit_run_or_tree_doesnt_count() {
     // Each attestation, kept in the gate run's artifacts, as the only one.
     let waits = |forged: &dyn Fn(&Hub, &str, u64) -> String| {

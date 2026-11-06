@@ -174,6 +174,27 @@ fn a_pr_joins_once_its_new_tests_failed_on_its_base_and_its_job_attests_it() {
     .unwrap();
     let why = unproven(rejoined);
     assert!(why.contains("other / negative hasn't run"), "{why}");
+    // Only while its signer is the one the machine names: kept from
+    // another, it's no negative now.
+    let moved = Negatives {
+        signer: "Acme/other/.github/workflows/gate.yml".parse().unwrap(),
+        ..negatives()
+    };
+    let rejoined = join(
+        &mut store,
+        &hub,
+        &hub,
+        &config(),
+        &repo(),
+        3,
+        &head(3),
+        &[],
+        &policy(),
+        Some(&moved),
+    )
+    .unwrap();
+    let why = unproven(rejoined);
+    assert!(why.contains(&format!("{CHECK} hasn't run")), "{why}");
     assert_eq!(join_proven(&mut store, &hub, 3), Joined::Joined);
     assert_eq!(hub.downloads.get(), downloads);
 }

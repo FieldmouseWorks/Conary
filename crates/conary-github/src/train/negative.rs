@@ -14,7 +14,7 @@ use conary_core::{ChangeId, RevisionId};
 
 use super::{Forge, TrainError, record};
 use crate::api::Source;
-use crate::attest::{Signer, Subject, attested};
+use crate::attest::{Signer, Subject, attested, signed_by};
 
 /// Which check is a PR's negative run, and whose signature and which
 /// runners its result counts from.
@@ -51,7 +51,7 @@ pub(super) fn negative(
     n: &Negatives,
 ) -> Result<Result<(), String>, TrainError> {
     let c = store.ledger().change(change).expect("ingest recorded it");
-    if counted(c, revision, &n.check) {
+    if counted(c, revision, n) {
         return Ok(Ok(()));
     }
     let r = c.revision(revision).expect("ingest recorded it");
@@ -111,14 +111,14 @@ pub(super) fn negative(
     })
 }
 
-/// Whether the ledger holds an attested negative for the revision, by the
-/// check asked for, that counts.
-fn counted(c: &Change, revision: RevisionId, check: &str) -> bool {
+/// Whether the ledger holds a negative for the revision, by the check
+/// asked for, that counts, attested by the signer the machine names now.
+fn counted(c: &Change, revision: RevisionId, n: &Negatives) -> bool {
     c.evidence.iter().any(|e| {
         e.revision == revision
             && e.kind == CheckKind::Negative
-            && e.check == check
-            && e.attest.is_some()
+            && e.check == n.check
+            && e.attest.as_ref().is_some_and(|a| signed_by(a, &n.signer))
             && counts(e.result)
     })
 }

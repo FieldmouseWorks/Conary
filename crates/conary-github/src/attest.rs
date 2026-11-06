@@ -199,6 +199,34 @@ pub fn attested(
     Ok(Err(why.join("; ")))
 }
 
+/// Whether a kept attestation was signed by `signer`'s jobs, as its
+/// token's `job_workflow_ref` says: the claim [`check`] held to the signer
+/// the machine named when it was recorded, under GitHub's signature, and
+/// which the ledger keeps as it was. Evidence a signer the machine no
+/// longer names attested counts for nothing more.
+pub fn signed_by(attest: &Attest, signer: &Signer) -> bool {
+    let Attest::GithubToken { token, .. } = attest;
+    let claims: Option<Map<String, Value>> = token
+        .split('.')
+        .nth(1)
+        .and_then(|c| unbase(c).ok())
+        .and_then(|c| serde_json::from_slice(&c).ok());
+    claims
+        .as_ref()
+        .and_then(|c| c.get("job_workflow_ref"))
+        .and_then(Value::as_str)
+        .is_some_and(|workflow| asked_by(workflow, signer))
+}
+
+/// Whether a token's `job_workflow_ref` is `signer`'s, at some ref.
+fn asked_by(workflow: &str, signer: &Signer) -> bool {
+    let signer = format!("{signer}@");
+    // Anyone's text: cut only where a character ends.
+    workflow
+        .get(..signer.len())
+        .is_some_and(|by| by.eq_ignore_ascii_case(&signer))
+}
+
 /// Whether a commit of the signer's repo is on its default branch: the tip,
 /// or behind it.
 fn on_main(
@@ -301,13 +329,8 @@ fn check(
     if !said("repository").eq_ignore_ascii_case(&repo.to_string()) {
         return Err(format!("its token is {}'s", said("repository")));
     }
-    let signer = format!("{signer}@");
     let workflow = said("job_workflow_ref");
-    // Anyone's text: cut only where a character ends.
-    let signed = workflow
-        .get(..signer.len())
-        .is_some_and(|by| by.eq_ignore_ascii_case(&signer));
-    if !signed {
+    if !asked_by(workflow, signer) {
         return Err(format!("its token was asked for by {workflow:?}"));
     }
     let workflow_sha = said("job_workflow_sha");
