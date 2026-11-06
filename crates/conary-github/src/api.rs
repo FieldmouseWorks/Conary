@@ -182,6 +182,7 @@ struct Comparison {
 struct ComparedFile {
     filename: String,
     previous_filename: Option<String>,
+    status: Option<String>,
 }
 
 /// The most files GitHub lists for a comparison. It says nothing of the
@@ -592,6 +593,7 @@ fn compared(files: Vec<ComparedFile>) -> Paths {
         files: files
             .into_iter()
             .map(|f| Touched {
+                added: f.status.as_deref() == Some("added"),
                 path: f.filename,
                 from: f.previous_filename,
             })

@@ -35,6 +35,10 @@ impl std::fmt::Display for Class {
 pub struct Touched {
     pub path: String,
     pub from: Option<String>,
+    /// Whether the change adds it. A new file can be a copy of one a
+    /// reviewer's snapshot hides, which a comparison doesn't name: the
+    /// snapshot pairs copies by content, from every file in the tree.
+    pub added: bool,
 }
 
 /// The paths a change touches, as far as they could be read.
@@ -277,12 +281,18 @@ impl Policy {
             .flat_map(|l| &l.not_docs)
             .chain(&self.never_docs);
         let hidden = levels.clone().flat_map(|l| &l.hidden);
+        // Where anything is hidden, a new file is never documentation: it
+        // may be a copy of a hidden one, and the snapshot hides it too.
+        let hiding = hidden.clone().next().is_some();
         let docs = !paths.cut
             && !paths.files.is_empty()
-            && every().all(|path| {
-                docs_pats.clone().any(|p| p.is_match(path))
-                    && !not_docs.clone().any(|p| p.is_match(path))
-                    && !hidden.clone().any(|p| hides(p, path))
+            && paths.files.iter().all(|t| {
+                !(hiding && t.added)
+                    && std::iter::once(&t.path).chain(&t.from).all(|path| {
+                        docs_pats.clone().any(|p| p.is_match(path))
+                            && !not_docs.clone().any(|p| p.is_match(path))
+                            && !hidden.clone().any(|p| hides(p, path))
+                    })
             });
         let live = levels.filter_map(|l| l.live).last().unwrap_or(false);
         let class = match (&because, live) {
