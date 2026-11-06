@@ -210,7 +210,6 @@ fn attestation(
         &c.repo,
         subject,
         run,
-        &settings.signer,
         settings.fresh.as_deref(),
     )?
     .map(|a| a.attest))

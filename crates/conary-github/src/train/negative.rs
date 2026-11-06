@@ -14,18 +14,15 @@ use conary_core::{ChangeId, RevisionId};
 
 use super::{Forge, TrainError, record};
 use crate::api::Source;
-use crate::attest::{Signer, Subject, attested};
+use crate::attest::{Subject, attested};
 
-/// Which check is a PR's negative run, and whose signature and which
-/// runners its result counts from.
-#[derive(Debug, Clone)]
+/// Which check is a PR's negative run, and which runners its result counts
+/// from.
+#[derive(Debug, Clone, Default)]
 pub struct Negatives {
-    /// The check run of the shared CI that runs a PR's new tests on its
-    /// base's code: its caller's job, then `negative`.
+    /// The check run of burrow's shared CI that runs a PR's new tests on
+    /// its base's code: its caller's job, then `negative`.
     pub check: String,
-    /// The workflow whose attestation of it counts, as for the gate's
-    /// checks ([`super::Settings::signer`]).
-    pub signer: Signer,
     /// What the name of each self-hosted runner started fresh for one job
     /// starts with, as for the gate's checks ([`super::Settings::fresh`]).
     pub fresh: Option<String>,
@@ -73,15 +70,7 @@ pub(super) fn negative(
         base: &base,
         head: &head,
     };
-    let a = match attested(
-        forge,
-        source,
-        repo,
-        subject,
-        &run,
-        &n.signer,
-        n.fresh.as_deref(),
-    )? {
+    let a = match attested(forge, source, repo, subject, &run, n.fresh.as_deref())? {
         Ok(a) => a,
         Err(why) => return Ok(Err(format!("{}: {why}", n.check))),
     };

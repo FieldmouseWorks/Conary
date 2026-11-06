@@ -11,7 +11,7 @@ use ring::signature::{RSA_PKCS1_SHA256, RsaKeyPair};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use super::{AUDIENCE, ISSUER, Key, Signer, hex};
+use super::{AUDIENCE, ISSUER, Key, SIGNER_REPO, SIGNER_WORKFLOW, hex};
 
 /// A key made for these tests alone, standing in for GitHub's: PKCS#8,
 /// base64. It signs nothing anywhere else.
@@ -41,15 +41,9 @@ const KEY: &str = concat!(
 );
 /// The test key's id, as GitHub's keys are named.
 pub(crate) const KID: &str = "test-key";
-/// The signer workflow the tests' machine names: no repo's in particular.
-pub(crate) const SIGNER: &str = "Acme/ci/.github/workflows/gate.yml";
-/// The signer workflow's commit in the tests, which they put on its repo's
+/// The signer workflow's commit in the tests, which they put on burrow's
 /// default branch.
 pub(crate) const SIGNER_SHA: &str = "5151515151515151515151515151515151515151";
-
-pub(crate) fn signer() -> Signer {
-    SIGNER.parse().unwrap()
-}
 
 fn pair() -> RsaKeyPair {
     RsaKeyPair::from_pkcs8(&STANDARD.decode(KEY).unwrap()).unwrap()
@@ -93,7 +87,7 @@ pub(crate) fn claims(repo: &str, commit: &str, run: u64, statement: &str) -> Val
         "repository": repo,
         "sha": commit,
         "check_run_id": run.to_string(),
-        "job_workflow_ref": format!("{SIGNER}@{SIGNER_SHA}"),
+        "job_workflow_ref": format!("{SIGNER_REPO}/{SIGNER_WORKFLOW}@{SIGNER_SHA}"),
         "job_workflow_sha": SIGNER_SHA,
         "event_name": "push",
         "runner_environment": "self-hosted",

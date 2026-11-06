@@ -12,7 +12,6 @@ const CHECK: &str = "check / negative";
 fn negatives() -> Negatives {
     Negatives {
         check: CHECK.into(),
-        signer: crate::attest::testing::signer(),
         fresh: Some(FRESH.into()),
     }
 }

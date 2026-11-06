@@ -119,16 +119,13 @@ alone), once `--raised` names every raise label (`cn class`'s `raised`) it
 has, the ones the steward settled it with, and `step`, on each of the repository's events,
 builds the next candidate, reads its gate, and lands a green one's PRs in
 order. `--require` names the checks the gate waits for even before they
-report, and a step needs one: jobs of a shared CI, such as burrow's, whose
-passes count only with the job's own attestation ([CI
-attestations](docs/ci-attestation.md)), signed by the workflow the machine
-names (`CONARY_SIGNER_WORKFLOW`) and made on one of GitHub's runners or on a
-self-hosted one started fresh for that job, whose name starts with
-`--fresh-runners`.
+report, and a step needs one: jobs of burrow's shared CI, whose passes count
+only with the job's own attestation ([CI attestations](docs/ci-attestation.md)),
+made on one of GitHub's runners or on a self-hosted one started fresh for that
+job, whose name starts with `--fresh-runners`.
 `verdict` records one `step` can't tell: `dropped`, for a gate that never
 finished.
 
-    export CONARY_SIGNER_WORKFLOW=FieldmouseWorks/burrow/.github/workflows/flake-check.yml
     cn train join FieldmouseWorks/remi 174 --head <sha> --raised review
     cn train step FieldmouseWorks/remi --require 'check / check' --fresh-runners fresh-remi-
     cn train verdict FieldmouseWorks/remi <candidate> dropped

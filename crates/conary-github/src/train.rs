@@ -18,7 +18,7 @@ use conary_core::store::StoreError;
 use conary_core::{CandidateId, ChangeId, Class, CommitId, Policy, Store, TreeId};
 
 use crate::api::{ApiError, Source};
-use crate::attest::{Actions, Signer};
+use crate::attest::Actions;
 use crate::branches::{BRANCHES, Branches, Merged};
 use crate::class::{self, ClassError};
 use crate::ingest::{self, Config, IngestError};
@@ -481,12 +481,8 @@ pub struct Settings {
     pub size: usize,
     /// Checks a candidate's gate waits for even before they report, and
     /// whose passes count only with their producer's attestation: the
-    /// repo's gate, as its shared CI runs it.
+    /// repo's gate, as burrow's shared CI runs it.
     pub require: Vec<String>,
-    /// The workflow whose jobs' attestations of those passes count, at a
-    /// commit on its repo's default branch: the shared CI the machine
-    /// trusts to sign.
-    pub signer: Signer,
     /// What the name of each self-hosted runner started fresh for one job
     /// starts with, which only the launcher of such runners gives one. A
     /// required pass counts only from such a runner or one of GitHub's.
