@@ -174,6 +174,16 @@ enum Command {
         #[command(flatten)]
         github: GithubArgs,
     },
+    /// Check a class policy file (docs/DESIGN.md section 4.4): read as `cn
+    /// class` reads it, a key this cn doesn't know, a bad pattern or a repo
+    /// named twice refused. Says the digest a `classify` op names it by. A
+    /// machine checks its file when it builds it, so a cn too old for it
+    /// fails the build rather than every class it's asked.
+    Policy {
+        /// The class policy, a JSON file.
+        #[arg(env = "CONARY_POLICY")]
+        policy: PathBuf,
+    },
     /// A repo's train: the changes ready to land, gated together.
     Train {
         #[command(subcommand)]
@@ -270,6 +280,14 @@ fn unavailable(e: &(dyn std::error::Error + 'static)) -> bool {
 
 fn run(cli: &Cli) -> Result<()> {
     match &cli.command {
+        Command::Policy { policy } => {
+            let digest = Policy::load(policy)?.digest().to_owned();
+            if cli.human {
+                println!("{}: a class policy, {digest}", policy.display());
+            } else {
+                println!("{}", serde_json::json!({ "digest": digest }));
+            }
+        }
         Command::Ingest { repo, pr, github } => {
             let (mut a, api, config) = write(cli, github)?;
             let got = ingest::pull(&mut a.store, &api, &config, repo, *pr);
@@ -789,6 +807,22 @@ mod tests {
         let prs = |at| -> Vec<u64> { read(&cli, at).unwrap().changes().map(|c| c.pr).collect() };
         assert_eq!(prs(Some(200)), [1]);
         assert_eq!(prs(None), [1, 2]);
+    }
+
+    // A policy file is checked as `cn class` reads it: one this cn doesn't
+    // know a key of is refused, so a machine's build of it fails.
+    #[test]
+    fn policy_checks_a_file_as_class_reads_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let check = |body: &str| {
+            let file = dir.path().join("policy.json");
+            std::fs::write(&file, body).unwrap();
+            run(&Cli::try_parse_from(["cn", "policy", file.to_str().unwrap()]).unwrap())
+        };
+        assert!(check(r#"{"r2": ["^secrets/"], "hidden": ["^docs/private/$"]}"#).is_ok());
+        for bad in [r#"{"hiddn": []}"#, r#"{"r2": ["("]}"#, "not json"] {
+            assert!(check(bad).is_err(), "{bad}");
+        }
     }
 
     #[test]
