@@ -761,8 +761,23 @@ toward it or fixes something.
    repository alone, and use it: one documented path from a clone to a
    working ledger, every command and call describing itself (`--help`, the
    MCP tools' schemas), and every refusal saying what to do next.
-7. Each parked idea in section 10 has a written decision, made from ledger
+7. It runs on an ordinary Linux box with no Nix and no burrow: `cargo
+   install`, a GitHub token, and the repository's own CI. Nix, systemd and a
+   steward are configuration on top, never something it needs.
+8. Each parked idea in section 10 has a written decision, made from ledger
    data.
+
+**What still ties it to burrow.** The ledger itself (`init`, `ingest`,
+`backfill`, `why`, `undo`, `class`) already runs anywhere cargo does. Three
+things don't yet, and M7 closes them:
+
+- Evidence counts only when burrow's shared CI signed it: the signer is
+  fixed in [`attest.rs`](../crates/conary-github/src/attest.rs) as burrow's
+  `flake-check.yml`, so no other repository's CI can make evidence the train
+  counts.
+- The negative check for new tests runs in that same workflow.
+- Nothing in Conary hears a PR event. burrow's steward calls `cn` on each
+  one; without it, someone runs `cn sync`.
 
 **What gets slotted in.** Work between milestones is a fix, a slice of the
 next milestone, or something an exit check showed it needs. Three rules keep
@@ -783,5 +798,5 @@ it pointed at the finish line:
 | M4 | `undo` by change, session and time, through the landing flow, and `at` | A deliberately bad session's changes in two repos are reverted by `undo --actor` and land with no person involved | Done ([#173](https://github.com/FieldmouseWorks/Conary/issues/173)) |
 | M5 | Class policy in Conary, from the paths and the kind of edit (section 4.4); the steward reads each change's class and the evidence it needs from conaryd | `oneWay` is gone from burrow's autoland config, and a docs-only change lands on green CI with no review round | In progress ([#226](https://github.com/FieldmouseWorks/Conary/issues/226)): `cn class` records each revision's class, and a join rides alone by it |
 | M6 | conaryd runs the landing flow. Its first slice is a simulated GitHub, in memory, that the train and the flow are tested against, with delays, errors, races and stale reads injected and recorded GitHub responses as its fixtures, so a change to either is proved without remi. Then the flow itself, R0 landing before review, and a red trunk bisected to the change that broke it and undone | `steward.py` is deleted; a week of PRs across every repo lands through conaryd, R0 ones with no wait on a reviewer; a deliberately broken landing is found and undone with no Claude job | |
-| M7 | Setup by an agent: one path from a clone to a working ledger, with the steward or without one, that an agent follows for someone; the box's specifics (Nix, systemd, remi) as configuration on top | A fresh agent session, given this repository, a machine and a token, sets up a ledger, records a repo's PRs and answers `why` and `undo`, with no person stepping in | |
+| M7 | Setup by an agent: one path from a clone to a working ledger, with the steward or without one, that an agent follows for someone; the box's specifics (Nix, systemd, remi) as configuration on top. The three ties to burrow above, cut: attested evidence and the negative check from a workflow any repository's CI can call, its signer configured rather than fixed, and a PR-event source of Conary's own | A fresh agent session, given this repository, a Linux machine with no Nix and no burrow, and a token, sets up a ledger, records a repo's PRs, lands one on that repo's own attested CI and answers `why` and `undo`, with no person stepping in | |
 | M8 | A written decision on each parked idea, from ledger data | The decisions, and with them the finish line | |
