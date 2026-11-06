@@ -74,6 +74,7 @@ fn a_seated_pr_joined_again_under_a_policy_that_makes_it_r2_rides_alone() {
         &repo(),
         3,
         &head(3),
+        &[],
         &new_policy(),
         None,
     );
@@ -204,14 +205,16 @@ fn a_pr_classed_r2_while_its_landing_is_open_is_reseated_once_its_not_merged() {
     assert!(alone(&store, 3));
 }
 
-/// The steward's `cn class` of a PR at its head, labels and all.
-fn classed(store: &mut Store, hub: &Hub, pr: u64) -> Class {
-    crate::class::class(store, hub, &config(), &policy(), &repo(), pr, &head(pr))
-        .unwrap()
-        .class()
+/// The steward's `cn class` of a PR at its head, labels and all: its class,
+/// and the raises it settles the PR with.
+fn classed(store: &mut Store, hub: &Hub, pr: u64) -> (Class, Vec<String>) {
+    let got =
+        crate::class::class(store, hub, &config(), &policy(), &repo(), pr, &head(pr)).unwrap();
+    (got.class(), got.said.raised)
 }
 
-fn join_one(store: &mut Store, hub: &Hub, pr: u64) -> Joined {
+/// The steward's join, of a PR it settled with `settled`.
+fn join_one(store: &mut Store, hub: &Hub, pr: u64, settled: &[String]) -> Joined {
     join(
         store,
         hub,
@@ -220,6 +223,7 @@ fn join_one(store: &mut Store, hub: &Hub, pr: u64) -> Joined {
         &repo(),
         pr,
         &head(pr),
+        settled,
         &policy(),
         None,
     )
@@ -227,27 +231,46 @@ fn join_one(store: &mut Store, hub: &Hub, pr: u64) -> Joined {
 }
 
 /// Its author labelled it `r2`: a PR whose paths are R0 and that the
-/// steward classed with the label joins alone. One labelled since the
-/// steward classed it is held out instead: the steward settled it without
-/// the label.
+/// steward settled with the label joins alone. Settled without it, it's
+/// held out, the join's own class recording the label notwithstanding,
+/// and asked again it's held out again.
 #[test]
-fn a_pr_labelled_r2_rides_alone_once_the_steward_classed_it_so() {
+fn a_pr_labelled_r2_rides_alone_once_the_steward_settled_it_so() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
     let hub = Hub::new(&[3, 5]);
     join_all(&mut store, &hub, &[3]);
     hub.labels.borrow_mut().insert(5, vec!["R2"]);
-    assert_eq!(join_one(&mut store, &hub, 5), Joined::Raised);
+    assert_eq!(join_one(&mut store, &hub, 5, &[]), Joined::Raised);
+    assert_eq!(join_one(&mut store, &hub, 5, &[]), Joined::Raised);
     assert_eq!(joined(&store), [3]);
-    assert_eq!(classed(&mut store, &hub, 5), Class::R2);
-    assert_eq!(join_one(&mut store, &hub, 5), Joined::Joined);
+    let (class, raised) = classed(&mut store, &hub, 5);
+    assert_eq!((class, &raised[..]), (Class::R2, &["r2".to_owned()][..]));
+    assert_eq!(join_one(&mut store, &hub, 5, &raised), Joined::Joined);
     assert!(alone(&store, 5) && !alone(&store, 3));
+}
+
+/// The steward classed a PR with no label, and settled it so; then it's
+/// labelled and someone else's `cn class` records the label before the
+/// steward's join. The join goes by what the steward settled, not by what
+/// the ledger holds by then: held out.
+#[test]
+fn a_label_recorded_by_another_class_between_the_stewards_and_its_join_holds_it_out() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = store(&dir);
+    let hub = Hub::new(&[3]);
+    let (_, settled) = classed(&mut store, &hub, 3);
+    assert!(settled.is_empty());
+    hub.labels.borrow_mut().insert(3, vec!["review"]);
+    classed(&mut store, &hub, 3);
+    assert_eq!(join_one(&mut store, &hub, 3, &settled), Joined::Raised);
+    assert!(joined(&store).is_empty());
 }
 
 /// Labelled to raise it once it's in, and classed with the label: the
 /// next step takes it out rather than putting it back alone, whichever
-/// label, since the steward settled it without the label. It joins again
-/// once it's settled with it.
+/// label, since the steward settled it without the label. Taking the label
+/// off lowers nothing: it joins again only settled with the raise.
 #[test]
 fn a_pr_classed_with_a_label_since_it_joined_leaves_the_train() {
     for (label, class) in [("r2", Class::R2), ("review", Class::R0)] {
@@ -256,7 +279,8 @@ fn a_pr_classed_with_a_label_since_it_joined_leaves_the_train() {
         let hub = Hub::new(&[3, 4]);
         join_all(&mut store, &hub, &[3, 4]);
         hub.labels.borrow_mut().insert(4, vec![label]);
-        assert_eq!(classed(&mut store, &hub, 4), class, "{label}");
+        let (got, raised) = classed(&mut store, &hub, 4);
+        assert_eq!(got, class, "{label}");
         let stepped = step_once(&mut store, &hub);
         assert_eq!(
             (&stepped.unready[..], &stepped.reseated[..]),
@@ -264,9 +288,18 @@ fn a_pr_classed_with_a_label_since_it_joined_leaves_the_train() {
             "{label}"
         );
         assert_eq!(hub.latest(&head(4)), Some(Mark::Waiting));
-        // Taking the label off lowers nothing: it's settled with the raise.
         hub.labels.borrow_mut().remove(&4);
-        assert_eq!(join_one(&mut store, &hub, 4), Joined::Joined, "{label}");
+        assert_eq!(
+            join_one(&mut store, &hub, 4, &[]),
+            Joined::Raised,
+            "{label}"
+        );
+        assert_eq!(classed(&mut store, &hub, 4).1, raised, "{label}");
+        assert_eq!(
+            join_one(&mut store, &hub, 4, &raised),
+            Joined::Joined,
+            "{label}"
+        );
         assert_eq!(alone(&store, 4), label == "r2");
     }
 }
@@ -353,8 +386,8 @@ fn a_label_it_joined_with_lands_it_as_classed() {
     let mut store = store(&dir);
     let mut hub = Hub::new(&[3]);
     hub.labels.borrow_mut().insert(3, vec!["review"]);
-    classed(&mut store, &hub, 3);
-    join_all(&mut store, &hub, &[3]);
+    let (_, raised) = classed(&mut store, &hub, 3);
+    assert_eq!(join_one(&mut store, &hub, 3, &raised), Joined::Joined);
     let (id, _) = gating(&step_once(&mut store, &hub));
     hub.ci(&commit_of(&store, id), &[("check / check", "success")]);
     let stepped = step_once(&mut store, &hub);

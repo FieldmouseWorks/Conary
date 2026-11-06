@@ -203,9 +203,8 @@ pub enum Joined {
     Already,
     /// It left as it is, and can't join again until something moves.
     Held(Held),
-    /// Its PR is labelled to raise it, and the label wasn't recorded until
-    /// this join: whoever settled it hadn't classed it with the label. Out,
-    /// to be settled again with it.
+    /// A label raises it that the steward didn't settle it with. Out, to
+    /// be settled again with it.
     Raised,
     /// It targets this branch, not the repo's default one, which is the
     /// train's.
@@ -221,6 +220,11 @@ pub enum Joined {
 /// records it): an R2 change rides alone, in a candidate of its own, which
 /// lands only while trunk is still its base. With `negatives`, only once
 /// its revision's negative counts ([`Negatives`]).
+/// `settled` is the raise labels the steward settled it with, as `cn class`
+/// told it: it joins only when they're every raise its change has once
+/// it's classed with its labels now, since a raise the steward didn't
+/// settle it with, recorded by anyone, would land on a settlement made
+/// without it ([`Joined::Raised`]).
 /// Its head's train status goes to pending first, so a success left from an
 /// earlier time in the train can't let anything merge it.
 #[allow(clippy::too_many_arguments)]
@@ -232,6 +236,7 @@ pub fn join(
     repo: &Repo,
     pr: u64,
     head: &str,
+    settled: &[String],
     policy: &Policy,
     negatives: Option<&Negatives>,
 ) -> Result<Joined, TrainError> {
@@ -250,7 +255,6 @@ pub fn join(
             head: now.to_string(),
         });
     }
-    let before = c.raised();
     let classes = class::of(
         store,
         source,
@@ -265,7 +269,7 @@ pub fn join(
         .change(got.change)
         .expect("ingest recorded it")
         .raised();
-    if raised != before {
+    if raised != conary_core::policy::raises(settled.iter().map(String::as_str)) {
         reseat(store, forge, source, repo)?;
         return Ok(Joined::Raised);
     }

@@ -257,10 +257,11 @@ round. A label can only raise, so who put it there doesn't matter. A
 raise stays with the change once it's recorded, at every later head:
 taking the label off lowers nothing. The `classify` op names the labels
 that raised it, and the ledger refuses one whose labels don't match its
-class or leave out an earlier raise. A join names every raise recorded
-for its change, which is what the steward settled it with, and one that
-has to record a raise itself is refused: the steward classed the PR
-without it. A change raised by a label it didn't join with, recorded or
+class or leave out an earlier raise. The steward's join names the raises
+it settled the PR with, as its `cn class` said, and it joins only when
+they're every raise the change has with its labels now: a raise anyone
+recorded since, the join included, holds it out until the steward settles
+it with the label. A change raised by a label it didn't join with, recorded or
 only on its PR (read last with its landing status up, just before the
 merge), leaves the train before its merge, never back in alone on its
 own: it joins again once the steward has settled it with the label.

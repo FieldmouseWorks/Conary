@@ -35,6 +35,12 @@ pub enum TrainCommand {
         /// The head that was settled.
         #[arg(long)]
         head: String,
+        /// Each raise label (`r2`, `review`) it was settled with, as `cn
+        /// class` said (its `raised`). It joins only when they're every
+        /// raise its change has, labels now included: one it wasn't settled
+        /// with holds it out until it's settled with it.
+        #[arg(long = "raised", value_name = "LABEL")]
+        raised: Vec<String>,
         /// The class policy, a JSON file (docs/DESIGN.md section 4.4). Its
         /// class is the policy's (`cn class`): an R2 one rides in a
         /// candidate of its own, which lands only while trunk is still the
@@ -151,6 +157,7 @@ pub fn run(cli: &Cli, command: &TrainCommand) -> Result<()> {
         TrainCommand::Join {
             pr,
             head,
+            raised,
             policy,
             negative,
             fresh,
@@ -169,6 +176,7 @@ pub fn run(cli: &Cli, command: &TrainCommand) -> Result<()> {
                 repo,
                 *pr,
                 head,
+                raised,
                 &policy,
                 negatives.as_ref(),
             )

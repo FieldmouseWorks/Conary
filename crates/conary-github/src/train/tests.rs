@@ -572,6 +572,7 @@ fn join_all(store: &mut Store, hub: &Hub, prs: &[u64]) {
                 &repo(),
                 *pr,
                 &head(*pr),
+                &[],
                 &policy(),
                 None
             )
@@ -590,7 +591,18 @@ fn r2(hub: &Hub, pr: u64) {
 
 /// Joins PR `pr` at `at`, as the steward asks once it's settled there.
 fn try_join(store: &mut Store, hub: &Hub, pr: u64, at: &str) -> Result<Joined, TrainError> {
-    join(store, hub, hub, &config(), &repo(), pr, at, &policy(), None)
+    join(
+        store,
+        hub,
+        hub,
+        &config(),
+        &repo(),
+        pr,
+        at,
+        &[],
+        &policy(),
+        None,
+    )
 }
 
 fn joined(store: &Store) -> Vec<u64> {
