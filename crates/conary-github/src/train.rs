@@ -246,7 +246,15 @@ pub fn join(
             head: now.to_string(),
         });
     }
-    let classes = class::of(store, source, policy, repo, got.change, got.revision)?;
+    let classes = class::of(
+        store,
+        source,
+        policy,
+        repo,
+        got.change,
+        got.revision,
+        pull.raises(),
+    )?;
     let body = Body::Join {
         change: got.change,
         revision: got.revision,

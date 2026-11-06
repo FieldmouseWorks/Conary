@@ -20,6 +20,8 @@ struct Hub {
     /// The comparisons asked for, as (base, head).
     compared: RefCell<Vec<(String, String)>>,
     pulled: Cell<usize>,
+    /// The PR's labels.
+    labels: RefCell<Vec<&'static str>>,
 }
 
 impl Hub {
@@ -29,6 +31,7 @@ impl Hub {
             files,
             compared: RefCell::default(),
             pulled: Cell::new(0),
+            labels: RefCell::default(),
         }
     }
 }
@@ -44,6 +47,7 @@ impl Source for Hub {
             "user": {"login": "TusanHomichi", "type": "User"},
             "base": {"sha": BASE, "ref": "main", "repo": {"default_branch": "main"}},
             "head": {"sha": *self.head.borrow(), "ref": "claude/x"},
+            "labels": self.labels.borrow().iter().map(|l| json!({"name": l})).collect::<Vec<_>>(),
         }))
         .unwrap())
     }
@@ -224,4 +228,63 @@ fn a_head_that_moved_is_refused_and_nothing_is_classed() {
     assert!(hub.compared.borrow().is_empty());
     let c = store.ledger().by_pr(&repo(), 7).unwrap();
     assert!(c.classes.is_empty());
+}
+
+/// Its labels raise it: `review` asks a docs change for a review round,
+/// `r2` makes it R2 and says so. Each set of labels is classed once and
+/// recorded; taking a label off gives back what the policy says.
+#[test]
+fn labels_raise_a_class_and_never_lower_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = store(&dir);
+    let hub = Hub::new(vec![(HEAD, paths(&["docs/a.md"]))]);
+    let p = policy(POLICY);
+    let ask = |store: &mut Store| class(store, &hub, &config(), &p, &repo(), 7, HEAD).unwrap();
+    let plain = ask(&mut store);
+    assert!(!plain.said.review());
+
+    *hub.labels.borrow_mut() = vec!["Review", "bug"];
+    let review = ask(&mut store);
+    assert!(review.recorded);
+    assert_eq!(review.said.raised, ["review"]);
+    assert!(review.said.docs && review.said.review());
+    assert_eq!(review.class(), Class::R0);
+    let again = ask(&mut store);
+    assert!(!again.recorded && again.said == review.said);
+
+    *hub.labels.borrow_mut() = vec!["r2", "review"];
+    let r2 = ask(&mut store);
+    assert_eq!(r2.class(), Class::R2);
+    assert_eq!(r2.said.because.as_deref(), Some("labelled r2"));
+    assert_eq!(r2.said.raised, ["r2", "review"]);
+    let c = store.ledger().change(r2.change).unwrap();
+    assert_eq!(c.class_of(r2.revision).unwrap().raised, ["r2", "review"]);
+
+    hub.labels.borrow_mut().clear();
+    let back = ask(&mut store);
+    assert!(back.recorded);
+    assert_eq!(back.said, plain.said);
+}
+
+/// `r2` on a change the policy already makes R2 keeps the policy's reason.
+#[test]
+fn an_r2_label_on_an_r2_change_keeps_its_reason() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = store(&dir);
+    let hub = Hub::new(vec![(HEAD, paths(&["CODEOWNERS"]))]);
+    *hub.labels.borrow_mut() = vec!["r2"];
+    let got = class(
+        &mut store,
+        &hub,
+        &config(),
+        &policy(POLICY),
+        &repo(),
+        7,
+        HEAD,
+    )
+    .unwrap();
+    assert_eq!(
+        (got.class(), got.said.because.as_deref()),
+        (Class::R2, Some("CODEOWNERS"))
+    );
 }

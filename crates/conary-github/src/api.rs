@@ -8,7 +8,7 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use ureq::tls::{RootCerts, TlsConfig};
 
-use conary_core::policy::{Paths, Touched};
+use conary_core::policy::{Paths, Touched, raises};
 
 use crate::etags::Etags;
 use crate::tokens::Tokens;
@@ -49,9 +49,21 @@ pub struct PullRequest {
     pub merge_commit_sha: Option<String>,
     pub base: Ref,
     pub head: Ref,
+    #[serde(default)]
+    pub labels: Vec<Label>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Label {
+    pub name: String,
 }
 
 impl PullRequest {
+    /// The labels among its own that raise its class ([`raises`]).
+    pub fn raises(&self) -> Vec<String> {
+        raises(self.labels.iter().map(|l| l.name.as_str()))
+    }
+
     /// The list endpoint leaves out `merged`; `merged_at` is on both.
     pub fn is_merged(&self) -> bool {
         self.merged.unwrap_or(false) || self.merged_at.is_some()

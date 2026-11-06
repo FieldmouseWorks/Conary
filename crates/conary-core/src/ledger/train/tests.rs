@@ -58,6 +58,7 @@ impl Book {
             because: (class == Class::R2).then(|| "CODEOWNERS".into()),
             docs: false,
             policy: format!("{class:?}"),
+            raised: Vec::new(),
         });
     }
 

@@ -28,7 +28,16 @@ fn a_pr_classed_r2_after_it_joined_leaves_its_candidate_and_rides_alone() {
     r2(&hub, 4);
     let c = store.ledger().by_pr(&repo(), 4).unwrap();
     let (change, revision) = (c.id, c.current.unwrap());
-    crate::class::of(&mut store, &hub, &new_policy(), &repo(), change, revision).unwrap();
+    crate::class::of(
+        &mut store,
+        &hub,
+        &new_policy(),
+        &repo(),
+        change,
+        revision,
+        Vec::new(),
+    )
+    .unwrap();
     let stepped = step_once(&mut store, &hub);
     assert_eq!(stepped.reseated, [4]);
     let (second, prs) = gating(&stepped);
@@ -97,7 +106,16 @@ fn a_pr_classed_r2_while_its_green_candidate_lands_is_reseated_before_its_merge(
         r2(&hub, pr);
         let c = store.ledger().by_pr(&repo(), pr).unwrap();
         let (change, revision) = (c.id, c.current.unwrap());
-        crate::class::of(&mut store, &hub, &new_policy(), &repo(), change, revision).unwrap();
+        crate::class::of(
+            &mut store,
+            &hub,
+            &new_policy(),
+            &repo(),
+            change,
+            revision,
+            Vec::new(),
+        )
+        .unwrap();
     }
     hub.lagging.set(false);
     let stepped = step_once(&mut store, &hub);
@@ -126,7 +144,16 @@ fn a_reseat_github_wont_mark_leaves_the_pr_in_for_the_next_step() {
     r2(&hub, 4);
     let c = store.ledger().by_pr(&repo(), 4).unwrap();
     let (change, revision) = (c.id, c.current.unwrap());
-    crate::class::of(&mut store, &hub, &new_policy(), &repo(), change, revision).unwrap();
+    crate::class::of(
+        &mut store,
+        &hub,
+        &new_policy(),
+        &repo(),
+        change,
+        revision,
+        Vec::new(),
+    )
+    .unwrap();
     hub.unmarked.set(Some(Mark::Waiting));
     assert!(step(&mut store, &hub, &hub, &config(), &repo(), &settings()).is_err());
     assert_eq!(joined(&store), [3, 4]);
@@ -159,11 +186,49 @@ fn a_pr_classed_r2_while_its_landing_is_open_is_reseated_once_its_not_merged() {
     r2(&hub, 3);
     let c = store.ledger().by_pr(&repo(), 3).unwrap();
     let (change, revision) = (c.id, c.current.unwrap());
-    crate::class::of(&mut store, &hub, &new_policy(), &repo(), change, revision).unwrap();
+    crate::class::of(
+        &mut store,
+        &hub,
+        &new_policy(),
+        &repo(),
+        change,
+        revision,
+        Vec::new(),
+    )
+    .unwrap();
     let stepped = step_once(&mut store, &hub);
     assert_eq!(stepped.reseated, [3]);
     assert!(stepped.landed.is_empty() && hub.merged.borrow().is_empty());
     assert_eq!(hub.latest(&head(3)), Some(Mark::Waiting));
     assert_eq!(gating(&stepped).1, [4]);
     assert!(alone(&store, 3));
+}
+
+/// Its author labelled it `r2`: a PR whose paths are R0 joins alone, and
+/// one already seated goes back in alone at the next step, once its class
+/// is asked again with the label.
+#[test]
+fn a_pr_labelled_r2_rides_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = store(&dir);
+    let hub = Hub::new(&[3, 4, 5]);
+    hub.labels.borrow_mut().insert(5, vec!["R2"]);
+    join_all(&mut store, &hub, &[3, 4, 5]);
+    assert!(alone(&store, 5) && !alone(&store, 3));
+    let c = store.ledger().by_pr(&repo(), 4).unwrap();
+    let (change, revision) = (c.id, c.current.unwrap());
+    let got = crate::class::of(
+        &mut store,
+        &hub,
+        &policy(),
+        &repo(),
+        change,
+        revision,
+        vec!["r2".into()],
+    )
+    .unwrap();
+    assert_eq!(got.said.because.as_deref(), Some("labelled r2"));
+    let stepped = step_once(&mut store, &hub);
+    assert_eq!(stepped.reseated, [4]);
+    assert!(alone(&store, 4));
 }

@@ -55,6 +55,8 @@ pub struct Classed {
     pub docs: bool,
     /// The BLAKE3 hash of the policy file that said it.
     pub policy: String,
+    /// The labels its PR raised it with, sorted.
+    pub raised: Vec<String>,
     pub at: i64,
 }
 
@@ -205,6 +207,9 @@ pub enum Invalid {
     NotAsked(ChangeId),
     /// A join below its revision's class: an R2 one that doesn't ride alone.
     BelowClass(RevisionId),
+    /// A class its raise labels don't account for: one that isn't a raise
+    /// label, a list out of order, or `r2` on a class below R2.
+    NotRaised,
 }
 
 impl std::fmt::Display for Invalid {
@@ -238,6 +243,7 @@ impl std::fmt::Display for Invalid {
             }
             Self::NotAsked(id) => write!(f, "change {id} isn't what the undo was asked for"),
             Self::BelowClass(id) => write!(f, "revision {id} is R2, so it rides alone"),
+            Self::NotRaised => f.write_str("its raise labels don't match its class"),
             Self::UndoCycle(id) => {
                 write!(
                     f,
@@ -389,13 +395,20 @@ impl Ledger {
                 because,
                 docs,
                 policy,
+                raised,
             } => {
                 let c = self.existing(*change)?;
                 if c.revision(*revision).is_none() {
                     return Err(Invalid::UnknownRevision(*revision));
                 }
+                if *raised != crate::policy::raises(raised.iter().map(String::as_str))
+                    || (raised.iter().any(|l| l == crate::policy::R2_LABEL) && *class != Class::R2)
+                {
+                    return Err(Invalid::NotRaised);
+                }
                 if c.class_of(*revision).is_some_and(|k| {
-                    (&k.class, &k.because, &k.docs, &k.policy) == (class, because, docs, policy)
+                    (&k.class, &k.because, &k.docs, &k.policy, &k.raised)
+                        == (class, because, docs, policy, raised)
                 }) {
                     return Err(Invalid::Duplicate);
                 }
@@ -588,6 +601,7 @@ impl Ledger {
                 because,
                 docs,
                 policy,
+                raised,
                 ..
             } => c.classes.push(Classed {
                 revision: *revision,
@@ -595,6 +609,7 @@ impl Ledger {
                 because: because.clone(),
                 docs: *docs,
                 policy: policy.clone(),
+                raised: raised.clone(),
                 at,
             }),
             Body::Land {

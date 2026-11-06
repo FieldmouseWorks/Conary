@@ -233,7 +233,8 @@ pub enum Body {
     /// What the class policy said of one revision of the change (design
     /// 4.4): its class, what made it R2, and whether every path it touches
     /// is documentation. `policy` is the BLAKE3 hash of the policy file
-    /// that said it. A later one for the same revision supersedes it.
+    /// that said it, and `raised` the labels its PR raised it with. A later
+    /// one for the same revision supersedes it.
     Classify {
         change: ChangeId,
         revision: RevisionId,
@@ -241,6 +242,8 @@ pub enum Body {
         because: Option<String>,
         docs: bool,
         policy: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        raised: Vec<String>,
     },
     /// Trunk moved to `after` by landing this revision of the change.
     Land {

@@ -110,6 +110,8 @@ struct Hub {
     touched: RefCell<HashMap<String, Vec<String>>>,
     /// How many times the files a head changes were read.
     compared: Cell<u64>,
+    /// Each PR's labels.
+    labels: RefCell<HashMap<u64, Vec<&'static str>>>,
 }
 
 /// An artifact a run kept: its name and GitHub's zip of it.
@@ -284,6 +286,8 @@ impl Source for Hub {
             "base": {"sha": TRUNK, "ref": base,
                      "repo": {"default_branch": *self.default.borrow()}},
             "head": {"sha": head, "ref": "claude/x"},
+            "labels": self.labels.borrow().get(&number).into_iter().flatten()
+                .map(|l| json!({"name": l})).collect::<Vec<_>>(),
         })))
     }
 

@@ -158,8 +158,10 @@ enum Command {
         github: GithubArgs,
     },
     /// A PR's class at a head, and the evidence it needs: what the class
-    /// policy says of the files that revision changes, recorded once per
-    /// revision and policy. Refused when the PR's head on GitHub is another.
+    /// policy says of the files that revision changes, raised by the PR's
+    /// labels (`r2` makes it R2, `review` asks for a review round), recorded
+    /// once per revision, policy and labels. Refused when the PR's head on
+    /// GitHub is another.
     Class {
         /// The repository, as owner/name.
         repo: Repo,
@@ -338,13 +340,18 @@ fn run(cli: &Cli) -> Result<()> {
                 } else {
                     ""
                 };
+                let raised = if said.raised.is_empty() {
+                    String::new()
+                } else {
+                    format!(", labelled {}", said.raised.join(" and "))
+                };
                 let review = if said.review() {
                     "a review round"
                 } else {
                     "no review round"
                 };
                 println!(
-                    "{repo}#{pr} at {head}: {}{because}{docs}; needs {review}",
+                    "{repo}#{pr} at {head}: {}{because}{docs}{raised}; needs {review}",
                     said.class
                 );
             } else {
@@ -353,7 +360,8 @@ fn run(cli: &Cli) -> Result<()> {
                     json!({"pr": pr, "change": got.change.to_string(),
                            "revision": got.revision.to_string(), "class": said.class,
                            "because": said.because, "docs": said.docs,
-                           "review": said.review(), "recorded": got.recorded})
+                           "raised": said.raised, "review": said.review(),
+                           "recorded": got.recorded})
                 );
             }
         }

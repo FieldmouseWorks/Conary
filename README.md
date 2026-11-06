@@ -98,8 +98,10 @@ clone with no ledger beside it answers from them ([notes](docs/notes.md)).
 `cn class` says what a PR's class is at a head, and whether it's
 documentation only, so needs green CI and no review round
 ([class](docs/DESIGN.md#44-class)). The policy is a JSON file
-(`CONARY_POLICY`) the machine gives it; the class is recorded once per
-revision and policy, so asking again costs no more than reading the PR.
+(`CONARY_POLICY`) the machine gives it. The PR's labels can only raise
+it: `r2` makes it R2, and `review` asks for a review round. The class is
+recorded once per revision, policy and labels, so asking again costs no
+more than reading the PR.
 
     cn class FieldmouseWorks/remi 174 --head <sha> --human
 

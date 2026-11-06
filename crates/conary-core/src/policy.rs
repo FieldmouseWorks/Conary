@@ -60,14 +60,49 @@ pub struct Classified {
     pub because: Option<String>,
     /// Every path it touches is documentation, as the policy names it.
     pub docs: bool,
+    /// The labels its PR raised it with ([`RAISES`]), sorted.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub raised: Vec<String>,
+}
+
+/// The labels that raise a change (`docs/DESIGN.md` section 4.4): `r2`
+/// makes it R2, and `review` asks for a review round. A label can only
+/// raise, so it doesn't matter who put it there; none lowers anything.
+pub const RAISES: [&str; 2] = [R2_LABEL, REVIEW_LABEL];
+pub const R2_LABEL: &str = "r2";
+pub const REVIEW_LABEL: &str = "review";
+
+/// The raise labels among a PR's labels, sorted, as [`Classified::raise`]
+/// takes them. GitHub matches label names without case, and so does this.
+pub fn raises<'a>(labels: impl IntoIterator<Item = &'a str>) -> Vec<String> {
+    let mut got: Vec<String> = labels
+        .into_iter()
+        .map(str::to_lowercase)
+        .filter(|l| RAISES.contains(&l.as_str()))
+        .collect();
+    got.sort();
+    got.dedup();
+    got
 }
 
 impl Classified {
     /// Whether it needs a review round before it lands. Documentation needs
-    /// green CI and nothing more, unless it's R2 (`docs/DESIGN.md` section
-    /// 4.4).
+    /// green CI and nothing more, unless it's R2 or its PR asks for review
+    /// (`docs/DESIGN.md` section 4.4).
     pub fn review(&self) -> bool {
-        self.class == Class::R2 || !self.docs
+        self.class == Class::R2 || !self.docs || self.raised.iter().any(|l| l == REVIEW_LABEL)
+    }
+
+    /// What the policy said, raised by a PR's [`raises`]: `r2` makes it R2,
+    /// saying so where the policy didn't, and `review` asks for a review
+    /// round. Neither lowers anything.
+    pub fn raise(mut self, raised: Vec<String>) -> Self {
+        if raised.iter().any(|l| l == R2_LABEL) && self.class != Class::R2 {
+            self.class = Class::R2;
+            self.because = Some(format!("labelled {R2_LABEL}"));
+        }
+        self.raised = raised;
+        self
     }
 }
 
@@ -305,6 +340,7 @@ impl Policy {
             class,
             because,
             docs,
+            raised: Vec::new(),
         }
     }
 }

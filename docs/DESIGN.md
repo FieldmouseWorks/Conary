@@ -251,7 +251,12 @@ and spec are never docs here: `AGENTS.md`, a design doc, and a page the repo
 publishes, such as the profile's README, all get reviewed. Anthropic's review
 tool draws the same line between comment-only and logical changes
 (section 10). An author can raise a change's class or ask for review, and
-never lower either.
+never lower either: a PR labelled `r2` is R2 (because it says so, where
+the policy didn't make it R2), and one labelled `review` gets a review
+round. A label can only raise, so who put it there doesn't matter, and
+taking it off gives back what the policy says. The `classify` op names
+the labels that raised it, and the ledger refuses one whose labels don't
+match its class.
 
 ### 4.5 Landing
 
@@ -796,7 +801,7 @@ it pointed at the finish line:
 | M2 | conaryd serving the ledger over its socket, the notes ref and the MCP server | A cloud session answers `why` from a fresh clone | Done |
 | M3 | The train (section 4.7) on remi, with the evidence verifier it counts candidates by and the negative check for new tests | For a day of remi's PRs: fewer gate runs than PRs landed, every candidate's last landing on its evidence, and trunk's own CI green after every candidate landed | Live on remi. The first criterion isn't met: remi's PRs arrive too slowly to batch ([#48](https://github.com/FieldmouseWorks/Conary/issues/48)). Signed proof verdicts ([#218](https://github.com/FieldmouseWorks/Conary/issues/218)) let PSIV's queue ride a train |
 | M4 | `undo` by change, session and time, through the landing flow, and `at` | A deliberately bad session's changes in two repos are reverted by `undo --actor` and land with no person involved | Done ([#173](https://github.com/FieldmouseWorks/Conary/issues/173)) |
-| M5 | Class policy in Conary, from the paths and the kind of edit (section 4.4); the steward reads each change's class and the evidence it needs from conaryd | `oneWay` is gone from burrow's autoland config, and a docs-only change lands on green CI with no review round | In progress ([#226](https://github.com/FieldmouseWorks/Conary/issues/226)): `cn class` records each revision's class, and a join rides alone by it |
+| M5 | Class policy in Conary, from the paths and the kind of edit (section 4.4); the steward reads each change's class and the evidence it needs from conaryd | `oneWay` is gone from burrow's autoland config, and a docs-only change lands on green CI with no review round | In progress ([#226](https://github.com/FieldmouseWorks/Conary/issues/226)): `cn class` records each revision's class, raised by its PR's labels; a join rides alone by it; burrow's steward lands docs with no review round |
 | M6 | conaryd runs the landing flow. Its first slice is a simulated GitHub, in memory, that the train and the flow are tested against, with delays, errors, races and stale reads injected and recorded GitHub responses as its fixtures, so a change to either is proved without remi. Then the flow itself, R0 landing before review, and a red trunk bisected to the change that broke it and undone | `steward.py` is deleted; a week of PRs across every repo lands through conaryd, R0 ones with no wait on a reviewer; a deliberately broken landing is found and undone with no Claude job | |
 | M7 | Setup by an agent: one path from a clone to a working ledger, with the steward or without one, that an agent follows for someone; the box's specifics (Nix, systemd, remi) as configuration on top. The three ties to burrow above, cut: attested evidence and the negative check from a workflow any repository's CI can call, its signer configured rather than fixed, and a PR-event source of Conary's own | A fresh agent session, given this repository, a Linux machine with no Nix and no burrow, and a token, sets up a ledger, records a repo's PRs, lands one on that repo's own attested CI and answers `why` and `undo`, with no person stepping in | |
 | M8 | A written decision on each parked idea, from ledger data | The decisions, and with them the finish line | |
