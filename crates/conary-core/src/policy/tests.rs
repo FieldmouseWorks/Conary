@@ -194,3 +194,38 @@ fn the_digest_is_the_files_and_changes_with_it() {
     assert_eq!(a.digest(), blake3::hash(b"{}").to_hex().as_str());
     assert_ne!(a.digest(), b.digest());
 }
+
+/// `hidden` hides what a reviewer's snapshot does, from documentation: a
+/// directory named with its trailing slash hides what's in it, a name is
+/// matched without its final newline too, and a rename's source counts. A
+/// repo's add to the machine's.
+#[test]
+fn hidden_paths_are_never_docs_as_a_snapshot_hides_them() {
+    let p = Policy::parse(
+        br#"{"docs": ["^docs/"], "hidden": ["^docs/private/$"],
+             "repos": {"o/own": {"hidden": ["^docs/x\\.md$"]}}}"#,
+    )
+    .unwrap();
+    let plain = repo("o/plain");
+    for path in ["docs/private/a.md", "docs/private/deep/b.md"] {
+        assert!(!p.classify(&plain, &paths(&[path])).docs, "{path:?}");
+    }
+    assert!(p.classify(&plain, &paths(&["docs/public/a.md"])).docs);
+    assert!(p.classify(&plain, &paths(&["docs/x.md\n"])).docs);
+    let own = repo("o/own");
+    assert!(!p.classify(&own, &paths(&["docs/x.md\n"])).docs);
+    assert!(!p.classify(&own, &paths(&["docs/private/a.md"])).docs);
+    let renamed = Paths {
+        files: vec![Touched {
+            path: "docs/public/a.md".into(),
+            from: Some("docs/private/a.md".into()),
+        }],
+        cut: false,
+    };
+    assert!(!p.classify(&plain, &renamed).docs);
+    // Hidden isn't R2: it's reviewed, and the judge is told.
+    assert_eq!(
+        p.classify(&plain, &paths(&["docs/private/a.md"])).class,
+        Class::R0
+    );
+}
