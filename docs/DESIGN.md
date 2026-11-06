@@ -779,6 +779,10 @@ toward it or fixes something.
    steward are configuration on top, never something it needs.
 8. Each parked idea in section 10 has a written decision, made from ledger
    data.
+9. Related work pays for one gate. Conary groups the work in flight by what
+   it touches (its paths and its class), shows the batches it would make,
+   and gates each batch once: one run of the repo's CI for the batch, the
+   PRs' own runs included, not one per PR or per head.
 
 **What still ties it to burrow.** The ledger itself (`init`, `ingest`,
 `backfill`, `why`, `undo`, `class`) already runs anywhere cargo does. Three
@@ -791,6 +795,28 @@ things don't yet, and M7 closes them:
 - The negative check for new tests runs in that same workflow.
 - Nothing in Conary hears a PR event. burrow's steward calls `cn` on each
   one; without it, someone runs `cn sync`.
+
+**What batching still lacks.** The train gates a candidate once, but only
+what's ready when it builds one, and each PR's head still runs the repo's
+CI on every push before that. Work rarely lines up: remi's PRs arrive too
+slowly to batch ([#48](https://github.com/FieldmouseWorks/Conary/issues/48)),
+and from 2026-10-26 to 28 remi ran about three and a half gate runs for each
+PR it landed. The ledger already knows what each change touches, from its
+class (section 4.4), so it can see what would batch before anyone opens a
+PR: changes to the same paths and of the same class, in flight at once.
+Item 9 asks Conary to propose those batches, so an agent can combine them
+into one branch, and to stop running a PR's own CI on a head the batch's
+gate will check anyway. M6 delivers it, since that's when conaryd owns the
+flow that decides what runs.
+
+The grouping is deterministic: class and paths, which the ledger has
+already, so a batch costs no model call and the same work always proposes
+the same batches. A wrong batch costs little, because a red one splits the
+way a candidate does. A model gets only the question the paths can't
+answer, whether two changes are one intent and belong in one branch. It
+asks a cheap model, records the verdict as an op (never the prompt), stays
+off the landing path, and stays only if the ledger shows its verdicts save
+more gate runs than they cost.
 
 **What gets slotted in.** Work between milestones is a fix, a slice of the
 next milestone, or something an exit check showed it needs. Three rules keep
@@ -810,6 +836,6 @@ it pointed at the finish line:
 | M3 | The train (section 4.7) on remi, with the evidence verifier it counts candidates by and the negative check for new tests | For a day of remi's PRs: fewer gate runs than PRs landed, every candidate's last landing on its evidence, and trunk's own CI green after every candidate landed | Live on remi. The first criterion isn't met: remi's PRs arrive too slowly to batch ([#48](https://github.com/FieldmouseWorks/Conary/issues/48)). Signed proof verdicts ([#218](https://github.com/FieldmouseWorks/Conary/issues/218)) let PSIV's queue ride a train |
 | M4 | `undo` by change, session and time, through the landing flow, and `at` | A deliberately bad session's changes in two repos are reverted by `undo --actor` and land with no person involved | Done ([#173](https://github.com/FieldmouseWorks/Conary/issues/173)) |
 | M5 | Class policy in Conary, from the paths and the kind of edit (section 4.4); the steward reads each change's class and the evidence it needs from conaryd | `oneWay` is gone from burrow's autoland config, and a docs-only change lands on green CI with no review round | Done ([#226](https://github.com/FieldmouseWorks/Conary/issues/226)): `cn class` records each revision's class, raised by its PR's labels and held to what the steward settled; a join rides alone by it. #236 landed docs-only on green CI with no review round, and `oneWay` is gone from burrow |
-| M6 | conaryd runs the landing flow. Its first slice is a simulated GitHub, in memory, that the train and the flow are tested against, with delays, errors, races and stale reads injected and recorded GitHub responses as its fixtures, so a change to either is proved without remi. Then the flow itself, R0 landing before review, and a red trunk bisected to the change that broke it and undone | `steward.py` is deleted; a week of PRs across every repo lands through conaryd, R0 ones with no wait on a reviewer; a deliberately broken landing is found and undone with no Claude job | |
+| M6 | conaryd runs the landing flow. Its first slice is a simulated GitHub, in memory, that the train and the flow are tested against, with delays, errors, races and stale reads injected and recorded GitHub responses as its fixtures, so a change to either is proved without remi. Then the flow itself, R0 landing before review, a red trunk bisected to the change that broke it and undone, and batches (item 9): the work in flight grouped by what it touches, proposed, and gated once | `steward.py` is deleted; a week of PRs across every repo lands through conaryd, R0 ones with no wait on a reviewer, with fewer gate runs than PRs landed, the PRs' own runs counted; a deliberately broken landing is found and undone with no Claude job | |
 | M7 | Setup by an agent: one path from a clone to a working ledger, with the steward or without one, that an agent follows for someone; the box's specifics (Nix, systemd, remi) as configuration on top. The three ties to burrow above, cut: attested evidence and the negative check from a workflow any repository's CI can call, its signer configured rather than fixed, and a PR-event source of Conary's own | A fresh agent session, given this repository, a Linux machine with no Nix and no burrow, and a token, sets up a ledger, records a repo's PRs, lands one on that repo's own attested CI and answers `why` and `undo`, with no person stepping in | |
 | M8 | A written decision on each parked idea, from ledger data | The decisions, and with them the finish line | |
