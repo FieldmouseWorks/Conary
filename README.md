@@ -143,6 +143,14 @@ what came after it opens all the same, for its conflict to be resolved.
     cn undo --actor https://claude.ai/code/session_01...
     cn undo --since 1793750400000 --repo FieldmouseWorks/remi
 
+`cn attest` is a CI job's side of the same evidence: it writes a gate's or
+a negative run's attestation in [the format](docs/ci-attestation.md), and
+with `--sign` signs it with the job's own OIDC token (the job needs
+`id-token: write`).
+
+    cn attest revision <base> <head> --result pass --tree <tree> \
+      --log flake.log --log-artifact flake-log-<uuid> --out "$RUNNER_TEMP/conary" --sign
+
 `cn --help` and each command's `--help` list the rest, environment variables
 included.
 

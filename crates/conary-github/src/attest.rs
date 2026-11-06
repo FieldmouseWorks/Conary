@@ -528,6 +528,8 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+pub mod make;
+
 #[cfg(test)]
 pub(crate) mod testing;
 #[cfg(test)]
