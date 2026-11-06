@@ -57,7 +57,10 @@ The full design, including what's parked and why, is
 Early. It runs on one machine, remi, over one owner's repositories, alongside
 [burrow's steward](https://github.com/FieldmouseWorks/burrow/blob/main/docs/repo-baseline.md#the-pr-flow-the-steward),
 the service that gets PRs reviewed and merges them there today. Conary takes the
-steward's jobs over one at a time.
+steward's jobs over one at a time. So far it records every PR in those
+repositories, runs their merge trains, decides each change's class (which
+ones need a review round, and which a person) and opens undos; the steward
+still asks for the reviews and says when a PR is settled.
 
 Where it's going, what's done and what's next are in the
 [roadmap](docs/DESIGN.md#12-roadmap).
