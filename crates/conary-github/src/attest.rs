@@ -23,11 +23,6 @@ use crate::train::Forge;
 pub const ISSUER: &str = "https://token.actions.githubusercontent.com";
 /// Where GitHub publishes the keys it signs them with.
 pub const KEYS: &str = "https://token.actions.githubusercontent.com/.well-known/jwks";
-/// The one workflow whose jobs' attestations count, at a commit on its
-/// repo's default branch: burrow's shared CI. A branch's copy of it, or a
-/// PR's run of the copy it changes, could sign anything.
-pub const SIGNER_REPO: &str = "FieldmouseWorks/burrow";
-pub const SIGNER_WORKFLOW: &str = ".github/workflows/flake-check.yml";
 /// A token's audience: this, then its statement's SHA-256 in lowercase hex.
 pub const AUDIENCE: &str = "conary-attestation:v1:sha256:";
 /// The artifacts a run keeps its attestations in, each holding the one file.
@@ -36,6 +31,50 @@ pub const FILE: &str = "conary-attestation";
 /// A statement and its token are a few kilobytes; a file far past that
 /// isn't one, and isn't read whole.
 const MOST: u64 = 64 * 1024;
+
+/// The one workflow whose jobs' attestations count, at a commit on its
+/// repo's default branch (`docs/ci-attestation.md`, rule 2): the shared CI
+/// the machine running the train trusts to sign, which it names as
+/// `owner/repo/.github/workflows/file.yml`, as GitHub's `job_workflow_ref`
+/// starts. A branch's copy of it, or a PR's run of the copy it changes,
+/// could sign anything.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Signer {
+    pub repo: Repo,
+    /// Its path in `repo`, under `.github/workflows/`.
+    pub workflow: String,
+}
+
+impl std::str::FromStr for Signer {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, String> {
+        let bad = || format!("{s:?} isn't owner/repo/.github/workflows/FILE");
+        let mut parts = s.splitn(3, '/');
+        let (Some(owner), Some(name), Some(workflow)) = (parts.next(), parts.next(), parts.next())
+        else {
+            return Err(bad());
+        };
+        let file = workflow
+            .strip_prefix(".github/workflows/")
+            .ok_or_else(bad)?;
+        // GitHub runs a workflow only from that directory itself, and ends
+        // its ref at the first `@`.
+        if file.is_empty() || file.contains(['/', '@']) {
+            return Err(bad());
+        }
+        Ok(Self {
+            repo: format!("{owner}/{name}").parse().map_err(|_| bad())?,
+            workflow: workflow.to_owned(),
+        })
+    }
+}
+
+impl std::fmt::Display for Signer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}/{}", self.repo, self.workflow)
+    }
+}
 
 /// A GitHub Actions job, as GitHub records it. A job is a check run of the
 /// same id.
@@ -101,8 +140,9 @@ pub struct Attested {
     pub result: Outcome,
 }
 
-/// The attestation of `run`'s result on `subject`, checked, or why none
-/// counts. Only GitHub not answering is an error. A self-hosted runner
+/// The attestation of `run`'s result on `subject`, signed by `signer`'s
+/// jobs, checked, or why none counts. Only GitHub not answering is an
+/// error. A self-hosted runner
 /// counts as started fresh for its job only with a name that starts with
 /// `fresh`, which only the launcher of such runners gives one; with no
 /// `fresh`, only GitHub's hosted runners count.
@@ -112,6 +152,7 @@ pub fn attested(
     repo: &Repo,
     subject: Subject,
     run: &CheckRun,
+    signer: &Signer,
     fresh: Option<&str>,
 ) -> Result<Result<Attested, String>, ApiError> {
     let full = repo.to_string();
@@ -135,7 +176,7 @@ pub fn attested(
     let mut why = Vec::new();
     for a in kept {
         let checked = unzip(&forge.artifact(&full, a.id)?)
-            .and_then(|file| check(&file, &keys, repo, subject, run));
+            .and_then(|file| check(&file, &keys, repo, subject, run, signer));
         match checked {
             // A runner that took a job before this one, or takes one beside
             // it as its user, could have asked for this token in its name
@@ -145,12 +186,12 @@ pub fn attested(
                 a.name,
                 runner.unwrap_or("a runner GitHub doesn't name")
             )),
-            Ok(claimed) if on_main(forge, source, &claimed.workflow_sha)? => {
+            Ok(claimed) if on_main(forge, source, &signer.repo, &claimed.workflow_sha)? => {
                 return Ok(Ok(claimed.attested));
             }
             Ok(claimed) => why.push(format!(
-                "{}: signed by {SIGNER_WORKFLOW} at {}, which isn't on {SIGNER_REPO}'s default branch",
-                a.name, claimed.workflow_sha
+                "{}: signed by {} at {}, which isn't on {}'s default branch",
+                a.name, signer.workflow, claimed.workflow_sha, signer.repo
             )),
             Err(e) => why.push(format!("{}: {e}", a.name)),
         }
@@ -160,12 +201,18 @@ pub fn attested(
 
 /// Whether a commit of the signer's repo is on its default branch: the tip,
 /// or behind it.
-fn on_main(forge: &dyn Forge, source: &dyn Source, sha: &str) -> Result<bool, ApiError> {
-    let trunk = forge.default_branch(SIGNER_REPO)?;
-    let Some(tip) = forge.branch(SIGNER_REPO, &trunk)? else {
+fn on_main(
+    forge: &dyn Forge,
+    source: &dyn Source,
+    repo: &Repo,
+    sha: &str,
+) -> Result<bool, ApiError> {
+    let repo = repo.to_string();
+    let trunk = forge.default_branch(&repo)?;
+    let Some(tip) = forge.branch(&repo, &trunk)? else {
         return Ok(false);
     };
-    Ok(tip == sha || source.merge_base(SIGNER_REPO, sha, &tip)? == sha)
+    Ok(tip == sha || source.merge_base(&repo, sha, &tip)? == sha)
 }
 
 /// The one file of an attestation's artifact.
@@ -219,7 +266,7 @@ struct Revision {
 }
 
 /// Checks an attestation's file, the statement then its token, as one of
-/// `run` on `subject`: every rule of `docs/ci-attestation.md` but the
+/// `run` on `subject`, by `signer`: every rule of `docs/ci-attestation.md` but the
 /// signer's commit being on its default branch and a self-hosted runner's
 /// name, which take asking GitHub.
 fn check(
@@ -228,6 +275,7 @@ fn check(
     repo: &Repo,
     subject: Subject,
     run: &CheckRun,
+    signer: &Signer,
 ) -> Result<Claimed, String> {
     let file = std::str::from_utf8(file).map_err(|_| "it isn't UTF-8")?;
     let (statement, token) = file
@@ -253,7 +301,7 @@ fn check(
     if !said("repository").eq_ignore_ascii_case(&repo.to_string()) {
         return Err(format!("its token is {}'s", said("repository")));
     }
-    let signer = format!("{SIGNER_REPO}/{SIGNER_WORKFLOW}@");
+    let signer = format!("{signer}@");
     let workflow = said("job_workflow_ref");
     // Anyone's text: cut only where a character ends.
     let signed = workflow

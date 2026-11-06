@@ -11,6 +11,7 @@ use conary_core::op::{Left, Repo};
 use std::path::PathBuf;
 
 use conary_core::{CandidateId, ChangeId, Policy};
+use conary_github::attest::Signer;
 use conary_github::train::{self, Joined, Leaving, Negatives, Now, Settings, Stepped};
 
 use crate::{Cli, GithubArgs, Result, read, word, write, write_notes};
@@ -47,12 +48,21 @@ pub enum TrainCommand {
         /// candidate's base.
         #[arg(long, env = "CONARY_POLICY")]
         policy: PathBuf,
-        /// The check run that runs a PR's new tests on its base's code
-        /// (burrow's shared CI's `negative`, under its caller's job). A PR
-        /// joins only once that run's attestation holds for its revision
-        /// and says they failed there, or that it adds no test to code.
-        #[arg(long, value_name = "CHECK", value_parser = clap::builder::NonEmptyStringValueParser::new())]
+        /// The check run that runs a PR's new tests on its base's code (the
+        /// shared CI's `negative`, under its caller's job). A PR joins only
+        /// once that run's attestation, by the signer workflow, holds for
+        /// its revision and says they failed there, or that it adds no test
+        /// to code.
+        #[arg(long, value_name = "CHECK", requires = "signer", value_parser = clap::builder::NonEmptyStringValueParser::new())]
         negative: Option<String>,
+        /// As for a step: the workflow whose attestation of a negative
+        /// counts.
+        #[arg(
+            long = "signer-workflow",
+            env = "CONARY_SIGNER_WORKFLOW",
+            value_name = "OWNER/REPO/PATH"
+        )]
+        signer: Option<Signer>,
         /// As for a step: the runners a negative's attestation counts from,
         /// besides GitHub's own.
         #[arg(long = "fresh-runners", env = "CONARY_FRESH_RUNNERS", value_name = "PREFIX", value_parser = clap::builder::NonEmptyStringValueParser::new())]
@@ -91,10 +101,21 @@ pub enum TrainCommand {
         size: u64,
         /// A check the gate waits for before it can be green, even before it
         /// reports, whose pass counts only with its job's attestation: the
-        /// repo's gate, as burrow's shared CI runs it. Repeat for each; a
-        /// step needs one.
+        /// repo's gate, as its shared CI runs it. Repeat for each; a step
+        /// needs one.
         #[arg(long = "require", value_name = "CHECK")]
         require: Vec<String>,
+        /// The workflow whose jobs' attestations count, as
+        /// `owner/repo/.github/workflows/FILE` (as `gh attestation verify
+        /// --signer-workflow` takes it), at a commit on that repo's default
+        /// branch: the shared CI the machine trusts to sign. A machine
+        /// setting, like the fresh runners.
+        #[arg(
+            long = "signer-workflow",
+            env = "CONARY_SIGNER_WORKFLOW",
+            value_name = "OWNER/REPO/PATH"
+        )]
+        signer: Signer,
         /// What the name of each self-hosted runner started fresh for one
         /// job starts with, as the launcher of such runners names them. A
         /// required pass counts only from such a runner or one of GitHub's
@@ -160,14 +181,20 @@ pub fn run(cli: &Cli, command: &TrainCommand) -> Result<()> {
             raised,
             policy,
             negative,
+            signer,
             fresh,
             ..
         } => {
             let policy = Policy::load(policy)?;
-            let negatives = negative.as_ref().map(|check| Negatives {
-                check: check.clone(),
-                fresh: fresh.clone(),
-            });
+            let negatives = match (negative, signer) {
+                (Some(check), Some(signer)) => Some(Negatives {
+                    check: check.clone(),
+                    signer: signer.clone(),
+                    fresh: fresh.clone(),
+                }),
+                (Some(_), None) => unreachable!("--negative requires --signer-workflow"),
+                (None, _) => None,
+            };
             train::join(
                 store,
                 &api,
@@ -233,12 +260,14 @@ pub fn run(cli: &Cli, command: &TrainCommand) -> Result<()> {
         TrainCommand::Step {
             size,
             require,
+            signer,
             fresh,
             ..
         } => {
             let settings = Settings {
                 size: usize::try_from(*size)?,
                 require: require.clone(),
+                signer: signer.clone(),
                 fresh: fresh.clone(),
             };
             train::step(store, &api, &api, &config, repo, &settings)
@@ -425,4 +454,60 @@ fn human_show(ledger: &Ledger, repo: &Repo) -> String {
         lines.push(format!("  {} {state:<8} {}", c.id, list(&prs)));
     }
     lines.join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    use crate::Cli;
+
+    // Whose CI signs evidence is the machine's to say too, with no default:
+    // a step can't count a pass without it, nor a join a negative.
+    #[test]
+    fn the_signer_workflow_is_a_machine_setting_that_a_step_and_a_negative_need() {
+        use clap::CommandFactory;
+        let cli = Cli::command();
+        let train = cli.find_subcommand("train").expect("cn train");
+        for name in ["step", "join"] {
+            let signer = train
+                .find_subcommand(name)
+                .and_then(|c| {
+                    c.get_arguments()
+                        .find(|a| a.get_long() == Some("signer-workflow"))
+                })
+                .unwrap_or_else(|| panic!("cn train {name} --signer-workflow"));
+            assert_eq!(
+                signer.get_env().and_then(|e| e.to_str()),
+                Some("CONARY_SIGNER_WORKFLOW"),
+                "{name}"
+            );
+            assert!(signer.get_default_values().is_empty(), "{name}");
+        }
+        let parse = |args: &[&str]| {
+            Cli::try_parse_from(
+                ["cn", "--ledger", "/l", "train"]
+                    .iter()
+                    .chain(args)
+                    .chain(&["--anchor-repo", "o/a"]),
+            )
+            .map(|_| ())
+            .map_err(|e| e.kind())
+        };
+        let signer = ["--signer-workflow", "o/ci/.github/workflows/g.yml"];
+        let step = ["step", "o/r", "--require", "check"];
+        assert_eq!(
+            parse(&step),
+            Err(clap::error::ErrorKind::MissingRequiredArgument)
+        );
+        assert_eq!(parse(&[&step[..], &signer].concat()), Ok(()));
+        let join = ["join", "o/r", "1", "--head", "h", "--policy", "/p"];
+        assert_eq!(parse(&join), Ok(()));
+        let negative = [&join[..], &["--negative", "check / negative"]].concat();
+        assert_eq!(
+            parse(&negative),
+            Err(clap::error::ErrorKind::MissingRequiredArgument)
+        );
+        assert_eq!(parse(&[&negative[..], &signer].concat()), Ok(()));
+    }
 }

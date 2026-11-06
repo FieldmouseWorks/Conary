@@ -1,7 +1,8 @@
 use serde_json::{Value, json};
 
 use super::testing::{
-    KID, SIGNER_SHA, claims, file, key, negative_statement, statement, token, token_with, zipped,
+    KID, SIGNER, SIGNER_SHA, claims, file, key, negative_statement, signer, statement, token,
+    token_with, zipped,
 };
 use super::*;
 use crate::api::CheckSuite;
@@ -42,7 +43,14 @@ fn honest() -> (String, Value) {
 
 /// Checks a file as the candidate's passing check run's attestation.
 fn checked(file: &str) -> Result<Claimed, String> {
-    check(file.as_bytes(), &[key()], &repo(), PUSH, &run("success"))
+    check(
+        file.as_bytes(),
+        &[key()],
+        &repo(),
+        PUSH,
+        &run("success"),
+        &signer(),
+    )
 }
 
 /// The honest attestation, with `change` made to its claims first: the
@@ -75,9 +83,7 @@ fn the_jobs_own_attestation_counts_and_is_kept_as_it_was_checked() {
     with_claims(|c| c["aud"] = json!([c["aud"].clone()])).unwrap();
     // GitHub's spelling of the signer's repo isn't the only one.
     with_claims(|c| {
-        c["job_workflow_ref"] = json!(format!(
-            "fieldmouseworks/BURROW/{SIGNER_WORKFLOW}@refs/heads/main"
-        ))
+        c["job_workflow_ref"] = json!("acme/CI/.github/workflows/gate.yml@refs/heads/main")
     })
     .unwrap();
     with_claims(|c| c["repository"] = json!("fieldmouseworks/remi")).unwrap();
@@ -129,6 +135,7 @@ fn a_token_github_didnt_sign_doesnt_count() {
             &repo(),
             PUSH,
             &run("success"),
+            &signer(),
         )
         .unwrap_err();
         assert!(why.contains("isn't one GitHub publishes"), "{why}");
@@ -166,15 +173,17 @@ fn a_token_counts_only_for_its_own_statement_run_and_commit() {
         |c| c["repository"] = json!("FieldmouseWorks/burrow"),
         "FieldmouseWorks/burrow's",
     );
-    // Asked for by any workflow but burrow's shared CI: the repo's own,
-    // which a candidate can change, or one that only starts like it. The
+    // Asked for by any workflow but the one the machine names: the repo's
+    // own, which a candidate can change, another shared CI, or one that
+    // only starts like it. The
     // token's text is anyone's: one as long as the signer's name, shorter,
     // or with a character that crosses where it ends, is refused too.
-    let signer = format!("{SIGNER_REPO}/{SIGNER_WORKFLOW}");
+    let signer = SIGNER.to_owned();
     for workflow in [
         "FieldmouseWorks/remi/.github/workflows/flake.yml@refs/heads/conary/train/x".into(),
-        "FieldmouseWorks/burrow/.github/workflows/flake-check.yml.old@refs/heads/main".into(),
-        "FieldmouseWorks/burrow-fork/.github/workflows/flake-check.yml@refs/heads/main".into(),
+        "FieldmouseWorks/burrow/.github/workflows/flake-check.yml@refs/heads/main".into(),
+        "Acme/ci/.github/workflows/gate.yml.old@refs/heads/main".into(),
+        "Acme/ci-fork/.github/workflows/gate.yml@refs/heads/main".into(),
         String::new(),
         signer.clone(),
         format!("{}x@", &signer[..signer.len() - 1]),
@@ -207,6 +216,7 @@ fn a_statement_counts_only_for_a_pass_on_the_candidates_tree_with_nothing_skippe
             &repo(),
             PUSH,
             &run,
+            &signer(),
         )
     };
     let honest = statement(COMMIT, TREE, "pass");
@@ -255,7 +265,8 @@ fn a_file_is_its_statement_and_then_its_token() {
             &[key()],
             &repo(),
             PUSH,
-            &run("success")
+            &run("success"),
+            &signer()
         )
         .is_err()
     );
@@ -284,7 +295,14 @@ const PR: Subject = Subject::Negative {
 fn negative_says(s: &str, run: &CheckRun) -> Result<Claimed, String> {
     let mut c = claims("FieldmouseWorks/remi", &"3".repeat(40), RUN, s);
     c["event_name"] = json!("pull_request");
-    check(file(s, &token(&c)).as_bytes(), &[key()], &repo(), PR, run)
+    check(
+        file(s, &token(&c)).as_bytes(),
+        &[key()],
+        &repo(),
+        PR,
+        run,
+        &signer(),
+    )
 }
 
 #[test]
@@ -350,6 +368,7 @@ fn a_negative_counts_only_for_its_own_revision_and_never_as_a_push() {
         &repo(),
         PUSH,
         &run("success"),
+        &signer(),
     )
     .unwrap_err();
     assert!(as_push.contains("commit's subject"), "{as_push}");
@@ -362,7 +381,51 @@ fn a_negative_counts_only_for_its_own_revision_and_never_as_a_push() {
         &repo(),
         PR,
         &run("success"),
+        &signer(),
     )
     .unwrap_err();
     assert!(wrong_run.contains("check run"), "{wrong_run}");
+}
+
+#[test]
+fn a_signer_is_a_workflow_of_a_repo_and_counts_only_where_the_machine_names_it() {
+    let named: Signer = SIGNER.parse().unwrap();
+    assert_eq!(named.repo.to_string(), "Acme/ci");
+    assert_eq!(named.workflow, ".github/workflows/gate.yml");
+    assert_eq!(named.to_string(), SIGNER);
+    for bad in [
+        "",
+        "Acme/ci",
+        "Acme/ci/gate.yml",
+        "Acme/ci/.github/workflows/",
+        "Acme/ci/.github/workflows/sub/gate.yml",
+        "Acme/ci/.github/workflows/gate.yml@refs/heads/main",
+        "/ci/.github/workflows/gate.yml",
+        "Acme//.github/workflows/gate.yml",
+    ] {
+        assert!(bad.parse::<Signer>().is_err(), "{bad:?}");
+    }
+    // The same job's token, by Acme's CI: it counts where the machine names
+    // that workflow, and nowhere else, burrow's shared CI included.
+    let (s, c) = honest();
+    let f = file(&s, &token(&c));
+    let under = |signer: &str| {
+        check(
+            f.as_bytes(),
+            &[key()],
+            &repo(),
+            PUSH,
+            &run("success"),
+            &signer.parse().unwrap(),
+        )
+    };
+    under(SIGNER).unwrap();
+    for other in [
+        "FieldmouseWorks/burrow/.github/workflows/flake-check.yml",
+        "Acme/ci/.github/workflows/other.yml",
+        "Acme/other/.github/workflows/gate.yml",
+    ] {
+        let why = under(other).unwrap_err();
+        assert!(why.contains("asked for by"), "{other}: {why}");
+    }
 }
