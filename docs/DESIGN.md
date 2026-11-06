@@ -745,7 +745,11 @@ toward it or fixes something.
    couldn't touch, and every new test failed on the old code first.
 5. Any agent, from anywhere, can ask why a line is the way it is, and undo
    any change, session or time range.
-6. Each parked idea in section 10 has a written decision, made from ledger
+6. An agent that has never seen Conary can set it up for someone from this
+   repository alone, and use it: one documented path from a clone to a
+   working ledger, every command and call describing itself (`--help`, the
+   MCP tools' schemas), and every refusal saying what to do next.
+7. Each parked idea in section 10 has a written decision, made from ledger
    data.
 
 **What gets slotted in.** Work between milestones is a fix, a slice of the
@@ -767,4 +771,5 @@ it pointed at the finish line:
 | M4 | `undo` by change, session and time, through the landing flow, and `at` | A deliberately bad session's changes in two repos are reverted by `undo --actor` and land with no person involved | Done ([#173](https://github.com/FieldmouseWorks/Conary/issues/173)) |
 | M5 | Class policy in Conary, from the paths and the kind of edit (section 4.4); the steward reads each change's class and the evidence it needs from conaryd | `oneWay` is gone from burrow's autoland config, and a docs-only change lands on green CI with no review round | In progress ([#226](https://github.com/FieldmouseWorks/Conary/issues/226)): `cn class` records each revision's class |
 | M6 | conaryd runs the landing flow. Its first slice is a simulated GitHub, in memory, that the train and the flow are tested against, with delays, errors, races and stale reads injected and recorded GitHub responses as its fixtures, so a change to either is proved without remi. Then the flow itself, R0 landing before review, and a red trunk bisected to the change that broke it and undone | `steward.py` is deleted; a week of PRs across every repo lands through conaryd, R0 ones with no wait on a reviewer; a deliberately broken landing is found and undone with no Claude job | |
-| M7 | A written decision on each parked idea, from ledger data | The decisions, and with them the finish line | |
+| M7 | Setup by an agent: one path from a clone to a working ledger, with the steward or without one, that an agent follows for someone; the box's specifics (Nix, systemd, remi) as configuration on top | A fresh agent session, given this repository, a machine and a token, sets up a ledger, records a repo's PRs and answers `why` and `undo`, with no person stepping in | |
+| M8 | A written decision on each parked idea, from ledger data | The decisions, and with them the finish line | |
