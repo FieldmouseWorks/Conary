@@ -1,11 +1,12 @@
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
+use std::time::Duration;
 
 use conary_core::op::{Outcome, Repo};
 use serde_json::json;
 
-use super::*;
 use crate::api::CheckRun;
+use crate::attest::make::*;
 use crate::attest::testing::{claims, key, signer, token as signed};
 use crate::attest::{Subject, check};
 

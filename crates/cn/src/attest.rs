@@ -266,6 +266,3 @@ fn make(claim: &Claim, out: &Out, request: Option<Request>) -> Result<Made> {
         audience,
     })
 }
-
-#[cfg(test)]
-mod tests;

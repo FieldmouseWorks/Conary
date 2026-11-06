@@ -317,7 +317,11 @@ pub fn token(request: &Request, statement: &str) -> Result<String, ApiError> {
     token_waiting(request, statement, Duration::from_secs(1))
 }
 
-fn token_waiting(request: &Request, statement: &str, first: Duration) -> Result<String, ApiError> {
+pub(super) fn token_waiting(
+    request: &Request,
+    statement: &str,
+    first: Duration,
+) -> Result<String, ApiError> {
     let agent = ureq::Agent::new_with_config(
         ureq::Agent::config_builder()
             .timeout_global(Some(Duration::from_secs(30)))
@@ -367,6 +371,3 @@ fn token_waiting(request: &Request, statement: &str, first: Duration) -> Result<
         }
     }
 }
-
-#[cfg(test)]
-mod tests;
