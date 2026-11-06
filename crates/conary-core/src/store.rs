@@ -94,6 +94,7 @@ mod tests {
     use crate::ledger::Status;
     use crate::log;
     use crate::op::{Actor, ActorKind, Attest, Authority, CheckKind, Outcome, Repo};
+    use crate::policy::Class;
 
     fn key() -> SigningKey {
         SigningKey::from_bytes(&[3; 32])
@@ -234,6 +235,52 @@ mod tests {
         assert_eq!(kept, [None, Some(attest)]);
         // A negative run that found no test to run says so in its own word.
         assert_eq!(serde_json::to_value(Outcome::None).unwrap(), "none");
+    }
+
+    /// A revision's class is recorded once for a policy's word on it, and a
+    /// later word (another policy, say) supersedes it; a revision the
+    /// change doesn't have is refused.
+    #[test]
+    fn a_revisions_class_is_recorded_once_and_the_latest_counts() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(Lock::take(dir.path()).unwrap(), key(), None).unwrap();
+        let change = observe(&mut store, 5);
+        store
+            .record(Body::Revision {
+                change,
+                base: commit('a'),
+                head: commit('b'),
+            })
+            .unwrap();
+        let revision = RevisionId::new(&commit('a'), &commit('b'));
+        let classify = |revision, class, policy: &str| Body::Classify {
+            change,
+            revision,
+            class,
+            because: (class == Class::R2).then(|| "CODEOWNERS".into()),
+            docs: false,
+            policy: policy.into(),
+        };
+        store.record(classify(revision, Class::R0, "p1")).unwrap();
+        assert!(matches!(
+            store.record(classify(revision, Class::R0, "p1")),
+            Err(StoreError::Invalid(Invalid::Duplicate))
+        ));
+        let elsewhere = RevisionId::new(&commit('a'), &commit('c'));
+        assert!(matches!(
+            store.record(classify(elsewhere, Class::R0, "p1")),
+            Err(StoreError::Invalid(Invalid::UnknownRevision(_)))
+        ));
+        store.record(classify(revision, Class::R2, "p2")).unwrap();
+        drop(store);
+        let ops = log::read(dir.path(), &key().verifying_key(), None).unwrap();
+        let ledger = Ledger::replay(&ops).unwrap();
+        let c = ledger.change(change).unwrap();
+        let now = c.class_of(revision).unwrap();
+        assert_eq!((now.class, now.policy.as_str()), (Class::R2, "p2"));
+        assert_eq!(now.because.as_deref(), Some("CODEOWNERS"));
+        assert_eq!(c.classes.len(), 2);
+        assert!(c.class_of(elsewhere).is_none());
     }
 
     #[test]

@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::id::{ChangeId, CommitId, RevisionId};
 use crate::ledger::{Change, Landing, Ledger};
 use crate::op::{Actor, Authority, CheckKind, Outcome, Repo};
+use crate::policy::Class;
 
 /// The ref the notes are kept on, in each change's own repository.
 pub const REF: &str = "refs/notes/conary";
@@ -29,6 +30,9 @@ pub struct Note {
     pub summary: Option<String>,
     pub task: Option<String>,
     pub author: Actor,
+    /// The landed revision's class, when the policy was asked for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub class: Option<Class>,
     pub landing: NoteLanding,
     /// The landed revision's evidence, as the ledger holds it: recorded,
     /// not counted.
@@ -86,6 +90,7 @@ impl Note {
             summary: intent.map(|i| text(&i.summary)),
             task,
             author,
+            class: change.class_of(landing.revision).map(|c| c.class),
             landing: NoteLanding {
                 revision: landing.revision,
                 before: landing.before.clone(),
@@ -211,6 +216,14 @@ mod tests {
             source: source.into(),
             attest: None,
         };
+        let classify = |revision, class| Body::Classify {
+            change,
+            revision,
+            class,
+            because: None,
+            docs: false,
+            policy: "p".into(),
+        };
         let run = "https://github.com/o/r/runs/1";
         for body in [
             Body::Observe {
@@ -242,6 +255,8 @@ mod tests {
             },
             evidence(landed, "flake", run),
             evidence(landed, "status", "https://claude.ai/code/session_z"),
+            classify(old, Class::R2),
+            classify(landed, Class::R1),
             Body::Land {
                 change,
                 revision: landed,
@@ -270,7 +285,9 @@ mod tests {
         assert_eq!(note.landing.after, c("d"));
         let checks: Vec<_> = note.evidence.iter().map(|e| e.check.as_str()).collect();
         assert_eq!(checks, ["flake", "status"]);
+        assert_eq!(note.class, Some(Class::R1));
         let text = note.text();
+        assert!(text.contains("\"class\": \"R1\""), "{text}");
         assert!(!text.contains("prompt-shaped"), "{text}");
         assert_eq!(Note::parse(&text).unwrap(), note);
     }

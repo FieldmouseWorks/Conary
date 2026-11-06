@@ -147,6 +147,7 @@ fn note(before: &str, after: &str) -> Note {
             login: "TusanHomichi".into(),
             session: None,
         },
+        class: None,
         landing: NoteLanding {
             revision: RevisionId::new(&c(before), &c(after)),
             before: before.parse().unwrap(),

@@ -129,6 +129,10 @@ mod tests {
             self.0.set(self.0.get() + 1);
             Ok(a.replace('a', "c"))
         }
+
+        fn files(&self, _: &str, _: &str, _: &str) -> Result<conary_core::policy::Paths, ApiError> {
+            unimplemented!("nothing here classifies")
+        }
     }
 
     const REPO: &str = "FieldmouseWorks/burrow";

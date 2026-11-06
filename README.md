@@ -95,6 +95,14 @@ that loses ops is refused. It prints JSON; add `--human` for people.
 Each write also brings the repository's notes up to date, and `cn why` in a
 clone with no ledger beside it answers from them ([notes](docs/notes.md)).
 
+`cn class` says what a PR's class is at a head, and whether it's
+documentation only, so needs green CI and no review round
+([class](docs/DESIGN.md#44-class)). The policy is a JSON file
+(`CONARY_POLICY`) the machine gives it; the class is recorded once per
+revision and policy, so asking again costs no more than reading the PR.
+
+    cn class FieldmouseWorks/remi 174 --head <sha> --human
+
 `cn train` runs a repository's train ([the
 train](docs/DESIGN.md#47-the-train)) for the steward, as its App: `join` puts
 a settled PR in at its head, and `step`, on each of the repository's events,

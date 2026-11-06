@@ -367,6 +367,10 @@ impl Source for Hub {
     fn merge_base(&self, _: &str, a: &str, _: &str) -> Result<String, ApiError> {
         Ok(a.into())
     }
+
+    fn files(&self, _: &str, _: &str, _: &str) -> Result<conary_core::policy::Paths, ApiError> {
+        unimplemented!("nothing here classifies")
+    }
 }
 
 fn store(dir: &tempfile::TempDir) -> Store {

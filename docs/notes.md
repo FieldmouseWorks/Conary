@@ -35,6 +35,7 @@ Each note is one JSON document. `conary` names the format:
   "summary": "<the PR's title>",
   "task": "<owner/name#N, or a thread's link>",
   "author": { "kind": "agent", "login": "<login>", "session": "<link>" },
+  "class": "R0",
   "landing": {
     "revision": "<revision id>",
     "before": "<trunk before>",
@@ -49,8 +50,9 @@ Each note is one JSON document. `conary` names the format:
 ```
 
 `evidence` is the landed revision's, as the ledger records it: recorded, not
-counted ([section 4.3](DESIGN.md#43-evidence)). The class joins the note when
-the ledger has one (M5).
+counted ([section 4.3](DESIGN.md#43-evidence)). `class` is the landed
+revision's (`"R0"`, `"R1"` or `"R2"`, [section 4.4](DESIGN.md#44-class)),
+and the field is left out when the policy was never asked for it.
 
 ## What a note leaves out
 

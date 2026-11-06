@@ -4,6 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::id::{CandidateId, ChangeId, CommitId, OpId, RevisionId, TreeId};
+use crate::policy::Class;
 
 /// A GitHub repository, as `owner/name`. GitHub ignores case in both, so two
 /// spellings of one repository are equal: an op keeps the spelling it was
@@ -225,6 +226,18 @@ pub enum Body {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         attest: Option<Attest>,
     },
+    /// What the class policy said of one revision of the change (design
+    /// 4.4): its class, what made it R2, and whether every path it touches
+    /// is documentation. `policy` is the BLAKE3 hash of the policy file
+    /// that said it. A later one for the same revision supersedes it.
+    Classify {
+        change: ChangeId,
+        revision: RevisionId,
+        class: Class,
+        because: Option<String>,
+        docs: bool,
+        policy: String,
+    },
     /// Trunk moved to `after` by landing this revision of the change.
     Land {
         change: ChangeId,
@@ -318,6 +331,7 @@ impl Body {
             | Self::Intent { change, .. }
             | Self::Revision { change, .. }
             | Self::Evidence { change, .. }
+            | Self::Classify { change, .. }
             | Self::Land { change, .. }
             | Self::Close { change }
             | Self::Reopen { change }
