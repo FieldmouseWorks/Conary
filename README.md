@@ -105,7 +105,8 @@ revision and policy, so asking again costs no more than reading the PR.
 
 `cn train` runs a repository's train ([the
 train](docs/DESIGN.md#47-the-train)) for the steward, as its App: `join` puts
-a settled PR in at its head, and `step`, on each of the repository's events,
+a settled PR in at its head, classed by the same policy (an R2 one rides
+alone), and `step`, on each of the repository's events,
 builds the next candidate, reads its gate, and lands a green one's PRs in
 order. `--require` names the checks the gate waits for even before they
 report, and a step needs one: jobs of burrow's shared CI, whose passes count

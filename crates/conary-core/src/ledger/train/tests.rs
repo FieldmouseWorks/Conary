@@ -20,11 +20,21 @@ fn tree(c: char) -> TreeId {
 struct Book {
     ledger: Ledger,
     n: u64,
+    /// Every op applied, in order.
+    ops: Vec<Op>,
 }
 
 impl Book {
     fn record(&mut self, body: Body) -> Result<(), Invalid> {
-        self.ledger.check(&body)?;
+        self.ledger.admit(&body)?;
+        self.write(body);
+        Ok(())
+    }
+
+    /// Applies an op held only to [`Ledger::check`], as a log written
+    /// before [`Ledger::admit`]'s rules may hold it.
+    fn write(&mut self, body: Body) {
+        self.ledger.check(&body).expect("the op applies");
         self.n += 1;
         let op = Op {
             id: OpId::of(&self.n.to_le_bytes()),
@@ -35,7 +45,20 @@ impl Book {
             },
         };
         self.ledger.apply(&op);
-        Ok(())
+        self.ops.push(op);
+    }
+
+    /// The policy's word on the change's revision now.
+    fn classify(&mut self, change: ChangeId, class: Class) {
+        let revision = self.current(change);
+        self.ok(Body::Classify {
+            change,
+            revision,
+            class,
+            because: (class == Class::R2).then(|| "CODEOWNERS".into()),
+            docs: false,
+            policy: format!("{class:?}"),
+        });
     }
 
     fn ok(&mut self, body: Body) {
@@ -816,66 +839,6 @@ fn a_refused_change_joins_again_once_trunk_moves() {
 }
 
 #[test]
-fn a_change_that_joined_alone_rides_in_a_candidate_of_its_own() {
-    let mut b = Book::default();
-    let a = b.change(1, 'a');
-    let r = b.change(2, 'b');
-    let c = b.change(3, 'c');
-    b.join(a);
-    b.join_alone(r);
-    b.join(c);
-    // The changes before it go without it.
-    assert_eq!(b.ledger.next(&repo(), 8).unwrap().changes, [b.member(a)]);
-    let with = b.candidate_of(&Plan {
-        changes: vec![b.member(a), b.member(r)],
-        of: None,
-    });
-    assert_eq!(b.record(with), Err(Invalid::OutOfTurn));
-    let first = b.build(8);
-    assert!(!b.ledger.candidate(first).unwrap().alone);
-    b.verdict(first, Verdict::Green);
-    b.land(a, 'd').unwrap();
-
-    // Then it goes by itself, and the changes after it wait for it.
-    assert_eq!(b.ledger.next(&repo(), 8).unwrap().changes, [b.member(r)]);
-    let with = b.candidate_of(&Plan {
-        changes: vec![b.member(r), b.member(c)],
-        of: None,
-    });
-    assert_eq!(b.record(with), Err(Invalid::OutOfTurn));
-    let alone = b.build(8);
-    assert!(b.ledger.candidate(alone).unwrap().alone);
-    b.verdict(alone, Verdict::Green);
-    b.land(r, 'e').unwrap();
-    assert_eq!(b.ledger.next(&repo(), 8).unwrap().changes, [b.member(c)]);
-}
-
-#[test]
-fn an_alone_candidate_lands_through_the_train_only_onto_its_base() {
-    let mut b = Book::default();
-    // Trunk moved after it was built: that landing isn't the candidate's,
-    // and it stops there.
-    let r = b.change(1, 'a');
-    b.join_alone(r);
-    let id = b.build(8);
-    b.verdict(id, Verdict::Green);
-    b.land_on(r, '9', 'd').unwrap();
-    assert_eq!(b.landing(r), None);
-    assert_eq!(
-        b.ledger.candidate(id).unwrap().state,
-        State::Broken { by: r, green: true }
-    );
-
-    let s = b.change(2, 'b');
-    b.join_alone(s);
-    let id = b.build(8);
-    b.verdict(id, Verdict::Green);
-    b.land(s, 'e').unwrap();
-    assert_eq!(b.landing(s), Some(id));
-    assert_eq!(b.ledger.candidate(id).unwrap().state, State::Landed);
-}
-
-#[test]
 fn a_green_candidate_can_be_dropped_only_alone_or_on_passes_nobody_attested() {
     let mut b = Book::default();
     let a = b.change(1, 'a');
@@ -916,6 +879,7 @@ fn a_green_candidate_can_be_dropped_only_alone_or_on_passes_nobody_attested() {
     assert!(!b.ledger.train(&repo()).unwrap().alone(r));
 }
 
+mod alone;
 mod land;
 
 #[test]

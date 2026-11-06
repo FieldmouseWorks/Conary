@@ -203,6 +203,8 @@ pub enum Invalid {
     UndoCycle(ChangeId),
     /// That change isn't one of the ones the undo was asked for.
     NotAsked(ChangeId),
+    /// A join below its revision's class: an R2 one that doesn't ride alone.
+    BelowClass(RevisionId),
 }
 
 impl std::fmt::Display for Invalid {
@@ -235,6 +237,7 @@ impl std::fmt::Display for Invalid {
                 write!(f, "change {change} already has an undo, {by}")
             }
             Self::NotAsked(id) => write!(f, "change {id} isn't what the undo was asked for"),
+            Self::BelowClass(id) => write!(f, "revision {id} is R2, so it rides alone"),
             Self::UndoCycle(id) => {
                 write!(
                     f,
@@ -305,6 +308,21 @@ impl Ledger {
 
     fn existing(&self, id: ChangeId) -> Result<&Change, Invalid> {
         self.changes.get(&id).ok_or(Invalid::UnknownChange(id))
+    }
+
+    /// Whether `body` can be recorded now: [`Ledger::check`], and the rules
+    /// a new op is held to that a signed log may hold older ops from before
+    /// (which [`Ledger::replay`] still applies, as they were written).
+    pub fn admit(&self, body: &Body) -> Result<(), Invalid> {
+        self.check(body)?;
+        match body {
+            Body::Join {
+                change,
+                revision,
+                alone,
+            } => self.admit_join(*change, *revision, *alone),
+            _ => Ok(()),
+        }
     }
 
     /// Whether `body` can be applied now.

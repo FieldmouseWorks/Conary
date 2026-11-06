@@ -25,7 +25,7 @@ fn join_proven(store: &mut Store, hub: &Hub, pr: u64) -> Joined {
         &repo(),
         pr,
         &head(pr),
-        false,
+        &policy(),
         Some(&negatives()),
     )
     .unwrap()
@@ -165,7 +165,7 @@ fn a_pr_joins_once_its_new_tests_failed_on_its_base_and_its_job_attests_it() {
         &repo(),
         3,
         &head(3),
-        false,
+        &policy(),
         Some(&other),
     )
     .unwrap();
@@ -190,7 +190,7 @@ fn a_pr_that_adds_no_test_to_code_joins_on_its_attested_word_alone() {
     let mut store = super::store(&dir);
     ran(&mut hub, 4, 80, None);
     assert_eq!(
-        try_join(&mut store, &hub, 4, &head(4), false).unwrap(),
+        try_join(&mut store, &hub, 4, &head(4)).unwrap(),
         Joined::Joined
     );
     assert!(negatives_of(&store, 4).is_empty());

@@ -15,11 +15,12 @@ use serde::Serialize;
 use conary_core::ledger::{Candidate, Held, Invalid, State};
 use conary_core::op::{Body, Left, Member, Repo, Verdict};
 use conary_core::store::StoreError;
-use conary_core::{CandidateId, ChangeId, CommitId, Store, TreeId};
+use conary_core::{CandidateId, ChangeId, Class, CommitId, Policy, Store, TreeId};
 
 use crate::api::{ApiError, Source};
 use crate::attest::Actions;
 use crate::branches::{BRANCHES, Branches, Merged};
+use crate::class::{self, ClassError};
 use crate::ingest::{self, Config, IngestError};
 
 mod gate;
@@ -166,6 +167,17 @@ impl From<IngestError> for TrainError {
     }
 }
 
+impl From<ClassError> for TrainError {
+    fn from(e: ClassError) -> Self {
+        match e {
+            ClassError::Api(e) => Self::Api(e),
+            ClassError::Ingest(e) => Self::Ingest(e),
+            ClassError::Store(e) => Self::Store(e),
+            ClassError::Moved { pr, head } => Self::Moved { pr, head },
+        }
+    }
+}
+
 /// Records `body`; true when it was new, false when the ledger held it.
 fn record(store: &mut Store, body: Body) -> Result<bool, TrainError> {
     match store.record(body) {
@@ -201,9 +213,10 @@ pub enum Joined {
 
 /// Puts a PR in its repo's train at `head`, the head everything but the
 /// gate said can land, once the ledger holds the PR as GitHub shows it now
-/// and that is its head. `alone`, it rides in a candidate of its own, which
-/// lands only while trunk is still its base: an R2 change. With
-/// `negatives`, only once its revision's negative counts ([`Negatives`]).
+/// and that is its head. Its class is the policy's ([`class::of`], which
+/// records it): an R2 change rides alone, in a candidate of its own, which
+/// lands only while trunk is still its base. With `negatives`, only once
+/// its revision's negative counts ([`Negatives`]).
 /// Its head's train status goes to pending first, so a success left from an
 /// earlier time in the train can't let anything merge it.
 #[allow(clippy::too_many_arguments)]
@@ -215,7 +228,7 @@ pub fn join(
     repo: &Repo,
     pr: u64,
     head: &str,
-    alone: bool,
+    policy: &Policy,
     negatives: Option<&Negatives>,
 ) -> Result<Joined, TrainError> {
     let (got, pull) = ingest::pulled(store, source, config, repo, pr)?;
@@ -233,14 +246,18 @@ pub fn join(
             head: now.to_string(),
         });
     }
+    let classes = class::of(store, source, policy, repo, got.change, got.revision)?;
     let body = Body::Join {
         change: got.change,
         revision: got.revision,
-        alone,
+        alone: classes.class() == Class::R2,
     };
-    match store.ledger().check(&body) {
+    match store.ledger().admit(&body) {
         Ok(()) => {}
-        Err(Invalid::Duplicate) => return Ok(Joined::Already),
+        Err(Invalid::Duplicate) => {
+            reseat(store, forge, source, repo)?;
+            return Ok(Joined::Already);
+        }
         Err(Invalid::Held(why)) => return Ok(Joined::Held(why)),
         Err(e) => return Err(StoreError::Invalid(e).into()),
     }
@@ -316,11 +333,37 @@ pub fn leave(
         &repo.to_string(),
         head.as_str(),
         Mark::Waiting,
-        "out of the train",
+        if why == Left::Below {
+            land::BELOW
+        } else {
+            "out of the train"
+        },
         None,
     )?;
     store.record(body)?;
     Ok(Leaving::Left)
+}
+
+/// Puts each change in the repo's train below its class (an R2 revision
+/// that isn't alone: [`conary_core::Ledger::below_class`]) back in alone, at
+/// the back ([`Left::Below`]). That takes it out of a gating candidate,
+/// which then waits again without it. One a green candidate has left to
+/// land stays for now: [`land_next`] reseats it instead of landing it, once
+/// the merges ahead of it are settled. The PRs it reseated.
+fn reseat(
+    store: &mut Store,
+    forge: &dyn Forge,
+    source: &dyn Source,
+    repo: &Repo,
+) -> Result<Vec<u64>, TrainError> {
+    let mut reseated = Vec::new();
+    for m in store.ledger().below_class(repo) {
+        let pr = pr_of(store, m.change);
+        if leave(store, forge, source, repo, pr, Left::Below)? == Leaving::Left {
+            reseated.push(pr);
+        }
+    }
+    Ok(reseated)
 }
 
 /// Drops a candidate whose gate won't finish, the stall watchdog's last
@@ -499,6 +542,8 @@ pub struct Stepped {
     /// The PRs it took out instead of landing them, as the steward no
     /// longer says they're settled.
     pub unready: Vec<u64>,
+    /// The PRs it put back in alone, classed R2 after they joined.
+    pub reseated: Vec<u64>,
     /// Candidates whose landings all came through, with the tree trunk
     /// ended on recorded.
     pub finished: Vec<CandidateId>,
@@ -535,6 +580,7 @@ pub fn step(
         landed: Vec::new(),
         refused: Vec::new(),
         unready: Vec::new(),
+        reseated: Vec::new(),
         finished: Vec::new(),
         now: Now::Idle,
     };
@@ -544,6 +590,9 @@ pub fn step(
         if let Some(now) = stopped_landing(store, forge, source, config, repo, &trunk)? {
             break now;
         }
+        // Before anything is built or gated, every change below its class
+        // is alone.
+        stepped.reseated.extend(reseat(store, forge, source, repo)?);
         let Some(id) = in_flight_or_built(store, forge, repo, &trunk, settings, &mut stepped)?
         else {
             break Now::Idle;

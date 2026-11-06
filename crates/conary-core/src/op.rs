@@ -146,6 +146,10 @@ pub enum Left {
     Empty,
     /// GitHub refused its merge.
     Refused,
+    /// It's in below its revision's class (`docs/DESIGN.md` section 4.4),
+    /// classed R2 after it joined: it's back in at once, alone, at the back,
+    /// at the same revision.
+    Below,
 }
 
 /// A producer's own word that a result came from its run on what it ran

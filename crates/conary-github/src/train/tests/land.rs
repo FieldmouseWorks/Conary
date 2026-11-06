@@ -59,9 +59,10 @@ fn a_pr_alone_lands_only_while_trunk_is_its_base_and_is_built_again_once_it_move
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
     let mut hub = Hub::new(&[3, 4, 9]);
+    r2(&hub, 4);
     join_all(&mut store, &hub, &[3]);
     assert_eq!(
-        try_join(&mut store, &hub, 4, &head(4), true).unwrap(),
+        try_join(&mut store, &hub, 4, &head(4)).unwrap(),
         Joined::Joined
     );
     // The PR ahead of it goes without it.
@@ -146,7 +147,7 @@ fn a_refused_merge_leaves_and_the_changes_after_it_go_again() {
     assert_eq!(prs, [5]);
     assert_eq!(hub.held(&train_branch(next)), [3, 5].map(head));
     assert_eq!(
-        try_join(&mut store, &hub, 4, &head(4), false).unwrap(),
+        try_join(&mut store, &hub, 4, &head(4)).unwrap(),
         Joined::Held(Held::Refused)
     );
     // Once trunk moves, it can try again.
@@ -194,7 +195,7 @@ fn a_pr_against_another_branch_never_lands_through_the_train() {
     // One against another branch isn't joined: its merge would land there.
     hub.targets.borrow_mut().insert(4, "release".into());
     assert_eq!(
-        try_join(&mut store, &hub, 4, &head(4), false).unwrap(),
+        try_join(&mut store, &hub, 4, &head(4)).unwrap(),
         Joined::Elsewhere("release".into())
     );
     assert!(joined(&store).is_empty());
@@ -277,7 +278,7 @@ fn the_train_lands_only_onto_the_default_branch_as_github_says_it_is() {
     assert_eq!(stepped.refused, [Refused { pr: 3, why }]);
     // A PR against main doesn't join now.
     assert_eq!(
-        try_join(&mut store, &hub, 4, &head(4), false).unwrap(),
+        try_join(&mut store, &hub, 4, &head(4)).unwrap(),
         Joined::Elsewhere("main".into())
     );
 }
@@ -314,15 +315,16 @@ fn a_heads_landing_success_never_outlives_its_landing() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
     let mut hub = Hub::new(&[3, 4]);
+    r2(&hub, 4);
     // Joining puts its head's status to pending first: a success from an
     // earlier time in the train lets nothing merge it. Until GitHub takes
     // that, it doesn't join.
     hub.unmarked.set(Some(Mark::Waiting));
-    assert!(try_join(&mut store, &hub, 4, &head(4), true).is_err());
+    assert!(try_join(&mut store, &hub, 4, &head(4)).is_err());
     assert!(joined(&store).is_empty());
     hub.unmarked.set(None);
     assert_eq!(
-        try_join(&mut store, &hub, 4, &head(4), true).unwrap(),
+        try_join(&mut store, &hub, 4, &head(4)).unwrap(),
         Joined::Joined
     );
     assert_eq!(hub.latest(&head(4)), Some(Mark::Waiting));
@@ -385,7 +387,7 @@ fn a_heads_landing_success_never_outlives_its_landing() {
 
     // Leaving otherwise puts the head to pending first too.
     assert_eq!(
-        try_join(&mut store, &hub, 3, &head(3), false).unwrap(),
+        try_join(&mut store, &hub, 3, &head(3)).unwrap(),
         Joined::Joined
     );
     hub.unmarked.set(Some(Mark::Waiting));
@@ -454,8 +456,9 @@ fn a_merge_github_hasnt_shown_is_waited_for_even_alone() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
     let mut hub = Hub::new(&[4]);
+    r2(&hub, 4);
     assert_eq!(
-        try_join(&mut store, &hub, 4, &head(4), true).unwrap(),
+        try_join(&mut store, &hub, 4, &head(4)).unwrap(),
         Joined::Joined
     );
     let (id, _) = gating(&step_once(&mut store, &hub));

@@ -20,7 +20,7 @@ struct Book {
 
 impl Book {
     fn record(&mut self, body: Body) -> Result<(), Invalid> {
-        self.ledger.check(&body)?;
+        self.ledger.admit(&body)?;
         self.n += 1;
         let op = Op {
             id: OpId::of(&self.n.to_le_bytes()),

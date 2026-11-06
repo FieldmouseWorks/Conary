@@ -443,9 +443,16 @@ so the wait is one run, however many are waiting.
   merge into trunk needs the train's status, only the head being landed has
   it, and a step holds the ledger's lock throughout. A write past the rules
   is an `outside` op, a violation for the owner, and `finish` records that
-  trunk's tree isn't the candidate's. Until
-  classes are the ledger's (M5), the steward says which changes join alone,
-  from its one-way paths.
+  trunk's tree isn't the candidate's. Whether a change joins alone is its
+  class, which the join reads from the policy and records: the ledger
+  refuses a new R2 join that isn't alone (replay still applies a log's
+  older joins as written). A change in below its class (classed R2 after
+  it joined, under a new policy, or seated by such an older join) is put
+  back in alone, at the back, by one `leave` op (`below`): by a step before
+  it builds or lands anything, and by a join of it. That takes it out of
+  a gating candidate, or out of a green one before its own merge, and the
+  rest wait again; only a merge already started, which may be on trunk,
+  is settled first.
 
 The ledger keeps each repo's train (`crates/conary-core/src/ledger/train.rs`)
 and refuses a candidate out of turn: a red candidate's halves first, each
@@ -769,7 +776,7 @@ it pointed at the finish line:
 | M2 | conaryd serving the ledger over its socket, the notes ref and the MCP server | A cloud session answers `why` from a fresh clone | Done |
 | M3 | The train (section 4.7) on remi, with the evidence verifier it counts candidates by and the negative check for new tests | For a day of remi's PRs: fewer gate runs than PRs landed, every candidate's last landing on its evidence, and trunk's own CI green after every candidate landed | Live on remi. The first criterion isn't met: remi's PRs arrive too slowly to batch ([#48](https://github.com/FieldmouseWorks/Conary/issues/48)). Signed proof verdicts ([#218](https://github.com/FieldmouseWorks/Conary/issues/218)) let PSIV's queue ride a train |
 | M4 | `undo` by change, session and time, through the landing flow, and `at` | A deliberately bad session's changes in two repos are reverted by `undo --actor` and land with no person involved | Done ([#173](https://github.com/FieldmouseWorks/Conary/issues/173)) |
-| M5 | Class policy in Conary, from the paths and the kind of edit (section 4.4); the steward reads each change's class and the evidence it needs from conaryd | `oneWay` is gone from burrow's autoland config, and a docs-only change lands on green CI with no review round | In progress ([#226](https://github.com/FieldmouseWorks/Conary/issues/226)): `cn class` records each revision's class |
+| M5 | Class policy in Conary, from the paths and the kind of edit (section 4.4); the steward reads each change's class and the evidence it needs from conaryd | `oneWay` is gone from burrow's autoland config, and a docs-only change lands on green CI with no review round | In progress ([#226](https://github.com/FieldmouseWorks/Conary/issues/226)): `cn class` records each revision's class, and a join rides alone by it |
 | M6 | conaryd runs the landing flow. Its first slice is a simulated GitHub, in memory, that the train and the flow are tested against, with delays, errors, races and stale reads injected and recorded GitHub responses as its fixtures, so a change to either is proved without remi. Then the flow itself, R0 landing before review, and a red trunk bisected to the change that broke it and undone | `steward.py` is deleted; a week of PRs across every repo lands through conaryd, R0 ones with no wait on a reviewer; a deliberately broken landing is found and undone with no Claude job | |
 | M7 | Setup by an agent: one path from a clone to a working ledger, with the steward or without one, that an agent follows for someone; the box's specifics (Nix, systemd, remi) as configuration on top | A fresh agent session, given this repository, a machine and a token, sets up a ledger, records a repo's PRs and answers `why` and `undo`, with no person stepping in | |
 | M8 | A written decision on each parked idea, from ledger data | The decisions, and with them the finish line | |

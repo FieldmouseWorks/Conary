@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 use super::*;
 use crate::api::{CheckRun, Commit, Event, PullRequest, Pulls, Review, Status as CommitStatus};
 use crate::attest::{ARTIFACT, Artifact, FILE, Job, Key, SIGNER_REPO, testing};
+use conary_core::policy::{Paths, Touched};
 
 const TRUNK: &str = "1111111111111111111111111111111111111111";
 const FORK: &str = "2222222222222222222222222222222222222222";
@@ -27,6 +28,11 @@ fn config() -> Config {
 }
 
 const STEWARD: &str = "fieldmouseworks-steward[bot]";
+
+/// The machine's class policy: a PR touching `secrets/` is R2.
+fn policy() -> Policy {
+    Policy::parse(br#"{"r2": ["^secrets/"]}"#).unwrap()
+}
 
 /// What the tests' fresh runners' names start with.
 const FRESH: &str = "fresh-remi-";
@@ -100,6 +106,10 @@ struct Hub {
     downloads: Cell<u64>,
     /// The runner each job ran on, when it isn't a fresh one of its own.
     runners: RefCell<HashMap<u64, String>>,
+    /// The files each head changes, when it isn't `src/lib.rs` alone.
+    touched: RefCell<HashMap<String, Vec<String>>>,
+    /// How many times the files a head changes were read.
+    compared: Cell<u64>,
 }
 
 /// An artifact a run kept: its name and GitHub's zip of it.
@@ -345,8 +355,21 @@ impl Source for Hub {
         Ok(FORK.into())
     }
 
-    fn files(&self, _: &str, _: &str, _: &str) -> Result<conary_core::policy::Paths, ApiError> {
-        unimplemented!("nothing here classifies")
+    fn files(&self, _: &str, _: &str, head: &str) -> Result<Paths, ApiError> {
+        self.compared.set(self.compared.get() + 1);
+        let files = self
+            .touched
+            .borrow()
+            .get(head)
+            .cloned()
+            .unwrap_or(vec!["src/lib.rs".into()]);
+        Ok(Paths {
+            files: files
+                .into_iter()
+                .map(|path| Touched { path, from: None })
+                .collect(),
+            cut: false,
+        })
     }
 }
 
@@ -534,7 +557,7 @@ fn join_all(store: &mut Store, hub: &Hub, prs: &[u64]) {
                 &repo(),
                 *pr,
                 &head(*pr),
-                false,
+                &policy(),
                 None
             )
             .unwrap(),
@@ -543,15 +566,16 @@ fn join_all(store: &mut Store, hub: &Hub, prs: &[u64]) {
     }
 }
 
+/// PR `pr` touches a secret at its head: under [`policy`], it's R2.
+fn r2(hub: &Hub, pr: u64) {
+    hub.touched
+        .borrow_mut()
+        .insert(head(pr), vec!["secrets/x.yaml".into()]);
+}
+
 /// Joins PR `pr` at `at`, as the steward asks once it's settled there.
-fn try_join(
-    store: &mut Store,
-    hub: &Hub,
-    pr: u64,
-    at: &str,
-    alone: bool,
-) -> Result<Joined, TrainError> {
-    join(store, hub, hub, &config(), &repo(), pr, at, alone, None)
+fn try_join(store: &mut Store, hub: &Hub, pr: u64, at: &str) -> Result<Joined, TrainError> {
+    join(store, hub, hub, &config(), &repo(), pr, at, &policy(), None)
 }
 
 fn joined(store: &Store) -> Vec<u64> {
@@ -589,6 +613,7 @@ fn waiting(stepped: &Stepped) -> Vec<String> {
     }
 }
 
+mod class;
 mod empty;
 mod gate;
 mod land;
@@ -599,12 +624,12 @@ fn a_ready_pr_joins_at_its_head_as_github_shows_it() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
     let hub = Hub::new(&[3]);
-    let mut again = || try_join(&mut store, &hub, 3, &head(3), false).unwrap();
+    let mut again = || try_join(&mut store, &hub, 3, &head(3)).unwrap();
     assert_eq!(again(), Joined::Joined);
     assert_eq!(again(), Joined::Already);
     // Settled at a head it's since moved on from.
     hub.pulls.borrow_mut().insert(3, head(4));
-    match try_join(&mut store, &hub, 3, &head(3), false) {
+    match try_join(&mut store, &hub, 3, &head(3)) {
         Err(TrainError::Moved { pr: 3, head: now }) => assert_eq!(now, head(4)),
         other => panic!("{other:?}"),
     }
@@ -614,6 +639,32 @@ fn a_ready_pr_joins_at_its_head_as_github_shows_it() {
         leave(&mut store, &hub, &hub, &repo(), 3, Left::Unready)
             .is_ok_and(|left| left == Leaving::NotIn)
     );
+}
+
+#[test]
+fn a_pr_joins_at_the_policys_class_and_an_r2_one_rides_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = store(&dir);
+    let hub = Hub::new(&[3, 4]);
+    r2(&hub, 4);
+    join_all(&mut store, &hub, &[3, 4]);
+    let ledger = store.ledger();
+    let train = ledger.train(&repo()).unwrap();
+    let class = |pr| {
+        let c = ledger.by_pr(&repo(), pr).unwrap();
+        let k = c.class_of(c.current.unwrap()).unwrap();
+        (train.alone(c.id), k.class, k.policy == policy().digest())
+    };
+    assert_eq!(class(3), (false, Class::R0, true));
+    assert_eq!(class(4), (true, Class::R2, true));
+    // Its class is read once a revision and policy: asked again, the
+    // ledger answers.
+    let read = hub.compared.get();
+    assert_eq!(
+        try_join(&mut store, &hub, 4, &head(4)).unwrap(),
+        Joined::Already
+    );
+    assert_eq!(hub.compared.get(), read);
 }
 
 #[test]
@@ -724,12 +775,12 @@ fn red_alone_leaves_with_the_trains_failure_and_stays_out_until_its_head_moves()
     );
     assert_eq!(stepped.now, Now::Idle);
     assert_eq!(
-        try_join(&mut store, &hub, 3, &head(3), false).unwrap(),
+        try_join(&mut store, &hub, 3, &head(3)).unwrap(),
         Joined::Held(Held::Red)
     );
     hub.pulls.borrow_mut().insert(3, head(33));
     assert_eq!(
-        try_join(&mut store, &hub, 3, &head(33), false).unwrap(),
+        try_join(&mut store, &hub, 3, &head(33)).unwrap(),
         Joined::Joined
     );
 }
@@ -776,7 +827,7 @@ fn a_pr_that_wont_merge_is_held_until_what_it_was_after_moves() {
     join_all(&mut store, &hub, &[3, 4]);
     let (id, _) = gating(&step_once(&mut store, &hub));
     assert_eq!(
-        try_join(&mut store, &hub, 4, &head(4), false).unwrap(),
+        try_join(&mut store, &hub, 4, &head(4)).unwrap(),
         Joined::Held(Held::Conflict)
     );
     hub.ci(&commit_of(&store, id), &[("check / check", "success")]);
