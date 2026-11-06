@@ -20,11 +20,21 @@ fn tree(c: char) -> TreeId {
 struct Book {
     ledger: Ledger,
     n: u64,
+    /// Every op applied, in order.
+    ops: Vec<Op>,
 }
 
 impl Book {
     fn record(&mut self, body: Body) -> Result<(), Invalid> {
-        self.ledger.check(&body)?;
+        self.ledger.admit(&body)?;
+        self.write(body);
+        Ok(())
+    }
+
+    /// Applies an op held only to [`Ledger::check`], as a log written
+    /// before [`Ledger::admit`]'s rules may hold it.
+    fn write(&mut self, body: Body) {
+        self.ledger.check(&body).expect("the op applies");
         self.n += 1;
         let op = Op {
             id: OpId::of(&self.n.to_le_bytes()),
@@ -35,7 +45,20 @@ impl Book {
             },
         };
         self.ledger.apply(&op);
-        Ok(())
+        self.ops.push(op);
+    }
+
+    /// The policy's word on the change's revision now.
+    fn classify(&mut self, change: ChangeId, class: Class) {
+        let revision = self.current(change);
+        self.ok(Body::Classify {
+            change,
+            revision,
+            class,
+            because: (class == Class::R2).then(|| "CODEOWNERS".into()),
+            docs: false,
+            policy: format!("{class:?}"),
+        });
     }
 
     fn ok(&mut self, body: Body) {
@@ -848,6 +871,37 @@ fn a_change_that_joined_alone_rides_in_a_candidate_of_its_own() {
     b.verdict(alone, Verdict::Green);
     b.land(r, 'e').unwrap();
     assert_eq!(b.ledger.next(&repo(), 8).unwrap().changes, [b.member(c)]);
+}
+
+/// A new join is held to its revision's class, but a log may hold a join
+/// below it, from before joins were, and a revision may be classed R2 after
+/// it joined: both replay, and the train names them, to reseat alone.
+#[test]
+fn a_change_in_the_train_below_its_class_replays_and_is_named() {
+    let mut b = Book::default();
+    let old = b.change(1, 'a');
+    let later = b.change(2, 'b');
+    let fine = b.change(3, 'c');
+    b.classify(old, Class::R2);
+    let below = Body::Join {
+        change: old,
+        revision: b.current(old),
+        alone: false,
+    };
+    assert_eq!(
+        b.ledger.admit(&below),
+        Err(Invalid::BelowClass(b.current(old)))
+    );
+    b.write(below);
+    b.join(later);
+    b.classify(later, Class::R2);
+    b.classify(fine, Class::R2);
+    b.join_alone(fine);
+    let named = [b.member(old), b.member(later)];
+    assert_eq!(b.ledger.below_class(&repo()), named);
+    let replayed = Ledger::replay(&b.ops).expect("the log replays");
+    assert_eq!(replayed.below_class(&repo()), named);
+    assert!(Ledger::default().below_class(&repo()).is_empty());
 }
 
 #[test]

@@ -294,12 +294,7 @@ impl Ledger {
         })
     }
 
-    pub(super) fn check_join(
-        &self,
-        change: ChangeId,
-        revision: RevisionId,
-        alone: bool,
-    ) -> Result<(), Invalid> {
+    pub(super) fn check_join(&self, change: ChangeId, revision: RevisionId) -> Result<(), Invalid> {
         let c = self.existing(change)?;
         match c.status() {
             Status::Landed | Status::Reverted => return Err(Invalid::AlreadyLanded),
@@ -320,13 +315,46 @@ impl Ledger {
         if let Some(why) = self.train_of(change).and_then(|t| t.held(change, revision)) {
             return Err(Invalid::Held(why));
         }
-        // Its class is the policy's (`docs/DESIGN.md` section 4.4), which
-        // a join may raise but never lower. One from before the ledger
-        // recorded classes has none to hold it to.
+        Ok(())
+    }
+
+    /// A new join is at its revision's class, the policy's (`docs/DESIGN.md`
+    /// section 4.4), which a join may raise but never lower: an R2 one rides
+    /// alone. A log may hold joins from before this held, which replay
+    /// still applies, and a revision classed after it joined: the train
+    /// reseats those ([`Ledger::below_class`]).
+    pub(super) fn admit_join(
+        &self,
+        change: ChangeId,
+        revision: RevisionId,
+        alone: bool,
+    ) -> Result<(), Invalid> {
+        let c = self.existing(change)?;
         if !alone && c.class_of(revision).is_some_and(|k| k.class == Class::R2) {
             return Err(Invalid::BelowClass(revision));
         }
         Ok(())
+    }
+
+    /// The changes in `repo`'s train below their class: R2 at the revision
+    /// they're in at, and not alone. A join's class can't be lowered, but a
+    /// revision can be classed R2 after it joined, under a new policy, and a
+    /// log may hold joins from before classes held them.
+    pub fn below_class(&self, repo: &Repo) -> Vec<Member> {
+        let Some(train) = self.trains.get(repo) else {
+            return Vec::new();
+        };
+        train
+            .joined()
+            .iter()
+            .filter(|m| {
+                !train.alone(m.change)
+                    && self.changes[&m.change]
+                        .class_of(m.revision)
+                        .is_some_and(|k| k.class == Class::R2)
+            })
+            .cloned()
+            .collect()
     }
 
     pub(super) fn check_leave(&self, change: ChangeId) -> Result<(), Invalid> {
@@ -443,7 +471,7 @@ impl Ledger {
             Body::Leave { change, why } => {
                 let repo = self.changes[change].repo.clone();
                 match why {
-                    Left::Unready => {}
+                    Left::Unready | Left::Below => {}
                     Left::Conflict | Left::Empty => {
                         let ahead = self.ahead_of(&repo, *change);
                         let train = self.trains.get_mut(&repo).expect("check: it's in it");

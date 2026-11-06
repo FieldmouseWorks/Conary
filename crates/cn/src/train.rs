@@ -308,6 +308,11 @@ fn human_stepped(repo: &Repo, s: &Stepped) -> String {
             "{repo}#{pr}: the steward no longer says it's settled, left the train"
         ));
     }
+    for pr in &s.reseated {
+        lines.push(format!(
+            "{repo}#{pr}: classed R2 after it joined, back in the train alone"
+        ));
+    }
     for id in &s.finished {
         lines.push(format!("{repo}: candidate {id} landed whole"));
     }

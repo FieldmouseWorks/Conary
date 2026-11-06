@@ -310,6 +310,21 @@ impl Ledger {
         self.changes.get(&id).ok_or(Invalid::UnknownChange(id))
     }
 
+    /// Whether `body` can be recorded now: [`Ledger::check`], and the rules
+    /// a new op is held to that a signed log may hold older ops from before
+    /// (which [`Ledger::replay`] still applies, as they were written).
+    pub fn admit(&self, body: &Body) -> Result<(), Invalid> {
+        self.check(body)?;
+        match body {
+            Body::Join {
+                change,
+                revision,
+                alone,
+            } => self.admit_join(*change, *revision, *alone),
+            _ => Ok(()),
+        }
+    }
+
     /// Whether `body` can be applied now.
     pub fn check(&self, body: &Body) -> Result<(), Invalid> {
         match body {
@@ -417,10 +432,8 @@ impl Ledger {
                 self.check_reopen(*change)?;
             }
             Body::Join {
-                change,
-                revision,
-                alone,
-            } => self.check_join(*change, *revision, *alone)?,
+                change, revision, ..
+            } => self.check_join(*change, *revision)?,
             Body::Leave { change, .. } => self.check_leave(*change)?,
             Body::Candidate {
                 candidate,

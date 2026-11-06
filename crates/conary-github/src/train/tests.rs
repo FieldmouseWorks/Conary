@@ -613,6 +613,7 @@ fn waiting(stepped: &Stepped) -> Vec<String> {
     }
 }
 
+mod class;
 mod empty;
 mod gate;
 mod land;

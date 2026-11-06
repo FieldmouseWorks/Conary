@@ -445,7 +445,11 @@ so the wait is one run, however many are waiting.
   is an `outside` op, a violation for the owner, and `finish` records that
   trunk's tree isn't the candidate's. Whether a change joins alone is its
   class, which the join reads from the policy and records: the ledger
-  refuses an R2 revision's join that isn't alone.
+  refuses a new R2 join that isn't alone (replay still applies a log's
+  older joins as written). A change classed R2 after it joined, under a
+  new policy, leaves and joins again alone on the next step or join,
+  taking it out of a gating candidate; one in a green candidate's open
+  landing stays, since that gate ran on its exact tree.
 
 The ledger keeps each repo's train (`crates/conary-core/src/ledger/train.rs`)
 and refuses a candidate out of turn: a red candidate's halves first, each

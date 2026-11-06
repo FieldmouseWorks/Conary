@@ -252,9 +252,12 @@ pub fn join(
         revision: got.revision,
         alone: classes.class() == Class::R2,
     };
-    match store.ledger().check(&body) {
+    match store.ledger().admit(&body) {
         Ok(()) => {}
-        Err(Invalid::Duplicate) => return Ok(Joined::Already),
+        Err(Invalid::Duplicate) => {
+            reseat(store, forge, source, repo)?;
+            return Ok(Joined::Already);
+        }
         Err(Invalid::Held(why)) => return Ok(Joined::Held(why)),
         Err(e) => return Err(StoreError::Invalid(e).into()),
     }
@@ -335,6 +338,41 @@ pub fn leave(
     )?;
     store.record(body)?;
     Ok(Leaving::Left)
+}
+
+/// Takes each change in the repo's train below its class (an R2 revision
+/// that isn't alone: [`conary_core::Ledger::below_class`]) out, and puts it
+/// back alone, at the back. Leaving takes it out of a gating candidate,
+/// which then waits again without it; one in a green candidate's open
+/// landing stays, since that candidate's gate ran on its exact tree. The
+/// PRs it reseated.
+fn reseat(
+    store: &mut Store,
+    forge: &dyn Forge,
+    source: &dyn Source,
+    repo: &Repo,
+) -> Result<Vec<u64>, TrainError> {
+    let mut reseated = Vec::new();
+    for m in store.ledger().below_class(repo) {
+        let pr = pr_of(store, m.change);
+        if leave(store, forge, source, repo, pr, Left::Below)? != Leaving::Left {
+            continue;
+        }
+        forge.mark(
+            &repo.to_string(),
+            head_of(store, &m).as_str(),
+            Mark::Waiting,
+            "in the train alone, as R2, waiting to land",
+            None,
+        )?;
+        store.record(Body::Join {
+            change: m.change,
+            revision: m.revision,
+            alone: true,
+        })?;
+        reseated.push(pr);
+    }
+    Ok(reseated)
 }
 
 /// Drops a candidate whose gate won't finish, the stall watchdog's last
@@ -513,6 +551,8 @@ pub struct Stepped {
     /// The PRs it took out instead of landing them, as the steward no
     /// longer says they're settled.
     pub unready: Vec<u64>,
+    /// The PRs it put back in alone, classed R2 after they joined.
+    pub reseated: Vec<u64>,
     /// Candidates whose landings all came through, with the tree trunk
     /// ended on recorded.
     pub finished: Vec<CandidateId>,
@@ -549,10 +589,12 @@ pub fn step(
         landed: Vec::new(),
         refused: Vec::new(),
         unready: Vec::new(),
+        reseated: Vec::new(),
         finished: Vec::new(),
         now: Now::Idle,
     };
     let trunk = forge.default_branch(&repo.to_string())?;
+    stepped.reseated = reseat(store, forge, source, repo)?;
     stepped.now = loop {
         stepped.finished.extend(finish(store, forge, source, repo)?);
         if let Some(now) = stopped_landing(store, forge, source, config, repo, &trunk)? {

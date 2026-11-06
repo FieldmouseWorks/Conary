@@ -73,7 +73,7 @@ impl Store {
     }
 
     pub fn record_at(&mut self, body: Body, at: i64) -> Result<OpId, StoreError> {
-        self.ledger.check(&body).map_err(StoreError::Invalid)?;
+        self.ledger.admit(&body).map_err(StoreError::Invalid)?;
         let op = self.log.append(body, at)?;
         self.ledger.apply(&op);
         Ok(op.id)
