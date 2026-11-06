@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::id::{CandidateId, ChangeId, CommitId, OpId, RevisionId};
 use crate::op::{Actor, Attest, Authority, Body, CheckKind, Op, Outcome, Repo};
+use crate::policy::Class;
 
 mod train;
 mod undo;
@@ -40,6 +41,20 @@ pub struct Evidence {
     pub source: String,
     /// Its producer's attestation, when it had one that held.
     pub attest: Option<Attest>,
+    pub at: i64,
+}
+
+/// What the class policy said of one revision (design 4.4).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Classed {
+    pub revision: RevisionId,
+    pub class: Class,
+    /// What made it R2.
+    pub because: Option<String>,
+    /// Every path it touches is documentation.
+    pub docs: bool,
+    /// The BLAKE3 hash of the policy file that said it.
+    pub policy: String,
     pub at: i64,
 }
 
@@ -90,6 +105,9 @@ pub struct Change {
     /// it did.
     pub current: Option<RevisionId>,
     pub evidence: Vec<Evidence>,
+    /// What the class policy said of its revisions, oldest first.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub classes: Vec<Classed>,
     pub landing: Option<Landing>,
     /// What it reverts, when it's an undo.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -121,6 +139,11 @@ impl Change {
 
     pub fn revision(&self, id: RevisionId) -> Option<&Revision> {
         self.revisions.iter().find(|r| r.id == id)
+    }
+
+    /// What the class policy last said of a revision, if it's been asked.
+    pub fn class_of(&self, revision: RevisionId) -> Option<&Classed> {
+        self.classes.iter().rev().find(|c| c.revision == revision)
     }
 }
 
@@ -341,6 +364,24 @@ impl Ledger {
                     return Err(Invalid::Duplicate);
                 }
             }
+            Body::Classify {
+                change,
+                revision,
+                class,
+                because,
+                docs,
+                policy,
+            } => {
+                let c = self.existing(*change)?;
+                if c.revision(*revision).is_none() {
+                    return Err(Invalid::UnknownRevision(*revision));
+                }
+                if c.class_of(*revision).is_some_and(|k| {
+                    (&k.class, &k.because, &k.docs, &k.policy) == (class, because, docs, policy)
+                }) {
+                    return Err(Invalid::Duplicate);
+                }
+            }
             Body::Land {
                 change,
                 revision,
@@ -453,6 +494,7 @@ impl Ledger {
                             revisions: Vec::new(),
                             current: None,
                             evidence: Vec::new(),
+                            classes: Vec::new(),
                             landing: None,
                             undo: None,
                             undone_by: Vec::new(),
@@ -520,6 +562,21 @@ impl Ledger {
                 result: *result,
                 source: source.clone(),
                 attest: attest.clone(),
+                at,
+            }),
+            Body::Classify {
+                revision,
+                class,
+                because,
+                docs,
+                policy,
+                ..
+            } => c.classes.push(Classed {
+                revision: *revision,
+                class: *class,
+                because: because.clone(),
+                docs: *docs,
+                policy: policy.clone(),
                 at,
             }),
             Body::Land {

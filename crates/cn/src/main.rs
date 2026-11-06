@@ -13,9 +13,10 @@ use conary_core::log;
 use conary_core::notes::Links;
 use conary_core::op::{Authority, Repo};
 use conary_core::why::{self, Why};
-use conary_core::{ChangeId, Ledger};
+use conary_core::{ChangeId, Ledger, Policy};
 use conary_core::{reader, rpc};
 use conary_github::anchor::{self, Anchored};
+use conary_github::class;
 use conary_github::undo::{self, How, Stopped, Undid, Undone, Unrecorded};
 use conary_github::{Api, ApiError, Config, Etags, Ingested, Tokens, ingest, notes};
 
@@ -156,6 +157,23 @@ enum Command {
         #[command(flatten)]
         github: GithubArgs,
     },
+    /// A PR's class at a head, and the evidence it needs: what the class
+    /// policy says of the files that revision changes, recorded once per
+    /// revision and policy. Refused when the PR's head on GitHub is another.
+    Class {
+        /// The repository, as owner/name.
+        repo: Repo,
+        /// The PR's number.
+        pr: u64,
+        /// The head to class.
+        #[arg(long)]
+        head: String,
+        /// The class policy, a JSON file (docs/DESIGN.md section 4.4).
+        #[arg(long, env = "CONARY_POLICY")]
+        policy: PathBuf,
+        #[command(flatten)]
+        github: GithubArgs,
+    },
     /// A repo's train: the changes ready to land, gated together.
     Train {
         #[command(subcommand)]
@@ -276,6 +294,49 @@ fn run(cli: &Cli) -> Result<()> {
             } else {
                 let all: Vec<Value> = got.iter().map(|g| ingested(g, store.ledger())).collect();
                 println!("{}", Value::Array(all));
+            }
+        }
+        Command::Class {
+            repo,
+            pr,
+            head,
+            policy,
+            github,
+        } => {
+            let policy = Policy::load(policy)?;
+            let (mut a, api, config) = write(cli, github)?;
+            let got = class::class(&mut a.store, &api, &config, &policy, repo, *pr, head);
+            a.publish(&api)?;
+            write_notes(&api, &a, github, repo)?;
+            let got = got?;
+            let said = &got.said;
+            if cli.human {
+                let because = said
+                    .because
+                    .as_deref()
+                    .map_or(String::new(), |b| format!(" ({b})"));
+                let docs = if said.docs {
+                    ", documentation only"
+                } else {
+                    ""
+                };
+                let review = if said.review() {
+                    "a review round"
+                } else {
+                    "no review round"
+                };
+                println!(
+                    "{repo}#{pr} at {head}: {}{because}{docs}; needs {review}",
+                    said.class
+                );
+            } else {
+                println!(
+                    "{}",
+                    json!({"pr": pr, "change": got.change.to_string(),
+                           "revision": got.revision.to_string(), "class": said.class,
+                           "because": said.because, "docs": said.docs,
+                           "review": said.review(), "recorded": got.recorded})
+                );
             }
         }
         Command::Init { remote } => {

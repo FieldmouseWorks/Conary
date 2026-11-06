@@ -344,6 +344,10 @@ impl Source for Hub {
         }
         Ok(FORK.into())
     }
+
+    fn files(&self, _: &str, _: &str, _: &str) -> Result<conary_core::policy::Paths, ApiError> {
+        unimplemented!("nothing here classifies")
+    }
 }
 
 /// A check run's job ran in the run of ten times its id, and an

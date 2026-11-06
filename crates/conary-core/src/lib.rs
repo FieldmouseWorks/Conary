@@ -9,6 +9,7 @@ pub mod log;
 pub mod mcp;
 pub mod notes;
 pub mod op;
+pub mod policy;
 pub mod reader;
 pub mod rpc;
 pub mod store;
@@ -16,4 +17,5 @@ pub mod why;
 
 pub use id::{CandidateId, ChangeId, CommitId, OpId, ParseIdError, RevisionId, TreeId};
 pub use ledger::Ledger;
+pub use policy::{Class, Policy};
 pub use store::Store;

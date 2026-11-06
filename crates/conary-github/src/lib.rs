@@ -8,6 +8,7 @@ pub mod api;
 pub mod attest;
 pub mod bases;
 pub mod branches;
+pub mod class;
 pub mod etags;
 pub mod ingest;
 pub mod notes;

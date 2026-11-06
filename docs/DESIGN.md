@@ -223,7 +223,20 @@ Three rules make it trustworthy:
 Policy sets the class from the repo and the paths a change touches, renames
 and copies included. The policy starts as today's `oneWay` patterns and
 per-repo settings, moved into Conary (M5), and grows rules only when a real
-change needs one. The guard's R2 command list stays where it is: it classifies
+change needs one. It's a JSON file the machine gives Conary (`CONARY_POLICY`,
+`Policy` in [`policy.rs`](../crates/conary-core/src/policy.rs)): path
+regexes that make a change R2, that name its docs and that are never docs,
+and whether landing goes live, for the machine and per repo. A repo's lists
+only add to the machine's, so no repo takes a path off R2. A change whose
+paths can't all be read (GitHub lists 300 files of a comparison and says
+nothing of the rest) is R2.
+
+The paths are the revision's own, read from its merge base to its head, so a
+class is about exactly one revision and a push can't slip past it. What the
+policy said is recorded as a `classify` op on that revision, naming the
+policy file by its hash, so the ledger says which policy decided and why;
+asked again for the same revision and policy, Conary answers from the
+ledger. The guard's R2 command list stays where it is: it classifies
 commands an agent runs, not changes that land.
 
 Policy also sets the evidence a change needs from the kind of edit it is,
@@ -274,7 +287,7 @@ Op {
   body:    what happened (`Body` in crates/conary-core/src/op.rs): observe,
            intent, revision, evidence, land, outside, close, reopen; the
            train's join, leave, candidate, candidate_evidence, verdict and
-           finish (section 4.7); undo (section 5); classify joins with M5
+           finish (section 4.7); undo (section 5); classify (section 4.4)
   sig:     the ledger key's signature over the id
 }
 ```
@@ -752,6 +765,6 @@ it pointed at the finish line:
 | M2 | conaryd serving the ledger over its socket, the notes ref and the MCP server | A cloud session answers `why` from a fresh clone | Done |
 | M3 | The train (section 4.7) on remi, with the evidence verifier it counts candidates by and the negative check for new tests | For a day of remi's PRs: fewer gate runs than PRs landed, every candidate's last landing on its evidence, and trunk's own CI green after every candidate landed | Live on remi. The first criterion isn't met: remi's PRs arrive too slowly to batch ([#48](https://github.com/FieldmouseWorks/Conary/issues/48)). Signed proof verdicts ([#218](https://github.com/FieldmouseWorks/Conary/issues/218)) let PSIV's queue ride a train |
 | M4 | `undo` by change, session and time, through the landing flow, and `at` | A deliberately bad session's changes in two repos are reverted by `undo --actor` and land with no person involved | Done ([#173](https://github.com/FieldmouseWorks/Conary/issues/173)) |
-| M5 | Class policy in Conary, from the paths and the kind of edit (section 4.4); the steward reads each change's class and the evidence it needs from conaryd | `oneWay` is gone from burrow's autoland config, and a docs-only change lands on green CI with no review round | Next |
+| M5 | Class policy in Conary, from the paths and the kind of edit (section 4.4); the steward reads each change's class and the evidence it needs from conaryd | `oneWay` is gone from burrow's autoland config, and a docs-only change lands on green CI with no review round | In progress ([#226](https://github.com/FieldmouseWorks/Conary/issues/226)): `cn class` records each revision's class |
 | M6 | conaryd runs the landing flow. Its first slice is a simulated GitHub, in memory, that the train and the flow are tested against, with delays, errors, races and stale reads injected and recorded GitHub responses as its fixtures, so a change to either is proved without remi. Then the flow itself, R0 landing before review, and a red trunk bisected to the change that broke it and undone | `steward.py` is deleted; a week of PRs across every repo lands through conaryd, R0 ones with no wait on a reviewer; a deliberately broken landing is found and undone with no Claude job | |
 | M7 | A written decision on each parked idea, from ledger data | The decisions, and with them the finish line | |

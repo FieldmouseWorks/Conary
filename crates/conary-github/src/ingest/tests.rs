@@ -97,6 +97,10 @@ impl Source for Fake {
         }
         .into())
     }
+
+    fn files(&self, _: &str, _: &str, _: &str) -> Result<conary_core::policy::Paths, ApiError> {
+        unimplemented!("nothing here classifies")
+    }
 }
 
 fn repo() -> Repo {

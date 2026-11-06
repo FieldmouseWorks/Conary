@@ -530,3 +530,59 @@ fn an_undo_makes_its_revert_opens_its_pr_and_finds_every_one_from_its_branch() {
     )));
     assert!(api.pulls_from("o/r", branch).unwrap().is_empty());
 }
+
+fn answer(body: String) -> &'static str {
+    format!(
+        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )
+    .leak()
+}
+
+#[test]
+fn a_comparisons_files_are_read_with_where_renames_started() {
+    let body = r#"{"merge_base_commit":{"sha":"b"},"files":[
+        {"filename":"src/a.rs","status":"modified"},
+        {"filename":"CODEOWNERS.bak","previous_filename":"CODEOWNERS","status":"renamed"}]}"#;
+    let (base, heads) = github(vec![answer(body.into())]);
+    let api = Api::new(&base, Tokens::given("t"));
+    let got = api.files("o/r", "b", "h").unwrap();
+    assert!(
+        heads
+            .recv()
+            .unwrap()
+            .starts_with("get /repos/o/r/compare/b...h?per_page=1 ")
+    );
+    assert!(!got.cut);
+    assert_eq!(
+        got.files,
+        [
+            Touched {
+                path: "src/a.rs".into(),
+                from: None
+            },
+            Touched {
+                path: "CODEOWNERS.bak".into(),
+                from: Some("CODEOWNERS".into())
+            }
+        ]
+    );
+}
+
+#[test]
+fn a_comparison_listing_as_many_files_as_github_lists_may_be_cut_short() {
+    let files: Vec<String> = (0..COMPARED_FILES)
+        .map(|i| format!(r#"{{"filename":"f{i}"}}"#))
+        .collect();
+    let body = format!(
+        r#"{{"merge_base_commit":{{"sha":"b"}},"files":[{}]}}"#,
+        files.join(",")
+    );
+    let (base, _heads) = github(vec![answer(body)]);
+    let got = Api::new(&base, Tokens::given("t"))
+        .files("o/r", "b", "h")
+        .unwrap();
+    assert_eq!((got.files.len(), got.cut), (COMPARED_FILES, true));
+    let shorter = compared(Vec::new());
+    assert!(!shorter.cut && shorter.files.is_empty());
+}
