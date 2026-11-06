@@ -203,6 +203,10 @@ pub enum Joined {
     Already,
     /// It left as it is, and can't join again until something moves.
     Held(Held),
+    /// Its PR is labelled to raise it, and the label wasn't recorded until
+    /// this join: whoever settled it hadn't classed it with the label. Out,
+    /// to be settled again with it.
+    Raised,
     /// It targets this branch, not the repo's default one, which is the
     /// train's.
     Elsewhere(String),
@@ -246,6 +250,7 @@ pub fn join(
             head: now.to_string(),
         });
     }
+    let before = c.raised();
     let classes = class::of(
         store,
         source,
@@ -255,10 +260,20 @@ pub fn join(
         got.revision,
         pull.raises(),
     )?;
+    let raised = store
+        .ledger()
+        .change(got.change)
+        .expect("ingest recorded it")
+        .raised();
+    if raised != before {
+        reseat(store, forge, source, repo)?;
+        return Ok(Joined::Raised);
+    }
     let body = Body::Join {
         change: got.change,
         revision: got.revision,
         alone: classes.class() == Class::R2,
+        raised,
     };
     match store.ledger().admit(&body) {
         Ok(()) => {}
@@ -311,6 +326,24 @@ pub fn leave(
     pr: u64,
     why: Left,
 ) -> Result<Leaving, TrainError> {
+    let said = if why == Left::Below {
+        land::BELOW
+    } else {
+        "out of the train"
+    };
+    out(store, forge, source, repo, pr, why, said)
+}
+
+/// [`leave`], its head's train status saying `said`.
+fn out(
+    store: &mut Store,
+    forge: &dyn Forge,
+    source: &dyn Source,
+    repo: &Repo,
+    pr: u64,
+    why: Left,
+    said: &str,
+) -> Result<Leaving, TrainError> {
     let change = change_of(store, repo, pr)?;
     let body = Body::Leave { change, why };
     match store.ledger().check(&body) {
@@ -337,33 +370,34 @@ pub fn leave(
         .expect("check: it's in it")
         .clone();
     let head = head_of(store, &member);
-    forge.mark(
-        &repo.to_string(),
-        head.as_str(),
-        Mark::Waiting,
-        if why == Left::Below {
-            land::BELOW
-        } else {
-            "out of the train"
-        },
-        None,
-    )?;
+    forge.mark(&repo.to_string(), head.as_str(), Mark::Waiting, said, None)?;
     store.record(body)?;
     Ok(Leaving::Left)
 }
 
-/// Puts each change in the repo's train below its class (an R2 revision
-/// that isn't alone: [`conary_core::Ledger::below_class`]) back in alone, at
-/// the back ([`Left::Below`]). That takes it out of a gating candidate,
-/// which then waits again without it. One a green candidate has left to
-/// land stays for now: [`land_next`] reseats it instead of landing it, once
-/// the merges ahead of it are settled. The PRs it reseated.
+/// Takes each change in the repo's train raised by a label since it joined
+/// out ([`conary_core::Ledger::raised_since_join`], [`Left::Unready`]): the
+/// steward settled it without the label, so it's settled again with it
+/// before it joins again. Then puts each change below its class (an R2
+/// revision that isn't alone: [`conary_core::Ledger::below_class`]) back in
+/// alone, at the back ([`Left::Below`]). Either takes it out of a gating
+/// candidate, which then waits again without it. One a green candidate has
+/// left to land stays for now: [`land_next`] does either instead of landing
+/// it, once the merges ahead of it are settled. The PRs it took out, and
+/// the PRs it reseated.
 fn reseat(
     store: &mut Store,
     forge: &dyn Forge,
     source: &dyn Source,
     repo: &Repo,
-) -> Result<Vec<u64>, TrainError> {
+) -> Result<(Vec<u64>, Vec<u64>), TrainError> {
+    let mut unready = Vec::new();
+    for m in store.ledger().raised_since_join(repo) {
+        let pr = pr_of(store, m.change);
+        if out(store, forge, source, repo, pr, Left::Unready, land::RAISED)? == Leaving::Left {
+            unready.push(pr);
+        }
+    }
     let mut reseated = Vec::new();
     for m in store.ledger().below_class(repo) {
         let pr = pr_of(store, m.change);
@@ -371,7 +405,7 @@ fn reseat(
             reseated.push(pr);
         }
     }
-    Ok(reseated)
+    Ok((unready, reseated))
 }
 
 /// Drops a candidate whose gate won't finish, the stall watchdog's last
@@ -548,7 +582,8 @@ pub struct Stepped {
     pub landed: Vec<u64>,
     pub refused: Vec<Refused>,
     /// The PRs it took out instead of landing them, as the steward no
-    /// longer says they're settled.
+    /// longer says they're settled, or settled them without a label that
+    /// raises them.
     pub unready: Vec<u64>,
     /// The PRs it put back in alone, classed R2 after they joined.
     pub reseated: Vec<u64>,
@@ -598,9 +633,11 @@ pub fn step(
         if let Some(now) = stopped_landing(store, forge, source, config, repo, &trunk)? {
             break now;
         }
-        // Before anything is built or gated, every change below its class
-        // is alone.
-        stepped.reseated.extend(reseat(store, forge, source, repo)?);
+        // Before anything is built or gated, every change raised since it
+        // joined is out, and every change below its class is alone.
+        let (unready, reseated) = reseat(store, forge, source, repo)?;
+        stepped.unready.extend(unready);
+        stepped.reseated.extend(reseated);
         let Some(id) = in_flight_or_built(store, forge, repo, &trunk, settings, &mut stepped)?
         else {
             break Now::Idle;

@@ -272,12 +272,20 @@ pub enum Body {
     /// way (design 4.4). Until classes are the ledger's, the steward says
     /// which changes those are, from its one-way paths. A join that isn't
     /// alone is written without the field, as joins were before it, so their
-    /// bytes, ids and signatures are the same either way.
+    /// bytes, ids and signatures are the same either way. `raised` is every
+    /// label recorded as raising the change when it joined ([`Classify`]'s,
+    /// at any revision): what the steward settled it with. A raise recorded
+    /// since takes it out before it lands, to be settled again. Written
+    /// without the field when there are none, as `alone` is.
+    ///
+    /// [`Classify`]: Body::Classify
     Join {
         change: ChangeId,
         revision: RevisionId,
         #[serde(default, skip_serializing_if = "is_false")]
         alone: bool,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        raised: Vec<String>,
     },
     /// The change left the train without landing.
     Leave { change: ChangeId, why: Left },

@@ -222,6 +222,9 @@ pub enum Invalid {
     /// label, a list out of order, `r2` on a class below R2, or a label
     /// that raised the change before left out.
     NotRaised,
+    /// A join that doesn't name exactly the labels recorded as raising its
+    /// change.
+    JoinRaised,
 }
 
 impl std::fmt::Display for Invalid {
@@ -256,6 +259,9 @@ impl std::fmt::Display for Invalid {
             Self::NotAsked(id) => write!(f, "change {id} isn't what the undo was asked for"),
             Self::BelowClass(id) => write!(f, "revision {id} is R2, so it rides alone"),
             Self::NotRaised => f.write_str("its raise labels don't match its class"),
+            Self::JoinRaised => {
+                f.write_str("the join doesn't name the labels recorded as raising its change")
+            }
             Self::UndoCycle(id) => {
                 write!(
                     f,
@@ -338,6 +344,7 @@ impl Ledger {
                 change,
                 revision,
                 alone,
+                ..
             } => self.admit_join(*change, *revision, *alone),
             _ => Ok(()),
         }
@@ -458,8 +465,11 @@ impl Ledger {
                 self.check_reopen(*change)?;
             }
             Body::Join {
-                change, revision, ..
-            } => self.check_join(*change, *revision)?,
+                change,
+                revision,
+                raised,
+                ..
+            } => self.check_join(*change, *revision, raised)?,
             Body::Leave { change, .. } => self.check_leave(*change)?,
             Body::Candidate {
                 candidate,

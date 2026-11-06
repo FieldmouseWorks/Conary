@@ -94,6 +94,8 @@ struct Hub {
     targets: RefCell<HashMap<u64, String>>,
     /// A PR retargeted the moment its head says it's landing.
     retarget: RefCell<Option<(u64, String)>>,
+    /// A PR labelled the moment its head says it's landing.
+    relabel: RefCell<Option<(u64, &'static str)>>,
     /// Every status the train posted.
     marks: RefCell<Vec<Posted>>,
     /// The last check run id given out: GitHub's are unique.
@@ -506,6 +508,11 @@ impl Forge for Hub {
             && let Some((pr, base)) = self.retarget.take()
         {
             self.targets.borrow_mut().insert(pr, base);
+        }
+        if mark == Mark::Landing
+            && let Some((pr, label)) = self.relabel.take()
+        {
+            self.labels.borrow_mut().insert(pr, vec![label]);
         }
         self.marks.borrow_mut().push(Posted {
             sha: sha.into(),

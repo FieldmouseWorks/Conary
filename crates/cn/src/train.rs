@@ -15,6 +15,10 @@ use conary_github::train::{self, Joined, Leaving, Negatives, Now, Settings, Step
 
 use crate::{Cli, GithubArgs, Result, read, word, write, write_notes};
 
+/// Why a join held a PR out ([`Joined::Raised`]), as the steward shows it.
+const RAISED: &str =
+    "labelled to raise its class since it was classed, to be settled with the label";
+
 #[derive(Subcommand)]
 pub enum TrainCommand {
     /// Put a PR in its repo's train: everything but the gate says its head
@@ -180,6 +184,12 @@ pub fn run(cli: &Cli, command: &TrainCommand) -> Result<()> {
                 Joined::Held(why) => (
                     json!({"pr": pr, "joined": false, "held": word(why)}),
                     format!("{repo}#{pr}: held out of the train: {why}"),
+                ),
+                // Said in words, since the steward shows a hold it doesn't
+                // know as it's said.
+                Joined::Raised => (
+                    json!({"pr": pr, "joined": false, "held": RAISED}),
+                    format!("{repo}#{pr}: held out of the train: {RAISED}"),
                 ),
                 Joined::Elsewhere(base) => (
                     json!({"pr": pr, "joined": false, "targets": base}),

@@ -204,33 +204,71 @@ fn a_pr_classed_r2_while_its_landing_is_open_is_reseated_once_its_not_merged() {
     assert!(alone(&store, 3));
 }
 
-/// Its author labelled it `r2`: a PR whose paths are R0 joins alone, and
-/// one already seated goes back in alone at the next step, once its class
-/// is asked again with the label.
+/// The steward's `cn class` of a PR at its head, labels and all.
+fn classed(store: &mut Store, hub: &Hub, pr: u64) -> Class {
+    crate::class::class(store, hub, &config(), &policy(), &repo(), pr, &head(pr))
+        .unwrap()
+        .class()
+}
+
+fn join_one(store: &mut Store, hub: &Hub, pr: u64) -> Joined {
+    join(
+        store,
+        hub,
+        hub,
+        &config(),
+        &repo(),
+        pr,
+        &head(pr),
+        &policy(),
+        None,
+    )
+    .unwrap()
+}
+
+/// Its author labelled it `r2`: a PR whose paths are R0 and that the
+/// steward classed with the label joins alone. One labelled since the
+/// steward classed it is held out instead: the steward settled it without
+/// the label.
 #[test]
-fn a_pr_labelled_r2_rides_alone() {
+fn a_pr_labelled_r2_rides_alone_once_the_steward_classed_it_so() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let hub = Hub::new(&[3, 4, 5]);
+    let hub = Hub::new(&[3, 5]);
+    join_all(&mut store, &hub, &[3]);
     hub.labels.borrow_mut().insert(5, vec!["R2"]);
-    join_all(&mut store, &hub, &[3, 4, 5]);
+    assert_eq!(join_one(&mut store, &hub, 5), Joined::Raised);
+    assert_eq!(joined(&store), [3]);
+    assert_eq!(classed(&mut store, &hub, 5), Class::R2);
+    assert_eq!(join_one(&mut store, &hub, 5), Joined::Joined);
     assert!(alone(&store, 5) && !alone(&store, 3));
-    let c = store.ledger().by_pr(&repo(), 4).unwrap();
-    let (change, revision) = (c.id, c.current.unwrap());
-    let got = crate::class::of(
-        &mut store,
-        &hub,
-        &policy(),
-        &repo(),
-        change,
-        revision,
-        vec!["r2".into()],
-    )
-    .unwrap();
-    assert_eq!(got.said.because.as_deref(), Some("labelled r2"));
-    let stepped = step_once(&mut store, &hub);
-    assert_eq!(stepped.reseated, [4]);
-    assert!(alone(&store, 4));
+}
+
+/// Labelled to raise it once it's in, and classed with the label: the
+/// next step takes it out rather than putting it back alone, whichever
+/// label, since the steward settled it without the label. It joins again
+/// once it's settled with it.
+#[test]
+fn a_pr_classed_with_a_label_since_it_joined_leaves_the_train() {
+    for (label, class) in [("r2", Class::R2), ("review", Class::R0)] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = store(&dir);
+        let hub = Hub::new(&[3, 4]);
+        join_all(&mut store, &hub, &[3, 4]);
+        hub.labels.borrow_mut().insert(4, vec![label]);
+        assert_eq!(classed(&mut store, &hub, 4), class, "{label}");
+        let stepped = step_once(&mut store, &hub);
+        assert_eq!(
+            (&stepped.unready[..], &stepped.reseated[..]),
+            (&[4][..], &[][..]),
+            "{label}"
+        );
+        assert_eq!(hub.latest(&head(4)), Some(Mark::Waiting));
+        // Taking the label off lowers nothing: it's settled with the raise.
+        hub.labels.borrow_mut().remove(&4);
+        assert_eq!(join_one(&mut store, &hub, 4), Joined::Joined, "{label}");
+        assert_eq!(alone(&store, 4), label == "r2");
+    }
 }
 
 /// Labelled to raise it while its candidate gated, with no class asked for
@@ -258,6 +296,56 @@ fn a_pr_labelled_since_it_joined_leaves_instead_of_landing() {
     }
 }
 
+/// Classed with a label since it joined, its candidate green and nothing
+/// of it landed yet: it's out before anything lands, and the rest are
+/// built again without it.
+#[test]
+fn a_pr_classed_with_a_label_in_a_green_candidate_leaves_before_it_lands() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = store(&dir);
+    let mut hub = Hub::new(&[3, 4, 6]);
+    join_all(&mut store, &hub, &[3, 4, 6]);
+    let (id, _) = gating(&step_once(&mut store, &hub));
+    hub.ci(&commit_of(&store, id), &[("check / check", "success")]);
+    hub.labels.borrow_mut().insert(4, vec!["review"]);
+    classed(&mut store, &hub, 4);
+    let stepped = step_once(&mut store, &hub);
+    assert_eq!(
+        (&stepped.landed[..], &stepped.unready[..]),
+        (&[][..], &[4][..])
+    );
+    assert!(hub.held("main").is_empty());
+    assert_eq!(hub.latest(&head(4)), Some(Mark::Waiting));
+    let (next, prs) = gating(&stepped);
+    assert_ne!(next, id);
+    assert_eq!(prs, [3, 6]);
+}
+
+/// Labelled while its head says it's landing, after the read that let it:
+/// the last read before the merge sees the label, and it leaves instead,
+/// its head saying it's landing no more.
+#[test]
+fn a_pr_labelled_as_it_lands_leaves_instead_of_merging() {
+    for label in ["r2", "review"] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = store(&dir);
+        let mut hub = Hub::new(&[3]);
+        join_all(&mut store, &hub, &[3]);
+        let (id, _) = gating(&step_once(&mut store, &hub));
+        hub.ci(&commit_of(&store, id), &[("check / check", "success")]);
+        *hub.relabel.borrow_mut() = Some((3, label));
+        let stepped = step_once(&mut store, &hub);
+        assert_eq!(
+            (&stepped.landed[..], &stepped.unready[..]),
+            (&[][..], &[3][..]),
+            "{label}"
+        );
+        assert!(hub.held("main").is_empty());
+        assert_eq!(hub.latest(&head(3)), Some(Mark::Waiting));
+        assert!(joined(&store).is_empty());
+    }
+}
+
 /// A label already counted when it joined takes nothing out.
 #[test]
 fn a_label_it_joined_with_lands_it_as_classed() {
@@ -265,9 +353,37 @@ fn a_label_it_joined_with_lands_it_as_classed() {
     let mut store = store(&dir);
     let mut hub = Hub::new(&[3]);
     hub.labels.borrow_mut().insert(3, vec!["review"]);
+    classed(&mut store, &hub, 3);
     join_all(&mut store, &hub, &[3]);
     let (id, _) = gating(&step_once(&mut store, &hub));
     hub.ci(&commit_of(&store, id), &[("check / check", "success")]);
     let stepped = step_once(&mut store, &hub);
     assert_eq!((stepped.landed, stepped.unready), (vec![3], vec![]));
+}
+
+/// Classed with a label while its own landing is open (its head said it
+/// was landing, and the merge didn't go), the label off again before the
+/// next step: what the ledger recorded takes it out instead of its merge,
+/// though the open landing kept the step's reseat from it.
+#[test]
+fn a_pr_classed_with_a_label_while_its_landing_is_open_leaves_before_its_merge() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = store(&dir);
+    let mut hub = Hub::new(&[3]);
+    join_all(&mut store, &hub, &[3]);
+    let (id, _) = gating(&step_once(&mut store, &hub));
+    hub.ci(&commit_of(&store, id), &[("check / check", "success")]);
+    hub.down.set(true);
+    assert!(step(&mut store, &hub, &hub, &config(), &repo(), &settings()).is_err());
+    assert_eq!(hub.latest(&head(3)), Some(Mark::Landing));
+    hub.down.set(false);
+    hub.labels.borrow_mut().insert(3, vec!["review"]);
+    classed(&mut store, &hub, 3);
+    hub.labels.borrow_mut().remove(&3);
+    let stepped = step_once(&mut store, &hub);
+    assert!(stepped.landed.is_empty());
+    assert_eq!(stepped.unready, [3]);
+    assert_eq!(hub.latest(&head(3)), Some(Mark::Waiting));
+    assert!(!hub.merged.borrow().contains_key(&3));
+    assert!(joined(&store).is_empty());
 }

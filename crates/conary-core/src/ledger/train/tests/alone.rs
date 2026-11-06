@@ -52,6 +52,7 @@ fn a_change_in_the_train_below_its_class_replays_and_is_named() {
         change: old,
         revision: b.current(old),
         alone: false,
+        raised: Vec::new(),
     };
     assert_eq!(
         b.ledger.admit(&below),
@@ -114,4 +115,79 @@ fn an_alone_candidate_lands_through_the_train_only_onto_its_base() {
     b.land(s, 'e').unwrap();
     assert_eq!(b.landing(s), Some(id));
     assert_eq!(b.ledger.candidate(id).unwrap().state, State::Landed);
+}
+
+/// A change raised by a label recorded since it joined is named to leave,
+/// not to go back in alone, even when the raise is `r2`: the steward
+/// settled it without the label. One that joined with its raise isn't, and
+/// going back in alone keeps what it joined with.
+#[test]
+fn a_change_raised_since_it_joined_is_named_to_leave_not_reseat() {
+    let mut b = Book::default();
+    let since = b.change(1, 'a');
+    let with = b.change(2, 'b');
+    b.join(since);
+    let raise = |b: &mut Book, change, class, raised: &[&str]| {
+        let revision = b.current(change);
+        b.ok(Body::Classify {
+            change,
+            revision,
+            class,
+            because: (class == Class::R2).then(|| "labelled r2".into()),
+            docs: false,
+            policy: format!("{class:?}{raised:?}"),
+            raised: raised.iter().map(|l| (*l).to_owned()).collect(),
+        });
+    };
+    raise(&mut b, with, Class::R0, &["review"]);
+    let join = |b: &Book, raised: &[&str]| Body::Join {
+        change: with,
+        revision: b.current(with),
+        alone: false,
+        raised: raised.iter().map(|l| (*l).to_owned()).collect(),
+    };
+    assert_eq!(b.ledger.admit(&join(&b, &[])), Err(Invalid::JoinRaised));
+    b.ok(join(&b, &["review"]));
+    raise(&mut b, since, Class::R2, &["r2"]);
+    raise(&mut b, with, Class::R2, &["r2", "review"]);
+    assert_eq!(
+        b.ledger.raised_since_join(&repo()),
+        [b.member(since), b.member(with)]
+    );
+    assert!(b.ledger.below_class(&repo()).is_empty());
+
+    // Joined with every raise, R2 by the policy: back in alone, and still
+    // not raised since it joined.
+    let reclassed = b.change(3, 'c');
+    raise(&mut b, reclassed, Class::R0, &["review"]);
+    b.ok(Body::Join {
+        change: reclassed,
+        revision: b.current(reclassed),
+        alone: false,
+        raised: vec!["review".into()],
+    });
+    let revision = b.current(reclassed);
+    b.ok(Body::Classify {
+        change: reclassed,
+        revision,
+        class: Class::R2,
+        because: Some("CODEOWNERS".into()),
+        docs: false,
+        policy: "p2".into(),
+        raised: vec!["review".into()],
+    });
+    assert_eq!(b.ledger.below_class(&repo()), [b.member(reclassed)]);
+    b.ok(Body::Leave {
+        change: reclassed,
+        why: Left::Below,
+    });
+    let replayed = Ledger::replay(&b.ops).expect("the log replays");
+    for ledger in [&b.ledger, &replayed] {
+        assert_eq!(
+            ledger.raised_since_join(&repo()),
+            [b.member(since), b.member(with)]
+        );
+        assert!(ledger.train(&repo()).unwrap().alone(reclassed));
+        assert_eq!(ledger.train(&repo()).unwrap().raised(reclassed), ["review"]);
+    }
 }

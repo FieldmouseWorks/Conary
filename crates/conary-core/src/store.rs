@@ -315,12 +315,24 @@ mod tests {
                 raised: vec!["review".into()],
             })
             .unwrap();
+        // A join names what raised its change, as the steward settled it.
+        assert!(matches!(
+            store.record(Body::Join {
+                change,
+                revision,
+                alone: true,
+                raised: Vec::new(),
+            }),
+            Err(StoreError::Invalid(Invalid::JoinRaised))
+        ));
+        let review = || vec!["review".to_owned()];
         // R2 rides alone: a join may raise its class, never lower it.
         assert!(matches!(
             store.record(Body::Join {
                 change,
                 revision,
-                alone: false
+                alone: false,
+                raised: review(),
             }),
             Err(StoreError::Invalid(Invalid::BelowClass(r))) if r == revision
         ));
@@ -329,6 +341,7 @@ mod tests {
                 change,
                 revision,
                 alone: true,
+                raised: review(),
             })
             .unwrap();
         drop(store);
