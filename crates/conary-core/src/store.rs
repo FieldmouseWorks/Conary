@@ -272,6 +272,22 @@ mod tests {
             Err(StoreError::Invalid(Invalid::UnknownRevision(_)))
         ));
         store.record(classify(revision, Class::R2, "p2")).unwrap();
+        // R2 rides alone: a join may raise its class, never lower it.
+        assert!(matches!(
+            store.record(Body::Join {
+                change,
+                revision,
+                alone: false
+            }),
+            Err(StoreError::Invalid(Invalid::BelowClass(r))) if r == revision
+        ));
+        store
+            .record(Body::Join {
+                change,
+                revision,
+                alone: true,
+            })
+            .unwrap();
         drop(store);
         let ops = log::read(dir.path(), &key().verifying_key(), None).unwrap();
         let ledger = Ledger::replay(&ops).unwrap();
@@ -281,6 +297,7 @@ mod tests {
         assert_eq!(now.because.as_deref(), Some("CODEOWNERS"));
         assert_eq!(c.classes.len(), 2);
         assert!(c.class_of(elsewhere).is_none());
+        assert!(ledger.train(&c.repo).unwrap().alone(change));
     }
 
     #[test]

@@ -8,7 +8,9 @@ use serde_json::{Value, json};
 
 use conary_core::ledger::{Candidate, Ledger};
 use conary_core::op::{Left, Repo};
-use conary_core::{CandidateId, ChangeId};
+use std::path::PathBuf;
+
+use conary_core::{CandidateId, ChangeId, Policy};
 use conary_github::train::{self, Joined, Leaving, Negatives, Now, Settings, Stepped};
 
 use crate::{Cli, GithubArgs, Result, read, word, write, write_notes};
@@ -29,10 +31,12 @@ pub enum TrainCommand {
         /// The head that was settled.
         #[arg(long)]
         head: String,
-        /// It touches a one-way path (R2): it rides in a candidate of its
-        /// own, which lands only while trunk is still the candidate's base.
-        #[arg(long)]
-        alone: bool,
+        /// The class policy, a JSON file (docs/DESIGN.md section 4.4). Its
+        /// class is the policy's (`cn class`): an R2 one rides in a
+        /// candidate of its own, which lands only while trunk is still the
+        /// candidate's base.
+        #[arg(long, env = "CONARY_POLICY")]
+        policy: PathBuf,
         /// The check run that runs a PR's new tests on its base's code
         /// (burrow's shared CI's `negative`, under its caller's job). A PR
         /// joins only once that run's attestation holds for its revision
@@ -143,11 +147,12 @@ pub fn run(cli: &Cli, command: &TrainCommand) -> Result<()> {
         TrainCommand::Join {
             pr,
             head,
-            alone,
+            policy,
             negative,
             fresh,
             ..
         } => {
+            let policy = Policy::load(policy)?;
             let negatives = negative.as_ref().map(|check| Negatives {
                 check: check.clone(),
                 fresh: fresh.clone(),
@@ -160,7 +165,7 @@ pub fn run(cli: &Cli, command: &TrainCommand) -> Result<()> {
                 repo,
                 *pr,
                 head,
-                *alone,
+                &policy,
                 negatives.as_ref(),
             )
             .map(|joined| match joined {

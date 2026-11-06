@@ -15,11 +15,12 @@ use serde::Serialize;
 use conary_core::ledger::{Candidate, Held, Invalid, State};
 use conary_core::op::{Body, Left, Member, Repo, Verdict};
 use conary_core::store::StoreError;
-use conary_core::{CandidateId, ChangeId, CommitId, Store, TreeId};
+use conary_core::{CandidateId, ChangeId, Class, CommitId, Policy, Store, TreeId};
 
 use crate::api::{ApiError, Source};
 use crate::attest::Actions;
 use crate::branches::{BRANCHES, Branches, Merged};
+use crate::class::{self, ClassError};
 use crate::ingest::{self, Config, IngestError};
 
 mod gate;
@@ -166,6 +167,17 @@ impl From<IngestError> for TrainError {
     }
 }
 
+impl From<ClassError> for TrainError {
+    fn from(e: ClassError) -> Self {
+        match e {
+            ClassError::Api(e) => Self::Api(e),
+            ClassError::Ingest(e) => Self::Ingest(e),
+            ClassError::Store(e) => Self::Store(e),
+            ClassError::Moved { pr, head } => Self::Moved { pr, head },
+        }
+    }
+}
+
 /// Records `body`; true when it was new, false when the ledger held it.
 fn record(store: &mut Store, body: Body) -> Result<bool, TrainError> {
     match store.record(body) {
@@ -201,9 +213,10 @@ pub enum Joined {
 
 /// Puts a PR in its repo's train at `head`, the head everything but the
 /// gate said can land, once the ledger holds the PR as GitHub shows it now
-/// and that is its head. `alone`, it rides in a candidate of its own, which
-/// lands only while trunk is still its base: an R2 change. With
-/// `negatives`, only once its revision's negative counts ([`Negatives`]).
+/// and that is its head. Its class is the policy's ([`class::of`], which
+/// records it): an R2 change rides alone, in a candidate of its own, which
+/// lands only while trunk is still its base. With `negatives`, only once
+/// its revision's negative counts ([`Negatives`]).
 /// Its head's train status goes to pending first, so a success left from an
 /// earlier time in the train can't let anything merge it.
 #[allow(clippy::too_many_arguments)]
@@ -215,7 +228,7 @@ pub fn join(
     repo: &Repo,
     pr: u64,
     head: &str,
-    alone: bool,
+    policy: &Policy,
     negatives: Option<&Negatives>,
 ) -> Result<Joined, TrainError> {
     let (got, pull) = ingest::pulled(store, source, config, repo, pr)?;
@@ -233,10 +246,11 @@ pub fn join(
             head: now.to_string(),
         });
     }
+    let classes = class::of(store, source, policy, repo, got.change, got.revision)?;
     let body = Body::Join {
         change: got.change,
         revision: got.revision,
-        alone,
+        alone: classes.class() == Class::R2,
     };
     match store.ledger().check(&body) {
         Ok(()) => {}

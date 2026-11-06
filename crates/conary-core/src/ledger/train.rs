@@ -11,6 +11,7 @@ use serde::Serialize;
 use super::{Invalid, Ledger, Status};
 use crate::id::{CandidateId, ChangeId, CommitId, RevisionId, TreeId};
 use crate::op::{Attest, Body, CheckKind, Left, Member, Outcome, Repo, Verdict};
+use crate::policy::Class;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CandidateEvidence {
@@ -293,7 +294,12 @@ impl Ledger {
         })
     }
 
-    pub(super) fn check_join(&self, change: ChangeId, revision: RevisionId) -> Result<(), Invalid> {
+    pub(super) fn check_join(
+        &self,
+        change: ChangeId,
+        revision: RevisionId,
+        alone: bool,
+    ) -> Result<(), Invalid> {
         let c = self.existing(change)?;
         match c.status() {
             Status::Landed | Status::Reverted => return Err(Invalid::AlreadyLanded),
@@ -313,6 +319,12 @@ impl Ledger {
         }
         if let Some(why) = self.train_of(change).and_then(|t| t.held(change, revision)) {
             return Err(Invalid::Held(why));
+        }
+        // Its class is the policy's (`docs/DESIGN.md` section 4.4), which
+        // a join may raise but never lower. One from before the ledger
+        // recorded classes has none to hold it to.
+        if !alone && c.class_of(revision).is_some_and(|k| k.class == Class::R2) {
+            return Err(Invalid::BelowClass(revision));
         }
         Ok(())
     }

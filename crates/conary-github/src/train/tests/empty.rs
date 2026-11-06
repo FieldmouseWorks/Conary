@@ -28,7 +28,7 @@ fn a_head_that_changes_nothing_after_the_ones_ahead_leaves_and_is_never_merged()
     assert_eq!(joined(&store), [3, 5]);
     // Held while 3 is on its way to trunk ahead of it.
     assert_eq!(
-        try_join(&mut store, &hub, 4, &head(4), false).unwrap(),
+        try_join(&mut store, &hub, 4, &head(4)).unwrap(),
         Joined::Held(Held::Empty)
     );
     hub.ci(&commit_of(&store, id), &[("check / check", "success")]);
@@ -71,7 +71,7 @@ fn a_head_already_in_a_pr_ahead_of_it_leaves_as_one_that_changes_nothing() {
     let (id, prs) = gating(&stepped);
     assert_eq!(prs, [3]);
     assert_eq!(
-        try_join(&mut store, &hub, 4, &head(4), false).unwrap(),
+        try_join(&mut store, &hub, 4, &head(4)).unwrap(),
         Joined::Held(Held::Empty)
     );
     hub.ci(&commit_of(&store, id), &[("check / check", "success")]);

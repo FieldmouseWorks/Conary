@@ -203,6 +203,8 @@ pub enum Invalid {
     UndoCycle(ChangeId),
     /// That change isn't one of the ones the undo was asked for.
     NotAsked(ChangeId),
+    /// A join below its revision's class: an R2 one that doesn't ride alone.
+    BelowClass(RevisionId),
 }
 
 impl std::fmt::Display for Invalid {
@@ -235,6 +237,7 @@ impl std::fmt::Display for Invalid {
                 write!(f, "change {change} already has an undo, {by}")
             }
             Self::NotAsked(id) => write!(f, "change {id} isn't what the undo was asked for"),
+            Self::BelowClass(id) => write!(f, "revision {id} is R2, so it rides alone"),
             Self::UndoCycle(id) => {
                 write!(
                     f,
@@ -414,8 +417,10 @@ impl Ledger {
                 self.check_reopen(*change)?;
             }
             Body::Join {
-                change, revision, ..
-            } => self.check_join(*change, *revision)?,
+                change,
+                revision,
+                alone,
+            } => self.check_join(*change, *revision, *alone)?,
             Body::Leave { change, .. } => self.check_leave(*change)?,
             Body::Candidate {
                 candidate,

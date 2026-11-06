@@ -88,11 +88,8 @@ fn said(k: &Classed) -> Classified {
 }
 
 /// The class of a PR at `head`, once the ledger holds the PR as GitHub
-/// shows it now and that is its head. The ledger's word for that revision
-/// under this policy is the answer when it has one; otherwise the files the
-/// revision changes from its merge base are read, and what the policy says
-/// of them is recorded. Asked again, it reads GitHub for the PR and nothing
-/// more.
+/// shows it now and that is its head ([`of`]). Asked again, it reads GitHub
+/// for the PR and nothing more.
 pub fn class(
     store: &mut Store,
     source: &dyn Source,
@@ -107,40 +104,53 @@ pub fn class(
         .ledger()
         .change(got.change)
         .expect("ingest recorded it");
-    let revision = c.revision(got.revision).expect("ingest recorded it");
-    if revision.head.as_str() != head {
+    let now = &c.revision(got.revision).expect("ingest recorded it").head;
+    if now.as_str() != head {
         return Err(ClassError::Moved {
             pr,
-            head: revision.head.to_string(),
+            head: now.to_string(),
         });
     }
-    if let Some(k) = c.class_of(got.revision)
+    of(store, source, policy, repo, got.change, got.revision)
+}
+
+/// The class of a revision the ledger holds. The ledger's word for it under
+/// this policy is the answer when it has one; otherwise the files the
+/// revision changes from its merge base are read, and what the policy says
+/// of them is recorded.
+pub(crate) fn of(
+    store: &mut Store,
+    source: &dyn Source,
+    policy: &Policy,
+    repo: &Repo,
+    change: ChangeId,
+    revision: RevisionId,
+) -> Result<Classes, ClassError> {
+    let c = store.ledger().change(change).expect("the caller's change");
+    if let Some(k) = c.class_of(revision)
         && k.policy == policy.digest()
     {
         return Ok(Classes {
-            change: got.change,
-            revision: got.revision,
+            change,
+            revision,
             said: said(k),
             recorded: false,
         });
     }
-    let paths = source.files(
-        &repo.to_string(),
-        revision.base.as_str(),
-        revision.head.as_str(),
-    )?;
+    let r = c.revision(revision).expect("the caller's revision");
+    let paths = source.files(&repo.to_string(), r.base.as_str(), r.head.as_str())?;
     let said = policy.classify(repo, &paths);
     store.record(Body::Classify {
-        change: got.change,
-        revision: got.revision,
+        change,
+        revision,
         class: said.class,
         because: said.because.clone(),
         docs: said.docs,
         policy: policy.digest().to_owned(),
     })?;
     Ok(Classes {
-        change: got.change,
-        revision: got.revision,
+        change,
+        revision,
         said,
         recorded: true,
     })
