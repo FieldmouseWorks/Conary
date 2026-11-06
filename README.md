@@ -59,19 +59,8 @@ Early. It runs on one machine, remi, over one owner's repositories, alongside
 the service that gets PRs reviewed and merges them there today. Conary takes the
 steward's jobs over one at a time.
 
-- **Done:** the ledger records every PR on remi and answers `why`, there and
-  from any clone (M1, M2). conaryd serves it over a socket, and an MCP server
-  offers it to agents.
-- **In progress:** the train (M3) has landed remi's PRs since 2026-10-30,
-  counting only attested results; its exit check waits on a day busy enough
-  to batch them. `undo` (M4) reverts a landed change by its PR, a
-  session's changes or everything since a time; the steward settling its
-  PRs comes next.
-- **Next:** class policy (M5), then Conary running the whole landing flow in
-  place of the steward (M6).
-
-The milestones and their exit checks are in
-[DESIGN section 12](docs/DESIGN.md#12-milestones).
+Where it's going, what's done and what's next are in the
+[roadmap](docs/DESIGN.md#12-roadmap).
 
 ## Trying it
 
