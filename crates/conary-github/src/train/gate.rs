@@ -12,7 +12,7 @@ use conary_core::op::{Attest, Body, CheckKind};
 
 use super::{Failed, Forge, Settings, TrainError, record};
 use crate::api::{CheckRun, Source};
-use crate::attest::{Subject, attested};
+use crate::attest::{Subject, attested, signed_by};
 use crate::ingest::{Config, run_result, status_result};
 
 /// What a candidate's checks say so far.
@@ -190,12 +190,14 @@ fn attestation(
             run.conclusion.as_deref().unwrap_or("nothing")
         )));
     }
-    // A job's link names it: no other run's evidence has it.
+    // A job's link names it: no other run's evidence has it. Kept only
+    // while its signer is still the one the machine names.
     let kept = run.html_url.as_ref().and_then(|url| {
         c.evidence
             .iter()
             .filter(|e| &e.source == url)
-            .find_map(|e| e.attest.clone())
+            .filter_map(|e| e.attest.clone())
+            .find(|a| signed_by(a, &settings.signer))
     });
     if let Some(attest) = kept {
         return Ok(Ok(attest));
@@ -210,6 +212,7 @@ fn attestation(
         &c.repo,
         subject,
         run,
+        &settings.signer,
         settings.fresh.as_deref(),
     )?
     .map(|a| a.attest))

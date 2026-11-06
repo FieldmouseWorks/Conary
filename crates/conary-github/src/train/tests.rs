@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 
 use super::*;
 use crate::api::{CheckRun, Commit, Event, PullRequest, Pulls, Review, Status as CommitStatus};
-use crate::attest::{ARTIFACT, Artifact, FILE, Job, Key, SIGNER_REPO, testing};
+use crate::attest::{ARTIFACT, Artifact, FILE, Job, Key, testing};
 use conary_core::policy::{Paths, Touched};
 
 const TRUNK: &str = "1111111111111111111111111111111111111111";
@@ -41,6 +41,7 @@ fn settings() -> Settings {
     Settings {
         size: 8,
         require: vec!["check / check".into()],
+        signer: testing::signer(),
         fresh: Some(FRESH.into()),
     }
 }
@@ -52,9 +53,9 @@ fn settings() -> Settings {
 /// just what another head does, so merged where that one is already it
 /// leaves the tree as it was. A head in `stacked` is on another's branch:
 /// merging it, or landing it, brings that head too. A PR's merge squashes
-/// its head onto trunk. Each check run is a GitHub Actions job, and burrow's
-/// shared CI, at the signer commit on burrow's main, attests the passes it
-/// is told to.
+/// its head onto trunk. Each check run is a GitHub Actions job, and the
+/// shared CI the machine names, at the signer commit on its repo's main,
+/// attests the passes it is told to.
 #[derive(Default)]
 struct Hub {
     /// The repo's default branch.
@@ -102,7 +103,7 @@ struct Hub {
     runs: Cell<u64>,
     /// Each job's run's attestation artifacts, by the job's check run id.
     attestations: RefCell<HashMap<u64, Vec<Kept>>>,
-    /// The commits on burrow's default branch, its tip first.
+    /// The commits on the signer's repo's default branch, its tip first.
     signer: RefCell<Vec<String>>,
     /// How many artifacts were downloaded.
     downloads: Cell<u64>,
@@ -352,10 +353,11 @@ impl Source for Hub {
         Ok(Vec::new())
     }
 
-    /// On burrow, a commit on its default branch is behind the tip; the
+    /// On the signer's repo, a commit on its default branch is behind the tip; the
     /// rest is a fork's.
     fn merge_base(&self, repo: &str, a: &str, _: &str) -> Result<String, ApiError> {
-        if repo == SIGNER_REPO && self.signer.borrow().iter().any(|c| c == a) {
+        if repo == testing::signer().repo.to_string() && self.signer.borrow().iter().any(|c| c == a)
+        {
             return Ok(a.into());
         }
         Ok(FORK.into())
@@ -429,14 +431,14 @@ impl Actions for Hub {
 
 impl Branches for Hub {
     fn default_branch(&self, repo: &str) -> Result<String, ApiError> {
-        if repo == SIGNER_REPO {
+        if repo == testing::signer().repo.to_string() {
             return Ok("main".into());
         }
         Ok(self.default.borrow().clone())
     }
 
     fn branch(&self, repo: &str, name: &str) -> Result<Option<String>, ApiError> {
-        if repo == SIGNER_REPO {
+        if repo == testing::signer().repo.to_string() {
             return Ok((name == "main").then(|| self.signer.borrow()[0].clone()));
         }
         Ok(self.branch_at(name))

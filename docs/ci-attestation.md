@@ -10,7 +10,8 @@ is the format; the workflow follows it.
 
 Each attestation is signed with the job's own GitHub OIDC identity: GitHub
 signs the job a token naming the repo, the workflow that asked for it
-(burrow's `flake-check.yml` at a commit), the commit the job checked and the
+(the signer workflow, such as burrow's `flake-check.yml`, at a commit), the
+commit the job checked and the
 run. A public repo's job turns that into a [Sigstore](https://www.sigstore.dev/)
 bundle; a private repo's signs with the token itself (both below). Either way
 it attests the same subject and predicate.
@@ -66,7 +67,7 @@ run
 
 ```sh
 gh attestation verify <file> --repo <owner>/<repo> \
-  --signer-workflow FieldmouseWorks/burrow/.github/workflows/flake-check.yml \
+  --signer-workflow "$CONARY_SIGNER_WORKFLOW" \
   --predicate-type https://github.com/FieldmouseWorks/Conary/blob/main/docs/ci-attestation.md#v1
 ```
 
@@ -191,10 +192,17 @@ asked to. Nothing checks a bundle, or a PR's revision's gate, yet.
    (`https://token.actions.githubusercontent.com/.well-known/jwks`, RS256),
    from the issuer `https://token.actions.githubusercontent.com`.
 2. The signer workflow (the token's `job_workflow_ref` and
-   `job_workflow_sha`, which the certificate carries too) is burrow's
-   `flake-check.yml` at a commit on burrow's main, and its repo is the
-   change's repo. A burrow branch, or a burrow PR's own run of the workflow
-   it changes, can sign anything, so neither counts.
+   `job_workflow_sha`, which the certificate carries too) is the one the
+   machine running the train names, at a commit on its repo's default
+   branch, and the token's repo is the change's repo. The machine names it
+   as `owner/repo/.github/workflows/FILE`, the way `gh attestation verify
+   --signer-workflow` takes it (`CONARY_SIGNER_WORKFLOW`, or `cn train
+   --signer-workflow`), with no default; remi names burrow's
+   `flake-check.yml`. A branch of the signer's repo, or a PR's own run of
+   the workflow it changes, can sign anything, so neither counts. What the ledger kept counts again (a gate's pass read on a
+   later step, a revision's negative when it joins again) only while its
+   token names the signer the machine names now; a green verdict already
+   recorded stands as it was decided.
 3. The subject's digest is the one for the revision (or the commit) asked
    about, and the predicate's `revision` says the same.
 4. It's this page's `#v1`: the bundle's predicate type, or the token's
@@ -243,11 +251,12 @@ A token also has to bind its statement to its run:
    merge as the event found it, which the job doesn't check.)
 
 Inside the signing job, nothing of the candidate's runs as the job's user:
-the workflow evaluates its flake and builds it in nix-daemon's sandbox, as
-Nix's build users, and runs only burrow's own steps and actions pinned to
-commits. That is part of what rule 2's signer workflow guarantees, so a
-change to `flake-check.yml` that ran the candidate's code outside Nix would
-break rule 5's reason for counting it.
+burrow's `flake-check.yml` evaluates its flake and builds it in nix-daemon's
+sandbox, as Nix's build users, and runs only burrow's own steps and actions
+pinned to commits. That is part of what rule 2's signer workflow
+guarantees, so a signer that ran the candidate's code as the job's user
+would break rule 5's reason for counting it, and a machine names only a
+workflow that keeps to this.
 
 A token expires minutes after the job asks for it; that only stops it being
 used to sign in somewhere, and doesn't bear on checking it. GitHub can drop a
