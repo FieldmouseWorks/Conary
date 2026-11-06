@@ -11,7 +11,7 @@ use sha2::{Digest, Sha256};
 use ureq::tls::{RootCerts, TlsConfig};
 
 use super::{AUDIENCE, hex, is_commit};
-use crate::api::{ApiError, passing_status, unreachable};
+use crate::api::{ApiError, passing_status, read, unreachable};
 
 /// A gate's result: `pass` when it succeeded, otherwise `fail`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -348,9 +348,10 @@ pub(super) fn token_waiting(
             .and_then(|mut answer| {
                 let status = answer.status().as_u16();
                 if status == 200 {
-                    let read: Answer = answer
-                        .body_mut()
-                        .read_json()
+                    // Cut off while it's read is the network, asked again;
+                    // a whole answer that isn't a token stays wrong.
+                    let body = read(request.url, &mut answer)?;
+                    let read: Answer = serde_json::from_slice(&body)
                         .map_err(|e| ApiError::new(format!("its OIDC token doesn't read: {e}")))?;
                     return Ok(read.value);
                 }

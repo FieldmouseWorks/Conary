@@ -227,10 +227,11 @@ fn a_statement_names_object_ids_and_a_negatives_tree_as_its_result_has_one() {
 }
 
 /// A token service on localhost answering each request with the next of
-/// `answers` (status, body), and handing back each request's line and
+/// `answers` (status, body, and how many bytes past it its length claims,
+/// for an answer cut off as it's sent), and handing back each request's line and
 /// Authorization header.
 fn service(
-    answers: Vec<(u16, &'static str)>,
+    answers: Vec<(u16, &'static str, usize)>,
 ) -> (String, std::thread::JoinHandle<Vec<(String, String)>>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!(
@@ -239,7 +240,7 @@ fn service(
     );
     let served = std::thread::spawn(move || {
         let mut seen = Vec::new();
-        for (status, body) in answers {
+        for (status, body, cut) in answers {
             let (stream, _) = listener.accept().unwrap();
             let mut reader = BufReader::new(stream.try_clone().unwrap());
             let mut line = String::new();
@@ -263,7 +264,7 @@ fn service(
             write!(
                 stream,
                 "HTTP/1.1 {status} X\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
-                body.len()
+                body.len() + cut
             )
             .unwrap();
         }
@@ -275,7 +276,11 @@ fn service(
 #[test]
 fn a_token_is_asked_for_with_its_statements_audience_and_again_when_github_says_later() {
     let s = "conary commit v1\nc0\n{}\n";
-    let (url, served) = service(vec![(503, "{}"), (200, r#"{"value":"a.b.c"}"#)]);
+    let (url, served) = service(vec![
+        (503, "{}", 0),
+        (200, r#"{"value":"#, 20),
+        (200, r#"{"value":"a.b.c"}"#, 0),
+    ]);
     let request = Request {
         url: &url,
         bearer: "request-token",
@@ -283,7 +288,8 @@ fn a_token_is_asked_for_with_its_statements_audience_and_again_when_github_says_
     let got = token_waiting(&request, s, Duration::from_millis(1)).unwrap();
     assert_eq!(got, "a.b.c");
     let seen = served.join().unwrap();
-    assert_eq!(seen.len(), 2);
+    // Cut off mid-answer is the network, not GitHub's word: asked again.
+    assert_eq!(seen.len(), 3);
     for (line, authorization) in &seen {
         assert!(
             line.starts_with(&format!(
@@ -295,7 +301,7 @@ fn a_token_is_asked_for_with_its_statements_audience_and_again_when_github_says_
         assert_eq!(authorization, "bearer request-token");
     }
     // Refused is refused: asked once, and the bearer isn't in what it says.
-    let (url, served) = service(vec![(403, "{}")]);
+    let (url, served) = service(vec![(403, "{}", 0)]);
     let request = Request {
         url: &url,
         bearer: "request-token",
@@ -303,5 +309,17 @@ fn a_token_is_asked_for_with_its_statements_audience_and_again_when_github_says_
     let e = token_waiting(&request, s, Duration::from_millis(1)).unwrap_err();
     assert!(!e.unavailable && e.to_string().contains("HTTP 403"), "{e}");
     assert!(!e.to_string().contains("request-token"), "{e}");
+    assert_eq!(served.join().unwrap().len(), 1);
+    // A whole answer that isn't a token is as wrong the next time.
+    let (url, served) = service(vec![(200, "not json", 0)]);
+    let request = Request {
+        url: &url,
+        bearer: "request-token",
+    };
+    let e = token_waiting(&request, s, Duration::from_millis(1)).unwrap_err();
+    assert!(
+        !e.unavailable && e.to_string().contains("doesn't read"),
+        "{e}"
+    );
     assert_eq!(served.join().unwrap().len(), 1);
 }

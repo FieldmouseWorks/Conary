@@ -460,7 +460,7 @@ pub(crate) fn passing_status(status: u16) -> bool {
     status == 429 || status >= 500
 }
 
-fn read(url: &str, response: &mut Response) -> Result<Vec<u8>, ApiError> {
+pub(crate) fn read(url: &str, response: &mut Response) -> Result<Vec<u8>, ApiError> {
     response
         .body_mut()
         .read_to_vec()
