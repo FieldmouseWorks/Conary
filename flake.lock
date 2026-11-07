@@ -9,17 +9,17 @@
         "rust-overlay": "rust-overlay"
       },
       "locked": {
-        "lastModified": 1794039719,
-        "narHash": "sha256-DU49jOS24LCH1UErcPnRQJtLhPzk1YQQhdpreizPHpI=",
+        "lastModified": 1794041314,
+        "narHash": "sha256-T9vg06tdMmTVEs8tTKmc1wP34pHwA9AYJ+cc2pWrYgc=",
         "ref": "main",
-        "rev": "849ce4f038c526510102bd7139a70887a5a3e114",
-        "revCount": 473,
+        "rev": "ca9cd8fb8a381382cc9e85bdd74cbfe28b9ceab7",
+        "revCount": 475,
         "type": "git",
         "url": "https://github.com/FieldmouseWorks/burrow"
       },
       "original": {
         "ref": "main",
-        "rev": "849ce4f038c526510102bd7139a70887a5a3e114",
+        "rev": "ca9cd8fb8a381382cc9e85bdd74cbfe28b9ceab7",
         "type": "git",
         "url": "https://github.com/FieldmouseWorks/burrow"
       }
@@ -110,10 +110,10 @@
         ]
       },
       "locked": {
-        "lastModified": 1793956102,
-        "narHash": "sha256-dASUovwB3DUoTm6daga0hsNZZAFCCGlUS4FPBjK0OwA=",
+        "lastModified": 1794040562,
+        "narHash": "sha256-7eEiezSku3lbZPUOXW8we1a7+xd5axkCQdyI3rzOKjo=",
         "ref": "refs/heads/master",
-        "rev": "74cebce67ef6671ea48fda353a5be2d229bd2920",
+        "rev": "d3fe74269f2a6652437e21e78eb7e83be81f6982",
         "shallow": true,
         "type": "git",
         "url": "https://github.com/oxalica/rust-overlay"
