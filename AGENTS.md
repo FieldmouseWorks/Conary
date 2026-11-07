@@ -2,8 +2,18 @@
 
 Conary is the ledger and landing engine for code that agents write, on top of
 git and GitHub: every change carries its intent and proof, lands when the proof
-is green, and can always be undone. It's at the design stage;
-[docs/DESIGN.md](docs/DESIGN.md) is the spec everything here builds toward.
+is green, and can always be undone. The ledger, the merge train and `cn undo`
+run on remi today; [docs/DESIGN.md](docs/DESIGN.md) is the spec everything here
+builds toward, and its [section 12](docs/DESIGN.md#12-roadmap) is the road to
+done. Where the rest lives:
+
+- [README](README.md): what it does today, and building it with plain cargo.
+- [docs/ci-attestation.md](docs/ci-attestation.md): how CI attests evidence,
+  and the negative runs.
+- [docs/conaryd.md](docs/conaryd.md), [docs/mcp.md](docs/mcp.md): the
+  ledger's calls over its socket and as MCP tools.
+- [docs/notes.md](docs/notes.md): how a clone that can't reach the ledger
+  reads it.
 
 <!-- house:rules v1 begin. Copied from FieldmouseWorks/burrow house/rules.md, verbatim. Change it there, not here: burrow's house sync rewrites everything between these markers. -->
 ## House rules
