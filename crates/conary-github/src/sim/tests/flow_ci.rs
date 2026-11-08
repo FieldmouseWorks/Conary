@@ -107,10 +107,12 @@ impl Scenario {
                 complete: true,
                 merge_state: "CLEAN".into(),
                 open_threads: 0,
-                changes_requested: false,
-                reviewers: f.reviewers,
+                resolved_reviews: Default::default(),
                 updated_at: 0,
                 suites: BTreeMap::new(),
+                checks_complete: true,
+                rebase_removed: Vec::new(),
+                timeline_cut_at: None,
             },
         );
         Self { hub, memory }
@@ -119,7 +121,10 @@ impl Scenario {
         self.read_settings(
             runs,
             Settings {
-                proofs: proofs.iter().map(|p| (*p).into()).collect(),
+                proofs: proofs
+                    .iter()
+                    .map(|p| ((*p).into(), Recipe::Job("run proof".into())))
+                    .collect(),
                 ..Settings::default()
             },
         )
@@ -134,7 +139,7 @@ impl Scenario {
             3,
             runs.iter().map(|r| (r.suite, r.metadata.clone())).collect(),
         );
-        let mut f = read(
+        read(
             &self.hub,
             &REMI.parse().unwrap(),
             3,
@@ -142,13 +147,7 @@ impl Scenario {
             settings,
             &["owner".into()],
         )
-        .unwrap();
-        // These remain conservative unknowns in the first reader adapter;
-        // they are immaterial to the CI assertions but permit a landing
-        // intention once the independently read CI is actually green.
-        f.authorship_known = true;
-        f.empty = Some(false);
-        f
+        .unwrap()
     }
     fn assert(&self, runs: &[Run], state: Ci, names: &[&str]) {
         let f = self.read(runs, &[]);
@@ -699,9 +698,13 @@ fn job_proofs_wait_for_ci_but_machine_proofs_start_beside_it() {
     for kind in ["build", "run"] {
         let mut f = f.clone();
         if kind == "build" {
-            f.settings.proof_builds.insert("agents".into());
+            f.settings
+                .proofs
+                .insert("agents".into(), Recipe::Build("checks.vm".into()));
         } else {
-            f.settings.proof_runs.insert("agents".into());
+            f.settings
+                .proofs
+                .insert("agents".into(), Recipe::Run(vec!["just proof".into()]));
         }
         assert_eq!(next(&f, &s.memory, 4000).0.step, Step::Prove);
     }
@@ -867,17 +870,6 @@ fn train_enabled_release_branch_lands_outside_the_train() {
     s.hub
         .edit_pull(REMI, 3, |p| p["base"]["ref"] = json!("release"));
     let revision = Revision::from(&crate::api::Source::pull(&s.hub, REMI, 3).unwrap());
-    let reviewers = BTreeMap::from([(
-        "reviewer".into(),
-        Reviewer {
-            review: Some(Review {
-                revision: revision.clone(),
-                verdict: Verdict::Clean,
-                at: 0,
-            }),
-            ..Reviewer::default()
-        },
-    )]);
     s.hub.flow_snapshot(
         REMI,
         3,
@@ -887,12 +879,15 @@ fn train_enabled_release_branch_lands_outside_the_train() {
             complete: true,
             merge_state: "CLEAN".into(),
             open_threads: 0,
-            changes_requested: false,
-            reviewers,
+            resolved_reviews: Default::default(),
             updated_at: 0,
             suites: BTreeMap::new(),
+            checks_complete: true,
+            rebase_removed: Vec::new(),
+            timeline_cut_at: None,
         },
     );
+    s.hub.flow_review(REMI, 3, "reviewer", Verdict::Clean, 0);
     let mut f = s.read(&[Run::whole(1, "release", "success")], &[]);
     f.settings.train = true;
     assert_eq!(f.default_branch, "main");
@@ -912,9 +907,13 @@ fn build_or_run_configuration_alone_still_requires_its_proof() {
     for build in [true, false] {
         let mut settings = Settings::default();
         if build {
-            settings.proof_builds.insert("vm".into());
+            settings
+                .proofs
+                .insert("vm".into(), Recipe::Build("checks.vm".into()));
         } else {
-            settings.proof_runs.insert("vm".into());
+            settings
+                .proofs
+                .insert("vm".into(), Recipe::Run(vec!["just proof".into()]));
         }
         let f = s.read_settings(&[Run::whole(1, "main", "success")], settings.clone());
         assert_eq!(f.proof, Proof::Needed);

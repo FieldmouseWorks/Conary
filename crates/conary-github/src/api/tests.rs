@@ -606,3 +606,5 @@ fn a_comparison_listing_as_many_files_as_github_lists_may_be_cut_short() {
     let shorter = compared(Vec::new());
     assert!(!shorter.cut && shorter.files.is_empty());
 }
+
+mod flow;

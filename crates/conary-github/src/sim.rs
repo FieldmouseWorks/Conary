@@ -44,6 +44,7 @@ use crate::train::Mark;
 mod ci;
 mod faults;
 mod fixtures;
+mod flow;
 mod forge;
 
 pub(crate) use faults::{Call, On};
@@ -83,6 +84,8 @@ pub(crate) struct World {
     /// Check runs by commit, as GitHub lists them.
     checks: HashMap<String, Vec<Value>>,
     annotations: HashMap<u64, Vec<String>>,
+    commit_records: HashMap<String, Value>,
+    diffs: HashMap<(String, String), String>,
     /// Each check run's job's artifacts, by the job's check run id: name
     /// and GitHub's zip of it.
     artifacts: HashMap<u64, Vec<(String, Vec<u8>)>>,
@@ -112,6 +115,7 @@ struct Repo {
     /// PRs as GitHub's REST API shows them, by number.
     pulls: BTreeMap<u64, Value>,
     reviews: HashMap<u64, Vec<Value>>,
+    comments: HashMap<u64, Vec<Value>>,
     flow: HashMap<u64, crate::flow::Snapshot>,
     /// Each PR's timeline events, oldest first.
     timeline: HashMap<u64, Vec<Value>>,

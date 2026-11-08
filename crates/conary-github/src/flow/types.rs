@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use super::{ProofData, ProofPlan, SealKey};
 use conary_core::policy::Classified;
 use serde::{Deserialize, Serialize};
 
@@ -84,6 +85,8 @@ pub struct Review {
 pub struct Reviewer {
     pub review: Option<Review>,
     pub rounds: u32,
+    pub record_id: Option<u64>,
+    pub findings_answered: bool,
     pub unavailable_until: Option<u64>,
     pub queued: bool,
     /// An answer from the service which has not yet been posted to GitHub.
@@ -97,6 +100,8 @@ pub enum Kind {
     Findings,
     Red,
     JudgeFailure,
+    /// Repair the PR description without changing its head.
+    Description,
     Conflict,
     Judge,
     Proof,
@@ -106,7 +111,7 @@ impl Kind {
     pub fn fixes_branch(self) -> bool {
         matches!(
             self,
-            Self::Findings | Self::Red | Self::JudgeFailure | Self::Conflict
+            Self::Findings | Self::Red | Self::JudgeFailure | Self::Description | Self::Conflict
         )
     }
 }
@@ -174,15 +179,34 @@ pub enum Proof {
     Unposted,
 }
 
+/// A proof's identity includes what runs, not just its status name.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Recipe {
+    Build(String),
+    Run(Vec<String>),
+    Job(String),
+}
+
 /// Machine settings, never selected by the PR's author.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Settings {
     pub train: bool,
+    pub proof_slots: Option<u32>,
+    pub proof_timeout: u64,
+    pub judge_engines: BTreeSet<String>,
+    pub reviewers: BTreeSet<String>,
+    pub review_authors: BTreeSet<String>,
+    pub verdict_authors: BTreeSet<String>,
+    pub judge_key: Option<SealKey>,
+    pub major_key: Option<SealKey>,
+    pub bot_emails: BTreeSet<String>,
+    pub renovate_email: Option<String>,
+    pub renovate_login: Option<String>,
+    pub batch_label: String,
+    pub hold_label: String,
+    pub owner_label: String,
     pub require_ci: bool,
-    /// Checks a job runs; builds and runs below are separate proof kinds.
-    pub proofs: BTreeSet<String>,
-    pub proof_builds: BTreeSet<String>,
-    pub proof_runs: BTreeSet<String>,
+    pub proofs: BTreeMap<String, Recipe>,
     pub settle_delay: u64,
     pub handoff_after: u64,
     pub session_handoff_after: u64,
@@ -191,16 +215,18 @@ pub struct Settings {
     pub hold_stall_after: u64,
     pub train_stall_after: u64,
     pub renovate_merge_after: u64,
+    pub renovate_run: u64,
 }
 
 impl Settings {
     pub fn machine(&self) -> BTreeSet<String> {
+        self.proofs.keys().map(|name| name.to_lowercase()).collect()
+    }
+    pub fn recipe(&self, name: &str) -> Option<&Recipe> {
         self.proofs
             .iter()
-            .chain(&self.proof_builds)
-            .chain(&self.proof_runs)
-            .cloned()
-            .collect()
+            .find(|(key, _)| key.eq_ignore_ascii_case(name))
+            .map(|(_, recipe)| recipe)
     }
 }
 
@@ -208,10 +234,24 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             train: false,
+            proof_slots: None,
+            proof_timeout: 10800,
+            judge_engines: BTreeSet::from(["codex".into()]),
+            reviewers: BTreeSet::from(["reviewer".into()]),
+            review_authors: BTreeSet::from(["fieldmouseworks-steward[bot]".into()]),
+            verdict_authors: BTreeSet::new(),
+            judge_key: None,
+            major_key: None,
+            bot_emails: BTreeSet::from(
+                ["49699333+dependabot[bot]@users.noreply.github.com".into()],
+            ),
+            renovate_email: None,
+            renovate_login: None,
+            batch_label: "upstream batch".into(),
+            hold_label: "hold".into(),
+            owner_label: "needs-peter".into(),
             require_ci: true,
-            proofs: BTreeSet::new(),
-            proof_builds: BTreeSet::new(),
-            proof_runs: BTreeSet::new(),
+            proofs: BTreeMap::new(),
             settle_delay: 300,
             handoff_after: 1800,
             session_handoff_after: 7200,
@@ -220,6 +260,7 @@ impl Default for Settings {
             hold_stall_after: 28800,
             train_stall_after: 7200,
             renovate_merge_after: 7200,
+            renovate_run: 7200,
         }
     }
 }
@@ -230,6 +271,7 @@ impl Default for Settings {
 pub struct Facts {
     pub revision: Revision,
     pub default_branch: String,
+    pub base_tip: Option<String>,
     pub open: bool,
     pub draft: bool,
     pub trusted: bool,
@@ -243,6 +285,7 @@ pub struct Facts {
     pub judgment: Option<Judged>,
     pub jobs: BTreeMap<Kind, Job>,
     pub proof: Proof,
+    pub proof_data: ProofData,
     pub settings: Settings,
     pub classified: Classified,
     pub unseen: bool,
@@ -256,6 +299,10 @@ pub struct Facts {
     pub major: Option<Major>,
     pub release_at: Option<u64>,
     pub bot_merges: bool,
+    pub bot_automerge_enabled: bool,
+    pub rebase_requested: bool,
+    pub rebase_removed: Vec<u64>,
+    pub timeline_cut_at: Option<u64>,
     pub stacked_on: Option<u64>,
     pub base_held: bool,
     /// Whether merging into the current base would change nothing. None is
@@ -300,6 +347,9 @@ pub struct Wait {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Memory {
     pub head: String,
+    pub raised: BTreeSet<String>,
+    pub latest_reviews: BTreeMap<String, u64>,
+    pub consumed_reviews: BTreeSet<(String, Revision, u64)>,
     pub seen: u64,
     pub no_checks_since: Option<u64>,
     pub strikes: BTreeMap<Failure, u32>,
@@ -318,6 +368,7 @@ pub enum Step {
     QueueReview(String),
     PostReview(String),
     HandFix(Kind),
+    StopJob(String),
     Prove,
     PostProof,
     Judge,
@@ -337,4 +388,5 @@ pub struct Next {
     pub step: Step,
     pub description: String,
     pub overdue_at: Option<u64>,
+    pub proof: Option<ProofPlan>,
 }

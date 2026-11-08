@@ -1,7 +1,7 @@
 //! The read half of a pass. The supplementary projection is behind a trait
 //! because Source's REST reads do not expose resolved review threads.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use conary_core::Policy;
 use conary_core::op::Repo;
@@ -19,10 +19,12 @@ pub struct Snapshot {
     pub complete: bool,
     pub merge_state: String,
     pub open_threads: u32,
-    pub changes_requested: bool,
-    pub reviewers: BTreeMap<String, Reviewer>,
+    pub resolved_reviews: BTreeSet<u64>,
     pub updated_at: u64,
     pub suites: BTreeMap<u64, Suite>,
+    pub checks_complete: bool,
+    pub rebase_removed: Vec<u64>,
+    pub timeline_cut_at: Option<u64>,
 }
 
 pub trait Read: Source + crate::branches::Branches {
@@ -48,10 +50,90 @@ pub fn read(
     if extra.revision != revision {
         return Err(ApiError::new("PR moved between flow reads"));
     }
-    let paths = source.files(&repository, &pull.base.sha, &pull.head.sha)?;
-    let classified = policy.classify(repo, &paths).raise(pull.raises());
-    let machine = settings.machine();
-    let ci = super::ci::checks(
+    let labels = pull.labels.iter().map(|l| l.name.clone()).collect();
+    let renovate = pull.head.name.starts_with("renovate/");
+    let dependency = dependency(&pull.head.name, &pull.title, &pull.labels);
+    let unknown = conary_core::policy::Paths {
+        files: Vec::new(),
+        cut: true,
+    };
+    let classified = policy.classify(repo, &unknown).raise(pull.raises());
+    let mut facts = Facts {
+        revision,
+        default_branch: pull
+            .base
+            .repo
+            .as_ref()
+            .map_or_else(String::new, |r| r.default_branch.clone()),
+        open: pull.state == "open",
+        draft: extra.draft,
+        trusted: trusted_authors.contains(&pull.user.login),
+        complete: extra.complete,
+        labels,
+        merging: Merge::from_github(&extra.merge_state),
+        checks: Vec::new(),
+        open_threads: extra.open_threads,
+        changes_requested: false,
+        reviewers: BTreeMap::new(),
+        judgment: None,
+        jobs: BTreeMap::new(),
+        proof: Proof::NotNeeded,
+        proof_data: ProofData::default(),
+        base_tip: None,
+        settings,
+        classified,
+        unseen: false,
+        authorship_known: false,
+        needs_judge: false,
+        judge_asked: false,
+        dependency,
+        renovate,
+        bot_edited: None,
+        gate_edited: false,
+        major: None,
+        release_at: None,
+        bot_merges: false,
+        bot_automerge_enabled: false,
+        rebase_requested: pull.title.starts_with("rebase!")
+            || pull.labels.iter().any(|l| l.name == "rebase"),
+        rebase_removed: extra.rebase_removed.clone(),
+        timeline_cut_at: extra.timeline_cut_at,
+        stacked_on: None,
+        base_held: false,
+        empty: None,
+        updated_at: extra.updated_at,
+        last_reply_at: 0,
+        session: pull
+            .body
+            .as_deref()
+            .is_some_and(|b| b.contains("https://claude.ai/code/session_")),
+        failed: None,
+    };
+    // These PRs do not enter the pipeline. In particular, do not spend
+    // thousands of review/comment reads after GitHub already said the cap
+    // was exceeded, or fail a draft because its unfinished checks fail.
+    if !facts.open
+        || facts.draft
+        || !facts.trusted
+        || !facts.complete
+        || facts.labels.contains(&facts.settings.hold_label)
+    {
+        return Ok(facts);
+    }
+    facts.stacked_on = source
+        .pulls(&repository, crate::api::Pulls::Open)?
+        .into_iter()
+        .find(|p| p.number != pr && p.head.name == pull.base.name)
+        .map(|p| p.number);
+    if facts.stacked_on.is_some() {
+        return Ok(facts);
+    }
+    let tip = source.branch(&repository, &pull.base.name)?;
+    let base = tip.as_deref().unwrap_or(&pull.base.sha);
+    let paths = source.files(&repository, base, &pull.head.sha)?;
+    facts.classified = policy.classify(repo, &paths).raise(pull.raises());
+    let machine = facts.settings.machine();
+    let mut ci = super::ci::checks(
         source,
         &repository,
         &pull.head.sha,
@@ -60,10 +142,65 @@ pub fn read(
         &extra.suites,
         &machine,
     )?;
-    let labels = pull.labels.iter().map(|l| l.name.clone()).collect();
-    let renovate = pull.head.name.starts_with("renovate/");
-    let dependency = dependency(&pull.head.name, &pull.title, &pull.labels);
-    let proof = if machine.is_empty() || ci.docs {
+    if !extra.checks_complete {
+        ci.checks = vec![Check {
+            name: "over 100 checks, too many to read".into(),
+            state: Ci::Pending,
+        }];
+        ci.docs = false;
+    }
+    let records = source.reviews(&repository, pr)?;
+    let comments = source.comments(&repository, pr)?;
+    let markers = super::markers::read(&repository, &pull, &comments, &facts.settings);
+    let mut verdicts = BTreeMap::new();
+    for r in &records {
+        if let (Some(who), Some(state)) = (&r.user, &r.state)
+            && matches!(
+                state.as_str(),
+                "APPROVED" | "CHANGES_REQUESTED" | "DISMISSED"
+            )
+        {
+            verdicts.insert(&who.login, state);
+        }
+    }
+    facts.changes_requested = verdicts.values().any(|s| s.as_str() == "CHANGES_REQUESTED");
+    facts.reviewers =
+        super::reviews::read(&pull, &records, &extra.resolved_reviews, &facts.settings)?;
+    facts.judgment = markers.judgment;
+    facts.judge_asked = markers.judge_asked;
+    facts.major = markers.major;
+    let history = source
+        .compare_commits(&repository, base, &pull.head.sha)
+        .ok();
+    let provenance = super::history::provenance(history.as_ref(), &facts.settings, renovate);
+    facts.authorship_known = provenance.known;
+    facts.needs_judge = provenance.judge;
+    facts.bot_edited = provenance.edited;
+    facts.empty = if let (Some(tip), Some(merge)) = (&tip, &pull.merge_commit_sha) {
+        source
+            .commit(&repository, merge)
+            .ok()
+            .filter(|c| {
+                c.parents
+                    .iter()
+                    .map(|p| p.sha.as_str())
+                    .eq([tip.as_str(), pull.head.sha.as_str()])
+            })
+            .and_then(|_| {
+                source
+                    .tree(&repository, merge)
+                    .ok()
+                    .zip(source.tree(&repository, tip).ok())
+                    .map(|(a, b)| a == b)
+            })
+    } else {
+        None
+    };
+    facts.base_tip = tip.clone();
+    facts.gate_edited = super::gates::edited(&paths, || {
+        source.diff(&repository, base, &pull.head.sha).ok()
+    });
+    facts.proof = if machine.is_empty() || ci.docs {
         Proof::NotNeeded
     } else if ci
         .checks
@@ -80,52 +217,25 @@ pub fn read(
     } else {
         Proof::Passed
     };
-    Ok(Facts {
-        revision,
-        default_branch: pull
-            .base
-            .repo
-            .as_ref()
-            .map_or_else(String::new, |r| r.default_branch.clone()),
-        open: pull.state == "open",
-        draft: extra.draft,
-        trusted: trusted_authors.contains(&pull.user.login),
-        complete: extra.complete,
-        labels,
-        merging: Merge::from_github(&extra.merge_state),
-        checks: ci.checks,
-        open_threads: extra.open_threads,
-        changes_requested: extra.changes_requested,
-        reviewers: extra.reviewers,
-        judgment: None,
-        jobs: BTreeMap::new(),
-        proof,
-        settings,
-        classified,
-        unseen: false,
-        // Commit provenance has not been read by this adapter. A missing read
-        // is never permission to land on reviews alone.
-        authorship_known: false,
-        needs_judge: false,
-        judge_asked: false,
-        dependency,
-        renovate,
-        bot_edited: None,
-        gate_edited: false,
-        major: None,
-        release_at: None,
-        bot_merges: renovate,
-        stacked_on: None,
-        base_held: false,
-        empty: None,
-        updated_at: extra.updated_at,
-        last_reply_at: 0,
-        session: pull
-            .body
-            .as_deref()
-            .is_some_and(|b| b.contains("https://claude.ai/code/session_")),
-        failed: None,
-    })
+    let body = pull.body.as_deref().unwrap_or("");
+    facts.bot_automerge_enabled = super::gates::enabled(body);
+    facts.bot_merges = renovate
+        && dependency == Some(Dependency::Minor)
+        && provenance.edited == Some(false)
+        && !facts.gate_edited
+        && !(super::gates::spent(body)
+            || facts.bot_automerge_enabled && facts.labels.contains(&facts.settings.batch_label));
+    let red: Vec<_> = ci
+        .checks
+        .iter()
+        .filter(|c| c.state == Ci::Red)
+        .map(|c| c.name.as_str())
+        .collect();
+    if renovate && red == ["renovate/artifacts"] {
+        facts.release_at = super::gates::release(&comments, &facts.settings);
+    }
+    facts.checks = ci.checks;
+    Ok(facts)
 }
 
 fn dependency(branch: &str, title: &str, labels: &[crate::api::Label]) -> Option<Dependency> {
@@ -145,12 +255,22 @@ fn dependency(branch: &str, title: &str, labels: &[crate::api::Label]) -> Option
     })
 }
 
+impl Revision {
+    pub fn for_parts(head: String, base: String, title: &str, body: &str) -> Self {
+        Self {
+            head,
+            base,
+            description: fingerprint(&format!("{title}\n{body}")),
+        }
+    }
+}
 impl From<&crate::api::PullRequest> for Revision {
     fn from(pull: &crate::api::PullRequest) -> Self {
-        Self {
-            head: pull.head.sha.clone(),
-            base: pull.base.name.clone(),
-            description: format!("{}\n{}", pull.title, pull.body.as_deref().unwrap_or("")),
-        }
+        Self::for_parts(
+            pull.head.sha.clone(),
+            pull.base.name.clone(),
+            &pull.title,
+            pull.body.as_deref().unwrap_or(""),
+        )
     }
 }

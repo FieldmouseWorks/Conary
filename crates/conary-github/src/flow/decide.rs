@@ -5,6 +5,13 @@ use conary_core::Class;
 /// starting jobs and landing are never assumed to have succeeded here.
 pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
     let mut m = memory.clone();
+    m.raised.extend(f.classified.raised.iter().cloned());
+    let mut raised = f.clone();
+    raised.classified = raised
+        .classified
+        .clone()
+        .raise(m.raised.iter().cloned().collect());
+    let f = &raised;
     if m.head != f.revision.head {
         m.head = f.revision.head.clone();
         m.seen = now;
@@ -22,11 +29,11 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
         || (f.stacked_on.is_some() && stage == Stage::Base)
         || matches!(step, Step::ListOwner));
     let overdue_at = if watched {
-        let duration = if f.labels.contains("hold") {
+        let duration = if f.labels.contains(&f.settings.hold_label) {
             f.settings.hold_stall_after
         } else if stage == Stage::Train {
             f.settings.train_stall_after
-        } else if stage == Stage::Merge && f.renovate && f.bot_merges {
+        } else if stage == Stage::Merge && f.renovate && f.bot_merges && f.bot_automerge_enabled {
             f.settings.renovate_merge_after
         } else {
             f.settings.stall_after
@@ -68,24 +75,54 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
     };
     (
         Next {
-            stage,
-            step,
+            stage: if f.draft || f.labels.contains(&f.settings.hold_label) {
+                Stage::None
+            } else {
+                stage
+            },
+            step: step.clone(),
             description,
             overdue_at,
+            proof: if matches!(step, Step::PostProof) {
+                super::proofs::posting(f)
+            } else {
+                None
+            }
+            .or_else(|| {
+                if matches!(step, Step::Prove | Step::PostProof) {
+                    super::proofs::next(f, now).and_then(|(_, _, _, plan)| plan)
+                } else {
+                    None
+                }
+            }),
         },
         m,
     )
 }
 
-type Decision = (Stage, Step, String);
-fn at(stage: Stage, step: Step, description: &str) -> Decision {
+pub(super) type Decision = (Stage, Step, String);
+pub(super) fn at(stage: Stage, step: Step, description: &str) -> Decision {
     (stage, step, description.into())
 }
-fn wait(stage: Stage, until: Option<u64>, why: &str) -> Decision {
+pub(super) fn wait(stage: Stage, until: Option<u64>, why: &str) -> Decision {
     at(stage, Step::Wait { until }, why)
 }
 
 fn decide(f: &Facts, m: &mut Memory, now: u64) -> Decision {
+    // Only proofs and judgments belong to a head. Fix jobs own the branch
+    // across pushes, including their own push, and must be left running.
+    if let Some((_, job)) = f.jobs.iter().find(|(kind, job)| {
+        !kind.fixes_branch()
+            && job.state.live()
+            && job.revision.head != f.revision.head
+            && !(**kind == Kind::Proof && super::proofs::useful(f, &job.id))
+    }) {
+        return at(
+            Stage::Fix,
+            Step::StopJob(job.id.clone()),
+            "Stop work answering for an earlier head",
+        );
+    }
     if !f.open {
         return wait(Stage::None, None, "PR is closed");
     }
@@ -113,7 +150,7 @@ fn decide(f: &Facts, m: &mut Memory, now: u64) -> Decision {
     if f.base_held {
         return wait(Stage::Base, None, "Waiting for the default branch's CI");
     }
-    if f.labels.contains("hold") {
+    if f.labels.contains(&f.settings.hold_label) {
         return wait(Stage::None, None, "On hold (the hold label)");
     }
     if f.stacked_on.is_some() {
@@ -123,7 +160,7 @@ fn decide(f: &Facts, m: &mut Memory, now: u64) -> Decision {
             "Stacked on an open PR: waiting to be retargeted",
         );
     }
-    if f.labels.contains("needs-peter") {
+    if f.labels.contains(&f.settings.owner_label) {
         // Seen labelled while this revision waits on its owner: taking the
         // label off afterwards is their answer, for this revision alone.
         if owner_owed(f) {
@@ -185,6 +222,13 @@ fn decide(f: &Facts, m: &mut Memory, now: u64) -> Decision {
         }
         return hand(f, m, now, Kind::Conflict, false);
     }
+    if super::proofs::posting(f).is_some() {
+        return at(
+            Stage::Proof,
+            Step::PostProof,
+            "Posting the remaining machine proof verdicts",
+        );
+    }
     let ci = ci(f, m, now);
     // Unknown provenance is someone else's code until read: only a history
     // known to be the bots' alone skips the review loop.
@@ -229,122 +273,10 @@ fn decide(f: &Facts, m: &mut Memory, now: u64) -> Decision {
         }
         return after_review(f, m, now, ci, false);
     }
-    // A newly posted review must get a fresh GitHub read before its findings
-    // can be considered resolved. A stale clean verdict never covers this head.
-    let capped = f.reviewers.values().map(|r| r.rounds).max().unwrap_or(0) >= f.settings.rounds;
-    let needs_review = f.classified.review();
-    // Reviewers with a current clean verdict, or able to give one now.
-    let mut covered = 0;
-    let mut clean = true;
-    let mut findings = f.open_threads > 0 || f.changes_requested;
-    for (name, r) in &f.reviewers {
-        let available = r.unavailable_until.is_none_or(|until| until <= now);
-        let current = r.review.as_ref().filter(|v| v.revision == f.revision);
-        let lost = m
-            .lost_on
-            .get(name)
-            .and_then(|bases| bases.get(&f.revision.base));
-        if let Some(answer) = &r.answer
-            && answer.revision.base == f.revision.base
-            && (answer.revision == f.revision || capped || !available || !needs_review)
-        {
-            return at(
-                Stage::Review,
-                Step::PostReview(name.clone()),
-                "Posting the review that came back",
-            );
-        }
-        // A verdict already returned for this revision stands whether or not
-        // its service is up now: findings keep blocking, a clean one covers.
-        if current.is_some_and(|v| v.verdict == Verdict::Findings) {
-            findings = true;
-            clean = false;
-        }
-        if current.is_some_and(|v| v.verdict == Verdict::Clean) && lost.is_none() {
-            covered += 1;
-            continue;
-        }
-        if !available {
-            if r.under_way {
-                return wait(
-                    Stage::Review,
-                    r.unavailable_until,
-                    "A reviewer out of service is still reviewing it",
-                );
-            }
-            if lost.is_some_and(|h| *h == f.revision.head || capped || !needs_review) {
-                return wait(
-                    Stage::Reviewer,
-                    r.unavailable_until,
-                    "Lost findings are owed by a reviewer out of service",
-                );
-            }
-            continue;
-        }
-        covered += 1;
-        clean = false;
-        if (needs_review && !capped || lost.is_some()) && current.is_none() {
-            if findings {
-                return hand(f, m, now, Kind::Findings, true);
-            }
-            let due = m.seen.saturating_add(f.settings.settle_delay);
-            if now < due {
-                return wait(
-                    Stage::Review,
-                    Some(due),
-                    "Waiting for the head to settle before review",
-                );
-            }
-            return if r.queued {
-                wait(Stage::Review, None, "Reviewing this commit")
-            } else {
-                at(
-                    Stage::Review,
-                    Step::QueueReview(name.clone()),
-                    "Queue a review of this commit",
-                )
-            };
-        }
-        if capped && r.queued {
-            return wait(
-                Stage::Review,
-                None,
-                "Past the round limit; a queued review is still owed",
-            );
-        }
+    match super::review::look(f, m, now) {
+        super::review::Look::Next(decision) => decision,
+        super::review::Look::Settled { capped } => after_review(f, m, now, ci, capped),
     }
-    if findings {
-        return hand(f, m, now, Kind::Findings, true);
-    }
-    if needs_review && covered == 0 && !capped {
-        return wait(Stage::Reviewer, None, "No reviewer can review it now");
-    }
-    if needs_review && !clean && !capped {
-        let due = f
-            .reviewers
-            .values()
-            .filter_map(|r| r.review.as_ref())
-            .map(|r| r.at)
-            .max()
-            .unwrap_or(now)
-            .saturating_add(f.settings.settle_delay);
-        if now <= due {
-            return wait(
-                Stage::Review,
-                Some(due),
-                "Findings answered; waiting for another look",
-            );
-        }
-        if let Some((name, _)) = f.reviewers.iter().find(|(_, r)| !r.queued) {
-            return at(
-                Stage::Review,
-                Step::QueueReview(name.clone()),
-                "Findings answered; another review round",
-            );
-        }
-        return wait(Stage::Review, None, "Findings answered; reviewing again");
-    }
-    after_review(f, m, now, ci, capped && !clean)
 }
 
 fn ci(f: &Facts, m: &mut Memory, now: u64) -> Ci {
@@ -387,11 +319,23 @@ fn owner_owed(f: &Facts) -> bool {
 }
 
 fn after_review(f: &Facts, m: &mut Memory, now: u64, ci: Ci, capped: bool) -> Decision {
+    // A partial failure may already make CI red. The remaining stored
+    // verdicts must be published before handing that failure to a fix.
+    if f.proof == Proof::Unposted {
+        return at(
+            Stage::Proof,
+            Step::PostProof,
+            "Posting machine proof verdicts",
+        );
+    }
     if ci == Ci::Red || f.proof == Proof::Failed {
         return hand(f, m, now, Kind::Red, true);
     }
     let verdict = judgment(f);
-    if matches!(verdict, Some(Judgment::Failing | Judgment::Misdescribed)) {
+    if verdict == Some(Judgment::Misdescribed) {
+        return hand(f, m, now, Kind::Description, false);
+    }
+    if verdict == Some(Judgment::Failing) {
         return hand(f, m, now, Kind::JudgeFailure, false);
     }
     if verdict == Some(Judgment::Owner) && m.owner_saw.as_ref() != Some(&f.revision) {
@@ -405,7 +349,10 @@ fn after_review(f: &Facts, m: &mut Memory, now: u64, ci: Ci, capped: bool) -> De
     let machine = f.settings.machine();
     let proof_only = !pending.is_empty() && pending.iter().all(|c| machine.contains(&c.name));
     let early = pending.iter().any(|c| {
-        f.settings.proof_builds.contains(&c.name) || f.settings.proof_runs.contains(&c.name)
+        matches!(
+            f.settings.recipe(&c.name),
+            Some(Recipe::Build(_) | Recipe::Run(_))
+        )
     });
     match f.proof {
         Proof::InLine(_) => {
@@ -424,6 +371,9 @@ fn after_review(f: &Facts, m: &mut Memory, now: u64, ci: Ci, capped: bool) -> De
             );
         }
         Proof::Needed if ci != Ci::Pending || proof_only || early => {
+            if let Some((stage, step, description, _)) = super::proofs::next(f, now) {
+                return (stage, step, description);
+            }
             return work(f, m, now, Kind::Proof);
         }
         _ => {}
@@ -449,6 +399,9 @@ fn after_review(f: &Facts, m: &mut Memory, now: u64, ci: Ci, capped: bool) -> De
         || f.unseen
         || ci == Ci::None
         || f.judge_asked
+        || f.jobs.get(&Kind::Judge).is_some_and(|j| {
+            j.revision.head == f.revision.head && j.revision.base == f.revision.base
+        })
         || capped
         || f.dependency == Some(Dependency::Major) && !f.renovate;
     if requires_judge {
@@ -542,7 +495,25 @@ fn land(f: &Facts, now: u64) -> Decision {
     )
 }
 
-fn hand(f: &Facts, m: &mut Memory, now: u64, kind: Kind, delay: bool) -> Decision {
+pub(super) fn hand(f: &Facts, m: &mut Memory, now: u64, kind: Kind, delay: bool) -> Decision {
+    if f.renovate && f.dependency.is_some() {
+        let red = f.checks.iter().any(|c| c.state == Ci::Red);
+        let until = f
+            .rebase_removed
+            .iter()
+            .copied()
+            .chain(f.timeline_cut_at)
+            .map(|t| t.saturating_add(f.settings.renovate_run))
+            .filter(|t| now < *t)
+            .max();
+        if red || f.rebase_requested || until.is_some() {
+            return wait(
+                Stage::Fix,
+                until,
+                "Dependency sweep or a Renovate rebase still owns the branch",
+            );
+        }
+    }
     if let Some(job) = f.jobs.values().find(|j| j.state.live()) {
         // Fix jobs keep the branch across pushes. Other jobs only block the
         // work they were asked for on their own revision.
@@ -559,7 +530,11 @@ fn hand(f: &Facts, m: &mut Memory, now: u64, kind: Kind, delay: bool) -> Decisio
         } else {
             f.settings.handoff_after
         };
-        let due = f.updated_at.max(f.last_reply_at).saturating_add(quiet);
+        let due = f
+            .updated_at
+            .max(f.last_reply_at)
+            .max(m.seen)
+            .saturating_add(quiet);
         if now <= due {
             return wait(
                 Stage::Fix,
