@@ -220,17 +220,13 @@ fn proof_slots_count_unique_builds_unknown_jobs_and_only_current_waiters() {
     c.hub
         .edit_pull(REMI, 9, |p| p["state"] = serde_json::json!("closed"));
     assert_eq!(c.view(800).step, Step::Prove);
-    c.proof_data.waiting.push(ProofWaiting {
-        number: 1,
-        first: false,
-    });
+    c.hub.pr(REMI, 1, &super::head(1));
+    c.proof_data.waiting.push(ProofWaiting { number: 1 });
     assert_eq!(c.view(800).stage, Stage::ProofSlot);
     c.label(&["first"]);
     assert_eq!(c.view(800).step, Step::Prove);
-    c.proof_data.waiting.push(ProofWaiting {
-        number: 1,
-        first: true,
-    });
+    c.hub.label(REMI, 1, &["first"]);
+    c.proof_data.waiting.push(ProofWaiting { number: 1 });
     assert_eq!(c.view(800).stage, Stage::ProofSlot);
 }
 #[test]

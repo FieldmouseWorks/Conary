@@ -59,18 +59,21 @@ fn slots_count_open_jobs_through_drafts_pushes_and_failed_stops() {
 fn first_label_precedes_older_waiters_and_a_departed_waiter_holds_no_turn() {
     // slots.py:92,113,122: current-pass waiters only, priority then PR number.
     let mut c = proof();
-    c.proof_data.waiting = vec![ProofWaiting {
-        number: 1,
-        first: false,
-    }];
+    c.hub.pr(REMI, 1, &super::head(1));
+    c.proof_data.waiting = vec![ProofWaiting { number: 1 }];
     assert_eq!(c.view(800).stage, Stage::ProofSlot);
     c.label(&["first"]);
     assert_eq!(c.view(800).step, Step::Prove);
-    c.proof_data.waiting.push(ProofWaiting {
-        number: 2,
-        first: true,
-    });
+    c.hub.pr(REMI, 2, &super::head(2));
+    c.hub.label(REMI, 2, &["first"]);
+    c.proof_data.waiting.push(ProofWaiting { number: 2 });
     assert_eq!(c.view(800).stage, Stage::ProofSlot);
+    c.hub.label(REMI, 2, &[]);
+    assert_eq!(c.view(800).step, Step::Prove);
+    c.hub.label(REMI, 2, &["first"]);
+    c.hub
+        .edit_pull(REMI, 2, |p| p["state"] = serde_json::json!("closed"));
+    assert_eq!(c.view(800).step, Step::Prove);
     c.proof_data.waiting.clear();
     assert_eq!(c.view(800).step, Step::Prove);
 }

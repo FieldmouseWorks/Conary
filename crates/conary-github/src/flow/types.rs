@@ -340,6 +340,7 @@ pub struct Facts {
     pub timeline_cut_at: Option<u64>,
     pub stacked_on: Option<u64>,
     pub open_prs: BTreeSet<u64>,
+    pub first_prs: BTreeSet<u64>,
     pub base_held: bool,
     pub queued_merge: bool,
     pub train: TrainState,

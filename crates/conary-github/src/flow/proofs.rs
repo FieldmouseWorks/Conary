@@ -51,7 +51,6 @@ pub struct ProofHolder {
 #[derive(Debug, Clone)]
 pub struct ProofWaiting {
     pub number: u64,
-    pub first: bool,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProofPlan {
@@ -200,7 +199,11 @@ fn ahead(f: &Facts, outputs: Option<&BTreeSet<String>>) -> (u32, bool) {
         .proof_data
         .waiting
         .iter()
-        .filter(|w| (!w.first, w.number) < (!f.labels.contains(&f.settings.first_label), f.number))
+        .filter(|w| {
+            f.open_prs.contains(&w.number)
+                && (!f.first_prs.contains(&w.number), w.number)
+                    < (!f.labels.contains(&f.settings.first_label), f.number)
+        })
         .count() as u32;
     if count < slots {
         return (0, false);
