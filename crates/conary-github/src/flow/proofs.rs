@@ -438,3 +438,32 @@ pub(super) fn next(f: &Facts, now: u64) -> Option<(Stage, Step, String, Option<P
         Some(plan),
     ))
 }
+
+/// Inspect every local observation, rather than the newest per-kind job.
+pub(super) fn obsolete(f: &Facts) -> Option<&Job> {
+    f.proof_data
+        .records
+        .iter()
+        .filter(|r| {
+            r.job.state.live()
+                && !useful(f, &r.job.id)
+                && (r.job.revision.head != f.revision.head
+                    || r.recipes
+                        .iter()
+                        .any(|(name, recipe)| f.settings.recipe(name) != Some(recipe)))
+        })
+        .map(|r| &r.job)
+        .chain(
+            f.proof_data
+                .live
+                .iter()
+                .filter(|h| {
+                    h.number == f.number
+                        && h.job.state.live()
+                        && h.job.revision.head != f.revision.head
+                        && !useful(f, &h.job.id)
+                })
+                .map(|h| &h.job),
+        )
+        .next()
+}

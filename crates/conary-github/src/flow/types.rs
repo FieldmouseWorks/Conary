@@ -411,6 +411,8 @@ pub struct Memory {
     pub retry: Option<(Failure, u64)>,
     /// Reviewer -> base -> head whose findings still need covering.
     pub lost_on: BTreeMap<String, BTreeMap<String, String>>,
+    /// Latest original submission time whose lost findings need superseding.
+    pub lost_after: BTreeMap<(String, String), u64>,
     pub handed: BTreeMap<Kind, Revision>,
     pub lost_jobs: BTreeSet<String>,
     pub unanswered: BTreeMap<(Kind, Revision), BTreeSet<String>>,
