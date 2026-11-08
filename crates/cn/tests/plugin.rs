@@ -148,3 +148,47 @@ fn plugin_cli_preserves_default_cargo_run() {
     );
     assert!(String::from_utf8_lossy(&out.stdout).contains("Conary: the ledger"));
 }
+
+#[test]
+fn cargo_manifest_preserves_cli_and_example_targets() {
+    // The example plugin is a second binary of this package; without a
+    // default, `cargo run -p conary-cli` (README) cannot pick one.
+    let out = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()))
+        .args([
+            "metadata",
+            "--no-deps",
+            "--offline",
+            "--format-version",
+            "1",
+        ])
+        .arg("--manifest-path")
+        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml"))
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let metadata: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let package = metadata["packages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["name"] == "conary-cli")
+        .unwrap();
+    assert_eq!(package["default_run"], "cn");
+    let bins: Vec<_> = package["targets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|t| t["kind"] == serde_json::json!(["bin"]))
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    assert!(bins.contains(&"conary-example-plugin"), "{bins:?}");
+}
+
+#[test]
+fn plugin_rejects_finding_path_escaping_the_repository() {
+    rejects("escape", "invalid finding");
+}

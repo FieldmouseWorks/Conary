@@ -67,8 +67,11 @@ impl Plugin {
         }
         if let Task::Fix { problems, .. } = &task {
             for problem in problems {
-                if let Problem::Finding { finding } = problem {
-                    finding.validate()?;
+                match problem {
+                    Problem::Finding { finding } if !finding.valid() => {
+                        return bad("invalid finding");
+                    }
+                    _ => {}
                 }
             }
         }
@@ -90,8 +93,8 @@ impl Plugin {
         }
         match (&task, &response.answer) {
             (Task::Review { .. }, Answer::Review { findings }) => {
-                for finding in findings {
-                    finding.validate()?;
+                if !findings.iter().all(Finding::valid) {
+                    return bad("invalid finding");
                 }
             }
             (Task::Fix { .. }, Answer::Fix { result }) => match result {
@@ -220,35 +223,4 @@ fn execute(path: &Path, limits: Limits, request: &Request) -> Result<Response, F
         return bad("wrong plugin contract version");
     }
     Ok(response)
-}
-
-impl Finding {
-    /// Validate a finding, whether returned by a reviewer or sent to a fixer.
-    /// Paths are checked lexically; this does not resolve checkout symlinks.
-    pub fn validate(&self) -> Result<(), Failure> {
-        if !repository_path(&self.path) || self.line == 0 || self.text.trim().is_empty() {
-            return bad("invalid finding");
-        }
-        Ok(())
-    }
-}
-
-fn repository_path(path: &str) -> bool {
-    if path.trim().is_empty() || path.starts_with('/') || path.contains('\0') {
-        return false;
-    }
-    let mut depth = 0usize;
-    for component in path.split('/') {
-        match component {
-            "" | "." => {}
-            ".." => {
-                let Some(parent) = depth.checked_sub(1) else {
-                    return false;
-                };
-                depth = parent;
-            }
-            _ => depth += 1,
-        }
-    }
-    depth > 0
 }
