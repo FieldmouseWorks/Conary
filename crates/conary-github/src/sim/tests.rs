@@ -251,3 +251,5 @@ fn a_comparison_lists_what_head_took_out_as_well_as_what_it_added() {
     let listed: Vec<_> = paths.files.iter().map(|t| t.path.as_str()).collect();
     assert_eq!(listed, ["CODEOWNERS"]);
 }
+
+mod flow;

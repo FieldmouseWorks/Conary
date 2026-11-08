@@ -111,6 +111,7 @@ struct Repo {
     /// PRs as GitHub's REST API shows them, by number.
     pulls: BTreeMap<u64, Value>,
     reviews: HashMap<u64, Vec<Value>>,
+    flow: HashMap<u64, crate::flow::Snapshot>,
     /// Each PR's timeline events, oldest first.
     timeline: HashMap<u64, Vec<Value>>,
     /// The PRs each commit is linked to: a PR's merge links its commit.

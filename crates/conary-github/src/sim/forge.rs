@@ -417,3 +417,32 @@ impl Forge for Hub {
         )
     }
 }
+
+impl crate::flow::Read for Hub {
+    fn snapshot(&self, repo: &str, number: u64) -> Result<crate::flow::Snapshot, ApiError> {
+        let n = number.to_string();
+        self.read(
+            Asked::new(Call::FlowSnapshot, repo).pr(number),
+            &[repo, &n],
+            |w| {
+                repo_of(w, repo)?
+                    .flow
+                    .get(&number)
+                    .cloned()
+                    .ok_or_else(|| not_found(format!("flow #{number}")))
+            },
+        )
+    }
+}
+
+impl Hub {
+    pub(crate) fn flow_snapshot(&self, repo: &str, number: u64, snapshot: crate::flow::Snapshot) {
+        self.world
+            .borrow_mut()
+            .repos
+            .get_mut(repo)
+            .expect("repo exists")
+            .flow
+            .insert(number, snapshot);
+    }
+}

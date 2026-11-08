@@ -11,6 +11,7 @@ use super::{Hub, World};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum Call {
     Pull,
+    FlowSnapshot,
     Pulls,
     CheckRuns,
     Statuses,
