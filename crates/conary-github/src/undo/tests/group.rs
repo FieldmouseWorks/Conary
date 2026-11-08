@@ -6,7 +6,8 @@ use super::*;
 const SESSION: &str = "https://claude.ai/code/session_01Bad";
 
 /// Changes landed one after another on trunk, in `repo`, each by the
-/// session given for it, as PRs from `first` up: their ids, oldest first.
+/// session given for it, as PRs from `first` up, each bringing a patch of
+/// its own (`#` and its number): their ids, oldest first.
 fn chain(
     store: &mut Store,
     hub: &Hub,
@@ -14,20 +15,32 @@ fn chain(
     first: u64,
     sessions: &[Option<&str>],
 ) -> Vec<ChangeId> {
+    let landings: Vec<_> = sessions.iter().map(|s| (*s, &[][..])).collect();
+    chain_doing(store, hub, repo, first, &landings)
+}
+
+/// The same, each landing taking out what the PRs it names brought, if
+/// any, in place of bringing a patch of its own.
+fn chain_doing(
+    store: &mut Store,
+    hub: &Hub,
+    repo: &Repo,
+    first: u64,
+    landings: &[(Option<&str>, &[u64])],
+) -> Vec<ChangeId> {
     let mut ids = Vec::new();
-    for (i, session) in sessions.iter().enumerate() {
+    let full = repo.to_string();
+    for (i, (session, takes_out)) in landings.iter().enumerate() {
         let pr = first + i as u64;
-        let before = hub.branches.borrow()["main"].clone();
-        let after = hub.sha();
-        hub.trees
-            .borrow_mut()
-            .insert(after.clone(), format!("trunk with #{pr}"));
-        hub.parents
-            .borrow_mut()
-            .insert(after.clone(), vec![before.clone()]);
-        hub.branches
-            .borrow_mut()
-            .insert("main".into(), after.clone());
+        let before = hub.branch_at(&full, "main").unwrap();
+        let mut after = before.clone();
+        for out in *takes_out {
+            after = hub.take_out(&after, &format!("#{out}"));
+        }
+        if takes_out.is_empty() {
+            after = hub.add(&before, &format!("#{pr}"));
+        }
+        hub.set_branch(&full, "main", &after);
         let change = ChangeId::new().unwrap();
         store
             .record(Body::Observe {
@@ -69,7 +82,7 @@ fn actor(store: &mut Store, hub: &Hub) -> Result<Undid, Stopped> {
 fn a_session_s_changes_are_undone_by_one_pr_in_each_repo_newest_first() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let hub = Hub::new();
+    let hub = github();
     let s = Some(SESSION);
     // Another session's change landed between the bad session's two here.
     let remi = chain(&mut store, &hub, &repo(), 10, &[s, Some("other"), s]);
@@ -88,7 +101,7 @@ fn a_session_s_changes_are_undone_by_one_pr_in_each_repo_newest_first() {
     assert!(r.left.is_empty());
     // Each change's own revert, the newest's the branch's base: the other
     // session's change isn't one of them.
-    let made: Vec<String> = hub.made.borrow().iter().map(|m| m.1.clone()).collect();
+    let made: Vec<String> = hub.made().iter().map(|m| m.1.clone()).collect();
     let after = |id| {
         store
             .ledger()
@@ -111,7 +124,7 @@ fn a_session_s_changes_are_undone_by_one_pr_in_each_repo_newest_first() {
     );
     assert_eq!(store.ledger().undo_of(remi[0]), Some(r.change));
     assert_eq!(store.ledger().undo_of(remi[1]), None);
-    let pr = hub.pull_json(r.pr);
+    let pr = hub.pull_json(REMI, r.pr);
     assert_eq!(
         pr["title"],
         format!("undo: revert 2 changes from session {SESSION}")
@@ -120,27 +133,19 @@ fn a_session_s_changes_are_undone_by_one_pr_in_each_repo_newest_first() {
     // Run again, it finds both.
     let again = actor(&mut store, &hub).unwrap();
     assert!(again.undos.iter().all(|g| g.how == How::Found), "{again:?}");
-    assert_eq!(hub.pulls.borrow().len(), 2);
+    assert_eq!(pulls(&hub), 2);
 }
 
 #[test]
 fn a_revert_that_conflicts_with_the_others_is_left_for_an_undo_of_its_own() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let hub = Hub::new();
+    let hub = github();
     let s = Some(SESSION);
-    let ids = chain(&mut store, &hub, &repo(), 10, &[s, s, s]);
-    // The oldest one's revert, the tree before it, doesn't merge.
-    let before = store
-        .ledger()
-        .change(ids[0])
-        .unwrap()
-        .landing
-        .clone()
-        .unwrap()
-        .before;
-    let tree = hub.trees.borrow()[before.as_str()].clone();
-    hub.conflicting.borrow_mut().push(tree);
+    // Someone else's change landed after the session's three.
+    let ids = chain(&mut store, &hub, &repo(), 10, &[s, s, s, Some("other")]);
+    // The oldest one's revert clashes with it, so it doesn't merge.
+    hub.clash("#10", "#13");
     let got = actor(&mut store, &hub).unwrap();
     assert_eq!(got.undos.len(), 1);
     assert_eq!(
@@ -148,7 +153,7 @@ fn a_revert_that_conflicts_with_the_others_is_left_for_an_undo_of_its_own() {
         (vec![ids[2], ids[1]], vec![ids[0]])
     );
     assert_eq!(store.ledger().undo_of(ids[0]), None);
-    let body = hub.pull_json(got.undos[0].pr)["body"]
+    let body = hub.pull_json(REMI, got.undos[0].pr)["body"]
         .as_str()
         .unwrap()
         .to_owned();
@@ -156,7 +161,7 @@ fn a_revert_that_conflicts_with_the_others_is_left_for_an_undo_of_its_own() {
     assert!(body.contains(&ids[0].to_string()));
     // Run again: the first is found, and the one left out gets its own,
     // its revert the branch's base.
-    hub.conflicting.borrow_mut().clear();
+    hub.unclash();
     let again = actor(&mut store, &hub).unwrap();
     assert_eq!(again.undos.len(), 2);
     assert_eq!(again.undos[0].how, How::Found);
@@ -168,7 +173,7 @@ fn a_revert_that_conflicts_with_the_others_is_left_for_an_undo_of_its_own() {
 fn since_undoes_what_landed_on_the_repo_after_the_time() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let hub = Hub::new();
+    let hub = github();
     let ids = chain(&mut store, &hub, &repo(), 10, &[None, Some("a"), Some("b")]);
     chain(&mut store, &hub, &burrow(), 20, &[None]);
     let since = store
@@ -184,7 +189,7 @@ fn since_undoes_what_landed_on_the_repo_after_the_time() {
     assert_eq!(got.undos[0].reverts, [ids[2], ids[1]]);
     let u = store.ledger().change(got.undos[0].change).unwrap();
     assert_eq!(u.undo.as_ref().unwrap().asked, Asked::Since { since });
-    let title = hub.pull_json(got.undos[0].pr)["title"]
+    let title = hub.pull_json(REMI, got.undos[0].pr)["title"]
         .as_str()
         .unwrap()
         .to_owned();
@@ -210,22 +215,22 @@ fn since_undoes_what_landed_on_the_repo_after_the_time() {
 fn a_session_s_run_that_stops_in_one_repo_keeps_the_undos_it_opened_before() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let hub = Hub::new();
+    let hub = github();
     let s = Some(SESSION);
     chain(&mut store, &hub, &burrow(), 20, &[s]);
     chain(&mut store, &hub, &repo(), 10, &[s]);
     // burrow's turn comes first; then GitHub errs for remi.
-    hub.down.borrow_mut().push(repo().to_string());
+    hub.fail(Call::DefaultBranch.repo(REMI));
     let err = actor(&mut store, &hub).unwrap_err();
     assert!(matches!(*err.error, UndoError::Api(_)), "{err}");
     assert!(!err.refused());
     assert_eq!(err.done.undos.len(), 1);
     let opened = &err.done.undos[0];
-    assert_eq!(hub.pulls.borrow().len(), 1);
-    assert_eq!(hub.pull_json(opened.pr)["number"], opened.pr);
+    assert_eq!(pulls(&hub), 1);
+    assert_eq!(hub.pull_json(BURROW, opened.pr)["number"], opened.pr);
     assert_eq!(store.ledger().change(opened.change).unwrap().repo, burrow());
     // Asked again once GitHub's back, it finds that one and opens remi's.
-    hub.down.borrow_mut().clear();
+    hub.heal(Call::DefaultBranch);
     let got = actor(&mut store, &hub).unwrap();
     assert_eq!(got.undos.len(), 2);
     assert!(
@@ -233,20 +238,20 @@ fn a_session_s_run_that_stops_in_one_repo_keeps_the_undos_it_opened_before() {
             .iter()
             .any(|u| u.pr == opened.pr && u.how == How::Found)
     );
-    assert_eq!(hub.pulls.borrow().len(), 2);
+    assert_eq!(pulls(&hub), 2);
 }
 
 #[test]
 fn a_run_that_stops_in_a_repo_keeps_the_undo_it_found_there() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let hub = Hub::new();
+    let hub = github();
     let s = Some(SESSION);
     chain(&mut store, &hub, &repo(), 10, &[s]);
     let first = actor(&mut store, &hub).unwrap().undos[0].clone();
     // The session landed another; opening its undo, GitHub errs.
     chain(&mut store, &hub, &repo(), 11, &[s]);
-    hub.down.borrow_mut().push(repo().to_string());
+    hub.fail(Call::DefaultBranch.repo(REMI));
     let err = actor(&mut store, &hub).unwrap_err();
     assert!(matches!(*err.error, UndoError::Api(_)), "{err}");
     assert_eq!(err.done.undos.len(), 1);
@@ -260,11 +265,11 @@ fn a_pr_opened_and_not_recorded_is_told_and_recorded_when_asked_again() {
     for by_change in [true, false] {
         let dir = tempfile::tempdir().unwrap();
         let mut store = store(&dir);
-        let hub = Hub::new();
+        let hub = github();
         let ids = chain(&mut store, &hub, &repo(), 10, &[Some(SESSION)]);
         // The PR it opens next can't be read back to record it.
-        let next = 100 + hub.pulls.borrow().len() as u64;
-        hub.lost.borrow_mut().push(next);
+        let next = 100 + pulls(&hub) as u64;
+        hub.fail(Call::Pull.pr(next));
         let run = |store: &mut Store| {
             if by_change {
                 undo(store, &hub, &hub, &config(), ids[0]).map(|u| u.pr)
@@ -288,10 +293,10 @@ fn a_pr_opened_and_not_recorded_is_told_and_recorded_when_asked_again() {
         assert!(!err.refused());
         assert_eq!(store.ledger().undo_of(ids[0]), None);
         // Asked again, it reads that PR from its branch and records it.
-        hub.lost.borrow_mut().clear();
+        hub.heal(Call::Pull);
         assert_eq!(run(&mut store).unwrap(), next);
         assert!(store.ledger().undo_of(ids[0]).is_some());
-        assert_eq!(hub.pulls.borrow().len(), 1);
+        assert_eq!(pulls(&hub), 1);
     }
 }
 
@@ -299,12 +304,10 @@ fn a_pr_opened_and_not_recorded_is_told_and_recorded_when_asked_again() {
 fn a_time_s_undo_in_a_repo_the_ledger_keeps_nothing_of_is_refused() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let hub = Hub::new();
+    let hub = github();
     chain(&mut store, &hub, &repo(), 10, &[None]);
     let stranger: Repo = "someone/else".parse().unwrap();
-    // Anything asked of GitHub about it errs.
-    hub.down.borrow_mut().push(stranger.to_string());
-    hub.pulls.borrow_mut().clear();
+    // GitHub has no such repo: anything asked of it errs.
     let err = undo_since(&mut store, &hub, &hub, &config(), &stranger, 0).unwrap_err();
     assert!(
         matches!(&*err.error, UndoError::Unkept(r) if r == &stranger),
@@ -360,7 +363,7 @@ fn what_the_ledger_refuses_is_told_apart_from_what_stopped_a_run() {
 fn a_stopped_run_s_pr_for_a_session_is_its_undo_read_from_its_marker() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let hub = Hub::new();
+    let hub = github();
     let s = Some(SESSION);
     let ids = chain(&mut store, &hub, &repo(), 10, &[s, s]);
     // A run opened the PR and stopped before recording it.
@@ -370,11 +373,11 @@ fn a_stopped_run_s_pr_for_a_session_is_its_undo_read_from_its_marker() {
             session: SESSION.into(),
         },
     };
-    let revert = hub.make_commit("", "x", AFTER, "m").unwrap();
-    hub.create_branch("", &undo_branch(ids[1], 1), &revert)
+    let revert = a_revert(&hub);
+    hub.create_branch(REMI, &undo_branch(ids[1], 1), &revert)
         .unwrap();
     let pr = hub
-        .open_pull("", &undo_branch(ids[1], 1), "main", "t", &marker.line())
+        .open_pull(REMI, &undo_branch(ids[1], 1), "main", "t", &marker.line())
         .unwrap();
     let got = actor(&mut store, &hub).unwrap();
     assert_eq!(got.undos.len(), 1);
@@ -383,38 +386,32 @@ fn a_stopped_run_s_pr_for_a_session_is_its_undo_read_from_its_marker() {
     assert_eq!(store.ledger().undo_of(ids[0]), Some(got.undos[0].change));
 }
 
-/// The tree `id`'s revert makes: trunk's before it landed.
-fn reverted(store: &Store, hub: &Hub, id: ChangeId) -> String {
-    let landing = store.ledger().change(id).unwrap().landing.clone().unwrap();
-    hub.trees.borrow()[landing.before.as_str()].clone()
-}
-
 #[test]
 fn an_actor_s_undo_isn_t_the_actor_s_change_once_it_lands() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let hub = Hub::new();
+    let hub = github();
     let s = Some(SESSION);
     chain(&mut store, &hub, &repo(), 10, &[s, s]);
     let got = actor(&mut store, &hub).unwrap();
     let undo = store.ledger().change(got.undos[0].change).unwrap();
     // Its marker names the session it reverts; its author is who opened it.
     assert_eq!(undo.author.session, None);
-    hub.land(got.undos[0].pr);
+    hub.steward_lands(REMI, got.undos[0].pr);
     // Landed, the session has nothing left to undo: the undo isn't its.
     let err = actor(&mut store, &hub).unwrap_err();
     assert!(
         matches!(*err.error, UndoError::NoneLanded(Asked::Actor { .. })),
         "{err}"
     );
-    assert_eq!(hub.pulls.borrow().len(), 1);
+    assert_eq!(pulls(&hub), 1);
 }
 
 #[test]
 fn a_stopped_run_s_pr_is_found_through_any_change_it_reverts() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let hub = Hub::new();
+    let hub = github();
     let s = Some(SESSION);
     let ids = chain(&mut store, &hub, &repo(), 10, &[s, s]);
     // A run opened the PR on the newest's branch and stopped before
@@ -425,24 +422,24 @@ fn a_stopped_run_s_pr_is_found_through_any_change_it_reverts() {
             session: SESSION.into(),
         },
     };
-    let revert = hub.make_commit("", "x", AFTER, "m").unwrap();
-    hub.create_branch("", &undo_branch(ids[1], 1), &revert)
+    let revert = a_revert(&hub);
+    hub.create_branch(REMI, &undo_branch(ids[1], 1), &revert)
         .unwrap();
     let pr = hub
-        .open_pull("", &undo_branch(ids[1], 1), "main", "t", &marker.line())
+        .open_pull(REMI, &undo_branch(ids[1], 1), "main", "t", &marker.line())
         .unwrap();
     let got = undo(&mut store, &hub, &hub, &config(), ids[0]).unwrap();
     assert_eq!((got.pr, got.how), (pr, How::Found));
     assert_eq!(got.reverts, [ids[1], ids[0]]);
     assert_eq!(store.ledger().undo_of(ids[1]), Some(got.change));
-    assert_eq!(hub.pulls.borrow().len(), 1);
+    assert_eq!(pulls(&hub), 1);
 }
 
 #[test]
 fn a_stopped_run_s_pr_merged_and_its_branch_gone_is_found_all_the_same() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let hub = Hub::new();
+    let hub = github();
     let s = Some(SESSION);
     let ids = chain(&mut store, &hub, &repo(), 10, &[s, s]);
     let marker = Marker {
@@ -451,17 +448,17 @@ fn a_stopped_run_s_pr_merged_and_its_branch_gone_is_found_all_the_same() {
             session: SESSION.into(),
         },
     };
-    let revert = hub.make_commit("", "x", AFTER, "m").unwrap();
-    hub.create_branch("", &undo_branch(ids[1], 1), &revert)
+    let revert = a_revert(&hub);
+    hub.create_branch(REMI, &undo_branch(ids[1], 1), &revert)
         .unwrap();
     let pr = hub
-        .open_pull("", &undo_branch(ids[1], 1), "main", "t", &marker.line())
+        .open_pull(REMI, &undo_branch(ids[1], 1), "main", "t", &marker.line())
         .unwrap();
     // It landed and its branch went, and trunk has what the older one
     // brought, as far as a revert of it can tell: its undo landed all the
     // same.
-    hub.land(pr);
-    assert!(hub.branches("", "conary/").unwrap().is_empty());
+    hub.steward_lands(REMI, pr);
+    assert!(hub.branches(REMI, "conary/").unwrap().is_empty());
     let err = *undo(&mut store, &hub, &hub, &config(), ids[0])
         .unwrap_err()
         .error;
@@ -470,20 +467,20 @@ fn a_stopped_run_s_pr_merged_and_its_branch_gone_is_found_all_the_same() {
         matches!(err, UndoError::Reverted { change, by: b } if change == ids[0] && b == by),
         "{err}"
     );
-    assert_eq!(hub.pulls.borrow().len(), 1);
+    assert_eq!(pulls(&hub), 1);
 }
 
 #[test]
 fn a_pr_from_the_branch_that_isn_t_an_undo_keeps_it() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let hub = Hub::new();
+    let hub = github();
     let ids = chain(&mut store, &hub, &repo(), 10, &[None]);
     let branch = undo_branch(ids[0], 1);
-    let made = hub.make_commit("", "x", AFTER, "m").unwrap();
-    hub.create_branch("", &branch, &made).unwrap();
+    let made = a_revert(&hub);
+    hub.create_branch(REMI, &branch, &made).unwrap();
     let pr = hub
-        .open_pull("", &branch, "main", "t", "its marker taken out")
+        .open_pull(REMI, &branch, "main", "t", "its marker taken out")
         .unwrap();
     let err = *undo(&mut store, &hub, &hub, &config(), ids[0])
         .unwrap_err()
@@ -492,21 +489,24 @@ fn a_pr_from_the_branch_that_isn_t_an_undo_keeps_it() {
         matches!(&err, UndoError::Taken { branch: b, pr: p } if b == &branch && *p == pr),
         "{err}"
     );
-    assert_eq!(hub.branch("", &branch).unwrap(), Some(made));
+    assert_eq!(hub.branch(REMI, &branch).unwrap(), Some(made));
 }
 
 #[test]
 fn what_trunk_already_lacks_is_gone_and_holds_up_nothing_else() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let hub = Hub::new();
+    let hub = github();
     let s = Some(SESSION);
     // Others took out burrow's, and on remi the newest's and the oldest's.
     let b = chain(&mut store, &hub, &burrow(), 20, &[s]);
     let r = chain(&mut store, &hub, &repo(), 10, &[s, s, s, Some("other")]);
-    for id in [b[0], r[2], r[0]] {
-        let tree = reverted(&store, &hub, id);
-        hub.gone.borrow_mut().push(tree);
+    for (repo, prs) in [(BURROW, &[20][..]), (REMI, &[12, 10])] {
+        for pr in prs {
+            let trunk = hub.branch_at(repo, "main").unwrap();
+            let out = hub.take_out(&trunk, &format!("#{pr}"));
+            hub.set_branch(repo, "main", &out);
+        }
     }
     let got = actor(&mut store, &hub).unwrap();
     assert_eq!(got.gone, [b[0], r[2], r[0]]);
@@ -514,36 +514,42 @@ fn what_trunk_already_lacks_is_gone_and_holds_up_nothing_else() {
     // The middle one's revert is the branch's base, and it alone is undone.
     assert_eq!(got.undos[0].reverts, [r[1]]);
     assert_eq!(
-        hub.pull_json(got.undos[0].pr)["head"]["ref"],
+        hub.pull_json(REMI, got.undos[0].pr)["head"]["ref"],
         undo_branch(r[1], 1)
     );
     for id in [r[2], r[0]] {
         assert_eq!(store.ledger().undo_of(id), None);
     }
-    let body = hub.pull_json(got.undos[0].pr)["body"]
+    let body = hub.pull_json(REMI, got.undos[0].pr)["body"]
         .as_str()
         .unwrap()
         .to_owned();
     assert!(body.contains("already lacks") && body.contains(&r[0].to_string()));
     // Nothing that's gone is left a branch.
-    assert_eq!(hub.branches("", "conary/").unwrap(), [undo_branch(r[1], 1)]);
+    assert_eq!(
+        hub.branches(REMI, "conary/").unwrap(),
+        [undo_branch(r[1], 1)]
+    );
 }
 
 #[test]
 fn reverts_that_together_change_nothing_leave_what_conflicted_its_own() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let hub = Hub::new();
+    let hub = github();
     let s = Some(SESSION);
-    let ids = chain(&mut store, &hub, &repo(), 10, &[s, s, s, Some("other")]);
-    // The newer two's reverts make trunk as it is, and the oldest's
-    // conflicts with them.
-    let trunk = hub.branches.borrow()["main"].clone();
-    let merging = hub.merging.borrow().clone().unwrap();
-    let net = format!("{merging}, then {}", reverted(&store, &hub, ids[1]));
-    hub.trees.borrow_mut().insert(trunk, net);
-    let tree = reverted(&store, &hub, ids[0]);
-    hub.conflicting.borrow_mut().push(tree);
+    // The newest took out what the one before it brought, so their
+    // reverts together make trunk as it is; and the oldest's clashes with
+    // what someone else landed after them.
+    let none: &[u64] = &[];
+    let ids = chain_doing(
+        &mut store,
+        &hub,
+        &repo(),
+        10,
+        &[(s, none), (s, none), (s, &[11]), (Some("other"), none)],
+    );
+    hub.clash("#10", "#13");
     let got = actor(&mut store, &hub).unwrap();
     assert_eq!(got.gone, [ids[2], ids[1]]);
     assert_eq!(got.undos.len(), 1);
@@ -555,31 +561,32 @@ fn reverts_that_together_change_nothing_leave_what_conflicted_its_own() {
 fn reverts_that_change_nothing_together_are_gone_though_trunk_conflicted_with_the_first() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let hub = Hub::new();
+    let hub = github();
     let s = Some(SESSION);
-    let ids = chain(&mut store, &hub, &repo(), 10, &[s, s, Some("other")]);
-    // Trunk won't merge into the newer one's revert, and with the older
-    // one's merged in, the branch is trunk as it is.
-    let net = format!(
-        "{}, then {}",
-        reverted(&store, &hub, ids[1]),
-        reverted(&store, &hub, ids[0])
+    // Someone else took both out since. Trunk won't merge into the newer
+    // one's revert, and with the older one's merged in, the branch is
+    // trunk as it is.
+    let none: &[u64] = &[];
+    let ids = chain_doing(
+        &mut store,
+        &hub,
+        &repo(),
+        10,
+        &[(s, none), (s, none), (Some("other"), &[10, 11])],
     );
-    let trunk = hub.branches.borrow()["main"].clone();
-    hub.trees.borrow_mut().insert(trunk, net.clone());
-    hub.conflicting.borrow_mut().push(net);
+    hub.clash("#10", "#11");
     let got = actor(&mut store, &hub).unwrap();
     assert!(got.undos.is_empty(), "{got:?}");
     assert_eq!(got.gone, [ids[1], ids[0]]);
-    assert!(hub.pulls.borrow().is_empty());
-    assert!(hub.branches("", "conary/").unwrap().is_empty());
+    assert!((pulls(&hub) == 0));
+    assert!(hub.branches(REMI, "conary/").unwrap().is_empty());
 }
 
 #[test]
 fn a_session_that_landed_nothing_has_nothing_to_undo() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let hub = Hub::new();
+    let hub = github();
     chain(&mut store, &hub, &repo(), 10, &[Some("other")]);
     let err = actor(&mut store, &hub).unwrap_err();
     assert!(

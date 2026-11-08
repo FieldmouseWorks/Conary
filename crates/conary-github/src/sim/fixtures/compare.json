@@ -1,0 +1,189 @@
+{
+  "url": "https://api.github.com/repos/FieldmouseWorks/Conary/compare/db2a09dabcacd2f866fe1d28d678d6cc0e67ff5c...1d8cd465a81ff5c103b3cc4b4392d8909d53c086",
+  "html_url": "https://github.com/FieldmouseWorks/Conary/compare/db2a09dabcacd2f866fe1d28d678d6cc0e67ff5c...1d8cd465a81ff5c103b3cc4b4392d8909d53c086",
+  "permalink_url": "https://github.com/FieldmouseWorks/Conary/compare/FieldmouseWorks:db2a09d...FieldmouseWorks:1d8cd46",
+  "diff_url": "https://github.com/FieldmouseWorks/Conary/compare/db2a09dabcacd2f866fe1d28d678d6cc0e67ff5c...1d8cd465a81ff5c103b3cc4b4392d8909d53c086.diff",
+  "patch_url": "https://github.com/FieldmouseWorks/Conary/compare/db2a09dabcacd2f866fe1d28d678d6cc0e67ff5c...1d8cd465a81ff5c103b3cc4b4392d8909d53c086.patch",
+  "base_commit": {
+    "sha": "db2a09dabcacd2f866fe1d28d678d6cc0e67ff5c",
+    "node_id": "C_kwDOVS7vt9oAKGRiMmEwOWRhYmNhY2QyZjg2NmZlMWQyOGQ2NzhkNmNjMGU2N2ZmNWM",
+    "commit": {
+      "author": {
+        "name": "Octo Person",
+        "email": "1000001+octo-person@users.noreply.github.com",
+        "date": "2026-11-07T16:46:57Z"
+      },
+      "committer": {
+        "name": "GitHub",
+        "email": "noreply@github.com",
+        "date": "2026-11-07T16:46:57Z"
+      },
+      "message": "agents: say what runs today and map the docs (#254)\n\nAGENTS.md still called Conary \"at the design stage\" though the ledger, the\ntrain and undo have run on remi since M3 and M4. It now says what runs,\npoints at DESIGN's roadmap, and lists where the other docs' subjects live.\n\n\nClaude-Session: https://claude.ai/code/session_example\n\nCo-authored-by: Claude <noreply@anthropic.com>",
+      "tree": {
+        "sha": "74f33c575b71cc4f7a1f0264751ad5b44322d5a5",
+        "url": "https://api.github.com/repos/FieldmouseWorks/Conary/git/trees/74f33c575b71cc4f7a1f0264751ad5b44322d5a5"
+      },
+      "url": "https://api.github.com/repos/FieldmouseWorks/Conary/git/commits/db2a09dabcacd2f866fe1d28d678d6cc0e67ff5c",
+      "comment_count": 0,
+      "verification": {
+        "verified": true,
+        "reason": "valid",
+        "signature": "-----BEGIN PGP SIGNATURE-----\n\nwsFcBAABCAAQBQJq71YBCRC1aQ7uu5UhlAAA51IQACbIzmY7wrKkQqckiyTDLbgq\nQgqFNQyNJMEWIFNX6MLQKoSWyOjKtzKmW9PU1l7ctWX0IJPbO8HrGahF+Z0QQazJ\nMUALH4yojjpqG3AmFqzha5aBHIbS45TNxaxAyWaQqGF4qZsj28pnOg4KEJlf4kER\nVMAJxdo7I1aq/JI1jk5fjezMSVii4lIcd2kn+pW3ayy2iCS94V7cG5lR6KXLaE13\nibMzWSlIa8SoQ7a2VG5mCVD9XeNWpeuDVini6xPJEvs4hRY6JzXtF5VboAZJ/vaG\nqbzomHYxU+ilw1dnwGOtefvb/Ji2/8eVFThxq2b5dSjHmLv9anc+D5niNioZM5ut\njHdmUdklw2TupGRSWP7wwbp3hcS6FPf2MG0wplOrNleOkQj7dbQ2QeBLY25RP98s\narBMfJOSbIz+Haz54dbV1adW79Hj0GT2fKgtbstAvmdPsVFcWbJVvnu8x4MJB9x9\nURNALRSJyDIoDt+6UxTdboO/2PgWjPOkj4IBGc90eijgMR05mEoW5kjrN87OpuQb\nXCT84NSGREFHol48xYM4yi7orbMSnHCoS4GNpaGx8mNi1or76a5iL52Oc31CDKsF\nc6H0Sfs0kerCL+giTJ6TNBZtB+UhmADWKhlo4fWgJ0roBH5MSz69usDxMDV9Q/Z7\nz66wcceg32UM0+iN8IDq\n=2SDD\n-----END PGP SIGNATURE-----\n",
+        "payload": "tree 74f33c575b71cc4f7a1f0264751ad5b44322d5a5\nparent 1c8f6b8a70abd4c13c0b319c3875c3a72b86b759\nauthor Octo Person <1000001+octo-person@users.noreply.github.com> 1794070017 -0800\ncommitter GitHub <noreply@github.com> 1794070017 -0800\n\nagents: say what runs today and map the docs (#254)\n\nAGENTS.md still called Conary \"at the design stage\" though the ledger, the\ntrain and undo have run on remi since M3 and M4. It now says what runs,\npoints at DESIGN's roadmap, and lists where the other docs' subjects live.\n\n\nClaude-Session: https://claude.ai/code/session_example\n\nCo-authored-by: Claude <noreply@anthropic.com>",
+        "verified_at": "2026-11-07T16:46:58Z"
+      }
+    },
+    "url": "https://api.github.com/repos/FieldmouseWorks/Conary/commits/db2a09dabcacd2f866fe1d28d678d6cc0e67ff5c",
+    "html_url": "https://github.com/FieldmouseWorks/Conary/commit/db2a09dabcacd2f866fe1d28d678d6cc0e67ff5c",
+    "comments_url": "https://api.github.com/repos/FieldmouseWorks/Conary/commits/db2a09dabcacd2f866fe1d28d678d6cc0e67ff5c/comments",
+    "author": {
+      "login": "octo-person",
+      "id": 1000001,
+      "node_id": "MDQ6VXNlcjEwMDAwMDE=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/1000001?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/octo-person",
+      "html_url": "https://github.com/octo-person",
+      "followers_url": "https://api.github.com/users/octo-person/followers",
+      "following_url": "https://api.github.com/users/octo-person/following{/other_user}",
+      "gists_url": "https://api.github.com/users/octo-person/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/octo-person/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/octo-person/subscriptions",
+      "organizations_url": "https://api.github.com/users/octo-person/orgs",
+      "repos_url": "https://api.github.com/users/octo-person/repos",
+      "events_url": "https://api.github.com/users/octo-person/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/octo-person/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "committer": {
+      "login": "web-flow",
+      "id": 19864447,
+      "node_id": "MDQ6VXNlcjE5ODY0NDQ3",
+      "avatar_url": "https://avatars.githubusercontent.com/u/19864447?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/web-flow",
+      "html_url": "https://github.com/web-flow",
+      "followers_url": "https://api.github.com/users/web-flow/followers",
+      "following_url": "https://api.github.com/users/web-flow/following{/other_user}",
+      "gists_url": "https://api.github.com/users/web-flow/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/web-flow/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/web-flow/subscriptions",
+      "organizations_url": "https://api.github.com/users/web-flow/orgs",
+      "repos_url": "https://api.github.com/users/web-flow/repos",
+      "events_url": "https://api.github.com/users/web-flow/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/web-flow/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "parents": [
+      {
+        "sha": "1c8f6b8a70abd4c13c0b319c3875c3a72b86b759",
+        "url": "https://api.github.com/repos/FieldmouseWorks/Conary/commits/1c8f6b8a70abd4c13c0b319c3875c3a72b86b759",
+        "html_url": "https://github.com/FieldmouseWorks/Conary/commit/1c8f6b8a70abd4c13c0b319c3875c3a72b86b759"
+      }
+    ]
+  },
+  "merge_base_commit": {
+    "sha": "db2a09dabcacd2f866fe1d28d678d6cc0e67ff5c",
+    "node_id": "C_kwDOVS7vt9oAKGRiMmEwOWRhYmNhY2QyZjg2NmZlMWQyOGQ2NzhkNmNjMGU2N2ZmNWM",
+    "commit": {
+      "author": {
+        "name": "Octo Person",
+        "email": "1000001+octo-person@users.noreply.github.com",
+        "date": "2026-11-07T16:46:57Z"
+      },
+      "committer": {
+        "name": "GitHub",
+        "email": "noreply@github.com",
+        "date": "2026-11-07T16:46:57Z"
+      },
+      "message": "agents: say what runs today and map the docs (#254)\n\nAGENTS.md still called Conary \"at the design stage\" though the ledger, the\ntrain and undo have run on remi since M3 and M4. It now says what runs,\npoints at DESIGN's roadmap, and lists where the other docs' subjects live.\n\n\nClaude-Session: https://claude.ai/code/session_example\n\nCo-authored-by: Claude <noreply@anthropic.com>",
+      "tree": {
+        "sha": "74f33c575b71cc4f7a1f0264751ad5b44322d5a5",
+        "url": "https://api.github.com/repos/FieldmouseWorks/Conary/git/trees/74f33c575b71cc4f7a1f0264751ad5b44322d5a5"
+      },
+      "url": "https://api.github.com/repos/FieldmouseWorks/Conary/git/commits/db2a09dabcacd2f866fe1d28d678d6cc0e67ff5c",
+      "comment_count": 0,
+      "verification": {
+        "verified": true,
+        "reason": "valid",
+        "signature": "-----BEGIN PGP SIGNATURE-----\n\nwsFcBAABCAAQBQJq71YBCRC1aQ7uu5UhlAAA51IQACbIzmY7wrKkQqckiyTDLbgq\nQgqFNQyNJMEWIFNX6MLQKoSWyOjKtzKmW9PU1l7ctWX0IJPbO8HrGahF+Z0QQazJ\nMUALH4yojjpqG3AmFqzha5aBHIbS45TNxaxAyWaQqGF4qZsj28pnOg4KEJlf4kER\nVMAJxdo7I1aq/JI1jk5fjezMSVii4lIcd2kn+pW3ayy2iCS94V7cG5lR6KXLaE13\nibMzWSlIa8SoQ7a2VG5mCVD9XeNWpeuDVini6xPJEvs4hRY6JzXtF5VboAZJ/vaG\nqbzomHYxU+ilw1dnwGOtefvb/Ji2/8eVFThxq2b5dSjHmLv9anc+D5niNioZM5ut\njHdmUdklw2TupGRSWP7wwbp3hcS6FPf2MG0wplOrNleOkQj7dbQ2QeBLY25RP98s\narBMfJOSbIz+Haz54dbV1adW79Hj0GT2fKgtbstAvmdPsVFcWbJVvnu8x4MJB9x9\nURNALRSJyDIoDt+6UxTdboO/2PgWjPOkj4IBGc90eijgMR05mEoW5kjrN87OpuQb\nXCT84NSGREFHol48xYM4yi7orbMSnHCoS4GNpaGx8mNi1or76a5iL52Oc31CDKsF\nc6H0Sfs0kerCL+giTJ6TNBZtB+UhmADWKhlo4fWgJ0roBH5MSz69usDxMDV9Q/Z7\nz66wcceg32UM0+iN8IDq\n=2SDD\n-----END PGP SIGNATURE-----\n",
+        "payload": "tree 74f33c575b71cc4f7a1f0264751ad5b44322d5a5\nparent 1c8f6b8a70abd4c13c0b319c3875c3a72b86b759\nauthor Octo Person <1000001+octo-person@users.noreply.github.com> 1794070017 -0800\ncommitter GitHub <noreply@github.com> 1794070017 -0800\n\nagents: say what runs today and map the docs (#254)\n\nAGENTS.md still called Conary \"at the design stage\" though the ledger, the\ntrain and undo have run on remi since M3 and M4. It now says what runs,\npoints at DESIGN's roadmap, and lists where the other docs' subjects live.\n\n\nClaude-Session: https://claude.ai/code/session_example\n\nCo-authored-by: Claude <noreply@anthropic.com>",
+        "verified_at": "2026-11-07T16:46:58Z"
+      }
+    },
+    "url": "https://api.github.com/repos/FieldmouseWorks/Conary/commits/db2a09dabcacd2f866fe1d28d678d6cc0e67ff5c",
+    "html_url": "https://github.com/FieldmouseWorks/Conary/commit/db2a09dabcacd2f866fe1d28d678d6cc0e67ff5c",
+    "comments_url": "https://api.github.com/repos/FieldmouseWorks/Conary/commits/db2a09dabcacd2f866fe1d28d678d6cc0e67ff5c/comments",
+    "author": {
+      "login": "octo-person",
+      "id": 1000001,
+      "node_id": "MDQ6VXNlcjEwMDAwMDE=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/1000001?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/octo-person",
+      "html_url": "https://github.com/octo-person",
+      "followers_url": "https://api.github.com/users/octo-person/followers",
+      "following_url": "https://api.github.com/users/octo-person/following{/other_user}",
+      "gists_url": "https://api.github.com/users/octo-person/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/octo-person/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/octo-person/subscriptions",
+      "organizations_url": "https://api.github.com/users/octo-person/orgs",
+      "repos_url": "https://api.github.com/users/octo-person/repos",
+      "events_url": "https://api.github.com/users/octo-person/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/octo-person/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "committer": {
+      "login": "web-flow",
+      "id": 19864447,
+      "node_id": "MDQ6VXNlcjE5ODY0NDQ3",
+      "avatar_url": "https://avatars.githubusercontent.com/u/19864447?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/web-flow",
+      "html_url": "https://github.com/web-flow",
+      "followers_url": "https://api.github.com/users/web-flow/followers",
+      "following_url": "https://api.github.com/users/web-flow/following{/other_user}",
+      "gists_url": "https://api.github.com/users/web-flow/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/web-flow/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/web-flow/subscriptions",
+      "organizations_url": "https://api.github.com/users/web-flow/orgs",
+      "repos_url": "https://api.github.com/users/web-flow/repos",
+      "events_url": "https://api.github.com/users/web-flow/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/web-flow/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "parents": [
+      {
+        "sha": "1c8f6b8a70abd4c13c0b319c3875c3a72b86b759",
+        "url": "https://api.github.com/repos/FieldmouseWorks/Conary/commits/1c8f6b8a70abd4c13c0b319c3875c3a72b86b759",
+        "html_url": "https://github.com/FieldmouseWorks/Conary/commit/1c8f6b8a70abd4c13c0b319c3875c3a72b86b759"
+      }
+    ]
+  },
+  "status": "ahead",
+  "ahead_by": 1,
+  "behind_by": 0,
+  "total_commits": 1,
+  "commits": [],
+  "files": [
+    {
+      "sha": "eeac2a5be92b5e65296ec75b52cf47d1b6f20f3d",
+      "filename": "AGENTS.md",
+      "status": "modified",
+      "additions": 65,
+      "deletions": 77,
+      "changes": 142,
+      "blob_url": "https://github.com/FieldmouseWorks/Conary/blob/1d8cd465a81ff5c103b3cc4b4392d8909d53c086/AGENTS.md",
+      "raw_url": "https://github.com/FieldmouseWorks/Conary/raw/1d8cd465a81ff5c103b3cc4b4392d8909d53c086/AGENTS.md",
+      "contents_url": "https://api.github.com/repos/FieldmouseWorks/Conary/contents/AGENTS.md?ref=1d8cd465a81ff5c103b3cc4b4392d8909d53c086"
+    }
+  ]
+}

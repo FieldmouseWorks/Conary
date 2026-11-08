@@ -93,47 +93,7 @@ impl MergeBases {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::{CheckRun, Commit, Event, PullRequest, Pulls, Review, Status};
-    use std::cell::Cell;
-
-    /// GitHub, answering only merge bases, and counting them.
-    #[derive(Default)]
-    struct Bases(Cell<usize>);
-
-    impl Source for Bases {
-        fn pull(&self, _: &str, _: u64) -> Result<PullRequest, ApiError> {
-            unimplemented!()
-        }
-        fn pulls(&self, _: &str, _: Pulls) -> Result<Vec<PullRequest>, ApiError> {
-            unimplemented!()
-        }
-        fn check_runs(&self, _: &str, _: &str) -> Result<Vec<CheckRun>, ApiError> {
-            unimplemented!()
-        }
-        fn statuses(&self, _: &str, _: &str) -> Result<Vec<Status>, ApiError> {
-            unimplemented!()
-        }
-        fn reviews(&self, _: &str, _: u64) -> Result<Vec<Review>, ApiError> {
-            unimplemented!()
-        }
-        fn commit(&self, _: &str, _: &str) -> Result<Commit, ApiError> {
-            unimplemented!()
-        }
-        fn commit_pulls(&self, _: &str, _: &str) -> Result<Vec<u64>, ApiError> {
-            unimplemented!()
-        }
-        fn timeline(&self, _: &str, _: u64) -> Result<Vec<Event>, ApiError> {
-            unimplemented!()
-        }
-        fn merge_base(&self, _: &str, a: &str, _: &str) -> Result<String, ApiError> {
-            self.0.set(self.0.get() + 1);
-            Ok(a.replace('a', "c"))
-        }
-
-        fn files(&self, _: &str, _: &str, _: &str) -> Result<conary_core::policy::Paths, ApiError> {
-            unimplemented!("nothing here classifies")
-        }
-    }
+    use crate::sim::{Call, Hub};
 
     const REPO: &str = "FieldmouseWorks/burrow";
 
@@ -142,11 +102,18 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let lock = Lock::take(dir.path()).unwrap();
         let (a, b, a2) = ("a".repeat(40), "b".repeat(40), "a".repeat(39) + "1");
-        let gh = Bases::default();
+        // b forked from where a2 did, after a forked: b and a meet at c,
+        // b and a2 at c1.
+        let (c, c1) = ("c".repeat(40), "c".repeat(39) + "1");
+        let gh = Hub::new(REPO, &c);
+        gh.change(&a, &c, "a");
+        gh.change(&c1, &c, "c1");
+        gh.change(&a2, &c1, "a2");
+        gh.change(&b, &c1, "b");
         let mut bases = MergeBases::load(&lock).unwrap();
         assert_eq!(bases.get(&gh, REPO, &a, &b).unwrap(), "c".repeat(40));
         assert_eq!(bases.get(&gh, REPO, &a, &b).unwrap(), "c".repeat(40));
-        assert_eq!(gh.0.get(), 1);
+        assert_eq!(gh.count(Call::MergeBase), 1);
 
         // An append cut short partway through its last commit id.
         let path = dir.path().join(FILE);
@@ -155,14 +122,14 @@ mod tests {
         std::fs::write(&path, &text).unwrap();
         let mut bases = MergeBases::load(&lock).unwrap();
         assert_eq!(bases.get(&gh, REPO, &a, &b).unwrap(), "c".repeat(40));
-        assert_eq!(gh.0.get(), 1);
+        assert_eq!(gh.count(Call::MergeBase), 1);
         assert_eq!(bases.get(&gh, REPO, &a2, &b).unwrap(), "c".repeat(39) + "1");
-        assert_eq!(gh.0.get(), 2);
+        assert_eq!(gh.count(Call::MergeBase), 2);
 
         // The new record went on a line of its own, so both read back.
         let mut bases = MergeBases::load(&lock).unwrap();
         bases.get(&gh, REPO, &a, &b).unwrap();
         bases.get(&gh, REPO, &a2, &b).unwrap();
-        assert_eq!(gh.0.get(), 2);
+        assert_eq!(gh.count(Call::MergeBase), 2);
     }
 }

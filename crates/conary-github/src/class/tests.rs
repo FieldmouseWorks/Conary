@@ -1,106 +1,43 @@
-use std::cell::{Cell, RefCell};
-
-use conary_core::policy::{Paths, Touched};
 use ed25519_dalek::SigningKey;
-use serde_json::json;
 
 use super::*;
-use crate::api::{CheckRun, Commit, Event, PullRequest, Pulls, Review, Status};
+use crate::sim::{Call, Hub};
 
 const BASE: &str = "1111111111111111111111111111111111111111";
 const FORK: &str = "2222222222222222222222222222222222222222";
 const HEAD: &str = "3333333333333333333333333333333333333333";
 const HEAD2: &str = "4444444444444444444444444444444444444444";
 
-/// GitHub with one open PR, whose head can move, and the files each
-/// comparison lists.
-struct Hub {
-    head: RefCell<&'static str>,
-    files: Vec<(&'static str, Paths)>,
-    /// The comparisons asked for, as (base, head).
-    compared: RefCell<Vec<(String, String)>>,
-    pulled: Cell<usize>,
-    /// The PR's labels.
-    labels: RefCell<Vec<&'static str>>,
+/// GitHub with PR 7 open at HEAD, forked from trunk at FORK, which has
+/// moved on to BASE since; and HEAD2, another head forked there. Each head
+/// changes `files`.
+fn github(files: &[(&str, &[&str])]) -> Hub {
+    let hub = Hub::new(REPO, FORK);
+    hub.change(BASE, FORK, "trunk moved");
+    hub.set_branch(REPO, "main", BASE);
+    for (head, paths) in files {
+        hub.change(head, FORK, head);
+        hub.touch(head, paths);
+    }
+    if !files.iter().any(|(h, _)| *h == HEAD) {
+        hub.change(HEAD, FORK, HEAD);
+    }
+    hub.pr(REPO, 7, HEAD);
+    hub
 }
 
-impl Hub {
-    fn new(files: Vec<(&'static str, Paths)>) -> Self {
-        Self {
-            head: RefCell::new(HEAD),
-            files,
-            compared: RefCell::default(),
-            pulled: Cell::new(0),
-            labels: RefCell::default(),
-        }
-    }
+/// The comparisons asked for, as (base, head).
+fn compared(hub: &Hub) -> Vec<(String, String)> {
+    hub.asked(Call::Files)
+        .into_iter()
+        .map(|a| (a[1].clone(), a[2].clone()))
+        .collect()
 }
 
-impl Source for Hub {
-    fn pull(&self, _: &str, number: u64) -> Result<PullRequest, ApiError> {
-        self.pulled.set(self.pulled.get() + 1);
-        Ok(serde_json::from_value(json!({
-            "number": number,
-            "state": "open",
-            "title": "area: a change",
-            "body": null,
-            "user": {"login": "TusanHomichi", "type": "User"},
-            "base": {"sha": BASE, "ref": "main", "repo": {"default_branch": "main"}},
-            "head": {"sha": *self.head.borrow(), "ref": "claude/x"},
-            "labels": self.labels.borrow().iter().map(|l| json!({"name": l})).collect::<Vec<_>>(),
-        }))
-        .unwrap())
-    }
-    fn pulls(&self, _: &str, _: Pulls) -> Result<Vec<PullRequest>, ApiError> {
-        unimplemented!()
-    }
-    fn check_runs(&self, _: &str, _: &str) -> Result<Vec<CheckRun>, ApiError> {
-        Ok(Vec::new())
-    }
-    fn statuses(&self, _: &str, _: &str) -> Result<Vec<Status>, ApiError> {
-        Ok(Vec::new())
-    }
-    fn reviews(&self, _: &str, _: u64) -> Result<Vec<Review>, ApiError> {
-        Ok(Vec::new())
-    }
-    fn commit(&self, _: &str, _: &str) -> Result<Commit, ApiError> {
-        unimplemented!()
-    }
-    fn commit_pulls(&self, _: &str, _: &str) -> Result<Vec<u64>, ApiError> {
-        Ok(Vec::new())
-    }
-    fn timeline(&self, _: &str, _: u64) -> Result<Vec<Event>, ApiError> {
-        Ok(Vec::new())
-    }
-    fn merge_base(&self, _: &str, _: &str, _: &str) -> Result<String, ApiError> {
-        Ok(FORK.into())
-    }
-    fn files(&self, _: &str, base: &str, head: &str) -> Result<Paths, ApiError> {
-        self.compared.borrow_mut().push((base.into(), head.into()));
-        self.files
-            .iter()
-            .find(|(h, _)| *h == head)
-            .map(|(_, p)| p.clone())
-            .ok_or_else(|| ApiError::new(format!("no comparison to {head}")))
-    }
-}
-
-fn paths(files: &[&str]) -> Paths {
-    Paths {
-        files: files
-            .iter()
-            .map(|p| Touched {
-                path: (*p).into(),
-                from: None,
-                new: false,
-            })
-            .collect(),
-        cut: false,
-    }
-}
+const REPO: &str = "FieldmouseWorks/burrow";
 
 fn repo() -> Repo {
-    "FieldmouseWorks/burrow".parse().unwrap()
+    REPO.parse().unwrap()
 }
 
 fn config() -> Config {
@@ -125,7 +62,7 @@ const POLICY: &str = r#"{"r2": ["(^|/)CODEOWNERS$"], "docs": ["^docs/"]}"#;
 fn a_revision_is_classed_from_its_own_comparison_and_recorded() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let hub = Hub::new(vec![(HEAD, paths(&["src/a.rs", "CODEOWNERS"]))]);
+    let hub = github(&[(HEAD, &["src/a.rs", "CODEOWNERS"])]);
     let got = class(
         &mut store,
         &hub,
@@ -140,7 +77,7 @@ fn a_revision_is_classed_from_its_own_comparison_and_recorded() {
     assert_eq!(got.class(), Class::R2);
     assert_eq!(got.said.because.as_deref(), Some("CODEOWNERS"));
     // Against the revision's merge base, not the base branch's tip.
-    assert_eq!(*hub.compared.borrow(), [(FORK.into(), HEAD.into())]);
+    assert_eq!(compared(&hub), [(FORK.into(), HEAD.into())]);
     let c = store.ledger().change(got.change).unwrap();
     let k = c.class_of(got.revision).unwrap();
     assert_eq!(
@@ -153,7 +90,7 @@ fn a_revision_is_classed_from_its_own_comparison_and_recorded() {
 fn asked_again_it_answers_from_the_ledger() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let hub = Hub::new(vec![(HEAD, paths(&["docs/a.md"]))]);
+    let hub = github(&[(HEAD, &["docs/a.md"])]);
     let p = policy(POLICY);
     let first = class(&mut store, &hub, &config(), &p, &repo(), 7, HEAD).unwrap();
     let ops = store.ledger().head();
@@ -161,7 +98,7 @@ fn asked_again_it_answers_from_the_ledger() {
     assert!(!again.recorded);
     assert_eq!(again.said, first.said);
     assert!(again.said.docs && !again.said.review());
-    assert_eq!(hub.compared.borrow().len(), 1, "compared again");
+    assert_eq!(compared(&hub).len(), 1, "compared again");
     assert_eq!(store.ledger().head(), ops, "recorded again");
 }
 
@@ -169,7 +106,7 @@ fn asked_again_it_answers_from_the_ledger() {
 fn another_policy_classes_it_again() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let hub = Hub::new(vec![(HEAD, paths(&["docs/a.md"]))]);
+    let hub = github(&[(HEAD, &["docs/a.md"])]);
     let docs = class(
         &mut store,
         &hub,
@@ -193,13 +130,10 @@ fn another_policy_classes_it_again() {
 fn a_new_head_is_a_new_revision_classed_on_its_own() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let hub = Hub::new(vec![
-        (HEAD, paths(&["docs/a.md"])),
-        (HEAD2, paths(&["docs/a.md", "src/b.rs"])),
-    ]);
+    let hub = github(&[(HEAD, &["docs/a.md"]), (HEAD2, &["docs/a.md", "src/b.rs"])]);
     let p = policy(POLICY);
     let first = class(&mut store, &hub, &config(), &p, &repo(), 7, HEAD).unwrap();
-    *hub.head.borrow_mut() = HEAD2;
+    hub.push(REPO, 7, HEAD2);
     let second = class(&mut store, &hub, &config(), &p, &repo(), 7, HEAD2).unwrap();
     assert_ne!(first.revision, second.revision);
     assert!(first.said.docs && !second.said.docs);
@@ -209,8 +143,8 @@ fn a_new_head_is_a_new_revision_classed_on_its_own() {
 fn a_head_that_moved_is_refused_and_nothing_is_classed() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let hub = Hub::new(vec![(HEAD2, paths(&["CODEOWNERS"]))]);
-    *hub.head.borrow_mut() = HEAD2;
+    let hub = github(&[(HEAD2, &["CODEOWNERS"])]);
+    hub.push(REPO, 7, HEAD2);
     let e = class(
         &mut store,
         &hub,
@@ -225,7 +159,7 @@ fn a_head_that_moved_is_refused_and_nothing_is_classed() {
         matches!(&e, ClassError::Moved { head, .. } if head == HEAD2),
         "{e}"
     );
-    assert!(hub.compared.borrow().is_empty());
+    assert!(compared(&hub).is_empty());
     let c = store.ledger().by_pr(&repo(), 7).unwrap();
     assert!(c.classes.is_empty());
 }
@@ -237,13 +171,13 @@ fn a_head_that_moved_is_refused_and_nothing_is_classed() {
 fn labels_raise_a_class_and_taking_them_off_lowers_nothing() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let hub = Hub::new(vec![(HEAD, paths(&["docs/a.md"]))]);
+    let hub = github(&[(HEAD, &["docs/a.md"])]);
     let p = policy(POLICY);
     let ask = |store: &mut Store| class(store, &hub, &config(), &p, &repo(), 7, HEAD).unwrap();
     let plain = ask(&mut store);
     assert!(!plain.said.review());
 
-    *hub.labels.borrow_mut() = vec!["Review", "bug"];
+    hub.label(REPO, 7, &["Review", "bug"]);
     let review = ask(&mut store);
     assert!(review.recorded);
     assert_eq!(review.said.raised, ["review"]);
@@ -252,7 +186,7 @@ fn labels_raise_a_class_and_taking_them_off_lowers_nothing() {
     let again = ask(&mut store);
     assert!(!again.recorded && again.said == review.said);
 
-    *hub.labels.borrow_mut() = vec!["r2", "review"];
+    hub.label(REPO, 7, &["r2", "review"]);
     let r2 = ask(&mut store);
     assert_eq!(r2.class(), Class::R2);
     assert_eq!(r2.said.because.as_deref(), Some("labelled r2"));
@@ -261,7 +195,7 @@ fn labels_raise_a_class_and_taking_them_off_lowers_nothing() {
     assert_eq!(c.class_of(r2.revision).unwrap().raised, ["r2", "review"]);
 
     // Taken off, they stay: an author's raise is never undone by the PR.
-    hub.labels.borrow_mut().clear();
+    hub.label(REPO, 7, &[]);
     let after = ask(&mut store);
     assert!(!after.recorded);
     assert_eq!(after.said, r2.said);
@@ -273,15 +207,12 @@ fn labels_raise_a_class_and_taking_them_off_lowers_nothing() {
 fn a_raise_holds_for_every_later_head() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let hub = Hub::new(vec![
-        (HEAD, paths(&["docs/a.md"])),
-        (HEAD2, paths(&["docs/b.md"])),
-    ]);
+    let hub = github(&[(HEAD, &["docs/a.md"]), (HEAD2, &["docs/b.md"])]);
     let p = policy(POLICY);
-    *hub.labels.borrow_mut() = vec!["r2"];
+    hub.label(REPO, 7, &["r2"]);
     class(&mut store, &hub, &config(), &p, &repo(), 7, HEAD).unwrap();
-    hub.labels.borrow_mut().clear();
-    *hub.head.borrow_mut() = HEAD2;
+    hub.label(REPO, 7, &[]);
+    hub.push(REPO, 7, HEAD2);
     let got = class(&mut store, &hub, &config(), &p, &repo(), 7, HEAD2).unwrap();
     assert!(got.recorded);
     assert_eq!(
@@ -295,8 +226,8 @@ fn a_raise_holds_for_every_later_head() {
 fn an_r2_label_on_an_r2_change_keeps_its_reason() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let hub = Hub::new(vec![(HEAD, paths(&["CODEOWNERS"]))]);
-    *hub.labels.borrow_mut() = vec!["r2"];
+    let hub = github(&[(HEAD, &["CODEOWNERS"])]);
+    hub.label(REPO, 7, &["r2"]);
     let got = class(
         &mut store,
         &hub,
