@@ -617,6 +617,10 @@ doc links to it, and `steward.py` goes. conaryd keeps the steward's rules on
 event-triggered passes: it acts on webhooks and on waits it booked itself,
 never on a timer.
 
+The executable [plugin contract](plugins.md) owns the interface for work
+requested by a flow step. Its runner and conformance test stand alone;
+calling it from the flow is a later slice.
+
 ## 7. Interfaces
 
 | Interface | Used by | Notes |
