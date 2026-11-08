@@ -179,7 +179,10 @@ pub enum Proof {
 pub struct Settings {
     pub train: bool,
     pub require_ci: bool,
+    /// Checks a job runs; builds and runs below are separate proof kinds.
     pub proofs: BTreeSet<String>,
+    pub proof_builds: BTreeSet<String>,
+    pub proof_runs: BTreeSet<String>,
     pub settle_delay: u64,
     pub handoff_after: u64,
     pub session_handoff_after: u64,
@@ -190,12 +193,25 @@ pub struct Settings {
     pub renovate_merge_after: u64,
 }
 
+impl Settings {
+    pub fn machine(&self) -> BTreeSet<String> {
+        self.proofs
+            .iter()
+            .chain(&self.proof_builds)
+            .chain(&self.proof_runs)
+            .cloned()
+            .collect()
+    }
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
             train: false,
             require_ci: true,
             proofs: BTreeSet::new(),
+            proof_builds: BTreeSet::new(),
+            proof_runs: BTreeSet::new(),
             settle_delay: 300,
             handoff_after: 1800,
             session_handoff_after: 7200,
@@ -213,6 +229,7 @@ impl Default for Settings {
 #[derive(Debug, Clone)]
 pub struct Facts {
     pub revision: Revision,
+    pub default_branch: String,
     pub open: bool,
     pub draft: bool,
     pub trusted: bool,

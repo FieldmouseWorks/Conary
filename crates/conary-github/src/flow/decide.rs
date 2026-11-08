@@ -357,7 +357,7 @@ fn ci(f: &Facts, m: &mut Memory, now: u64) -> Ci {
     if !f.checks.is_empty() {
         return Ci::Green;
     }
-    if f.settings.train || !f.settings.require_ci {
+    if by_train(f) || !f.settings.require_ci {
         return Ci::Green;
     }
     let first = *m.no_checks_since.get_or_insert(now);
@@ -401,6 +401,12 @@ fn after_review(f: &Facts, m: &mut Memory, now: u64, ci: Ci, capped: bool) -> De
             "The judge sent it to the owner",
         );
     }
+    let pending: Vec<_> = f.checks.iter().filter(|c| c.state == Ci::Pending).collect();
+    let machine = f.settings.machine();
+    let proof_only = !pending.is_empty() && pending.iter().all(|c| machine.contains(&c.name));
+    let early = pending.iter().any(|c| {
+        f.settings.proof_builds.contains(&c.name) || f.settings.proof_runs.contains(&c.name)
+    });
     match f.proof {
         Proof::InLine(_) => {
             return wait(
@@ -417,7 +423,7 @@ fn after_review(f: &Facts, m: &mut Memory, now: u64, ci: Ci, capped: bool) -> De
                 "Posting machine proof verdicts",
             );
         }
-        Proof::Needed if ci != Ci::Pending || !f.settings.proofs.is_empty() => {
+        Proof::Needed if ci != Ci::Pending || proof_only || early => {
             return work(f, m, now, Kind::Proof);
         }
         _ => {}
@@ -426,7 +432,16 @@ fn after_review(f: &Facts, m: &mut Memory, now: u64, ci: Ci, capped: bool) -> De
         return wait(
             Stage::Ci,
             m.no_checks_since.map(|t| t.saturating_add(300)),
-            "Settled; waiting for CI",
+            &format!(
+                "Settled; waiting for CI: {}",
+                pending
+                    .iter()
+                    .map(|c| c.name.as_str())
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .into_iter()
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
         );
     }
     let requires_judge = f.classified.class == Class::R2
@@ -499,7 +514,7 @@ fn land(f: &Facts, now: u64) -> Decision {
             "Settled, but behind its base",
         );
     }
-    if f.settings.train {
+    if by_train(f) {
         return at(
             Stage::Train,
             Step::JoinTrain,
@@ -624,4 +639,8 @@ fn failure_stage(kind: Failure) -> Stage {
         Failure::Job | Failure::Lost | Failure::Answer | Failure::Stop => Stage::Fix,
         _ => Stage::Merge,
     }
+}
+
+fn by_train(f: &Facts) -> bool {
+    f.settings.train && f.revision.base == f.default_branch
 }

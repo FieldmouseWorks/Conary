@@ -7,7 +7,7 @@ use crate::flow::*;
 use crate::sim::Hub;
 use serde_json::json;
 
-fn setup() -> (Hub, Facts, Memory) {
+pub(super) fn setup() -> (Hub, Facts, Memory) {
     let hub = hub();
     hub.pr(REMI, 3, &head(3));
     hub.edit_pull(REMI, 3, |p| p["user"]["login"] = json!("owner"));
@@ -16,7 +16,7 @@ fn setup() -> (Hub, Facts, Memory) {
         REMI,
         3,
         Snapshot {
-            head: head(3),
+            revision: Revision::from(&crate::api::Source::pull(&hub, REMI, 3).unwrap()),
             draft: false,
             complete: true,
             merge_state: "CLEAN".into(),
@@ -24,6 +24,7 @@ fn setup() -> (Hub, Facts, Memory) {
             changes_requested: false,
             reviewers: BTreeMap::new(),
             updated_at: 0,
+            suites: BTreeMap::new(),
         },
     );
     let mut f = read(
@@ -36,7 +37,7 @@ fn setup() -> (Hub, Facts, Memory) {
         &["owner".into()],
     )
     .unwrap();
-    // These are machine facts not exposed by the initial reader adapter.
+    // These GitHub facts are not exposed by the initial reader adapter yet.
     f.authorship_known = true;
     f.empty = Some(false);
     f.reviewers.insert(

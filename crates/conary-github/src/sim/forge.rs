@@ -419,6 +419,12 @@ impl Forge for Hub {
 }
 
 impl crate::flow::Read for Hub {
+    fn annotations(&self, repo: &str, run: u64) -> Result<Vec<String>, ApiError> {
+        let id = run.to_string();
+        self.read(Asked::new(Call::Annotations, repo), &[repo, &id], |w| {
+            Ok(w.annotations.get(&run).cloned().unwrap_or_default())
+        })
+    }
     fn snapshot(&self, repo: &str, number: u64) -> Result<crate::flow::Snapshot, ApiError> {
         let n = number.to_string();
         self.read(
@@ -444,5 +450,30 @@ impl Hub {
             .expect("repo exists")
             .flow
             .insert(number, snapshot);
+    }
+}
+
+impl Hub {
+    pub(crate) fn flow_suites(
+        &self,
+        repo: &str,
+        pr: u64,
+        suites: std::collections::BTreeMap<u64, crate::flow::Suite>,
+    ) {
+        self.world
+            .borrow_mut()
+            .repos
+            .get_mut(repo)
+            .unwrap()
+            .flow
+            .get_mut(&pr)
+            .unwrap()
+            .suites = suites;
+    }
+    pub(crate) fn annotations(&self, run: u64, messages: &[&str]) {
+        self.world
+            .borrow_mut()
+            .annotations
+            .insert(run, messages.iter().map(|s| (*s).into()).collect());
     }
 }

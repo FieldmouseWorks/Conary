@@ -9,11 +9,12 @@ use conary_core::op::Repo;
 use super::*;
 use crate::api::{ApiError, Source};
 
-/// GitHub facts that Source does not yet expose. The head binds this read
-/// to the REST pull read: a push between endpoints is an error, not a clean PR.
+/// GitHub facts that Source does not yet expose. The revision binds this read
+/// to the REST pull read: pushes, retargets and description edits between
+/// endpoints are errors, never a clean PR.
 #[derive(Debug, Clone)]
 pub struct Snapshot {
-    pub head: String,
+    pub revision: Revision,
     pub draft: bool,
     pub complete: bool,
     pub merge_state: String,
@@ -21,10 +22,12 @@ pub struct Snapshot {
     pub changes_requested: bool,
     pub reviewers: BTreeMap<String, Reviewer>,
     pub updated_at: u64,
+    pub suites: BTreeMap<u64, Suite>,
 }
 
-pub trait Read: Source {
+pub trait Read: Source + crate::branches::Branches {
     fn snapshot(&self, repo: &str, pr: u64) -> Result<Snapshot, ApiError>;
+    fn annotations(&self, repo: &str, run: u64) -> Result<Vec<String>, ApiError>;
 }
 
 /// Read once, then decide without I/O. Only the configured trusted authors
@@ -41,38 +44,62 @@ pub fn read(
     let repository = repo.to_string();
     let pull = source.pull(&repository, pr)?;
     let extra = source.snapshot(&repository, pr)?;
-    if extra.head != pull.head.sha {
+    let revision = Revision::from(&pull);
+    if extra.revision != revision {
         return Err(ApiError::new("PR moved between flow reads"));
     }
     let paths = source.files(&repository, &pull.base.sha, &pull.head.sha)?;
     let classified = policy.classify(repo, &paths).raise(pull.raises());
-    let checks = checks(source, &repository, &pull.head.sha)?;
+    let machine = settings.machine();
+    let ci = super::ci::checks(
+        source,
+        &repository,
+        &pull.head.sha,
+        &pull.base.name,
+        &paths,
+        &extra.suites,
+        &machine,
+    )?;
     let labels = pull.labels.iter().map(|l| l.name.clone()).collect();
     let renovate = pull.head.name.starts_with("renovate/");
     let dependency = dependency(&pull.head.name, &pull.title, &pull.labels);
+    let proof = if machine.is_empty() || ci.docs {
+        Proof::NotNeeded
+    } else if ci
+        .checks
+        .iter()
+        .any(|c| machine.contains(&c.name) && c.state == Ci::Red)
+    {
+        Proof::Failed
+    } else if ci
+        .checks
+        .iter()
+        .any(|c| machine.contains(&c.name) && c.state == Ci::Pending)
+    {
+        Proof::Needed
+    } else {
+        Proof::Passed
+    };
     Ok(Facts {
-        revision: Revision {
-            head: pull.head.sha,
-            base: pull.base.name,
-            description: format!("{}\n{}", pull.title, pull.body.as_deref().unwrap_or("")),
-        },
+        revision,
+        default_branch: pull
+            .base
+            .repo
+            .as_ref()
+            .map_or_else(String::new, |r| r.default_branch.clone()),
         open: pull.state == "open",
         draft: extra.draft,
         trusted: trusted_authors.contains(&pull.user.login),
         complete: extra.complete,
         labels,
         merging: Merge::from_github(&extra.merge_state),
-        checks,
+        checks: ci.checks,
         open_threads: extra.open_threads,
         changes_requested: extra.changes_requested,
         reviewers: extra.reviewers,
         judgment: None,
         jobs: BTreeMap::new(),
-        proof: if settings.proofs.is_empty() {
-            Proof::NotNeeded
-        } else {
-            Proof::Needed
-        },
+        proof,
         settings,
         classified,
         unseen: false,
@@ -118,64 +145,12 @@ fn dependency(branch: &str, title: &str, labels: &[crate::api::Label]) -> Option
     })
 }
 
-fn checks(source: &dyn Read, repo: &str, head: &str) -> Result<Vec<Check>, ApiError> {
-    // A run gives way only to a rerun of it: a later run (GitHub's ids grow)
-    // of its name in its own suite, as the train's gate counts them. Runs of
-    // one name from two workflows or Apps each count, and a run with no suite
-    // to tell them apart gives way to nothing. Status contexts are
-    // case-insensitive and returned newest first by GitHub.
-    let mut runs: BTreeMap<(u64, String), crate::api::CheckRun> = BTreeMap::new();
-    let mut unsuited = Vec::new();
-    for run in source.check_runs(repo, head)? {
-        let Some(suite) = run.check_suite.as_ref().map(|s| s.id) else {
-            unsuited.push(run);
-            continue;
-        };
-        let key = (suite, run.name.clone());
-        if runs.get(&key).is_none_or(|old| old.id < run.id) {
-            runs.insert(key, run);
+impl From<&crate::api::PullRequest> for Revision {
+    fn from(pull: &crate::api::PullRequest) -> Self {
+        Self {
+            head: pull.head.sha.clone(),
+            base: pull.base.name.clone(),
+            description: format!("{}\n{}", pull.title, pull.body.as_deref().unwrap_or("")),
         }
     }
-    let mut checks = Vec::new();
-    for run in runs.into_values().chain(unsuited) {
-        let state = if run.status != "completed" {
-            Ci::Pending
-        } else {
-            match run.conclusion.as_deref() {
-                Some("success" | "neutral" | "skipped") => Ci::Green,
-                Some("cancelled") => Ci::Pending,
-                _ => Ci::Red,
-            }
-        };
-        checks.push(Check {
-            name: run.name,
-            state,
-        });
-    }
-    let mut seen = std::collections::BTreeSet::new();
-    for status in source.statuses(repo, head)? {
-        let name = status.context.to_lowercase();
-        if !seen.insert(name.clone()) || name == "review-settled" {
-            continue;
-        }
-        if name.starts_with(crate::train::CONTEXT)
-            && (status.state != "failure"
-                || !status
-                    .creator
-                    .as_ref()
-                    .is_some_and(|u| u.login == "fieldmouseworks-steward[bot]"))
-        {
-            continue;
-        }
-        let state = match status.state.as_str() {
-            "success" => Ci::Green,
-            "pending" | "expected" => Ci::Pending,
-            _ => Ci::Red,
-        };
-        checks.push(Check {
-            name: status.context,
-            state,
-        });
-    }
-    Ok(checks)
 }

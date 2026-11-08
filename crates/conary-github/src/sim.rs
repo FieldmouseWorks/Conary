@@ -82,6 +82,7 @@ pub(crate) struct World {
     statuses: HashMap<String, Vec<Value>>,
     /// Check runs by commit, as GitHub lists them.
     checks: HashMap<String, Vec<Value>>,
+    annotations: HashMap<u64, Vec<String>>,
     /// Each check run's job's artifacts, by the job's check run id: name
     /// and GitHub's zip of it.
     artifacts: HashMap<u64, Vec<(String, Vec<u8>)>>,
