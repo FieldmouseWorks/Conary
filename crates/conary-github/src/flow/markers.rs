@@ -181,25 +181,16 @@ pub(super) fn read(
             if issued.revision != current {
                 continue;
             }
-            let (out, valid) = if name == "major-verdict" {
-                (
-                    &mut majors,
-                    matches!(issued.verdict.as_str(), "ok" | "held"),
-                )
+            // An authenticated newer generation supersedes older words even
+            // when its verdict is unsupported: decoding it then fails closed.
+            let out = if name == "major-verdict" {
+                &mut majors
             } else {
-                (
-                    &mut judges,
-                    matches!(
-                        issued.verdict.as_str(),
-                        "land" | "owner" | "failed" | "misdescribed"
-                    ),
-                )
+                &mut judges
             };
-            if valid {
-                out.entry(issued.generation)
-                    .or_default()
-                    .insert(issued.verdict.clone());
-            }
+            out.entry(issued.generation)
+                .or_default()
+                .insert(issued.verdict.clone());
         }
     }
     // Duplicates are idempotent; conflicting authenticated words at one

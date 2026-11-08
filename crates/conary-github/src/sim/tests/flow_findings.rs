@@ -296,6 +296,14 @@ fn issuance_metadata_is_authenticated_and_conflicting_generations_fail_closed() 
     let newer = key.decision(REMI, 3, "autoland-judgment", "land", &c.scope(), 10);
     c.hub.flow_comment(REMI, 3, "owner", &newer);
     assert_eq!(c.pass(8200).step, Step::Merge);
+    // An authenticated but unsupported later word cannot revive an older Land.
+    let unsupported = key.decision(REMI, 3, "autoland-judgment", "unsupported", &c.scope(), 11);
+    c.hub.flow_comment(REMI, 3, "owner", &unsupported);
+    assert!(c.facts().judgment.is_none());
+    assert_eq!(c.pass(8300).step, Step::Judge);
+    let last = key.decision(REMI, 3, "autoland-judgment", "land", &c.scope(), 12);
+    c.hub.flow_comment(REMI, 3, "owner", &last);
+    assert_eq!(c.pass(8400).step, Step::Merge);
 }
 #[test]
 fn legacy_body_only_review_marks_and_seals_are_not_upgraded_to_full_scope() {
