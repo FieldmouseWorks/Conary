@@ -3,6 +3,8 @@
 //! `--sign`, the statement and the job's own OIDC token as the file the
 //! verifier reads.
 
+mod ci;
+
 use std::path::{Path, PathBuf};
 
 use clap::Subcommand;
@@ -24,6 +26,10 @@ const ATTESTATION: &str = "conary-attestation";
 
 #[derive(Subcommand)]
 pub enum AttestCommand {
+    /// Summarise caller jobs and sign a tree read with git alone.
+    Ci(ci::CiArgs),
+    /// Construct base code with head test files, without running code.
+    PrepareNegative(ci::RevisionArgs),
     /// A push's gate on a commit.
     Commit {
         /// The commit pushed.
@@ -109,6 +115,11 @@ pub struct Out {
 }
 
 pub fn run(cli: &Cli, command: &AttestCommand) -> Result<()> {
+    match command {
+        AttestCommand::Ci(args) => return ci::attest(cli, args),
+        AttestCommand::PrepareNegative(args) => return ci::prepare(args),
+        _ => {}
+    }
     let request = |out: &Out| -> Result<Option<(String, String)>> {
         if !out.sign {
             return Ok(None);
@@ -164,6 +175,7 @@ fn claim(command: &AttestCommand) -> Result<(Claim, &Out)> {
         Ok(Log::of(&bytes, &out.log_artifact))
     };
     Ok(match command {
+        AttestCommand::Ci(_) | AttestCommand::PrepareNegative(_) => unreachable!(),
         AttestCommand::Commit { commit, gate, out } => (
             Claim::Commit {
                 commit: commit.clone(),
