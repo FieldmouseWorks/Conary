@@ -151,6 +151,9 @@ with `--sign` signs it with the job's own OIDC token (the job needs
     cn attest revision <base> <head> --result pass --tree <tree> \
       --log flake.log --log-artifact flake-log-<uuid> --out "$RUNNER_TEMP/conary" --sign
 
+`cn plugin check PATH` checks an executable against the versioned
+[plugin contract](docs/plugins.md), with a copyable Rust example.
+
 `cn --help` and each command's `--help` list the rest, environment variables
 included.
 

@@ -24,3 +24,7 @@ tempfile = "3.27.0"
 
 [lints]
 workspace = true
+
+[[bin]]
+name = "conary-example-plugin"
+path = "../conary-core/examples/plugin.rs"
