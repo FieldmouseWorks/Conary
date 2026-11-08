@@ -221,3 +221,33 @@ fn answers_come_in_githubs_own_shapes() {
         Some("looks fine")
     );
 }
+
+#[test]
+fn the_merge_base_is_the_newest_common_ancestor_whichever_way_round() {
+    let hub = hub();
+    let b = hub.add(TRUNK, "x");
+    // A merge whose first parent is the older commit, and a revert of x
+    // on b: b is their merge base, however far trunk is from either.
+    let m = "a".repeat(40);
+    hub.commit_as(&m, &[TRUNK.into(), b.clone()], hub.patches(&b));
+    let u = hub.take_out(&b, "x");
+    let before = hub.patches(TRUNK);
+    let w = hub.world.borrow();
+    assert_eq!(w.merge_base(&u, &m), Some(b.clone()));
+    assert_eq!(w.merge_base(&m, &u), Some(b));
+    // So merging the merge into the revert keeps x out.
+    assert_eq!(w.three_way(&u, &m), Some(before));
+}
+
+#[test]
+fn a_comparison_lists_what_head_took_out_as_well_as_what_it_added() {
+    let hub = hub();
+    let kept = hub.add(TRUNK, "y");
+    let after = hub.add(&kept, "x");
+    hub.touch("x", &["CODEOWNERS"]);
+    hub.touch("y", &["src/y.rs"]);
+    let undo = hub.take_out(&after, "x");
+    let paths = hub.files(REMI, &after, &undo).unwrap();
+    let listed: Vec<_> = paths.files.iter().map(|t| t.path.as_str()).collect();
+    assert_eq!(listed, ["CODEOWNERS"]);
+}

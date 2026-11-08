@@ -765,11 +765,21 @@ impl World {
         out
     }
 
-    /// `a` and `b`'s merge base: the nearest of `b`'s ancestors that's one
-    /// of `a`'s too.
+    /// `a` and `b`'s merge base, as git picks it: a common ancestor no
+    /// other common ancestor descends from. Where there are several, the
+    /// least by name, so the answer never hangs on the order of the
+    /// arguments or of a merge's parents.
     fn merge_base(&self, a: &str, b: &str) -> Option<String> {
         let of_a: BTreeSet<String> = self.ancestors(a).into_iter().collect();
-        self.ancestors(b).into_iter().find(|c| of_a.contains(c))
+        let common: BTreeSet<String> = self
+            .ancestors(b)
+            .into_iter()
+            .filter(|c| of_a.contains(c))
+            .collect();
+        common
+            .iter()
+            .find(|c| !common.iter().any(|d| d != *c && self.reaches(d, c)))
+            .cloned()
     }
 
     fn clashes(&self, a: &str, b: &str) -> bool {
@@ -805,13 +815,13 @@ impl World {
         )
     }
 
-    /// The files comparing `base...head` lists: what each patch `head`
-    /// holds and their merge base doesn't changes.
+    /// The files comparing `base...head` lists: what each patch changes
+    /// that `head` added or took out since their merge base.
     fn compare(&self, base: &str, head: &str) -> Option<Vec<Touched>> {
         let fork = self.merge_base(base, head)?;
         let had = &self.commits[&fork].patches;
         let mut files: Vec<Touched> = Vec::new();
-        for p in self.commits[head].patches.difference(had) {
+        for p in self.commits[head].patches.symmetric_difference(had) {
             let touched = self.touched.get(p).cloned().unwrap_or_else(|| {
                 vec![Touched {
                     path: SOME_FILE.into(),

@@ -377,7 +377,11 @@ fn only_the_named_ci_at_a_commit_on_its_main_signs() {
         )]
     );
     // Once main has it, behind its tip, it counts.
-    hub.set_signer(&[&"e".repeat(40), testing::SIGNER_SHA]);
+    hub.set_signer(&[testing::SIGNER_SHA, &"e".repeat(40)]);
+    let signer = testing::signer().repo.to_string();
+    let tip = hub.branch_at(&signer, "main").unwrap();
+    assert_ne!(tip, testing::SIGNER_SHA);
+    assert!(hub.reaches(&tip, testing::SIGNER_SHA));
     let stepped = step_once(&mut store, &hub);
     assert_eq!(stepped.verdicts, [(id, Verdict::Green)]);
 }
