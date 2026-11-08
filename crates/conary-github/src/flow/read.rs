@@ -119,19 +119,25 @@ fn dependency(branch: &str, title: &str, labels: &[crate::api::Label]) -> Option
 }
 
 fn checks(source: &dyn Read, repo: &str, head: &str) -> Result<Vec<Check>, ApiError> {
-    // Reruns replace earlier runs of the same check; status contexts are
+    // A run gives way only to a rerun of it: a later run (GitHub's ids grow)
+    // of its name in its own suite, as the train's gate counts them. Runs of
+    // one name from two workflows or Apps each count, and a run with no suite
+    // to tell them apart gives way to nothing. Status contexts are
     // case-insensitive and returned newest first by GitHub.
-    let mut runs = BTreeMap::new();
+    let mut runs: BTreeMap<(u64, String), crate::api::CheckRun> = BTreeMap::new();
+    let mut unsuited = Vec::new();
     for run in source.check_runs(repo, head)? {
-        let keep = runs
-            .get(&run.name)
-            .is_none_or(|old: &crate::api::CheckRun| old.id < run.id);
-        if keep {
-            runs.insert(run.name.clone(), run);
+        let Some(suite) = run.check_suite.as_ref().map(|s| s.id) else {
+            unsuited.push(run);
+            continue;
+        };
+        let key = (suite, run.name.clone());
+        if runs.get(&key).is_none_or(|old| old.id < run.id) {
+            runs.insert(key, run);
         }
     }
     let mut checks = Vec::new();
-    for run in runs.into_values() {
+    for run in runs.into_values().chain(unsuited) {
         let state = if run.status != "completed" {
             Ci::Pending
         } else {

@@ -578,3 +578,256 @@ fn reader_uses_latest_run_and_ignores_own_status() {
         }]
     );
 }
+
+fn landing(step: &Step) -> bool {
+    matches!(step, Step::Merge | Step::Settle | Step::JoinTrain)
+}
+
+fn read_checks(hub: &Hub) -> Vec<Check> {
+    read(
+        hub,
+        &REMI.parse().unwrap(),
+        3,
+        &conary_core::Policy::parse(b"{}").unwrap(),
+        Settings::default(),
+        &["owner".into()],
+    )
+    .unwrap()
+    .checks
+}
+
+#[test]
+fn unknown_provenance_blocks_every_landing_path() {
+    // codex_heads.py / touches.py: unread commits never land, bot's or not.
+    let (_, mut f, m) = setup();
+    f.authorship_known = false;
+    for (renovate, dependency, bot_edited, train) in [
+        (false, None, None, false),
+        (false, None, None, true),
+        (true, Some(Dependency::Minor), Some(false), false),
+        (true, Some(Dependency::Minor), None, false),
+        (true, Some(Dependency::Minor), Some(false), true),
+        (false, Some(Dependency::Minor), Some(false), false),
+        (false, Some(Dependency::Minor), None, false),
+        (false, Some(Dependency::Minor), Some(false), true),
+    ] {
+        f.renovate = renovate;
+        f.bot_merges = renovate;
+        f.dependency = dependency;
+        f.bot_edited = bot_edited;
+        f.settings.train = train;
+        let n = next(&f, &m, 4000).0;
+        assert!(
+            !landing(&n.step),
+            "{renovate} {dependency:?} {bot_edited:?} {train}: {n:?}"
+        );
+    }
+}
+
+#[test]
+fn only_known_bot_history_skips_review() {
+    // touches.py: bot-only commits are CI-reviewed; anyone else's are read.
+    let (_, mut f, m) = setup();
+    f.reviewers.get_mut("reviewer").unwrap().review = None;
+    f.renovate = true;
+    f.bot_merges = true;
+    f.dependency = Some(Dependency::Minor);
+    f.bot_edited = Some(false);
+    assert_eq!(step(&f, &m), Step::Settle);
+    f.renovate = false;
+    f.bot_merges = false;
+    assert_eq!(step(&f, &m), Step::Merge);
+    // A branch name alone, or an unread history, is not the bots' alone.
+    for renovate in [true, false] {
+        f.renovate = renovate;
+        f.bot_merges = renovate;
+        f.bot_edited = None;
+        assert_eq!(step(&f, &m), Step::QueueReview("reviewer".into()));
+        f.bot_edited = Some(true);
+        assert_eq!(step(&f, &m), Step::QueueReview("reviewer".into()));
+    }
+}
+
+#[test]
+fn same_named_checks_of_other_suites_keep_their_failures() {
+    // gate.rs: a run gives way only to a rerun in its own suite.
+    let (hub, _, _) = setup();
+    let run = |id: u64, suite: Option<u64>, status: &str, conclusion: Option<&str>| {
+        let mut v = json!({"id": id, "name": "check", "status": status,
+                           "conclusion": conclusion});
+        if let Some(suite) = suite {
+            v["check_suite"] = json!({"id": suite});
+        }
+        v
+    };
+    let states = |hub: &Hub| -> Vec<Ci> { read_checks(hub).into_iter().map(|c| c.state).collect() };
+
+    // Another workflow's later success leaves this one's failure red.
+    hub.put_checks(
+        &head(3),
+        json!([
+            run(1, Some(10), "completed", Some("failure")),
+            run(2, Some(20), "completed", Some("success"))
+        ]),
+    );
+    assert!(states(&hub).contains(&Ci::Red));
+    // And its pending run pending.
+    hub.put_checks(
+        &head(3),
+        json!([
+            run(1, Some(10), "in_progress", None),
+            run(2, Some(20), "completed", Some("success"))
+        ]),
+    );
+    assert!(states(&hub).contains(&Ci::Pending));
+    // Runs with no suite to tell them apart replace nothing.
+    hub.put_checks(
+        &head(3),
+        json!([
+            run(1, None, "completed", Some("failure")),
+            run(2, None, "completed", Some("success"))
+        ]),
+    );
+    assert!(states(&hub).contains(&Ci::Red));
+    hub.put_checks(
+        &head(3),
+        json!([
+            run(1, Some(10), "completed", Some("failure")),
+            run(2, None, "completed", Some("success"))
+        ]),
+    );
+    assert!(states(&hub).contains(&Ci::Red));
+    // A rerun in its own suite does replace it, whichever order GitHub lists.
+    hub.put_checks(
+        &head(3),
+        json!([
+            run(2, Some(10), "completed", Some("success")),
+            run(1, Some(10), "completed", Some("failure"))
+        ]),
+    );
+    assert_eq!(states(&hub), [Ci::Green]);
+}
+
+#[test]
+fn other_suites_failure_prevents_landing() {
+    let (hub, mut f, m) = setup();
+    hub.put_checks(
+        &head(3),
+        json!([{"id": 1, "name": "check", "status": "completed", "conclusion": "failure",
+                "check_suite": {"id": 10}},
+               {"id": 2, "name": "check", "status": "completed", "conclusion": "success",
+                "check_suite": {"id": 20}}]),
+    );
+    f.checks = read_checks(&hub);
+    assert_eq!(step(&f, &m), Step::HandFix(Kind::Red));
+}
+
+#[test]
+fn current_verdicts_stand_while_their_reviewer_is_unavailable() {
+    // lost.py / carried.py: an outage neither drops findings nor coverage.
+    let (_, mut f, m) = setup();
+    let verdict = |f: &Facts, verdict| Reviewer {
+        review: Some(Review {
+            revision: f.revision.clone(),
+            verdict,
+            at: 0,
+        }),
+        unavailable_until: Some(9000),
+        ..Reviewer::default()
+    };
+    // Current findings from the reviewer out of service still block.
+    let absent = verdict(&f, Verdict::Findings);
+    f.reviewers.insert("absent".into(), absent);
+    assert_eq!(step(&f, &m), Step::HandFix(Kind::Findings));
+    // Even when it is the only reviewer, and even while it is under way.
+    f.reviewers.remove("reviewer");
+    assert_eq!(step(&f, &m), Step::HandFix(Kind::Findings));
+    f.reviewers.get_mut("absent").unwrap().under_way = true;
+    assert!(!landing(&step(&f, &m)));
+    // Its current clean verdict still covers the revision.
+    let absent = verdict(&f, Verdict::Clean);
+    f.reviewers.insert("absent".into(), absent);
+    assert_eq!(step(&f, &m), Step::Merge);
+    // A stale one does not, and nobody can look now.
+    f.reviewers
+        .get_mut("absent")
+        .unwrap()
+        .review
+        .as_mut()
+        .unwrap()
+        .revision
+        .head = head(2);
+    assert_eq!(next(&f, &m, 4000).0.stage, Stage::Reviewer);
+    // Nor does a current clean verdict with lost findings still owed.
+    let absent = verdict(&f, Verdict::Clean);
+    f.reviewers.insert("absent".into(), absent);
+    let mut m = m;
+    m.lost_on.insert(
+        "absent".into(),
+        BTreeMap::from([(f.revision.base.clone(), head(3))]),
+    );
+    assert_eq!(next(&f, &m, 4000).0.stage, Stage::Reviewer);
+}
+
+#[test]
+fn r2_land_is_released_by_the_owner_for_its_revision_only() {
+    // handle.py: "the owner has a label to take off ... their answer".
+    let (_, mut f, m) = setup();
+    f.classified.class = conary_core::Class::R2;
+    f.judgment = Some(Judged {
+        revision: f.revision.clone(),
+        verdict: Judgment::Land,
+    });
+    // Asking the owner is not their answer, however often it is asked.
+    let (n, m) = next(&f, &m, 4000);
+    assert_eq!(n.step, Step::ListOwner);
+    assert_eq!(m.owner_saw, None);
+    assert_eq!(step(&f, &m), Step::ListOwner);
+    // The label seen on this revision, then taken off, is.
+    f.labels.insert("needs-peter".into());
+    let (n, m) = next(&f, &m, 4000);
+    assert_eq!(n.step, Step::ListOwner);
+    assert_eq!(m.owner_saw.as_ref(), Some(&f.revision));
+    f.labels.clear();
+    assert_eq!(step(&f, &m), Step::Merge);
+    // Not for another head, base or description, even with a fresh Land.
+    let changes: [fn(&mut Revision); 3] = [
+        |r| r.head = head(4),
+        |r| r.base = "release".into(),
+        |r| r.description.push('!'),
+    ];
+    for change in changes {
+        let mut g = f.clone();
+        change(&mut g.revision);
+        g.reviewers
+            .get_mut("reviewer")
+            .unwrap()
+            .review
+            .as_mut()
+            .unwrap()
+            .revision = g.revision.clone();
+        g.judgment = Some(Judged {
+            revision: g.revision.clone(),
+            verdict: Judgment::Land,
+        });
+        assert_eq!(step(&g, &m), Step::ListOwner);
+    }
+}
+
+#[test]
+fn label_without_an_owed_decision_is_not_approval() {
+    // handle.py: "A label taken off before the judge said anything isn't an
+    // answer to it"; neither is one on a judgment that needs no person.
+    let (_, mut f, m) = setup();
+    f.classified.class = conary_core::Class::R2;
+    f.labels.insert("needs-peter".into());
+    let (_, seen) = next(&f, &m, 4000);
+    assert_eq!(seen.owner_saw, None);
+    f.classified.class = conary_core::Class::R0;
+    f.judgment = Some(Judged {
+        revision: f.revision.clone(),
+        verdict: Judgment::Land,
+    });
+    let (_, seen) = next(&f, &m, 4000);
+    assert_eq!(seen.owner_saw, None);
+}

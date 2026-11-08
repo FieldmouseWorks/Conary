@@ -124,7 +124,9 @@ fn decide(f: &Facts, m: &mut Memory, now: u64) -> Decision {
         );
     }
     if f.labels.contains("needs-peter") {
-        if judgment(f) == Some(Judgment::Owner) {
+        // Seen labelled while this revision waits on its owner: taking the
+        // label off afterwards is their answer, for this revision alone.
+        if owner_owed(f) {
             m.owner_saw = Some(f.revision.clone());
         }
         return at(
@@ -184,7 +186,9 @@ fn decide(f: &Facts, m: &mut Memory, now: u64) -> Decision {
         return hand(f, m, now, Kind::Conflict, false);
     }
     let ci = ci(f, m, now);
-    let edited = f.bot_edited.unwrap_or(!f.renovate || f.settings.train) || f.gate_edited;
+    // Unknown provenance is someone else's code until read: only a history
+    // known to be the bots' alone skips the review loop.
+    let edited = f.bot_edited != Some(false) || f.gate_edited;
     let fixed =
         f.dependency == Some(Dependency::Minor) && edited && f.classified.class != Class::R2;
     if f.dependency.is_some() && !fixed {
@@ -229,7 +233,8 @@ fn decide(f: &Facts, m: &mut Memory, now: u64) -> Decision {
     // can be considered resolved. A stale clean verdict never covers this head.
     let capped = f.reviewers.values().map(|r| r.rounds).max().unwrap_or(0) >= f.settings.rounds;
     let needs_review = f.classified.review();
-    let mut live = 0;
+    // Reviewers with a current clean verdict, or able to give one now.
+    let mut covered = 0;
     let mut clean = true;
     let mut findings = f.open_threads > 0 || f.changes_requested;
     for (name, r) in &f.reviewers {
@@ -249,6 +254,16 @@ fn decide(f: &Facts, m: &mut Memory, now: u64) -> Decision {
                 "Posting the review that came back",
             );
         }
+        // A verdict already returned for this revision stands whether or not
+        // its service is up now: findings keep blocking, a clean one covers.
+        if current.is_some_and(|v| v.verdict == Verdict::Findings) {
+            findings = true;
+            clean = false;
+        }
+        if current.is_some_and(|v| v.verdict == Verdict::Clean) && lost.is_none() {
+            covered += 1;
+            continue;
+        }
         if !available {
             if r.under_way {
                 return wait(
@@ -266,14 +281,8 @@ fn decide(f: &Facts, m: &mut Memory, now: u64) -> Decision {
             }
             continue;
         }
-        live += 1;
-        if current.is_some_and(|v| v.verdict == Verdict::Clean) && lost.is_none() {
-            continue;
-        }
+        covered += 1;
         clean = false;
-        if current.is_some_and(|v| v.verdict == Verdict::Findings) {
-            findings = true;
-        }
         if (needs_review && !capped || lost.is_some()) && current.is_none() {
             if findings {
                 return hand(f, m, now, Kind::Findings, true);
@@ -307,7 +316,7 @@ fn decide(f: &Facts, m: &mut Memory, now: u64) -> Decision {
     if findings {
         return hand(f, m, now, Kind::Findings, true);
     }
-    if needs_review && live == 0 && !capped {
+    if needs_review && covered == 0 && !capped {
         return wait(Stage::Reviewer, None, "No reviewer can review it now");
     }
     if needs_review && !clean && !capped {
@@ -364,6 +373,17 @@ fn judgment(f: &Facts) -> Option<Judgment> {
         .as_ref()
         .filter(|j| j.revision == f.revision)
         .map(|j| j.verdict)
+}
+
+/// Whether this revision's own judgment leaves it to a person: the judge
+/// sent it to the owner, or an R2 change was judged fit to land, which only a
+/// person may let through.
+fn owner_owed(f: &Facts) -> bool {
+    match judgment(f) {
+        Some(Judgment::Owner) => true,
+        Some(Judgment::Land) => f.classified.class == Class::R2,
+        _ => false,
+    }
 }
 
 fn after_review(f: &Facts, m: &mut Memory, now: u64, ci: Ci, capped: bool) -> Decision {
@@ -438,7 +458,7 @@ fn after_review(f: &Facts, m: &mut Memory, now: u64, ci: Ci, capped: bool) -> De
             );
         }
     }
-    if !f.authorship_known && f.dependency.is_none() {
+    if !f.authorship_known {
         return wait(
             Stage::Review,
             None,
