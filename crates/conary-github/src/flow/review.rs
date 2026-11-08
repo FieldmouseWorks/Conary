@@ -71,6 +71,20 @@ pub(super) fn look(f: &Facts, m: &mut Memory, now: u64) -> Look {
             if m.consumed_reviews.contains(&key) {
                 continue;
             }
+            let tries = m.review_posts.get(&key).copied().unwrap_or(0);
+            if tries >= 3 {
+                let covered = current(r, &f.revision).is_some_and(|v| v.verdict == Verdict::Clean);
+                if covered || available(r) && needs_review && !capped {
+                    if !covered && answer.verdict == Verdict::Findings {
+                        m.lost_on
+                            .entry(name.clone())
+                            .or_default()
+                            .insert(answer.revision.base.clone(), answer.revision.head.clone());
+                    }
+                    m.consumed_reviews.insert(key);
+                    continue;
+                }
+            }
             if answer.revision.base != f.revision.base {
                 if answer.verdict == Verdict::Findings {
                     m.lost_on
@@ -142,6 +156,39 @@ pub(super) fn look(f: &Facts, m: &mut Memory, now: u64) -> Look {
         }
         let wanted = loss.is_some() || needs_review && !capped;
         if wanted {
+            let key = (name.clone(), f.revision.clone());
+            if r.missing {
+                let (since, failed) = m.missing_reviews.entry(key.clone()).or_insert((now, false));
+                if now == *since {
+                    return wait(
+                        Stage::Review,
+                        Some(now.saturating_add(60)),
+                        "A queued review disappeared; read its answer once more",
+                    );
+                }
+                if !*failed {
+                    *failed = true;
+                    let failure = m.review_failures.entry(key.clone()).or_insert((0, 0));
+                    failure.0 = failure.0.saturating_add(1);
+                    failure.1 = now;
+                }
+            }
+            if let Some((count, at)) = m.review_failures.get(&key) {
+                if *count >= 3 && now < at.saturating_add(3600) {
+                    return wait(
+                        Stage::Review,
+                        Some(at.saturating_add(3600)),
+                        "Repeated review failures; try again an hour after the last",
+                    );
+                }
+            }
+            if let Some(at) = r.queue_failed_at.filter(|at| now < at.saturating_add(300)) {
+                return wait(
+                    Stage::Review,
+                    Some(at.saturating_add(300)),
+                    "Could not queue the review; try again in five minutes",
+                );
+            }
             let quiet = m.seen.saturating_add(f.settings.settle_delay);
             let answered = current(r, &f.revision)
                 .filter(|v| v.verdict == Verdict::Findings && r.findings_answered)

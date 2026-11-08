@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::{ProofData, ProofPlan, SealKey};
+use super::{FixClaim, ProofData, ProofPlan, SealKey, Unposted};
 use conary_core::policy::Classified;
 use serde::{Deserialize, Serialize};
 
@@ -93,6 +93,9 @@ pub struct Reviewer {
     pub answer: Option<Review>,
     /// A look already under way, even if its service is now unavailable.
     pub under_way: bool,
+    pub failed_at: Option<u64>,
+    pub queue_failed_at: Option<u64>,
+    pub missing: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -191,6 +194,7 @@ pub enum Recipe {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Settings {
     pub train: bool,
+    pub job_login: Option<String>,
     pub proof_slots: Option<u32>,
     pub proof_timeout: u64,
     pub judge_engines: BTreeSet<String>,
@@ -216,6 +220,7 @@ pub struct Settings {
     pub train_stall_after: u64,
     pub renovate_merge_after: u64,
     pub renovate_run: u64,
+    pub renovate_sweep: bool,
 }
 
 impl Settings {
@@ -225,7 +230,12 @@ impl Settings {
     pub fn recipe(&self, name: &str) -> Option<&Recipe> {
         self.proofs
             .iter()
-            .find(|(key, _)| key.eq_ignore_ascii_case(name))
+            .filter(|(key, _)| key.eq_ignore_ascii_case(name))
+            .min_by_key(|(_, recipe)| match recipe {
+                Recipe::Build(_) => 0,
+                Recipe::Run(_) => 1,
+                Recipe::Job(_) => 2,
+            })
             .map(|(_, recipe)| recipe)
     }
 }
@@ -234,6 +244,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             train: false,
+            job_login: None,
             proof_slots: None,
             proof_timeout: 10800,
             judge_engines: BTreeSet::from(["codex".into()]),
@@ -261,6 +272,7 @@ impl Default for Settings {
             train_stall_after: 7200,
             renovate_merge_after: 7200,
             renovate_run: 7200,
+            renovate_sweep: false,
         }
     }
 }
@@ -284,6 +296,9 @@ pub struct Facts {
     pub reviewers: BTreeMap<String, Reviewer>,
     pub judgment: Option<Judged>,
     pub jobs: BTreeMap<Kind, Job>,
+    pub claims: Vec<FixClaim>,
+    pub pushes: BTreeMap<String, String>,
+    pub threads: BTreeMap<String, bool>,
     pub proof: Proof,
     pub proof_data: ProofData,
     pub settings: Settings,
@@ -309,11 +324,14 @@ pub struct Facts {
     /// unknown, never permission to land.
     pub empty: Option<bool>,
     pub updated_at: u64,
+    pub created_at: Option<u64>,
     pub last_reply_at: u64,
     pub session: bool,
     /// The failed effect from the preceding execution, if any. Decisions
     /// never optimistically record an effect as having succeeded.
     pub failed: Option<Failure>,
+    pub failed_review: Option<String>,
+    pub succeeded: BTreeSet<Failure>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -350,6 +368,9 @@ pub struct Memory {
     pub raised: BTreeSet<String>,
     pub latest_reviews: BTreeMap<String, u64>,
     pub consumed_reviews: BTreeSet<(String, Revision, u64)>,
+    pub review_posts: BTreeMap<(String, Revision, u64), u32>,
+    pub review_failures: BTreeMap<(String, Revision), (u32, u64)>,
+    pub missing_reviews: BTreeMap<(String, Revision), (u64, bool)>,
     pub seen: u64,
     pub no_checks_since: Option<u64>,
     pub strikes: BTreeMap<Failure, u32>,
@@ -360,6 +381,9 @@ pub struct Memory {
     pub lost_jobs: BTreeSet<String>,
     pub broken_jobs: BTreeMap<String, u64>,
     pub owner_saw: Option<Revision>,
+    pub answered_jobs: BTreeSet<String>,
+    pub unposted: BTreeMap<Kind, (String, Unposted)>,
+    pub push_looks: BTreeMap<(String, String), (u32, u64)>,
     pub wait: Option<Wait>,
 }
 
@@ -367,6 +391,7 @@ pub struct Memory {
 pub enum Step {
     QueueReview(String),
     PostReview(String),
+    PostFix(String),
     HandFix(Kind),
     StopJob(String),
     Prove,
@@ -382,6 +407,23 @@ pub enum Step {
     Wait { until: Option<u64> },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WaitOn {
+    Steward,
+    Hold,
+    Sweep,
+    Renovate,
+    Train,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OwnerNotice {
+    OpenOverDay,
+    NoReviewer,
+    ReviewFailures,
+    UnpostedReview,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Next {
     pub stage: Stage,
@@ -389,4 +431,8 @@ pub struct Next {
     pub description: String,
     pub overdue_at: Option<u64>,
     pub proof: Option<ProofPlan>,
+    pub wait_on: Option<WaitOn>,
+    pub on_usage: bool,
+    /// A digest decision, independent of the one executable intention.
+    pub owner_notice: Option<OwnerNotice>,
 }

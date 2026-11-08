@@ -22,6 +22,7 @@ pub(super) fn setup() -> (Hub, Facts, Memory) {
             complete: true,
             merge_state: "CLEAN".into(),
             open_threads: 0,
+            threads: Default::default(),
             resolved_reviews: Default::default(),
             updated_at: 0,
             suites: BTreeMap::new(),

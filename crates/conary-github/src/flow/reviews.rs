@@ -33,6 +33,7 @@ pub(super) fn read(
     records: &[GithubReview],
     resolved: &BTreeSet<u64>,
     settings: &Settings,
+    carried: &BTreeSet<String>,
 ) -> Result<BTreeMap<String, Reviewer>, ApiError> {
     let revision = Revision::from(pull);
     let description = fingerprint(pull.body.as_deref().unwrap_or(""));
@@ -44,6 +45,7 @@ pub(super) fn read(
         ))
         .expect("escaped pattern");
         let mut reviewer = Reviewer::default();
+        let mut candidates = BTreeMap::<String, (Review, Option<u64>, bool)>::new();
         for r in records.iter().filter(|r| {
             r.user
                 .as_ref()
@@ -67,8 +69,11 @@ pub(super) fn read(
             if count > 0 {
                 reviewer.rounds = reviewer.rounds.saturating_add(1);
             }
-            if m["commit_sha"].as_str() != Some(revision.head.as_str())
-                || r.commit_id.as_deref() != Some(revision.head.as_str())
+            let Some(head) = r.commit_id.as_deref() else {
+                continue;
+            };
+            if m["commit_sha"].as_str() != Some(head)
+                || head != revision.head && !carried.contains(head)
                 || m["base"].as_str() != Some(revision.base.as_str())
                 || m["description"].as_str() != Some(description.as_str())
             {
@@ -78,20 +83,35 @@ pub(super) fn read(
                 None | Some("") => 0,
                 Some(t) => timestamp(t)?,
             };
-            if reviewer.review.as_ref().is_none_or(|v| at >= v.at) {
-                reviewer.record_id = r.id;
-                reviewer.findings_answered =
-                    count > 0 && r.id.is_some_and(|id| resolved.contains(&id));
-                reviewer.review = Some(Review {
-                    revision: revision.clone(),
-                    verdict: if count > 0 {
-                        Verdict::Findings
-                    } else {
-                        Verdict::Clean
-                    },
-                    at,
-                });
+            if candidates.get(head).is_none_or(|(v, _, _)| at >= v.at) {
+                candidates.insert(
+                    head.into(),
+                    (
+                        Review {
+                            revision: revision.clone(),
+                            verdict: if count > 0 {
+                                Verdict::Findings
+                            } else {
+                                Verdict::Clean
+                            },
+                            at,
+                        },
+                        r.id,
+                        count > 0 && r.id.is_some_and(|id| resolved.contains(&id)),
+                    ),
+                );
             }
+        }
+        let chosen = candidates.remove(&revision.head).or_else(|| {
+            candidates
+                .into_values()
+                .filter(|(v, _, _)| v.verdict == Verdict::Clean)
+                .max_by_key(|(v, _, _)| v.at)
+        });
+        if let Some((review, id, answered)) = chosen {
+            reviewer.review = Some(review);
+            reviewer.record_id = id;
+            reviewer.findings_answered = answered;
         }
         result.insert(name.clone(), reviewer);
     }

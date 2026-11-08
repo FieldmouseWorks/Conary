@@ -13,6 +13,9 @@ pub(super) struct Service {
     pub unavailable_until: Option<u64>,
     pub answer: Option<Review>,
     pub under_way: bool,
+    pub failed_at: Option<u64>,
+    pub queue_failed_at: Option<u64>,
+    pub missing: bool,
 }
 pub(super) struct Case {
     pub hub: Hub,
@@ -20,9 +23,13 @@ pub(super) struct Case {
     pub settings: Settings,
     pub services: BTreeMap<String, Service>,
     pub jobs: BTreeMap<Kind, Job>,
+    pub claims: Vec<FixClaim>,
     pub proof: Option<Proof>,
     pub proof_data: ProofData,
     pub failed: Option<Failure>,
+    pub failed_review: Option<String>,
+    pub succeeded: std::collections::BTreeSet<Failure>,
+    pub base_held: bool,
     pub unseen: bool,
 }
 impl Case {
@@ -34,9 +41,13 @@ impl Case {
             settings: Settings::default(),
             services: BTreeMap::new(),
             jobs: BTreeMap::new(),
+            claims: Vec::new(),
             proof: None,
             proof_data: ProofData::default(),
             failed: None,
+            failed_review: None,
+            succeeded: Default::default(),
+            base_held: false,
             unseen: false,
         }
     }
@@ -113,15 +124,22 @@ impl Case {
                 r.unavailable_until = s.unavailable_until;
                 r.answer = s.answer.clone();
                 r.under_way = s.under_way;
+                r.failed_at = s.failed_at;
+                r.queue_failed_at = s.queue_failed_at;
+                r.missing = s.missing;
             }
         }
         f.jobs = self.jobs.clone();
+        f.claims = self.claims.clone();
         f.proof_data = self.proof_data.clone();
         if let Some(p) = &self.proof {
             f.proof = p.clone();
         }
         f.failed = self.failed;
-        f.unseen = self.unseen;
+        f.failed_review = self.failed_review.clone();
+        f.succeeded = self.succeeded.clone();
+        f.base_held = self.base_held;
+        f.unseen |= self.unseen;
         f
     }
     pub fn view(&self, now: u64) -> Next {

@@ -190,3 +190,20 @@ impl Hub {
         });
     }
 }
+
+impl Hub {
+    pub(crate) fn pushed_by(&self, repo: &str, branch: &str, head: &str, who: &str) {
+        self.world
+            .borrow_mut()
+            .pushes
+            .entry((repo.into(), branch.into()))
+            .or_default()
+            .insert(head.into(), who.into());
+    }
+    pub(crate) fn flow_thread(&self, repo: &str, pr: u64, id: &str, resolved: bool) {
+        self.edit_flow(repo, pr, |s| {
+            s.threads.insert(id.into(), resolved);
+            s.open_threads = s.threads.values().filter(|resolved| !**resolved).count() as u32;
+        });
+    }
+}

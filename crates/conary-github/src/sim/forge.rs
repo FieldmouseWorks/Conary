@@ -465,6 +465,38 @@ impl Forge for Hub {
 }
 
 impl crate::flow::Read for Hub {
+    fn pushes(
+        &self,
+        repo: &str,
+        branch: &str,
+    ) -> Result<std::collections::BTreeMap<String, String>, ApiError> {
+        self.read(Asked::new(Call::Pushes, repo), &[repo, branch], |w| {
+            Ok(w.pushes
+                .get(&(repo.into(), branch.into()))
+                .cloned()
+                .unwrap_or_default())
+        })
+    }
+
+    fn carries(&self, repo: &str, base: &str, head: &str, old: &str) -> Result<bool, ApiError> {
+        self.read(
+            Asked::new(Call::Carries, repo),
+            &[repo, base, head, old],
+            |w| {
+                let tip = repo_of(w, repo)?
+                    .branches
+                    .get(base)
+                    .map(String::as_str)
+                    .unwrap_or(base);
+                let fork = w
+                    .merge_base(tip, head)
+                    .ok_or_else(|| not_found("merge base"))?;
+                Ok(w.three_way(&fork, old)
+                    .is_some_and(|tree| w.commits.get(head).is_some_and(|c| c.patches == tree)))
+            },
+        )
+    }
+
     fn annotations(&self, repo: &str, run: u64) -> Result<Vec<String>, ApiError> {
         let id = run.to_string();
         self.read(Asked::new(Call::Annotations, repo), &[repo, &id], |w| {

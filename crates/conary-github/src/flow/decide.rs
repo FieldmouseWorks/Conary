@@ -11,6 +11,15 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
         .classified
         .clone()
         .raise(m.raised.iter().cloned().collect());
+    for claim in &f.claims {
+        let entry = raised
+            .jobs
+            .entry(claim.kind)
+            .or_insert_with(|| claim.job.clone());
+        if claim.job.started >= entry.started {
+            *entry = claim.job.clone();
+        }
+    }
     let f = &raised;
     if m.head != f.revision.head {
         m.head = f.revision.head.clone();
@@ -22,12 +31,124 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
         // Lost findings survive pushes, indexed by base; old judgments do
         // not, since their Revision must match below.
     }
+    for kind in &f.succeeded {
+        if f.failed != Some(*kind) {
+            m.strikes.remove(kind);
+            if m.retry.is_some_and(|(k, _)| k == *kind) {
+                m.retry = None;
+            }
+        }
+    }
+    for (kind, job) in &f.jobs {
+        if kind.fixes_branch() {
+            m.handed.insert(*kind, job.revision.clone());
+        }
+    }
+    for (role, reviewer) in &f.reviewers {
+        if reviewer.record_id.is_some()
+            && reviewer.record_id != m.latest_reviews.get(role).copied()
+            && reviewer
+                .review
+                .as_ref()
+                .is_some_and(|v| v.revision == f.revision)
+            && f.failed_review.as_ref() != Some(role)
+            && reviewer.failed_at.is_none()
+        {
+            m.review_failures
+                .remove(&(role.clone(), f.revision.clone()));
+        }
+        if let Some(at) = reviewer.failed_at {
+            let failure = m
+                .review_failures
+                .entry((role.clone(), f.revision.clone()))
+                .or_insert((0, 0));
+            if failure.0 == 0 || failure.1 != at {
+                failure.0 = failure.0.saturating_add(1);
+                failure.1 = at;
+            }
+        }
+        if reviewer.queued {
+            m.missing_reviews
+                .remove(&(role.clone(), f.revision.clone()));
+        }
+    }
+    if let Some((role, answer)) = f.failed_review.as_ref().and_then(|role| {
+        f.reviewers
+            .get(role)
+            .and_then(|r| r.answer.as_ref())
+            .map(|a| (role, a))
+    }) {
+        let tries = m
+            .review_posts
+            .entry((role.clone(), answer.revision.clone(), answer.at))
+            .or_default();
+        *tries = tries.saturating_add(1);
+        if answer.revision.head == f.revision.head && answer.revision.base == f.revision.base {
+            let failure = m
+                .review_failures
+                .entry((role.clone(), f.revision.clone()))
+                .or_insert((0, 0));
+            failure.0 = failure.0.saturating_add(1);
+            failure.1 = now;
+        }
+        let strikes = m.strikes.entry(Failure::Post).or_default();
+        *strikes = strikes.saturating_add(1);
+    }
     let (stage, step, description) = decide(f, &mut m, now);
     let description = description.chars().take(140).collect::<String>();
-    let watched = !(f.draft
+    let no_reviewer = f.classified.review()
+        && f.reviewers.values().all(|r| {
+            r.unavailable_until.is_some_and(|until| until > now)
+                && !r
+                    .review
+                    .as_ref()
+                    .is_some_and(|r| r.revision == f.revision && r.verdict == Verdict::Clean)
+        });
+    let failures = m
+        .review_failures
+        .iter()
+        .any(|((_, rev), (count, _))| rev == &f.revision && *count >= 3);
+    let unposted = m
+        .review_posts
+        .iter()
+        .any(|(key, count)| *count >= 3 && !m.consumed_reviews.contains(key));
+    let fixed_renovate = f.dependency == Some(Dependency::Minor)
+        && (f.bot_edited == Some(true) || f.gate_edited)
+        && f.classified.class != Class::R2;
+    let owner_notice = if f.draft
         || !f.open
-        || (f.stacked_on.is_some() && stage == Stage::Base)
-        || matches!(step, Step::ListOwner));
+        || f.labels.contains(&f.settings.hold_label)
+        || f.stacked_on.is_some()
+        || matches!(step, Step::ListOwner)
+    {
+        None
+    } else if no_reviewer
+        && matches!(stage, Stage::Reviewer | Stage::Review)
+        && matches!(step, Step::Wait { .. })
+    {
+        Some(OwnerNotice::NoReviewer)
+    } else if failures && f.classified.review() {
+        Some(OwnerNotice::ReviewFailures)
+    } else if unposted {
+        Some(OwnerNotice::UnpostedReview)
+    } else if f
+        .created_at
+        .is_some_and(|at| now > at.saturating_add(86400))
+        && (!f.renovate || fixed_renovate)
+        && !matches!(
+            step,
+            Step::Merge | Step::Settle | Step::JoinTrain | Step::CloseAlreadyLanded
+        )
+    {
+        Some(OwnerNotice::OpenOverDay)
+    } else {
+        None
+    };
+    let watched = owner_notice.is_none()
+        && !(f.draft
+            || !f.open
+            || (f.stacked_on.is_some() && stage == Stage::Base)
+            || matches!(step, Step::ListOwner));
     let overdue_at = if watched {
         let duration = if f.labels.contains(&f.settings.hold_label) {
             f.settings.hold_stall_after
@@ -53,11 +174,35 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
         let due = if failing {
             since
         } else {
-            let until = match step {
-                Step::Wait { until: Some(until) } => until,
-                _ => since,
+            let refreshing = f.renovate
+                && f.settings.renovate_sweep
+                && !f.labels.contains(&f.settings.hold_label)
+                && (f.checks.iter().any(|c| c.state == Ci::Red)
+                    || f.rebase_requested
+                    || f.rebase_removed
+                        .iter()
+                        .copied()
+                        .chain(f.timeline_cut_at)
+                        .any(|t| now < t.saturating_add(f.settings.renovate_run)));
+            let drain = 4 * (3600 + f.settings.renovate_run).max(600) + f.settings.renovate_run;
+            let grace = if refreshing {
+                if f.release_at.is_some() {
+                    3 * (21600 + 3600 + f.settings.renovate_run) + drain
+                } else {
+                    drain
+                }
+            } else {
+                0
             };
-            since.max(until).saturating_add(duration)
+            let until = if refreshing {
+                f.release_at.unwrap_or(0)
+            } else {
+                0
+            };
+            since
+                .max(until)
+                .saturating_add(grace)
+                .saturating_add(duration)
         };
         m.wait = Some(Wait {
             head: f.revision.head.clone(),
@@ -83,6 +228,39 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
             step: step.clone(),
             description,
             overdue_at,
+            owner_notice,
+            wait_on: watched.then(|| {
+                if f.labels.contains(&f.settings.hold_label) {
+                    WaitOn::Hold
+                } else if stage == Stage::Train {
+                    WaitOn::Train
+                } else if f.renovate
+                    && f.bot_merges
+                    && f.bot_automerge_enabled
+                    && stage == Stage::Merge
+                {
+                    WaitOn::Renovate
+                } else if f.renovate
+                    && f.dependency.is_some()
+                    && (f.checks.iter().any(|c| c.state == Ci::Red)
+                        || f.dependency == Some(Dependency::Major) && f.major.is_none())
+                {
+                    WaitOn::Sweep
+                } else {
+                    WaitOn::Steward
+                }
+            }),
+            on_usage: watched
+                && !m.strikes.values().any(|n| *n >= 3)
+                && f.jobs.iter().any(|(kind, j)| {
+                    matches!(j.state, JobState::Running | JobState::Queued)
+                        && (*kind != Kind::Proof
+                            || !f
+                                .settings
+                                .proofs
+                                .values()
+                                .all(|r| matches!(r, Recipe::Build(_) | Recipe::Run(_))))
+                }),
             proof: if matches!(step, Step::PostProof) {
                 super::proofs::posting(f)
             } else {
@@ -122,6 +300,31 @@ fn decide(f: &Facts, m: &mut Memory, now: u64) -> Decision {
             Step::StopJob(job.id.clone()),
             "Stop work answering for an earlier head",
         );
+    }
+    if let Some(kind) = f.failed {
+        let times = m.strikes.entry(kind).or_default();
+        *times = times.saturating_add(1);
+        let delay = (1u64 << (*times - 1).min(6)).min(60) * 60;
+        let due = now.saturating_add(delay);
+        m.retry = Some((kind, due));
+        return at(
+            failure_stage(kind),
+            Step::Retry { kind, at: due },
+            "The step failed; trying again later",
+        );
+    }
+    if let Some((kind, due)) = m.retry {
+        if now < due {
+            return at(
+                failure_stage(kind),
+                Step::Retry { kind, at: due },
+                "Waiting to try the failed step again",
+            );
+        }
+        m.retry = None;
+    }
+    if let Some(decision) = super::claims::look(f, m, now) {
+        return decision;
     }
     if !f.open {
         return wait(Stage::None, None, "PR is closed");
@@ -171,28 +374,6 @@ fn decide(f: &Facts, m: &mut Memory, now: u64) -> Decision {
             Step::ListOwner,
             "The owner decides (the needs-peter label)",
         );
-    }
-    if let Some(kind) = f.failed {
-        let times = m.strikes.entry(kind).or_default();
-        *times = times.saturating_add(1);
-        let delay = (1u64 << (*times - 1).min(6)).min(60) * 60;
-        let due = now.saturating_add(delay);
-        m.retry = Some((kind, due));
-        return at(
-            failure_stage(kind),
-            Step::Retry { kind, at: due },
-            "The step failed; trying again later",
-        );
-    }
-    if let Some((kind, due)) = m.retry {
-        if now < due {
-            return at(
-                failure_stage(kind),
-                Step::Retry { kind, at: due },
-                "Waiting to try the failed step again",
-            );
-        }
-        m.retry = None;
     }
     if f.merging == Merge::Conflict {
         if f.dependency.is_some() && f.bot_edited != Some(true) {
@@ -371,6 +552,9 @@ fn after_review(f: &Facts, m: &mut Memory, now: u64, ci: Ci, capped: bool) -> De
             );
         }
         Proof::Needed if ci != Ci::Pending || proof_only || early => {
+            if let Some(decision) = super::proofs::retry(f, m, now) {
+                return decision;
+            }
             if let Some((stage, step, description, _)) = super::proofs::next(f, now) {
                 return (stage, step, description);
             }
@@ -546,7 +730,7 @@ pub(super) fn hand(f: &Facts, m: &mut Memory, now: u64, kind: Kind, delay: bool)
     work(f, m, now, kind)
 }
 
-fn work(f: &Facts, m: &mut Memory, now: u64, kind: Kind) -> Decision {
+pub(super) fn work(f: &Facts, m: &mut Memory, now: u64, kind: Kind) -> Decision {
     let stage = if kind.fixes_branch() {
         Stage::Fix
     } else if kind == Kind::Proof {

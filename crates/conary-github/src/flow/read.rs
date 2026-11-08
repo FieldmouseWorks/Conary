@@ -19,6 +19,7 @@ pub struct Snapshot {
     pub complete: bool,
     pub merge_state: String,
     pub open_threads: u32,
+    pub threads: BTreeMap<String, bool>,
     pub resolved_reviews: BTreeSet<u64>,
     pub updated_at: u64,
     pub suites: BTreeMap<u64, Suite>,
@@ -28,6 +29,8 @@ pub struct Snapshot {
 }
 
 pub trait Read: Source + crate::branches::Branches {
+    fn pushes(&self, repo: &str, branch: &str) -> Result<BTreeMap<String, String>, ApiError>;
+    fn carries(&self, repo: &str, base: &str, head: &str, old: &str) -> Result<bool, ApiError>;
     fn snapshot(&self, repo: &str, pr: u64) -> Result<Snapshot, ApiError>;
     fn annotations(&self, repo: &str, run: u64) -> Result<Vec<String>, ApiError>;
 }
@@ -77,6 +80,9 @@ pub fn read(
         reviewers: BTreeMap::new(),
         judgment: None,
         jobs: BTreeMap::new(),
+        claims: Vec::new(),
+        pushes: BTreeMap::new(),
+        threads: extra.threads.clone(),
         proof: Proof::NotNeeded,
         proof_data: ProofData::default(),
         base_tip: None,
@@ -102,12 +108,19 @@ pub fn read(
         base_held: false,
         empty: None,
         updated_at: extra.updated_at,
+        created_at: pull
+            .created_at
+            .as_deref()
+            .map(super::reviews::timestamp)
+            .transpose()?,
         last_reply_at: 0,
         session: pull
             .body
             .as_deref()
             .is_some_and(|b| b.contains("https://claude.ai/code/session_")),
         failed: None,
+        failed_review: None,
+        succeeded: BTreeSet::new(),
     };
     // These PRs do not enter the pipeline. In particular, do not spend
     // thousands of review/comment reads after GitHub already said the cap
@@ -149,6 +162,9 @@ pub fn read(
         }];
         ci.docs = false;
     }
+    if facts.settings.job_login.is_some() {
+        facts.pushes = source.pushes(&repository, &pull.head.name)?;
+    }
     let records = source.reviews(&repository, pr)?;
     let comments = source.comments(&repository, pr)?;
     let markers = super::markers::read(&repository, &pull, &comments, &facts.settings);
@@ -164,8 +180,27 @@ pub fn read(
         }
     }
     facts.changes_requested = verdicts.values().any(|s| s.as_str() == "CHANGES_REQUESTED");
-    facts.reviewers =
-        super::reviews::read(&pull, &records, &extra.resolved_reviews, &facts.settings)?;
+    let mut carried = BTreeSet::new();
+    for old in records
+        .iter()
+        .filter_map(|r| r.commit_id.as_ref())
+        .filter(|h| *h != &pull.head.sha)
+        .collect::<BTreeSet<_>>()
+    {
+        if source
+            .carries(&repository, base, &pull.head.sha, old)
+            .unwrap_or(false)
+        {
+            carried.insert(old.clone());
+        }
+    }
+    facts.reviewers = super::reviews::read(
+        &pull,
+        &records,
+        &extra.resolved_reviews,
+        &facts.settings,
+        &carried,
+    )?;
     facts.judgment = markers.judgment;
     facts.judge_asked = markers.judge_asked;
     facts.major = markers.major;
@@ -197,6 +232,11 @@ pub fn read(
         None
     };
     facts.base_tip = tip.clone();
+    facts.unseen = paths
+        .files
+        .iter()
+        .flat_map(|p| std::iter::once(&p.path).chain(p.from.as_ref()))
+        .any(|p| policy.hidden(repo, p));
     facts.gate_edited = super::gates::edited(&paths, || {
         source.diff(&repository, base, &pull.head.sha).ok()
     });

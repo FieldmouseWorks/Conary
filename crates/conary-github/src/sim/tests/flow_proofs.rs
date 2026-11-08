@@ -261,3 +261,24 @@ fn an_old_proof_building_the_new_heads_outputs_is_left_running() {
     c.proof_data.evaluation.as_mut().unwrap().outputs = None;
     assert_eq!(c.view(1200).step, Step::StopJob(old.job.id));
 }
+
+#[test]
+fn an_ended_machine_proof_without_verdicts_is_retried_as_infrastructure_failure() {
+    // proving.py:378 / 392: a done unit with no verdicts broke; never fail the PR for it.
+    for state in [JobState::Done, JobState::Broken] {
+        let mut c = build();
+        evaluate(&mut c);
+        c.proof_data.records.push(record(&c, state));
+        assert_eq!(c.pass(900).step, Step::Wait { until: Some(960) });
+        assert_eq!(
+            c.pass(960).step,
+            Step::Retry {
+                kind: Failure::Lost,
+                at: 1020
+            }
+        );
+        assert_eq!(c.pass(1100).step, Step::Prove);
+        assert_eq!(c.memory.strikes[&Failure::Lost], 1);
+        assert!(matches!(c.view(1100).proof, Some(ProofPlan::Build(_))));
+    }
+}

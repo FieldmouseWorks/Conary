@@ -3,6 +3,8 @@
 //! Nothing in the daemon or CLI executes these intentions yet.
 
 mod ci;
+mod claims;
+pub use claims::{FixAnswer, FixClaim, FixResult, Unposted};
 mod decide;
 mod gates;
 mod history;

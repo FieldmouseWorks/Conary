@@ -20,6 +20,8 @@ pub(crate) enum Call {
     Comments,
     Commit,
     CompareCommits,
+    Carries,
+    Pushes,
     CommitPulls,
     Timeline,
     MergeBase,

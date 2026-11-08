@@ -199,6 +199,38 @@ fn ahead(f: &Facts, outputs: Option<&BTreeSet<String>>) -> (u32, bool) {
     (count, false)
 }
 
+pub(super) fn retry(f: &Facts, m: &mut Memory, now: u64) -> Option<super::decide::Decision> {
+    let recipes = selected(f);
+    let record = f.proof_data.records.iter().rev().find(|r| {
+        current(f, r)
+            && recipes
+                .iter()
+                .all(|(name, recipe)| r.recipes.get(name) == Some(recipe))
+    });
+    let mut observed = f.clone();
+    if let Some(record) = record {
+        if record.job.state.live() {
+            return None;
+        }
+        let mut job = record.job.clone();
+        if recipes
+            .values()
+            .any(|r| matches!(r, Recipe::Build(_) | Recipe::Run(_)))
+            && record.verdicts.is_none()
+        {
+            job.state = JobState::Broken;
+        }
+        observed.jobs.insert(Kind::Proof, job);
+    }
+    if observed.jobs.contains_key(&Kind::Proof) {
+        let decision = super::decide::work(&observed, m, now, Kind::Proof);
+        if decision.1 != Step::Prove {
+            return Some(decision);
+        }
+    }
+    None
+}
+
 pub(super) fn next(f: &Facts, now: u64) -> Option<(Stage, Step, String, Option<ProofPlan>)> {
     let recipes = selected(f);
     if recipes.is_empty() {

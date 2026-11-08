@@ -10,7 +10,7 @@ const QUERY: &str = r#"query($owner:String!,$name:String!,$number:Int!) {
  repository(owner:$owner,name:$name) { pullRequest(number:$number) {
   headRefOid baseRefName title body isDraft mergeStateStatus updatedAt
   labels(first:100) { pageInfo { hasNextPage } }
-  reviewThreads(first:100) { pageInfo { hasNextPage } nodes { isResolved comments(first:1) { nodes { pullRequestReview { databaseId } } } } }
+  reviewThreads(first:100) { pageInfo { hasNextPage } nodes { id isResolved comments(first:1) { nodes { pullRequestReview { databaseId } } } } }
   reviews { totalCount } comments { totalCount }
   timelineItems(last:50,itemTypes:[UNLABELED_EVENT,RENAMED_TITLE_EVENT]) { pageInfo { hasPreviousPage } nodes { ... on UnlabeledEvent { createdAt label { name } } ... on RenamedTitleEvent { createdAt previousTitle } } }
   commits(last:1) { nodes { commit { oid checkSuites(first:100) {
@@ -89,6 +89,7 @@ struct Threads {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Thread {
+    id: Option<String>,
     is_resolved: bool,
     comments: Option<ThreadComments>,
 }
@@ -164,6 +165,37 @@ struct Annotation {
 }
 
 impl Read for Api {
+    fn pushes(&self, repo: &str, branch: &str) -> Result<BTreeMap<String, String>, ApiError> {
+        #[derive(Deserialize)]
+        struct Push {
+            after: String,
+            actor: Option<User>,
+        }
+        let encoded: String = branch
+            .bytes()
+            .map(|b| {
+                if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) {
+                    (b as char).to_string()
+                } else {
+                    format!("%{b:02X}")
+                }
+            })
+            .collect();
+        let records: Vec<Push> = self.pages(&format!(
+            "/repos/{repo}/activity?activity_type=push&ref=refs%2Fheads%2F{encoded}"
+        ))?;
+        let mut result = BTreeMap::new();
+        for p in records {
+            if let Some(actor) = p.actor {
+                result.entry(p.after).or_insert(actor.login);
+            }
+        }
+        Ok(result)
+    }
+
+    fn carries(&self, repo: &str, base: &str, head: &str, old: &str) -> Result<bool, ApiError> {
+        Api::carries(self, repo, base, head, old)
+    }
     fn snapshot(&self, repo: &str, number: u64) -> Result<Snapshot, ApiError> {
         let (owner, name) = repo
             .split_once('/')
@@ -273,6 +305,12 @@ impl Read for Api {
                 .iter()
                 .filter(|t| !t.is_resolved)
                 .count() as u32,
+            threads: p
+                .review_threads
+                .nodes
+                .iter()
+                .filter_map(|t| t.id.clone().map(|id| (id, t.is_resolved)))
+                .collect(),
             resolved_reviews,
             updated_at: crate::flow::reviews::timestamp(&p.updated_at)?,
             suites,

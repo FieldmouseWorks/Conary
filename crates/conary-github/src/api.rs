@@ -658,6 +658,7 @@ pub(crate) fn compared(files: Vec<ComparedFile>) -> Paths {
 }
 
 mod actions;
+mod carry;
 mod flow;
 mod history;
 pub use history::History;
