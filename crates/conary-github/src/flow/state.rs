@@ -336,13 +336,15 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
                     WaitOn::Hold
                 } else if stage == Stage::Train {
                     WaitOn::Train
-                } else if f.renovate
+                } else if f.settings.renovate_sweep
+                    && f.renovate
                     && f.bot_merges
                     && f.bot_automerge_enabled
                     && stage == Stage::Merge
                 {
                     WaitOn::Renovate
-                } else if f.renovate
+                } else if f.settings.renovate_sweep
+                    && f.renovate
                     && f.dependency.is_some()
                     && (f.merging != Merge::Conflict || f.bot_edited == Some(true))
                     && (f.checks.iter().any(|c| c.state == Ci::Red)

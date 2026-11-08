@@ -106,8 +106,8 @@ fn selected(f: &Facts) -> BTreeMap<String, Recipe> {
         .filter(|c| c.state == Ci::Pending)
         .filter_map(|c| {
             f.settings
-                .recipe(&c.name)
-                .map(|r| (c.name.clone(), r.clone()))
+                .proof_recipe(&c.name)
+                .map(|(name, r)| (name.clone(), r.clone()))
         })
         .collect();
     for rank in 0..3 {

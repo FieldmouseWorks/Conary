@@ -312,7 +312,16 @@ pub fn read(
         facts.release_at = super::gates::release(&comments, &facts.settings);
     }
     facts.has_ci = ci.has_ci;
-    facts.checks = ci.checks;
+    facts.checks = ci
+        .checks
+        .into_iter()
+        .map(|mut check| {
+            if let Some((name, _)) = facts.settings.proof_recipe(&check.name) {
+                check.name.clone_from(name);
+            }
+            check
+        })
+        .collect();
     Ok(facts)
 }
 

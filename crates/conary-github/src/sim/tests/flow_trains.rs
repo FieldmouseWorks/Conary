@@ -123,3 +123,50 @@ fn a_queued_github_merge_is_taken_off_before_joining_or_waiting_on_hold() {
         .edit_pull(REMI, 3, |p| p["auto_merge"] = serde_json::Value::Null);
     assert!(matches!(c.view(1000).step, Step::Wait { .. }));
 }
+
+#[test]
+fn train_ci_can_cover_missing_pr_ci_but_never_unknown_authorship() {
+    // trains.py:275,289,295: no CI and dependency bot use train, unread provenance never does.
+    let mut c = train();
+    c.no_ci();
+    assert_eq!(c.view(800).step, Step::JoinTrain);
+    c.hub.edit_pull(REMI, 3, |p| {
+        p["head"]["ref"] = serde_json::json!("renovate/foo");
+        p["title"] = serde_json::json!("Update foo to v1.5");
+    });
+    c.hub.refresh_flow(REMI, 3);
+    c.settings.renovate_email = Some("bot@example.org".into());
+    c.hub.commit_details(
+        &c.scope().head,
+        Some("deps: bump"),
+        Some("bot@example.org"),
+        Some("bot@example.org"),
+    );
+    assert_eq!(c.view(800).step, Step::JoinTrain);
+    c.hub.fail(crate::sim::Call::Commit);
+    assert_ne!(c.view(800).step, Step::JoinTrain);
+}
+#[test]
+fn train_admission_keeps_class_raises_and_requires_a_person_for_r2() {
+    // trains.py:80,119,131,440,457: raised class persists and gates admission.
+    // R2 deliberately requires the person specified by #263, even after a judge's land.
+    for labels in [&["review"][..], &["r2"][..], &["Review", "r2"][..]] {
+        let mut c = train();
+        c.label(labels);
+        if labels.contains(&"r2") {
+            c.judge("land");
+            assert_eq!(c.pass(800).step, Step::ListOwner);
+            c.label(&["needs-peter", "r2"]);
+            c.pass(810);
+            c.label(&[]);
+            assert_eq!(c.pass(820).step, Step::JoinTrain);
+        } else {
+            assert_eq!(c.pass(800).step, Step::JoinTrain);
+            c.label(&[]);
+            c.push("raised-train-head");
+            c.review("reviewer", Verdict::Clean, 900);
+            assert_eq!(c.pass(1300).step, Step::JoinTrain);
+        }
+        assert!(!c.memory.raised.is_empty());
+    }
+}

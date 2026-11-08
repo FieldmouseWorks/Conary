@@ -19,6 +19,7 @@ fn bot(renovate: bool, major: bool, edited: bool) -> Case {
     } else {
         "Update pkg from 1.4 to 1.5"
     };
+    c.settings.renovate_sweep = renovate;
     c.settings.renovate_email = Some("renovate@example.org".into());
     c.hub.edit_pull(REMI, 3, |p| {
         p["head"]["ref"] = json!(branch);

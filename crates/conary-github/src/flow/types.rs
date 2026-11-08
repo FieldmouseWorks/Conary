@@ -229,7 +229,7 @@ impl Settings {
     pub fn machine(&self) -> BTreeSet<String> {
         self.proofs.keys().map(|name| name.to_lowercase()).collect()
     }
-    pub fn recipe(&self, name: &str) -> Option<&Recipe> {
+    pub fn proof_recipe(&self, name: &str) -> Option<(&String, &Recipe)> {
         self.proofs
             .iter()
             .filter(|(key, _)| key.eq_ignore_ascii_case(name))
@@ -238,7 +238,9 @@ impl Settings {
                 Recipe::Run(_) => 1,
                 Recipe::Job(_) => 2,
             })
-            .map(|(_, recipe)| recipe)
+    }
+    pub fn recipe(&self, name: &str) -> Option<&Recipe> {
+        self.proof_recipe(name).map(|(_, recipe)| recipe)
     }
 }
 

@@ -192,3 +192,24 @@ fn signing_configuration_does_not_print_keys() {
     assert!(!shown.contains(&"a".repeat(64)));
     assert!(!shown.contains(&"b".repeat(64)));
 }
+
+#[test]
+fn burrows_fingerprint_and_seal_wire_formats_are_preserved() {
+    // seal.py / common.py: fixed Python-generated vector, independent of the Rust verifier.
+    assert_eq!(
+        fingerprint("  Why café?\n\nThis is the change.  "),
+        "cdbb8552558be0c8"
+    );
+    let key = SealKey::from_hex(&"a".repeat(64)).unwrap();
+    assert_eq!(
+        key.seal(
+            "o/r",
+            7,
+            "autoland-judgment",
+            "land",
+            &"1".repeat(40),
+            "main cdbb8552558be0c8"
+        ),
+        "5e205c8a699161f5c2ff24e5dc48f55e"
+    );
+}

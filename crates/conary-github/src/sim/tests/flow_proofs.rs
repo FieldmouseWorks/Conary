@@ -392,3 +392,83 @@ fn run_and_job_recipes_never_consume_build_evaluations_or_store_outputs() {
         );
     }
 }
+
+#[test]
+fn proof_context_case_changes_keep_configured_names_and_only_unposted_work() {
+    // builds.py:330,350,354,362,379,398,404,414,420,425.
+    let mut c = build();
+    c.settings.proofs = BTreeMap::from([
+        ("VM".into(), Recipe::Build("checks.vm".into())),
+        ("Other".into(), Recipe::Build("checks.other".into())),
+    ]);
+    let mut r = record(&c, JobState::Done);
+    r.verdicts = Some(BTreeMap::from([
+        ("VM".into(), Verdict::Clean),
+        ("Other".into(), Verdict::Clean),
+    ]));
+    c.proof_data.records.push(r);
+    for name in ["vm", "Vm", "VM"] {
+        c.hub.put_statuses(
+            &c.scope().head,
+            serde_json::json!([
+                {"context":name,"state":"success"}, {"context":"oTHER","state":"pending"}
+            ]),
+        );
+        assert_eq!(
+            c.view(800).proof,
+            Some(ProofPlan::Post {
+                job: "proof-1".into(),
+                verdicts: BTreeMap::from([("Other".into(), Verdict::Clean)]),
+                note: false,
+            })
+        );
+    }
+    c.hub.put_statuses(
+        &c.scope().head,
+        serde_json::json!([
+            {"context":"vM","state":"success"}, {"context":"OTHER","state":"success"}
+        ]),
+    );
+    assert_eq!(c.view(800).step, Step::Merge);
+    c.hub.put_statuses(
+        &c.scope().head,
+        serde_json::json!([
+            {"context":"vM","state":"failure"}, {"context":"OTHER","state":"success"}
+        ]),
+    );
+    assert_eq!(c.view(8000).step, Step::HandFix(Kind::Red));
+    c.proof_data.records.clear();
+    c.hub.put_statuses(
+        &c.scope().head,
+        serde_json::json!([
+            {"context":"vM","state":"pending"}, {"context":"OTHER","state":"success"}
+        ]),
+    );
+    assert_eq!(
+        c.view(8000).proof,
+        Some(ProofPlan::Evaluate(BTreeMap::from([(
+            "VM".into(),
+            Recipe::Build("checks.vm".into())
+        )])))
+    );
+}
+
+#[test]
+fn one_of_two_outputs_is_never_a_stored_pass() {
+    // builds.py:438: one output of two is insufficient.
+    let mut c = build();
+    evaluate(&mut c);
+    c.proof_data.valid_paths = drv().outputs;
+    c.proof_data
+        .evaluation
+        .as_mut()
+        .unwrap()
+        .outputs
+        .as_mut()
+        .unwrap()
+        .get_mut("vm")
+        .unwrap()
+        .outputs
+        .insert("/nix/store/second".into());
+    assert!(matches!(c.view(800).proof, Some(ProofPlan::Build(_))));
+}

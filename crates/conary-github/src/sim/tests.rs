@@ -287,3 +287,12 @@ mod flow_trains;
 mod flow_scope;
 
 mod flow_conflicts;
+
+mod flow_deps;
+
+mod flow_slots;
+
+mod flow_ci_case;
+mod flow_legs;
+
+mod flow_docs;

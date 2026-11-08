@@ -125,3 +125,57 @@ fn unavailable_and_repeatedly_failing_reviewers_are_listed_without_watching_them
     assert_eq!(n.owner_notice, Some(OwnerNotice::ReviewFailures));
     assert_eq!(n.overdue_at, None);
 }
+
+#[test]
+fn a_settled_bot_waits_on_renovate_only_when_its_run_exists_on_the_machine() {
+    // watched.py:259,272: enabled automerge uses Renovate's deadline; no local runner kicks steward.
+    for (enabled, here, who, duration) in [
+        (true, true, WaitOn::Renovate, 3600),
+        (false, true, WaitOn::Steward, 7200),
+        (true, false, WaitOn::Steward, 3600),
+    ] {
+        let mut c = Case::new();
+        c.settings.renovate_sweep = here;
+        c.settings.renovate_merge_after = 3600;
+        c.settings.renovate_email = Some("bot@example.org".into());
+        c.hub.edit_pull(REMI, 3, |p| {
+            p["head"]["ref"] = json!("renovate/foo");
+            p["title"] = json!("Update foo to v1.5");
+        });
+        c.hub.refresh_flow(REMI, 3);
+        c.hub.commit_details(
+            &c.scope().head,
+            Some("deps: bump"),
+            Some("bot@example.org"),
+            Some("bot@example.org"),
+        );
+        c.description(
+            if enabled {
+                "🚦 **Automerge**: Enabled."
+            } else {
+                "🚦 **Automerge**: Disabled by config."
+            },
+            0,
+        );
+        let n = c.pass(450);
+        assert_eq!(n.step, Step::Settle);
+        assert_eq!(n.wait_on, Some(who));
+        assert_eq!(n.overdue_at, Some(450 + duration));
+        assert_eq!(c.pass(460).overdue_at, n.overdue_at);
+    }
+}
+#[test]
+fn a_new_head_starts_a_new_deadline_even_when_its_phase_is_identical() {
+    // watched.py:91,150,156: same phase on a new revision is new work; closed is unwatched.
+    let mut c = Case::new();
+    c.ci("pending");
+    let n = c.pass(100);
+    assert_eq!(n.overdue_at, Some(7300));
+    c.push("next-wait-head");
+    c.review("reviewer", Verdict::Clean, 200);
+    c.ci("pending");
+    assert_eq!(c.pass(250).overdue_at, Some(7450));
+    assert_eq!(c.pass(260).overdue_at, Some(7450));
+    c.hub.edit_pull(REMI, 3, |p| p["state"] = json!("closed"));
+    assert_eq!(c.pass(270).overdue_at, None);
+}

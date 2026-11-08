@@ -11,7 +11,7 @@ fn answer(v: Value) -> &'static str {
     .leak()
 }
 fn snapshot() -> Value {
-    json!({"data":{"repository":{"pullRequest":{
+    json!({"data":{"repository":{"defaultBranchRef":{"name":"main","target":{"oid":"base-tip","statusCheckRollup":{"state":"FAILURE"}}},"pullRequest":{
         "headRefOid":"h","baseRefName":"main","title":"t","body":"b","isDraft":false,"mergeStateStatus":"BEHIND","updatedAt":"2026-11-08T12:00:00Z",
         "timelineItems":{"pageInfo":{"hasPreviousPage":false},"nodes":[]},
         "labels":{"pageInfo":{"hasNextPage":false}},
@@ -29,6 +29,10 @@ fn reads_mergeability_threads_and_suite_identity_without_writes() {
     let api = Api::new(&base, Tokens::given("test-token"));
     let s = api.snapshot("o/r", 7).unwrap();
     assert_eq!(s.merge_state, "BEHIND");
+    let observed = s.default_branch.as_ref().unwrap();
+    assert_eq!(observed.name, "main");
+    assert_eq!(observed.head, "base-tip");
+    assert_eq!(observed.ci, crate::flow::Ci::Red);
     assert_eq!(s.open_threads, 1);
     assert!(s.complete && s.checks_complete);
     assert_eq!(s.suites[&11].status, "in_progress");
