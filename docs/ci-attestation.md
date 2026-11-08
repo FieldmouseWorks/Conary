@@ -1,12 +1,111 @@
 # CI attestations
 
 How a repo's CI attests its gate's result, so Conary can count it as evidence
-([DESIGN section 9](DESIGN.md#9-security-and-identity)). burrow's shared
-[`flake-check.yml`](https://github.com/FieldmouseWorks/burrow/blob/main/.github/workflows/flake-check.yml)
-makes them, after `nix flake check`, on every push and same-repo PR. This page
-is the format; the workflow follows it. `cn attest` writes one in it for any
-job: its subject and `predicate.json`, for a bundle, and with `--sign` the
-statement and the job's token as `conary-attestation`.
+([DESIGN section 9](DESIGN.md#9-security-and-identity)). Conary ships
+[attest.yml](../.github/workflows/attest.yml) for a repository's own CI;
+burrow's shared flake workflow is another producer of this same format.
+`cn attest` writes its subject and `predicate.json`, for a bundle, and with
+`--sign` the statement and the job's token as `conary-attestation`.
+
+## Calling Conary's workflow
+
+Run your tests in ordinary GitHub-hosted jobs, then call the reusable workflow
+with their results. Neither Nix nor burrow is needed. For example, a workflow
+triggered by `push` and `pull_request` can contain:
+
+```yaml
+permissions:
+  contents: read
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4 # Pin actions to commits in production.
+      - run: cargo test --workspace
+  attest:
+    needs: tests
+    if: always()
+    uses: FieldmouseWorks/Conary/.github/workflows/attest.yml@main
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    with:
+      jobs: ${{ toJSON(needs) }}
+      negative-command: cargo test --workspace
+```
+
+Pin the workflow call to a reviewed commit of Conary's default branch in
+production. Set the machine's `CONARY_SIGNER_WORKFLOW` to
+`FieldmouseWorks/Conary/.github/workflows/attest.yml`. A branch's modified
+copy doesn't count (rule 2 below). The workflow builds the trusted CLI from
+the Conary commit pinned in that workflow, before checking out the candidate
+in a separate directory; it never builds the candidate's copy of Conary. A caller's tests must use
+the event commit (`github.sha`, the PR merge commit), as checkout does by
+default. The signer reads that commit's tree with git alone.
+
+The caller is also part of the trusted CI configuration. Before signing,
+`cn attest ci` checks GitHub's caller identity (`github.workflow_ref`) and
+requires the event commit's entire `.github` tree to equal the tree fetched
+from this repository's default branch. This protects the caller's `needs`
+list, `toJSON(needs)` expression, checkout steps, literal negative command,
+and local reusable workflows/actions from changes in the candidate. A new
+or modified caller cannot attest until its configuration has been reviewed
+and installed on the default branch. It fails closed rather than producing
+candidate-chosen evidence; CI configuration updates must be installed
+separately from the changes whose evidence they produce.
+
+Review that default-branch configuration before enabling this signer: it
+must run every required test job on `github.sha` on a fresh GitHub-hosted
+runner, pass the actual
+`toJSON(needs)` of all those jobs, and invoke the complete relevant test
+suite in `negative-command`. Pin external actions and reusable workflows to
+reviewed commits. Do not derive invocation, checkout refs, job selection or
+attestation inputs from candidate files or outputs. That is the trusted
+wiring; the tests themselves remain candidate-controlled, as in the flake
+model. A signer cannot infer the meaning or coverage of arbitrary test code.
+
+The required checks are `attest / gate` and, for PRs using negatives,
+`attest / negative` (replace `attest` with the caller job's name). The gate
+passes only when every supplied job concludes `success`; skipped and failed
+jobs give a failing statement, and cancelled, empty or malformed results
+produce no statement. The statement's hashed log artifact contains the
+supplied job names and conclusions, excluding arbitrary job outputs. This
+retains the v1 predicate and lets a single required gate explain which jobs it
+summarised.
+
+On same-repository PRs, `negative-run` constructs base code with head tests
+using `cn attest prepare-negative`, then runs `negative-command` in that tree
+on its own GitHub-hosted VM with **no OIDC permission**. Tests run under a
+separate Unix user with an empty environment and a home of its own. They
+cannot edit the runner's file-command channels or impersonate its result
+reporter. Their stdout and stderr go to a protected local file, not the
+Actions command parser; the runner reports only their exit status. Include
+dependency and toolchain setup in that command when needed (for example,
+`rustup default stable` for an unpinned Rust project), and run the complete
+test suite: Conary
+cannot infer which tests an arbitrary command runs. Setup or compilation
+failure inside the command is a failure on the negative tree, just as a
+flake failing to evaluate is; failure constructing the tree or provisioning
+the trusted tool produces no negative evidence. The independent `negative`
+signing job recomputes the tree and test list, names `negative-run` in
+`checks`, and signs the execution job's result. The supplied shell command
+is not copied into the evidence. Passing tests on old code
+make that check red; failing tests or a change needing no negative make it
+green. Fork PRs and unsupported events get no attestations. A run without
+OIDC permission fails closed.
+
+Both signing jobs execute trusted Conary code and pinned actions only, with
+no candidate hooks, filters, build scripts or test commands. Public runs
+publish a Sigstore bundle; all runs also keep the token-signed artifact the
+train currently verifies. The log records job results rather than copying
+the caller's console output; those logs remain in the caller's Actions run.
+
+A machine selects one signer for all evidence it counts. Existing burrow
+callers can keep burrow's signer until migrated together; switching the
+machine setting before its repositories call Conary would stop their old
+evidence counting. Migrating burrow's own workflow is a separate change in
+that repository.
 
 ## v1
 
@@ -95,14 +194,13 @@ file's last line.
 
 [Rule 2](DESIGN.md#43-evidence) asks a change that adds a test for a
 `negative` record: its new tests run on the old code, failing.
-`flake-check.yml`'s `negative` job makes it on every same-repo PR, train
-repos' included, and attests it the way the gate's result is attested
-above, with a subject and a predicate of its own.
+Both workflows make it on same-repo PRs and attest it with a subject and
+predicate of its own. Conary runs the caller's whole test command; the
+flake-specific selection below applies only to burrow's workflow.
 
 - **Test files.** A path is a test file when it matches one of the patterns
-  in the workflow itself (`tests/**`, `**/tests.rs`, `**/tests/**`,
-  `**/test_*.py`, `**/*_test.*`, `**/*.test.ts`, `src/test/**`). They aren't
-  an input: the caller's workflow comes from the PR, and a PR mustn't choose
+  in [the trusted planner](../crates/conary-github/src/attest/ci.rs). They
+  aren't an input: the caller's workflow comes from the PR, and a PR mustn't choose
   its own judge.
 - **Whether it needs one.** The PR's changes, from its merge base to its
   head, renames as the path left and the path made: if they add or change a
@@ -252,9 +350,10 @@ A token also has to bind its statement to its run:
 8. For a push, its `sha` is the subject's commit too. (A PR's is GitHub's
    merge as the event found it, which the job doesn't check.)
 
-Inside the signing job, nothing of the candidate's runs as the job's user:
-burrow's `flake-check.yml` evaluates its flake and builds it in nix-daemon's
-sandbox, as Nix's build users, and runs only burrow's own steps and actions
+Inside the signing job, nothing of the candidate's runs as the job's user.
+Conary's workflow runs candidate commands in a separate tokenless job on
+another hosted VM. burrow's `flake-check.yml` evaluates its flake and builds
+it in nix-daemon's sandbox, as Nix's build users, and runs only burrow's own steps and actions
 pinned to commits. That is part of what rule 2's signer workflow
 guarantees, so a signer that ran the candidate's code as the job's user
 would break rule 5's reason for counting it, and a machine names only a
