@@ -67,10 +67,10 @@ jobs:
             # Their stdout is data, never Actions workflow commands.
             sudo useradd --create-home --shell /bin/bash conary-tests
             chmod go-rwx "$RUNNER_TEMP" "$(dirname "$GITHUB_OUTPUT")" "$(dirname "$GITHUB_ENV")"
-            sudo chown -R conary-tests:conary-tests candidate
+            sudo chown -hR conary-tests:conary-tests candidate
             # Checkout's post-job cleanup must never read test-controlled
             # git configuration. Keep metadata read-only and its name fixed.
-            sudo chown -R "$(id -u):$(id -g)" candidate/.git
+            sudo chown -hR "$(id -u):$(id -g)" candidate/.git
             sudo chown "$(id -u):$(id -g)" candidate
             chmod 1777 candidate
             cd candidate
