@@ -40,6 +40,12 @@ fn main() {
     };
     let answer = if describe {
         r#""kind":"describe","versions":["conary-plugin v1"],"kinds":["review"]"#
+    } else if mode == "absolute-path" {
+        r#""kind":"review","findings":[{"path":"/etc/passwd","line":1,"severity":"p1","text":"fixture finding"}]"#
+    } else if mode == "parent-path" {
+        r#""kind":"review","findings":[{"path":"../../outside.rs","line":1,"severity":"p1","text":"fixture finding"}]"#
+    } else if mode == "nested-escape" {
+        r#""kind":"review","findings":[{"path":"src/nested/../../../outside.rs","line":1,"severity":"p1","text":"fixture finding"}]"#
     } else if mode == "missing" {
         r#""kind":"review""#
     } else if mode == "undescribed" {

@@ -1,5 +1,6 @@
 [package]
 name = "conary-cli"
+default-run = "cn"
 version = "0.0.0"
 description = "cn, Conary's command line"
 edition.workspace = true

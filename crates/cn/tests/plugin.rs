@@ -112,3 +112,39 @@ fn plugin_rejects_author_switching_engines() {
 fn plugin_rejects_unknown_session_of_author_engine() {
     rejects("unknown-session", "author cannot grade");
 }
+
+#[test]
+fn plugin_rejects_absolute_finding_path() {
+    rejects("absolute-path", "invalid finding");
+}
+#[test]
+fn plugin_rejects_parent_finding_path() {
+    rejects("parent-path", "invalid finding");
+}
+#[test]
+fn plugin_rejects_nested_finding_path_escape() {
+    rejects("nested-escape", "invalid finding");
+}
+#[test]
+fn plugin_cli_preserves_default_cargo_run() {
+    let out = Command::new(env!("CARGO"))
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .args([
+            "run",
+            "--quiet",
+            "--offline",
+            "--locked",
+            "-p",
+            "conary-cli",
+            "--",
+            "--help",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(String::from_utf8_lossy(&out.stdout).contains("Conary: the ledger"));
+}
