@@ -44,6 +44,27 @@ in a separate directory; it never builds the candidate's copy of Conary. A calle
 the event commit (`github.sha`, the PR merge commit), as checkout does by
 default. The signer reads that commit's tree with git alone.
 
+The caller is also part of the trusted CI configuration. Before signing,
+`cn attest ci` checks GitHub's caller identity (`github.workflow_ref`) and
+requires the event commit's entire `.github` tree to equal the tree fetched
+from this repository's default branch. This protects the caller's `needs`
+list, `toJSON(needs)` expression, checkout steps, literal negative command,
+and local reusable workflows/actions from changes in the candidate. A new
+or modified caller cannot attest until its configuration has been reviewed
+and installed on the default branch. It fails closed rather than producing
+candidate-chosen evidence; CI configuration updates must be installed
+separately from the changes whose evidence they produce.
+
+Review that default-branch configuration before enabling this signer: it
+must run every required test job on `github.sha` on a fresh GitHub-hosted
+runner, pass the actual
+`toJSON(needs)` of all those jobs, and invoke the complete relevant test
+suite in `negative-command`. Pin external actions and reusable workflows to
+reviewed commits. Do not derive invocation, checkout refs, job selection or
+attestation inputs from candidate files or outputs. That is the trusted
+wiring; the tests themselves remain candidate-controlled, as in the flake
+model. A signer cannot infer the meaning or coverage of arbitrary test code.
+
 The required checks are `attest / gate` and, for PRs using negatives,
 `attest / negative` (replace `attest` with the caller job's name). The gate
 passes only when every supplied job concludes `success`; skipped and failed
@@ -55,8 +76,14 @@ summarised.
 
 On same-repository PRs, `negative-run` constructs base code with head tests
 using `cn attest prepare-negative`, then runs `negative-command` in that tree
-on its own GitHub-hosted VM with **no OIDC permission**. Include dependency
-setup in that command when needed, and run the complete test suite: Conary
+on its own GitHub-hosted VM with **no OIDC permission**. Tests run under a
+separate Unix user with an empty environment and a home of its own. They
+cannot edit the runner's file-command channels or impersonate its result
+reporter. Their stdout and stderr go to a protected local file, not the
+Actions command parser; the runner reports only their exit status. Include
+dependency and toolchain setup in that command when needed (for example,
+`rustup default stable` for an unpinned Rust project), and run the complete
+test suite: Conary
 cannot infer which tests an arbitrary command runs. Setup or compilation
 failure inside the command is a failure on the negative tree, just as a
 flake failing to evaluate is; failure constructing the tree or provisioning

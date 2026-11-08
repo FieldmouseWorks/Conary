@@ -16,7 +16,7 @@ permissions:
   contents: read
 # The tool is part of the signer's reviewed source, never a caller input.
 env:
-  CONARY_TOOL_REV: 6415688464e3283b8f99effa61c1ca1aea743c69
+  CONARY_TOOL_REV: 6a99e855d927c50e1fa6f2c7f8176dad037e7e7a
 jobs:
   negative-run:
     if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
@@ -63,8 +63,23 @@ jobs:
           if [ "$(jq -r .tree plan.json)" = null ]; then
             echo 'result=none' >> "$GITHUB_OUTPUT"
           else
+            # Isolate tests from the runner's file commands and process identity.
+            # Their stdout is data, never Actions workflow commands.
+            sudo useradd --create-home --shell /bin/bash conary-tests
+            chmod go-rwx "$RUNNER_TEMP" "$(dirname "$GITHUB_OUTPUT")" "$(dirname "$GITHUB_ENV")"
+            sudo chown -R conary-tests:conary-tests candidate
+            # Checkout's post-job cleanup must never read test-controlled
+            # git configuration. Keep metadata read-only and its name fixed.
+            sudo chown -R "$(id -u):$(id -g)" candidate/.git
+            sudo chown "$(id -u):$(id -g)" candidate
+            chmod 1777 candidate
             cd candidate
-            if bash --noprofile --norc -eo pipefail -c "$TEST_COMMAND"; then
+            # A runner/setup failure must not masquerade as a failed test.
+            sudo --user conary-tests test -x "$PWD"
+            sudo --user conary-tests test -r "$PWD/.git/HEAD"
+            if sudo --user conary-tests env -i HOME=/home/conary-tests PATH="$PATH" \
+              bash --noprofile --norc -eo pipefail -c "$TEST_COMMAND" \
+              > "$RUNNER_TEMP/negative-command.log" 2>&1; then
               echo 'result=pass' >> "$GITHUB_OUTPUT"
             else
               echo 'result=fail' >> "$GITHUB_OUTPUT"
@@ -103,12 +118,15 @@ jobs:
       - name: Make and sign the statement
         id: statement
         env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           COMMIT: ${{ github.sha }}
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.event.pull_request.head.sha }}
           JOBS: ${{ inputs.jobs }}
         run: |
-          args=(--repo candidate --commit "$COMMIT" --jobs "$JOBS")
+          args=(--repo candidate --commit "$COMMIT" --jobs "$JOBS"
+            --repository "$GITHUB_REPOSITORY" --workflow-ref "$GITHUB_WORKFLOW_REF"
+            --default-branch "$DEFAULT_BRANCH")
           if [ -n "$HEAD" ]; then args+=(--base "$BASE" --head "$HEAD"); fi
           cn attest ci "${args[@]}" --log summary.json --log-artifact gate-log-${{ steps.identity.outputs.uuid }} --out signed --sign > made.json
           jq -r '"subject=\(.subject)\npredicate_type=\(.predicate_type)"' made.json >> "$GITHUB_OUTPUT"
@@ -167,13 +185,16 @@ jobs:
       - name: Make and sign the statement
         id: statement
         env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           COMMIT: ${{ github.sha }}
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.event.pull_request.head.sha }}
           JOBS: ${{ toJSON(needs) }}
           NEGATIVE_RESULT: ${{ needs.negative-run.outputs.result }}
         run: |
-          args=(--repo candidate --commit "$COMMIT" --jobs "$JOBS")
+          args=(--repo candidate --commit "$COMMIT" --jobs "$JOBS"
+            --repository "$GITHUB_REPOSITORY" --workflow-ref "$GITHUB_WORKFLOW_REF"
+            --default-branch "$DEFAULT_BRANCH")
           if [ -n "$HEAD" ]; then args+=(--base "$BASE" --head "$HEAD"); fi
           args+=(--negative-result "$NEGATIVE_RESULT" --negative-check negative-run)
           cn attest ci "${args[@]}" --log summary.json --log-artifact negative-log-${{ steps.identity.outputs.uuid }} --out signed --sign > made.json
