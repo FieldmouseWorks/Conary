@@ -9,6 +9,7 @@ pub mod log;
 pub mod mcp;
 pub mod notes;
 pub mod op;
+pub mod plugin;
 pub mod policy;
 pub mod reader;
 pub mod rpc;

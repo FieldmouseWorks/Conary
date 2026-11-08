@@ -6,6 +6,8 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 publish = false
+# The example plugin is a second binary; plain `cargo run -p conary-cli` stays cn.
+default-run = "cn"
 
 [[bin]]
 name = "cn"
@@ -24,3 +26,7 @@ tempfile = "3.27.0"
 
 [lints]
 workspace = true
+
+[[bin]]
+name = "conary-example-plugin"
+path = "../conary-core/examples/plugin.rs"
