@@ -61,8 +61,9 @@ cannot infer which tests an arbitrary command runs. Setup or compilation
 failure inside the command is a failure on the negative tree, just as a
 flake failing to evaluate is; failure constructing the tree or provisioning
 the trusted tool produces no negative evidence. The independent `negative`
-signing job recomputes the tree and test list, records the command in
-`checks`, and signs the execution job's result. Passing tests on old code
+signing job recomputes the tree and test list, names `negative-run` in
+`checks`, and signs the execution job's result. The supplied shell command
+is not copied into the evidence. Passing tests on old code
 make that check red; failing tests or a change needing no negative make it
 green. Fork PRs and unsupported events get no attestations. A run without
 OIDC permission fails closed.

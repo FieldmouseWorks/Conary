@@ -172,11 +172,10 @@ jobs:
           HEAD: ${{ github.event.pull_request.head.sha }}
           JOBS: ${{ toJSON(needs) }}
           NEGATIVE_RESULT: ${{ needs.negative-run.outputs.result }}
-          TEST_COMMAND: ${{ inputs.negative-command }}
         run: |
           args=(--repo candidate --commit "$COMMIT" --jobs "$JOBS")
           if [ -n "$HEAD" ]; then args+=(--base "$BASE" --head "$HEAD"); fi
-          args+=(--negative-result "$NEGATIVE_RESULT" --negative-check "$TEST_COMMAND")
+          args+=(--negative-result "$NEGATIVE_RESULT" --negative-check negative-run)
           cn attest ci "${args[@]}" --log summary.json --log-artifact negative-log-${{ steps.identity.outputs.uuid }} --out signed --sign > made.json
           jq -r '"subject=\(.subject)\npredicate_type=\(.predicate_type)"' made.json >> "$GITHUB_OUTPUT"
       - name: Publish public evidence
