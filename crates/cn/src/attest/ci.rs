@@ -20,7 +20,22 @@ pub struct RevisionArgs {
 }
 
 #[derive(Args)]
+pub struct CallerArgs {
+    /// GitHub's caller repository, not a workflow input.
+    #[arg(long)]
+    repository: String,
+    /// GitHub's caller workflow identity, not a workflow input.
+    #[arg(long)]
+    workflow_ref: String,
+    /// The repository's default branch, supplied by GitHub's event.
+    #[arg(long)]
+    default_branch: String,
+}
+
+#[derive(Args)]
 pub struct CiArgs {
+    #[command(flatten)]
+    caller: CallerArgs,
     #[arg(long)]
     repo: PathBuf,
     /// The exact commit checked out by the caller's test jobs.
@@ -58,6 +73,13 @@ pub fn prepare(args: &RevisionArgs) -> Result<()> {
 }
 
 pub fn attest(cli: &Cli, args: &CiArgs) -> Result<()> {
+    ci::trusted_caller(
+        &args.repo,
+        &args.commit,
+        &args.caller.repository,
+        &args.caller.workflow_ref,
+        &args.caller.default_branch,
+    )?;
     let (result, summary) = ci::summary(&args.jobs)?;
     let tree = ci::tree(&args.repo, &args.commit, args.head.as_deref())?;
     let command = if let (Some(base), Some(head)) = (&args.base, &args.head) {

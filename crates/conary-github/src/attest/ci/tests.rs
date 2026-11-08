@@ -125,3 +125,49 @@ fn test_only_code_only_and_deleted_tests_need_no_negative() {
     assert!(tree(repo, &base, Some(&head)).is_err());
     assert!(tree(repo, "HEAD", None).is_err());
 }
+
+#[test]
+fn candidate_cannot_forge_jobs_change_checkout_or_replace_the_negative_command() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    run(repo, &["init", "-q"]);
+    std::fs::create_dir_all(repo.join(".github/workflows")).unwrap();
+    let workflow = repo.join(".github/workflows/ci.yml");
+    let reviewed =
+        "jobs: ${{ toJSON(needs) }}\nnegative-command: cargo test\ncheckout: github.sha\n";
+    std::fs::write(&workflow, reviewed).unwrap();
+    let base = commit(repo);
+    run(repo, &["fetch", ".", "HEAD:refs/remotes/origin/main"]);
+    let check = |candidate: &str, identity: &str| {
+        trusted_caller(repo, candidate, "owner/repo", identity, "main")
+    };
+    let identity = "owner/repo/.github/workflows/ci.yml@refs/pull/1/merge";
+    assert!(check(&base, identity).is_ok());
+    assert!(check(&base, "attacker/repo/.github/workflows/ci.yml@main").is_err());
+    assert!(check(&base, "owner/repo/.github/workflows/new.yml@main").is_err());
+    // Tests remain candidate-controlled; their CI wiring doesn't.
+    std::fs::create_dir(repo.join("tests")).unwrap();
+    std::fs::write(repo.join("tests/new.rs"), "new regression").unwrap();
+    assert!(check(&commit(repo), identity).is_ok());
+    for edit in [
+        reviewed.replace(
+            "${{ toJSON(needs) }}",
+            r#"'{"tests":{"result":"success"}}'"#,
+        ),
+        reviewed.replace("cargo test", "false"),
+        reviewed.replace("github.sha", "another-tree"),
+        reviewed.replace("toJSON(needs)", "toJSON(needs.omitted-producers)"),
+    ] {
+        std::fs::write(&workflow, edit).unwrap();
+        assert!(check(&commit(repo), identity).is_err());
+    }
+    std::fs::write(&workflow, reviewed).unwrap();
+    std::fs::create_dir_all(repo.join(".github/actions/test")).unwrap();
+    std::fs::write(
+        repo.join(".github/actions/test/action.yml"),
+        "replacement invocation",
+    )
+    .unwrap();
+    assert!(check(&commit(repo), identity).is_err());
+    assert!(trusted_caller(repo, &base, "owner/repo", identity, "main~1").is_err());
+}

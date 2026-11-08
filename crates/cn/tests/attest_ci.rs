@@ -36,9 +36,19 @@ fn commit(repo: &Path) -> String {
 }
 
 fn cn(args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_cn"))
-        .args(["attest"])
-        .args(args)
+    let mut command = Command::new(env!("CARGO_BIN_EXE_cn"));
+    command.args(["attest"]).args(args);
+    if args.first() == Some(&"ci") {
+        command.args([
+            "--repository",
+            "owner/repo",
+            "--workflow-ref",
+            "owner/repo/.github/workflows/ci.yml@refs/pull/1/merge",
+            "--default-branch",
+            "main",
+        ]);
+    }
+    command
         .env_remove("ACTIONS_ID_TOKEN_REQUEST_URL")
         .env_remove("ACTIONS_ID_TOKEN_REQUEST_TOKEN")
         .output()
@@ -59,8 +69,11 @@ fn caller_jobs_bind_the_read_tree_and_summary_and_never_pass_a_skip() {
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
     git(repo, &["init", "-q"]);
+    std::fs::create_dir_all(repo.join(".github/workflows")).unwrap();
+    std::fs::write(repo.join(".github/workflows/ci.yml"), "reviewed CI wiring").unwrap();
     std::fs::write(repo.join("code"), "fixed\n").unwrap();
     let head = commit(repo);
+    git(repo, &["fetch", ".", "HEAD:refs/remotes/origin/main"]);
     let log = repo.join("summary.json");
     let out = repo.join("signed");
     let tree = git(repo, &["rev-parse", "HEAD^{tree}"]);
@@ -127,8 +140,11 @@ fn regression_passes_on_head_fails_on_negative_and_gets_its_own_statement() {
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
     git(repo, &["init", "-q"]);
+    std::fs::create_dir_all(repo.join(".github/workflows")).unwrap();
+    std::fs::write(repo.join(".github/workflows/ci.yml"), "reviewed CI wiring").unwrap();
     std::fs::write(repo.join("code"), "old\n").unwrap();
     let base = commit(repo);
+    git(repo, &["fetch", ".", "HEAD:refs/remotes/origin/main"]);
     std::fs::write(repo.join("code"), "fixed\n").unwrap();
     std::fs::create_dir(repo.join("tests")).unwrap();
     std::fs::write(repo.join("tests/regression.sh"), "grep -qx fixed code\n").unwrap();
@@ -203,4 +219,62 @@ fn regression_passes_on_head_fails_on_negative_and_gets_its_own_statement() {
         !cn(&missing).status.success(),
         "a mixed change cannot claim no negative needed"
     );
+}
+
+#[test]
+fn changed_ci_wiring_cannot_sign_fabricated_success_or_an_unrelated_negative() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    git(repo, &["init", "-q"]);
+    std::fs::create_dir_all(repo.join(".github/workflows")).unwrap();
+    let caller = repo.join(".github/workflows/ci.yml");
+    std::fs::write(
+        &caller,
+        "jobs: ${{ toJSON(needs) }}\nnegative-command: cargo test\n",
+    )
+    .unwrap();
+    let base = commit(repo);
+    git(repo, &["fetch", ".", "HEAD:refs/remotes/origin/main"]);
+    std::fs::write(
+        &caller,
+        "jobs: fabricated-success\nnegative-command: false\n",
+    )
+    .unwrap();
+    let head = commit(repo);
+    let log = repo.join("summary.json");
+    let out = repo.join("signed");
+    let common = [
+        "ci",
+        "--repo",
+        repo.to_str().unwrap(),
+        "--commit",
+        &head,
+        "--jobs",
+        r#"{"tests":{"result":"success"}}"#,
+        "--log",
+        log.to_str().unwrap(),
+        "--log-artifact",
+        "test-log",
+        "--out",
+        out.to_str().unwrap(),
+    ];
+    for extra in [
+        vec![],
+        vec![
+            "--base",
+            &base,
+            "--head",
+            &head,
+            "--negative-result",
+            "fail",
+            "--negative-check",
+            "negative-run",
+        ],
+    ] {
+        let result = cn(&[&common[..], &extra].concat());
+        assert!(!result.status.success());
+        assert!(String::from_utf8_lossy(&result.stderr).contains("candidate CI wiring"));
+        assert!(!out.exists());
+        assert!(!log.exists());
+    }
 }

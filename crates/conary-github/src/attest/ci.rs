@@ -189,5 +189,50 @@ pub fn summary(jobs: &str) -> Result<(super::make::Gate, String)> {
     Ok((result, serde_json::to_string(&jobs)?))
 }
 
+/// Authenticate the caller's CI wiring against its repository's reviewed
+/// default branch. GitHub supplies the workflow identity; the signer supplies
+/// this check, so a candidate cannot replace needs results or test invocations.
+/// The entire .github tree is protected, including local reusable workflows
+/// and actions that the caller can delegate to.
+pub fn trusted_caller(
+    repo: &std::path::Path,
+    commit: &str,
+    repository: &str,
+    workflow_ref: &str,
+    default_branch: &str,
+) -> Result<()> {
+    oid(commit)?;
+    let path = workflow_ref
+        .strip_prefix(&format!("{repository}/"))
+        .and_then(|s| s.rsplit_once('@').map(|(path, _)| path))
+        .filter(|p| {
+            p.starts_with(".github/workflows/") && (p.ends_with(".yml") || p.ends_with(".yaml"))
+        })
+        .ok_or("the caller must be a workflow in the candidate's repository")?;
+    if path.split('/').any(|p| p == ".." || p.is_empty()) {
+        return Err("invalid caller workflow path".into());
+    }
+    let trusted = format!("refs/remotes/origin/{default_branch}");
+    // Validate the complete ref rather than allowing rev-parse expressions.
+    git(repo, &["check-ref-format", &trusted])?;
+    let trusted = git(repo, &["rev-parse", "--verify", &trusted])?
+        .trim()
+        .to_owned();
+    oid(&trusted)?;
+    git(repo, &["cat-file", "-e", &format!("{trusted}:{path}")])?;
+    let ci_tree = |revision: &str| -> Result<String> {
+        Ok(git(
+            repo,
+            &["rev-parse", "--verify", &format!("{revision}:.github")],
+        )?
+        .trim()
+        .to_owned())
+    };
+    if ci_tree(commit)? != ci_tree(&trusted)? {
+        return Err("candidate CI wiring differs from the reviewed default branch; caller results and negative commands cannot be trusted".into());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests;
