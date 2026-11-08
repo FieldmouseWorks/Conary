@@ -785,14 +785,13 @@ toward it or fixes something.
    PRs' own runs included, not one per PR or per head.
 
 **What still ties it to burrow.** The ledger itself (`init`, `ingest`,
-`backfill`, `why`, `undo`, `class`) already runs anywhere cargo does. Three
-things don't yet, and M7 closes them:
+`backfill`, `why`, `undo`, `class`) already runs anywhere cargo does. M7
+closes the remaining ties:
 
-- Only burrow's shared CI makes attested evidence. Which workflow signs it
-  is the machine's setting ([rule 2](ci-attestation.md#checking-one)), but
-  no workflow of Conary's own makes attestations, so a repository without
-  burrow's CI has nothing to name.
-- The negative check for new tests runs in that same workflow.
+- Attested evidence and the negative check are available from Conary's own
+  [reusable workflow](ci-attestation.md#calling-conarys-workflow), without
+  burrow or Nix. Existing repositories on burrow's signer must migrate
+  together before their machine switches its signer setting.
 - Nothing in Conary hears a PR event. burrow's steward calls `cn` on each
   one; without it, someone runs `cn sync`.
 

@@ -1,0 +1,202 @@
+# Candidate commands run only in negative-run, on its own hosted VM with
+# no OIDC permission. Signing jobs run trusted Conary code and git only.
+name: attest
+on:
+  workflow_call:
+    inputs:
+      jobs:
+        description: 'toJSON(needs) of the caller test jobs; all must succeed'
+        type: string
+        required: true
+      negative-command:
+        description: 'Setup and run the complete test suite on base code plus head tests'
+        type: string
+        required: true
+permissions:
+  contents: read
+# The tool is part of the signer's reviewed source, never a caller input.
+env:
+  CONARY_TOOL_REV: 6415688464e3283b8f99effa61c1ca1aea743c69
+jobs:
+  negative-run:
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      result: ${{ steps.tests.outputs.result }}
+    steps:
+      - name: Read Conary's trusted tool source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: FieldmouseWorks/Conary
+          ref: ${{ env.CONARY_TOOL_REV }}
+          path: conary-tool
+          persist-credentials: false
+      - name: Build the trusted tool (never the candidate's copy)
+        working-directory: conary-tool
+        run: |
+          rustup show active-toolchain
+          cargo build --locked --release -p conary-cli
+          echo "$PWD/target/release" >> "$GITHUB_PATH"
+      - name: Read the candidate's git objects
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Construct the negative tree with git alone
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          cn attest prepare-negative --repo candidate --base "$BASE" --head "$HEAD" > plan.json
+          tree=$(jq -r '.tree // empty' plan.json)
+          if [ -n "$tree" ]; then
+            git -C candidate read-tree --reset -u "$tree"
+          fi
+      - name: Run candidate tests without a signing token
+        id: tests
+        env:
+          TEST_COMMAND: ${{ inputs.negative-command }}
+        run: |
+          if [ "$(jq -r .tree plan.json)" = null ]; then
+            echo 'result=none' >> "$GITHUB_OUTPUT"
+          else
+            cd candidate
+            if bash --noprofile --norc -eo pipefail -c "$TEST_COMMAND"; then
+              echo 'result=pass' >> "$GITHUB_OUTPUT"
+            else
+              echo 'result=fail' >> "$GITHUB_OUTPUT"
+            fi
+          fi
+  gate:
+    if: always() && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Read Conary's trusted tool source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: FieldmouseWorks/Conary
+          ref: ${{ env.CONARY_TOOL_REV }}
+          path: conary-tool
+          persist-credentials: false
+      - name: Build the trusted tool (never the candidate's copy)
+        working-directory: conary-tool
+        run: |
+          rustup show active-toolchain
+          cargo build --locked --release -p conary-cli
+          echo "$PWD/target/release" >> "$GITHUB_PATH"
+      - name: Read the candidate's git objects
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Name this evidence
+        id: identity
+        run: echo "uuid=$(uuidgen)" >> "$GITHUB_OUTPUT"
+      - name: Make and sign the statement
+        id: statement
+        env:
+          COMMIT: ${{ github.sha }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+          JOBS: ${{ inputs.jobs }}
+        run: |
+          args=(--repo candidate --commit "$COMMIT" --jobs "$JOBS")
+          if [ -n "$HEAD" ]; then args+=(--base "$BASE" --head "$HEAD"); fi
+          cn attest ci "${args[@]}" --log summary.json --log-artifact gate-log-${{ steps.identity.outputs.uuid }} --out signed --sign > made.json
+          jq -r '"subject=\(.subject)\npredicate_type=\(.predicate_type)"' made.json >> "$GITHUB_OUTPUT"
+      - name: Publish public evidence
+        if: github.event.repository.visibility == 'public'
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: ${{ steps.statement.outputs.subject }}
+          predicate-type: ${{ steps.statement.outputs.predicate_type }}
+          predicate-path: signed/predicate.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: conary-attestation-${{ steps.identity.outputs.uuid }}
+          path: signed/conary-attestation
+          if-no-files-found: error
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: gate-log-${{ steps.identity.outputs.uuid }}
+          path: summary.json
+          if-no-files-found: error
+      - name: Conclude as the attested result
+        env:
+          JOBS: ${{ inputs.jobs }}
+        run: jq -e 'length > 0 and all(.[]; .result == "success")' <<< "$JOBS"
+  negative:
+    needs: negative-run
+    if: always() && needs.negative-run.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Read Conary's trusted tool source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: FieldmouseWorks/Conary
+          ref: ${{ env.CONARY_TOOL_REV }}
+          path: conary-tool
+          persist-credentials: false
+      - name: Build the trusted tool (never the candidate's copy)
+        working-directory: conary-tool
+        run: |
+          rustup show active-toolchain
+          cargo build --locked --release -p conary-cli
+          echo "$PWD/target/release" >> "$GITHUB_PATH"
+      - name: Read the candidate's git objects
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Name this evidence
+        id: identity
+        run: echo "uuid=$(uuidgen)" >> "$GITHUB_OUTPUT"
+      - name: Make and sign the statement
+        id: statement
+        env:
+          COMMIT: ${{ github.sha }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+          JOBS: ${{ toJSON(needs) }}
+          NEGATIVE_RESULT: ${{ needs.negative-run.outputs.result }}
+          TEST_COMMAND: ${{ inputs.negative-command }}
+        run: |
+          args=(--repo candidate --commit "$COMMIT" --jobs "$JOBS")
+          if [ -n "$HEAD" ]; then args+=(--base "$BASE" --head "$HEAD"); fi
+          args+=(--negative-result "$NEGATIVE_RESULT" --negative-check "$TEST_COMMAND")
+          cn attest ci "${args[@]}" --log summary.json --log-artifact negative-log-${{ steps.identity.outputs.uuid }} --out signed --sign > made.json
+          jq -r '"subject=\(.subject)\npredicate_type=\(.predicate_type)"' made.json >> "$GITHUB_OUTPUT"
+      - name: Publish public evidence
+        if: github.event.repository.visibility == 'public'
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: ${{ steps.statement.outputs.subject }}
+          predicate-type: ${{ steps.statement.outputs.predicate_type }}
+          predicate-path: signed/predicate.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: conary-attestation-${{ steps.identity.outputs.uuid }}
+          path: signed/conary-attestation
+          if-no-files-found: error
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: negative-log-${{ steps.identity.outputs.uuid }}
+          path: summary.json
+          if-no-files-found: error
+      - name: Conclude as the attested result
+        env:
+          RESULT: ${{ needs.negative-run.outputs.result }}
+        run: test "$RESULT" = fail || test "$RESULT" = none
