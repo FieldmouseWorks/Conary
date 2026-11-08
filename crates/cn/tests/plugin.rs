@@ -27,7 +27,10 @@ fn fixture(mode: &str) -> (tempfile::TempDir, std::path::PathBuf) {
     });
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join(mode);
-    std::fs::copy(compiled.path().join("fixture"), &path).unwrap();
+    // The binary is immutable after compilation. A hard link gives each mode
+    // its own executable name without opening it for writing during parallel
+    // spawns (a child can inherit a writer briefly and cause ETXTBSY).
+    std::fs::hard_link(compiled.path().join("fixture"), &path).unwrap();
     (dir, path)
 }
 #[test]
