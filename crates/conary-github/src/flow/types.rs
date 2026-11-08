@@ -80,7 +80,53 @@ pub enum Verdict {
 pub struct Review {
     pub revision: Revision,
     pub verdict: Verdict,
+    /// Producer completion time, preserved across posting retries. Zero is unknown.
     pub at: u64,
+}
+
+/// Findings whose posting/coverage was lost. Legacy state has no ordering
+/// evidence until this library observes it; a REST record ID supplies none.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LostReview {
+    Legacy { head: String, after: Option<u64> },
+    Findings { revision: Revision, at: u64 },
+}
+impl From<String> for LostReview {
+    fn from(head: String) -> Self {
+        Self::Legacy { head, after: None }
+    }
+}
+impl LostReview {
+    pub fn head(&self) -> &str {
+        match self {
+            Self::Legacy { head, .. } => head,
+            Self::Findings { revision, .. } => &revision.head,
+        }
+    }
+    pub(super) fn after(&self) -> Option<u64> {
+        match self {
+            Self::Legacy { after, .. } => *after,
+            Self::Findings { at, .. } => Some(*at),
+        }
+    }
+    pub(super) fn observe(&mut self, now: u64) {
+        if let Self::Legacy { after, .. } = self {
+            after.get_or_insert(now);
+        }
+    }
+    pub(super) fn findings(review: &Review, now: u64) -> Self {
+        if review.at == 0 {
+            Self::Legacy {
+                head: review.revision.head.clone(),
+                after: Some(now),
+            }
+        } else {
+            Self::Findings {
+                revision: review.revision.clone(),
+                at: review.at,
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -409,8 +455,8 @@ pub struct Memory {
     pub update_requested: Option<(String, u64)>,
     pub strikes: BTreeMap<Failure, u32>,
     pub retry: Option<(Failure, u64)>,
-    /// Reviewer -> base -> head whose findings still need covering.
-    pub lost_on: BTreeMap<String, BTreeMap<String, String>>,
+    /// Reviewer -> base -> the original findings and their ordering evidence.
+    pub lost_on: BTreeMap<String, BTreeMap<String, LostReview>>,
     pub handed: BTreeMap<Kind, Revision>,
     pub lost_jobs: BTreeSet<String>,
     pub unanswered: BTreeMap<(Kind, Revision), BTreeSet<String>>,

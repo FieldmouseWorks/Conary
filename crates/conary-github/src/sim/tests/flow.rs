@@ -265,10 +265,20 @@ fn push_resets_strikes_but_keeps_lost_findings() {
     // strikes.py / superseded.py: counters are per head; losses survive pushes.
     let mut c = Case::new();
     c.memory.strikes.insert(Failure::Merge, 3);
-    c.memory
-        .lost_on
-        .insert("absent".into(), BTreeMap::from([("main".into(), head(2))]));
-    let lost = c.memory.lost_on.clone();
+    c.memory.lost_on.insert(
+        "absent".into(),
+        BTreeMap::from([("main".into(), head(2).into())]),
+    );
+    let lost = BTreeMap::from([(
+        "absent".into(),
+        BTreeMap::from([(
+            "main".into(),
+            LostReview::Legacy {
+                head: head(2),
+                after: Some(5000),
+            },
+        )]),
+    )]);
     c.push(&head(4));
     c.pass(5000);
     assert_eq!(c.memory.seen, 5000);
@@ -283,7 +293,7 @@ fn lost_findings_from_unavailable_reviewer_hold_the_head() {
     c.service("reviewer").unavailable_until = Some(9000);
     c.memory.lost_on.insert(
         "reviewer".into(),
-        BTreeMap::from([("main".into(), head(3))]),
+        BTreeMap::from([("main".into(), head(3).into())]),
     );
     assert_eq!(c.view(4000).stage, Stage::Reviewer);
 }
@@ -740,9 +750,10 @@ fn current_verdicts_stand_while_their_reviewer_is_unavailable() {
     c.push(&head(4));
     assert_eq!(c.view(4000).stage, Stage::Reviewer);
     c.review("absent", Verdict::Clean, 3);
-    c.memory
-        .lost_on
-        .insert("absent".into(), BTreeMap::from([("main".into(), head(4))]));
+    c.memory.lost_on.insert(
+        "absent".into(),
+        BTreeMap::from([("main".into(), head(4).into())]),
+    );
     assert_eq!(c.view(4000).stage, Stage::Reviewer);
 }
 
@@ -792,7 +803,6 @@ fn label_without_an_owed_decision_is_not_approval() {
 
 fn old_review(c: &Case, sha: &str, base: &str) {
     let p = crate::api::Source::pull(&c.hub, REMI, 3).unwrap();
-    let mark =
-        json!({"commit_sha":sha,"base":base,"findings":0,"scope":Revision::from(&p).description});
+    let mark = json!({"commit_sha":sha,"base":base,"findings":0,"scope":Revision::from(&p).description,"reviewed_at":0});
     c.hub.put_reviews(REMI,3,json!([{"id":1,"user":{"login":crate::sim::STEWARD,"type":"Bot"},"body":format!("<!-- reviewer-review:v2 {mark} -->"),"commit_id":sha,"submitted_at":"1970-01-01T00:00:00Z"}]));
 }

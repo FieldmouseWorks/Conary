@@ -131,7 +131,7 @@ fn dependency_landing_never_skips_existing_or_owed_reviewer_gates() {
                 .lost_on
                 .entry("reviewer".into())
                 .or_default()
-                .insert("main".into(), rev.head);
+                .insert("main".into(), rev.head.into());
             c.service("reviewer").unavailable_until = Some(9000);
             assert_eq!(c.view(8000).stage, Stage::Reviewer);
         }
@@ -347,7 +347,7 @@ fn carried_clean_provenance_cannot_cover_later_losses_or_refused_findings() {
                 .lost_on
                 .entry("reviewer".into())
                 .or_default()
-                .insert("main".into(), middle.head.clone());
+                .insert("main".into(), middle.head.clone().into());
             c.service("reviewer").unavailable_until = Some(10000);
         } else {
             c.service("reviewer").answer = Some(Review {

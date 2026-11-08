@@ -10,7 +10,7 @@ fn reviewer_recovery_and_quiet_wakeups_do_not_extend_the_stall_deadline() {
     c.review("covering", Verdict::Clean, 600);
     c.memory.lost_on.insert(
         "reviewer".into(),
-        std::collections::BTreeMap::from([("main".into(), c.scope().head)]),
+        std::collections::BTreeMap::from([("main".into(), c.scope().head.into())]),
     );
     c.service("reviewer").unavailable_until = Some(86400);
     let n = c.pass(700);

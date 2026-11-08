@@ -40,7 +40,7 @@ pub(super) fn read(
     let mut result = BTreeMap::new();
     for name in &settings.reviewers {
         let pattern = regex::Regex::new(&format!(
-            r"<!-- {}-review:v([12]) (\{{.*?\}}) -->",
+            r"(?m)^<!-- {}-review:v([12]) (\{{[^\n]*\}}) -->\s*\z",
             regex::escape(name)
         ))
         .expect("escaped pattern");
@@ -88,13 +88,27 @@ pub(super) fn read(
             {
                 continue;
             }
-            let at = match r.submitted_at.as_deref() {
-                None | Some("") => 0,
+            let posted_at = match r.submitted_at.as_deref() {
+                None | Some("") => {
+                    return Err(ApiError::new(
+                        "GitHub returned a scoped review without a submission time",
+                    ));
+                }
                 Some(t) => timestamp(t)?,
             };
+            // Posting can be delayed or retried. Only the producer's completion
+            // time orders verdicts; neither a new REST ID nor posting time does.
+            let at = m["reviewed_at"]
+                .as_u64()
+                .ok_or_else(|| ApiError::new("Scoped review lacks its producer completion time"))?;
+            if at > posted_at {
+                return Err(ApiError::new(
+                    "Review completion is later than its submission",
+                ));
+            }
             if candidates.get(head).is_none_or(|(v, id, _)| {
-                (at, r.id.unwrap_or(0), count > 0)
-                    >= (v.at, id.unwrap_or(0), v.verdict == Verdict::Findings)
+                (at, count > 0, r.id.unwrap_or(0))
+                    >= (v.at, v.verdict == Verdict::Findings, id.unwrap_or(0))
             }) {
                 candidates.insert(
                     head.into(),
@@ -119,7 +133,7 @@ pub(super) fn read(
             .map(|v| (revision.head.clone(), v))
             .or_else(|| {
                 candidates.into_iter().max_by_key(|(_, (v, id, _))| {
-                    (v.at, id.unwrap_or(0), v.verdict == Verdict::Findings)
+                    (v.at, v.verdict == Verdict::Findings, id.unwrap_or(0))
                 })
             });
         if let Some((head, (review, id, answered))) = chosen {

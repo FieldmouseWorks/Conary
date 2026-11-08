@@ -19,29 +19,38 @@ fn current<'a>(r: &'a Reviewer, revision: &Revision) -> Option<&'a Review> {
 }
 
 pub(super) fn look(f: &Facts, m: &mut Memory, now: u64, request_review: bool) -> Look {
-    // A newly read clean review can cover an earlier loss on this base.
-    // A clean review already present before the loss cannot. Old records
-    // without this observation keep their loss until a fresh look appears.
+    for (name, bases) in &mut m.lost_on {
+        let observed = now.max(
+            f.reviewers
+                .get(name)
+                .and_then(|r| r.review.as_ref())
+                .map_or(0, |r| r.at),
+        );
+        for loss in bases.values_mut() {
+            loss.observe(observed);
+        }
+    }
     for (name, r) in &f.reviewers {
-        let lost = m.lost_on.get(name).and_then(|s| s.get(&f.revision.base));
-        let clean = r
-            .review
-            .as_ref()
-            .is_some_and(|v| v.revision == f.revision && v.verdict == Verdict::Clean);
-        let changed = r
-            .record_id
-            .zip(m.latest_reviews.get(name).copied())
-            .is_some_and(|(a, b)| a != b);
-        if clean
-            && r.reviewed_head
-                .as_ref()
-                .is_none_or(|h| h == &f.revision.head)
-            && lost.is_some_and(|h| h != &f.revision.head || changed)
-        {
+        let loss = m
+            .lost_on
+            .get(name)
+            .and_then(|bases| bases.get(&f.revision.base));
+        let covered = current(r, &f.revision).is_some_and(|v| {
+            v.verdict == Verdict::Clean
+                && loss.is_some_and(|loss| {
+                    let original = match loss {
+                        LostReview::Findings { revision, .. } => Some(revision),
+                        LostReview::Legacy { .. } => None,
+                    };
+                    loss.after()
+                        .is_some_and(|after| covers(r, &f.revision, original, after))
+                })
+        });
+        if covered {
             if let Some(bases) = m.lost_on.get_mut(name) {
                 bases.remove(&f.revision.base);
             }
-            if m.lost_on.get(name).is_some_and(|s| s.is_empty()) {
+            if m.lost_on.get(name).is_some_and(|bases| bases.is_empty()) {
                 m.lost_on.remove(name);
             }
         }
@@ -83,20 +92,15 @@ pub(super) fn look(f: &Facts, m: &mut Memory, now: u64, request_review: bool) ->
             }
             let tries = m.review_posts.get(&key).copied().unwrap_or(0);
             if tries >= 3 {
-                let covered = current(r, &f.revision).is_some_and(|v| {
-                    v.verdict == Verdict::Clean
-                        && (r
-                            .reviewed_head
-                            .as_ref()
-                            .is_none_or(|h| h == &f.revision.head)
-                            || v.at >= answer.at)
-                });
+                let covered = covers_answer(r, &f.revision, answer);
                 if covered || available(r) && answer.revision.head == f.revision.head {
                     if !covered && answer.verdict == Verdict::Findings {
-                        m.lost_on
-                            .entry(name.clone())
-                            .or_default()
-                            .insert(answer.revision.base.clone(), answer.revision.head.clone());
+                        remember_loss(
+                            m,
+                            name,
+                            answer,
+                            now.max(r.review.as_ref().map_or(0, |v| v.at)),
+                        );
                     }
                     m.consumed_reviews.insert(key);
                     continue;
@@ -104,10 +108,12 @@ pub(super) fn look(f: &Facts, m: &mut Memory, now: u64, request_review: bool) ->
             }
             if answer.revision.base != f.revision.base {
                 if answer.verdict == Verdict::Findings {
-                    m.lost_on
-                        .entry(name.clone())
-                        .or_default()
-                        .insert(answer.revision.base.clone(), answer.revision.head.clone());
+                    remember_loss(
+                        m,
+                        name,
+                        answer,
+                        now.max(r.review.as_ref().map_or(0, |v| v.at)),
+                    );
                 }
                 m.consumed_reviews.insert(key);
                 continue;
@@ -121,17 +127,13 @@ pub(super) fn look(f: &Facts, m: &mut Memory, now: u64, request_review: bool) ->
             }
             // A look at the current head follows: old findings could have
             // been fixed by its push and must not raise another round.
-            if answer.verdict == Verdict::Findings
-                && r.reviewed_head
-                    .as_ref()
-                    .is_some_and(|h| h != &f.revision.head)
-                && current(r, &f.revision)
-                    .is_some_and(|v| v.verdict == Verdict::Clean && v.at < answer.at)
-            {
-                m.lost_on
-                    .entry(name.clone())
-                    .or_default()
-                    .insert(answer.revision.base.clone(), answer.revision.head.clone());
+            if answer.verdict == Verdict::Findings && !covers_answer(r, &f.revision, answer) {
+                remember_loss(
+                    m,
+                    name,
+                    answer,
+                    now.max(r.review.as_ref().map_or(0, |v| v.at)),
+                );
             }
             m.consumed_reviews.insert(key);
         }
@@ -164,9 +166,7 @@ pub(super) fn look(f: &Facts, m: &mut Memory, now: u64, request_review: bool) ->
                     "A reviewer out of service is still reviewing it",
                 );
             }
-            if loss.is_some_and(|h| h == &f.revision.head || capped || !needs_review)
-                || capped && r.queued
-            {
+            if loss.is_some() || capped && r.queued {
                 return wait(
                     Stage::Reviewer,
                     r.unavailable_until,
@@ -273,4 +273,52 @@ pub(super) fn look(f: &Facts, m: &mut Memory, now: u64, request_review: bool) ->
         );
     }
     Look::Settled { capped }
+}
+
+fn covers(
+    reviewer: &Reviewer,
+    revision: &Revision,
+    original: Option<&Revision>,
+    after: u64,
+) -> bool {
+    current(reviewer, revision).is_some_and(|clean| {
+        clean.verdict == Verdict::Clean
+            && clean.at > after
+            && reviewer.reviewed_head.as_deref().is_some_and(|head| {
+                head == revision.head
+                    || original.is_some_and(|original| {
+                        head == original.head
+                            && clean.revision.base == original.base
+                            && clean.revision.description == original.description
+                    })
+            })
+    })
+}
+fn covers_answer(reviewer: &Reviewer, revision: &Revision, answer: &Review) -> bool {
+    answer.at != 0
+        && answer.revision.base == revision.base
+        && covers(reviewer, revision, Some(&answer.revision), answer.at)
+}
+fn remember_loss(memory: &mut Memory, role: &str, answer: &Review, observed: u64) {
+    let incoming = LostReview::findings(answer, observed);
+    memory
+        .lost_on
+        .entry(role.into())
+        .or_default()
+        .entry(answer.revision.base.clone())
+        .and_modify(|loss| {
+            let same_scope = matches!((&*loss,&incoming),
+                (LostReview::Findings{revision:a,..},LostReview::Findings{revision:b,..}) if a==b);
+            if same_scope {
+                if incoming.after() > loss.after() {
+                    *loss = incoming.clone();
+                }
+            } else {
+                *loss = LostReview::Legacy {
+                    head: loss.head().into(),
+                    after: loss.after().max(incoming.after()),
+                };
+            }
+        })
+        .or_insert(incoming);
 }

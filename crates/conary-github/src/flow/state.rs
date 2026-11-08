@@ -20,9 +20,6 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
             *entry = claim.job.clone();
         }
     }
-    if let Some(record) = f.proof_data.records.iter().max_by_key(|r| r.job.started) {
-        raised.jobs.insert(Kind::Proof, record.job.clone());
-    }
     for id in &m.stopping {
         let ended = f
             .jobs
@@ -48,6 +45,14 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
         .proof_data
         .live
         .retain(|h| !m.retired_jobs.contains(&h.job.id));
+    if let Some(record) = raised
+        .proof_data
+        .records
+        .iter()
+        .max_by_key(|r| r.job.started)
+    {
+        raised.jobs.insert(Kind::Proof, record.job.clone());
+    }
     if raised
         .proof_data
         .inputs_job
@@ -78,6 +83,10 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
         raised.major_generation,
         raised.major,
     );
+    raised.major_generation = m
+        .major_issuance
+        .get(&raised.revision)
+        .map(|(generation, _)| *generation);
     let f = &raised;
     if m.head != f.revision.head {
         m.head = f.revision.head.clone();
@@ -358,6 +367,13 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
                     WaitOn::Hold
                 } else if stage == Stage::Train {
                     WaitOn::Train
+                } else if f.settings.renovate_sweep
+                    && f.major_generation.is_some()
+                    && f.major.is_none()
+                    && stage == Stage::Review
+                    && matches!(step, Step::Wait { .. })
+                {
+                    WaitOn::Sweep
                 } else if f.settings.renovate_sweep
                     && f.renovate
                     && f.bot_merges

@@ -363,7 +363,7 @@ fn only_the_configured_stewards_rest_login_can_supply_a_review_mark() {
         let scope = c.scope();
         let body = format!(
             "<!-- reviewer-review:v2 {} -->",
-            json!({"commit_sha":scope.head,"base":"main","scope":scope.description,"findings":0})
+            json!({"commit_sha":scope.head,"base":"main","scope":scope.description,"reviewed_at":0,"findings":0})
         );
         c.hub.put_reviews(REMI,3,json!([{"id":1,"user":{"login":who,"type":kind},"body":body,"commit_id":scope.head,"state":"COMMENTED","submitted_at":"2026-11-08T12:00:00Z"}]));
         assert_eq!(
@@ -383,7 +383,7 @@ fn a_mark_with_an_invalid_time_stops_the_reader() {
     let scope = c.scope();
     let body = format!(
         "<!-- reviewer-review:v2 {} -->",
-        json!({"commit_sha":scope.head,"base":"main","scope":scope.description,"findings":0})
+        json!({"commit_sha":scope.head,"base":"main","scope":scope.description,"reviewed_at":0,"findings":0})
     );
     c.hub.put_reviews(REMI,3,json!([{"id":1,"user":{"login":"fieldmouseworks-steward[bot]","type":"Bot"},"body":body,"commit_id":scope.head,"state":"COMMENTED","submitted_at":"yesterday"}]));
     assert!(

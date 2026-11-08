@@ -37,6 +37,13 @@ pub(super) fn decide(f: &Facts, m: &mut Memory, now: u64) -> Decision {
             "Stop inputs for an obsolete proof",
         );
     }
+    if let Some(job) = super::proofs::obsolete(f) {
+        return at(
+            Stage::Proof,
+            Step::StopJob(job.id.clone()),
+            "Stop an obsolete proof before starting more work",
+        );
+    }
     // Only proofs and judgments belong to a head. Fix jobs own the branch
     // across pushes, including their own push, and must be left running.
     if let Some((_, job)) = f.jobs.iter().find(|(kind, job)| {
@@ -112,6 +119,13 @@ pub(super) fn decide(f: &Facts, m: &mut Memory, now: u64) -> Decision {
             Stage::Fix,
             Some(job_wake(f, *kind, job, now)),
             "A fix job still owns the branch",
+        );
+    }
+    if f.major_generation.is_some() && f.major.is_none() {
+        return wait(
+            Stage::Review,
+            None,
+            "Sweep decision rejected; a valid newer issuance is required",
         );
     }
     if f.merging == Merge::Conflict {

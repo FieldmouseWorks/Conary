@@ -70,7 +70,7 @@ fn lost_findings_are_owed_on_the_same_base_after_a_push() {
         .lost_on
         .entry("primary".into())
         .or_default()
-        .insert("main".into(), head(3));
+        .insert("main".into(), head(3).into());
     c.judge("land");
     assert_eq!(c.pass(4000).step, Step::QueueReview("primary".into()));
     c.push(&head(4));
@@ -113,11 +113,14 @@ fn an_older_clean_look_cannot_cover_a_later_loss_on_this_head() {
         .lost_on
         .entry("primary".into())
         .or_default()
-        .insert("main".into(), head(3));
+        .insert("main".into(), head(3).into());
     assert_eq!(c.pass(4001).step, Step::QueueReview("primary".into()));
     assert!(c.memory.lost_on.contains_key("primary"));
     c.review("primary", Verdict::Clean, 30);
     c.pass(4002);
+    assert!(c.memory.lost_on.contains_key("primary")); // new ID, but still an older look
+    c.review("primary", Verdict::Clean, 4003);
+    c.pass(4004);
     assert!(!c.memory.lost_on.contains_key("primary"));
 }
 #[test]
@@ -134,7 +137,7 @@ fn losses_on_another_base_are_not_cleared_by_this_bases_clean_review() {
         at: 4000,
     });
     c.pass(4001);
-    assert_eq!(c.memory.lost_on["primary"]["release"], head(3));
+    assert_eq!(c.memory.lost_on["primary"]["release"].head(), head(3));
     c.hub.set_branch(REMI, "release", super::TRUNK);
     c.hub.retarget(REMI, 3, "release");
     c.hub.refresh_flow(REMI, 3);
@@ -164,7 +167,7 @@ fn docs_still_owe_lost_findings_from_an_unavailable_reviewer() {
         .lost_on
         .entry("primary".into())
         .or_default()
-        .insert("main".into(), head(2));
+        .insert("main".into(), head(2).into());
     c.service("primary").unavailable_until = Some(9000);
     assert_eq!(c.view(4000).stage, Stage::Reviewer);
 }
@@ -231,6 +234,6 @@ fn three_refused_current_posts_still_get_a_replacement_look_past_the_cap() {
     }
     assert_eq!(c.pass(770).step, Step::Wait { until: Some(4371) });
     c.failed_review = None;
-    assert_eq!(c.memory.lost_on["reviewer"]["main"], c.scope().head);
+    assert_eq!(c.memory.lost_on["reviewer"]["main"].head(), c.scope().head);
     assert_eq!(c.pass(4470).step, Step::QueueReview("reviewer".into()));
 }

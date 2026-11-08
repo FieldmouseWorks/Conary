@@ -253,6 +253,45 @@ pub(super) fn retry(f: &Facts, m: &mut Memory, now: u64) -> Option<super::decide
     None
 }
 
+/// Examine every live proof, not just the single job used for the normal
+/// progress status. An audit record for a newer job cannot hide older work.
+pub(super) fn obsolete(f: &Facts) -> Option<&Job> {
+    let wanted = selected(f);
+    f.proof_data
+        .records
+        .iter()
+        .filter(|r| {
+            r.job.state.live()
+                && (r.job.revision.head != f.revision.head
+                    || r.recipes
+                        .iter()
+                        .any(|(name, recipe)| f.settings.recipe(name) != Some(recipe))
+                    || !wanted.is_empty()
+                        && !wanted
+                            .iter()
+                            .all(|(name, recipe)| r.recipes.get(name) == Some(recipe)))
+        })
+        .map(|r| &r.job)
+        .chain(
+            f.proof_data
+                .live
+                .iter()
+                .filter(|h| {
+                    h.number == f.number
+                        && h.job.state.live()
+                        && h.job.revision.head != f.revision.head
+                })
+                .map(|h| &h.job),
+        )
+        .chain(
+            f.jobs
+                .get(&Kind::Proof)
+                .filter(|j| j.state.live() && j.revision.head != f.revision.head),
+        )
+        .filter(|job| !useful(f, &job.id))
+        .max_by(|a, b| a.started.cmp(&b.started).then_with(|| a.id.cmp(&b.id)))
+}
+
 pub(super) fn obsolete_inputs(f: &Facts) -> Option<&Job> {
     let inputs = f.proof_data.inputs_job.as_ref()?;
     let wanted = selected(f);
@@ -288,6 +327,9 @@ pub(super) fn next(f: &Facts, now: u64) -> Option<(Stage, Step, String, Option<P
         let fits = selected_names.is_subset(&names)
             && recipes.iter().all(|(k, v)| r.recipes.get(k) == Some(v));
         if r.job.state.live() {
+            if !fits && useful(f, &r.job.id) {
+                continue;
+            }
             return Some(if fits {
                 (
                     Stage::Proof,

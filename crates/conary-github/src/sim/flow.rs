@@ -117,7 +117,7 @@ impl Hub {
     ) {
         let p = self.pull_json(repo, pr);
         let scope = crate::flow::Revision::from(&crate::api::Source::pull(self, repo, pr).unwrap());
-        let mark = json!({"commit_sha":p["head"]["sha"],"base":p["base"]["ref"],"findings":u32::from(verdict==crate::flow::Verdict::Findings),"scope":scope.description});
+        let mark = json!({"commit_sha":p["head"]["sha"],"base":p["base"]["ref"],"findings":u32::from(verdict==crate::flow::Verdict::Findings),"scope":scope.description,"reviewed_at":at});
         let id = self.world.borrow().repos[repo]
             .reviews
             .get(&pr)
