@@ -29,6 +29,7 @@ pub struct Suite {
 pub(super) struct Result {
     pub checks: Vec<Check>,
     pub docs: bool,
+    pub has_ci: bool,
 }
 
 const LANE: &str = "lane into ";
@@ -184,7 +185,12 @@ pub(super) fn checks(
 ) -> std::result::Result<Result, ApiError> {
     let mut grouped: BTreeMap<(u64, String), CheckRun> = BTreeMap::new();
     let mut runs = Vec::new();
-    for run in source.check_runs(repo, head)? {
+    let raw_runs = source.check_runs(repo, head)?;
+    let mut has_ci = !raw_runs.is_empty()
+        || suites
+            .values()
+            .any(|s| s.conclusion.as_deref() == Some("startup_failure"));
+    for run in raw_runs {
         let Some(id) = suite_id(&run) else {
             runs.push(run);
             continue;
@@ -321,6 +327,9 @@ pub(super) fn checks(
     let mut seen = BTreeSet::new();
     for status in source.statuses(repo, head)? {
         let name = status.context.to_lowercase();
+        has_ci |= name != "review-settled"
+            && !name.starts_with(crate::train::CONTEXT)
+            && !proofs.contains(&name);
         if !seen.insert(name.clone()) || name == "review-settled" {
             continue;
         }
@@ -351,5 +360,9 @@ pub(super) fn checks(
             });
         }
     }
-    Ok(Result { checks, docs })
+    Ok(Result {
+        checks,
+        docs,
+        has_ci,
+    })
 }

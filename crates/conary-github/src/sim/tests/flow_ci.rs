@@ -102,6 +102,7 @@ impl Scenario {
             REMI,
             3,
             Snapshot {
+                default_branch: None,
                 revision: f.revision.clone(),
                 draft: false,
                 complete: true,
@@ -875,6 +876,7 @@ fn train_enabled_release_branch_lands_outside_the_train() {
         REMI,
         3,
         Snapshot {
+            default_branch: None,
             revision,
             draft: false,
             complete: true,

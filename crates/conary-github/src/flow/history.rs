@@ -9,25 +9,31 @@ pub(super) struct Provenance {
     pub edited: Option<bool>,
 }
 
-/// Git's trailer block is the final paragraph, all of whose lines are
-/// trailers or their indented continuations. Prose quoting an Engine line
-/// earlier in the message is not a trailer.
-fn trailers(message: &str) -> Vec<(&str, &str)> {
-    let last = message.trim_end().rsplit("\n\n").next().unwrap_or("");
-    let mut result = Vec::new();
-    for line in last.lines() {
-        if line.starts_with([' ', '\t']) && !result.is_empty() {
-            continue;
-        }
-        let Some((key, value)) = line.split_once(':') else {
-            return Vec::new();
-        };
-        if key.is_empty() || !key.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-') {
-            return Vec::new();
-        }
-        result.push((key, value.trim()));
+/// The reader uses git's parser, as burrow does. It unfolds continuations
+/// and recognizes real trailer blocks rather than searching quoted prose.
+fn trailers(message: &str) -> Option<Vec<(String, String)>> {
+    use std::io::{Seek, Write};
+    let mut input = tempfile::tempfile().ok()?;
+    input.write_all(message.as_bytes()).ok()?;
+    input.rewind().ok()?;
+    let out = std::process::Command::new("git")
+        .args(["interpret-trailers", "--parse"])
+        // PR repository configuration must not influence trailer parsing.
+        .current_dir("/")
+        .stdin(input)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
     }
-    result
+    String::from_utf8(out.stdout)
+        .ok()?
+        .lines()
+        .map(|line| {
+            line.split_once(':')
+                .map(|(key, value)| (key.to_owned(), value.trim().to_owned()))
+        })
+        .collect()
 }
 
 pub(super) fn provenance(got: Option<&History>, settings: &Settings, renovate: bool) -> Provenance {
@@ -55,7 +61,13 @@ pub(super) fn provenance(got: Option<&History>, settings: &Settings, renovate: b
                 edited: None,
             };
         };
-        let trailers = trailers(message);
+        let Some(trailers) = trailers(message) else {
+            return Provenance {
+                known: false,
+                judge: false,
+                edited: None,
+            };
+        };
         judge |= trailers.iter().any(|(k, v)| {
             k.eq_ignore_ascii_case("engine")
                 && settings

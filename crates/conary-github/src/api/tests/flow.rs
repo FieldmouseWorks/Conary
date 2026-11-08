@@ -15,7 +15,7 @@ fn snapshot() -> Value {
         "headRefOid":"h","baseRefName":"main","title":"t","body":"b","isDraft":false,"mergeStateStatus":"BEHIND","updatedAt":"2026-11-08T12:00:00Z",
         "timelineItems":{"pageInfo":{"hasPreviousPage":false},"nodes":[]},
         "labels":{"pageInfo":{"hasNextPage":false}},
-        "reviewThreads":{"pageInfo":{"hasNextPage":false},"nodes":[{"isResolved":false},{"isResolved":true}]},
+        "reviewThreads":{"pageInfo":{"hasNextPage":false},"nodes":[{"id":"open","isResolved":false},{"id":"resolved","isResolved":true}]},
         "reviews":{"totalCount":2},"comments":{"totalCount":3},
         "commits":{"nodes":[{"commit":{"oid":"h","checkSuites":{"pageInfo":{"hasNextPage":false},"nodes":[{
             "databaseId":11,"status":"IN_PROGRESS","conclusion":null,"app":{"slug":"github-actions"},
@@ -69,7 +69,7 @@ fn query_caps_labels_threads_and_comments_but_not_workflow_results() {
         let mut v = snapshot();
         let p = &mut v["data"]["repository"]["pullRequest"];
         if matches!(field, "reviews" | "comments") {
-            p[field]["totalCount"] = json!(1001);
+            p[field]["totalCount"] = json!(101);
         } else {
             p[field]["pageInfo"]["hasNextPage"] = json!(true);
         }

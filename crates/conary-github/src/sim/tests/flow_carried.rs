@@ -15,9 +15,10 @@ fn merge_base_into(c: &Case, changed: bool) -> String {
     if changed {
         patches.insert("line15: conflict resolution nobody reviewed".into());
     }
-    c.hub.commit_as("merge-of-main", &[old, tip], patches);
-    c.push("merge-of-main");
-    "merge-of-main".into()
+    let sha = crate::sim::tree_of(&["merge-of-main"]);
+    c.hub.commit_as(&sha, &[old, tip], patches);
+    c.push(&sha);
+    sha
 }
 #[test]
 fn a_base_only_merge_carries_clean_reviews_without_another_round() {

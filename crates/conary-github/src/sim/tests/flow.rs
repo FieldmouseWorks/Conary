@@ -17,6 +17,7 @@ pub(super) fn setup() -> (Hub, Facts, Memory) {
         REMI,
         3,
         Snapshot {
+            default_branch: None,
             revision: Revision::from(&crate::api::Source::pull(&hub, REMI, 3).unwrap()),
             draft: false,
             complete: true,
@@ -221,7 +222,13 @@ fn every_merge_state_has_a_step() {
     assert_eq!(c.view(4000).step, Step::HandFix(Kind::Conflict));
     for state in ["UNKNOWN", "DRAFT", "SOMETHING_NEW"] {
         c.hub.edit_flow(REMI, 3, |s| s.merge_state = state.into());
-        assert_eq!(c.view(4000).step, Step::Wait { until: None });
+        assert_eq!(
+            c.view(4000).step,
+            Step::Retry {
+                kind: Failure::Mergeable,
+                at: 4060
+            }
+        );
     }
 }
 
@@ -411,7 +418,7 @@ fn only_one_fix_job_owns_the_branch_across_pushes() {
             repeated: false,
         },
     );
-    assert_eq!(c.view(4000).step, Step::Wait { until: None });
+    assert_eq!(c.view(4000).step, Step::Wait { until: Some(4900) });
 }
 
 #[test]

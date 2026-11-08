@@ -69,6 +69,23 @@ fn pins(diff: &str) -> bool {
             } else {
                 path = None;
             }
+        } else if path.is_some()
+            && [
+                "old mode ",
+                "new mode ",
+                "new file mode ",
+                "deleted file mode ",
+                "rename from ",
+                "rename to ",
+                "copy from ",
+                "copy to ",
+                "Binary files ",
+                "GIT binary patch",
+            ]
+            .iter()
+            .any(|prefix| line.starts_with(prefix))
+        {
+            return false;
         } else if line.starts_with("@@") {
             hunk = true;
         } else if path.is_some()

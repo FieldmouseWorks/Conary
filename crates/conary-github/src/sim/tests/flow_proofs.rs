@@ -8,7 +8,6 @@ fn build() -> Case {
     c.settings
         .proofs
         .insert("vm".into(), Recipe::Build("checks.vm".into()));
-    c.proof_data.number = 3;
     c
 }
 fn drv() -> Derivation {
@@ -158,7 +157,7 @@ fn a_running_job_with_one_check_already_posted_is_the_same_proof() {
         &c.scope().head,
         serde_json::json!([{"context":"a","state":"success"}]),
     );
-    assert_eq!(c.view(800).step, Step::Wait { until: Some(11800) });
+    assert_eq!(c.view(800).step, Step::Wait { until: Some(4600) });
     c.settings
         .proofs
         .insert("b".into(), Recipe::Build("checks.b".into()));
@@ -182,9 +181,17 @@ fn already_built_merged_outputs_update_only_the_exact_default_tip() {
 }
 
 fn holder(c: &Case, id: &str, paths: Option<BTreeSet<String>>, at: u64) -> ProofHolder {
+    let number = match id {
+        "a" => 7,
+        "b" => 8,
+        "Proof-1" => 3,
+        _ => 9,
+    };
+    if number != 3 {
+        c.hub.pr(REMI, number, &super::head(number));
+    }
     ProofHolder {
-        number: 9,
-        open: true,
+        number,
         job: Job {
             id: id.into(),
             revision: c.scope(),
@@ -195,6 +202,7 @@ fn holder(c: &Case, id: &str, paths: Option<BTreeSet<String>>, at: u64) -> Proof
         paths,
     }
 }
+
 #[test]
 fn proof_slots_count_unique_builds_unknown_jobs_and_only_current_waiters() {
     // builds.py / proving.py: shared paths take one slot; unknown jobs each take one.
@@ -209,14 +217,15 @@ fn proof_slots_count_unique_builds_unknown_jobs_and_only_current_waiters() {
     assert_eq!(c.view(800).step, Step::Prove);
     c.proof_data.live.push(holder(&c, "unknown", None, 300));
     assert_eq!(c.view(800).stage, Stage::ProofSlot);
-    c.proof_data.live[2].open = false;
+    c.hub
+        .edit_pull(REMI, 9, |p| p["state"] = serde_json::json!("closed"));
     assert_eq!(c.view(800).step, Step::Prove);
     c.proof_data.waiting.push(ProofWaiting {
         number: 1,
         first: false,
     });
     assert_eq!(c.view(800).stage, Stage::ProofSlot);
-    c.proof_data.first = true;
+    c.label(&["first"]);
     assert_eq!(c.view(800).step, Step::Prove);
     c.proof_data.waiting.push(ProofWaiting {
         number: 1,
@@ -280,5 +289,106 @@ fn an_ended_machine_proof_without_verdicts_is_retried_as_infrastructure_failure(
         assert_eq!(c.pass(1100).step, Step::Prove);
         assert_eq!(c.memory.strikes[&Failure::Lost], 1);
         assert!(matches!(c.view(1100).proof, Some(ProofPlan::Build(_))));
+    }
+}
+
+fn inputs(c: &Case, state: JobState) -> InputBuild {
+    InputBuild {
+        job: Job {
+            id: "inputs".into(),
+            state,
+            ..record(c, state).job
+        },
+        recipes: c.settings.proofs.clone(),
+    }
+}
+#[test]
+fn inputs_run_outside_the_line_and_the_first_finished_takes_the_slot() {
+    // builds.py:552,581,587,590,598,604,615,629.
+    let mut c = build();
+    evaluate(&mut c);
+    c.settings.proof_slots = Some(1);
+    c.proof_data.inputs.insert("/nix/store/input".into());
+    assert!(matches!(c.view(700).proof, Some(ProofPlan::Prebuild(_))));
+    c.proof_data.inputs_job = Some(inputs(&c, JobState::Running));
+    assert_eq!(c.view(800).step, Step::Wait { until: Some(11800) });
+    assert_eq!(c.view(11800).step, Step::Wait { until: Some(12700) });
+    for state in [JobState::Done, JobState::Broken] {
+        c.proof_data.inputs_job = Some(inputs(&c, state));
+        assert!(matches!(c.view(900).proof, Some(ProofPlan::Build(_))));
+        c.proof_data.live = vec![holder(&c, "other", None, 800)];
+        assert_eq!(c.view(1000).stage, Stage::ProofSlot);
+        c.proof_data.live.clear();
+    }
+    c.proof_data.inputs_job = None;
+    c.proof_data.valid_paths = c.proof_data.inputs.clone();
+    assert!(matches!(c.view(1000).proof, Some(ProofPlan::Build(_))));
+    c.proof_data.valid_paths.clear();
+    c.settings.proof_slots = None;
+    assert!(matches!(c.view(1000).proof, Some(ProofPlan::Build(_))));
+}
+#[test]
+fn obsolete_prebuilds_are_stopped_across_pushes_remaps_and_recipe_kinds() {
+    // builds.py:636,649,668: obsolete input work is stopped, even if new outputs are built.
+    for change in 0..4 {
+        let mut c = build();
+        evaluate(&mut c);
+        c.settings.proof_slots = Some(1);
+        c.proof_data.inputs.insert("/nix/store/input".into());
+        c.proof_data.inputs_job = Some(inputs(&c, JobState::Running));
+        match change {
+            0 => {
+                c.push("new-input-head");
+                c.review("reviewer", Verdict::Clean, 800);
+            }
+            1 => {
+                c.settings
+                    .proofs
+                    .insert("vm".into(), Recipe::Build("checks.other".into()));
+            }
+            2 => {
+                c.settings
+                    .proofs
+                    .insert("vm".into(), Recipe::Job("exercise it".into()));
+            }
+            _ => {
+                c.settings.proof_slots = None;
+            }
+        }
+        assert_eq!(c.pass(1300).step, Step::StopJob("inputs".into()));
+        assert_eq!(c.pass(1400).step, Step::StopJob("inputs".into()));
+        c.failed = Some(Failure::Stop);
+        assert_eq!(
+            c.pass(1500).step,
+            Step::Retry {
+                kind: Failure::Stop,
+                at: 1560
+            }
+        );
+        c.failed = None;
+        c.stopped_jobs.insert("inputs".into());
+        assert_ne!(c.pass(1600).step, Step::StopJob("inputs".into()));
+        assert!(c.memory.stopping.is_empty());
+    }
+}
+#[test]
+fn run_and_job_recipes_never_consume_build_evaluations_or_store_outputs() {
+    // runs.py:182,227: each kind starts afresh, and remapped commands are different proofs.
+    for recipe in [
+        Recipe::Run(vec!["check".into()]),
+        Recipe::Job("check".into()),
+    ] {
+        let mut c = build();
+        c.settings.proofs.insert("vm".into(), recipe.clone());
+        evaluate(&mut c);
+        c.proof_data.valid_paths = drv().outputs;
+        let plan = c.view(800).proof.unwrap();
+        assert_eq!(
+            plan,
+            match recipe {
+                Recipe::Run(_) => ProofPlan::Run(c.settings.proofs.clone()),
+                _ => ProofPlan::Job(c.settings.proofs.clone()),
+            }
+        );
     }
 }

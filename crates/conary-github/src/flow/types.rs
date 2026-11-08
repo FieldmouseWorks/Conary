@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::{FixClaim, ProofData, ProofPlan, SealKey, Unposted};
+use super::{FixClaim, ProofData, ProofPlan, SealKey, TrainState, Unposted};
 use conary_core::policy::Classified;
 use serde::{Deserialize, Serialize};
 
@@ -92,7 +92,7 @@ pub struct Reviewer {
     /// An answer from the service which has not yet been posted to GitHub.
     pub answer: Option<Review>,
     /// A look already under way, even if its service is now unavailable.
-    pub under_way: bool,
+    pub under_way: Option<Revision>,
     pub failed_at: Option<u64>,
     pub queue_failed_at: Option<u64>,
     pub missing: bool,
@@ -197,6 +197,7 @@ pub struct Settings {
     pub job_login: Option<String>,
     pub proof_slots: Option<u32>,
     pub proof_timeout: u64,
+    pub job_timeout: u64,
     pub judge_engines: BTreeSet<String>,
     pub reviewers: BTreeSet<String>,
     pub review_authors: BTreeSet<String>,
@@ -208,6 +209,7 @@ pub struct Settings {
     pub renovate_login: Option<String>,
     pub batch_label: String,
     pub hold_label: String,
+    pub first_label: String,
     pub owner_label: String,
     pub require_ci: bool,
     pub proofs: BTreeMap<String, Recipe>,
@@ -247,6 +249,7 @@ impl Default for Settings {
             job_login: None,
             proof_slots: None,
             proof_timeout: 10800,
+            job_timeout: 3600,
             judge_engines: BTreeSet::from(["codex".into()]),
             reviewers: BTreeSet::from(["reviewer".into()]),
             review_authors: BTreeSet::from(["fieldmouseworks-steward[bot]".into()]),
@@ -260,6 +263,7 @@ impl Default for Settings {
             renovate_login: None,
             batch_label: "upstream batch".into(),
             hold_label: "hold".into(),
+            first_label: "first".into(),
             owner_label: "needs-peter".into(),
             require_ci: true,
             proofs: BTreeMap::new(),
@@ -277,10 +281,22 @@ impl Default for Settings {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct FailedPost {
+    pub role: String,
+    /// A rate limit or transport outage does not spend a review attempt.
+    pub unavailable: bool,
+}
+
 /// All the facts read once for a pass. Local service answers, jobs and proofs
 /// are supplied by the caller after [`super::read`]. No executor consumes this yet.
 #[derive(Debug, Clone)]
 pub struct Facts {
+    pub repo: conary_core::op::Repo,
+    pub title: String,
+    pub description: String,
+    pub branch: String,
+    pub number: u64,
     pub revision: Revision,
     pub default_branch: String,
     pub base_tip: Option<String>,
@@ -291,12 +307,14 @@ pub struct Facts {
     pub labels: BTreeSet<String>,
     pub merging: Merge,
     pub checks: Vec<Check>,
+    pub has_ci: bool,
     pub open_threads: u32,
     pub changes_requested: bool,
     pub reviewers: BTreeMap<String, Reviewer>,
     pub judgment: Option<Judged>,
     pub jobs: BTreeMap<Kind, Job>,
     pub claims: Vec<FixClaim>,
+    pub stopped_jobs: BTreeSet<String>,
     pub pushes: BTreeMap<String, String>,
     pub threads: BTreeMap<String, bool>,
     pub proof: Proof,
@@ -319,7 +337,10 @@ pub struct Facts {
     pub rebase_removed: Vec<u64>,
     pub timeline_cut_at: Option<u64>,
     pub stacked_on: Option<u64>,
+    pub open_prs: BTreeSet<u64>,
     pub base_held: bool,
+    pub queued_merge: bool,
+    pub train: TrainState,
     /// Whether merging into the current base would change nothing. None is
     /// unknown, never permission to land.
     pub empty: Option<bool>,
@@ -330,7 +351,7 @@ pub struct Facts {
     /// The failed effect from the preceding execution, if any. Decisions
     /// never optimistically record an effect as having succeeded.
     pub failed: Option<Failure>,
-    pub failed_review: Option<String>,
+    pub failed_review: Option<FailedPost>,
     pub succeeded: BTreeSet<Failure>,
 }
 
@@ -373,15 +394,19 @@ pub struct Memory {
     pub missing_reviews: BTreeMap<(String, Revision), (u64, bool)>,
     pub seen: u64,
     pub no_checks_since: Option<u64>,
+    pub update_requested: Option<(String, u64)>,
     pub strikes: BTreeMap<Failure, u32>,
     pub retry: Option<(Failure, u64)>,
     /// Reviewer -> base -> head whose findings still need covering.
     pub lost_on: BTreeMap<String, BTreeMap<String, String>>,
     pub handed: BTreeMap<Kind, Revision>,
     pub lost_jobs: BTreeSet<String>,
+    pub unanswered: BTreeMap<(Kind, Revision), BTreeSet<String>>,
     pub broken_jobs: BTreeMap<String, u64>,
     pub owner_saw: Option<Revision>,
     pub answered_jobs: BTreeSet<String>,
+    pub stopping: BTreeSet<String>,
+    pub retired_jobs: BTreeSet<String>,
     pub unposted: BTreeMap<Kind, (String, Unposted)>,
     pub push_looks: BTreeMap<(String, String), (u32, u64)>,
     pub wait: Option<Wait>,
@@ -401,6 +426,8 @@ pub enum Step {
     Settle,
     Merge,
     JoinTrain,
+    LeaveTrain,
+    DisableAutoMerge,
     CloseAlreadyLanded,
     ListOwner,
     Retry { kind: Failure, at: u64 },

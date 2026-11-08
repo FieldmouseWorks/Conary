@@ -45,6 +45,11 @@ pub(super) fn look(f: &Facts, m: &mut Memory, now: u64) -> Look {
         }
     }
     let needs_review = f.classified.review();
+    let working = |r: &Reviewer| {
+        r.under_way
+            .as_ref()
+            .is_some_and(|r| r.base == f.revision.base)
+    };
     let available = |r: &Reviewer| r.unavailable_until.is_none_or(|t| t <= now);
     let lost = |name: &str| m.lost_on.get(name).and_then(|s| s.get(&f.revision.base));
     let on: Vec<_> = f
@@ -74,7 +79,7 @@ pub(super) fn look(f: &Facts, m: &mut Memory, now: u64) -> Look {
             let tries = m.review_posts.get(&key).copied().unwrap_or(0);
             if tries >= 3 {
                 let covered = current(r, &f.revision).is_some_and(|v| v.verdict == Verdict::Clean);
-                if covered || available(r) && needs_review && !capped {
+                if covered || available(r) && answer.revision.head == f.revision.head {
                     if !covered && answer.verdict == Verdict::Findings {
                         m.lost_on
                             .entry(name.clone())
@@ -128,7 +133,7 @@ pub(super) fn look(f: &Facts, m: &mut Memory, now: u64) -> Look {
             continue;
         }
         if !available(r) {
-            if r.under_way {
+            if working(r) {
                 return wait(
                     Stage::Review,
                     r.unavailable_until,
@@ -147,7 +152,7 @@ pub(super) fn look(f: &Facts, m: &mut Memory, now: u64) -> Look {
             continue;
         }
         coverage += 1;
-        if capped && (r.queued || r.under_way) {
+        if capped && (r.queued || working(r)) {
             return wait(
                 Stage::Review,
                 None,
@@ -173,12 +178,22 @@ pub(super) fn look(f: &Facts, m: &mut Memory, now: u64) -> Look {
                     failure.1 = now;
                 }
             }
-            if let Some((count, at)) = m.review_failures.get(&key) {
-                if *count >= 3 && now < at.saturating_add(3600) {
+            if let Some((count, at)) = m.review_failures.get_mut(&key) {
+                if *count >= 3 {
+                    if now <= at.saturating_add(3600) {
+                        return wait(
+                            Stage::Review,
+                            Some(at.saturating_add(3601)),
+                            "Repeated review failures; try again an hour after the last",
+                        );
+                    }
+                    *count = 0;
+                }
+                if *count > 0 && now < at.saturating_add(300) {
                     return wait(
                         Stage::Review,
-                        Some(at.saturating_add(3600)),
-                        "Repeated review failures; try again an hour after the last",
+                        Some(at.saturating_add(300)),
+                        "Review failed; allow five minutes before another try",
                     );
                 }
             }
@@ -205,7 +220,7 @@ pub(super) fn look(f: &Facts, m: &mut Memory, now: u64) -> Look {
                     "Waiting for the head or answered findings to settle before review",
                 );
             }
-            return if r.queued || r.under_way {
+            return if r.queued || working(r) {
                 wait(Stage::Review, None, "Reviewing this commit")
             } else {
                 at(

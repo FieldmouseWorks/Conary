@@ -10,11 +10,14 @@ pub struct ProofData {
     pub records: Vec<ProofRecord>,
     pub live: Vec<ProofHolder>,
     pub waiting: Vec<ProofWaiting>,
-    pub number: u64,
-    pub first: bool,
     pub valid_paths: BTreeSet<String>,
     pub inputs: BTreeSet<String>,
-    pub inputs_job: Option<Job>,
+    pub inputs_job: Option<InputBuild>,
+}
+#[derive(Debug, Clone)]
+pub struct InputBuild {
+    pub job: Job,
+    pub recipes: BTreeMap<String, Recipe>,
 }
 #[derive(Debug, Clone)]
 pub struct Evaluation {
@@ -42,7 +45,6 @@ pub struct ProofRecord {
 #[derive(Debug, Clone)]
 pub struct ProofHolder {
     pub number: u64,
-    pub open: bool,
     pub job: Job,
     pub paths: Option<BTreeSet<String>>,
 }
@@ -124,6 +126,17 @@ fn selected(f: &Facts) -> BTreeMap<String, Recipe> {
     }
     pending
 }
+pub(super) fn engine_job(f: &Facts, id: &str) -> bool {
+    let recipes = f
+        .proof_data
+        .records
+        .iter()
+        .find(|r| r.job.id == id)
+        .map(|r| r.recipes.clone())
+        .unwrap_or_else(|| selected(f));
+    recipes.values().all(|r| matches!(r, Recipe::Job(_)))
+}
+
 fn evaluation<'a>(f: &'a Facts, recipes: &BTreeMap<String, Recipe>) -> Option<&'a Evaluation> {
     f.proof_data
         .evaluation
@@ -134,6 +147,9 @@ fn evaluation<'a>(f: &'a Facts, recipes: &BTreeMap<String, Recipe>) -> Option<&'
 /// A running old proof may be building an unchanged check on the new head.
 pub(super) fn useful(f: &Facts, id: &str) -> bool {
     let selected = selected(f);
+    if !selected.values().all(|r| matches!(r, Recipe::Build(_))) {
+        return false;
+    }
     let Some(outputs) = evaluation(f, &selected).and_then(|e| e.outputs.as_ref()) else {
         return false;
     };
@@ -161,7 +177,7 @@ fn ahead(f: &Facts, outputs: Option<&BTreeSet<String>>) -> (u32, bool) {
         .proof_data
         .live
         .iter()
-        .filter(|h| h.open && h.job.state.live())
+        .filter(|h| f.open_prs.contains(&h.number) && h.job.state.live())
         .collect();
     holders.sort_by_key(|h| (h.job.started, &h.job.id));
     let mut building = BTreeSet::new();
@@ -184,7 +200,7 @@ fn ahead(f: &Facts, outputs: Option<&BTreeSet<String>>) -> (u32, bool) {
         .proof_data
         .waiting
         .iter()
-        .filter(|w| (!w.first, w.number) < (!f.proof_data.first, f.proof_data.number))
+        .filter(|w| (!w.first, w.number) < (!f.labels.contains(&f.settings.first_label), f.number))
         .count() as u32;
     if count < slots {
         return (0, false);
@@ -208,6 +224,9 @@ pub(super) fn retry(f: &Facts, m: &mut Memory, now: u64) -> Option<super::decide
                 .all(|(name, recipe)| r.recipes.get(name) == Some(recipe))
     });
     let mut observed = f.clone();
+    if !f.proof_data.records.is_empty() {
+        observed.jobs.remove(&Kind::Proof);
+    }
     if let Some(record) = record {
         if record.job.state.live() {
             return None;
@@ -229,6 +248,17 @@ pub(super) fn retry(f: &Facts, m: &mut Memory, now: u64) -> Option<super::decide
         }
     }
     None
+}
+
+pub(super) fn obsolete_inputs(f: &Facts) -> Option<&Job> {
+    let inputs = f.proof_data.inputs_job.as_ref()?;
+    let wanted = selected(f);
+    (inputs.job.state.live()
+        && (inputs.job.revision.head != f.revision.head
+            || inputs.recipes != wanted
+            || !wanted.values().all(|r| matches!(r, Recipe::Build(_)))
+            || f.settings.proof_slots.is_none()))
+    .then_some(&inputs.job)
 }
 
 pub(super) fn next(f: &Facts, now: u64) -> Option<(Stage, Step, String, Option<ProofPlan>)> {
@@ -259,7 +289,19 @@ pub(super) fn next(f: &Facts, now: u64) -> Option<(Stage, Step, String, Option<P
                 (
                     Stage::Proof,
                     Step::Wait {
-                        until: Some(r.job.started.saturating_add(f.settings.proof_timeout + 300)),
+                        until: Some({
+                            let timeout = if builds || run {
+                                f.settings.proof_timeout
+                            } else {
+                                f.settings.job_timeout
+                            };
+                            let deadline = r.job.started.saturating_add(timeout + 300);
+                            if now < deadline {
+                                deadline
+                            } else {
+                                now.saturating_add(900)
+                            }
+                        }),
                     },
                     "Machine proof is still running".into(),
                     None,
@@ -274,7 +316,7 @@ pub(super) fn next(f: &Facts, now: u64) -> Option<(Stage, Step, String, Option<P
             });
         }
     }
-    let eval = evaluation(f, &recipes);
+    let eval = builds.then(|| evaluation(f, &recipes)).flatten();
     let drvs = eval
         .filter(|e| e.derivations_present)
         .and_then(|e| e.outputs.as_ref());
@@ -333,15 +375,28 @@ pub(super) fn next(f: &Facts, now: u64) -> Option<(Stage, Step, String, Option<P
         && builds
         && !free
         && !f.proof_data.inputs.is_subset(&f.proof_data.valid_paths)
+        && f.proof_data
+            .inputs_job
+            .as_ref()
+            .is_none_or(|j| j.job.state.live())
     {
         if f.proof_data
             .inputs_job
             .as_ref()
-            .is_some_and(|j| j.state.live())
+            .is_some_and(|j| j.job.state.live())
         {
             return Some((
                 Stage::ProofSlot,
-                Step::Wait { until: None },
+                Step::Wait {
+                    until: f.proof_data.inputs_job.as_ref().map(|j| {
+                        let deadline = j.job.started.saturating_add(f.settings.proof_timeout + 300);
+                        if now < deadline {
+                            deadline
+                        } else {
+                            now.saturating_add(900)
+                        }
+                    }),
+                },
                 "Building the proof's inputs before its turn".into(),
                 None,
             ));

@@ -207,3 +207,60 @@ impl Hub {
         });
     }
 }
+
+impl Hub {
+    pub(crate) fn short_history(&self, base: &str, head: &str, shown: usize) {
+        self.world
+            .borrow_mut()
+            .history_limits
+            .insert((base.into(), head.into()), shown);
+    }
+}
+
+impl Hub {
+    pub(crate) fn renamed_path(&self, patch: &str, from: &str, to: &str) {
+        self.world.borrow_mut().touched.insert(
+            patch.into(),
+            vec![conary_core::policy::Touched {
+                path: to.into(),
+                from: Some(from.into()),
+                new: true,
+            }],
+        );
+    }
+}
+
+impl World {
+    pub(super) fn base_observation(&self, repo: &str) -> Option<crate::flow::BaseObservation> {
+        use crate::flow::Ci;
+        let r = self.repos.get(repo)?;
+        let head = r.branches.get(&r.default)?;
+        let mut states = Vec::new();
+        for c in self.checks.get(head).into_iter().flatten() {
+            states.push(match (c["status"].as_str(), c["conclusion"].as_str()) {
+                (_, Some("failure")) => Ci::Red,
+                (Some("completed"), Some("success" | "neutral" | "skipped")) => Ci::Green,
+                _ => Ci::Pending,
+            });
+        }
+        for s in self.statuses.get(head).into_iter().flatten() {
+            states.push(match s["state"].as_str() {
+                Some("failure") => Ci::Red,
+                Some("success") => Ci::Green,
+                _ => Ci::Pending,
+            });
+        }
+        let ci = if states.contains(&Ci::Red) {
+            Ci::Red
+        } else if states.is_empty() || states.contains(&Ci::Pending) {
+            Ci::Pending
+        } else {
+            Ci::Green
+        };
+        Some(crate::flow::BaseObservation {
+            name: r.default.clone(),
+            head: head.clone(),
+            ci,
+        })
+    }
+}

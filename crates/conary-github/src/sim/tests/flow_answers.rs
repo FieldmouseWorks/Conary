@@ -55,7 +55,7 @@ fn three_failed_posts_drop_an_answer_only_when_a_fresh_look_can_replace_it() {
     for at in [650, 710] {
         assert_eq!(c.pass(at).step, Step::PostReview("reviewer".into()));
     }
-    assert_eq!(c.pass(770).step, Step::Wait { until: Some(4370) });
+    assert_eq!(c.pass(770).step, Step::Wait { until: Some(4371) });
     c.failed_review = None;
     c.service("reviewer").unavailable_until = Some(86400);
     assert_eq!(c.pass(830).stage, Stage::Reviewer);
@@ -135,6 +135,7 @@ fn repo_controller_holds_apply_before_reviews_proofs_or_landing() {
             p["head"]["ref"] = serde_json::json!(branch)
         });
         c.hub.refresh_flow(crate::sim::REMI, 3);
+        c.hub.ci(super::TRUNK, &[("main-ci", "failure")]);
         c.base_held = true;
         c.settings
             .proofs
@@ -186,9 +187,9 @@ fn three_review_failures_wait_an_hour_and_repeated_observations_count_once() {
         c.service("reviewer").failed_at = Some(at);
         c.pass(at);
     }
-    assert_eq!(c.pass(800).step, Step::Wait { until: Some(4250) });
+    assert_eq!(c.pass(800).step, Step::Wait { until: Some(4251) });
     assert_eq!(c.memory.review_failures.values().next().unwrap().0, 3);
-    assert_eq!(c.pass(4250).step, Step::QueueReview("reviewer".into()));
+    assert_eq!(c.pass(4251).step, Step::QueueReview("reviewer".into()));
 }
 #[test]
 fn a_disappeared_queue_gets_a_second_look_and_a_failed_enqueue_gets_five_minutes() {
@@ -197,11 +198,55 @@ fn a_disappeared_queue_gets_a_second_look_and_a_failed_enqueue_gets_five_minutes
     c.roles(&["reviewer"]);
     c.service("reviewer").missing = true;
     assert_eq!(c.pass(700).step, Step::Wait { until: Some(760) });
-    assert_eq!(c.pass(760).step, Step::QueueReview("reviewer".into()));
+    assert_eq!(c.pass(760).step, Step::Wait { until: Some(1060) });
     c.pass(800);
     assert_eq!(c.memory.review_failures.values().next().unwrap().0, 1);
     c.service("reviewer").missing = false;
     c.service("reviewer").queue_failed_at = Some(800);
     assert_eq!(c.pass(900).step, Step::Wait { until: Some(1100) });
     assert_eq!(c.pass(1100).step, Step::QueueReview("reviewer".into()));
+}
+
+#[test]
+fn a_posting_outage_does_not_spend_review_attempts_or_drop_the_answer() {
+    // answers.py:88: rate limits and transport failures belong to the steward, never the reviewer.
+    let mut c = answered();
+    c.failed_review = Some("reviewer".into());
+    c.review_unavailable = true;
+    for at in [610, 611, 612, 613] {
+        let n = c.pass(at);
+        assert_eq!(n.step, Step::PostReview("reviewer".into()));
+        assert!(c.memory.review_posts.is_empty() && c.memory.review_failures.is_empty());
+        assert_eq!(n.owner_notice, None);
+    }
+    c.failed_review = None;
+    c.service("reviewer").answer = None;
+    c.review("reviewer", Verdict::Clean, 620);
+    assert_eq!(c.pass(620).step, Step::Merge);
+}
+#[test]
+fn failed_review_retries_are_five_minutes_apart_then_restart_after_the_hour() {
+    // answers.py:39 / 57 / 104 / 129: invalid answers and failed snapshots share the bounded retry schedule.
+    let mut c = Case::new();
+    c.roles(&["reviewer"]);
+    for (i, at) in [610, 920, 1230].into_iter().enumerate() {
+        c.service("reviewer").failed_at = Some(at);
+        let n = c.pass(at);
+        assert_eq!(
+            n.step,
+            Step::Wait {
+                until: Some(at + if i < 2 { 300 } else { 3601 })
+            }
+        );
+        if i < 2 {
+            assert!(matches!(c.pass(at + 10).step, Step::Wait { .. }));
+            assert_eq!(c.pass(at + 300).step, Step::QueueReview("reviewer".into()));
+        }
+    }
+    assert_eq!(c.view(1600).owner_notice, Some(OwnerNotice::ReviewFailures));
+    assert_eq!(c.pass(5000).step, Step::QueueReview("reviewer".into()));
+    assert_eq!(c.memory.review_failures.values().next().unwrap().0, 0);
+    c.service("reviewer").failed_at = Some(5010);
+    c.pass(5010);
+    assert_eq!(c.memory.review_failures.values().next().unwrap().0, 1);
 }

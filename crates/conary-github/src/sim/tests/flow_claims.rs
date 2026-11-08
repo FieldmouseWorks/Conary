@@ -78,7 +78,10 @@ fn an_unknown_pusher_is_looked_for_only_three_times_without_stopping_work() {
     c.push(PUSHED);
     assert_eq!(c.pass(2100).step, Step::Wait { until: Some(2220) });
     assert_eq!(c.pass(2220).step, Step::Wait { until: Some(2340) });
-    assert!(matches!(c.pass(2340).step, Step::Wait { until: None }));
+    assert!(matches!(
+        c.pass(2340).step,
+        Step::Wait { until: Some(5760) }
+    ));
     assert_eq!(c.memory.push_looks.values().next().unwrap().0, 3);
 }
 #[test]
@@ -102,6 +105,7 @@ fn a_queued_fix_on_an_old_head_cannot_have_pushed() {
         assert_eq!(c.pass(at).step, Step::StopJob("fix-1".into()));
     }
     c.claims.clear();
+    c.stopped_jobs.insert("fix-1".into());
     assert_ne!(c.view(2700).step, Step::StopJob("fix-1".into()));
 }
 #[test]

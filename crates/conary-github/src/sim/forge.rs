@@ -58,16 +58,20 @@ impl Source for Hub {
             |w| {
                 let excluded: std::collections::BTreeSet<_> =
                     w.ancestors(base).into_iter().collect();
-                let commits = w
+                let mut commits = w
                     .ancestors(head)
                     .into_iter()
                     .filter(|c| !excluded.contains(c))
                     .map(|c| w.commit_record(repo, &c))
                     .collect::<Result<Vec<_>, _>>()?;
-                Ok(crate::api::History {
-                    commits,
-                    complete: true,
-                })
+                let limit = w
+                    .history_limits
+                    .get(&(base.into(), head.into()))
+                    .copied()
+                    .unwrap_or(usize::MAX);
+                let complete = commits.len() <= limit;
+                commits.truncate(limit);
+                Ok(crate::api::History { commits, complete })
             },
         )
     }
@@ -182,7 +186,7 @@ impl Source for Hub {
                     .map(|t| json!({
                         "filename": t.path,
                         "previous_filename": t.from,
-                        "status": if t.new { "added" } else { "modified" },
+                        "status": if t.from.is_some() {"renamed"} else if t.new { "added" } else { "modified" },
                     }))
                     .collect::<Vec<_>>()
             );
@@ -509,11 +513,15 @@ impl crate::flow::Read for Hub {
             Asked::new(Call::FlowSnapshot, repo).pr(number),
             &[repo, &n],
             |w| {
-                repo_of(w, repo)?
+                let mut snapshot = repo_of(w, repo)?
                     .flow
                     .get(&number)
                     .cloned()
-                    .ok_or_else(|| not_found(format!("flow #{number}")))
+                    .ok_or_else(|| not_found(format!("flow #{number}")))?;
+                if snapshot.default_branch.is_none() {
+                    snapshot.default_branch = w.base_observation(repo);
+                }
+                Ok(snapshot)
             },
         )
     }

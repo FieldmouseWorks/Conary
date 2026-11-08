@@ -236,3 +236,100 @@ fn threads_and_mergeability_are_read_from_the_sim() {
         Step::UpdateBranch
     );
 }
+
+#[test]
+fn a_permanently_short_history_requires_a_judge_not_unread_authorship_retry() {
+    // codex_heads.py:81 / 130: a stable partial comparison cannot rule out another engine or a human edit.
+    let (hub, m) = ready();
+    let mut tip = TRUNK.to_owned();
+    for i in 0..300 {
+        let sha = format!("{:040x}", 1000 + i);
+        hub.put_commit(&sha, &[&tip], false);
+        tip = sha;
+    }
+    hub.push(REMI, 3, &tip);
+    hub.refresh_flow(REMI, 3);
+    hub.ci(&tip, &[("check", "success")]);
+    hub.flow_review(REMI, 3, "reviewer", Verdict::Clean, 600);
+    hub.short_history(TRUNK, &tip, 250);
+    let f = facts(&hub, Settings::default());
+    assert!(f.authorship_known && f.needs_judge);
+    assert_eq!(f.bot_edited, None);
+    assert_eq!(next(&f, &m, 700).0.step, Step::Judge);
+    assert_eq!(decision(&hub, &m, Settings::default()).step, Step::Judge);
+}
+
+#[test]
+fn a_coauthor_on_the_251st_bot_commit_removes_the_ci_only_exemption() {
+    // codex_heads.py:117: all authors, committers and coauthors count beyond the PR endpoint's cap, with or without Renovate configured.
+    let bot = "49699333+dependabot[bot]@users.noreply.github.com";
+    for renovate in [None, Some("renovate@example.org")] {
+        for (trailer, edited) in [
+            ("", false),
+            ("\n\nCo-authored-by: Person <person@example.org>\n", true),
+            ("\n\nCo-authored-by: Person\n", true),
+        ] {
+            let mut c = super::flow_case::Case::new();
+            c.roles(&["reviewer"]);
+            c.settings.renovate_email = renovate.map(str::to_owned);
+            let mut tip = TRUNK.to_owned();
+            for i in 0..251 {
+                let sha = format!("{:040x}", 1000 + i);
+                c.hub.put_commit(&sha, &[&tip], false);
+                c.hub
+                    .commit_details(&sha, Some("deps: bump"), Some(bot), Some(bot));
+                tip = sha;
+            }
+            c.hub.commit_details(
+                &tip,
+                Some(&format!("deps: bump{trailer}")),
+                Some(bot),
+                Some(bot),
+            );
+            c.push(&tip);
+            c.hub
+                .edit_pull(REMI, 3, |p| p["head"]["ref"] = json!("dependabot/pkg"));
+            c.hub.refresh_flow(REMI, 3);
+            c.memory.head = tip;
+            let f = c.facts();
+            assert_eq!(f.bot_edited, Some(edited));
+            assert_eq!(
+                next(&f, &c.memory, 700).0.step,
+                if edited {
+                    Step::QueueReview("reviewer".into())
+                } else {
+                    Step::Merge
+                }
+            );
+        }
+    }
+}
+
+#[test]
+fn a_red_fix_lands_only_on_the_default_tip_observed_red() {
+    // landed.py:152,163,167: red-fix guard binds CI to the observed tip.
+    for (branch, state, moved, held) in [
+        ("autoland/red-cccccccccccc", "failure", true, true),
+        ("feature", "failure", true, false),
+        ("autoland/red-cccccccccccc", "failure", false, false),
+        ("autoland/red-cccccccccccc", "success", false, true),
+        ("autoland/red-cccccccccccc", "pending", false, true),
+    ] {
+        let c = super::flow_case::Case::new();
+        c.hub.edit_pull(REMI, 3, |p| {
+            p["head"]["ref"] = json!(branch);
+            p["head"]["repo"]["full_name"] = json!(REMI);
+        });
+        c.hub.refresh_flow(REMI, 3);
+        c.hub.ci(TRUNK, &[("main-ci", state)]);
+        if moved {
+            c.hub.stale(Call::FlowSnapshot);
+            let newer = head(80);
+            c.hub.change(&newer, TRUNK, "new main");
+            c.hub.set_branch(REMI, "main", &newer);
+        }
+        let f = c.facts();
+        assert_eq!(f.base_held, held, "{branch} {state} moved={moved}");
+        assert_eq!(next(&f, &c.memory, 4000).0.stage == Stage::Base, held);
+    }
+}

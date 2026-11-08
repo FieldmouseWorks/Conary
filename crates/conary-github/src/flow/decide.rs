@@ -1,283 +1,6 @@
 use super::*;
 use conary_core::Class;
 
-/// Decide one intention. Memory records observations only: queuing, posting,
-/// starting jobs and landing are never assumed to have succeeded here.
-pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
-    let mut m = memory.clone();
-    m.raised.extend(f.classified.raised.iter().cloned());
-    let mut raised = f.clone();
-    raised.classified = raised
-        .classified
-        .clone()
-        .raise(m.raised.iter().cloned().collect());
-    for claim in &f.claims {
-        let entry = raised
-            .jobs
-            .entry(claim.kind)
-            .or_insert_with(|| claim.job.clone());
-        if claim.job.started >= entry.started {
-            *entry = claim.job.clone();
-        }
-    }
-    let f = &raised;
-    if m.head != f.revision.head {
-        m.head = f.revision.head.clone();
-        m.seen = now;
-        m.no_checks_since = None;
-        m.strikes.clear();
-        m.retry = None;
-        m.handed.clear();
-        // Lost findings survive pushes, indexed by base; old judgments do
-        // not, since their Revision must match below.
-    }
-    for kind in &f.succeeded {
-        if f.failed != Some(*kind) {
-            m.strikes.remove(kind);
-            if m.retry.is_some_and(|(k, _)| k == *kind) {
-                m.retry = None;
-            }
-        }
-    }
-    for (kind, job) in &f.jobs {
-        if kind.fixes_branch() {
-            m.handed.insert(*kind, job.revision.clone());
-        }
-    }
-    for (role, reviewer) in &f.reviewers {
-        if reviewer.record_id.is_some()
-            && reviewer.record_id != m.latest_reviews.get(role).copied()
-            && reviewer
-                .review
-                .as_ref()
-                .is_some_and(|v| v.revision == f.revision)
-            && f.failed_review.as_ref() != Some(role)
-            && reviewer.failed_at.is_none()
-        {
-            m.review_failures
-                .remove(&(role.clone(), f.revision.clone()));
-        }
-        if let Some(at) = reviewer.failed_at {
-            let failure = m
-                .review_failures
-                .entry((role.clone(), f.revision.clone()))
-                .or_insert((0, 0));
-            if failure.0 == 0 || failure.1 != at {
-                failure.0 = failure.0.saturating_add(1);
-                failure.1 = at;
-            }
-        }
-        if reviewer.queued {
-            m.missing_reviews
-                .remove(&(role.clone(), f.revision.clone()));
-        }
-    }
-    if let Some((role, answer)) = f.failed_review.as_ref().and_then(|role| {
-        f.reviewers
-            .get(role)
-            .and_then(|r| r.answer.as_ref())
-            .map(|a| (role, a))
-    }) {
-        let tries = m
-            .review_posts
-            .entry((role.clone(), answer.revision.clone(), answer.at))
-            .or_default();
-        *tries = tries.saturating_add(1);
-        if answer.revision.head == f.revision.head && answer.revision.base == f.revision.base {
-            let failure = m
-                .review_failures
-                .entry((role.clone(), f.revision.clone()))
-                .or_insert((0, 0));
-            failure.0 = failure.0.saturating_add(1);
-            failure.1 = now;
-        }
-        let strikes = m.strikes.entry(Failure::Post).or_default();
-        *strikes = strikes.saturating_add(1);
-    }
-    let (stage, step, description) = decide(f, &mut m, now);
-    let description = description.chars().take(140).collect::<String>();
-    let no_reviewer = f.classified.review()
-        && f.reviewers.values().all(|r| {
-            r.unavailable_until.is_some_and(|until| until > now)
-                && !r
-                    .review
-                    .as_ref()
-                    .is_some_and(|r| r.revision == f.revision && r.verdict == Verdict::Clean)
-        });
-    let failures = m
-        .review_failures
-        .iter()
-        .any(|((_, rev), (count, _))| rev == &f.revision && *count >= 3);
-    let unposted = m
-        .review_posts
-        .iter()
-        .any(|(key, count)| *count >= 3 && !m.consumed_reviews.contains(key));
-    let fixed_renovate = f.dependency == Some(Dependency::Minor)
-        && (f.bot_edited == Some(true) || f.gate_edited)
-        && f.classified.class != Class::R2;
-    let owner_notice = if f.draft
-        || !f.open
-        || f.labels.contains(&f.settings.hold_label)
-        || f.stacked_on.is_some()
-        || matches!(step, Step::ListOwner)
-    {
-        None
-    } else if no_reviewer
-        && matches!(stage, Stage::Reviewer | Stage::Review)
-        && matches!(step, Step::Wait { .. })
-    {
-        Some(OwnerNotice::NoReviewer)
-    } else if failures && f.classified.review() {
-        Some(OwnerNotice::ReviewFailures)
-    } else if unposted {
-        Some(OwnerNotice::UnpostedReview)
-    } else if f
-        .created_at
-        .is_some_and(|at| now > at.saturating_add(86400))
-        && (!f.renovate || fixed_renovate)
-        && !matches!(
-            step,
-            Step::Merge | Step::Settle | Step::JoinTrain | Step::CloseAlreadyLanded
-        )
-    {
-        Some(OwnerNotice::OpenOverDay)
-    } else {
-        None
-    };
-    let watched = owner_notice.is_none()
-        && !(f.draft
-            || !f.open
-            || (f.stacked_on.is_some() && stage == Stage::Base)
-            || matches!(step, Step::ListOwner));
-    let overdue_at = if watched {
-        let duration = if f.labels.contains(&f.settings.hold_label) {
-            f.settings.hold_stall_after
-        } else if stage == Stage::Train {
-            f.settings.train_stall_after
-        } else if stage == Stage::Merge && f.renovate && f.bot_merges && f.bot_automerge_enabled {
-            f.settings.renovate_merge_after
-        } else {
-            f.settings.stall_after
-        };
-        let failure = m.retry.map(|(kind, _)| kind);
-        let since = m
-            .wait
-            .as_ref()
-            .filter(|w| {
-                w.head == f.revision.head
-                    && w.base == f.revision.base
-                    && ((failure.is_some() && w.failure == failure)
-                        || (w.stage == stage && w.description == description))
-            })
-            .map_or(now, |w| w.since);
-        let failing = m.strikes.values().any(|n| *n >= 3);
-        let due = if failing {
-            since
-        } else {
-            let refreshing = f.renovate
-                && f.settings.renovate_sweep
-                && !f.labels.contains(&f.settings.hold_label)
-                && (f.checks.iter().any(|c| c.state == Ci::Red)
-                    || f.rebase_requested
-                    || f.rebase_removed
-                        .iter()
-                        .copied()
-                        .chain(f.timeline_cut_at)
-                        .any(|t| now < t.saturating_add(f.settings.renovate_run)));
-            let drain = 4 * (3600 + f.settings.renovate_run).max(600) + f.settings.renovate_run;
-            let grace = if refreshing {
-                if f.release_at.is_some() {
-                    3 * (21600 + 3600 + f.settings.renovate_run) + drain
-                } else {
-                    drain
-                }
-            } else {
-                0
-            };
-            let until = if refreshing {
-                f.release_at.unwrap_or(0)
-            } else {
-                0
-            };
-            since
-                .max(until)
-                .saturating_add(grace)
-                .saturating_add(duration)
-        };
-        m.wait = Some(Wait {
-            head: f.revision.head.clone(),
-            base: f.revision.base.clone(),
-            stage,
-            description: description.clone(),
-            failure,
-            since,
-            due,
-        });
-        Some(due)
-    } else {
-        m.wait = None;
-        None
-    };
-    (
-        Next {
-            stage: if f.draft || f.labels.contains(&f.settings.hold_label) {
-                Stage::None
-            } else {
-                stage
-            },
-            step: step.clone(),
-            description,
-            overdue_at,
-            owner_notice,
-            wait_on: watched.then(|| {
-                if f.labels.contains(&f.settings.hold_label) {
-                    WaitOn::Hold
-                } else if stage == Stage::Train {
-                    WaitOn::Train
-                } else if f.renovate
-                    && f.bot_merges
-                    && f.bot_automerge_enabled
-                    && stage == Stage::Merge
-                {
-                    WaitOn::Renovate
-                } else if f.renovate
-                    && f.dependency.is_some()
-                    && (f.checks.iter().any(|c| c.state == Ci::Red)
-                        || f.dependency == Some(Dependency::Major) && f.major.is_none())
-                {
-                    WaitOn::Sweep
-                } else {
-                    WaitOn::Steward
-                }
-            }),
-            on_usage: watched
-                && !m.strikes.values().any(|n| *n >= 3)
-                && f.jobs.iter().any(|(kind, j)| {
-                    matches!(j.state, JobState::Running | JobState::Queued)
-                        && (*kind != Kind::Proof
-                            || !f
-                                .settings
-                                .proofs
-                                .values()
-                                .all(|r| matches!(r, Recipe::Build(_) | Recipe::Run(_))))
-                }),
-            proof: if matches!(step, Step::PostProof) {
-                super::proofs::posting(f)
-            } else {
-                None
-            }
-            .or_else(|| {
-                if matches!(step, Step::Prove | Step::PostProof) {
-                    super::proofs::next(f, now).and_then(|(_, _, _, plan)| plan)
-                } else {
-                    None
-                }
-            }),
-        },
-        m,
-    )
-}
-
 pub(super) type Decision = (Stage, Step, String);
 pub(super) fn at(stage: Stage, step: Step, description: &str) -> Decision {
     (stage, step, description.into())
@@ -286,7 +9,34 @@ pub(super) fn wait(stage: Stage, until: Option<u64>, why: &str) -> Decision {
     at(stage, Step::Wait { until }, why)
 }
 
-fn decide(f: &Facts, m: &mut Memory, now: u64) -> Decision {
+pub(super) fn decide(f: &Facts, m: &mut Memory, now: u64) -> Decision {
+    if let Some(kind) = f.failed {
+        return failed(m, kind, now, "The step failed; trying again later");
+    }
+    if let Some((kind, due)) = m.retry {
+        if now < due {
+            return at(
+                failure_stage(kind),
+                Step::Retry { kind, at: due },
+                "Waiting to try the failed step again",
+            );
+        }
+        m.retry = None;
+    }
+    if let Some(id) = m.stopping.first() {
+        return at(
+            Stage::Fix,
+            Step::StopJob(id.clone()),
+            "Stop obsolete work before starting another job",
+        );
+    }
+    if let Some(job) = super::proofs::obsolete_inputs(f) {
+        return at(
+            Stage::ProofSlot,
+            Step::StopJob(job.id.clone()),
+            "Stop inputs for an obsolete proof",
+        );
+    }
     // Only proofs and judgments belong to a head. Fix jobs own the branch
     // across pushes, including their own push, and must be left running.
     if let Some((_, job)) = f.jobs.iter().find(|(kind, job)| {
@@ -300,28 +50,6 @@ fn decide(f: &Facts, m: &mut Memory, now: u64) -> Decision {
             Step::StopJob(job.id.clone()),
             "Stop work answering for an earlier head",
         );
-    }
-    if let Some(kind) = f.failed {
-        let times = m.strikes.entry(kind).or_default();
-        *times = times.saturating_add(1);
-        let delay = (1u64 << (*times - 1).min(6)).min(60) * 60;
-        let due = now.saturating_add(delay);
-        m.retry = Some((kind, due));
-        return at(
-            failure_stage(kind),
-            Step::Retry { kind, at: due },
-            "The step failed; trying again later",
-        );
-    }
-    if let Some((kind, due)) = m.retry {
-        if now < due {
-            return at(
-                failure_stage(kind),
-                Step::Retry { kind, at: due },
-                "Waiting to try the failed step again",
-            );
-        }
-        m.retry = None;
     }
     if let Some(decision) = super::claims::look(f, m, now) {
         return decision;
@@ -552,10 +280,23 @@ fn after_review(f: &Facts, m: &mut Memory, now: u64, ci: Ci, capped: bool) -> De
             );
         }
         Proof::Needed if ci != Ci::Pending || proof_only || early => {
-            if let Some(decision) = super::proofs::retry(f, m, now) {
+            let retry = super::proofs::retry(f, m, now);
+            let plan = super::proofs::next(f, now);
+            if let Some(decision) = retry {
+                if let Step::Retry {
+                    kind: Failure::Lost,
+                    at,
+                } = decision.1
+                    && let Some((Stage::ProofSlot, mut step, description, _)) = plan
+                {
+                    if matches!(step, Step::Wait { .. }) {
+                        step = Step::Wait { until: Some(at) };
+                    }
+                    return (Stage::ProofSlot, step, description);
+                }
                 return decision;
             }
-            if let Some((stage, step, description, _)) = super::proofs::next(f, now) {
+            if let Some((stage, step, description, _)) = plan {
                 return (stage, step, description);
             }
             return work(f, m, now, Kind::Proof);
@@ -617,18 +358,16 @@ fn after_review(f: &Facts, m: &mut Memory, now: u64, ci: Ci, capped: bool) -> De
             "Settled; could not read its commits; next pass",
         );
     }
-    land(f, now)
+    land(f, m, now)
 }
 
-fn land(f: &Facts, now: u64) -> Decision {
+fn land(f: &Facts, m: &mut Memory, now: u64) -> Decision {
     match f.empty {
         None => {
-            return at(
-                Stage::Merge,
-                Step::Retry {
-                    kind: Failure::Empty,
-                    at: now.saturating_add(60),
-                },
+            return failed(
+                m,
+                Failure::Empty,
+                now,
                 "What its merge would change is not known",
             );
         }
@@ -659,9 +398,10 @@ fn land(f: &Facts, now: u64) -> Decision {
         );
     }
     if matches!(f.merging, Merge::Unknown | Merge::Refused) {
-        return wait(
-            Stage::Merge,
-            None,
+        return failed(
+            m,
+            Failure::Mergeable,
+            now,
             "GitHub will not yet say it can be merged",
         );
     }
@@ -698,15 +438,16 @@ pub(super) fn hand(f: &Facts, m: &mut Memory, now: u64, kind: Kind, delay: bool)
             );
         }
     }
-    if let Some(job) = f.jobs.values().find(|j| j.state.live()) {
-        // Fix jobs keep the branch across pushes. Other jobs only block the
-        // work they were asked for on their own revision.
-        if f.jobs
-            .iter()
-            .any(|(k, j)| k.fixes_branch() && j.id == job.id)
-        {
-            return wait(Stage::Fix, None, "A fix job still has the branch");
-        }
+    if let Some((_, job)) = f
+        .jobs
+        .iter()
+        .find(|(kind, job)| kind.fixes_branch() && job.state.live())
+    {
+        return wait(
+            Stage::Fix,
+            Some(job_wake(f, Kind::Findings, job, now)),
+            "A fix job still has the branch",
+        );
     }
     if delay {
         let quiet = if f.session {
@@ -742,12 +483,20 @@ pub(super) fn work(f: &Facts, m: &mut Memory, now: u64, kind: Kind) -> Decision 
         if j.state.live() {
             return wait(
                 stage,
-                None,
+                Some(job_wake(f, kind, j, now)),
                 "A job is queued or running, or its state is unknown",
             );
         }
         if !m.lost_jobs.insert(j.id.clone()) {
-            if j.state == JobState::Done && j.repeated {
+            let second = if j.state == JobState::Done {
+                m.strikes.remove(&Failure::Lost);
+                let ended = m.unanswered.entry((kind, j.revision.clone())).or_default();
+                ended.insert(j.id.clone());
+                ended.len() >= 2 || j.repeated
+            } else {
+                false
+            };
+            if second {
                 return at(
                     Stage::Owner,
                     Step::ListOwner,
@@ -789,6 +538,35 @@ pub(super) fn work(f: &Facts, m: &mut Memory, now: u64, kind: Kind) -> Decision 
         _ => Step::HandFix(kind),
     };
     at(stage, step, "Start the next job")
+}
+
+fn job_wake(f: &Facts, kind: Kind, job: &Job, now: u64) -> u64 {
+    let unit = kind == Kind::Proof
+        && f.checks.iter().filter(|c| c.state == Ci::Pending).any(|c| {
+            matches!(
+                f.settings.recipe(&c.name),
+                Some(Recipe::Build(_) | Recipe::Run(_))
+            )
+        });
+    let timeout = if unit {
+        f.settings.proof_timeout
+    } else {
+        f.settings.job_timeout
+    };
+    let deadline = job.started.saturating_add(timeout).saturating_add(300);
+    if now < deadline {
+        deadline
+    } else {
+        now.saturating_add(900)
+    }
+}
+
+fn failed(m: &mut Memory, kind: Failure, now: u64, why: &str) -> Decision {
+    let times = m.strikes.entry(kind).or_default();
+    *times = times.saturating_add(1);
+    let due = now.saturating_add((1u64 << (*times - 1).min(6)).min(60) * 60);
+    m.retry = Some((kind, due));
+    at(failure_stage(kind), Step::Retry { kind, at: due }, why)
 }
 
 fn failure_stage(kind: Failure) -> Stage {

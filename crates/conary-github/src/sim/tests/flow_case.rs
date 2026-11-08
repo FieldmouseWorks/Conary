@@ -13,6 +13,7 @@ pub(super) struct Service {
     pub unavailable_until: Option<u64>,
     pub answer: Option<Review>,
     pub under_way: bool,
+    pub under_way_on: Option<Revision>,
     pub failed_at: Option<u64>,
     pub queue_failed_at: Option<u64>,
     pub missing: bool,
@@ -24,12 +25,15 @@ pub(super) struct Case {
     pub services: BTreeMap<String, Service>,
     pub jobs: BTreeMap<Kind, Job>,
     pub claims: Vec<FixClaim>,
+    pub stopped_jobs: std::collections::BTreeSet<String>,
     pub proof: Option<Proof>,
     pub proof_data: ProofData,
     pub failed: Option<Failure>,
     pub failed_review: Option<String>,
+    pub review_unavailable: bool,
     pub succeeded: std::collections::BTreeSet<Failure>,
     pub base_held: bool,
+    pub train: TrainState,
     pub unseen: bool,
 }
 impl Case {
@@ -42,12 +46,15 @@ impl Case {
             services: BTreeMap::new(),
             jobs: BTreeMap::new(),
             claims: Vec::new(),
+            stopped_jobs: Default::default(),
             proof: None,
             proof_data: ProofData::default(),
             failed: None,
             failed_review: None,
+            review_unavailable: false,
             succeeded: Default::default(),
             base_held: false,
+            train: TrainState::default(),
             unseen: false,
         }
     }
@@ -68,7 +75,18 @@ impl Case {
     pub fn scope(&self) -> Revision {
         Revision::from(&self.hub.pull(REMI, 3).unwrap())
     }
-    pub fn push(&self, sha: &str) {
+    pub fn push(&self, label: &str) {
+        let named;
+        let sha = if label.len() == 40
+            && label
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        {
+            label
+        } else {
+            named = crate::sim::tree_of(&[label]);
+            &named
+        };
         self.hub.push(REMI, 3, sha);
         self.hub.refresh_flow(REMI, 3);
         self.hub.ci(sha, &[("check", "success")]);
@@ -99,6 +117,29 @@ impl Case {
             &format!("<!-- autoland-judgment: {verdict} {} {tag} -->", p.head.sha),
         );
     }
+    pub fn sweep(&mut self, verdict: &str) {
+        let key = SealKey::from_hex(&"b".repeat(64)).unwrap();
+        self.settings.major_key = Some(key.clone());
+        self.settings.verdict_authors.insert("owner".into());
+        let scope = self.scope();
+        let tag = key.seal(
+            &REMI.to_lowercase(),
+            3,
+            "major-verdict",
+            verdict,
+            &scope.head,
+            &scope.base,
+        );
+        self.hub.flow_comment(
+            REMI,
+            3,
+            "owner",
+            &format!(
+                "<!-- major-verdict: {verdict} {} on {} {tag} -->",
+                scope.head, scope.base
+            ),
+        );
+    }
     pub fn secret(&self) {
         let h = self.hub.head_of(REMI, 3);
         self.hub.touch(&h, &["secrets/app.yaml"]);
@@ -123,7 +164,10 @@ impl Case {
                 r.queued = s.queued;
                 r.unavailable_until = s.unavailable_until;
                 r.answer = s.answer.clone();
-                r.under_way = s.under_way;
+                r.under_way = s
+                    .under_way_on
+                    .clone()
+                    .or_else(|| s.under_way.then(|| f.revision.clone()));
                 r.failed_at = s.failed_at;
                 r.queue_failed_at = s.queue_failed_at;
                 r.missing = s.missing;
@@ -131,14 +175,19 @@ impl Case {
         }
         f.jobs = self.jobs.clone();
         f.claims = self.claims.clone();
+        f.stopped_jobs = self.stopped_jobs.clone();
         f.proof_data = self.proof_data.clone();
         if let Some(p) = &self.proof {
             f.proof = p.clone();
         }
         f.failed = self.failed;
-        f.failed_review = self.failed_review.clone();
+        f.failed_review = self.failed_review.as_ref().map(|role| FailedPost {
+            role: role.clone(),
+            unavailable: self.review_unavailable,
+        });
         f.succeeded = self.succeeded.clone();
-        f.base_held = self.base_held;
+        f.base_held |= self.base_held;
+        f.train = self.train.clone();
         f.unseen |= self.unseen;
         f
     }

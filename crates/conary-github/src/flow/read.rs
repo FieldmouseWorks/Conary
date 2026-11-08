@@ -13,8 +13,16 @@ use crate::api::{ApiError, Source};
 /// to the REST pull read: pushes, retargets and description edits between
 /// endpoints are errors, never a clean PR.
 #[derive(Debug, Clone)]
+pub struct BaseObservation {
+    pub name: String,
+    pub head: String,
+    pub ci: Ci,
+}
+
+#[derive(Debug, Clone)]
 pub struct Snapshot {
     pub revision: Revision,
+    pub default_branch: Option<BaseObservation>,
     pub draft: bool,
     pub complete: bool,
     pub merge_state: String,
@@ -62,6 +70,11 @@ pub fn read(
     };
     let classified = policy.classify(repo, &unknown).raise(pull.raises());
     let mut facts = Facts {
+        repo: repo.clone(),
+        title: pull.title.clone(),
+        description: pull.body.clone().unwrap_or_default(),
+        branch: pull.head.name.clone(),
+        number: pull.number,
         revision,
         default_branch: pull
             .base
@@ -75,12 +88,14 @@ pub fn read(
         labels,
         merging: Merge::from_github(&extra.merge_state),
         checks: Vec::new(),
+        has_ci: false,
         open_threads: extra.open_threads,
         changes_requested: false,
         reviewers: BTreeMap::new(),
         judgment: None,
         jobs: BTreeMap::new(),
         claims: Vec::new(),
+        stopped_jobs: BTreeSet::new(),
         pushes: BTreeMap::new(),
         threads: extra.threads.clone(),
         proof: Proof::NotNeeded,
@@ -105,7 +120,10 @@ pub fn read(
         rebase_removed: extra.rebase_removed.clone(),
         timeline_cut_at: extra.timeline_cut_at,
         stacked_on: None,
+        open_prs: BTreeSet::new(),
         base_held: false,
+        queued_merge: pull.auto_merge.is_some(),
+        train: TrainState::default(),
         empty: None,
         updated_at: extra.updated_at,
         created_at: pull
@@ -133,9 +151,10 @@ pub fn read(
     {
         return Ok(facts);
     }
-    facts.stacked_on = source
-        .pulls(&repository, crate::api::Pulls::Open)?
-        .into_iter()
+    let open = source.pulls(&repository, crate::api::Pulls::Open)?;
+    facts.open_prs = open.iter().map(|p| p.number).collect();
+    facts.stacked_on = open
+        .iter()
         .find(|p| p.number != pr && p.head.name == pull.base.name)
         .map(|p| p.number);
     if facts.stacked_on.is_some() {
@@ -232,6 +251,24 @@ pub fn read(
         None
     };
     facts.base_tip = tip.clone();
+    let own_branch = pull
+        .head
+        .repo
+        .as_ref()
+        .and_then(|r| r.full_name.as_ref())
+        .is_some_and(|r| r.eq_ignore_ascii_case(&repository));
+    if facts.branch.starts_with("autoland/red-")
+        && facts.trusted
+        && !facts.draft
+        && own_branch
+        && facts.revision.base == facts.default_branch
+    {
+        facts.base_held = extra
+            .default_branch
+            .as_ref()
+            .is_none_or(|b| b.ci != Ci::Red || tip.as_deref() != Some(&b.head));
+    }
+
     facts.unseen = paths
         .files
         .iter()
@@ -274,6 +311,7 @@ pub fn read(
     if renovate && red == ["renovate/artifacts"] {
         facts.release_at = super::gates::release(&comments, &facts.settings);
     }
+    facts.has_ci = ci.has_ci;
     facts.checks = ci.checks;
     Ok(facts)
 }

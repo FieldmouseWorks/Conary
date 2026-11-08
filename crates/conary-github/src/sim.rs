@@ -85,6 +85,7 @@ pub(crate) struct World {
     checks: HashMap<String, Vec<Value>>,
     annotations: HashMap<u64, Vec<String>>,
     pushes: HashMap<(String, String), BTreeMap<String, String>>,
+    history_limits: HashMap<(String, String), usize>,
     commit_records: HashMap<String, Value>,
     diffs: HashMap<(String, String), String>,
     /// Each check run's job's artifacts, by the job's check run id: name

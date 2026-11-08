@@ -26,9 +26,10 @@ fn superseded_proofs_and_judges_stop_before_new_work() {
         c.push("new-head");
         c.review("reviewer", Verdict::Clean, 800);
         assert_eq!(c.pass(800).step, Step::StopJob(id.clone()));
-        assert_eq!(c.pass(900).step, Step::StopJob(id));
+        assert_eq!(c.pass(900).step, Step::StopJob(id.clone()));
         assert!(c.memory.strikes.is_empty());
         c.jobs.clear(); // The executor has now observed the stop.
+        c.stopped_jobs.insert(id);
         assert_eq!(c.pass(1000).step, Step::Merge);
     }
 }
@@ -108,4 +109,60 @@ fn newly_seen_findings_receive_the_full_quiet_period() {
     c.memory = Memory::default();
     assert_eq!(c.pass(10000).step, Step::Wait { until: Some(11800) });
     assert_eq!(c.pass(11801).step, Step::HandFix(Kind::Findings));
+}
+
+#[test]
+fn a_returned_head_gets_a_fresh_proof_not_a_stopped_jobs_lost_answer() {
+    // superseded.py:52: A -> B -> C -> A never resurrects the job stopped on A.
+    let mut c = Case::new();
+    c.settings
+        .proofs
+        .insert("proof".into(), Recipe::Job("run proof".into()));
+    let a = c.scope().head;
+    let (kind, old) = job(&c, Kind::Proof, JobState::Running);
+    let id = old.id.clone();
+    c.jobs.insert(kind, old);
+    c.pass(700);
+    c.push("B");
+    c.review("reviewer", Verdict::Clean, 800);
+    assert_eq!(c.pass(800).step, Step::StopJob(id.clone()));
+    c.stopped_jobs.insert(id.clone());
+    c.jobs.get_mut(&Kind::Proof).unwrap().state = JobState::Broken;
+    assert_eq!(c.pass(900).step, Step::Prove);
+    c.stopped_jobs.clear();
+    c.push("C");
+    c.push(&a);
+    c.review("reviewer", Verdict::Clean, 1000);
+    assert_eq!(c.pass(1000).step, Step::Prove);
+    assert!(c.memory.retired_jobs.contains(&id));
+    assert!(c.memory.strikes.is_empty());
+}
+#[test]
+fn failed_stops_keep_obsolete_work_reserved_until_confirmed_stopped() {
+    // superseded.py:67 / unpushed.py:204: a refused stop holds its job, is struck and retried.
+    let mut c = Case::new();
+    let (kind, old) = job(&c, Kind::Judge, JobState::Running);
+    let id = old.id.clone();
+    c.jobs.insert(kind, old);
+    c.push("new-head");
+    assert_eq!(c.pass(800).step, Step::StopJob(id.clone()));
+    for (at, due, count) in [(810, 870, 1), (900, 1020, 2), (1100, 1340, 3)] {
+        c.failed = Some(Failure::Stop);
+        assert_eq!(
+            c.pass(at).step,
+            Step::Retry {
+                kind: Failure::Stop,
+                at: due
+            }
+        );
+        assert_eq!(c.memory.strikes[&Failure::Stop], count);
+        assert!(c.memory.stopping.contains(&id));
+    }
+    c.failed = None;
+    c.succeeded.insert(Failure::Stop);
+    c.stopped_jobs.insert(id.clone());
+    c.review("reviewer", Verdict::Clean, 1400);
+    assert_eq!(c.pass(1400).step, Step::Merge);
+    assert!(c.memory.stopping.is_empty());
+    assert!(!c.memory.strikes.contains_key(&Failure::Stop));
 }

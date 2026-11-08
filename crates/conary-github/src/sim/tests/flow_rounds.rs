@@ -210,3 +210,27 @@ fn a_review_raise_survives_label_removal_on_documentation() {
     c.label(&[]);
     assert_eq!(c.view(4001).step, Step::QueueReview("reviewer".into()));
 }
+
+#[test]
+fn three_refused_current_posts_still_get_a_replacement_look_past_the_cap() {
+    // rounds.py:61: a lost current answer is the same owed round, even at the limit.
+    let mut c = Case::new();
+    c.roles(&["reviewer"]);
+    for at in 1..=5 {
+        c.review("reviewer", Verdict::Findings, at);
+    }
+    c.answered("reviewer");
+    c.service("reviewer").answer = Some(Review {
+        revision: c.scope(),
+        verdict: Verdict::Findings,
+        at: 600,
+    });
+    c.failed_review = Some("reviewer".into());
+    for at in [650, 710] {
+        assert_eq!(c.pass(at).step, Step::PostReview("reviewer".into()));
+    }
+    assert_eq!(c.pass(770).step, Step::Wait { until: Some(4371) });
+    c.failed_review = None;
+    assert_eq!(c.memory.lost_on["reviewer"]["main"], c.scope().head);
+    assert_eq!(c.pass(4470).step, Step::QueueReview("reviewer".into()));
+}

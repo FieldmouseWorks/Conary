@@ -47,6 +47,7 @@ pub struct PullRequest {
     pub created_at: Option<String>,
     pub merged_at: Option<String>,
     pub merge_commit_sha: Option<String>,
+    pub auto_merge: Option<serde_json::Value>,
     pub base: Ref,
     pub head: Ref,
     #[serde(default)]

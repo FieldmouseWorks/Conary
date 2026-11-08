@@ -2,12 +2,12 @@
 //! complete reviews/checks/commits; GraphQL supplies thread resolution and
 //! mergeability, which REST does not expose with the same semantics.
 use super::*;
-use crate::flow::{Read, Revision, Snapshot, Suite, Workflow};
+use crate::flow::{BaseObservation, Ci, Read, Revision, Snapshot, Suite, Workflow};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 
 const QUERY: &str = r#"query($owner:String!,$name:String!,$number:Int!) {
- repository(owner:$owner,name:$name) { pullRequest(number:$number) {
+ repository(owner:$owner,name:$name) { defaultBranchRef { name target { ... on Commit { oid statusCheckRollup { state } } } } pullRequest(number:$number) {
   headRefOid baseRefName title body isDraft mergeStateStatus updatedAt
   labels(first:100) { pageInfo { hasNextPage } }
   reviewThreads(first:100) { pageInfo { hasNextPage } nodes { id isResolved comments(first:1) { nodes { pullRequestReview { databaseId } } } } }
@@ -40,6 +40,21 @@ struct Event {
     previous_title: Option<String>,
 }
 #[derive(Deserialize)]
+struct DefaultBranch {
+    name: String,
+    target: Option<BaseTip>,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BaseTip {
+    oid: String,
+    status_check_rollup: Option<Rollup>,
+}
+#[derive(Deserialize)]
+struct Rollup {
+    state: String,
+}
+#[derive(Deserialize)]
 struct Envelope {
     data: Option<Data>,
     errors: Option<Vec<serde_json::Value>>,
@@ -51,6 +66,7 @@ struct Data {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Repository {
+    default_branch_ref: Option<DefaultBranch>,
     pull_request: Option<Pull>,
 }
 #[derive(Deserialize)]
@@ -89,7 +105,7 @@ struct Threads {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Thread {
-    id: Option<String>,
+    id: String,
     is_resolved: bool,
     comments: Option<ThreadComments>,
 }
@@ -221,10 +237,23 @@ impl Read for Api {
                 ApiError::new("GitHub GraphQL returned errors instead of a complete snapshot")
             });
         }
-        let p = envelope
+        let repository = envelope
             .data
             .and_then(|d| d.repository)
-            .and_then(|r| r.pull_request)
+            .ok_or_else(|| ApiError::new("GitHub did not return the repository snapshot"))?;
+        let default_branch = repository.default_branch_ref.and_then(|b| {
+            b.target.map(|t| BaseObservation {
+                name: b.name,
+                head: t.oid,
+                ci: match t.status_check_rollup.as_ref().map(|r| r.state.as_str()) {
+                    Some("FAILURE") => Ci::Red,
+                    Some("SUCCESS") => Ci::Green,
+                    _ => Ci::Pending,
+                },
+            })
+        });
+        let p = repository
+            .pull_request
             .ok_or_else(|| ApiError::new("GitHub did not return the PR snapshot"))?;
         let mut suites = BTreeMap::new();
         let mut checks_complete = true;
@@ -281,6 +310,7 @@ impl Read for Api {
             }
         }
         Ok(Snapshot {
+            default_branch,
             rebase_removed,
             timeline_cut_at: if p.timeline_items.page_info.has_previous_page {
                 oldest
@@ -296,8 +326,8 @@ impl Read for Api {
             draft: p.is_draft,
             complete: !p.labels.page_info.has_next_page
                 && !p.review_threads.page_info.has_next_page
-                && p.reviews.total_count <= 1000
-                && p.comments.total_count <= 1000,
+                && p.reviews.total_count <= 100
+                && p.comments.total_count <= 100,
             merge_state: p.merge_state_status,
             open_threads: p
                 .review_threads
@@ -309,7 +339,7 @@ impl Read for Api {
                 .review_threads
                 .nodes
                 .iter()
-                .filter_map(|t| t.id.clone().map(|id| (id, t.is_resolved)))
+                .map(|t| (t.id.clone(), t.is_resolved))
                 .collect(),
             resolved_reviews,
             updated_at: crate::flow::reviews::timestamp(&p.updated_at)?,
