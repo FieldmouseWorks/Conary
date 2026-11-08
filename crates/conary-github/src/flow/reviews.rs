@@ -36,11 +36,11 @@ pub(super) fn read(
     carried: &BTreeSet<String>,
 ) -> Result<BTreeMap<String, Reviewer>, ApiError> {
     let revision = Revision::from(pull);
-    let description = fingerprint(pull.body.as_deref().unwrap_or(""));
+    let description = &revision.description;
     let mut result = BTreeMap::new();
     for name in &settings.reviewers {
         let pattern = regex::Regex::new(&format!(
-            r"<!-- {}-review:v1 (\{{.*?\}}) -->",
+            r"<!-- {}-review:v([12]) (\{{.*?\}}) -->",
             regex::escape(name)
         ))
         .expect("escaped pattern");
@@ -51,11 +51,15 @@ pub(super) fn read(
                 .as_ref()
                 .is_some_and(|u| settings.review_authors.contains(&u.login))
         }) {
-            let Some(m) = r
+            let Some((version, m)) = r
                 .body
                 .as_deref()
                 .and_then(|b| pattern.captures(b))
-                .and_then(|c| serde_json::from_str::<serde_json::Value>(&c[1]).ok())
+                .and_then(|c| {
+                    serde_json::from_str::<serde_json::Value>(&c[2])
+                        .ok()
+                        .map(|mark| (c[1].to_owned(), mark))
+                })
             else {
                 continue;
             };
@@ -69,13 +73,18 @@ pub(super) fn read(
             if count > 0 {
                 reviewer.rounds = reviewer.rounds.saturating_add(1);
             }
+            // Legacy findings still count toward the historical cap. Their
+            // body-only scope cannot establish coverage of today's claim.
+            if version != "2" {
+                continue;
+            }
             let Some(head) = r.commit_id.as_deref() else {
                 continue;
             };
             if m["commit_sha"].as_str() != Some(head)
                 || head != revision.head && !carried.contains(head)
                 || m["base"].as_str() != Some(revision.base.as_str())
-                || m["description"].as_str() != Some(description.as_str())
+                || m["scope"].as_str() != Some(description.as_str())
             {
                 continue;
             }
@@ -83,7 +92,10 @@ pub(super) fn read(
                 None | Some("") => 0,
                 Some(t) => timestamp(t)?,
             };
-            if candidates.get(head).is_none_or(|(v, _, _)| at >= v.at) {
+            if candidates.get(head).is_none_or(|(v, id, _)| {
+                (at, r.id.unwrap_or(0), count > 0)
+                    >= (v.at, id.unwrap_or(0), v.verdict == Verdict::Findings)
+            }) {
                 candidates.insert(
                     head.into(),
                     (
@@ -102,13 +114,16 @@ pub(super) fn read(
                 );
             }
         }
-        let chosen = candidates.remove(&revision.head).or_else(|| {
-            candidates
-                .into_values()
-                .filter(|(v, _, _)| v.verdict == Verdict::Clean)
-                .max_by_key(|(v, _, _)| v.at)
-        });
-        if let Some((review, id, answered)) = chosen {
+        let chosen = candidates
+            .remove(&revision.head)
+            .map(|v| (revision.head.clone(), v))
+            .or_else(|| {
+                candidates.into_iter().max_by_key(|(_, (v, id, _))| {
+                    (v.at, id.unwrap_or(0), v.verdict == Verdict::Findings)
+                })
+            });
+        if let Some((head, (review, id, answered))) = chosen {
+            reviewer.reviewed_head = Some(head);
             reviewer.review = Some(review);
             reviewer.record_id = id;
             reviewer.findings_answered = answered;

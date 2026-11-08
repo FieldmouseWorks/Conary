@@ -116,13 +116,13 @@ impl Hub {
         at: u64,
     ) {
         let p = self.pull_json(repo, pr);
-        let body = p["body"].as_str().unwrap_or("");
-        let mark = json!({"commit_sha":p["head"]["sha"],"base":p["base"]["ref"],"findings":u32::from(verdict==crate::flow::Verdict::Findings),"description":crate::flow::fingerprint(body)});
+        let scope = crate::flow::Revision::from(&crate::api::Source::pull(self, repo, pr).unwrap());
+        let mark = json!({"commit_sha":p["head"]["sha"],"base":p["base"]["ref"],"findings":u32::from(verdict==crate::flow::Verdict::Findings),"scope":scope.description});
         let id = self.world.borrow().repos[repo]
             .reviews
             .get(&pr)
             .map_or(1, |r| r.len() as u64 + 1);
-        let review = json!({"id":id,"user":fixtures::user(super::STEWARD,"Bot"),"body":format!("<!-- {reviewer}-review:v1 {mark} -->"),"commit_id":p["head"]["sha"],"submitted_at":chrono::DateTime::from_timestamp(at as i64,0).unwrap().to_rfc3339()});
+        let review = json!({"id":id,"user":fixtures::user(super::STEWARD,"Bot"),"body":format!("<!-- {reviewer}-review:v2 {mark} -->"),"commit_id":p["head"]["sha"],"submitted_at":chrono::DateTime::from_timestamp(at as i64,0).unwrap().to_rfc3339()});
         self.world
             .borrow_mut()
             .repos
@@ -179,7 +179,7 @@ impl Hub {
             .find(|r| {
                 r["body"]
                     .as_str()
-                    .is_some_and(|b| b.contains(&format!("<!-- {role}-review:v1 ")))
+                    .is_some_and(|b| b.contains(&format!("<!-- {role}-review:v2 ")))
             })
             .unwrap()["id"]
             .as_u64()
@@ -262,5 +262,20 @@ impl World {
             head: head.clone(),
             ci,
         })
+    }
+}
+
+impl Hub {
+    pub(crate) fn edit_flow_comment(&self, repo: &str, pr: u64, index: usize, body: &str) {
+        let mut world = self.world.borrow_mut();
+        let comment = &mut world
+            .repos
+            .get_mut(repo)
+            .unwrap()
+            .comments
+            .get_mut(&pr)
+            .unwrap()[index];
+        comment["body"] = json!(body);
+        comment["updated_at"] = json!("2030-01-01T00:00:00Z");
     }
 }

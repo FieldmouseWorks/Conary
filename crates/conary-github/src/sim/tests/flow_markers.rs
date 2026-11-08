@@ -30,26 +30,18 @@ fn read_f(h: &Hub, s: Settings) -> Facts {
 }
 fn marker(h: &Hub, s: &Settings, name: &str, verdict: &str) -> String {
     let p = h.pull(REMI, 3).unwrap();
-    let body = p.body.as_deref().unwrap_or("");
-    let (key, repo, on, base) = if name == "major-verdict" {
-        (
-            s.major_key.as_ref().unwrap(),
-            REMI.to_lowercase(),
-            p.base.name.clone(),
-            format!(" on {}", p.base.name),
-        )
+    let key = if name == "major-verdict" {
+        s.major_key.as_ref().unwrap()
     } else {
-        (
-            s.judge_key.as_ref().unwrap(),
-            REMI.to_owned(),
-            format!("{} {}", p.base.name, fingerprint(body)),
-            String::new(),
-        )
+        s.judge_key.as_ref().unwrap()
     };
-    format!(
-        "<!-- {name}: {verdict} {}{base} {} -->",
-        p.head.sha,
-        key.seal(&repo, 3, name, verdict, &p.head.sha, &on)
+    key.decision(
+        REMI,
+        3,
+        name,
+        verdict,
+        &Revision::from(&p),
+        h.comments(REMI, 3).unwrap().len() as u64 + 1,
     )
 }
 #[test]
@@ -114,25 +106,19 @@ fn a_seal_from_another_head_base_description_or_pr_is_not_reused() {
             2 => h.edit_pull(REMI, 3, |p| p["body"] = json!("new reasons")),
             3..=5 => {
                 let p = h.pull(REMI, 3).unwrap();
-                let on = format!(
-                    "{} {}",
-                    p.base.name,
-                    fingerprint(p.body.as_deref().unwrap_or(""))
-                );
                 let key = if change == 5 {
                     SealKey::from_hex(&"d".repeat(64)).unwrap()
                 } else {
                     s.judge_key.clone().unwrap()
                 };
-                let tag = key.seal(
+                body = key.decision(
                     if change == 4 { "other/repo" } else { REMI },
                     if change == 3 { 99 } else { 3 },
                     "autoland-judgment",
                     "land",
-                    &p.head.sha,
-                    &on,
+                    &Revision::from(&p),
+                    1,
                 );
-                body = format!("<!-- autoland-judgment: land {} {tag} -->", p.head.sha);
             }
             _ => unreachable!(),
         }

@@ -96,7 +96,9 @@ fn dependency_edits_are_reviewed_for_both_author_and_committer_changes() {
     c.settings.renovate_email = None;
     assert_eq!(c.facts().bot_edited, None);
     // Unknown/misconfigured provenance never gets the CI-only shortcut.
-    assert_eq!(c.view(8000).step, Step::Merge); // current trusted reviewer already covered it
+    assert_eq!(c.view(8000).step, Step::QueueReview("reviewer".into()));
+    c.review("reviewer", Verdict::Clean, 700);
+    assert_eq!(c.view(8000).step, Step::Merge); // current trusted reviewer covers the complete claim
 }
 #[test]
 fn majors_threads_and_security_use_their_own_gates() {

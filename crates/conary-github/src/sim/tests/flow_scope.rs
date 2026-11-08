@@ -283,24 +283,8 @@ fn a_major_renovate_proof_waits_for_its_sweeps_verdict() {
     });
     c.hub.refresh_flow(REMI, 3);
     assert!(matches!(c.view(900).step, Step::Wait { .. }));
-    let key = SealKey::from_hex(&"b".repeat(64)).unwrap();
-    c.settings.major_key = Some(key.clone());
-    c.settings.verdict_authors.insert("owner".into());
-    let scope = c.scope();
-    let tag = key.seal(
-        &REMI.to_lowercase(),
-        3,
-        "major-verdict",
-        "ok",
-        &scope.head,
-        "main",
-    );
-    c.hub.flow_comment(
-        REMI,
-        3,
-        "owner",
-        &format!("<!-- major-verdict: ok {} on main {tag} -->", scope.head),
-    );
+    c.sweep("ok");
+    c.review("reviewer", Verdict::Clean, 950);
     assert_eq!(c.view(1000).step, Step::Prove);
 }
 #[test]
@@ -378,8 +362,8 @@ fn only_the_configured_stewards_rest_login_can_supply_a_review_mark() {
         c.roles(&["reviewer"]);
         let scope = c.scope();
         let body = format!(
-            "<!-- reviewer-review:v1 {} -->",
-            json!({"commit_sha":scope.head,"base":"main","description":fingerprint(""),"findings":0})
+            "<!-- reviewer-review:v2 {} -->",
+            json!({"commit_sha":scope.head,"base":"main","scope":scope.description,"findings":0})
         );
         c.hub.put_reviews(REMI,3,json!([{"id":1,"user":{"login":who,"type":kind},"body":body,"commit_id":scope.head,"state":"COMMENTED","submitted_at":"2026-11-08T12:00:00Z"}]));
         assert_eq!(
@@ -398,8 +382,8 @@ fn a_mark_with_an_invalid_time_stops_the_reader() {
     let c = Case::new();
     let scope = c.scope();
     let body = format!(
-        "<!-- reviewer-review:v1 {} -->",
-        json!({"commit_sha":scope.head,"base":"main","description":fingerprint(""),"findings":0})
+        "<!-- reviewer-review:v2 {} -->",
+        json!({"commit_sha":scope.head,"base":"main","scope":scope.description,"findings":0})
     );
     c.hub.put_reviews(REMI,3,json!([{"id":1,"user":{"login":"fieldmouseworks-steward[bot]","type":"Bot"},"body":body,"commit_id":scope.head,"state":"COMMENTED","submitted_at":"yesterday"}]));
     assert!(

@@ -103,6 +103,17 @@ pub(super) fn decide(f: &Facts, m: &mut Memory, now: u64) -> Decision {
             "The owner decides (the needs-peter label)",
         );
     }
+    if let Some((kind, job)) = f
+        .jobs
+        .iter()
+        .find(|(kind, job)| kind.fixes_branch() && job.state.live())
+    {
+        return wait(
+            Stage::Fix,
+            Some(job_wake(f, *kind, job, now)),
+            "A fix job still owns the branch",
+        );
+    }
     if f.merging == Merge::Conflict {
         if f.dependency.is_some() && f.bot_edited != Some(true) {
             return wait(
@@ -142,9 +153,7 @@ pub(super) fn decide(f: &Facts, m: &mut Memory, now: u64) -> Decision {
     // Unknown provenance is someone else's code until read: only a history
     // known to be the bots' alone skips the review loop.
     let edited = f.bot_edited != Some(false) || f.gate_edited;
-    let fixed =
-        f.dependency == Some(Dependency::Minor) && edited && f.classified.class != Class::R2;
-    if f.dependency.is_some() && !fixed {
+    if f.dependency.is_some() {
         let threads = f.open_threads > 0 || f.changes_requested;
         if f.release_at.is_some_and(|t| t > now) && !threads {
             return wait(
@@ -174,15 +183,8 @@ pub(super) fn decide(f: &Facts, m: &mut Memory, now: u64) -> Decision {
                 "Major update: waiting for the dependency sweep's verdict on this head",
             );
         }
-        if threads {
-            return hand(f, m, now, Kind::Findings, true);
-        }
-        if ci == Ci::Red {
-            return hand(f, m, now, Kind::Red, true);
-        }
-        return after_review(f, m, now, ci, false);
     }
-    match super::review::look(f, m, now) {
+    match super::review::look(f, m, now, f.dependency.is_none() || edited) {
         super::review::Look::Next(decision) => decision,
         super::review::Look::Settled { capped } => after_review(f, m, now, ci, capped),
     }
@@ -256,7 +258,10 @@ fn after_review(f: &Facts, m: &mut Memory, now: u64, ci: Ci, capped: bool) -> De
     }
     let pending: Vec<_> = f.checks.iter().filter(|c| c.state == Ci::Pending).collect();
     let machine = f.settings.machine();
-    let proof_only = !pending.is_empty() && pending.iter().all(|c| machine.contains(&c.name));
+    let proof_only = !pending.is_empty()
+        && pending
+            .iter()
+            .all(|c| machine.contains(&c.name.to_lowercase()));
     let early = pending.iter().any(|c| {
         matches!(
             f.settings.recipe(&c.name),

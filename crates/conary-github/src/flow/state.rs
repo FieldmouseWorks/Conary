@@ -56,6 +56,29 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
     {
         raised.proof_data.inputs_job = None;
     }
+    if m.issued.keys().any(|(kind, rev)| {
+        kind == "judge" && rev.head == raised.revision.head && rev.base == raised.revision.base
+    }) {
+        raised.judge_asked = true;
+    }
+    if !issuance(
+        &mut m,
+        "judge",
+        &raised.revision,
+        raised.judgment_generation,
+        raised.judgment.as_ref().map(|j| format!("{:?}", j.verdict)),
+    ) {
+        raised.judgment = None;
+    }
+    if !issuance(
+        &mut m,
+        "major",
+        &raised.revision,
+        raised.major_generation,
+        raised.major.map(|v| format!("{v:?}")),
+    ) {
+        raised.major = None;
+    }
     let f = &raised;
     if m.head != f.revision.head {
         m.head = f.revision.head.clone();
@@ -376,4 +399,34 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
         },
         m,
     )
+}
+
+/// A deleted/edited comment cannot roll an observed decision back. Conflicting
+/// words at the same generation stay blocked until a strictly newer issuance.
+fn issuance(
+    memory: &mut Memory,
+    kind: &str,
+    revision: &Revision,
+    generation: Option<u64>,
+    word: Option<String>,
+) -> bool {
+    let Some(generation) = generation else {
+        return word.is_none();
+    };
+    let word = word.unwrap_or_default();
+    let receipt = memory
+        .issued
+        .entry((kind.into(), revision.clone()))
+        .or_insert((generation, word.clone()));
+    if generation < receipt.0 {
+        return false;
+    }
+    if generation > receipt.0 {
+        *receipt = (generation, word.clone());
+    }
+    if receipt.1 != word {
+        receipt.1.clear();
+        return false;
+    }
+    !word.is_empty()
 }

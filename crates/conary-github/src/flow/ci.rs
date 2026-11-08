@@ -327,19 +327,22 @@ pub(super) fn checks(
     let mut seen = BTreeSet::new();
     for status in source.statuses(repo, head)? {
         let name = status.context.to_lowercase();
-        has_ci |= name != "review-settled"
-            && !name.starts_with(crate::train::CONTEXT)
-            && !proofs.contains(&name);
+        let train = name == crate::train::CONTEXT.to_ascii_lowercase();
+        // Authenticate reserved train results before choosing the newest one.
+        // A forged newer result must not hide the steward's blocking word.
+        if train
+            && !status
+                .creator
+                .as_ref()
+                .is_some_and(|u| u.login.eq_ignore_ascii_case("fieldmouseworks-steward[bot]"))
+        {
+            continue;
+        }
+        has_ci |= name != "review-settled" && !train && !proofs.contains(&name);
         if !seen.insert(name.clone()) || name == "review-settled" {
             continue;
         }
-        if name.starts_with(crate::train::CONTEXT)
-            && (status.state != "failure"
-                || !status
-                    .creator
-                    .as_ref()
-                    .is_some_and(|u| u.login == "fieldmouseworks-steward[bot]"))
-        {
+        if train && status.state != "failure" {
             continue;
         }
         let state = match status.state.as_str() {

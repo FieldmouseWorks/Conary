@@ -488,23 +488,7 @@ fn dependency_held_and_release_age() {
     c.hub
         .edit_pull(REMI, 3, |p| p["head"]["ref"] = json!("renovate/pkg"));
     c.label(&["major"]);
-    let key = SealKey::from_hex(&"b".repeat(64)).unwrap();
-    c.settings.major_key = Some(key.clone());
-    c.settings.verdict_authors.insert("owner".into());
-    let tag = key.seal(
-        &REMI.to_lowercase(),
-        3,
-        "major-verdict",
-        "held",
-        &head(3),
-        "main",
-    );
-    c.hub.flow_comment(
-        REMI,
-        3,
-        "owner",
-        &format!("<!-- major-verdict: held {} on main {tag} -->", head(3)),
-    );
+    c.sweep("held");
     assert_eq!(c.view(4000).step, Step::ListOwner);
     c.settings.major_key = None;
     c.settings.renovate_login = Some("renovate[bot]".into());
@@ -808,6 +792,7 @@ fn label_without_an_owed_decision_is_not_approval() {
 
 fn old_review(c: &Case, sha: &str, base: &str) {
     let p = crate::api::Source::pull(&c.hub, REMI, 3).unwrap();
-    let mark = json!({"commit_sha":sha,"base":base,"findings":0,"description":fingerprint(p.body.as_deref().unwrap_or(""))});
-    c.hub.put_reviews(REMI,3,json!([{"id":1,"user":{"login":crate::sim::STEWARD,"type":"Bot"},"body":format!("<!-- reviewer-review:v1 {mark} -->"),"commit_id":sha,"submitted_at":"1970-01-01T00:00:00Z"}]));
+    let mark =
+        json!({"commit_sha":sha,"base":base,"findings":0,"scope":Revision::from(&p).description});
+    c.hub.put_reviews(REMI,3,json!([{"id":1,"user":{"login":crate::sim::STEWARD,"type":"Bot"},"body":format!("<!-- reviewer-review:v2 {mark} -->"),"commit_id":sha,"submitted_at":"1970-01-01T00:00:00Z"}]));
 }

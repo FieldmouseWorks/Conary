@@ -103,42 +103,24 @@ impl Case {
         let key = SealKey::from_hex(&"a".repeat(64)).unwrap();
         self.settings.judge_key = Some(key.clone());
         self.settings.verdict_authors.insert("owner".into());
-        let p = self.hub.pull(REMI, 3).unwrap();
-        let on = format!(
-            "{} {}",
-            p.base.name,
-            fingerprint(p.body.as_deref().unwrap_or(""))
-        );
-        let tag = key.seal(REMI, 3, "autoland-judgment", verdict, &p.head.sha, &on);
-        self.hub.flow_comment(
+        let generation = self.hub.comments(REMI, 3).unwrap().len() as u64 + 1;
+        let marker = key.decision(
             REMI,
             3,
-            "owner",
-            &format!("<!-- autoland-judgment: {verdict} {} {tag} -->", p.head.sha),
+            "autoland-judgment",
+            verdict,
+            &self.scope(),
+            generation,
         );
+        self.hub.flow_comment(REMI, 3, "owner", &marker);
     }
     pub fn sweep(&mut self, verdict: &str) {
         let key = SealKey::from_hex(&"b".repeat(64)).unwrap();
         self.settings.major_key = Some(key.clone());
         self.settings.verdict_authors.insert("owner".into());
-        let scope = self.scope();
-        let tag = key.seal(
-            &REMI.to_lowercase(),
-            3,
-            "major-verdict",
-            verdict,
-            &scope.head,
-            &scope.base,
-        );
-        self.hub.flow_comment(
-            REMI,
-            3,
-            "owner",
-            &format!(
-                "<!-- major-verdict: {verdict} {} on {} {tag} -->",
-                scope.head, scope.base
-            ),
-        );
+        let generation = self.hub.comments(REMI, 3).unwrap().len() as u64 + 1;
+        let marker = key.decision(REMI, 3, "major-verdict", verdict, &self.scope(), generation);
+        self.hub.flow_comment(REMI, 3, "owner", &marker);
     }
     pub fn secret(&self) {
         let h = self.hub.head_of(REMI, 3);

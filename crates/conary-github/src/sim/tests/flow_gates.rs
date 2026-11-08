@@ -117,9 +117,7 @@ fn gate_renames_are_edits_but_a_rename_elsewhere_keeps_the_bots_exemption() {
         assert_eq!(c.facts().gate_edited, gated);
         assert_eq!(
             c.view(4000).step,
-            if c.facts().classified.class == conary_core::Class::R2 {
-                Step::Judge
-            } else if gated {
+            if gated {
                 Step::QueueReview("reviewer".into())
             } else {
                 Step::Merge

@@ -61,7 +61,9 @@ pub struct Check {
 }
 
 /// Scope of a verdict. Description and base are as much its input as head.
-#[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(
+    Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 pub struct Revision {
     pub head: String,
     pub base: String,
@@ -86,6 +88,8 @@ pub struct Reviewer {
     pub review: Option<Review>,
     pub rounds: u32,
     pub record_id: Option<u64>,
+    /// Original reviewed head, retained when equivalent-tree coverage carries.
+    pub reviewed_head: Option<String>,
     pub findings_answered: bool,
     pub unavailable_until: Option<u64>,
     pub queued: bool,
@@ -314,6 +318,8 @@ pub struct Facts {
     pub changes_requested: bool,
     pub reviewers: BTreeMap<String, Reviewer>,
     pub judgment: Option<Judged>,
+    pub judgment_generation: Option<u64>,
+    pub major_generation: Option<u64>,
     pub jobs: BTreeMap<Kind, Job>,
     pub claims: Vec<FixClaim>,
     pub stopped_jobs: BTreeSet<String>,
@@ -391,6 +397,8 @@ pub struct Memory {
     pub head: String,
     pub raised: BTreeSet<String>,
     pub latest_reviews: BTreeMap<String, u64>,
+    /// Authenticated issuance high-water marks, including same-generation conflicts.
+    pub issued: BTreeMap<(String, Revision), (u64, String)>,
     pub consumed_reviews: BTreeSet<(String, Revision, u64)>,
     pub review_posts: BTreeMap<(String, Revision, u64), u32>,
     pub review_failures: BTreeMap<(String, Revision), (u32, u64)>,

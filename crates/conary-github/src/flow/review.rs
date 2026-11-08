@@ -18,7 +18,7 @@ fn current<'a>(r: &'a Reviewer, revision: &Revision) -> Option<&'a Review> {
     r.review.as_ref().filter(|v| &v.revision == revision)
 }
 
-pub(super) fn look(f: &Facts, m: &mut Memory, now: u64) -> Look {
+pub(super) fn look(f: &Facts, m: &mut Memory, now: u64, request_review: bool) -> Look {
     // A newly read clean review can cover an earlier loss on this base.
     // A clean review already present before the loss cannot. Old records
     // without this observation keep their loss until a fresh look appears.
@@ -32,7 +32,12 @@ pub(super) fn look(f: &Facts, m: &mut Memory, now: u64) -> Look {
             .record_id
             .zip(m.latest_reviews.get(name).copied())
             .is_some_and(|(a, b)| a != b);
-        if clean && lost.is_some_and(|h| h != &f.revision.head || changed) {
+        if clean
+            && r.reviewed_head
+                .as_ref()
+                .is_none_or(|h| h == &f.revision.head)
+            && lost.is_some_and(|h| h != &f.revision.head || changed)
+        {
             if let Some(bases) = m.lost_on.get_mut(name) {
                 bases.remove(&f.revision.base);
             }
@@ -44,7 +49,7 @@ pub(super) fn look(f: &Facts, m: &mut Memory, now: u64) -> Look {
             m.latest_reviews.insert(name.clone(), id);
         }
     }
-    let needs_review = f.classified.review();
+    let needs_review = f.classified.review() && request_review;
     let working = |r: &Reviewer| {
         r.under_way
             .as_ref()
@@ -78,7 +83,14 @@ pub(super) fn look(f: &Facts, m: &mut Memory, now: u64) -> Look {
             }
             let tries = m.review_posts.get(&key).copied().unwrap_or(0);
             if tries >= 3 {
-                let covered = current(r, &f.revision).is_some_and(|v| v.verdict == Verdict::Clean);
+                let covered = current(r, &f.revision).is_some_and(|v| {
+                    v.verdict == Verdict::Clean
+                        && (r
+                            .reviewed_head
+                            .as_ref()
+                            .is_none_or(|h| h == &f.revision.head)
+                            || v.at >= answer.at)
+                });
                 if covered || available(r) && answer.revision.head == f.revision.head {
                     if !covered && answer.verdict == Verdict::Findings {
                         m.lost_on
@@ -109,6 +121,18 @@ pub(super) fn look(f: &Facts, m: &mut Memory, now: u64) -> Look {
             }
             // A look at the current head follows: old findings could have
             // been fixed by its push and must not raise another round.
+            if answer.verdict == Verdict::Findings
+                && r.reviewed_head
+                    .as_ref()
+                    .is_some_and(|h| h != &f.revision.head)
+                && current(r, &f.revision)
+                    .is_some_and(|v| v.verdict == Verdict::Clean && v.at < answer.at)
+            {
+                m.lost_on
+                    .entry(name.clone())
+                    .or_default()
+                    .insert(answer.revision.base.clone(), answer.revision.head.clone());
+            }
             m.consumed_reviews.insert(key);
         }
     }

@@ -93,6 +93,8 @@ pub fn read(
         changes_requested: false,
         reviewers: BTreeMap::new(),
         judgment: None,
+        judgment_generation: None,
+        major_generation: None,
         jobs: BTreeMap::new(),
         claims: Vec::new(),
         stopped_jobs: BTreeSet::new(),
@@ -165,7 +167,16 @@ pub fn read(
         .collect();
     facts.stacked_on = open
         .iter()
-        .find(|p| p.number != pr && p.head.name == pull.base.name)
+        .find(|p| {
+            p.number != pr
+                && p.head.name == pull.base.name
+                && p.head
+                    .repo
+                    .as_ref()
+                    .and_then(|r| r.full_name.as_ref())
+                    .zip(pull.base.repo.as_ref().and_then(|r| r.full_name.as_ref()))
+                    .is_some_and(|(head, base)| head.eq_ignore_ascii_case(base))
+        })
         .map(|p| p.number);
     if facts.stacked_on.is_some() {
         return Ok(facts);
@@ -231,6 +242,8 @@ pub fn read(
         &carried,
     )?;
     facts.judgment = markers.judgment;
+    facts.judgment_generation = markers.judgment_generation;
+    facts.major_generation = markers.major_generation;
     facts.judge_asked = markers.judge_asked;
     facts.major = markers.major;
     let history = source
@@ -292,13 +305,13 @@ pub fn read(
     } else if ci
         .checks
         .iter()
-        .any(|c| machine.contains(&c.name) && c.state == Ci::Red)
+        .any(|c| machine.contains(&c.name.to_lowercase()) && c.state == Ci::Red)
     {
         Proof::Failed
     } else if ci
         .checks
         .iter()
-        .any(|c| machine.contains(&c.name) && c.state == Ci::Pending)
+        .any(|c| machine.contains(&c.name.to_lowercase()) && c.state == Ci::Pending)
     {
         Proof::Needed
     } else {

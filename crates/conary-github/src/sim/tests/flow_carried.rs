@@ -3,7 +3,7 @@ use crate::branches::Branches;
 use crate::flow::*;
 use crate::sim::{REMI, faults::Call};
 
-fn merge_base_into(c: &Case, changed: bool) -> String {
+pub(super) fn merge_base_into(c: &Case, changed: bool) -> String {
     let old = c.scope().head;
     let trunk = c.hub.branch(REMI, "main").unwrap().unwrap();
     let tip = c
@@ -15,7 +15,7 @@ fn merge_base_into(c: &Case, changed: bool) -> String {
     if changed {
         patches.insert("line15: conflict resolution nobody reviewed".into());
     }
-    let sha = crate::sim::tree_of(&["merge-of-main"]);
+    let sha = crate::sim::tree_of(&["merge-of-main", &old, &tip]);
     c.hub.commit_as(&sha, &[old, tip], patches);
     c.push(&sha);
     sha
@@ -38,7 +38,7 @@ fn latest_findings_invalidate_an_earlier_clean_carried_review() {
     c.review("reviewer", Verdict::Findings, 600);
     merge_base_into(&c, false);
     c.pass(0);
-    assert_eq!(c.view(700).step, Step::QueueReview("reviewer".into()));
+    assert_eq!(c.view(8000).step, Step::HandFix(Kind::Findings));
     assert_eq!(
         c.facts().reviewers["other"]
             .review
