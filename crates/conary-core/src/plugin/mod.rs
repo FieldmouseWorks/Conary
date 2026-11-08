@@ -75,6 +75,36 @@ pub struct Finding {
     pub text: String,
 }
 
+impl Finding {
+    /// A finding names a file inside the repository by a relative path, a
+    /// one-based line and a nonblank explanation.
+    pub fn valid(&self) -> bool {
+        inside_repository(&self.path) && self.line != 0 && !self.text.trim().is_empty()
+    }
+}
+
+/// Whether `path` is relative and, read lexically, names something below the
+/// repository root: never absolute, never the root itself, and no `..` that
+/// climbs above it, however many components it passes through.
+fn inside_repository(path: &str) -> bool {
+    if path.trim().is_empty() || path.contains('\\') {
+        return false;
+    }
+    let mut depth = 0usize;
+    for component in std::path::Path::new(path).components() {
+        match component {
+            std::path::Component::Normal(_) => depth += 1,
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => match depth.checked_sub(1) {
+                Some(d) => depth = d,
+                None => return false,
+            },
+            std::path::Component::RootDir | std::path::Component::Prefix(_) => return false,
+        }
+    }
+    depth > 0
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Severity {
@@ -203,4 +233,60 @@ pub fn fixtures() -> Vec<Task> {
             checks: vec!["fixture-pass".into(), "fixture-fail".into()],
         },
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn finding(path: &str) -> Finding {
+        Finding {
+            path: path.into(),
+            line: 1,
+            severity: Severity::P2,
+            text: "defect".into(),
+        }
+    }
+
+    #[test]
+    fn findings_stay_inside_the_repository() {
+        for path in ["src/lib.rs", "./src/lib.rs", "src/../lib.rs", "a/b/../../c"] {
+            assert!(finding(path).valid(), "{path}");
+        }
+        for path in [
+            "",
+            " ",
+            "/etc/passwd",
+            "//etc/passwd",
+            "..",
+            "../outside.rs",
+            "../../outside.rs",
+            "src/../../outside.rs",
+            "a/b/../../../outside.rs",
+            "./../outside.rs",
+            ".",
+            "src/..",
+            "..\\outside.rs",
+        ] {
+            assert!(!finding(path).valid(), "{path}");
+        }
+    }
+
+    #[test]
+    fn findings_need_a_line_and_text() {
+        assert!(
+            !Finding {
+                line: 0,
+                ..finding("src/lib.rs")
+            }
+            .valid()
+        );
+        assert!(
+            !Finding {
+                text: " ".into(),
+                ..finding("src/lib.rs")
+            }
+            .valid()
+        );
+    }
 }

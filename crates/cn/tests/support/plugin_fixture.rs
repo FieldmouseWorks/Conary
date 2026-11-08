@@ -44,6 +44,10 @@ fn main() {
         r#""kind":"review""#
     } else if mode == "undescribed" {
         r#""kind":"judge","verdict":"pass","why":"wrong kind""#
+    } else if mode == "absolute" {
+        r#""kind":"review","findings":[{"path":"/etc/passwd","line":1,"severity":"p1","text":"outside"}]"#
+    } else if mode == "escape" {
+        r#""kind":"review","findings":[{"path":"src/../../outside.rs","line":1,"severity":"p1","text":"outside"}]"#
     } else {
         r#""kind":"review","findings":[]"#
     };

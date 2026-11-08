@@ -83,10 +83,7 @@ impl Plugin {
         }
         match (&task, &response.answer) {
             (Task::Review { .. }, Answer::Review { findings }) => {
-                if findings
-                    .iter()
-                    .any(|f| f.path.trim().is_empty() || f.line == 0 || f.text.trim().is_empty())
-                {
+                if !findings.iter().all(Finding::valid) {
                     return bad("invalid finding");
                 }
             }

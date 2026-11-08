@@ -42,7 +42,9 @@ specified fields; receivers need not accept unknown fields. Missing required
 fields fail. `session` is the sole optional field. Arrays may be empty unless
 otherwise stated. Commit and tree names are full Git object IDs (40 or 64 hex
 digits), not branch names. Repo is `owner/name`; PR and line are positive
-integers. Paths are relative to the repository, lines are one-based.
+integers. Paths are relative to the repository, separated by `/`, and name
+something inside it: an absolute path, a backslash, or a `..` that climbs
+above the repository root fails. Lines are one-based.
 
 ## Work requests and answers
 

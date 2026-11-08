@@ -112,3 +112,49 @@ fn plugin_rejects_author_switching_engines() {
 fn plugin_rejects_unknown_session_of_author_engine() {
     rejects("unknown-session", "author cannot grade");
 }
+#[test]
+fn plugin_rejects_absolute_finding_path() {
+    rejects("absolute", "invalid finding");
+}
+#[test]
+fn plugin_rejects_finding_path_escaping_the_repository() {
+    rejects("escape", "invalid finding");
+}
+#[test]
+fn cargo_run_still_launches_cn() {
+    // The example plugin is a second binary of this package; without a
+    // default, `cargo run -p conary-cli` (README) cannot pick one.
+    let out = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()))
+        .args([
+            "metadata",
+            "--no-deps",
+            "--offline",
+            "--format-version",
+            "1",
+        ])
+        .arg("--manifest-path")
+        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml"))
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let metadata: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let package = metadata["packages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["name"] == "conary-cli")
+        .unwrap();
+    assert_eq!(package["default_run"], "cn");
+    let bins: Vec<_> = package["targets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|t| t["kind"] == serde_json::json!(["bin"]))
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    assert!(bins.contains(&"conary-example-plugin"), "{bins:?}");
+}

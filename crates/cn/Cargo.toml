@@ -6,6 +6,8 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 publish = false
+# The example plugin is a second binary; plain `cargo run -p conary-cli` stays cn.
+default-run = "cn"
 
 [[bin]]
 name = "cn"
