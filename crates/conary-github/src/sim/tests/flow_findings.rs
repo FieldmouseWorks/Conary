@@ -265,6 +265,7 @@ fn observed_generations_survive_deleted_or_rewritten_decision_history() {
         assert_eq!(c.pass(8000).step, Step::ListOwner);
         c.hub.edit_flow_comment(REMI, 3, 1, &old);
         let n = c.pass(8100);
+        assert_eq!(n.step, Step::ListOwner); // Keep the authenticated Owner/Held decision, not just its counter.
         assert!(!matches!(
             n.step,
             Step::Merge | Step::JoinTrain | Step::Settle

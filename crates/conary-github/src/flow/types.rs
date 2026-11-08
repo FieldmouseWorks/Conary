@@ -398,7 +398,8 @@ pub struct Memory {
     pub raised: BTreeSet<String>,
     pub latest_reviews: BTreeMap<String, u64>,
     /// Authenticated issuance high-water marks, including same-generation conflicts.
-    pub issued: BTreeMap<(String, Revision), (u64, String)>,
+    pub judge_issuance: BTreeMap<Revision, (u64, Option<Judgment>)>,
+    pub major_issuance: BTreeMap<Revision, (u64, Option<Major>)>,
     pub consumed_reviews: BTreeSet<(String, Revision, u64)>,
     pub review_posts: BTreeMap<(String, Revision, u64), u32>,
     pub review_failures: BTreeMap<(String, Revision), (u32, u64)>,
