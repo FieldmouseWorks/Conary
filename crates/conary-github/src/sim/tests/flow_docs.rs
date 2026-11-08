@@ -101,3 +101,154 @@ fn docs_runs_for_another_fork_or_base_never_prove_this_pr() {
         assert!(f.checks.iter().all(|c| c.state != Ci::Red));
     }
 }
+
+fn on_base(base: &str) -> Scenario {
+    let s = Scenario::new();
+    s.hub.set_branch(REMI, base, TRUNK);
+    s.hub.retarget(REMI, 3, base);
+    s.hub.refresh_flow(REMI, 3);
+    s.hub.flow_review(REMI, 3, "reviewer", Verdict::Clean, 600);
+    s
+}
+fn twin(r: Run) -> Run {
+    r.workflow("twin", Some(TWIN))
+}
+#[test]
+fn fresh_retarget_runs_replace_only_the_same_workflows_stale_base() {
+    // docs.py:164,175,185,196: both workflow files, there and back, title edits and unfinished runs.
+    for (runs, base, ready) in [
+        (
+            vec![
+                Run::whole(1, "main", "success"),
+                twin(Run::whole(2, "next", "success")),
+            ],
+            "next",
+            true,
+        ),
+        (
+            vec![
+                Run::whole(1, "main", "success"),
+                Run::whole(2, "next", "success")
+                    .workflow("other", Some(".github/workflows/ci.yml")),
+            ],
+            "next",
+            false,
+        ),
+        (
+            vec![
+                Run::whole(1, "next", "success"),
+                twin(Run::whole(2, "main", "success")),
+            ],
+            "main",
+            true,
+        ),
+        (
+            vec![
+                twin(Run::whole(1, "next", "success")),
+                Run::whole(2, "main", "success"),
+            ],
+            "main",
+            true,
+        ),
+        (
+            vec![
+                Run::whole(1, "main", "success"),
+                twin(Run::whole(2, "next", "success")),
+                twin(Run::whole(3, "main", "success")),
+            ],
+            "main",
+            true,
+        ),
+        (
+            vec![
+                Run::whole(1, "main", "success"),
+                twin(Run::whole(2, "next", "success")),
+                twin(Run::new(3, &[(GATE, "skipped")])),
+            ],
+            "next",
+            true,
+        ),
+        (
+            vec![
+                Run::whole(1, "main", "success"),
+                twin(Run::new(2, &[(GATE, "skipped")])),
+            ],
+            "next",
+            false,
+        ),
+        (
+            vec![
+                Run::whole(1, "main", "success"),
+                twin(Run::whole(2, "next", "success").going()),
+            ],
+            "next",
+            false,
+        ),
+        (
+            vec![
+                Run::whole(1, "main", "success"),
+                twin(Run::whole(2, "other", "success")),
+            ],
+            "next",
+            false,
+        ),
+    ] {
+        let s = on_base(base);
+        let f = s.read(&runs, &["proof"]);
+        assert_eq!(
+            next(&f, &s.memory, 4000).0.step == Step::Prove,
+            ready,
+            "{base} {f:?}"
+        );
+        if !ready {
+            assert_eq!(next(&f, &s.memory, 4000).0.stage, Stage::Ci);
+        }
+    }
+}
+#[test]
+fn a_retargets_own_docs_or_whole_gate_decides_proofs_and_red() {
+    // docs.py:206,217,222,225: unrelated/incomplete work cannot clear old docs; current work can.
+    let mut another_app = Run::new(2, &[("check / lane into next", "success")]);
+    another_app.metadata.app = "some-app".into();
+    for extra in [
+        Run::new(2, &[("check / report", "success")]).workflow("report", Some("report.yml")),
+        another_app,
+        Run::whole(2, "other", "success"),
+        Run::whole(2, "next", "success").going(),
+    ] {
+        let s = on_base("next");
+        let f = s.read(&[Run::docs(1, TRUNK, "success"), extra], &["proof"]);
+        assert_eq!(next(&f, &s.memory, 4000).0.stage, Stage::Ci);
+    }
+    for old in ["success", "failure"] {
+        let s = on_base("next");
+        let f = s.read(
+            &[Run::docs(1, TRUNK, old), Run::whole(2, "next", "success")],
+            &["proof"],
+        );
+        assert_eq!(next(&f, &s.memory, 4000).0.step, Step::Prove);
+    }
+    let s = on_base("next");
+    let f = s.read(
+        &[
+            Run::docs(1, TRUNK, "success"),
+            Run::whole(2, "next", "failure"),
+        ],
+        &["proof"],
+    );
+    assert_eq!(next(&f, &s.memory, 4000).0.step, Step::HandFix(Kind::Red));
+    let newer = Run::new(
+        2,
+        &[
+            ("check / lane into next", "success"),
+            (GATE, "skipped"),
+            (
+                &format!("check / docs only into next from {TRUNK}"),
+                "success",
+            ),
+        ],
+    );
+    let f = s.read(&[Run::docs(1, TRUNK, "success"), newer], &["proof"]);
+    assert_eq!(f.proof, Proof::NotNeeded);
+    assert_eq!(next(&f, &s.memory, 4000).0.step, Step::Merge);
+}
