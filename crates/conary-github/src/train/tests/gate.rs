@@ -4,26 +4,26 @@
 //! names at a commit on its repo's main.
 
 use super::*;
+use crate::attest::ARTIFACT;
 use conary_core::op::Attest;
 
 #[test]
 fn the_gates_results_are_recorded_for_the_candidates_commit_alone() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let mut hub = Hub::new(&[3]);
+    let hub = github(&[3]);
     join_all(&mut store, &hub, &[3]);
     let (id, _) = gating(&step_once(&mut store, &hub));
     let commit = store.ledger().candidate(id).unwrap().commit.to_string();
-    hub.checks.insert(
-        commit.clone(),
+    hub.put_checks(&commit.clone(),
         json!([
             {"id": 2, "name": "check / check", "status": "completed", "conclusion": "success",
              "html_url": "https://github.com/FieldmouseWorks/remi/actions/runs/1/job/1"},
             {"id": 3, "name": "slow", "status": "in_progress", "conclusion": null, "html_url": null},
         ]),
     );
-    hub.statuses.insert(
-        commit.clone(),
+    hub.put_statuses(
+        &commit.clone(),
         json!([
             {"context": "review-settled", "state": "success", "target_url": null},
             {"context": "proof", "state": "failure", "target_url": "https://remi/proof/1"},
@@ -31,11 +31,11 @@ fn the_gates_results_are_recorded_for_the_candidates_commit_alone() {
     );
     // Something else pushed to the train branch counts for nothing.
     let pushed = format!("{:0>40}", "dead");
-    hub.checks.insert(
-        pushed.clone(),
+    hub.put_checks(&pushed.clone(),
         json!([{"id": 4, "name": "check / check", "status": "completed", "conclusion": "failure", "html_url": null}]),
     );
-    hub.branches.borrow_mut().insert(train_branch(id), pushed);
+    hub.change(&pushed, TRUNK, "pushed");
+    hub.set_branch(REMI, &train_branch(id), &pushed);
     step_once(&mut store, &hub);
     step_once(&mut store, &hub);
     let evidence: Vec<(String, conary_core::op::Outcome)> = store
@@ -57,7 +57,7 @@ fn the_gates_results_are_recorded_for_the_candidates_commit_alone() {
 fn the_gate_is_green_only_once_every_check_passed_and_the_required_ones_reported_attested() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let mut hub = Hub::new(&[3]);
+    let hub = github(&[3]);
     join_all(&mut store, &hub, &[3]);
     let required = Settings {
         require: vec!["check / check".into(), "proof".into()],
@@ -72,8 +72,8 @@ fn the_gate_is_green_only_once_every_check_passed_and_the_required_ones_reported
     let (id, _) = gating(&stepped);
     assert_eq!(waiting(&stepped), ["check / check", "proof"]);
     let commit = commit_of(&store, id);
-    hub.checks.insert(
-        commit.clone(),
+    hub.put_checks(
+        &commit.clone(),
         json!([
             {"id": 5, "name": "check / check", "status": "completed", "conclusion": "success",
              "html_url": null, "started_at": "2026-10-29T11:00:00Z"},
@@ -88,21 +88,21 @@ fn the_gate_is_green_only_once_every_check_passed_and_the_required_ones_reported
         &[("check / check", "success"), ("slow", "skipped")],
     );
     // The proof job hasn't posted, and the steward's own word isn't a check.
-    hub.statuses.insert(
-        commit.clone(),
+    hub.put_statuses(
+        &commit.clone(),
         json!([{"context": "review-settled", "state": "success", "target_url": null},
                {"context": CONTEXT, "state": "pending", "target_url": null}]),
     );
     assert_eq!(waiting(&step_req(&mut store, &hub)), ["proof"]);
-    hub.statuses.insert(
-        commit.clone(),
+    hub.put_statuses(
+        &commit.clone(),
         json!([{"context": "proof", "state": "pending", "target_url": null}]),
     );
     assert_eq!(waiting(&step_req(&mut store, &hub)), ["proof"]);
     // A status that passed still isn't attested: no status carries an
     // attestation, so a required one can't make a candidate green.
-    hub.statuses.insert(
-        commit.clone(),
+    hub.put_statuses(
+        &commit.clone(),
         json!([{"context": "proof", "state": "success", "target_url": null},
                {"context": "proof", "state": "pending", "target_url": null}]),
     );
@@ -111,7 +111,7 @@ fn the_gate_is_green_only_once_every_check_passed_and_the_required_ones_reported
         ["proof: a status carries no attestation"]
     );
     // A required job that passed, attested by its producer, is.
-    hub.statuses.remove(&commit);
+    hub.put_statuses(&commit, json!([]));
     hub.ci(
         &commit,
         &[("check / check", "success"), ("proof", "success")],
@@ -128,13 +128,13 @@ fn each_checks_latest_run_is_its_word() {
     let gate = |runs: Vec<Value>, statuses: Value| {
         let dir = tempfile::tempdir().unwrap();
         let mut store = store(&dir);
-        let mut hub = Hub::new(&[3]);
+        let hub = github(&[3]);
         join_all(&mut store, &hub, &[3]);
         let (id, _) = gating(&step_once(&mut store, &hub));
         let commit = commit_of(&store, id);
-        hub.checks.insert(commit.clone(), Value::Array(runs));
+        hub.put_checks(&commit.clone(), Value::Array(runs));
         hub.attest_passes(&commit);
-        hub.statuses.insert(commit, statuses);
+        hub.put_statuses(&commit, statuses);
         step_once(&mut store, &hub).verdicts.first().map(|v| v.1)
     };
     // A run of the gate in a suite: done with `conclusion`, else queued.
@@ -181,12 +181,12 @@ fn each_checks_latest_run_is_its_word() {
 
 /// A candidate of #3 gating, with its gate's one run passed but not yet
 /// attested: the run's id.
-fn gating_unattested(store: &mut Store, hub: &mut Hub) -> (CandidateId, String, u64) {
+fn gating_unattested(store: &mut Store, hub: &Hub) -> (CandidateId, String, u64) {
     join_all(store, hub, &[3]);
     let (id, _) = gating(&step_once(store, hub));
     let commit = commit_of(store, id);
-    hub.checks.insert(
-        commit.clone(),
+    hub.put_checks(
+        &commit.clone(),
         json!([{"id": 9, "name": "check / check", "status": "completed", "conclusion": "success",
                 "html_url": "https://github.com/FieldmouseWorks/remi/actions/runs/90/job/9",
                 "started_at": "2026-10-29T11:00:00Z"}]),
@@ -198,8 +198,8 @@ fn gating_unattested(store: &mut Store, hub: &mut Hub) -> (CandidateId, String, 
 fn a_required_pass_waits_for_its_attestation_and_then_lands_on_it() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let mut hub = Hub::new(&[3]);
-    let (id, commit, run) = gating_unattested(&mut store, &mut hub);
+    let hub = github(&[3]);
+    let (id, commit, run) = gating_unattested(&mut store, &hub);
     // Its pass alone is no green: the gate waits, and says why.
     let stepped = step_once(&mut store, &hub);
     assert_eq!(gating(&stepped).0, id);
@@ -238,12 +238,12 @@ fn a_required_pass_waits_for_its_attestation_and_then_lands_on_it() {
 fn an_attestation_already_checked_isnt_read_again() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let mut hub = Hub::new(&[3]);
+    let hub = github(&[3]);
     let required = Settings {
         require: vec!["check / check".into(), "proof".into()],
         ..settings()
     };
-    let (id, commit, run) = gating_unattested(&mut store, &mut hub);
+    let (id, commit, run) = gating_unattested(&mut store, &hub);
     hub.attest(run, &hub.attestation(&commit, run));
     let step_req = |store: &mut Store, hub: &Hub| {
         step(store, hub, hub, &config(), &repo(), &required).unwrap()
@@ -252,7 +252,7 @@ fn an_attestation_already_checked_isnt_read_again() {
     for _ in 0..3 {
         assert_eq!(waiting(&step_req(&mut store, &hub)), ["proof"]);
     }
-    assert_eq!(hub.downloads.get(), 1);
+    assert_eq!(hub.count(Call::Artifact), 1);
     let attested = |store: &Store| {
         store
             .ledger()
@@ -268,19 +268,14 @@ fn an_attestation_already_checked_isnt_read_again() {
     let proof = json!({"id": 19, "name": "proof", "status": "completed", "conclusion": "success",
                        "html_url": "https://github.com/FieldmouseWorks/remi/actions/runs/190/job/19",
                        "started_at": "2026-10-29T11:05:00Z"});
-    hub.checks
-        .get_mut(&commit)
-        .unwrap()
-        .as_array_mut()
-        .unwrap()
-        .push(proof);
+    hub.add_check(&commit, proof);
     assert_eq!(
         waiting(&step_req(&mut store, &hub)),
         ["proof: its run 190 kept no attestation"]
     );
     hub.attest(19, &hub.attestation(&commit, 19));
     assert_eq!(step_req(&mut store, &hub).verdicts, [(id, Verdict::Green)]);
-    assert_eq!(hub.downloads.get(), 2);
+    assert_eq!(hub.count(Call::Artifact), 2);
     assert_eq!(attested(&store), 2);
 }
 
@@ -288,12 +283,12 @@ fn an_attestation_already_checked_isnt_read_again() {
 fn an_attestation_kept_from_a_signer_the_machine_no_longer_names_counts_for_nothing() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let mut hub = Hub::new(&[3]);
+    let hub = github(&[3]);
     let required = Settings {
         require: vec!["check / check".into(), "proof".into()],
         ..settings()
     };
-    let (_, commit, run) = gating_unattested(&mut store, &mut hub);
+    let (_, commit, run) = gating_unattested(&mut store, &hub);
     hub.attest(run, &hub.attestation(&commit, run));
     let stepped = step(&mut store, &hub, &hub, &config(), &repo(), &required).unwrap();
     assert_eq!(waiting(&stepped), ["proof"]);
@@ -315,7 +310,7 @@ fn an_attestation_kept_from_a_signer_the_machine_no_longer_names_counts_for_noth
             )
         ]
     );
-    assert_eq!(hub.downloads.get(), 2);
+    assert_eq!(hub.count(Call::Artifact), 2);
 }
 
 #[test]
@@ -324,8 +319,8 @@ fn an_attestation_of_another_commit_run_or_tree_doesnt_count() {
     let waits = |forged: &dyn Fn(&Hub, &str, u64) -> String| {
         let dir = tempfile::tempdir().unwrap();
         let mut store = store(&dir);
-        let mut hub = Hub::new(&[3]);
-        let (_, commit, run) = gating_unattested(&mut store, &mut hub);
+        let hub = github(&[3]);
+        let (_, commit, run) = gating_unattested(&mut store, &hub);
         let file = forged(&hub, &commit, run);
         hub.attest(run, &file);
         let stepped = step_once(&mut store, &hub);
@@ -335,7 +330,7 @@ fn an_attestation_of_another_commit_run_or_tree_doesnt_count() {
     let other = "d".repeat(40);
     // Another commit's honest attestation, replayed.
     let why = waits(&|hub, _, run| {
-        hub.holds.borrow_mut().insert(other.clone(), Vec::new());
+        hub.change(&other, TRUNK, "other");
         hub.attestation(&other, run)
     });
     assert!(why[0].contains("its token is for"), "{why:?}");
@@ -351,7 +346,7 @@ fn an_attestation_of_another_commit_run_or_tree_doesnt_count() {
     assert!(why[0].contains("it ran on tree"), "{why:?}");
     // Another repo's.
     let why = waits(&|hub, commit, run| {
-        let tree = tree_of(&hub.holds.borrow()[commit]);
+        let tree = hub.tree_at(commit);
         let s = testing::statement(commit, &tree, "pass");
         let c = testing::claims("FieldmouseWorks/burrow", commit, run, &s);
         testing::file(&s, &testing::token(&c))
@@ -366,12 +361,12 @@ fn an_attestation_of_another_commit_run_or_tree_doesnt_count() {
 fn only_the_named_ci_at_a_commit_on_its_main_signs() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let mut hub = Hub::new(&[3]);
-    let (id, commit, run) = gating_unattested(&mut store, &mut hub);
+    let hub = github(&[3]);
+    let (id, commit, run) = gating_unattested(&mut store, &hub);
     hub.attest(run, &hub.attestation(&commit, run));
     // The signer's main hasn't got its commit: a branch's copy of the
     // workflow could sign anything.
-    hub.signer.replace(vec!["e".repeat(40)]);
+    hub.set_signer(&[&"e".repeat(40)]);
     let stepped = step_once(&mut store, &hub);
     assert!(stepped.verdicts.is_empty());
     assert_eq!(
@@ -382,8 +377,7 @@ fn only_the_named_ci_at_a_commit_on_its_main_signs() {
         )]
     );
     // Once main has it, behind its tip, it counts.
-    hub.signer
-        .replace(vec!["e".repeat(40), testing::SIGNER_SHA.into()]);
+    hub.set_signer(&[&"e".repeat(40), testing::SIGNER_SHA]);
     let stepped = step_once(&mut store, &hub);
     assert_eq!(stepped.verdicts, [(id, Verdict::Green)]);
 }
@@ -395,10 +389,10 @@ fn a_pass_counts_only_from_a_runner_started_fresh_for_it() {
     let lands = |runner: &str, claims: fn(&mut Value), fresh: Option<&str>| {
         let dir = tempfile::tempdir().unwrap();
         let mut store = store(&dir);
-        let mut hub = Hub::new(&[3]);
-        let (id, commit, run) = gating_unattested(&mut store, &mut hub);
-        hub.runners.borrow_mut().insert(run, runner.into());
-        let tree = tree_of(&hub.holds.borrow()[&commit]);
+        let hub = github(&[3]);
+        let (id, commit, run) = gating_unattested(&mut store, &hub);
+        hub.ran_on(run, runner);
+        let tree = hub.tree_at(&commit);
         let s = testing::statement(&commit, &tree, "pass");
         let mut c = testing::claims("FieldmouseWorks/remi", &commit, run, &s);
         claims(&mut c);
@@ -438,7 +432,7 @@ fn a_pass_counts_only_from_a_runner_started_fresh_for_it() {
 fn a_required_job_that_was_skipped_attests_nothing() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let mut hub = Hub::new(&[3]);
+    let hub = github(&[3]);
     join_all(&mut store, &hub, &[3]);
     let (id, _) = gating(&step_once(&mut store, &hub));
     let commit = commit_of(&store, id);
@@ -453,7 +447,7 @@ fn a_required_job_that_was_skipped_attests_nothing() {
 fn red_needs_no_attestation_and_a_check_not_required_needs_none_to_pass() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let mut hub = Hub::new(&[3, 4]);
+    let hub = github(&[3, 4]);
     join_all(&mut store, &hub, &[3]);
     let (id, _) = gating(&step_once(&mut store, &hub));
     // A check failed: red, with nothing attested, and the required one's
@@ -463,7 +457,7 @@ fn red_needs_no_attestation_and_a_check_not_required_needs_none_to_pass() {
         &[("check / check", "success"), ("lint", "failure")],
     );
     assert_eq!(step_once(&mut store, &hub).verdicts, [(id, Verdict::Red)]);
-    assert_eq!(hub.downloads.get(), 0);
+    assert_eq!(hub.count(Call::Artifact), 0);
     // A pass of a check that isn't required counts unattested beside the
     // required one's.
     join_all(&mut store, &hub, &[4]);
@@ -474,11 +468,12 @@ fn red_needs_no_attestation_and_a_check_not_required_needs_none_to_pass() {
         &[("check / check", "success"), ("lint", "success")],
     );
     // Only the required one's job attested it.
-    let lint = parse::<Vec<CheckRun>>(&hub.checks[&commit])
+    let lint = hub
+        .checks_on(&commit)
         .into_iter()
         .find(|r| r.name == "lint")
         .unwrap();
-    hub.attestations.borrow_mut().remove(&lint.id).unwrap();
+    hub.forget_artifacts(Some(lint.id));
     let stepped = step_once(&mut store, &hub);
     assert_eq!(stepped.verdicts, [(id, Verdict::Green)]);
 }
@@ -487,7 +482,7 @@ fn red_needs_no_attestation_and_a_check_not_required_needs_none_to_pass() {
 fn a_train_with_nothing_required_doesnt_step() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let hub = Hub::new(&[3]);
+    let hub = github(&[3]);
     join_all(&mut store, &hub, &[3]);
     let none = Settings {
         require: Vec::new(),
@@ -498,17 +493,17 @@ fn a_train_with_nothing_required_doesnt_step() {
         Err(TrainError::NothingRequired)
     ));
     // Nothing was built.
-    assert_eq!(hub.names(), ["main"]);
+    assert_eq!(hub.names(REMI), ["main"]);
 }
 
 /// A candidate a train said green before a required check's pass counted
 /// only attested: its commit's runs passed, recorded as its evidence with
 /// no attestation, and then its green.
-fn green_unattested(store: &mut Store, hub: &mut Hub, prs: &[u64]) -> CandidateId {
+fn green_unattested(store: &mut Store, hub: &Hub, prs: &[u64]) -> CandidateId {
     join_all(store, hub, prs);
     let (id, _) = gating(&step_once(store, hub));
     hub.ci(&commit_of(store, id), &[("check / check", "success")]);
-    hub.attestations.borrow_mut().clear();
+    hub.forget_artifacts(None);
     step_once(store, hub);
     store
         .record(Body::Verdict {
@@ -526,15 +521,15 @@ fn a_green_on_passes_nobody_attested_merges_nothing_and_is_built_again() {
     // landing, and nothing's merged.
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let mut hub = Hub::new(&[3, 5]);
-    let old = green_unattested(&mut store, &mut hub, &[3, 5]);
+    let hub = github(&[3, 5]);
+    let old = green_unattested(&mut store, &hub, &[3, 5]);
     let landing = format!("landing with candidate {old}");
     hub.mark(&repo().to_string(), &head(3), Mark::Landing, &landing, None)
         .unwrap();
     let stepped = step_once(&mut store, &hub);
     assert_eq!(stepped.verdicts, [(old, Verdict::Dropped)]);
     assert!(stepped.landed.is_empty() && stepped.refused.is_empty());
-    assert_eq!(hub.held("main"), Vec::<String>::new());
+    assert_eq!(hub.held(REMI, "main"), Vec::<String>::new());
     assert_eq!(hub.latest(&head(3)), Some(Mark::Waiting));
     assert_eq!(hub.marked(), [(head(3), Mark::Landing)]);
     // Built again, and gated as a candidate is now: it lands once its pass
@@ -553,8 +548,8 @@ fn a_green_on_passes_nobody_attested_has_a_merge_it_made_recorded_and_makes_no_m
     // A step landed the first and stopped before the second.
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let mut hub = Hub::new(&[3, 5]);
-    let old = green_unattested(&mut store, &mut hub, &[3, 5]);
+    let hub = github(&[3, 5]);
+    let old = green_unattested(&mut store, &hub, &[3, 5]);
     let full = repo().to_string();
     let landing = format!("landing with candidate {old}");
     hub.mark(&full, &head(3), Mark::Landing, &landing, None)
@@ -572,12 +567,12 @@ fn a_green_on_passes_nobody_attested_has_a_merge_it_made_recorded_and_makes_no_m
     );
     assert_eq!(stepped.verdicts, [(old, Verdict::Dropped)]);
     assert!(stepped.landed.is_empty() && stepped.refused.is_empty());
-    assert_eq!(hub.held("main"), [head(3)]);
+    assert_eq!(hub.held(REMI, "main"), [head(3)]);
     assert_ne!(hub.latest(&head(5)), Some(Mark::Landing));
     let (new, prs) = gating(&stepped);
     assert_eq!(prs, [5]);
     hub.ci(&commit_of(&store, new), &[("check / check", "success")]);
     let stepped = step_once(&mut store, &hub);
     assert_eq!((stepped.landed, stepped.finished), (vec![5], vec![new]));
-    assert_eq!(hub.held("main"), [3, 5].map(head));
+    assert_eq!(hub.held(REMI, "main"), [3, 5].map(head));
 }

@@ -1,11 +1,7 @@
-use std::cell::{Cell, RefCell};
-use std::collections::{BTreeMap, HashMap};
-
 use ed25519_dalek::SigningKey;
-use serde_json::{Value, json};
 
 use super::*;
-use crate::api::{CheckRun, Commit, Event, PullRequest, Pulls, Review, Status};
+use crate::sim::{Call, Hub, REMI};
 use conary_core::ledger::Status as Kept;
 use conary_core::op::{Actor, ActorKind, Authority};
 
@@ -13,7 +9,7 @@ use conary_core::op::{Actor, ActorKind, Authority};
 const BEFORE: &str = "1111111111111111111111111111111111111111";
 const AFTER: &str = "2222222222222222222222222222222222222222";
 const TRUNK: &str = "3333333333333333333333333333333333333333";
-const STEWARD: &str = "fieldmouseworks-steward[bot]";
+use crate::sim::STEWARD;
 
 fn repo() -> Repo {
     "FieldmouseWorks/remi".parse().unwrap()
@@ -26,351 +22,37 @@ fn config() -> Config {
     }
 }
 
-/// GitHub, as far as undo can tell: commits with their trees and
-/// parents, branches, and the PRs opened from them. Merging trunk into a
-/// revert's branch makes `merging`'s tree, or conflicts when it's `None`;
-/// a branch that holds trunk already is merged already. Merging another
-/// revert in makes a tree of both. A revert whose tree is `gone` changes
-/// nothing: trunk already lacks what its change brought.
-struct Hub {
-    trees: RefCell<HashMap<String, String>>,
-    parents: RefCell<HashMap<String, Vec<String>>>,
-    branches: RefCell<BTreeMap<String, String>>,
-    merging: RefCell<Option<String>>,
-    /// Trees whose commit conflicts when it's merged into a branch.
-    conflicting: RefCell<Vec<String>>,
-    /// Trees of reverts that change nothing.
-    gone: RefCell<Vec<String>>,
-    /// Every commit made, as (tree, parent, message).
-    made: RefCell<Vec<(String, String, String)>>,
-    pulls: RefCell<Vec<Value>>,
-    /// The PRs each trunk commit a merge made is linked to.
-    linked: RefCell<HashMap<String, Vec<u64>>>,
-    /// The heads the steward settled, before they merged.
-    settled: RefCell<Vec<String>>,
-    /// When each PR closed and reopened, oldest first.
-    turns: RefCell<HashMap<u64, Vec<(String, &'static str)>>>,
-    /// Repos GitHub errs for.
-    down: RefCell<Vec<String>>,
-    /// PRs GitHub errs for when they're read.
-    lost: RefCell<Vec<u64>>,
-    n: Cell<u64>,
-    /// Seconds since noon, a tick for each thing that happens.
-    clock: Cell<u64>,
+/// PR 5's change, and what landed on trunk after it.
+const CHANGE: &str = "#5";
+const LATER: &str = "later";
+
+/// GitHub as undo finds it: in remi, trunk before PR 5's change landed
+/// (BEFORE, holding nothing), its landing (AFTER) and trunk now (TRUNK,
+/// with something LATER on top); and burrow, its trunk at BEFORE too.
+fn github() -> Hub {
+    let hub = Hub::new(REMI, BEFORE);
+    hub.change(AFTER, BEFORE, CHANGE);
+    hub.change(TRUNK, AFTER, LATER);
+    hub.set_branch(REMI, "main", TRUNK);
+    hub.add_repo(BURROW, "main", BEFORE);
+    hub
 }
 
-impl Hub {
-    fn new() -> Self {
-        let commits = [(BEFORE, "before"), (AFTER, "after"), (TRUNK, "trunk")];
-        Self {
-            trees: RefCell::new(
-                commits
-                    .iter()
-                    .map(|(c, t)| (c.to_string(), t.to_string()))
-                    .collect(),
-            ),
-            parents: RefCell::new(HashMap::from([
-                (AFTER.into(), vec![BEFORE.into()]),
-                (TRUNK.into(), vec![AFTER.into()]),
-            ])),
-            branches: RefCell::new(BTreeMap::from([("main".into(), TRUNK.into())])),
-            merging: RefCell::new(Some("trunk without the change".into())),
-            conflicting: RefCell::new(Vec::new()),
-            gone: RefCell::new(Vec::new()),
-            made: RefCell::new(Vec::new()),
-            pulls: RefCell::new(Vec::new()),
-            linked: RefCell::new(HashMap::new()),
-            settled: RefCell::new(Vec::new()),
-            turns: RefCell::new(HashMap::new()),
-            down: RefCell::new(Vec::new()),
-            lost: RefCell::new(Vec::new()),
-            n: Cell::new(0),
-            clock: Cell::new(0),
-        }
-    }
+const BURROW: &str = "FieldmouseWorks/burrow";
 
-    fn now(&self) -> String {
-        let t = self.clock.get() + 1;
-        self.clock.set(t);
-        format!("2026-10-27T12:{:02}:{:02}Z", t / 60, t % 60)
-    }
-
-    fn turn(&self, number: u64, state: &str, event: &'static str) {
-        let at = self.now();
-        for p in self.pulls.borrow_mut().iter_mut() {
-            if p["number"] == number {
-                p["state"] = json!(state);
-            }
-        }
-        let mut turns = self.turns.borrow_mut();
-        turns.entry(number).or_default().push((at, event));
-    }
-
-    fn sha(&self) -> String {
-        self.n.set(self.n.get() + 1);
-        format!("{:0>40x}", 0xc0ffee_u64 + self.n.get())
-    }
-
-    /// Whether `commit` is `at` or one of its ancestors.
-    fn holds(&self, at: &str, commit: &str) -> bool {
-        let parents = self.parents.borrow();
-        let mut todo = vec![at.to_owned()];
-        while let Some(c) = todo.pop() {
-            if c == commit {
-                return true;
-            }
-            todo.extend(parents.get(&c).into_iter().flatten().cloned());
-        }
-        false
-    }
-
-    fn parent(&self, of: &str) -> String {
-        self.parents.borrow()[of][0].clone()
-    }
-
-    fn pull_json(&self, number: u64) -> Value {
-        self.pulls
-            .borrow()
-            .iter()
-            .find(|p| p["number"] == number)
-            .cloned()
-            .unwrap()
-    }
-
-    fn close(&self, number: u64) {
-        self.turn(number, "closed", "closed");
-    }
-
-    fn reopen(&self, number: u64) {
-        self.turn(number, "open", "reopened");
-    }
-
-    /// The steward lands PR `number`, settled, squashed onto trunk, and
-    /// its branch goes: trunk's new tip.
-    fn land(&self, number: u64) -> String {
-        let sha = self.sha();
-        let trunk = self.branches.borrow()["main"].clone();
-        let mut pulls = self.pulls.borrow_mut();
-        let p = pulls.iter_mut().find(|p| p["number"] == number).unwrap();
-        let head = p["head"]["sha"].as_str().unwrap().to_owned();
-        let tree = self.trees.borrow()[&head].clone();
-        self.trees.borrow_mut().insert(sha.clone(), tree);
-        self.parents.borrow_mut().insert(sha.clone(), vec![trunk]);
-        self.linked.borrow_mut().insert(sha.clone(), vec![number]);
-        self.settled.borrow_mut().push(head);
-        self.branches
-            .borrow_mut()
-            .insert("main".into(), sha.clone());
-        let branch = p["head"]["ref"].as_str().unwrap().to_owned();
-        self.branches.borrow_mut().remove(&branch);
-        p["merged_at"] = json!(self.now());
-        p["merge_commit_sha"] = json!(sha);
-        drop(pulls);
-        self.turn(number, "closed", "closed");
-        sha
-    }
+/// Every PR opened, in either repo.
+fn pulls(hub: &Hub) -> usize {
+    [REMI, BURROW]
+        .map(|r| hub.pull_numbers(r).len())
+        .iter()
+        .sum()
 }
 
-impl Branches for Hub {
-    fn default_branch(&self, repo: &str) -> Result<String, ApiError> {
-        if self.down.borrow().iter().any(|d| d == repo) {
-            return Err(ApiError::new(format!("{repo}: Server Error")));
-        }
-        Ok("main".into())
-    }
-
-    fn branch(&self, _: &str, name: &str) -> Result<Option<String>, ApiError> {
-        Ok(self.branches.borrow().get(name).cloned())
-    }
-
-    fn branches(&self, _: &str, prefix: &str) -> Result<Vec<String>, ApiError> {
-        Ok(self
-            .branches
-            .borrow()
-            .keys()
-            .filter(|n| n.starts_with(prefix))
-            .cloned()
-            .collect())
-    }
-
-    fn create_branch(&self, _: &str, name: &str, sha: &str) -> Result<(), ApiError> {
-        let mut branches = self.branches.borrow_mut();
-        if branches.contains_key(name) {
-            return Err(ApiError::new(format!("{name}: Reference already exists")));
-        }
-        branches.insert(name.into(), sha.into());
-        Ok(())
-    }
-
-    fn delete_branch(&self, _: &str, name: &str) -> Result<(), ApiError> {
-        self.branches.borrow_mut().remove(name);
-        Ok(())
-    }
-
-    fn merge(&self, _: &str, into: &str, head: &str, _: &str) -> Result<Merged, ApiError> {
-        let at = self.branches.borrow()[into].clone();
-        if self.holds(&at, head) {
-            return Ok(Merged::Already);
-        }
-        let Some(merging) = self.merging.borrow().clone() else {
-            return Ok(Merged::Conflict);
-        };
-        let (here, there) = {
-            let trees = self.trees.borrow();
-            (trees[&at].clone(), trees[head].clone())
-        };
-        if self.conflicting.borrow().contains(&there) {
-            return Ok(Merged::Conflict);
-        }
-        let trunk = head == self.branches.borrow()["main"];
-        let gone = self.gone.borrow();
-        let tree = match (trunk, gone.contains(&here)) {
-            (true, true) => there,
-            (true, false) => merging,
-            (false, _) if gone.contains(&there) => here,
-            (false, _) => format!("{here}, then {there}"),
-        };
-        drop(gone);
-        let sha = self.sha();
-        self.trees.borrow_mut().insert(sha.clone(), tree.clone());
-        self.parents
-            .borrow_mut()
-            .insert(sha.clone(), vec![at, head.into()]);
-        self.branches.borrow_mut().insert(into.into(), sha.clone());
-        Ok(Merged::Commit { sha, tree })
-    }
-
-    fn tree(&self, _: &str, sha: &str) -> Result<String, ApiError> {
-        Ok(self.trees.borrow()[sha].clone())
-    }
-}
-
-impl Reverts for Hub {
-    fn make_commit(
-        &self,
-        _: &str,
-        tree: &str,
-        parent: &str,
-        message: &str,
-    ) -> Result<String, ApiError> {
-        let sha = self.sha();
-        self.trees.borrow_mut().insert(sha.clone(), tree.into());
-        self.parents
-            .borrow_mut()
-            .insert(sha.clone(), vec![parent.into()]);
-        self.made
-            .borrow_mut()
-            .push((tree.into(), parent.into(), message.into()));
-        Ok(sha)
-    }
-
-    fn open_pull(
-        &self,
-        repo: &str,
-        head: &str,
-        base: &str,
-        title: &str,
-        body: &str,
-    ) -> Result<u64, ApiError> {
-        let open = self
-            .pulls
-            .borrow()
-            .iter()
-            .any(|p| p["state"] == "open" && p["head"]["ref"] == head);
-        if open {
-            return Err(ApiError::new("A pull request already exists"));
-        }
-        let number = 100 + self.pulls.borrow().len() as u64;
-        let sha = self.branches.borrow()[head].clone();
-        let at = self.now();
-        self.pulls.borrow_mut().push(json!({
-            "number": number, "state": "open", "title": title, "body": body,
-            "created_at": at,
-            "user": {"login": STEWARD, "type": "Bot"},
-            "merged_at": null, "merge_commit_sha": null,
-            "base": {"sha": TRUNK, "ref": base, "repo": {"default_branch": "main"}},
-            "head": {"sha": sha, "ref": head,
-                "repo": {"full_name": if repo.is_empty() { "FieldmouseWorks/remi" } else { repo },
-                    "default_branch": "main"}},
-        }));
-        Ok(number)
-    }
-
-    fn pulls_from(&self, _: &str, head: &str) -> Result<Vec<u64>, ApiError> {
-        Ok(self
-            .pulls
-            .borrow()
-            .iter()
-            .filter(|p| p["head"]["ref"] == head)
-            .filter_map(|p| p["number"].as_u64())
-            .collect())
-    }
-}
-
-fn parse<T: serde::de::DeserializeOwned>(v: &Value) -> T {
-    serde_json::from_value(v.clone()).unwrap()
-}
-
-impl Source for Hub {
-    fn pull(&self, _: &str, number: u64) -> Result<PullRequest, ApiError> {
-        if self.lost.borrow().contains(&number) {
-            return Err(ApiError::new(format!("#{number}: Server Error")));
-        }
-        Ok(parse(&self.pull_json(number)))
-    }
-
-    fn pulls(&self, _: &str, _: Pulls) -> Result<Vec<PullRequest>, ApiError> {
-        Ok(self.pulls.borrow().iter().map(parse).collect())
-    }
-
-    fn check_runs(&self, _: &str, _: &str) -> Result<Vec<CheckRun>, ApiError> {
-        Ok(Vec::new())
-    }
-
-    fn statuses(&self, _: &str, sha: &str) -> Result<Vec<Status>, ApiError> {
-        let settled = self.settled.borrow().iter().any(|s| s == sha);
-        Ok(parse(&json!(if settled {
-            vec![json!({"context": "review-settled", "state": "success",
-                "creator": {"login": STEWARD, "type": "Bot"},
-                "created_at": "2026-10-27T11:00:00Z"})]
-        } else {
-            Vec::new()
-        })))
-    }
-
-    fn reviews(&self, _: &str, _: u64) -> Result<Vec<Review>, ApiError> {
-        Ok(Vec::new())
-    }
-
-    fn commit(&self, _: &str, sha: &str) -> Result<Commit, ApiError> {
-        let parents = self.parents.borrow().get(sha).cloned().unwrap_or_default();
-        Ok(parse(&json!({
-            "sha": sha,
-            "parents": parents.iter().map(|p| json!({"sha": p})).collect::<Vec<_>>(),
-        })))
-    }
-
-    fn commit_pulls(&self, _: &str, sha: &str) -> Result<Vec<u64>, ApiError> {
-        Ok(self.linked.borrow().get(sha).cloned().unwrap_or_default())
-    }
-
-    fn timeline(&self, _: &str, number: u64) -> Result<Vec<Event>, ApiError> {
-        let turns = self.turns.borrow();
-        Ok(turns
-            .get(&number)
-            .into_iter()
-            .flatten()
-            .map(|(at, event)| parse(&json!({"event": event, "created_at": at})))
-            .collect())
-    }
-
-    fn merge_base(&self, _: &str, a: &str, _: &str) -> Result<String, ApiError> {
-        Ok(a.into())
-    }
-
-    fn files(&self, _: &str, _: &str, _: &str) -> Result<conary_core::policy::Paths, ApiError> {
-        unimplemented!("nothing here classifies")
-    }
+/// A revert of PR 5's change, as a run makes it: trunk's tree before it
+/// landed, on its landing.
+fn a_revert(hub: &Hub) -> String {
+    hub.make_commit(REMI, &hub.tree_at(BEFORE), AFTER, "m")
+        .unwrap()
 }
 
 fn store(dir: &tempfile::TempDir) -> Store {
@@ -439,7 +121,7 @@ fn undo_of(store: &mut Store, hub: &Hub, x: ChangeId) -> Result<Undone, Stopped>
 fn an_undo_reverts_the_landing_alone_brings_trunk_in_and_is_recorded() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let hub = Hub::new();
+    let hub = github();
     let x = landed(
         &mut store,
         Some("autoland: merge only the head that was checked"),
@@ -450,9 +132,9 @@ fn an_undo_reverts_the_landing_alone_brings_trunk_in_and_is_recorded() {
     // The revert: trunk's tree from before it landed, on its landing.
     let title = "autoland: undo #5, merge only the head that was checked";
     assert_eq!(
-        hub.made.borrow().clone(),
+        hub.made(),
         [(
-            "before".to_owned(),
+            hub.tree_at(BEFORE),
             AFTER.to_owned(),
             format!("{title}\n\nThis reverts {AFTER}, #5's landing.")
         )]
@@ -460,7 +142,7 @@ fn an_undo_reverts_the_landing_alone_brings_trunk_in_and_is_recorded() {
     // Its branch, with trunk merged in, is the PR's head.
     let branch = undo_branch(x, 1);
     assert_eq!(branch, format!("conary/undo/{x}/1"));
-    let pull = hub.pull_json(100);
+    let pull = hub.pull_json(REMI, 100);
     assert_eq!(pull["head"]["ref"], branch);
     assert_eq!(pull["base"]["ref"], "main");
     assert_eq!(pull["title"], title);
@@ -469,8 +151,9 @@ fn an_undo_reverts_the_landing_alone_brings_trunk_in_and_is_recorded() {
         "Undoes #5, which landed as {AFTER} (Conary change `{x}`)"
     )));
     assert!(!body.contains("conflicts"));
-    let head = hub.branches.borrow()[&branch].clone();
-    assert_eq!(hub.trees.borrow()[&head], "trunk without the change");
+    let head = hub.branch_at(REMI, &branch).unwrap();
+    // Trunk without the change.
+    assert_eq!(hub.holding(&head), [LATER]);
     // The ledger holds it as the change's undo, asked for by the change.
     let u = store.ledger().change(got.change).unwrap();
     assert_eq!(u.pr, 100);
@@ -487,21 +170,21 @@ fn an_undo_reverts_the_landing_alone_brings_trunk_in_and_is_recorded() {
         (again.change, again.pr, again.how, again.recorded),
         (got.change, 100, How::Found, 0)
     );
-    assert_eq!((hub.made.borrow().len(), hub.pulls.borrow().len()), (1, 1));
+    assert_eq!((hub.made().len(), pulls(&hub)), (1, 1));
 }
 
 #[test]
 fn a_revert_that_conflicts_with_trunk_opens_as_it_is_and_says_so() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let hub = Hub::new();
-    hub.merging.replace(None);
+    let hub = github();
+    hub.clash(CHANGE, LATER);
     let x = landed(&mut store, Some("tools: a plain sentence"));
     let got = undo_of(&mut store, &hub, x).unwrap();
     assert_eq!(got.how, How::Opened { conflicts: true });
-    let pull = hub.pull_json(got.pr);
+    let pull = hub.pull_json(REMI, got.pr);
     // The head is the revert alone, on the landing.
-    let revert = hub.branches.borrow()[&undo_branch(x, 1)].clone();
+    let revert = hub.branch_at(REMI, &undo_branch(x, 1)).unwrap();
     assert_eq!(pull["head"]["sha"], revert);
     assert_eq!(hub.parent(&revert), AFTER);
     let body = pull["body"].as_str().unwrap();
@@ -512,14 +195,12 @@ fn a_revert_that_conflicts_with_trunk_opens_as_it_is_and_says_so() {
 fn a_change_whose_landing_is_trunk_has_its_revert_on_trunk_already() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let hub = Hub::new();
-    hub.branches
-        .borrow_mut()
-        .insert("main".into(), AFTER.into());
+    let hub = github();
+    hub.set_branch(REMI, "main", AFTER);
     let x = landed(&mut store, Some("tools: a plain sentence"));
     let got = undo_of(&mut store, &hub, x).unwrap();
     assert_eq!(got.how, How::Opened { conflicts: false });
-    let head = hub.pull_json(got.pr)["head"]["sha"].clone();
+    let head = hub.pull_json(REMI, got.pr)["head"]["sha"].clone();
     assert_eq!(hub.parent(head.as_str().unwrap()), AFTER);
 }
 
@@ -527,14 +208,15 @@ fn a_change_whose_landing_is_trunk_has_its_revert_on_trunk_already() {
 fn a_revert_that_changes_nothing_opens_nothing() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let hub = Hub::new();
+    let hub = github();
     // Trunk took the change out some other way.
-    hub.merging.replace(Some("trunk".into()));
+    let out = hub.take_out(TRUNK, CHANGE);
+    hub.set_branch(REMI, "main", &out);
     let x = landed(&mut store, Some("tools: a plain sentence"));
     let err = *undo_of(&mut store, &hub, x).unwrap_err().error;
     assert!(matches!(err, UndoError::Nothing(c) if c == x), "{err}");
-    assert!(hub.pulls.borrow().is_empty());
-    assert!(hub.branch("", &undo_branch(x, 1)).unwrap().is_none());
+    assert_eq!(pulls(&hub), 0);
+    assert!(hub.branch(REMI, &undo_branch(x, 1)).unwrap().is_none());
     assert_eq!(store.ledger().undo_of(x), None);
 }
 
@@ -542,20 +224,21 @@ fn a_revert_that_changes_nothing_opens_nothing() {
 fn a_run_that_stopped_partway_is_taken_up_where_it_stopped() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let hub = Hub::new();
+    let hub = github();
     let x = landed(&mut store, Some("tools: a plain sentence"));
     // Its branch made, and no PR: it's made again, since what a stopped
     // run put on it needn't be what's asked for now.
-    let earlier = hub.make_commit("", "before", AFTER, "m").unwrap();
-    hub.create_branch("", &undo_branch(x, 1), &earlier).unwrap();
+    let earlier = a_revert(&hub);
+    hub.create_branch(REMI, &undo_branch(x, 1), &earlier)
+        .unwrap();
     let got = undo_of(&mut store, &hub, x).unwrap();
     assert_eq!(got.how, How::Opened { conflicts: false });
-    let head = hub.pull_json(got.pr)["head"]["sha"]
+    let head = hub.pull_json(REMI, got.pr)["head"]["sha"]
         .as_str()
         .unwrap()
         .to_owned();
-    assert!(!hub.holds(&head, &earlier));
-    assert_eq!(hub.made.borrow().len(), 2);
+    assert!(!hub.reaches(&head, &earlier));
+    assert_eq!(hub.made().len(), 2);
 
     // Its PR opened, and not recorded: it's recorded.
     let dir = tempfile::tempdir().unwrap();
@@ -572,12 +255,12 @@ fn a_run_that_stopped_partway_is_taken_up_where_it_stopped() {
 fn an_undo_closed_leaves_the_next_a_branch_of_its_own() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let hub = Hub::new();
+    let hub = github();
     let x = landed(&mut store, Some("tools: a plain sentence"));
     let first = undo_of(&mut store, &hub, x).unwrap();
     // Closed on GitHub, and asked again before anything reads it: it's read
     // first, so no closed PR is taken for the open undo.
-    hub.close(first.pr);
+    hub.close(REMI, first.pr);
     let second = undo_of(&mut store, &hub, x).unwrap();
     assert_eq!(
         store.ledger().change(first.change).unwrap().status(),
@@ -585,23 +268,26 @@ fn an_undo_closed_leaves_the_next_a_branch_of_its_own() {
     );
     assert_ne!(second.change, first.change);
     assert_eq!(second.how, How::Opened { conflicts: false });
-    assert_eq!(hub.pull_json(second.pr)["head"]["ref"], undo_branch(x, 2));
+    assert_eq!(
+        hub.pull_json(REMI, second.pr)["head"]["ref"],
+        undo_branch(x, 2)
+    );
 }
 
 #[test]
 fn an_undo_landed_on_github_is_read_before_another_is_made() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let hub = Hub::new();
+    let hub = github();
     let x = landed(&mut store, Some("tools: a plain sentence"));
     let first = undo_of(&mut store, &hub, x).unwrap();
-    hub.land(first.pr);
+    hub.steward_lands(REMI, first.pr);
     assert!(matches!(
         undo_of(&mut store, &hub, x).map_err(|s| *s.error),
         Err(UndoError::Reverted { change, by }) if change == x && by == first.change
     ));
     assert_eq!(store.ledger().change(x).unwrap().status(), Kept::Reverted);
-    assert_eq!(hub.pulls.borrow().len(), 1);
+    assert_eq!(pulls(&hub), 1);
 }
 
 /// A run that opened its PR and stopped before recording it: the PR, on
@@ -612,14 +298,14 @@ fn stopped(hub: &Hub, x: ChangeId) -> u64 {
 
 /// The same, on the branch of `x`'s `attempt`th undo.
 fn stopped_at(hub: &Hub, x: ChangeId, attempt: usize) -> u64 {
-    let revert = hub.make_commit("", "before", AFTER, "m").unwrap();
-    hub.create_branch("", &undo_branch(x, attempt), &revert)
+    let revert = a_revert(hub);
+    hub.create_branch(REMI, &undo_branch(x, attempt), &revert)
         .unwrap();
     let marker = Marker {
         reverts: vec![x],
         asked: Asked::Change,
     };
-    hub.open_pull("", &undo_branch(x, attempt), "main", "t", &marker.line())
+    hub.open_pull(REMI, &undo_branch(x, attempt), "main", "t", &marker.line())
         .unwrap()
 }
 
@@ -628,10 +314,10 @@ fn a_stopped_run_s_pr_is_its_undo_whatever_became_of_it() {
     // Landed since, its branch gone: it's what reverted the change.
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let hub = Hub::new();
+    let hub = github();
     let x = landed(&mut store, Some("tools: a plain sentence"));
     let pr = stopped(&hub, x);
-    hub.land(pr);
+    hub.steward_lands(REMI, pr);
     let err = *undo_of(&mut store, &hub, x).unwrap_err().error;
     let u = store.ledger().by_pr(&repo(), pr).unwrap().id;
     assert!(
@@ -639,15 +325,15 @@ fn a_stopped_run_s_pr_is_its_undo_whatever_became_of_it() {
         "{err}"
     );
     assert_eq!(store.ledger().undo_of(x), Some(u));
-    assert_eq!(hub.pulls.borrow().len(), 1);
+    assert_eq!(pulls(&hub), 1);
 
     // Closed since: the next attempt takes a branch of its own.
     let dir = tempfile::tempdir().unwrap();
     let mut store = self::store(&dir);
-    let hub = Hub::new();
+    let hub = github();
     let y = landed(&mut store, Some("tools: a plain sentence"));
     let pr = stopped(&hub, y);
-    hub.close(pr);
+    hub.close(REMI, pr);
     let got = undo_of(&mut store, &hub, y).unwrap();
     let closed = store.ledger().by_pr(&repo(), pr).unwrap();
     assert_eq!(closed.status(), Kept::Closed);
@@ -655,21 +341,24 @@ fn a_stopped_run_s_pr_is_its_undo_whatever_became_of_it() {
         store.ledger().change(y).unwrap().undone_by,
         [closed.id, got.change]
     );
-    assert_eq!(hub.pull_json(got.pr)["head"]["ref"], undo_branch(y, 2));
+    assert_eq!(
+        hub.pull_json(REMI, got.pr)["head"]["ref"],
+        undo_branch(y, 2)
+    );
 
     // Landed, and undone in turn: undoing that is what reverts it again.
     let dir = tempfile::tempdir().unwrap();
     let mut store = self::store(&dir);
-    let hub = Hub::new();
+    let hub = github();
     let z = landed(&mut store, Some("tools: a plain sentence"));
     let pr = stopped(&hub, z);
-    hub.land(pr);
+    hub.steward_lands(REMI, pr);
     let u = ingest::pull(&mut store, &hub, &config(), &repo(), pr)
         .unwrap()
         .change;
     let w = undo_of(&mut store, &hub, u).unwrap();
     // Landed, and nothing has read that since.
-    hub.land(w.pr);
+    hub.steward_lands(REMI, w.pr);
     let err = *undo_of(&mut store, &hub, z).unwrap_err().error;
     assert!(
         matches!(err, UndoError::UndoneUndo { change, undo, by }
@@ -683,7 +372,7 @@ fn a_stopped_run_s_pr_is_its_undo_whatever_became_of_it() {
 fn only_a_landed_change_not_yet_reverted_is_undone() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let hub = Hub::new();
+    let hub = github();
     let unknown = ChangeId::new().unwrap();
     assert!(matches!(
         undo_of(&mut store, &hub, unknown).map_err(|s| *s.error),
@@ -708,18 +397,15 @@ fn only_a_landed_change_not_yet_reverted_is_undone() {
     ));
     let x = landed(&mut store, Some("tools: a plain sentence"));
     let u = undo_of(&mut store, &hub, x).unwrap();
-    land(
-        &mut store,
-        u.change,
-        TRUNK,
-        "5555555555555555555555555555555555555555",
-    );
+    let reverted = hub.take_out_as(&"5".repeat(40), TRUNK, CHANGE);
+    hub.set_branch(REMI, "main", &reverted);
+    land(&mut store, u.change, TRUNK, &reverted);
     assert_eq!(store.ledger().change(x).unwrap().status(), Kept::Reverted);
     assert!(matches!(
         undo_of(&mut store, &hub, x).map_err(|s| *s.error),
         Err(UndoError::Reverted { change, by }) if change == x && by == u.change
     ));
-    assert_eq!(hub.pulls.borrow().len(), 1);
+    assert_eq!(pulls(&hub), 1);
     // Its undo undone puts it back, and only undoing that reverts it again.
     let w = undo_of(&mut store, &hub, u.change).unwrap();
     land(
@@ -734,7 +420,7 @@ fn only_a_landed_change_not_yet_reverted_is_undone() {
         Err(UndoError::UndoneUndo { change, undo, by })
             if change == x && undo == u.change && by == w.change
     ));
-    assert_eq!(hub.pulls.borrow().len(), 2);
+    assert_eq!(pulls(&hub), 2);
 }
 
 #[test]
@@ -758,43 +444,43 @@ fn an_undo_is_titled_in_the_style_of_what_it_reverts() {
 fn an_undo_reopened_on_github_is_found_not_made_again() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let hub = Hub::new();
+    let hub = github();
     let x = landed(&mut store, Some("tools: a plain sentence"));
     let first = undo_of(&mut store, &hub, x).unwrap();
     let read = |store: &mut Store| {
         ingest::pull(store, &hub, &config(), &repo(), first.pr).unwrap();
     };
-    hub.close(first.pr);
+    hub.close(REMI, first.pr);
     read(&mut store);
     // Reopened since it was read closed.
-    hub.reopen(first.pr);
+    hub.reopen(REMI, first.pr);
     let got = undo_of(&mut store, &hub, x).unwrap();
     assert_eq!((got.change, got.how), (first.change, How::Found));
     // And landed since, unread.
-    hub.close(first.pr);
+    hub.close(REMI, first.pr);
     read(&mut store);
-    hub.reopen(first.pr);
-    hub.land(first.pr);
+    hub.reopen(REMI, first.pr);
+    hub.steward_lands(REMI, first.pr);
     assert!(matches!(
         undo_of(&mut store, &hub, x).map_err(|s| *s.error),
         Err(UndoError::Reverted { change, by }) if change == x && by == first.change
     ));
-    assert_eq!(hub.pulls.borrow().len(), 1);
+    assert_eq!(pulls(&hub), 1);
 }
 
 #[test]
 fn an_undo_s_own_undo_is_read_down_the_tree() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let hub = Hub::new();
+    let hub = github();
     let x = landed(&mut store, Some("tools: a plain sentence"));
     let u = undo_of(&mut store, &hub, x).unwrap();
-    hub.land(u.pr);
+    hub.steward_lands(REMI, u.pr);
     ingest::pull(&mut store, &hub, &config(), &repo(), u.pr).unwrap();
     // The undo of the undo, from a run that stopped before recording it,
     // landed: nothing has read either.
     let pr = stopped(&hub, u.change);
-    hub.land(pr);
+    hub.steward_lands(REMI, pr);
     let err = *undo_of(&mut store, &hub, x).unwrap_err().error;
     let w = store.ledger().by_pr(&repo(), pr).unwrap().id;
     assert!(
@@ -809,16 +495,16 @@ fn an_undo_s_own_undo_is_read_down_the_tree() {
 fn a_stopped_run_closed_is_recorded_beside_the_undo_that_reopened() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let hub = Hub::new();
+    let hub = github();
     let x = landed(&mut store, Some("tools: a plain sentence"));
     let first = undo_of(&mut store, &hub, x).unwrap();
-    hub.close(first.pr);
+    hub.close(REMI, first.pr);
     ingest::pull(&mut store, &hub, &config(), &repo(), first.pr).unwrap();
     // The next attempt's run stopped before recording its PR, which closed,
     // and then the first reopened.
     let second = stopped_at(&hub, x, 2);
-    hub.close(second);
-    hub.reopen(first.pr);
+    hub.close(REMI, second);
+    hub.reopen(REMI, first.pr);
     let got = undo_of(&mut store, &hub, x).unwrap();
     assert_eq!((got.change, got.how), (first.change, How::Found));
     let closed = store.ledger().by_pr(&repo(), second).unwrap();
@@ -830,7 +516,7 @@ fn a_stopped_run_closed_is_recorded_beside_the_undo_that_reopened() {
     // Recorded once: run again, there's nothing new.
     let again = undo_of(&mut store, &hub, x).unwrap();
     assert_eq!((again.change, again.recorded), (first.change, 0));
-    assert_eq!(hub.pulls.borrow().len(), 2);
+    assert_eq!(pulls(&hub), 2);
 }
 
 #[test]
@@ -843,17 +529,17 @@ fn a_stopped_run_that_merged_after_its_rival_landed_is_trunk_moving_outside() {
     for read_first in [None, Some(true), Some(false)] {
         let dir = tempfile::tempdir().unwrap();
         let mut store = store(&dir);
-        let hub = Hub::new();
+        let hub = github();
         let x = landed(&mut store, Some("tools: a plain sentence"));
         let first = undo_of(&mut store, &hub, x).unwrap();
-        hub.close(first.pr);
+        hub.close(REMI, first.pr);
         ingest::pull(&mut store, &hub, &config(), &repo(), first.pr).unwrap();
         let second = stopped_at(&hub, x, 2);
-        hub.close(second);
-        hub.reopen(first.pr);
-        hub.land(first.pr);
-        hub.reopen(second);
-        let again = hub.land(second);
+        hub.close(REMI, second);
+        hub.reopen(REMI, first.pr);
+        hub.steward_lands(REMI, first.pr);
+        hub.reopen(REMI, second);
+        let again = hub.steward_lands(REMI, second);
         match read_first {
             Some(true) => _ = ingest::sync(&mut store, &hub, &config(), &repo()).unwrap(),
             Some(false) => _ = ingest::pull(&mut store, &hub, &config(), &repo(), second).unwrap(),

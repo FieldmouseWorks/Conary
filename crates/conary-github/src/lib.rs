@@ -12,6 +12,8 @@ pub mod class;
 pub mod etags;
 pub mod ingest;
 pub mod notes;
+#[cfg(test)]
+pub(crate) mod sim;
 pub mod tokens;
 pub mod train;
 pub mod undo;

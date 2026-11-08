@@ -42,14 +42,13 @@ fn unproven(joined: Joined) -> String {
 }
 
 /// PR `pr`'s negative ran as check run `run`, concluding `concluded`.
-fn ran(hub: &mut Hub, pr: u64, run: u64, concluded: Option<&str>) {
+fn ran(hub: &Hub, pr: u64, run: u64, concluded: Option<&str>) {
     let status = if concluded.is_some() {
         "completed"
     } else {
         "in_progress"
     };
-    hub.checks.insert(
-        head(pr),
+    hub.put_checks(&head(pr),
         json!([{"id": run, "name": CHECK, "status": status, "conclusion": concluded,
                 "html_url": format!("https://github.com/FieldmouseWorks/remi/actions/runs/9/job/{run}"),
                 "started_at": "2026-11-05T05:00:00Z"}]),
@@ -81,7 +80,7 @@ fn negatives_of(store: &Store, pr: u64) -> Vec<(Outcome, bool)> {
 fn a_pr_joins_once_its_new_tests_failed_on_its_base_and_its_job_attests_it() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let mut hub = Hub::new(&[3]);
+    let hub = github(&[3]);
     // Nothing has run, or it's still running.
     let why = unproven(join_proven(&mut store, &hub, 3));
     assert!(why.contains("hasn't run"), "{why}");
@@ -101,11 +100,11 @@ fn a_pr_joins_once_its_new_tests_failed_on_its_base_and_its_job_attests_it() {
         .unwrap();
     let why = unproven(join_proven(&mut store, &hub, 3));
     assert!(why.contains("hasn't run"), "{why}");
-    ran(&mut hub, 3, 70, None);
+    ran(&hub, 3, 70, None);
     let why = unproven(join_proven(&mut store, &hub, 3));
     assert!(why.contains("hasn't finished"), "{why}");
     // It passed, but no attestation says so.
-    ran(&mut hub, 3, 70, Some("success"));
+    ran(&hub, 3, 70, Some("success"));
     let why = unproven(join_proven(&mut store, &hub, 3));
     assert!(why.contains("kept no attestation"), "{why}");
     // Its attestation is another revision's: the head on another base.
@@ -114,8 +113,8 @@ fn a_pr_joins_once_its_new_tests_failed_on_its_base_and_its_job_attests_it() {
     assert!(why.contains("not"), "{why}");
     assert_eq!(negatives_of(&store, 3), [(Outcome::Fail, false)]);
     // The new tests passed on the old code: red, recorded, and not in.
-    ran(&mut hub, 3, 71, Some("failure"));
-    hub.attest(71, &attestation(FORK, &head(3), 71, "pass"));
+    ran(&hub, 3, 71, Some("failure"));
+    hub.attest(71, &attestation(TRUNK, &head(3), 71, "pass"));
     let why = unproven(join_proven(&mut store, &hub, 3));
     assert!(why.contains("pass on"), "{why}");
     assert_eq!(
@@ -124,13 +123,13 @@ fn a_pr_joins_once_its_new_tests_failed_on_its_base_and_its_job_attests_it() {
     );
     assert!(joined(&store).is_empty());
     // A rerun that caught them, on a runner it was started fresh for.
-    ran(&mut hub, 3, 72, Some("success"));
-    let file = attestation(FORK, &head(3), 72, "fail");
+    ran(&hub, 3, 72, Some("success"));
+    let file = attestation(TRUNK, &head(3), 72, "fail");
     hub.attest(72, &file);
-    hub.runners.borrow_mut().insert(72, "remi-1".into());
+    hub.ran_on(72, "remi-1");
     let why = unproven(join_proven(&mut store, &hub, 3));
     assert!(why.contains("wasn't started fresh"), "{why}");
-    hub.runners.borrow_mut().remove(&72);
+    hub.ran_on(72, &format!("{FRESH}72"));
     assert_eq!(join_proven(&mut store, &hub, 3), Joined::Joined);
     assert_eq!(joined(&store), [3]);
     let c = store.ledger().by_pr(&repo(), 3).unwrap();
@@ -152,8 +151,8 @@ fn a_pr_joins_once_its_new_tests_failed_on_its_base_and_its_job_attests_it() {
     ));
     // Out and in again, it's counted from the ledger, downloading nothing.
     leave(&mut store, &hub, &hub, &repo(), 3, Left::Unready).unwrap();
-    let downloads = hub.downloads.get();
-    hub.checks.remove(&head(3));
+    let downloads = hub.count(Call::Artifact);
+    hub.remove_checks(&head(3));
     // Only for the check asked for: another's word is no negative of this.
     let other = Negatives {
         check: "other / negative".into(),
@@ -196,23 +195,23 @@ fn a_pr_joins_once_its_new_tests_failed_on_its_base_and_its_job_attests_it() {
     let why = unproven(rejoined);
     assert!(why.contains(&format!("{CHECK} hasn't run")), "{why}");
     assert_eq!(join_proven(&mut store, &hub, 3), Joined::Joined);
-    assert_eq!(hub.downloads.get(), downloads);
+    assert_eq!(hub.count(Call::Artifact), downloads);
 }
 
 #[test]
 fn a_pr_that_adds_no_test_to_code_joins_on_its_attested_word_alone() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let mut hub = Hub::new(&[3]);
-    ran(&mut hub, 3, 70, Some("success"));
-    hub.attest(70, &attestation(FORK, &head(3), 70, "none"));
+    let hub = github(&[3]);
+    ran(&hub, 3, 70, Some("success"));
+    hub.attest(70, &attestation(TRUNK, &head(3), 70, "none"));
     assert_eq!(join_proven(&mut store, &hub, 3), Joined::Joined);
     assert_eq!(negatives_of(&store, 3), [(Outcome::None, true)]);
     // A train that doesn't ask for one doesn't read it.
-    let mut hub = Hub::new(&[4]);
+    let hub = github(&[4]);
     let dir = tempfile::tempdir().unwrap();
     let mut store = super::store(&dir);
-    ran(&mut hub, 4, 80, None);
+    ran(&hub, 4, 80, None);
     assert_eq!(
         try_join(&mut store, &hub, 4, &head(4)).unwrap(),
         Joined::Joined

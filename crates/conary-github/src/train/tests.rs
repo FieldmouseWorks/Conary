@@ -1,16 +1,11 @@
-use std::cell::{Cell, RefCell};
-use std::collections::{BTreeMap, HashMap, HashSet};
-
 use ed25519_dalek::SigningKey;
 use serde_json::{Value, json};
 
 use super::*;
-use crate::api::{CheckRun, Commit, Event, PullRequest, Pulls, Review, Status as CommitStatus};
-use crate::attest::{ARTIFACT, Artifact, FILE, Job, Key, testing};
-use conary_core::policy::{Paths, Touched};
+use crate::attest::testing;
+use crate::sim::{Call, FRESH, Hub, On, Posted, REMI, STEWARD, tree_of};
 
 const TRUNK: &str = "1111111111111111111111111111111111111111";
-const FORK: &str = "2222222222222222222222222222222222222222";
 
 fn head(pr: u64) -> String {
     format!("{pr:0>40}")
@@ -27,15 +22,10 @@ fn config() -> Config {
     }
 }
 
-const STEWARD: &str = "fieldmouseworks-steward[bot]";
-
 /// The machine's class policy: a PR touching `secrets/` is R2.
 fn policy() -> Policy {
     Policy::parse(br#"{"r2": ["^secrets/"]}"#).unwrap()
 }
-
-/// What the tests' fresh runners' names start with.
-const FRESH: &str = "fresh-remi-";
 
 fn settings() -> Settings {
     Settings {
@@ -46,516 +36,24 @@ fn settings() -> Settings {
     }
 }
 
-/// GitHub, as far as the train can tell: PRs at their heads, each settled
-/// by the steward, CI results by commit, and branches that merges really
-/// move, each holding the heads merged into it. A head in `conflicts` won't
-/// merge onto anything that holds another head, and one in `same` changes
-/// just what another head does, so merged where that one is already it
-/// leaves the tree as it was. A head in `stacked` is on another's branch:
-/// merging it, or landing it, brings that head too. A PR's merge squashes
-/// its head onto trunk. Each check run is a GitHub Actions job, and the
-/// shared CI the machine names, at the signer commit on its repo's main,
-/// attests the passes it is told to.
-#[derive(Default)]
-struct Hub {
-    /// The repo's default branch.
-    default: RefCell<String>,
-    pulls: RefCell<BTreeMap<u64, String>>,
-    checks: HashMap<String, Value>,
-    statuses: HashMap<String, Value>,
-    conflicts: HashSet<String>,
-    /// A head that does what the head it maps to does.
-    same: HashMap<String, String>,
-    /// A head and the head of the PR its branch was made on.
-    stacked: HashMap<String, String>,
-    branches: RefCell<BTreeMap<String, String>>,
-    /// What each commit holds: the heads merged into it.
-    holds: RefCell<HashMap<String, Vec<String>>>,
-    /// Every merge made, as (branch, head).
-    merges: RefCell<Vec<(String, String)>>,
-    made: RefCell<u64>,
-    /// Each merged PR's commit on trunk.
-    merged: RefCell<HashMap<u64, String>>,
-    /// Each trunk commit's parent, and the PR it's linked to.
-    parents: RefCell<HashMap<String, String>>,
-    linked: RefCell<HashMap<String, u64>>,
-    /// PRs whose merge GitHub refuses, and what it says.
-    refuse: HashMap<u64, String>,
-    /// GitHub not showing the merges it made yet.
-    lagging: Cell<bool>,
-    /// GitHub showing them, but not linking their commits to their PRs yet.
-    unlinked: Cell<bool>,
-    /// A PR's merge failing before GitHub makes it, or once it's made with
-    /// GitHub's answer lost.
-    down: Cell<bool>,
-    lost: Cell<bool>,
-    /// Statuses of this kind GitHub doesn't take.
-    unmarked: Cell<Option<Mark>>,
-    /// Each PR's base branch, when it isn't the default one.
-    targets: RefCell<HashMap<u64, String>>,
-    /// A PR retargeted the moment its head says it's landing.
-    retarget: RefCell<Option<(u64, String)>>,
-    /// A PR labelled the moment its head says it's landing.
-    relabel: RefCell<Option<(u64, &'static str)>>,
-    /// Every status the train posted.
-    marks: RefCell<Vec<Posted>>,
-    /// The last check run id given out: GitHub's are unique.
-    runs: Cell<u64>,
-    /// Each job's run's attestation artifacts, by the job's check run id.
-    attestations: RefCell<HashMap<u64, Vec<Kept>>>,
-    /// The commits on the signer's repo's default branch, its tip first.
-    signer: RefCell<Vec<String>>,
-    /// How many artifacts were downloaded.
-    downloads: Cell<u64>,
-    /// The runner each job ran on, when it isn't a fresh one of its own.
-    runners: RefCell<HashMap<u64, String>>,
-    /// The files each head changes, when it isn't `src/lib.rs` alone.
-    touched: RefCell<HashMap<String, Vec<String>>>,
-    /// How many times the files a head changes were read.
-    compared: Cell<u64>,
-    /// Each PR's labels.
-    labels: RefCell<HashMap<u64, Vec<&'static str>>>,
+/// GitHub with PRs `prs` open at their heads, each its own patch on trunk
+/// and settled by the steward there.
+fn github(prs: &[u64]) -> Hub {
+    let hub = Hub::new(REMI, TRUNK);
+    for pr in prs {
+        hub.pr(REMI, *pr, &head(*pr));
+    }
+    hub
 }
 
-/// An artifact a run kept: its name and GitHub's zip of it.
-type Kept = (String, Vec<u8>);
-
-#[derive(Debug, PartialEq, Eq)]
-struct Posted {
-    sha: String,
-    mark: Mark,
-    description: String,
-    url: Option<String>,
+/// The train's statuses that `on` covers fail, until healed.
+fn unmarked(mark: Mark) -> On {
+    On::from(Call::Mark).mark(mark)
 }
 
-impl Hub {
-    fn new(prs: &[u64]) -> Self {
-        let mut hub = Self::default();
-        for pr in prs {
-            hub.pulls.borrow_mut().insert(*pr, head(*pr));
-            hub.statuses.insert(
-                head(*pr),
-                json!([{"context": "review-settled", "state": "success", "target_url": null,
-                        "created_at": "2026-10-29T10:00:00Z", "creator": {"login": STEWARD, "type": "Bot"}}]),
-            );
-        }
-        hub.default.replace("main".into());
-        hub.branches
-            .borrow_mut()
-            .insert("main".into(), TRUNK.into());
-        hub.holds.borrow_mut().insert(TRUNK.into(), Vec::new());
-        hub.signer.replace(vec![testing::SIGNER_SHA.into()]);
-        hub
-    }
-
-    /// The branch a PR targets: the default one unless it was told another.
-    /// The tree of a commit holding these heads: what they do, each once.
-    fn tree_holding(&self, holds: &[String]) -> String {
-        let mut does: Vec<String> = Vec::new();
-        for h in holds {
-            let d = self.same.get(h).unwrap_or(h);
-            if !does.contains(d) {
-                does.push(d.clone());
-            }
-        }
-        tree_of(&does)
-    }
-
-    fn base_of(&self, pr: u64) -> String {
-        self.targets
-            .borrow()
-            .get(&pr)
-            .cloned()
-            .unwrap_or_else(|| self.default.borrow().clone())
-    }
-
-    fn branch_at(&self, name: &str) -> Option<String> {
-        self.branches.borrow().get(name).cloned()
-    }
-
-    fn names(&self) -> Vec<String> {
-        self.branches.borrow().keys().cloned().collect()
-    }
-
-    /// The heads a branch holds, in the order they were merged.
-    fn held(&self, name: &str) -> Vec<String> {
-        let at = self.branch_at(name).unwrap();
-        self.holds.borrow()[&at].clone()
-    }
-
-    /// CI on a commit: each check's name and conclusion, all completed,
-    /// and each pass attested.
-    fn ci(&mut self, sha: &str, runs: &[(&str, &str)]) {
-        let runs: Vec<Value> = runs
-            .iter()
-            .enumerate()
-            .map(|(i, (name, conclusion))| {
-                json!({"id": self.run_id(), "name": name, "status": "completed", "conclusion": conclusion,
-                       "html_url": format!("https://github.com/FieldmouseWorks/remi/actions/runs/{i}"),
-                       "started_at": format!("2026-10-29T11:0{i}:00Z")})
-            })
-            .collect();
-        self.checks.insert(sha.into(), Value::Array(runs));
-        self.attest_passes(sha);
-    }
-
-    fn run_id(&self) -> u64 {
-        self.runs.set(self.runs.get() + 1);
-        self.runs.get()
-    }
-
-    /// Each completed, successful run on a commit attested, as its job
-    /// attests: its statement and token in an artifact of its run.
-    fn attest_passes(&self, sha: &str) {
-        let runs: Vec<CheckRun> = self.checks.get(sha).map_or_else(Vec::new, parse);
-        for run in runs
-            .iter()
-            .filter(|r| r.conclusion.as_deref() == Some("success"))
-        {
-            self.attest(run.id, &self.attestation(sha, run.id));
-        }
-    }
-
-    /// An honest attestation of a pass on a commit by its check run.
-    fn attestation(&self, sha: &str, run: u64) -> String {
-        let tree = tree_of(&self.holds.borrow()[sha]);
-        let statement = testing::statement(sha, &tree, "pass");
-        let claims = testing::claims(&repo().to_string(), sha, run, &statement);
-        testing::file(&statement, &testing::token(&claims))
-    }
-
-    /// Keeps `file` as an attestation in a run's artifacts.
-    fn attest(&self, run: u64, file: &str) {
-        let mut all = self.attestations.borrow_mut();
-        let kept = all.entry(run).or_default();
-        let name = format!("{ARTIFACT}{}", kept.len());
-        kept.push((name, testing::zipped(FILE, file.as_bytes())));
-    }
-
-    /// What the train's statuses said became of each head, as (commit,
-    /// mark): landing, red or refused, the pending ones aside.
-    fn marked(&self) -> Vec<(String, Mark)> {
-        self.marks
-            .borrow()
-            .iter()
-            .filter(|p| p.mark != Mark::Waiting)
-            .map(|p| (p.sha.clone(), p.mark))
-            .collect()
-    }
-
-    /// The train's latest status on a commit.
-    fn latest(&self, sha: &str) -> Option<Mark> {
-        self.marks
-            .borrow()
-            .iter()
-            .rev()
-            .find(|p| p.sha == sha)
-            .map(|p| p.mark)
-    }
-}
-
-/// A tree is named by what its commit holds, so two commits holding the
-/// same heads in the same order have one tree.
-fn tree_of(holds: &[String]) -> String {
-    let n = holds.iter().fold(7u64, |n, h| {
-        n.wrapping_mul(31)
-            .wrapping_add(u64::from_str_radix(&h[24..], 16).unwrap())
-    });
-    format!("{n:0>40x}")
-}
-
-fn parse<T: serde::de::DeserializeOwned>(v: &Value) -> T {
-    serde_json::from_value(v.clone()).unwrap()
-}
-
-impl Source for Hub {
-    fn pull(&self, _: &str, number: u64) -> Result<PullRequest, ApiError> {
-        let head = self.pulls.borrow()[&number].clone();
-        let base = self.base_of(number);
-        let merged = self
-            .merged
-            .borrow()
-            .get(&number)
-            .filter(|_| !self.lagging.get())
-            .cloned();
-        Ok(parse(&json!({
-            "number": number,
-            "state": if merged.is_some() { "closed" } else { "open" },
-            "title": "remi: a change",
-            "body": "",
-            "user": {"login": "TusanHomichi", "type": "User"},
-            "merged_at": merged.as_ref().map(|_| "2026-10-29T12:00:00Z"),
-            "merge_commit_sha": merged,
-            "base": {"sha": TRUNK, "ref": base,
-                     "repo": {"default_branch": *self.default.borrow()}},
-            "head": {"sha": head, "ref": "claude/x"},
-            "labels": self.labels.borrow().get(&number).into_iter().flatten()
-                .map(|l| json!({"name": l})).collect::<Vec<_>>(),
-        })))
-    }
-
-    fn pulls(&self, _: &str, _: Pulls) -> Result<Vec<PullRequest>, ApiError> {
-        unreachable!("the train reads one PR at a time")
-    }
-
-    fn check_runs(&self, _: &str, sha: &str) -> Result<Vec<CheckRun>, ApiError> {
-        Ok(self.checks.get(sha).map_or_else(Vec::new, parse))
-    }
-
-    /// The train's own, newest first, then the rest.
-    fn statuses(&self, _: &str, sha: &str) -> Result<Vec<CommitStatus>, ApiError> {
-        let state = |m: Mark| match m {
-            Mark::Landing => "success",
-            Mark::Waiting => "pending",
-            Mark::Red => "failure",
-            Mark::Refused => "error",
-        };
-        let mut all: Vec<CommitStatus> = self
-            .marks
-            .borrow()
-            .iter()
-            .rev()
-            .filter(|p| p.sha == sha)
-            .map(|p| {
-                parse(&json!({"context": CONTEXT, "state": state(p.mark),
-                              "description": p.description, "target_url": p.url}))
-            })
-            .collect();
-        all.extend(
-            self.statuses
-                .get(sha)
-                .map_or_else(Vec::new, parse::<Vec<CommitStatus>>),
-        );
-        Ok(all)
-    }
-
-    fn reviews(&self, _: &str, _: u64) -> Result<Vec<Review>, ApiError> {
-        Ok(Vec::new())
-    }
-
-    fn commit(&self, _: &str, sha: &str) -> Result<Commit, ApiError> {
-        let parent = self.parents.borrow()[sha].clone();
-        Ok(parse(&json!({"sha": sha, "parents": [{"sha": parent}]})))
-    }
-
-    fn commit_pulls(&self, _: &str, sha: &str) -> Result<Vec<u64>, ApiError> {
-        Ok(self
-            .linked
-            .borrow()
-            .get(sha)
-            .filter(|_| !self.unlinked.get())
-            .into_iter()
-            .copied()
-            .collect())
-    }
-
-    fn timeline(&self, _: &str, _: u64) -> Result<Vec<Event>, ApiError> {
-        Ok(Vec::new())
-    }
-
-    /// On the signer's repo, a commit on its default branch is behind the tip; the
-    /// rest is a fork's.
-    fn merge_base(&self, repo: &str, a: &str, _: &str) -> Result<String, ApiError> {
-        if repo == testing::signer().repo.to_string() && self.signer.borrow().iter().any(|c| c == a)
-        {
-            return Ok(a.into());
-        }
-        Ok(FORK.into())
-    }
-
-    fn files(&self, _: &str, _: &str, head: &str) -> Result<Paths, ApiError> {
-        self.compared.set(self.compared.get() + 1);
-        let files = self
-            .touched
-            .borrow()
-            .get(head)
-            .cloned()
-            .unwrap_or(vec!["src/lib.rs".into()]);
-        Ok(Paths {
-            files: files
-                .into_iter()
-                .map(|path| Touched {
-                    path,
-                    from: None,
-                    new: false,
-                })
-                .collect(),
-            cut: false,
-        })
-    }
-}
-
-/// A check run's job ran in the run of ten times its id, and an
-/// artifact's id is its run's and its place among them.
-impl Actions for Hub {
-    fn job(&self, _: &str, job: u64) -> Result<Option<Job>, ApiError> {
-        Ok(Some(Job {
-            run_id: job * 10,
-            runner_name: Some(
-                self.runners
-                    .borrow()
-                    .get(&job)
-                    .cloned()
-                    .unwrap_or_else(|| format!("{FRESH}{job}")),
-            ),
-        }))
-    }
-
-    fn artifacts(&self, _: &str, run: u64) -> Result<Vec<Artifact>, ApiError> {
-        Ok(self
-            .attestations
-            .borrow()
-            .get(&(run / 10))
-            .into_iter()
-            .flatten()
-            .enumerate()
-            .map(|(i, (name, _))| Artifact {
-                id: run * 10 + i as u64,
-                name: name.clone(),
-                expired: false,
-            })
-            .collect())
-    }
-
-    fn artifact(&self, _: &str, id: u64) -> Result<Vec<u8>, ApiError> {
-        self.downloads.set(self.downloads.get() + 1);
-        Ok(self.attestations.borrow()[&(id / 100)][(id % 100) as usize]
-            .1
-            .clone())
-    }
-
-    fn keys(&self) -> Result<Vec<Key>, ApiError> {
-        Ok(vec![testing::key()])
-    }
-}
-
-impl Branches for Hub {
-    fn default_branch(&self, repo: &str) -> Result<String, ApiError> {
-        if repo == testing::signer().repo.to_string() {
-            return Ok("main".into());
-        }
-        Ok(self.default.borrow().clone())
-    }
-
-    fn branch(&self, repo: &str, name: &str) -> Result<Option<String>, ApiError> {
-        if repo == testing::signer().repo.to_string() {
-            return Ok((name == "main").then(|| self.signer.borrow()[0].clone()));
-        }
-        Ok(self.branch_at(name))
-    }
-
-    fn branches(&self, _: &str, prefix: &str) -> Result<Vec<String>, ApiError> {
-        Ok(self
-            .names()
-            .into_iter()
-            .filter(|n| n.starts_with(prefix))
-            .collect())
-    }
-
-    fn create_branch(&self, _: &str, name: &str, sha: &str) -> Result<(), ApiError> {
-        let mut branches = self.branches.borrow_mut();
-        if branches.contains_key(name) {
-            return Err(ApiError::new(format!("{name}: Reference already exists")));
-        }
-        branches.insert(name.into(), sha.into());
-        Ok(())
-    }
-
-    fn delete_branch(&self, _: &str, name: &str) -> Result<(), ApiError> {
-        self.branches.borrow_mut().remove(name);
-        Ok(())
-    }
-
-    fn merge(&self, _: &str, into: &str, head: &str, _: &str) -> Result<Merged, ApiError> {
-        let at = self
-            .branch_at(into)
-            .ok_or_else(|| ApiError::new(format!("no branch {into}")))?;
-        let mut holds = self.holds.borrow()[&at].clone();
-        if holds.iter().any(|h| h == head) {
-            return Ok(Merged::Already);
-        }
-        if !holds.is_empty() && self.conflicts.contains(head) {
-            return Ok(Merged::Conflict);
-        }
-        self.merges.borrow_mut().push((into.into(), head.into()));
-        holds.extend(self.stacked.get(head).cloned());
-        holds.push(head.into());
-        let mut made = self.made.borrow_mut();
-        *made += 1;
-        let sha = format!("{:0>40x}", 0x00c0_ffee_0000_u64 + *made);
-        let tree = self.tree_holding(&holds);
-        self.holds.borrow_mut().insert(sha.clone(), holds);
-        self.branches.borrow_mut().insert(into.into(), sha.clone());
-        Ok(Merged::Commit { sha, tree })
-    }
-
-    fn tree(&self, _: &str, sha: &str) -> Result<String, ApiError> {
-        Ok(self.tree_holding(&self.holds.borrow()[sha]))
-    }
-}
-
-impl Forge for Hub {
-    fn mark(
-        &self,
-        _: &str,
-        sha: &str,
-        mark: Mark,
-        description: &str,
-        url: Option<&str>,
-    ) -> Result<(), ApiError> {
-        if self.unmarked.get() == Some(mark) {
-            return Err(ApiError::unavailable("statuses"));
-        }
-        if mark == Mark::Landing
-            && let Some((pr, base)) = self.retarget.take()
-        {
-            self.targets.borrow_mut().insert(pr, base);
-        }
-        if mark == Mark::Landing
-            && let Some((pr, label)) = self.relabel.take()
-        {
-            self.labels.borrow_mut().insert(pr, vec![label]);
-        }
-        self.marks.borrow_mut().push(Posted {
-            sha: sha.into(),
-            mark,
-            description: description.into(),
-            url: url.map(str::to_owned),
-        });
-        Ok(())
-    }
-
-    fn land(&self, _: &str, pr: u64, at: &str) -> Result<PrMerge, ApiError> {
-        if let Some(why) = self.refuse.get(&pr) {
-            return Ok(PrMerge::Refused(why.clone()));
-        }
-        if self.pulls.borrow()[&pr] != at {
-            return Ok(PrMerge::Refused("Head branch was modified".into()));
-        }
-        if self.merged.borrow().contains_key(&pr) {
-            return Ok(PrMerge::Refused("Pull Request is not mergeable".into()));
-        }
-        if self.down.get() {
-            return Err(ApiError::unavailable("merge"));
-        }
-        let base = self.base_of(pr);
-        let before = self.branch_at(&base).unwrap();
-        let mut holds = self.holds.borrow()[&before].clone();
-        holds.extend(self.stacked.get(at).cloned());
-        holds.push(at.into());
-        let mut made = self.made.borrow_mut();
-        *made += 1;
-        let sha = format!("{:0>40x}", 0x00ba_5e00_0000_u64 + *made);
-        self.holds.borrow_mut().insert(sha.clone(), holds);
-        self.branches.borrow_mut().insert(base, sha.clone());
-        self.parents.borrow_mut().insert(sha.clone(), before);
-        self.linked.borrow_mut().insert(sha.clone(), pr);
-        self.merged.borrow_mut().insert(pr, sha);
-        if self.lost.get() {
-            return Err(ApiError::unavailable("merge"));
-        }
-        Ok(PrMerge::Merged)
-    }
+/// The train's status saying a head is landing.
+fn landing() -> On {
+    unmarked(Mark::Landing)
 }
 
 fn store(dir: &tempfile::TempDir) -> Store {
@@ -586,9 +84,7 @@ fn join_all(store: &mut Store, hub: &Hub, prs: &[u64]) {
 
 /// PR `pr` touches a secret at its head: under [`policy`], it's R2.
 fn r2(hub: &Hub, pr: u64) {
-    hub.touched
-        .borrow_mut()
-        .insert(head(pr), vec!["secrets/x.yaml".into()]);
+    hub.touch(&head(pr), &["secrets/x.yaml"]);
 }
 
 /// Joins PR `pr` at `at`, as the steward asks once it's settled there.
@@ -652,12 +148,12 @@ mod negative;
 fn a_ready_pr_joins_at_its_head_as_github_shows_it() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let hub = Hub::new(&[3]);
+    let hub = github(&[3]);
     let mut again = || try_join(&mut store, &hub, 3, &head(3)).unwrap();
     assert_eq!(again(), Joined::Joined);
     assert_eq!(again(), Joined::Already);
     // Settled at a head it's since moved on from.
-    hub.pulls.borrow_mut().insert(3, head(4));
+    hub.push(REMI, 3, &head(4));
     match try_join(&mut store, &hub, 3, &head(3)) {
         Err(TrainError::Moved { pr: 3, head: now }) => assert_eq!(now, head(4)),
         other => panic!("{other:?}"),
@@ -674,7 +170,7 @@ fn a_ready_pr_joins_at_its_head_as_github_shows_it() {
 fn a_pr_joins_at_the_policys_class_and_an_r2_one_rides_alone() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let hub = Hub::new(&[3, 4]);
+    let hub = github(&[3, 4]);
     r2(&hub, 4);
     join_all(&mut store, &hub, &[3, 4]);
     let ledger = store.ledger();
@@ -688,19 +184,19 @@ fn a_pr_joins_at_the_policys_class_and_an_r2_one_rides_alone() {
     assert_eq!(class(4), (true, Class::R2, true));
     // Its class is read once a revision and policy: asked again, the
     // ledger answers.
-    let read = hub.compared.get();
+    let read = hub.count(Call::Files);
     assert_eq!(
         try_join(&mut store, &hub, 4, &head(4)).unwrap(),
         Joined::Already
     );
-    assert_eq!(hub.compared.get(), read);
+    assert_eq!(hub.count(Call::Files), read);
 }
 
 #[test]
 fn a_candidate_is_merged_on_its_build_branch_and_gated_on_its_train_branch() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let hub = Hub::new(&[3, 5, 4]);
+    let hub = github(&[3, 5, 4]);
     join_all(&mut store, &hub, &[3, 5, 4]);
     let stepped = step_once(&mut store, &hub);
     let (id, prs) = gating(&stepped);
@@ -708,7 +204,7 @@ fn a_candidate_is_merged_on_its_build_branch_and_gated_on_its_train_branch() {
     assert!(stepped.conflicts.is_empty());
 
     // Merged in the order they joined, onto trunk, on the build branch.
-    let merges = hub.merges.borrow().clone();
+    let merges = hub.merges(REMI);
     let build = build_branch(id);
     assert_eq!(
         merges,
@@ -717,28 +213,29 @@ fn a_candidate_is_merged_on_its_build_branch_and_gated_on_its_train_branch() {
     // The build branch is gone, and the train branch holds the result.
     let train = train_branch(id);
     assert_eq!(
-        hub.names(),
+        hub.names(REMI),
         ["conary/train/".to_owned() + &id.to_string(), "main".into()]
     );
-    assert_eq!(hub.held(&train), [3, 5, 4].map(head));
+    // What it holds, whatever order it was merged in.
+    assert_eq!(hub.held(REMI, &train), [3, 4, 5].map(head));
     let c = store.ledger().candidate(id).unwrap();
     assert_eq!(c.base.as_str(), TRUNK);
-    assert_eq!(c.commit.as_str(), hub.branch_at(&train).unwrap());
+    assert_eq!(c.commit.as_str(), hub.branch_at(REMI, &train).unwrap());
     assert_eq!(c.tree.as_str(), tree_of(&[3, 5, 4].map(head)));
     assert_eq!(c.state, State::Gating);
 
     // Stepped again while it gates: nothing new is built.
     let again = step_once(&mut store, &hub);
     assert_eq!(gating(&again).0, id);
-    assert_eq!(hub.merges.borrow().len(), 3);
+    assert_eq!(hub.merges(REMI).len(), 3);
 }
 
 #[test]
 fn a_head_that_wont_merge_leaves_and_the_rest_are_built_without_it() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let mut hub = Hub::new(&[3, 4, 5]);
-    hub.conflicts.insert(head(4));
+    let hub = github(&[3, 4, 5]);
+    hub.clash_with_all(&head(4));
     join_all(&mut store, &hub, &[3, 4, 5]);
     let stepped = step_once(&mut store, &hub);
     assert_eq!(
@@ -752,7 +249,7 @@ fn a_head_that_wont_merge_leaves_and_the_rest_are_built_without_it() {
     let (id, prs) = gating(&stepped);
     assert_eq!(prs, [3, 5]);
     // Only the candidate's own branch is left.
-    assert_eq!(hub.names(), [train_branch(id), "main".into()]);
+    assert_eq!(hub.names(REMI), [train_branch(id), "main".into()]);
     assert_eq!(joined(&store), [3, 5]);
 }
 
@@ -760,19 +257,19 @@ fn a_head_that_wont_merge_leaves_and_the_rest_are_built_without_it() {
 fn a_train_branch_lost_before_it_was_made_is_made_at_the_recorded_commit() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let hub = Hub::new(&[3]);
+    let hub = github(&[3]);
     join_all(&mut store, &hub, &[3]);
     let (id, _) = gating(&step_once(&mut store, &hub));
-    let commit = hub.branches.borrow_mut().remove(&train_branch(id)).unwrap();
+    let commit = hub.remove_branch(REMI, &train_branch(id)).unwrap();
     step_once(&mut store, &hub);
-    assert_eq!(hub.branch_at(&train_branch(id)), Some(commit));
+    assert_eq!(hub.branch_at(REMI, &train_branch(id)), Some(commit));
 }
 
 #[test]
 fn red_alone_leaves_with_the_trains_failure_and_stays_out_until_its_head_moves() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let mut hub = Hub::new(&[3]);
+    let hub = github(&[3]);
     join_all(&mut store, &hub, &[3]);
     let (id, _) = gating(&step_once(&mut store, &hub));
     hub.ci(
@@ -794,7 +291,7 @@ fn red_alone_leaves_with_the_trains_failure_and_stays_out_until_its_head_moves()
         }]
     );
     assert_eq!(
-        hub.marks.borrow().last(),
+        hub.marks().last(),
         Some(&Posted {
             sha: head(3),
             mark: Mark::Red,
@@ -807,7 +304,7 @@ fn red_alone_leaves_with_the_trains_failure_and_stays_out_until_its_head_moves()
         try_join(&mut store, &hub, 3, &head(3)).unwrap(),
         Joined::Held(Held::Red)
     );
-    hub.pulls.borrow_mut().insert(3, head(33));
+    hub.push(REMI, 3, &head(33));
     assert_eq!(
         try_join(&mut store, &hub, 3, &head(33)).unwrap(),
         Joined::Joined
@@ -818,7 +315,7 @@ fn red_alone_leaves_with_the_trains_failure_and_stays_out_until_its_head_moves()
 fn red_with_others_splits_and_builds_the_older_half_in_the_same_step() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let mut hub = Hub::new(&[3, 4, 5]);
+    let hub = github(&[3, 4, 5]);
     join_all(&mut store, &hub, &[3, 4, 5]);
     let (whole, _) = gating(&step_once(&mut store, &hub));
     hub.ci(&commit_of(&store, whole), &[("check / check", "failure")]);
@@ -834,14 +331,14 @@ fn red_with_others_splits_and_builds_the_older_half_in_the_same_step() {
 fn red_alone_is_recorded_only_once_its_head_has_the_failure() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let mut hub = Hub::new(&[3]);
+    let hub = github(&[3]);
     join_all(&mut store, &hub, &[3]);
     let (id, _) = gating(&step_once(&mut store, &hub));
     hub.ci(&commit_of(&store, id), &[("check / check", "failure")]);
-    hub.unmarked.set(Some(Mark::Red));
+    hub.fail(unmarked(Mark::Red));
     assert!(step(&mut store, &hub, &hub, &config(), &repo(), &settings()).is_err());
     assert_eq!(store.ledger().candidate(id).unwrap().state, State::Gating);
-    hub.unmarked.set(None);
+    hub.heal(Call::Mark);
     let stepped = step_once(&mut store, &hub);
     assert_eq!(stepped.verdicts, [(id, Verdict::Red)]);
     assert_eq!(hub.marked(), [(head(3), Mark::Red)]);
@@ -851,8 +348,8 @@ fn red_alone_is_recorded_only_once_its_head_has_the_failure() {
 fn a_pr_that_wont_merge_is_held_until_what_it_was_after_moves() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let mut hub = Hub::new(&[3, 4]);
-    hub.conflicts.insert(head(4));
+    let hub = github(&[3, 4]);
+    hub.clash_with_all(&head(4));
     join_all(&mut store, &hub, &[3, 4]);
     let (id, _) = gating(&step_once(&mut store, &hub));
     assert_eq!(
@@ -869,7 +366,7 @@ fn a_pr_that_wont_merge_is_held_until_what_it_was_after_moves() {
         [Conflict {
             pr: 4,
             onto: vec![],
-            base: hub.branch_at("main").unwrap().parse().unwrap(),
+            base: hub.branch_at(REMI, "main").unwrap().parse().unwrap(),
         }]
     );
     assert_eq!(stepped.now, Now::Idle);
@@ -880,7 +377,7 @@ fn a_pr_that_wont_merge_is_held_until_what_it_was_after_moves() {
 fn red_splits_and_the_older_half_is_built_on_trunk_as_it_is() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let hub = Hub::new(&[3, 4, 5, 6]);
+    let hub = github(&[3, 4, 5, 6]);
     join_all(&mut store, &hub, &[3, 4, 5, 6]);
     let (whole, _) = gating(&step_once(&mut store, &hub));
     store
@@ -894,27 +391,27 @@ fn red_splits_and_the_older_half_is_built_on_trunk_as_it_is() {
     assert_eq!(prs, [3, 4]);
     assert_eq!(store.ledger().candidate(older).unwrap().of, Some(whole));
     // The red one's branch went.
-    assert_eq!(hub.names(), [train_branch(older), "main".into()]);
-    assert_eq!(hub.held(&train_branch(older)), [3, 4].map(head));
+    assert_eq!(hub.names(REMI), [train_branch(older), "main".into()]);
+    assert_eq!(hub.held(REMI, &train_branch(older)), [3, 4].map(head));
 }
 
 #[test]
 fn stray_branches_go_and_only_the_trains_own() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let hub = Hub::new(&[]);
+    let hub = github(&[]);
     for name in [
         "conary/build/left-by-a-stopped-step",
         "conary/train/of-a-candidate-done-with",
         "conary/notes-of-someone-else",
         "claude/x",
     ] {
-        hub.branches.borrow_mut().insert(name.into(), TRUNK.into());
+        hub.set_branch(REMI, name, TRUNK);
     }
     let stepped = step_once(&mut store, &hub);
     assert_eq!(stepped.now, Now::Idle);
     assert_eq!(
-        hub.names(),
+        hub.names(REMI),
         ["claude/x", "conary/notes-of-someone-else", "main"]
     );
 }
@@ -923,7 +420,7 @@ fn stray_branches_go_and_only_the_trains_own() {
 fn a_candidate_is_dropped_only_in_its_own_repo_and_only_once() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let hub = Hub::new(&[3]);
+    let hub = github(&[3]);
     join_all(&mut store, &hub, &[3]);
     let (id, _) = gating(&step_once(&mut store, &hub));
     let other: Repo = "FieldmouseWorks/burrow".parse().unwrap();

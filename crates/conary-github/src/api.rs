@@ -182,16 +182,16 @@ pub struct Event {
 }
 
 #[derive(Debug, Deserialize)]
-struct Comparison {
+pub(crate) struct Comparison {
     merge_base_commit: Parent,
     #[serde(default)]
-    files: Vec<ComparedFile>,
+    pub(crate) files: Vec<ComparedFile>,
 }
 
 /// One file a comparison changes, and where it started if it was renamed
 /// or copied.
 #[derive(Debug, Deserialize)]
-struct ComparedFile {
+pub(crate) struct ComparedFile {
     filename: String,
     previous_filename: Option<String>,
     status: Option<String>,
@@ -599,7 +599,7 @@ impl Source for Api {
     }
 }
 
-fn compared(files: Vec<ComparedFile>) -> Paths {
+pub(crate) fn compared(files: Vec<ComparedFile>) -> Paths {
     Paths {
         cut: files.len() >= COMPARED_FILES,
         files: files

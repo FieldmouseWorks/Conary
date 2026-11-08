@@ -1,0 +1,35 @@
+[
+  {
+    "url": "https://api.github.com/repos/FieldmouseWorks/Conary/statuses/1d8cd465a81ff5c103b3cc4b4392d8909d53c086",
+    "avatar_url": "https://avatars.githubusercontent.com/u/213728946?v=4",
+    "id": 58341271178,
+    "node_id": "SC_kwDOVS7vt88AAAANlWkmig",
+    "state": "success",
+    "description": "Codex found nothing in this commit's change, every thread is resolved, CI is green",
+    "target_url": "https://github.com/FieldmouseWorks/Conary/pull/255",
+    "context": "review-settled",
+    "created_at": "2026-11-07T21:43:41Z",
+    "updated_at": "2026-11-07T21:43:41Z",
+    "creator": {
+      "login": "fieldmouseworks-steward[bot]",
+      "id": 349526397,
+      "node_id": "BOT_kgDOFNVZfQ",
+      "avatar_url": "https://avatars.githubusercontent.com/u/213728946?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/fieldmouseworks-steward%5Bbot%5D",
+      "html_url": "https://github.com/apps/fieldmouseworks-steward",
+      "followers_url": "https://api.github.com/users/fieldmouseworks-steward%5Bbot%5D/followers",
+      "following_url": "https://api.github.com/users/fieldmouseworks-steward%5Bbot%5D/following{/other_user}",
+      "gists_url": "https://api.github.com/users/fieldmouseworks-steward%5Bbot%5D/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/fieldmouseworks-steward%5Bbot%5D/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/fieldmouseworks-steward%5Bbot%5D/subscriptions",
+      "organizations_url": "https://api.github.com/users/fieldmouseworks-steward%5Bbot%5D/orgs",
+      "repos_url": "https://api.github.com/users/fieldmouseworks-steward%5Bbot%5D/repos",
+      "events_url": "https://api.github.com/users/fieldmouseworks-steward%5Bbot%5D/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/fieldmouseworks-steward%5Bbot%5D/received_events",
+      "type": "Bot",
+      "user_view_type": "public",
+      "site_admin": false
+    }
+  }
+]

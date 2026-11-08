@@ -21,7 +21,7 @@ fn alone(store: &Store, pr: u64) -> bool {
 fn a_pr_classed_r2_after_it_joined_leaves_its_candidate_and_rides_alone() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let mut hub = Hub::new(&[3, 4, 5]);
+    let hub = github(&[3, 4, 5]);
     join_all(&mut store, &hub, &[3, 4, 5]);
     let (first, prs) = gating(&step_once(&mut store, &hub));
     assert_eq!(prs, [3, 4, 5]);
@@ -61,7 +61,7 @@ fn a_pr_classed_r2_after_it_joined_leaves_its_candidate_and_rides_alone() {
 fn a_seated_pr_joined_again_under_a_policy_that_makes_it_r2_rides_alone() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let hub = Hub::new(&[3, 4]);
+    let hub = github(&[3, 4]);
     join_all(&mut store, &hub, &[3, 4]);
     let (_, prs) = gating(&step_once(&mut store, &hub));
     assert_eq!(prs, [3, 4]);
@@ -94,12 +94,12 @@ fn a_seated_pr_joined_again_under_a_policy_that_makes_it_r2_rides_alone() {
 fn a_pr_classed_r2_while_its_green_candidate_lands_is_reseated_before_its_merge() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let mut hub = Hub::new(&[3, 4, 5, 6]);
+    let hub = github(&[3, 4, 5, 6]);
     join_all(&mut store, &hub, &[3, 4, 5, 6]);
     let (id, _) = gating(&step_once(&mut store, &hub));
     hub.ci(&commit_of(&store, id), &[("check / check", "success")]);
     // GitHub takes 3's merge and doesn't show it merged yet.
-    hub.lagging.set(true);
+    hub.stale(Call::Pull.pr(3));
     let stepped = step_once(&mut store, &hub);
     assert_eq!(stepped.landed, [3]);
     assert!(matches!(stepped.now, Now::Landing { .. }));
@@ -118,14 +118,14 @@ fn a_pr_classed_r2_while_its_green_candidate_lands_is_reseated_before_its_merge(
         )
         .unwrap();
     }
-    hub.lagging.set(false);
+    hub.fresh(Call::Pull);
     let stepped = step_once(&mut store, &hub);
     // 4 instead of its merge; then 5 and 6 wait again, and 6 goes back in
     // alone before it's built with 5.
     assert_eq!(stepped.reseated, [4, 6]);
     assert!(stepped.landed.is_empty());
     assert_eq!(hub.latest(&head(4)), Some(Mark::Waiting));
-    assert!(!hub.merged.borrow().contains_key(&4));
+    assert!(!hub.merged(REMI, 4).is_some());
     let (next, prs) = gating(&stepped);
     assert_ne!(next, id);
     assert_eq!(prs, [5]);
@@ -139,7 +139,7 @@ fn a_pr_classed_r2_while_its_green_candidate_lands_is_reseated_before_its_merge(
 fn a_reseat_github_wont_mark_leaves_the_pr_in_for_the_next_step() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let hub = Hub::new(&[3, 4]);
+    let hub = github(&[3, 4]);
     join_all(&mut store, &hub, &[3, 4]);
     let (first, _) = gating(&step_once(&mut store, &hub));
     r2(&hub, 4);
@@ -155,14 +155,14 @@ fn a_reseat_github_wont_mark_leaves_the_pr_in_for_the_next_step() {
         Vec::new(),
     )
     .unwrap();
-    hub.unmarked.set(Some(Mark::Waiting));
+    hub.fail(unmarked(Mark::Waiting));
     assert!(step(&mut store, &hub, &hub, &config(), &repo(), &settings()).is_err());
     assert_eq!(joined(&store), [3, 4]);
     assert_eq!(
         store.ledger().train(&repo()).unwrap().in_flight(),
         Some(first)
     );
-    hub.unmarked.set(None);
+    hub.heal(Call::Mark);
     let stepped = step_once(&mut store, &hub);
     assert_eq!(stepped.reseated, [4]);
     assert_eq!(joined(&store), [3, 4]);
@@ -176,14 +176,14 @@ fn a_reseat_github_wont_mark_leaves_the_pr_in_for_the_next_step() {
 fn a_pr_classed_r2_while_its_landing_is_open_is_reseated_once_its_not_merged() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let mut hub = Hub::new(&[3, 4]);
+    let hub = github(&[3, 4]);
     join_all(&mut store, &hub, &[3, 4]);
     let (id, _) = gating(&step_once(&mut store, &hub));
     hub.ci(&commit_of(&store, id), &[("check / check", "success")]);
-    hub.down.set(true);
+    hub.fail(Call::Land);
     assert!(step(&mut store, &hub, &hub, &config(), &repo(), &settings()).is_err());
     assert_eq!(hub.latest(&head(3)), Some(Mark::Landing));
-    hub.down.set(false);
+    hub.heal(Call::Land);
     r2(&hub, 3);
     let c = store.ledger().by_pr(&repo(), 3).unwrap();
     let (change, revision) = (c.id, c.current.unwrap());
@@ -199,7 +199,7 @@ fn a_pr_classed_r2_while_its_landing_is_open_is_reseated_once_its_not_merged() {
     .unwrap();
     let stepped = step_once(&mut store, &hub);
     assert_eq!(stepped.reseated, [3]);
-    assert!(stepped.landed.is_empty() && hub.merged.borrow().is_empty());
+    assert!(stepped.landed.is_empty() && hub.landed(REMI).is_empty());
     assert_eq!(hub.latest(&head(3)), Some(Mark::Waiting));
     assert_eq!(gating(&stepped).1, [4]);
     assert!(alone(&store, 3));
@@ -238,9 +238,9 @@ fn join_one(store: &mut Store, hub: &Hub, pr: u64, settled: &[String]) -> Joined
 fn a_pr_labelled_r2_rides_alone_once_the_steward_settled_it_so() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let hub = Hub::new(&[3, 5]);
+    let hub = github(&[3, 5]);
     join_all(&mut store, &hub, &[3]);
-    hub.labels.borrow_mut().insert(5, vec!["R2"]);
+    hub.label(REMI, 5, &["R2"]);
     assert_eq!(join_one(&mut store, &hub, 5, &[]), Joined::Raised);
     assert_eq!(join_one(&mut store, &hub, 5, &[]), Joined::Raised);
     assert_eq!(joined(&store), [3]);
@@ -258,10 +258,10 @@ fn a_pr_labelled_r2_rides_alone_once_the_steward_settled_it_so() {
 fn a_label_recorded_by_another_class_between_the_stewards_and_its_join_holds_it_out() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let hub = Hub::new(&[3]);
+    let hub = github(&[3]);
     let (_, settled) = classed(&mut store, &hub, 3);
     assert!(settled.is_empty());
-    hub.labels.borrow_mut().insert(3, vec!["review"]);
+    hub.label(REMI, 3, &["review"]);
     classed(&mut store, &hub, 3);
     assert_eq!(join_one(&mut store, &hub, 3, &settled), Joined::Raised);
     assert!(joined(&store).is_empty());
@@ -276,9 +276,9 @@ fn a_pr_classed_with_a_label_since_it_joined_leaves_the_train() {
     for (label, class) in [("r2", Class::R2), ("review", Class::R0)] {
         let dir = tempfile::tempdir().unwrap();
         let mut store = store(&dir);
-        let hub = Hub::new(&[3, 4]);
+        let hub = github(&[3, 4]);
         join_all(&mut store, &hub, &[3, 4]);
-        hub.labels.borrow_mut().insert(4, vec![label]);
+        hub.label(REMI, 4, &[label]);
         let (got, raised) = classed(&mut store, &hub, 4);
         assert_eq!(got, class, "{label}");
         let stepped = step_once(&mut store, &hub);
@@ -288,7 +288,7 @@ fn a_pr_classed_with_a_label_since_it_joined_leaves_the_train() {
             "{label}"
         );
         assert_eq!(hub.latest(&head(4)), Some(Mark::Waiting));
-        hub.labels.borrow_mut().remove(&4);
+        hub.label(REMI, 4, &[]);
         assert_eq!(
             join_one(&mut store, &hub, 4, &[]),
             Joined::Raised,
@@ -312,18 +312,18 @@ fn a_pr_labelled_since_it_joined_leaves_instead_of_landing() {
     for label in ["r2", "Review"] {
         let dir = tempfile::tempdir().unwrap();
         let mut store = store(&dir);
-        let mut hub = Hub::new(&[3, 4, 6]);
+        let hub = github(&[3, 4, 6]);
         join_all(&mut store, &hub, &[3, 4, 6]);
         let (id, _) = gating(&step_once(&mut store, &hub));
         hub.ci(&commit_of(&store, id), &[("check / check", "success")]);
-        hub.labels.borrow_mut().insert(4, vec!["bug", label]);
+        hub.label(REMI, 4, &["bug", label]);
         let stepped = step_once(&mut store, &hub);
         assert_eq!(
             (&stepped.landed[..], &stepped.unready[..]),
             (&[3][..], &[4][..]),
             "{label}"
         );
-        assert_eq!(hub.held("main"), [head(3)]);
+        assert_eq!(hub.held(REMI, "main"), [head(3)]);
         assert_eq!(hub.latest(&head(4)), Some(Mark::Waiting));
         assert_eq!(joined(&store), [6]);
     }
@@ -336,18 +336,18 @@ fn a_pr_labelled_since_it_joined_leaves_instead_of_landing() {
 fn a_pr_classed_with_a_label_in_a_green_candidate_leaves_before_it_lands() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let mut hub = Hub::new(&[3, 4, 6]);
+    let hub = github(&[3, 4, 6]);
     join_all(&mut store, &hub, &[3, 4, 6]);
     let (id, _) = gating(&step_once(&mut store, &hub));
     hub.ci(&commit_of(&store, id), &[("check / check", "success")]);
-    hub.labels.borrow_mut().insert(4, vec!["review"]);
+    hub.label(REMI, 4, &["review"]);
     classed(&mut store, &hub, 4);
     let stepped = step_once(&mut store, &hub);
     assert_eq!(
         (&stepped.landed[..], &stepped.unready[..]),
         (&[][..], &[4][..])
     );
-    assert!(hub.held("main").is_empty());
+    assert!(hub.held(REMI, "main").is_empty());
     assert_eq!(hub.latest(&head(4)), Some(Mark::Waiting));
     let (next, prs) = gating(&stepped);
     assert_ne!(next, id);
@@ -362,18 +362,18 @@ fn a_pr_labelled_as_it_lands_leaves_instead_of_merging() {
     for label in ["r2", "review"] {
         let dir = tempfile::tempdir().unwrap();
         let mut store = store(&dir);
-        let mut hub = Hub::new(&[3]);
+        let hub = github(&[3]);
         join_all(&mut store, &hub, &[3]);
         let (id, _) = gating(&step_once(&mut store, &hub));
         hub.ci(&commit_of(&store, id), &[("check / check", "success")]);
-        *hub.relabel.borrow_mut() = Some((3, label));
+        hub.race(landing(), move |h| h.label(REMI, 3, &[label]));
         let stepped = step_once(&mut store, &hub);
         assert_eq!(
             (&stepped.landed[..], &stepped.unready[..]),
             (&[][..], &[3][..]),
             "{label}"
         );
-        assert!(hub.held("main").is_empty());
+        assert!(hub.held(REMI, "main").is_empty());
         assert_eq!(hub.latest(&head(3)), Some(Mark::Waiting));
         assert!(joined(&store).is_empty());
     }
@@ -384,8 +384,8 @@ fn a_pr_labelled_as_it_lands_leaves_instead_of_merging() {
 fn a_label_it_joined_with_lands_it_as_classed() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let mut hub = Hub::new(&[3]);
-    hub.labels.borrow_mut().insert(3, vec!["review"]);
+    let hub = github(&[3]);
+    hub.label(REMI, 3, &["review"]);
     let (_, raised) = classed(&mut store, &hub, 3);
     assert_eq!(join_one(&mut store, &hub, 3, &raised), Joined::Joined);
     let (id, _) = gating(&step_once(&mut store, &hub));
@@ -402,21 +402,21 @@ fn a_label_it_joined_with_lands_it_as_classed() {
 fn a_pr_classed_with_a_label_while_its_landing_is_open_leaves_before_its_merge() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let mut hub = Hub::new(&[3]);
+    let hub = github(&[3]);
     join_all(&mut store, &hub, &[3]);
     let (id, _) = gating(&step_once(&mut store, &hub));
     hub.ci(&commit_of(&store, id), &[("check / check", "success")]);
-    hub.down.set(true);
+    hub.fail(Call::Land);
     assert!(step(&mut store, &hub, &hub, &config(), &repo(), &settings()).is_err());
     assert_eq!(hub.latest(&head(3)), Some(Mark::Landing));
-    hub.down.set(false);
-    hub.labels.borrow_mut().insert(3, vec!["review"]);
+    hub.heal(Call::Land);
+    hub.label(REMI, 3, &["review"]);
     classed(&mut store, &hub, 3);
-    hub.labels.borrow_mut().remove(&3);
+    hub.label(REMI, 3, &[]);
     let stepped = step_once(&mut store, &hub);
     assert!(stepped.landed.is_empty());
     assert_eq!(stepped.unready, [3]);
     assert_eq!(hub.latest(&head(3)), Some(Mark::Waiting));
-    assert!(!hub.merged.borrow().contains_key(&3));
+    assert!(!hub.merged(REMI, 3).is_some());
     assert!(joined(&store).is_empty());
 }

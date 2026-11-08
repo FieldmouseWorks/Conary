@@ -1,0 +1,84 @@
+{
+  "sha": "7b0c8ef944357b981509dae58a474856e43f1e3c",
+  "node_id": "C_kwDOVS7vt9oAKDdiMGM4ZWY5NDQzNTdiOTgxNTA5ZGFlNThhNDc0ODU2ZTQzZjFlM2M",
+  "commit": {
+    "author": {
+      "name": "fieldmouseworks-workers[bot]",
+      "email": "349565860+fieldmouseworks-workers[bot]@users.noreply.github.com",
+      "date": "2026-11-07T21:43:44Z"
+    },
+    "committer": {
+      "name": "GitHub",
+      "email": "noreply@github.com",
+      "date": "2026-11-07T21:43:44Z"
+    },
+    "message": "house: the house blocks, as burrow has them now (#255)\n\nCo-authored-by: fieldmouseworks-workers[bot] <349565860+fieldmouseworks-workers[bot]@users.noreply.github.com>",
+    "tree": {
+      "sha": "f0ee129dc23cf4a268ce72e0f91951126b58fca7",
+      "url": "https://api.github.com/repos/FieldmouseWorks/Conary/git/trees/f0ee129dc23cf4a268ce72e0f91951126b58fca7"
+    },
+    "url": "https://api.github.com/repos/FieldmouseWorks/Conary/git/commits/7b0c8ef944357b981509dae58a474856e43f1e3c",
+    "comment_count": 0,
+    "verification": {
+      "verified": true,
+      "reason": "valid",
+      "signature": "-----BEGIN PGP SIGNATURE-----\n\nwsFcBAABCAAQBQJq75uQCRC1aQ7uu5UhlAAAELsQADiRcKqaVVlpTnZ66vwU+Iu4\nfmcaB+/AxNfJ61GIWaqXJ2Xq1q3+slXd/VJtq0d4wpBfhUDJ+yEasSmLgYNBgsoh\nceIRn2oryhCnw5bINCNVyjNutMmuDZ3EeclrkYKADpBPawfh9a+7grTuHqHIf9CD\nI5qEo7LQ/lv2bqsFs2adv0QctgxC+Z+thfNcz2Kn5CPBoVabyyEnIASeRy5t/duD\ngIxMbXHxbMAGbGQM80OPXD4VQiJrIDRW6gfDyMpvXxEQ9DBjzS21dfbfnpRmO+zS\n8z/o6SrgFnGtT2VE/3+ZAqhuvrVxq9dPxkPkPTWVthBhhdCqeYTe1gJRFRwvZQO6\nzqvp+qb0yZiU0Mg6AuBy7TxeEbJdI5JtMjXOtdyN7cBuBcjJTytsfR55Ki1RPgUb\nybO3RXfBMfxx0/8rWuFcYhhbpkCHNTas9gYc98m4dD7zARNYFiUhxjWYN+ap9Oa5\n8nM6scsyaHNUloe3gUN+z0ZcBTj472nZH94mn2XNqhmP/bOYKw763DDH9dVOoOB4\nVUf7gB/icFi7bVmYQ5CtETSGyk8lEzeQBUtehCl4Ibvk/0RbQuBISsocdYCS5hYT\nf6D4oU6bo4x4Jqs85JZncCjt58ur9IF0W4ok13MkpokTIBhbd+lGS9k7AutIakyl\nM4dJs8KhCQaBETT8Ur3l\n=BmNj\n-----END PGP SIGNATURE-----\n",
+      "payload": "tree f0ee129dc23cf4a268ce72e0f91951126b58fca7\nparent db2a09dabcacd2f866fe1d28d678d6cc0e67ff5c\nauthor fieldmouseworks-workers[bot] <349565860+fieldmouseworks-workers[bot]@users.noreply.github.com> 1794087824 -0800\ncommitter GitHub <noreply@github.com> 1794087824 -0800\n\nhouse: the house blocks, as burrow has them now (#255)\n\nCo-authored-by: fieldmouseworks-workers[bot] <349565860+fieldmouseworks-workers[bot]@users.noreply.github.com>",
+      "verified_at": "2026-11-07T21:43:45Z"
+    }
+  },
+  "url": "https://api.github.com/repos/FieldmouseWorks/Conary/commits/7b0c8ef944357b981509dae58a474856e43f1e3c",
+  "html_url": "https://github.com/FieldmouseWorks/Conary/commit/7b0c8ef944357b981509dae58a474856e43f1e3c",
+  "comments_url": "https://api.github.com/repos/FieldmouseWorks/Conary/commits/7b0c8ef944357b981509dae58a474856e43f1e3c/comments",
+  "author": {
+    "login": "fieldmouseworks-workers[bot]",
+    "id": 349565860,
+    "node_id": "BOT_kgDOFNXzpA",
+    "avatar_url": "https://avatars.githubusercontent.com/u/213728946?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/fieldmouseworks-workers%5Bbot%5D",
+    "html_url": "https://github.com/apps/fieldmouseworks-workers",
+    "followers_url": "https://api.github.com/users/fieldmouseworks-workers%5Bbot%5D/followers",
+    "following_url": "https://api.github.com/users/fieldmouseworks-workers%5Bbot%5D/following{/other_user}",
+    "gists_url": "https://api.github.com/users/fieldmouseworks-workers%5Bbot%5D/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/fieldmouseworks-workers%5Bbot%5D/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/fieldmouseworks-workers%5Bbot%5D/subscriptions",
+    "organizations_url": "https://api.github.com/users/fieldmouseworks-workers%5Bbot%5D/orgs",
+    "repos_url": "https://api.github.com/users/fieldmouseworks-workers%5Bbot%5D/repos",
+    "events_url": "https://api.github.com/users/fieldmouseworks-workers%5Bbot%5D/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/fieldmouseworks-workers%5Bbot%5D/received_events",
+    "type": "Bot",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "committer": {
+    "login": "web-flow",
+    "id": 19864447,
+    "node_id": "MDQ6VXNlcjE5ODY0NDQ3",
+    "avatar_url": "https://avatars.githubusercontent.com/u/19864447?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/web-flow",
+    "html_url": "https://github.com/web-flow",
+    "followers_url": "https://api.github.com/users/web-flow/followers",
+    "following_url": "https://api.github.com/users/web-flow/following{/other_user}",
+    "gists_url": "https://api.github.com/users/web-flow/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/web-flow/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/web-flow/subscriptions",
+    "organizations_url": "https://api.github.com/users/web-flow/orgs",
+    "repos_url": "https://api.github.com/users/web-flow/repos",
+    "events_url": "https://api.github.com/users/web-flow/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/web-flow/received_events",
+    "type": "User",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "parents": [
+    {
+      "sha": "db2a09dabcacd2f866fe1d28d678d6cc0e67ff5c",
+      "url": "https://api.github.com/repos/FieldmouseWorks/Conary/commits/db2a09dabcacd2f866fe1d28d678d6cc0e67ff5c",
+      "html_url": "https://github.com/FieldmouseWorks/Conary/commit/db2a09dabcacd2f866fe1d28d678d6cc0e67ff5c"
+    }
+  ],
+  "stats": null,
+  "files": []
+}

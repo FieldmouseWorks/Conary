@@ -7,9 +7,9 @@ use super::*;
 fn a_head_that_changes_nothing_after_the_ones_ahead_leaves_and_is_never_merged() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let mut hub = Hub::new(&[3, 4, 5]);
+    let hub = github(&[3, 4, 5]);
     // 4 is the same fix as 3: merged after it, it changes nothing.
-    hub.same.insert(head(4), head(3));
+    hub.does_as(&head(4), &head(3));
     join_all(&mut store, &hub, &[3, 4, 5]);
     let stepped = step_once(&mut store, &hub);
     assert_eq!(
@@ -24,7 +24,7 @@ fn a_head_that_changes_nothing_after_the_ones_ahead_leaves_and_is_never_merged()
     let (id, prs) = gating(&stepped);
     assert_eq!(prs, [3, 5]);
     // Only the candidate's own branch is left.
-    assert_eq!(hub.names(), [train_branch(id), "main".into()]);
+    assert_eq!(hub.names(REMI), [train_branch(id), "main".into()]);
     assert_eq!(joined(&store), [3, 5]);
     // Held while 3 is on its way to trunk ahead of it.
     assert_eq!(
@@ -42,22 +42,22 @@ fn a_head_that_changes_nothing_after_the_ones_ahead_leaves_and_is_never_merged()
         [Empty {
             pr: 4,
             onto: vec![],
-            base: hub.branch_at("main").unwrap().parse().unwrap(),
+            base: hub.branch_at(REMI, "main").unwrap().parse().unwrap(),
         }]
     );
     assert_eq!(stepped.now, Now::Idle);
     assert!(joined(&store).is_empty());
-    assert!(!hub.merged.borrow().contains_key(&4));
+    assert!(!hub.merged(REMI, 4).is_some());
 }
 
 #[test]
 fn a_head_already_in_a_pr_ahead_of_it_leaves_as_one_that_changes_nothing() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    let mut hub = Hub::new(&[3, 4]);
+    let hub = github(&[3, 4]);
     // 3's branch was made on 4's: merging 3 brings 4's head, so 4's merge
     // after it has nothing left to bring (GitHub's 204).
-    hub.stacked.insert(head(3), head(4));
+    hub.stack(&head(3), &head(4));
     join_all(&mut store, &hub, &[3, 4]);
     let stepped = step_once(&mut store, &hub);
     assert_eq!(
@@ -85,9 +85,9 @@ fn a_head_already_in_a_pr_ahead_of_it_leaves_as_one_that_changes_nothing() {
         [Empty {
             pr: 4,
             onto: vec![],
-            base: hub.branch_at("main").unwrap().parse().unwrap(),
+            base: hub.branch_at(REMI, "main").unwrap().parse().unwrap(),
         }]
     );
     assert!(joined(&store).is_empty());
-    assert!(!hub.merged.borrow().contains_key(&4));
+    assert!(!hub.merged(REMI, 4).is_some());
 }
