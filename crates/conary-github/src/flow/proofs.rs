@@ -289,7 +289,7 @@ pub(super) fn obsolete(f: &Facts) -> Option<&Job> {
                 .filter(|j| j.state.live() && j.revision.head != f.revision.head),
         )
         .filter(|job| !useful(f, &job.id))
-        .max_by(|a, b| a.started.cmp(&b.started).then_with(|| a.id.cmp(&b.id)))
+        .min_by(|a, b| a.started.cmp(&b.started).then_with(|| a.id.cmp(&b.id)))
 }
 
 pub(super) fn obsolete_inputs(f: &Facts) -> Option<&Job> {

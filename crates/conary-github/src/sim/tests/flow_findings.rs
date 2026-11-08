@@ -470,3 +470,96 @@ fn legacy_findings_keep_the_round_cap_without_supplying_clean_coverage() {
     c.review("reviewer", Verdict::Clean, 600);
     assert_eq!(c.view(8000).step, Step::Merge);
 }
+
+#[test]
+fn older_or_ambiguous_clean_cannot_discard_newer_refused_findings() {
+    for carried in [false, true] {
+        for clean_at in [100, 900, 901] {
+            let mut c = Case::new();
+            c.review("reviewer", Verdict::Clean, clean_at);
+            let revision = c.scope();
+            c.service("reviewer").answer = Some(Review {
+                revision: revision.clone(),
+                verdict: Verdict::Findings,
+                at: 900,
+            });
+            c.memory
+                .review_posts
+                .insert(("reviewer".into(), revision, 900), 3);
+            if carried {
+                super::flow_carried::merge_base_into(&c, false);
+            }
+            let n = c.pass(8000);
+            assert_eq!(
+                matches!(n.step, Step::Merge | Step::JoinTrain | Step::Settle),
+                clean_at > 900
+            );
+            if clean_at <= 900 {
+                c.review("reviewer", Verdict::Clean, 8001);
+                assert_eq!(c.pass(9000).step, Step::Merge);
+            }
+        }
+    }
+}
+
+#[test]
+fn rejected_sweep_remains_blocking_after_minor_reclassification() {
+    for conflict in [false, true] {
+        let mut c = Case::new();
+        c.hub.edit_pull(REMI, 3, |p| {
+            p["head"]["ref"] = json!("renovate/pkg");
+            p["title"] = json!("Update pkg from 1 to 2");
+        });
+        c.hub.refresh_flow(REMI, 3);
+        c.review("reviewer", Verdict::Clean, 600);
+        c.sweep("held");
+        c.pass(8000);
+        let key = SealKey::from_hex(&"b".repeat(64)).unwrap();
+        let marker = key.decision(
+            REMI,
+            3,
+            "major-verdict",
+            if conflict { "ok" } else { "unsupported" },
+            &c.scope(),
+            if conflict { 1 } else { 2 },
+        );
+        c.hub.flow_comment(REMI, 3, "owner", &marker);
+        c.label(&["security"]);
+        for time in [8100, 8200] {
+            assert!(!matches!(
+                c.pass(time).step,
+                Step::Merge | Step::JoinTrain | Step::Settle
+            ));
+            c.hub.edit_flow_comment(REMI, 3, 1, "");
+        }
+        c.sweep("ok");
+        c.sweep("ok");
+        assert_eq!(c.pass(9000).step, Step::Merge);
+    }
+}
+
+#[test]
+fn a_different_rest_id_is_not_ordering_evidence_for_a_loss() {
+    let mut c = Case::new();
+    c.review("reviewer", Verdict::Clean, 100);
+    let revision = c.scope();
+    c.service("reviewer").answer = Some(Review {
+        revision: revision.clone(),
+        verdict: Verdict::Findings,
+        at: 900,
+    });
+    c.memory
+        .review_posts
+        .insert(("reviewer".into(), revision, 900), 3);
+    c.pass(8000);
+    c.service("reviewer").answer = None;
+    for time in [99, 899, 900] {
+        c.review("reviewer", Verdict::Clean, time);
+        assert!(!matches!(
+            c.pass(8100).step,
+            Step::Merge | Step::JoinTrain | Step::Settle
+        ));
+    }
+    c.review("reviewer", Verdict::Clean, 901);
+    assert_eq!(c.pass(8200).step, Step::Merge);
+}

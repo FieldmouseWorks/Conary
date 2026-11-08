@@ -468,3 +468,68 @@ fn one_of_two_outputs_is_never_a_stored_pass() {
         .insert("/nix/store/second".into());
     assert!(matches!(c.view(800).proof, Some(ProofPlan::Build(_))));
 }
+
+#[test]
+fn every_obsolete_live_proof_is_stopped_even_behind_newer_records() {
+    for retired in [false, true] {
+        let mut c = build();
+        let mut a = record(&c, JobState::Running);
+        a.job.revision.head = "old-head".into();
+        let mut b = a.clone();
+        b.job.id = "proof-2".into();
+        b.job.started += 1;
+        if retired {
+            c.memory.retired_jobs.insert(b.job.id.clone());
+        } else {
+            b.job.state = JobState::Done;
+        }
+        c.proof_data.records = vec![a, b];
+        assert_eq!(c.pass(8000).step, Step::StopJob("proof-1".into()));
+        assert_eq!(c.pass(8100).step, Step::StopJob("proof-1".into()));
+        c.stopped_jobs.insert("proof-1".into());
+        assert!(!matches!(c.pass(8200).step, Step::StopJob(_)));
+    }
+}
+
+#[test]
+fn hidden_builds_keep_useful_outputs_then_stop_when_outputs_change() {
+    let mut c = build();
+    evaluate(&mut c);
+    let mut a = record(&c, JobState::Running);
+    a.job.revision.head = "old-head".into();
+    let mut b = a.clone();
+    b.job.id = "proof-2".into();
+    b.job.started += 1;
+    c.proof_data.live.push(ProofHolder {
+        number: 3,
+        job: a.job.clone(),
+        paths: Some(drv().outputs),
+    });
+    c.proof_data.records = vec![a, b];
+    // A's output is still needed on this head; only B is obsolete.
+    assert_eq!(c.pass(8000).step, Step::StopJob("proof-2".into()));
+    c.stopped_jobs.insert("proof-2".into());
+    assert!(!matches!(c.pass(8100).step, Step::StopJob(_)));
+    c.proof_data.evaluation.as_mut().unwrap().outputs = None;
+    assert_eq!(c.pass(8200).step, Step::StopJob("proof-1".into()));
+    c.stopped_jobs.insert("proof-1".into());
+    assert!(!matches!(c.pass(8300).step, Step::StopJob(_)));
+}
+
+#[test]
+fn recipe_changes_cancel_every_live_record_before_new_work() {
+    let mut c = build();
+    let a = record(&c, JobState::Running);
+    let mut b = a.clone();
+    b.job.id = "proof-2".into();
+    b.job.started += 1;
+    c.proof_data.records = vec![a, b];
+    c.settings
+        .proofs
+        .insert("vm".into(), Recipe::Run(vec!["new-command".into()]));
+    assert_eq!(c.pass(8000).step, Step::StopJob("proof-1".into()));
+    c.stopped_jobs.insert("proof-1".into());
+    assert_eq!(c.pass(8100).step, Step::StopJob("proof-2".into()));
+    c.stopped_jobs.insert("proof-2".into());
+    assert!(!matches!(c.pass(8200).step, Step::StopJob(_)));
+}

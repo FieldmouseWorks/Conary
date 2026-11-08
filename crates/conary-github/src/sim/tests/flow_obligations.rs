@@ -189,13 +189,13 @@ fn every_observed_live_proof_is_cancelled_after_newer_records_retire_or_finish()
                 c.review("reviewer", Verdict::Clean, 800);
             }
             evaluation(&mut c, "/nix/store/Y");
-            if !completed {
-                assert_eq!(c.pass(1000).step, Step::StopJob("B".into()));
-                c.stopped_jobs.insert("B".into()); // retained Running record must no longer hide A
-            }
-            assert_eq!(c.pass(1100).step, Step::StopJob("A".into()));
-            assert_eq!(c.pass(1200).step, Step::StopJob("A".into())); // until confirmed stopped
+            assert_eq!(c.pass(1000).step, Step::StopJob("A".into()));
+            assert_eq!(c.pass(1100).step, Step::StopJob("A".into())); // until confirmed stopped
             c.stopped_jobs.insert("A".into());
+            if !completed {
+                assert_eq!(c.pass(1200).step, Step::StopJob("B".into()));
+                c.stopped_jobs.insert("B".into()); // retained Running records must be retired
+            }
             assert_eq!(c.pass(1300).step, Step::Prove);
         }
     }
