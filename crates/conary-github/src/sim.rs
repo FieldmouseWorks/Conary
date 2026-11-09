@@ -45,6 +45,7 @@ mod ci;
 mod faults;
 mod fixtures;
 mod flow;
+mod flow_write;
 mod forge;
 
 pub(crate) use faults::{Call, On};

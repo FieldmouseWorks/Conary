@@ -21,6 +21,7 @@ use conary_github::undo::{self, How, Stopped, Undid, Undone, Unrecorded};
 use conary_github::{Api, ApiError, Config, Etags, Ingested, Tokens, ingest, notes};
 
 mod attest;
+mod flow;
 mod plugin;
 mod train;
 
@@ -89,6 +90,13 @@ struct GithubArgs {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Run the landing flow explicitly; no daemon or repository is switched over.
+    Flow {
+        #[command(subcommand)]
+        command: flow::FlowCommand,
+    },
+    #[command(hide = true)]
+    FlowWorker { path: PathBuf },
     /// Check an executable against the published plugin contract.
     Plugin {
         #[command(subcommand)]
@@ -295,6 +303,10 @@ fn unavailable(e: &(dyn std::error::Error + 'static)) -> bool {
 
 fn run(cli: &Cli) -> Result<()> {
     match &cli.command {
+        Command::Flow { command } => flow::run(cli, command)?,
+        Command::FlowWorker { path } => {
+            conary_github::flow::jobs::worker(path).map_err(|e| e.to_string())?
+        }
         Command::Policy { policy } => {
             let digest = Policy::load(policy)?.digest().to_owned();
             if cli.human {

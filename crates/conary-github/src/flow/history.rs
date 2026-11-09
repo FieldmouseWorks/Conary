@@ -11,7 +11,7 @@ pub(super) struct Provenance {
 
 /// The reader uses git's parser, as burrow does. It unfolds continuations
 /// and recognizes real trailer blocks rather than searching quoted prose.
-fn trailers(message: &str) -> Option<Vec<(String, String)>> {
+pub(super) fn trailers(message: &str) -> Option<Vec<(String, String)>> {
     use std::io::{Seek, Write};
     let mut input = tempfile::tempfile().ok()?;
     input.write_all(message.as_bytes()).ok()?;

@@ -159,6 +159,8 @@ fn train_admission_keeps_class_raises_and_requires_a_person_for_r2() {
             c.label(&["needs-peter", "r2"]);
             c.pass(810);
             c.label(&[]);
+            assert_eq!(c.pass(819).step, Step::ListOwner);
+            c.approve();
             assert_eq!(c.pass(820).step, Step::JoinTrain);
         } else {
             assert_eq!(c.pass(800).step, Step::JoinTrain);

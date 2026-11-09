@@ -56,34 +56,9 @@ pub(super) fn negative(
     }
     let r = c.revision(revision).expect("ingest recorded it");
     let (base, head) = (r.base.to_string(), r.head.to_string());
-    let full = repo.to_string();
-    // A rerun is a new run, with a higher id.
-    let Some(run) = source
-        .check_runs(&full, &head)?
-        .into_iter()
-        .filter(|run| run.name == n.check)
-        .max_by_key(|run| run.id)
-    else {
-        return Ok(Err(format!("{} hasn't run on {head}", n.check)));
-    };
-    if run.status != "completed" {
-        return Ok(Err(format!("{} hasn't finished on {head}", n.check)));
-    }
-    let subject = Subject::Negative {
-        base: &base,
-        head: &head,
-    };
-    let a = match attested(
-        forge,
-        source,
-        repo,
-        subject,
-        &run,
-        &n.signer,
-        n.fresh.as_deref(),
-    )? {
-        Ok(a) => a,
-        Err(why) => return Ok(Err(format!("{}: {why}", n.check))),
+    let (run, a) = match checked(forge, source, repo, &base, &head, n)? {
+        Ok(evidence) => evidence,
+        Err(why) => return Ok(Err(why)),
     };
     let result = a.result;
     record(
@@ -121,4 +96,57 @@ fn counted(c: &Change, revision: RevisionId, n: &Negatives) -> bool {
             && e.attest.as_ref().is_some_and(|a| signed_by(a, &n.signer))
             && counts(e.result)
     })
+}
+
+/// Verify the same independently produced negative used by train admission,
+/// without recording it. Explicit flow passes use this before any permission.
+pub fn verify(
+    forge: &dyn Forge,
+    source: &dyn Source,
+    repo: &Repo,
+    base: &str,
+    head: &str,
+    n: &Negatives,
+) -> Result<Result<(), String>, crate::api::ApiError> {
+    Ok(
+        checked(forge, source, repo, base, head, n)?.and_then(|(_, a)| {
+            if counts(a.result) {
+                Ok(())
+            } else {
+                Err(format!("{}: new tests pass on old code", n.check))
+            }
+        }),
+    )
+}
+fn checked(
+    forge: &dyn Forge,
+    source: &dyn Source,
+    repo: &Repo,
+    base: &str,
+    head: &str,
+    n: &Negatives,
+) -> Result<Result<(crate::api::CheckRun, crate::attest::Attested), String>, crate::api::ApiError> {
+    let full = repo.to_string();
+    let Some(run) = source
+        .check_runs(&full, head)?
+        .into_iter()
+        .filter(|run| run.name == n.check)
+        .max_by_key(|run| run.id)
+    else {
+        return Ok(Err(format!("{} hasn't run on {head}", n.check)));
+    };
+    if run.status != "completed" {
+        return Ok(Err(format!("{} hasn't finished on {head}", n.check)));
+    }
+    Ok(attested(
+        forge,
+        source,
+        repo,
+        Subject::Negative { base, head },
+        &run,
+        &n.signer,
+        n.fresh.as_deref(),
+    )?
+    .map(|a| (run, a))
+    .map_err(|why| format!("{}: {why}", n.check)))
 }

@@ -133,6 +133,31 @@ impl Hub {
             .or_default()
             .push(review);
     }
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn person_review(
+        &self,
+        repo: &str,
+        pr: u64,
+        who: &str,
+        kind: &str,
+        head: &str,
+        body: &str,
+        state: &str,
+    ) {
+        let mut world = self.world.borrow_mut();
+        let reviews = world
+            .repos
+            .get_mut(repo)
+            .unwrap()
+            .reviews
+            .entry(pr)
+            .or_default();
+        let id = reviews.len() as u64 + 1;
+        reviews.push(
+            json!({"id":id,"user":fixtures::user(who,kind),"state":state,
+            "body":body,"commit_id":head,"submitted_at":"2026-11-01T00:00:00Z"}),
+        );
+    }
     pub(crate) fn remove_flow_reviews(&self, repo: &str, pr: u64) {
         self.world
             .borrow_mut()
@@ -277,5 +302,21 @@ impl Hub {
             .unwrap()[index];
         comment["body"] = json!(body);
         comment["updated_at"] = json!("2030-01-01T00:00:00Z");
+    }
+}
+
+impl Hub {
+    pub(crate) fn request_changes(&self, repo: &str, pr: u64, who: &str) {
+        self.world
+            .borrow_mut()
+            .repos
+            .get_mut(repo)
+            .unwrap()
+            .reviews
+            .entry(pr)
+            .or_default()
+            .push(
+                serde_json::json!({"user":{"login":who,"type":"User"},"state":"CHANGES_REQUESTED"}),
+            );
     }
 }

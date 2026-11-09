@@ -155,3 +155,10 @@ runner's public `fixtures()` builds these same requests. An advertised subset
 is checked in review, fix, judge, proof order. A successful conformance run
 checks the wire behavior and fixtures; it cannot prove a plugin's real-world
 judgment quality, that a pushed head exists, or that a proof was executed.
+
+
+The example also recognizes `conary-test/flow-simulation` for the in-memory
+flow tests: a head ending in `3` gets one finding, and a fix reports the
+forty-digit head `4`. The simulation host applies that push to its Hub;
+the executable still performs no real writes. Its fixer and reviewer use
+distinct known sessions, so the example exercises independence after a fix.

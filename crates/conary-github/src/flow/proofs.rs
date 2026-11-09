@@ -4,8 +4,10 @@
 use super::*;
 use std::collections::{BTreeMap, BTreeSet};
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ProofData {
+    /// Capacity without ownership. It must never enter job cancellation.
+    pub reserved: u32,
     pub evaluation: Option<Evaluation>,
     pub records: Vec<ProofRecord>,
     pub live: Vec<ProofHolder>,
@@ -14,12 +16,12 @@ pub struct ProofData {
     pub inputs: BTreeSet<String>,
     pub inputs_job: Option<InputBuild>,
 }
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InputBuild {
     pub job: Job,
     pub recipes: BTreeMap<String, Recipe>,
 }
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Evaluation {
     pub head: String,
     pub recipes: BTreeMap<String, Recipe>,
@@ -29,12 +31,12 @@ pub struct Evaluation {
     pub derivations_present: bool,
     pub merged: Option<(String, BTreeSet<String>)>,
 }
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Derivation {
     pub path: String,
     pub outputs: BTreeSet<String>,
 }
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProofRecord {
     pub job: Job,
     pub recipes: BTreeMap<String, Recipe>,
@@ -42,17 +44,17 @@ pub struct ProofRecord {
     pub verdicts: Option<BTreeMap<String, Verdict>>,
     pub note_needed: bool,
 }
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProofHolder {
     pub number: u64,
     pub job: Job,
     pub paths: Option<BTreeSet<String>>,
 }
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProofWaiting {
     pub number: u64,
 }
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ProofPlan {
     Evaluate(BTreeMap<String, Recipe>),
     Build(BTreeMap<String, Derivation>),
@@ -168,7 +170,7 @@ pub(super) fn useful(f: &Facts, id: &str) -> bool {
 
 /// Number ahead, or zero when paths are already being built. Unknown paths
 /// hold a slot each. Only open PRs and earlier waiters in this pass count.
-fn ahead(f: &Facts, outputs: Option<&BTreeSet<String>>) -> (u32, bool) {
+pub(super) fn ahead(f: &Facts, outputs: Option<&BTreeSet<String>>) -> (u32, bool) {
     let Some(slots) = f.settings.proof_slots else {
         return (0, false);
     };
@@ -180,7 +182,7 @@ fn ahead(f: &Facts, outputs: Option<&BTreeSet<String>>) -> (u32, bool) {
         .collect();
     holders.sort_by_key(|h| (h.job.started, &h.job.id));
     let mut building = BTreeSet::new();
-    let mut count = 0;
+    let mut count = f.proof_data.reserved;
     for h in holders {
         if let Some(paths) = &h.paths {
             let rest: BTreeSet<_> = paths
@@ -188,23 +190,24 @@ fn ahead(f: &Facts, outputs: Option<&BTreeSet<String>>) -> (u32, bool) {
                 .cloned()
                 .collect();
             if !rest.is_subset(&building) {
-                count += 1;
+                count = count.saturating_add(1);
             }
             building.extend(rest);
         } else {
-            count += 1;
+            count = count.saturating_add(1);
         }
     }
-    count += f
-        .proof_data
-        .waiting
-        .iter()
-        .filter(|w| {
-            f.open_prs.contains(&w.number)
-                && (!f.first_prs.contains(&w.number), w.number)
-                    < (!f.labels.contains(&f.settings.first_label), f.number)
-        })
-        .count() as u32;
+    count = count.saturating_add(
+        f.proof_data
+            .waiting
+            .iter()
+            .filter(|w| {
+                f.open_prs.contains(&w.number)
+                    && (!f.first_prs.contains(&w.number), w.number)
+                        < (!f.labels.contains(&f.settings.first_label), f.number)
+            })
+            .count() as u32,
+    );
     if count < slots {
         return (0, false);
     }

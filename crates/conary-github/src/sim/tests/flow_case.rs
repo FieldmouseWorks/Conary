@@ -122,6 +122,19 @@ impl Case {
         let marker = key.decision(REMI, 3, "major-verdict", verdict, &self.scope(), generation);
         self.hub.flow_comment(REMI, 3, "owner", &marker);
     }
+    pub fn approve(&mut self) {
+        self.settings.people.insert("maintainer".into());
+        let scope = self.scope();
+        self.hub.person_review(
+            REMI,
+            3,
+            "maintainer",
+            "User",
+            &scope.head,
+            &owner_approval(&REMI.parse().unwrap(), 3, &scope),
+            "APPROVED",
+        );
+    }
     pub fn secret(&self) {
         let h = self.hub.head_of(REMI, 3);
         self.hub.touch(&h, &["secrets/app.yaml"]);

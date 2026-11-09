@@ -12,6 +12,13 @@ use super::{Hub, World};
 pub(crate) enum Call {
     Pull,
     FlowSnapshot,
+    FlowStatus,
+    FlowStage,
+    FlowReview,
+    FlowUpdate,
+    FlowClose,
+    FlowOwner,
+    FlowDisable,
     Annotations,
     Pulls,
     CheckRuns,

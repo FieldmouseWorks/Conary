@@ -91,6 +91,7 @@ pub fn read(
         has_ci: false,
         open_threads: extra.open_threads,
         changes_requested: false,
+        owner_approved: false,
         reviewers: BTreeMap::new(),
         judgment: None,
         judgment_generation: None,
@@ -146,12 +147,7 @@ pub fn read(
     // These PRs do not enter the pipeline. In particular, do not spend
     // thousands of review/comment reads after GitHub already said the cap
     // was exceeded, or fail a draft because its unfinished checks fail.
-    if !facts.open
-        || facts.draft
-        || !facts.trusted
-        || !facts.complete
-        || facts.labels.contains(&facts.settings.hold_label)
-    {
+    if excluded(&facts) {
         return Ok(facts);
     }
     let open = source.pulls(&repository, crate::api::Pulls::Open)?;
@@ -208,18 +204,9 @@ pub fn read(
     let records = source.reviews(&repository, pr)?;
     let comments = source.comments(&repository, pr)?;
     let markers = super::markers::read(&repository, &pull, &comments, &facts.settings);
-    let mut verdicts = BTreeMap::new();
-    for r in &records {
-        if let (Some(who), Some(state)) = (&r.user, &r.state)
-            && matches!(
-                state.as_str(),
-                "APPROVED" | "CHANGES_REQUESTED" | "DISMISSED"
-            )
-        {
-            verdicts.insert(&who.login, state);
-        }
-    }
-    facts.changes_requested = verdicts.values().any(|s| s.as_str() == "CHANGES_REQUESTED");
+    facts.changes_requested = super::reviews::changes_requested(&records);
+    facts.owner_approved =
+        super::approval::from_reviews(repo, pr, &facts.revision, &records, &facts.settings.people);
     let mut carried = BTreeSet::new();
     for old in records
         .iter()
@@ -383,4 +370,13 @@ impl From<&crate::api::PullRequest> for Revision {
             pull.body.as_deref().unwrap_or(""),
         )
     }
+}
+
+pub(crate) fn excluded(f: &Facts) -> bool {
+    !f.open
+        || f.draft
+        || !f.trusted
+        || !f.complete
+        || f.labels.contains(&f.settings.hold_label)
+        || f.stacked_on.is_some()
 }

@@ -35,8 +35,23 @@ pub struct Plugin {
 }
 
 impl Plugin {
+    /// Bound a negotiated plugin's remaining call time.
+    pub fn with_deadline(mut self, deadline: Duration) -> Self {
+        self.limits.deadline = deadline;
+        self
+    }
+
     pub fn describe(path: &Path, limits: Limits) -> Result<Self, Failure> {
-        let response = execute(path, limits, &Request::new(Task::Describe))?;
+        Self::describe_cancellable(path, limits, None)
+    }
+
+    /// Negotiate long-running work under the controller's cancellation marker.
+    pub fn describe_cancellable(
+        path: &Path,
+        limits: Limits,
+        cancelled: Option<&Path>,
+    ) -> Result<Self, Failure> {
+        let response = execute(path, limits, &Request::new(Task::Describe), cancelled)?;
         valid_identity(&response.by)?;
         let Answer::Describe { versions, kinds } = response.answer else {
             return bad("expected describe response");
@@ -59,9 +74,33 @@ impl Plugin {
     }
 
     pub fn call(&self, task: Task) -> Result<Response, Failure> {
+        self.call_cancellable(task, None)
+    }
+
+    /// The controller may cancel long work without changing the v1 wire contract.
+    pub fn call_cancellable(
+        &self,
+        task: Task,
+        cancelled: Option<&Path>,
+    ) -> Result<Response, Failure> {
         let Some(kind) = task.kind() else {
             return bad("use describe to negotiate");
         };
+        let full_objects = match &task {
+            Task::Review { base, head, .. } => sha(base) && sha(head),
+            Task::Fix { head, problems, .. } => {
+                sha(head)
+                    && problems
+                        .iter()
+                        .all(|p| !matches!(p,Problem::Conflict{base,..} if !sha(base)))
+            }
+            Task::Judge { head, .. } => sha(head),
+            Task::Proof { tree, .. } => sha(tree),
+            Task::Describe => false,
+        };
+        if !full_objects {
+            return bad("plugin requests require full Git object IDs");
+        }
         if !self.kinds.contains(&kind) {
             return bad("request kind was not described");
         }
@@ -75,7 +114,12 @@ impl Plugin {
                 }
             }
         }
-        let response = execute(&self.path, self.limits, &Request::new(task.clone()))?;
+        let response = execute(
+            &self.path,
+            self.limits,
+            &Request::new(task.clone()),
+            cancelled,
+        )?;
         valid_identity(&response.by)?;
         if response.by.engine != self.identity.engine {
             return bad("plugin changed its engine identity");
@@ -172,7 +216,12 @@ fn sha(s: &str) -> bool {
     matches!(s.len(), 40 | 64) && s.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
-fn execute(path: &Path, limits: Limits, request: &Request) -> Result<Response, Failure> {
+fn execute(
+    path: &Path,
+    limits: Limits,
+    request: &Request,
+    cancelled: Option<&Path>,
+) -> Result<Response, Failure> {
     // File-backed stdio avoids deadlocks from a child that never reads stdin,
     // fills stdout before reading, or exits leaving a descendant holding a pipe.
     let mut input = tempfile::tempfile()?;
@@ -188,6 +237,9 @@ fn execute(path: &Path, limits: Limits, request: &Request) -> Result<Response, F
         .spawn()?;
     let status = loop {
         let result = (|| {
+            if cancelled.is_some_and(Path::exists) {
+                return bad("plugin cancelled");
+            }
             if start.elapsed() >= limits.deadline {
                 return bad("plugin exceeded deadline");
             }

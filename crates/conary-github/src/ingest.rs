@@ -151,6 +151,29 @@ pub(crate) fn pulled(
     Ok((record(store, source, config, repo, &pr, base)?, pr))
 }
 
+mod submission;
+pub(crate) use submission::{CLEANUP, Permission, Submission};
+
+pub(crate) fn submitted(
+    store: &mut Store,
+    source: &dyn Source,
+    config: &Config,
+    repo: &Repo,
+    pr: &PullRequest,
+    submissions: &[Submission],
+) -> Result<Ingested, IngestError> {
+    config.check()?;
+    record_with_submission(
+        store,
+        source,
+        config,
+        repo,
+        pr,
+        base(source, repo, pr)?,
+        submissions,
+    )
+}
+
 /// Where the head branched from the base branch: the tree the PR's diff and
 /// its review are against, which trunk moving doesn't change.
 fn base(source: &dyn Source, repo: &Repo, pr: &PullRequest) -> Result<CommitId, IngestError> {
@@ -415,6 +438,19 @@ fn record(
     pr: &PullRequest,
     base: CommitId,
 ) -> Result<Ingested, IngestError> {
+    record_with_submission(store, source, config, repo, pr, base, &[])
+}
+
+#[allow(clippy::too_many_arguments)]
+fn record_with_submission(
+    store: &mut Store,
+    source: &dyn Source,
+    config: &Config,
+    repo: &Repo,
+    pr: &PullRequest,
+    base: CommitId,
+    submissions: &[Submission],
+) -> Result<Ingested, IngestError> {
     let full = repo.to_string();
     let mut w = Writer {
         store,
@@ -496,7 +532,7 @@ fn record(
         Some(m) => at.is_some_and(|t| t <= m),
         None => !pr.is_merged(),
     };
-    let settled = statuses
+    let mut settled = statuses
         .iter()
         .filter(|s| config.own_contexts.contains(&s.context))
         .filter(|s| {
@@ -511,6 +547,17 @@ fn record(
         .map(|u| Authority::Status {
             login: u.login.clone(),
         });
+    if settled.is_none() {
+        settled = submission::authority(
+            source,
+            config,
+            repo,
+            pr,
+            &statuses,
+            since.as_deref(),
+            submissions,
+        )?;
+    }
     for review in source.reviews(&full, pr.number)? {
         if current(review.submitted_at.as_deref()) {
             evidence.extend(review_marker(config, pr, change, revision, &review));

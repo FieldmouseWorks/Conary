@@ -25,3 +25,12 @@ zip = { version = "9.1.3", default-features = false, features = ["deflate-flate2
 
 [lints]
 workspace = true
+
+# The simulations execute the published example through the real runner.
+# Cargo builds it before this package's integration tests, with its real deps.
+[[bin]]
+name = "conary-flow-test-plugin"
+path = "../conary-core/examples/plugin.rs"
+test = false
+bench = false
+doc = false

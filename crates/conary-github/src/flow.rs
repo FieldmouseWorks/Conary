@@ -1,6 +1,6 @@
 //! One pass of the landing flow. Reading and deciding are separate: [`next`]
 //! has no clock or effects; its returned step is an intention, never a merge.
-//! Nothing in the daemon or CLI executes these intentions yet.
+//! Explicit CLI passes execute intentions through GitHub and plugin traits.
 
 mod ci;
 mod claims;
@@ -28,3 +28,29 @@ pub use read::{BaseObservation, Read, Snapshot, read};
 pub use reviews::fingerprint;
 pub use state::next;
 pub use types::*;
+
+mod persist;
+pub use persist::{Data, Landing, Record};
+pub mod jobs;
+
+mod write;
+pub use write::{SETTLED, Write, review_body};
+
+mod execute;
+mod observe;
+mod pass;
+pub use pass::{Config, Pass, Plugins, Report};
+
+pub(crate) mod evidence;
+pub use evidence::{Evidence, judgment_receipt, major_receipt, receipt_digest, review_receipt};
+
+mod scope;
+
+mod occupancy;
+
+mod ledger;
+
+mod approval;
+pub use approval::owner_approval;
+
+mod handoff;

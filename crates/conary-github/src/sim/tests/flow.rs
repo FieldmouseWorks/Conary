@@ -163,14 +163,16 @@ fn r2_requires_person_even_after_judge_land() {
 }
 
 #[test]
-fn owner_label_seen_and_removed_is_revision_scoped() {
-    // handle.py: label seen, then removed, releases only that judged revision.
+fn owner_approval_is_required_after_label_removal_and_is_revision_scoped() {
+    // A label removal cannot release an owner decision; an approval is scoped.
     let mut c = Case::new();
     c.secret();
     c.judge("owner");
     c.label(&["needs-peter"]);
     assert_eq!(c.pass(4000).step, Step::ListOwner);
     c.label(&[]);
+    assert_eq!(c.view(4001).step, Step::ListOwner);
+    c.approve();
     assert_eq!(c.view(4001).step, Step::Merge);
     c.description("different reasons", 4002);
     c.review("reviewer", Verdict::Clean, 4003);
@@ -759,17 +761,19 @@ fn current_verdicts_stand_while_their_reviewer_is_unavailable() {
 
 #[test]
 fn r2_land_is_released_by_the_owner_for_its_revision_only() {
-    // review finding: observing the label and removal releases only its revision.
+    // Labels never authorize; an authenticated approval covers only its revision.
     for change in 0..3 {
         let mut c = Case::new();
         c.secret();
         c.judge("land");
         assert_eq!(c.pass(4000).step, Step::ListOwner);
-        assert_eq!(c.memory.owner_saw, None);
+        assert!(!c.facts().owner_approved);
         assert_eq!(c.pass(4001).step, Step::ListOwner);
         c.label(&["needs-peter"]);
         c.pass(4002);
         c.label(&[]);
+        assert_eq!(c.view(4003).step, Step::ListOwner);
+        c.approve();
         assert_eq!(c.view(4003).step, Step::Merge);
         match change {
             0 => c.push(&head(4)),
@@ -794,11 +798,11 @@ fn label_without_an_owed_decision_is_not_approval() {
     c.secret();
     c.label(&["needs-peter"]);
     c.pass(4000);
-    assert_eq!(c.memory.owner_saw, None);
+    assert!(!c.facts().owner_approved);
     c.hub.touch(&head(3), &["src/a.rs"]);
     c.judge("land");
     c.pass(4001);
-    assert_eq!(c.memory.owner_saw, None);
+    assert!(!c.facts().owner_approved);
 }
 
 fn old_review(c: &Case, sha: &str, base: &str) {

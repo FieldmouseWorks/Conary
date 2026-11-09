@@ -618,8 +618,8 @@ event-triggered passes: it acts on webhooks and on waits it booked itself,
 never on a timer.
 
 The executable [plugin contract](plugins.md) owns the interface for work
-requested by a flow step. Its runner and conformance test stand alone;
-calling it from the flow is a later slice.
+requested by a flow step. The [explicit pass runner](flow.md) connects reads, decisions, GitHub effects
+and asynchronous plugin work; deployment and event-driven passes remain later slices.
 
 ## 7. Interfaces
 
