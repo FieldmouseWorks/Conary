@@ -206,6 +206,12 @@ impl Pass<'_> {
                     next.stage = Stage::Proof;
                     next.description = why.to_string().chars().take(140).collect();
                 }
+                if let Step::HandFix(kind) = next.step
+                    && let Err(why) = super::handoff::problems(github, &facts, &record.memory, kind)
+                {
+                    next.step = Step::Wait { until: None };
+                    next.description = why;
+                }
                 if let Some(kind) = plugin_kind(&next.step)
                     && self.path(kind).is_none()
                 {

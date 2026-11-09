@@ -185,11 +185,23 @@ reservation, never an invented worker ID or a cancellation target. Old local
 records containing synthetic capacity cancellations are recovered without
 dropping cancellation state for real owned workers.
 
-Before submitting a direct merge, flow persists its intent. The existing
+Fixer requests use the selected current or carried GitHub review's structured
+findings, including its review ID and original head, rather than saved local
+review answers. Reviews published by flow include those structured findings.
+Unstructured reviews, blocking threads, native change requests, judgment and
+description failures wait explicitly: v1 cannot express their repair. Red
+checks and conflicts carry their observed check or exact base commit.
+
+Before submitting a direct merge, flow persists its intent and the authenticated
+permission it observed. The existing
 GitHub ingestion path then records the actual revision and trunk before/after
 commits as a Land operation. Later passes revisit pending records even when the
 PR has left the open list, including delegated bot merges, lost responses and
-lagging merge metadata. A known accepted submission is never resubmitted.
+lagging merge metadata. The saved permission is reauthenticated against GitHub status history when
+cleanup and merging share a timestamp. It applies only to the submitted head,
+target, intent and original trunk tip; ordinary withdrawals still block it.
+Cleanup cannot erase this request's historical permission, and a known refused
+request discards its receipt. A known accepted submission is never resubmitted.
 An unsent or uncertain submission may retry only after reading the open PR
 and the original target's complete comparison history without finding its
 merge; this includes non-first-parent ancestry and has no local 300-commit

@@ -28,8 +28,16 @@ pub(crate) fn classify<G: Write>(
     store: &mut Store,
 ) -> Result<()> {
     raised(f, &mut record.memory, Some(store.ledger()));
-    let (got, pull) =
-        crate::ingest::pulled(store, github, &config(&f.settings), &f.repo, f.number)?;
+    let pull = github.pull(&f.repo.to_string(), f.number)?;
+    let receipts = submissions(record);
+    let got = crate::ingest::submitted(
+        store,
+        github,
+        &config(&f.settings),
+        &f.repo,
+        &pull,
+        &receipts,
+    )?;
     if Revision::from(&pull) != f.revision {
         return Err("PR moved while recording its classification".into());
     }
@@ -62,7 +70,15 @@ pub(crate) fn reconcile<G: Write>(
 ) -> Result<()> {
     if record.landing.is_some() || !record.pending.is_empty() {
         let pull = github.pull(&repo.to_string(), pr)?;
-        crate::ingest::pull(store, github, &config(&pass.config.settings), repo, pr)?;
+        let receipts = submissions(record);
+        crate::ingest::submitted(
+            store,
+            github,
+            &config(&pass.config.settings),
+            repo,
+            &pull,
+            &receipts,
+        )?;
         let finished = store.ledger().by_pr(repo, pr).is_some_and(|c| {
             matches!(
                 c.status(),
@@ -85,8 +101,25 @@ pub(crate) fn reconcile<G: Write>(
     }
     Ok(())
 }
+fn submissions(record: &Record) -> Vec<crate::ingest::Submission> {
+    record
+        .landing
+        .iter()
+        .chain(&record.pending)
+        .filter_map(|l| {
+            Some(crate::ingest::Submission {
+                head: l.head.clone(),
+                target: l.target.clone(),
+                before: l.base.clone(),
+                description: l.revision.as_ref()?.description.clone(),
+                permission: l.permission.clone()?,
+            })
+        })
+        .collect()
+}
 pub(crate) fn intent(f: &Facts, delegated: bool) -> Result<Landing> {
     Ok(Landing {
+        permission: None,
         head: f.revision.head.clone(),
         target: f.revision.base.clone(),
         revision: Some(f.revision.clone()),
@@ -104,12 +137,7 @@ pub(crate) fn cleanup<G: Write>(
     record: &mut Record,
 ) -> Result<()> {
     for head in record.cleanup.clone() {
-        github.status(
-            &repo.to_string(),
-            &head,
-            false,
-            "Revoke unconfirmed landing permission",
-        )?;
+        github.status(&repo.to_string(), &head, false, crate::ingest::CLEANUP)?;
         record.cleanup.remove(&head);
         data.save(pr, record)?;
     }

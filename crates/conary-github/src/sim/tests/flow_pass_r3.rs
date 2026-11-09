@@ -243,6 +243,7 @@ fn unsent_and_failed_merge_intents_can_be_revalidated_and_retried() {
             let data = Data::open(c.dir.path(), &REPO.parse().unwrap()).unwrap();
             let record = Record {
                 landing: Some(crate::flow::Landing {
+                    permission: None,
                     head: head(3),
                     target: "main".into(),
                     revision: None,

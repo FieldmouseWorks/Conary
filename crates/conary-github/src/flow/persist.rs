@@ -81,6 +81,8 @@ fn record(path: &Path) -> Result<Record> {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Landing {
+    #[serde(default)]
+    pub(crate) permission: Option<crate::ingest::Permission>,
     pub head: String,
     #[serde(default)]
     pub target: String,

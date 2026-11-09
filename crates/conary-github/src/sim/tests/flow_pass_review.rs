@@ -500,19 +500,16 @@ fn conflict_without_an_observed_base_commit_does_not_start_a_fixer() {
     c.hub.edit_flow(REPO, 3, |s| s.merge_state = "DIRTY".into());
     crate::branches::Branches::delete_branch(&c.hub, REPO, "main").unwrap();
     let now = crate::flow::jobs::now();
-    let report = c.pass(now, false);
-    assert!(
-        report[0]
-            .error
-            .as_ref()
-            .unwrap()
-            .contains("conflict base commit is unavailable")
-    );
-    let retry = c.pass(now + 1, false);
-    assert!(matches!(
-        retry[0].next.as_ref().unwrap().step,
-        Step::Retry { .. }
-    ));
+    for at in [now, now + 1] {
+        let report = c.pass(at, false);
+        assert_eq!(report[0].error, None);
+        let next = report[0].next.as_ref().unwrap();
+        assert!(matches!(next.step, Step::Wait { .. }));
+        assert!(
+            next.description
+                .contains("conflict base commit is unavailable")
+        );
+    }
     assert!(c.record().jobs.is_empty());
 }
 

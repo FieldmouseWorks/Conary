@@ -23,8 +23,21 @@ pub(crate) fn act<G: Write>(
     record.cleanup.insert(f.revision.head.clone());
     data.save(f.number, record)
         .map_err(|e| (Failure::Status, e))?;
+    // While a submitted request is unresolved, waiting withdraws future
+    // grants; it does not revoke the authority of that request retroactively.
+    let text = if matches!(next.step, Step::Wait { .. })
+        && record
+            .landing
+            .iter()
+            .chain(&record.pending)
+            .any(|l| l.head == f.revision.head && !l.retry && l.permission.is_some())
+    {
+        crate::ingest::CLEANUP
+    } else {
+        &next.description
+    };
     github
-        .status(&repo, &f.revision.head, false, &next.description)
+        .status(&repo, &f.revision.head, false, text)
         .map_err(|e| (Failure::Status, Box::new(e) as Error))?;
     record.cleanup.remove(&f.revision.head);
     data.save(f.number, record)
@@ -82,40 +95,7 @@ pub(crate) fn act<G: Write>(
                 )?;
             }
             Step::HandFix(kind) => {
-                let mut problems = Vec::new();
-                for work in &record.jobs {
-                    if !matches!(work.purpose, Purpose::Review(_))
-                        || work.job.revision != f.revision
-                    {
-                        continue;
-                    }
-                    if let Some(Ok(plugin::Response {
-                        answer: plugin::Answer::Review { findings },
-                        ..
-                    })) = jobs::completion(work, pass.now)?.result
-                    {
-                        problems.extend(
-                            findings
-                                .into_iter()
-                                .map(|finding| plugin::Problem::Finding { finding }),
-                        );
-                    }
-                }
-                problems.extend(f.checks.iter().filter(|c| c.state == Ci::Red).map(|c| {
-                    plugin::Problem::RedCheck {
-                        check: c.name.clone(),
-                        text: "GitHub check failed".into(),
-                    }
-                }));
-                if *kind == Kind::Conflict {
-                    problems.push(plugin::Problem::Conflict {
-                        base: f
-                            .base_tip
-                            .clone()
-                            .ok_or("conflict base commit is unavailable")?,
-                        text: "GitHub reports a merge conflict".into(),
-                    });
-                }
+                let problems = super::handoff::problems(github, f, &record.memory, *kind)?;
                 pass.start(
                     f,
                     Purpose::Fix(*kind),
@@ -215,6 +195,21 @@ pub(crate) fn act<G: Write>(
                 }
                 permission(pass, github, f, record)?;
                 super::ledger::begin(f, record)?;
+                let status = status.expect("permission checked above");
+                record.landing.as_mut().expect("saved intent").permission =
+                    Some(crate::ingest::Permission {
+                        login: status
+                            .creator
+                            .as_ref()
+                            .expect("authenticated above")
+                            .login
+                            .clone(),
+                        at: status
+                            .created_at
+                            .clone()
+                            .ok_or("permission timestamp unknown")?,
+                        text: status.description.clone(),
+                    });
                 data.save(f.number, record)?;
                 match github.land(&repo, f.number, &f.revision.head)? {
                     crate::train::PrMerge::Merged => {
@@ -222,6 +217,8 @@ pub(crate) fn act<G: Write>(
                         data.save(f.number, record)?;
                     }
                     crate::train::PrMerge::Refused(why) => {
+                        record.landing.as_mut().expect("saved intent").permission = None;
+                        data.save(f.number, record)?;
                         return Err(why.into());
                     }
                 }

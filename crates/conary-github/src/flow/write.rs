@@ -64,7 +64,7 @@ pub fn review_body(
     }
     let marker: Value = serde_json::json!({
         "commit_sha":revision.head, "base":revision.base, "scope":revision.description,
-        "reviewed_at":at, "findings":findings.len()
+        "reviewed_at":at, "findings":findings.len(), "problems":findings
     });
     format!("{body}\n\n<!-- {role}-review:v2 {marker} -->")
 }

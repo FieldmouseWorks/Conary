@@ -80,13 +80,10 @@ fn pass_conflict_request_uses_the_observed_base_commit() {
             let record = c.record();
             if target == "missing" {
                 assert!(record.jobs.is_empty());
-                assert!(
-                    reports[0]
-                        .error
-                        .as_deref()
-                        .unwrap()
-                        .contains("base commit is unavailable")
-                );
+                assert_eq!(reports[0].error, None);
+                let next = reports[0].next.as_ref().unwrap();
+                assert!(matches!(next.step, flow::Step::Wait { .. }));
+                assert!(next.description.contains("base commit is unavailable"));
                 continue;
             }
             assert_eq!(reports[0].error, None);
