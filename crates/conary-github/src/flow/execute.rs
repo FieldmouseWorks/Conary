@@ -13,25 +13,60 @@ pub(crate) fn act<G: Write>(
     next: &Next,
     record: &mut Record,
     data: &Data,
-    store: Option<&mut Store>,
+    mut store: Option<&mut Store>,
 ) -> Effect {
     let kind = failure(&next.step);
-    if matches!(next.step, Step::Retry { .. }) {
-        return Ok(vec![]);
-    }
-    let prepare = || -> Result<()> {
+    let mut prepare = || -> Result<()> {
         let repo = f.repo.to_string();
-        let pull = github.pull(&repo, f.number)?;
-        if Revision::from(&pull) != f.revision || (pull.state == "open") != f.open {
-            return Err("PR moved before executing flow decision".into());
-        }
-        github.stage(&repo, f.number, next.stage)?;
         let settled = matches!(
             next.step,
             Step::Merge | Step::Settle | Step::JoinTrain | Step::CloseAlreadyLanded
-        ) || next.stage == Stage::Train && f.train.seat.is_some();
-        // Every pass revokes old permission before doing unsettled work.
-        github.status(&repo, &f.revision.head, settled, &next.description)?;
+        ) || next.stage == Stage::Train
+            && f.train.seat.is_some()
+            && !matches!(next.step, Step::LeaveTrain | Step::Retry { .. });
+        // Revoke before any fallible cosmetic work, including Retry passes.
+        github.status(&repo, &f.revision.head, false, &next.description)?;
+        scope(pass, github, f)?;
+        if matches!(next.step, Step::Merge | Step::Settle)
+            && f.classified
+                .clone()
+                .raise(record.memory.raised.iter().cloned().collect())
+                .class
+                == conary_core::Class::R2
+        {
+            return Err("R2 landing requires the candidate train; configure train mode".into());
+        }
+        if settled {
+            let negative = pass
+                .config
+                .negative
+                .as_ref()
+                .ok_or("negative evidence verifier is not configured")?
+                .verifier()?;
+            let config = crate::Config {
+                reviewers: f.settings.review_authors.iter().cloned().collect(),
+                own_contexts: vec![SETTLED.into(), crate::train::CONTEXT.into()],
+            };
+            crate::train::verify_negative(
+                store
+                    .as_deref_mut()
+                    .ok_or("negative evidence needs an anchored ledger")?,
+                github,
+                github,
+                &config,
+                &f.repo,
+                f.number,
+                &f.revision.head,
+                &negative,
+            )?
+            .map_err(|why| format!("negative evidence: {why}"))?;
+        }
+        github.stage(&repo, f.number, next.stage)?;
+        if settled {
+            scope(pass, github, f)?;
+            github.status(&repo, &f.revision.head, true, &next.description)?;
+            guarded_scope(pass, github, f)?;
+        }
         Ok(())
     };
     prepare().map_err(|error| (Failure::Status, error))?;
@@ -83,7 +118,7 @@ pub(crate) fn act<G: Write>(
                 }));
                 if *kind == Kind::Conflict {
                     problems.push(plugin::Problem::Conflict {
-                        base: f.revision.base.clone(),
+                        base: f.base_tip.clone().ok_or("conflict base tip unknown")?,
                         text: "GitHub reports a merge conflict".into(),
                     });
                 }
@@ -184,12 +219,14 @@ pub(crate) fn act<G: Write>(
                 }) {
                     return Err("review-settled permission was not observed".into());
                 }
+                guarded_scope(pass, github, f)?;
                 match github.land(&repo, f.number, &f.revision.head)? {
                     crate::train::PrMerge::Merged => {}
                     crate::train::PrMerge::Refused(why) => return Err(why.into()),
                 }
             }
             Step::JoinTrain => {
+                guarded_scope(pass, github, f)?;
                 let store = store.ok_or("train needs an anchored ledger")?;
                 let config = crate::Config {
                     reviewers: f.settings.review_authors.iter().cloned().collect(),
@@ -205,7 +242,14 @@ pub(crate) fn act<G: Write>(
                     &f.revision.head,
                     &record.memory.raised.iter().cloned().collect::<Vec<_>>(),
                     pass.policy,
-                    None,
+                    Some(
+                        &pass
+                            .config
+                            .negative
+                            .as_ref()
+                            .ok_or("negative evidence verifier is not configured")?
+                            .verifier()?,
+                    ),
                 )?;
                 if !matches!(
                     joined,
@@ -295,4 +339,70 @@ fn author<G: Read>(github: &G, f: &Facts, record: &Record) -> Result<plugin::Ide
         engine,
         session: None,
     })
+}
+
+/// Revalidate policy inputs that can change without a push. Stage labels are
+/// controller output; all other labels remain decision inputs.
+fn scope<G: Read>(pass: &Pass<'_>, github: &G, f: &Facts) -> Result<()> {
+    let current = read(
+        github,
+        &f.repo,
+        f.number,
+        pass.policy,
+        f.settings.clone(),
+        &pass.config.trusted_authors,
+    )?;
+    let labels = |facts: &Facts| {
+        facts
+            .labels
+            .iter()
+            .filter(|label| {
+                ![
+                    Stage::Review,
+                    Stage::Reviewer,
+                    Stage::Fix,
+                    Stage::Ci,
+                    Stage::ProofSlot,
+                    Stage::Proof,
+                    Stage::ReleaseAge,
+                    Stage::Train,
+                    Stage::Merge,
+                    Stage::Owner,
+                    Stage::Base,
+                ]
+                .iter()
+                .any(|stage| stage.label() == Some(label.as_str()))
+            })
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>()
+    };
+    if current.revision != f.revision
+        || current.open != f.open
+        || current.draft != f.draft
+        || current.trusted != f.trusted
+        || current.complete != f.complete
+        || labels(&current) != labels(f)
+        || current.base_tip != f.base_tip
+        || current.classified != f.classified
+        || current.checks != f.checks
+        || current.has_ci != f.has_ci
+        || current.open_threads != f.open_threads
+        || current.changes_requested != f.changes_requested
+    {
+        return Err("PR scope moved before executing flow decision".into());
+    }
+    Ok(())
+}
+
+fn guarded_scope<G: Write>(pass: &Pass<'_>, github: &G, f: &Facts) -> Result<()> {
+    if let Err(error) = scope(pass, github, f) {
+        github.status(
+            &f.repo.to_string(),
+            &f.revision.head,
+            false,
+            "Decision scope changed; settlement revoked",
+        )?;
+        return Err(error);
+    }
+    Ok(())
 }

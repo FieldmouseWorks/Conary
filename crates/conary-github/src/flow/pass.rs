@@ -22,6 +22,29 @@ pub struct Config {
     pub settings: Settings,
     pub trusted_authors: Vec<String>,
     pub plugins: Plugins,
+    pub negative: Option<Negative>,
+}
+
+/// Producer policy for the revision's negative evidence. Required before any
+/// explicit pass can publish settlement, including delegated bot settlement.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Negative {
+    pub check: String,
+    pub signer: String,
+    pub fresh: Option<String>,
+}
+impl Negative {
+    pub(crate) fn verifier(&self) -> Result<crate::train::Negatives> {
+        Ok(crate::train::Negatives {
+            check: self.check.clone(),
+            signer: self
+                .signer
+                .parse()
+                .map_err(|e: String| -> persist::Error { e.into() })?,
+            fresh: self.fresh.clone(),
+        })
+    }
 }
 #[derive(Debug, Serialize)]
 pub struct Report {
@@ -56,6 +79,59 @@ impl Pass<'_> {
         };
         let mut pulls = github.pulls(&repo.to_string(), crate::api::Pulls::Open)?;
         pulls.sort_by_key(|p| p.number);
+        // Read the entire repository even for a targeted kick. Dry runs inspect
+        // the same workers without collecting or cancelling them.
+        let mut occupancy = Vec::new();
+        let mut waiting = Vec::new();
+        for pull in &pulls {
+            let record = match Data::read(self.root, repo, pull.number) {
+                Ok(record) => record,
+                Err(_) => {
+                    // Unknown ownership holds a slot, but doesn't prevent
+                    // independent PRs from being reviewed or repaired.
+                    occupancy.push(ProofHolder {
+                        number: pull.number,
+                        job: Job {
+                            id: format!("unreadable-{}", pull.number),
+                            revision: Revision::from(pull),
+                            state: JobState::Unknown,
+                            started: 0,
+                            repeated: false,
+                        },
+                        paths: None,
+                    });
+                    continue;
+                }
+            };
+            // Queue priority includes PRs excluded by a targeted kick.
+            if let Ok(mut facts) = read(
+                github,
+                repo,
+                pull.number,
+                self.policy,
+                self.config.settings.clone(),
+                &self.config.trusted_authors,
+            ) {
+                let _ = super::observe::hydrate(&mut facts, &record, self.now, true);
+                let decision = next(&facts, &record.memory, self.now).0;
+                if decision.step == Step::Prove || decision.stage == Stage::ProofSlot {
+                    waiting.push(ProofWaiting {
+                        number: pull.number,
+                    });
+                }
+            }
+            for work in &record.jobs {
+                if matches!(work.purpose, Purpose::Proof)
+                    && jobs::inspect(work, self.now).map_or(true, |answer| answer.result.is_none())
+                {
+                    occupancy.push(ProofHolder {
+                        number: pull.number,
+                        job: work.job.clone(),
+                        paths: None,
+                    });
+                }
+            }
+        }
         let mut reports = Vec::new();
         for pull in pulls
             .into_iter()
@@ -85,6 +161,8 @@ impl Pass<'_> {
                 if let Some(ledger) = store.as_deref().map(Store::ledger).or(self.ledger) {
                     super::observe::train(&mut facts, ledger);
                 }
+                facts.proof_data.live = occupancy.clone();
+                facts.proof_data.waiting = waiting.clone();
                 facts.failed = record.failed.take();
                 facts.failed_review = record.failed_review.take();
                 facts.succeeded = std::mem::take(&mut record.succeeded);
@@ -95,6 +173,22 @@ impl Pass<'_> {
                 {
                     next.step = Step::Wait { until: None };
                     next.description = format!("No plugin configured for {kind}");
+                }
+                if next.step == Step::Prove {
+                    waiting.retain(|waiter| waiter.number != pr);
+                }
+                if self.dry_run && next.step == Step::Prove {
+                    occupancy.push(ProofHolder {
+                        number: pr,
+                        job: Job {
+                            id: format!("dry-{pr}"),
+                            revision: facts.revision.clone(),
+                            state: JobState::Running,
+                            started: self.now,
+                            repeated: false,
+                        },
+                        paths: None,
+                    });
                 }
                 report.next = Some(next.clone());
                 record.decision = Some(next.clone());
@@ -131,6 +225,19 @@ impl Pass<'_> {
                         }
                     }
                     data.save(pr, &record)?;
+                    occupancy.retain(|holder| holder.number != pr);
+                    for work in &record.jobs {
+                        if matches!(work.purpose, Purpose::Proof)
+                            && jobs::inspect(work, self.now)
+                                .map_or(true, |answer| answer.result.is_none())
+                        {
+                            occupancy.push(ProofHolder {
+                                number: pr,
+                                job: work.job.clone(),
+                                paths: None,
+                            });
+                        }
+                    }
                 }
                 Ok(())
             })();
@@ -168,8 +275,23 @@ impl Pass<'_> {
             .path(kind)
             .ok_or("plugin is not configured")?
             .to_path_buf();
+        // Observe the shared issuance high-water mark before allocating. Equal
+        // concurrent issuances are reconciled as conflicts, never last-wins.
+        let observed = facts
+            .judgment_generation
+            .into_iter()
+            .chain(
+                record
+                    .memory
+                    .judge_issuance
+                    .values()
+                    .map(|(generation, _)| *generation),
+            )
+            .max()
+            .unwrap_or(0);
         record.sequence = record
             .sequence
+            .max(observed)
             .checked_add(1)
             .ok_or("job sequence exhausted")?;
         let path = data.job_path(facts.number, record.sequence);

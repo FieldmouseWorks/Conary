@@ -29,7 +29,7 @@ pub struct Args {
     api: String,
     #[arg(long, env = "CONARY_TOKEN_COMMAND", hide_env_values = true)]
     token_command: Option<String>,
-    /// Required when this repository uses the train.
+    /// Required for train operations or recording negative evidence.
     #[arg(long, env = "CONARY_ANCHOR_REPO")]
     anchor_repo: Option<String>,
 }
@@ -43,11 +43,12 @@ pub fn run(cli: &super::Cli, command: &FlowCommand) -> super::Result<()> {
         std::env::var("GITHUB_TOKEN").ok().as_deref(),
     )?;
     let api = Api::new(&args.api, tokens);
-    let mut anchored = if config.settings.train && !args.dry_run {
+    let needs_ledger = config.settings.train || config.negative.is_some();
+    let mut anchored = if needs_ledger && !args.dry_run {
         let anchor_repo = args
             .anchor_repo
             .as_deref()
-            .ok_or("train flow requires --anchor-repo")?;
+            .ok_or("flow evidence and train operations require --anchor-repo")?;
         Some(anchor::open(
             &cli.ledger,
             log::load_signing_key(&log::key_path(&cli.ledger))?,
@@ -57,7 +58,7 @@ pub fn run(cli: &super::Cli, command: &FlowCommand) -> super::Result<()> {
     } else {
         None
     };
-    let observed = if config.settings.train && args.dry_run {
+    let observed = if needs_ledger && args.dry_run {
         Some(super::read(cli, None)?)
     } else {
         None
@@ -80,7 +81,7 @@ pub fn run(cli: &super::Cli, command: &FlowCommand) -> super::Result<()> {
             anchored.as_mut().map(|a| &mut a.store),
         )
         .map_err(|e| -> Box<dyn std::error::Error> { e });
-    // Any train ops recorded before a per-PR failure still get anchored.
+    // Any ledger ops recorded before a per-PR failure still get anchored.
     if let Some(anchored) = &mut anchored {
         anchored.publish(&api)?;
     }

@@ -17,6 +17,11 @@ the same policy as `cn class`. A minimal configuration is:
     "reviewers": ["reviewer"],
     "review_authors": ["landing-app[bot]"]
   },
+  "negative": {
+    "check": "check / negative",
+    "signer": "organization/shared-ci/.github/workflows/check.yml",
+    "fresh": "fresh-remi-"
+  },
   "plugins": {
     "review": "/absolute/path/to/reviewer",
     "fix": "/absolute/path/to/fixer",
@@ -25,6 +30,15 @@ the same policy as `cn class`. A minimal configuration is:
   }
 }
 ```
+
+Publishing settlement requires an anchored ledger and the `negative` verifier
+configuration. The existing train verifier records the exact revision's producer
+attestation and accepts only tests that failed on the base, or an attested
+result that no new tests were added to code. Missing configuration, unsigned
+results, another revision's result, and results from a reused author runner
+leave permission pending. Direct and delegated settlement use this same guard;
+train admission also receives the verifier. R2 landings require train mode:
+direct and delegated landing cannot bind GitHub's merge to an exact candidate.
 
 Omitted settings use `flow::Settings` defaults; unknown keys are rejected.
 An omitted plugin makes its step wait, with the missing kind in its status.

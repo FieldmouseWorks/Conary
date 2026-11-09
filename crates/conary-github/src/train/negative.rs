@@ -122,3 +122,35 @@ fn counted(c: &Change, revision: RevisionId, n: &Negatives) -> bool {
             && counts(e.result)
     })
 }
+
+/// Verify and record a revision's independently produced negative before a
+/// controller publishes settlement. Admission calls the same verifier again;
+/// already verified evidence is counted from the append-only ledger.
+#[allow(clippy::too_many_arguments)]
+pub fn verify_negative(
+    store: &mut Store,
+    forge: &dyn Forge,
+    source: &dyn Source,
+    config: &crate::Config,
+    repo: &Repo,
+    pr: u64,
+    head: &str,
+    negatives: &Negatives,
+) -> Result<Result<(), String>, TrainError> {
+    let (got, pull) = crate::ingest::pulled(store, source, config, repo, pr)?;
+    if pull.head.sha != head {
+        return Err(TrainError::Moved {
+            pr,
+            head: pull.head.sha,
+        });
+    }
+    negative(
+        store,
+        forge,
+        source,
+        repo,
+        got.change,
+        got.revision,
+        negatives,
+    )
+}

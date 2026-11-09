@@ -49,6 +49,8 @@ struct Case {
     config: flow::Config,
     policy: conary_core::Policy,
     deferred: Deferred,
+    store: RefCell<conary_core::Store>,
+    _ledger: tempfile::TempDir,
 }
 impl Case {
     fn new() -> Self {
@@ -82,13 +84,31 @@ impl Case {
             trusted_authors: vec!["owner".into()],
             ..Default::default()
         };
+        config.negative = Some(Negative {
+            check: "check / negative".into(),
+            signer: crate::attest::testing::SIGNER.into(),
+            fresh: Some("fresh-remi-".into()),
+        });
+        negative_evidence(&hub, &head(3), "none");
         config.settings.settle_delay = 0;
         config.settings.handoff_after = 0;
         config.plugins.review = Some(example());
         config.plugins.fix = Some(example());
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = tempfile::tempdir().unwrap();
+        let store = RefCell::new(
+            conary_core::Store::open(
+                conary_core::log::Lock::take(ledger.path()).unwrap(),
+                ed25519_dalek::SigningKey::from_bytes(&[5; 32]),
+                None,
+            )
+            .unwrap(),
+        );
         Self {
             hub,
-            dir: tempfile::tempdir().unwrap(),
+            dir,
+            store,
+            _ledger: ledger,
             config,
             policy: conary_core::Policy::parse(b"{}").unwrap(),
             deferred: Deferred(RefCell::new(vec![])),
@@ -104,7 +124,12 @@ impl Case {
             dry_run: dry,
             ledger: None,
         }
-        .run(&self.hub, &REPO.parse().unwrap(), None, None)
+        .run(
+            &self.hub,
+            &REPO.parse().unwrap(),
+            None,
+            Some(&mut self.store.borrow_mut()),
+        )
         .unwrap()
     }
     fn run_worker(&self) {
@@ -127,6 +152,7 @@ impl Case {
                 self.hub.push(REPO, 3, &head);
                 self.hub.refresh_flow(REPO, 3);
                 self.hub.ci(&head, &[("check", "success")]);
+                negative_evidence(&self.hub, &head, "none");
             }
         }
     }
@@ -138,7 +164,7 @@ fn lifecycle(train: bool) {
     let mut c = Case::new();
     c.config.settings.train = train;
     let ledger = tempfile::tempdir().unwrap();
-    let mut store = train.then(|| {
+    let mut store = Some({
         conary_core::Store::open(
             conary_core::log::Lock::take(ledger.path()).unwrap(),
             ed25519_dalek::SigningKey::from_bytes(&[5; 32]),
@@ -280,6 +306,8 @@ fn pass_refused_settled_write_never_merges_and_third_strike_is_overdue() {
     assert_eq!(c.hub.count(Call::Land), 0);
     c.hub.heal(Call::FlowStatus);
     c.pass(now + 10000, false);
+    // The successful revocation clears the failed Retry on this pass.
+    c.pass(now + 10001, false);
     assert_eq!(c.hub.count(Call::Land), 1);
 }
 #[test]
@@ -513,4 +541,22 @@ fn pass_reconciles_a_review_post_whose_answer_was_lost() {
         "the same producer answer is posted once"
     );
     assert!(c.record().jobs[0].posted);
+}
+
+mod safety;
+
+fn negative_evidence(hub: &Hub, head: &str, result: &str) {
+    use crate::attest::testing;
+    let run = if head == super::head(3) { 703 } else { 704 };
+    hub.put_checks(
+        head,
+        json!([{
+            "id":run, "name":"check / negative", "status":"completed", "conclusion":"success",
+            "html_url":format!("https://github.com/{REPO}/actions/runs/9/job/{run}"),
+            "started_at":"2026-11-05T05:00:00Z"
+        }]),
+    );
+    let statement = testing::negative_statement(TRUNK, head, result);
+    let claims = testing::claims(REPO, head, run, &statement);
+    hub.attest(run, &testing::file(&statement, &testing::token(&claims)));
 }

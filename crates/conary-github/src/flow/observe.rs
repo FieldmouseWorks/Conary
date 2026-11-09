@@ -86,18 +86,29 @@ pub(crate) fn hydrate(f: &mut Facts, record: &Record, now: u64, dry_run: bool) -
                         ..
                     })) = &completion.result
                 {
-                    f.judgment = Some(Judged {
-                        revision: job.revision,
-                        verdict: match verdict {
-                            plugin::Judgment::Pass => Judgment::Land,
-                            plugin::Judgment::Fail => Judgment::Failing,
-                            plugin::Judgment::Owner => Judgment::Owner,
-                        },
-                    });
-                    // Local, runner-validated issuances use the persistent sequence.
-                    f.judgment_generation = Some(work.generation);
+                    let verdict = match verdict {
+                        plugin::Judgment::Pass => Judgment::Land,
+                        plugin::Judgment::Fail => Judgment::Failing,
+                        plugin::Judgment::Owner => Judgment::Owner,
+                    };
+                    match f.judgment_generation {
+                        Some(generation) if generation > work.generation => {}
+                        Some(generation) if generation == work.generation => {
+                            if f.judgment.as_ref().map(|j| j.verdict) != Some(verdict) {
+                                f.judgment = None;
+                            }
+                        }
+                        _ => {
+                            f.judgment = Some(Judged {
+                                revision: job.revision,
+                                verdict,
+                            });
+                            f.judgment_generation = Some(work.generation);
+                        }
+                    }
                 }
             }
+
             Purpose::Proof => {
                 if job.revision == f.revision
                     && work.recipes == super::pass::recipes(f)

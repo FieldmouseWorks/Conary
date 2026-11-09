@@ -39,4 +39,4 @@ pub use write::{SETTLED, Write};
 mod execute;
 mod observe;
 mod pass;
-pub use pass::{Config, Pass, Plugins, Report};
+pub use pass::{Config, Negative, Pass, Plugins, Report};

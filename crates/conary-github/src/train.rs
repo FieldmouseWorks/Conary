@@ -28,7 +28,7 @@ mod land;
 mod negative;
 use gate::{Gate, gate};
 use land::{land_next, open_landing, stopped_landing};
-pub use negative::Negatives;
+pub use negative::{Negatives, verify_negative};
 
 /// Where a candidate is built, one merge at a time.
 pub fn build_branch(id: CandidateId) -> String {
