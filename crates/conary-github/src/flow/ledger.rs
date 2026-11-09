@@ -42,7 +42,9 @@ pub(crate) fn classify<G: Write>(
         got.revision,
         record.memory.raised.iter().cloned().collect(),
     )?;
-    f.classified = classes.said;
+    if !super::read::excluded(f) {
+        f.classified = classes.said;
+    }
     raised(f, &mut record.memory, Some(store.ledger()));
     Ok(())
 }
@@ -69,6 +71,15 @@ pub(crate) fn reconcile<G: Write>(
                     | conary_core::ledger::Status::Closed
             )
         });
+        if let Some(intent) = record.landing.as_mut()
+            && !intent.delegated
+            && !intent.accepted
+            && pull.state == "open"
+            && !pull.is_merged()
+        {
+            intent.retry = retryable(github, repo, pr, &pull.base.name, intent)?;
+            data.save(pr, record)?;
+        }
         if finished || pull.state != "open" && !pull.is_merged() {
             record.landing = None;
             data.save(pr, record)?;
@@ -81,6 +92,8 @@ pub(crate) fn intent(f: &Facts, delegated: bool) -> Result<Landing> {
         head: f.revision.head.clone(),
         base: f.base_tip.clone().ok_or("landing base unknown")?,
         delegated,
+        accepted: false,
+        retry: false,
     })
 }
 pub(crate) fn cleanup<G: Write>(
@@ -98,6 +111,45 @@ pub(crate) fn cleanup<G: Write>(
             "Revoke unconfirmed landing permission",
         )?;
         record.cleanup.remove(&head);
+        data.save(pr, record)?;
+    }
+    Ok(())
+}
+
+/// A known acceptance is never retried. For an uncertain submission, an
+/// expected-head retry is safe only while no merge of this PR is visible on
+/// the target's first-parent history. The pending observation is retained
+/// even while another fully revalidated attempt is allowed.
+fn retryable<G: Write>(
+    github: &G,
+    repo: &conary_core::op::Repo,
+    pr: u64,
+    target: &str,
+    intent: &Landing,
+) -> Result<bool> {
+    let full = repo.to_string();
+    let mut at = github
+        .branch(&full, target)?
+        .ok_or("landing target disappeared")?;
+    for _ in 0..300 {
+        if at == intent.base {
+            return Ok(true);
+        }
+        if github.commit_pulls(&full, &at)?.contains(&pr) {
+            return Ok(false);
+        }
+        let commit = github.commit(&full, &at)?;
+        let Some(parent) = commit.parents.first() else {
+            return Ok(false);
+        };
+        at = parent.sha.clone();
+    }
+    Ok(false)
+}
+
+pub(crate) fn withdraw_live(pr: u64, data: &Data, record: &mut Record) -> Result<()> {
+    if !record.live.is_empty() {
+        record.cleanup.append(&mut record.live);
         data.save(pr, record)?;
     }
     Ok(())

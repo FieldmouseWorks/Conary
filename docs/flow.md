@@ -67,6 +67,9 @@ record. A repository file lock serializes mutating passes and kicks.
 The pass imports every raise from the append-only ledger before deciding and
 appends any raise remembered locally before acting. Removing a label, resetting
 local Memory or pushing a new revision never lowers the change's class.
+Excluded PRs keep the same intentionally incomplete classification in the
+initial read and scope checks; recording a complete ledger classification
+must not prevent owner listing, waiting or cancellation from executing.
 
 Starting long work saves the invocation and ownership before spawning the
 hidden `cn flow-worker` entry. The pass returns without waiting for describe
@@ -94,7 +97,11 @@ in dry runs as well as mutating passes.
 The machine names its trusted signer, required checks and negative check in
 `evidence`. All counted green checks must have a verified
 [CI attestation](ci-attestation.md) for the head's exact tree from that signer
-on its default branch. An ordinary status cannot attest a result.
+on its default branch. Verification uses the CI reader's effective workflow
+and target selection: replaced cancellations, obsolete target suites and
+skipped jobs are not reintroduced as evidence requirements. Producer receipts
+verify the latest effective issuance, including across workflow changes,
+against the exact selected result. An ordinary status cannot attest a result.
 `fresh: null` accepts GitHub-hosted jobs only; a configured fresh-runner
 prefix also accepts jobs on runners started for that job, as the existing
 attestation verifier requires. A result from the authoring runner is refused.
@@ -151,20 +158,28 @@ Proof slots count active workers across all open PRs, including workers outside
 a targeted kick and admissions earlier in this pass. Queued first-priority PRs
 keep their order. Dry runs reserve hypothetical slots for the decisions they
 print, without starting workers. Cancellation does not release a slot before
-the worker answers.
+the worker answers. An unreadable ownership record or proof answer reserves
+the configured capacity conservatively, once per pass. Its error remains on
+its own PR; unrelated reviews and fixes still proceed.
 
 Before submitting a direct merge, flow persists its intent. The existing
 GitHub ingestion path then records the actual revision and trunk before/after
 commits as a Land operation. Later passes revisit pending records even when the
 PR has left the open list, including delegated bot merges, lost responses and
-lagging merge metadata. An ambiguous submission waits for reconciliation and
-never resubmits the merge. A merge into another branch closes without recording
-a trunk landing.
+lagging merge metadata. A known accepted submission is never resubmitted.
+An unsent or uncertain submission may retry only after reading the open PR
+and target history without finding its merge; every new attempt revalidates
+permission and pins the expected head. Its pending observation is retained
+while retrying, including when a new head supersedes the original request.
+A merge into another branch closes without recording a trunk landing.
 
 Every possibly accepted permission write is recorded before sending it. A
 failed write or a failed validation immediately withdraws permission. If that
 cleanup fails, the persisted record is retried before any further PR action,
-even for a closed PR. Validation re-reads review coverage and findings, sealed
+even for a closed PR. Valid live permissions are stored separately: a targeted
+kick preserves an excluded open PR's valid grant while retrying uncertain
+cleanup for every PR. A selected PR withdraws its live grant even if its next
+read fails. Validation re-reads review coverage and findings, sealed
 judgment and dependency generations (including conflicts and tombstones),
 local worker results, checks and policy inputs both after publication and
 before using the permission.
@@ -191,6 +206,8 @@ cn flow kick OWNER/REPO 123 --config flow.json --policy policy.json --dry-run
 Dry runs only read GitHub and existing local records. They create no data
 directory, lock, worker or GitHub write, and collect no results by mutation.
 All dry runs read the verified local ledger without taking its writer lock.
+The library also refuses to mutate a supplied writable Store in dry-run mode;
+it uses only that Store's ledger observations.
 Output is one JSON object per PR, sorted by PR number. Each successful read
 includes `repo`, `pr` and all of Next: `stage`, `step`, `description`,
 `overdue_at`, `proof`, `wait_on`, `on_usage`, and `owner_notice`;

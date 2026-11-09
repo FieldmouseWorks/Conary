@@ -30,6 +30,9 @@ pub(super) struct Result {
     pub checks: Vec<Check>,
     pub docs: bool,
     pub has_ci: bool,
+    /// Effective producer runs, selected by the same scope/replacement rules.
+    pub runs: Vec<CheckRun>,
+    pub statuses: BTreeSet<String>,
 }
 
 const LANE: &str = "lane into ";
@@ -272,6 +275,7 @@ pub(super) fn checks(
             state: Ci::Red,
         });
     }
+    let mut effective = BTreeMap::<(Option<String>, String), CheckRun>::new();
     for run in &runs {
         if suite_id(run).is_some_and(|id| stale.contains(&id)) {
             continue;
@@ -283,6 +287,10 @@ pub(super) fn checks(
         };
         if after == Replacement::Finished {
             continue;
+        }
+        let key = (flow(run, suites), run.name.clone());
+        if effective.get(&key).is_none_or(|old| old.id < run.id) {
+            effective.insert(key, run.clone());
         }
         let mut name = run.name.clone();
         let state = if run.status != "completed" || after == Replacement::Going {
@@ -325,6 +333,7 @@ pub(super) fn checks(
         proofs.iter().map(|p| (p.to_lowercase(), p)).collect()
     };
     let mut seen = BTreeSet::new();
+    let mut successful_statuses = BTreeSet::new();
     for status in source.statuses(repo, head)? {
         let name = status.context.to_lowercase();
         let train = name == crate::train::CONTEXT.to_ascii_lowercase();
@@ -350,6 +359,9 @@ pub(super) fn checks(
             "pending" | "expected" => Ci::Pending,
             _ => Ci::Red,
         };
+        if state == Ci::Green {
+            successful_statuses.insert(status.context.clone());
+        }
         checks.push(Check {
             name: spelling.get(&name).map_or(status.context, |p| (*p).clone()),
             state,
@@ -367,5 +379,7 @@ pub(super) fn checks(
         checks,
         docs,
         has_ci,
+        runs: effective.into_values().collect(),
+        statuses: successful_statuses,
     })
 }

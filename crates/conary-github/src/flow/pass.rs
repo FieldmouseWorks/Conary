@@ -76,7 +76,17 @@ impl Pass<'_> {
                     } else {
                         Ok(())
                     };
-                    // Even a failed reconciliation read cannot retain a live grant.
+                    // Selected PRs withdraw their last valid grant even if a
+                    // new read fails. Unrelated live permissions are preserved.
+                    let selected = only.is_none_or(|n| n == pr);
+                    let closed = !selected
+                        && !record.live.is_empty()
+                        && github
+                            .pull(&repo.to_string(), pr)
+                            .is_ok_and(|p| p.state != "open");
+                    if selected || closed {
+                        super::ledger::withdraw_live(pr, data, &mut record)?;
+                    }
                     let cleaned = super::ledger::cleanup(github, repo, pr, data, &mut record);
                     reconciled.and(cleaned)
                 })();
@@ -136,7 +146,9 @@ impl Pass<'_> {
                     &mut record.memory,
                     store.as_deref().map(Store::ledger).or(self.ledger),
                 );
-                if let Some(store) = store.as_deref_mut() {
+                if !self.dry_run
+                    && let Some(store) = store.as_deref_mut()
+                {
                     super::ledger::classify(self, github, &mut facts, &mut record, store)?;
                 }
                 super::observe::hydrate(&mut facts, &record, self.now, self.dry_run)?;
@@ -160,7 +172,11 @@ impl Pass<'_> {
                             format!("Waiting for a full plugin proof slot ({ahead} ahead)");
                     }
                 }
-                if record.landing.as_ref().is_some_and(|l| !l.delegated) {
+                if record
+                    .landing
+                    .as_ref()
+                    .is_some_and(|l| !l.delegated && !l.retry)
+                {
                     next.stage = Stage::Merge;
                     next.step = Step::Wait { until: None };
                     next.description =

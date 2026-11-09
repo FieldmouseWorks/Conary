@@ -71,6 +71,13 @@ pub(crate) fn authorize<G: Write>(pass: &Pass<'_>, github: &G, f: &Facts) -> Res
         .map(|role| format!("conary/review/{role}"))
         .collect();
     receipts.extend(["conary/judgment".into(), "conary/major".into()]);
+    if evidence
+        .require
+        .iter()
+        .any(|name| receipts.contains(name) || name == &evidence.negative)
+    {
+        return Err("required gate collides with producer receipt or negative evidence".into());
+    }
     if f.settings
         .proofs
         .keys()
@@ -78,21 +85,17 @@ pub(crate) fn authorize<G: Write>(pass: &Pass<'_>, github: &G, f: &Facts) -> Res
     {
         return Err("proof check name collides with producer receipt or negative evidence".into());
     }
+    let effective = observations(github, f, &f.revision.head)?;
     let mut required: std::collections::BTreeSet<_> = evidence.require.iter().cloned().collect();
     required.extend(
-        f.checks
+        effective
+            .runs
             .iter()
-            .filter(|c| c.state == Ci::Green)
-            .filter(|c| c.name != evidence.negative && !receipts.contains(&c.name))
-            .map(|c| c.name.clone()),
+            .filter(|r| r.status == "completed" && r.conclusion.as_deref() == Some("success"))
+            .map(|r| r.name.clone()),
     );
-    required.extend(
-        github
-            .check_runs(&repo, &f.revision.head)?
-            .into_iter()
-            .filter(|r| r.name != evidence.negative && !receipts.contains(&r.name))
-            .map(|r| r.name),
-    );
+    required.extend(effective.statuses);
+    required.retain(|name| name != &evidence.negative && !receipts.contains(name));
     for name in required {
         check(github, f, evidence, &f.revision.head, &name, None)?;
     }
@@ -197,22 +200,25 @@ fn check<G: Write>(
     receipt: Option<&[u8]>,
 ) -> Result<()> {
     let repo = f.repo.to_string();
-    let runs = github.check_runs(&repo, head)?;
-    let mut latest = std::collections::BTreeMap::new();
-    for run in runs.into_iter().filter(|r| r.name == name) {
-        let suite = run.check_suite.as_ref().map(|s| s.id);
-        if latest
-            .get(&suite)
-            .is_none_or(|old: &crate::api::CheckRun| old.id < run.id)
-        {
-            latest.insert(suite, run);
-        }
+    let mut latest: Vec<_> = observations(github, f, head)?
+        .runs
+        .into_iter()
+        .filter(|r| r.name == name)
+        .collect();
+    if receipt.is_some() {
+        // A receipt is one producer issuance, not a conjunction of every
+        // workflow that published this role in the past.
+        latest = latest
+            .into_iter()
+            .max_by_key(|r| r.id)
+            .into_iter()
+            .collect();
     }
     if latest.is_empty() {
         return Err(format!("{name}: no attested check run (statuses cannot attest)").into());
     }
     let tree = github.tree(&repo, head)?;
-    for run in latest.into_values() {
+    for run in latest {
         if run.status != "completed" || run.conclusion.as_deref() != Some("success") {
             return Err(format!("{name}: producer check is not successful").into());
         }
@@ -244,4 +250,26 @@ fn check<G: Write>(
         }
     }
     Ok(())
+}
+
+fn observations<G: Write>(github: &G, f: &Facts, head: &str) -> Result<super::ci::Result> {
+    let repo = f.repo.to_string();
+    let snapshot = github.snapshot(&repo, f.number)?;
+    if snapshot.revision != f.revision || !snapshot.checks_complete {
+        return Err("producer check scope changed or is incomplete".into());
+    }
+    let paths = github.files(
+        &repo,
+        f.base_tip.as_deref().ok_or("check base unknown")?,
+        head,
+    )?;
+    Ok(super::ci::checks(
+        github,
+        &repo,
+        head,
+        &f.revision.base,
+        &paths,
+        &snapshot.suites,
+        &f.settings.machine(),
+    )?)
 }

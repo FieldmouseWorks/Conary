@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 
 pub(crate) struct Occupancy {
     records: BTreeMap<u64, Record>,
-    unknown: Vec<u64>,
+    unknown: std::collections::BTreeSet<u64>,
     virtual_live: Vec<ProofHolder>,
     queued: std::collections::BTreeSet<u64>,
 }
@@ -17,13 +17,15 @@ impl Occupancy {
         pulls: &[crate::api::PullRequest],
     ) -> Self {
         let mut records = BTreeMap::new();
-        let mut unknown = Vec::new();
+        let mut unknown = std::collections::BTreeSet::new();
         for pull in pulls {
             match Data::read(root, repo, pull.number) {
                 Ok(record) => {
                     records.insert(pull.number, record);
                 }
-                Err(_) => unknown.push(pull.number),
+                Err(_) => {
+                    unknown.insert(pull.number);
+                }
             }
         }
         Self {
@@ -65,42 +67,54 @@ impl Occupancy {
                     self.queued.insert(*number);
                 }
                 Ok(false) => {}
-                Err(_) => self.unknown.push(*number),
+                Err(_) => {
+                    self.unknown.insert(*number);
+                }
             }
         }
     }
     pub(crate) fn apply(&self, f: &mut Facts, now: u64) -> Result<()> {
         f.proof_data.live.extend(self.virtual_live.clone());
-        for number in &self.unknown {
-            f.proof_data.live.push(ProofHolder {
-                number: *number,
-                paths: None,
-                job: Job {
-                    id: format!("unreadable-{number}"),
-                    revision: Revision::default(),
-                    state: JobState::Unknown,
-                    started: 0,
-                    repeated: false,
-                },
-            });
-        }
+        let mut uncertain = self.unknown.first().copied();
         for (number, record) in &self.records {
+            if self.unknown.contains(number) {
+                continue;
+            }
             let mut holding = self.virtual_live.iter().any(|h| h.number == *number);
+            let start = f.proof_data.live.len();
             for work in &record.jobs {
                 if !matches!(work.purpose, Purpose::Proof) {
                     continue;
                 }
-                if jobs::inspect(work, now)?.result.is_none() {
-                    holding = true;
-                    f.proof_data.live.push(ProofHolder {
-                        number: *number,
-                        job: work.job.clone(),
-                        paths: None,
-                    });
+                match jobs::inspect(work, now) {
+                    Err(_) => {
+                        f.proof_data.live.truncate(start);
+                        uncertain.get_or_insert(*number);
+                        holding = true;
+                        break;
+                    }
+                    Ok(completion) if completion.result.is_none() => {
+                        holding = true;
+                        f.proof_data.live.push(ProofHolder {
+                            number: *number,
+                            job: work.job.clone(),
+                            paths: None,
+                        });
+                    }
+                    Ok(_) => {}
                 }
             }
             if !holding && self.queued.contains(number) {
                 f.proof_data.waiting.push(ProofWaiting { number: *number });
+            }
+        }
+        if let Some(number) = uncertain {
+            // Unknown ownership may hide several workers. Reserve the entire
+            // configured capacity once, regardless of how many files failed.
+            for slot in 0..f.settings.proof_slots.unwrap_or(1).max(1) {
+                let mut holder = unknown(number);
+                holder.job.id.push_str(&format!("-{slot}"));
+                f.proof_data.live.push(holder);
             }
         }
         Ok(())
@@ -132,5 +146,19 @@ impl Occupancy {
                 .insert(f.number, Data::read(root, &f.repo, f.number)?);
         }
         Ok(())
+    }
+}
+
+fn unknown(number: u64) -> ProofHolder {
+    ProofHolder {
+        number,
+        paths: None,
+        job: Job {
+            id: format!("unreadable-{number}"),
+            revision: Revision::default(),
+            state: JobState::Unknown,
+            started: 0,
+            repeated: false,
+        },
     }
 }

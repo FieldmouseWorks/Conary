@@ -34,6 +34,8 @@ pub(crate) mod pairs {
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Record {
     #[serde(default)]
+    pub live: std::collections::BTreeSet<String>,
+    #[serde(default)]
     pub cleanup: std::collections::BTreeSet<String>,
     #[serde(default)]
     pub landing: Option<Landing>,
@@ -51,6 +53,10 @@ pub struct Landing {
     pub head: String,
     pub base: String,
     pub delegated: bool,
+    #[serde(default)]
+    pub accepted: bool,
+    #[serde(default)]
+    pub retry: bool,
 }
 
 /// One repository lock covers read/decide/act/save. Dry runs only read files.

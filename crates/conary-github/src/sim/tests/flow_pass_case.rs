@@ -210,7 +210,7 @@ impl Case {
         self.attest_run(head, id, receipt);
         id
     }
-    fn attest_run(&self, head: &str, id: u64, receipt: Option<&[u8]>) {
+    pub(super) fn attest_run(&self, head: &str, id: u64, receipt: Option<&[u8]>) {
         let tree = crate::branches::Branches::tree(&self.hub, REPO, head).unwrap();
         let mut statement = testing::statement(head, &tree, "pass");
         if let Some(receipt) = receipt {

@@ -19,6 +19,7 @@ pub(crate) fn act<G: Write>(
     let repo = f.repo.to_string();
     // Revocation is safety critical; cosmetic label failure must never
     // preserve an earlier success, including while a retry is booked.
+    record.live.remove(&f.revision.head);
     record.cleanup.insert(f.revision.head.clone());
     data.save(f.number, record)
         .map_err(|e| (Failure::Status, e))?;
@@ -216,9 +217,11 @@ pub(crate) fn act<G: Write>(
                 record.landing = Some(super::ledger::intent(f, false)?);
                 data.save(f.number, record)?;
                 match github.land(&repo, f.number, &f.revision.head)? {
-                    crate::train::PrMerge::Merged => {}
+                    crate::train::PrMerge::Merged => {
+                        record.landing.as_mut().expect("saved intent").accepted = true;
+                        data.save(f.number, record)?;
+                    }
                     crate::train::PrMerge::Refused(why) => {
-                        record.landing = None;
                         return Err(why.into());
                     }
                 }
@@ -292,8 +295,11 @@ pub(crate) fn act<G: Write>(
         if let Err(error) = super::ledger::cleanup(github, &f.repo, f.number, data, record) {
             return Err((Failure::Status, error));
         }
-    } else if next.step == Step::Merge || !super::pass::grants(next, f) {
+    } else {
         record.cleanup.remove(&f.revision.head);
+        if next.step != Step::Merge && super::pass::grants(next, f) {
+            record.live.insert(f.revision.head.clone());
+        }
     }
     result.map_err(|error| (kind, error))
 }

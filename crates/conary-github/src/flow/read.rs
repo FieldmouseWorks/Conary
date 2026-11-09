@@ -146,12 +146,7 @@ pub fn read(
     // These PRs do not enter the pipeline. In particular, do not spend
     // thousands of review/comment reads after GitHub already said the cap
     // was exceeded, or fail a draft because its unfinished checks fail.
-    if !facts.open
-        || facts.draft
-        || !facts.trusted
-        || !facts.complete
-        || facts.labels.contains(&facts.settings.hold_label)
-    {
+    if excluded(&facts) {
         return Ok(facts);
     }
     let open = source.pulls(&repository, crate::api::Pulls::Open)?;
@@ -372,4 +367,13 @@ impl From<&crate::api::PullRequest> for Revision {
             pull.body.as_deref().unwrap_or(""),
         )
     }
+}
+
+pub(crate) fn excluded(f: &Facts) -> bool {
+    !f.open
+        || f.draft
+        || !f.trusted
+        || !f.complete
+        || f.labels.contains(&f.settings.hold_label)
+        || f.stacked_on.is_some()
 }

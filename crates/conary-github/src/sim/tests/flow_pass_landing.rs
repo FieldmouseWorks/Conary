@@ -263,11 +263,12 @@ fn a_later_read_failure_still_revokes_the_previous_delegated_permission() {
     c.as_bot();
     c.clean_review();
     c.pass(jobs::now(), false);
-    assert!(c.record().cleanup.contains(&head(3)));
+    assert!(c.record().live.contains(&head(3)));
     c.hub.fail(Call::Pull);
     let report = c.pass(jobs::now() + 1, false);
     assert!(report[0].error.is_some());
     assert!(c.record().cleanup.is_empty());
+    assert!(c.record().live.is_empty());
     pending(&c);
 }
 
