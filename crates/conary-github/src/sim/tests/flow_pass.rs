@@ -1,6 +1,8 @@
 //! Exercise the real executor and runner against Hub over successive passes.
 use super::flow_pass_case::{Case, REPO, example};
-use super::head;
+use super::{TRUNK, head};
+#[path = "flow_pass/safety.rs"]
+mod safety;
 use crate::api::Source;
 use crate::flow::{self, *};
 use crate::sim::Call;
@@ -9,7 +11,7 @@ fn lifecycle(train: bool) {
     let mut c = Case::new();
     c.config.settings.train = train;
     let ledger = tempfile::tempdir().unwrap();
-    let mut store = train.then(|| {
+    let mut store = Some({
         conary_core::Store::open(
             conary_core::log::Lock::take(ledger.path()).unwrap(),
             ed25519_dalek::SigningKey::from_bytes(&[5; 32]),

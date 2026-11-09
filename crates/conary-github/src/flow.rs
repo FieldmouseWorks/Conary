@@ -47,3 +47,5 @@ pub use evidence::{Evidence, judgment_receipt, major_receipt, receipt_digest, re
 mod scope;
 
 mod occupancy;
+
+mod ledger;

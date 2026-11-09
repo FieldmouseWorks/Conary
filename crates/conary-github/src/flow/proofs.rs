@@ -4,7 +4,7 @@
 use super::*;
 use std::collections::{BTreeMap, BTreeSet};
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ProofData {
     pub evaluation: Option<Evaluation>,
     pub records: Vec<ProofRecord>,
@@ -14,12 +14,12 @@ pub struct ProofData {
     pub inputs: BTreeSet<String>,
     pub inputs_job: Option<InputBuild>,
 }
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InputBuild {
     pub job: Job,
     pub recipes: BTreeMap<String, Recipe>,
 }
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Evaluation {
     pub head: String,
     pub recipes: BTreeMap<String, Recipe>,
@@ -34,7 +34,7 @@ pub struct Derivation {
     pub path: String,
     pub outputs: BTreeSet<String>,
 }
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProofRecord {
     pub job: Job,
     pub recipes: BTreeMap<String, Recipe>,
@@ -42,13 +42,13 @@ pub struct ProofRecord {
     pub verdicts: Option<BTreeMap<String, Verdict>>,
     pub note_needed: bool,
 }
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProofHolder {
     pub number: u64,
     pub job: Job,
     pub paths: Option<BTreeSet<String>>,
 }
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProofWaiting {
     pub number: u64,
 }
@@ -168,7 +168,7 @@ pub(super) fn useful(f: &Facts, id: &str) -> bool {
 
 /// Number ahead, or zero when paths are already being built. Unknown paths
 /// hold a slot each. Only open PRs and earlier waiters in this pass count.
-fn ahead(f: &Facts, outputs: Option<&BTreeSet<String>>) -> (u32, bool) {
+pub(super) fn ahead(f: &Facts, outputs: Option<&BTreeSet<String>>) -> (u32, bool) {
     let Some(slots) = f.settings.proof_slots else {
         return (0, false);
     };

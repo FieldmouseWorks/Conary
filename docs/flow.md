@@ -32,6 +32,11 @@ the same policy as `cn class`. A minimal configuration is:
 }
 ```
 
+Publishing settlement requires an anchored ledger (`--anchor-repo`) and the
+`evidence` verifier configuration. Missing configuration leaves permission
+pending. Passes always read the ledger, even when evidence is unconfigured,
+so historical raises still apply. Dry runs use no writer and publish no anchor.
+
 Omitted settings use `flow::Settings` defaults; unknown keys are rejected.
 An omitted plugin makes its step wait, with the missing kind in its status.
 The paths name executables, without shell parsing. They use the unchanged
@@ -58,6 +63,10 @@ monotonic invocation sequence. Only a ListOwner step adds the blocking owner
 label; a digest notice keeps the PR moving. Composite map keys are
 stored as ordered pairs. Atomic rename, file and directory sync protect each
 record. A repository file lock serializes mutating passes and kicks.
+
+The pass imports every raise from the append-only ledger before deciding and
+appends any raise remembered locally before acting. Removing a label, resetting
+local Memory or pushing a new revision never lowers the change's class.
 
 Starting long work saves the invocation and ownership before spawning the
 hidden `cn flow-worker` entry. The pass returns without waiting for describe
@@ -144,6 +153,28 @@ keep their order. Dry runs reserve hypothetical slots for the decisions they
 print, without starting workers. Cancellation does not release a slot before
 the worker answers.
 
+Before submitting a direct merge, flow persists its intent. The existing
+GitHub ingestion path then records the actual revision and trunk before/after
+commits as a Land operation. Later passes revisit pending records even when the
+PR has left the open list, including delegated bot merges, lost responses and
+lagging merge metadata. An ambiguous submission waits for reconciliation and
+never resubmits the merge. A merge into another branch closes without recording
+a trunk landing.
+
+Every possibly accepted permission write is recorded before sending it. A
+failed write or a failed validation immediately withdraws permission. If that
+cleanup fails, the persisted record is retried before any further PR action,
+even for a closed PR. Validation re-reads review coverage and findings, sealed
+judgment and dependency generations (including conflicts and tombstones),
+local worker results, checks and policy inputs both after publication and
+before using the permission.
+
+The v1 proof task runs the whole requested proof. Every full plugin worker
+therefore takes a repository proof slot, including Build's initial Evaluate
+plan and Run/Job recipes. A targeted kick reads the other open PRs' queue
+priority even before their first pass; dry runs reserve virtual slots within
+the pass using the same ordering.
+
 A refused write is saved as a failure observation for the next decision.
 Retry passes still revoke permission while leaving the failed substantive
 action until its deadline. Three strikes make the wait overdue. One PR's
@@ -159,7 +190,7 @@ cn flow kick OWNER/REPO 123 --config flow.json --policy policy.json --dry-run
 
 Dry runs only read GitHub and existing local records. They create no data
 directory, lock, worker or GitHub write, and collect no results by mutation.
-Train dry runs read the verified local ledger without taking its writer lock.
+All dry runs read the verified local ledger without taking its writer lock.
 Output is one JSON object per PR, sorted by PR number. Each successful read
 includes `repo`, `pr` and all of Next: `stage`, `step`, `description`,
 `overdue_at`, `proof`, `wait_on`, `on_usage`, and `owner_notice`;

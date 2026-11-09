@@ -13,24 +13,29 @@ pub(crate) fn act<G: Write>(
     next: &Next,
     record: &mut Record,
     data: &Data,
-    store: Option<&mut Store>,
+    mut store: Option<&mut Store>,
 ) -> Effect {
     let kind = failure(&next.step);
     let repo = f.repo.to_string();
     // Revocation is safety critical; cosmetic label failure must never
     // preserve an earlier success, including while a retry is booked.
+    record.cleanup.insert(f.revision.head.clone());
+    data.save(f.number, record)
+        .map_err(|e| (Failure::Status, e))?;
     github
         .status(&repo, &f.revision.head, false, &next.description)
         .map_err(|e| (Failure::Status, Box::new(e) as Error))?;
+    record.cleanup.remove(&f.revision.head);
+    data.save(f.number, record)
+        .map_err(|e| (Failure::Status, e))?;
     if matches!(next.step, Step::Retry { .. }) {
         return Ok(vec![]);
     }
-    let prepare = || -> Result<()> {
-        super::scope::current(github, f)?;
+    let mut prepare = || -> Result<()> {
+        super::scope::current(pass, github, f, record)?;
         github.stage(&repo, f.number, next.stage)?;
-        super::scope::current(github, f)?;
-        let settled = matches!(next.step, Step::Merge | Step::Settle | Step::JoinTrain)
-            || next.stage == Stage::Train && f.train.seat.is_some();
+        super::scope::current(pass, github, f, record)?;
+        let settled = super::pass::grants(next, f);
         if settled {
             if matches!(next.step, Step::Merge | Step::Settle)
                 && f.classified.class == conary_core::Class::R2
@@ -38,18 +43,26 @@ pub(crate) fn act<G: Write>(
                 return Err("R2 requires exact candidate evidence through the train".into());
             }
             super::evidence::authorize(pass, github, f)?;
-            super::scope::current(github, f)?;
+            super::scope::current(pass, github, f, record)?;
+            record.cleanup.insert(f.revision.head.clone());
+            if next.step == Step::Settle {
+                record.landing = Some(super::ledger::intent(f, true)?);
+            }
+            data.save(f.number, record)?;
             github.status(&repo, &f.revision.head, true, &next.description)?;
-            super::scope::current(github, f)?;
+            super::scope::current(pass, github, f, record)?;
         }
         Ok(())
     };
-    prepare().map_err(|error| (Failure::Status, error))?;
-    let run = || -> Result<Vec<Failure>> {
+    if let Err(error) = prepare() {
+        let cleanup = super::ledger::cleanup(github, &f.repo, f.number, data, record);
+        return Err((Failure::Status, cleanup.err().unwrap_or(error)));
+    }
+    let mut run = || -> Result<Vec<Failure>> {
         let repo = f.repo.to_string();
         match &next.step {
             Step::Wait { .. } | Step::Retry { .. } => {}
-            Step::Settle => permission(pass, github, f)?,
+            Step::Settle => permission(pass, github, f, record)?,
 
             Step::QueueReview(role) => {
                 let author = author(github, f, record)?;
@@ -199,15 +212,33 @@ pub(crate) fn act<G: Write>(
                 }) {
                     return Err("review-settled permission was not observed".into());
                 }
-                permission(pass, github, f)?;
+                permission(pass, github, f, record)?;
+                record.landing = Some(super::ledger::intent(f, false)?);
+                data.save(f.number, record)?;
                 match github.land(&repo, f.number, &f.revision.head)? {
                     crate::train::PrMerge::Merged => {}
-                    crate::train::PrMerge::Refused(why) => return Err(why.into()),
+                    crate::train::PrMerge::Refused(why) => {
+                        record.landing = None;
+                        return Err(why.into());
+                    }
                 }
+                super::ledger::reconcile(
+                    pass,
+                    github,
+                    &f.repo,
+                    data,
+                    store
+                        .as_deref_mut()
+                        .ok_or("landing needs an anchored ledger")?,
+                    f.number,
+                    record,
+                )?;
             }
             Step::JoinTrain => {
-                permission(pass, github, f)?;
-                let store = store.ok_or("train needs an anchored ledger")?;
+                permission(pass, github, f, record)?;
+                let store = store
+                    .as_deref_mut()
+                    .ok_or("train needs an anchored ledger")?;
                 let config = crate::Config {
                     reviewers: f.settings.review_authors.iter().cloned().collect(),
                     own_contexts: vec![SETTLED.into(), crate::train::CONTEXT.into()],
@@ -240,7 +271,9 @@ pub(crate) fn act<G: Write>(
             }
             Step::LeaveTrain => {
                 crate::train::leave(
-                    store.ok_or("train needs an anchored ledger")?,
+                    store
+                        .as_deref_mut()
+                        .ok_or("train needs an anchored ledger")?,
                     github,
                     github,
                     &f.repo,
@@ -254,7 +287,15 @@ pub(crate) fn act<G: Write>(
         }
         Ok(vec![kind, Failure::Status])
     };
-    run().map_err(|error| (kind, error))
+    let result = run();
+    if result.is_err() {
+        if let Err(error) = super::ledger::cleanup(github, &f.repo, f.number, data, record) {
+            return Err((Failure::Status, error));
+        }
+    } else if next.step == Step::Merge || !super::pass::grants(next, f) {
+        record.cleanup.remove(&f.revision.head);
+    }
+    result.map_err(|error| (kind, error))
 }
 fn failure(step: &Step) -> Failure {
     match step {
@@ -321,9 +362,9 @@ fn author<G: Read>(github: &G, f: &Facts, record: &Record) -> Result<plugin::Ide
     })
 }
 
-fn permission<G: Write>(pass: &Pass<'_>, github: &G, f: &Facts) -> Result<()> {
-    let result =
-        super::scope::current(github, f).and_then(|()| super::evidence::authorize(pass, github, f));
+fn permission<G: Write>(pass: &Pass<'_>, github: &G, f: &Facts, record: &Record) -> Result<()> {
+    let result = super::scope::current(pass, github, f, record)
+        .and_then(|()| super::evidence::authorize(pass, github, f));
     if result.is_err() {
         github.status(
             &f.repo.to_string(),

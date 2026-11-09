@@ -127,3 +127,53 @@ fn a_cancellation_request_keeps_its_slot_until_the_worker_answers() {
     let report = kick(&c, 5, true, now + 1);
     assert_eq!(report[0].next.as_ref().unwrap().stage, Stage::ProofSlot);
 }
+
+#[test]
+fn all_full_proof_workers_take_a_slot_including_build_evaluation() {
+    for recipe in [
+        Recipe::Build(".#check".into()),
+        Recipe::Run(vec!["check".into()]),
+        Recipe::Job("proof".into()),
+    ] {
+        let mut c = two(1);
+        c.config.settings.proofs.insert("machine".into(), recipe);
+        let now = crate::flow::jobs::now();
+        for dry in [true, false] {
+            let report = c.pass(now, dry);
+            assert_eq!(report[0].next.as_ref().unwrap().step, Step::Prove);
+            assert_eq!(report[1].next.as_ref().unwrap().stage, Stage::ProofSlot);
+        }
+        assert_eq!(c.deferred.0.borrow().len(), 1);
+        assert_eq!(
+            kick(&c, 5, true, now + 1)[0].next.as_ref().unwrap().stage,
+            Stage::ProofSlot
+        );
+    }
+}
+#[test]
+fn a_first_targeted_kick_preserves_the_priority_of_unvisited_prs() {
+    let c = two(1);
+    assert_eq!(
+        kick(&c, 5, true, crate::flow::jobs::now())[0]
+            .next
+            .as_ref()
+            .unwrap()
+            .stage,
+        Stage::ProofSlot
+    );
+}
+
+#[test]
+fn targeted_kicks_do_not_reserve_slots_for_a_stale_queued_decision() {
+    let c = two(1);
+    let now = crate::flow::jobs::now();
+    let data = Data::open(c.dir.path(), &REPO.parse().unwrap()).unwrap();
+    let mut record = Record::default();
+    record.decision = c.pass(now, true)[0].next.clone();
+    data.save(3, &record).unwrap();
+    drop(data);
+    c.hub
+        .post_status(&head(3), json!({"context":"machine","state":"success"}));
+    let report = kick(&c, 5, true, now + 1);
+    assert_eq!(report[0].next.as_ref().unwrap().step, Step::Prove);
+}

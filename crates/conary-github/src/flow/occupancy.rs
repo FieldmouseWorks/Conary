@@ -8,6 +8,7 @@ pub(crate) struct Occupancy {
     records: BTreeMap<u64, Record>,
     unknown: Vec<u64>,
     virtual_live: Vec<ProofHolder>,
+    queued: std::collections::BTreeSet<u64>,
 }
 impl Occupancy {
     pub(crate) fn read(
@@ -29,6 +30,43 @@ impl Occupancy {
             records,
             unknown,
             virtual_live: vec![],
+            queued: Default::default(),
+        }
+    }
+    pub(crate) fn discover<G: Write>(
+        &mut self,
+        pass: &Pass<'_>,
+        github: &G,
+        repo: &conary_core::op::Repo,
+        ledger: Option<&conary_core::Ledger>,
+    ) {
+        for (number, record) in &self.records {
+            let result: Result<bool> = (|| {
+                let mut facts = read(
+                    github,
+                    repo,
+                    *number,
+                    pass.policy,
+                    pass.config.settings.clone(),
+                    &pass.config.trusted_authors,
+                )?;
+                let mut memory = record.memory.clone();
+                super::ledger::raised(&mut facts, &mut memory, ledger);
+                super::observe::hydrate(&mut facts, record, pass.now, true)?;
+                super::observe::issuances(&mut facts, &memory);
+                if let Some(ledger) = ledger {
+                    super::observe::train(&mut facts, ledger);
+                }
+                let decision = next(&facts, &memory, pass.now).0;
+                Ok(decision.step == Step::Prove || decision.stage == Stage::ProofSlot)
+            })();
+            match result {
+                Ok(true) => {
+                    self.queued.insert(*number);
+                }
+                Ok(false) => {}
+                Err(_) => self.unknown.push(*number),
+            }
         }
     }
     pub(crate) fn apply(&self, f: &mut Facts, now: u64) -> Result<()> {
@@ -61,12 +99,7 @@ impl Occupancy {
                     });
                 }
             }
-            if !holding
-                && record
-                    .decision
-                    .as_ref()
-                    .is_some_and(|n| n.step == Step::Prove || n.stage == Stage::ProofSlot)
-            {
+            if !holding && self.queued.contains(number) {
                 f.proof_data.waiting.push(ProofWaiting { number: *number });
             }
         }

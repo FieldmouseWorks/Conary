@@ -33,6 +33,10 @@ pub(crate) mod pairs {
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Record {
+    #[serde(default)]
+    pub cleanup: std::collections::BTreeSet<String>,
+    #[serde(default)]
+    pub landing: Option<Landing>,
     pub memory: Memory,
     pub decision: Option<Next>,
     pub jobs: Vec<super::jobs::Work>,
@@ -40,6 +44,13 @@ pub struct Record {
     pub failed_review: Option<FailedPost>,
     pub succeeded: std::collections::BTreeSet<Failure>,
     pub sequence: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Landing {
+    pub head: String,
+    pub base: String,
+    pub delegated: bool,
 }
 
 /// One repository lock covers read/decide/act/save. Dry runs only read files.
@@ -78,6 +89,22 @@ impl Data {
         fs::create_dir_all(&dir)?;
         let lock = LocalLock::take(&dir.join("lock"))?;
         Ok(Self { dir, _lock: lock })
+    }
+    pub(crate) fn records(&self) -> Result<Vec<u64>> {
+        let mut numbers = Vec::new();
+        for entry in fs::read_dir(&self.dir)? {
+            let path = entry?.path();
+            if path.extension().is_some_and(|e| e == "json")
+                && let Some(number) = path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .and_then(|s| s.parse().ok())
+            {
+                numbers.push(number);
+            }
+        }
+        numbers.sort_unstable();
+        Ok(numbers)
     }
     pub fn path(&self, pr: u64) -> PathBuf {
         self.dir.join(format!("{pr}.json"))

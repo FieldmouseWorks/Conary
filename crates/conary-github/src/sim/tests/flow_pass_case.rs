@@ -47,6 +47,8 @@ pub(super) fn example() -> PathBuf {
 
 pub(super) struct Case {
     pub(super) hub: Hub,
+    pub(super) store: RefCell<conary_core::Store>,
+    _ledger: tempfile::TempDir,
     pub(super) dir: tempfile::TempDir,
     pub(super) config: flow::Config,
     pub(super) policy: conary_core::Policy,
@@ -96,7 +98,16 @@ impl Case {
         });
         config.settings.judge_key = Some(SealKey::from_hex(&"a".repeat(64)).unwrap());
         config.settings.verdict_authors.insert("producer".into());
+        let ledger = tempfile::tempdir().unwrap();
+        let store = conary_core::Store::open(
+            conary_core::log::Lock::take(ledger.path()).unwrap(),
+            ed25519_dalek::SigningKey::from_bytes(&[5; 32]),
+            None,
+        )
+        .unwrap();
         let case = Self {
+            store: RefCell::new(store),
+            _ledger: ledger,
             hub,
             dir: tempfile::tempdir().unwrap(),
             config,
@@ -107,7 +118,8 @@ impl Case {
         case
     }
     pub(super) fn pass(&self, now: u64, dry: bool) -> Vec<flow::Report> {
-        Pass {
+        let mut store = self.store.borrow_mut();
+        let mut pass = Pass {
             config: &self.config,
             policy: &self.policy,
             root: self.dir.path(),
@@ -115,9 +127,15 @@ impl Case {
             now,
             dry_run: dry,
             ledger: None,
+        };
+        if dry {
+            pass.ledger = Some(store.ledger());
+            pass.run(&self.hub, &REPO.parse().unwrap(), None, None)
+                .unwrap()
+        } else {
+            pass.run(&self.hub, &REPO.parse().unwrap(), None, Some(&mut store))
+                .unwrap()
         }
-        .run(&self.hub, &REPO.parse().unwrap(), None, None)
-        .unwrap()
     }
     pub(super) fn run_worker(&self) {
         for path in self.deferred.0.borrow_mut().drain(..) {

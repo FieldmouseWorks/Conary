@@ -55,6 +55,36 @@ impl Pass<'_> {
         } else {
             Some(Data::open(self.root, repo)?)
         };
+        let mut recovery = Vec::new();
+        if let Some(data) = &data {
+            for pr in data.records()? {
+                let result: Result<()> = (|| {
+                    let mut record = data.load(pr)?;
+                    let reconciled = if record.landing.is_some() {
+                        match store.as_deref_mut() {
+                            Some(store) => super::ledger::reconcile(
+                                self,
+                                github,
+                                repo,
+                                data,
+                                store,
+                                pr,
+                                &mut record,
+                            ),
+                            None => Err("pending landing needs an anchored ledger".into()),
+                        }
+                    } else {
+                        Ok(())
+                    };
+                    // Even a failed reconciliation read cannot retain a live grant.
+                    let cleaned = super::ledger::cleanup(github, repo, pr, data, &mut record);
+                    reconciled.and(cleaned)
+                })();
+                if let Err(error) = result {
+                    recovery.push((pr, error.to_string()));
+                }
+            }
+        }
         let mut pulls = github.pulls(&repo.to_string(), crate::api::Pulls::Open)?;
         pulls.sort_by_key(|p| {
             (
@@ -65,6 +95,12 @@ impl Pass<'_> {
             )
         });
         let mut occupancy = super::occupancy::Occupancy::read(self.root, repo, &pulls);
+        occupancy.discover(
+            self,
+            github,
+            repo,
+            store.as_deref().map(Store::ledger).or(self.ledger),
+        );
         let mut reports = Vec::new();
         for pull in pulls
             .into_iter()
@@ -90,6 +126,19 @@ impl Pass<'_> {
                     self.config.settings.clone(),
                     &self.config.trusted_authors,
                 )?;
+                if let Some((_, error)) = recovery.iter().find(|(number, _)| *number == pr) {
+                    // Keep advancing strikes while cleanup blocks effects.
+                    record.failed = Some(Failure::Status);
+                    report.error = Some(error.clone());
+                }
+                super::ledger::raised(
+                    &mut facts,
+                    &mut record.memory,
+                    store.as_deref().map(Store::ledger).or(self.ledger),
+                );
+                if let Some(store) = store.as_deref_mut() {
+                    super::ledger::classify(self, github, &mut facts, &mut record, store)?;
+                }
                 super::observe::hydrate(&mut facts, &record, self.now, self.dry_run)?;
                 occupancy.apply(&mut facts, self.now)?;
                 if let Some(ledger) = store.as_deref().map(Store::ledger).or(self.ledger) {
@@ -101,6 +150,22 @@ impl Pass<'_> {
                 facts.succeeded = std::mem::take(&mut record.succeeded);
                 let (mut next, memory) = next(&facts, &record.memory, self.now);
                 record.memory = memory;
+                if next.step == Step::Prove {
+                    let (ahead, _) = super::proofs::ahead(&facts, None);
+                    if ahead > 0 {
+                        next.stage = Stage::ProofSlot;
+                        next.step = Step::Wait { until: None };
+                        next.proof = None;
+                        next.description =
+                            format!("Waiting for a full plugin proof slot ({ahead} ahead)");
+                    }
+                }
+                if record.landing.as_ref().is_some_and(|l| !l.delegated) {
+                    next.stage = Stage::Merge;
+                    next.step = Step::Wait { until: None };
+                    next.description =
+                        "Waiting to reconcile the submitted merge with the ledger".into();
+                }
                 if matches!(next.step, Step::Merge | Step::Settle)
                     && facts.classified.class == conary_core::Class::R2
                 {
@@ -109,9 +174,13 @@ impl Pass<'_> {
                     next.description =
                         "R2 landing requires the merge train and exact candidate evidence".into();
                 }
-                if (matches!(next.step, Step::Merge | Step::Settle | Step::JoinTrain)
-                    || next.stage == Stage::Train && facts.train.seat.is_some())
-                    && let Err(why) = super::evidence::authorize(self, github, &facts)
+                if grants(&next, &facts)
+                    && let Err(why) = if store.is_none() && (!self.dry_run || self.ledger.is_none())
+                    {
+                        Err("landing permission requires an anchored ledger".into())
+                    } else {
+                        super::evidence::authorize(self, github, &facts)
+                    }
                 {
                     next.step = Step::Wait { until: None };
                     next.stage = Stage::Proof;
@@ -166,6 +235,16 @@ impl Pass<'_> {
                 report.error = Some(error.to_string());
             }
             reports.push(report);
+        }
+        for (pr, error) in recovery {
+            if !reports.iter().any(|r| r.pr == pr) {
+                reports.push(Report {
+                    repo: repo.clone(),
+                    pr,
+                    next: None,
+                    error: Some(error),
+                });
+            }
         }
         reports.sort_by_key(|r| r.pr);
         Ok(reports)
@@ -257,4 +336,11 @@ pub(crate) fn recipes(f: &Facts) -> BTreeMap<String, Recipe> {
                 .map(|(n, r)| (n.clone(), r.clone()))
         })
         .collect()
+}
+
+pub(crate) fn grants(next: &Next, f: &Facts) -> bool {
+    matches!(next.step, Step::Merge | Step::Settle | Step::JoinTrain)
+        || next.stage == Stage::Train
+            && matches!(next.step, Step::Wait { .. })
+            && f.train.seat.is_some()
 }

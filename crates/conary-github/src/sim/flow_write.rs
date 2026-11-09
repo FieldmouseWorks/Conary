@@ -19,7 +19,7 @@ impl Write for Hub {
                 0,
                 json!({
                     "context":crate::flow::SETTLED, "state":if settled {"success"} else {"pending"},
-                    "description":text,"creator":{"login":STEWARD,"type":"Bot"}
+                    "created_at":self.now(),"description":text,"creator":{"login":STEWARD,"type":"Bot"}
                 }),
             );
                 Ok(())
