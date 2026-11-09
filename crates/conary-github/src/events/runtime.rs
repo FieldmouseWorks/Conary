@@ -13,6 +13,7 @@ use std::path::PathBuf;
 pub struct Runtime {
     pub listen: std::net::SocketAddr,
     pub secret_path: PathBuf,
+    #[serde(deserialize_with = "repos")]
     pub repos: Vec<conary_core::op::Repo>,
     pub data: PathBuf,
     pub flow_config: PathBuf,
@@ -26,10 +27,23 @@ pub struct Runtime {
 fn api() -> String {
     "https://api.github.com".into()
 }
+fn repos<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> std::result::Result<Vec<conary_core::op::Repo>, D::Error> {
+    Vec::<String>::deserialize(d)?
+        .into_iter()
+        .map(|s| s.parse().map_err(serde::de::Error::custom))
+        .collect()
+}
 impl Runtime {
     /// This is the same Pass::run used by cn flow kick. Never accept a path,
     /// executable or policy from a webhook payload.
-    pub fn pass(&self, ledger: &std::path::Path, work: &Work) -> Result<Vec<flow::Report>> {
+    pub fn pass(
+        &self,
+        ledger: &std::path::Path,
+        work: &Work,
+        queue: &std::sync::Arc<Queue>,
+    ) -> Result<Vec<flow::Report>> {
         let repo = self
             .repos
             .iter()
@@ -37,7 +51,8 @@ impl Runtime {
             .ok_or("unlisted repository")?;
         let config: flow::Config = serde_json::from_slice(&std::fs::read(&self.flow_config)?)?;
         let policy = Policy::load(&self.policy)?;
-        let api = Api::new(&self.api, Tokens::command(&self.token_command)?);
+        let api = Api::new(&self.api, Tokens::command(&self.token_command)?)
+            .with_event_queue(std::sync::Arc::clone(queue));
         let needs_ledger =
             config.settings.train || config.evidence.is_some() || self.anchor_repo.is_some();
         let mut anchored = if needs_ledger {
@@ -76,7 +91,7 @@ impl Runtime {
         }
         reports
     }
-    pub fn run(&self, ledger: &std::path::Path, queue: &Queue) -> Result<()> {
+    pub fn run(&self, ledger: &std::path::Path, queue: &std::sync::Arc<Queue>) -> Result<()> {
         loop {
             let started = flow::jobs::now();
             let ran = queue.run_one(started, |work| {
@@ -88,7 +103,7 @@ impl Runtime {
                     // Removing a repo from config retires its old mailbox.
                     return Ok(vec![]);
                 }
-                self.pass(ledger, work)
+                self.pass(ledger, work, queue)
             })?;
             if !ran {
                 queue.wait();

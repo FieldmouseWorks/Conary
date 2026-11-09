@@ -79,6 +79,9 @@ impl Write for Api {
         Ok(())
     }
     fn owner(&self, repo: &str, pr: u64, label: &str) -> Result<(), ApiError> {
+        if self.pull(repo, pr)?.labels.iter().any(|l| l.name == label) {
+            return Ok(());
+        }
         let _: Value = self.send(
             false,
             &format!("/repos/{repo}/issues/{pr}/labels"),

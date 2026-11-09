@@ -93,7 +93,14 @@ issue comments, check suites, check runs, commit statuses and pushes. GitHub's
 `pull_request`. Only pushes to the default branch kick the repo's open PRs.
 Issue comments without a PR and events outside this table are acknowledged
 without work. Check events without associated PR numbers and commit statuses
-kick the repository so the pass can correlate current PR heads.
+kick the repository so the pass can correlate current PR heads. Status echoes
+are queued with their GitHub status ID. Before dispatch, the worker drops only
+IDs recorded from its own successful status-write responses, including both
+pending and success writes and train statuses. Delivery can precede the write
+response: the worker classifies echoes after its active pass finishes. Receipts
+survive restart and are retained for 24 hours. External writes, including writes
+to Conary's own status contexts, still kick a pass and recheck permission.
+Stage labels already present are read without posting them again.
 
 Only POST is accepted. `X-Hub-Signature-256` must contain the HMAC-SHA256 of the
 exact request body, verified with a constant-time tag comparison before JSON
@@ -116,9 +123,17 @@ manager can restart it. Errors never print webhook content.
 Each report's `Next.wait_until` names its explicit wait or owned worker deadline;
 `overdue_at` names the stall deadline. The mailbox books the earliest future
 time per PR, replacing earlier bookings after a new repo pass and removing
-closed PRs. It sleeps on a condition variable until an incoming kick or that
+closed PRs. A per-PR error, even one without a decision, books a durable recovery
+wait: 60 seconds initially, doubling per failed report up to 64 minutes. Other
+PRs keep their successful bookings. A successful report cancels that PR's retry;
+an absent report after a successful repository read retires its closed PR.
+These are failure-triggered bookings, not periodic repository scans. Explicit
+waits name the first second their predicate permits progress (the quiet handoff
+requires the second after its inclusive quiet period).
+
+The worker sleeps on a condition variable until an incoming kick or that
 booked time, consumes the booking once, and runs a pass. There is no periodic
 scan or polling timer. Already elapsed deadlines are not rebooked by an
-unchanged report. The mailbox and delivery cache are mutable JSON files in
+unchanged report. The mailbox, status receipts, failure backoffs and delivery cache are mutable JSON files in
 `data`, beside `flow/` memory, with atomic rename and file/directory sync;
 they are separate from the append-only ledger.

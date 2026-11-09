@@ -171,7 +171,12 @@ impl Receiver {
             return 400;
         };
         for kick in kicks(event, &value, &self.repos) {
-            if queue.kick(kick).is_err() {
+            let queued = if event == "status" && value["id"].as_u64().is_some() {
+                queue.status(&kick.repo, value["id"].as_u64().expect("checked above"))
+            } else {
+                queue.kick(kick)
+            };
+            if queued.is_err() {
                 return 503;
             }
         }

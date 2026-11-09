@@ -14,6 +14,12 @@ use std::time::Duration;
 struct State {
     pending: BTreeSet<String>,
     active: Option<String>,
+    #[serde(default)]
+    status_events: BTreeMap<String, BTreeSet<u64>>,
+    #[serde(default)]
+    owned_statuses: BTreeMap<String, BTreeMap<u64, u64>>,
+    #[serde(default)]
+    failures: BTreeMap<String, BTreeMap<u64, u32>>,
     // One home for a PR's next unconsumed booking, replaced by each pass.
     waits: BTreeMap<String, BTreeMap<u64, u64>>,
 }
@@ -67,11 +73,37 @@ impl Queue {
             s.pending.insert(kick.repo.to_lowercase());
         })
     }
+    /// A signed status event remains distinct until the active writer has
+    /// recorded its response ID. This also handles delivery before HTTP reply.
+    pub fn status(&self, repo: &str, id: u64) -> Result<()> {
+        self.change(|s| {
+            s.status_events
+                .entry(repo.to_lowercase())
+                .or_default()
+                .insert(id);
+        })
+    }
+    pub fn own_status(&self, repo: &str, id: u64, now: u64) -> Result<()> {
+        self.change(|s| {
+            let owned = s.owned_statuses.entry(repo.to_lowercase()).or_default();
+            owned.retain(|_, at| now < at.saturating_add(86400));
+            owned.insert(id, now);
+        })
+    }
     /// Nonblocking form, also used by deterministic clock tests.
     pub fn take(&self, now: u64) -> Result<Option<Work>> {
         self.change(|s| {
             if s.active.is_some() {
                 return None;
+            }
+            for (repo, ids) in std::mem::take(&mut s.status_events) {
+                let owned = s.owned_statuses.get(&repo);
+                if ids
+                    .iter()
+                    .any(|id| owned.is_none_or(|owned| !owned.contains_key(id)))
+                {
+                    s.pending.insert(repo);
+                }
             }
             for (repo, waits) in &mut s.waits {
                 let before = waits.len();
@@ -90,9 +122,20 @@ impl Queue {
             assert_eq!(s.active.as_deref(), Some(work.repo.as_str()));
             let waits = s.waits.entry(work.repo.clone()).or_default();
             waits.clear(); // A repo pass reports every open PR; closed PRs lose bookings.
+            let failures = s.failures.entry(work.repo.clone()).or_default();
+            failures.retain(|pr, _| reports.iter().any(|r| r.pr == *pr && r.error.is_some()));
             for report in reports {
+                if report.error.is_some() {
+                    let attempts = failures.entry(report.pr).or_default();
+                    let retry = now.saturating_add(60 * (1u64 << (*attempts).min(6)));
+                    *attempts = attempts.saturating_add(1);
+                    waits.insert(report.pr, retry);
+                }
                 if let Some(at) = report.next.as_ref().and_then(|n| booking(n, now)) {
-                    waits.insert(report.pr, at);
+                    waits
+                        .entry(report.pr)
+                        .and_modify(|old| *old = (*old).min(at))
+                        .or_insert(at);
                 }
             }
             s.active = None;
@@ -116,7 +159,7 @@ impl Queue {
     /// Wait only for a message or a booked deadline. There is no polling clock.
     pub fn wait(&self) {
         let state = self.state.lock().unwrap();
-        if !state.pending.is_empty() {
+        if !state.pending.is_empty() || !state.status_events.is_empty() {
             return;
         }
         let soonest = state.waits.values().flat_map(|w| w.values()).min().copied();
