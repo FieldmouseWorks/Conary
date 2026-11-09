@@ -494,3 +494,23 @@ fn pass_releases_the_repository_lock_with_an_inherited_descriptor() {
     drop(inherited);
     drop(next);
 }
+
+#[test]
+fn pass_reconciles_a_review_post_whose_answer_was_lost() {
+    let c = Case::new();
+    let now = flow::jobs::now();
+    c.pass(now, false);
+    c.run_worker();
+    c.hub.lose(Call::FlowReview);
+    assert!(c.pass(now + 1, false)[0].error.is_some());
+    assert_eq!(c.hub.count(Call::FlowReview), 1);
+    c.hub.heal(Call::FlowReview);
+    let report = c.pass(now + 2, false);
+    assert_eq!(report[0].error, None);
+    assert_eq!(
+        c.hub.count(Call::FlowReview),
+        1,
+        "the same producer answer is posted once"
+    );
+    assert!(c.record().jobs[0].posted);
+}

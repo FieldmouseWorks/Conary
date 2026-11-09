@@ -145,7 +145,18 @@ pub(crate) fn act<G: Write>(
                 }
                 let body =
                     super::write::review_body(role, &work.job.revision, completion.at, &findings);
-                github.review(&repo, f.number, &work.job.revision.head, &body)?;
+                // A write can succeed even when its response is lost. Reconcile
+                // the exact authenticated marker before spending another round.
+                let already_posted = github.reviews(&repo, f.number)?.iter().any(|r| {
+                    r.commit_id.as_deref() == Some(work.job.revision.head.as_str())
+                        && r.body.as_deref() == Some(body.as_str())
+                        && r.user
+                            .as_ref()
+                            .is_some_and(|u| f.settings.review_authors.contains(&u.login))
+                });
+                if !already_posted {
+                    github.review(&repo, f.number, &work.job.revision.head, &body)?;
+                }
                 work.posted = true;
             }
             Step::PostFix(_) => return Err("v1 fix results cannot carry thread replies".into()),
