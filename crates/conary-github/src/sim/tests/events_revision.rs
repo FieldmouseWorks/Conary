@@ -168,3 +168,23 @@ fn documented_runtime_config_parses_and_preserves_repo_identity() {
             .any(|repo| repo.to_string().eq_ignore_ascii_case(&kicks[0].repo))
     );
 }
+
+#[test]
+fn mailbox_unlocks_on_drop_even_with_an_inherited_descriptor() {
+    let dir = tempfile::tempdir().unwrap();
+    let queue = Queue::open(dir.path()).unwrap();
+    let inherited = queue.duplicate_lock();
+    assert!(
+        Queue::open(dir.path()).is_err(),
+        "a live owner must still exclude another worker"
+    );
+    queue.kick(kick()).unwrap();
+    drop(queue);
+    let restarted =
+        Queue::open(dir.path()).expect("drop must unlock the shared description explicitly");
+    assert!(
+        restarted.take(1).unwrap().is_some(),
+        "queued work survives the restart"
+    );
+    drop(inherited);
+}

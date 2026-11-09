@@ -32,18 +32,12 @@ pub struct Queue {
     state: Mutex<State>,
     changed: Condvar,
     path: PathBuf,
-    _lock: std::fs::File,
+    _lock: persist::LocalLock,
 }
 impl Queue {
     pub fn open(data: &Path) -> Result<Self> {
         std::fs::create_dir_all(data)?;
-        let lock = std::fs::File::options()
-            .create(true)
-            .truncate(false)
-            .read(true)
-            .write(true)
-            .open(data.join("events.lock"))?;
-        lock.try_lock()?;
+        let lock = persist::LocalLock::take(&data.join("events.lock"))?;
         let path = data.join("events.json");
         let mut state: State = persist::load(&path)?;
         if let Some(repo) = state.active.take() {
@@ -56,6 +50,10 @@ impl Queue {
             path,
             _lock: lock,
         })
+    }
+    #[cfg(test)]
+    pub(crate) fn duplicate_lock(&self) -> std::fs::File {
+        self._lock.duplicate()
     }
     fn change<T>(&self, f: impl FnOnce(&mut State) -> T) -> Result<T> {
         let mut state = self.state.lock().unwrap();

@@ -99,6 +99,10 @@ pub struct Landing {
 /// One repository lock covers read/decide/act/save. Dry runs only read files.
 pub(crate) struct LocalLock(File);
 impl LocalLock {
+    #[cfg(test)]
+    pub(crate) fn duplicate(&self) -> File {
+        self.0.try_clone().unwrap()
+    }
     pub(crate) fn take(path: &Path) -> Result<Self> {
         let file = OpenOptions::new()
             .create(true)
@@ -124,7 +128,7 @@ pub struct Data {
 impl Data {
     #[cfg(test)]
     pub(crate) fn duplicate_lock(&self) -> File {
-        self._lock.0.try_clone().unwrap()
+        self._lock.duplicate()
     }
 
     pub fn open(root: &Path, repo: &conary_core::op::Repo) -> Result<Self> {
