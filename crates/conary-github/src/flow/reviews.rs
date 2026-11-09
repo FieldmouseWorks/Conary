@@ -146,3 +146,20 @@ pub(super) fn read(
     }
     Ok(result)
 }
+
+/// The latest native review state per account, shared by reading and the
+/// final admission check so a same-head request for changes cannot race in.
+pub(super) fn changes_requested(records: &[GithubReview]) -> bool {
+    let mut verdicts = BTreeMap::new();
+    for r in records {
+        if let (Some(who), Some(state)) = (&r.user, &r.state)
+            && matches!(
+                state.as_str(),
+                "APPROVED" | "CHANGES_REQUESTED" | "DISMISSED"
+            )
+        {
+            verdicts.insert(&who.login, state);
+        }
+    }
+    verdicts.values().any(|s| s.as_str() == "CHANGES_REQUESTED")
+}

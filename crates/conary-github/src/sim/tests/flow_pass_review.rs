@@ -519,3 +519,25 @@ fn conflict_without_an_observed_base_commit_does_not_start_a_fixer() {
     ));
     assert!(c.record().jobs.is_empty());
 }
+
+#[test]
+fn a_native_request_for_changes_after_permission_is_published_blocks_the_merge() {
+    let c = Case::new();
+    c.clean_review();
+    c.hub
+        .race(On::from(Call::FlowStatus).mark(Mark::Landing), |h| {
+            h.race(Call::Statuses, |h| {
+                h.request_changes(REPO, 3, "human-reviewer")
+            });
+        });
+    let report = c.pass(crate::flow::jobs::now(), false);
+    assert!(
+        report[0]
+            .error
+            .as_ref()
+            .unwrap()
+            .contains("changes were requested")
+    );
+    assert_eq!(c.hub.count(Call::Land), 0);
+    pending(&c);
+}

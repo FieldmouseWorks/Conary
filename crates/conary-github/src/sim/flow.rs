@@ -279,3 +279,19 @@ impl Hub {
         comment["updated_at"] = json!("2030-01-01T00:00:00Z");
     }
 }
+
+impl Hub {
+    pub(crate) fn request_changes(&self, repo: &str, pr: u64, who: &str) {
+        self.world
+            .borrow_mut()
+            .repos
+            .get_mut(repo)
+            .unwrap()
+            .reviews
+            .entry(pr)
+            .or_default()
+            .push(
+                serde_json::json!({"user":{"login":who,"type":"User"},"state":"CHANGES_REQUESTED"}),
+            );
+    }
+}

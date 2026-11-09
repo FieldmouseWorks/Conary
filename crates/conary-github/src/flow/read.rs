@@ -208,18 +208,7 @@ pub fn read(
     let records = source.reviews(&repository, pr)?;
     let comments = source.comments(&repository, pr)?;
     let markers = super::markers::read(&repository, &pull, &comments, &facts.settings);
-    let mut verdicts = BTreeMap::new();
-    for r in &records {
-        if let (Some(who), Some(state)) = (&r.user, &r.state)
-            && matches!(
-                state.as_str(),
-                "APPROVED" | "CHANGES_REQUESTED" | "DISMISSED"
-            )
-        {
-            verdicts.insert(&who.login, state);
-        }
-    }
-    facts.changes_requested = verdicts.values().any(|s| s.as_str() == "CHANGES_REQUESTED");
+    facts.changes_requested = super::reviews::changes_requested(&records);
     let mut carried = BTreeSet::new();
     for old in records
         .iter()

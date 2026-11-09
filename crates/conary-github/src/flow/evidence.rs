@@ -106,6 +106,9 @@ pub(crate) fn authorize<G: Write>(pass: &Pass<'_>, github: &G, f: &Facts) -> Res
         .map_err(|why| format!("negative evidence: {why}"))?;
 
     let records = github.reviews(&repo, f.number)?;
+    if super::reviews::changes_requested(&records) {
+        return Err("Review changes were requested before permission was used".into());
+    }
     for (role, reviewer) in &f.reviewers {
         let Some(review) = &reviewer.review else {
             continue;
