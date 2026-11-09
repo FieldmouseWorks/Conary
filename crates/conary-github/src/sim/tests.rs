@@ -251,3 +251,52 @@ fn a_comparison_lists_what_head_took_out_as_well_as_what_it_added() {
     let listed: Vec<_> = paths.files.iter().map(|t| t.path.as_str()).collect();
     assert_eq!(listed, ["CODEOWNERS"]);
 }
+
+mod flow;
+
+mod flow_ci;
+
+mod flow_reader;
+
+mod flow_markers;
+
+mod flow_gates;
+
+mod flow_case;
+
+mod flow_rounds;
+
+mod flow_jobs;
+
+mod flow_renovate;
+
+mod flow_proofs;
+
+mod flow_answers;
+
+mod flow_carried;
+
+mod flow_waits;
+
+mod flow_claims;
+
+mod flow_lost;
+
+mod flow_trains;
+
+mod flow_scope;
+
+mod flow_conflicts;
+
+mod flow_deps;
+
+mod flow_slots;
+
+mod flow_ci_case;
+mod flow_legs;
+
+mod flow_docs;
+
+mod flow_findings;
+
+mod flow_obligations;

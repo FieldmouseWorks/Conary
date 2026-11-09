@@ -47,6 +47,7 @@ pub struct PullRequest {
     pub created_at: Option<String>,
     pub merged_at: Option<String>,
     pub merge_commit_sha: Option<String>,
+    pub auto_merge: Option<serde_json::Value>,
     pub base: Ref,
     pub head: Ref,
     #[serde(default)]
@@ -116,11 +117,21 @@ pub struct Status {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Review {
+    pub id: Option<u64>,
+    pub state: Option<String>,
     pub user: Option<User>,
     pub body: Option<String>,
     pub commit_id: Option<String>,
     pub html_url: Option<String>,
     pub submitted_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Comment {
+    pub user: Option<User>,
+    pub body: Option<String>,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -160,7 +171,15 @@ pub struct Login {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct CommitDetail {
+    pub message: Option<String>,
+    pub author: Option<Identity>,
+    pub committer: Option<Identity>,
     pub verification: Option<Verification>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Identity {
+    pub email: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -246,6 +265,9 @@ pub enum Pulls {
 
 /// Where ingest reads GitHub from.
 pub trait Source {
+    fn diff(&self, repo: &str, base: &str, head: &str) -> Result<String, ApiError>;
+    fn comments(&self, repo: &str, pr: u64) -> Result<Vec<Comment>, ApiError>;
+    fn compare_commits(&self, repo: &str, base: &str, head: &str) -> Result<History, ApiError>;
     fn pull(&self, repo: &str, number: u64) -> Result<PullRequest, ApiError>;
     fn pulls(&self, repo: &str, which: Pulls) -> Result<Vec<PullRequest>, ApiError>;
     fn check_runs(&self, repo: &str, sha: &str) -> Result<Vec<CheckRun>, ApiError>;
@@ -529,6 +551,29 @@ fn says_rate_limit(url: &str, response: &mut Response) -> Result<bool, ApiError>
 const MAX_MESSAGE: u64 = 64 * 1024;
 
 impl Source for Api {
+    fn diff(&self, repo: &str, base: &str, head: &str) -> Result<String, ApiError> {
+        let path = format!("/repos/{repo}/compare/{base}...{head}");
+        let url = format!("{}{path}", self.base);
+        let mut response = self
+            .agent
+            .get(&url)
+            .header("Authorization", &self.authorization(&path)?)
+            .header("Accept", "application/vnd.github.diff")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .call()
+            .map_err(|e| unreachable(&url, e))?;
+        if !response.status().is_success() {
+            return Err(failed(&url, &mut response));
+        }
+        String::from_utf8(read(&url, &mut response)?)
+            .map_err(|_| ApiError::new("GitHub diff is not UTF-8"))
+    }
+    fn comments(&self, repo: &str, pr: u64) -> Result<Vec<Comment>, ApiError> {
+        self.pages(&format!("/repos/{repo}/issues/{pr}/comments"))
+    }
+    fn compare_commits(&self, repo: &str, base: &str, head: &str) -> Result<History, ApiError> {
+        self.history(repo, base, head)
+    }
     fn pull(&self, repo: &str, number: u64) -> Result<PullRequest, ApiError> {
         self.get(&format!("/repos/{repo}/pulls/{number}"))
     }
@@ -614,6 +659,10 @@ pub(crate) fn compared(files: Vec<ComparedFile>) -> Paths {
 }
 
 mod actions;
+mod carry;
+mod flow;
+mod history;
+pub use history::History;
 mod writes;
 
 #[cfg(test)]

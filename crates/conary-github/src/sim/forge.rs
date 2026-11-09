@@ -26,11 +26,70 @@ fn repo_of<'a>(w: &'a World, repo: &str) -> Result<&'a super::Repo, ApiError> {
 }
 
 impl Source for Hub {
+    fn diff(&self, repo: &str, base: &str, head: &str) -> Result<String, ApiError> {
+        self.read(Asked::new(Call::Diff, repo), &[repo, base, head], |w| {
+            w.diffs
+                .get(&(base.into(), head.into()))
+                .cloned()
+                .ok_or_else(|| ApiError::new("diff unavailable"))
+        })
+    }
+    fn comments(&self, repo: &str, pr: u64) -> Result<Vec<crate::api::Comment>, ApiError> {
+        let n = pr.to_string();
+        self.read(Asked::new(Call::Comments, repo).pr(pr), &[repo, &n], |w| {
+            Ok(repo_of(w, repo)?
+                .comments
+                .get(&pr)
+                .into_iter()
+                .flatten()
+                .map(parse)
+                .collect())
+        })
+    }
+    fn compare_commits(
+        &self,
+        repo: &str,
+        base: &str,
+        head: &str,
+    ) -> Result<crate::api::History, ApiError> {
+        self.read(
+            Asked::new(Call::CompareCommits, repo),
+            &[repo, base, head],
+            |w| {
+                let excluded: std::collections::BTreeSet<_> =
+                    w.ancestors(base).into_iter().collect();
+                let mut commits = w
+                    .ancestors(head)
+                    .into_iter()
+                    .filter(|c| !excluded.contains(c))
+                    .map(|c| w.commit_record(repo, &c))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let limit = w
+                    .history_limits
+                    .get(&(base.into(), head.into()))
+                    .copied()
+                    .unwrap_or(usize::MAX);
+                let complete = commits.len() <= limit;
+                commits.truncate(limit);
+                Ok(crate::api::History { commits, complete })
+            },
+        )
+    }
     fn pull(&self, repo: &str, number: u64) -> Result<PullRequest, ApiError> {
         let n = number.to_string();
         self.read(Asked::new(Call::Pull, repo).pr(number), &[repo, &n], |w| {
-            let p = repo_of(w, repo)?.pulls.get(&number);
-            p.map(parse).ok_or_else(|| not_found(format!("#{number}")))
+            let mut p = repo_of(w, repo)?
+                .pulls
+                .get(&number)
+                .cloned()
+                .ok_or_else(|| not_found(format!("#{number}")))?;
+            if p["state"] == "open"
+                && p["merge_commit_sha"].is_null()
+                && let Some((sha, _, _)) = w.preview(repo, number)
+            {
+                p["merge_commit_sha"] = json!(sha);
+            }
+            Ok(parse(&p))
         })
     }
 
@@ -80,20 +139,7 @@ impl Source for Hub {
 
     fn commit(&self, repo: &str, sha: &str) -> Result<Commit, ApiError> {
         self.read(Asked::new(Call::Commit, repo), &[repo, sha], |w| {
-            let c = w.commits.get(sha).ok_or_else(|| not_found(sha))?;
-            let mut v = fixtures::commit();
-            v["sha"] = json!(sha);
-            v["parents"] = json!(
-                c.parents
-                    .iter()
-                    .map(|p| json!({"sha": p}))
-                    .collect::<Vec<_>>()
-            );
-            if !c.by_github {
-                v["committer"] = fixtures::user("TusanHomichi", "User");
-                v["commit"]["verification"]["verified"] = json!(false);
-            }
-            Ok(parse(&v))
+            w.commit_record(repo, sha)
         })
     }
 
@@ -140,7 +186,7 @@ impl Source for Hub {
                     .map(|t| json!({
                         "filename": t.path,
                         "previous_filename": t.from,
-                        "status": if t.new { "added" } else { "modified" },
+                        "status": if t.from.is_some() {"renamed"} else if t.new { "added" } else { "modified" },
                     }))
                     .collect::<Vec<_>>()
             );
@@ -273,8 +319,12 @@ impl Branches for Hub {
 
     fn tree(&self, repo: &str, sha: &str) -> Result<String, ApiError> {
         self.read(Asked::new(Call::Tree, repo), &[repo, sha], |w| {
-            let c = w.commits.get(sha).ok_or_else(|| not_found(sha))?;
-            Ok(super::tree_of(&super::names(&c.patches)))
+            if let Some(c) = w.commits.get(sha) {
+                return Ok(super::tree_of(&super::names(&c.patches)));
+            }
+            w.preview_for(repo, sha)
+                .map(|(_, patches)| super::tree_of(&super::names(&patches)))
+                .ok_or_else(|| not_found(sha))
         })
     }
 }
@@ -415,5 +465,101 @@ impl Forge for Hub {
                 })
             },
         )
+    }
+}
+
+impl crate::flow::Read for Hub {
+    fn pushes(
+        &self,
+        repo: &str,
+        branch: &str,
+    ) -> Result<std::collections::BTreeMap<String, String>, ApiError> {
+        self.read(Asked::new(Call::Pushes, repo), &[repo, branch], |w| {
+            Ok(w.pushes
+                .get(&(repo.into(), branch.into()))
+                .cloned()
+                .unwrap_or_default())
+        })
+    }
+
+    fn carries(&self, repo: &str, base: &str, head: &str, old: &str) -> Result<bool, ApiError> {
+        self.read(
+            Asked::new(Call::Carries, repo),
+            &[repo, base, head, old],
+            |w| {
+                let tip = repo_of(w, repo)?
+                    .branches
+                    .get(base)
+                    .map(String::as_str)
+                    .unwrap_or(base);
+                let fork = w
+                    .merge_base(tip, head)
+                    .ok_or_else(|| not_found("merge base"))?;
+                Ok(w.three_way(&fork, old)
+                    .is_some_and(|tree| w.commits.get(head).is_some_and(|c| c.patches == tree)))
+            },
+        )
+    }
+
+    fn annotations(&self, repo: &str, run: u64) -> Result<Vec<String>, ApiError> {
+        let id = run.to_string();
+        self.read(Asked::new(Call::Annotations, repo), &[repo, &id], |w| {
+            Ok(w.annotations.get(&run).cloned().unwrap_or_default())
+        })
+    }
+    fn snapshot(&self, repo: &str, number: u64) -> Result<crate::flow::Snapshot, ApiError> {
+        let n = number.to_string();
+        self.read(
+            Asked::new(Call::FlowSnapshot, repo).pr(number),
+            &[repo, &n],
+            |w| {
+                let mut snapshot = repo_of(w, repo)?
+                    .flow
+                    .get(&number)
+                    .cloned()
+                    .ok_or_else(|| not_found(format!("flow #{number}")))?;
+                if snapshot.default_branch.is_none() {
+                    snapshot.default_branch = w.base_observation(repo);
+                }
+                Ok(snapshot)
+            },
+        )
+    }
+}
+
+impl Hub {
+    pub(crate) fn flow_snapshot(&self, repo: &str, number: u64, snapshot: crate::flow::Snapshot) {
+        self.world
+            .borrow_mut()
+            .repos
+            .get_mut(repo)
+            .expect("repo exists")
+            .flow
+            .insert(number, snapshot);
+    }
+}
+
+impl Hub {
+    pub(crate) fn flow_suites(
+        &self,
+        repo: &str,
+        pr: u64,
+        suites: std::collections::BTreeMap<u64, crate::flow::Suite>,
+    ) {
+        self.world
+            .borrow_mut()
+            .repos
+            .get_mut(repo)
+            .unwrap()
+            .flow
+            .get_mut(&pr)
+            .unwrap()
+            .suites = suites;
+    }
+    pub(crate) fn annotations(&self, run: u64, messages: &[&str]) {
+        self.world
+            .borrow_mut()
+            .annotations
+            .insert(run, messages.iter().map(|s| (*s).into()).collect());
     }
 }

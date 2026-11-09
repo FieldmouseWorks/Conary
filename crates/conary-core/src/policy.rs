@@ -294,6 +294,13 @@ impl Policy {
         )
     }
 
+    /// Whether snapshots hide this path, including a hidden parent directory.
+    pub fn hidden(&self, repo: &Repo, path: &str) -> bool {
+        self.levels(repo)
+            .flat_map(|l| &l.hidden)
+            .any(|p| hides(p, path))
+    }
+
     /// What the policy says of a change in `repo` touching `paths`.
     pub fn classify(&self, repo: &Repo, paths: &Paths) -> Classified {
         let levels = self.levels(repo);
