@@ -6,7 +6,7 @@ use ring::hmac;
 use std::fmt;
 use subtle::ConstantTimeEq;
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SealKey(String);
 impl fmt::Debug for SealKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

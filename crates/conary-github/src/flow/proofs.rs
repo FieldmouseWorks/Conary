@@ -29,7 +29,7 @@ pub struct Evaluation {
     pub derivations_present: bool,
     pub merged: Option<(String, BTreeSet<String>)>,
 }
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Derivation {
     pub path: String,
     pub outputs: BTreeSet<String>,
@@ -52,7 +52,7 @@ pub struct ProofHolder {
 pub struct ProofWaiting {
     pub number: u64,
 }
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ProofPlan {
     Evaluate(BTreeMap<String, Recipe>),
     Build(BTreeMap<String, Derivation>),

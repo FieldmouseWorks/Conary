@@ -179,3 +179,6 @@ With Nix, the flake runs the same checks in a sandbox. That's the gate CI runs:
 ## License
 
 MIT licensed. See [LICENSE](LICENSE).
+
+Explicit landing passes and dry-run decision comparisons are documented in
+[cn flow](docs/flow.md). They do not switch repositories away from the steward.

@@ -26,7 +26,7 @@ pub struct FixAnswer {
     pub description: Option<String>,
     pub comment: bool,
 }
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Unposted {
     Missing,
     Invalid,

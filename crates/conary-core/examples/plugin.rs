@@ -7,10 +7,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if request.contract != CONTRACT {
         return Err("unsupported contract".into());
     }
+    let session = match &request.task {
+        Task::Fix { .. } => "example-fixer",
+        Task::Judge { .. } => "example-judge",
+        _ => "example",
+    };
     let answer = match request.task {
         Task::Describe => Answer::Describe {
             versions: vec![CONTRACT.into()],
             kinds: vec![Kind::Review, Kind::Fix, Kind::Judge, Kind::Proof],
+        },
+        // Reserved, in-memory flow demonstration: the host simulates this
+        // push. No real repository is written or claimed to be written.
+        Task::Review { repo, head, .. }
+            if repo == "conary-test/flow-simulation" && head.ends_with('3') =>
+        {
+            Answer::Review {
+                findings: vec![Finding {
+                    path: "src/lib.rs".into(),
+                    line: 1,
+                    severity: Severity::P1,
+                    text: "Demonstration finding on the first simulated head".into(),
+                }],
+            }
+        }
+        Task::Fix { repo, .. } if repo == "conary-test/flow-simulation" => Answer::Fix {
+            result: FixResult::Pushed {
+                head: format!("{:0>40}", 4),
+            },
         },
         Task::Review { .. } => Answer::Review { findings: vec![] },
         Task::Fix { .. } => Answer::Fix {
@@ -43,7 +67,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             contract: CONTRACT.into(),
             by: Identity {
                 engine: "conary-example".into(),
-                session: Some("example".into()),
+                session: Some(session.into()),
             },
             answer,
         },

@@ -70,13 +70,13 @@ pub struct Revision {
     pub description: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Verdict {
     Clean,
     Findings,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Review {
     pub revision: Revision,
     pub verdict: Verdict,
@@ -86,7 +86,7 @@ pub struct Review {
 
 /// Findings whose posting/coverage was lost. Legacy state has no ordering
 /// evidence until this library observes it; a REST record ID supplies none.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LostReview {
     Legacy { head: String, after: Option<u64> },
     Findings { revision: Revision, at: u64 },
@@ -148,7 +148,7 @@ pub struct Reviewer {
     pub missing: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Kind {
     Findings,
     Red,
@@ -169,7 +169,7 @@ impl Kind {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum JobState {
     Queued,
     Running,
@@ -184,7 +184,7 @@ impl JobState {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Job {
     pub id: String,
     pub revision: Revision,
@@ -193,7 +193,7 @@ pub struct Job {
     pub repeated: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Judgment {
     Land,
     Owner,
@@ -213,7 +213,7 @@ pub enum Dependency {
     Major,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Major {
     Cleared,
     Held,
@@ -233,7 +233,7 @@ pub enum Proof {
 }
 
 /// A proof's identity includes what runs, not just its status name.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Recipe {
     Build(String),
     Run(Vec<String>),
@@ -241,7 +241,8 @@ pub enum Recipe {
 }
 
 /// Machine settings, never selected by the PR's author.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct Settings {
     pub train: bool,
     pub job_login: Option<String>,
@@ -333,7 +334,7 @@ impl Default for Settings {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FailedPost {
     pub role: String,
     /// A rate limit or transport outage does not spend a review attempt.
@@ -341,7 +342,7 @@ pub struct FailedPost {
 }
 
 /// All the facts read once for a pass. Local service answers, jobs and proofs
-/// are supplied by the caller after [`super::read`]. No executor consumes this yet.
+/// are supplied by the caller after [`super::read`]. The pass executor supplies these observations.
 #[derive(Debug, Clone)]
 pub struct Facts {
     pub repo: conary_core::op::Repo,
@@ -410,7 +411,7 @@ pub struct Facts {
     pub succeeded: BTreeSet<Failure>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Failure {
     Status,
     Update,
@@ -427,7 +428,7 @@ pub enum Failure {
     Stop,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Wait {
     pub head: String,
     pub base: String,
@@ -438,39 +439,52 @@ pub struct Wait {
     pub due: u64,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Memory {
     pub head: String,
     pub raised: BTreeSet<String>,
+    #[serde(with = "super::persist::pairs")]
     pub latest_reviews: BTreeMap<String, u64>,
     /// Authenticated issuance high-water marks, including same-generation conflicts.
+    #[serde(with = "super::persist::pairs")]
     pub judge_issuance: BTreeMap<Revision, (u64, Option<Judgment>)>,
+    #[serde(with = "super::persist::pairs")]
     pub major_issuance: BTreeMap<Revision, (u64, Option<Major>)>,
     pub consumed_reviews: BTreeSet<(String, Revision, u64)>,
+    #[serde(with = "super::persist::pairs")]
     pub review_posts: BTreeMap<(String, Revision, u64), u32>,
+    #[serde(with = "super::persist::pairs")]
     pub review_failures: BTreeMap<(String, Revision), (u32, u64)>,
+    #[serde(with = "super::persist::pairs")]
     pub missing_reviews: BTreeMap<(String, Revision), (u64, bool)>,
     pub seen: u64,
     pub no_checks_since: Option<u64>,
     pub update_requested: Option<(String, u64)>,
+    #[serde(with = "super::persist::pairs")]
     pub strikes: BTreeMap<Failure, u32>,
     pub retry: Option<(Failure, u64)>,
     /// Reviewer -> base -> the original findings and their ordering evidence.
+    #[serde(with = "super::persist::pairs")]
     pub lost_on: BTreeMap<String, BTreeMap<String, LostReview>>,
+    #[serde(with = "super::persist::pairs")]
     pub handed: BTreeMap<Kind, Revision>,
     pub lost_jobs: BTreeSet<String>,
+    #[serde(with = "super::persist::pairs")]
     pub unanswered: BTreeMap<(Kind, Revision), BTreeSet<String>>,
+    #[serde(with = "super::persist::pairs")]
     pub broken_jobs: BTreeMap<String, u64>,
     pub owner_saw: Option<Revision>,
     pub answered_jobs: BTreeSet<String>,
     pub stopping: BTreeSet<String>,
     pub retired_jobs: BTreeSet<String>,
+    #[serde(with = "super::persist::pairs")]
     pub unposted: BTreeMap<Kind, (String, Unposted)>,
+    #[serde(with = "super::persist::pairs")]
     pub push_looks: BTreeMap<(String, String), (u32, u64)>,
     pub wait: Option<Wait>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Step {
     QueueReview(String),
     PostReview(String),
@@ -492,7 +506,7 @@ pub enum Step {
     Wait { until: Option<u64> },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WaitOn {
     Steward,
     Hold,
@@ -501,7 +515,7 @@ pub enum WaitOn {
     Train,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum OwnerNotice {
     OpenOverDay,
     NoReviewer,
@@ -509,7 +523,7 @@ pub enum OwnerNotice {
     UnpostedReview,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Next {
     pub stage: Stage,
     pub step: Step,
