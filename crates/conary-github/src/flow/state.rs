@@ -360,6 +360,11 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
             },
             step: step.clone(),
             description,
+            wait_until: match step {
+                Step::Wait { until } => until,
+                Step::Retry { at, .. } => Some(at),
+                _ => None,
+            },
             overdue_at,
             owner_notice,
             wait_on: watched.then(|| {

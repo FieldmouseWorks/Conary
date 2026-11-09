@@ -264,6 +264,7 @@ version = "0.0.0"
 dependencies = [
  "clap",
  "conary-core",
+ "conary-github",
  "ed25519-dalek",
  "serde_json",
  "tempfile",

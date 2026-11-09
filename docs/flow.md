@@ -3,7 +3,9 @@
 `cn flow pass OWNER/REPO` reads the open PRs, calls `flow::next` on each
 PR's current facts and saved observations, and executes its one returned
 step. `cn flow kick OWNER/REPO [PR]` uses that same entry immediately.
-Neither command installs an event source, schedules another pass, nor
+[conaryd](conaryd.md#verified-flow-events) can call the same pass entry from
+verified webhooks and persist the report's booked waits. Neither CLI command
+installs an event source, schedules another pass, nor
 switches a repository away from its steward.
 
 Configuration is machine-owned JSON, supplied with `--config`

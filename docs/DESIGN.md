@@ -796,8 +796,10 @@ closes the remaining ties:
   [reusable workflow](ci-attestation.md#calling-conarys-workflow), without
   burrow or Nix. Existing repositories on burrow's signer must migrate
   together before their machine switches its signer setting.
-- Nothing in Conary hears a PR event. burrow's steward calls `cn` on each
-  one; without it, someone runs `cn sync`.
+- The PR-event source tie is cut: [conaryd](conaryd.md#verified-flow-events)
+  verifies GitHub webhooks and starts coalesced flow passes, also waking on
+  persisted waits booked by those passes. Repository webhook cutover is M6
+  slice 5; no existing repository is switched by adding the receiver.
 
 **What batching still lacks.** The train gates a candidate once, but only
 what's ready when it builds one, and each PR's head still runs the repo's
@@ -840,5 +842,5 @@ it pointed at the finish line:
 | M4 | `undo` by change, session and time, through the landing flow, and `at` | A deliberately bad session's changes in two repos are reverted by `undo --actor` and land with no person involved | Done ([#173](https://github.com/FieldmouseWorks/Conary/issues/173)) |
 | M5 | Class policy in Conary, from the paths and the kind of edit (section 4.4); the steward reads each change's class and the evidence it needs from conaryd | `oneWay` is gone from burrow's autoland config, and a docs-only change lands on green CI with no review round | Done ([#226](https://github.com/FieldmouseWorks/Conary/issues/226)): `cn class` records each revision's class, raised by its PR's labels and held to what the steward settled; a join rides alone by it. #236 landed docs-only on green CI with no review round, and `oneWay` is gone from burrow |
 | M6 | conaryd runs the landing flow. Its first slice is a simulated GitHub, in memory, that the train and the flow are tested against, with delays, errors, races and stale reads injected and recorded GitHub responses as its fixtures, so a change to either is proved without remi. Then the flow itself, R0 landing before review, a red trunk bisected to the change that broke it and undone, and batches (item 9): the work in flight grouped by what it touches, proposed, and gated once | `steward.py` is deleted; a week of PRs across every repo lands through conaryd, R0 ones with no wait on a reviewer, with fewer gate runs than PRs landed, the PRs' own runs counted; a deliberately broken landing is found and undone with no Claude job | |
-| M7 | Setup by an agent: one path from a clone to a working ledger, with the steward or without one, that an agent follows for someone; the box's specifics (Nix, systemd, remi) as configuration on top. The three ties to burrow above, cut: attested evidence and the negative check from a workflow any repository's CI can call, its signer configured rather than fixed, and a PR-event source of Conary's own | A fresh agent session, given this repository, a Linux machine with no Nix and no burrow, and a token, sets up a ledger, records a repo's PRs, lands one on that repo's own attested CI and answers `why` and `undo`, with no person stepping in | |
+| M7 | Setup by an agent: one path from a clone to a working ledger, with the steward or without one, that an agent follows for someone; the box's specifics (Nix, systemd, remi) as configuration on top. The three ties to burrow above, cut: attested evidence and the negative check from a workflow any repository's CI can call, its signer configured rather than fixed, and a PR-event source of Conary's own | A fresh agent session, given this repository, a Linux machine with no Nix and no burrow, and a token, sets up a ledger, records a repo's PRs, lands one on that repo's own attested CI and answers `why` and `undo`, with no person stepping in | Event-source tie cut (#278); repository cutover and setup path remain |
 | M8 | A written decision on each parked idea, from ledger data | The decisions, and with them the finish line | |

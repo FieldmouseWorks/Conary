@@ -258,6 +258,22 @@ impl Pass<'_> {
                     }
                     data.save(pr, &record)?;
                 }
+                next.wait_until = next
+                    .wait_until
+                    .into_iter()
+                    .chain(
+                        record
+                            .jobs
+                            .iter()
+                            .filter(|w| !w.posted && w.deadline > self.now)
+                            .map(|w| w.deadline),
+                    )
+                    .min();
+                report.next = Some(next.clone());
+                record.decision = Some(next.clone());
+                if let Some(data) = &data {
+                    data.save(pr, &record)?;
+                }
                 occupancy.observed(self.root, &facts, &next, self.now, self.dry_run)?;
                 Ok(())
             })();
