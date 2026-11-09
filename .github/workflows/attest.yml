@@ -27,7 +27,7 @@ jobs:
       result: ${{ steps.tests.outputs.result }}
     steps:
       - name: Read Conary's trusted tool source
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           repository: FieldmouseWorks/Conary
           ref: ${{ env.CONARY_TOOL_REV }}
@@ -40,7 +40,7 @@ jobs:
           cargo build --locked --release -p conary-cli
           echo "$PWD/target/release" >> "$GITHUB_PATH"
       - name: Read the candidate's git objects
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           path: candidate
           fetch-depth: 0
@@ -94,7 +94,7 @@ jobs:
       attestations: write
     steps:
       - name: Read Conary's trusted tool source
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           repository: FieldmouseWorks/Conary
           ref: ${{ env.CONARY_TOOL_REV }}
@@ -107,7 +107,7 @@ jobs:
           cargo build --locked --release -p conary-cli
           echo "$PWD/target/release" >> "$GITHUB_PATH"
       - name: Read the candidate's git objects
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           path: candidate
           fetch-depth: 0
@@ -161,7 +161,7 @@ jobs:
       attestations: write
     steps:
       - name: Read Conary's trusted tool source
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           repository: FieldmouseWorks/Conary
           ref: ${{ env.CONARY_TOOL_REV }}
@@ -174,7 +174,7 @@ jobs:
           cargo build --locked --release -p conary-cli
           echo "$PWD/target/release" >> "$GITHUB_PATH"
       - name: Read the candidate's git objects
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           path: candidate
           fetch-depth: 0
