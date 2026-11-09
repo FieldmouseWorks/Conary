@@ -214,3 +214,37 @@ fn a_socket_is_taken_over_only_from_a_daemon_thats_gone() {
     assert!(conaryd::bind(&file).is_err());
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "mine");
 }
+
+#[test]
+fn webhook_http_queues_before_a_pass_and_refuses_bad_requests() {
+    use conary_github::events::{Queue, Receiver};
+    use std::net::{TcpListener, TcpStream};
+    use std::sync::Arc;
+    let dir = tempfile::tempdir().unwrap();
+    let queue = Arc::new(Queue::open(dir.path()).unwrap());
+    let receiver = Receiver::open(b"s".to_vec(), ["o/r".into()], dir.path()).unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let incoming = Arc::clone(&queue);
+    thread::spawn(move || conaryd::webhook::serve(listener, receiver, incoming).unwrap());
+    let request = |method: &str, signature: &str, length: usize, body: &str| {
+        let mut stream = TcpStream::connect(addr).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        write!(stream, "{method} / HTTP/1.1\r\nHost: localhost\r\nContent-Length: {length}\r\nX-Hub-Signature-256: {signature}\r\nX-GitHub-Delivery: delivery\r\nX-GitHub-Event: pull_request\r\n\r\n{body}").unwrap();
+        let mut out = String::new();
+        stream.read_to_string(&mut out).unwrap();
+        out
+    };
+    let body = r#"{"repository":{"full_name":"o/r"},"pull_request":{"number":3}}"#;
+    assert!(request("POST", "sha1=123", body.len(), body).starts_with("HTTP/1.1 401"));
+    assert!(queue.take(1).unwrap().is_none());
+    assert!(request("GET", "sha256=bad", 0, "").starts_with("HTTP/1.1 401"));
+    assert!(request("POST", "sha256=bad", (1 << 20) + 1, "").starts_with("HTTP/1.1 413"));
+    let signature = "sha256=a3958bff98fd2068bacfee43bba9e112334db91e40c49081bcbe2a11783775bc";
+    let before = std::time::Instant::now();
+    assert!(request("POST", signature, body.len(), body).starts_with("HTTP/1.1 202"));
+    assert!(before.elapsed() < Duration::from_secs(2));
+    assert!(queue.take(1).unwrap().is_some());
+}

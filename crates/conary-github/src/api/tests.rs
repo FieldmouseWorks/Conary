@@ -610,3 +610,6 @@ fn a_comparison_listing_as_many_files_as_github_lists_may_be_cut_short() {
 mod flow;
 
 mod carry;
+
+#[path = "tests/events.rs"]
+mod events;

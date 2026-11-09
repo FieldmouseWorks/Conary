@@ -409,7 +409,7 @@ fn red_ci_handoff_waits_for_session_quiet() {
     c.ci("failure");
     c.description("https://claude.ai/code/session_test", 3000);
     c.hub.flow_review(REMI, 3, "reviewer", Verdict::Clean, 3001);
-    assert_eq!(c.view(4000).step, Step::Wait { until: Some(10200) });
+    assert_eq!(c.view(4000).step, Step::Wait { until: Some(10201) });
     assert_eq!(c.view(10201).step, Step::HandFix(Kind::Red));
 }
 

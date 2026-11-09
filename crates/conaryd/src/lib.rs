@@ -1,8 +1,10 @@
 //! conaryd (`docs/conaryd.md`): the ledger's calls ([`conary_core::rpc`])
 //! over a Unix socket, one JSON-RPC request per line, each connection on its
-//! own thread. It reads the ledger and never writes it: `cn` and the steward
-//! still record the ops, and conaryd reads the log again when it moves. It
-//! runs no git, and nothing else a caller could point it at.
+//! own thread. Socket calls only read the ledger, refreshing it when it moves,
+//! and accept no executable paths. Optional machine-owned event configuration
+//! enables a separate verified webhook worker which executes flow passes.
+
+pub mod webhook;
 
 use std::fs::{self, File, TryLockError};
 use std::io::{self, BufRead, BufReader, Read, Write};

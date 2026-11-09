@@ -29,7 +29,7 @@ pub use reviews::fingerprint;
 pub use state::next;
 pub use types::*;
 
-mod persist;
+pub(crate) mod persist;
 pub use persist::{Data, Landing, Record};
 pub mod jobs;
 

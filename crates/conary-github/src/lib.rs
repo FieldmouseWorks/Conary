@@ -10,6 +10,7 @@ pub mod bases;
 pub mod branches;
 pub mod class;
 pub mod etags;
+pub mod events;
 pub mod flow;
 pub mod ingest;
 pub mod notes;

@@ -292,6 +292,7 @@ pub struct Api {
     base: String,
     tokens: Tokens,
     etags: Option<Etags>,
+    event_queue: Option<std::sync::Arc<crate::events::Queue>>,
 }
 
 /// Pages are read until one comes back short, up to this many.
@@ -331,7 +332,15 @@ impl Api {
             base: base.trim_end_matches('/').to_owned(),
             tokens,
             etags: None,
+            event_queue: None,
         }
+    }
+
+    /// Record exact status response IDs so ingress can distinguish echoes
+    /// from external writes, without suppressing permission revocations.
+    pub fn with_event_queue(mut self, queue: std::sync::Arc<crate::events::Queue>) -> Self {
+        self.event_queue = Some(queue);
+        self
     }
 
     /// Reads ask GitHub whether what's kept in `etags` is still current, and
@@ -408,7 +417,23 @@ impl Api {
         if !response.status().is_success() {
             return Err(failed(&url, &mut response));
         }
-        parse(&url, &read(&url, &mut response)?)
+        let bytes = read(&url, &mut response)?;
+        if path.split('/').nth(4) == Some("statuses")
+            && let Some(queue) = &self.event_queue
+        {
+            let status: serde_json::Value = parse(&url, &bytes)?;
+            let id = status["id"]
+                .as_u64()
+                .ok_or_else(|| ApiError::new("status response lacks ID"))?;
+            queue
+                .own_status(
+                    repo_of(path).expect("authorized repository path"),
+                    id,
+                    crate::flow::jobs::now(),
+                )
+                .map_err(|_| ApiError::new("could not record owned status ID"))?;
+        }
+        parse(&url, &bytes)
     }
 
     fn pages<T: DeserializeOwned>(&self, path: &str) -> Result<Vec<T>, ApiError> {

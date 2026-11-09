@@ -107,7 +107,7 @@ fn newly_seen_findings_receive_the_full_quiet_period() {
     let mut c = Case::new();
     c.threads(1);
     c.memory = Memory::default();
-    assert_eq!(c.pass(10000).step, Step::Wait { until: Some(11800) });
+    assert_eq!(c.pass(10000).step, Step::Wait { until: Some(11801) });
     assert_eq!(c.pass(11801).step, Step::HandFix(Kind::Findings));
 }
 

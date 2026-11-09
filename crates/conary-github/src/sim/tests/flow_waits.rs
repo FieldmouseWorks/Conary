@@ -20,7 +20,7 @@ fn reviewer_recovery_and_quiet_wakeups_do_not_extend_the_stall_deadline() {
     c.threads(1);
     let n = c.pass(810);
     assert_eq!(n.overdue_at, Some(8010));
-    assert_eq!(n.step, Step::Wait { until: Some(1800) });
+    assert_eq!(n.step, Step::Wait { until: Some(1801) });
 }
 #[test]
 fn release_age_and_refresh_recovery_have_the_sweeps_full_allowance() {

@@ -466,7 +466,7 @@ pub(super) fn hand(f: &Facts, m: &mut Memory, now: u64, kind: Kind, delay: bool)
         if now <= due {
             return wait(
                 Stage::Fix,
-                Some(due),
+                Some(due.saturating_add(1)),
                 "Findings or CI await handoff after the quiet period",
             );
         }

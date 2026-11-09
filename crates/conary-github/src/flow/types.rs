@@ -530,6 +530,9 @@ pub struct Next {
     pub stage: Stage,
     pub step: Step,
     pub description: String,
+    /// Earliest explicit wait or owned worker deadline, in Unix seconds.
+    #[serde(default)]
+    pub wait_until: Option<u64>,
     pub overdue_at: Option<u64>,
     pub proof: Option<ProofPlan>,
     pub wait_on: Option<WaitOn>,
