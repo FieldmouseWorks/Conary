@@ -108,14 +108,8 @@ impl Occupancy {
                 f.proof_data.waiting.push(ProofWaiting { number: *number });
             }
         }
-        if let Some(number) = uncertain {
-            // Unknown ownership may hide several workers. Reserve the entire
-            // configured capacity once, regardless of how many files failed.
-            for slot in 0..f.settings.proof_slots.unwrap_or(1).max(1) {
-                let mut holder = unknown(number);
-                holder.job.id.push_str(&format!("-{slot}"));
-                f.proof_data.live.push(holder);
-            }
+        if uncertain.is_some() {
+            f.proof_data.reserved = f.settings.proof_slots.unwrap_or(0);
         }
         Ok(())
     }
@@ -146,19 +140,5 @@ impl Occupancy {
                 .insert(f.number, Data::read(root, &f.repo, f.number)?);
         }
         Ok(())
-    }
-}
-
-fn unknown(number: u64) -> ProofHolder {
-    ProofHolder {
-        number,
-        paths: None,
-        job: Job {
-            id: format!("unreadable-{number}"),
-            revision: Revision::default(),
-            state: JobState::Unknown,
-            started: 0,
-            repeated: false,
-        },
     }
 }

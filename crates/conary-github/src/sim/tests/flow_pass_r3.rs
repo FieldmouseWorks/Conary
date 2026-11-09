@@ -244,6 +244,8 @@ fn unsent_and_failed_merge_intents_can_be_revalidated_and_retried() {
             let record = Record {
                 landing: Some(crate::flow::Landing {
                     head: head(3),
+                    target: "main".into(),
+                    revision: None,
                     base: TRUNK.into(),
                     delegated: false,
                     accepted: false,

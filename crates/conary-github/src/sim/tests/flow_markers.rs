@@ -139,10 +139,11 @@ fn a_seal_from_another_head_base_description_or_pr_is_not_reused() {
     }
 }
 #[test]
-fn owner_release_is_observed_from_labels_for_this_revision_only() {
+fn owner_release_requires_an_authenticated_review_for_this_revision() {
     // handle.py / gates.py: requesting the label is not the owner's answer.
     let (h, m) = setup();
-    let s = settings();
+    let mut s = settings();
+    s.people.insert("maintainer".into());
     h.touch(&head(3), &["secrets/app"]);
     h.flow_comment(
         REMI,
@@ -152,11 +153,25 @@ fn owner_release_is_observed_from_labels_for_this_revision_only() {
     );
     let (n, m) = next(&read_f(&h, s.clone()), &m, 4000);
     assert_eq!(n.step, Step::ListOwner);
-    assert_eq!(m.owner_saw, None);
+    assert!(!read_f(&h, s.clone()).owner_approved);
     h.label(REMI, 3, &["needs-peter"]);
     let (_, m) = next(&read_f(&h, s.clone()), &m, 4001);
     h.label(REMI, 3, &[]);
-    assert_eq!(next(&read_f(&h, s), &m, 4002).0.step, Step::Merge);
+    assert_eq!(
+        next(&read_f(&h, s.clone()), &m, 4002).0.step,
+        Step::ListOwner
+    );
+    let revision = Revision::from(&crate::api::Source::pull(&h, REMI, 3).unwrap());
+    h.person_review(
+        REMI,
+        3,
+        "maintainer",
+        "User",
+        &revision.head,
+        &owner_approval(&REMI.parse().unwrap(), 3, &revision),
+        "APPROVED",
+    );
+    assert_eq!(next(&read_f(&h, s), &m, 4003).0.step, Step::Merge);
 }
 #[test]
 fn major_sweep_verdict_is_head_base_repo_and_key_scoped() {

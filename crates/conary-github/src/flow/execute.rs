@@ -51,7 +51,7 @@ pub(crate) fn act<G: Write>(
             }
             data.save(f.number, record)?;
             github.status(&repo, &f.revision.head, true, &next.description)?;
-            super::scope::current(pass, github, f, record)?;
+            permission(pass, github, f, record)?;
         }
         Ok(())
     };
@@ -214,7 +214,7 @@ pub(crate) fn act<G: Write>(
                     return Err("review-settled permission was not observed".into());
                 }
                 permission(pass, github, f, record)?;
-                record.landing = Some(super::ledger::intent(f, false)?);
+                super::ledger::begin(f, record)?;
                 data.save(f.number, record)?;
                 match github.land(&repo, f.number, &f.revision.head)? {
                     crate::train::PrMerge::Merged => {
@@ -370,7 +370,14 @@ fn author<G: Read>(github: &G, f: &Facts, record: &Record) -> Result<plugin::Ide
 
 fn permission<G: Write>(pass: &Pass<'_>, github: &G, f: &Facts, record: &Record) -> Result<()> {
     let result = super::scope::current(pass, github, f, record)
-        .and_then(|()| super::evidence::authorize(pass, github, f));
+        .and_then(|()| super::evidence::authorize(pass, github, f))
+        .and_then(|()| super::scope::current(pass, github, f, record))
+        .and_then(|()| {
+            if super::approval::required(f) && !super::approval::approved(pass, github, f)? {
+                return Err("An authorized person's scoped approval was withdrawn".into());
+            }
+            Ok(())
+        });
     if result.is_err() {
         github.status(
             &f.repo.to_string(),

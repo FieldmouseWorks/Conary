@@ -39,6 +39,8 @@ pub struct Record {
     pub cleanup: std::collections::BTreeSet<String>,
     #[serde(default)]
     pub landing: Option<Landing>,
+    #[serde(default)]
+    pub pending: Vec<Landing>,
     pub memory: Memory,
     pub decision: Option<Next>,
     pub jobs: Vec<super::jobs::Work>,
@@ -48,9 +50,42 @@ pub struct Record {
     pub sequence: u64,
 }
 
+impl Record {
+    /// Older occupancy snapshots could book cancellation of synthetic IDs.
+    /// Only retire that reserved namespace when no real owned work has it.
+    fn recover_capacity(&mut self) {
+        let before = self.memory.stopping.len();
+        self.memory.stopping.retain(|id| {
+            !id.starts_with("unreadable-") || self.jobs.iter().any(|w| w.job.id == *id)
+        });
+        if self.memory.stopping.len() != before && self.memory.stopping.is_empty() {
+            self.memory.strikes.remove(&Failure::Stop);
+            if self
+                .memory
+                .retry
+                .is_some_and(|(kind, _)| kind == Failure::Stop)
+            {
+                self.memory.retry = None;
+            }
+            if self.failed == Some(Failure::Stop) {
+                self.failed = None;
+            }
+        }
+    }
+}
+fn record(path: &Path) -> Result<Record> {
+    let mut record: Record = load(path)?;
+    record.recover_capacity();
+    Ok(record)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Landing {
     pub head: String,
+    #[serde(default)]
+    pub target: String,
+    #[serde(default)]
+    pub revision: Option<Revision>,
     pub base: String,
     pub delegated: bool,
     #[serde(default)]
@@ -116,7 +151,7 @@ impl Data {
         self.dir.join(format!("{pr}.json"))
     }
     pub fn load(&self, pr: u64) -> Result<Record> {
-        load(&self.path(pr))
+        record(&self.path(pr))
     }
     pub fn save(&self, pr: u64, record: &Record) -> Result<()> {
         save(&self.path(pr), record)
@@ -125,7 +160,7 @@ impl Data {
         self.dir.join(format!("{pr}-{sequence}.job"))
     }
     pub fn read(root: &Path, repo: &conary_core::op::Repo, pr: u64) -> Result<Record> {
-        load(
+        record(
             &root
                 .join("flow")
                 .join(repo.to_string().to_lowercase())

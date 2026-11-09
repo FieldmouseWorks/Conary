@@ -226,6 +226,7 @@ fn pass_direct_and_delegated_r2_require_the_candidate_train_after_owner_release(
             .edit_pull(REPO, 3, |p| p["labels"] = json!([{"name":"needs-peter"}]));
         c.pass(now + 1, false);
         c.hub.edit_pull(REPO, 3, |p| p["labels"] = json!([]));
+        c.approve();
         let reports = c.pass(now + 2, false);
         assert!(matches!(
             reports[0].next.as_ref().unwrap().step,

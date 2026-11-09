@@ -40,6 +40,7 @@ pub(crate) fn current<G: Write>(
         || fresh.open_threads != f.open_threads
         || fresh.reviewers != f.reviewers
         || fresh.changes_requested != f.changes_requested
+        || fresh.owner_approved != f.owner_approved
         || fresh.judgment != f.judgment
         || fresh.judgment_generation != f.judgment_generation
         || fresh.major != f.major

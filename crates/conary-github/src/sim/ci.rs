@@ -157,6 +157,11 @@ impl Hub {
             .push(v);
     }
 
+    pub(crate) fn remove_check(&self, sha: &str, name: &str) {
+        if let Some(checks) = self.world.borrow_mut().checks.get_mut(sha) {
+            checks.retain(|c| c["name"].as_str() != Some(name));
+        }
+    }
     pub(crate) fn remove_checks(&self, sha: &str) {
         self.world.borrow_mut().checks.remove(sha);
     }

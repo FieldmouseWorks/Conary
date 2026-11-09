@@ -31,6 +31,7 @@ pub struct Report {
     #[serde(flatten)]
     pub next: Option<Next>,
     pub error: Option<String>,
+    pub owner_approval: Option<String>,
 }
 
 pub struct Pass<'a> {
@@ -60,7 +61,7 @@ impl Pass<'_> {
             for pr in data.records()? {
                 let result: Result<()> = (|| {
                     let mut record = data.load(pr)?;
-                    let reconciled = if record.landing.is_some() {
+                    let reconciled = if record.landing.is_some() || !record.pending.is_empty() {
                         match store.as_deref_mut() {
                             Some(store) => super::ledger::reconcile(
                                 self,
@@ -122,6 +123,7 @@ impl Pass<'_> {
                 pr,
                 next: None,
                 error: None,
+                owner_approval: None,
             };
             let result: Result<()> = (|| {
                 let mut record = match &data {
@@ -160,6 +162,7 @@ impl Pass<'_> {
                 facts.failed = record.failed.take();
                 facts.failed_review = record.failed_review.take();
                 facts.succeeded = std::mem::take(&mut record.succeeded);
+                let approved = facts.owner_approved;
                 let (mut next, memory) = next(&facts, &record.memory, self.now);
                 record.memory = memory;
                 if next.step == Step::Prove {
@@ -174,8 +177,9 @@ impl Pass<'_> {
                 }
                 if record
                     .landing
-                    .as_ref()
-                    .is_some_and(|l| !l.delegated && !l.retry)
+                    .iter()
+                    .chain(&record.pending)
+                    .any(|l| !l.delegated && !l.retry)
                 {
                     next.stage = Stage::Merge;
                     next.step = Step::Wait { until: None };
@@ -207,6 +211,10 @@ impl Pass<'_> {
                 {
                     next.step = Step::Wait { until: None };
                     next.description = format!("No plugin configured for {kind}");
+                }
+                if super::approval::required(&facts) && !approved {
+                    report.owner_approval =
+                        Some(super::approval::owner_approval(repo, pr, &facts.revision));
                 }
                 report.next = Some(next.clone());
                 record.decision = Some(next.clone());
@@ -259,6 +267,7 @@ impl Pass<'_> {
                     pr,
                     next: None,
                     error: Some(error),
+                    owner_approval: None,
                 });
             }
         }

@@ -41,7 +41,7 @@ mod observe;
 mod pass;
 pub use pass::{Config, Pass, Plugins, Report};
 
-mod evidence;
+pub(crate) mod evidence;
 pub use evidence::{Evidence, judgment_receipt, major_receipt, receipt_digest, review_receipt};
 
 mod scope;
@@ -49,3 +49,6 @@ mod scope;
 mod occupancy;
 
 mod ledger;
+
+mod approval;
+pub use approval::owner_approval;

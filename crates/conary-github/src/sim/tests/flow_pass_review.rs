@@ -265,12 +265,8 @@ fn r2_owner_approval_does_not_enable_direct_or_delegated_landings() {
         c.clean_review();
         c.policy = conary_core::Policy::parse(br#"{"r2":["^src/"]}"#).unwrap();
         c.judgment(1, Judgment::Land, true);
-        // Exercise the same saved owner acknowledgement used by next.
-        let data = Data::open(c.dir.path(), &REPO.parse().unwrap()).unwrap();
-        let mut record = Record::default();
-        record.memory.owner_saw = Some(Revision::from(&c.hub.pull(REPO, 3).unwrap()));
-        data.save(3, &record).unwrap();
-        drop(data);
+        // Person approval still cannot replace exact candidate evidence.
+        c.approve();
         if bot {
             c.as_bot();
         }

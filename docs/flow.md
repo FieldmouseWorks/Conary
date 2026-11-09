@@ -14,6 +14,7 @@ the same policy as `cn class`. A minimal configuration is:
 {
   "trusted_authors": ["repository-owner"],
   "settings": {
+    "people": ["maintainer"],
     "reviewers": ["reviewer"],
     "review_authors": ["landing-app[bot]"]
   },
@@ -50,6 +51,22 @@ a known session for its reported push.
 GitHub authentication uses `GH_TOKEN`, `GITHUB_TOKEN`, or
 `--token-command` (`CONARY_TOKEN_COMMAND`), as other cn commands do.
 `--api` overrides the API root. Nothing enables these commands automatically.
+
+## Person approval
+
+R2 and a judge's Owner decision require an APPROVED GitHub review from an
+account in machine-owned `settings.people`. The account must be a GitHub User, not a
+Bot. The review must name the exact head and include the exact marker returned
+as `owner_approval` in pass/dry-run output. `flow::owner_approval` produces the
+same marker for callers. It binds repo, PR, head, target branch and the current
+intent fingerprint; an approval on another scope does not carry forward.
+A later review or dismissal from that person supersedes their earlier review.
+
+The owner label only lists work. Adding it, observing it in Memory, or taking
+it off never grants permission. A valid approval allows progress while that
+label remains. Permission verification rereads the person's approval before
+admission, after publication and before use, including continued train grants.
+An empty `settings.people` list leaves owner-required decisions waiting.
 
 ## State and workers
 
@@ -101,7 +118,10 @@ on its default branch. Verification uses the CI reader's effective workflow
 and target selection: replaced cancellations, obsolete target suites and
 skipped jobs are not reintroduced as evidence requirements. Producer receipts
 verify the latest effective issuance, including across workflow changes,
-against the exact selected result. An ordinary status cannot attest a result.
+against the exact selected result. Fresh observations must still match the
+decision's check coverage and contain no blocking states. Configured proofs
+remain verification requirements even if a job reports neutral or skipped.
+An ordinary status cannot attest a result.
 `fresh: null` accepts GitHub-hosted jobs only; a configured fresh-runner
 prefix also accepts jobs on runners started for that job, as the existing
 attestation verifier requires. A result from the authoring runner is refused.
@@ -160,7 +180,10 @@ keep their order. Dry runs reserve hypothetical slots for the decisions they
 print, without starting workers. Cancellation does not release a slot before
 the worker answers. An unreadable ownership record or proof answer reserves
 the configured capacity conservatively, once per pass. Its error remains on
-its own PR; unrelated reviews and fixes still proceed.
+its own PR; unrelated reviews and fixes still proceed. Capacity is a numeric
+reservation, never an invented worker ID or a cancellation target. Old local
+records containing synthetic capacity cancellations are recovered without
+dropping cancellation state for real owned workers.
 
 Before submitting a direct merge, flow persists its intent. The existing
 GitHub ingestion path then records the actual revision and trunk before/after
@@ -168,9 +191,12 @@ commits as a Land operation. Later passes revisit pending records even when the
 PR has left the open list, including delegated bot merges, lost responses and
 lagging merge metadata. A known accepted submission is never resubmitted.
 An unsent or uncertain submission may retry only after reading the open PR
-and target history without finding its merge; every new attempt revalidates
-permission and pins the expected head. Its pending observation is retained
-while retrying, including when a new head supersedes the original request.
+and the original target's complete comparison history without finding its
+merge; this includes non-first-parent ancestry and has no local 300-commit
+scan limit. A superseding head fences the original request even if that
+comparison is incomplete. Every new attempt revalidates permission and pins
+the expected head. Original scope observations are retained separately while
+retrying on another head or target, until the PR's terminal state is recorded.
 A merge into another branch closes without recording a trunk landing.
 
 Every possibly accepted permission write is recorded before sending it. A

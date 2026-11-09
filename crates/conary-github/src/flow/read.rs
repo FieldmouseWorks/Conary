@@ -91,6 +91,7 @@ pub fn read(
         has_ci: false,
         open_threads: extra.open_threads,
         changes_requested: false,
+        owner_approved: false,
         reviewers: BTreeMap::new(),
         judgment: None,
         judgment_generation: None,
@@ -204,6 +205,8 @@ pub fn read(
     let comments = source.comments(&repository, pr)?;
     let markers = super::markers::read(&repository, &pull, &comments, &facts.settings);
     facts.changes_requested = super::reviews::changes_requested(&records);
+    facts.owner_approved =
+        super::approval::from_reviews(repo, pr, &facts.revision, &records, &facts.settings.people);
     let mut carried = BTreeSet::new();
     for old in records
         .iter()

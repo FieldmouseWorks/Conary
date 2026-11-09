@@ -195,12 +195,16 @@ fn build_recipe_wins_when_case_variants_name_the_same_check() {
 }
 
 #[test]
-fn confirmed_label_application_can_be_released_between_two_reads() {
-    // handle.py:470: the executor recorded a successful label write, then the owner removed it before the next read.
+fn confirmed_label_application_cannot_replace_person_approval() {
+    // Even a persisted legacy label observation cannot authorize the revision.
     let mut c = Case::new();
     c.judge("owner");
     assert_eq!(c.pass(700).step, Step::ListOwner);
-    c.memory.owner_saw = Some(c.scope()); // Confirmed executor observation, not an optimistic next() effect.
+    let mut legacy = serde_json::to_value(&c.memory).unwrap();
+    legacy["owner_saw"] = serde_json::json!(c.scope());
+    c.memory = serde_json::from_value(legacy).unwrap();
+    assert_eq!(c.pass(709).step, Step::ListOwner);
+    c.approve();
     assert_eq!(c.pass(710).step, Step::Merge);
     c.push("new-head-after-persons-answer");
     c.review("reviewer", Verdict::Clean, 720);

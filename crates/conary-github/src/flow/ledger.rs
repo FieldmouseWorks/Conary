@@ -60,7 +60,7 @@ pub(crate) fn reconcile<G: Write>(
     pr: u64,
     record: &mut Record,
 ) -> Result<()> {
-    if record.landing.is_some() {
+    if record.landing.is_some() || !record.pending.is_empty() {
         let pull = github.pull(&repo.to_string(), pr)?;
         crate::ingest::pull(store, github, &config(&pass.config.settings), repo, pr)?;
         let finished = store.ledger().by_pr(repo, pr).is_some_and(|c| {
@@ -71,17 +71,15 @@ pub(crate) fn reconcile<G: Write>(
                     | conary_core::ledger::Status::Closed
             )
         });
-        if let Some(intent) = record.landing.as_mut()
-            && !intent.delegated
-            && !intent.accepted
-            && pull.state == "open"
-            && !pull.is_merged()
-        {
-            intent.retry = retryable(github, repo, pr, &pull.base.name, intent)?;
-            data.save(pr, record)?;
+        for intent in record.landing.iter_mut().chain(&mut record.pending) {
+            if !intent.delegated && !intent.accepted && pull.state == "open" && !pull.is_merged() {
+                intent.retry = retryable(github, repo, pr, &pull, intent)?;
+            }
         }
+        data.save(pr, record)?;
         if finished || pull.state != "open" && !pull.is_merged() {
             record.landing = None;
+            record.pending.clear();
             data.save(pr, record)?;
         }
     }
@@ -90,6 +88,8 @@ pub(crate) fn reconcile<G: Write>(
 pub(crate) fn intent(f: &Facts, delegated: bool) -> Result<Landing> {
     Ok(Landing {
         head: f.revision.head.clone(),
+        target: f.revision.base.clone(),
+        revision: Some(f.revision.clone()),
         base: f.base_tip.clone().ok_or("landing base unknown")?,
         delegated,
         accepted: false,
@@ -116,35 +116,53 @@ pub(crate) fn cleanup<G: Write>(
     Ok(())
 }
 
-/// A known acceptance is never retried. For an uncertain submission, an
-/// expected-head retry is safe only while no merge of this PR is visible on
-/// the target's first-parent history. The pending observation is retained
-/// even while another fully revalidated attempt is allowed.
+/// Reconcile the original target using the complete comparison, including
+/// merges through non-first parents. A changed head fences an old request;
+/// retain its observation even if history is incomplete while permitting
+/// the superseding revision to make progress.
 fn retryable<G: Write>(
     github: &G,
     repo: &conary_core::op::Repo,
     pr: u64,
-    target: &str,
+    pull: &crate::api::PullRequest,
     intent: &Landing,
 ) -> Result<bool> {
     let full = repo.to_string();
-    let mut at = github
-        .branch(&full, target)?
-        .ok_or("landing target disappeared")?;
-    for _ in 0..300 {
-        if at == intent.base {
-            return Ok(true);
-        }
-        if github.commit_pulls(&full, &at)?.contains(&pr) {
+    let target = if intent.target.is_empty() {
+        &pull.base.name
+    } else {
+        &intent.target
+    };
+    let superseded = pull.head.sha != intent.head;
+    let Some(tip) = github.branch(&full, target)? else {
+        return Ok(superseded);
+    };
+    let history = github.compare_commits(&full, &intent.base, &tip)?;
+    for commit in &history.commits {
+        if github.commit_pulls(&full, &commit.sha)?.contains(&pr) {
             return Ok(false);
         }
-        let commit = github.commit(&full, &at)?;
-        let Some(parent) = commit.parents.first() else {
-            return Ok(false);
-        };
-        at = parent.sha.clone();
     }
-    Ok(false)
+    Ok(superseded || history.complete)
+}
+pub(crate) fn begin(f: &Facts, record: &mut Record) -> Result<()> {
+    let new = intent(f, false)?;
+    if let Some(old) = record.landing.take()
+        && (old.head != new.head
+            || old.target != new.target
+            || old.revision != new.revision
+            || old.base != new.base)
+        && !record.pending.iter().any(|p| {
+            p.head == old.head
+                && p.target == old.target
+                && p.revision == old.revision
+                && p.base == old.base
+        })
+    {
+        record.pending.push(old);
+    }
+    record.landing = Some(new);
+    Ok(())
 }
 
 pub(crate) fn withdraw_live(pr: u64, data: &Data, record: &mut Record) -> Result<()> {

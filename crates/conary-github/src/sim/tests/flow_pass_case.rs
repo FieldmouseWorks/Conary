@@ -86,6 +86,7 @@ impl Case {
             trusted_authors: vec!["owner".into()],
             ..Default::default()
         };
+        config.settings.people.insert("maintainer".into());
         config.settings.settle_delay = 0;
         config.settings.handoff_after = 0;
         config.plugins.review = Some(example());
@@ -189,6 +190,18 @@ impl Case {
     }
     pub(super) fn record(&self) -> flow::Record {
         Data::read(self.dir.path(), &REPO.parse().unwrap(), 3).unwrap()
+    }
+    pub(super) fn approve(&self) {
+        let revision = Revision::from(&self.hub.pull(REPO, 3).unwrap());
+        self.hub.person_review(
+            REPO,
+            3,
+            "maintainer",
+            "User",
+            &revision.head,
+            &owner_approval(&REPO.parse().unwrap(), 3, &revision),
+            "APPROVED",
+        );
     }
     pub(super) fn clean_review(&self) {
         self.hub.flow_review(REPO, 3, "reviewer", Verdict::Clean, 0);

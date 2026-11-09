@@ -98,12 +98,7 @@ pub(super) fn decide(f: &Facts, m: &mut Memory, now: u64) -> Decision {
             "Stacked on an open PR: waiting to be retargeted",
         );
     }
-    if f.labels.contains(&f.settings.owner_label) {
-        // Seen labelled while this revision waits on its owner: taking the
-        // label off afterwards is their answer, for this revision alone.
-        if owner_owed(f) {
-            m.owner_saw = Some(f.revision.clone());
-        }
+    if f.labels.contains(&f.settings.owner_label) && !f.owner_approved {
         return at(
             Stage::Owner,
             Step::ListOwner,
@@ -232,17 +227,6 @@ fn judgment(f: &Facts) -> Option<Judgment> {
         .map(|j| j.verdict)
 }
 
-/// Whether this revision's own judgment leaves it to a person: the judge
-/// sent it to the owner, or an R2 change was judged fit to land, which only a
-/// person may let through.
-fn owner_owed(f: &Facts) -> bool {
-    match judgment(f) {
-        Some(Judgment::Owner) => true,
-        Some(Judgment::Land) => f.classified.class == Class::R2,
-        _ => false,
-    }
-}
-
 fn after_review(f: &Facts, m: &mut Memory, now: u64, ci: Ci, capped: bool) -> Decision {
     // A partial failure may already make CI red. The remaining stored
     // verdicts must be published before handing that failure to a fix.
@@ -263,7 +247,7 @@ fn after_review(f: &Facts, m: &mut Memory, now: u64, ci: Ci, capped: bool) -> De
     if verdict == Some(Judgment::Failing) {
         return hand(f, m, now, Kind::JudgeFailure, false);
     }
-    if verdict == Some(Judgment::Owner) && m.owner_saw.as_ref() != Some(&f.revision) {
+    if verdict == Some(Judgment::Owner) && !f.owner_approved {
         return at(
             Stage::Owner,
             Step::ListOwner,
@@ -350,7 +334,7 @@ fn after_review(f: &Facts, m: &mut Memory, now: u64, ci: Ci, capped: bool) -> De
         || f.dependency == Some(Dependency::Major) && !f.renovate;
     if requires_judge {
         if !matches!(verdict, Some(Judgment::Land))
-            && !(verdict == Some(Judgment::Owner) && m.owner_saw.as_ref() == Some(&f.revision))
+            && !(verdict == Some(Judgment::Owner) && f.owner_approved)
         {
             if f.merging == Merge::Update {
                 return at(
@@ -362,7 +346,7 @@ fn after_review(f: &Facts, m: &mut Memory, now: u64, ci: Ci, capped: bool) -> De
             return work(f, m, now, Kind::Judge);
         }
         // A judge's land verdict cannot replace the person's word for R2.
-        if f.classified.class == Class::R2 && m.owner_saw.as_ref() != Some(&f.revision) {
+        if f.classified.class == Class::R2 && !f.owner_approved {
             return at(
                 Stage::Owner,
                 Step::ListOwner,

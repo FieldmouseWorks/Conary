@@ -55,6 +55,9 @@ pub fn receipt_digest(bytes: &[u8]) -> String {
 }
 
 pub(crate) fn authorize<G: Write>(pass: &Pass<'_>, github: &G, f: &Facts) -> Result<()> {
+    if super::approval::required(f) && !super::approval::approved(pass, github, f)? {
+        return Err("An authorized person's scoped approval is required".into());
+    }
     let evidence = pass
         .config
         .evidence
@@ -94,6 +97,17 @@ pub(crate) fn authorize<G: Write>(pass: &Pass<'_>, github: &G, f: &Facts) -> Res
             .filter(|r| r.status == "completed" && r.conclusion.as_deref() == Some("success"))
             .map(|r| r.name.clone()),
     );
+    if !effective.docs {
+        for name in f.settings.proofs.keys() {
+            required.insert(
+                effective
+                    .runs
+                    .iter()
+                    .find(|r| r.name.eq_ignore_ascii_case(name))
+                    .map_or_else(|| name.clone(), |r| r.name.clone()),
+            );
+        }
+    }
     required.extend(effective.statuses);
     required.retain(|name| name != &evidence.negative && !receipts.contains(name));
     for name in required {
@@ -263,7 +277,7 @@ fn observations<G: Write>(github: &G, f: &Facts, head: &str) -> Result<super::ci
         f.base_tip.as_deref().ok_or("check base unknown")?,
         head,
     )?;
-    Ok(super::ci::checks(
+    let observed = super::ci::checks(
         github,
         &repo,
         head,
@@ -271,5 +285,22 @@ fn observations<G: Write>(github: &G, f: &Facts, head: &str) -> Result<super::ci
         &paths,
         &snapshot.suites,
         &f.settings.machine(),
-    )?)
+    )?;
+    if head == f.revision.head {
+        let checks: Vec<_> = observed
+            .checks
+            .iter()
+            .cloned()
+            .map(|mut c| {
+                if let Some((name, _)) = f.settings.proof_recipe(&c.name) {
+                    c.name.clone_from(name);
+                }
+                c
+            })
+            .collect();
+        if checks != f.checks || checks.iter().any(|c| c.state != Ci::Green) {
+            return Err("Blocking or changed CI observations before permission".into());
+        }
+    }
+    Ok(observed)
 }
