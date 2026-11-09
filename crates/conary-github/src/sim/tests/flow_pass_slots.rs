@@ -168,8 +168,10 @@ fn targeted_kicks_do_not_reserve_slots_for_a_stale_queued_decision() {
     let c = two(1);
     let now = crate::flow::jobs::now();
     let data = Data::open(c.dir.path(), &REPO.parse().unwrap()).unwrap();
-    let mut record = Record::default();
-    record.decision = c.pass(now, true)[0].next.clone();
+    let record = Record {
+        decision: c.pass(now, true)[0].next.clone(),
+        ..Record::default()
+    };
     data.save(3, &record).unwrap();
     drop(data);
     c.hub
