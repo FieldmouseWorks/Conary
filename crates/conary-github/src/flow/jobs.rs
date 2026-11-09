@@ -17,7 +17,6 @@ pub enum Purpose {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Work {
     pub purpose: Purpose,
-    pub generation: u64,
     pub job: Job,
     pub path: PathBuf,
     pub deadline: u64,

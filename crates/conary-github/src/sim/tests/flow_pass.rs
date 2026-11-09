@@ -1,139 +1,10 @@
 //! Exercise the real executor and runner against Hub over successive passes.
-use super::{TRUNK, head};
+use super::flow_pass_case::{Case, REPO, example};
+use super::head;
 use crate::api::Source;
 use crate::flow::{self, *};
-use crate::sim::{Call, Hub};
+use crate::sim::Call;
 use serde_json::json;
-use std::cell::RefCell;
-use std::path::{Path, PathBuf};
-
-const REPO: &str = "conary-test/flow-simulation";
-struct Deferred(RefCell<Vec<PathBuf>>);
-impl flow::jobs::Launch for Deferred {
-    fn launch(
-        &self,
-        path: &Path,
-    ) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let invocation: flow::jobs::Invocation = serde_json::from_slice(&std::fs::read(path)?)?;
-        if let conary_core::plugin::Task::Review { pr, head, .. } = invocation.task {
-            let record: flow::Record = serde_json::from_slice(&std::fs::read(
-                path.parent().unwrap().join(format!("{pr}.json")),
-            )?)?;
-            assert_eq!(
-                record.memory.head, head,
-                "worker must see the Memory from this decision"
-            );
-        }
-        self.0.borrow_mut().push(path.into());
-        Ok(())
-    }
-}
-fn example() -> PathBuf {
-    let executable = std::env::current_exe()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join("conary-flow-test-plugin");
-    assert!(
-        executable.is_file(),
-        "Cargo must build the shared example fixture"
-    );
-    executable
-}
-
-struct Case {
-    hub: Hub,
-    dir: tempfile::TempDir,
-    config: flow::Config,
-    policy: conary_core::Policy,
-    deferred: Deferred,
-}
-impl Case {
-    fn new() -> Self {
-        let hub = Hub::new(REPO, TRUNK);
-        hub.pr(REPO, 3, &head(3));
-        hub.edit_pull(REPO, 3, |p| {
-            p["user"]["login"] = json!("owner");
-            p["created_at"] = json!("2099-01-01T00:00:00Z");
-        });
-        hub.ci(&head(3), &[("check", "success")]);
-        hub.flow_snapshot(
-            REPO,
-            3,
-            Snapshot {
-                revision: Revision::from(&hub.pull(REPO, 3).unwrap()),
-                default_branch: None,
-                draft: false,
-                complete: true,
-                merge_state: "CLEAN".into(),
-                open_threads: 0,
-                threads: Default::default(),
-                resolved_reviews: Default::default(),
-                updated_at: 0,
-                suites: Default::default(),
-                checks_complete: true,
-                rebase_removed: vec![],
-                timeline_cut_at: None,
-            },
-        );
-        let mut config = flow::Config {
-            trusted_authors: vec!["owner".into()],
-            ..Default::default()
-        };
-        config.settings.settle_delay = 0;
-        config.settings.handoff_after = 0;
-        config.plugins.review = Some(example());
-        config.plugins.fix = Some(example());
-        Self {
-            hub,
-            dir: tempfile::tempdir().unwrap(),
-            config,
-            policy: conary_core::Policy::parse(b"{}").unwrap(),
-            deferred: Deferred(RefCell::new(vec![])),
-        }
-    }
-    fn pass(&self, now: u64, dry: bool) -> Vec<flow::Report> {
-        Pass {
-            config: &self.config,
-            policy: &self.policy,
-            root: self.dir.path(),
-            launcher: &self.deferred,
-            now,
-            dry_run: dry,
-            ledger: None,
-        }
-        .run(&self.hub, &REPO.parse().unwrap(), None, None)
-        .unwrap()
-    }
-    fn run_worker(&self) {
-        for path in self.deferred.0.borrow_mut().drain(..) {
-            flow::jobs::worker(&path).unwrap();
-            let invocation: flow::jobs::Invocation =
-                serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-            let answer: flow::jobs::Completion =
-                serde_json::from_slice(&std::fs::read(path.with_extension("answer")).unwrap())
-                    .unwrap();
-            if let conary_core::plugin::Task::Fix { .. } = invocation.task
-                && let Some(Ok(conary_core::plugin::Response {
-                    answer:
-                        conary_core::plugin::Answer::Fix {
-                            result: conary_core::plugin::FixResult::Pushed { head },
-                        },
-                    ..
-                })) = answer.result
-            {
-                self.hub.push(REPO, 3, &head);
-                self.hub.refresh_flow(REPO, 3);
-                self.hub.ci(&head, &[("check", "success")]);
-            }
-        }
-    }
-    fn record(&self) -> flow::Record {
-        Data::read(self.dir.path(), &REPO.parse().unwrap(), 3).unwrap()
-    }
-}
 fn lifecycle(train: bool) {
     let mut c = Case::new();
     c.config.settings.train = train;
@@ -267,7 +138,7 @@ fn pass_without_plugin_waits_with_reason() {
 #[test]
 fn pass_refused_settled_write_never_merges_and_third_strike_is_overdue() {
     let c = Case::new();
-    c.hub.flow_review(REPO, 3, "reviewer", Verdict::Clean, 0);
+    c.clean_review();
     c.hub.fail(Call::FlowStatus);
     let now = flow::jobs::now();
     c.pass(now, false);
@@ -279,7 +150,13 @@ fn pass_refused_settled_write_never_merges_and_third_strike_is_overdue() {
     assert!(result[0].next.as_ref().unwrap().overdue_at.unwrap() <= now + 2001);
     assert_eq!(c.hub.count(Call::Land), 0);
     c.hub.heal(Call::FlowStatus);
-    c.pass(now + 10000, false);
+    let retry = c.pass(now + 10000, false);
+    assert!(matches!(
+        retry[0].next.as_ref().unwrap().step,
+        Step::Retry { .. }
+    ));
+    assert_eq!(c.hub.count(Call::Land), 0);
+    c.pass(now + 20000, false);
     assert_eq!(c.hub.count(Call::Land), 1);
 }
 #[test]
@@ -314,7 +191,7 @@ fn pass_refuses_the_heads_own_plugin_as_reviewer() {
 #[test]
 fn pass_merges_only_after_observing_settled_permission() {
     let c = Case::new();
-    c.hub.flow_review(REPO, 3, "reviewer", Verdict::Clean, 0);
+    c.clean_review();
     flow::Write::status(&c.hub, REPO, &head(3), false, "unsettled").unwrap();
     // The write succeeds, but GitHub's status endpoint has not caught up.
     c.hub.stale(Call::Statuses);
@@ -327,7 +204,7 @@ fn pass_merges_only_after_observing_settled_permission() {
 fn pass_train_joins_through_the_existing_train_module() {
     let mut c = Case::new();
     c.config.settings.train = true;
-    c.hub.flow_review(REPO, 3, "reviewer", Verdict::Clean, 0);
+    c.clean_review();
     let ledger = tempfile::tempdir().unwrap();
     let lock = conary_core::log::Lock::take(ledger.path()).unwrap();
     let mut store =
@@ -382,7 +259,7 @@ fn pass_isolates_one_prs_read_failure() {
 #[test]
 fn pass_rejects_a_revision_that_moves_before_execution() {
     let c = Case::new();
-    c.hub.flow_review(REPO, 3, "reviewer", Verdict::Clean, 0);
+    c.clean_review();
     c.hub.race(Call::FlowStage, |hub| {
         hub.push(REPO, 3, &head(4));
         hub.refresh_flow(REPO, 3);
@@ -412,7 +289,7 @@ fn pass_collects_an_independent_judgment() {
     let mut c = Case::new();
     c.config.plugins.judge = Some(example());
     c.config.settings.judge_engines = ["fixture-author".into()].into();
-    c.hub.flow_review(REPO, 3, "reviewer", Verdict::Clean, 0);
+    c.clean_review();
     c.hub.commit_details(
         &head(3),
         Some("change: fixture\n\nEngine: fixture-author\nSession: author\n"),
@@ -438,7 +315,7 @@ fn pass_proof_names_the_tree_and_canned_output_never_grants_permission() {
         .settings
         .proofs
         .insert("machine".into(), Recipe::Run(vec!["check".into()]));
-    c.hub.flow_review(REPO, 3, "reviewer", Verdict::Clean, 0);
+    c.clean_review();
     c.hub
         .post_status(&head(3), json!({"context":"machine","state":"pending"}));
     let now = flow::jobs::now();

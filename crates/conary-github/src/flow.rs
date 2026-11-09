@@ -34,9 +34,16 @@ pub use persist::{Data, Record};
 pub mod jobs;
 
 mod write;
-pub use write::{SETTLED, Write};
+pub use write::{SETTLED, Write, review_body};
 
 mod execute;
 mod observe;
 mod pass;
 pub use pass::{Config, Pass, Plugins, Report};
+
+mod evidence;
+pub use evidence::{Evidence, judgment_receipt, major_receipt, receipt_digest, review_receipt};
+
+mod scope;
+
+mod occupancy;

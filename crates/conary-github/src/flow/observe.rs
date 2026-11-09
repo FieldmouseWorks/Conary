@@ -16,6 +16,7 @@ pub(crate) fn hydrate(f: &mut Facts, record: &Record, now: u64, dry_run: bool) -
             .ok()
             .as_deref()
             == Some(b"obsolete\n")
+            && completion.result.is_some()
         {
             f.stopped_jobs.insert(job.id.clone());
             continue;
@@ -80,22 +81,15 @@ pub(crate) fn hydrate(f: &mut Facts, record: &Record, now: u64, dry_run: bool) -
             }
             Purpose::Judge => {
                 f.jobs.insert(Kind::Judge, job.clone());
+                // v1 responses are proposals, not authenticated issuances.
+                // The producer publishes its sealed, independently attested
+                // judgment separately. Preserve every GitHub generation.
                 if job.revision == f.revision
-                    && let Some(Ok(plugin::Response {
-                        answer: plugin::Answer::Judge { verdict, .. },
-                        ..
-                    })) = &completion.result
+                    && completion.result.as_ref().is_some_and(|r| r.is_ok())
+                    && f.judgment_generation.is_none()
+                    && let Some(job) = f.jobs.get_mut(&Kind::Judge)
                 {
-                    f.judgment = Some(Judged {
-                        revision: job.revision,
-                        verdict: match verdict {
-                            plugin::Judgment::Pass => Judgment::Land,
-                            plugin::Judgment::Fail => Judgment::Failing,
-                            plugin::Judgment::Owner => Judgment::Owner,
-                        },
-                    });
-                    // Local, runner-validated issuances use the persistent sequence.
-                    f.judgment_generation = Some(work.generation);
+                    job.state = JobState::Unknown;
                 }
             }
             Purpose::Proof => {
@@ -162,4 +156,22 @@ pub(crate) fn train(f: &mut Facts, ledger: &conary_core::Ledger) {
                 }),
         });
     }
+}
+
+pub(crate) fn issuances(f: &mut Facts, memory: &Memory) {
+    let mut judges = memory.judge_issuance.clone();
+    f.judgment = super::state::issuance(
+        &mut judges,
+        &f.revision,
+        f.judgment_generation,
+        f.judgment.as_ref().map(|j| j.verdict),
+    )
+    .map(|verdict| Judged {
+        revision: f.revision.clone(),
+        verdict,
+    });
+    f.judgment_generation = judges.get(&f.revision).map(|(generation, _)| *generation);
+    let mut majors = memory.major_issuance.clone();
+    f.major = super::state::issuance(&mut majors, &f.revision, f.major_generation, f.major);
+    f.major_generation = majors.get(&f.revision).map(|(generation, _)| *generation);
 }

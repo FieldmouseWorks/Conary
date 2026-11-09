@@ -6,17 +6,25 @@ use crate::flow::{Stage, Write};
 use serde_json::json;
 impl Write for Hub {
     fn status(&self, repo: &str, head: &str, settled: bool, text: &str) -> Result<(), ApiError> {
-        self.write(Asked::new(Call::FlowStatus, repo), &[repo, head], || {
-            let mut world = self.world.borrow_mut();
-            world.statuses.entry(head.into()).or_default().insert(
+        self.write(
+            Asked::new(Call::FlowStatus, repo).mark(if settled {
+                crate::train::Mark::Landing
+            } else {
+                crate::train::Mark::Waiting
+            }),
+            &[repo, head],
+            || {
+                let mut world = self.world.borrow_mut();
+                world.statuses.entry(head.into()).or_default().insert(
                 0,
                 json!({
                     "context":crate::flow::SETTLED, "state":if settled {"success"} else {"pending"},
                     "description":text,"creator":{"login":STEWARD,"type":"Bot"}
                 }),
             );
-            Ok(())
-        })
+                Ok(())
+            },
+        )
     }
     fn stage(&self, repo: &str, pr: u64, stage: Stage) -> Result<(), ApiError> {
         self.write(
@@ -25,7 +33,7 @@ impl Write for Hub {
             || {
                 self.edit_pull(repo, pr, |p| {
                     let labels = p["labels"].as_array_mut().unwrap();
-                    labels.retain(|l| !l["name"].as_str().unwrap_or("").starts_with("waiting: "));
+                    labels.retain(|l| !Stage::owns_label(l["name"].as_str().unwrap_or("")));
                     if let Some(label) = stage.label() {
                         labels.push(json!({"name":label}));
                     }

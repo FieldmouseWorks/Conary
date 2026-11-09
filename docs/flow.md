@@ -22,6 +22,12 @@ the same policy as `cn class`. A minimal configuration is:
     "fix": "/absolute/path/to/fixer",
     "judge": "/absolute/path/to/judge",
     "proof": "/absolute/path/to/proof"
+  },
+  "evidence": {
+    "signer": "owner/ci/.github/workflows/gate.yml",
+    "fresh": null,
+    "require": ["check"],
+    "negative": "attest / negative"
   }
 }
 ```
@@ -69,26 +75,80 @@ until that deadline, rather than risking two fixers. Deployment must retain
 worker processes after the invoking pass exits, and supply plugin sandbox
 and descendant resource limits as described in the contract.
 
-A plugin's proof response is **not signed CI evidence**. The producer must
-publish its independently attested checks through the existing evidence
-path; until those appear on GitHub, the flow waits. In particular, the
-example's canned output cannot authorize a real landing. No plugin response
-is inserted into the ledger as an attestation.
+## Producer evidence
+
+Plugin v1 answers are proposals, not producer attestations. No local review,
+judgment or proof result can grant landing permission. A missing evidence
+configuration or missing verification makes the decision wait with a reason,
+in dry runs as well as mutating passes.
+
+The machine names its trusted signer, required checks and negative check in
+`evidence`. All counted green checks must have a verified
+[CI attestation](ci-attestation.md) for the head's exact tree from that signer
+on its default branch. An ordinary status cannot attest a result.
+`fresh: null` accepts GitHub-hosted jobs only; a configured fresh-runner
+prefix also accepts jobs on runners started for that job, as the existing
+attestation verifier requires. A result from the authoring runner is refused.
+
+For a review, the producer must attest the exact published review record.
+The producer log is the canonical UTF-8 JSON returned by
+`flow::review_receipt(head, body)`; its SHA-256 goes in the existing signed
+commit predicate's `log.sha256`. The check name is
+`conary/review/ROLE`. This binds the complete result, including the marker's
+head, target branch, description scope and completion time. The exported
+`review_body` helper owns that marker's formatting.
+
+Judgments use `judgment_receipt(revision, generation, verdict)` under
+`conary/judgment`, and dependency decisions use `major_receipt` under
+`conary/major`. Their sealed GitHub issuances and independently attested
+logs must agree. Only the independent producer allocates issuance generations.
+A local invocation sequence has no judgment authority. Newer authenticated
+issuances and same-generation conflicts or unsupported-verdict tombstones
+survive both worker hydration and later deletion of a comment.
+
+The signing producer must attest results it actually produced in its isolated
+job, including checking grader independence; copying a controller-posted
+proposal into a signing job is insufficient. Producers can use the existing
+commit-attestation format and these log helpers without changing any v1
+plugin request or response. Implementing deployment-specific producers is
+separate from the pass runner.
+
+Every permission path also verifies the revision's independently attested
+negative result through the existing train verifier. It must say the new
+tests fail on old code, or attest that no negative is needed. Train admission
+records that evidence through the same verifier. Direct and delegated bot
+merges apply it too.
+
+The example's canned responses cannot authorize a real landing. The simulation
+tests supply independent signed producer records separately. No plugin
+response is inserted into the ledger as an attestation.
 
 ## Effects and retries
 
-The executor rechecks the PR revision before effects, publishes the stage
-label and `review-settled` status, then performs the selected step. It
-reads back settled permission before merging the exact head. Review markers
-bind the response to head, base, description and producer completion time.
-PR pushes invalidate older scope. Branch updates also name their expected
-head. Train admission and departure use the existing train module and its
-ledger checks, with `--anchor-repo` required for train-enabled passes.
+The executor revokes previous permission before cosmetic stage-label writes.
+It validates the current head, target branch and tip, description, draft state,
+review threads, blocking labels and policy raises before granting permission.
+It repeats scope and producer-evidence checks immediately before an expected-head
+merge or a delegated settlement. Same-head edits invalidate permission too.
+Branch updates pin their expected head; conflict requests carry the resolved
+base commit, never a branch name.
+
+Train admission and departure use the existing train module and its ledger
+checks, with `--anchor-repo` required for train-enabled passes. Direct and
+delegated R2 landings are refused even after owner approval: R2 must use the
+train's exact candidate-tree evidence and trunk binding.
+
+Proof slots count active workers across all open PRs, including workers outside
+a targeted kick and admissions earlier in this pass. Queued first-priority PRs
+keep their order. Dry runs reserve hypothetical slots for the decisions they
+print, without starting workers. Cancellation does not release a slot before
+the worker answers.
 
 A refused write is saved as a failure observation for the next decision.
-Retry steps perform no further writes until their deadline; three strikes
-make the decision overdue. One PR's read, plugin or write failure is
-reported on that PR and does not stop processing the others.
+Retry passes still revoke permission while leaving the failed substantive
+action until its deadline. Three strikes make the wait overdue. One PR's
+read, plugin or write failure is reported on that PR and does not stop
+processing the others.
 
 ## Comparing decisions
 

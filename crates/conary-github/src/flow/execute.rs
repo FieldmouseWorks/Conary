@@ -16,29 +16,41 @@ pub(crate) fn act<G: Write>(
     store: Option<&mut Store>,
 ) -> Effect {
     let kind = failure(&next.step);
+    let repo = f.repo.to_string();
+    // Revocation is safety critical; cosmetic label failure must never
+    // preserve an earlier success, including while a retry is booked.
+    github
+        .status(&repo, &f.revision.head, false, &next.description)
+        .map_err(|e| (Failure::Status, Box::new(e) as Error))?;
     if matches!(next.step, Step::Retry { .. }) {
         return Ok(vec![]);
     }
     let prepare = || -> Result<()> {
-        let repo = f.repo.to_string();
-        let pull = github.pull(&repo, f.number)?;
-        if Revision::from(&pull) != f.revision || (pull.state == "open") != f.open {
-            return Err("PR moved before executing flow decision".into());
-        }
+        super::scope::current(github, f)?;
         github.stage(&repo, f.number, next.stage)?;
-        let settled = matches!(
-            next.step,
-            Step::Merge | Step::Settle | Step::JoinTrain | Step::CloseAlreadyLanded
-        ) || next.stage == Stage::Train && f.train.seat.is_some();
-        // Every pass revokes old permission before doing unsettled work.
-        github.status(&repo, &f.revision.head, settled, &next.description)?;
+        super::scope::current(github, f)?;
+        let settled = matches!(next.step, Step::Merge | Step::Settle | Step::JoinTrain)
+            || next.stage == Stage::Train && f.train.seat.is_some();
+        if settled {
+            if matches!(next.step, Step::Merge | Step::Settle)
+                && f.classified.class == conary_core::Class::R2
+            {
+                return Err("R2 requires exact candidate evidence through the train".into());
+            }
+            super::evidence::authorize(pass, github, f)?;
+            super::scope::current(github, f)?;
+            github.status(&repo, &f.revision.head, true, &next.description)?;
+            super::scope::current(github, f)?;
+        }
         Ok(())
     };
     prepare().map_err(|error| (Failure::Status, error))?;
     let run = || -> Result<Vec<Failure>> {
         let repo = f.repo.to_string();
         match &next.step {
-            Step::Wait { .. } | Step::Retry { .. } | Step::Settle => {}
+            Step::Wait { .. } | Step::Retry { .. } => {}
+            Step::Settle => permission(pass, github, f)?,
+
             Step::QueueReview(role) => {
                 let author = author(github, f, record)?;
                 pass.start(
@@ -83,7 +95,10 @@ pub(crate) fn act<G: Write>(
                 }));
                 if *kind == Kind::Conflict {
                     problems.push(plugin::Problem::Conflict {
-                        base: f.revision.base.clone(),
+                        base: f
+                            .base_tip
+                            .clone()
+                            .ok_or("conflict base commit is unavailable")?,
                         text: "GitHub reports a merge conflict".into(),
                     });
                 }
@@ -184,12 +199,14 @@ pub(crate) fn act<G: Write>(
                 }) {
                     return Err("review-settled permission was not observed".into());
                 }
+                permission(pass, github, f)?;
                 match github.land(&repo, f.number, &f.revision.head)? {
                     crate::train::PrMerge::Merged => {}
                     crate::train::PrMerge::Refused(why) => return Err(why.into()),
                 }
             }
             Step::JoinTrain => {
+                permission(pass, github, f)?;
                 let store = store.ok_or("train needs an anchored ledger")?;
                 let config = crate::Config {
                     reviewers: f.settings.review_authors.iter().cloned().collect(),
@@ -205,7 +222,14 @@ pub(crate) fn act<G: Write>(
                     &f.revision.head,
                     &record.memory.raised.iter().cloned().collect::<Vec<_>>(),
                     pass.policy,
-                    None,
+                    Some(
+                        &pass
+                            .config
+                            .evidence
+                            .as_ref()
+                            .ok_or("producer verifier missing")?
+                            .negatives()?,
+                    ),
                 )?;
                 if !matches!(
                     joined,
@@ -295,4 +319,18 @@ fn author<G: Read>(github: &G, f: &Facts, record: &Record) -> Result<plugin::Ide
         engine,
         session: None,
     })
+}
+
+fn permission<G: Write>(pass: &Pass<'_>, github: &G, f: &Facts) -> Result<()> {
+    let result =
+        super::scope::current(github, f).and_then(|()| super::evidence::authorize(pass, github, f));
+    if result.is_err() {
+        github.status(
+            &f.repo.to_string(),
+            &f.revision.head,
+            false,
+            "Permission inputs changed; read the PR again",
+        )?;
+    }
+    result
 }

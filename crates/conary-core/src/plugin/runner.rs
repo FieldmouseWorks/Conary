@@ -86,6 +86,21 @@ impl Plugin {
         let Some(kind) = task.kind() else {
             return bad("use describe to negotiate");
         };
+        let full_objects = match &task {
+            Task::Review { base, head, .. } => sha(base) && sha(head),
+            Task::Fix { head, problems, .. } => {
+                sha(head)
+                    && problems
+                        .iter()
+                        .all(|p| !matches!(p,Problem::Conflict{base,..} if !sha(base)))
+            }
+            Task::Judge { head, .. } => sha(head),
+            Task::Proof { tree, .. } => sha(tree),
+            Task::Describe => false,
+        };
+        if !full_objects {
+            return bad("plugin requests require full Git object IDs");
+        }
         if !self.kinds.contains(&kind) {
             return bad("request kind was not described");
         }

@@ -13,6 +13,24 @@ pub trait Write: Read + crate::train::Forge {
     fn disable_auto_merge(&self, repo: &str, pr: u64) -> Result<(), ApiError>;
 }
 impl Stage {
+    pub fn owns_label(label: &str) -> bool {
+        [
+            Self::Review,
+            Self::Reviewer,
+            Self::Fix,
+            Self::Ci,
+            Self::ProofSlot,
+            Self::Proof,
+            Self::ReleaseAge,
+            Self::Train,
+            Self::Merge,
+            Self::Owner,
+            Self::Base,
+        ]
+        .iter()
+        .any(|s| s.label() == Some(label))
+    }
+
     pub fn label(self) -> Option<&'static str> {
         Some(match self {
             Self::Review => "waiting: review",
@@ -30,7 +48,7 @@ impl Stage {
         })
     }
 }
-pub(crate) fn review_body(
+pub fn review_body(
     role: &str,
     revision: &Revision,
     at: u64,

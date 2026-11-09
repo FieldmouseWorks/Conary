@@ -418,7 +418,7 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
 
 /// A deleted/edited comment cannot roll an observed decision back. Conflicting
 /// words at the same generation stay blocked until a strictly newer issuance.
-fn issuance<T: Clone + Eq>(
+pub(super) fn issuance<T: Clone + Eq>(
     receipts: &mut std::collections::BTreeMap<Revision, (u64, Option<T>)>,
     revision: &Revision,
     generation: Option<u64>,

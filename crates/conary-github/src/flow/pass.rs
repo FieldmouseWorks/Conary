@@ -22,6 +22,7 @@ pub struct Config {
     pub settings: Settings,
     pub trusted_authors: Vec<String>,
     pub plugins: Plugins,
+    pub evidence: Option<Evidence>,
 }
 #[derive(Debug, Serialize)]
 pub struct Report {
@@ -55,7 +56,15 @@ impl Pass<'_> {
             Some(Data::open(self.root, repo)?)
         };
         let mut pulls = github.pulls(&repo.to_string(), crate::api::Pulls::Open)?;
-        pulls.sort_by_key(|p| p.number);
+        pulls.sort_by_key(|p| {
+            (
+                !p.labels
+                    .iter()
+                    .any(|l| l.name == self.config.settings.first_label),
+                p.number,
+            )
+        });
+        let mut occupancy = super::occupancy::Occupancy::read(self.root, repo, &pulls);
         let mut reports = Vec::new();
         for pull in pulls
             .into_iter()
@@ -82,14 +91,32 @@ impl Pass<'_> {
                     &self.config.trusted_authors,
                 )?;
                 super::observe::hydrate(&mut facts, &record, self.now, self.dry_run)?;
+                occupancy.apply(&mut facts, self.now)?;
                 if let Some(ledger) = store.as_deref().map(Store::ledger).or(self.ledger) {
                     super::observe::train(&mut facts, ledger);
                 }
+                super::observe::issuances(&mut facts, &record.memory);
                 facts.failed = record.failed.take();
                 facts.failed_review = record.failed_review.take();
                 facts.succeeded = std::mem::take(&mut record.succeeded);
                 let (mut next, memory) = next(&facts, &record.memory, self.now);
                 record.memory = memory;
+                if matches!(next.step, Step::Merge | Step::Settle)
+                    && facts.classified.class == conary_core::Class::R2
+                {
+                    next.stage = Stage::Train;
+                    next.step = Step::Wait { until: None };
+                    next.description =
+                        "R2 landing requires the merge train and exact candidate evidence".into();
+                }
+                if (matches!(next.step, Step::Merge | Step::Settle | Step::JoinTrain)
+                    || next.stage == Stage::Train && facts.train.seat.is_some())
+                    && let Err(why) = super::evidence::authorize(self, github, &facts)
+                {
+                    next.step = Step::Wait { until: None };
+                    next.stage = Stage::Proof;
+                    next.description = why.to_string().chars().take(140).collect();
+                }
                 if let Some(kind) = plugin_kind(&next.step)
                     && self.path(kind).is_none()
                 {
@@ -132,6 +159,7 @@ impl Pass<'_> {
                     }
                     data.save(pr, &record)?;
                 }
+                occupancy.observed(self.root, &facts, &next, self.now, self.dry_run)?;
                 Ok(())
             })();
             if let Err(error) = result {
@@ -139,6 +167,7 @@ impl Pass<'_> {
             }
             reports.push(report);
         }
+        reports.sort_by_key(|r| r.pr);
         Ok(reports)
     }
     pub(crate) fn path(&self, kind: &str) -> Option<&Path> {
@@ -190,7 +219,6 @@ impl Pass<'_> {
         )?;
         record.jobs.push(jobs::Work {
             purpose,
-            generation: record.sequence,
             job: Job {
                 id: format!("{}-{}", facts.number, record.sequence),
                 revision: facts.revision.clone(),

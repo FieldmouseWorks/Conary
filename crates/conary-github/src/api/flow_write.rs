@@ -32,25 +32,8 @@ impl Write for Api {
     }
     fn stage(&self, repo: &str, pr: u64, stage: Stage) -> Result<(), ApiError> {
         let pull = self.pull(repo, pr)?;
-        let stages = [
-            Stage::Review,
-            Stage::Reviewer,
-            Stage::Fix,
-            Stage::Ci,
-            Stage::ProofSlot,
-            Stage::Proof,
-            Stage::ReleaseAge,
-            Stage::Train,
-            Stage::Merge,
-            Stage::Owner,
-            Stage::Base,
-        ];
         for label in pull.labels {
-            if stages
-                .iter()
-                .any(|s| s.label() == Some(label.name.as_str()))
-                && stage.label() != Some(label.name.as_str())
-            {
+            if Stage::owns_label(&label.name) && stage.label() != Some(label.name.as_str()) {
                 let encoded = label.name.replace(' ', "%20").replace(':', "%3A");
                 let path = format!("/repos/{repo}/issues/{pr}/labels/{encoded}");
                 let url = format!("{}{path}", self.base);
