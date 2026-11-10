@@ -13,6 +13,7 @@ fn report(pr: u64, at: u64, error: bool, next: bool) -> Report {
         pr,
         error: error.then(|| "temporary failure".into()),
         owner_approval: None,
+        revision: None,
         next: next.then_some(Next {
             stage: Stage::Ci,
             step: Step::Wait { until: Some(at) },

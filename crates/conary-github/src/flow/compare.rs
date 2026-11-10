@@ -7,7 +7,7 @@ use std::collections::BTreeSet;
 
 use serde::Serialize;
 
-use super::{Report, SETTLED, Stage, Step};
+use super::{Report, Revision, SETTLED, Stage, Step};
 use crate::api::Source;
 use conary_core::op::Repo;
 
@@ -55,8 +55,10 @@ pub struct Tally {
 
 /// Each dry-run report beside what the steward said of its PR. The steward's
 /// status counts only from `authors` (its App's bot), or from anyone when
-/// none are named. Disagreements come first, then errors, then agreements,
-/// each by PR number.
+/// none are named. Both must be of one revision: a PR whose head, base,
+/// title or body moved between the dry pass and this read, or that the pass
+/// never read, is an error, never a comparison. Disagreements come first,
+/// then errors, then agreements, each by PR number.
 pub fn beside<G: Source>(
     github: &G,
     reports: Vec<Report>,
@@ -73,7 +75,17 @@ pub fn beside<G: Source>(
                 step: next.step,
                 description: next.description,
             });
-            let read = said(github, &report.repo.to_string(), report.pr, authors);
+            let read = said(github, &report.repo.to_string(), report.pr, authors).and_then(
+                |(revision, said)| match &report.revision {
+                    _ if report.error.is_some() => Ok((revision.head, said)),
+                    Some(decided) if *decided == revision => Ok((revision.head, said)),
+                    Some(_) => Err(
+                        "the PR's head, base, title or body changed between the flow's decision and the steward's read"
+                            .into(),
+                    ),
+                    None => Err("the flow's decision names no revision".into()),
+                },
+            );
             let (head, steward, read_error) = match read {
                 Ok((head, said)) => (Some(head), Some(said), None),
                 Err(e) => (None, None, Some(e)),
@@ -121,7 +133,7 @@ fn said<G: Source>(
     repo: &str,
     pr: u64,
     authors: &BTreeSet<String>,
-) -> Result<(String, Said), String> {
+) -> Result<(Revision, Said), String> {
     let pull = github
         .pull(repo, pr)
         .map_err(|e| format!("reading the steward's labels: {e}"))?;
@@ -142,7 +154,7 @@ fn said<G: Source>(
                     .is_some_and(|c| authors.contains(&c.login)))
     });
     Ok((
-        pull.head.sha,
+        Revision::from(&pull),
         Said {
             stages,
             state: settled.as_ref().map(|s| s.state.clone()),

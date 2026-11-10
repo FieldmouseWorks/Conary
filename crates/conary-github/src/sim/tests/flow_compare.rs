@@ -95,6 +95,7 @@ fn compare_lists_disagreements_then_errors_then_agreements() {
     steward_says(&c, stage, "pending", STEWARD);
     let mut other = report.next.clone().unwrap();
     other.stage = Stage::LABELLED.into_iter().find(|s| *s != stage).unwrap();
+    let revision = report.revision.clone();
     let reports = vec![
         report,
         Report {
@@ -103,6 +104,7 @@ fn compare_lists_disagreements_then_errors_then_agreements() {
             next: None,
             error: Some("unreadable".into()),
             owner_approval: None,
+            revision: None,
         },
         Report {
             repo: REPO.parse().unwrap(),
@@ -110,6 +112,7 @@ fn compare_lists_disagreements_then_errors_then_agreements() {
             next: Some(other),
             error: None,
             owner_approval: None,
+            revision,
         },
     ];
     let (lines, tally) = beside(&c.hub, reports, &authors());
@@ -128,4 +131,50 @@ fn compare_maps_every_label_back_to_its_stage() {
         assert_eq!(Stage::from_label(stage.label().unwrap()), Some(stage));
     }
     assert_eq!(Stage::from_label("waiting: nothing"), None);
+}
+
+#[test]
+fn compare_refuses_a_pr_that_moved_after_the_flow_decided() {
+    let moves: [fn(&Case); 3] = [
+        |c| c.hub.push(REPO, 3, &"a".repeat(40)),
+        |c| c.hub.edit_pull(REPO, 3, |p| p["body"] = json!("rewritten")),
+        |c| c.hub.edit_pull(REPO, 3, |p| p["title"] = json!("renamed")),
+    ];
+    for moved in moves {
+        let c = Case::new();
+        let reports = dry(&c);
+        steward_says(
+            &c,
+            reports[0].next.as_ref().unwrap().stage,
+            "pending",
+            STEWARD,
+        );
+        moved(&c);
+        let (lines, tally) = beside(&c.hub, reports, &authors());
+        assert!(!lines[0].agree);
+        assert!(
+            lines[0].error.as_deref().unwrap().contains("changed"),
+            "{lines:?}"
+        );
+        assert_eq!((tally.agree, tally.disagree, tally.errors), (0, 0, 1));
+    }
+}
+
+#[test]
+fn compare_refuses_a_decision_without_its_revision() {
+    let c = Case::new();
+    let mut reports = dry(&c);
+    steward_says(
+        &c,
+        reports[0].next.as_ref().unwrap().stage,
+        "pending",
+        STEWARD,
+    );
+    reports[0].revision = None;
+    let (lines, tally) = beside(&c.hub, reports, &authors());
+    assert_eq!(
+        lines[0].error.as_deref(),
+        Some("the flow's decision names no revision")
+    );
+    assert_eq!(tally.errors, 1);
 }
