@@ -254,3 +254,17 @@ includes `repo`, `pr` and all of Next: `stage`, `step`, `description`,
 `error` reports a per-PR failure. Null deadlines remain explicit. These
 lines are suitable for comparing with the existing steward beside it,
 before any repository is switched over.
+
+`cn flow compare OWNER/REPO [PR]` makes that comparison itself. It does the
+same dry run, then reads what the steward running the repository says of
+each PR now: the stage its `waiting: …` label names, and its newest
+`review-settled` status on the head, counted only from
+`settings.review_authors` (from anyone when that's empty). It prints one
+JSON line per PR with `repo`, `pr`, `head`, `agree`, `flow` (`stage`,
+`step`, `description`), `steward` (`stages`, `state`, `description`) and
+`error`: disagreements first, then errors, then agreements, each by PR
+number. A last line tallies the repository: `prs`, `agree`, `disagree`,
+`errors`. The stages agree when the steward's labels name exactly the
+flow's stage, or none for the null stage. It writes nothing, as a dry run.
+Run right after the steward's own pass, it shows where the two part before
+any repository switches over.

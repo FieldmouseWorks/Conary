@@ -13,22 +13,30 @@ pub trait Write: Read + crate::train::Forge {
     fn disable_auto_merge(&self, repo: &str, pr: u64) -> Result<(), ApiError>;
 }
 impl Stage {
+    /// Every stage that has a label, in stages.py's order.
+    pub const LABELLED: [Stage; 11] = [
+        Self::Review,
+        Self::Reviewer,
+        Self::Fix,
+        Self::Ci,
+        Self::ProofSlot,
+        Self::Proof,
+        Self::ReleaseAge,
+        Self::Train,
+        Self::Merge,
+        Self::Owner,
+        Self::Base,
+    ];
+
     pub fn owns_label(label: &str) -> bool {
-        [
-            Self::Review,
-            Self::Reviewer,
-            Self::Fix,
-            Self::Ci,
-            Self::ProofSlot,
-            Self::Proof,
-            Self::ReleaseAge,
-            Self::Train,
-            Self::Merge,
-            Self::Owner,
-            Self::Base,
-        ]
-        .iter()
-        .any(|s| s.label() == Some(label))
+        Self::from_label(label).is_some()
+    }
+
+    /// The stage a `waiting: …` label names.
+    pub fn from_label(label: &str) -> Option<Stage> {
+        Self::LABELLED
+            .into_iter()
+            .find(|s| s.label() == Some(label))
     }
 
     pub fn label(self) -> Option<&'static str> {
