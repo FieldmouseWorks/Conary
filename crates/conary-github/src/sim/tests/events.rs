@@ -42,6 +42,7 @@ fn report(at: u64) -> Report {
         }),
         error: None,
         owner_approval: None,
+        revision: None,
     }
 }
 #[test]

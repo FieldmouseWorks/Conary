@@ -10,6 +10,9 @@ pub enum FlowCommand {
     Pass(Args),
     /// Request the same pass now, optionally for one pull request.
     Kick(Args),
+    /// A dry pass beside what the steward running the repository says of
+    /// each PR now: one JSON line per PR, disagreements first, then a tally.
+    Compare(Args),
 }
 #[derive(clap::Args)]
 pub struct Args {
@@ -34,7 +37,9 @@ pub struct Args {
     anchor_repo: Option<String>,
 }
 pub fn run(cli: &super::Cli, command: &FlowCommand) -> super::Result<()> {
-    let (FlowCommand::Pass(args) | FlowCommand::Kick(args)) = command;
+    let (FlowCommand::Pass(args) | FlowCommand::Kick(args) | FlowCommand::Compare(args)) = command;
+    let compare = matches!(command, FlowCommand::Compare(_));
+    let dry_run = args.dry_run || compare;
     let config: Config = serde_json::from_slice(&std::fs::read(&args.config)?)?;
     let policy = Policy::load(&args.policy)?;
     let tokens: Tokens = super::choose_tokens(
@@ -45,7 +50,7 @@ pub fn run(cli: &super::Cli, command: &FlowCommand) -> super::Result<()> {
     let api = Api::new(&args.api, tokens);
     let needs_ledger =
         config.settings.train || config.evidence.is_some() || args.anchor_repo.is_some();
-    let mut anchored = if needs_ledger && !args.dry_run {
+    let mut anchored = if needs_ledger && !dry_run {
         let anchor_repo = args
             .anchor_repo
             .as_deref()
@@ -71,7 +76,7 @@ pub fn run(cli: &super::Cli, command: &FlowCommand) -> super::Result<()> {
         root: &args.data,
         launcher: &process,
         now: jobs::now(),
-        dry_run: args.dry_run,
+        dry_run,
         ledger: observed.as_ref(),
     };
     let reports = pass
@@ -86,7 +91,17 @@ pub fn run(cli: &super::Cli, command: &FlowCommand) -> super::Result<()> {
     if let Some(anchored) = &mut anchored {
         anchored.publish(&api)?;
     }
-    for report in reports? {
+    let reports = reports?;
+    if compare {
+        let (lines, tally) =
+            conary_github::flow::beside(&api, reports, &config.settings.review_authors);
+        for line in lines {
+            println!("{}", serde_json::to_string(&line)?);
+        }
+        println!("{}", serde_json::to_string(&tally)?);
+        return Ok(());
+    }
+    for report in reports {
         println!("{}", serde_json::to_string(&report)?);
     }
     Ok(())

@@ -41,6 +41,9 @@ mod observe;
 mod pass;
 pub use pass::{Config, Pass, Plugins, Report};
 
+mod compare;
+pub use compare::{Beside, Decided, Said, Tally, beside};
+
 pub(crate) mod evidence;
 pub use evidence::{Evidence, judgment_receipt, major_receipt, receipt_digest, review_receipt};
 

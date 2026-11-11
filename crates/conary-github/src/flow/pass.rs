@@ -32,6 +32,8 @@ pub struct Report {
     pub next: Option<Next>,
     pub error: Option<String>,
     pub owner_approval: Option<String>,
+    /// The revision the decision was made on, once the PR was read.
+    pub revision: Option<Revision>,
 }
 
 pub struct Pass<'a> {
@@ -124,6 +126,7 @@ impl Pass<'_> {
                 next: None,
                 error: None,
                 owner_approval: None,
+                revision: None,
             };
             let result: Result<()> = (|| {
                 let mut record = match &data {
@@ -138,6 +141,7 @@ impl Pass<'_> {
                     self.config.settings.clone(),
                     &self.config.trusted_authors,
                 )?;
+                report.revision = Some(facts.revision.clone());
                 if let Some((_, error)) = recovery.iter().find(|(number, _)| *number == pr) {
                     // Keep advancing strikes while cleanup blocks effects.
                     record.failed = Some(Failure::Status);
@@ -290,6 +294,7 @@ impl Pass<'_> {
                     next: None,
                     error: Some(error),
                     owner_approval: None,
+                    revision: None,
                 });
             }
         }
