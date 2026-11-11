@@ -3,13 +3,22 @@
 
   # Pinned by commit, so Renovate moves it with the workflows' pins on burrow
   # (burrow's templates/project/flake.nix).
-  inputs.burrow.url = "git+https://github.com/FieldmouseWorks/burrow?ref=main&rev=c9099069c5ac7e293064e237dd77f37a54d9b559";
+  inputs.burrow.url = "git+https://github.com/FieldmouseWorks/burrow?ref=main&rev=7050c0226d046dfe83ed5a9bb729bc1c9bf28a5f";
 
   # `nix develop` for the toolchains, `nix flake check` for the gate:
   # rustfmt, clippy and the workspace's tests, on rust-toolchain.toml's
   # toolchain (see burrow's lib/project.nix). The tests drive git.
   outputs = { self, burrow }: burrow.lib.project {
     inherit self;
-    rust.testInputs = pkgs: [ pkgs.git ];
+    checks = pkgs: {
+      package-git = import ./checks/package-git.nix {
+        inherit pkgs;
+        package = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
+      };
+    };
+    rust = {
+      testInputs = pkgs: [ pkgs.git ];
+      runtimeInputs = pkgs: [ pkgs.git ];
+    };
   };
 }
