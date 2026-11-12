@@ -456,7 +456,7 @@ pub struct Memory {
     #[serde(with = "super::persist::pairs")]
     pub latest_reviews: BTreeMap<String, u64>,
     /// Authenticated issuance high-water marks, including same-generation conflicts.
-    #[serde(with = "super::persist::pairs")]
+    #[serde(with = "super::persist::judge_issuance")]
     pub judge_issuance: BTreeMap<Revision, (u64, Option<Judgment>)>,
     #[serde(with = "super::persist::pairs")]
     pub major_issuance: BTreeMap<Revision, (u64, Option<Major>)>,
