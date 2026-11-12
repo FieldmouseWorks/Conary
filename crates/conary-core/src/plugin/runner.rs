@@ -58,6 +58,7 @@ impl Plugin {
         let Answer::Describe {
             versions,
             kinds,
+            v2_kinds,
             models,
             capabilities,
             meters,
@@ -73,6 +74,17 @@ impl Plugin {
         } else {
             return bad("invalid advertised versions or kinds");
         };
+        let mut kinds = kinds;
+        if kinds.contains(&Kind::Job) {
+            return bad("the job kind belongs in v2_kinds, which a v1 runner doesn't read");
+        }
+        if v2_kinds.iter().any(|k| *k != Kind::Job) {
+            return bad("invalid advertised versions or kinds");
+        }
+        if contract == CONTRACT_V1 && !v2_kinds.is_empty() {
+            return bad("the job kind needs conary-plugin v2");
+        }
+        kinds.extend(v2_kinds);
         if kinds.is_empty()
             || kinds
                 .iter()
@@ -94,8 +106,6 @@ impl Plugin {
                 return bad("invalid declared models, capabilities or meters");
             }
             Some(offers)
-        } else if kinds.contains(&Kind::Job) {
-            return bad("the job kind needs conary-plugin v2");
         } else {
             None
         };

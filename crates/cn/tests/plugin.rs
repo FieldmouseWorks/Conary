@@ -51,6 +51,46 @@ fn plugin_example_conforms() {
     );
 }
 #[test]
+fn plugin_example_describe_decodes_with_the_v1_runner() {
+    // What a v1 runner decodes `kinds` into: no `job`.
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    enum LegacyKind {
+        Review,
+        Fix,
+        Judge,
+        Proof,
+    }
+    #[derive(serde::Deserialize)]
+    struct LegacyDescribe {
+        versions: Vec<String>,
+        kinds: Vec<LegacyKind>,
+    }
+    use std::io::Write;
+    let path = Path::new(env!("CARGO_BIN_EXE_cn")).with_file_name("conary-example-plugin");
+    let mut child = std::process::Command::new(path)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(br#"{"contract":"conary-plugin v1","kind":"describe"}"#)
+        .unwrap();
+    let out = child.wait_with_output().unwrap();
+    let described: LegacyDescribe = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(described.versions.iter().any(|v| v == "conary-plugin v1"));
+    assert_eq!(described.kinds.len(), 4);
+    let _ = (
+        LegacyKind::Review,
+        LegacyKind::Fix,
+        LegacyKind::Judge,
+        LegacyKind::Proof,
+    );
+}
+#[test]
 fn plugin_accepts_an_independent_session_of_the_same_engine() {
     let (_dir, path) = fixture("valid");
     let out = check(&path, "5000", "4096");
@@ -223,6 +263,10 @@ fn plugin_rejects_duplicate_models() {
 #[test]
 fn plugin_rejects_job_under_v1() {
     rejects("v1-job", "needs conary-plugin v2");
+}
+#[test]
+fn plugin_rejects_job_among_the_v1_readable_kinds() {
+    rejects("v2-job-in-kinds", "belongs in v2_kinds");
 }
 #[test]
 fn plugin_rejects_job_with_empty_summary() {

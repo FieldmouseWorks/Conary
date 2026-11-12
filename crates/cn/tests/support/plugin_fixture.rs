@@ -41,24 +41,26 @@ fn main() {
         r#""engine":"conary-conformance-author","session":"independent""#
     };
     let caps = r#""capabilities":{"sandbox":"brings","network":true,"devices":["kvm"],"mcp":true}"#;
-    let v2 = |kinds: &str, models: &str, caps: &str| {
+    let v2 = |kinds: &str, v2_kinds: &str, models: &str, caps: &str| {
         format!(
-            r#""kind":"describe","versions":["conary-plugin v1","conary-plugin v2"],"kinds":{kinds},"models":{models},{caps},"meters":["week"]"#
+            r#""kind":"describe","versions":["conary-plugin v1","conary-plugin v2"],"kinds":{kinds},"v2_kinds":{v2_kinds},"models":{models},{caps},"meters":["week"]"#
         )
     };
     let models = r#"[{"id":"m","efforts":["low","high"],"context_tokens":1000,"max_output_tokens":100}]"#;
     let answer = if describe && mode == "v2-valid" {
-        v2(r#"["review","job"]"#, models, caps)
+        v2(r#"["review"]"#, r#"["job"]"#, models, caps)
     } else if describe && mode == "v2-proof-model" {
-        v2(r#"["proof","job"]"#, models, caps)
+        v2(r#"["proof"]"#, r#"["job"]"#, models, caps)
     } else if describe && mode == "v2-no-caps" {
-        v2(r#"["job"]"#, "[]", r#""meters2":[]"#)
+        v2(r#"[]"#, r#"["job"]"#, "[]", r#""meters2":[]"#)
     } else if describe && mode == "v2-dup-model" {
-        v2(r#"["job"]"#, r#"[{"id":"m","efforts":[]},{"id":"m","efforts":[]}]"#, caps)
+        v2(r#"[]"#, r#"["job"]"#, r#"[{"id":"m","efforts":[]},{"id":"m","efforts":[]}]"#, caps)
     } else if describe && mode == "v1-job" {
-        r#""kind":"describe","versions":["conary-plugin v1"],"kinds":["job"]"#.to_string()
+        r#""kind":"describe","versions":["conary-plugin v1"],"kinds":["review"],"v2_kinds":["job"]"#.to_string()
+    } else if describe && mode == "v2-job-in-kinds" {
+        v2(r#"["review","job"]"#, "[]", models, caps)
     } else if describe && mode.starts_with("v2-job") {
-        v2(r#"["job"]"#, models, caps)
+        v2(r#"[]"#, r#"["job"]"#, models, caps)
     } else if mode == "v2-job-empty" {
         r#""kind":"job","summary":" ","next":{"step":"done"}"#.to_string()
     } else if mode == "v2-job-bad-ask" {

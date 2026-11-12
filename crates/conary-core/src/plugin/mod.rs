@@ -143,7 +143,13 @@ pub struct Response {
 pub enum Answer {
     Describe {
         versions: Vec<String>,
+        /// The legacy kinds only: a v1 runner decodes this list into an enum
+        /// without `job`, so a newer kind here would make it reject the whole
+        /// response.
         kinds: Vec<Kind>,
+        /// v2: kinds beyond v1's (`job`), which only a v2 runner reads.
+        #[serde(default)]
+        v2_kinds: Vec<Kind>,
         /// v2: models and their efforts. Empty for a program.
         #[serde(default)]
         models: Vec<Model>,

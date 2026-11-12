@@ -16,7 +16,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let answer = match request.task {
         Task::Describe => Answer::Describe {
             versions: vec![CONTRACT_V1.into(), CONTRACT.into()],
-            kinds: vec![Kind::Review, Kind::Fix, Kind::Judge, Kind::Proof, Kind::Job],
+            kinds: vec![Kind::Review, Kind::Fix, Kind::Judge, Kind::Proof],
+            v2_kinds: vec![Kind::Job],
             // A program: no models, so it may advertise `proof`.
             models: vec![],
             capabilities: Some(Capabilities {

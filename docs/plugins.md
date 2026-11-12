@@ -28,11 +28,16 @@ Before work, the runner sends:
 A complete response is:
 
 ```json
-{"contract":"conary-plugin v1","by":{"engine":"example","session":null},"kind":"describe","versions":["conary-plugin v1","conary-plugin v2"],"kinds":["review","fix","judge","proof","job"],"models":[],"capabilities":{"sandbox":"none","network":false,"devices":[],"mcp":false},"meters":[]}
+{"contract":"conary-plugin v1","by":{"engine":"example","session":null},"kind":"describe","versions":["conary-plugin v1","conary-plugin v2"],"kinds":["review","fix","judge","proof"],"v2_kinds":["job"],"models":[],"capabilities":{"sandbox":"none","network":false,"devices":[],"mcp":false},"meters":[]}
 ```
 
-`versions` must contain this contract string. `kinds` is a nonempty list of
-unique supported kinds from the table below. A plugin can serve a subset.
+`versions` must contain this contract string. `kinds` is a list of unique
+supported kinds from the table below, a subset of the four v1 kinds: a v1
+runner decodes it into an enum without `job` and would reject the whole
+response otherwise. `v2_kinds` (default empty) lists the kinds beyond v1's,
+currently only `job`; a v2 runner serves `kinds` plus `v2_kinds`, and a v1
+runner ignores the field. Together they are nonempty, and `job` in `kinds`
+or `v2_kinds` on a plugin that doesn't speak v2 fails describe.
 `by` is required on **every** response: `engine` is a nonblank stable name,
 and `session` is a nonblank session identifier when available, otherwise
 null or omitted. The engine must match describe; a work invocation may create
