@@ -17,7 +17,8 @@ impl Write for Hub {
             Asked::new(Call::Dispatch, repo),
             &[repo, workflow, git_ref, &nonce],
             || {
-                let id = self.run_id();
+                // A run's one job is the check run numbered a tenth of it.
+                let id = self.run_id() * 10;
                 self.world
                     .borrow_mut()
                     .workflow_runs
@@ -38,7 +39,9 @@ impl Write for Hub {
             Asked::new(Call::CancelRun, repo),
             &[repo, &run.to_string()],
             || {
-                self.finish_workflow(repo, run, "cancelled");
+                if !self.world.borrow().cancel_ignored {
+                    self.finish_workflow(repo, run, "cancelled");
+                }
                 Ok(())
             },
         )
@@ -144,6 +147,14 @@ impl Hub {
                 }
             }
         }
+    }
+    /// A workflow's run list is cut to its newest `cap` runs.
+    pub(crate) fn cap_run_list(&self, cap: Option<usize>) {
+        self.world.borrow_mut().list_cap = cap;
+    }
+    /// Cancel requests are accepted and ignored, or honoured again.
+    pub(crate) fn ignore_cancels(&self, ignored: bool) {
+        self.world.borrow_mut().cancel_ignored = ignored;
     }
     /// Every dispatched run of a repo, newest first.
     pub(crate) fn dispatched(&self, repo: &str) -> Vec<serde_json::Value> {

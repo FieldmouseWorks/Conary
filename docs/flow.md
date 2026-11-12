@@ -272,23 +272,41 @@ the check run too.
 
 **The workflow's part.** It receives the inputs `pr`, `head`, `base`, `check`
 and `nonce`. It must (1) set `run-name: conary ${{ inputs.nonce }}`, so the run
-can be found, (2) check out `inputs.head` (a dispatch runs on a branch, never
-on the PR's head), and (3) report a check run named exactly `check` on
-`inputs.head` with `external_id` set to `inputs.nonce`, completed with
-`success` only if the work passed. A same-named check run without an owned
-nonce is not evidence, nor is a run on another head.
+can be found, (2) check out `inputs.head` (a dispatch runs on the ref it was
+sent to, never on the PR's head), and (3) in a job named exactly `check` that
+succeeds only if the work passed, sign the result with
+`cn attest deferred HEAD NONCE ...` (the same token, tree and log rules as
+`cn attest commit`). The evidence is that job's own check run: the dispatch
+owns it because the job belongs to the run Conary dispatched, and the signed
+statement names the head, its tree and the nonce. The token's `sha` is the
+dispatched ref's commit and is not held to the head; its `event_name` must be
+`workflow_dispatch` and its check run the job's own. One record has to carry
+all of it: a same-named job of another run, a newer foreign run, or a run on
+another head never supplies another dispatch's missing proof, and the
+generic newest-run-by-name rule is not used for these checks.
 
-**Ownership.** Before sending, the dispatch (check, head, nonce, time) is saved
-in the PR's record, so a restart or a lost response never sends it twice.
-Passes look runs up by nonce. A dispatch not seen, or a finished run without
-its evidence, within `start_timeout` counts as lost and may be sent again, up
-to `attempts` per check and head; a run past `run_timeout` is cancelled and
-counts as lost. Past `attempts` the PR waits and says so.
+**Ownership.** Before sending, the dispatch (check, workflow, head, nonce,
+time) is saved in the PR's record, so a restart or a lost response never sends
+it twice. The workflow is saved with it, so repointing or removing the check
+never loses a run that is going. Passes read a saved run by its id and look
+for an unseen one by nonce in the whole run list (every page; too many pages
+is an error, never a shorter answer). A dispatch not seen, or a finished run
+without its evidence, within `start_timeout` counts as lost and may be sent
+again, up to `attempts` per check and head; a run past `run_timeout` is asked
+to stop and counts as lost. Past `attempts` the PR waits and says so. The
+earliest outstanding deadline is always booked as the PR's wake, whatever else
+the pass decided, so none depends on a webhook.
 
-**Obsolete heads.** When the head changes (a fix push, any push), the next
-pass cancels the old head's runs before anything else, asks again if
-cancelling failed, and forgets the dispatch once nothing of it can still run.
-The new head starts its own. Runs on a PR that is closed are left to finish.
+**Obsolete heads.** When the head changes (a fix push, any push), or the check
+is repointed or removed, the next pass asks the old runs to stop before
+anything else. Asking is not stopping: the dispatch is kept, asked again every
+minute, and forgotten only once its run is seen finished; until then the check
+is not started again. The new head starts its own. Runs on a PR that is closed
+are left to finish.
+
+**Capped reviews.** Readiness at the review-round limit needs a judgment that
+lands, or an owner's with the person's approval. The judge is asked before the
+decision waits for evidence, so it is never what the evidence waits on.
 
 ## Comparing decisions
 

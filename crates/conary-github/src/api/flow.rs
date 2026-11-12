@@ -352,12 +352,26 @@ impl Read for Api {
         struct Runs {
             workflow_runs: Vec<WorkflowRun>,
         }
-        // The newest hundred dispatched runs: a nonce older than that has long
-        // since lapsed, and its dispatch is no longer sought.
-        let runs: Runs = self.get(&format!(
-            "/repos/{repo}/actions/workflows/{workflow}/runs?event=workflow_dispatch&per_page=100"
-        ))?;
-        Ok(runs.workflow_runs)
+        // Every page: a listing that stopped short would make a live run look
+        // gone. Too many pages is an error, never a shorter answer.
+        let mut all = Vec::new();
+        for page in 1..=MAX_PAGES {
+            let got: Runs = self.get(&format!(
+                "/repos/{repo}/actions/workflows/{workflow}/runs?event=workflow_dispatch&per_page=100&page={page}"
+            ))?;
+            let short = got.workflow_runs.len() < 100;
+            all.extend(got.workflow_runs);
+            if short {
+                return Ok(all);
+            }
+        }
+        Err(ApiError::new(format!(
+            "workflow {workflow}'s runs: more than {MAX_PAGES} pages"
+        )))
+    }
+
+    fn workflow_run(&self, repo: &str, run: u64) -> Result<Option<WorkflowRun>, ApiError> {
+        self.get_found(&format!("/repos/{repo}/actions/runs/{run}"))
     }
 
     fn annotations(&self, repo: &str, run: u64) -> Result<Vec<String>, ApiError> {

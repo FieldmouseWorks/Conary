@@ -287,6 +287,11 @@ impl Pass<'_> {
                             .filter(|w| !w.posted && w.deadline > self.now)
                             .map(|w| w.deadline),
                     )
+                    .chain(super::deferred::deadline(
+                        &facts,
+                        &record.dispatches,
+                        self.now,
+                    ))
                     .min();
                 report.next = Some(next.clone());
                 record.decision = Some(next.clone());

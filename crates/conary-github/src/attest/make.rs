@@ -94,6 +94,16 @@ pub enum Claim {
         skipped: Vec<String>,
         log: Log,
     },
+    /// A deferred check's gate for the dispatch `nonce`, on `commit`, run on
+    /// `tree`.
+    Deferred {
+        commit: String,
+        nonce: String,
+        result: Gate,
+        tree: String,
+        skipped: Vec<String>,
+        log: Log,
+    },
     /// A PR's gate on its revision, `head` on its merge base `base`, run on
     /// `tree`, the head merged onto the base branch's tip as the job found it.
     Revision {
@@ -204,6 +214,32 @@ pub fn statement(claim: &Claim) -> Result<Statement, String> {
             (
                 "conary-commit",
                 format!("conary commit v1\n{commit}\n"),
+                json(&predicate),
+                GATE_TYPE,
+            )
+        }
+        Claim::Deferred {
+            commit,
+            nonce,
+            result,
+            tree,
+            skipped,
+            log,
+        } => {
+            ids(&[commit, tree])?;
+            if nonce.is_empty() || nonce.contains(char::is_whitespace) {
+                return Err(format!("{nonce:?} isn't a dispatch nonce"));
+            }
+            let predicate = GatePredicate {
+                result: *result,
+                revision: None,
+                tree,
+                skipped,
+                log,
+            };
+            (
+                "conary-deferred",
+                format!("conary deferred v1\n{commit}\n{nonce}\n"),
                 json(&predicate),
                 GATE_TYPE,
             )

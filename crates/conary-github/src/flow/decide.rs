@@ -266,9 +266,10 @@ fn after_review(f: &Facts, m: &mut Memory, now: u64, ci: Ci, capped: bool) -> De
     // Review is ready here: the deferred checks start, and cheap checks have
     // been running all along. A judge's pending verdict on exhausted rounds
     // is not readiness.
-    if (!capped || verdict == Some(Judgment::Land))
-        && let Some(decision) = super::deferred::start(f)
-    {
+    let ready = !capped
+        || verdict == Some(Judgment::Land)
+        || verdict == Some(Judgment::Owner) && f.owner_approved;
+    if ready && let Some(decision) = super::deferred::start(f) {
         return decision;
     }
     let pending: Vec<_> = f.checks.iter().filter(|c| c.state == Ci::Pending).collect();
@@ -339,9 +340,6 @@ fn after_review(f: &Facts, m: &mut Memory, now: u64, ci: Ci, capped: bool) -> De
             ),
         );
     }
-    if let Some(decision) = super::deferred::gate(f) {
-        return decision;
-    }
     let requires_judge = f.classified.class == Class::R2
         || f.needs_judge
         || f.unseen
@@ -352,19 +350,24 @@ fn after_review(f: &Facts, m: &mut Memory, now: u64, ci: Ci, capped: bool) -> De
         })
         || capped
         || f.dependency == Some(Dependency::Major) && !f.renovate;
-    if requires_judge {
-        if !matches!(verdict, Some(Judgment::Land))
-            && !(verdict == Some(Judgment::Owner) && f.owner_approved)
-        {
-            if f.merging == Merge::Update {
-                return at(
-                    Stage::Review,
-                    Step::UpdateBranch,
-                    "Behind its base: updated before judging",
-                );
-            }
-            return work(f, m, now, Kind::Judge);
+    if requires_judge
+        && !matches!(verdict, Some(Judgment::Land))
+        && !(verdict == Some(Judgment::Owner) && f.owner_approved)
+    {
+        if f.merging == Merge::Update {
+            return at(
+                Stage::Review,
+                Step::UpdateBranch,
+                "Behind its base: updated before judging",
+            );
         }
+        return work(f, m, now, Kind::Judge);
+    }
+    // After the judgment, which readiness may need before any evidence exists.
+    if let Some(decision) = super::deferred::gate(f) {
+        return decision;
+    }
+    if requires_judge {
         // A judge's land verdict cannot replace the person's word for R2.
         if f.classified.class == Class::R2 && !f.owner_approved {
             return at(

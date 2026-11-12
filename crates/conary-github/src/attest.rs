@@ -129,6 +129,16 @@ pub enum Subject<'a> {
     /// (`docs/ci-attestation.md`, "Negative runs"): `head` on its merge
     /// base `base`.
     Negative { base: &'a str, head: &'a str },
+    /// A deferred check's gate, run by a dispatched workflow for the
+    /// dispatch `nonce`, on `commit` (whose tree is `tree`). A dispatch runs
+    /// on the ref it was sent to, so its token's `sha` is not the commit; the
+    /// signed statement names the commit and the nonce instead, and the token
+    /// still has to be this check run's own job's.
+    Deferred {
+        commit: &'a str,
+        tree: &'a str,
+        nonce: &'a str,
+    },
 }
 
 /// An attestation that holds, as it was checked, and the result it attests.
@@ -360,6 +370,19 @@ fn check(
             pushed(&statement, commit, tree, run)?
         }
         Subject::Negative { base, head } => negative(&statement, base, head, run)?,
+        Subject::Deferred {
+            commit,
+            tree,
+            nonce,
+        } => {
+            if said("event_name") != "workflow_dispatch" {
+                return Err(format!(
+                    "its token is for a {:?} event, not a dispatch",
+                    said("event_name")
+                ));
+            }
+            deferred(&statement, commit, tree, nonce, run)?
+        }
     };
     Ok(Claimed {
         attested: Attested {
@@ -390,6 +413,52 @@ fn pushed(statement: &str, commit: &str, tree: &str, run: &CheckRun) -> Result<O
         serde_json::from_str(predicate).map_err(|e| format!("its predicate doesn't read: {e}"))?;
     if predicate.revision.is_some_and(|r| !r.is_null()) {
         return Err("its predicate names a revision, not a push".into());
+    }
+    if predicate.tree != tree {
+        return Err(format!("it ran on tree {}, not {tree}", predicate.tree));
+    }
+    if predicate.result != "pass" || run.conclusion.as_deref() != Some("success") {
+        return Err(format!(
+            "it says {} and its check run {}",
+            predicate.result,
+            run.conclusion.as_deref().unwrap_or("hasn't concluded")
+        ));
+    }
+    skipped_none(&predicate.skipped)?;
+    Ok(Outcome::Pass)
+}
+
+/// A deferred check's statement, as one of `commit`, whose tree is `tree`, for
+/// the dispatch `nonce`, passing as its check run did.
+fn deferred(
+    statement: &str,
+    commit: &str,
+    tree: &str,
+    nonce: &str,
+    run: &CheckRun,
+) -> Result<Outcome, String> {
+    let mut lines = statement.lines();
+    let (Some("conary deferred v1"), Some(subject), Some(named), Some(predicate), None) = (
+        lines.next(),
+        lines.next(),
+        lines.next(),
+        lines.next(),
+        lines.next(),
+    ) else {
+        return Err("its statement isn't a deferred run's subject, nonce and predicate".into());
+    };
+    if subject != commit {
+        return Err(format!("its statement is about {subject}, not {commit}"));
+    }
+    if named != nonce {
+        return Err(format!(
+            "its statement is for dispatch {named}, not {nonce}"
+        ));
+    }
+    let predicate: Predicate =
+        serde_json::from_str(predicate).map_err(|e| format!("its predicate doesn't read: {e}"))?;
+    if predicate.revision.is_some_and(|r| !r.is_null()) {
+        return Err("its predicate names a revision, not a deferred run".into());
     }
     if predicate.tree != tree {
         return Err(format!("it ran on tree {}, not {tree}", predicate.tree));

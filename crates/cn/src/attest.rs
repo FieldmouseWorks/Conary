@@ -39,6 +39,17 @@ pub enum AttestCommand {
         #[command(flatten)]
         out: Out,
     },
+    /// A deferred check's gate on a commit, for one dispatch.
+    Deferred {
+        /// The PR head the dispatch was sent for.
+        commit: String,
+        /// The dispatch's nonce, from the workflow's inputs.
+        nonce: String,
+        #[command(flatten)]
+        gate: GateArgs,
+        #[command(flatten)]
+        out: Out,
+    },
     /// A PR's gate on its revision.
     Revision {
         /// The merge base of the head and the base branch.
@@ -179,6 +190,22 @@ fn claim(command: &AttestCommand) -> Result<(Claim, &Out)> {
         AttestCommand::Commit { commit, gate, out } => (
             Claim::Commit {
                 commit: commit.clone(),
+                result: gate.result,
+                tree: gate.tree.clone(),
+                skipped: gate.skipped.clone(),
+                log: log(out)?,
+            },
+            out,
+        ),
+        AttestCommand::Deferred {
+            commit,
+            nonce,
+            gate,
+            out,
+        } => (
+            Claim::Deferred {
+                commit: commit.clone(),
+                nonce: nonce.clone(),
                 result: gate.result,
                 tree: gate.tree.clone(),
                 skipped: gate.skipped.clone(),

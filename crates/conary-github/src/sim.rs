@@ -96,6 +96,10 @@ pub(crate) struct World {
     artifacts: HashMap<u64, Vec<(String, Vec<u8>)>>,
     /// The runner each job ran on, when it isn't a fresh one of its own.
     runners: HashMap<u64, String>,
+    /// Cancel requests GitHub accepts and does nothing about.
+    cancel_ignored: bool,
+    /// A workflow's run list shows only this many of the newest runs.
+    list_cap: Option<usize>,
     /// Pairs of patches that change the same lines.
     clashes: BTreeSet<(String, String)>,
     /// Patches that change lines every other patch does.

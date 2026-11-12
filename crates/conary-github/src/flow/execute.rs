@@ -183,7 +183,9 @@ pub(crate) fn act<G: Write>(
             Step::StartDeferred(names) => {
                 super::deferred::begin(pass, github, f, names, record, data)?
             }
-            Step::CancelDeferred(nonce) => super::deferred::cancel(github, f, nonce, record, data)?,
+            Step::CancelDeferred(nonce) => {
+                super::deferred::cancel(github, f, nonce, pass.now, record, data)?
+            }
             Step::UpdateBranch => github.update(&repo, f.number, &f.revision.head)?,
             Step::Merge => {
                 // Read back the permission; a refused or lost status write must never merge.

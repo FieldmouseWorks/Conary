@@ -1,6 +1,7 @@
 //! Deferred checks against the simulated GitHub, across successive passes.
 use super::flow_pass_case::{Case, REPO};
 use super::head;
+use crate::attest::testing;
 use crate::flow::*;
 use crate::sim::Call;
 use serde_json::json;
@@ -26,16 +27,43 @@ fn step(c: &Case, now: u64) -> Step {
 fn runs(c: &Case) -> usize {
     c.hub.dispatched(REPO).len()
 }
-/// What the dispatched workflow does when it finishes: report on the PR's head.
+/// The dispatched run owning `nonce`, if any.
+fn run_of(c: &Case, nonce: &str) -> Option<u64> {
+    let title = format!("conary {nonce}");
+    c.hub
+        .dispatched(REPO)
+        .iter()
+        .find(|r| r["display_title"] == title)
+        .map(|r| r["id"].as_u64().unwrap())
+}
+/// Signs a dispatched job's statement as GitHub does for a dispatch: the token
+/// is for the default branch's commit, the statement names the head.
+fn sign(c: &Case, head: &str, job: u64, nonce: &str) {
+    sign_for(c, head, job, nonce, "workflow_dispatch");
+}
+fn sign_for(c: &Case, head: &str, job: u64, nonce: &str, event: &str) {
+    let tree = crate::branches::Branches::tree(&c.hub, REPO, head).unwrap();
+    let statement = testing::deferred_statement(head, &tree, nonce, "pass");
+    let mut claims = testing::claims(REPO, &"9".repeat(40), job, &statement);
+    claims["event_name"] = json!(event);
+    c.hub
+        .attest(job, &testing::file(&statement, &testing::token(&claims)));
+}
+/// What the dispatched workflow does when it finishes: its job reports on the
+/// PR's head. A nonce nobody dispatched is a job of some other run.
 fn report(c: &Case, head: &str, nonce: &str, conclusion: &str) -> u64 {
-    let id = c.hub.run_id();
+    let owned = run_of(c, nonce);
+    let id = owned.map_or_else(|| c.hub.run_id(), |run| run / 10);
     c.hub.add_check(
         head,
         json!({"id":id,"name":HEAVY,"status":"completed","conclusion":conclusion,
-            "external_id":nonce,"started_at":"2026-11-01T00:00:00Z"}),
+            "started_at":"2026-11-01T00:00:00Z"}),
     );
+    if let Some(run) = owned {
+        c.hub.finish_workflow(REPO, run, conclusion);
+    }
     if conclusion == "success" {
-        c.attest_run(head, id, None);
+        sign(c, head, id, nonce);
     }
     id
 }
@@ -322,4 +350,292 @@ fn a_configuration_that_collides_with_a_gate_is_refused() {
     }
     .run(&c.hub, &REPO.parse().unwrap(), None, Some(&mut store));
     assert!(result.is_err());
+}
+
+/// An owned job that succeeded without anyone signing it.
+fn unsigned(c: &Case, head: &str, nonce: &str) -> u64 {
+    let run = run_of(c, nonce).unwrap();
+    let id = run / 10;
+    c.hub.add_check(
+        head,
+        json!({"id":id,"name":HEAVY,"status":"completed","conclusion":"success",
+            "started_at":"2026-11-01T00:00:00Z"}),
+    );
+    c.hub.finish_workflow(REPO, run, "success");
+    id
+}
+fn refused(c: &Case, now: u64) {
+    let reports = c.pass(now, false);
+    assert!(
+        reports[0].error.is_some()
+            || !matches!(reports[0].next.as_ref().unwrap().step, Step::Merge),
+        "{:?}",
+        reports[0].next
+    );
+    assert_eq!(c.hub.count(Call::Land), 0);
+    assert!(c.hub.merged(REPO, 3).is_none());
+}
+
+#[test]
+fn a_foreign_attested_run_never_supplies_the_owned_runs_missing_attestation() {
+    let c = configured();
+    c.clean_review();
+    let now = jobs::now();
+    step(&c, now);
+    let n = nonce(&c);
+    // The owned job succeeded but nobody attested it; a newer same-named job
+    // of some other run is attested, even naming this nonce.
+    unsigned(&c, &head(3), &n);
+    let foreign = report(&c, &head(3), "someone-else", "success");
+    sign(&c, &head(3), foreign, &n);
+    refused(&c, now + 1);
+    refused(&c, now + 2);
+}
+
+#[test]
+fn the_signed_statement_must_name_this_dispatch_and_a_dispatch_event() {
+    let c = configured();
+    c.clean_review();
+    let now = jobs::now();
+    step(&c, now);
+    let n = nonce(&c);
+    let id = unsigned(&c, &head(3), &n);
+    sign(&c, &head(3), id, "another-dispatch");
+    refused(&c, now + 1);
+    c.hub.forget_artifacts(Some(id));
+    sign_for(&c, &head(3), id, &n, "push");
+    refused(&c, now + 2);
+    c.hub.forget_artifacts(Some(id));
+    sign(&c, &head(3), id, &n);
+    assert_eq!(step(&c, now + 3), Step::Merge);
+    assert_eq!(c.hub.count(Call::Land), 1);
+}
+
+#[test]
+fn a_dispatch_from_the_default_branch_is_accepted_on_the_prs_head() {
+    // The token's own commit is the default branch's, never the PR head's.
+    let c = configured();
+    c.clean_review();
+    let now = jobs::now();
+    step(&c, now);
+    report(&c, &head(3), &nonce(&c), "success");
+    assert_ne!(head(3), "9".repeat(40));
+    assert_eq!(step(&c, now + 1), Step::Merge);
+}
+
+#[test]
+fn an_accepted_dispatch_that_never_appears_is_woken_at_its_start_timeout() {
+    for reviewers in [true, false] {
+        let mut c = configured();
+        if reviewers {
+            c.clean_review();
+        } else {
+            c.config.settings.reviewers.clear();
+        }
+        // Accepted, but no run ever shows in the list.
+        c.hub.cap_run_list(Some(0));
+        let now = jobs::now();
+        let due = now + c.config.settings.deferred.start_timeout;
+        for later in [0, 5, 10] {
+            let reports = c.pass(now + later, false);
+            assert_eq!(reports[0].next.as_ref().unwrap().wait_until, Some(due));
+        }
+        // At the deadline it is lost and asked for again, without a webhook.
+        assert!(matches!(step(&c, due + 1), Step::StartDeferred(_)));
+    }
+}
+
+#[test]
+fn a_running_check_books_its_run_timeout() {
+    let c = configured();
+    c.clean_review();
+    let now = jobs::now();
+    step(&c, now);
+    let reports = c.pass(now + 1, false);
+    assert_eq!(
+        reports[0].next.as_ref().unwrap().wait_until,
+        Some(now + c.config.settings.deferred.run_timeout)
+    );
+}
+
+#[test]
+fn a_run_past_the_first_page_of_runs_is_still_found_by_its_id() {
+    let c = configured();
+    c.clean_review();
+    let now = jobs::now();
+    step(&c, now);
+    let old = nonce(&c);
+    let run = run_of(&c, &old).unwrap();
+    step(&c, now + 1);
+    // Newer dispatches push it off the list that is read.
+    for k in 0..3 {
+        crate::flow::Write::dispatch(
+            &c.hub,
+            REPO,
+            "heavy.yml",
+            "main",
+            &[("nonce".to_string(), format!("noise-{k}"))].into(),
+        )
+        .unwrap();
+    }
+    c.hub.cap_run_list(Some(2));
+    c.hub.push(REPO, 3, &head(4));
+    c.hub.refresh_flow(REPO, 3);
+    c.good_ci(&head(4));
+    assert_eq!(step(&c, now + 2), Step::CancelDeferred(old.clone()));
+    assert_eq!(
+        c.hub
+            .dispatched(REPO)
+            .iter()
+            .find(|r| r["id"] == run)
+            .unwrap()["conclusion"],
+        "cancelled"
+    );
+    // Nor does its absence from the list count it as lost and send it again.
+    assert_eq!(c.hub.count(Call::Dispatch), 4);
+}
+
+#[test]
+fn a_cancel_request_is_not_a_stop() {
+    let c = configured();
+    c.clean_review();
+    let now = jobs::now();
+    step(&c, now);
+    let old = nonce(&c);
+    c.hub.push(REPO, 3, &head(4));
+    c.hub.refresh_flow(REPO, 3);
+    c.good_ci(&head(4));
+    c.hub.ignore_cancels(true);
+    assert_eq!(step(&c, now + 1), Step::CancelDeferred(old.clone()));
+    // GitHub accepted it, the run still goes: it is kept, asked again, and
+    // nothing replaces it.
+    assert!(c.record().dispatches.iter().any(|d| d.nonce == old));
+    for later in [2, 70, 140, 210] {
+        let next = step(&c, now + later);
+        assert!(!matches!(next, Step::StartDeferred(_)), "{next:?}");
+    }
+    assert!(c.hub.count(Call::CancelRun) >= 3);
+    assert_eq!(c.hub.count(Call::Dispatch), 1);
+    assert!(c.record().dispatches.iter().any(|d| d.nonce == old));
+    c.hub.ignore_cancels(false);
+    step(&c, now + 300);
+    step(&c, now + 301);
+    assert!(c.record().dispatches.iter().all(|d| d.nonce != old));
+}
+
+#[test]
+fn a_timed_out_run_keeps_being_stopped_and_is_not_replaced_while_it_runs() {
+    let c = configured();
+    c.clean_review();
+    let now = jobs::now();
+    step(&c, now);
+    let old = nonce(&c);
+    c.hub.ignore_cancels(true);
+    let late = now + c.config.settings.deferred.run_timeout + 1;
+    assert_eq!(step(&c, late), Step::CancelDeferred(old.clone()));
+    for later in [1, 70, 140] {
+        let next = step(&c, late + later);
+        assert!(!matches!(next, Step::StartDeferred(_)), "{next:?}");
+    }
+    assert!(c.hub.count(Call::CancelRun) >= 2);
+    assert_eq!(c.hub.count(Call::Dispatch), 1);
+    c.hub.ignore_cancels(false);
+    step(&c, late + 300);
+    assert!(matches!(
+        step(&c, late + 301),
+        Step::StartDeferred(_) | Step::Wait { .. }
+    ));
+}
+
+#[test]
+fn a_run_is_cleaned_up_after_its_check_is_repointed_or_removed() {
+    for remove in [false, true] {
+        let mut c = configured();
+        c.clean_review();
+        let now = jobs::now();
+        step(&c, now);
+        let old = nonce(&c);
+        let run = run_of(&c, &old).unwrap();
+        if remove {
+            c.config.settings.deferred.checks.clear();
+        } else {
+            c.config
+                .settings
+                .deferred
+                .checks
+                .get_mut(HEAVY)
+                .unwrap()
+                .workflow = "other.yml".into();
+        }
+        assert_eq!(step(&c, now + 1), Step::CancelDeferred(old.clone()));
+        assert_eq!(
+            c.hub
+                .dispatched(REPO)
+                .iter()
+                .find(|r| r["id"] == run)
+                .unwrap()["conclusion"],
+            "cancelled"
+        );
+        step(&c, now + 2);
+        assert!(c.record().dispatches.iter().all(|d| d.nonce != old));
+    }
+}
+
+mod capped {
+    use super::super::flow_case::Case;
+    use crate::flow::deferred::Deferral;
+    use crate::flow::*;
+
+    fn five() -> Case {
+        let mut c = Case::new();
+        c.roles(&["primary", "secondary"]);
+        for t in 1..=5 {
+            c.review("primary", Verdict::Findings, t);
+        }
+        c.answered("primary");
+        c
+    }
+    fn view(c: &Case, state: Deferral, now: u64) -> Next {
+        let mut f = c.facts();
+        f.deferred.insert("heavy".into(), state);
+        next(&f, &c.memory, now).0
+    }
+
+    #[test]
+    fn a_capped_review_is_judged_before_it_waits_for_evidence() {
+        let mut c = five();
+        let start = |c: &Case| view(c, Deferral::Unstarted, 4000);
+        let wait = Deferral::InFlight { wake: 9999 };
+        // Not ready, and nothing to wait on yet: the judge is asked.
+        assert_eq!(start(&c).step, Step::Judge);
+        assert_eq!(view(&c, wait, 4000).step, Step::Judge);
+        c.judge("land");
+        assert_eq!(start(&c).step, Step::StartDeferred(vec!["heavy".into()]));
+        assert!(matches!(view(&c, wait, 4001).step, Step::Wait { .. }));
+        let done = Deferral::Done {
+            run: 1,
+            check_run: 1,
+        };
+        assert_eq!(view(&c, done, 4002).step, Step::Merge);
+    }
+
+    #[test]
+    fn an_approved_owner_judgment_is_readiness_too() {
+        let mut c = five();
+        c.judge("owner");
+        assert_eq!(view(&c, Deferral::Unstarted, 4000).step, Step::ListOwner);
+        c.approve();
+        assert_eq!(
+            view(&c, Deferral::Unstarted, 4001).step,
+            Step::StartDeferred(vec!["heavy".into()])
+        );
+    }
+
+    #[test]
+    fn a_push_invalidates_the_judgment_and_it_is_asked_again() {
+        let mut c = five();
+        c.judge("land");
+        c.push(&super::head(4));
+        assert_eq!(view(&c, Deferral::Unstarted, 4000).step, Step::Judge);
+    }
 }
