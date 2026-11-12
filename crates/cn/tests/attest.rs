@@ -66,6 +66,43 @@ fn service(status: u16, body: &'static str) -> (String, std::thread::JoinHandle<
     (url, served)
 }
 
+/// A token service answering its requests in turn with `answers`.
+fn service_seq(
+    answers: Vec<(u16, &'static str)>,
+) -> (String, std::thread::JoinHandle<Vec<String>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!(
+        "http://{}/token?api-version=2.0",
+        listener.local_addr().unwrap()
+    );
+    let served = std::thread::spawn(move || {
+        let mut lines = Vec::new();
+        for (status, body) in answers {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            loop {
+                let mut header = String::new();
+                reader.read_line(&mut header).unwrap();
+                if header.trim().is_empty() {
+                    break;
+                }
+            }
+            lines.push(line);
+            let mut stream = stream;
+            write!(
+                stream,
+                "HTTP/1.1 {status} X\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+        }
+        lines
+    });
+    (url, served)
+}
+
 fn read(path: &Value) -> String {
     std::fs::read_to_string(path.as_str().unwrap()).unwrap()
 }
@@ -243,4 +280,259 @@ fn attest_refuses_what_the_format_has_no_place_for() {
         assert!(!run.status.success(), "{args:?}");
     }
     assert!(!Path::new(out).exists());
+}
+
+// Burrow's statements, as its workflow wrote them before cn made them: the
+// subject, then the predicate in jq's key order on one line. cn must write
+// the same bytes for the same inputs.
+const FAIL_COMMIT_STATEMENT: &str = concat!(
+    "conary commit v1\nc0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0\n",
+    r#"{"result":"fail","revision":null,"tree":"7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e","skipped":[],"log":{"sha256":"642efd8bb55acff8e8b531a81b63cbc9d2b62acb652ec106891dca6ef1959a07","artifact":"flake-log-1"}}"#,
+    "\n"
+);
+
+#[test]
+fn a_failing_commit_claim_is_burrows_statement_byte_for_byte() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("flake.log");
+    std::fs::write(&log, "every check passed\n").unwrap();
+    let out = dir.path().join("out");
+    let run = attest(
+        &[
+            "commit",
+            COMMIT,
+            "--result",
+            "fail",
+            "--tree",
+            TREE,
+            "--log",
+            log.to_str().unwrap(),
+            "--log-artifact",
+            "flake-log-1",
+            "--out",
+            out.to_str().unwrap(),
+        ],
+        None,
+    );
+    assert!(run.status.success(), "{run:?}");
+    let made: Value = serde_json::from_slice(&run.stdout).unwrap();
+    assert_eq!(
+        format!("{}{}", read(&made["subject"]), read(&made["predicate"])),
+        FAIL_COMMIT_STATEMENT
+    );
+}
+
+// A gate split across legs is attested from each leg's log: cn puts them
+// together as burrow's gate job did (`leg K of N:` and then the leg's log),
+// names that in the predicate and keeps it for the job to upload.
+#[test]
+fn a_combined_leg_log_is_what_the_predicate_names_and_what_is_kept() {
+    let dir = tempfile::tempdir().unwrap();
+    let (one, two) = (dir.path().join("one"), dir.path().join("two"));
+    std::fs::write(&one, "built a\n").unwrap();
+    std::fs::write(&two, "built b\n").unwrap();
+    let out = dir.path().join("out");
+    let run = attest(
+        &[
+            "revision",
+            BASE,
+            HEAD,
+            "--result",
+            "pass",
+            "--tree",
+            TREE,
+            "--skipped",
+            "agents",
+            "--leg-log",
+            one.to_str().unwrap(),
+            "--leg-log",
+            two.to_str().unwrap(),
+            "--log-artifact",
+            "flake-log-1",
+            "--out",
+            out.to_str().unwrap(),
+        ],
+        None,
+    );
+    assert!(run.status.success(), "{run:?}");
+    let made: Value = serde_json::from_slice(&run.stdout).unwrap();
+    assert_eq!(
+        read(&made["log"]),
+        "leg 1 of 2:\nbuilt a\nleg 2 of 2:\nbuilt b\n"
+    );
+    assert_eq!(
+        format!("{}{}", read(&made["subject"]), read(&made["predicate"])),
+        format!(
+            "conary revision v1\n{BASE}\n{HEAD}\n{}\n",
+            format_args!(
+                r#"{{"result":"pass","revision":{{"base":"{BASE}","head":"{HEAD}"}},"tree":"{TREE}","skipped":["agents"],"log":{{"sha256":"40cebbe8158ea4c343a603a9121053d03fdd69f711d73f43345809ec04310a0a","artifact":"flake-log-1"}}}}"#
+            )
+        )
+    );
+    // One log or the legs', not both.
+    let run = attest(
+        &[
+            "commit",
+            COMMIT,
+            "--result",
+            "pass",
+            "--tree",
+            TREE,
+            "--log",
+            one.to_str().unwrap(),
+            "--leg-log",
+            two.to_str().unwrap(),
+            "--log-artifact",
+            "l",
+            "--out",
+            dir.path().join("o2").to_str().unwrap(),
+        ],
+        None,
+    );
+    assert!(!run.status.success());
+}
+
+fn negative_from(found: &str, extra: &[&str]) -> (Output, Option<Value>, tempfile::TempDir) {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("negative.json");
+    std::fs::write(&file, found).unwrap();
+    let log = dir.path().join("negative.log");
+    std::fs::write(&log, "built t: it failed\n").unwrap();
+    let out = dir.path().join("out");
+    let mut args = vec![
+        "negative",
+        BASE,
+        HEAD,
+        "--from",
+        file.to_str().unwrap(),
+        "--log",
+        log.to_str().unwrap(),
+        "--log-artifact",
+        "negative-log-1",
+        "--out",
+        out.to_str().unwrap(),
+    ];
+    args.extend_from_slice(extra);
+    let run = attest(&args, None);
+    let made = serde_json::from_slice(&run.stdout).ok();
+    (run, made, dir)
+}
+
+// burrow's negative.json is taken as it is, in the key order burrow's jq
+// gave the predicate, with the revision from the arguments.
+#[test]
+fn negative_json_is_the_statement_burrow_made_of_it() {
+    let (run, made, _dir) = negative_from(
+        &format!(
+            r#"{{"result":"fail","tree":"{TREE}","tests":["tests/a.txt"],"checks":["t"],"skipped":[],"unrun":["tests/b.txt"]}}"#
+        ),
+        &[],
+    );
+    assert!(run.status.success(), "{run:?}");
+    let made = made.unwrap();
+    assert_eq!(
+        format!("{}{}", read(&made["subject"]), read(&made["predicate"])),
+        format!(
+            "conary negative v1\n{BASE}\n{HEAD}\n{}\n",
+            format_args!(
+                r#"{{"result":"fail","revision":{{"base":"{BASE}","head":"{HEAD}"}},"tree":"{TREE}","tests":["tests/a.txt"],"checks":["t"],"skipped":[],"unrun":["tests/b.txt"],"log":{{"sha256":"9a1e0801bbb8cb2932ef91ed59175c946e9197d3f21b6846f1ca7e03db1cef30","artifact":"negative-log-1"}}}}"#
+            )
+        )
+    );
+    assert_eq!(
+        made["predicate_type"],
+        json!(
+            "https://github.com/FieldmouseWorks/Conary/blob/main/docs/ci-attestation.md#negative-v1"
+        )
+    );
+
+    // A change that needs no negative has a null tree and empty lists.
+    let (run, made, _dir) = negative_from(
+        r#"{"result":"none","tree":null,"tests":[],"checks":[],"skipped":[],"unrun":[]}"#,
+        &[],
+    );
+    assert!(run.status.success(), "{run:?}");
+    assert!(read(&made.unwrap()["predicate"]).contains(r#""tree":null,"tests":[]"#));
+}
+
+// What the format has no place for in negative.json is refused, and nothing
+// is written.
+#[test]
+fn negative_json_is_refused_when_it_doesnt_fit_the_format() {
+    // The same shape that fits is taken, so the refusals below are the
+    // format's and not a bad command line.
+    let (run, _, _dir) = negative_from(
+        r#"{"result":"none","tree":null,"tests":[],"checks":[],"skipped":[],"unrun":[]}"#,
+        &[],
+    );
+    assert!(run.status.success(), "{run:?}");
+    for found in [
+        // An invented key.
+        r#"{"result":"fail","tree":"7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e","tests":[],"checks":[],"skipped":[],"unrun":[],"extra":1}"#,
+        // A result the format doesn't name.
+        r#"{"result":"maybe","tree":null,"tests":[],"checks":[],"skipped":[],"unrun":[]}"#,
+        // A tree that isn't an object id.
+        r#"{"result":"fail","tree":"abc","tests":[],"checks":[],"skipped":[],"unrun":[]}"#,
+        // None with a tree.
+        r#"{"result":"none","tree":"7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e","tests":[],"checks":[],"skipped":[],"unrun":[]}"#,
+        // A list missing.
+        r#"{"result":"none","tree":null,"tests":[],"checks":[],"skipped":[]}"#,
+        "not json",
+    ] {
+        let (run, _, dir) = negative_from(found, &[]);
+        assert!(!run.status.success(), "{found}");
+        assert!(!dir.path().join("out").exists(), "{found}");
+    }
+    // Flags beside the file would be two sources for one fact.
+    let (run, _, _dir) = negative_from(
+        r#"{"result":"none","tree":null,"tests":[],"checks":[],"skipped":[],"unrun":[]}"#,
+        &["--result", "fail"],
+    );
+    assert!(!run.status.success());
+}
+
+// GitHub's token service answers 503 now and then: cn asks again, and signs
+// the same statement the unsigned run writes.
+#[test]
+fn signing_asks_again_when_the_token_service_says_try_later() {
+    let (url, served) = service_seq(vec![
+        (503, "{}"),
+        (503, "{}"),
+        (200, r#"{"value":"a.b.c"}"#),
+    ]);
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("n.json");
+    std::fs::write(
+        &file,
+        format!(
+            r#"{{"result":"fail","tree":"{TREE}","tests":["t"],"checks":["c"],"skipped":[],"unrun":[]}}"#
+        ),
+    )
+    .unwrap();
+    let log = dir.path().join("l");
+    std::fs::write(&log, "x").unwrap();
+    let out = dir.path().join("out");
+    let signed = attest(
+        &[
+            "negative",
+            BASE,
+            HEAD,
+            "--from",
+            file.to_str().unwrap(),
+            "--log",
+            log.to_str().unwrap(),
+            "--log-artifact",
+            "negative-log-1",
+            "--out",
+            out.to_str().unwrap(),
+            "--sign",
+        ],
+        Some(&url),
+    );
+    assert!(signed.status.success(), "{signed:?}");
+    assert_eq!(served.join().unwrap().len(), 3);
+    let signed: Value = serde_json::from_slice(&signed.stdout).unwrap();
+    let statement = format!("{}{}", read(&signed["subject"]), read(&signed["predicate"]));
+    assert_eq!(read(&signed["attestation"]), format!("{statement}a.b.c\n"));
+    assert_eq!(signed["audience"], json!(audience(&statement)));
 }

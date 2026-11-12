@@ -60,23 +60,28 @@ pub enum AttestCommand {
         /// check passed and runs every new test; skipped when every check
         /// built passed but not all were built or some new test none runs;
         /// none when the change needs no negative.
-        #[arg(long)]
-        result: Negative,
+        #[arg(long, required_unless_present = "from", conflicts_with = "from")]
+        result: Option<Negative>,
         /// The negative tree. Every result but none has one.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "from")]
         tree: Option<String>,
         /// Each new test file.
-        #[arg(long = "test", value_name = "PATH")]
+        #[arg(long = "test", value_name = "PATH", conflicts_with = "from")]
         tests: Vec<String>,
         /// Each check that reads the test files.
-        #[arg(long = "check", value_name = "CHECK")]
+        #[arg(long = "check", value_name = "CHECK", conflicts_with = "from")]
         checks: Vec<String>,
         /// Each of those checks that wasn't built.
-        #[arg(long = "skipped", value_name = "CHECK")]
+        #[arg(long = "skipped", value_name = "CHECK", conflicts_with = "from")]
         skipped: Vec<String>,
         /// Each new test file none of the checks runs.
-        #[arg(long = "unrun", value_name = "PATH")]
+        #[arg(long = "unrun", value_name = "PATH", conflicts_with = "from")]
         unrun: Vec<String>,
+        /// Take all of the above from burrow's `negative.json` (`result`,
+        /// `tree`, `tests`, `checks`, `skipped` and `unrun`, nothing else)
+        /// instead of from flags.
+        #[arg(long, value_name = "FILE")]
+        from: Option<PathBuf>,
         #[command(flatten)]
         out: Out,
     },
@@ -99,8 +104,17 @@ pub struct GateArgs {
 #[derive(clap::Args)]
 pub struct Out {
     /// The gate's output, which the predicate names by its SHA-256.
-    #[arg(long)]
-    log: PathBuf,
+    #[arg(
+        long,
+        required_unless_present = "leg_logs",
+        conflicts_with = "leg_logs"
+    )]
+    log: Option<PathBuf>,
+    /// One leg's log of a gate split across legs, in leg order. The gate's
+    /// output is them one after another, each under a `leg K of N:` line
+    /// (written to `combined.log` in `--out`), and the predicate names that.
+    #[arg(long = "leg-log", value_name = "FILE")]
+    leg_logs: Vec<PathBuf>,
     /// The name of the run's artifact that keeps the log.
     #[arg(long = "log-artifact", value_name = "NAME")]
     log_artifact: String,
@@ -112,6 +126,23 @@ pub struct Out {
     /// job does: the job needs `id-token: write`.
     #[arg(long)]
     sign: bool,
+}
+
+impl Out {
+    /// The gate's output the predicate names: the one log, or the legs' put
+    /// together.
+    fn log_bytes(&self) -> Result<Vec<u8>> {
+        let read = |path: &PathBuf| -> Result<Vec<u8>> {
+            Ok(std::fs::read(path)
+                .map_err(|e| format!("the log {} doesn't read: {e}", path.display()))?)
+        };
+        match &self.log {
+            Some(path) => read(path),
+            None => Ok(combined(
+                &self.leg_logs.iter().map(read).collect::<Result<Vec<_>>>()?,
+            )),
+        }
+    }
 }
 
 pub fn run(cli: &Cli, command: &AttestCommand) -> Result<()> {
@@ -156,6 +187,7 @@ pub fn run(cli: &Cli, command: &AttestCommand) -> Result<()> {
         println!(
             "{}",
             json!({
+                "log": made.log,
                 "subject": made.subject,
                 "predicate": made.predicate,
                 "predicate_type": made.predicate_type,
@@ -169,11 +201,7 @@ pub fn run(cli: &Cli, command: &AttestCommand) -> Result<()> {
 
 /// The claim a command makes, and where it goes.
 fn claim(command: &AttestCommand) -> Result<(Claim, &Out)> {
-    let log = |out: &Out| -> Result<Log> {
-        let bytes = std::fs::read(&out.log)
-            .map_err(|e| format!("the log {} doesn't read: {e}", out.log.display()))?;
-        Ok(Log::of(&bytes, &out.log_artifact))
-    };
+    let log = |out: &Out| -> Result<Log> { Ok(Log::of(&out.log_bytes()?, &out.log_artifact)) };
     Ok(match command {
         AttestCommand::Ci(_) | AttestCommand::PrepareNegative(_) => unreachable!(),
         AttestCommand::Commit { commit, gate, out } => (
@@ -211,26 +239,76 @@ fn claim(command: &AttestCommand) -> Result<(Claim, &Out)> {
             checks,
             skipped,
             unrun,
+            from,
             out,
-        } => (
-            Claim::Negative {
-                base: base.clone(),
-                head: head.clone(),
-                result: *result,
-                tree: tree.clone(),
-                tests: tests.clone(),
-                checks: checks.clone(),
-                skipped: skipped.clone(),
-                unrun: unrun.clone(),
-                log: log(out)?,
-            },
-            out,
-        ),
+        } => {
+            let found = match (from, result) {
+                (Some(path), _) => Found::read(path)?,
+                (None, Some(result)) => Found {
+                    result: *result,
+                    tree: tree.clone(),
+                    tests: tests.clone(),
+                    checks: checks.clone(),
+                    skipped: skipped.clone(),
+                    unrun: unrun.clone(),
+                },
+                (None, None) => unreachable!("clap requires --result without --from"),
+            };
+            (
+                Claim::Negative {
+                    base: base.clone(),
+                    head: head.clone(),
+                    result: found.result,
+                    tree: found.tree,
+                    tests: found.tests,
+                    checks: found.checks,
+                    skipped: found.skipped,
+                    unrun: found.unrun,
+                    log: log(out)?,
+                },
+                out,
+            )
+        }
     })
+}
+
+/// What a negative run found, as burrow's `negative.json` keeps it. The
+/// subject and predicate are made from it here, never by the caller.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Found {
+    result: Negative,
+    tree: Option<String>,
+    tests: Vec<String>,
+    checks: Vec<String>,
+    skipped: Vec<String>,
+    unrun: Vec<String>,
+}
+
+impl Found {
+    fn read(path: &Path) -> Result<Self> {
+        let bytes =
+            std::fs::read(path).map_err(|e| format!("{} doesn't read: {e}", path.display()))?;
+        Ok(serde_json::from_slice(&bytes)
+            .map_err(|e| format!("{} isn't a negative run's result: {e}", path.display()))?)
+    }
+}
+
+/// The legs' logs as one gate output: each under its `leg K of N:` line, one
+/// after another.
+fn combined(legs: &[Vec<u8>]) -> Vec<u8> {
+    let mut all = Vec::new();
+    for (k, log) in legs.iter().enumerate() {
+        all.extend(format!("leg {} of {}:\n", k + 1, legs.len()).bytes());
+        all.extend(log);
+    }
+    all
 }
 
 /// What `cn attest` wrote.
 struct Made {
+    /// The legs' logs together, when there were legs.
+    log: Option<PathBuf>,
     subject: PathBuf,
     predicate: PathBuf,
     predicate_type: &'static str,
@@ -264,6 +342,14 @@ fn make(claim: &Claim, out: &Out, request: Option<Request>) -> Result<Made> {
             .map_err(|e| format!("{} doesn't write: {e}", path.display()))?;
         Ok(path)
     };
+    // Legs' logs are put together here, so the file a job keeps as the log is
+    // the one the predicate's digest names.
+    let log = if out.leg_logs.is_empty() {
+        None
+    } else {
+        std::fs::write(out.out.join("combined.log"), out.log_bytes()?)?;
+        Some(out.out.join("combined.log"))
+    };
     let subject = write(name, &subject)?;
     let predicate = write("predicate.json", &format!("{predicate}\n"))?;
     let (attestation, audience) = match signed {
@@ -271,6 +357,7 @@ fn make(claim: &Claim, out: &Out, request: Option<Request>) -> Result<Made> {
         None => (None, None),
     };
     Ok(Made {
+        log,
         subject,
         predicate,
         predicate_type,
