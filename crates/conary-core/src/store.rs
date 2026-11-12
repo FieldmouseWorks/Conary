@@ -433,6 +433,39 @@ mod tests {
     }
 
     #[test]
+    fn historical_signed_undos_replay_without_rewriting_the_log() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(Lock::take(dir.path()).unwrap(), key(), None).unwrap();
+        let x = observe(&mut store, 1);
+        store.record(Body::Revision { change: x, base: commit('a'), head: commit('b') }).unwrap();
+        store.record(Body::Land {
+            change: x, revision: RevisionId::new(&commit('a'), &commit('b')),
+            before: commit('a'), after: commit('c'),
+            by: Authority::Status { login: "steward".into() },
+        }).unwrap();
+        let u = observe(&mut store, 2);
+        let anchor = store.head();
+        drop(store);
+        // Simulate the old writer: a signed undo with exactly the historical
+        // fields, appended below today's admission rules.
+        let json = serde_json::json!({
+            "op": "undo", "change": u, "reverts": [x], "asked": {"by": "change"},
+        });
+        let body: Body = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&body).unwrap(), json);
+        let (mut log, _) = OpLog::open(Lock::take(dir.path()).unwrap(), key(), anchor).unwrap();
+        log.append(body, now()).unwrap();
+        let anchor = log.head();
+        drop(log);
+        let path = dir.path().join("ops.jsonl");
+        let before = std::fs::read(&path).unwrap();
+        let store = Store::open(Lock::take(dir.path()).unwrap(), key(), anchor).unwrap();
+        assert_eq!(store.ledger().undo_of(x), Some(u));
+        assert_eq!(store.ledger().change(u).unwrap().undo.as_ref().unwrap().reverts, [x]);
+        assert_eq!(std::fs::read(path).unwrap(), before);
+    }
+
+    #[test]
     fn two_changes_cant_claim_one_trunk_commit() {
         let dir = tempfile::tempdir().unwrap();
         let mut store = Store::open(Lock::take(dir.path()).unwrap(), key(), None).unwrap();

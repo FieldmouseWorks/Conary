@@ -351,3 +351,23 @@ fn an_undo_is_written_as_the_log_keeps_it() {
         assert_eq!(serde_json::from_value::<Body>(want).unwrap(), body);
     }
 }
+
+#[test]
+fn new_undo_records_require_a_nonblank_reason() {
+    for reason in [None, Some(""), Some(" \t\n\u{2003}")] {
+        let mut b = Book::default();
+        let x = b.landed();
+        let u = b.change();
+        let mut json = serde_json::json!({
+            "op": "undo", "change": u, "reverts": [x], "asked": {"by": "change"},
+        });
+        if let Some(reason) = reason {
+            json["reason"] = reason.into();
+        }
+        let body: Body = serde_json::from_value(json).unwrap();
+        let head = b.ledger.head();
+        assert!(b.record(body).is_err(), "accepted reason {reason:?}");
+        assert_eq!(b.ledger.head(), head);
+        assert!(b.ledger.change(u).unwrap().undo.is_none());
+    }
+}

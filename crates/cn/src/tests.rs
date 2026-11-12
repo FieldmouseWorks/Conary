@@ -3,6 +3,24 @@ use conary_github::IngestError;
 use conary_github::anchor::AnchorError;
 use conary_github::undo::UndoError;
 
+#[test]
+fn undo_requires_a_nonblank_reason_for_every_selection() {
+    for selection in [
+        vec!["o/r#1"],
+        vec!["--actor", "session"],
+        vec!["--since", "1", "--repo", "o/r"],
+    ] {
+        for reason in [None, Some(""), Some(" \t\n\u{2003}")] {
+            let mut args = vec!["cn", "undo"];
+            args.extend(&selection);
+            if let Some(reason) = reason {
+                args.extend(["--reason", reason]);
+            }
+            assert!(Cli::try_parse_from(&args).is_err(), "{args:?}");
+        }
+    }
+}
+
 // Every query, and only a query, is asked at a time; asked so, it
 // reads the ledger as it stood then.
 #[test]
