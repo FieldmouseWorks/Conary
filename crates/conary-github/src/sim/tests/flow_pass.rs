@@ -347,7 +347,7 @@ fn pass_memory_roundtrips_nonempty_composite_keys() {
     record
         .memory
         .judge_issuance
-        .insert(revision.clone(), (10, Some(Judgment::Land)));
+        .insert(revision.clone(), (10, Some(Judgment::Pass)));
     record
         .memory
         .review_posts

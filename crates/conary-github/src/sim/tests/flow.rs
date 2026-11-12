@@ -158,7 +158,7 @@ fn r2_requires_person_even_after_judge_land() {
     // gates.py: a judge's land verdict never replaces the R2 person's answer.
     let mut c = Case::new();
     c.secret();
-    c.judge("land");
+    c.judge("pass");
     assert_eq!(c.view(4000).step, Step::ListOwner);
 }
 
@@ -184,7 +184,7 @@ fn owner_approval_is_required_after_label_removal_and_is_revision_scoped() {
 fn stale_judgment_is_not_a_verdict_for_this_head() {
     // gates.py: a judgment at an old head cannot release the new one.
     let mut c = Case::new();
-    c.judge("land");
+    c.judge("pass");
     c.push(&head(4));
     c.secret();
     c.review("reviewer", Verdict::Clean, 1);
@@ -195,7 +195,7 @@ fn stale_judgment_is_not_a_verdict_for_this_head() {
 fn judge_failure_is_held_even_with_pending_ci() {
     // handle.py: a failing judgment holds it whatever CI is doing.
     let mut c = Case::new();
-    c.judge("failed");
+    c.judge("fail");
     c.hub.put_checks(&head(3),json!([{"id":1,"name":"check","status":"in_progress","conclusion":null,"check_suite":{"id":1}}]));
     assert_eq!(c.view(4000).step, Step::HandFix(Kind::JudgeFailure));
 }
@@ -765,7 +765,7 @@ fn r2_land_is_released_by_the_owner_for_its_revision_only() {
     for change in 0..3 {
         let mut c = Case::new();
         c.secret();
-        c.judge("land");
+        c.judge("pass");
         assert_eq!(c.pass(4000).step, Step::ListOwner);
         assert!(!c.facts().owner_approved);
         assert_eq!(c.pass(4001).step, Step::ListOwner);
@@ -786,7 +786,7 @@ fn r2_land_is_released_by_the_owner_for_its_revision_only() {
         }
         c.secret();
         c.review("reviewer", Verdict::Clean, 4005);
-        c.judge("land");
+        c.judge("pass");
         assert_eq!(c.view(5000).step, Step::ListOwner);
     }
 }
@@ -800,7 +800,7 @@ fn label_without_an_owed_decision_is_not_approval() {
     c.pass(4000);
     assert!(!c.facts().owner_approved);
     c.hub.touch(&head(3), &["src/a.rs"]);
-    c.judge("land");
+    c.judge("pass");
     c.pass(4001);
     assert!(!c.facts().owner_approved);
 }

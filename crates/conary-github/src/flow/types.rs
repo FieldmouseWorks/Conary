@@ -193,18 +193,25 @@ pub struct Job {
     pub repeated: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Judgment {
-    Land,
-    Owner,
-    Failing,
-    Misdescribed,
-}
+pub use conary_core::plugin::Judgment;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Judged {
     pub revision: Revision,
     pub verdict: Judgment,
+}
+
+impl Judged {
+    /// A judge plugin's answer for `revision`; other answers are not judgments.
+    pub fn from_answer(revision: Revision, answer: &conary_core::plugin::Answer) -> Option<Self> {
+        match answer {
+            conary_core::plugin::Answer::Judge { verdict, .. } => Some(Self {
+                revision,
+                verdict: *verdict,
+            }),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
