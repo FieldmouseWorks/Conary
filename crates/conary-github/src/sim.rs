@@ -100,6 +100,8 @@ pub(crate) struct World {
     cancel_ignored: bool,
     /// A workflow's run list shows only this many of the newest runs.
     list_cap: Option<usize>,
+    /// The run list cannot be read whole.
+    list_incomplete: bool,
     /// Pairs of patches that change the same lines.
     clashes: BTreeSet<(String, String)>,
     /// Patches that change lines every other patch does.

@@ -97,6 +97,9 @@ pub struct Dispatch {
     /// The workflow it was sent to, kept so that changing the configuration
     /// never loses a run that is still going.
     pub workflow: String,
+    /// The ref it was sent to, resolved: the configured one or the default
+    /// branch then. A different ref is different work.
+    pub git_ref: String,
     pub head: String,
     /// Unique to this dispatch. The run is titled with it and the signed
     /// evidence of the job names it.
@@ -132,6 +135,8 @@ pub(crate) struct Proof {
     pub name: String,
     pub nonce: String,
     pub run: u64,
+    /// The commit the run is on, which hosts its job's check run.
+    pub sha: String,
     pub check_run: u64,
 }
 
@@ -141,6 +146,11 @@ pub(super) struct Observation {
     pub deferrals: BTreeMap<String, Deferral>,
     /// Nonces of runs to stop: obsolete heads, or lost and still running.
     pub stale: Vec<String>,
+    /// The earliest moment a dispatch needs another look, whatever else the
+    /// pass decides, from the same observed state that decides loss.
+    pub wake: Option<u64>,
+    /// The record behind each `Done`.
+    pub proofs: BTreeMap<String, Proof>,
     adopt: Vec<(String, u64)>,
     retire: BTreeSet<String>,
 }
@@ -179,12 +189,16 @@ fn lapses(d: &Dispatch, run: Option<&crate::api::WorkflowRun>, c: &DeferredConfi
 }
 
 /// Read the dispatches and their evidence. Evidence is a completed, successful
-/// check run on the head that is the job of the owned dispatch's own workflow
-/// run: the name alone is nothing, and a missing run is never a pass.
+/// check run that is the job of the owned dispatch's own workflow run, on the
+/// commit the run is on (a dispatch's is its ref's tip, never the PR's head),
+/// that `prove` also accepts as attested for this head, tree and nonce. The
+/// name alone is nothing, a missing run is never a pass, and a candidate
+/// `prove` refuses leaves the dispatch subject to loss and retry.
 pub(super) fn observe<G: Read + Actions + ?Sized>(
     github: &G,
     f: &Facts,
     now: u64,
+    prove: &dyn Fn(&Proof) -> bool,
 ) -> std::result::Result<Observation, crate::api::ApiError> {
     let config = &f.settings.deferred;
     let mut seen = Observation::default();
@@ -192,12 +206,23 @@ pub(super) fn observe<G: Read + Actions + ?Sized>(
         return Ok(seen);
     }
     let repo = f.repo.to_string();
-    // A saved run is read by its id; one not yet seen is looked for in the
-    // whole listing of its own workflow, as it was sent.
+    // A saved run is read by its id; one not yet seen is looked for in its own
+    // workflow's listing from when the earliest such dispatch was sent.
     let mut listed: BTreeMap<&str, Vec<crate::api::WorkflowRun>> = BTreeMap::new();
     for d in f.dispatches.iter().filter(|d| d.run.is_none()) {
         if !listed.contains_key(d.workflow.as_str()) {
-            listed.insert(&d.workflow, github.workflow_runs(&repo, &d.workflow)?);
+            let since = f
+                .dispatches
+                .iter()
+                .filter(|o| o.run.is_none() && o.workflow == d.workflow)
+                .map(|o| o.sent_at)
+                .min()
+                .unwrap_or(d.sent_at)
+                .saturating_sub(300);
+            listed.insert(
+                &d.workflow,
+                github.workflow_runs(&repo, &d.workflow, since)?,
+            );
         }
     }
     let mut run_of: BTreeMap<&str, Option<crate::api::WorkflowRun>> = BTreeMap::new();
@@ -213,9 +238,13 @@ pub(super) fn observe<G: Read + Actions + ?Sized>(
     }
     let obsolete = |d: &Dispatch| {
         d.head != f.revision.head
-            || config.checks.get(&d.check).map(|s| s.workflow.as_str()) != Some(d.workflow.as_str())
+            || config.checks.get(&d.check).is_none_or(|s| {
+                s.workflow != d.workflow
+                    || s.git_ref.as_deref().unwrap_or(&f.default_branch) != d.git_ref
+            })
     };
     let mut unsettled = Vec::new();
+    let mut asks: Vec<(Option<u64>, String)> = Vec::new();
     for d in &f.dispatches {
         let run = run_of[d.nonce.as_str()].as_ref();
         if d.run.is_none()
@@ -227,7 +256,7 @@ pub(super) fn observe<G: Read + Actions + ?Sized>(
         let live = run.is_some_and(|r| r.status != "completed");
         let settled = !live && (run.is_some() || d.run.is_some() || lost);
         if live && (obsolete(d) || lost) && d.cancel_asked.is_none_or(|t| now >= t + RETRY) {
-            seen.stale.push(d.nonce.clone());
+            asks.push((d.cancel_asked, d.nonce.clone()));
         }
         // Forgotten only once the run is seen finished (or was never there).
         if obsolete(d) && settled {
@@ -236,42 +265,41 @@ pub(super) fn observe<G: Read + Actions + ?Sized>(
             unsettled.push(d);
         }
     }
+    // Never-asked runs first, then the longest since asked: an ignored
+    // request never starves another run's first.
+    asks.sort();
+    seen.stale = asks.into_iter().map(|(_, n)| n).collect();
     let here: Vec<&Dispatch> = f
         .dispatches
         .iter()
         .filter(|d| !obsolete(d) && !seen.retire.contains(&d.nonce))
         .collect();
-    let checks = if here.is_empty() {
-        Vec::new()
-    } else {
-        github.check_runs(&repo, &f.revision.head)?
-    };
     for name in config.checks.keys() {
         let owned: Vec<&&Dispatch> = here.iter().filter(|d| &d.check == name).collect();
         let mut proof = None;
         for d in &owned {
-            let Some(run) = d
-                .run
-                .or_else(|| run_of[d.nonce.as_str()].as_ref().map(|r| r.id))
-            else {
+            let Some(run) = run_of[d.nonce.as_str()].as_ref() else {
                 continue;
             };
-            let finished = run_of[d.nonce.as_str()].as_ref().is_some_and(|r| {
-                r.status == "completed" && r.conclusion.as_deref() == Some("success")
-            });
-            if !finished {
+            if run.status != "completed" || run.conclusion.as_deref() != Some("success") {
                 continue;
             }
-            for c in checks.iter().filter(|c| {
+            for c in github.check_runs(&repo, &run.head_sha)?.iter().filter(|c| {
                 &c.name == name
                     && c.status == "completed"
                     && c.conclusion.as_deref() == Some("success")
             }) {
-                if github.job(&repo, c.id)?.is_some_and(|j| j.run_id == run) {
-                    proof = Some(Deferral::Done {
-                        run,
+                if github.job(&repo, c.id)?.is_some_and(|j| j.run_id == run.id) {
+                    let candidate = Proof {
+                        name: name.clone(),
+                        nonce: d.nonce.clone(),
+                        run: run.id,
+                        sha: run.head_sha.clone(),
                         check_run: c.id,
-                    });
+                    };
+                    if prove(&candidate) {
+                        proof = Some(candidate);
+                    }
                 }
             }
         }
@@ -285,7 +313,12 @@ pub(super) fn observe<G: Read + Actions + ?Sized>(
             })
             .collect();
         let state = if let Some(done) = proof {
-            done
+            let state = Deferral::Done {
+                run: done.run,
+                check_run: done.check_run,
+            };
+            seen.proofs.insert(name.clone(), done);
+            state
         } else if let Some(wake) = stopping.into_iter().min() {
             Deferral::Stopping { wake }
         } else {
@@ -302,34 +335,50 @@ pub(super) fn observe<G: Read + Actions + ?Sized>(
         };
         seen.deferrals.insert(name.clone(), state);
     }
-    Ok(seen)
-}
-
-/// The earliest moment a dispatch in the record needs another look, whatever
-/// else the pass decided: its start or run deadline, or the next ask to stop
-/// it. Work whose evidence is in needs none. Moments already past are not
-/// booked: the pass that saw them acted on them.
-pub(super) fn deadline(f: &Facts, dispatches: &[Dispatch], now: u64) -> Option<u64> {
-    let config = &f.settings.deferred;
-    dispatches
-        .iter()
-        .filter(|d| {
-            !f.deferred
-                .values()
-                .any(|s| matches!(s, Deferral::Done { run, .. } if Some(*run) == d.run))
+    // Booked from the same states: unseen, running, finished awaiting its
+    // evidence, and stopping, whatever the pass then decides.
+    let proven = |d: &Dispatch| {
+        seen.deferrals.values().any(|s| {
+            matches!(s, Deferral::Done { run, .. }
+                if Some(*run) == run_of[d.nonce.as_str()].as_ref().map(|r| r.id))
         })
+    };
+    seen.wake = f
+        .dispatches
+        .iter()
+        .filter(|d| !seen.retire.contains(&d.nonce) && !proven(d))
         .flat_map(|d| {
-            let due = if d.run.is_some() {
-                config.run_timeout
-            } else {
-                config.start_timeout
-            };
             [
-                Some(d.sent_at.saturating_add(due)),
+                lapses(d, run_of[d.nonce.as_str()].as_ref(), config),
                 d.cancel_asked.map(|t| t.saturating_add(RETRY)),
             ]
         })
         .flatten()
+        .chain((seen.stale.len() > 1).then(|| now.saturating_add(1)))
+        .filter(|t| *t > now)
+        .min();
+    Ok(seen)
+}
+
+/// The moment to look again: what was observed, and what this pass itself
+/// changed in the record (a dispatch just sent, a stop just asked).
+pub(super) fn deadline(f: &Facts, dispatches: &[Dispatch], now: u64) -> Option<u64> {
+    let start = f.settings.deferred.start_timeout;
+    dispatches
+        .iter()
+        .filter(|d| {
+            !f.dispatches
+                .iter()
+                .any(|o| o.nonce == d.nonce && o.cancel_asked == d.cancel_asked)
+        })
+        .flat_map(|d| {
+            [
+                Some(d.sent_at.saturating_add(start)),
+                d.cancel_asked.map(|t| t.saturating_add(RETRY)),
+            ]
+        })
+        .flatten()
+        .chain(f.deferred_wake)
         .filter(|t| *t > now)
         .min()
 }
@@ -404,33 +453,20 @@ pub(crate) fn verify<G: Read + Actions + ?Sized>(
     github: &G,
     f: &Facts,
     now: u64,
+    prove: &dyn Fn(&Proof) -> bool,
 ) -> Result<Vec<Proof>> {
-    let seen = observe(github, f, now)?;
-    let mut proofs = Vec::new();
-    for name in f.settings.deferred.checks.keys() {
-        let Some(Deferral::Done { run, check_run }) = seen.deferrals.get(name) else {
-            return Err(format!("deferred check {name:?} has no successful evidence").into());
-        };
-        let nonce = f
-            .dispatches
-            .iter()
-            .find(|d| d.run == Some(*run))
-            .map(|d| d.nonce.clone())
-            .or_else(|| {
-                seen.adopt
-                    .iter()
-                    .find(|(_, r)| r == run)
-                    .map(|(n, _)| n.clone())
-            })
-            .ok_or("deferred evidence has no owned dispatch")?;
-        proofs.push(Proof {
-            name: name.clone(),
-            nonce,
-            run: *run,
-            check_run: *check_run,
-        });
-    }
-    Ok(proofs)
+    let seen = observe(github, f, now, prove)?;
+    f.settings
+        .deferred
+        .checks
+        .keys()
+        .map(|name| {
+            seen.proofs
+                .get(name)
+                .cloned()
+                .ok_or_else(|| format!("deferred check {name:?} has no successful evidence").into())
+        })
+        .collect()
 }
 
 fn input(f: &Facts, check: &str, nonce: &str) -> BTreeMap<String, String> {
@@ -481,6 +517,10 @@ pub(super) fn begin<G: Write>(
         record.dispatches.push(Dispatch {
             check: name.clone(),
             workflow: start.workflow.clone(),
+            git_ref: start
+                .git_ref
+                .clone()
+                .unwrap_or_else(|| f.default_branch.clone()),
             head: f.revision.head.clone(),
             nonce: nonce.clone(),
             sent_at: pass.now,
@@ -491,7 +531,7 @@ pub(super) fn begin<G: Write>(
         github.dispatch(
             &f.repo.to_string(),
             &start.workflow,
-            start.git_ref.as_deref().unwrap_or(&f.default_branch),
+            &record.dispatches.last().expect("just saved").git_ref,
             &input(f, name, &nonce),
         )?;
     }

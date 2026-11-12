@@ -505,11 +505,15 @@ impl crate::flow::Read for Hub {
         &self,
         repo: &str,
         workflow: &str,
+        _since: u64,
     ) -> Result<Vec<crate::api::WorkflowRun>, ApiError> {
         self.read(
             Asked::new(Call::WorkflowRuns, repo),
             &[repo, workflow],
             |w| {
+                if w.list_incomplete {
+                    return Err(ApiError::new("workflow runs: GitHub listed 1000 of 1500"));
+                }
                 Ok(w.workflow_runs
                     .get(repo)
                     .into_iter()

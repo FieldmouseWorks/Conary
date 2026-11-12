@@ -163,7 +163,13 @@ impl Pass<'_> {
                 }
                 super::observe::hydrate(&mut facts, &record, self.now, self.dry_run)?;
                 facts.dispatches.clone_from(&record.dispatches);
-                let seen = super::deferred::observe(github, &facts, self.now)?;
+                let prove = |p: &super::deferred::Proof| {
+                    self.config
+                        .evidence
+                        .as_ref()
+                        .is_some_and(|e| super::evidence::deferred(github, &facts, e, p).is_ok())
+                };
+                let seen = super::deferred::observe(github, &facts, self.now, &prove)?;
                 if !self.dry_run
                     && seen.apply(&mut record)
                     && let Some(data) = &data
@@ -173,6 +179,7 @@ impl Pass<'_> {
                 }
                 facts.deferred = seen.deferrals;
                 facts.deferred_stale = seen.stale;
+                facts.deferred_wake = seen.wake;
                 occupancy.apply(&mut facts, self.now)?;
                 if let Some(ledger) = store.as_deref().map(Store::ledger).or(self.ledger) {
                     super::observe::train(&mut facts, ledger);

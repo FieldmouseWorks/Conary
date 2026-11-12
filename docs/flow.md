@@ -274,7 +274,8 @@ the check run too.
 and `nonce`. It must (1) set `run-name: conary ${{ inputs.nonce }}`, so the run
 can be found, (2) check out `inputs.head` (a dispatch runs on the ref it was
 sent to, never on the PR's head), and (3) in a job named exactly `check` that
-succeeds only if the work passed, sign the result with
+succeeds only if the work passed (GitHub keeps that job's check run on the
+commit the run is on, the dispatched ref's tip, not on the PR's head), sign the result with
 `cn attest deferred HEAD NONCE ...` (the same token, tree and log rules as
 `cn attest commit`). The evidence is that job's own check run: the dispatch
 owns it because the job belongs to the run Conary dispatched, and the signed
@@ -285,13 +286,17 @@ all of it: a same-named job of another run, a newer foreign run, or a run on
 another head never supplies another dispatch's missing proof, and the
 generic newest-run-by-name rule is not used for these checks.
 
-**Ownership.** Before sending, the dispatch (check, workflow, head, nonce,
-time) is saved in the PR's record, so a restart or a lost response never sends
-it twice. The workflow is saved with it, so repointing or removing the check
-never loses a run that is going. Passes read a saved run by its id and look
-for an unseen one by nonce in the whole run list (every page; too many pages
-is an error, never a shorter answer). A dispatch not seen, or a finished run
-without its evidence, within `start_timeout` counts as lost and may be sent
+**Ownership.** Before sending, the dispatch (check, workflow, ref, head,
+nonce, time) is saved in the PR's record, so a restart or a lost response never sends
+it twice. The workflow and the resolved ref are saved with it, so repointing (workflow
+or ref), or removing the check stops the old run through the same
+stop-and-confirm lifecycle as an obsolete head, and never loses a run that is
+going. Passes read a saved run by its id and look
+for an unseen one by nonce in its workflow's runs created since the earliest
+such dispatch (every page; a listing GitHub cuts short, or too many pages, is
+an error, never a shorter answer, so absence is never inferred from it). A finished run counts as evidence only once its attestation verifies; until
+then it is only waiting, and a dispatch not seen, or a finished run without
+usable evidence, within `start_timeout` counts as lost and may be sent
 again, up to `attempts` per check and head; a run past `run_timeout` is asked
 to stop and counts as lost. Past `attempts` the PR waits and says so. The
 earliest outstanding deadline is always booked as the PR's wake, whatever else
@@ -300,7 +305,8 @@ the pass decided, so none depends on a webhook.
 **Obsolete heads.** When the head changes (a fix push, any push), or the check
 is repointed or removed, the next pass asks the old runs to stop before
 anything else. Asking is not stopping: the dispatch is kept, asked again every
-minute, and forgotten only once its run is seen finished; until then the check
+minute (every run gets its first request before any gets a second), and
+forgotten only once its run is seen finished; until then the check
 is not started again. The new head starts its own. Runs on a PR that is closed
 are left to finish.
 

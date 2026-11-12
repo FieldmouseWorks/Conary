@@ -54,8 +54,22 @@ fn sign_for(c: &Case, head: &str, job: u64, nonce: &str, event: &str) {
 fn report(c: &Case, head: &str, nonce: &str, conclusion: &str) -> u64 {
     let owned = run_of(c, nonce);
     let id = owned.map_or_else(|| c.hub.run_id(), |run| run / 10);
+    // GitHub keeps a dispatched job's check on the commit its run is on.
+    let sha = owned.map_or_else(
+        || head.to_string(),
+        |run| {
+            c.hub
+                .dispatched(REPO)
+                .iter()
+                .find(|r| r["id"] == run)
+                .unwrap()["head_sha"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        },
+    );
     c.hub.add_check(
-        head,
+        &sha,
         json!({"id":id,"name":HEAVY,"status":"completed","conclusion":conclusion,
             "started_at":"2026-11-01T00:00:00Z"}),
     );
@@ -176,9 +190,9 @@ fn permission_is_refused_without_evidence_even_when_asked_directly() {
         f.dispatches = c.record().dispatches;
         f
     };
-    assert!(crate::flow::deferred::verify(&c.hub, &facts(&c), now + 1).is_err());
+    assert!(crate::flow::deferred::verify(&c.hub, &facts(&c), now + 1, &|_| true).is_err());
     report(&c, &head(3), &nonce(&c), "success");
-    assert!(crate::flow::deferred::verify(&c.hub, &facts(&c), now + 1).is_ok());
+    assert!(crate::flow::deferred::verify(&c.hub, &facts(&c), now + 1, &|_| true).is_ok());
 }
 
 #[test]
@@ -356,8 +370,18 @@ fn a_configuration_that_collides_with_a_gate_is_refused() {
 fn unsigned(c: &Case, head: &str, nonce: &str) -> u64 {
     let run = run_of(c, nonce).unwrap();
     let id = run / 10;
+    let sha = c
+        .hub
+        .dispatched(REPO)
+        .iter()
+        .find(|r| r["id"] == run)
+        .unwrap()["head_sha"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let _ = head;
     c.hub.add_check(
-        head,
+        &sha,
         json!({"id":id,"name":HEAVY,"status":"completed","conclusion":"success",
             "started_at":"2026-11-01T00:00:00Z"}),
     );
@@ -638,4 +662,95 @@ mod capped {
         c.push(&super::head(4));
         assert_eq!(view(&c, Deferral::Unstarted, 4000).step, Step::Judge);
     }
+}
+
+#[test]
+fn changing_the_configured_ref_stops_the_old_run_before_any_replacement() {
+    let mut c = configured();
+    c.clean_review();
+    let now = jobs::now();
+    step(&c, now);
+    let old = nonce(&c);
+    assert_eq!(c.record().dispatches[0].git_ref, "main");
+    c.config
+        .settings
+        .deferred
+        .checks
+        .get_mut(HEAVY)
+        .unwrap()
+        .git_ref = Some("other".into());
+    assert_eq!(step(&c, now + 1), Step::CancelDeferred(old.clone()));
+    // Its eventual success is for work the machine no longer asks for.
+    report(&c, &head(3), &old, "success");
+    let next = step(&c, now + 2);
+    assert_ne!(next, Step::Merge);
+    assert_eq!(c.hub.count(Call::Land), 0);
+}
+
+#[test]
+fn an_unreadable_run_list_never_means_the_dispatch_vanished() {
+    let c = configured();
+    c.clean_review();
+    c.hub.lose(Call::Dispatch);
+    let now = jobs::now();
+    assert!(c.pass(now, false)[0].error.is_some());
+    c.hub.heal(Call::Dispatch);
+    c.hub.incomplete_run_list(true);
+    let lapsed = now + c.config.settings.deferred.start_timeout + 500;
+    for later in 0..3 {
+        c.pass(lapsed + later * 100, false);
+    }
+    assert_eq!(runs(&c), 1);
+    assert_eq!(c.record().dispatches.len(), 1);
+}
+
+#[test]
+fn a_finished_run_without_usable_evidence_is_retried() {
+    let c = configured();
+    c.clean_review();
+    let now = jobs::now();
+    step(&c, now);
+    unsigned(&c, &head(3), &nonce(&c));
+    refused(&c, now + 1);
+    let lapsed = now + c.config.settings.deferred.start_timeout + 1;
+    assert!(matches!(step(&c, lapsed), Step::StartDeferred(_)));
+    assert!(matches!(step(&c, lapsed + 10), Step::Wait { .. }));
+    assert_eq!(runs(&c), 2);
+    assert_eq!(c.record().dispatches.len(), 2);
+}
+
+#[test]
+fn every_timed_out_run_is_asked_to_stop_though_the_first_ignores_it() {
+    let mut c = configured();
+    c.config.settings.deferred.run_timeout = 100;
+    c.config.settings.deferred.checks.insert(
+        "heavy2".into(),
+        Start {
+            workflow: "heavy2.yml".into(),
+            git_ref: None,
+        },
+    );
+    c.clean_review();
+    let now = jobs::now();
+    step(&c, now);
+    assert_eq!(runs(&c), 2);
+    c.hub.ignore_cancels(true);
+    for later in [200, 201, 202, 203] {
+        c.pass(now + later, false);
+    }
+    assert_eq!(c.hub.count(Call::CancelRun), 2);
+}
+
+#[test]
+fn a_finished_run_awaiting_evidence_books_the_start_timeout_whatever_step_is_chosen() {
+    let mut c = configured();
+    c.config.settings.reviewers.clear();
+    let now = jobs::now();
+    step(&c, now);
+    unsigned(&c, &head(3), &nonce(&c));
+    let reports = c.pass(now + 1, false);
+    assert_eq!(
+        reports[0].next.as_ref().unwrap().wait_until,
+        Some(now + c.config.settings.deferred.start_timeout)
+    );
 }

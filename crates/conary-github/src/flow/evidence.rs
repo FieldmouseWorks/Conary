@@ -88,7 +88,9 @@ pub(crate) fn authorize<G: Write>(pass: &Pass<'_>, github: &G, f: &Facts) -> Res
     {
         return Err("proof check name collides with producer receipt or negative evidence".into());
     }
-    let proofs = super::deferred::verify(github, f, pass.now)?;
+    let proofs = super::deferred::verify(github, f, pass.now, &|p| {
+        deferred(github, f, evidence, p).is_ok()
+    })?;
     let effective = observations(github, f, &f.revision.head)?;
     let mut required: std::collections::BTreeSet<_> = evidence.require.iter().cloned().collect();
     required.extend(
@@ -217,7 +219,7 @@ pub(crate) fn authorize<G: Write>(pass: &Pass<'_>, github: &G, f: &Facts) -> Res
 }
 /// One deferred check's evidence: the check run of the owned dispatch's own
 /// workflow run, attested for this head, tree and nonce.
-fn deferred<G: Write>(
+pub(crate) fn deferred<G: Write>(
     github: &G,
     f: &Facts,
     evidence: &Evidence,
@@ -227,7 +229,7 @@ fn deferred<G: Write>(
     let head = &f.revision.head;
     let name = &proof.name;
     let run = github
-        .check_runs(&repo, head)?
+        .check_runs(&repo, &proof.sha)?
         .into_iter()
         .find(|c| c.id == proof.check_run)
         .ok_or_else(|| format!("{name}: its check run is gone"))?;

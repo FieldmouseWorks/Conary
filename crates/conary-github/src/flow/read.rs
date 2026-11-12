@@ -47,11 +47,14 @@ pub trait Read: Source + crate::branches::Branches {
         repo: &str,
         run: u64,
     ) -> Result<Option<crate::api::WorkflowRun>, ApiError>;
-    /// Every dispatched run of one workflow, newest first, across all pages.
+    /// Every dispatched run of one workflow created at or after `since`
+    /// (Unix seconds), newest first, across all pages. A listing GitHub cuts
+    /// short is an error, never a shorter answer.
     fn workflow_runs(
         &self,
         repo: &str,
         workflow: &str,
+        since: u64,
     ) -> Result<Vec<crate::api::WorkflowRun>, ApiError>;
 }
 
@@ -158,6 +161,7 @@ pub fn read(
         dispatches: Vec::new(),
         deferred: BTreeMap::new(),
         deferred_stale: Vec::new(),
+        deferred_wake: None,
     };
     // These PRs do not enter the pipeline. In particular, do not spend
     // thousands of review/comment reads after GitHub already said the cap

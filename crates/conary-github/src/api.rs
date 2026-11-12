@@ -107,6 +107,10 @@ pub struct WorkflowRun {
     pub status: String,
     #[serde(default)]
     pub conclusion: Option<String>,
+    /// The commit the run is on: a dispatch's is its ref's tip, never the
+    /// PR's head, and its jobs' check runs are on that commit.
+    #[serde(default)]
+    pub head_sha: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]

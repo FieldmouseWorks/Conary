@@ -19,17 +19,18 @@ impl Write for Hub {
             || {
                 // A run's one job is the check run numbered a tenth of it.
                 let id = self.run_id() * 10;
-                self.world
-                    .borrow_mut()
-                    .workflow_runs
-                    .entry(repo.into())
-                    .or_default()
-                    .insert(
-                        0,
-                        json!({"id":id,"display_title":format!("conary {nonce}"),
-                            "status":"queued","conclusion":null,
+                let mut world = self.world.borrow_mut();
+                let tip = world
+                    .repos
+                    .get(repo)
+                    .and_then(|r| r.branches.get(git_ref).cloned())
+                    .unwrap_or_default();
+                world.workflow_runs.entry(repo.into()).or_default().insert(
+                    0,
+                    json!({"id":id,"display_title":format!("conary {nonce}"),
+                            "status":"queued","conclusion":null,"head_sha":tip,
                             "workflow":workflow,"ref":git_ref,"inputs":inputs}),
-                    );
+                );
                 Ok(())
             },
         )
@@ -151,6 +152,10 @@ impl Hub {
     /// A workflow's run list is cut to its newest `cap` runs.
     pub(crate) fn cap_run_list(&self, cap: Option<usize>) {
         self.world.borrow_mut().list_cap = cap;
+    }
+    /// The run list can only be read in part, and says so.
+    pub(crate) fn incomplete_run_list(&self, incomplete: bool) {
+        self.world.borrow_mut().list_incomplete = incomplete;
     }
     /// Cancel requests are accepted and ignored, or honoured again.
     pub(crate) fn ignore_cancels(&self, ignored: bool) {
