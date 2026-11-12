@@ -211,8 +211,14 @@ pub struct Capabilities {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "step", rename_all = "snake_case")]
 pub enum Next {
-    Await { url: String },
-    Ask { question: String, default: String, one_way: bool },
+    Await {
+        url: String,
+    },
+    Ask {
+        question: String,
+        default: String,
+        one_way: bool,
+    },
     Done,
 }
 

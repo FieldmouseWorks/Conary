@@ -53,13 +53,7 @@ impl Plugin {
         limits: Limits,
         cancelled: Option<&Path>,
     ) -> Result<Self, Failure> {
-        let response = execute(
-            path,
-            limits,
-            &Request::describe(),
-            CONTRACT_V1,
-            cancelled,
-        )?;
+        let response = execute(path, limits, &Request::describe(), CONTRACT_V1, cancelled)?;
         valid_identity(&response.by)?;
         let Answer::Describe {
             versions,
