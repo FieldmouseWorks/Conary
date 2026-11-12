@@ -19,6 +19,8 @@ pub(crate) fn current<G: Write>(
     )?;
     super::observe::hydrate(&mut fresh, record, pass.now, true)?;
     super::observe::issuances(&mut fresh, &record.memory);
+    fresh.dispatches.clone_from(&record.dispatches);
+    super::deferred::hydrate(github, &mut fresh, pass.config.evidence.as_ref(), pass.now)?;
     let mut memory = record.memory.clone();
     super::ledger::raised(&mut fresh, &mut memory, pass.ledger);
     if fresh.changes_requested && !f.changes_requested {
@@ -50,6 +52,8 @@ pub(crate) fn current<G: Write>(
         || fresh.jobs != f.jobs
         || fresh.threads != f.threads
         || fresh.checks != f.checks
+        || fresh.deferred != f.deferred
+        || fresh.deferred_failures != f.deferred_failures
         || fresh.classified != f.classified
         || fresh.trusted != f.trusted
         || fresh.authorship_known != f.authorship_known

@@ -236,6 +236,96 @@ action until its deadline. Three strikes make the wait overdue. One PR's
 read, plugin or write failure is reported on that PR and does not stop
 processing the others.
 
+## Deferred checks
+
+Some checks are too heavy to run on every push. A repository's machine
+configuration (`settings.deferred`) can name them; the default is none, and
+nothing about a repository changes until it does:
+
+```json
+"settings": {
+  "deferred": {
+    "checks": { "heavy": { "workflow": "heavy.yml", "ref": null } },
+    "start_timeout": 900,
+    "run_timeout": 21600,
+    "attempts": 3
+  }
+}
+```
+
+A deferred check is started by Conary, through `workflow_dispatch` of the
+named workflow file on `ref` (the default branch if null), never by a push.
+Any host that can dispatch a workflow with string inputs and report a check
+run on a commit can play the workflow's part; nothing here needs Nix. Cheap
+checks stay ordinary CI and run on every push as before.
+
+**Readiness is not permission.** The work starts when review is ready: the
+head's reviews are clean with their threads resolved, or no reviewer is
+configured (`settings.reviewers` empty) and nothing is open, and CI is not
+red. It does not wait for `review-settled`, which only the landing decision
+posts and which needs the work's evidence; waiting on that evidence therefore
+cannot hold back the work that produces it. Landing needs every deferred check
+to have succeeded (the decision waits, and the permission paths refuse):
+a check with no evidence is never counted as passing, and a failed one goes
+to a fix like any red check, with the owned workflow run, conclusion and
+available job identity in the handoff. Scope rereads include these deferred
+results without mixing them into ordinary commit CI. Cancelled, skipped,
+neutral and startup outcomes remain eligible for recovery at `start_timeout`.
+The permission's attested-evidence rules apply to the check run too.
+
+**The workflow's part.** It receives the inputs `pr`, `head`, `base`, `check`
+and `nonce`. It must (1) set `run-name: conary ${{ inputs.nonce }}`, so the run
+can be found, (2) check out `inputs.head` (a dispatch runs on the ref it was
+sent to, never on the PR's head), and (3) in a job named exactly `check` that
+succeeds only if the work passed (GitHub keeps that job's check run on the
+commit the run is on, the dispatched ref's tip, not on the PR's head), sign the result with
+`cn attest deferred HEAD NONCE ...` (the same token, tree and log rules as
+`cn attest commit`). The evidence is that job's own check run: the dispatch
+owns it because the job belongs to the run Conary dispatched, and the signed
+statement names the head, its tree and the nonce. The token's `sha` is the
+dispatched ref's commit and is not held to the head; its `event_name` must be
+`workflow_dispatch` and its check run the job's own. One record has to carry
+all of it: a same-named job of another run, a newer foreign run, or a run on
+another head never supplies another dispatch's missing proof, and the
+generic newest-run-by-name rule is not used for these checks.
+
+**Ownership.** Before sending, the dispatch (check, workflow, ref, head,
+nonce, time) is saved in the PR's record, so a restart or a lost response
+never causes an immediate duplicate. The workflow and the resolved ref are
+saved with it, so repointing (workflow or ref), or removing the check stops the old run through the same
+stop-and-confirm lifecycle as an obsolete head, and never loses a run that is
+going. Passes read a saved run by its id and look
+for an unseen one by nonce in its workflow's runs created since the earliest
+such dispatch (every page; a listing GitHub cuts short, or too many pages, is
+an error, never a shorter answer, so absence is never inferred from it). A finished run counts as evidence only once its attestation verifies; until
+then it is only waiting. Missing, invalid, expired or incorrectly scoped
+attestations keep the evidence deadline. A failed GitHub read (including
+artifacts, keys and signer history) is an error with normal event backoff;
+it never spends a dispatch attempt or substitutes for rejected evidence.
+An unseen dispatch, or a finished run without usable evidence, counts as
+lost once `start_timeout` elapses and may be sent again, up to `attempts`
+per check and head; a run past `run_timeout` is asked to stop and counts as lost. Past `attempts` the PR waits and says so. The
+earliest outstanding deadline is always booked as the PR's wake, whatever else
+the pass decided, so none depends on a webhook.
+
+**Obsolete heads.** When the head changes (a fix push, any push), or the check
+is repointed or removed, the next pass asks the old runs to stop before
+anything else. Asking is not stopping: the dispatch is kept, asked again every
+minute. Every attempt is saved before sending, separately from an accepted
+response; failed, lost and ignored cancellation requests therefore all take
+their turn, with independent deadlines instead of blocking the whole PR.
+Ownership is forgotten only after terminal completion or authoritative
+disappearance of a previously adopted run. An unseen obsolete dispatch stays
+owned and is rediscovered every minute even after `start_timeout`; elapsed
+time cannot establish that accepted work will never appear. Until cleanup is
+confirmed the check is not replaced, and removal of its configuration cannot
+bypass this wait. The new head starts its own. Runs on a PR that is closed
+are left to finish.
+
+**Capped reviews.** Readiness at the review-round limit needs a judgment that
+lands, or an owner's with the person's approval. The judge is asked before the
+decision waits for evidence, so it is never what the evidence waits on.
+
 ## Comparing decisions
 
 ```console

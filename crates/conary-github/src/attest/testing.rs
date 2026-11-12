@@ -73,6 +73,14 @@ pub(crate) fn statement(commit: &str, tree: &str, result: &str) -> String {
     format!("conary commit v1\n{commit}\n{predicate}\n")
 }
 
+/// The statement of a deferred check's gate on `commit`, whose tree is
+/// `tree`, for the dispatch `nonce`.
+pub(crate) fn deferred_statement(commit: &str, tree: &str, nonce: &str, result: &str) -> String {
+    let predicate = json!({"result": result, "revision": null, "tree": tree, "skipped": [],
+                           "log": {"sha256": "0".repeat(64), "artifact": "flake-log-1"}});
+    format!("conary deferred v1\n{commit}\n{nonce}\n{predicate}\n")
+}
+
 /// The statement of a PR's negative run on `head`, whose merge base is
 /// `base`.
 pub(crate) fn negative_statement(base: &str, head: &str, result: &str) -> String {

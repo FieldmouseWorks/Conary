@@ -4,6 +4,16 @@ use crate::api::ApiError;
 use serde_json::Value;
 pub const SETTLED: &str = "review-settled";
 pub trait Write: Read + crate::train::Forge {
+    /// Start a workflow on `git_ref` (a branch) with string inputs. GitHub
+    /// answers 204 with no run: the run is found afterwards by its inputs.
+    fn dispatch(
+        &self,
+        repo: &str,
+        workflow: &str,
+        git_ref: &str,
+        inputs: &std::collections::BTreeMap<String, String>,
+    ) -> Result<(), ApiError>;
+    fn cancel_run(&self, repo: &str, run: u64) -> Result<(), ApiError>;
     fn status(&self, repo: &str, head: &str, settled: bool, text: &str) -> Result<(), ApiError>;
     fn stage(&self, repo: &str, pr: u64, stage: Stage) -> Result<(), ApiError>;
     fn review(&self, repo: &str, pr: u64, head: &str, body: &str) -> Result<(), ApiError>;

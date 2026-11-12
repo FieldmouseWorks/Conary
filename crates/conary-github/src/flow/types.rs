@@ -275,6 +275,7 @@ pub struct Settings {
     pub renovate_merge_after: u64,
     pub renovate_run: u64,
     pub renovate_sweep: bool,
+    pub deferred: super::deferred::DeferredConfig,
 }
 
 impl Settings {
@@ -332,6 +333,7 @@ impl Default for Settings {
             renovate_merge_after: 7200,
             renovate_run: 7200,
             renovate_sweep: false,
+            deferred: Default::default(),
         }
     }
 }
@@ -412,6 +414,16 @@ pub struct Facts {
     pub failed: Option<Failure>,
     pub failed_review: Option<FailedPost>,
     pub succeeded: BTreeSet<Failure>,
+    /// The deferred dispatches this controller owns, from its record.
+    pub dispatches: Vec<super::deferred::Dispatch>,
+    /// Where each configured deferred check stands for this head.
+    pub deferred: BTreeMap<String, super::deferred::Deferral>,
+    /// Nonces of owned runs to cancel.
+    pub deferred_stale: Vec<String>,
+    /// Owned current-head failures and their producer diagnostics.
+    pub deferred_failures: BTreeMap<String, super::deferred::DeferredFailure>,
+    /// When the owned dispatches next need a look.
+    pub deferred_wake: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -429,6 +441,7 @@ pub enum Failure {
     Answer,
     Lost,
     Stop,
+    Deferred,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -493,6 +506,10 @@ pub enum Step {
     PostFix(String),
     HandFix(Kind),
     StopJob(String),
+    /// Start these deferred checks, once review is ready.
+    StartDeferred(Vec<String>),
+    /// Cancel the owned run with this dispatch nonce.
+    CancelDeferred(String),
     Prove,
     PostProof,
     Judge,
@@ -504,8 +521,13 @@ pub enum Step {
     DisableAutoMerge,
     CloseAlreadyLanded,
     ListOwner,
-    Retry { kind: Failure, at: u64 },
-    Wait { until: Option<u64> },
+    Retry {
+        kind: Failure,
+        at: u64,
+    },
+    Wait {
+        until: Option<u64>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

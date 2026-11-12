@@ -20,7 +20,42 @@ impl Api {
         Ok(())
     }
 }
+impl Api {
+    fn flow_post(&self, path: &str, body: Value) -> Result<(), ApiError> {
+        let url = format!("{}{path}", self.base);
+        let mut response = self
+            .agent
+            .post(&url)
+            .header("Authorization", &self.authorization(path)?)
+            .header("Accept", "application/vnd.github+json")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .send_json(body)
+            .map_err(|e| unreachable(&url, e))?;
+        if !response.status().is_success() {
+            return Err(failed(&url, &mut response));
+        }
+        Ok(())
+    }
+}
 impl Write for Api {
+    fn dispatch(
+        &self,
+        repo: &str,
+        workflow: &str,
+        git_ref: &str,
+        inputs: &std::collections::BTreeMap<String, String>,
+    ) -> Result<(), ApiError> {
+        self.flow_post(
+            &format!("/repos/{repo}/actions/workflows/{workflow}/dispatches"),
+            json!({"ref":git_ref,"inputs":inputs}),
+        )
+    }
+    fn cancel_run(&self, repo: &str, run: u64) -> Result<(), ApiError> {
+        self.flow_post(
+            &format!("/repos/{repo}/actions/runs/{run}/cancel"),
+            json!({}),
+        )
+    }
     fn status(&self, repo: &str, head: &str, settled: bool, text: &str) -> Result<(), ApiError> {
         let _: Value = self.send(
             false,

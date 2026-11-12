@@ -225,7 +225,7 @@ impl Actions for Hub {
                 .map(|(i, (name, _))| Artifact {
                     id: run * 10 + i as u64,
                     name: name.clone(),
-                    expired: false,
+                    expired: w.expired_artifacts.contains(&(run / 10)),
                 })
                 .collect())
         })
@@ -497,6 +497,50 @@ impl crate::flow::Read for Hub {
                     .ok_or_else(|| not_found("merge base"))?;
                 Ok(w.three_way(&fork, old)
                     .is_some_and(|tree| w.commits.get(head).is_some_and(|c| c.patches == tree)))
+            },
+        )
+    }
+
+    fn workflow_runs(
+        &self,
+        repo: &str,
+        workflow: &str,
+        _since: u64,
+    ) -> Result<Vec<crate::api::WorkflowRun>, ApiError> {
+        self.read(
+            Asked::new(Call::WorkflowRuns, repo),
+            &[repo, workflow],
+            |w| {
+                if w.list_incomplete {
+                    return Err(ApiError::new("workflow runs: GitHub listed 1000 of 1500"));
+                }
+                Ok(w.workflow_runs
+                    .get(repo)
+                    .into_iter()
+                    .flatten()
+                    .filter(|r| r["workflow"] == workflow)
+                    .take(w.list_cap.unwrap_or(usize::MAX))
+                    .map(parse)
+                    .collect())
+            },
+        )
+    }
+
+    fn workflow_run(
+        &self,
+        repo: &str,
+        run: u64,
+    ) -> Result<Option<crate::api::WorkflowRun>, ApiError> {
+        self.read(
+            Asked::new(Call::WorkflowRuns, repo),
+            &[repo, &run.to_string()],
+            |w| {
+                Ok(w.workflow_runs
+                    .get(repo)
+                    .into_iter()
+                    .flatten()
+                    .find(|r| r["id"] == run)
+                    .map(parse))
             },
         )
     }

@@ -313,6 +313,8 @@ mod flow_pass_slots;
 
 mod flow_pass_landing;
 
+mod flow_deferred;
+
 mod flow_pass_r3;
 
 mod flow_pass_r4;

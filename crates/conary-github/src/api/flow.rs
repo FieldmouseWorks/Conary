@@ -347,6 +347,50 @@ impl Read for Api {
             checks_complete,
         })
     }
+    fn workflow_runs(
+        &self,
+        repo: &str,
+        workflow: &str,
+        since: u64,
+    ) -> Result<Vec<WorkflowRun>, ApiError> {
+        #[derive(Deserialize)]
+        struct Runs {
+            total_count: usize,
+            workflow_runs: Vec<WorkflowRun>,
+        }
+        // Bounded by time, because a filtered listing is cut at a thousand
+        // results however many pages are read. Anything cut short is an
+        // error: absence is never inferred from an incomplete listing.
+        let from = chrono::DateTime::from_timestamp(i64::try_from(since).unwrap_or(0), 0)
+            .ok_or_else(|| ApiError::new("workflow run window is out of range"))?
+            .format("%Y-%m-%dT%H:%M:%SZ");
+        let mut all = Vec::new();
+        for page in 1..=MAX_PAGES {
+            let got: Runs = self.get(&format!(
+                "/repos/{repo}/actions/workflows/{workflow}/runs?event=workflow_dispatch&created=%3E%3D{from}&per_page=100&page={page}"
+            ))?;
+            let short = got.workflow_runs.len() < 100;
+            let total = got.total_count;
+            all.extend(got.workflow_runs);
+            if short {
+                if all.len() < total {
+                    return Err(ApiError::new(format!(
+                        "workflow {workflow}'s runs: GitHub listed {} of {total}",
+                        all.len()
+                    )));
+                }
+                return Ok(all);
+            }
+        }
+        Err(ApiError::new(format!(
+            "workflow {workflow}'s runs: more than {MAX_PAGES} pages"
+        )))
+    }
+
+    fn workflow_run(&self, repo: &str, run: u64) -> Result<Option<WorkflowRun>, ApiError> {
+        self.get_found(&format!("/repos/{repo}/actions/runs/{run}"))
+    }
+
     fn annotations(&self, repo: &str, run: u64) -> Result<Vec<String>, ApiError> {
         let all: Vec<Annotation> =
             self.pages(&format!("/repos/{repo}/check-runs/{run}/annotations"))?;

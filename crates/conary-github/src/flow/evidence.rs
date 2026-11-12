@@ -88,6 +88,9 @@ pub(crate) fn authorize<G: Write>(pass: &Pass<'_>, github: &G, f: &Facts) -> Res
     {
         return Err("proof check name collides with producer receipt or negative evidence".into());
     }
+    let proofs = super::deferred::verify(github, f, pass.now, &|p| {
+        deferred(github, f, evidence, p).map(|r| r.is_ok())
+    })?;
     let effective = observations(github, f, &f.revision.head)?;
     let mut required: std::collections::BTreeSet<_> = evidence.require.iter().cloned().collect();
     required.extend(
@@ -109,7 +112,16 @@ pub(crate) fn authorize<G: Write>(pass: &Pass<'_>, github: &G, f: &Facts) -> Res
         }
     }
     required.extend(effective.statuses);
-    required.retain(|name| name != &evidence.negative && !receipts.contains(name));
+    // A deferred check is proven by its own owned record below, never by the
+    // newest run of its name.
+    required.retain(|name| {
+        name != &evidence.negative
+            && !receipts.contains(name)
+            && !f.settings.deferred.checks.contains_key(name)
+    });
+    for proof in &proofs {
+        deferred(github, f, evidence, proof)??;
+    }
     for name in required {
         check(github, f, evidence, &f.revision.head, &name, None)?;
     }
@@ -205,6 +217,63 @@ pub(crate) fn authorize<G: Write>(pass: &Pass<'_>, github: &G, f: &Facts) -> Res
     }
     Ok(())
 }
+/// One deferred check's evidence: the check run of the owned dispatch's own
+/// workflow run, attested for this head, tree and nonce.
+pub(crate) fn deferred<G: Write>(
+    github: &G,
+    f: &Facts,
+    evidence: &Evidence,
+    proof: &super::deferred::Proof,
+) -> std::result::Result<std::result::Result<(), String>, crate::api::ApiError> {
+    let repo = f.repo.to_string();
+    let head = &f.revision.head;
+    let name = &proof.name;
+    let run = github
+        .check_runs(&repo, &proof.sha)?
+        .into_iter()
+        .find(|c| c.id == proof.check_run);
+    let Some(run) = run else {
+        return Ok(Err(format!("{name}: its check run is gone")));
+    };
+    if run.name != *name
+        || run.status != "completed"
+        || run.conclusion.as_deref() != Some("success")
+    {
+        return Ok(Err(format!("{name}: producer check is not successful")));
+    }
+    if github.job(&repo, run.id)?.map(|j| j.run_id) != Some(proof.run) {
+        return Ok(Err(format!(
+            "{name}: its check run is not the owned dispatch's job"
+        )));
+    }
+    let tree = github.tree(&repo, head)?;
+    let signer = match evidence.signer.parse::<Signer>() {
+        Ok(signer) => signer,
+        Err(why) => return Ok(Err(why)),
+    };
+    let verified = attested(
+        github,
+        github,
+        &f.repo,
+        Subject::Deferred {
+            commit: head,
+            tree: &tree,
+            nonce: &proof.nonce,
+        },
+        &run,
+        &signer,
+        evidence.fresh.as_deref(),
+    )?;
+    let verified = match verified {
+        Ok(verified) => verified,
+        Err(why) => return Ok(Err(format!("{name}: {why}"))),
+    };
+    if verified.result != Outcome::Pass {
+        return Ok(Err(format!("{name}: producer did not pass")));
+    }
+    Ok(Ok(()))
+}
+
 fn check<G: Write>(
     github: &G,
     f: &Facts,
@@ -284,7 +353,7 @@ fn observations<G: Write>(github: &G, f: &Facts, head: &str) -> Result<super::ci
         &f.revision.base,
         &paths,
         &snapshot.suites,
-        &f.settings.machine(),
+        &f.settings,
     )?;
     if head == f.revision.head {
         let checks: Vec<_> = observed

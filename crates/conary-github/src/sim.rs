@@ -85,6 +85,8 @@ pub(crate) struct World {
     /// Check runs by commit, as GitHub lists them.
     checks: HashMap<String, Vec<Value>>,
     annotations: HashMap<u64, Vec<String>>,
+    /// Dispatched workflow runs by repo, as `dispatch` starts them.
+    workflow_runs: HashMap<String, Vec<Value>>,
     pushes: HashMap<(String, String), BTreeMap<String, String>>,
     history_limits: HashMap<(String, String), usize>,
     commit_records: HashMap<String, Value>,
@@ -92,8 +94,15 @@ pub(crate) struct World {
     /// Each check run's job's artifacts, by the job's check run id: name
     /// and GitHub's zip of it.
     artifacts: HashMap<u64, Vec<(String, Vec<u8>)>>,
+    expired_artifacts: BTreeSet<u64>,
     /// The runner each job ran on, when it isn't a fresh one of its own.
     runners: HashMap<u64, String>,
+    /// Cancel requests GitHub accepts and does nothing about.
+    cancel_ignored: bool,
+    /// A workflow's run list shows only this many of the newest runs.
+    list_cap: Option<usize>,
+    /// The run list cannot be read whole.
+    list_incomplete: bool,
     /// Pairs of patches that change the same lines.
     clashes: BTreeSet<(String, String)>,
     /// Patches that change lines every other patch does.

@@ -23,6 +23,13 @@ pub(super) fn decide(f: &Facts, m: &mut Memory, now: u64) -> Decision {
         }
         m.retry = None;
     }
+    if let Some(nonce) = f.deferred_stale.first() {
+        return at(
+            Stage::Ci,
+            Step::CancelDeferred(nonce.clone()),
+            "Cancel a deferred check that is obsolete or lost",
+        );
+    }
     if let Some(id) = m.stopping.first() {
         return at(
             Stage::Fix,
@@ -158,6 +165,10 @@ pub(super) fn decide(f: &Facts, m: &mut Memory, now: u64) -> Decision {
             "Posting the remaining machine proof verdicts",
         );
     }
+    // Owned deferred failures need repair even without a configured reviewer.
+    if !f.deferred_failures.is_empty() {
+        return hand(f, m, now, Kind::Red, true);
+    }
     let ci = ci(f, m, now);
     // Unknown provenance is someone else's code until read: only a history
     // known to be the bots' alone skips the review loop.
@@ -194,7 +205,9 @@ pub(super) fn decide(f: &Facts, m: &mut Memory, now: u64) -> Decision {
         }
     }
     match super::review::look(f, m, now, f.dependency.is_none() || edited) {
-        super::review::Look::Next(decision) => decision,
+        super::review::Look::Next(decision) => {
+            super::deferred::without_reviewer(f, ci == Ci::Red, &decision).unwrap_or(decision)
+        }
         super::review::Look::Settled { capped } => after_review(f, m, now, ci, capped),
     }
 }
@@ -253,6 +266,15 @@ fn after_review(f: &Facts, m: &mut Memory, now: u64, ci: Ci, capped: bool) -> De
             Step::ListOwner,
             "The judge sent it to the owner",
         );
+    }
+    // Review is ready here: the deferred checks start, and cheap checks have
+    // been running all along. A judge's pending verdict on exhausted rounds
+    // is not readiness.
+    let ready = !capped
+        || verdict == Some(Judgment::Land)
+        || verdict == Some(Judgment::Owner) && f.owner_approved;
+    if ready && let Some(decision) = super::deferred::start(f) {
+        return decision;
     }
     let pending: Vec<_> = f.checks.iter().filter(|c| c.state == Ci::Pending).collect();
     let machine = f.settings.machine();
@@ -332,19 +354,24 @@ fn after_review(f: &Facts, m: &mut Memory, now: u64, ci: Ci, capped: bool) -> De
         })
         || capped
         || f.dependency == Some(Dependency::Major) && !f.renovate;
-    if requires_judge {
-        if !matches!(verdict, Some(Judgment::Land))
-            && !(verdict == Some(Judgment::Owner) && f.owner_approved)
-        {
-            if f.merging == Merge::Update {
-                return at(
-                    Stage::Review,
-                    Step::UpdateBranch,
-                    "Behind its base: updated before judging",
-                );
-            }
-            return work(f, m, now, Kind::Judge);
+    if requires_judge
+        && !matches!(verdict, Some(Judgment::Land))
+        && !(verdict == Some(Judgment::Owner) && f.owner_approved)
+    {
+        if f.merging == Merge::Update {
+            return at(
+                Stage::Review,
+                Step::UpdateBranch,
+                "Behind its base: updated before judging",
+            );
         }
+        return work(f, m, now, Kind::Judge);
+    }
+    // After the judgment, which readiness may need before any evidence exists.
+    if let Some(decision) = super::deferred::gate(f) {
+        return decision;
+    }
+    if requires_judge {
         // A judge's land verdict cannot replace the person's word for R2.
         if f.classified.class == Class::R2 && !f.owner_approved {
             return at(
@@ -576,6 +603,7 @@ fn failure_stage(kind: Failure) -> Stage {
     match kind {
         Failure::Build | Failure::Eval => Stage::Proof,
         Failure::Post => Stage::Review,
+        Failure::Deferred => Stage::Ci,
         Failure::Job | Failure::Lost | Failure::Answer | Failure::Stop => Stage::Fix,
         _ => Stage::Merge,
     }

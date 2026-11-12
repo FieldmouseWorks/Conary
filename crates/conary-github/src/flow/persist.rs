@@ -48,6 +48,9 @@ pub struct Record {
     pub failed_review: Option<FailedPost>,
     pub succeeded: std::collections::BTreeSet<Failure>,
     pub sequence: u64,
+    /// Deferred dispatches this controller sent, until they are forgotten.
+    #[serde(default)]
+    pub dispatches: Vec<super::deferred::Dispatch>,
 }
 
 impl Record {
