@@ -4,7 +4,7 @@ use std::io;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let request: Request = serde_json::from_reader(io::stdin())?;
-    if request.contract != CONTRACT {
+    if request.contract != CONTRACT && request.contract != CONTRACT_V1 {
         return Err("unsupported contract".into());
     }
     let session = match &request.task {
@@ -12,10 +12,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Task::Judge { .. } => "example-judge",
         _ => "example",
     };
+    let contract = request.contract.clone();
     let answer = match request.task {
         Task::Describe => Answer::Describe {
-            versions: vec![CONTRACT.into()],
-            kinds: vec![Kind::Review, Kind::Fix, Kind::Judge, Kind::Proof],
+            versions: vec![CONTRACT_V1.into(), CONTRACT.into()],
+            kinds: vec![Kind::Review, Kind::Fix, Kind::Judge, Kind::Proof, Kind::Job],
+            // A program: no models, so it may advertise `proof`.
+            models: vec![],
+            capabilities: Some(Capabilities {
+                sandbox: Sandbox::None,
+                network: false,
+                devices: vec![],
+                mcp: false,
+            }),
+            meters: vec![],
+        },
+        Task::Job { .. } => Answer::Job {
+            summary: "Deterministic example job".into(),
+            next: Next::Done,
         },
         // Reserved, in-memory flow demonstration: the host simulates this
         // push. No real repository is written or claimed to be written.
@@ -64,7 +78,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     serde_json::to_writer(
         io::stdout(),
         &Response {
-            contract: CONTRACT.into(),
+            contract,
             by: Identity {
                 engine: "conary-example".into(),
                 session: Some(session.into()),

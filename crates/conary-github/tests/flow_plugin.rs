@@ -13,5 +13,5 @@ fn the_flow_fixture_satisfies_the_published_contract() {
         },
     )
     .unwrap();
-    assert_eq!(plugin.check().unwrap().len(), 4);
+    assert_eq!(plugin.check().unwrap().len(), 5);
 }
