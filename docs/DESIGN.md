@@ -152,9 +152,11 @@ tree, parents and message, so the revision ID changes with anything about the
 revision: a reworded commit, new ancestry, a rebase or a retarget all give a
 new revision, and none of them overwrites an old one. A head pushed back to
 one Conary already saw is that revision again, and the PR's revision now.
-Evidence binds to the revision. Trees are named by their own git IDs, and two
-revisions sharing a tree is a fact Conary can report, never a reason to count
-one's evidence for the other.
+Evidence binds to the revision that produced it, and that record is never
+rewritten. Trees are named by their own git IDs, and two revisions sharing a
+tree is a fact Conary can report. Equal trees let a check result count for a
+landing with that exact tree (section 4.3, rule 3); they never merge two
+revisions, and never carry a review or a judgment from one to the other.
 
 For a GitHub PR the base is the merge base of the head and the base branch:
 the tree its diff and its review are against, which trunk moving doesn't
@@ -198,19 +200,25 @@ Three rules make it trustworthy:
    whether they failed ([how](ci-attestation.md#negative-runs)). A test
    inside a code file, such as an inline Rust `#[cfg(test)]` module, is
    code here, so tests go in files of their own.
-3. **Evidence is about the tree it ran on, and says so.** A PR's evidence
-   proves its revision: that head on that base. Landing squashes it onto a
-   newer trunk, and the default branch is never required to be up to date
-   first ([why](https://github.com/FieldmouseWorks/burrow/blob/main/docs/repo-baseline.md#settings-the-steward)).
-   So Conary never records a PR's pre-land evidence as proof of the landed
-   tree. The landed tree gets its own: its train's candidate's, when trunk's
-   tree after the landing is the candidate's (section 4.7), and otherwise
-   trunk's CI's, recorded against the landing. A red result there starts an
-   undo or a fix (section 6). That is the owner's call for R0 and R1, where
-   a revert undoes the damage. R2 is different: undo can't help, so an R2
-   change lands only on evidence for the candidate tree itself (its head
-   merged onto the trunk commit it lands on), and if trunk moves before the
-   merge, that evidence no longer counts and the checks run again.
+3. **Evidence is about the tree it ran on, and says so.** A result proves the
+   tree it actually ran on, and counts for a landing whose tree is exactly
+   that tree: same tree ID, same check identity and definition, and the
+   attestation of rule 1. The record stays on the revision (or candidate)
+   that produced it, with its provenance untouched; counting it for another
+   landing is a read of that record, never a copy or a rewrite. A different
+   tree gets no reuse. A PR's evidence proves its head on that base, and
+   landing squashes it onto a newer trunk, so a PR's pre-land evidence is
+   not the landed tree's unless the trees are equal. Otherwise the landed
+   tree gets its own: its train's candidate's, when trunk's tree after the
+   landing is the candidate's (section 4.7), and otherwise trunk's CI's,
+   recorded against the landing. A red result there starts an undo or a fix
+   (section 6). That is the owner's call for R0 and R1, where a revert
+   undoes the damage. R2 is different: undo can't help, so an R2 change
+   lands only on evidence for the candidate tree itself (its head merged
+   onto the trunk commit it lands on), and if trunk moves before the merge,
+   that evidence no longer counts and the checks run again. Equal trees
+   never authorize carrying a `review` or `judge` result: whether those
+   carry is a separate rule of its own, not this one.
 
 ### 4.4 Class
 
