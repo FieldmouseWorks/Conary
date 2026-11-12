@@ -41,6 +41,12 @@ pub trait Read: Source + crate::branches::Branches {
     fn carries(&self, repo: &str, base: &str, head: &str, old: &str) -> Result<bool, ApiError>;
     fn snapshot(&self, repo: &str, pr: u64) -> Result<Snapshot, ApiError>;
     fn annotations(&self, repo: &str, run: u64) -> Result<Vec<String>, ApiError>;
+    /// Recent dispatched runs of one workflow, newest first.
+    fn workflow_runs(
+        &self,
+        repo: &str,
+        workflow: &str,
+    ) -> Result<Vec<crate::api::WorkflowRun>, ApiError>;
 }
 
 /// Read once, then decide without I/O. Only the configured trusted authors
@@ -143,6 +149,9 @@ pub fn read(
         failed: None,
         failed_review: None,
         succeeded: BTreeSet::new(),
+        dispatches: Vec::new(),
+        deferred: BTreeMap::new(),
+        deferred_stale: Vec::new(),
     };
     // These PRs do not enter the pipeline. In particular, do not spend
     // thousands of review/comment reads after GitHub already said the cap

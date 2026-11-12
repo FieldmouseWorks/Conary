@@ -53,6 +53,10 @@ impl Pass<'_> {
         only: Option<u64>,
         mut store: Option<&mut Store>,
     ) -> Result<Vec<Report>> {
+        self.config.settings.deferred.validate(
+            &self.config.settings,
+            self.config.evidence.as_ref().map(|e| e.negative.as_str()),
+        )?;
         let data = if self.dry_run {
             None
         } else {
@@ -158,6 +162,17 @@ impl Pass<'_> {
                     super::ledger::classify(self, github, &mut facts, &mut record, store)?;
                 }
                 super::observe::hydrate(&mut facts, &record, self.now, self.dry_run)?;
+                facts.dispatches.clone_from(&record.dispatches);
+                let seen = super::deferred::observe(github, &facts, self.now)?;
+                if !self.dry_run
+                    && seen.apply(&mut record)
+                    && let Some(data) = &data
+                {
+                    data.save(pr, &record)?;
+                    facts.dispatches.clone_from(&record.dispatches);
+                }
+                facts.deferred = seen.deferrals;
+                facts.deferred_stale = seen.stale;
                 occupancy.apply(&mut facts, self.now)?;
                 if let Some(ledger) = store.as_deref().map(Store::ledger).or(self.ledger) {
                     super::observe::train(&mut facts, ledger);

@@ -85,6 +85,8 @@ pub(crate) struct World {
     /// Check runs by commit, as GitHub lists them.
     checks: HashMap<String, Vec<Value>>,
     annotations: HashMap<u64, Vec<String>>,
+    /// Dispatched workflow runs by repo, as `dispatch` starts them.
+    workflow_runs: HashMap<String, Vec<Value>>,
     pushes: HashMap<(String, String), BTreeMap<String, String>>,
     history_limits: HashMap<(String, String), usize>,
     commit_records: HashMap<String, Value>,

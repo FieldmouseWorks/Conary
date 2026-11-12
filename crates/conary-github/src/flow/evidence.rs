@@ -88,6 +88,7 @@ pub(crate) fn authorize<G: Write>(pass: &Pass<'_>, github: &G, f: &Facts) -> Res
     {
         return Err("proof check name collides with producer receipt or negative evidence".into());
     }
+    super::deferred::verify(github, f, pass.now)?;
     let effective = observations(github, f, &f.revision.head)?;
     let mut required: std::collections::BTreeSet<_> = evidence.require.iter().cloned().collect();
     required.extend(
@@ -109,6 +110,7 @@ pub(crate) fn authorize<G: Write>(pass: &Pass<'_>, github: &G, f: &Facts) -> Res
         }
     }
     required.extend(effective.statuses);
+    required.extend(f.settings.deferred.checks.keys().cloned());
     required.retain(|name| name != &evidence.negative && !receipts.contains(name));
     for name in required {
         check(github, f, evidence, &f.revision.head, &name, None)?;

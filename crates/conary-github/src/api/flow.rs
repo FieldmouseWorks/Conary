@@ -347,6 +347,19 @@ impl Read for Api {
             checks_complete,
         })
     }
+    fn workflow_runs(&self, repo: &str, workflow: &str) -> Result<Vec<WorkflowRun>, ApiError> {
+        #[derive(Deserialize)]
+        struct Runs {
+            workflow_runs: Vec<WorkflowRun>,
+        }
+        // The newest hundred dispatched runs: a nonce older than that has long
+        // since lapsed, and its dispatch is no longer sought.
+        let runs: Runs = self.get(&format!(
+            "/repos/{repo}/actions/workflows/{workflow}/runs?event=workflow_dispatch&per_page=100"
+        ))?;
+        Ok(runs.workflow_runs)
+    }
+
     fn annotations(&self, repo: &str, run: u64) -> Result<Vec<String>, ApiError> {
         let all: Vec<Annotation> =
             self.pages(&format!("/repos/{repo}/check-runs/{run}/annotations"))?;

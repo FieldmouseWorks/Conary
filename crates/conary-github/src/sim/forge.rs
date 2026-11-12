@@ -501,6 +501,26 @@ impl crate::flow::Read for Hub {
         )
     }
 
+    fn workflow_runs(
+        &self,
+        repo: &str,
+        workflow: &str,
+    ) -> Result<Vec<crate::api::WorkflowRun>, ApiError> {
+        self.read(
+            Asked::new(Call::WorkflowRuns, repo),
+            &[repo, workflow],
+            |w| {
+                Ok(w.workflow_runs
+                    .get(repo)
+                    .into_iter()
+                    .flatten()
+                    .filter(|r| r["workflow"] == workflow)
+                    .map(parse)
+                    .collect())
+            },
+        )
+    }
+
     fn annotations(&self, repo: &str, run: u64) -> Result<Vec<String>, ApiError> {
         let id = run.to_string();
         self.read(Asked::new(Call::Annotations, repo), &[repo, &id], |w| {

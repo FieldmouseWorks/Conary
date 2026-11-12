@@ -236,6 +236,60 @@ action until its deadline. Three strikes make the wait overdue. One PR's
 read, plugin or write failure is reported on that PR and does not stop
 processing the others.
 
+## Deferred checks
+
+Some checks are too heavy to run on every push. A repository's machine
+configuration (`settings.deferred`) can name them; the default is none, and
+nothing about a repository changes until it does:
+
+```json
+"settings": {
+  "deferred": {
+    "checks": { "heavy": { "workflow": "heavy.yml", "ref": null } },
+    "start_timeout": 900,
+    "run_timeout": 21600,
+    "attempts": 3
+  }
+}
+```
+
+A deferred check is started by Conary, through `workflow_dispatch` of the
+named workflow file on `ref` (the default branch if null), never by a push.
+Any host that can dispatch a workflow with string inputs and report a check
+run on a commit can play the workflow's part; nothing here needs Nix. Cheap
+checks stay ordinary CI and run on every push as before.
+
+**Readiness is not permission.** The work starts when review is ready: the
+head's reviews are clean with their threads resolved, or no reviewer is
+configured (`settings.reviewers` empty) and nothing is open, and CI is not
+red. It does not wait for `review-settled`, which only the landing decision
+posts and which needs the work's evidence; waiting on that evidence therefore
+cannot hold back the work that produces it. Landing needs every deferred check
+to have succeeded (the decision waits, and the permission paths refuse):
+a check with no evidence is never counted as passing, and a failed one goes
+to a fix like any red check. The permission's attested-evidence rules apply to
+the check run too.
+
+**The workflow's part.** It receives the inputs `pr`, `head`, `base`, `check`
+and `nonce`. It must (1) set `run-name: conary ${{ inputs.nonce }}`, so the run
+can be found, (2) check out `inputs.head` (a dispatch runs on a branch, never
+on the PR's head), and (3) report a check run named exactly `check` on
+`inputs.head` with `external_id` set to `inputs.nonce`, completed with
+`success` only if the work passed. A same-named check run without an owned
+nonce is not evidence, nor is a run on another head.
+
+**Ownership.** Before sending, the dispatch (check, head, nonce, time) is saved
+in the PR's record, so a restart or a lost response never sends it twice.
+Passes look runs up by nonce. A dispatch not seen, or a finished run without
+its evidence, within `start_timeout` counts as lost and may be sent again, up
+to `attempts` per check and head; a run past `run_timeout` is cancelled and
+counts as lost. Past `attempts` the PR waits and says so.
+
+**Obsolete heads.** When the head changes (a fix push, any push), the next
+pass cancels the old head's runs before anything else, asks again if
+cancelling failed, and forgets the dispatch once nothing of it can still run.
+The new head starts its own. Runs on a PR that is closed are left to finish.
+
 ## Comparing decisions
 
 ```console

@@ -23,6 +23,13 @@ pub(super) fn decide(f: &Facts, m: &mut Memory, now: u64) -> Decision {
         }
         m.retry = None;
     }
+    if let Some(nonce) = f.deferred_stale.first() {
+        return at(
+            Stage::Ci,
+            Step::CancelDeferred(nonce.clone()),
+            "Cancel a deferred check that is obsolete or lost",
+        );
+    }
     if let Some(id) = m.stopping.first() {
         return at(
             Stage::Fix,
@@ -194,7 +201,9 @@ pub(super) fn decide(f: &Facts, m: &mut Memory, now: u64) -> Decision {
         }
     }
     match super::review::look(f, m, now, f.dependency.is_none() || edited) {
-        super::review::Look::Next(decision) => decision,
+        super::review::Look::Next(decision) => {
+            super::deferred::without_reviewer(f, ci == Ci::Red, &decision).unwrap_or(decision)
+        }
         super::review::Look::Settled { capped } => after_review(f, m, now, ci, capped),
     }
 }
@@ -253,6 +262,14 @@ fn after_review(f: &Facts, m: &mut Memory, now: u64, ci: Ci, capped: bool) -> De
             Step::ListOwner,
             "The judge sent it to the owner",
         );
+    }
+    // Review is ready here: the deferred checks start, and cheap checks have
+    // been running all along. A judge's pending verdict on exhausted rounds
+    // is not readiness.
+    if (!capped || verdict == Some(Judgment::Land))
+        && let Some(decision) = super::deferred::start(f)
+    {
+        return decision;
     }
     let pending: Vec<_> = f.checks.iter().filter(|c| c.state == Ci::Pending).collect();
     let machine = f.settings.machine();
@@ -321,6 +338,9 @@ fn after_review(f: &Facts, m: &mut Memory, now: u64, ci: Ci, capped: bool) -> De
                     .join(", ")
             ),
         );
+    }
+    if let Some(decision) = super::deferred::gate(f) {
+        return decision;
     }
     let requires_judge = f.classified.class == Class::R2
         || f.needs_judge
@@ -576,6 +596,7 @@ fn failure_stage(kind: Failure) -> Stage {
     match kind {
         Failure::Build | Failure::Eval => Stage::Proof,
         Failure::Post => Stage::Review,
+        Failure::Deferred => Stage::Ci,
         Failure::Job | Failure::Lost | Failure::Answer | Failure::Stop => Stage::Fix,
         _ => Stage::Merge,
     }

@@ -91,6 +91,22 @@ pub struct CheckRun {
     /// The suite it ran in: one workflow run's, under GitHub Actions. A
     /// rerun is in the suite of the run it reruns.
     pub check_suite: Option<CheckSuite>,
+    /// What the run's creator named it by. A deferred check's run names the
+    /// dispatch that started it here.
+    #[serde(default)]
+    pub external_id: Option<String>,
+}
+
+/// One run of a workflow, as the workflow's run list shows it.
+#[derive(Debug, Clone, Deserialize)]
+pub struct WorkflowRun {
+    pub id: u64,
+    /// The workflow's `run-name`. A dispatched run's carries its nonce.
+    #[serde(default)]
+    pub display_title: Option<String>,
+    pub status: String,
+    #[serde(default)]
+    pub conclusion: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
