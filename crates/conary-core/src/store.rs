@@ -437,12 +437,24 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut store = Store::open(Lock::take(dir.path()).unwrap(), key(), None).unwrap();
         let x = observe(&mut store, 1);
-        store.record(Body::Revision { change: x, base: commit('a'), head: commit('b') }).unwrap();
-        store.record(Body::Land {
-            change: x, revision: RevisionId::new(&commit('a'), &commit('b')),
-            before: commit('a'), after: commit('c'),
-            by: Authority::Status { login: "steward".into() },
-        }).unwrap();
+        store
+            .record(Body::Revision {
+                change: x,
+                base: commit('a'),
+                head: commit('b'),
+            })
+            .unwrap();
+        store
+            .record(Body::Land {
+                change: x,
+                revision: RevisionId::new(&commit('a'), &commit('b')),
+                before: commit('a'),
+                after: commit('c'),
+                by: Authority::Status {
+                    login: "steward".into(),
+                },
+            })
+            .unwrap();
         let u = observe(&mut store, 2);
         let anchor = store.head();
         drop(store);
@@ -461,7 +473,17 @@ mod tests {
         let before = std::fs::read(&path).unwrap();
         let store = Store::open(Lock::take(dir.path()).unwrap(), key(), anchor).unwrap();
         assert_eq!(store.ledger().undo_of(x), Some(u));
-        assert_eq!(store.ledger().change(u).unwrap().undo.as_ref().unwrap().reverts, [x]);
+        assert_eq!(
+            store
+                .ledger()
+                .change(u)
+                .unwrap()
+                .undo
+                .as_ref()
+                .unwrap()
+                .reverts,
+            [x]
+        );
         assert_eq!(std::fs::read(path).unwrap(), before);
     }
 

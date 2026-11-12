@@ -18,6 +18,13 @@ fn undo_requires_a_nonblank_reason_for_every_selection() {
             }
             assert!(Cli::try_parse_from(&args).is_err(), "{args:?}");
         }
+        let reason =
+            "Red run https://github.com/o/r/actions/runs/1: check failed; error: missing value";
+        let mut args = vec!["cn", "undo"];
+        args.extend(&selection);
+        args.extend(["--reason", reason]);
+        let cli = Cli::try_parse_from(&args).unwrap();
+        assert!(matches!(cli.command, Command::Undo { reason: got, .. } if got == reason));
     }
 }
 

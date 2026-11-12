@@ -199,6 +199,8 @@ pub enum Invalid {
     Held(Held),
     /// An undo that reverts nothing.
     NothingToUndo,
+    /// A new undo lacks its nonblank operational reason.
+    UndoReason,
     /// The change is an undo already.
     AlreadyUndo,
     /// An undo can't revert itself, or a change twice.
@@ -249,6 +251,7 @@ impl std::fmt::Display for Invalid {
             }
             Self::Held(why) => write!(f, "the change can't join its train again: {why}"),
             Self::NothingToUndo => f.write_str("the undo reverts nothing"),
+            Self::UndoReason => f.write_str("an undo requires a nonblank reason"),
             Self::AlreadyUndo => f.write_str("the change is an undo already"),
             Self::UndoRepeats(id) => write!(f, "the undo names {id} twice, or itself"),
             Self::OtherRepo(id) => write!(f, "change {id} is in another repo than its undo"),
@@ -340,6 +343,7 @@ impl Ledger {
     pub fn admit(&self, body: &Body) -> Result<(), Invalid> {
         self.check(body)?;
         match body {
+            Body::Undo { reason: None, .. } => Err(Invalid::UndoReason),
             Body::Join {
                 change,
                 revision,
@@ -499,7 +503,8 @@ impl Ledger {
                 change,
                 reverts,
                 asked,
-            } => self.check_undo(*change, reverts, asked)?,
+                reason,
+            } => self.check_undo(*change, reverts, asked, reason.as_deref())?,
         }
         Ok(())
     }
