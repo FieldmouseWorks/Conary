@@ -56,7 +56,7 @@ snapshot of main on 2026-11-12; the issues it links own the live state.
 | 2c | A "Proofs on the machine" section in ci-attestation.md | #309 (format) and P1 (status binding) | open |
 | 3 | `conary/train/` candidates get the repo's proof check started and its status posted | **P3** | uncovered |
 | 3b | Per-PR proofs drop to something cheap | repo configuration, in P6 | uncovered |
-| 4 | Public repos' hosted checks can be required on a candidate | **P4** (Conary), **P5** (burrow) | uncovered |
+| 4 | Public repos' hosted checks can be required on a candidate | existing token verifier; **P4** (documentation and regression coverage), **P5** (burrow publication) | verifier implemented; producer publication uncovered |
 | 5 | PSIV `train = true`, `trainRequire = ["gate"]`, DEVELOPMENT.md | **P6** | uncovered, owner-sequenced |
 | M3 | "fewer gate runs than PRs" on remi | #326, unchanged | open |
 | M3b | PSIV batching measured | **P7** | uncovered, supplementary |
@@ -144,31 +144,41 @@ returns a result for an unrequested check, or for another tree, is rejected.
 Landing behavior with the flag off is unchanged, shown by the existing train
 tests. Run the repository gate.
 
-### P4: public-repo candidate evidence (Conary)
+### P4: document and cover existing public-token evidence (Conary)
 
-Depends on #309 (not on P1). Can land in parallel with P1.
+No implementation prerequisite. Can land independently of #309, P1 and P5;
+P5 does not wait for it.
 
 #218 offers two ways: read Sigstore bundles, or let public repos' jobs keep
 the token artifact private repos keep. Take the second. It reuses the verifier
-that already counts private repos' evidence, adds no trust root or new crypto
-dependency, and the bundle path stays what `gh attestation verify` offers to a
-person. Teach the verifier that a public repo's candidate evidence may come
-from the token artifact, with the same fresh-runner and run-binding rules, and
-update ci-attestation.md's "Public repos". Reading bundles is not scheduled; it
-is reopened only if the artifact can't meet the section 9 bar for a public repo
-(for example, if an artifact visible to everyone breaks the token's binding).
+that already counts private repos' evidence:
+[`attest::attested`](../crates/conary-github/src/attest.rs) reads token artifacts
+without consulting repository visibility, and
+[`train/gate.rs`](../crates/conary-github/src/train/gate.rs) already uses it for
+required candidate checks. Public and private artifacts follow the same trust
+checks. Once a producer publishes the artifact, no verifier change is needed;
+there is no new trust root or crypto dependency. Update ci-attestation.md's
+"Public repos" to describe this existing support and distinguish token
+verification by the train from `gh attestation verify`'s bundle verification
+for a person. Reading bundles in the train is not scheduled.
 
-Check: a public repo's candidate counts with a valid artifact and not with an
-altered subject, a token from another run, another repo or workflow, a job not
-on a fresh runner, or no artifact; the existing bundle-based rejection of
-statuses stays. Run the repository gate.
+Check: review the existing verifier and candidate-gate tests and extend only
+missing regression coverage. For both public and private token artifacts, a
+candidate counts with a valid artifact and not with an altered subject, a token
+from another run, another repo or workflow, a self-hosted job not on a fresh
+runner, or no artifact. GitHub-hosted runners retain their existing acceptance;
+required statuses without attestation retain their existing rejection. These
+checks exercise the shared verifier, not a new visibility-specific path. Run
+the applicable tests; this documentation and coverage task changes no verifier
+behavior and does not gate producer publication.
 
 ### P5: public repos keep the token artifact (burrow)
 
-Depends on P4 and burrow#728/#740. One PR in burrow, flag off.
+Depends only on burrow#728/#740, not on P4 or #309. One PR in burrow, flag off.
 
 In the shared `cn attest` step, public repos also keep the token artifact. No
-second copy of the format, and no change for private repos.
+second copy of the format, and no change for private repos. Both use Conary's
+existing verifier and trust checks; publication needs no verifier implementation.
 
 Check: workflow tests fail before the change; public with the flag on keeps the
 artifact and still makes the bundle, off or private is as before; the artifact
@@ -203,10 +213,15 @@ reaches a batch, the report says so and nothing is manufactured.
 ## Order
 
 ```
-#309 ──► P1 ──┐
-  │           ├──► P3 ──► P6 ──► P7
-  └──► P4 ──► P5 ──┘      ▲
-#311 (proof plugin, P2) ──┘ ┘   key provisioning (owner) ──► P6
+#309 ──► P1 ────────────────────► P3
+#311 (proof plugin, P2) ─────────► P3
+#256 slice 5 (proof queue) ──────► P3
+burrow#728/#740 ──► P5 ──────────► P6
+P1, P3 ─────────────────────────► P6
+key provisioning, trusted config, PSIV 1.0 ──► P6
+P6, #326 ───────────────────────► P7
+
+P4: independent documentation and regression coverage of existing support
 ```
 
 #326 (remi's exit report) is independent of all of it and goes first or in
@@ -217,4 +232,5 @@ parallel; nothing here gates it.
 Every line of #218's "Shape" appears in the table, and the "M3 exit relevance"
 note is carried by the two-measurements split above. No tracker or ongoing
 workstream is an implementation child: #256, #48, #218 and #311 are not tasks;
-P1 to P5 and P7 are single PRs, and P6 waits for the owner.
+P1, P3, P5 and P7 are implementation PRs; P4 is a documentation and regression
+coverage PR, P2 is #311's requirements, and P6 waits for the owner.
