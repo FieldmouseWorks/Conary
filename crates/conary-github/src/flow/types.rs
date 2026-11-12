@@ -195,6 +195,10 @@ pub struct Job {
 
 pub use conary_core::plugin::Judgment;
 
+/// Per revision: the highest authenticated judge generation, and its verdict
+/// (`None` when that generation's words conflict).
+pub type JudgeIssuance = BTreeMap<Revision, (u64, Option<Judgment>)>;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Judged {
     pub revision: Revision,
@@ -457,7 +461,7 @@ pub struct Memory {
     pub latest_reviews: BTreeMap<String, u64>,
     /// Authenticated issuance high-water marks, including same-generation conflicts.
     #[serde(with = "super::persist::judge_issuance")]
-    pub judge_issuance: BTreeMap<Revision, (u64, Option<Judgment>)>,
+    pub judge_issuance: JudgeIssuance,
     #[serde(with = "super::persist::pairs")]
     pub major_issuance: BTreeMap<Revision, (u64, Option<Major>)>,
     pub consumed_reviews: BTreeSet<(String, Revision, u64)>,

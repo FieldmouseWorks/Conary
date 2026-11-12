@@ -1,14 +1,11 @@
 //! Compatibility belongs to saved flow state, never the plugin wire type.
-use super::{Judgment, Revision};
+use super::{JudgeIssuance, Judgment, Revision};
 use serde::{Deserialize, Deserializer, de::Error};
-use std::collections::BTreeMap;
 
 // Always write the contract's canonical words through Judgment's serializer.
 pub use super::pairs::serialize;
 
-pub fn deserialize<'de, D: Deserializer<'de>>(
-    deserializer: D,
-) -> Result<BTreeMap<Revision, (u64, Option<Judgment>)>, D::Error> {
+pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<JudgeIssuance, D::Error> {
     let entries = Vec::<(Revision, (u64, Option<String>))>::deserialize(deserializer)?;
     entries
         .into_iter()
