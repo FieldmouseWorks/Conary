@@ -659,7 +659,7 @@ change.get(id | repo#pr) / change.list(repo?, session?, status?, class?, since?)
 evidence.add / evidence.query(change | revision)
 train.join(change) / train.step(repo)   // M3: the train (section 4.7)
 land(change)                      // M6; until then the steward lands and reports
-undo(change | actor | since) / at(time, query)
+undo(change | actor | since, reason) / at(time, query)
 log.query(repo?, path?, symbol?, session?, intent~text?, since?, class?)
 why(repo, path, line | symbol)    // the change, its intent, session and evidence
 events.subscribe(land | outside | red | undo | owner)
