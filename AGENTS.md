@@ -139,8 +139,10 @@ For reviewers, Codex included. Flag as P1:
 - evidence counted when it was produced inside the authoring session's
   sandbox or lacks its producer's attestation (conaryd's signature on the op
   doesn't count); a new test accepted without a failing `negative` result
-- evidence counted for a tree it didn't run on: a PR's evidence proves its
-  revision, never the landed tree, and an R2 change lands only on evidence
-  for the exact candidate tree
+- evidence counted for a tree it didn't run on: evidence proves the tree it
+  ran on and may count only for a landing with that exact tree, with the
+  check's identity, definition and attestation intact; tree equality alone
+  never carries a review or judgment; an R2 change lands only on evidence
+  for the exact candidate tree and trunk binding
 - a ledger note carrying prompt text, or anything the repo's own rules keep
   out of its history
