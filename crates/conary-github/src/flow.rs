@@ -7,7 +7,7 @@ mod claims;
 pub use claims::{FixAnswer, FixClaim, FixResult, Unposted};
 mod decide;
 pub(crate) mod deferred;
-pub use deferred::{Deferral, DeferredConfig, Dispatch, Start};
+pub use deferred::{Deferral, DeferredConfig, DeferredFailure, Dispatch, Start};
 mod gates;
 mod history;
 mod markers;

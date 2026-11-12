@@ -161,6 +161,7 @@ pub fn read(
         dispatches: Vec::new(),
         deferred: BTreeMap::new(),
         deferred_stale: Vec::new(),
+        deferred_failures: BTreeMap::new(),
         deferred_wake: None,
     };
     // These PRs do not enter the pipeline. In particular, do not spend
@@ -208,7 +209,7 @@ pub fn read(
         &pull.base.name,
         &paths,
         &extra.suites,
-        &machine,
+        &facts.settings,
     )?;
     if !extra.checks_complete {
         ci.checks = vec![Check {

@@ -9,6 +9,7 @@
 use super::decide::{Decision, at, wait};
 use super::persist::Result;
 use super::*;
+use crate::api::ApiError;
 use crate::attest::Actions;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -110,6 +111,10 @@ pub struct Dispatch {
     /// When GitHub last accepted a request to stop it. A request is not a
     /// stop: the dispatch is kept until its run is seen finished.
     pub cancel_asked: Option<u64>,
+    /// Saved before every stop request, even when its response fails.
+    /// Retry ordering and deadlines belong to each dispatch.
+    #[serde(default)]
+    pub cancel_attempted: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -124,6 +129,8 @@ pub enum Deferral {
     /// A successful check run of the owned run's own job. `run` and
     /// `check_run` are the one record that must also carry the attestation.
     Done { run: u64, check_run: u64 },
+    /// An owned current-head run failed and needs branch repair.
+    Failed,
     /// Lost too many times for this head.
     Exhausted,
 }
@@ -140,6 +147,14 @@ pub(crate) struct Proof {
     pub check_run: u64,
 }
 
+/// The failing owned producer, kept separately from ordinary commit CI.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeferredFailure {
+    pub run: u64,
+    pub check_run: Option<u64>,
+    pub conclusion: String,
+}
+
 /// What reading GitHub says about the dispatches in a record.
 #[derive(Debug, Default)]
 pub(super) struct Observation {
@@ -151,6 +166,7 @@ pub(super) struct Observation {
     pub wake: Option<u64>,
     /// The record behind each `Done`.
     pub proofs: BTreeMap<String, Proof>,
+    pub failures: BTreeMap<String, DeferredFailure>,
     adopt: Vec<(String, u64)>,
     retire: BTreeSet<String>,
 }
@@ -177,15 +193,45 @@ fn titled(run: &crate::api::WorkflowRun, nonce: &str) -> bool {
         .is_some_and(|t| t.split_whitespace().any(|w| w == nonce))
 }
 
-fn lapses(d: &Dispatch, run: Option<&crate::api::WorkflowRun>, c: &DeferredConfig) -> Option<u64> {
-    // When it will count as lost, and None when it already has.
-    Some(match run {
-        Some(r) if r.status == "completed" && r.conclusion.as_deref() != Some("success") => {
-            return None;
-        }
+fn lapses(d: &Dispatch, run: Option<&crate::api::WorkflowRun>, c: &DeferredConfig) -> u64 {
+    match run {
         Some(r) if r.status != "completed" => d.sent_at.saturating_add(c.run_timeout),
+        // Retryable terminal outcomes and missing/invalid evidence have the
+        // same eligibility boundary as begin, even when they finish early.
         _ => d.sent_at.saturating_add(c.start_timeout),
-    })
+    }
+}
+
+fn stop_due(d: &Dispatch) -> Option<u64> {
+    d.cancel_attempted
+        .or(d.cancel_asked)
+        .map(|t| t.saturating_add(RETRY))
+}
+
+fn failed(run: &crate::api::WorkflowRun) -> bool {
+    run.status == "completed"
+        && matches!(
+            run.conclusion.as_deref(),
+            Some("failure" | "timed_out" | "action_required")
+        )
+}
+
+/// Populate the same deferred observations for a pass and its scope rereads.
+pub(super) fn hydrate<G: Write>(
+    github: &G,
+    f: &mut Facts,
+    evidence: Option<&Evidence>,
+    now: u64,
+) -> std::result::Result<Observation, ApiError> {
+    let seen = observe(github, f, now, &|p| match evidence {
+        Some(e) => super::evidence::deferred(github, f, e, p).map(|r| r.is_ok()),
+        None => Ok(false),
+    })?;
+    f.deferred.clone_from(&seen.deferrals);
+    f.deferred_failures.clone_from(&seen.failures);
+    f.deferred_stale.clone_from(&seen.stale);
+    f.deferred_wake = seen.wake;
+    Ok(seen)
 }
 
 /// Read the dispatches and their evidence. Evidence is a completed, successful
@@ -198,7 +244,7 @@ pub(super) fn observe<G: Read + Actions + ?Sized>(
     github: &G,
     f: &Facts,
     now: u64,
-    prove: &dyn Fn(&Proof) -> bool,
+    prove: &dyn Fn(&Proof) -> std::result::Result<bool, ApiError>,
 ) -> std::result::Result<Observation, crate::api::ApiError> {
     let config = &f.settings.deferred;
     let mut seen = Observation::default();
@@ -252,16 +298,19 @@ pub(super) fn observe<G: Read + Actions + ?Sized>(
         {
             seen.adopt.push((d.nonce.clone(), r.id));
         }
-        let lost = lapses(d, run, config).is_none_or(|t| now >= t);
+        let lost = now >= lapses(d, run, config);
         let live = run.is_some_and(|r| r.status != "completed");
-        let settled = !live && (run.is_some() || d.run.is_some() || lost);
-        if live && (obsolete(d) || lost) && d.cancel_asked.is_none_or(|t| now >= t + RETRY) {
-            asks.push((d.cancel_asked, d.nonce.clone()));
+        // A complete nonce listing without a match cannot prove that an
+        // accepted dispatch will never appear. Only a terminal run or an
+        // authoritative lookup of a previously adopted ID settles ownership.
+        let settled = !live && (run.is_some() || d.run.is_some());
+        if live && (obsolete(d) || lost) && stop_due(d).is_none_or(|t| now >= t) {
+            asks.push((d.cancel_attempted.or(d.cancel_asked), d.nonce.clone()));
         }
-        // Forgotten only once the run is seen finished (or was never there).
+        // Unknown obsolete work remains discoverable until its disposition is known.
         if obsolete(d) && settled {
             seen.retire.insert(d.nonce.clone());
-        } else if !settled && (obsolete(d) || lost) {
+        } else if !settled && (obsolete(d) || live && lost) {
             unsettled.push(d);
         }
     }
@@ -277,10 +326,29 @@ pub(super) fn observe<G: Read + Actions + ?Sized>(
     for name in config.checks.keys() {
         let owned: Vec<&&Dispatch> = here.iter().filter(|d| &d.check == name).collect();
         let mut proof = None;
+        let mut failure = None;
         for d in &owned {
             let Some(run) = run_of[d.nonce.as_str()].as_ref() else {
                 continue;
             };
+            if failed(run) {
+                let mut check_run = None;
+                for c in github
+                    .check_runs(&repo, &run.head_sha)?
+                    .iter()
+                    .filter(|c| &c.name == name)
+                {
+                    if github.job(&repo, c.id)?.is_some_and(|j| j.run_id == run.id) {
+                        check_run = Some(c.id);
+                    }
+                }
+                failure = Some(DeferredFailure {
+                    run: run.id,
+                    check_run,
+                    conclusion: run.conclusion.clone().expect("failed conclusion"),
+                });
+                continue;
+            }
             if run.status != "completed" || run.conclusion.as_deref() != Some("success") {
                 continue;
             }
@@ -297,7 +365,7 @@ pub(super) fn observe<G: Read + Actions + ?Sized>(
                         sha: run.head_sha.clone(),
                         check_run: c.id,
                     };
-                    if prove(&candidate) {
+                    if prove(&candidate)? {
                         proof = Some(candidate);
                     }
                 }
@@ -307,24 +375,31 @@ pub(super) fn observe<G: Read + Actions + ?Sized>(
             .iter()
             .filter(|d| &d.check == name)
             .map(|d| {
-                d.cancel_asked
-                    .map_or(now.saturating_add(RETRY), |t| t.saturating_add(RETRY))
+                stop_due(d)
+                    .unwrap_or_else(|| now.saturating_add(RETRY))
                     .max(now.saturating_add(1))
             })
             .collect();
-        let state = if let Some(done) = proof {
+        if proof.is_none()
+            && let Some(failure) = failure
+        {
+            seen.failures.insert(name.clone(), failure);
+        }
+        let state = if let Some(wake) = stopping.into_iter().min() {
+            Deferral::Stopping { wake }
+        } else if let Some(done) = proof {
             let state = Deferral::Done {
                 run: done.run,
                 check_run: done.check_run,
             };
             seen.proofs.insert(name.clone(), done);
             state
-        } else if let Some(wake) = stopping.into_iter().min() {
-            Deferral::Stopping { wake }
+        } else if seen.failures.contains_key(name) {
+            Deferral::Failed
         } else {
             let wakes: Vec<u64> = owned
                 .iter()
-                .filter_map(|d| lapses(d, run_of[d.nonce.as_str()].as_ref(), config))
+                .map(|d| lapses(d, run_of[d.nonce.as_str()].as_ref(), config))
                 .filter(|t| now < *t)
                 .collect();
             match wakes.into_iter().min() {
@@ -334,6 +409,17 @@ pub(super) fn observe<G: Read + Actions + ?Sized>(
             }
         };
         seen.deferrals.insert(name.clone(), state);
+    }
+    // Removing a configured gate does not remove ownership of uncertain work.
+    // Keep that cleanup in the landing gate too, until it is settled.
+    for d in &unsettled {
+        seen.deferrals
+            .entry(d.check.clone())
+            .or_insert_with(|| Deferral::Stopping {
+                wake: stop_due(d)
+                    .unwrap_or(now.saturating_add(RETRY))
+                    .max(now.saturating_add(1)),
+            });
     }
     // Booked from the same states: unseen, running, finished awaiting its
     // evidence, and stopping, whatever the pass then decides.
@@ -347,13 +433,22 @@ pub(super) fn observe<G: Read + Actions + ?Sized>(
         .dispatches
         .iter()
         .filter(|d| !seen.retire.contains(&d.nonce) && !proven(d))
-        .flat_map(|d| {
-            [
-                lapses(d, run_of[d.nonce.as_str()].as_ref(), config),
-                d.cancel_asked.map(|t| t.saturating_add(RETRY)),
-            ]
+        .filter_map(|d| {
+            let run = run_of[d.nonce.as_str()].as_ref();
+            if unsettled.iter().any(|u| u.nonce == d.nonce) {
+                // Unknown obsolete work needs discovery; running work needs
+                // independent cancellation recovery, including failed requests.
+                Some(
+                    stop_due(d)
+                        .unwrap_or(now.saturating_add(RETRY))
+                        .max(now.saturating_add(1)),
+                )
+            } else if run.is_some_and(failed) {
+                None
+            } else {
+                Some(lapses(d, run, config))
+            }
         })
-        .flatten()
         .chain((seen.stale.len() > 1).then(|| now.saturating_add(1)))
         .filter(|t| *t > now)
         .min();
@@ -369,12 +464,18 @@ pub(super) fn deadline(f: &Facts, dispatches: &[Dispatch], now: u64) -> Option<u
         .filter(|d| {
             !f.dispatches
                 .iter()
-                .any(|o| o.nonce == d.nonce && o.cancel_asked == d.cancel_asked)
+                .any(|o| o.nonce == d.nonce && o.cancel_attempted == d.cancel_attempted)
         })
         .flat_map(|d| {
             [
-                Some(d.sent_at.saturating_add(start)),
-                d.cancel_asked.map(|t| t.saturating_add(RETRY)),
+                // Once this request has taken its turn, give other due
+                // cancellations and branch repair/review work a prompt pass.
+                Some(if d.cancel_attempted.is_some() {
+                    now.saturating_add(1)
+                } else {
+                    d.sent_at.saturating_add(start)
+                }),
+                stop_due(d),
             ]
         })
         .flatten()
@@ -453,9 +554,16 @@ pub(crate) fn verify<G: Read + Actions + ?Sized>(
     github: &G,
     f: &Facts,
     now: u64,
-    prove: &dyn Fn(&Proof) -> bool,
+    prove: &dyn Fn(&Proof) -> std::result::Result<bool, ApiError>,
 ) -> Result<Vec<Proof>> {
     let seen = observe(github, f, now, prove)?;
+    if seen
+        .deferrals
+        .values()
+        .any(|d| matches!(d, Deferral::Stopping { .. }))
+    {
+        return Err("deferred work still has unresolved ownership".into());
+    }
     f.settings
         .deferred
         .checks
@@ -526,6 +634,7 @@ pub(super) fn begin<G: Write>(
             sent_at: pass.now,
             run: None,
             cancel_asked: None,
+            cancel_attempted: None,
         });
         data.save(f.number, record)?;
         github.dispatch(
@@ -554,7 +663,14 @@ pub(super) fn cancel<G: Write>(
         .find(|d| d.nonce == nonce)
         .ok_or("dispatch missing")?;
     let run = d.run.ok_or("run not found")?;
+    d.cancel_attempted = Some(now);
+    data.save(f.number, record)?;
     github.cancel_run(&f.repo.to_string(), run)?;
+    let d = record
+        .dispatches
+        .iter_mut()
+        .find(|d| d.nonce == nonce)
+        .expect("saved dispatch");
     d.cancel_asked = Some(now);
     data.save(f.number, record)?;
     Ok(())

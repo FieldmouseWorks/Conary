@@ -267,8 +267,11 @@ posts and which needs the work's evidence; waiting on that evidence therefore
 cannot hold back the work that produces it. Landing needs every deferred check
 to have succeeded (the decision waits, and the permission paths refuse):
 a check with no evidence is never counted as passing, and a failed one goes
-to a fix like any red check. The permission's attested-evidence rules apply to
-the check run too.
+to a fix like any red check, with the owned workflow run, conclusion and
+available job identity in the handoff. Scope rereads include these deferred
+results without mixing them into ordinary commit CI. Cancelled, skipped,
+neutral and startup outcomes remain eligible for recovery at `start_timeout`.
+The permission's attested-evidence rules apply to the check run too.
 
 **The workflow's part.** It receives the inputs `pr`, `head`, `base`, `check`
 and `nonce`. It must (1) set `run-name: conary ${{ inputs.nonce }}`, so the run
@@ -287,27 +290,36 @@ another head never supplies another dispatch's missing proof, and the
 generic newest-run-by-name rule is not used for these checks.
 
 **Ownership.** Before sending, the dispatch (check, workflow, ref, head,
-nonce, time) is saved in the PR's record, so a restart or a lost response never sends
-it twice. The workflow and the resolved ref are saved with it, so repointing (workflow
-or ref), or removing the check stops the old run through the same
+nonce, time) is saved in the PR's record, so a restart or a lost response
+never causes an immediate duplicate. The workflow and the resolved ref are
+saved with it, so repointing (workflow or ref), or removing the check stops the old run through the same
 stop-and-confirm lifecycle as an obsolete head, and never loses a run that is
 going. Passes read a saved run by its id and look
 for an unseen one by nonce in its workflow's runs created since the earliest
 such dispatch (every page; a listing GitHub cuts short, or too many pages, is
 an error, never a shorter answer, so absence is never inferred from it). A finished run counts as evidence only once its attestation verifies; until
-then it is only waiting, and a dispatch not seen, or a finished run without
-usable evidence, within `start_timeout` counts as lost and may be sent
-again, up to `attempts` per check and head; a run past `run_timeout` is asked
-to stop and counts as lost. Past `attempts` the PR waits and says so. The
+then it is only waiting. Missing, invalid, expired or incorrectly scoped
+attestations keep the evidence deadline. A failed GitHub read (including
+artifacts, keys and signer history) is an error with normal event backoff;
+it never spends a dispatch attempt or substitutes for rejected evidence.
+An unseen dispatch, or a finished run without usable evidence, counts as
+lost once `start_timeout` elapses and may be sent again, up to `attempts`
+per check and head; a run past `run_timeout` is asked to stop and counts as lost. Past `attempts` the PR waits and says so. The
 earliest outstanding deadline is always booked as the PR's wake, whatever else
 the pass decided, so none depends on a webhook.
 
 **Obsolete heads.** When the head changes (a fix push, any push), or the check
 is repointed or removed, the next pass asks the old runs to stop before
 anything else. Asking is not stopping: the dispatch is kept, asked again every
-minute (every run gets its first request before any gets a second), and
-forgotten only once its run is seen finished; until then the check
-is not started again. The new head starts its own. Runs on a PR that is closed
+minute. Every attempt is saved before sending, separately from an accepted
+response; failed, lost and ignored cancellation requests therefore all take
+their turn, with independent deadlines instead of blocking the whole PR.
+Ownership is forgotten only after terminal completion or authoritative
+disappearance of a previously adopted run. An unseen obsolete dispatch stays
+owned and is rediscovered every minute even after `start_timeout`; elapsed
+time cannot establish that accepted work will never appear. Until cleanup is
+confirmed the check is not replaced, and removal of its configuration cannot
+bypass this wait. The new head starts its own. Runs on a PR that is closed
 are left to finish.
 
 **Capped reviews.** Readiness at the review-round limit needs a judgment that

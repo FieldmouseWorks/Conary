@@ -420,6 +420,8 @@ pub struct Facts {
     pub deferred: BTreeMap<String, super::deferred::Deferral>,
     /// Nonces of owned runs to cancel.
     pub deferred_stale: Vec<String>,
+    /// Owned current-head failures and their producer diagnostics.
+    pub deferred_failures: BTreeMap<String, super::deferred::DeferredFailure>,
     /// When the owned dispatches next need a look.
     pub deferred_wake: Option<u64>,
 }

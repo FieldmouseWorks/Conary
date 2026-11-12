@@ -94,6 +94,7 @@ pub(crate) struct World {
     /// Each check run's job's artifacts, by the job's check run id: name
     /// and GitHub's zip of it.
     artifacts: HashMap<u64, Vec<(String, Vec<u8>)>>,
+    expired_artifacts: BTreeSet<u64>,
     /// The runner each job ran on, when it isn't a fresh one of its own.
     runners: HashMap<u64, String>,
     /// Cancel requests GitHub accepts and does nothing about.

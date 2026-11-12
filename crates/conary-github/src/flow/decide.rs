@@ -165,6 +165,10 @@ pub(super) fn decide(f: &Facts, m: &mut Memory, now: u64) -> Decision {
             "Posting the remaining machine proof verdicts",
         );
     }
+    // Owned deferred failures need repair even without a configured reviewer.
+    if !f.deferred_failures.is_empty() {
+        return hand(f, m, now, Kind::Red, true);
+    }
     let ci = ci(f, m, now);
     // Unknown provenance is someone else's code until read: only a history
     // known to be the bots' alone skips the review loop.

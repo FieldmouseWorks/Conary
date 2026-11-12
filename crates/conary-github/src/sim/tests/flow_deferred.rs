@@ -1,4 +1,6 @@
 //! Deferred checks against the simulated GitHub, across successive passes.
+mod recovery;
+
 use super::flow_pass_case::{Case, REPO};
 use super::head;
 use crate::attest::testing;
@@ -190,9 +192,9 @@ fn permission_is_refused_without_evidence_even_when_asked_directly() {
         f.dispatches = c.record().dispatches;
         f
     };
-    assert!(crate::flow::deferred::verify(&c.hub, &facts(&c), now + 1, &|_| true).is_err());
+    assert!(crate::flow::deferred::verify(&c.hub, &facts(&c), now + 1, &|_| Ok(true)).is_err());
     report(&c, &head(3), &nonce(&c), "success");
-    assert!(crate::flow::deferred::verify(&c.hub, &facts(&c), now + 1, &|_| true).is_ok());
+    assert!(crate::flow::deferred::verify(&c.hub, &facts(&c), now + 1, &|_| Ok(true)).is_ok());
 }
 
 #[test]
@@ -203,7 +205,7 @@ fn a_failed_deferred_check_goes_to_a_fix_not_to_landing() {
     step(&c, now);
     report(&c, &head(3), &nonce(&c), "failure");
     let next = step(&c, now + 1);
-    assert_ne!(next, Step::Merge);
+    assert_eq!(next, Step::HandFix(Kind::Red));
     assert_eq!(c.hub.count(Call::Land), 0);
 }
 

@@ -163,13 +163,12 @@ impl Pass<'_> {
                 }
                 super::observe::hydrate(&mut facts, &record, self.now, self.dry_run)?;
                 facts.dispatches.clone_from(&record.dispatches);
-                let prove = |p: &super::deferred::Proof| {
-                    self.config
-                        .evidence
-                        .as_ref()
-                        .is_some_and(|e| super::evidence::deferred(github, &facts, e, p).is_ok())
-                };
-                let seen = super::deferred::observe(github, &facts, self.now, &prove)?;
+                let seen = super::deferred::hydrate(
+                    github,
+                    &mut facts,
+                    self.config.evidence.as_ref(),
+                    self.now,
+                )?;
                 if !self.dry_run
                     && seen.apply(&mut record)
                     && let Some(data) = &data
@@ -177,9 +176,6 @@ impl Pass<'_> {
                     data.save(pr, &record)?;
                     facts.dispatches.clone_from(&record.dispatches);
                 }
-                facts.deferred = seen.deferrals;
-                facts.deferred_stale = seen.stale;
-                facts.deferred_wake = seen.wake;
                 occupancy.apply(&mut facts, self.now)?;
                 if let Some(ledger) = store.as_deref().map(Store::ledger).or(self.ledger) {
                     super::observe::train(&mut facts, ledger);
@@ -228,6 +224,9 @@ impl Pass<'_> {
                         super::evidence::authorize(self, github, &facts)
                     }
                 {
+                    if why.downcast_ref::<crate::ApiError>().is_some() {
+                        return Err(why);
+                    }
                     next.step = Step::Wait { until: None };
                     next.stage = Stage::Proof;
                     next.description = why.to_string().chars().take(140).collect();
@@ -276,7 +275,12 @@ impl Pass<'_> {
                                         .downcast_ref::<crate::ApiError>()
                                         .is_some_and(|e| e.unavailable),
                                 });
-                            } else {
+                            } else if !(matches!(next.step, Step::CancelDeferred(_))
+                                && kind == Failure::Deferred
+                                && error.downcast_ref::<crate::ApiError>().is_some())
+                            {
+                                // A stop request has its own persisted attempt
+                                // deadline; PR backoff would starve other runs.
                                 record.failed = Some(kind);
                             }
                             report.error = Some(error.to_string());
