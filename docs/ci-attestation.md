@@ -21,12 +21,14 @@ workflow's. Beside the flags above, `cn attest` takes:
   (instead of `--log`). The gate's output is each log under a `leg K of N:`
   line, one after another; the predicate's digest names it, and
   `combined.log` in `--out` keeps it for the job to upload (`cn attest`'s
-  JSON says where in `log`).
+  JSON says where in `log`). The logs are read once; hashing and writing
+  use that snapshot even if a source changes during signing or retries.
 - `negative BASE HEAD --from negative.json`, for burrow's negative run
   (instead of `--result`, `--tree` and the lists): the file's `result`,
-  `tree`, `tests`, `checks`, `skipped` and `unrun`, and nothing else. A file
-  with another key, a missing list or a result and tree that don't fit is
-  refused.
+  `tree`, `tests`, `checks`, `skipped` and `unrun`, each present exactly
+  once, and nothing else. The input must be an object with a string result,
+  an explicit string-or-null tree, and arrays of strings for the lists.
+  Other shapes and a result and tree that don't fit are refused.
 
 ## Calling Conary's workflow
 

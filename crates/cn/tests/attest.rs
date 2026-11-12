@@ -5,7 +5,7 @@ use std::net::TcpListener;
 use std::path::Path;
 use std::process::{Command, Output};
 
-use conary_github::attest::make::audience;
+use conary_github::attest::make::{Log, audience};
 use serde_json::{Value, json};
 
 const COMMIT: &str = "c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0";
@@ -70,6 +70,13 @@ fn service(status: u16, body: &'static str) -> (String, std::thread::JoinHandle<
 fn service_seq(
     answers: Vec<(u16, &'static str)>,
 ) -> (String, std::thread::JoinHandle<Vec<String>>) {
+    service_seq_with(answers, |_| {})
+}
+
+fn service_seq_with(
+    answers: Vec<(u16, &'static str)>,
+    mut before_answer: impl FnMut(usize) + Send + 'static,
+) -> (String, std::thread::JoinHandle<Vec<String>>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!(
         "http://{}/token?api-version=2.0",
@@ -77,7 +84,7 @@ fn service_seq(
     );
     let served = std::thread::spawn(move || {
         let mut lines = Vec::new();
-        for (status, body) in answers {
+        for (index, (status, body)) in answers.into_iter().enumerate() {
             let (stream, _) = listener.accept().unwrap();
             let mut reader = BufReader::new(stream.try_clone().unwrap());
             let mut line = String::new();
@@ -90,6 +97,7 @@ fn service_seq(
                 }
             }
             lines.push(line);
+            before_answer(index);
             let mut stream = stream;
             write!(
                 stream,
@@ -393,6 +401,14 @@ fn a_combined_leg_log_is_what_the_predicate_names_and_what_is_kept() {
 }
 
 fn negative_from(found: &str, extra: &[&str]) -> (Output, Option<Value>, tempfile::TempDir) {
+    negative_from_at(found, extra, None)
+}
+
+fn negative_from_at(
+    found: &str,
+    extra: &[&str],
+    url: Option<&str>,
+) -> (Output, Option<Value>, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("negative.json");
     std::fs::write(&file, found).unwrap();
@@ -413,7 +429,7 @@ fn negative_from(found: &str, extra: &[&str]) -> (Output, Option<Value>, tempfil
         out.to_str().unwrap(),
     ];
     args.extend_from_slice(extra);
-    let run = attest(&args, None);
+    let run = attest(&args, url);
     let made = serde_json::from_slice(&run.stdout).ok();
     (run, made, dir)
 }
@@ -535,4 +551,168 @@ fn signing_asks_again_when_the_token_service_says_try_later() {
     let statement = format!("{}{}", read(&signed["subject"]), read(&signed["predicate"]));
     assert_eq!(read(&signed["attestation"]), format!("{statement}a.b.c\n"));
     assert_eq!(signed["audience"], json!(audience(&statement)));
+}
+
+// The token server changes a source only after the statement has been made.
+// Both the initial request and a retry must retain that original snapshot.
+#[test]
+fn signing_keeps_the_log_snapshot_across_source_changes_and_retries() {
+    for command in ["commit", "revision", "negative"] {
+        for change in ["append", "replace", "remove"] {
+            for retry in [false, true] {
+                let dir = tempfile::tempdir().unwrap();
+                let one = dir.path().join("one");
+                let two = dir.path().join("two");
+                std::fs::write(&one, b"first\n").unwrap();
+                std::fs::write(&two, b"second\x00\xff").unwrap();
+                let original = b"leg 1 of 2:\nfirst\nleg 2 of 2:\nsecond\x00\xff";
+                let source = one.clone();
+                let answers = if retry {
+                    vec![(503, "{}"), (200, r#"{"value":"a.b.c"}"#)]
+                } else {
+                    vec![(200, r#"{"value":"a.b.c"}"#)]
+                };
+                let (url, served) = service_seq_with(answers, move |index| {
+                    if index != usize::from(retry) {
+                        return;
+                    }
+                    match change {
+                        "append" => std::fs::OpenOptions::new()
+                            .append(true)
+                            .open(&source)
+                            .unwrap()
+                            .write_all(b"appended")
+                            .unwrap(),
+                        "replace" => {
+                            std::fs::remove_file(&source).unwrap();
+                            std::fs::write(&source, b"replacement").unwrap();
+                        }
+                        "remove" => std::fs::remove_file(&source).unwrap(),
+                        _ => unreachable!(),
+                    }
+                });
+                let out = dir.path().join("out");
+                let mut args = if command == "commit" {
+                    vec![command, COMMIT]
+                } else {
+                    vec![command, BASE, HEAD]
+                };
+                args.extend([
+                    "--result",
+                    "fail",
+                    "--tree",
+                    TREE,
+                    "--leg-log",
+                    one.to_str().unwrap(),
+                    "--leg-log",
+                    two.to_str().unwrap(),
+                    "--log-artifact",
+                    "logs",
+                    "--out",
+                    out.to_str().unwrap(),
+                    "--sign",
+                ]);
+                let run = attest(&args, Some(&url));
+                let requests = served.join().unwrap();
+                assert!(
+                    run.status.success(),
+                    "{command} {change} retry={retry}: {run:?}"
+                );
+                let made: Value = serde_json::from_slice(&run.stdout).unwrap();
+                let kept = std::fs::read(made["log"].as_str().unwrap()).unwrap();
+                assert_eq!(kept, original, "{command} {change} retry={retry}");
+                let predicate: Value = serde_json::from_str(&read(&made["predicate"])).unwrap();
+                assert_eq!(
+                    predicate["log"],
+                    serde_json::to_value(Log::of(&kept, "logs")).unwrap()
+                );
+                let statement = format!("{}{}", read(&made["subject"]), read(&made["predicate"]));
+                assert_eq!(read(&made["attestation"]), format!("{statement}a.b.c\n"));
+                for request in requests {
+                    assert!(request.contains(&format!("&audience={} ", audience(&statement))));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn negative_json_requires_exactly_the_named_members_and_types_before_any_side_effect() {
+    let valid = json!({
+        "result": "none", "tree": null, "tests": [], "checks": [], "skipped": [], "unrun": []
+    });
+    let mut invalid = vec![
+        r#"["none",null,[],[],[],[]]"#.to_owned(),
+        r#"{"result":{"none":null},"tree":null,"tests":[],"checks":[],"skipped":[],"unrun":[]}"#
+            .to_owned(),
+        "null".to_owned(),
+    ];
+    for field in ["result", "tree", "tests", "checks", "skipped", "unrun"] {
+        let mut missing = valid.clone();
+        missing.as_object_mut().unwrap().remove(field);
+        invalid.push(missing.to_string());
+        let mut duplicate = valid.to_string();
+        duplicate.pop();
+        duplicate.push_str(&format!(",\"{field}\":{}}}", valid[field]));
+        invalid.push(duplicate);
+        let wrong_types = match field {
+            "result" => vec![
+                json!(null),
+                json!(0),
+                json!([]),
+                json!({"none": null}),
+                json!("maybe"),
+            ],
+            "tree" => vec![json!(0), json!([]), json!({}), json!(true)],
+            _ => vec![
+                json!(null),
+                json!("list"),
+                json!({}),
+                json!([0]),
+                json!([null]),
+                json!([[]]),
+                json!([{}]),
+            ],
+        };
+        for wrong in wrong_types {
+            let mut value = valid.clone();
+            value[field] = wrong;
+            invalid.push(value.to_string());
+        }
+    }
+    let mut extra = valid.clone();
+    extra["extra"] = json!(null);
+    invalid.push(extra.to_string());
+    // The shape is valid but the result/tree pair is inconsistent.
+    for result in ["pass", "fail", "skipped"] {
+        let mut value = valid.clone();
+        value["result"] = json!(result);
+        invalid.push(value.to_string());
+    }
+    let mut value = valid.clone();
+    value["tree"] = json!(TREE);
+    invalid.push(value.to_string());
+    value["result"] = json!("fail");
+    value["tree"] = json!("not-a-tree");
+    invalid.push(value.to_string());
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let url = format!(
+        "http://{}/token?api-version=2.0",
+        listener.local_addr().unwrap()
+    );
+    for found in invalid {
+        for sign in [false, true] {
+            let extra = if sign { &["--sign"][..] } else { &[][..] };
+            let (run, _, dir) = negative_from_at(&found, extra, Some(&url));
+            assert!(!run.status.success(), "sign={sign}: {found}");
+            assert!(!dir.path().join("out").exists(), "sign={sign}: {found}");
+            assert_eq!(
+                listener.accept().unwrap_err().kind(),
+                std::io::ErrorKind::WouldBlock,
+                "token requested for sign={sign}: {found}"
+            );
+        }
+    }
 }

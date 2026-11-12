@@ -164,11 +164,12 @@ pub fn run(cli: &Cli, command: &AttestCommand) -> Result<()> {
             .into()),
         }
     };
-    let (claim, out) = claim(command)?;
+    let (claim, out, log_bytes) = claim(command)?;
     let request = request(out)?;
     let made = make(
         &claim,
         out,
+        &log_bytes,
         request
             .as_ref()
             .map(|(url, bearer)| Request { url, bearer }),
@@ -200,36 +201,34 @@ pub fn run(cli: &Cli, command: &AttestCommand) -> Result<()> {
 }
 
 /// The claim a command makes, and where it goes.
-fn claim(command: &AttestCommand) -> Result<(Claim, &Out)> {
-    let log = |out: &Out| -> Result<Log> { Ok(Log::of(&out.log_bytes()?, &out.log_artifact)) };
-    Ok(match command {
+fn claim(command: &AttestCommand) -> Result<(Claim, &Out, Vec<u8>)> {
+    let out = match command {
         AttestCommand::Ci(_) | AttestCommand::PrepareNegative(_) => unreachable!(),
-        AttestCommand::Commit { commit, gate, out } => (
-            Claim::Commit {
-                commit: commit.clone(),
-                result: gate.result,
-                tree: gate.tree.clone(),
-                skipped: gate.skipped.clone(),
-                log: log(out)?,
-            },
-            out,
-        ),
+        AttestCommand::Commit { out, .. }
+        | AttestCommand::Revision { out, .. }
+        | AttestCommand::Negative { out, .. } => out,
+    };
+    let log_bytes = out.log_bytes()?;
+    let log = Log::of(&log_bytes, &out.log_artifact);
+    let claim = match command {
+        AttestCommand::Ci(_) | AttestCommand::PrepareNegative(_) => unreachable!(),
+        AttestCommand::Commit { commit, gate, .. } => Claim::Commit {
+            commit: commit.clone(),
+            result: gate.result,
+            tree: gate.tree.clone(),
+            skipped: gate.skipped.clone(),
+            log,
+        },
         AttestCommand::Revision {
-            base,
-            head,
-            gate,
-            out,
-        } => (
-            Claim::Revision {
-                base: base.clone(),
-                head: head.clone(),
-                result: gate.result,
-                tree: gate.tree.clone(),
-                skipped: gate.skipped.clone(),
-                log: log(out)?,
-            },
-            out,
-        ),
+            base, head, gate, ..
+        } => Claim::Revision {
+            base: base.clone(),
+            head: head.clone(),
+            result: gate.result,
+            tree: gate.tree.clone(),
+            skipped: gate.skipped.clone(),
+            log,
+        },
         AttestCommand::Negative {
             base,
             head,
@@ -240,7 +239,7 @@ fn claim(command: &AttestCommand) -> Result<(Claim, &Out)> {
             skipped,
             unrun,
             from,
-            out,
+            ..
         } => {
             let found = match (from, result) {
                 (Some(path), _) => Found::read(path)?,
@@ -254,22 +253,20 @@ fn claim(command: &AttestCommand) -> Result<(Claim, &Out)> {
                 },
                 (None, None) => unreachable!("clap requires --result without --from"),
             };
-            (
-                Claim::Negative {
-                    base: base.clone(),
-                    head: head.clone(),
-                    result: found.result,
-                    tree: found.tree,
-                    tests: found.tests,
-                    checks: found.checks,
-                    skipped: found.skipped,
-                    unrun: found.unrun,
-                    log: log(out)?,
-                },
-                out,
-            )
+            Claim::Negative {
+                base: base.clone(),
+                head: head.clone(),
+                result: found.result,
+                tree: found.tree,
+                tests: found.tests,
+                checks: found.checks,
+                skipped: found.skipped,
+                unrun: found.unrun,
+                log,
+            }
         }
-    })
+    };
+    Ok((claim, out, log_bytes))
 }
 
 /// What a negative run found, as burrow's `negative.json` keeps it. The
@@ -277,7 +274,10 @@ fn claim(command: &AttestCommand) -> Result<(Claim, &Out)> {
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Found {
+    #[serde(deserialize_with = "negative_result")]
     result: Negative,
+    // An explicit deserializer requires the key even when its value is null.
+    #[serde(deserialize_with = "serde::Deserialize::deserialize")]
     tree: Option<String>,
     tests: Vec<String>,
     checks: Vec<String>,
@@ -289,9 +289,40 @@ impl Found {
     fn read(path: &Path) -> Result<Self> {
         let bytes =
             std::fs::read(path).map_err(|e| format!("{} doesn't read: {e}", path.display()))?;
-        Ok(serde_json::from_slice(&bytes)
-            .map_err(|e| format!("{} isn't a negative run's result: {e}", path.display()))?)
+        // A derived struct also accepts a positional array. Enter through
+        // deserialize_map so only the six named members can reach Found.
+        struct Object;
+        impl<'de> serde::de::Visitor<'de> for Object {
+            type Value = Found;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("a negative run's result object")
+            }
+
+            fn visit_map<M: serde::de::MapAccess<'de>>(
+                self,
+                map: M,
+            ) -> std::result::Result<Found, M::Error> {
+                serde::Deserialize::deserialize(serde::de::value::MapAccessDeserializer::new(map))
+            }
+        }
+        let read = || -> serde_json::Result<Self> {
+            let mut input = serde_json::Deserializer::from_slice(&bytes);
+            let found = serde::Deserializer::deserialize_map(&mut input, Object)?;
+            input.end()?;
+            Ok(found)
+        };
+        Ok(read().map_err(|e| format!("{} isn't a negative run's result: {e}", path.display()))?)
     }
+}
+
+// Deserialize a string before parsing the enum: serde's enum deserializer
+// would also accept an object such as {"none": null}.
+fn negative_result<'de, D: serde::Deserializer<'de>>(
+    input: D,
+) -> std::result::Result<Negative, D::Error> {
+    let result: String = serde::Deserialize::deserialize(input)?;
+    result.parse().map_err(serde::de::Error::custom)
 }
 
 /// The legs' logs as one gate output: each under its `leg K of N:` line, one
@@ -319,7 +350,7 @@ struct Made {
 /// Writes the claim's subject and predicate into `out.out` and, given a
 /// request, its statement with the token GitHub signs for it. The token is
 /// asked for before anything is written, so a refusal leaves nothing behind.
-fn make(claim: &Claim, out: &Out, request: Option<Request>) -> Result<Made> {
+fn make(claim: &Claim, out: &Out, log_bytes: &[u8], request: Option<Request>) -> Result<Made> {
     let statement = make::statement(claim)?;
     let signed = match &request {
         Some(request) => {
@@ -342,12 +373,12 @@ fn make(claim: &Claim, out: &Out, request: Option<Request>) -> Result<Made> {
             .map_err(|e| format!("{} doesn't write: {e}", path.display()))?;
         Ok(path)
     };
-    // Legs' logs are put together here, so the file a job keeps as the log is
-    // the one the predicate's digest names.
+    // Write the snapshot used for the predicate, even if signing or its
+    // retries allowed the source logs to change or disappear.
     let log = if out.leg_logs.is_empty() {
         None
     } else {
-        std::fs::write(out.out.join("combined.log"), out.log_bytes()?)?;
+        std::fs::write(out.out.join("combined.log"), log_bytes)?;
         Some(out.out.join("combined.log"))
     };
     let subject = write(name, &subject)?;
@@ -365,3 +396,6 @@ fn make(claim: &Claim, out: &Out, request: Option<Request>) -> Result<Made> {
         audience,
     })
 }
+
+#[cfg(test)]
+mod tests;
