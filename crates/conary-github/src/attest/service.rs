@@ -30,9 +30,10 @@ pub const HEADER: &str = "conary service v1";
 /// The one signature scheme a signature line names.
 pub const SCHEME: &str = "ed25519";
 
-/// What a service attests: that `producer` ran `check` on `tree`, for
-/// `revision` of `repository`, with `result`, and that its output hashes to
-/// `log`. Its bytes as signed are [`Statement::text`].
+/// What a service attests: that `producer` ran `check`, as `definition`
+/// defines it, on `tree`, for `revision` of `repository`, with `result`,
+/// and that its output hashes to `log`. Its bytes as signed are
+/// [`Statement::text`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Statement {
@@ -47,6 +48,13 @@ pub struct Statement {
     pub tree: Option<String>,
     /// The check run it reports as.
     pub check: String,
+    /// The SHA-256, in lowercase hex, of the check's definition as the
+    /// machine configures it (a flow proof's recipe,
+    /// [`crate::flow::recipe_digest`]): what ran, not only its name. `None`
+    /// for a check the machine defines no recipe for. Always present in the
+    /// predicate, `null` included.
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub definition: Option<String>,
     /// `pass` for a commit's check; `fail`, `none` or `pass` for a negative,
     /// as CI's negatives say it (`docs/ci-attestation.md`).
     pub result: String,
@@ -214,7 +222,11 @@ pub(super) fn check(
         return Err("its statement names no log's SHA-256".into());
     }
     let result = match subject {
-        Subject::Commit { commit, tree } => {
+        Subject::Commit {
+            commit,
+            tree,
+            definition,
+        } => {
             if s.revision.base.is_some() || s.revision.head != commit {
                 return Err(format!(
                     "its statement is about {}, not {commit}",
@@ -227,9 +239,21 @@ pub(super) fn check(
                     s.tree.as_deref().unwrap_or("none")
                 ));
             }
+            if s.definition.as_deref() != definition {
+                return Err(format!(
+                    "it ran the check as defined by {}, and the machine defines it by {}",
+                    s.definition.as_deref().unwrap_or("nothing"),
+                    definition.unwrap_or("nothing")
+                ));
+            }
             pass_result(&s.result, run)?
         }
         Subject::Negative { base, head } => {
+            if let Some(d) = &s.definition {
+                return Err(format!(
+                    "it ran the negative as defined by {d}, and the machine defines no recipe for it"
+                ));
+            }
             if (s.revision.base.as_deref(), s.revision.head.as_str()) != (Some(base), head) {
                 return Err(format!(
                     "its statement is about {}, not {head} on {base}",

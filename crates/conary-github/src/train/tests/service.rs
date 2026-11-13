@@ -291,3 +291,158 @@ fn a_pr_joins_on_a_trusted_services_negative_and_on_nothing_less() {
         assert_eq!(kept, expected, "{result}");
     }
 }
+
+/// The candidate's runs: the proof, its output `text` (none: no output),
+/// and the slow check, running or done.
+fn runs(text: Option<&str>, done: bool) -> serde_json::Value {
+    json!([
+        {"id": 31, "name": PROOF, "status": "completed", "conclusion": "success",
+         "html_url": "https://remi.example/proof/31", "check_suite": {"id": 7},
+         "started_at": "2026-11-05T05:00:00Z", "output": {"text": text}},
+        {"id": 32, "name": "slow", "status": if done { "completed" } else { "in_progress" },
+         "conclusion": if done { Some("success") } else { None }, "html_url": null},
+    ])
+}
+
+#[test]
+fn a_kept_service_pass_counts_only_while_the_run_still_publishes_it() {
+    type Rewrite = Box<dyn Fn(&Hub, &str, &str, &str) -> Option<String>>;
+    let cases: Vec<(&str, &str, Rewrite)> = vec![
+        (
+            "its result altered under the same signature",
+            "doesn't verify",
+            Box::new(|_, signed, _, _| Some(signed.replacen(&"c".repeat(64), &"d".repeat(64), 1))),
+        ),
+        (
+            "its signature replaced",
+            "64 bytes",
+            Box::new(|_, signed, _, _| {
+                let (rest, _) = signed.trim_end().rsplit_once(' ').unwrap();
+                Some(format!("{rest} AAAA\n"))
+            }),
+        ),
+        (
+            "re-signed with a key the machine doesn't trust",
+            "doesn't trust",
+            Box::new(|_, _, commit, tree| Some(sign(&statement(commit, tree), &author_key()))),
+        ),
+        (
+            "re-signed for the PR's own head",
+            "is about",
+            Box::new(|hub, _, _, _| {
+                Some(sign(
+                    &statement(&head(3), &hub.tree_at(&head(3))),
+                    &producer_key(),
+                ))
+            }),
+        ),
+        (
+            "its statement taken away",
+            "proof: ",
+            Box::new(|_, _, _, _| None),
+        ),
+        (
+            "its statement replaced by other text",
+            "proof: ",
+            Box::new(|_, _, _, _| Some("all good\n".into())),
+        ),
+    ];
+    for (why, says, rewrite) in cases {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = store(&dir);
+        let hub = github(&[3]);
+        let (id, commit, tree) = gating_r2(&mut store, &hub);
+        let signed = sign(&statement(&commit, &tree), &producer_key());
+        hub.put_checks(&commit, runs(Some(&signed), false));
+        let stepped = step(&mut store, &hub, &hub, &config(), &repo(), &trusting()).unwrap();
+        assert_eq!(waiting(&stepped), ["slow"], "{why}");
+        // The same run, its name, link and success unchanged, publishes
+        // something else; then the slow check passes.
+        let text = rewrite(&hub, &signed, &commit, &tree);
+        hub.put_checks(&commit, runs(text.as_deref(), true));
+        let stepped = step(&mut store, &hub, &hub, &config(), &repo(), &trusting()).unwrap();
+        assert_eq!(gating(&stepped).0, id, "{why}");
+        let waiting = waiting(&stepped);
+        assert!(
+            waiting.len() == 1 && waiting[0].starts_with("proof: ") && waiting[0].contains(says),
+            "{why}: {waiting:?}"
+        );
+        assert!(stepped.landed.is_empty(), "{why}");
+    }
+    // Still publishing what was kept, it counts.
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = store(&dir);
+    let hub = github(&[3]);
+    let (id, commit, tree) = gating_r2(&mut store, &hub);
+    let signed = sign(&statement(&commit, &tree), &producer_key());
+    hub.put_checks(&commit, runs(Some(&signed), false));
+    step(&mut store, &hub, &hub, &config(), &repo(), &trusting()).unwrap();
+    hub.put_checks(&commit, runs(Some(&signed), true));
+    let stepped = step(&mut store, &hub, &hub, &config(), &repo(), &trusting()).unwrap();
+    assert_eq!(stepped.verdicts, [(id, Verdict::Green)]);
+}
+
+#[test]
+fn a_kept_service_pass_cannot_stand_for_another_run_of_its_name_and_link() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = store(&dir);
+    let hub = github(&[3]);
+    let (id, commit, tree) = gating_r2(&mut store, &hub);
+    let signed = sign(&statement(&commit, &tree), &producer_key());
+    hub.put_checks(&commit, runs(Some(&signed), false));
+    assert_eq!(
+        waiting(&step(&mut store, &hub, &hub, &config(), &repo(), &trusting()).unwrap()),
+        ["slow"]
+    );
+    // Another publisher's run of the same name, in a suite of its own, with
+    // the same link: what the first one's statement said isn't its word.
+    let mut both = runs(Some(&signed), true);
+    both.as_array_mut().unwrap().push(json!(
+        {"id": 33, "name": PROOF, "status": "completed", "conclusion": "success",
+         "html_url": "https://remi.example/proof/31", "check_suite": {"id": 8},
+         "started_at": "2026-11-05T05:01:00Z",
+         "output": {"text": signed.replacen(&"c".repeat(64), &"d".repeat(64), 1)}}
+    ));
+    hub.put_checks(&commit, both);
+    let stepped = step(&mut store, &hub, &hub, &config(), &repo(), &trusting()).unwrap();
+    assert_eq!(gating(&stepped).0, id);
+    let waiting = waiting(&stepped);
+    assert!(
+        waiting.len() == 1 && waiting[0].contains("doesn't verify"),
+        "{waiting:?}"
+    );
+    assert!(stepped.landed.is_empty());
+}
+
+#[test]
+fn a_kept_ci_pass_gives_way_to_a_service_statement_its_run_publishes_later() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = store(&dir);
+    let hub = github(&[3]);
+    let (id, commit, _) = gating_r2(&mut store, &hub);
+    // CI's attested pass, kept while the slow check runs.
+    hub.put_checks(&commit, runs(None, false));
+    hub.attest_passes(&commit);
+    assert_eq!(
+        waiting(&step(&mut store, &hub, &hub, &config(), &repo(), &trusting()).unwrap()),
+        ["slow"]
+    );
+    let kept = store.ledger().candidate(id).unwrap().evidence.clone();
+    assert!(
+        kept.iter()
+            .any(|e| e.check == PROOF && matches!(e.attest, Some(Attest::GithubToken { .. }))),
+        "{kept:?}"
+    );
+    // The run now carries a service statement, and an untrusted one: it
+    // counts in CI's place, and doesn't hold.
+    let forged = sign(&statement(&commit, "7".repeat(40).as_str()), &author_key());
+    hub.put_checks(&commit, runs(Some(&forged), true));
+    let stepped = step(&mut store, &hub, &hub, &config(), &repo(), &trusting()).unwrap();
+    assert_eq!(gating(&stepped).0, id);
+    let waiting = waiting(&stepped);
+    assert!(
+        waiting.len() == 1 && waiting[0].contains("doesn't trust"),
+        "{waiting:?}"
+    );
+    assert!(stepped.landed.is_empty());
+}

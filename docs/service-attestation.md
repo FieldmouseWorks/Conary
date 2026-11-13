@@ -53,7 +53,7 @@ A service posts the following exact UTF-8 bytes as the reporting check run's
 
 ```text
 conary service v1
-{"producer":"review-service","repository":"owner/repo","revision":{"base":null,"head":"COMMIT"},"tree":"TREE","check":"conary/review/reviewer","result":"pass","log":{"sha256":"LOG_SHA256"}}
+{"producer":"review-service","repository":"owner/repo","revision":{"base":null,"head":"COMMIT"},"tree":"TREE","check":"conary/review/reviewer","definition":null,"result":"pass","log":{"sha256":"LOG_SHA256"}}
 ed25519 PUBLIC_KEY SIGNATURE
 ```
 
@@ -63,12 +63,20 @@ ending in a newline. `PUBLIC_KEY` is the configured key; `SIGNATURE` is the
 exact statement bytes rather than reserializing them. The library exports
 `attest::service::{Statement, Revision, Log, sign}` to construct this format;
 `Statement::text` returns the bytes for a service using another signer.
-Unknown versions and predicate fields are refused. Input is limited to
+Unknown versions and predicate fields are refused, and `definition` is
+always present, `null` included. Input is limited to
 64 KiB. A service statement that fails verification never falls back to CI.
 
 The signed producer must match the key's configured identity, and the key
 must be trusted for the signed check. The check must match the reporting
-check run's name. Repository names compare without case; commits and trees
+check run's name, and `definition` the check's definition as the machine
+selects it now: for a [flow proof](flow.md#producer-evidence), the
+lowercase hexadecimal SHA-256 of its recipe's JSON as the flow settings
+hold it (`{"Build":"…"}`, `{"Run":["…"]}` or `{"Job":"…"}`;
+`flow::recipe_digest`), and `null` for every other check, the train's
+gates and negatives included. A pass signed for a recipe the machine no
+longer runs under that name proves nothing. A CI attestation names no
+recipe, so a check the machine defines counts only from a service. Repository names compare without case; commits and trees
 compare exactly. For a commit result, `base` is null, `head` is the tested
 commit, `tree` is that commit's exact tree and `result` must be `pass`, with
 a successful, completed check run. The log hash is a lowercase hexadecimal
@@ -85,7 +93,12 @@ only when there are no new tests to run; a failure to run tests is no pass.
 
 The verified statement, public key and signature are retained verbatim in
 `Attest::Service` on the immutable evidence operation. They do not replace
-conaryd's operation signature. Train verification asks about the candidate's
+conaryd's operation signature. A check run's output can be rewritten after
+it is read, so the train never counts a kept service attestation in place
+of the run's current output: each gate step verifies the statement the run
+publishes then. Only a kept CI attestation stands in for a recheck, and
+only for the very check run its token names while that run carries no
+service statement. Train verification asks about the candidate's
 own commit and tree, including R2 candidates: a PR-head statement cannot
 prove a different candidate, and service evidence grants no person approval
 or exemption from the train's trunk binding.
@@ -94,7 +107,7 @@ or exemption from the train's trunk binding.
 
 `cargo test -p conary-github service` exercises the shared verifier, simulated
 flow and train. It accepts independent service evidence beside CI and
-rejects altered results, logs, revisions and trees, wrong repositories and
-checks, unknown or author-held keys, malformed signatures, out-of-scope keys
+rejects altered results, logs, revisions and trees, wrong repositories,
+checks and check definitions, rewritten or removed publications, unknown or author-held keys, malformed signatures, out-of-scope keys
 and invalid configuration. It also checks receipt binding, negative results,
 key removal and R2 candidate scope. The repository gate runs these tests.

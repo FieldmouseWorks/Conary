@@ -19,6 +19,7 @@ const CHECK: &str = "conary/review/reviewer";
 const PUSH: Subject = Subject::Commit {
     commit: COMMIT,
     tree: TREE,
+    definition: None,
 };
 
 fn log() -> String {
@@ -439,4 +440,78 @@ fn the_shared_verifier_counts_a_service_statement_by_itself_and_keeps_it_while_t
     .unwrap_err();
     assert!(why.contains("statement and then a signature"), "{why}");
     assert_eq!(actions(), [0; 4]);
+}
+
+#[test]
+fn a_statement_counts_only_for_the_check_definition_the_machine_selects() {
+    let (now, before) = ("d".repeat(64), "e".repeat(64));
+    let defined = Subject::Commit {
+        commit: COMMIT,
+        tree: TREE,
+        definition: Some(&now),
+    };
+    let checked_as = |text: &str, subject| {
+        check(
+            text,
+            &producers(&["conary/review/*"]),
+            &repo(),
+            subject,
+            &run(CHECK, "success", Some(text.into())),
+        )
+    };
+    checked_as(&signed(|s| s.definition = Some(now.clone())), defined).unwrap();
+    for (text, subject, says) in [
+        (
+            signed(|s| s.definition = Some(before.clone())),
+            defined,
+            format!("defined by {before}, and the machine defines it by {now}"),
+        ),
+        (
+            signed(|_| {}),
+            defined,
+            format!("defined by nothing, and the machine defines it by {now}"),
+        ),
+        (
+            signed(|s| s.definition = Some(now.clone())),
+            PUSH,
+            format!("defined by {now}, and the machine defines it by nothing"),
+        ),
+    ] {
+        let why = checked_as(&text, subject).unwrap_err();
+        assert!(why.contains(&says), "{says}: {why}");
+    }
+    // Signed, the definition can't be swapped for the one selected.
+    let text = signed(|s| s.definition = Some(before.clone()));
+    let why = checked_as(&text.replacen(&before, &now, 1), defined).unwrap_err();
+    assert!(why.contains("signature doesn't verify"), "{why}");
+    // Nor left out: a statement says it, null included.
+    let key = producer_key();
+    let mut v = serde_json::to_value(honest()).unwrap();
+    v.as_object_mut().unwrap().remove("definition");
+    let statement = format!("{HEADER}\n{v}\n");
+    let text = format!(
+        "{statement}{SCHEME} {} {}\n",
+        URL_SAFE_NO_PAD.encode(key.verifying_key().as_bytes()),
+        URL_SAFE_NO_PAD.encode(key.sign(statement.as_bytes()).to_bytes())
+    );
+    let why = checked(&text).unwrap_err();
+    assert!(why.contains("missing field `definition`"), "{why}");
+    // A negative is the machine's named check, with no recipe of its own.
+    let mut s = service_statement(REPO, COMMIT, TREE, "negative", &log());
+    s.revision.base = Some(BASE.into());
+    s.result = "fail".into();
+    s.definition = Some(now.clone());
+    let text = sign(&s, &producer_key());
+    let why = check(
+        &text,
+        &producers(&["negative"]),
+        &repo(),
+        Subject::Negative {
+            base: BASE,
+            head: COMMIT,
+        },
+        &run("negative", "success", Some(text.clone())),
+    )
+    .unwrap_err();
+    assert!(why.contains("defines no recipe for it"), "{why}");
 }

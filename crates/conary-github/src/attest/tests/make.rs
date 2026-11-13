@@ -68,6 +68,7 @@ fn what_a_job_makes_is_what_the_verifier_reads() {
     let push = Subject::Commit {
         commit: COMMIT,
         tree: TREE,
+        definition: None,
     };
     assert_eq!(
         made_and_checked(&pushed, push, "success"),
@@ -77,6 +78,7 @@ fn what_a_job_makes_is_what_the_verifier_reads() {
     let elsewhere = Subject::Commit {
         commit: COMMIT,
         tree: BASE,
+        definition: None,
     };
     assert!(
         made_and_checked(&pushed, elsewhere, "success")
@@ -132,6 +134,7 @@ fn what_a_job_makes_is_what_the_verifier_reads() {
     let push = Subject::Commit {
         commit: HEAD,
         tree: TREE,
+        definition: None,
     };
     assert!(made_and_checked(&failed, push, "success").is_err());
 }

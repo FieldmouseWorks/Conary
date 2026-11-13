@@ -66,6 +66,11 @@ pub fn major_receipt(revision: &Revision, generation: u64, verdict: Option<Major
         "generation":generation,"verdict":verdict}))
     .expect("receipt")
 }
+/// A proof's definition, as a service's statement names it
+/// (`docs/service-attestation.md`): the SHA-256 of its recipe's JSON.
+pub fn recipe_digest(recipe: &Recipe) -> String {
+    receipt_digest(&serde_json::to_vec(recipe).expect("a recipe is JSON"))
+}
 pub fn receipt_digest(bytes: &[u8]) -> String {
     Sha256::digest(bytes)
         .iter()
@@ -252,6 +257,8 @@ fn check<G: Write>(
         return Err(format!("{name}: no attested check run (statuses cannot attest)").into());
     }
     let tree = github.tree(&repo, head)?;
+    // A proof's pass counts only for the recipe the machine selects now.
+    let definition = f.settings.recipe(name).map(recipe_digest);
     for run in latest {
         if run.status != "completed" || run.conclusion.as_deref() != Some("success") {
             return Err(format!("{name}: producer check is not successful").into());
@@ -263,6 +270,7 @@ fn check<G: Write>(
             Subject::Commit {
                 commit: head,
                 tree: &tree,
+                definition: definition.as_deref(),
             },
             &run,
             trust,

@@ -13,6 +13,7 @@ const RUN: u64 = 41;
 const PUSH: Subject = Subject::Commit {
     commit: COMMIT,
     tree: TREE,
+    definition: None,
 };
 
 fn repo() -> Repo {
@@ -432,3 +433,68 @@ fn a_signer_is_a_workflow_of_a_repo_and_counts_only_where_the_machine_names_it()
 }
 
 mod make;
+
+#[test]
+fn a_kept_attestation_stands_only_for_the_ci_run_it_was_checked_for() {
+    let (s, c) = honest();
+    let kept = Attest::GithubToken {
+        statement: s,
+        token: token(&c),
+    };
+    assert!(stands_for(&kept, &run("success")));
+    // Another run, a URL and name shared or not: its token isn't that run's.
+    let mut other = run("success");
+    other.id = RUN + 1;
+    assert!(!stands_for(&kept, &other));
+    // A token naming no check run stands for none.
+    let mut unnamed = c.clone();
+    unnamed.as_object_mut().unwrap().remove("check_run_id");
+    let unnamed = Attest::GithubToken {
+        statement: String::new(),
+        token: token(&unnamed),
+    };
+    assert!(!stands_for(&unnamed, &run("success")));
+    // The run now carries a service statement: that counts in its place,
+    // checked, and the token kept for it stands for nothing.
+    let mut published = run("success");
+    published.output = Some(crate::api::CheckOutput {
+        text: Some(format!("{}\n", service::HEADER)),
+    });
+    assert!(!stands_for(&kept, &published));
+    // A service attestation is checked from its run's output every time,
+    // whatever the ledger kept of it.
+    let service = Attest::Service {
+        statement: format!("{}\n{{}}\n", service::HEADER),
+        key: String::new(),
+        signature: String::new(),
+    };
+    assert!(!stands_for(&service, &run("success")));
+    assert!(!stands_for(&service, &published));
+}
+
+#[test]
+fn a_ci_attestation_cannot_attest_a_check_the_machine_defines() {
+    use crate::sim::Call;
+    // Nothing on GitHub is asked: CI's statement names no recipe.
+    let hub = crate::sim::Hub::new("FieldmouseWorks/remi", COMMIT);
+    let trust = Trust {
+        signer: signer(),
+        fresh: None,
+        producers: service::Producers::default(),
+    };
+    let subject = Subject::Commit {
+        commit: COMMIT,
+        tree: TREE,
+        definition: Some("d"),
+    };
+    let why = attested(&hub, &hub, &repo(), subject, &run("success"), &trust)
+        .unwrap()
+        .unwrap_err();
+    assert!(
+        why.contains("defines this check by d, which only a service's statement"),
+        "{why}"
+    );
+    for call in [Call::Job, Call::Artifacts, Call::Artifact, Call::Keys] {
+        assert_eq!(hub.count(call), 0, "{call:?}");
+    }
+}

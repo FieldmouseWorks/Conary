@@ -161,8 +161,16 @@ pub trait Actions {
 /// and which of its token's claims are held to it.
 #[derive(Debug, Clone, Copy)]
 pub enum Subject<'a> {
-    /// A push's gate on `commit`, whose tree is `tree`, passing.
-    Commit { commit: &'a str, tree: &'a str },
+    /// A check passing on `commit`, whose tree is `tree`: a push's gate,
+    /// or a PR head's proof. `definition` is the SHA-256 of the check's
+    /// definition as the machine configures it (a flow proof's recipe), or
+    /// `None` where it configures none. Only a service statement can sign
+    /// one, so a check the machine defines counts only from a service.
+    Commit {
+        commit: &'a str,
+        tree: &'a str,
+        definition: Option<&'a str>,
+    },
     /// A PR revision's negative run, its new tests on its base's code
     /// (`docs/ci-attestation.md`, "Negative runs"): `head` on its merge
     /// base `base`.
@@ -199,6 +207,16 @@ pub fn attested(
 ) -> Result<Result<Attested, String>, ApiError> {
     if let Some(text) = service::carried(run) {
         return Ok(service::check(text, &trust.producers, repo, subject, run));
+    }
+    // A CI statement names no recipe, so it can't say it ran this one.
+    if let Subject::Commit {
+        definition: Some(definition),
+        ..
+    } = subject
+    {
+        return Ok(Err(format!(
+            "the machine defines this check by {definition}, which only a service's statement can attest"
+        )));
     }
     let (signer, fresh) = (&trust.signer, trust.fresh.as_deref());
     let full = repo.to_string();
@@ -245,17 +263,49 @@ pub fn attested(
     Ok(Err(why.join("; ")))
 }
 
+/// Whether an attestation the ledger kept for a check run is still what
+/// `run` publishes now, so counting it needn't check `run` again. Only a
+/// CI one can be: its token names the one check run it's for, which has to
+/// be `run`, and `run` must carry no service statement, which would count
+/// in its place. A service statement rides in its run's output, which its
+/// publisher can rewrite at any time, so it's checked from that output
+/// each time it counts, which asks GitHub nothing.
+pub fn stands_for(attest: &Attest, run: &CheckRun) -> bool {
+    match attest {
+        Attest::GithubToken { token, .. } => {
+            service::carried(run).is_none()
+                && kept_claims(token).and_then(|c| check_run_id(&c)) == Some(run.id)
+        }
+        Attest::Service { .. } => false,
+    }
+}
+
+/// A kept token's claims, read without checking its signature again:
+/// [`check`] checked it when it was recorded, and the ledger keeps it as
+/// it was.
+fn kept_claims(token: &str) -> Option<Map<String, Value>> {
+    token
+        .split('.')
+        .nth(1)
+        .and_then(|c| unbase(c).ok())
+        .and_then(|c| serde_json::from_slice(&c).ok())
+}
+
+/// The check run a token's `check_run_id` claim names.
+fn check_run_id(claims: &Map<String, Value>) -> Option<u64> {
+    match claims.get("check_run_id") {
+        Some(Value::String(id)) => id.parse().ok(),
+        Some(Value::Number(id)) => id.as_u64(),
+        _ => None,
+    }
+}
+
 /// Whether a kept token was asked for by `signer`'s jobs, as its
 /// `job_workflow_ref` says: the claim [`check`] held to the signer the
 /// machine named when it was recorded, under GitHub's signature, and which
 /// the ledger keeps as it was.
 fn signed_by(token: &str, signer: &Signer) -> bool {
-    let claims: Option<Map<String, Value>> = token
-        .split('.')
-        .nth(1)
-        .and_then(|c| unbase(c).ok())
-        .and_then(|c| serde_json::from_slice(&c).ok());
-    claims
+    kept_claims(token)
         .as_ref()
         .and_then(|c| c.get("job_workflow_ref"))
         .and_then(Value::as_str)
@@ -391,11 +441,7 @@ fn check(
             "its token names no signer commit ({workflow_sha:?})"
         ));
     }
-    let check_run = match claims.get("check_run_id") {
-        Some(Value::String(id)) => id.parse().ok(),
-        Some(Value::Number(id)) => id.as_u64(),
-        _ => None,
-    };
+    let check_run = check_run_id(&claims);
     if check_run != Some(run.id) {
         return Err(format!(
             "its token is check run {check_run:?}'s, not {}'s",
@@ -403,7 +449,7 @@ fn check(
         ));
     }
     let (result, log) = match subject {
-        Subject::Commit { commit, tree } => {
+        Subject::Commit { commit, tree, .. } => {
             // A PR's token is for GitHub's merge as its event found it,
             // which nothing checks, so only a push's is held to its commit.
             if said("sha") != commit {

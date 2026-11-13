@@ -232,3 +232,98 @@ fn a_services_negative_must_say_the_new_tests_failed_on_the_old_code() {
     c.pass(jobs::now(), false);
     pending(&c, "a passing negative");
 }
+
+const PROOF: &str = "proof";
+
+/// The case, its machine running `recipe` as the proof [`PROOF`] and
+/// trusting [`PRODUCER`] for it, with a clean review and a failing negative.
+fn proving(recipe: &Recipe) -> (Case, tempfile::TempDir) {
+    let file = producers_file(&[(
+        PRODUCER,
+        &producer_key(),
+        &["conary/review/*", "negative", PROOF],
+    )]);
+    let (mut c, keys) = case(&file);
+    c.config
+        .settings
+        .proofs
+        .insert(PROOF.into(), recipe.clone());
+    review(&c, &producer_key(), |_| {}, |t| t);
+    negative(&c, "fail");
+    (c, keys)
+}
+
+/// The proof's pass on the head, as the service signed it, having run
+/// what `definition` defines.
+fn proved(c: &Case, definition: Option<String>) {
+    let tree = Branches::tree(&c.hub, REPO, &head(3)).unwrap();
+    let mut s = testing::service_statement(REPO, &head(3), &tree, PROOF, &"0".repeat(64));
+    s.definition = definition;
+    post(c, &head(3), PROOF, "success", &sign(&s, &producer_key()));
+}
+
+#[test]
+fn a_services_proof_counts_only_for_the_recipe_the_machine_selects() {
+    let run = |cmd: &str| Recipe::Run(vec!["sh".into(), "-c".into(), cmd.into()]);
+    for (now, before) in [
+        (
+            Recipe::Build("checks.tests".into()),
+            Recipe::Build("checks.fmt".into()),
+        ),
+        (run("make test"), run("true")),
+        (
+            Recipe::Job("prove the tests".into()),
+            Recipe::Job("say yes".into()),
+        ),
+        (run("make test"), Recipe::Job("make test".into())),
+    ] {
+        let why = format!("{now:?} after {before:?}");
+        // The same check's name, another definition: what the service ran
+        // isn't what the machine selects now.
+        let (c, _keys) = proving(&now);
+        proved(&c, Some(recipe_digest(&before)));
+        let reports = c.pass(jobs::now(), false);
+        let next = reports[0].next.as_ref().unwrap();
+        assert_eq!(next.step, Step::Wait { until: None }, "{why}");
+        assert!(
+            next.description.starts_with(&format!(
+                "proof: it ran the check as defined by {}, and the machine defines it by",
+                recipe_digest(&before),
+            )),
+            "{why}: {}",
+            next.description
+        );
+        pending(&c, &why);
+        // Signed for no definition at all, it says nothing of this one.
+        let (c, _keys) = proving(&now);
+        proved(&c, None);
+        c.pass(jobs::now(), false);
+        pending(&c, &format!("{why}, undefined"));
+        // Signed for the one it selects, it counts.
+        let (c, _keys) = proving(&now);
+        proved(&c, Some(recipe_digest(&now)));
+        let reports = c.pass(jobs::now(), false);
+        assert_eq!(reports[0].error, None, "{why}");
+        assert!(landed(&c), "{why}: {:?}", reports[0].next);
+    }
+}
+
+#[test]
+fn a_ci_attestation_cannot_prove_a_check_the_machine_defines() {
+    let recipe = Recipe::Build("checks.tests".into());
+    let (c, _keys) = proving(&recipe);
+    // CI's statement names no recipe, so it can't say it ran this one.
+    c.sign_check(&head(3), PROOF, None);
+    let reports = c.pass(jobs::now(), false);
+    let next = reports[0].next.as_ref().unwrap();
+    assert_eq!(next.step, Step::Wait { until: None });
+    assert!(
+        next.description.starts_with(&format!(
+            "proof: the machine defines this check by {}",
+            recipe_digest(&recipe)
+        )),
+        "{}",
+        next.description
+    );
+    pending(&c, "a CI pass of a defined proof");
+}

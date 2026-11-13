@@ -192,6 +192,7 @@ pub(crate) fn service_statement(
         },
         tree: Some(tree.into()),
         check: check.into(),
+        definition: None,
         result: "pass".into(),
         log: super::service::Log { sha256: log.into() },
     }

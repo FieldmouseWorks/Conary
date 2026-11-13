@@ -125,7 +125,10 @@ skipped jobs are not reintroduced as evidence requirements. Producer receipts
 verify the latest effective issuance, including across workflow changes,
 against the exact selected result. Fresh observations must still match the
 decision's check coverage and contain no blocking states. Configured proofs
-remain verification requirements even if a job reports neutral or skipped.
+remain verification requirements even if a job reports neutral or skipped,
+and count only from a service statement signed for the recipe the flow
+selects now ([definition](service-attestation.md#signed-statement-v1)), so
+changing a proof's recipe under its name needs a new pass.
 An ordinary status cannot attest a result.
 `fresh: null` accepts GitHub-hosted jobs only; a configured fresh-runner
 prefix also accepts jobs on runners started for that job, as the existing
