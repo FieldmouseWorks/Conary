@@ -126,6 +126,10 @@ pub(super) fn land_next(
     let (why, description) = if let Some(why) = elsewhere {
         (why.clone(), why)
     } else {
+        // The commits its merge squashes, read before the mark goes up:
+        // their trailers go in the landing commit's message, which the
+        // merge's head pins.
+        let commits = source.compare_commits(&full, &at, head.as_str())?;
         forge.mark(
             &full,
             head.as_str(),
@@ -156,7 +160,8 @@ pub(super) fn land_next(
             let why = format!("it targets {base}, not {trunk}");
             (why.clone(), why)
         } else {
-            match forge.land(&full, pr, head.as_str())? {
+            let message = Message::of(&last.title, pr, &commits);
+            match forge.land(&full, pr, head.as_str(), &message)? {
                 PrMerge::Merged => {
                     stepped.landed.push(pr);
                     ingest::pull(store, source, config, repo, pr)?;

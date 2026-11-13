@@ -25,9 +25,11 @@ use crate::ingest::{self, Config, IngestError};
 
 mod gate;
 mod land;
+mod message;
 mod negative;
 use gate::{Gate, gate};
 use land::{land_next, open_landing, stopped_landing};
+pub use message::Message;
 pub use negative::{Negatives, verify as verify_negative};
 
 /// Where a candidate is built, one merge at a time.
@@ -84,8 +86,11 @@ pub trait Forge: Branches + Actions {
         description: &str,
         url: Option<&str>,
     ) -> Result<(), ApiError>;
-    /// Merges a PR at `head` the way the repo merges PRs, or not at all.
-    fn land(&self, repo: &str, pr: u64, head: &str) -> Result<PrMerge, ApiError>;
+    /// Merges a PR at `head` the way the repo merges PRs, or not at all. A
+    /// squash or merge commit says `message`; a rebase keeps the PR's own
+    /// commits.
+    fn land(&self, repo: &str, pr: u64, head: &str, message: &Message)
+    -> Result<PrMerge, ApiError>;
 }
 
 #[derive(Debug)]

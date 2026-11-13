@@ -637,11 +637,41 @@ impl Hub {
     }
 
     /// Lands PR `number` as the steward does outside the train: settled at
-    /// its head, then merged. Trunk's new tip.
+    /// its head, then merged with the message the train would give it.
+    /// Trunk's new tip.
     pub(crate) fn steward_lands(&self, repo: &str, number: u64) -> String {
         let head = self.head_of(repo, number);
         self.settle(&head);
-        match self.squash(repo, number, &head) {
+        let p = self.pull_json(repo, number);
+        let tip = self
+            .branch_at(repo, p["base"]["ref"].as_str().unwrap())
+            .unwrap();
+        let messages: Vec<String> = {
+            let w = self.world.borrow();
+            let excluded: BTreeSet<_> = w.ancestors(&tip).into_iter().collect();
+            let mut commits: Vec<String> = w
+                .ancestors(&head)
+                .into_iter()
+                .filter(|c| !excluded.contains(c))
+                .collect();
+            commits.reverse();
+            commits
+                .iter()
+                .map(|c| {
+                    w.commit_record(repo, c)
+                        .ok()
+                        .and_then(|c| c.commit)
+                        .and_then(|c| c.message)
+                        .unwrap_or_default()
+                })
+                .collect()
+        };
+        let message = crate::train::Message::new(
+            p["title"].as_str().unwrap(),
+            number,
+            messages.iter().map(String::as_str),
+        );
+        match self.squash(repo, number, &head, &message) {
             Ok(sha) => sha,
             Err(why) => panic!("#{number} won't land: {why}"),
         }
@@ -704,7 +734,15 @@ impl Hub {
     /// Squashes PR `number`'s head `head` onto its base branch, as its
     /// merge does: the new commit, linked to it, and the PR merged and
     /// closed, its branch deleted if it's the repo's own.
-    fn squash(&self, repo: &str, number: u64, head: &str) -> Result<String, String> {
+    /// Squashes PR `number` at `head` onto its base, as a commit saying
+    /// `message`, the way GitHub's merge does.
+    fn squash(
+        &self,
+        repo: &str,
+        number: u64,
+        head: &str,
+        message: &crate::train::Message,
+    ) -> Result<String, String> {
         let p = self.pull_json(repo, number);
         let base = p["base"]["ref"].as_str().unwrap().to_owned();
         let tip = self.branch_at(repo, &base).ok_or("no base branch")?;
@@ -716,6 +754,9 @@ impl Hub {
         let sha = self.next_sha();
         self.commit_as(&sha, &[tip], merged);
         self.by_github(&sha);
+        let mut record = fixtures::commit();
+        record["commit"]["message"] = json!(message.whole());
+        self.commit_response(&sha, record);
         self.set_branch(repo, &base, &sha);
         self.link(repo, &sha, &[number]);
         let at = self.now();

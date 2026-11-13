@@ -6,7 +6,7 @@ use serde_json::json;
 use super::*;
 use crate::api::{Pulls, Source};
 use crate::branches::{Branches, Merged};
-use crate::train::{Forge, PrMerge};
+use crate::train::{Forge, Message, PrMerge};
 use crate::undo::Reverts;
 
 const TRUNK: &str = "1111111111111111111111111111111111111111";
@@ -17,6 +17,14 @@ fn head(n: u64) -> String {
 
 fn hub() -> Hub {
     Hub::new(REMI, TRUNK)
+}
+
+fn message() -> Message {
+    Message::new(
+        "remi: a change",
+        3,
+        ["remi: a change\n\nCo-authored-by: A <a@b>"],
+    )
 }
 
 #[test]
@@ -107,12 +115,20 @@ fn a_landing_squashes_links_and_closes_and_refuses_a_moved_head() {
     let hub = hub();
     hub.pr(REMI, 3, &head(3));
     assert_eq!(
-        hub.land(REMI, 3, &head(4)).unwrap(),
+        hub.land(REMI, 3, &head(4), &message()).unwrap(),
         PrMerge::Refused("Head branch was modified".into())
     );
-    assert_eq!(hub.land(REMI, 3, &head(3)).unwrap(), PrMerge::Merged);
+    assert_eq!(
+        hub.land(REMI, 3, &head(3), &message()).unwrap(),
+        PrMerge::Merged
+    );
     let trunk = hub.branch_at(REMI, "main").unwrap();
     assert_eq!(hub.parents(&trunk), [TRUNK]);
+    // Its squash says the message it was given.
+    assert_eq!(
+        hub.commit(REMI, &trunk).unwrap().commit.unwrap().message,
+        Some(message().whole())
+    );
     assert_eq!(hub.holding(&trunk), [head(3)]);
     assert_eq!(hub.commit_pulls(REMI, &trunk).unwrap(), [3]);
     let pr = hub.pull(REMI, 3).unwrap();
@@ -126,7 +142,7 @@ fn a_landing_squashes_links_and_closes_and_refuses_a_moved_head() {
         .collect();
     assert_eq!(events, ["merged", "closed"]);
     assert_eq!(
-        hub.land(REMI, 3, &head(3)).unwrap(),
+        hub.land(REMI, 3, &head(3), &message()).unwrap(),
         PrMerge::Refused("Pull Request is not mergeable".into())
     );
     // GitHub's own merges are its own, a person's commits aren't.
@@ -144,11 +160,15 @@ fn a_failing_call_does_nothing_and_a_lost_answer_hides_what_was_done() {
     let hub = hub();
     hub.pr(REMI, 3, &head(3));
     hub.fail(Call::Land.pr(3));
-    assert!(hub.land(REMI, 3, &head(3)).unwrap_err().unavailable);
+    assert!(
+        hub.land(REMI, 3, &head(3), &message())
+            .unwrap_err()
+            .unavailable
+    );
     assert_eq!(hub.pull(REMI, 3).unwrap().state, "open");
     hub.heal(Call::Land);
     hub.lose(Call::Land);
-    assert!(hub.land(REMI, 3, &head(3)).is_err());
+    assert!(hub.land(REMI, 3, &head(3), &message()).is_err());
     assert!(hub.pull(REMI, 3).unwrap().is_merged());
     // Narrowed to a repo, a status, or a PR, it's only those.
     hub.fail(Call::Mark.repo(REMI).mark(Mark::Red));
@@ -166,7 +186,7 @@ fn a_stale_read_answers_from_before_and_catches_up() {
     let hub = hub();
     hub.pr(REMI, 3, &head(3));
     hub.stale(Call::Pull);
-    hub.land(REMI, 3, &head(3)).unwrap();
+    hub.land(REMI, 3, &head(3), &message()).unwrap();
     assert!(!hub.pull(REMI, 3).unwrap().is_merged());
     // Another endpoint shows it already.
     assert_eq!(hub.pulls(REMI, Pulls::Open).unwrap().len(), 0);
@@ -180,10 +200,13 @@ fn a_race_changes_github_just_before_its_call_once() {
     hub.pr(REMI, 3, &head(3));
     hub.race(Call::Land.pr(3), |hub| hub.push(REMI, 3, &head(33)));
     assert_eq!(
-        hub.land(REMI, 3, &head(3)).unwrap(),
+        hub.land(REMI, 3, &head(3), &message()).unwrap(),
         PrMerge::Refused("Head branch was modified".into())
     );
-    assert_eq!(hub.land(REMI, 3, &head(33)).unwrap(), PrMerge::Merged);
+    assert_eq!(
+        hub.land(REMI, 3, &head(33), &message()).unwrap(),
+        PrMerge::Merged
+    );
 }
 
 #[test]

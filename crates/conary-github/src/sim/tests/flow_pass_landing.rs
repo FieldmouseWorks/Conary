@@ -42,6 +42,15 @@ fn landing_is_recorded_once_with_the_actual_trunk_commits() {
     }
     assert!(c.pass(jobs::now() + 1, false).is_empty());
     assert_eq!(c.hub.count(Call::Land), 1);
+    // It lands as the train would: the PR's title, and its commits'
+    // trailers once each, as the sim's default commit carries one.
+    let title = c.hub.pull(REPO, 3).unwrap().title;
+    let sent = &c.hub.asked(Call::Land)[0];
+    assert_eq!(sent[3], format!("{title} (#3)"));
+    assert_eq!(
+        sent[4],
+        "Co-authored-by: fieldmouseworks-workers[bot] <349565860+fieldmouseworks-workers[bot]@users.noreply.github.com>"
+    );
 }
 #[test]
 fn a_lost_merge_response_is_reconciled_after_the_pr_leaves_open() {
@@ -105,7 +114,14 @@ fn delegated_merges_are_reconciled_by_later_passes() {
         Step::Settle
     );
     assert!(c.record().landing.as_ref().unwrap().delegated);
-    crate::train::Forge::land(&c.hub, REPO, 3, &head(3)).unwrap();
+    crate::train::Forge::land(
+        &c.hub,
+        REPO,
+        3,
+        &head(3),
+        &crate::train::Message::new("t", 3, []),
+    )
+    .unwrap();
     c.pass(jobs::now() + 1, false);
     assert!(
         c.store

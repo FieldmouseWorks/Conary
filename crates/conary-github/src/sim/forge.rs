@@ -69,6 +69,8 @@ impl Source for Hub {
                     .get(&(base.into(), head.into()))
                     .copied()
                     .unwrap_or(usize::MAX);
+                // Oldest first, as GitHub lists them.
+                commits.reverse();
                 let complete = commits.len() <= limit;
                 commits.truncate(limit);
                 Ok(crate::api::History { commits, complete })
@@ -437,11 +439,17 @@ impl Forge for Hub {
         })
     }
 
-    fn land(&self, repo: &str, pr: u64, head: &str) -> Result<PrMerge, ApiError> {
+    fn land(
+        &self,
+        repo: &str,
+        pr: u64,
+        head: &str,
+        message: &crate::train::Message,
+    ) -> Result<PrMerge, ApiError> {
         let n = pr.to_string();
         self.write(
             Asked::new(Call::Land, repo).pr(pr),
-            &[repo, &n, head],
+            &[repo, &n, head, &message.title, &message.body],
             || {
                 let refused = self
                     .world
@@ -459,7 +467,7 @@ impl Forge for Hub {
                 if p["state"] != "open" {
                     return Ok(PrMerge::Refused("Pull Request is not mergeable".into()));
                 }
-                Ok(match self.squash(repo, pr, head) {
+                Ok(match self.squash(repo, pr, head, message) {
                     Ok(_) => PrMerge::Merged,
                     Err(why) => PrMerge::Refused(why),
                 })

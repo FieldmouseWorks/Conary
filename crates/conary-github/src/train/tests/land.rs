@@ -662,7 +662,8 @@ fn a_head_its_stopped_candidate_was_landing_says_so_no_longer_once_its_pr_is_mer
         ingest::pull(&mut store, &hub, &config(), &repo(), 5).unwrap();
         hub.push(REMI, 3, &head(33));
         assert_eq!(
-            hub.land("FieldmouseWorks/remi", 3, &head(33)).unwrap(),
+            hub.land("FieldmouseWorks/remi", 3, &head(33), &message())
+                .unwrap(),
             PrMerge::Merged
         );
         assert_eq!(step_once(&mut store, &hub).now, Now::Idle);
@@ -727,4 +728,88 @@ fn only_the_stewards_own_word_takes_a_pr_out() {
     then_said(&hub, 4, "pending", "someone");
     let stepped = step_once(&mut store, &hub);
     assert_eq!((stepped.landed, stepped.unready), (vec![3, 4], vec![]));
+}
+
+#[test]
+fn a_landing_says_the_prs_title_and_each_distinct_trailer_of_its_commits_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = store(&dir);
+    let author = "A Bot <bot@example.com>";
+    // #5 took three rounds, each commit with the same co-author, spelled
+    // two ways, and a session line of its own or the first one again.
+    let first = own_commit(1);
+    let second = own_commit(2);
+    let hub = Hub::new(REMI, TRUNK);
+    hub.change(&first, TRUNK, "five, first");
+    hub.change(&second, &first, "five, second");
+    hub.change(&head(5), &second, &head(5));
+    for (sha, message) in [
+        (
+            first.clone(),
+            format!(
+                "remi: land it\n\nWhy.\n\nCo-Authored-By: {author}\nClaude-Session: https://s/1"
+            ),
+        ),
+        (
+            second.clone(),
+            format!("remi: answer\n\nCo-authored-by: {author}\nClaude-Session: https://s/2"),
+        ),
+        (
+            head(5),
+            format!("remi: again\n\nCo-Authored-By: {author}\nClaude-Session: https://s/1"),
+        ),
+    ] {
+        hub.commit_details(&sha, Some(&message), None, None);
+    }
+    hub.pr(REMI, 5, &head(5));
+    hub.edit_pull(REMI, 5, |p| {
+        p["title"] = json!("remi: land it in three rounds")
+    });
+    // #3 is one commit, whose subject isn't its PR's title.
+    hub.pr(REMI, 3, &head(3));
+    hub.commit_details(
+        &head(3),
+        Some(&format!(
+            "remi: an older subject\n\nCo-authored-by: {author}"
+        )),
+        None,
+        None,
+    );
+    hub.edit_pull(REMI, 3, |p| {
+        p["title"] = json!("remi: the title the house checked")
+    });
+    join_all(&mut store, &hub, &[5, 3]);
+    let (id, _) = gating(&step_once(&mut store, &hub));
+    hub.ci(&commit_of(&store, id), &[("check / check", "success")]);
+    let stepped = step_once(&mut store, &hub);
+    assert_eq!(stepped.landed, [5, 3]);
+    let sent: Vec<(String, String)> = hub
+        .asked(Call::Land)
+        .into_iter()
+        .map(|a| (a[3].clone(), a[4].clone()))
+        .collect();
+    let five = (
+        "remi: land it in three rounds (#5)".to_owned(),
+        format!(
+            "Co-Authored-By: {author}\nClaude-Session: https://s/1\nClaude-Session: https://s/2"
+        ),
+    );
+    let three = (
+        "remi: the title the house checked (#3)".to_owned(),
+        format!("Co-authored-by: {author}"),
+    );
+    assert_eq!(sent, [five.clone(), three.clone()]);
+    // What landed on trunk says just that.
+    for (pr, (title, body)) in [(5, five), (3, three)] {
+        let merged = hub.merged(REMI, pr).unwrap();
+        assert_eq!(
+            hub.commit(REMI, &merged).unwrap().commit.unwrap().message,
+            Some(format!("{title}\n\n{body}"))
+        );
+    }
+}
+
+/// A commit of a PR's own, before its head.
+fn own_commit(n: u64) -> String {
+    format!("c{n:0>39}")
 }

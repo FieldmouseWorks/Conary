@@ -194,6 +194,11 @@ pub(crate) fn act<G: Write>(
                     return Err("review-settled permission was not observed".into());
                 }
                 permission(pass, github, f, record)?;
+                // The commits its merge squashes, whose trailers its landing
+                // commit says, read before the intent is saved.
+                let base = f.base_tip.as_deref().unwrap_or(&f.revision.base);
+                let commits = github.compare_commits(&repo, base, &f.revision.head)?;
+                let message = crate::train::Message::of(&f.title, f.number, &commits);
                 super::ledger::begin(f, record)?;
                 let status = status.expect("permission checked above");
                 record.landing.as_mut().expect("saved intent").permission =
@@ -211,7 +216,7 @@ pub(crate) fn act<G: Write>(
                         text: status.description.clone(),
                     });
                 data.save(f.number, record)?;
-                match github.land(&repo, f.number, &f.revision.head)? {
+                match github.land(&repo, f.number, &f.revision.head, &message)? {
                     crate::train::PrMerge::Merged => {
                         record.landing.as_mut().expect("saved intent").accepted = true;
                         data.save(f.number, record)?;

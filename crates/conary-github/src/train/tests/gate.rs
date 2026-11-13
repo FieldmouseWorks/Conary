@@ -554,7 +554,10 @@ fn a_green_on_passes_nobody_attested_has_a_merge_it_made_recorded_and_makes_no_m
     let landing = format!("landing with candidate {old}");
     hub.mark(&full, &head(3), Mark::Landing, &landing, None)
         .unwrap();
-    assert_eq!(hub.land(&full, 3, &head(3)).unwrap(), PrMerge::Merged);
+    assert_eq!(
+        hub.land(&full, 3, &head(3), &message()).unwrap(),
+        PrMerge::Merged
+    );
     let stepped = step_once(&mut store, &hub);
     // Its merge is recorded through it, never made again, and the rest is
     // built again.
