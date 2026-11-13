@@ -5,7 +5,13 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 fn fixture(mode: &str) -> (tempfile::TempDir, PathBuf, Plugin) {
-    let dir = tempfile::tempdir().unwrap();
+    // Keep aliases on the executable's filesystem: /tmp may be another mount.
+    let dir = tempfile::tempdir_in(
+        Path::new(env!("CARGO_BIN_EXE_conary-execution-test-plugin"))
+            .parent()
+            .unwrap(),
+    )
+    .unwrap();
     let path = dir.path().join(mode);
     std::fs::hard_link(env!("CARGO_BIN_EXE_conary-execution-test-plugin"), &path).unwrap();
     let plugin = Plugin::describe(
