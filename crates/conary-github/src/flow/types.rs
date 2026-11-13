@@ -193,18 +193,29 @@ pub struct Job {
     pub repeated: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Judgment {
-    Land,
-    Owner,
-    Failing,
-    Misdescribed,
-}
+pub use conary_core::plugin::Judgment;
+
+/// Per revision: the highest authenticated judge generation, and its verdict
+/// (`None` when that generation's words conflict).
+pub type JudgeIssuance = BTreeMap<Revision, (u64, Option<Judgment>)>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Judged {
     pub revision: Revision,
     pub verdict: Judgment,
+}
+
+impl Judged {
+    /// A judge plugin's answer for `revision`; other answers are not judgments.
+    pub fn from_answer(revision: Revision, answer: &conary_core::plugin::Answer) -> Option<Self> {
+        match answer {
+            conary_core::plugin::Answer::Judge { verdict, .. } => Some(Self {
+                revision,
+                verdict: *verdict,
+            }),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -449,8 +460,8 @@ pub struct Memory {
     #[serde(with = "super::persist::pairs")]
     pub latest_reviews: BTreeMap<String, u64>,
     /// Authenticated issuance high-water marks, including same-generation conflicts.
-    #[serde(with = "super::persist::pairs")]
-    pub judge_issuance: BTreeMap<Revision, (u64, Option<Judgment>)>,
+    #[serde(with = "super::persist::judge_issuance")]
+    pub judge_issuance: JudgeIssuance,
     #[serde(with = "super::persist::pairs")]
     pub major_issuance: BTreeMap<Revision, (u64, Option<Major>)>,
     pub consumed_reviews: BTreeSet<(String, Revision, u64)>,

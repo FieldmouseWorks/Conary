@@ -90,7 +90,7 @@ fn a_judge_already_asked_for_still_decides_when_ci_appears_or_description_change
 #[test]
 fn legacy_base_only_seals_owe_a_judge_but_are_not_verdicts_on_the_description() {
     // handle.py:739: old seals keep the judgment owed, never permission to land.
-    for verdict in ["land", "owner", "failed"] {
+    for verdict in ["pass", "owner", "fail"] {
         let mut c = Case::new();
         let key = SealKey::from_hex(&"a".repeat(64)).unwrap();
         c.settings.judge_key = Some(key.clone());
@@ -217,7 +217,7 @@ fn the_newest_sealed_judge_verdict_for_the_revision_wins() {
     let mut c = Case::new();
     c.judge("owner");
     assert_eq!(c.pass(700).step, Step::ListOwner);
-    c.judge("land");
+    c.judge("pass");
     assert_eq!(c.pass(800).step, Step::Merge);
     c.judge("owner");
     assert_eq!(c.pass(900).step, Step::ListOwner);

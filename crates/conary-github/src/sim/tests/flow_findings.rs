@@ -40,7 +40,7 @@ fn old_judge_and_sweep_tokens_cannot_be_reissued_by_copying_or_editing_comments(
         if sweep {
             c.sweep("ok");
         } else {
-            c.judge("land");
+            c.judge("pass");
         }
         let old = c
             .hub
@@ -70,8 +70,8 @@ fn old_judge_and_sweep_tokens_cannot_be_reissued_by_copying_or_editing_comments(
             c.sweep("ok");
             assert_eq!(c.facts().major, Some(Major::Cleared));
         } else {
-            c.judge("land");
-            assert_eq!(c.facts().judgment.unwrap().verdict, Judgment::Land);
+            c.judge("pass");
+            assert_eq!(c.facts().judgment.unwrap().verdict, Judgment::Pass);
         }
     }
 }
@@ -80,7 +80,7 @@ fn a_title_edit_invalidates_reviews_and_judgments_without_rebinding_legacy_scope
     for judged in [false, true] {
         let mut c = Case::new();
         if judged {
-            c.judge("land");
+            c.judge("pass");
         }
         c.hub
             .edit_pull(REMI, 3, |p| p["title"] = json!("change: a different claim"));
@@ -113,7 +113,7 @@ fn dependency_landing_never_skips_existing_or_owed_reviewer_gates() {
                 c.secret();
             }
             c.sweep("ok");
-            c.judge("land");
+            c.judge("pass");
             c.roles(&["reviewer"]);
             assert_eq!(c.view(8000).step, Step::QueueReview("reviewer".into()));
             c.review("reviewer", Verdict::Findings, 600);
@@ -254,7 +254,7 @@ fn observed_generations_survive_deleted_or_rewritten_decision_history() {
             c.review("reviewer", Verdict::Clean, 600);
             c.sweep("ok");
         } else {
-            c.judge("land");
+            c.judge("pass");
         }
         let old = c.hub.comments(REMI, 3).unwrap()[0].body.clone().unwrap();
         if sweep {
@@ -273,7 +273,7 @@ fn observed_generations_survive_deleted_or_rewritten_decision_history() {
         if sweep {
             c.sweep("ok");
         } else {
-            c.judge("land");
+            c.judge("pass");
         }
         assert_eq!(c.pass(8200).step, Step::Merge);
     }
@@ -442,7 +442,7 @@ fn mixed_proof_kinds_use_case_insensitive_membership_and_configured_plan_names()
 fn judgments_bind_the_complete_claim_after_a_fresh_review_of_an_edit() {
     for title in [false, true] {
         let mut c = Case::new();
-        c.judge("land");
+        c.judge("pass");
         c.hub.edit_pull(REMI, 3, |p| {
             p[if title { "title" } else { "body" }] = json!("a new claim")
         });
@@ -450,7 +450,7 @@ fn judgments_bind_the_complete_claim_after_a_fresh_review_of_an_edit() {
         c.review("reviewer", Verdict::Clean, 700);
         assert!(c.facts().judgment.is_none());
         assert_eq!(c.view(8000).step, Step::Judge);
-        c.judge("land");
+        c.judge("pass");
         assert_eq!(c.view(8000).step, Step::Merge);
     }
 }

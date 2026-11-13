@@ -217,18 +217,22 @@ pub(super) fn read(
         _ => None,
     });
     result.judgment = latest(judges)
-        .and_then(|v| match v.as_str() {
-            "land" => Some(Judgment::Land),
-            "owner" => Some(Judgment::Owner),
-            "failed" => Some(Judgment::Failing),
-            "misdescribed" => Some(Judgment::Misdescribed),
-            _ => None,
-        })
+        .and_then(|v| legacy_word(&v).or_else(|| Judgment::from_word(&v)))
         .map(|verdict| Judged {
             revision: current,
             verdict,
         });
     result
+}
+
+/// Markers the steward wrote before the contract's words are read once.
+/// Delete with the steward (Conary#256 slice 5).
+fn legacy_word(word: &str) -> Option<Judgment> {
+    match word {
+        "land" => Some(Judgment::Pass),
+        "failed" => Some(Judgment::Fail),
+        _ => None,
+    }
 }
 
 fn verified(expected: String, tag: &str) -> bool {

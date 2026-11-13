@@ -154,7 +154,7 @@ fn train_admission_keeps_class_raises_and_requires_a_person_for_r2() {
         let mut c = train();
         c.label(labels);
         if labels.contains(&"r2") {
-            c.judge("land");
+            c.judge("pass");
             assert_eq!(c.pass(800).step, Step::ListOwner);
             c.label(&["needs-peter", "r2"]);
             c.pass(810);
