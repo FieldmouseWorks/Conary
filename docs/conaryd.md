@@ -117,8 +117,19 @@ and train state. A burst queued before a pass runs makes one pass; kicks during
 a running pass make one additional pass. The existing repository file lock
 still guards execution. A separate data-directory lock prevents two event
 workers from owning the same mailbox. In-flight work is recovered on restart.
-A fatal worker error stops the daemon with work still durable; the service
-manager can restart it. Errors never print webhook content.
+
+A whole-repository pass that fails before its reports (GitHub unavailable, a
+token command failing) books a durable recovery for that repository instead of
+stopping the worker: 60 seconds after the first failure, doubling per failure
+in a row up to 64 minutes, and cleared by the next pass that finishes. Until its
+recovery time the repository is held: kicks and status events arriving
+meanwhile stay queued, and its PR bookings stay unspent, and all of them run
+in that one retry. Other repositories go on advancing, and the ledger socket
+keeps answering. The recovery, the held kicks and the bookings survive restart.
+The log names the repository, its failures in a row and its retry time, never
+the error's text. Only a mailbox that can't be written stops the worker, and
+the daemon with it, so the service manager can restart it. Errors never print
+webhook content.
 
 Each report's `Next.wait_until` names its explicit wait or owned worker deadline;
 `overdue_at` names the stall deadline. The mailbox books the earliest future
@@ -134,6 +145,6 @@ requires the second after its inclusive quiet period).
 The worker sleeps on a condition variable until an incoming kick or that
 booked time, consumes the booking once, and runs a pass. There is no periodic
 scan or polling timer. Already elapsed deadlines are not rebooked by an
-unchanged report. The mailbox, status receipts, failure backoffs and delivery cache are mutable JSON files in
+unchanged report. The mailbox, status receipts, failure backoffs, repository recoveries and delivery cache are mutable JSON files in
 `data`, beside `flow/` memory, with atomic rename and file/directory sync;
 they are separate from the append-only ledger.

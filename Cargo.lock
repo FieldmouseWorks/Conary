@@ -266,6 +266,7 @@ dependencies = [
  "conary-core",
  "conary-github",
  "ed25519-dalek",
+ "ring",
  "serde_json",
  "tempfile",
 ]

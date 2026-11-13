@@ -217,7 +217,7 @@ fn signed_pull_event_runs_flow_against_hub() {
         202
     );
     let now = crate::flow::jobs::now();
-    assert!(
+    assert_eq!(
         queue
             .run_one(now, |work| {
                 assert_eq!(work.repo, REPO);
@@ -237,7 +237,8 @@ fn signed_pull_event_runs_flow_against_hub() {
                 );
                 Ok(reports)
             })
-            .unwrap()
+            .unwrap(),
+        Ran::Finished
     );
     assert!(queue.take(now).unwrap().is_none());
 }
