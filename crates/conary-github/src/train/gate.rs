@@ -12,7 +12,7 @@ use conary_core::op::{Attest, Body, CheckKind};
 
 use super::{Failed, Forge, Settings, TrainError, record};
 use crate::api::{CheckRun, Source};
-use crate::attest::{Subject, attested, signed_by};
+use crate::attest::{Subject, attested, stands_for};
 use crate::ingest::{Config, run_result, status_result};
 
 /// What a candidate's checks say so far.
@@ -176,7 +176,8 @@ pub(super) fn gate(
 }
 
 /// A required check run's attestation: the one its evidence already holds,
-/// checked when it was recorded, or one checked now.
+/// checked when it was recorded, while it's still what the run publishes
+/// ([`stands_for`]), or one checked now.
 fn attestation(
     forge: &dyn Forge,
     source: &dyn Source,
@@ -190,30 +191,24 @@ fn attestation(
             run.conclusion.as_deref().unwrap_or("nothing")
         )));
     }
-    // A job's link names it: no other run's evidence has it. Kept only
-    // while its signer is still the one the machine names.
+    // A publisher can reuse a link for another check, so keep the check
+    // identity as well. Count it only while it's what the run publishes now
+    // and its signer is still trusted.
     let kept = run.html_url.as_ref().and_then(|url| {
         c.evidence
             .iter()
-            .filter(|e| &e.source == url)
+            .filter(|e| &e.source == url && e.check == run.name)
             .filter_map(|e| e.attest.clone())
-            .find(|a| signed_by(a, &settings.signer))
+            .find(|a| stands_for(a, run) && settings.trust.holds(a))
     });
     if let Some(attest) = kept {
         return Ok(Ok(attest));
     }
+    // The train configures no check's recipe: its checks are named only.
     let subject = Subject::Commit {
         commit: c.commit.as_str(),
         tree: c.tree.as_str(),
+        definition: None,
     };
-    Ok(attested(
-        forge,
-        source,
-        &c.repo,
-        subject,
-        run,
-        &settings.signer,
-        settings.fresh.as_deref(),
-    )?
-    .map(|a| a.attest))
+    Ok(attested(forge, source, &c.repo, subject, run, &settings.trust)?.map(|a| a.attest))
 }

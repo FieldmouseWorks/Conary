@@ -18,7 +18,7 @@ use conary_core::store::StoreError;
 use conary_core::{CandidateId, ChangeId, Class, CommitId, Policy, Store, TreeId};
 
 use crate::api::{ApiError, Source};
-use crate::attest::{Actions, Signer};
+use crate::attest::{Actions, Trust};
 use crate::branches::{BRANCHES, Branches, Merged};
 use crate::class::{self, ClassError};
 use crate::ingest::{self, Config, IngestError};
@@ -483,14 +483,10 @@ pub struct Settings {
     /// whose passes count only with their producer's attestation: the
     /// repo's gate, as its shared CI runs it.
     pub require: Vec<String>,
-    /// The workflow whose jobs' attestations of those passes count, at a
-    /// commit on its repo's default branch: the shared CI the machine
-    /// trusts to sign.
-    pub signer: Signer,
-    /// What the name of each self-hosted runner started fresh for one job
-    /// starts with, which only the launcher of such runners gives one. A
-    /// required pass counts only from such a runner or one of GitHub's.
-    pub fresh: Option<String>,
+    /// Whose attestations of those passes count: the shared CI the machine
+    /// trusts to sign, at a commit on its repo's default branch, and the
+    /// runners it counts from; and the services' producer keys.
+    pub trust: Trust,
 }
 
 /// A change to land, at the head its candidate merged.

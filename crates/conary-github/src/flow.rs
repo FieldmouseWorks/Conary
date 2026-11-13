@@ -45,7 +45,9 @@ mod compare;
 pub use compare::{Beside, Decided, Said, Tally, beside};
 
 pub(crate) mod evidence;
-pub use evidence::{Evidence, judgment_receipt, major_receipt, receipt_digest, review_receipt};
+pub use evidence::{
+    Evidence, judgment_receipt, major_receipt, receipt_digest, recipe_digest, review_receipt,
+};
 
 mod scope;
 

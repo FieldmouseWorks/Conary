@@ -12,8 +12,11 @@ const CHECK: &str = "check / negative";
 fn negatives() -> Negatives {
     Negatives {
         check: CHECK.into(),
-        signer: crate::attest::testing::signer(),
-        fresh: Some(FRESH.into()),
+        trust: crate::attest::Trust {
+            signer: crate::attest::testing::signer(),
+            fresh: Some(FRESH.into()),
+            producers: Default::default(),
+        },
     }
 }
 
@@ -175,10 +178,8 @@ fn a_pr_joins_once_its_new_tests_failed_on_its_base_and_its_job_attests_it() {
     assert!(why.contains("other / negative hasn't run"), "{why}");
     // Only while its signer is the one the machine names: kept from
     // another, it's no negative now.
-    let moved = Negatives {
-        signer: "Acme/other/.github/workflows/gate.yml".parse().unwrap(),
-        ..negatives()
-    };
+    let mut moved = negatives();
+    moved.trust.signer = "Acme/other/.github/workflows/gate.yml".parse().unwrap();
     let rejoined = join(
         &mut store,
         &hub,

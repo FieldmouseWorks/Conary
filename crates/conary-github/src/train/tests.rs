@@ -31,8 +31,11 @@ fn settings() -> Settings {
     Settings {
         size: 8,
         require: vec!["check / check".into()],
-        signer: testing::signer(),
-        fresh: Some(FRESH.into()),
+        trust: crate::attest::Trust {
+            signer: testing::signer(),
+            fresh: Some(FRESH.into()),
+            producers: Default::default(),
+        },
     }
 }
 
@@ -143,6 +146,7 @@ mod empty;
 mod gate;
 mod land;
 mod negative;
+mod service;
 
 #[test]
 fn a_ready_pr_joins_at_its_head_as_github_shows_it() {

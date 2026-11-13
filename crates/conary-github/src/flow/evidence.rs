@@ -2,8 +2,9 @@
 //! controller-posted assertions. Plugin v1 remains a work protocol.
 use super::persist::Result;
 use super::*;
-use crate::attest::{Signer, Subject, attested};
-use conary_core::op::{Attest, Outcome};
+use crate::attest::service::Producers;
+use crate::attest::{Signer, Subject, Trust, attested};
+use conary_core::op::Outcome;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -14,16 +15,34 @@ pub struct Evidence {
     pub fresh: Option<String>,
     pub require: Vec<String>,
     pub negative: String,
+    /// The machine's producer keys file (`docs/service-attestation.md`):
+    /// the services whose signed results count. None trusts no service.
+    #[serde(default)]
+    pub producers: Option<std::path::PathBuf>,
 }
 impl Evidence {
+    /// Whose attestations count, read from the machine's configuration.
+    /// A producer keys file that's named and doesn't read fails closed.
+    pub(crate) fn trust(&self) -> Result<Trust> {
+        Ok(Trust {
+            signer: self.signer.parse::<Signer>()?,
+            fresh: self.fresh.clone(),
+            producers: match &self.producers {
+                Some(path) => Producers::load(path)?,
+                None => Producers::default(),
+            },
+        })
+    }
     pub(crate) fn negatives(&self) -> Result<crate::train::Negatives> {
+        self.negatives_under(self.trust()?)
+    }
+    fn negatives_under(&self, trust: Trust) -> Result<crate::train::Negatives> {
         if self.negative.trim().is_empty() {
             return Err("negative check is not configured".into());
         }
         Ok(crate::train::Negatives {
             check: self.negative.clone(),
-            signer: self.signer.parse::<Signer>()?,
-            fresh: self.fresh.clone(),
+            trust,
         })
     }
 }
@@ -46,6 +65,11 @@ pub fn major_receipt(revision: &Revision, generation: u64, verdict: Option<Major
     serde_json::to_vec(&serde_json::json!({"kind":"major","revision":revision,
         "generation":generation,"verdict":verdict}))
     .expect("receipt")
+}
+/// A proof's definition, as a service's statement names it
+/// (`docs/service-attestation.md`): the SHA-256 of its recipe's JSON.
+pub fn recipe_digest(recipe: &Recipe) -> String {
+    receipt_digest(&serde_json::to_vec(recipe).expect("a recipe is JSON"))
 }
 pub fn receipt_digest(bytes: &[u8]) -> String {
     Sha256::digest(bytes)
@@ -88,6 +112,7 @@ pub(crate) fn authorize<G: Write>(pass: &Pass<'_>, github: &G, f: &Facts) -> Res
     {
         return Err("proof check name collides with producer receipt or negative evidence".into());
     }
+    let trust = evidence.trust()?;
     let effective = observations(github, f, &f.revision.head)?;
     let mut required: std::collections::BTreeSet<_> = evidence.require.iter().cloned().collect();
     required.extend(
@@ -111,9 +136,9 @@ pub(crate) fn authorize<G: Write>(pass: &Pass<'_>, github: &G, f: &Facts) -> Res
     required.extend(effective.statuses);
     required.retain(|name| name != &evidence.negative && !receipts.contains(name));
     for name in required {
-        check(github, f, evidence, &f.revision.head, &name, None)?;
+        check(github, f, &trust, &f.revision.head, &name, None)?;
     }
-    let negatives = evidence.negatives()?;
+    let negatives = evidence.negatives_under(trust.clone())?;
     let base = github.merge_base(
         &repo,
         f.base_tip.as_deref().ok_or("negative base unknown")?,
@@ -166,7 +191,7 @@ pub(crate) fn authorize<G: Write>(pass: &Pass<'_>, github: &G, f: &Facts) -> Res
         check(
             github,
             f,
-            evidence,
+            &trust,
             head,
             &format!("conary/review/{role}"),
             Some(&review_receipt(head, body)),
@@ -180,7 +205,7 @@ pub(crate) fn authorize<G: Write>(pass: &Pass<'_>, github: &G, f: &Facts) -> Res
         check(
             github,
             f,
-            evidence,
+            &trust,
             &f.revision.head,
             "conary/judgment",
             Some(&judgment_receipt(
@@ -197,7 +222,7 @@ pub(crate) fn authorize<G: Write>(pass: &Pass<'_>, github: &G, f: &Facts) -> Res
         check(
             github,
             f,
-            evidence,
+            &trust,
             &f.revision.head,
             "conary/major",
             Some(&major_receipt(&f.revision, generation, f.major)),
@@ -208,7 +233,7 @@ pub(crate) fn authorize<G: Write>(pass: &Pass<'_>, github: &G, f: &Facts) -> Res
 fn check<G: Write>(
     github: &G,
     f: &Facts,
-    evidence: &Evidence,
+    trust: &Trust,
     head: &str,
     name: &str,
     receipt: Option<&[u8]>,
@@ -232,6 +257,8 @@ fn check<G: Write>(
         return Err(format!("{name}: no attested check run (statuses cannot attest)").into());
     }
     let tree = github.tree(&repo, head)?;
+    // A proof's pass counts only for the recipe the machine selects now.
+    let definition = f.settings.recipe(name).map(recipe_digest);
     for run in latest {
         if run.status != "completed" || run.conclusion.as_deref() != Some("success") {
             return Err(format!("{name}: producer check is not successful").into());
@@ -243,24 +270,21 @@ fn check<G: Write>(
             Subject::Commit {
                 commit: head,
                 tree: &tree,
+                definition: definition.as_deref(),
             },
             &run,
-            &evidence.signer.parse::<Signer>()?,
-            evidence.fresh.as_deref(),
+            trust,
         )?
         .map_err(|why| format!("{name}: {why}"))?;
         if verified.result != Outcome::Pass {
             return Err(format!("{name}: producer did not pass").into());
         }
-        if let Some(receipt) = receipt {
-            let Attest::GithubToken { statement, .. } = verified.attest;
-            let predicate: serde_json::Value =
-                serde_json::from_str(statement.lines().nth(2).ok_or("missing signed predicate")?)?;
-            if predicate["log"]["sha256"].as_str() != Some(receipt_digest(receipt).as_str()) {
-                return Err(
-                    format!("{name}: signed producer log does not bind this exact result").into(),
-                );
-            }
+        if let Some(receipt) = receipt
+            && verified.log.as_deref() != Some(receipt_digest(receipt).as_str())
+        {
+            return Err(
+                format!("{name}: signed producer log does not bind this exact result").into(),
+            );
         }
     }
     Ok(())

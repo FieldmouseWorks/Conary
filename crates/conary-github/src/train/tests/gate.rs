@@ -294,10 +294,8 @@ fn an_attestation_kept_from_a_signer_the_machine_no_longer_names_counts_for_noth
     assert_eq!(waiting(&stepped), ["proof"]);
     // Kept in the candidate's evidence, by the signer named then. Named
     // another, the machine reads it again, and it's no pass of that one's.
-    let moved = Settings {
-        signer: "Acme/other/.github/workflows/gate.yml".parse().unwrap(),
-        ..required
-    };
+    let mut moved = required.clone();
+    moved.trust.signer = "Acme/other/.github/workflows/gate.yml".parse().unwrap();
     let stepped = step(&mut store, &hub, &hub, &config(), &repo(), &moved).unwrap();
     assert_eq!(
         waiting(&stepped),
@@ -401,10 +399,8 @@ fn a_pass_counts_only_from_a_runner_started_fresh_for_it() {
         let mut c = testing::claims("FieldmouseWorks/remi", &commit, run, &s);
         claims(&mut c);
         hub.attest(run, &testing::file(&s, &testing::token(&c)));
-        let settings = Settings {
-            fresh: fresh.map(Into::into),
-            ..settings()
-        };
+        let mut settings = settings();
+        settings.trust.fresh = fresh.map(Into::into);
         let stepped = step(&mut store, &hub, &hub, &config(), &repo(), &settings).unwrap();
         if stepped.verdicts == [(id, Verdict::Green)] {
             Ok(())

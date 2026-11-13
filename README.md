@@ -125,6 +125,9 @@ attestations](docs/ci-attestation.md)), signed by the workflow the machine
 names (`CONARY_SIGNER_WORKFLOW`) and made on one of GitHub's runners or on a
 self-hosted one started fresh for that job, whose name starts with
 `--fresh-runners`.
+Services can also attest results with machine-configured public keys;
+[`--producer-keys`](docs/service-attestation.md) names the trusted keys and
+the checks each can attest. This uses the same verifier as CI and flow.
 `verdict` records one `step` can't tell: `dropped`, for a gate that never
 finished.
 
