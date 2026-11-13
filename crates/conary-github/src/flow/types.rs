@@ -205,6 +205,46 @@ pub enum Judgment {
 pub struct Judged {
     pub revision: Revision,
     pub verdict: Judgment,
+    pub provenance: Option<conary_core::plugin::Provenance>,
+}
+
+/// Old saved issuances are plain verdicts. New ones retain their provenance.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum JudgeResult {
+    Recorded {
+        verdict: Judgment,
+        provenance: conary_core::plugin::Provenance,
+    },
+    Legacy(Judgment),
+}
+impl Judged {
+    pub(super) fn result(&self) -> JudgeResult {
+        match &self.provenance {
+            Some(provenance) => JudgeResult::Recorded {
+                verdict: self.verdict,
+                provenance: provenance.clone(),
+            },
+            None => JudgeResult::Legacy(self.verdict),
+        }
+    }
+    pub(super) fn from_result(revision: Revision, result: JudgeResult) -> Self {
+        match result {
+            JudgeResult::Recorded {
+                verdict,
+                provenance,
+            } => Self {
+                revision,
+                verdict,
+                provenance: Some(provenance),
+            },
+            JudgeResult::Legacy(verdict) => Self {
+                revision,
+                verdict,
+                provenance: None,
+            },
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -450,7 +490,7 @@ pub struct Memory {
     pub latest_reviews: BTreeMap<String, u64>,
     /// Authenticated issuance high-water marks, including same-generation conflicts.
     #[serde(with = "super::persist::pairs")]
-    pub judge_issuance: BTreeMap<Revision, (u64, Option<Judgment>)>,
+    pub judge_issuance: BTreeMap<Revision, (u64, Option<JudgeResult>)>,
     #[serde(with = "super::persist::pairs")]
     pub major_issuance: BTreeMap<Revision, (u64, Option<Major>)>,
     pub consumed_reviews: BTreeSet<(String, Revision, u64)>,

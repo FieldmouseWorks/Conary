@@ -81,7 +81,7 @@ pub(crate) fn hydrate(f: &mut Facts, record: &Record, now: u64, dry_run: bool) -
             }
             Purpose::Judge => {
                 f.jobs.insert(Kind::Judge, job.clone());
-                // v1 responses are proposals, not authenticated issuances.
+                // Plugin responses are proposals, not authenticated issuances.
                 // The producer publishes its sealed, independently attested
                 // judgment separately. Preserve every GitHub generation.
                 if job.revision == f.revision
@@ -97,7 +97,7 @@ pub(crate) fn hydrate(f: &mut Facts, record: &Record, now: u64, dry_run: bool) -
                     && work.recipes == super::pass::recipes(f)
                     && matches!(completion.result, Some(Ok(_)))
                 {
-                    // v1 identity is an assertion, not an evidence attestation.
+                    // Plugin identity is an assertion, not an evidence attestation.
                     // The producer must publish its own attested check on GitHub.
                     f.proof = Proof::Running;
                 } else {
@@ -164,12 +164,9 @@ pub(crate) fn issuances(f: &mut Facts, memory: &Memory) {
         &mut judges,
         &f.revision,
         f.judgment_generation,
-        f.judgment.as_ref().map(|j| j.verdict),
+        f.judgment.as_ref().map(Judged::result),
     )
-    .map(|verdict| Judged {
-        revision: f.revision.clone(),
-        verdict,
-    });
+    .map(|result| Judged::from_result(f.revision.clone(), result));
     f.judgment_generation = judges.get(&f.revision).map(|(generation, _)| *generation);
     let mut majors = memory.major_issuance.clone();
     f.major = super::state::issuance(&mut majors, &f.revision, f.major_generation, f.major);

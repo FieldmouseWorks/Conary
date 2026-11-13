@@ -1,4 +1,4 @@
-//! A worker invokes the unchanged v1 runner. A pass only starts or collects it.
+//! A worker invokes the negotiated runner. A pass only starts or collects it.
 use super::persist::{self, Result};
 use super::*;
 use conary_core::plugin::{self, Limits, Plugin, Task};
@@ -27,6 +27,8 @@ pub struct Work {
 pub struct Invocation {
     pub executable: PathBuf,
     pub task: Task,
+    #[serde(default)]
+    pub choice: Option<plugin::Choice>,
     pub deadline: u64,
     pub response_bytes: usize,
 }
@@ -71,7 +73,12 @@ pub fn worker(path: &Path) -> Result<()> {
         // Describe and call share an absolute deadline.
         let plugin = plugin.with_deadline(Duration::from_secs(remaining));
         plugin
-            .call_cancellable(invocation.task, Some(&path.with_extension("cancel")))
+            .call_with(
+                invocation.task,
+                invocation.choice,
+                plugin::Context::Fresh,
+                Some(&path.with_extension("cancel")),
+            )
             .map_err(|e| e.to_string())
     })();
     persist::save_once(

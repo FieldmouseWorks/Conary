@@ -34,6 +34,7 @@ pub struct Plugin {
     kinds: Vec<Kind>,
     contract: &'static str,
     offers: Option<Offers>,
+    judges: execution::Judges,
 }
 
 impl Plugin {
@@ -69,6 +70,8 @@ impl Plugin {
         let speaks = |c: &str| versions.iter().any(|v| v == c);
         let contract = if speaks(CONTRACT) {
             CONTRACT
+        } else if speaks(CONTRACT_V2) {
+            CONTRACT_V2
         } else if speaks(CONTRACT_V1) {
             CONTRACT_V1
         } else {
@@ -93,7 +96,7 @@ impl Plugin {
         {
             return bad("invalid advertised versions or kinds");
         }
-        let offers = if contract == CONTRACT {
+        let offers = if contract != CONTRACT_V1 {
             let Some(capabilities) = capabilities else {
                 return bad("a v2 plugin must declare its capabilities");
             };
@@ -116,6 +119,7 @@ impl Plugin {
             kinds,
             contract,
             offers,
+            judges: execution::Judges::default(),
         })
     }
 
@@ -136,6 +140,18 @@ impl Plugin {
     pub fn call_cancellable(
         &self,
         task: Task,
+        cancelled: Option<&Path>,
+    ) -> Result<Response, Failure> {
+        self.call_with(task, None, Context::Fresh, cancelled)
+    }
+
+    /// Every initial judge starts fresh. Only this handle's own validated
+    /// judgment for the same task can be continued; forks are always refused.
+    pub fn call_with(
+        &self,
+        task: Task,
+        choice: Option<Choice>,
+        context: Context,
         cancelled: Option<&Path>,
     ) -> Result<Response, Failure> {
         let Some(kind) = task.kind() else {
@@ -159,6 +175,38 @@ impl Plugin {
         }
         if !self.kinds.contains(&kind) {
             return bad("request kind was not described");
+        }
+        let configured_choice = choice.is_some();
+        let choice = if let Task::Job { model, effort, .. } = &task {
+            if choice.as_ref().is_some_and(|c| {
+                model.as_ref().is_some_and(|m| c.model.as_ref() != Some(m))
+                    || effort
+                        .as_ref()
+                        .is_some_and(|e| c.effort.as_ref() != Some(e))
+            }) {
+                return bad("job and execution choices disagree");
+            }
+            choice.or_else(|| {
+                (model.is_some() || effort.is_some()).then(|| Choice {
+                    engine: self.identity.engine.clone(),
+                    model: model.clone(),
+                    effort: effort.clone(),
+                })
+            })
+        } else {
+            choice
+        };
+        let mut request = Request::work(self.contract, task.clone());
+        if self.contract == CONTRACT {
+            let execution = Execution { choice, context };
+            execution.validate(
+                &self.identity.engine,
+                self.offers.as_ref().expect("v3 offers"),
+            )?;
+            self.judges.prepare(&task, &execution.context)?;
+            request.execution = Some(execution);
+        } else if configured_choice || context != Context::Fresh || kind == Kind::Judge {
+            return bad("execution choices and independent judges need conary-plugin v3");
         }
         if let Task::Job {
             repo,
@@ -192,23 +240,24 @@ impl Plugin {
                 }
             }
         }
-        let response = execute(
-            &self.path,
-            self.limits,
-            &Request::work(self.contract, task.clone()),
-            self.contract,
-            cancelled,
-        )?;
+        let response = execute(&self.path, self.limits, &request, self.contract, cancelled)?;
         valid_identity(&response.by)?;
         if response.by.engine != self.identity.engine {
             return bad("plugin changed its engine identity");
+        }
+        if let Some(execution) = &request.execution {
+            let Some(actual) = &response.execution else {
+                return bad("plugin did not report actual execution");
+            };
+            execution.verify(actual, self.offers.as_ref().expect("v3 offers"))?;
         }
         if let Task::Review { author, .. } | Task::Judge { author, .. } = &task {
             valid_identity(author)?;
             // A session remains its author even if it switches engines.
             // Unknown sessions cannot establish independence within an engine.
             if (author.session.is_some() && author.session == response.by.session)
-                || (author.engine == response.by.engine
+                || (kind == Kind::Review
+                    && author.engine == response.by.engine
                     && (author.session.is_none() || response.by.session.is_none()))
             {
                 return bad("the head's author cannot grade it");
@@ -248,6 +297,10 @@ impl Plugin {
                 }
             }
             _ => return bad("response kind does not match request or required reason is empty"),
+        }
+        if let Some(execution) = &request.execution {
+            self.judges
+                .accept(&task, &execution.context, &response.by)?;
         }
         Ok(response)
     }

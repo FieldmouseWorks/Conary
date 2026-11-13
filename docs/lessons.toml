@@ -1,0 +1,18 @@
+# The register owned by #305. This task seeds only its two execution properties;
+# the broader seed extends this same file and these stable IDs.
+
+[[lessons]]
+id = "no-pinned-engines"
+lesson = "Execution engine, model and effort are caller configuration, never policy fixed in conaryd."
+from = ["https://github.com/FieldmouseWorks/burrow/issues/822", "https://github.com/FieldmouseWorks/burrow/issues/914"]
+applies = ["conaryd", "plugin runner", "M6 slice 5c", "M7 standalone setup"]
+status = "built"
+where = ["docs/DESIGN.md#61-execution-choices-and-independent-judging", "docs/flow.md", "crates/conary-github/src/events/runtime.rs", "crates/conary-github/src/flow/pass.rs", "crates/conary-github/tests/flow_execution.rs"]
+
+[[lessons]]
+id = "fresh-judge"
+lesson = "A grader is independent by session on any engine: start judges fresh, continue only their own task, and retain actual execution provenance."
+from = ["https://github.com/FieldmouseWorks/burrow/issues/822", "https://github.com/FieldmouseWorks/burrow/issues/914"]
+applies = ["plugin runner", "judgment producers", "M6 slice 5c"]
+status = "built"
+where = ["docs/DESIGN.md#61-execution-choices-and-independent-judging", "docs/plugins.md#independence-and-execution-failures", "crates/conary-core/src/plugin/execution.rs", "crates/conary-github/src/flow/markers.rs", "crates/conary-github/tests/flow_execution.rs", "crates/conary-github/src/sim/tests/flow_markers.rs"]

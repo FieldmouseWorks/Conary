@@ -34,3 +34,10 @@ path = "../conary-core/examples/plugin.rs"
 test = false
 bench = false
 doc = false
+
+[[bin]]
+name = "conary-execution-test-plugin"
+path = "tests/support/execution_plugin.rs"
+test = false
+bench = false
+doc = false

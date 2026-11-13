@@ -118,6 +118,7 @@ pub(crate) fn act<G: Write>(
                         head: f.revision.head.clone(),
                         against: format!("{}\n{}", f.title, f.description),
                         author,
+                        reviewers: reviewers(record)?,
                     },
                     record,
                     data,
@@ -313,6 +314,18 @@ fn failure(step: &Step) -> Failure {
         _ => Failure::Status,
     }
 }
+fn reviewers(record: &Record) -> Result<Vec<plugin::Identity>> {
+    let mut reviewers = Vec::new();
+    for work in &record.jobs {
+        if matches!(work.purpose, Purpose::Review(_))
+            && let Some(Ok(response)) = jobs::completion(work, jobs::now())?.result
+        {
+            reviewers.push(response.by);
+        }
+    }
+    Ok(reviewers)
+}
+
 fn author<G: Read>(github: &G, f: &Facts, record: &Record) -> Result<plugin::Identity> {
     for work in record.jobs.iter().rev() {
         if let Some(Ok(response)) = jobs::completion(work, jobs::now())?.result

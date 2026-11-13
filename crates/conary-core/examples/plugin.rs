@@ -4,7 +4,7 @@ use std::io;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let request: Request = serde_json::from_reader(io::stdin())?;
-    if request.contract != CONTRACT && request.contract != CONTRACT_V1 {
+    if ![CONTRACT, CONTRACT_V2, CONTRACT_V1].contains(&request.contract.as_str()) {
         return Err("unsupported contract".into());
     }
     let session = match &request.task {
@@ -15,7 +15,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let contract = request.contract.clone();
     let answer = match request.task {
         Task::Describe => Answer::Describe {
-            versions: vec![CONTRACT_V1.into(), CONTRACT.into()],
+            versions: vec![CONTRACT_V1.into(), CONTRACT_V2.into(), CONTRACT.into()],
             kinds: vec![Kind::Review, Kind::Fix, Kind::Judge, Kind::Proof],
             v2_kinds: vec![Kind::Job],
             // A program: no models, so it may advertise `proof`.
@@ -80,6 +80,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         io::stdout(),
         &Response {
             contract,
+            execution: request.execution.map(|execution| Executed {
+                model: None,
+                effort: None,
+                context: execution.context,
+            }),
             by: Identity {
                 engine: "conary-example".into(),
                 session: Some(session.into()),

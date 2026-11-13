@@ -28,6 +28,87 @@ fn read_f(h: &Hub, s: Settings) -> Facts {
     )
     .unwrap()
 }
+
+fn provenance() -> conary_core::plugin::Provenance {
+    use conary_core::plugin::{Context, Executed, Identity, Provenance};
+    Provenance {
+        by: Identity {
+            engine: "fixture-engine".into(),
+            session: Some("judge-session".into()),
+        },
+        execution: Executed {
+            model: Some("fixture-model".into()),
+            effort: Some("deliberate".into()),
+            context: Context::Fresh,
+        },
+    }
+}
+
+#[test]
+fn sealed_judge_provenance_is_retained_in_memory_and_bound_to_the_receipt() {
+    let (h, memory) = setup();
+    let s = settings();
+    let revision = Revision::from(&h.pull(REMI, 3).unwrap());
+    let by = provenance();
+    let body = s
+        .judge_key
+        .as_ref()
+        .unwrap()
+        .judgment_by(REMI, 3, "land", &revision, 1, by.clone())
+        .unwrap();
+    h.flow_comment(REMI, 3, "owner", &body);
+    let f = read_f(&h, s.clone());
+    assert_eq!(f.judgment.as_ref().unwrap().provenance.as_ref(), Some(&by));
+    let (_, retained) = next(&f, &memory, 4000);
+    let roundtrip: Memory =
+        serde_json::from_slice(&serde_json::to_vec(&retained).unwrap()).unwrap();
+    assert_eq!(retained, roundtrip);
+    let mut absent = read_f(&h, s.clone());
+    absent.judgment = None;
+    absent.judgment_generation = None;
+    let (_, retained_again) = next(&absent, &roundtrip, 4001);
+    assert_eq!(retained_again.judge_issuance, roundtrip.judge_issuance);
+
+    let receipt = judgment_receipt_by(&revision, 1, Some(Judgment::Land), Some(&by));
+    let evidence: serde_json::Value = serde_json::from_slice(&receipt).unwrap();
+    assert_eq!(evidence["provenance"]["by"]["engine"], "fixture-engine");
+    assert_eq!(
+        evidence["provenance"]["execution"]["model"],
+        "fixture-model"
+    );
+    let mut different = by.clone();
+    different.execution.model = Some("alternate-model".into());
+    assert_ne!(
+        receipt_digest(&receipt),
+        receipt_digest(&judgment_receipt_by(
+            &revision,
+            1,
+            Some(Judgment::Land),
+            Some(&different)
+        ))
+    );
+    // The MAC covers provenance: copying the seal and changing the model fails.
+    let tampered = body.replace("fixture-model", "alternate-model");
+    h.flow_comment(REMI, 3, "owner", &tampered);
+    assert_eq!(
+        read_f(&h, s.clone())
+            .judgment
+            .as_ref()
+            .unwrap()
+            .provenance
+            .as_ref(),
+        Some(&by)
+    );
+    // Two authenticated, different provenance claims at one generation conflict.
+    let conflict = s
+        .judge_key
+        .as_ref()
+        .unwrap()
+        .judgment_by(REMI, 3, "land", &revision, 1, different)
+        .unwrap();
+    h.flow_comment(REMI, 3, "owner", &conflict);
+    assert!(read_f(&h, s).judgment.is_none());
+}
 fn marker(h: &Hub, s: &Settings, name: &str, verdict: &str) -> String {
     let p = h.pull(REMI, 3).unwrap();
     let key = if name == "major-verdict" {
