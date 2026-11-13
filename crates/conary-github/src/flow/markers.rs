@@ -6,11 +6,20 @@ use ring::hmac;
 use std::fmt;
 use subtle::ConstantTimeEq;
 
+/// Deserialized only through [`SealKey::from_hex`], so a malformed key in the
+/// flow config is refused when the config loads.
 #[derive(Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(try_from = "String")]
 pub struct SealKey(String);
 impl fmt::Debug for SealKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("SealKey([redacted])")
+    }
+}
+impl TryFrom<String> for SealKey {
+    type Error = &'static str;
+    fn try_from(text: String) -> Result<Self, Self::Error> {
+        Self::from_hex(&text)
     }
 }
 impl SealKey {
