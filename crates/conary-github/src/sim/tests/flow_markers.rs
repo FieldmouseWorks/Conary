@@ -214,3 +214,34 @@ fn burrows_fingerprint_and_seal_wire_formats_are_preserved() {
         "5e205c8a699161f5c2ff24e5dc48f55e"
     );
 }
+
+#[test]
+fn flow_config_refuses_malformed_seal_keys() {
+    let config = |field: &str, key: &str| {
+        serde_json::from_value::<Config>(json!({"settings": {field: key}}))
+    };
+    for field in ["judge_key", "major_key"] {
+        for bad in [
+            "a".repeat(63),
+            "a".repeat(65),
+            "A".repeat(64),
+            format!("{}g", "a".repeat(63)),
+        ] {
+            let err = config(field, &bad).unwrap_err().to_string();
+            assert!(
+                err.contains("64 lowercase hexadecimal"),
+                "{field} {bad}: {err}"
+            );
+        }
+        let good = config(field, &"c".repeat(64)).unwrap().settings;
+        let want = Some(SealKey::from_hex(&"c".repeat(64)).unwrap());
+        assert_eq!(
+            if field == "judge_key" {
+                good.judge_key
+            } else {
+                good.major_key
+            },
+            want
+        );
+    }
+}
