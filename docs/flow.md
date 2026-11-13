@@ -114,9 +114,12 @@ configuration or missing verification makes the decision wait with a reason,
 in dry runs as well as mutating passes.
 
 The machine names its trusted signer, required checks and negative check in
-`evidence`. All counted green checks must have a verified
-[CI attestation](ci-attestation.md) for the head's exact tree from that signer
-on its default branch. Verification uses the CI reader's effective workflow
+`evidence`, and can set `evidence.producers` to its
+[service producer keys file](service-attestation.md#machine-configuration).
+All counted green checks must have a verified attestation for the head's
+exact tree: a [CI attestation](ci-attestation.md) from that signer on its
+default branch, or a [service attestation](service-attestation.md) from a
+producer key trusted for that check. Verification uses the CI reader's effective workflow
 and target selection: replaced cancellations, obsolete target suites and
 skipped jobs are not reintroduced as evidence requirements. Producer receipts
 verify the latest effective issuance, including across workflow changes,
@@ -131,7 +134,7 @@ attestation verifier requires. A result from the authoring runner is refused.
 For a review, the producer must attest the exact published review record.
 The producer log is the canonical UTF-8 JSON returned by
 `flow::review_receipt(head, body)`; its SHA-256 goes in the existing signed
-commit predicate's `log.sha256`. The check name is
+commit predicate's or service statement's `log.sha256`. The check name is
 `conary/review/ROLE`. This binds the complete result, including the marker's
 head, target branch, description scope and completion time. The exported
 `review_body` helper owns that marker's formatting.

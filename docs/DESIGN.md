@@ -721,6 +721,8 @@ Targets on remi, warm cache, a year of ledger across every repo:
   - Jobs on remi (reviewers, proof and judge jobs, negative runs): a signature
     by that runner service's own key, which no authoring session or sandbox
     can read, over the result, the revision and the run's log hash.
+    [Service attestations](service-attestation.md) defines the signed format
+    and the machine's trusted public-key configuration.
   - Anything without a valid attestation doesn't count, whatever its source:
     a missing or unverifiable one fails closed.
 - The steward acts on GitHub as its own GitHub App, never as the owner's

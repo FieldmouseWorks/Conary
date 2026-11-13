@@ -96,6 +96,7 @@ impl Case {
             fresh: Some(FRESH.into()),
             require: vec!["check".into()],
             negative: "negative".into(),
+            producers: None,
         });
         config.settings.judge_key = Some(SealKey::from_hex(&"a".repeat(64)).unwrap());
         config.settings.verdict_authors.insert("producer".into());

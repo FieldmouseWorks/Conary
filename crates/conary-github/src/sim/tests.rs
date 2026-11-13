@@ -309,6 +309,8 @@ mod flow_compare;
 
 mod flow_pass_review;
 
+mod flow_pass_service;
+
 mod flow_pass_slots;
 
 mod flow_pass_landing;

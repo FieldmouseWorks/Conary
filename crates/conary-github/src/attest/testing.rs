@@ -141,3 +141,58 @@ pub(crate) fn zipped(name: &str, bytes: &[u8]) -> Vec<u8> {
     zip.write_all(bytes).unwrap();
     zip.finish().unwrap().into_inner()
 }
+
+/// The producer the tests' machine trusts, a service on it.
+pub(crate) const PRODUCER: &str = "remi-reviewer";
+
+/// The trusted producer's key: made for these tests alone.
+pub(crate) fn producer_key() -> ed25519_dalek::SigningKey {
+    ed25519_dalek::SigningKey::from_bytes(&[7; 32])
+}
+
+/// A key nobody trusts: one the change's own author made.
+pub(crate) fn author_key() -> ed25519_dalek::SigningKey {
+    ed25519_dalek::SigningKey::from_bytes(&[9; 32])
+}
+
+/// A producer keys file trusting each `(name, key, checks)`.
+pub(crate) fn producers_file(entries: &[(&str, &ed25519_dalek::SigningKey, &[&str])]) -> Vec<u8> {
+    let entries: Vec<Value> = entries
+        .iter()
+        .map(|(name, key, checks)| {
+            json!({"name": name,
+                   "key": URL_SAFE_NO_PAD.encode(key.verifying_key().as_bytes()),
+                   "checks": checks})
+        })
+        .collect();
+    serde_json::to_vec(&entries).unwrap()
+}
+
+/// The machine's producers in the tests: [`PRODUCER`], for `checks`.
+pub(crate) fn producers(checks: &[&str]) -> super::service::Producers {
+    super::service::Producers::parse(&producers_file(&[(PRODUCER, &producer_key(), checks)]))
+        .unwrap()
+}
+
+/// [`PRODUCER`]'s statement of `check` passing on `commit` of `repo`,
+/// whose tree is `tree`, with output hashing to `log`.
+pub(crate) fn service_statement(
+    repo: &str,
+    commit: &str,
+    tree: &str,
+    check: &str,
+    log: &str,
+) -> super::service::Statement {
+    super::service::Statement {
+        producer: PRODUCER.into(),
+        repository: repo.into(),
+        revision: super::service::Revision {
+            base: None,
+            head: commit.into(),
+        },
+        tree: Some(tree.into()),
+        check: check.into(),
+        result: "pass".into(),
+        log: super::service::Log { sha256: log.into() },
+    }
+}

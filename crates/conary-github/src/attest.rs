@@ -1,9 +1,14 @@
-//! Attested CI evidence (`docs/DESIGN.md` section 9,
-//! `docs/ci-attestation.md`): a private repo's gate result, or a PR's
-//! negative run, signed with its job's own GitHub OIDC token, whose audience
-//! names the digest of the statement it came with. It counts only once
-//! GitHub's signature, the signer workflow, the statement and the check run
-//! all agree.
+//! Attested evidence (`docs/DESIGN.md` section 9): the one verifier the
+//! flow and the train count a producer's result through.
+//!
+//! - CI (`docs/ci-attestation.md`): a private repo's gate result, or a PR's
+//!   negative run, signed with its job's own GitHub OIDC token, whose
+//!   audience names the digest of the statement it came with. It counts
+//!   only once GitHub's signature, the signer workflow, the statement and
+//!   the check run all agree.
+//! - A service on the machine ([`service`], `docs/service-attestation.md`):
+//!   a statement in its check run's output, signed with a producer key the
+//!   machine's own configuration trusts for that producer and check.
 
 use std::io::{Cursor, Read};
 
@@ -31,6 +36,39 @@ pub const FILE: &str = "conary-attestation";
 /// A statement and its token are a few kilobytes; a file far past that
 /// isn't one, and isn't read whole.
 const MOST: u64 = 64 * 1024;
+
+/// What the machine trusts to attest a result: the CI workflow that signs
+/// and the runners it counts from, and the services' producer keys. Its
+/// own configuration, never a repository's.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Trust {
+    /// The workflow whose jobs' attestations count.
+    pub signer: Signer,
+    /// What the name of each self-hosted runner started fresh for one job
+    /// starts with, which only the launcher of such runners gives one. With
+    /// none, a CI attestation counts only from GitHub's own runners.
+    pub fresh: Option<String>,
+    /// The services whose signed results count, and for which checks.
+    pub producers: service::Producers,
+}
+
+impl Trust {
+    /// Whether an attestation the ledger kept counts now: a CI one while
+    /// its token names the signer the machine names now, a service one
+    /// while the machine still trusts its key for its producer and check.
+    /// Evidence a signer the machine no longer trusts attested counts for
+    /// nothing more.
+    pub fn holds(&self, attest: &Attest) -> bool {
+        match attest {
+            Attest::GithubToken { token, .. } => signed_by(token, &self.signer),
+            Attest::Service {
+                statement,
+                key,
+                signature,
+            } => service::holds(statement, key, signature, &self.producers),
+        }
+    }
+}
 
 /// The one workflow whose jobs' attestations count, at a commit on its
 /// repo's default branch (`docs/ci-attestation.md`, rule 2): the shared CI
@@ -138,23 +176,31 @@ pub struct Attested {
     /// A gate's pass, or what a negative run's new tests did on the old
     /// code: failed, passed, or had nothing to run.
     pub result: Outcome,
+    /// The SHA-256 of the run's log its producer signed, when it signed one:
+    /// what binds a review's or a judgment's exact receipt.
+    pub log: Option<String>,
 }
 
-/// The attestation of `run`'s result on `subject`, signed by `signer`'s
-/// jobs, checked, or why none counts. Only GitHub not answering is an
-/// error. A self-hosted runner
+/// The attestation of `run`'s result on `subject`, by a producer `trust`
+/// trusts, checked, or why none counts. Only GitHub not answering is an
+/// error. A check run whose output carries a service statement counts by
+/// that statement alone ([`service`]); any other, by its job's CI
+/// attestation, signed by `trust`'s signer's jobs. A self-hosted runner
 /// counts as started fresh for its job only with a name that starts with
-/// `fresh`, which only the launcher of such runners gives one; with no
-/// `fresh`, only GitHub's hosted runners count.
+/// `trust.fresh`, which only the launcher of such runners gives one; with
+/// none, only GitHub's hosted runners count.
 pub fn attested(
     forge: &dyn Forge,
     source: &dyn Source,
     repo: &Repo,
     subject: Subject,
     run: &CheckRun,
-    signer: &Signer,
-    fresh: Option<&str>,
+    trust: &Trust,
 ) -> Result<Result<Attested, String>, ApiError> {
+    if let Some(text) = service::carried(run) {
+        return Ok(service::check(text, &trust.producers, repo, subject, run));
+    }
+    let (signer, fresh) = (&trust.signer, trust.fresh.as_deref());
     let full = repo.to_string();
     let Some(job) = forge.job(&full, run.id)? else {
         return Ok(Err("it isn't a GitHub Actions job".into()));
@@ -199,13 +245,11 @@ pub fn attested(
     Ok(Err(why.join("; ")))
 }
 
-/// Whether a kept attestation was signed by `signer`'s jobs, as its
-/// token's `job_workflow_ref` says: the claim [`check`] held to the signer
-/// the machine named when it was recorded, under GitHub's signature, and
-/// which the ledger keeps as it was. Evidence a signer the machine no
-/// longer names attested counts for nothing more.
-pub fn signed_by(attest: &Attest, signer: &Signer) -> bool {
-    let Attest::GithubToken { token, .. } = attest;
+/// Whether a kept token was asked for by `signer`'s jobs, as its
+/// `job_workflow_ref` says: the claim [`check`] held to the signer the
+/// machine named when it was recorded, under GitHub's signature, and which
+/// the ledger keeps as it was.
+fn signed_by(token: &str, signer: &Signer) -> bool {
     let claims: Option<Map<String, Value>> = token
         .split('.')
         .nth(1)
@@ -277,6 +321,14 @@ struct Predicate {
     revision: Option<Value>,
     tree: String,
     skipped: Vec<String>,
+    #[serde(default)]
+    log: Option<PredicateLog>,
+}
+
+/// A predicate's log, by its hash.
+#[derive(Debug, Deserialize)]
+struct PredicateLog {
+    sha256: Option<String>,
 }
 
 /// A negative run's statement, in its predicate's line.
@@ -350,7 +402,7 @@ fn check(
             run.id
         ));
     }
-    let result = match subject {
+    let (result, log) = match subject {
         Subject::Commit { commit, tree } => {
             // A PR's token is for GitHub's merge as its event found it,
             // which nothing checks, so only a push's is held to its commit.
@@ -359,7 +411,7 @@ fn check(
             }
             pushed(&statement, commit, tree, run)?
         }
-        Subject::Negative { base, head } => negative(&statement, base, head, run)?,
+        Subject::Negative { base, head } => (negative(&statement, base, head, run)?, None),
     };
     Ok(Claimed {
         attested: Attested {
@@ -368,6 +420,7 @@ fn check(
                 token: token.to_owned(),
             },
             result,
+            log,
         },
         workflow_sha: workflow_sha.to_owned(),
         hosted: said("runner_environment") == "github-hosted",
@@ -375,8 +428,13 @@ fn check(
 }
 
 /// A push's statement, as one of `commit`, whose tree is `tree`, passing as
-/// its check run did.
-fn pushed(statement: &str, commit: &str, tree: &str, run: &CheckRun) -> Result<Outcome, String> {
+/// its check run did, and the log hash it signed.
+fn pushed(
+    statement: &str,
+    commit: &str,
+    tree: &str,
+    run: &CheckRun,
+) -> Result<(Outcome, Option<String>), String> {
     let mut lines = statement.lines();
     let (Some("conary commit v1"), Some(subject), Some(predicate), None) =
         (lines.next(), lines.next(), lines.next(), lines.next())
@@ -394,14 +452,20 @@ fn pushed(statement: &str, commit: &str, tree: &str, run: &CheckRun) -> Result<O
     if predicate.tree != tree {
         return Err(format!("it ran on tree {}, not {tree}", predicate.tree));
     }
-    if predicate.result != "pass" || run.conclusion.as_deref() != Some("success") {
+    let result = pass_result(&predicate.result, run)?;
+    skipped_none(&predicate.skipped)?;
+    Ok((result, predicate.log.and_then(|l| l.sha256)))
+}
+
+/// A commit's result, as one that counts: a pass, its check run's
+/// conclusion a success. A red gate needs no attestation.
+fn pass_result(result: &str, run: &CheckRun) -> Result<Outcome, String> {
+    if result != "pass" || run.conclusion.as_deref() != Some("success") {
         return Err(format!(
-            "it says {} and its check run {}",
-            predicate.result,
+            "it says {result} and its check run {}",
             run.conclusion.as_deref().unwrap_or("hasn't concluded")
         ));
     }
-    skipped_none(&predicate.skipped)?;
     Ok(Outcome::Pass)
 }
 
@@ -437,7 +501,14 @@ fn negative(statement: &str, base: &str, head: &str, run: &CheckRun) -> Result<O
         ));
     }
     skipped_none(&predicate.skipped)?;
-    let (result, concluded) = match predicate.result.as_str() {
+    negative_result(&predicate.result, run)
+}
+
+/// A negative's result, its check run's conclusion the one it says:
+/// `success` for a failure on the old code or nothing to run, `failure`
+/// for a pass there.
+fn negative_result(result: &str, run: &CheckRun) -> Result<Outcome, String> {
+    let (outcome, concluded) = match result {
         "fail" => (Outcome::Fail, "success"),
         "none" => (Outcome::None, "success"),
         "pass" => (Outcome::Pass, "failure"),
@@ -449,12 +520,11 @@ fn negative(statement: &str, base: &str, head: &str, run: &CheckRun) -> Result<O
     };
     if run.conclusion.as_deref() != Some(concluded) {
         return Err(format!(
-            "it says {} and its check run {}",
-            predicate.result,
+            "it says {result} and its check run {}",
             run.conclusion.as_deref().unwrap_or("hasn't concluded")
         ));
     }
-    Ok(result)
+    Ok(outcome)
 }
 
 /// A result counts only for the checks it ran: one that skipped some says
@@ -530,6 +600,7 @@ fn hex(bytes: &[u8]) -> String {
 
 pub mod ci;
 pub mod make;
+pub mod service;
 
 #[cfg(test)]
 pub(crate) mod testing;

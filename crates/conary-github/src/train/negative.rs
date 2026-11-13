@@ -14,7 +14,7 @@ use conary_core::{ChangeId, RevisionId};
 
 use super::{Forge, TrainError, record};
 use crate::api::Source;
-use crate::attest::{Signer, Subject, attested, signed_by};
+use crate::attest::{Subject, Trust, attested};
 
 /// Which check is a PR's negative run, and whose signature and which
 /// runners its result counts from.
@@ -23,12 +23,9 @@ pub struct Negatives {
     /// The check run of the shared CI that runs a PR's new tests on its
     /// base's code: its caller's job, then `negative`.
     pub check: String,
-    /// The workflow whose attestation of it counts, as for the gate's
-    /// checks ([`super::Settings::signer`]).
-    pub signer: Signer,
-    /// What the name of each self-hosted runner started fresh for one job
-    /// starts with, as for the gate's checks ([`super::Settings::fresh`]).
-    pub fresh: Option<String>,
+    /// Whose attestation of it counts, as for the gate's checks
+    /// ([`super::Settings::trust`]).
+    pub trust: Trust,
 }
 
 /// Whether a result counts as a change's negative: its new tests failed on
@@ -87,13 +84,13 @@ pub(super) fn negative(
 }
 
 /// Whether the ledger holds a negative for the revision, by the check
-/// asked for, that counts, attested by the signer the machine names now.
+/// asked for, that counts, attested by a signer the machine trusts now.
 fn counted(c: &Change, revision: RevisionId, n: &Negatives) -> bool {
     c.evidence.iter().any(|e| {
         e.revision == revision
             && e.kind == CheckKind::Negative
             && e.check == n.check
-            && e.attest.as_ref().is_some_and(|a| signed_by(a, &n.signer))
+            && e.attest.as_ref().is_some_and(|a| n.trust.holds(a))
             && counts(e.result)
     })
 }
@@ -144,8 +141,7 @@ fn checked(
         repo,
         Subject::Negative { base, head },
         &run,
-        &n.signer,
-        n.fresh.as_deref(),
+        &n.trust,
     )?
     .map(|a| (run, a))
     .map_err(|why| format!("{}: {why}", n.check)))

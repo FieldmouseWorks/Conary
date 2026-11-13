@@ -91,6 +91,16 @@ pub struct CheckRun {
     /// The suite it ran in: one workflow run's, under GitHub Actions. A
     /// rerun is in the suite of the run it reruns.
     pub check_suite: Option<CheckSuite>,
+    /// What it reports: a service producer's signed statement rides in its
+    /// text (`docs/service-attestation.md`).
+    #[serde(default)]
+    pub output: Option<CheckOutput>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct CheckOutput {
+    #[serde(default)]
+    pub text: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
