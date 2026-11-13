@@ -534,3 +534,34 @@ fn a_native_request_for_changes_after_permission_is_published_blocks_the_merge()
     assert_eq!(c.hub.count(Call::Land), 0);
     pending(&c);
 }
+#[test]
+fn a_signed_check_that_skipped_some_cannot_grant_permission() {
+    let c = Case::new();
+    c.clean_review();
+    // The gate's job signs a pass that left a check unbuilt: the flow
+    // reads no evidence for what it skipped.
+    let tree = crate::branches::Branches::tree(&c.hub, REPO, &head(3)).unwrap();
+    for run in c
+        .hub
+        .checks_on(&head(3))
+        .iter()
+        .filter(|r| r.name == "check")
+    {
+        c.hub.forget_artifacts(Some(run.id));
+        let statement = crate::attest::testing::statement(&head(3), &tree, "pass")
+            .replace(r#""skipped":[]"#, r#""skipped":["agents"]"#);
+        let claims = crate::attest::testing::claims(REPO, &head(3), run.id, &statement);
+        c.hub.attest(
+            run.id,
+            &crate::attest::testing::file(&statement, &crate::attest::testing::token(&claims)),
+        );
+    }
+    let report = c.pass(crate::flow::jobs::now(), false);
+    let next = report[0].next.as_ref().unwrap();
+    assert!(
+        next.description.contains("check: it skipped agents"),
+        "{}",
+        next.description
+    );
+    pending(&c);
+}

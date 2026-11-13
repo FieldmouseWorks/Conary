@@ -196,7 +196,9 @@ pub struct Attested {
 /// attestation, signed by `trust`'s signer's jobs. A self-hosted runner
 /// counts as started fresh for its job only with a name that starts with
 /// `trust.fresh`, which only the launcher of such runners gives one; with
-/// none, only GitHub's hosted runners count.
+/// none, only GitHub's hosted runners count. A commit's CI result that
+/// skipped some checks counts for the ones it ran: its caller asks
+/// [`skipped`] which, and decides what covers the rest.
 pub fn attested(
     forge: &dyn Forge,
     source: &dyn Source,
@@ -481,17 +483,10 @@ fn pushed(
     tree: &str,
     run: &CheckRun,
 ) -> Result<(Outcome, Option<String>), String> {
-    let mut lines = statement.lines();
-    let (Some("conary commit v1"), Some(subject), Some(predicate), None) =
-        (lines.next(), lines.next(), lines.next(), lines.next())
-    else {
-        return Err("its statement isn't a commit's subject and a predicate".into());
-    };
+    let (subject, predicate) = commit_statement(statement)?;
     if subject != commit {
         return Err(format!("its statement is about {subject}, not {commit}"));
     }
-    let predicate: Predicate =
-        serde_json::from_str(predicate).map_err(|e| format!("its predicate doesn't read: {e}"))?;
     if predicate.revision.is_some_and(|r| !r.is_null()) {
         return Err("its predicate names a revision, not a push".into());
     }
@@ -499,8 +494,36 @@ fn pushed(
         return Err(format!("it ran on tree {}, not {tree}", predicate.tree));
     }
     let result = pass_result(&predicate.result, run)?;
-    skipped_none(&predicate.skipped)?;
     Ok((result, predicate.log.and_then(|l| l.sha256)))
+}
+
+/// A commit's statement, as its subject and its predicate.
+fn commit_statement(statement: &str) -> Result<(&str, Predicate), String> {
+    let mut lines = statement.lines();
+    let (Some("conary commit v1"), Some(subject), Some(predicate), None) =
+        (lines.next(), lines.next(), lines.next(), lines.next())
+    else {
+        return Err("its statement isn't a commit's subject and a predicate".into());
+    };
+    let predicate =
+        serde_json::from_str(predicate).map_err(|e| format!("its predicate doesn't read: {e}"))?;
+    Ok((subject, predicate))
+}
+
+/// The checks a commit's attested result says it skipped, so says nothing
+/// about: those its CI statement's predicate names, and none for a
+/// service's, which reports its one check whole. [`attested`] counts such
+/// a result for the checks it ran; whether anything covers the rest is the
+/// counting policy's call. The flow counts nothing for them, the train only
+/// a required machine proof of the same candidate (`docs/DESIGN.md`
+/// section 4.7).
+pub fn skipped(attest: &Attest) -> Result<Vec<String>, String> {
+    match attest {
+        Attest::Service { .. } => Ok(Vec::new()),
+        Attest::GithubToken { statement, .. } => {
+            commit_statement(statement).map(|(_, p)| p.skipped)
+        }
+    }
 }
 
 /// A commit's result, as one that counts: a pass, its check run's
@@ -573,14 +596,14 @@ fn negative_result(result: &str, run: &CheckRun) -> Result<Outcome, String> {
     Ok(outcome)
 }
 
-/// A result counts only for the checks it ran: one that skipped some says
-/// nothing about where they'd pass or fail.
+/// A negative counts only whole: one that skipped some checks says nothing
+/// about where its new tests would pass or fail in them.
 fn skipped_none(skipped: &[String]) -> Result<(), String> {
     if skipped.is_empty() {
         return Ok(());
     }
     Err(format!(
-        "it skipped {}, whose evidence the train doesn't read",
+        "it skipped {}, so it says nothing about them",
         skipped.join(", ")
     ))
 }

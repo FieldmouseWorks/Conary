@@ -3,7 +3,7 @@
 use super::persist::Result;
 use super::*;
 use crate::attest::service::Producers;
-use crate::attest::{Signer, Subject, Trust, attested};
+use crate::attest::{Signer, Subject, Trust, attested, skipped};
 use conary_core::op::Outcome;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -276,6 +276,15 @@ fn check<G: Write>(
             trust,
         )?
         .map_err(|why| format!("{name}: {why}"))?;
+        // A result counts here only whole: nothing covers what it skipped.
+        let skipped = skipped(&verified.attest).map_err(|why| format!("{name}: {why}"))?;
+        if !skipped.is_empty() {
+            return Err(format!(
+                "{name}: it skipped {}, so it says nothing about them",
+                skipped.join(", ")
+            )
+            .into());
+        }
         if verified.result != Outcome::Pass {
             return Err(format!("{name}: producer did not pass").into());
         }
