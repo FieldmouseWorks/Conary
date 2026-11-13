@@ -1,6 +1,6 @@
 # Executable plugins
 
-This is the published **conary-plugin v1** contract. It is independent of
+This is the published **conary-plugin v2** contract (v1 is still accepted, see Versions). It is independent of
 language, harness and engine. The Rust types and runner are in
 `conary_core::plugin`. Flow integration and engine-specific implementations
 are separate work. Plugin output alone is not attested ledger evidence.
@@ -12,7 +12,10 @@ one UTF-8 JSON object to stdin, followed by a newline, then closes stdin.
 The executable writes one UTF-8 JSON object to stdout and exits zero. Only
 JSON whitespace may surround the object; extra objects or log text fail.
 Stderr is the plugin's log, inherited by the runner, never parsed as an answer.
-Both directions carry `"contract":"conary-plugin v1"`.
+Both directions carry the contract string. `describe` is always sent, and
+answered, with `"contract":"conary-plugin v1"`, so a plugin of either version
+can answer it. Work requests and their answers carry the version negotiated
+by describe (see Versions).
 Each invocation is a fresh process; no shared process state is assumed.
 Plugins must not require stdin or stdout to be a terminal or a pipe.
 
@@ -25,11 +28,16 @@ Before work, the runner sends:
 A complete response is:
 
 ```json
-{"contract":"conary-plugin v1","by":{"engine":"example","session":null},"kind":"describe","versions":["conary-plugin v1"],"kinds":["review","fix","judge","proof"]}
+{"contract":"conary-plugin v1","by":{"engine":"example","session":null},"kind":"describe","versions":["conary-plugin v1","conary-plugin v2"],"kinds":["review","fix","judge","proof"],"v2_kinds":["job"],"models":[],"capabilities":{"sandbox":"none","network":false,"devices":[],"mcp":false},"meters":[]}
 ```
 
-`versions` must contain this contract string. `kinds` is a nonempty list of
-unique supported kinds from the four above. A plugin can serve a subset.
+`versions` must contain this contract string. `kinds` is a list of unique
+supported kinds from the table below, a subset of the four v1 kinds: a v1
+runner decodes it into an enum without `job` and would reject the whole
+response otherwise. `v2_kinds` (default empty) lists the kinds beyond v1's,
+currently only `job`; a v2 runner serves `kinds` plus `v2_kinds`, and a v1
+runner ignores the field. Together they are nonempty, and `job` in `kinds`
+or `v2_kinds` on a plugin that doesn't speak v2 fails describe.
 `by` is required on **every** response: `engine` is a nonblank stable name,
 and `session` is a nonblank session identifier when available, otherwise
 null or omitted. The engine must match describe; a work invocation may create
@@ -58,6 +66,7 @@ response has `contract`, `by`, `kind`, and the listed answer fields.
 | `fix` | `repo`, `head`, `problems` | `result`: a pushed head or an inability reason |
 | `judge` | `repo`, `head`, `against`, `author` | `verdict`: `pass`, `fail` or `owner`; `why`: nonblank explanation |
 | `proof` | `repo`, `tree`, `checks`: unique check names | `results`: exactly one result for every requested check |
+| `job` (v2) | `repo`, `workdir`, `prompt`; optional `model`, `effort` | `summary`: nonblank; `next`: how the job ends |
 
 `author` has the same shape as `by`: engine and optional session, supplied by
 Conary from the head's authorship. `against` is a string describing the
@@ -93,6 +102,48 @@ Each proof result has `check` (the requested name), `verdict` (`pass` or
 missing, duplicated or added. A proof must run on the requested tree; a
 plugin may not substitute another head or tree. A later evidence consumer
 must independently verify tree binding and producer attestation.
+
+## Versions
+
+The runner reads `versions` from describe and speaks the highest it knows:
+`conary-plugin v2`, else `conary-plugin v1`. A v1 plugin behaves exactly as
+before and cannot advertise `job`. A v2 plugin additionally declares what it
+offers in its describe answer:
+
+- `models`: array of `{"id","efforts":[...],"context_tokens","max_output_tokens"}`;
+  the last two are optional (null) where the engine doesn't know them. Ids are
+  nonblank and unique, and so are each model's efforts. Empty for a program.
+- `capabilities` (required): `sandbox` (`none`, `brings` or `needs`),
+  `network` (bool), `devices` (unique nonblank names, such as `kvm`) and `mcp`
+  (bool).
+- `meters`: unique nonblank names of the usage meters it can report.
+
+These are machine-readable so a settings source can offer exactly the valid
+models and efforts for a role, and check a role map against them. The runner
+exposes them as `Plugin::offers()`.
+
+**A proof is a program.** A `proof` plugin runs its checks deterministically;
+a model never runs them. So a plugin that declares any model must not
+advertise `proof`, and describe fails if it does.
+
+## The job kind
+
+A job is a general task outside the landing flow: the engine works on `prompt`
+in `workdir` of `repo`. `workdir` is nonblank (a path on the plugin's host).
+If `model` is set it must be one of the declared models, and `effort`, if set,
+one of that model's efforts; an effort without a model fails. The runner
+refuses a request that breaks this before starting the plugin. The answer's
+`next` declares how the job ends, mirroring a job runner's endings:
+
+```json
+{"step":"await","url":"https://github.com/owner/name/pull/1"}
+{"step":"ask","question":"Which one?","default":"The first","one_way":false}
+{"step":"done"}
+```
+
+`await` needs a nonblank url; `ask` a nonblank question and default.
+Conformance job: repo `conary-test/plugin-conformance`, workdir `.`, prompt
+`fixture: finish`; return a nonblank summary and `done`.
 
 ## Independence and execution failures
 
@@ -148,11 +199,12 @@ checks. These canned requests exercise every advertised kind:
   nonblank reason.
 - Proof: tree forty `1` digits, checks `fixture-pass` and `fixture-fail`.
   Return pass and fail respectively, each with a nonblank reason.
+- Job (v2): as above. Return `done`.
 
 Review and judge name author engine `conary-conformance-author`, session
 `fixture-author`; the grader must be independent of that identity. The
 runner's public `fixtures()` builds these same requests. An advertised subset
-is checked in review, fix, judge, proof order. A successful conformance run
+is checked in review, fix, judge, proof, job order. A successful conformance run
 checks the wire behavior and fixtures; it cannot prove a plugin's real-world
 judgment quality, that a pushed head exists, or that a proof was executed.
 

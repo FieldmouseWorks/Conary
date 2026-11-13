@@ -32,6 +32,8 @@ pub struct Plugin {
     limits: Limits,
     pub identity: Identity,
     kinds: Vec<Kind>,
+    contract: &'static str,
+    offers: Option<Offers>,
 }
 
 impl Plugin {
@@ -51,13 +53,39 @@ impl Plugin {
         limits: Limits,
         cancelled: Option<&Path>,
     ) -> Result<Self, Failure> {
-        let response = execute(path, limits, &Request::new(Task::Describe), cancelled)?;
+        let response = execute(path, limits, &Request::describe(), CONTRACT_V1, cancelled)?;
         valid_identity(&response.by)?;
-        let Answer::Describe { versions, kinds } = response.answer else {
+        let Answer::Describe {
+            versions,
+            kinds,
+            v2_kinds,
+            models,
+            capabilities,
+            meters,
+        } = response.answer
+        else {
             return bad("expected describe response");
         };
-        if !versions.iter().any(|v| v == CONTRACT)
-            || kinds.is_empty()
+        let speaks = |c: &str| versions.iter().any(|v| v == c);
+        let contract = if speaks(CONTRACT) {
+            CONTRACT
+        } else if speaks(CONTRACT_V1) {
+            CONTRACT_V1
+        } else {
+            return bad("invalid advertised versions or kinds");
+        };
+        let mut kinds = kinds;
+        if kinds.contains(&Kind::Job) {
+            return bad("the job kind belongs in v2_kinds, which a v1 runner doesn't read");
+        }
+        if v2_kinds.iter().any(|k| *k != Kind::Job) {
+            return bad("invalid advertised versions or kinds");
+        }
+        if contract == CONTRACT_V1 && !v2_kinds.is_empty() {
+            return bad("the job kind needs conary-plugin v2");
+        }
+        kinds.extend(v2_kinds);
+        if kinds.is_empty()
             || kinds
                 .iter()
                 .enumerate()
@@ -65,12 +93,39 @@ impl Plugin {
         {
             return bad("invalid advertised versions or kinds");
         }
+        let offers = if contract == CONTRACT {
+            let Some(capabilities) = capabilities else {
+                return bad("a v2 plugin must declare its capabilities");
+            };
+            let offers = Offers {
+                models,
+                capabilities,
+                meters,
+            };
+            if !offers.valid(&kinds) {
+                return bad("invalid declared models, capabilities or meters");
+            }
+            Some(offers)
+        } else {
+            None
+        };
         Ok(Self {
             path: path.into(),
             limits,
             identity: response.by,
             kinds,
+            contract,
+            offers,
         })
+    }
+
+    /// What the plugin declared, when it speaks v2.
+    pub fn offers(&self) -> Option<&Offers> {
+        self.offers.as_ref()
+    }
+
+    pub fn kinds(&self) -> &[Kind] {
+        &self.kinds
     }
 
     pub fn call(&self, task: Task) -> Result<Response, Failure> {
@@ -96,6 +151,7 @@ impl Plugin {
             }
             Task::Judge { head, .. } => sha(head),
             Task::Proof { tree, .. } => sha(tree),
+            Task::Job { .. } => true,
             Task::Describe => false,
         };
         if !full_objects {
@@ -103,6 +159,28 @@ impl Plugin {
         }
         if !self.kinds.contains(&kind) {
             return bad("request kind was not described");
+        }
+        if let Task::Job {
+            repo,
+            workdir,
+            prompt,
+            model,
+            effort,
+        } = &task
+        {
+            let Some(offers) = &self.offers else {
+                return bad("the job kind needs conary-plugin v2");
+            };
+            if repo.trim().is_empty()
+                || workdir.trim().is_empty()
+                || workdir.contains('\0')
+                || prompt.trim().is_empty()
+            {
+                return bad("a job needs a repo, workdir and prompt");
+            }
+            if !offers.allows(model.as_deref(), effort.as_deref()) {
+                return bad("job asks for a model or effort the plugin did not offer");
+            }
         }
         if let Task::Fix { problems, .. } = &task {
             for problem in problems {
@@ -117,7 +195,8 @@ impl Plugin {
         let response = execute(
             &self.path,
             self.limits,
-            &Request::new(task.clone()),
+            &Request::work(self.contract, task.clone()),
+            self.contract,
             cancelled,
         )?;
         valid_identity(&response.by)?;
@@ -149,6 +228,8 @@ impl Plugin {
                 _ => {}
             },
             (Task::Judge { .. }, Answer::Judge { why, .. }) if !why.trim().is_empty() => {}
+            (Task::Job { .. }, Answer::Job { summary, next })
+                if !summary.trim().is_empty() && next.valid() => {}
             (Task::Proof { checks, .. }, Answer::Proof { results }) => {
                 if checks.len() != results.len()
                     || checks
@@ -195,6 +276,7 @@ impl Plugin {
                         ("fixture-pass", Verdict::Pass) | ("fixture-fail", Verdict::Fail)
                     )
                 }),
+                Answer::Job { next, .. } => next == Next::Done,
                 _ => false,
             };
             if !conforms {
@@ -220,6 +302,7 @@ fn execute(
     path: &Path,
     limits: Limits,
     request: &Request,
+    contract: &str,
     cancelled: Option<&Path>,
 ) -> Result<Response, Failure> {
     // File-backed stdio avoids deadlocks from a child that never reads stdin,
@@ -271,7 +354,7 @@ fn execute(
     }
     let response: Response =
         serde_json::from_slice(&bytes).map_err(|e| Failure(format!("invalid plugin JSON: {e}")))?;
-    if response.contract != CONTRACT {
+    if response.contract != contract {
         return bad("wrong plugin contract version");
     }
     Ok(response)
