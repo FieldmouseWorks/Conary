@@ -106,9 +106,20 @@ impl Case {
     pub fn label(&self, labels: &[&str]) {
         self.hub.label(REMI, 3, labels);
     }
-    /// `flow::judging_context` over the discussion now.
+    /// `flow::judging_context` over the discussion now: the workers' log
+    /// and GitHub's review threads.
     pub fn context(&self) -> String {
-        judging_context(self.discussion.iter().map(|(f, a)| (f, a.as_ref())))
+        self.context_on(
+            &crate::flow::Read::snapshot(&self.hub, REMI, 3)
+                .unwrap()
+                .threads,
+        )
+    }
+    fn context_on(&self, threads: &BTreeMap<String, ReviewThread>) -> String {
+        judging_context(
+            self.discussion.iter().map(|(f, a)| (f, a.as_ref())),
+            threads,
+        )
     }
     /// A judgment of the current revision. A contract word is a producer's
     /// v3 judgment, judged for every reason on the discussion now; any other
@@ -210,7 +221,7 @@ impl Case {
                 r.missing = s.missing;
             }
         }
-        f.context = Some(self.context());
+        f.context = Some(self.context_on(&f.threads));
         f.jobs = self.jobs.clone();
         f.claims = self.claims.clone();
         f.stopped_jobs = self.stopped_jobs.clone();

@@ -175,6 +175,9 @@ pub enum JobState {
     Running,
     Unknown,
     Done,
+    /// A judge's job, done, whose sealed issuance was read: its answer came,
+    /// whether or not it still speaks for the revision.
+    Answered,
     Broken,
 }
 
@@ -452,6 +455,23 @@ pub struct FailedPost {
     pub unavailable: bool,
 }
 
+/// A review thread as GitHub shows it: whether it's resolved, and its
+/// comments in order. Its comments, not whether it's resolved, are part of
+/// what a judge reads ([`super::judging_context`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ReviewThread {
+    pub resolved: bool,
+    pub comments: Vec<ThreadComment>,
+}
+
+/// One comment on a review thread: who wrote it (`None` for a deleted
+/// account) and what it says now, edits included.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ThreadComment {
+    pub author: Option<String>,
+    pub body: String,
+}
+
 /// All the facts read once for a pass. Local service answers, jobs and proofs
 /// are supplied by the caller after [`super::read`]. The pass executor supplies these observations.
 #[derive(Debug, Clone)]
@@ -487,7 +507,8 @@ pub struct Facts {
     pub claims: Vec<FixClaim>,
     pub stopped_jobs: BTreeSet<String>,
     pub pushes: BTreeMap<String, String>,
-    pub threads: BTreeMap<String, bool>,
+    /// Every review thread on GitHub, by its id.
+    pub threads: BTreeMap<String, ReviewThread>,
     pub proof: Proof,
     pub proof_data: ProofData,
     pub settings: Settings,

@@ -78,9 +78,11 @@ it proves. A judge request carries the decision's reasons as `why`, in the
 contract's words. One asked again only because a judge already started on
 this head and base carries that judge's reasons, even if the description
 changed since, or `started` when that judge predates recorded reasons. Its `context` is
-`flow::judging_context` over the PR's discussion as a log in job order: each
+`flow::judging_context` over the PR's discussion: its log in job order, each
 validated review's findings, then each v4 fix's findings as handed, with its
-answers. A plugin speaking an older contract gets none of these fields.
+answers; and every review thread on GitHub with its comments as they read now,
+whoever wrote them and whether or not a worker did. Resolving a thread doesn't
+change it. A plugin speaking an older contract gets none of these fields.
 Engine trailers across the PR history supply its author engine. Unreadable
 or mixed-engine histories wait rather than infer independence. Session
 trailers are untrusted: only a completed fix's validated producer establishes
@@ -192,7 +194,13 @@ A fail or misdescribed verdict is acted on as it stands. A pass or owner
 verdict counts only while its `why` holds every reason `flow::decide` requires
 now, except `asked`, which the judgment's own existence makes hold, and its
 `context` equals `flow::judging_context` over the discussion now. Otherwise the
-flow asks a judge again before granting anything; the old issuance stays. A v2
+flow asks a judge again before granting anything; the old issuance stays. A
+judge's job is answered once the issuance read for its revision seals what it
+was asked on (any issuance, for a request from before v4). An answer that no
+longer counts was superseded, never lost: the flow asks again at once, and it
+doesn't count toward the two jobs that end without their answer before the
+owner is told. A judge job that ended without its answer is waited for and
+counted as before. A v2
 issuance says neither, so its pass or owner verdict never counts. The worker also
 retains the complete response with its verdict in the durable completion.
 Provenance survives high-water memory; a same-generation provenance conflict

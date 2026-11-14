@@ -180,13 +180,23 @@ impl Case {
                         Some(&review_receipt(&work.job.revision.head, &body)),
                     );
                 }
+                // The producer seals what the judge was asked on, at the
+                // next generation.
                 (
-                    conary_core::plugin::Task::Judge { .. },
+                    conary_core::plugin::Task::Judge { why, context, .. },
                     Some(Ok(conary_core::plugin::Response {
                         answer: conary_core::plugin::Answer::Judge { .. },
                         ..
                     })),
-                ) => self.judgment(1, Judgment::Pass, true),
+                ) => self.judgment_on(
+                    self.hub.comments(REPO, 3).unwrap().len() as u64 + 1,
+                    Judgment::Pass,
+                    true,
+                    crate::flow::Basis {
+                        why: why.clone(),
+                        context: context.clone(),
+                    },
+                ),
                 _ => {}
             }
         }

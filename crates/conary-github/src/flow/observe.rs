@@ -5,7 +5,7 @@ use super::*;
 use conary_core::plugin;
 
 pub(crate) fn hydrate(f: &mut Facts, record: &Record, now: u64, dry_run: bool) -> Result<()> {
-    f.context = Some(super::judging::context(record, now)?);
+    f.context = Some(super::judging::context(record, &f.threads, now)?);
     for work in &record.jobs {
         let completion: Completion = if dry_run {
             jobs::inspect(work, now)?
@@ -82,17 +82,19 @@ pub(crate) fn hydrate(f: &mut Facts, record: &Record, now: u64, dry_run: bool) -
                 });
             }
             Purpose::Judge => {
-                f.jobs.insert(Kind::Judge, job.clone());
                 // Plugin responses are proposals, not authenticated issuances.
                 // The producer publishes its sealed, independently attested
                 // judgment separately. Preserve every GitHub generation.
                 if job.revision == f.revision
                     && completion.result.as_ref().is_some_and(|r| r.is_ok())
-                    && f.judgment_generation.is_none()
-                    && let Some(job) = f.jobs.get_mut(&Kind::Judge)
                 {
-                    job.state = JobState::Unknown;
+                    if f.judgment_generation.is_none() {
+                        job.state = JobState::Unknown;
+                    } else if answers(f, super::judging::asked(work)?) {
+                        job.state = JobState::Answered;
+                    }
                 }
+                f.jobs.insert(Kind::Judge, job);
             }
             Purpose::Proof => {
                 if job.revision == f.revision
@@ -115,6 +117,16 @@ pub(crate) fn hydrate(f: &mut Facts, record: &Record, now: u64, dry_run: bool) -
     }
     Ok(())
 }
+/// Whether the issuance read for this revision answers a judge job asked on
+/// `asked`: it seals that basis. A request from before the flow said what it
+/// asked on is answered by any issuance of its revision.
+fn answers(f: &Facts, asked: Option<Basis>) -> bool {
+    let Some(judged) = f.judgment.as_ref().filter(|j| j.revision == f.revision) else {
+        return false;
+    };
+    asked.is_none() || judged.basis == asked
+}
+
 pub(crate) fn train(f: &mut Facts, ledger: &conary_core::Ledger) {
     let Some(change) = ledger.by_pr(&f.repo, f.number) else {
         return;

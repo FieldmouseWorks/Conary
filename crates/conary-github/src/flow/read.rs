@@ -27,7 +27,7 @@ pub struct Snapshot {
     pub complete: bool,
     pub merge_state: String,
     pub open_threads: u32,
-    pub threads: BTreeMap<String, bool>,
+    pub threads: BTreeMap<String, ReviewThread>,
     pub resolved_reviews: BTreeSet<u64>,
     pub updated_at: u64,
     pub suites: BTreeMap<u64, Suite>,

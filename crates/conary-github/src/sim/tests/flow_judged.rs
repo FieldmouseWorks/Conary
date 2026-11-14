@@ -135,8 +135,62 @@ fn generations_stay_ordered_across_issued_versions() {
     // A newer pass judged on another discussion revives no older one.
     let stale = Basis {
         why: vec![Trigger::RoundLimit],
-        context: judging_context([]),
+        context: judging_context([], &Default::default()),
     };
     c.judge_on(Judgment::Pass, stale);
     assert_eq!(c.view(4005).step, asked);
+}
+
+#[test]
+fn a_finding_or_answer_on_github_asks_for_a_new_judgment() {
+    let thread = |c: &Case, comments: &[(&str, &str)]| {
+        c.hub
+            .flow_thread_comments(crate::sim::REMI, 3, "T1", comments);
+        c.hub.flow_thread(crate::sim::REMI, 3, "T1", true);
+    };
+    let asked = Step::Judge(vec![Trigger::Asked, Trigger::RoundLimit]);
+    let mut c = capped();
+    let basis = on(&c, &[Trigger::RoundLimit]);
+    c.judge_on(Judgment::Pass, basis);
+    assert_eq!(c.view(4001).step, Step::Merge);
+    // A person's finding and its answer, on GitHub alone, resolved without a
+    // push: no worker's log has them.
+    thread(&c, &[("person", "a finding"), ("owner", "an answer")]);
+    assert_eq!(c.view(4002).step, asked);
+    let basis = on(&c, &[Trigger::RoundLimit]);
+    c.judge_on(Judgment::Pass, basis);
+    assert_eq!(c.view(4003).step, Step::Merge);
+    // Resolving or reopening it adds nothing a judge hasn't read.
+    c.hub.flow_thread(crate::sim::REMI, 3, "T1", false);
+    c.hub.flow_thread(crate::sim::REMI, 3, "T1", true);
+    assert_eq!(c.view(4004).step, Step::Merge);
+    // An edited answer is another discussion.
+    thread(
+        &c,
+        &[("person", "a finding"), ("owner", "an edited answer")],
+    );
+    assert_eq!(c.view(4005).step, asked);
+}
+
+#[test]
+fn a_superseded_judgment_never_spends_the_unanswered_budget() {
+    let mut c = capped();
+    let asked = Step::Judge(vec![Trigger::RoundLimit]);
+    for round in 0..4 {
+        // Its judge answered, then the discussion moved on.
+        c.jobs.insert(
+            Kind::Judge,
+            Job {
+                id: format!("judge-{round}"),
+                revision: c.scope(),
+                state: JobState::Answered,
+                started: 4000,
+                repeated: false,
+            },
+        );
+        c.discussion.push((finding(), Some(answer())));
+        assert_eq!(c.pass(5000 + round * 100).step, asked, "{round}");
+        assert_eq!(c.pass(5060 + round * 100).step, asked, "{round}");
+    }
+    assert!(c.memory.unanswered.is_empty());
 }

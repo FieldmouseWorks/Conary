@@ -2,7 +2,9 @@
 //! complete reviews/checks/commits; GraphQL supplies thread resolution and
 //! mergeability, which REST does not expose with the same semantics.
 use super::*;
-use crate::flow::{BaseObservation, Ci, Read, Revision, Snapshot, Suite, Workflow};
+use crate::flow::{
+    BaseObservation, Ci, Read, ReviewThread, Revision, Snapshot, Suite, ThreadComment, Workflow,
+};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 
@@ -10,7 +12,7 @@ const QUERY: &str = r#"query($owner:String!,$name:String!,$number:Int!) {
  repository(owner:$owner,name:$name) { defaultBranchRef { name target { ... on Commit { oid statusCheckRollup { state } } } } pullRequest(number:$number) {
   headRefOid baseRefName title body isDraft mergeStateStatus updatedAt
   labels(first:100) { pageInfo { hasNextPage } }
-  reviewThreads(first:100) { pageInfo { hasNextPage } nodes { id isResolved comments(first:1) { nodes { pullRequestReview { databaseId } } } } }
+  reviewThreads(first:100) { pageInfo { hasNextPage } nodes { id isResolved comments(first:100) { pageInfo { hasNextPage } nodes { author { login } body pullRequestReview { databaseId } } } } }
   reviews { totalCount } comments { totalCount }
   timelineItems(last:50,itemTypes:[UNLABELED_EVENT,RENAMED_TITLE_EVENT]) { pageInfo { hasPreviousPage } nodes { ... on UnlabeledEvent { createdAt label { name } } ... on RenamedTitleEvent { createdAt previousTitle } } }
   commits(last:1) { nodes { commit { oid checkSuites(first:100) {
@@ -107,16 +109,24 @@ struct Threads {
 struct Thread {
     id: String,
     is_resolved: bool,
-    comments: Option<ThreadComments>,
-}
-#[derive(Deserialize)]
-struct ThreadComments {
-    nodes: Vec<ThreadComment>,
+    comments: ThreadComments,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct ThreadComment {
+struct ThreadComments {
+    page_info: More,
+    nodes: Vec<ThreadNode>,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ThreadNode {
+    author: Option<Login>,
+    body: String,
     pull_request_review: Option<ReviewId>,
+}
+#[derive(Deserialize)]
+struct Login {
+    login: String,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -283,8 +293,8 @@ impl Read for Api {
         for t in &p.review_threads.nodes {
             if let Some(id) = t
                 .comments
-                .as_ref()
-                .and_then(|c| c.nodes.first())
+                .nodes
+                .first()
                 .and_then(|c| c.pull_request_review.as_ref())
                 .map(|r| r.database_id)
             {
@@ -326,6 +336,11 @@ impl Read for Api {
             draft: p.is_draft,
             complete: !p.labels.page_info.has_next_page
                 && !p.review_threads.page_info.has_next_page
+                && !p
+                    .review_threads
+                    .nodes
+                    .iter()
+                    .any(|t| t.comments.page_info.has_next_page)
                 && p.reviews.total_count <= 100
                 && p.comments.total_count <= 100,
             merge_state: p.merge_state_status,
@@ -338,8 +353,22 @@ impl Read for Api {
             threads: p
                 .review_threads
                 .nodes
-                .iter()
-                .map(|t| (t.id.clone(), t.is_resolved))
+                .into_iter()
+                .map(|t| {
+                    let thread = ReviewThread {
+                        resolved: t.is_resolved,
+                        comments: t
+                            .comments
+                            .nodes
+                            .into_iter()
+                            .map(|c| ThreadComment {
+                                author: c.author.map(|a| a.login),
+                                body: c.body,
+                            })
+                            .collect(),
+                    };
+                    (t.id, thread)
+                })
                 .collect(),
             resolved_reviews,
             updated_at: crate::flow::reviews::timestamp(&p.updated_at)?,

@@ -50,7 +50,7 @@ fn every_reason() -> Vec<conary_core::plugin::Trigger> {
 fn judged_for_everything() -> crate::flow::Basis {
     crate::flow::Basis {
         why: every_reason(),
-        context: crate::flow::judging_context([]),
+        context: crate::flow::judging_context([], &Default::default()),
     }
 }
 

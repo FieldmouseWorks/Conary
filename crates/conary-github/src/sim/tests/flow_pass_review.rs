@@ -410,7 +410,7 @@ fn r2_owner_approval_does_not_enable_direct_or_delegated_landings() {
         )
         .unwrap();
         // No worker has answered: the discussion is empty.
-        facts.context = Some(judging_context([]));
+        facts.context = Some(judging_context([], &facts.threads));
         assert_eq!(
             next(&facts, &c.record().memory, crate::flow::jobs::now())
                 .0

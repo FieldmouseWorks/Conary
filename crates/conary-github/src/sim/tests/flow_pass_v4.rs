@@ -102,7 +102,12 @@ fn a_judge_after_a_fix_carries_its_pr_reasons_and_the_answered_finding() {
     assert_eq!(pr, 3);
     assert_eq!(why, [Trigger::AuthorEngine]);
     // The log: the review's finding, then the fix's answer to it as handed.
-    let log = |answer| judging_context([(&findings[0], None), (&handed[0], answer)]);
+    let log = |answer| {
+        judging_context(
+            [(&findings[0], None), (&handed[0], answer)],
+            &Default::default(),
+        )
+    };
     assert_eq!(context, log(Some(&answered[0])));
     // Another answer, or none, is another discussion.
     assert_ne!(context, log(None));
@@ -165,13 +170,47 @@ fn a_judgment_counts_only_on_the_discussion_the_flow_reads_now() {
             true,
             Basis {
                 why: vec![Trigger::AuthorEngine],
-                context: judging_context(discussion.iter().map(|(f, a)| (f, a.as_ref()))),
+                context: judging_context(
+                    discussion.iter().map(|(f, a)| (f, a.as_ref())),
+                    &Default::default(),
+                ),
             },
         );
         let report = c.pass(now + 5, true);
         assert_eq!(report[0].error, None);
         assert_eq!(report[0].next.as_ref().unwrap().step, expected);
     }
+}
+
+/// The producer answers each judge with an issuance sealing what it was
+/// asked on. Then a finding or answer on GitHub alone, resolved without a
+/// push, makes that judgment stale: the flow asks a judge again at once,
+/// every time, and never takes the answered judges for missing ones.
+#[test]
+fn a_judgment_made_stale_on_github_is_asked_again_each_time() {
+    let mut c = Case::new();
+    let now = flow::jobs::now();
+    fixed_then_reviewed(&mut c, now);
+    let step = |c: &Case, t: u64, dry: bool| {
+        let report = c.pass(now + t, dry).remove(0);
+        assert_eq!(report.error, None, "{t}");
+        report.next.unwrap().step
+    };
+    assert_eq!(step(&c, 5, false), Step::Judge(vec![Trigger::AuthorEngine]));
+    let discussion: [&[(&str, &str)]; 3] = [
+        &[("person", "a finding")],
+        &[("person", "a finding"), ("owner", "an answer")],
+        &[("person", "a finding"), ("owner", "an edited answer")],
+    ];
+    for (round, comments) in discussion.into_iter().enumerate() {
+        let t = 10 + 10 * round as u64;
+        c.run_worker();
+        assert_eq!(step(&c, t, true), Step::Merge, "{round}");
+        c.hub.flow_thread_comments(REPO, 3, "T1", comments);
+        c.hub.flow_thread(REPO, 3, "T1", true);
+        assert!(matches!(step(&c, t + 1, false), Step::Judge(_)), "{round}");
+    }
+    assert!(c.record().memory.unanswered.is_empty());
 }
 
 /// A judge started because of the author engine. Then the engine trailer is
