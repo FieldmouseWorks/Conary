@@ -145,7 +145,13 @@ body of the later task when it's filed.
    ready issue outside the three lists is held (`hold` on a PR, `later` on
    an issue), the jobs parked for them are stopped, the labels that were on
    are written to an undo list, and then burrow is allowed. One
-   `settings pause` puts it back.
+   `settings pause` puts it back. It opens in two moves. The first, done
+   on 2026-11-14, held every burrow PR but this plan's own (burrow#1113),
+   the tracks' PRs included, so the plan could be reviewed before anything
+   was built on it. The second, here, takes `hold` off the tracks' PRs and
+   `later` off their issues, a lane at a time and inside the fences. The
+   holds outlast the hold watchdog's usual patience, so remi#1290
+   lengthened it; that change is reverted when the last hold comes off.
 2. **The stalled lists.** #294's list waits on its closed child #304, and
    [#291](https://github.com/FieldmouseWorks/Conary/issues/291)'s on #322,
    whose work landed in burrow. Both are released through the author's door
