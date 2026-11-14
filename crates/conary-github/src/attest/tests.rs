@@ -207,7 +207,7 @@ fn a_token_counts_only_for_its_own_statement_run_and_commit() {
 }
 
 #[test]
-fn a_statement_counts_only_for_a_pass_on_the_candidates_tree_with_nothing_skipped() {
+fn a_statement_counts_only_for_a_pass_on_the_candidates_tree_and_names_what_it_skipped() {
     // A statement that's changed, signed for as it is now: only what it
     // says decides.
     let says = |s: String, run: CheckRun| {
@@ -231,9 +231,17 @@ fn a_statement_counts_only_for_a_pass_on_the_candidates_tree_with_nothing_skippe
     // agree with doesn't count.
     assert!(why(statement(COMMIT, TREE, "fail"), run("success")).contains("says fail"));
     assert!(why(honest.clone(), run("failure")).contains("check run failure"));
+    // One that skipped a check counts for those it ran, and says which it
+    // skipped: what covers them is the counting policy's call.
     let skipped = honest.replace(r#""skipped":[]"#, r#""skipped":["agents"]"#);
     assert_ne!(skipped, honest);
-    assert!(why(skipped, run("success")).contains("skipped agents"));
+    let claimed = says(skipped, run("success")).unwrap();
+    assert_eq!(
+        super::skipped(&claimed.attested.attest).unwrap(),
+        ["agents"]
+    );
+    let whole = says(honest.clone(), run("success")).unwrap();
+    assert!(super::skipped(&whole.attested.attest).unwrap().is_empty());
     let pr = honest.replace(
         r#""revision":null"#,
         r#""revision":{"base":"b","head":"h"}"#,

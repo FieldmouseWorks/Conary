@@ -12,7 +12,7 @@ use conary_core::op::{Attest, Body, CheckKind};
 
 use super::{Failed, Forge, Settings, TrainError, record};
 use crate::api::{CheckRun, Source};
-use crate::attest::{Subject, attested, stands_for};
+use crate::attest::{Subject, attested, skipped, stands_for};
 use crate::ingest::{Config, run_result, status_result};
 
 /// What a candidate's checks say so far.
@@ -37,7 +37,8 @@ enum Said<'a> {
 /// (`docs/DESIGN.md` section 4.7). Green once every check has passed, the
 /// required ones among them, each required one's latest run a success its
 /// producer attests. A required status can't be: no status carries an
-/// attestation. Waiting otherwise, with no check at all too, so a gate that
+/// attestation. A required CI result that skipped checks counts only once
+/// each is a required check whose pass a service attests on this candidate. Waiting otherwise, with no check at all too, so a gate that
 /// never starts, or never attests, is a stall, never a pass.
 pub(super) fn gate(
     store: &mut Store,
@@ -105,6 +106,10 @@ pub(super) fn gate(
     // A red gate needs no attestation; a required check's pass does.
     let mut attests: BTreeMap<u64, Attest> = BTreeMap::new();
     let mut unattested = Vec::new();
+    // The required checks a service on the machine attests on this
+    // candidate, and the required CI results that skipped some checks.
+    let mut proved: BTreeSet<&str> = BTreeSet::new();
+    let mut skips: Vec<(&str, Vec<String>)> = Vec::new();
     if failed.is_empty() {
         for (check, s) in &said {
             let Said::Pass(run) = s else { continue };
@@ -117,10 +122,34 @@ pub(super) fn gate(
             };
             match attestation(forge, source, settings, c, run)? {
                 Ok(attest) => {
+                    match skipped(&attest) {
+                        Ok(s) if s.is_empty() => {}
+                        Ok(s) => skips.push((check, s)),
+                        Err(why) => unattested.push(format!("{check}: {why}")),
+                    }
+                    if matches!(attest, Attest::Service { .. }) {
+                        proved.insert(check);
+                    }
                     attests.insert(run.id, attest);
                 }
                 Err(why) => unattested.push(format!("{check}: {why}")),
             }
+        }
+    }
+    // A result that skipped checks says nothing about them: it counts only
+    // once a required machine proof of this same commit and tree covers
+    // each one, by name.
+    for (check, skipped) in skips {
+        let uncovered: Vec<&str> = skipped
+            .iter()
+            .map(String::as_str)
+            .filter(|s| !proved.contains(s))
+            .collect();
+        if !uncovered.is_empty() {
+            unattested.push(format!(
+                "{check}: it skipped {}, which no required machine proof of this candidate attests",
+                uncovered.join(", ")
+            ));
         }
     }
 

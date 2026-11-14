@@ -401,6 +401,12 @@ so the wait is one run, however many are waiting.
   in the candidate's evidence. A status carries no
   attestation, so a required check is a job of the repo's CI until remi's
   proof jobs sign theirs, and a train that requires nothing doesn't step.
+  A required CI result that says it skipped checks (its predicate's
+  `skipped`, a check its runner can't build) counts only once each of them
+  is a required check of the same name whose pass on that commit a service
+  on the machine attests ([service attestations](service-attestation.md)):
+  a machine proof of the same commit and tree covers what CI didn't build.
+  Anything it skipped that no such proof covers leaves the gate waiting.
   No check at all is no pass, and a required pass with no attestation that
   holds waits, so a gate that never attests is a stall, never a landing. A
   green whose evidence holds no attestation at all, said before passes

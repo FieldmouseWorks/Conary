@@ -367,4 +367,6 @@ records it, and the ledger keeps the token with the evidence.
 The caller's own workflow can change what it passes in (`build-skip` among
 them), and a PR's run takes that workflow from the PR. So the predicate says
 what was skipped, and the policy that counts the evidence decides whether a
-result with skipped checks is enough. The train's counts none.
+result with skipped checks is enough. The flow's counts none; the train's
+counts one only once each check it skipped is a required machine proof of
+the same candidate ([DESIGN section 4.7](DESIGN.md#47-the-train)).

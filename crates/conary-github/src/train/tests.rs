@@ -147,6 +147,7 @@ mod gate;
 mod land;
 mod negative;
 mod service;
+mod skipped;
 
 #[test]
 fn a_ready_pr_joins_at_its_head_as_github_shows_it() {
