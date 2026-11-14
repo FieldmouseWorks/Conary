@@ -106,28 +106,52 @@ on GitHub and signs that publication.
 
 The plugin and its producer are separate processes for three reasons:
 
-- conaryd runs as the same user as authoring jobs. A key held in the
+- conaryd runs as the same user as authoring jobs today. A key held in the
   plugin's process would be readable by them.
 - When a work invocation is cancelled, the runner kills the plugin process
   with SIGKILL and nothing else. That can't be trapped.
 - The work outlives a short process: an engine session, or a build.
 
-### Authority comes from GitHub, not from the caller
+### Only the flow may ask, and GitHub must agree
 
-Any process that can run the plugin can reach the producer, authoring
-sessions included. So a producer takes no authority from whoever asks. It
-checks every request against GitHub's state:
+A producer does what it's asked only when two things hold.
 
+**The caller is the flow.** A producer accepts a connection only from the
+controller's own system user, checked by the socket's peer credentials
+(`SO_PEERCRED`).
+- No authoring session runs as that user.
+  [B3](#b3-ledger-run-the-flows-plugins-as-a-controller-user-no-authoring-session-shares)
+  creates that user, because conaryd runs as the authoring user today.
+- So an authoring session can't ask for a judgment early, choose the
+  reasons it's judged for, re-roll a review, or start a proof.
+- The judge's `why` and the review's prior history come from the flow, and
+  only the flow.
+
+**GitHub's state matches the request.** The producer checks every request
+against GitHub before it works and again before it publishes:
 - the head is the PR's current head;
 - the tree is that head's tree;
 - the description is the PR's current description.
 
-A producer also works once per scope: one review per repo, PR, head, base
-and role; one judgment per revision; one proof per tree and recipe digest.
-Asking again returns the answer it recorded the first time, so a caller
-can't re-roll a review, a judgment or a flaky proof. The one exception is a
-scope whose earlier attempt ended without a result. That attempt can run
-again.
+**Each piece of work is done once for its complete input.** A producer
+keys its record by everything the work read, not by a subset:
+- a review, by repo, PR, role, head, base, the description's fingerprint,
+  and a digest of the earlier findings and their answers that its brief
+  quotes;
+- a judgment, by revision, `why`, and a digest of the review threads and
+  answers it read;
+- a proof, by repo, head, check and recipe digest.
+
+A repeat of exactly that input returns the recorded answer. Any change in
+it is new work. The one exception is an attempt that ended without a
+result: it can run again.
+
+A proof's record names the commit it ran on. Its statement is issued only
+for that commit, never re-signed for another commit with the same tree.
+Another commit gets its own run. Reusing a pass on the same tree is
+Conary's consumer path ([#291](https://github.com/FieldmouseWorks/Conary/issues/291)),
+which reads the original statement and leaves the producer out of it. An
+R2 candidate still needs a statement for its own commit.
 
 ### Restart and cancellation
 
@@ -177,7 +201,8 @@ that run would make the decision wait. It could never make one count.
 
 ## Provisioning
 
-None of these is a task here. Each has an owner.
+Only the controller user is a task here (B3). Every other row has its own
+owner.
 
 | Need | For | Owner |
 | --- | --- | --- |
@@ -186,12 +211,13 @@ None of these is a task here. Each has an owner.
 | Public keys and check scopes in the machine's producers file (`evidence.producers`), as in the table above | Conary's verifier | #314 for remi, #315 for the rest |
 | The judge's seal key, shared by the flow's `settings.judge_key` and the judge producer, and by no authoring session | J | #314, from the steward's existing verdict key |
 | The flow configuration's `plugins` paths and `execution` choices, generated from the settings source and its role map | All four plugins | Each plugin task exports its executable. [#313](https://github.com/FieldmouseWorks/Conary/issues/313) consumes the configuration schema, and #314 sets the values |
+| A controller user that runs the flow's plugins, which no authoring session shares | Every producer's peer-credential check | [B3](#b3-ledger-run-the-flows-plugins-as-a-controller-user-no-authoring-session-shares) builds it, off by default. #314 turns it on |
 | The `first` label on every PR | All | Each task |
 
 ## The tasks
 
-There are nine tasks. Three are in Conary: C1, C2 and C3. Six are in
-burrow: B1, B2, R, F, J and P. Each task is one PR, in one repository.
+There are ten tasks. Three are in Conary: C1, C2 and C3. Seven are in
+burrow: B1, B2, B3, R, F, J and P. Each task is one PR, in one repository.
 
 ### C1: contract: conary-plugin v4 carries what the plugins need
 
@@ -242,31 +268,61 @@ the change. The runner refuses:
 
 A v3 plugin keeps passing `cn plugin check`. Run the repository gate.
 
-### C2: flow: post a fix's answers and resolve their threads
+### C2: flow: give each finding a thread, and post a fix's answers on it
 
 **Repo:** Conary. **Depends on:** C1.
 
-**Crates:** `conary-github` `flow` (`execute.rs`, `write.rs`, the fix's
-observation). `docs/flow.md`.
+**Crates:** `conary-github`: `api` (review submission with comments, and
+thread replies and resolution), and `flow` (`write.rs`, `execute.rs`,
+`reviews.rs`, `handoff.rs`, the fix's observation). `docs/flow.md`.
 
-**Work.** `Step::PostFix` stops failing. For each finding problem the flow
-handed out, it posts the answer's `reply` on the finding's review thread,
-as the flow's review account, and resolves the thread. The thread comes
-from the review ID and the finding the problem was built from.
+Today `Api::review` submits only a body, so a flow-published finding has no
+thread to answer, and `Step::PostFix` fails. This task owns both halves.
 
-- A lost write is reconciled by its exact body before it's posted again,
-  as `PostReview` already is.
+**Publishing a finding's thread (`PostReview`).** The review is submitted
+in one request with one comment per finding. Each comment carries a marker
+naming the role, the head and the finding's index in the review marker's
+`problems`. Where each finding goes is decided from the diff before
+submitting, because GitHub refuses the whole review if one comment can't
+be placed:
+- a line in the diff gets a line comment;
+- a file in the diff, at a line outside it, gets a file-level comment;
+- a file outside the diff gets no thread. Its answer is a PR comment with
+  the same marker, and it has nothing to resolve.
+
+Two findings at one place get one comment each, told apart by index. A
+lost submission is reconciled by its exact body and comment markers before
+it's sent again, as `PostReview` already is. The review body and its
+receipt don't change.
+
+**Reading threads.** `flow::reviews` matches each finding to its thread by
+the marker, including on a review carried from an earlier head, where the
+thread stays on the original review. Handoff treats a recognised finding
+thread as that finding, not as an unstructured blocking thread. A fix
+problem carries its thread.
+
+**Posting answers (`PostFix`).** For each finding problem it handed out,
+the flow posts the answer's `reply` on that finding's target, as the
+flow's review account, and resolves the thread if there is one.
+- A lost write is reconciled by its exact body before it's posted again.
 - An `unchanged` result posts replies and pushes nothing.
 - The reviewers then look again, and the flow counts the round as it does
   today. This task adds no policy: [review-loop.md](review-loop.md) owns
   what the answers mean.
 
-**Negative verification**, against the simulated GitHub:
+**Negative verification**, against the simulated GitHub with no threads
+made in advance, each case failing before the change:
+- The whole path runs: `PostReview` makes the threads, a fix answers, and
+  `PostFix` replies on and resolves exactly those threads.
+- Two findings on one line, a finding outside the diff, and a carried
+  review each reach their own target.
+- A retried submission makes no duplicate threads.
 - A reply is never posted on a thread other than its finding's.
-- A reply for a head that moved isn't posted.
-- A repeated pass posts each reply once.
+- A reply for a head that moved isn't posted, and a repeated pass posts
+  each reply once.
 - A fix answer from a superseded invocation posts nothing.
-- Each case fails before the change. Run the repository gate.
+
+Run the repository gate.
 
 ### C3: flow: prepare proofs outside the proof slots, and send no model-run check to a proof plugin
 
@@ -354,10 +410,12 @@ None of these formats is copied.
   forwards work over the socket, and writes one answer. It exits nonzero on
   any producer error.
 - **The producer side.**
-  - A Unix-socket server.
+  - A Unix-socket server that accepts only the configured controller user,
+    checked by `SO_PEERCRED`.
   - Connection-scoped work: a closed connection stops the work's process
     group or unit, and publishes nothing.
-  - One request per scope, with recorded answers returned on a repeat.
+  - Records keyed by the work's complete input, with the recorded answer
+    returned only on an exact repeat.
   - A durable record of results, written atomically, kept beside the work.
   - Reconciliation at startup.
 - **The signer.** It loads the key only from `$CREDENTIALS_DIRECTORY`. It
@@ -373,10 +431,37 @@ None of these formats is copied.
 - A closed connection leaves no running work and no `success` check run
   (fake GitHub).
 - A key offered through the environment or arguments is refused.
-- A second request for a recorded scope returns the recorded answer
-  without running.
+- A connection from any user but the controller is refused.
+- An exact repeat returns the recorded answer without running, and a
+  request differing in any part of its input runs again.
 - The crate's public API has no function that signs a caller-supplied
   statement, checked by an API-surface test.
+
+Run burrow's gate.
+
+### B3: ledger: run the flow's plugins as a controller user no authoring session shares
+
+**Repo:** burrow. **Depends on:** nothing.
+
+**Crates:** `modules/ledger.nix`, the flow's worker unit, and its check in
+`checks/`.
+
+conaryd runs as `burrow.user`, the user authoring jobs run as. A producer
+that trusted that user would trust every authoring session. This task adds
+a controller system user and runs the flow's passes and workers, and so
+its plugins, as that user. It keeps access to the ledger for `cn` and the
+steward through the socket directory's group.
+- The controller user owns the flow's data directory.
+- No authoring job, sandbox or `proj` run may run as it.
+- It's behind `burrow.ledger.controllerUser`, off by default. #314 turns it
+  on.
+
+**Negative verification**, in the module's VM check:
+- With the option on, a process running as `burrow.user` can't open a
+  producer's socket. A flow worker can.
+- `cn` still reads the ledger.
+- With the option off, nothing changes.
+- The first case fails before the change.
 
 Run burrow's gate.
 
@@ -392,7 +477,10 @@ steward's queue until #316 removes the queue.
 **Request.** `review {repo, pr, base, head, author}`, with
 `execution {choice, context: fresh}`.
 
-- The producer checks `head` against the PR's current head.
+- The producer checks `head` and `base` against the PR, and records its
+  input: repo, PR, role, head, base, the description's fingerprint as
+  `flow::fingerprint` takes it, and a digest of the earlier findings and
+  answers it quotes.
 - It builds the look from B1's review brief: the base's rules, the quoted
   description, and earlier findings with their replies, read from GitHub.
 - It runs the engine in a fresh session. It doesn't resume the PR's
@@ -408,13 +496,21 @@ steward's queue until #316 removes the queue.
 
 **Signing.** The flow publishes the review. When the producer sees that
 review on the head (burrow-events' `pull_request_review`, plus a periodic
-sweep), it checks two things:
-- the review was posted by a `review_authors` account;
-- its `ROLE-review:v2` marker's head and problems equal the producer's own
-  record.
+sweep), it checks the whole published record against its own:
+- the review was posted by a `review_authors` account, on the recorded
+  head;
+- the `ROLE-review:v2` marker names the recorded role, `commit_sha`,
+  `base` and `scope`;
+- its `problems` equal the recorded findings, in order, and its `findings`
+  count equals their number;
+- `reviewed_at` is no earlier than the producer finished the look and no
+  later than now;
+- the PR's description and the quoted history still have the recorded
+  digests.
 
-Then it signs `review_receipt(head, body)` as `conary/review/ROLE`. A
-published review that differs from the record is never signed.
+Only then does it sign `review_receipt(head, body)` as
+`conary/review/ROLE`. A published review that differs in any of these is
+never signed.
 
 **Restart and cancellation.** As in B2. A cancelled look records nothing.
 Signing is idempotent per published review.
@@ -424,7 +520,12 @@ Signing is idempotent per published review.
   tests through Conary's `Plugin` and `fixtures()`.
 - A request for a head that isn't the PR's head is refused.
 - A request whose author session equals the producer's session is refused.
-- A published body with a finding removed or added isn't signed.
+- A published body is never signed when it has a finding removed or
+  added, a `findings` count of zero against recorded findings, another
+  `base` or `scope`, a `reviewed_at` before the look ended, or a
+  description edited since the look.
+- A request with a changed description or new answers runs a new look
+  rather than returning the recorded one.
 - An old statement fails Conary's verifier against an edited body.
 - Each case fails before the change.
 
@@ -486,7 +587,10 @@ happened stands, and the next pass reads the head that moved.
 with `execution {choice, context: fresh}`.
 
 - The producer reads the PR. The head, base and description must match
-  the request and `against`.
+  the request and `against`. Only the flow can send the request (B3), so
+  `why` is the flow's.
+- `why` only adds to what's judged, never removes. The judge always reads
+  every review thread and its answer, whatever `why` says.
 - It allocates the next generation for this repo and PR and persists it
   before publishing anything.
 - It runs the judging engine in a fresh session, on B1's judge brief for
@@ -508,7 +612,10 @@ copy.
 2. Then `conary/judgment` over
    `judgment_receipt_by(revision, generation, verdict, provenance)`.
 
-One issuance per revision. A repeat request returns it.
+One issuance per complete input: the revision, `why`, and a digest of the
+threads and answers the judge read. A repeat of exactly that input returns
+it. A request differing in any of those is judged again, under a new
+generation.
 
 **Restart and cancellation.**
 - A closed connection stops the engine session.
@@ -521,6 +628,10 @@ One issuance per revision. A repeat request returns it.
 - `cn plugin check` passes.
 - A judge session equal to the author's or a reviewer's is refused.
 - A stale head, base or description is refused.
+- A request with an added reason, or with threads answered since, isn't
+  served from the earlier issuance.
+- A brief built for a `why` without "no CI" still includes every thread and
+  answer.
 - The sealed comment and its statement round-trip through Conary's public
   `SealKey` and service verifier. A statement for another generation,
   verdict or revision fails that verifier.
@@ -558,6 +669,12 @@ the request or the PR.
 - The verdict is the program's recorded exit.
 - A `Job` recipe is refused as a plugin failure.
 
+**Records.** A run is recorded per repo, head, check and recipe digest. A
+statement is signed only for the commit its run checked out. Another
+commit with the same tree, such as a train candidate, gets its own run,
+which for a `Build` recipe with valid outputs finishes at once. Reusing a
+pass across commits is Conary's consumer path (#291), never re-signing.
+
 **Signing.** On a program's recorded exit, it signs `{producer, repo,
 revision {base: null, head}, tree, check, definition:
 recipe_digest(recipe), result, log sha256}`. It posts the check run on
@@ -577,6 +694,9 @@ started check run is completed as `cancelled`.
   `definition` check.
 - A killed run leaves no pass statement and no `success` run.
 - A `prepare` never posts a check run.
+- A request for a second commit with the same tree runs again and is
+  signed for that commit. The first commit's statement is never re-issued
+  under the second commit.
 - Each case fails before the change.
 
 These cover [#218's requirements of this producer](https://github.com/FieldmouseWorks/Conary/pull/338)
@@ -590,15 +710,16 @@ the candidate commit (#338's P3).
 ```
 C1 ──► C2
 C1 ──► C3
+B3 ──────► #314
 B1 ──┐
 B2 ──┼──► R
 C1 ──┼──► F   (C2 before cutover)
      ├──► J
      └──► P   (C3 before cutover; P doesn't need B1)
-R, F, J, P, C2, C3, and key provisioning ──► #313 ──► #314
+R, F, J, P, C2, C3, B3, and key provisioning ──► #313 ──► #314
 ```
 
-C1, B1 and B2 start at once. R starts once B1 and B2 land. F, J and P
+C1, B1, B2 and B3 start at once. R starts once B1 and B2 land. F, J and P
 start once C1 and B2 land, plus B1 for F and J. C2 and C3 run alongside
 the plugins.
 
