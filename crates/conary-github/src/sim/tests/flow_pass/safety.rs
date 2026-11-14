@@ -205,14 +205,22 @@ fn pass_direct_and_delegated_r2_require_the_candidate_train_after_owner_release(
         c.hub
             .edit_pull(REPO, 3, |p| p["labels"] = json!([{"name":"r2"}]));
         let revision = Revision::from(&c.hub.pull(REPO, 3).unwrap());
-        let body = c.config.settings.judge_key.as_ref().unwrap().decision(
-            REPO,
-            3,
-            "autoland-judgment",
-            "land",
-            &revision,
-            1,
-        );
+        let body = c
+            .config
+            .settings
+            .judge_key
+            .as_ref()
+            .unwrap()
+            .judgment_by(
+                REPO,
+                3,
+                Judgment::Pass,
+                &revision,
+                1,
+                super::super::judge_provenance(),
+                super::super::judged_for_everything(),
+            )
+            .unwrap();
         c.hub.flow_comment(REPO, 3, "owner", &body);
         let now = flow::jobs::now();
         assert_eq!(

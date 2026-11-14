@@ -179,9 +179,21 @@ head, target branch, description scope and completion time. The exported
 `review_body` helper owns that marker's formatting.
 
 New judging producers use `Response::provenance()` with `SealKey::judgment_by`
-and `judgment_receipt_by(revision, generation, verdict, provenance)` under
-`conary/judgment`. Actual engine, session, model, effort and context are inside
-both the sealed issuance and independently attested receipt. The worker also
+and `judgment_receipt_by(revision, generation, verdict, provenance, basis)`
+under `conary/judgment`. Actual engine, session, model, effort and context are
+inside both the sealed issuance and independently attested receipt, and so is
+its `Basis`: the request's `why` and `context` it was judged under.
+`judgment_by` issues these as `autoland-judgment:v3`, whose seal covers its
+version, and refuses a basis a judge request couldn't carry. v2 issuances stay
+as they are, in one generation order with v3 ones; an authenticated v3
+issuance without its basis is a tombstone.
+
+A fail or misdescribed verdict is acted on as it stands. A pass or owner
+verdict counts only while its `why` holds every reason `flow::decide` requires
+now, except `asked`, which the judgment's own existence makes hold, and its
+`context` equals `flow::judging_context` over the discussion now. Otherwise the
+flow asks a judge again before granting anything; the old issuance stays. A v2
+issuance says neither, so its pass or owner verdict never counts. The worker also
 retains the complete response with its verdict in the durable completion.
 Provenance survives high-water memory; a same-generation provenance conflict
 is a tombstone just like conflicting verdict words. Legacy issuances retain

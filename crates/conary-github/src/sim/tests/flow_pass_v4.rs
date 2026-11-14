@@ -10,13 +10,12 @@ fn invocation(work: &flow::jobs::Work) -> flow::jobs::Invocation {
     serde_json::from_slice(&std::fs::read(&work.path).unwrap()).unwrap()
 }
 
-#[test]
-fn a_judge_after_a_fix_carries_its_pr_reasons_and_the_answered_finding() {
-    let mut c = Case::new();
+/// The example finds one problem on head 3, its fix answers it and pushes
+/// head 4, and head 4's review is clean. The author's engine needs a judge,
+/// which the next pass asks for.
+fn fixed_then_reviewed(c: &mut Case, now: u64) {
     c.config.plugins.judge = Some(example());
     c.config.settings.judge_engines = ["fixture-author".into()].into();
-    let now = flow::jobs::now();
-    // The example finds one problem on head 3, and its fix pushes head 4.
     assert_eq!(
         c.pass(now, false)[0].next.as_ref().unwrap().step,
         Step::QueueReview("reviewer".into())
@@ -38,6 +37,13 @@ fn a_judge_after_a_fix_carries_its_pr_reasons_and_the_answered_finding() {
     c.pass(now + 3, false);
     c.run_worker();
     c.pass(now + 4, false);
+}
+
+#[test]
+fn a_judge_after_a_fix_carries_its_pr_reasons_and_the_answered_finding() {
+    let mut c = Case::new();
+    let now = flow::jobs::now();
+    fixed_then_reviewed(&mut c, now);
     assert_eq!(
         c.pass(now + 5, false)[0].next.as_ref().unwrap().step,
         Step::Judge(vec![Trigger::AuthorEngine])
@@ -111,6 +117,61 @@ fn a_judge_after_a_fix_carries_its_pr_reasons_and_the_answered_finding() {
         ..answered[0].clone()
     };
     assert_eq!(context, log(Some(&moved)));
+}
+
+/// A judgment counts only on the discussion a judge would be asked on now:
+/// with the fix's answer in it, not as it was before the fix answered.
+#[test]
+fn a_judgment_counts_only_on_the_discussion_the_flow_reads_now() {
+    for (read_the_answer, expected) in [
+        (true, Step::Merge),
+        (
+            false,
+            Step::Judge(vec![Trigger::AuthorEngine, Trigger::Asked]),
+        ),
+    ] {
+        let mut c = Case::new();
+        let now = flow::jobs::now();
+        fixed_then_reviewed(&mut c, now);
+        let record = c.record();
+        let mut findings = vec![];
+        let mut answered = vec![];
+        for work in &record.jobs {
+            let Some(Ok(response)) = flow::jobs::inspect(work, now + 5).unwrap().result else {
+                continue;
+            };
+            match (invocation(work).task, response.answer) {
+                (_, Answer::Review { findings: found }) => {
+                    findings.extend(found.into_iter().map(|f| (f, None)))
+                }
+                (Task::Fix { problems, .. }, Answer::Fix { answers, .. }) => {
+                    for answer in answers.unwrap() {
+                        let Problem::Finding { finding } = &problems[answer.problem] else {
+                            panic!("an answer to a finding");
+                        };
+                        answered.push((finding.clone(), Some(answer)));
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut discussion = findings;
+        if read_the_answer {
+            discussion.extend(answered);
+        }
+        c.judgment_on(
+            1,
+            Judgment::Pass,
+            true,
+            Basis {
+                why: vec![Trigger::AuthorEngine],
+                context: judging_context(discussion.iter().map(|(f, a)| (f, a.as_ref()))),
+            },
+        );
+        let report = c.pass(now + 5, true);
+        assert_eq!(report[0].error, None);
+        assert_eq!(report[0].next.as_ref().unwrap().step, expected);
+    }
 }
 
 /// A judge started because of the author engine. Then the engine trailer is

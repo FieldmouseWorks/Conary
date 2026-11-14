@@ -35,6 +35,12 @@ pub(super) struct Case {
     pub base_held: bool,
     pub train: TrainState,
     pub unseen: bool,
+    /// The discussion the workers' answers make: what `Facts::context`
+    /// digests. Empty until a test says otherwise.
+    pub discussion: Vec<(
+        conary_core::plugin::Finding,
+        Option<conary_core::plugin::FindingAnswer>,
+    )>,
 }
 impl Case {
     pub fn new() -> Self {
@@ -56,6 +62,7 @@ impl Case {
             base_held: false,
             train: TrainState::default(),
             unseen: false,
+            discussion: Vec::new(),
         }
     }
     pub fn roles(&mut self, names: &[&str]) {
@@ -99,19 +106,54 @@ impl Case {
     pub fn label(&self, labels: &[&str]) {
         self.hub.label(REMI, 3, labels);
     }
+    /// `flow::judging_context` over the discussion now.
+    pub fn context(&self) -> String {
+        judging_context(self.discussion.iter().map(|(f, a)| (f, a.as_ref())))
+    }
+    /// A judgment of the current revision. A contract word is a producer's
+    /// v3 judgment, judged for every reason on the discussion now; any other
+    /// word only an older issuance can carry.
     pub fn judge(&mut self, verdict: &str) {
+        match Judgment::from_word(verdict) {
+            Some(judgment) => {
+                let basis = Basis {
+                    why: super::every_reason(),
+                    context: self.context(),
+                };
+                self.judge_on(judgment, basis);
+            }
+            None => self.judge_v2(verdict),
+        }
+    }
+    /// A v2 judgment of the current revision: it says nothing of what it
+    /// was judged on.
+    pub fn judge_v2(&mut self, verdict: &str) {
+        self.issue(|key, scope, generation| {
+            key.decision(REMI, 3, "autoland-judgment", verdict, scope, generation)
+        });
+    }
+    /// A producer's v3 judgment of the current revision, judged on `basis`.
+    pub fn judge_on(&mut self, verdict: Judgment, basis: Basis) {
+        self.issue(|key, scope, generation| {
+            key.judgment_by(
+                REMI,
+                3,
+                verdict,
+                scope,
+                generation,
+                super::judge_provenance(),
+                basis,
+            )
+            .unwrap()
+        });
+    }
+    /// Post a sealed judgment at the next generation.
+    fn issue(&mut self, seal: impl FnOnce(&SealKey, &Revision, u64) -> String) {
         let key = SealKey::from_hex(&"a".repeat(64)).unwrap();
         self.settings.judge_key = Some(key.clone());
         self.settings.verdict_authors.insert("owner".into());
         let generation = self.hub.comments(REMI, 3).unwrap().len() as u64 + 1;
-        let marker = key.decision(
-            REMI,
-            3,
-            "autoland-judgment",
-            verdict,
-            &self.scope(),
-            generation,
-        );
+        let marker = seal(&key, &self.scope(), generation);
         self.hub.flow_comment(REMI, 3, "owner", &marker);
     }
     pub fn sweep(&mut self, verdict: &str) {
@@ -168,6 +210,7 @@ impl Case {
                 r.missing = s.missing;
             }
         }
+        f.context = Some(self.context());
         f.jobs = self.jobs.clone();
         f.claims = self.claims.clone();
         f.stopped_jobs = self.stopped_jobs.clone();

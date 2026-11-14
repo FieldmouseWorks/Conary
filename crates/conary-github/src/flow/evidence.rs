@@ -61,20 +61,27 @@ pub fn judgment_receipt(
         "generation":generation,"verdict":verdict}))
     .expect("receipt")
 }
+/// A judgment's receipt: the legacy one, plus the issuance's provenance when
+/// it has one and, for a v3 issuance, the `why` and `context` it was judged
+/// under, so its signed log binds exactly what the sealed issuance says.
 pub fn judgment_receipt_by(
     revision: &Revision,
     generation: u64,
     verdict: Option<Judgment>,
     provenance: Option<&conary_core::plugin::Provenance>,
+    basis: Option<&Basis>,
 ) -> Vec<u8> {
-    match provenance {
-        None => judgment_receipt(revision, generation, verdict),
-        Some(provenance) => serde_json::to_vec(&serde_json::json!({
-            "kind":"judgment", "revision":revision, "generation":generation,
-            "verdict":verdict, "provenance":provenance,
-        }))
-        .expect("receipt"),
+    let mut receipt = serde_json::json!({"kind":"judgment","revision":revision,
+        "generation":generation,"verdict":verdict});
+    let fields = receipt.as_object_mut().expect("a receipt is an object");
+    if let Some(provenance) = provenance {
+        fields.insert("provenance".into(), serde_json::json!(provenance));
     }
+    if let Some(basis) = basis {
+        fields.insert("why".into(), serde_json::json!(basis.why));
+        fields.insert("context".into(), serde_json::json!(basis.context));
+    }
+    serde_json::to_vec(&receipt).expect("receipt")
 }
 pub fn major_receipt(revision: &Revision, generation: u64, verdict: Option<Major>) -> Vec<u8> {
     serde_json::to_vec(&serde_json::json!({"kind":"major","revision":revision,
@@ -228,6 +235,7 @@ pub(crate) fn authorize<G: Write>(pass: &Pass<'_>, github: &G, f: &Facts) -> Res
                 generation,
                 f.judgment.as_ref().map(|j| j.verdict),
                 f.judgment.as_ref().and_then(|j| j.provenance.as_ref()),
+                f.judgment.as_ref().and_then(|j| j.basis.as_ref()),
             )),
         )?;
     }

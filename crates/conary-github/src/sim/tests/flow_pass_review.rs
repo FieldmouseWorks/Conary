@@ -268,9 +268,11 @@ fn local_judgment(c: &Case) {
 }
 
 #[test]
-fn permission_binds_the_judging_model_to_independently_attested_evidence() {
+fn permission_binds_the_judging_model_and_basis_to_independently_attested_evidence() {
     use conary_core::plugin::{Context, Executed, Identity, Provenance};
-    for matches in [true, false] {
+    // What the signed receipt says differently from the sealed issuance.
+    for differs in [None, Some("model"), Some("why"), Some("context")] {
+        let matches = differs.is_none();
         let mut c = Case::new();
         c.clean_review();
         needs_judge(&mut c);
@@ -292,12 +294,24 @@ fn permission_binds_the_judging_model_to_independently_attested_evidence() {
             .judge_key
             .as_ref()
             .unwrap()
-            .judgment_by(REPO, 3, Judgment::Pass, &revision, 1, provenance.clone())
+            .judgment_by(
+                REPO,
+                3,
+                Judgment::Pass,
+                &revision,
+                1,
+                provenance.clone(),
+                super::judged_for_everything(),
+            )
             .unwrap();
         c.hub.flow_comment(REPO, 3, "producer", &body);
         let mut attested = provenance;
-        if !matches {
-            attested.execution.model = Some("different-model".into());
+        let mut basis = super::judged_for_everything();
+        match differs {
+            Some("model") => attested.execution.model = Some("different-model".into()),
+            Some("why") => basis.why.retain(|t| *t != Trigger::AuthorEngine),
+            Some("context") => basis.context = "0".repeat(64),
+            _ => {}
         }
         c.sign_check(
             &revision.head,
@@ -307,6 +321,7 @@ fn permission_binds_the_judging_model_to_independently_attested_evidence() {
                 1,
                 Some(Judgment::Pass),
                 Some(&attested),
+                Some(&basis),
             )),
         );
         let report = c.pass(crate::flow::jobs::now(), false);
@@ -385,7 +400,7 @@ fn r2_owner_approval_does_not_enable_direct_or_delegated_landings() {
         if bot {
             c.as_bot();
         }
-        let facts = read(
+        let mut facts = read(
             &c.hub,
             &REPO.parse().unwrap(),
             3,
@@ -394,6 +409,8 @@ fn r2_owner_approval_does_not_enable_direct_or_delegated_landings() {
             &c.config.trusted_authors,
         )
         .unwrap();
+        // No worker has answered: the discussion is empty.
+        facts.context = Some(judging_context([]));
         assert_eq!(
             next(&facts, &c.record().memory, crate::flow::jobs::now())
                 .0

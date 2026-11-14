@@ -263,23 +263,49 @@ impl Case {
         }
         self.negative(head, "none");
     }
+    /// A producer's judgment, judged for every reason on an empty discussion.
     pub(super) fn judgment(&self, generation: u64, verdict: Judgment, attest: bool) {
+        self.judgment_on(generation, verdict, attest, super::judged_for_everything());
+    }
+    /// A producer's v3 judgment of the PR's current revision, judged on
+    /// `basis`, and its signed receipt when `attest`.
+    pub(super) fn judgment_on(
+        &self,
+        generation: u64,
+        verdict: Judgment,
+        attest: bool,
+        basis: crate::flow::Basis,
+    ) {
         let revision = Revision::from(&self.hub.pull(REPO, 3).unwrap());
-        let word = verdict.word();
-        let body = self.config.settings.judge_key.as_ref().unwrap().decision(
-            REPO,
-            3,
-            "autoland-judgment",
-            word,
-            &revision,
-            generation,
-        );
+        let provenance = super::judge_provenance();
+        let body = self
+            .config
+            .settings
+            .judge_key
+            .as_ref()
+            .unwrap()
+            .judgment_by(
+                REPO,
+                3,
+                verdict,
+                &revision,
+                generation,
+                provenance.clone(),
+                basis.clone(),
+            )
+            .unwrap();
         self.hub.flow_comment(REPO, 3, "producer", &body);
         if attest {
             self.sign_check(
                 &revision.head,
                 "conary/judgment",
-                Some(&judgment_receipt(&revision, generation, Some(verdict))),
+                Some(&judgment_receipt_by(
+                    &revision,
+                    generation,
+                    Some(verdict),
+                    Some(&provenance),
+                    Some(&basis),
+                )),
             );
         }
     }

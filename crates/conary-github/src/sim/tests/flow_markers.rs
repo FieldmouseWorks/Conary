@@ -26,22 +26,16 @@ fn read_f(h: &Hub, s: Settings) -> Facts {
         s,
         &["owner".into()],
     )
+    .map(|mut f| {
+        // No worker has answered here: the discussion is empty.
+        f.context = Some(judging_context([]));
+        f
+    })
     .unwrap()
 }
 
 fn provenance() -> conary_core::plugin::Provenance {
-    use conary_core::plugin::{Context, Executed, Identity, Provenance};
-    Provenance {
-        by: Identity {
-            engine: "fixture-engine".into(),
-            session: Some("judge-session".into()),
-        },
-        execution: Executed {
-            model: Some("fixture-model".into()),
-            effort: Some("deliberate".into()),
-            context: Context::Fresh,
-        },
-    }
+    super::judge_provenance()
 }
 
 #[test]
@@ -54,7 +48,15 @@ fn sealed_judge_provenance_is_retained_in_memory_and_bound_to_the_receipt() {
         .judge_key
         .as_ref()
         .unwrap()
-        .judgment_by(REMI, 3, Judgment::Pass, &revision, 1, by.clone())
+        .judgment_by(
+            REMI,
+            3,
+            Judgment::Pass,
+            &revision,
+            1,
+            by.clone(),
+            super::judged_for_everything(),
+        )
         .unwrap();
     h.flow_comment(REMI, 3, "owner", &body);
     let f = read_f(&h, s.clone());
@@ -69,7 +71,8 @@ fn sealed_judge_provenance_is_retained_in_memory_and_bound_to_the_receipt() {
     let (_, retained_again) = next(&absent, &roundtrip, 4001);
     assert_eq!(retained_again.judge_issuance, roundtrip.judge_issuance);
 
-    let receipt = judgment_receipt_by(&revision, 1, Some(Judgment::Pass), Some(&by));
+    let basis = super::judged_for_everything();
+    let receipt = judgment_receipt_by(&revision, 1, Some(Judgment::Pass), Some(&by), Some(&basis));
     let evidence: serde_json::Value = serde_json::from_slice(&receipt).unwrap();
     assert_eq!(evidence["provenance"]["by"]["engine"], "fixture-engine");
     assert_eq!(
@@ -84,7 +87,8 @@ fn sealed_judge_provenance_is_retained_in_memory_and_bound_to_the_receipt() {
             &revision,
             1,
             Some(Judgment::Pass),
-            Some(&different)
+            Some(&different),
+            Some(&basis),
         ))
     );
     // The MAC covers provenance: copying the seal and changing the model fails.
@@ -104,26 +108,37 @@ fn sealed_judge_provenance_is_retained_in_memory_and_bound_to_the_receipt() {
         .judge_key
         .as_ref()
         .unwrap()
-        .judgment_by(REMI, 3, Judgment::Pass, &revision, 1, different)
+        .judgment_by(REMI, 3, Judgment::Pass, &revision, 1, different, basis)
         .unwrap();
     h.flow_comment(REMI, 3, "owner", &conflict);
     assert!(read_f(&h, s).judgment.is_none());
 }
+/// A judgment in a contract word is a producer's v3 issuance, judged for
+/// every reason; any other word, and a sweep's, a v2 one.
 fn marker(h: &Hub, s: &Settings, name: &str, verdict: &str) -> String {
     let p = h.pull(REMI, 3).unwrap();
+    let generation = h.comments(REMI, 3).unwrap().len() as u64 + 1;
     let key = if name == "major-verdict" {
         s.major_key.as_ref().unwrap()
     } else {
         s.judge_key.as_ref().unwrap()
     };
-    key.decision(
-        REMI,
-        3,
-        name,
-        verdict,
-        &Revision::from(&p),
-        h.comments(REMI, 3).unwrap().len() as u64 + 1,
-    )
+    if name == "autoland-judgment"
+        && let Some(judgment) = Judgment::from_word(verdict)
+    {
+        return key
+            .judgment_by(
+                REMI,
+                3,
+                judgment,
+                &Revision::from(&p),
+                generation,
+                provenance(),
+                super::judged_for_everything(),
+            )
+            .unwrap();
+    }
+    key.decision(REMI, 3, name, verdict, &Revision::from(&p), generation)
 }
 #[test]
 fn judge_verdicts_are_read_from_sealed_comments() {
@@ -133,7 +148,12 @@ fn judge_verdicts_are_read_from_sealed_comments() {
         ("owner", Step::ListOwner),
         ("fail", Step::HandFix(Kind::JudgeFailure)),
         // Old steward words, read once until Conary#256 slice 5 deletes them.
-        ("land", Step::Merge),
+        // A v2 issuance doesn't say what it was judged on, so its land is
+        // no pass: the flow asks again. Its failure still stands.
+        (
+            "land",
+            Step::Judge(vec![Trigger::AuthorEngine, Trigger::Asked]),
+        ),
         ("failed", Step::HandFix(Kind::JudgeFailure)),
         // An unknown word is no judgment: the flow asks the judge again.
         (
@@ -280,7 +300,7 @@ fn owner_release_requires_an_authenticated_review_for_this_revision() {
         REMI,
         3,
         "owner",
-        &marker(&h, &s, "autoland-judgment", "land"),
+        &marker(&h, &s, "autoland-judgment", "pass"),
     );
     let (n, m) = next(&read_f(&h, s.clone()), &m, 4000);
     assert_eq!(n.step, Step::ListOwner);
@@ -375,4 +395,131 @@ fn flow_config_refuses_malformed_seal_keys() {
             want
         );
     }
+}
+#[test]
+fn an_edited_why_or_context_fails_the_seal_and_the_receipt() {
+    let s = settings();
+    let key = s.judge_key.clone().unwrap();
+    let (h, _) = setup();
+    let revision = Revision::from(&h.pull(REMI, 3).unwrap());
+    let basis = Basis {
+        why: vec![Trigger::NoCi, Trigger::RoundLimit],
+        context: judging_context([]),
+    };
+    let body = key
+        .judgment_by(
+            REMI,
+            3,
+            Judgment::Pass,
+            &revision,
+            1,
+            provenance(),
+            basis.clone(),
+        )
+        .unwrap();
+    h.flow_comment(REMI, 3, "owner", &body);
+    let judged = read_f(&h, s.clone()).judgment.unwrap();
+    assert_eq!(judged.basis.as_ref(), Some(&basis));
+    for forged in [
+        body.replace(r#""why":["no_ci","round_limit"]"#, r#""why":["no_ci"]"#),
+        body.replace(&basis.context, &"0".repeat(64)),
+        // The version is sealed too: a v3 issuance can't be read as v2.
+        body.replace("autoland-judgment:v3 ", "autoland-judgment:v2 "),
+    ] {
+        assert_ne!(forged, body);
+        let (h, _) = setup();
+        h.flow_comment(REMI, 3, "owner", &forged);
+        let f = read_f(&h, s.clone());
+        assert_eq!(f.judgment, None, "{forged}");
+        assert_eq!(f.judgment_generation, None, "{forged}");
+    }
+    // The receipt binds both: another why or context is another log.
+    let receipt = |b: Option<&Basis>| {
+        receipt_digest(&judgment_receipt_by(
+            &revision,
+            1,
+            Some(Judgment::Pass),
+            Some(&provenance()),
+            b,
+        ))
+    };
+    let signed = receipt(Some(&basis));
+    for other in [
+        Basis {
+            why: vec![Trigger::NoCi],
+            ..basis.clone()
+        },
+        Basis {
+            context: "0".repeat(64),
+            ..basis.clone()
+        },
+    ] {
+        assert_ne!(receipt(Some(&other)), signed);
+    }
+    assert_ne!(receipt(None), signed);
+    // A judgment that doesn't say what it was judged on isn't issued as v3.
+    for bad in [
+        Basis {
+            why: vec![],
+            ..basis.clone()
+        },
+        Basis {
+            why: vec![Trigger::NoCi, Trigger::NoCi],
+            ..basis.clone()
+        },
+        Basis {
+            context: "A".repeat(64),
+            ..basis.clone()
+        },
+        Basis {
+            context: "short".into(),
+            ..basis.clone()
+        },
+    ] {
+        assert!(
+            key.judgment_by(REMI, 3, Judgment::Pass, &revision, 2, provenance(), bad)
+                .is_err()
+        );
+    }
+}
+#[test]
+fn an_authenticated_v3_issuance_without_its_basis_is_a_tombstone() {
+    let s = settings();
+    let key = s.judge_key.clone().unwrap();
+    let (h, m) = setup();
+    h.commit_details(
+        &head(3),
+        Some("change: code\n\nEngine: codex\n"),
+        Some("author@example.org"),
+        Some("author@example.org"),
+    );
+    let revision = Revision::from(&h.pull(REMI, 3).unwrap());
+    // Sealed by the judge's own key, in the issued format's field order,
+    // but without the why and context v3 requires.
+    let issued = format!(
+        r#"{{"generation":1,"revision":{},"verdict":"pass","provenance":{}}}"#,
+        serde_json::to_string(&revision).unwrap(),
+        serde_json::to_string(&provenance()).unwrap(),
+    );
+    let tag = key.seal(
+        &REMI.to_lowercase(),
+        3,
+        "autoland-judgment:v3",
+        "pass",
+        &revision.head,
+        &issued,
+    );
+    h.flow_comment(
+        REMI,
+        3,
+        "owner",
+        &format!(r#"<!-- autoland-judgment:v3 {{"issued":{issued},"tag":"{tag}"}} -->"#),
+    );
+    let f = read_f(&h, s);
+    assert_eq!(f.judgment_generation, Some(1));
+    assert_eq!(f.judgment, None);
+    assert_eq!(
+        next(&f, &m, 4000).0.step,
+        Step::Judge(vec![Trigger::AuthorEngine, Trigger::Asked])
+    );
 }

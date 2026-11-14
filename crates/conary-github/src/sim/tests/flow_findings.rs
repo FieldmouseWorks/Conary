@@ -284,7 +284,21 @@ fn issuance_metadata_is_authenticated_and_conflicting_generations_fail_closed() 
     let key = SealKey::from_hex(&"a".repeat(64)).unwrap();
     c.settings.judge_key = Some(key.clone());
     c.settings.verdict_authors.insert("owner".into());
-    let land = key.decision(REMI, 3, "autoland-judgment", "land", &c.scope(), 9);
+    // A producer's v3 pass; v2 issuances share its generations.
+    let scope = c.scope();
+    let pass = |generation| {
+        key.judgment_by(
+            REMI,
+            3,
+            Judgment::Pass,
+            &scope,
+            generation,
+            super::judge_provenance(),
+            super::judged_for_everything(),
+        )
+        .unwrap()
+    };
+    let land = pass(9);
     let tampered = land.replace("\"generation\":9", "\"generation\":99");
     c.hub.flow_comment(REMI, 3, "owner", &tampered);
     assert!(c.facts().judgment.is_none());
@@ -294,7 +308,7 @@ fn issuance_metadata_is_authenticated_and_conflicting_generations_fail_closed() 
     assert_eq!(c.pass(8000).step, Step::Judge(vec![Trigger::Asked]));
     c.hub.edit_flow_comment(REMI, 3, 2, "");
     assert_eq!(c.pass(8100).step, Step::Judge(vec![Trigger::Asked]));
-    let newer = key.decision(REMI, 3, "autoland-judgment", "land", &c.scope(), 10);
+    let newer = pass(10);
     c.hub.flow_comment(REMI, 3, "owner", &newer);
     assert_eq!(c.pass(8200).step, Step::Merge);
     // An authenticated but unsupported later word cannot revive an older Land.
@@ -302,7 +316,7 @@ fn issuance_metadata_is_authenticated_and_conflicting_generations_fail_closed() 
     c.hub.flow_comment(REMI, 3, "owner", &unsupported);
     assert!(c.facts().judgment.is_none());
     assert_eq!(c.pass(8300).step, Step::Judge(vec![Trigger::Asked]));
-    let last = key.decision(REMI, 3, "autoland-judgment", "land", &c.scope(), 12);
+    let last = pass(12);
     c.hub.flow_comment(REMI, 3, "owner", &last);
     assert_eq!(c.pass(8400).step, Step::Merge);
 }
