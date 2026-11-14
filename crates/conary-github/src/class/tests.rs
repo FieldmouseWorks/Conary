@@ -52,6 +52,43 @@ fn store(dir: &tempfile::TempDir) -> Store {
     Store::open(lock, SigningKey::from_bytes(&[6; 32]), None).unwrap()
 }
 
+fn class(
+    store: &mut Store,
+    hub: &Hub,
+    config: &Config,
+    policy: &Policy,
+    repo: &Repo,
+    pr: u64,
+    head: &str,
+) -> Result<Classes, ClassError> {
+    at_once(store, hub, config, policy, repo, pr, head)
+}
+
+fn asked(
+    store: &Store,
+    hub: &Hub,
+    config: &Config,
+    policy: &Policy,
+    repo: &Repo,
+    pr: u64,
+    head: &str,
+) -> Result<Asked, ClassError> {
+    let dir = store.lock().dir().to_owned();
+    ask(store.ledger(), hub, config, policy, repo, pr, head, &dir)
+}
+
+/// Every read of GitHub a class makes, by kind, in order.
+fn reads(hub: &Hub) -> Vec<Call> {
+    use Call::*;
+    let mut all = Vec::new();
+    for call in [
+        Pull, MergeBase, Files, CheckRuns, Statuses, Reviews, Timeline,
+    ] {
+        all.extend(std::iter::repeat_n(call, hub.count(call)));
+    }
+    all
+}
+
 fn policy(text: &str) -> Policy {
     Policy::parse(text.as_bytes()).unwrap()
 }
@@ -242,4 +279,70 @@ fn an_r2_label_on_an_r2_change_keeps_its_reason() {
         (got.class(), got.said.because.as_deref()),
         (Class::R2, Some("CODEOWNERS"))
     );
+}
+
+/// Everything a class reads of GitHub is read before the lock: under it,
+/// with the PR's change as the ledger held it then, it only records.
+#[test]
+fn under_the_lock_it_only_records() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = store(&dir);
+    let hub = github(&[(HEAD, &["CODEOWNERS"])]);
+    let p = policy(POLICY);
+    let Asked::Read(read) = asked(&store, &hub, &config(), &p, &repo(), 7, HEAD).unwrap() else {
+        panic!("the ledger held nothing")
+    };
+    let before = reads(&hub);
+    assert!(before.contains(&Call::Files), "{before:?}");
+    let got = super::class(&mut store, &hub, &p, *read).unwrap();
+    assert_eq!(reads(&hub), before, "read GitHub under the lock");
+    assert!(got.recorded);
+    assert_eq!(got.class(), Class::R2);
+    let c = store.ledger().change(got.change).unwrap();
+    assert_eq!(c.current, Some(got.revision));
+}
+
+/// A class the ledger holds for the PR at its head, under this policy and
+/// its labels, is the answer before the lock: one read of the PR, its merge
+/// base kept beside the ledger, and nothing recorded.
+#[test]
+fn a_class_the_ledger_holds_needs_no_lock() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = store(&dir);
+    let hub = github(&[(HEAD, &["docs/a.md"])]);
+    let p = policy(POLICY);
+    let first = class(&mut store, &hub, &config(), &p, &repo(), 7, HEAD).unwrap();
+    let ops = store.ledger().head();
+    let mut before = reads(&hub);
+    let Asked::Held(got) = asked(&store, &hub, &config(), &p, &repo(), 7, HEAD).unwrap() else {
+        panic!("the ledger holds it")
+    };
+    assert_eq!(got.said, first.said);
+    assert!(!got.recorded);
+    before.insert(0, Call::Pull);
+    assert_eq!(reads(&hub), before, "read more than the PR");
+    assert_eq!(store.ledger().head(), ops);
+}
+
+/// Another writer that recorded the PR after it was read, as GitHub showed
+/// it later, is never written back over: the PR is read again under the
+/// lock, and recorded as it is now.
+#[test]
+fn a_pr_recorded_since_it_was_read_is_read_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = store(&dir);
+    let hub = github(&[(HEAD, &["docs/a.md"])]);
+    let p = policy(POLICY);
+    let Asked::Read(read) = asked(&store, &hub, &config(), &p, &repo(), 7, HEAD).unwrap() else {
+        panic!("the ledger held nothing")
+    };
+    hub.edit_pull(REPO, 7, |pr| pr["title"] = "renamed".into());
+    crate::ingest::pull(&mut store, &hub, &config(), &repo(), 7).unwrap();
+    let pulls = hub.count(Call::Pull);
+    let got = super::class(&mut store, &hub, &p, *read).unwrap();
+    let c = store.ledger().change(got.change).unwrap();
+    assert_eq!(c.intent.as_ref().unwrap().summary, "renamed");
+    assert_eq!(hub.count(Call::Pull), pulls + 1, "not read again");
+    assert_eq!(compared(&hub).len(), 1, "its files read again");
+    assert_eq!(got.class(), Class::R0);
 }

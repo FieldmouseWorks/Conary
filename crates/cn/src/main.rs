@@ -356,11 +356,32 @@ fn run(cli: &Cli) -> Result<()> {
             github,
         } => {
             let policy = Policy::load(policy)?;
-            let (mut a, api, config) = write(cli, github)?;
-            let got = class::class(&mut a.store, &api, &config, &policy, repo, *pr, head);
-            a.publish(&api)?;
-            write_notes(&api, &a, github, repo)?;
-            let got = got?;
+            let (api, config) = writer(cli, github)?;
+            // The ledger as it is before GitHub is read, then GitHub,
+            // before the lock: a class the ledger holds needs no lock, and
+            // other writers wait only for the recording.
+            let ledger = read(cli, None)?;
+            let asked = class::ask(
+                &ledger,
+                &api,
+                &config,
+                &policy,
+                repo,
+                *pr,
+                head,
+                &cli.ledger,
+            )?;
+            drop(ledger);
+            let got = match asked {
+                class::Asked::Held(got) => got,
+                class::Asked::Read(read) => {
+                    let mut a = open(cli, github, &api)?;
+                    let got = class::class(&mut a.store, &api, &policy, *read);
+                    a.publish(&api)?;
+                    write_notes(&api, &a, github, repo)?;
+                    got?
+                }
+            };
             let said = &got.said;
             if cli.human {
                 let because = said
