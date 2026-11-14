@@ -76,7 +76,7 @@ impl SealKey {
         &self,
         repo: &str,
         pr: u64,
-        verdict: &str,
+        verdict: Judgment,
         revision: &Revision,
         generation: u64,
         provenance: conary_core::plugin::Provenance,
@@ -91,7 +91,7 @@ impl SealKey {
             Issued {
                 generation,
                 revision: revision.clone(),
-                verdict: verdict.into(),
+                verdict: verdict.word().into(),
                 provenance: Some(provenance),
             },
         ))
@@ -257,13 +257,8 @@ pub(super) fn read(
             if issued.provenance.as_ref().is_some_and(|p| !p.valid()) {
                 return None;
             }
-            let verdict = match issued.verdict.as_str() {
-                "land" => Judgment::Land,
-                "owner" => Judgment::Owner,
-                "failed" => Judgment::Failing,
-                "misdescribed" => Judgment::Misdescribed,
-                _ => return None,
-            };
+            let verdict =
+                legacy_word(&issued.verdict).or_else(|| Judgment::from_word(&issued.verdict))?;
             Some(Judged {
                 revision: current,
                 verdict,
@@ -271,6 +266,16 @@ pub(super) fn read(
             })
         });
     result
+}
+
+/// Markers the steward wrote before the contract's words are read once.
+/// Delete with the steward (Conary#256 slice 5).
+fn legacy_word(word: &str) -> Option<Judgment> {
+    match word {
+        "land" => Some(Judgment::Pass),
+        "failed" => Some(Judgment::Fail),
+        _ => None,
+    }
 }
 
 fn verified(expected: String, tag: &str) -> bool {

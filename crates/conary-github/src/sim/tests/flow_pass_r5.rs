@@ -216,7 +216,7 @@ fn unrepresentable_blockers_wait_instead_of_launching_an_empty_fixer() {
             c.judgment(
                 1,
                 if blocker == "judgment" {
-                    Judgment::Failing
+                    Judgment::Fail
                 } else {
                     Judgment::Misdescribed
                 },

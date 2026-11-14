@@ -346,7 +346,7 @@ fn pass_memory_roundtrips_nonempty_composite_keys() {
     let revision = Revision::from(&c.hub.pull(REPO, 3).unwrap());
     record.memory.judge_issuance.insert(
         revision.clone(),
-        (10, Some(JudgeResult::Legacy(Judgment::Land))),
+        (10, Some(JudgeResult::Legacy(Judgment::Pass))),
     );
     record
         .memory

@@ -308,12 +308,34 @@ pub enum FixResult {
     Unable { why: String },
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+/// The one vocabulary of a judge's verdict, on the wire and in the flow's
+/// markers. `Misdescribed` is its own word, not a `Fail` with a reason: the
+/// flow hands a wrong description to a different fix than failing code.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Judgment {
     Pass,
     Fail,
     Owner,
+    Misdescribed,
+}
+
+impl Judgment {
+    pub const fn word(self) -> &'static str {
+        match self {
+            Self::Pass => "pass",
+            Self::Fail => "fail",
+            Self::Owner => "owner",
+            Self::Misdescribed => "misdescribed",
+        }
+    }
+
+    /// Parses a wire word; anything else is `None`, so callers fail closed.
+    pub fn from_word(word: &str) -> Option<Self> {
+        [Self::Pass, Self::Fail, Self::Owner, Self::Misdescribed]
+            .into_iter()
+            .find(|j| j.word() == word)
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

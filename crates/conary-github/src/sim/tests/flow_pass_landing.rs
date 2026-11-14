@@ -180,7 +180,7 @@ fn blocking_producer_results_racing_publication_retract_permission() {
     for blocking in ["findings", "failed", "owner", "tombstone", "conflict"] {
         let c = Case::new();
         c.clean_review();
-        c.judgment(1, Judgment::Land, true);
+        c.judgment(1, Judgment::Pass, true);
         let key = c.config.settings.judge_key.clone().unwrap();
         c.hub.race(Call::FlowStage, move |hub| {
             if blocking == "findings" {

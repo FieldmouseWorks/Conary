@@ -25,7 +25,7 @@ fn unanswered_jobs_are_counted_from_observations_not_a_callers_retry_flag() {
             Kind::Judge => c.secret(),
             Kind::Findings => c.threads(1),
             Kind::Red => c.ci("failure"),
-            Kind::JudgeFailure => c.judge("failed"),
+            Kind::JudgeFailure => c.judge("fail"),
             Kind::Description => c.judge("misdescribed"),
             _ => {
                 c.settings

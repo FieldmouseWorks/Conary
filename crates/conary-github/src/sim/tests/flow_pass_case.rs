@@ -184,7 +184,7 @@ impl Case {
                         answer: conary_core::plugin::Answer::Judge { .. },
                         ..
                     })),
-                ) => self.judgment(1, Judgment::Land, true),
+                ) => self.judgment(1, Judgment::Pass, true),
                 _ => {}
             }
         }
@@ -263,12 +263,7 @@ impl Case {
     }
     pub(super) fn judgment(&self, generation: u64, verdict: Judgment, attest: bool) {
         let revision = Revision::from(&self.hub.pull(REPO, 3).unwrap());
-        let word = match verdict {
-            Judgment::Land => "land",
-            Judgment::Owner => "owner",
-            Judgment::Failing => "failed",
-            Judgment::Misdescribed => "misdescribed",
-        };
+        let word = verdict.word();
         let body = self.config.settings.judge_key.as_ref().unwrap().decision(
             REPO,
             3,

@@ -54,7 +54,7 @@ fn sealed_judge_provenance_is_retained_in_memory_and_bound_to_the_receipt() {
         .judge_key
         .as_ref()
         .unwrap()
-        .judgment_by(REMI, 3, "land", &revision, 1, by.clone())
+        .judgment_by(REMI, 3, Judgment::Pass, &revision, 1, by.clone())
         .unwrap();
     h.flow_comment(REMI, 3, "owner", &body);
     let f = read_f(&h, s.clone());
@@ -69,7 +69,7 @@ fn sealed_judge_provenance_is_retained_in_memory_and_bound_to_the_receipt() {
     let (_, retained_again) = next(&absent, &roundtrip, 4001);
     assert_eq!(retained_again.judge_issuance, roundtrip.judge_issuance);
 
-    let receipt = judgment_receipt_by(&revision, 1, Some(Judgment::Land), Some(&by));
+    let receipt = judgment_receipt_by(&revision, 1, Some(Judgment::Pass), Some(&by));
     let evidence: serde_json::Value = serde_json::from_slice(&receipt).unwrap();
     assert_eq!(evidence["provenance"]["by"]["engine"], "fixture-engine");
     assert_eq!(
@@ -83,7 +83,7 @@ fn sealed_judge_provenance_is_retained_in_memory_and_bound_to_the_receipt() {
         receipt_digest(&judgment_receipt_by(
             &revision,
             1,
-            Some(Judgment::Land),
+            Some(Judgment::Pass),
             Some(&different)
         ))
     );
@@ -104,7 +104,7 @@ fn sealed_judge_provenance_is_retained_in_memory_and_bound_to_the_receipt() {
         .judge_key
         .as_ref()
         .unwrap()
-        .judgment_by(REMI, 3, "land", &revision, 1, different)
+        .judgment_by(REMI, 3, Judgment::Pass, &revision, 1, different)
         .unwrap();
     h.flow_comment(REMI, 3, "owner", &conflict);
     assert!(read_f(&h, s).judgment.is_none());
@@ -129,9 +129,14 @@ fn marker(h: &Hub, s: &Settings, name: &str, verdict: &str) -> String {
 fn judge_verdicts_are_read_from_sealed_comments() {
     // gates.py / misdescribed.py: each verdict is a scoped producer's answer.
     for (said, expected) in [
-        ("land", Step::Merge),
+        ("pass", Step::Merge),
         ("owner", Step::ListOwner),
+        ("fail", Step::HandFix(Kind::JudgeFailure)),
+        // Old steward words, read once until Conary#256 slice 5 deletes them.
+        ("land", Step::Merge),
         ("failed", Step::HandFix(Kind::JudgeFailure)),
+        // An unknown word is no judgment: the flow asks the judge again.
+        ("approve", Step::Judge),
         ("misdescribed", Step::HandFix(Kind::Description)),
     ] {
         let (h, m) = setup();
@@ -144,6 +149,41 @@ fn judge_verdicts_are_read_from_sealed_comments() {
         );
         h.flow_comment(REMI, 3, "owner", &marker(&h, &s, "autoland-judgment", said));
         assert_eq!(next(&read_f(&h, s), &m, 4000).0.step, expected);
+    }
+}
+#[test]
+fn a_judge_plugin_answer_round_trips_through_its_marker_to_a_decision() {
+    use conary_core::plugin::{Answer, Judgment};
+    for (verdict, expected) in [
+        (Judgment::Pass, Step::Merge),
+        (Judgment::Fail, Step::HandFix(Kind::JudgeFailure)),
+        (Judgment::Owner, Step::ListOwner),
+        (Judgment::Misdescribed, Step::HandFix(Kind::Description)),
+    ] {
+        let (h, m) = setup();
+        let s = settings();
+        h.commit_details(
+            &head(3),
+            Some("change: code\n\nEngine: codex\n"),
+            Some("author@example.org"),
+            Some("author@example.org"),
+        );
+        let answer = Answer::Judge {
+            verdict,
+            why: "because".into(),
+        };
+        let wire: Answer = serde_json::from_str(&serde_json::to_string(&answer).unwrap()).unwrap();
+        let revision = crate::flow::Revision::from(&h.pull(REMI, 3).unwrap());
+        let judged = crate::flow::Judged::from_answer(revision, &wire).unwrap();
+        h.flow_comment(
+            REMI,
+            3,
+            "owner",
+            &marker(&h, &s, "autoland-judgment", judged.verdict.word()),
+        );
+        let f = read_f(&h, s);
+        assert_eq!(f.judgment.as_ref().map(|j| j.verdict), Some(verdict));
+        assert_eq!(next(&f, &m, 4000).0.step, expected);
     }
 }
 #[test]

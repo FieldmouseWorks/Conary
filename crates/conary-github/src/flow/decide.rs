@@ -244,7 +244,7 @@ fn after_review(f: &Facts, m: &mut Memory, now: u64, ci: Ci, capped: bool) -> De
     if verdict == Some(Judgment::Misdescribed) {
         return hand(f, m, now, Kind::Description, false);
     }
-    if verdict == Some(Judgment::Failing) {
+    if verdict == Some(Judgment::Fail) {
         return hand(f, m, now, Kind::JudgeFailure, false);
     }
     if verdict == Some(Judgment::Owner) && !f.owner_approved {
@@ -333,7 +333,7 @@ fn after_review(f: &Facts, m: &mut Memory, now: u64, ci: Ci, capped: bool) -> De
         || capped
         || f.dependency == Some(Dependency::Major) && !f.renovate;
     if requires_judge {
-        if !matches!(verdict, Some(Judgment::Land))
+        if !matches!(verdict, Some(Judgment::Pass))
             && !(verdict == Some(Judgment::Owner) && f.owner_approved)
         {
             if f.merging == Merge::Update {

@@ -289,7 +289,7 @@ fn permission_binds_the_judging_model_to_independently_attested_evidence() {
             .judge_key
             .as_ref()
             .unwrap()
-            .judgment_by(REPO, 3, "land", &revision, 1, provenance.clone())
+            .judgment_by(REPO, 3, Judgment::Pass, &revision, 1, provenance.clone())
             .unwrap();
         c.hub.flow_comment(REPO, 3, "producer", &body);
         let mut attested = provenance;
@@ -302,7 +302,7 @@ fn permission_binds_the_judging_model_to_independently_attested_evidence() {
             Some(&judgment_receipt_by(
                 &revision,
                 1,
-                Some(Judgment::Land),
+                Some(Judgment::Pass),
                 Some(&attested),
             )),
         );
@@ -335,21 +335,21 @@ fn a_local_judge_pass_is_not_an_authenticated_issuance() {
 }
 #[test]
 fn github_generations_and_tombstones_survive_local_judge_answers() {
-    for word in ["failed", "owner", "conflict", "unsupported"] {
+    for word in ["fail", "owner", "conflict", "unsupported"] {
         let mut c = Case::new();
         c.clean_review();
         needs_judge(&mut c);
         let now = crate::flow::jobs::now();
         c.pass(now, false);
         local_judgment(&c);
-        c.judgment(1, Judgment::Land, true);
+        c.judgment(1, Judgment::Pass, true);
         // Observe generation 1 without letting the PR land.
         c.hub.fail(Call::Land);
         c.pass(now + 1, false);
         c.hub.heal(Call::Land);
         let revision = Revision::from(&c.hub.pull(REPO, 3).unwrap());
         if word == "conflict" {
-            c.judgment(1, Judgment::Failing, true);
+            c.judgment(1, Judgment::Fail, true);
         } else {
             let key = c.config.settings.judge_key.as_ref().unwrap();
             let body = key.decision(REPO, 3, "autoland-judgment", word, &revision, 2);
@@ -362,7 +362,7 @@ fn github_generations_and_tombstones_survive_local_judge_answers() {
         assert_eq!(
             observed.1,
             match word {
-                "failed" => Some(JudgeResult::Legacy(Judgment::Failing)),
+                "fail" => Some(JudgeResult::Legacy(Judgment::Fail)),
                 "owner" => Some(JudgeResult::Legacy(Judgment::Owner)),
                 _ => None,
             }
@@ -376,7 +376,7 @@ fn r2_owner_approval_does_not_enable_direct_or_delegated_landings() {
         let mut c = Case::new();
         c.clean_review();
         c.policy = conary_core::Policy::parse(br#"{"r2":["^src/"]}"#).unwrap();
-        c.judgment(1, Judgment::Land, true);
+        c.judgment(1, Judgment::Pass, true);
         // Person approval still cannot replace exact candidate evidence.
         c.approve();
         if bot {

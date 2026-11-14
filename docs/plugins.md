@@ -65,7 +65,7 @@ response has `contract`, `by`, `kind`, and the listed answer fields.
 | --- | --- | --- |
 | `review` | `repo`, `pr`, `base`, `head`, `author` | `findings`: array of findings, empty for none |
 | `fix` | `repo`, `head`, `problems` | `result`: a pushed head or an inability reason |
-| `judge` (v3) | `repo`, `head`, `against`, `author`, optional `reviewers` (identity array, default empty) | `verdict`: `pass`, `fail` or `owner`; `why`: nonblank explanation |
+| `judge` (v3) | `repo`, `head`, `against`, `author`, optional `reviewers` (identity array, default empty) | `verdict`: `pass`, `fail`, `owner` or `misdescribed`; `why`: nonblank explanation |
 | `proof` | `repo`, `tree`, `checks`: unique check names | `results`: exactly one result for every requested check |
 | `job` (v2) | `repo`, `workdir`, `prompt`; optional `model`, `effort` | `summary`: nonblank; `next`: how the job ends |
 
@@ -76,6 +76,13 @@ policy or criteria the judgment must apply. A finding is:
 ```json
 {"path":"src/lib.rs","line":12,"severity":"p1","text":"Explain the defect and its consequence"}
 ```
+
+`misdescribed` is its own verdict, not a `fail` with a reason: it says the
+change is sound but its description is wrong, and the flow hands that to a
+different fix than failing code. This is the only vocabulary for a judge's
+verdict; the flow writes and reads these same words in its markers. Markers
+the steward wrote in the old words `land` and `failed` are read once, as
+`pass` and `fail`; that reader goes with the steward (Conary#256 slice 5).
 
 Severity is `p0`, `p1`, `p2` or `p3`, highest first. Path and text must be
 nonblank, and line must be positive. A fix problem is one of:
