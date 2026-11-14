@@ -227,3 +227,61 @@ fn github_unavailable_is_told_through_whatever_wraps_it() {
     assert!(!boxed(AnchorError::Lost("gone".into()).into()));
     assert!(!boxed("no token".into()));
 }
+
+// `cn lessons check` passes a register with an open lesson; `cn lessons
+// exit` fails on it only for the milestone that ships its component, and
+// refuses a broken register either way.
+#[test]
+fn lessons_check_passes_an_open_lesson_that_exit_refuses() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("lessons.toml");
+    let entry = |status: &str| {
+        format!(
+            r#"milestones = ["M6", "M7"]
+[components]
+"flow" = ["M6"]
+"M7 standalone setup" = ["M7"]
+[[lessons]]
+id = "a"
+lesson = "One line."
+from = ["https://github.com/FieldmouseWorks/burrow/issues/1"]
+applies = ["flow"]
+status = "{status}"
+where = ["https://github.com/FieldmouseWorks/Conary/issues/312"]
+"#
+        )
+    };
+    let run = |args: &[&str]| {
+        let register = path.to_str().unwrap();
+        let cli =
+            Cli::try_parse_from([&["cn", "lessons"], args, &["--register", register]].concat())
+                .unwrap();
+        let Command::Lessons { command } = &cli.command else {
+            unreachable!()
+        };
+        lessons::run(&cli, command).map_err(|e| e.to_string())
+    };
+
+    std::fs::write(&path, entry("open")).unwrap();
+    run(&["check"]).unwrap();
+    let e = run(&["exit", "M6"]).unwrap_err();
+    assert!(
+        e.contains("M6 can't exit while 1 open lessons apply"),
+        "{e}"
+    );
+    run(&["exit", "M7"]).unwrap();
+    assert!(
+        run(&["exit", "M8"])
+            .unwrap_err()
+            .contains("no milestone M8")
+    );
+
+    std::fs::write(&path, entry("designed")).unwrap();
+    run(&["exit", "M6"]).unwrap();
+
+    std::fs::write(&path, entry("done")).unwrap();
+    for args in [&["check"][..], &["exit", "M7"]] {
+        let e = run(args).unwrap_err();
+        assert!(e.contains("doesn't parse"), "{args:?}: {e}");
+    }
+}

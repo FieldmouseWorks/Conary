@@ -2,13 +2,53 @@
 # until Conary builds that part. DESIGN's Properties index
 # (docs/DESIGN.md#properties) links every entry and says who delivers it.
 #
+# `cn lessons check` reads it as the gate does (conary-core's lessons module):
+# every field below present and well formed, each id once, and every
+# `applies` value a component declared here. An honest "open" entry passes.
+# `cn lessons exit M6` is the lessons part of a milestone's exit check, and
+# fails while an "open" entry applies to a component that milestone ships.
+#
 # Each entry has:
-#   id       stable, never reused or renamed
+#   id       stable, never reused or renamed: lowercase words and hyphens
 #   lesson   one line
-#   from     links to the issues or PRs where it was learned
-#   applies  the Conary component, and the M6 slice or M7 setup work it bears on
+#   from     links to the GitHub issues or PRs where it was learned
+#   applies  the Conary components, M6 slices or M7 setup work it bears on,
+#            each one declared in [components]
 #   status   "open"; "designed" once DESIGN states it; "built" once a test holds it
 #   where    the DESIGN section, test or issue that carries it
+
+# The milestones whose exit this register checks.
+milestones = ["M6", "M7"]
+
+# Every component an entry may apply to, and the milestones that ship it
+# (docs/DESIGN.md#12-roadmap, docs/m6.md). A lesson that applies to one holds
+# each of those milestones' exits while it's open.
+[components]
+"cn flow" = ["M6"]
+"conary-core" = ["M6", "M7"]
+"conary-github" = ["M6", "M7"]
+"conaryd" = ["M6", "M7"]
+"effects and retries" = ["M6"]
+"evidence" = ["M6", "M7"]
+"flow" = ["M6"]
+"flow proofs" = ["M6"]
+"flow settings" = ["M6"]
+"ingest" = ["M6"]
+"judgment producers" = ["M6"]
+"op log" = ["M6"]
+"per-repository landing ownership" = ["M6"]
+"person approval" = ["M6"]
+"plugin contract" = ["M6"]
+"plugin runner" = ["M6"]
+"red-trunk recovery" = ["M6"]
+"train" = ["M6"]
+"upkeep" = ["M6"]
+"waits and deadlines" = ["M6"]
+"M6 slice 5c" = ["M6"]
+"M6 slice 5d" = ["M6"]
+"M6 slice 7" = ["M6"]
+"M6 slice 8" = ["M6"]
+"M7 standalone setup" = ["M7"]
 
 [[lessons]]
 id = "no-pinned-engines"

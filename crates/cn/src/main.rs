@@ -22,6 +22,7 @@ use conary_github::{Api, ApiError, Config, Etags, Ingested, Tokens, ingest, note
 
 mod attest;
 mod flow;
+mod lessons;
 mod plugin;
 mod train;
 
@@ -97,6 +98,12 @@ enum Command {
     },
     #[command(hide = true)]
     FlowWorker { path: PathBuf },
+    /// The lessons register, docs/lessons.toml: check it, or ask whether
+    /// a milestone's open lessons let it exit.
+    Lessons {
+        #[command(subcommand)]
+        command: lessons::LessonsCommand,
+    },
     /// Check an executable against the published plugin contract.
     Plugin {
         #[command(subcommand)]
@@ -304,6 +311,7 @@ fn unavailable(e: &(dyn std::error::Error + 'static)) -> bool {
 fn run(cli: &Cli) -> Result<()> {
     match &cli.command {
         Command::Flow { command } => flow::run(cli, command)?,
+        Command::Lessons { command } => lessons::run(cli, command)?,
         Command::FlowWorker { path } => {
             conary_github::flow::jobs::worker(path).map_err(|e| e.to_string())?
         }
