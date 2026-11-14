@@ -43,7 +43,7 @@ impl Config {
         !self.own_contexts.iter().any(|c| c == context) && context != crate::train::CONTEXT
     }
 
-    fn check(&self) -> Result<(), IngestError> {
+    pub(crate) fn check(&self) -> Result<(), IngestError> {
         if self.reviewers.is_empty() {
             return Err(IngestError::Config("no reviewer logins: the steward's"));
         }
@@ -198,7 +198,7 @@ pub fn backfill(
 mod sync;
 pub use sync::{Gathered, gather, sync};
 
-fn commit(sha: &str) -> Result<CommitId, IngestError> {
+pub(crate) fn commit(sha: &str) -> Result<CommitId, IngestError> {
     sha.parse()
         .map_err(|_| IngestError::Malformed(format!("{sha:?} as a commit id")))
 }
@@ -370,7 +370,7 @@ fn open_at(pr: &PullRequest, timeline: &[Event], at: &str) -> bool {
 /// What ingest reads about a PR besides the PR itself: its [`Results`],
 /// and its timeline, read after them so that every retarget before any of
 /// them is in it.
-struct Read {
+pub(crate) struct Read {
     timeline: Vec<Event>,
     results: Results,
 }
@@ -396,7 +396,11 @@ impl Results {
 }
 
 impl Read {
-    fn of(source: &dyn Source, repo: &str, pr: &PullRequest) -> Result<Self, IngestError> {
+    pub(crate) fn of(
+        source: &dyn Source,
+        repo: &str,
+        pr: &PullRequest,
+    ) -> Result<Self, IngestError> {
         let results = Results::of(source, repo, pr)?;
         Self::after(source, repo, pr, results)
     }
@@ -416,7 +420,7 @@ impl Read {
     }
 }
 
-fn record(
+pub(crate) fn record(
     store: &mut Store,
     source: &dyn Source,
     config: &Config,
