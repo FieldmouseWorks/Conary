@@ -91,9 +91,8 @@ fn open_in(dir: &Path) -> Store {
     Store::open(lock, SigningKey::from_bytes(&[5; 32]), None).unwrap()
 }
 
-// The minutes a sync spends reading each open PR's results are spent
-// before the lock: every other writer waits only for the recording, and
-// for each PR's timeline, read under it.
+// The minutes a sync spends reading each open PR are spent before the
+// lock: every other writer waits only for the recording.
 #[test]
 fn sync_reads_open_prs_before_the_lock_and_records_them_under_it() {
     let dir = tempfile::tempdir().unwrap();
@@ -111,7 +110,7 @@ fn sync_reads_open_prs_before_the_lock_and_records_them_under_it() {
     assert_eq!(watch.locked(), ["timeline 9"]);
 
     let got = sync(&mut store, &watch, gathered).unwrap();
-    assert_eq!(watch.locked(), ["timeline 9", "timeline 10"]);
+    assert_eq!(watch.locked(), Vec::<String>::new());
     // Recorded from what was gathered: 9's evidence as reading it now gets.
     assert_eq!(got.len(), 2);
     let c = store.ledger().by_pr(&repo(), 9).unwrap();
@@ -162,7 +161,6 @@ fn sync_reads_again_under_the_lock_what_changed_since_it_gathered() {
             "reviews 9".into(),
             format!("statuses {HEAD}"),
             format!("statuses {HEAD2}"),
-            "timeline 10".into(),
             "timeline 11".into(),
             "timeline 9".into(),
         ]
@@ -186,9 +184,10 @@ fn run(id: u64, name: &str, started: &str) -> Value {
 }
 
 // Retargeted away and back after the gather, 9 is at the same head, branch
-// and base, but what ran on the other base isn't this revision's: the
-// timeline read under the lock leaves out what came before the retarget,
-// as reading it all now would.
+// and base, but what ran on the other base isn't this revision's. The
+// retargets changed its `updated_at`, so its timeline is read again under
+// the lock and leaves out what came before them, as reading it all now
+// would.
 #[test]
 fn sync_leaves_out_gathered_results_from_before_a_retarget_since() {
     let dir = tempfile::tempdir().unwrap();
@@ -205,6 +204,7 @@ fn sync_leaves_out_gathered_results_from_before_a_retarget_since() {
 
     f.put_event(REPO, 9, "base_ref_changed", "2026-10-27T12:59:00Z");
     f.put_event(REPO, 9, "base_ref_changed", "2026-10-27T13:00:00Z");
+    f.edit_pull(REPO, 9, |p| p["updated_at"] = json!("2026-10-27T13:00:00Z"));
     let mut store = open_in(dir.path());
     sync(&mut store, &watch, gathered).unwrap();
     assert_eq!(watch.locked(), ["timeline 9"]);
@@ -269,4 +269,32 @@ fn sync_reads_again_a_pr_whose_merge_base_changed_since_it_gathered() {
             "{moved}"
         );
     }
+}
+
+// A PR that changed less than a minute before its timeline was gathered
+// could have been retargeted since in the same second, with its
+// `updated_at` the same: its timeline is read again under the lock.
+#[test]
+fn sync_reads_again_the_timeline_of_a_pr_changed_just_before_it_gathered() {
+    let dir = tempfile::tempdir().unwrap();
+    let f = fake();
+    let just = chrono::DateTime::<chrono::Utc>::from(std::time::SystemTime::now())
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    f.edit_pull(REPO, 9, |p| p["updated_at"] = json!(just));
+    let watch = Watch::new(&f, dir.path());
+    let gathered = gather(&watch, &config(), &repo(), dir.path()).unwrap();
+    let mut store = open_in(dir.path());
+    sync(&mut store, &watch, gathered).unwrap();
+    assert_eq!(watch.locked(), ["timeline 9"]);
+
+    // Listed with no `updated_at` at all, the same.
+    let dir = tempfile::tempdir().unwrap();
+    f.edit_pull(REPO, 9, |p| {
+        _ = p.as_object_mut().unwrap().remove("updated_at")
+    });
+    let watch = Watch::new(&f, dir.path());
+    let gathered = gather(&watch, &config(), &repo(), dir.path()).unwrap();
+    let mut store = open_in(dir.path());
+    sync(&mut store, &watch, gathered).unwrap();
+    assert_eq!(watch.locked(), ["timeline 9"]);
 }

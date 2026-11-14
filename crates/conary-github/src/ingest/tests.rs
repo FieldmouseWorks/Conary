@@ -34,6 +34,7 @@ fn pr(number: u64, head: &str, state: &str, merged: bool) -> Value {
         "title": "autoland: merge only the head that was checked",
         "body": "Refs #61\n\nhttps://claude.ai/code/session_01Abc",
         "user": {"login": "TusanHomichi", "type": "User"},
+        "updated_at": "2026-10-27T11:00:00Z",
         "merged_at": if merged { json!("2026-10-27T12:00:00Z") } else { Value::Null },
         "merge_commit_sha": if merged { json!(MERGE) } else { Value::Null },
         "base": {"sha": BASE, "ref": "main", "repo": {"default_branch": "main"}},
