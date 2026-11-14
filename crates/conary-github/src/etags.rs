@@ -70,18 +70,25 @@ impl Etags {
     }
 
     /// Keeps `body`, as `url` answered with `etag`, in place of what was.
+    /// Each put writes a file of its own and renames it into place, so
+    /// writers at once (a sync reading before the ledger's lock, and the
+    /// writer holding it) never write into each other's, and the last
+    /// rename wins whole.
     pub fn put(&self, url: &str, etag: &str, body: &[u8]) -> io::Result<()> {
         if etag.contains('\n') {
             return Ok(());
         }
         let path = self.path(url);
-        let tmp = path.with_extension("new");
-        let mut f = File::create(&tmp)?;
+        let mut tmp = tempfile::Builder::new()
+            .prefix(".")
+            .suffix(".new")
+            .tempfile_in(&self.dir)?;
+        let f = tmp.as_file_mut();
         f.write_all(etag.as_bytes())?;
         f.write_all(b"\n")?;
         f.write_all(body)?;
         f.sync_all()?;
-        fs::rename(&tmp, &path)
+        tmp.persist(&path).map(drop).map_err(|e| e.error)
     }
 }
 
@@ -109,6 +116,34 @@ mod tests {
             etags.get("https://x/a"),
             Some(("W/\"4\"".into(), b"[4]".to_vec()))
         );
+    }
+
+    // A sync reads GitHub before it takes the ledger's lock, so two writers
+    // can keep the same answer at once: each put is whole, and none fails.
+    #[test]
+    fn writers_at_once_each_keep_a_whole_answer() {
+        let dir = tempfile::tempdir().unwrap();
+        let url = "https://x/pulls";
+        std::thread::scope(|s| {
+            for w in 0..8 {
+                let etags = Etags::open(dir.path()).unwrap();
+                s.spawn(move || {
+                    for i in 0..200 {
+                        let n = format!("{w}-{i}");
+                        let body = n.repeat(500);
+                        etags
+                            .put(url, &format!("\"{n}\""), body.as_bytes())
+                            .unwrap();
+                    }
+                });
+            }
+        });
+        let etags = Etags::open(dir.path()).unwrap();
+        let (etag, body) = etags.get(url).unwrap();
+        let n = etag.trim_matches('"');
+        assert_eq!(body, n.repeat(500).into_bytes());
+        // Nothing left behind but the one entry.
+        assert_eq!(fs::read_dir(dir.path().join(DIR)).unwrap().count(), 1);
     }
 
     #[test]

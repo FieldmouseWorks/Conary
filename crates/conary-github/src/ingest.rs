@@ -10,7 +10,7 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
-use conary_core::ledger::{Change, Invalid, Ledger, Status};
+use conary_core::ledger::{Change, Invalid, Status};
 use conary_core::op::{Actor, ActorKind, Authority, Body, CheckKind, Outcome, Repo};
 use conary_core::store::StoreError;
 use conary_core::{ChangeId, CommitId, RevisionId, Store};
@@ -18,7 +18,7 @@ use conary_core::{ChangeId, CommitId, RevisionId, Store};
 use crate::api::{
     ApiError, CheckRun, Commit, Event, PullRequest, Pulls, Review, Source, Status as CommitStatus,
 };
-use crate::bases::{BasesError, MergeBases};
+use crate::bases::BasesError;
 use crate::undo::Marker as Undo;
 
 /// What ingest trusts, from the machine's configuration. Both are needed:
@@ -146,9 +146,11 @@ pub(crate) fn pulled(
     number: u64,
 ) -> Result<(Ingested, PullRequest), IngestError> {
     config.check()?;
-    let pr = source.pull(&repo.to_string(), number)?;
+    let full = repo.to_string();
+    let pr = source.pull(&full, number)?;
     let base = base(source, repo, &pr)?;
-    Ok((record(store, source, config, repo, &pr, base)?, pr))
+    let read = Read::of(source, &full, &pr)?;
+    Ok((record(store, source, config, repo, &pr, base, read)?, pr))
 }
 
 mod submission;
@@ -163,15 +165,9 @@ pub(crate) fn submitted(
     submissions: &[Submission],
 ) -> Result<Ingested, IngestError> {
     config.check()?;
-    record_with_submission(
-        store,
-        source,
-        config,
-        repo,
-        pr,
-        base(source, repo, pr)?,
-        submissions,
-    )
+    let base = base(source, repo, pr)?;
+    let read = Read::of(source, &repo.to_string(), pr)?;
+    record_with_submission(store, source, config, repo, pr, base, read, submissions)
 }
 
 /// Where the head branched from the base branch: the tree the PR's diff and
@@ -193,73 +189,14 @@ pub fn backfill(
         .iter()
         .map(|pr| {
             let base = base(source, repo, pr)?;
-            record(store, source, config, repo, pr, base)
+            let read = Read::of(source, &repo.to_string(), pr)?;
+            record(store, source, config, repo, pr, base, read)
         })
         .collect()
 }
 
-/// Brings the ledger up to date with what's happening in a repo: every open
-/// PR, since its checks and reviews come and go, and every recently closed
-/// one the ledger doesn't hold as it finished yet. The merge base of a
-/// PR's base and head never changes, so it comes from the cache beside the
-/// ledger, and a closed PR the ledger already holds as GitHub shows it
-/// costs no calls.
-pub fn sync(
-    store: &mut Store,
-    source: &dyn Source,
-    config: &Config,
-    repo: &Repo,
-) -> Result<Vec<Ingested>, IngestError> {
-    config.check()?;
-    let full = repo.to_string();
-    let mut bases = MergeBases::load(store.lock()).map_err(IngestError::Cache)?;
-    let mut got = Vec::new();
-    for pr in source.pulls(&full, Pulls::Open)? {
-        let base = commit(&bases.get(source, &full, &pr.base.sha, &pr.head.sha)?)?;
-        got.push(record(store, source, config, repo, &pr, base)?);
-    }
-    for pr in source.pulls(&full, Pulls::RecentlyClosed)?.iter().rev() {
-        let base = commit(&bases.get(source, &full, &pr.base.sha, &pr.head.sha)?)?;
-        let revision = RevisionId::new(&base, &commit(&pr.head.sha)?);
-        let ledger = store.ledger();
-        let settled = ledger
-            .by_pr(repo, pr.number)
-            .is_some_and(|c| settled(ledger, c, pr, revision));
-        if !settled {
-            got.push(record(store, source, config, repo, pr, base)?);
-        }
-    }
-    Ok(got)
-}
-
-/// Whether the ledger already holds a closed PR as GitHub shows it: how it
-/// finished, the revision it's at and its intent. A PR reopened, retargeted or
-/// pushed to (back to an older head or base too) and closed again, or
-/// reopened and merged, between two syncs is read again.
-fn settled(ledger: &Ledger, c: &Change, pr: &PullRequest, revision: RevisionId) -> bool {
-    let finished = match c.status() {
-        Status::Open => false,
-        Status::Landed | Status::Reverted => pr.is_merged(),
-        // Closed without landing, or merged without a landing: into another
-        // branch, or pushed to trunk outside a merge.
-        Status::Closed => {
-            !pr.is_merged()
-                || !pr.targets_trunk()
-                || pr.merge_commit_sha.as_deref().is_some_and(|sha| {
-                    ledger
-                        .outside()
-                        .iter()
-                        .any(|o| o.repo == c.repo && o.after.as_str() == sha)
-                })
-        }
-    };
-    let body = pr.body.as_deref().unwrap_or_default();
-    finished
-        && c.current == Some(revision)
-        && c.intent
-            .as_ref()
-            .is_some_and(|i| i.summary == pr.title && i.body == body)
-}
+mod sync;
+pub use sync::{Gathered, gather, sync};
 
 fn commit(sha: &str) -> Result<CommitId, IngestError> {
     sha.parse()
@@ -430,6 +367,28 @@ fn open_at(pr: &PullRequest, timeline: &[Event], at: &str) -> bool {
     last.is_none_or(|(_, open)| open)
 }
 
+/// What ingest reads about a PR besides the PR itself, by its number and
+/// its head: right before it's recorded, or by a sync before it takes the
+/// ledger's lock ([`gather`]).
+struct Read {
+    timeline: Vec<Event>,
+    check_runs: Vec<CheckRun>,
+    statuses: Vec<CommitStatus>,
+    reviews: Vec<Review>,
+}
+
+impl Read {
+    fn of(source: &dyn Source, repo: &str, pr: &PullRequest) -> Result<Self, IngestError> {
+        let head = commit(&pr.head.sha)?;
+        Ok(Self {
+            timeline: source.timeline(repo, pr.number)?,
+            check_runs: source.check_runs(repo, head.as_str())?,
+            statuses: source.statuses(repo, head.as_str())?,
+            reviews: source.reviews(repo, pr.number)?,
+        })
+    }
+}
+
 fn record(
     store: &mut Store,
     source: &dyn Source,
@@ -437,8 +396,9 @@ fn record(
     repo: &Repo,
     pr: &PullRequest,
     base: CommitId,
+    read: Read,
 ) -> Result<Ingested, IngestError> {
-    record_with_submission(store, source, config, repo, pr, base, &[])
+    record_with_submission(store, source, config, repo, pr, base, read, &[])
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -449,9 +409,15 @@ fn record_with_submission(
     repo: &Repo,
     pr: &PullRequest,
     base: CommitId,
+    read: Read,
     submissions: &[Submission],
 ) -> Result<Ingested, IngestError> {
-    let full = repo.to_string();
+    let Read {
+        timeline,
+        check_runs,
+        statuses,
+        reviews,
+    } = read;
     let mut w = Writer {
         store,
         recorded: 0,
@@ -507,17 +473,16 @@ fn record_with_submission(
     // retargeted, so they're bound to this revision only when they came
     // after the last retarget and aren't bound to another revision of this
     // head already. One whose revision can't be told is left out.
-    let since = retargeted(&source.timeline(&full, pr.number)?);
+    let since = retargeted(&timeline);
     let current = |at: Option<&str>| since.as_deref().is_none_or(|s| at.is_some_and(|t| t >= s));
     let mut evidence = Vec::new();
-    for run in source.check_runs(&full, head.as_str())? {
+    for run in check_runs {
         // Started after the retarget, so it can't have run on the old base.
         if current(run.started_at.as_deref()) {
             evidence.extend(run_result(&run).map(|f| f.evidence(change, revision)));
         }
     }
     // Newest first from GitHub; recorded in the order they happened.
-    let statuses = source.statuses(&full, head.as_str())?;
     for status in statuses.iter().rev() {
         if config.is_check(&status.context) && current(status.created_at.as_deref()) {
             evidence.extend(status_result(status).map(|f| f.evidence(change, revision)));
@@ -558,7 +523,7 @@ fn record_with_submission(
             submissions,
         )?;
     }
-    for review in source.reviews(&full, pr.number)? {
+    for review in reviews {
         if current(review.submitted_at.as_deref()) {
             evidence.extend(review_marker(config, pr, change, revision, &review));
         }

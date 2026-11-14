@@ -117,6 +117,11 @@ fn open() -> (tempfile::TempDir, Store) {
     (dir, store)
 }
 
+/// A sync as `cn sync` runs one: gathered, then recorded.
+fn synced(store: &mut Store, f: &Hub) -> Result<Vec<Ingested>, IngestError> {
+    sync(store, f, gather(f, &config(), &repo())?)
+}
+
 fn sha(s: &str) -> CommitId {
     s.parse().unwrap()
 }
@@ -329,7 +334,7 @@ fn sync_takes_open_prs_and_closed_ones_it_hasnt_finished() {
         REPO,
         [pr(9, HEAD, "open", false), pr(10, HEAD2, "open", false)],
     );
-    assert_eq!(sync(&mut store, &f, &config(), &repo()).unwrap().len(), 2);
+    assert_eq!(synced(&mut store, &f).unwrap().len(), 2);
 
     // 9 merged and 11 opened and closed between two syncs; 10 is still open.
     f.put_pulls(
@@ -340,7 +345,7 @@ fn sync_takes_open_prs_and_closed_ones_it_hasnt_finished() {
             pr(11, HEAD2, "closed", false),
         ],
     );
-    let got = sync(&mut store, &f, &config(), &repo()).unwrap();
+    let got = synced(&mut store, &f).unwrap();
     let prs: Vec<u64> = got
         .iter()
         .map(|g| store.ledger().change(g.change).unwrap().pr)
@@ -353,7 +358,7 @@ fn sync_takes_open_prs_and_closed_ones_it_hasnt_finished() {
     );
 
     // Finished PRs aren't read again.
-    let got = sync(&mut store, &f, &config(), &repo()).unwrap();
+    let got = synced(&mut store, &f).unwrap();
     assert_eq!(got.len(), 1);
 }
 
@@ -362,16 +367,16 @@ fn sync_asks_an_open_pr_s_merge_base_once_until_it_moves() {
     let (_dir, mut store) = open();
     let f = fake();
     f.put_pulls(REPO, [pr(9, HEAD, "open", false)]);
-    sync(&mut store, &f, &config(), &repo()).unwrap();
+    synced(&mut store, &f).unwrap();
     let asked = f.count(Call::MergeBase);
     assert_eq!(asked, 1);
     // Every event on the repo syncs it again; its base and head haven't moved.
-    sync(&mut store, &f, &config(), &repo()).unwrap();
-    sync(&mut store, &f, &config(), &repo()).unwrap();
+    synced(&mut store, &f).unwrap();
+    synced(&mut store, &f).unwrap();
     assert_eq!(f.count(Call::MergeBase), asked);
     // A push is a new pair.
     f.put_pulls(REPO, [pr(9, HEAD2, "open", false)]);
-    sync(&mut store, &f, &config(), &repo()).unwrap();
+    synced(&mut store, &f).unwrap();
     assert_eq!(f.count(Call::MergeBase), asked + 1);
 }
 
@@ -389,7 +394,7 @@ fn a_squash_github_hasnt_linked_to_its_pr_yet_is_recorded_once_it_has() {
     assert!(ledger.outside().is_empty());
     assert!(ledger.landed_as(&repo(), &sha(MERGE)).is_none());
     f.link(REPO, MERGE, &[9]);
-    let synced = sync(&mut store, &f, &config(), &repo()).unwrap();
+    let synced = synced(&mut store, &f).unwrap();
     assert_eq!(synced.len(), 1);
     let ledger = store.ledger();
     assert_eq!(ledger.landed_as(&repo(), &sha(MERGE)).unwrap().id, change);
@@ -529,7 +534,7 @@ fn a_merge_the_steward_didnt_settle_is_outside_not_a_landing() {
             0
         );
         // And sync leaves it be.
-        assert!(sync(&mut store, &f, &config(), &repo()).unwrap().is_empty());
+        assert!(synced(&mut store, &f).unwrap().is_empty());
     }
 }
 
@@ -574,7 +579,7 @@ fn ingest_refuses_to_run_without_the_steward_configured() {
             Err(IngestError::Config(_))
         ));
         assert!(matches!(
-            sync(&mut store, &f, &config, &repo()),
+            gather(&f, &config, &repo()),
             Err(IngestError::Config(_))
         ));
         assert!(matches!(
@@ -596,7 +601,7 @@ fn a_pr_merged_into_another_branch_closes_without_landing() {
     let ledger = store.ledger();
     assert_eq!(ledger.change(change).unwrap().status(), Status::Closed);
     assert!(ledger.landed_as(&repo(), &sha(MERGE)).is_none() && ledger.outside().is_empty());
-    assert!(sync(&mut store, &f, &config(), &repo()).unwrap().is_empty());
+    assert!(synced(&mut store, &f).unwrap().is_empty());
 }
 
 /// 9 retargeted from main to dev with its head unchanged: a new revision.
@@ -661,14 +666,14 @@ fn sync_reads_a_closed_pr_again_when_it_changed_since() {
     let (_dir, mut store) = open();
     let f = fake();
     f.put_pulls(REPO, [pr(9, HEAD, "closed", false)]);
-    sync(&mut store, &f, &config(), &repo()).unwrap();
+    synced(&mut store, &f).unwrap();
     let status = |s: &Store| s.ledger().by_pr(&repo(), 9).unwrap().status();
     assert_eq!(status(&store), Status::Closed);
-    assert!(sync(&mut store, &f, &config(), &repo()).unwrap().is_empty());
+    assert!(synced(&mut store, &f).unwrap().is_empty());
 
     // Reopened, pushed to and closed again between two syncs.
     f.put_pulls(REPO, [pr(9, HEAD2, "closed", false)]);
-    assert_eq!(sync(&mut store, &f, &config(), &repo()).unwrap().len(), 1);
+    assert_eq!(synced(&mut store, &f).unwrap().len(), 1);
     let c = store.ledger().by_pr(&repo(), 9).unwrap();
     assert_eq!(c.revisions.len(), 2);
 
@@ -679,9 +684,9 @@ fn sync_reads_a_closed_pr_again_when_it_changed_since() {
              "creator": {"login": STEWARD, "type": "User"}, "created_at": "2026-10-27T11:59:00Z"}]),
     );
     f.put_pulls(REPO, [pr(9, HEAD2, "closed", true)]);
-    assert_eq!(sync(&mut store, &f, &config(), &repo()).unwrap().len(), 1);
+    assert_eq!(synced(&mut store, &f).unwrap().len(), 1);
     assert_eq!(status(&store), Status::Landed);
-    assert!(sync(&mut store, &f, &config(), &repo()).unwrap().is_empty());
+    assert!(synced(&mut store, &f).unwrap().is_empty());
 }
 
 #[test]
@@ -691,27 +696,27 @@ fn sync_reads_a_closed_pr_again_when_it_went_back_to_a_revision_it_had() {
     let current = |s: &Store| s.ledger().by_pr(&repo(), 9).unwrap().current;
     let first = RevisionId::new(&sha(FORK), &sha(HEAD));
     f.put_pulls(REPO, [pr(9, HEAD, "closed", false)]);
-    sync(&mut store, &f, &config(), &repo()).unwrap();
+    synced(&mut store, &f).unwrap();
     f.put_pulls(REPO, [pr(9, HEAD2, "closed", false)]);
-    sync(&mut store, &f, &config(), &repo()).unwrap();
+    synced(&mut store, &f).unwrap();
 
     // Reopened, pushed back to its first head and closed again between two
     // syncs: that revision is current again, and nothing new is added.
     f.put_pulls(REPO, [pr(9, HEAD, "closed", false)]);
-    assert_eq!(sync(&mut store, &f, &config(), &repo()).unwrap().len(), 1);
+    assert_eq!(synced(&mut store, &f).unwrap().len(), 1);
     assert_eq!(current(&store), Some(first));
     assert_eq!(store.ledger().by_pr(&repo(), 9).unwrap().revisions.len(), 2);
-    assert!(sync(&mut store, &f, &config(), &repo()).unwrap().is_empty());
+    assert!(synced(&mut store, &f).unwrap().is_empty());
 
     // Retargeted, then back onto main, the same way.
     let mut on_dev = pr(9, HEAD, "closed", false);
     on_dev["base"] = json!({"sha": DEV, "ref": "dev", "repo": {"default_branch": "main"}});
     f.put_pulls(REPO, [on_dev]);
-    sync(&mut store, &f, &config(), &repo()).unwrap();
+    synced(&mut store, &f).unwrap();
     f.put_pulls(REPO, [pr(9, HEAD, "closed", false)]);
-    assert_eq!(sync(&mut store, &f, &config(), &repo()).unwrap().len(), 1);
+    assert_eq!(synced(&mut store, &f).unwrap().len(), 1);
     assert_eq!(current(&store), Some(first));
-    assert!(sync(&mut store, &f, &config(), &repo()).unwrap().is_empty());
+    assert!(synced(&mut store, &f).unwrap().is_empty());
 }
 
 #[test]
@@ -719,23 +724,24 @@ fn sync_reads_a_closed_pr_again_when_its_base_changed_and_asks_github_once() {
     let (_dir, mut store) = open();
     let f = fake();
     f.put_pulls(REPO, [pr(9, HEAD, "closed", false)]);
-    sync(&mut store, &f, &config(), &repo()).unwrap();
+    synced(&mut store, &f).unwrap();
     // Each closed PR's merge base is asked for once, then kept.
     let asked = f.count(Call::MergeBase);
-    assert!(sync(&mut store, &f, &config(), &repo()).unwrap().is_empty());
+    assert!(synced(&mut store, &f).unwrap().is_empty());
     assert_eq!(f.count(Call::MergeBase), asked);
 
     // Reopened, retargeted and closed again, its head and intent the same.
     let mut on_dev = pr(9, HEAD, "closed", false);
     on_dev["base"] = json!({"sha": DEV, "ref": "dev", "repo": {"default_branch": "main"}});
     f.put_pulls(REPO, [on_dev]);
-    assert_eq!(sync(&mut store, &f, &config(), &repo()).unwrap().len(), 1);
+    assert_eq!(synced(&mut store, &f).unwrap().len(), 1);
     let c = store.ledger().by_pr(&repo(), 9).unwrap();
     assert!(
         c.revision(RevisionId::new(&sha(DEV_FORK), &sha(HEAD)))
             .is_some()
     );
-    assert!(sync(&mut store, &f, &config(), &repo()).unwrap().is_empty());
+    assert!(synced(&mut store, &f).unwrap().is_empty());
 }
 
+mod sync;
 mod undo;

@@ -324,11 +324,18 @@ fn run(cli: &Cli) -> Result<()> {
             print_ingested(cli, repo, *pr, got?, a.store.ledger());
         }
         Command::Sync { repo, github } | Command::Backfill { repo, github } => {
-            let (mut a, api, config) = write(cli, github)?;
-            let got = if matches!(cli.command, Command::Sync { .. }) {
-                ingest::sync(&mut a.store, &api, &config, repo)
+            let (api, config) = writer(cli, github)?;
+            let (a, got) = if matches!(cli.command, Command::Sync { .. }) {
+                // Read before the lock, so other writers wait only for
+                // the recording, not the minutes GitHub takes.
+                let gathered = ingest::gather(&api, &config, repo)?;
+                let mut a = open(cli, github, &api)?;
+                let got = ingest::sync(&mut a.store, &api, gathered);
+                (a, got)
             } else {
-                ingest::backfill(&mut a.store, &api, &config, repo)
+                let mut a = open(cli, github, &api)?;
+                let got = ingest::backfill(&mut a.store, &api, &config, repo);
+                (a, got)
             };
             a.publish(&api)?;
             write_notes(&api, &a, github, repo)?;
@@ -560,15 +567,33 @@ fn choose_tokens(
 
 /// The ledger, open for writing once its log holds the anchor on GitHub.
 fn write(cli: &Cli, github: &GithubArgs) -> Result<(Anchored, Api, Config)> {
+    let (api, config) = writer(cli, github)?;
+    let anchored = open(cli, github, &api)?;
+    Ok((anchored, api, config))
+}
+
+/// GitHub as the ledger's writer reads it, and what ingest trusts: neither
+/// takes the ledger's lock.
+fn writer(cli: &Cli, github: &GithubArgs) -> Result<(Api, Config)> {
     let api =
         Api::new(&github.remote.api, tokens(&github.remote)?).with_etags(Etags::open(&cli.ledger)?);
-    let key = log::load_signing_key(&log::key_path(&cli.ledger))?;
-    let anchored = anchor::open(&cli.ledger, key, &api, &github.remote.anchor_repo)?;
     let config = Config {
         reviewers: github.reviewers.clone(),
         own_contexts: github.own_contexts.clone(),
     };
-    Ok((anchored, api, config))
+    Ok((api, config))
+}
+
+/// The ledger, open for writing: this takes its lock, held until it's
+/// dropped.
+fn open(cli: &Cli, github: &GithubArgs, api: &Api) -> Result<Anchored> {
+    let key = log::load_signing_key(&log::key_path(&cli.ledger))?;
+    Ok(anchor::open(
+        &cli.ledger,
+        key,
+        api,
+        &github.remote.anchor_repo,
+    )?)
 }
 
 /// Brings `repo`'s notes up to date with what the ledger now holds.

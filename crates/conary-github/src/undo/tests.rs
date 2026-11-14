@@ -541,7 +541,10 @@ fn a_stopped_run_that_merged_after_its_rival_landed_is_trunk_moving_outside() {
         hub.reopen(REMI, second);
         let again = hub.steward_lands(REMI, second);
         match read_first {
-            Some(true) => _ = ingest::sync(&mut store, &hub, &config(), &repo()).unwrap(),
+            Some(true) => {
+                let gathered = ingest::gather(&hub, &config(), &repo()).unwrap();
+                _ = ingest::sync(&mut store, &hub, gathered).unwrap();
+            }
             Some(false) => _ = ingest::pull(&mut store, &hub, &config(), &repo(), second).unwrap(),
             None => {}
         }
