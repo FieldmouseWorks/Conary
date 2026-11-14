@@ -72,6 +72,39 @@ Section 12 is where it's going and how far it has got.
   produce it.
 - Windows.
 
+### Properties
+
+What the pipeline Conary replaces taught is kept in the
+[lessons register](lessons.toml), one entry per lesson with its source and
+status. Conary is built to these properties from the start: M6's slices and
+M7's setup path are held to them, and nothing in `steward.py` is ported as it
+is where one says otherwise. This index says where each is held and who
+delivers it. A property no other section holds is stated here; the rest link
+to their section.
+
+| Entry | Where it's held | Delivered by |
+| --- | --- | --- |
+| `no-pinned-engines`, `fresh-judge` | [Section 6.1](#61-execution-choices-and-independent-judging) | [#295](https://github.com/FieldmouseWorks/Conary/issues/295), then M6 slice 5c ([m6-plugins.md](m6-plugins.md)) |
+| `same-inputs-same-verdict` | [Section 4.3](#43-evidence), rule 3 | [#291](https://github.com/FieldmouseWorks/Conary/issues/291) for a gate's pass; [#293](https://github.com/FieldmouseWorks/Conary/issues/293) for a judge's verdict, by a rule of its own |
+| `heavy-work-waits-for-settled-inputs` | [Finish line](#12-roadmap), item 9 | [#292](https://github.com/FieldmouseWorks/Conary/issues/292), then M6 slice 8 |
+| `reusable-modules` | [Finish line](#12-roadmap), item 7 | Every slice, and M7's setup path; [#378](https://github.com/FieldmouseWorks/Conary/issues/378) for the flow's defaults |
+| `no-model-in-mechanical-step` | A proof, build, replay or poll is a program ([a proof is a program](plugins.md#versions)). A model is a `fix` asked to read a failed proof's log, never what runs it, so the flow sends no model-run check to a proof plugin | M6 slice 5c, tasks C3 and P ([m6-plugins.md](m6-plugins.md)) |
+| `degraded-counts-as-failed` | A degraded outcome (a fallback taken, a cache or evidence lookup that half-worked, an unreadable record read conservatively) is recorded as an op naming what degraded, and counts as its check's failure, never as a pass. The flow's status names it | [#312](https://github.com/FieldmouseWorks/Conary/issues/312) |
+| `spenders-off-by-default` | Every setting that starts paid work (a plugin, an admission like a drain, proof slots) defaults to off or zero, and a test holds every such default to that. M7's setup path turns each on explicitly | [#312](https://github.com/FieldmouseWorks/Conary/issues/312), [#378](https://github.com/FieldmouseWorks/Conary/issues/378), M7 |
+| `one-settings-source` | Conary's settings publish a self-describing schema: each setting's name, type, allowed values, default, description, and whether it's live. A settings source such as [burrow#655](https://github.com/FieldmouseWorks/burrow/issues/655) imports it rather than declaring it again; a machine's configuration is generated from that source or written by hand against the schema, and nothing reads a setting the schema doesn't declare | [#312](https://github.com/FieldmouseWorks/Conary/issues/312); the rendered configuration [#313](https://github.com/FieldmouseWorks/Conary/issues/313) consumes; M7 |
+| `live-settings` | Every setting is read at the next decision, as the flow's configuration is on each pass ([flow.md](flow.md)), so changing one needs no release, restart or deploy. A setting that does need one says so in the schema, and Conary's status shows it as that exception | [#312](https://github.com/FieldmouseWorks/Conary/issues/312), M7 |
+| `off-switch-independent` | Conary's pause and hold take effect at the next decision through a write that needs none of what they stop: no pass, CI run, merge or deploy. Turning work off is always allowed and immediate | [#312](https://github.com/FieldmouseWorks/Conary/issues/312), [#313](https://github.com/FieldmouseWorks/Conary/issues/313) |
+| `pause-vacates` | A pause or a hold frees at once every slot, lane and proof its work holds, and keeps the branch, PR and flow state, so lifting it resumes without redoing anything | [#312](https://github.com/FieldmouseWorks/Conary/issues/312), [#313](https://github.com/FieldmouseWorks/Conary/issues/313) |
+| `switches-show-their-effect` | A pause, a hold or a per-repository switch shows in the flow's status and in `cn flow` output as in effect, with what it's holding | [#312](https://github.com/FieldmouseWorks/Conary/issues/312), [#313](https://github.com/FieldmouseWorks/Conary/issues/313) |
+| `explicit-priority` | Admission and proof slots go by an explicit priority, the levels [burrow#652](https://github.com/FieldmouseWorks/burrow/issues/652) gives the drain, with age as the tiebreak. The steward's binary `first` queue isn't the order | [#312](https://github.com/FieldmouseWorks/Conary/issues/312) |
+| `one-question-per-decision` | When the flow needs a person ([person approval](flow.md#person-approval)), it asks once per decision, under that decision's subject key, and a later wait on the same decision joins the open question | [#312](https://github.com/FieldmouseWorks/Conary/issues/312) |
+| `limits-are-design-bugs` | A check that hits its deadline twice on the same tree is a stall to fix, not a retry: it's reported as one and not started again on that tree. A proof's deadline is sized from that proof's own history | [#312](https://github.com/FieldmouseWorks/Conary/issues/312) |
+| `spend-only-where-needed` | Not yet stated | [#312](https://github.com/FieldmouseWorks/Conary/issues/312), with [#292](https://github.com/FieldmouseWorks/Conary/issues/292) and [#320](https://github.com/FieldmouseWorks/Conary/issues/320) |
+| `owner-only-for-doors`, `waiting-costs-nothing`, `read-sized-to-data`, `recover-by-kind` | Not yet stated | [#312](https://github.com/FieldmouseWorks/Conary/issues/312) |
+| `scope-below-a-repo` | Not yet stated | [#313](https://github.com/FieldmouseWorks/Conary/issues/313) |
+| `publish-only-news` | Not yet stated | [#316](https://github.com/FieldmouseWorks/Conary/issues/316) |
+| `repair-ahead-of-red` | Not yet stated | M6 slice 7, [#318](https://github.com/FieldmouseWorks/Conary/issues/318) |
+
 ## 2. Gates, and what replaces them
 
 Each gate below exists because a mistake used to be expensive. For each one,
@@ -660,9 +693,7 @@ authenticated judgments without treating plugin proposals as attestations.
 The corresponding [lesson entries](lessons.toml), `no-pinned-engines` and
 `fresh-judge`, are built for the configuration, runner and provenance
 interfaces and their tests. Deploying real engine plugins is still M6's
-[slice 5c](m6.md), not a claim made by these interface tests. The broader
-Properties index and register seed belong to
-[#305](https://github.com/FieldmouseWorks/Conary/issues/305).
+[slice 5c](m6.md), not a claim made by these interface tests.
 
 ## 7. Interfaces
 

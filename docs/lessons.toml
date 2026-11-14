@@ -1,5 +1,14 @@
-# The register owned by #305. Its first two entries are the execution
-# properties; the broader seed extends this same file and these stable IDs.
+# Conary's lessons register: what the pipeline Conary replaces taught, kept
+# until Conary builds that part. DESIGN's Properties index
+# (docs/DESIGN.md#properties) links every entry and says who delivers it.
+#
+# Each entry has:
+#   id       stable, never reused or renamed
+#   lesson   one line
+#   from     links to the issues or PRs where it was learned
+#   applies  the Conary component, and the M6 slice or M7 setup work it bears on
+#   status   "open"; "designed" once DESIGN states it; "built" once a test holds it
+#   where    the DESIGN section, test or issue that carries it
 
 [[lessons]]
 id = "no-pinned-engines"
@@ -16,6 +25,129 @@ from = ["https://github.com/FieldmouseWorks/burrow/issues/822", "https://github.
 applies = ["plugin runner", "judgment producers", "M6 slice 5c"]
 status = "built"
 where = ["docs/DESIGN.md#61-execution-choices-and-independent-judging", "docs/plugins.md#independence-and-execution-failures", "crates/conary-core/src/plugin/execution.rs", "crates/conary-github/src/flow/markers.rs", "crates/conary-github/tests/flow_execution.rs", "crates/conary-github/src/sim/tests/flow_markers.rs"]
+
+# Seeded from #294: the 2026-11-11 audit's lessons (remi#981, burrow#656)
+# and the owner's additions.
+
+[[lessons]]
+id = "no-model-in-mechanical-step"
+lesson = "A proof, build, replay or poll runs as a program; a model only reads a failed one's log, as a fix."
+from = ["https://github.com/FieldmouseWorks/burrow/issues/646", "https://github.com/FieldmouseWorks/remi/issues/981"]
+applies = ["plugin contract", "flow proofs", "M6 slice 5c"]
+status = "designed"
+where = ["docs/DESIGN.md#properties", "docs/plugins.md#versions", "crates/conary-core/src/plugin/mod.rs", "docs/m6-plugins.md#c3-flow-prepare-proofs-outside-the-proof-slots-and-send-no-model-run-check-to-a-proof-plugin"]
+
+[[lessons]]
+id = "degraded-counts-as-failed"
+lesson = "A degraded outcome (a fallback taken, a lookup that half-worked) is recorded and counted as a failure, never passed quietly."
+from = ["https://github.com/FieldmouseWorks/burrow/issues/641", "https://github.com/FieldmouseWorks/remi/issues/981"]
+applies = ["flow", "op log", "M6 slice 5d"]
+status = "designed"
+where = ["docs/DESIGN.md#properties", "https://github.com/FieldmouseWorks/Conary/issues/312"]
+
+[[lessons]]
+id = "same-inputs-same-verdict"
+lesson = "The same inputs get the same verdict: a result proven on a tree is reused for that tree, not run again."
+from = ["https://github.com/FieldmouseWorks/remi/issues/981", "https://github.com/FieldmouseWorks/burrow/issues/656"]
+applies = ["evidence", "train", "M6 slice 8"]
+status = "designed"
+where = ["docs/DESIGN.md#43-evidence", "https://github.com/FieldmouseWorks/Conary/issues/291", "https://github.com/FieldmouseWorks/Conary/issues/293"]
+
+[[lessons]]
+id = "heavy-work-waits-for-settled-inputs"
+lesson = "Heavy work starts once its inputs have settled, not on every push."
+from = ["https://github.com/FieldmouseWorks/remi/issues/981", "https://github.com/FieldmouseWorks/burrow/issues/656"]
+applies = ["flow", "train", "M6 slice 8"]
+status = "designed"
+where = ["docs/DESIGN.md#12-roadmap", "https://github.com/FieldmouseWorks/Conary/issues/292"]
+
+[[lessons]]
+id = "spenders-off-by-default"
+lesson = "Anything that starts paid work is off or zero until someone turns it on."
+from = ["https://github.com/FieldmouseWorks/burrow/issues/647", "https://github.com/FieldmouseWorks/remi/issues/981"]
+applies = ["flow settings", "M6 slice 5d", "M7 standalone setup"]
+status = "designed"
+where = ["docs/DESIGN.md#properties", "https://github.com/FieldmouseWorks/Conary/issues/312", "https://github.com/FieldmouseWorks/Conary/issues/378"]
+
+[[lessons]]
+id = "one-settings-source"
+lesson = "Settings have one self-describing schema that a settings source imports and every reader loads; no part keeps its own copy."
+from = ["https://github.com/FieldmouseWorks/burrow/issues/655"]
+applies = ["flow settings", "M6 slice 5d", "M7 standalone setup"]
+status = "designed"
+where = ["docs/DESIGN.md#properties", "docs/DESIGN.md#61-execution-choices-and-independent-judging", "https://github.com/FieldmouseWorks/Conary/issues/312"]
+
+[[lessons]]
+id = "live-settings"
+lesson = "Every setting is live, read at the next decision; one that needs a deploy or restart says so, visibly."
+from = ["https://github.com/FieldmouseWorks/burrow/issues/655"]
+applies = ["flow settings", "conaryd", "M6 slice 5d", "M7 standalone setup"]
+status = "designed"
+where = ["docs/DESIGN.md#properties", "docs/flow.md", "https://github.com/FieldmouseWorks/Conary/issues/312"]
+
+[[lessons]]
+id = "explicit-priority"
+lesson = "Work goes in order of explicit priority, then age, never by a binary first flag or by accident."
+from = ["https://github.com/FieldmouseWorks/burrow/issues/652", "https://github.com/FieldmouseWorks/remi/issues/981"]
+applies = ["flow", "train", "M6 slice 5d"]
+status = "designed"
+where = ["docs/DESIGN.md#properties", "https://github.com/FieldmouseWorks/Conary/issues/312"]
+
+[[lessons]]
+id = "one-question-per-decision"
+lesson = "A person is asked once per decision; a later wait on the same decision joins the open question."
+from = ["https://github.com/FieldmouseWorks/burrow/issues/649"]
+applies = ["flow", "person approval", "M6 slice 5d"]
+status = "designed"
+where = ["docs/DESIGN.md#properties", "docs/flow.md#person-approval", "https://github.com/FieldmouseWorks/Conary/issues/312"]
+
+[[lessons]]
+id = "switches-show-their-effect"
+lesson = "A switch isn't real until something enforces it and a status shows it in effect, with what it holds."
+from = ["https://github.com/FieldmouseWorks/burrow/issues/647", "https://github.com/FieldmouseWorks/remi/issues/979"]
+applies = ["flow", "cn flow", "M6 slice 5d"]
+status = "designed"
+where = ["docs/DESIGN.md#properties", "https://github.com/FieldmouseWorks/Conary/issues/312", "https://github.com/FieldmouseWorks/Conary/issues/313"]
+
+[[lessons]]
+id = "limits-are-design-bugs"
+lesson = "A deadline work keeps hitting is a stall to fix, not a retry; a proof's deadline is sized from its own history."
+from = ["https://github.com/FieldmouseWorks/burrow/issues/646", "https://github.com/FieldmouseWorks/remi/issues/981"]
+applies = ["flow", "waits and deadlines", "M6 slice 5d"]
+status = "designed"
+where = ["docs/DESIGN.md#properties", "https://github.com/FieldmouseWorks/Conary/issues/312"]
+
+[[lessons]]
+id = "off-switch-independent"
+lesson = "An off switch never depends on the pipeline it stops: it takes effect at the next decision with no pass, run, merge or deploy."
+from = ["https://github.com/FieldmouseWorks/remi/pull/980", "https://github.com/FieldmouseWorks/burrow/issues/647", "https://github.com/FieldmouseWorks/burrow/issues/655"]
+applies = ["flow settings", "per-repository landing ownership", "M6 slice 5d"]
+status = "designed"
+where = ["docs/DESIGN.md#properties", "https://github.com/FieldmouseWorks/Conary/issues/312", "https://github.com/FieldmouseWorks/Conary/issues/313"]
+
+[[lessons]]
+id = "reusable-modules"
+lesson = "A pipeline piece is a reusable library any machine can use; a machine holds only its own values."
+from = ["https://github.com/FieldmouseWorks/burrow/issues/656", "https://github.com/FieldmouseWorks/remi/issues/981"]
+applies = ["conary-core", "conary-github", "M7 standalone setup"]
+status = "designed"
+where = ["docs/DESIGN.md#12-roadmap", "https://github.com/FieldmouseWorks/Conary/issues/378"]
+
+[[lessons]]
+id = "pause-vacates"
+lesson = "Pausing frees every slot, lane and proof the paused work holds at once, and keeps its state so unpausing redoes nothing."
+from = ["https://github.com/FieldmouseWorks/burrow/issues/647"]
+applies = ["flow", "per-repository landing ownership", "M6 slice 5d"]
+status = "designed"
+where = ["docs/DESIGN.md#properties", "https://github.com/FieldmouseWorks/Conary/issues/312", "https://github.com/FieldmouseWorks/Conary/issues/313"]
+
+[[lessons]]
+id = "spend-only-where-needed"
+lesson = "Work starts only when its result can decide something, by the cheapest path that's enough, and stops once it can't."
+from = ["https://github.com/FieldmouseWorks/remi/issues/1079", "https://github.com/FieldmouseWorks/burrow/issues/815", "https://github.com/FieldmouseWorks/burrow/issues/798", "https://github.com/FieldmouseWorks/burrow/issues/812"]
+applies = ["flow", "train", "M6 slice 5d", "M6 slice 8"]
+status = "open"
+where = ["https://github.com/FieldmouseWorks/Conary/issues/312", "https://github.com/FieldmouseWorks/Conary/issues/292", "https://github.com/FieldmouseWorks/Conary/issues/320"]
 
 # Seeded 2026-11-14 from the stalls of 2026-11-13 and 11-14, each still open.
 # docs/m6-order.md says which plan answers each one.
