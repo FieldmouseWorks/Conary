@@ -310,3 +310,44 @@ fn read_only_ledger_access_cannot_submit_a_merge() {
     ));
     pending(&c);
 }
+/// Just before the `k`th comparison from now, `then` changes GitHub.
+fn before_comparison(hub: &crate::sim::Hub, k: usize, then: fn(&crate::sim::Hub)) {
+    if k == 1 {
+        hub.race(Call::CompareCommits, then);
+    } else {
+        hub.race(Call::CompareCommits, move |h| {
+            before_comparison(h, k - 1, then)
+        });
+    }
+}
+
+#[test]
+fn a_merge_whose_trailers_cant_all_be_read_isnt_made() {
+    // The merge's own read of the PR's commits is a clean pass's last.
+    let clean = Case::new();
+    clean.clean_review();
+    clean.pass(jobs::now(), false);
+    let last = clean.hub.count(Call::CompareCommits);
+    assert_eq!(clean.hub.count(Call::Land), 1);
+    let cut: fn(&crate::sim::Hub) = |h| h.short_history(TRUNK, &head(3), 0);
+    let bare: fn(&crate::sim::Hub) = |h| h.commit_details(&head(3), None, None, None);
+    for (then, why) in [
+        (
+            cut,
+            "GitHub listed only 0 of its commits, so its landing can't say all their trailers",
+        ),
+        (
+            bare,
+            "GitHub sent its commit 0000000000000000000000000000000000000003 without a message",
+        ),
+    ] {
+        let c = Case::new();
+        c.clean_review();
+        before_comparison(&c.hub, last, then);
+        let reports = c.pass(jobs::now(), false);
+        assert_eq!(c.hub.count(Call::CompareCommits), last);
+        assert_eq!(reports[0].error.as_deref(), Some(why));
+        assert_eq!(c.hub.count(Call::Land), 0);
+        assert!(c.record().landing.is_none());
+    }
+}

@@ -813,3 +813,35 @@ fn a_landing_says_the_prs_title_and_each_distinct_trailer_of_its_commits_once() 
 fn own_commit(n: u64) -> String {
     format!("c{n:0>39}")
 }
+
+#[test]
+fn a_pr_whose_trailers_cant_all_be_read_is_refused_not_landed_without_them() {
+    for (cut, why) in [
+        (
+            true,
+            "GitHub listed only 0 of its commits, so its landing can't say all their trailers",
+        ),
+        (
+            false,
+            "GitHub sent its commit 0000000000000000000000000000000000000003 without a message",
+        ),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = store(&dir);
+        let hub = github(&[3]);
+        join_all(&mut store, &hub, &[3]);
+        let (id, _) = gating(&step_once(&mut store, &hub));
+        hub.ci(&commit_of(&store, id), &[("check / check", "success")]);
+        if cut {
+            hub.short_history(TRUNK, &head(3), 0);
+        } else {
+            hub.commit_details(&head(3), None, None, None);
+        }
+        let stepped = step_once(&mut store, &hub);
+        assert!(stepped.landed.is_empty() && hub.landed(REMI).is_empty());
+        let why = why.to_owned();
+        assert_eq!(stepped.refused, [Refused { pr: 3, why }]);
+        assert_eq!(hub.marked(), [(head(3), Mark::Refused)]);
+        assert_eq!(hub.count(Call::Land), 0);
+    }
+}

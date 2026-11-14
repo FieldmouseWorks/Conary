@@ -29,7 +29,7 @@ mod message;
 mod negative;
 use gate::{Gate, gate};
 use land::{land_next, open_landing, stopped_landing};
-pub use message::Message;
+pub use message::{Message, messages};
 pub use negative::{Negatives, verify as verify_negative};
 
 /// Where a candidate is built, one merge at a time.

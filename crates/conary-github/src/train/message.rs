@@ -31,18 +31,6 @@ impl Message {
         }
     }
 
-    /// PR `pr` titled `title`, landing the commits of `history`.
-    pub fn of(title: &str, pr: u64, history: &crate::api::History) -> Self {
-        Self::new(
-            title,
-            pr,
-            history
-                .commits
-                .iter()
-                .filter_map(|c| c.commit.as_ref()?.message.as_deref()),
-        )
-    }
-
     /// The whole commit message GitHub makes of it.
     pub fn whole(&self) -> String {
         if self.body.is_empty() {
@@ -51,6 +39,29 @@ impl Message {
             format!("{}\n\n{}", self.title, self.body)
         }
     }
+}
+
+/// The messages of `history`'s commits, oldest first, for [`Message::new`];
+/// or why there's no saying their trailers: a history GitHub cut short, or
+/// a commit it sent without a message. A landing commit that dropped a
+/// commit's co-author or session would lose who wrote it.
+pub fn messages(history: &crate::api::History) -> Result<Vec<&str>, String> {
+    if !history.complete {
+        return Err(format!(
+            "GitHub listed only {} of its commits, so its landing can't say all their trailers",
+            history.commits.len()
+        ));
+    }
+    history
+        .commits
+        .iter()
+        .map(|c| {
+            c.commit
+                .as_ref()
+                .and_then(|d| d.message.as_deref())
+                .ok_or_else(|| format!("GitHub sent its commit {} without a message", c.sha))
+        })
+        .collect()
 }
 
 /// A commit message's trailers, as (key, value): its final paragraph, when
@@ -120,6 +131,38 @@ mod tests {
         assert_eq!(
             message.whole(),
             format!("{}\n\n{}", message.title, message.body)
+        );
+    }
+
+    fn history(messages: &[Option<&str>], complete: bool) -> crate::api::History {
+        let commits = messages
+            .iter()
+            .enumerate()
+            .map(|(i, m)| {
+                serde_json::from_value(serde_json::json!({
+                    "sha": format!("c{i}"),
+                    "parents": [],
+                    "commit": {"message": m},
+                }))
+                .unwrap()
+            })
+            .collect();
+        crate::api::History { commits, complete }
+    }
+
+    #[test]
+    fn a_history_cut_short_or_a_commit_without_a_message_says_nothing() {
+        let whole = history(&[Some("a: one"), Some("a: two\n\nX-Y: z")], true);
+        assert_eq!(messages(&whole).unwrap(), ["a: one", "a: two\n\nX-Y: z"]);
+        let cut = history(&[Some("a: one")], false);
+        assert_eq!(
+            messages(&cut).unwrap_err(),
+            "GitHub listed only 1 of its commits, so its landing can't say all their trailers"
+        );
+        let bare = history(&[Some("a: one"), None], true);
+        assert_eq!(
+            messages(&bare).unwrap_err(),
+            "GitHub sent its commit c1 without a message"
         );
     }
 

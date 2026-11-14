@@ -195,10 +195,15 @@ pub(crate) fn act<G: Write>(
                 }
                 permission(pass, github, f, record)?;
                 // The commits its merge squashes, whose trailers its landing
-                // commit says, read before the intent is saved.
+                // commit says, read before the intent is saved. One whose
+                // trailers can't all be read isn't merged without them.
                 let base = f.base_tip.as_deref().unwrap_or(&f.revision.base);
                 let commits = github.compare_commits(&repo, base, &f.revision.head)?;
-                let message = crate::train::Message::of(&f.title, f.number, &commits);
+                let message = crate::train::Message::new(
+                    &f.title,
+                    f.number,
+                    crate::train::messages(&commits)?,
+                );
                 super::ledger::begin(f, record)?;
                 let status = status.expect("permission checked above");
                 record.landing.as_mut().expect("saved intent").permission =

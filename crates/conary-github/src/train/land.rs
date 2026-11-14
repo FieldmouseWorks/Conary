@@ -113,6 +113,11 @@ pub(super) fn land_next(
         stepped.reseated.push(pr);
         return Ok(None);
     }
+    // The commits its merge squashes, read before the mark goes up: their
+    // trailers go in the landing commit's message, which the merge's head
+    // pins. One whose trailers can't all be read isn't landed without them.
+    let commits = source.compare_commits(&full, &at, head.as_str())?;
+    let messages = messages(&commits);
     let elsewhere = if c.trunk != trunk {
         Some(format!(
             "candidate {} was built on {}, not {trunk}",
@@ -121,15 +126,11 @@ pub(super) fn land_next(
     } else if pull.base.name != trunk {
         Some(format!("it targets {}, not {trunk}", pull.base.name))
     } else {
-        None
+        messages.as_ref().err().cloned()
     };
     let (why, description) = if let Some(why) = elsewhere {
         (why.clone(), why)
     } else {
-        // The commits its merge squashes, read before the mark goes up:
-        // their trailers go in the landing commit's message, which the
-        // merge's head pins.
-        let commits = source.compare_commits(&full, &at, head.as_str())?;
         forge.mark(
             &full,
             head.as_str(),
@@ -160,7 +161,8 @@ pub(super) fn land_next(
             let why = format!("it targets {base}, not {trunk}");
             (why.clone(), why)
         } else {
-            let message = Message::of(&last.title, pr, &commits);
+            // Read whole, or it went elsewhere above.
+            let message = Message::new(&last.title, pr, messages.iter().flatten().copied());
             match forge.land(&full, pr, head.as_str(), &message)? {
                 PrMerge::Merged => {
                     stepped.landed.push(pr);
