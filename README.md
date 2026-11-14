@@ -163,6 +163,11 @@ token, on stdin, may hand the machine something
 `cn plugin check PATH` checks an executable against the versioned
 [plugin contract](docs/plugins.md), with a copyable Rust example.
 
+`cn lessons check` checks the [lessons register](docs/lessons.toml) as the
+gate does, and `cn lessons exit M6` is the lessons part of a milestone's exit
+check: it fails while an open lesson applies to a component the milestone
+ships ([Properties](docs/DESIGN.md#properties)).
+
 `cn --help` and each command's `--help` list the rest, environment variables
 included.
 
