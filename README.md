@@ -156,6 +156,10 @@ with `--sign` signs it with the job's own OIDC token (the job needs
     cn attest revision <base> <head> --result pass --tree <tree> \
       --log flake.log --log-artifact flake-log-<uuid> --out "$RUNNER_TEMP/conary" --sign
 
+`cn attest job --audience AUDIENCE --repo OWNER/NAME` is a door's side: whether a job's own
+token, on stdin, may hand the machine something
+([a job's own token](docs/ci-attestation.md#a-jobs-own-token)).
+
 `cn plugin check PATH` checks an executable against the versioned
 [plugin contract](docs/plugins.md), with a copyable Rust example.
 

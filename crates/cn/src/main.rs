@@ -29,7 +29,7 @@ mod train;
 #[command(
     name = "cn",
     about = "Conary: the ledger of every change and why it was made",
-    after_help = "Exits 75 when GitHub couldn't be asked just now (its rate limit, its own errors, the network): run it again later. Exits 65 when the ledger refused what was asked, so nothing was done: asked again, it refuses again until the ledger changes."
+    after_help = "Exits 75 when GitHub couldn't be asked just now (its rate limit, its own errors, the network): run it again later. Exits 65 when the ledger refused what was asked, so nothing was done: asked again, it refuses again until the ledger changes. `cn attest job` exits 65 when the token doesn't hold."
 )]
 struct Cli {
     /// The ledger's directory.
@@ -280,7 +280,9 @@ fn main() -> ExitCode {
 
 /// Whether the ledger refused what was asked, before anything was done.
 fn refused(e: &(dyn std::error::Error + 'static)) -> bool {
-    e.downcast_ref::<Stopped>().is_some_and(Stopped::refused) || e.is::<Unnamed>()
+    e.downcast_ref::<Stopped>().is_some_and(Stopped::refused)
+        || e.is::<Unnamed>()
+        || e.is::<attest::Refused>()
 }
 
 /// A change named by something the ledger has no change for.

@@ -1,15 +1,20 @@
 //! `cn attest`: a signing job's side of `docs/ci-attestation.md`. It writes
 //! the subject and predicate a Sigstore bundle is made from and, with
 //! `--sign`, the statement and the job's own OIDC token as the file the
-//! verifier reads.
+//! verifier reads. And `cn attest job`, a door's side: whether a job's own
+//! token, on its own, may hand it something.
 
 mod ci;
 
+use std::io::Read as _;
 use std::path::{Path, PathBuf};
 
 use clap::Subcommand;
 use serde_json::json;
 
+use conary_github::Api;
+use conary_github::attest::Signer;
+use conary_github::attest::job::{self, Admitted};
 use conary_github::attest::make::{self, Claim, Gate, Log, Negative, Request, Statement};
 
 use crate::{Cli, Result};
@@ -80,7 +85,63 @@ pub enum AttestCommand {
         #[command(flatten)]
         out: Out,
     },
+    /// Check a GitHub Actions job's own OIDC token, read from stdin, as a
+    /// door that takes something from CI asks before it takes it
+    /// (docs/ci-attestation.md, "A job's own token"): GitHub signed it for
+    /// the audience given and no other, it hasn't expired, the signer
+    /// workflow asked for it at a commit on its default branch in one of the
+    /// repos given, and its job ran on one of GitHub's runners or a fresh
+    /// one. Says what the token
+    /// says of its run; exits 65 when it doesn't hold.
+    Job(JobArgs),
 }
+
+#[derive(clap::Args)]
+pub struct JobArgs {
+    /// The audience the token has to name, alone: what the job hands over,
+    /// by its digest.
+    #[arg(long, value_parser = clap::builder::NonEmptyStringValueParser::new())]
+    audience: String,
+    /// A repository, as owner/name, whose runs may hand it over. Repeat for
+    /// each; a token of any other is refused, since anyone's repo can call
+    /// the signer workflow.
+    #[arg(long = "repo", value_name = "OWNER/NAME", required = true)]
+    repos: Vec<conary_core::op::Repo>,
+    /// The workflow whose jobs may, as `owner/repo/.github/workflows/FILE`:
+    /// the machine's, as `cn train step` takes it.
+    #[arg(
+        long = "signer-workflow",
+        env = "CONARY_SIGNER_WORKFLOW",
+        value_name = "OWNER/REPO/PATH"
+    )]
+    signer: Signer,
+    /// What the name of each self-hosted runner started fresh for one job
+    /// starts with, as `cn train step` takes it. With none, only GitHub's
+    /// own runners count.
+    #[arg(long = "fresh-runners", env = "CONARY_FRESH_RUNNERS", value_name = "PREFIX", value_parser = clap::builder::NonEmptyStringValueParser::new())]
+    fresh: Option<String>,
+    /// The GitHub API's root.
+    #[arg(long, env = "GITHUB_API_URL", default_value = "https://api.github.com")]
+    api: String,
+    /// A command that prints a token for the repository it's given, as
+    /// every `cn` takes it. GitHub is asked which runner took a self-hosted
+    /// job and whether the signer's commit is on its default branch.
+    #[arg(long, env = "CONARY_TOKEN_COMMAND", hide_env_values = true)]
+    token_command: Option<String>,
+}
+
+/// A job's token that doesn't hold, and why: nothing was taken, and asking
+/// again refuses again.
+#[derive(Debug)]
+pub struct Refused(pub(crate) String);
+
+impl std::fmt::Display for Refused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "the job's token doesn't hold: {}", self.0)
+    }
+}
+
+impl std::error::Error for Refused {}
 
 #[derive(clap::Args)]
 pub struct GateArgs {
@@ -118,6 +179,7 @@ pub fn run(cli: &Cli, command: &AttestCommand) -> Result<()> {
     match command {
         AttestCommand::Ci(args) => return ci::attest(cli, args),
         AttestCommand::PrepareNegative(args) => return ci::prepare(args),
+        AttestCommand::Job(args) => return job(cli, args),
         _ => {}
     }
     let request = |out: &Out| -> Result<Option<(String, String)>> {
@@ -175,7 +237,9 @@ fn claim(command: &AttestCommand) -> Result<(Claim, &Out)> {
         Ok(Log::of(&bytes, &out.log_artifact))
     };
     Ok(match command {
-        AttestCommand::Ci(_) | AttestCommand::PrepareNegative(_) => unreachable!(),
+        AttestCommand::Ci(_) | AttestCommand::PrepareNegative(_) | AttestCommand::Job(_) => {
+            unreachable!()
+        }
         AttestCommand::Commit { commit, gate, out } => (
             Claim::Commit {
                 commit: commit.clone(),
@@ -228,6 +292,52 @@ fn claim(command: &AttestCommand) -> Result<(Claim, &Out)> {
         ),
     })
 }
+
+/// `cn attest job`: the token on stdin, never an argument, where any
+/// process could read it.
+fn job(cli: &Cli, args: &JobArgs) -> Result<()> {
+    let mut token = String::new();
+    std::io::Read::read_to_string(&mut std::io::stdin().take(MOST_TOKEN), &mut token)?;
+    let token = token.trim();
+    let tokens = crate::choose_tokens(
+        args.token_command.as_deref(),
+        std::env::var("GH_TOKEN").ok().as_deref(),
+        std::env::var("GITHUB_TOKEN").ok().as_deref(),
+    )?;
+    let api = Api::new(&args.api, tokens);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_secs();
+    let got = job::admitted(
+        &api,
+        &api,
+        token,
+        &job::Door {
+            audience: &args.audience,
+            repos: &args.repos,
+            signer: &args.signer,
+            fresh: args.fresh.as_deref(),
+        },
+        i64::try_from(now)?,
+    )?
+    .map_err(Refused)?;
+    if cli.human {
+        let Admitted {
+            repository,
+            visibility,
+            event,
+            git_ref,
+            ..
+        } = &got;
+        println!("{repository} ({visibility}), {event} of {git_ref}: holds");
+    } else {
+        println!("{}", serde_json::to_value(&got)?);
+    }
+    Ok(())
+}
+
+/// A job's token is a kilobyte or so; anything far past that isn't one.
+const MOST_TOKEN: u64 = 16 * 1024;
 
 /// What `cn attest` wrote.
 struct Made {
