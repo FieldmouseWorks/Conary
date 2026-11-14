@@ -351,7 +351,9 @@ deleted in the same PR.
   recipe set. It's cancelled when the head or a selected recipe changes,
   as burrow#518's prebuild is.
 - **`proof`.** It holds a slot, unless its `prepare` answered
-  `slot: false`. Queue order and the `first` label work as they do now.
+  `slot: false`. C3 leaves queue order as it is. The binary `first`
+  order isn't carried across: #312's `explicit-priority` task replaces it
+  before cutover ([what M6 doesn't port](m6.md#what-m6-doesnt-port)).
 
 A `Job` recipe is never sent to a proof plugin. Its check waits, with a
 reason that says a model-run check isn't a proof. Whether wend's

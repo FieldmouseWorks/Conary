@@ -90,15 +90,15 @@ milestone's exit check in the [roadmap](#12-roadmap) includes it.
 
 | Entry | Where it's held | Delivered by |
 | --- | --- | --- |
-| `no-pinned-engines`, `fresh-judge` | [Section 6.1](#61-execution-choices-and-independent-judging) | [#295](https://github.com/FieldmouseWorks/Conary/issues/295), then M6 slice 5c ([m6-plugins.md](m6-plugins.md)) |
-| `same-inputs-same-verdict` | [Section 4.3](#43-evidence), rule 3 | [#291](https://github.com/FieldmouseWorks/Conary/issues/291) for a gate's pass; [#293](https://github.com/FieldmouseWorks/Conary/issues/293) for a judge's verdict, by a rule of its own |
-| `heavy-work-waits-for-settled-inputs` | [Finish line](#12-roadmap), item 9 | [#292](https://github.com/FieldmouseWorks/Conary/issues/292), then M6 slice 8 |
+| `no-pinned-engines`, `fresh-judge` | [Section 6.1](#61-execution-choices-and-independent-judging) | [#295](https://github.com/FieldmouseWorks/Conary/issues/295) (landed in #330), then M6 slice 5c's plugins ([m6-plugins.md](m6-plugins.md)) |
+| `same-inputs-same-verdict` | [Section 4.3](#43-evidence), rule 3 | [#291](https://github.com/FieldmouseWorks/Conary/issues/291) for a gate's pass; [#293](https://github.com/FieldmouseWorks/Conary/issues/293) for a judge's verdict, by a rule of its own; [#320](https://github.com/FieldmouseWorks/Conary/issues/320) for a batch's gate, on #291's lookup |
+| `heavy-work-waits-for-settled-inputs` | [Finish line](#12-roadmap), item 9 | [#292](https://github.com/FieldmouseWorks/Conary/issues/292) (its tasks #296 to #302), then M6 slice 8 ([#320](https://github.com/FieldmouseWorks/Conary/issues/320)) |
 | `reusable-modules` | [Finish line](#12-roadmap), item 7 | Every slice, and M7's setup path; [#378](https://github.com/FieldmouseWorks/Conary/issues/378) for the flow's defaults |
-| `no-model-in-mechanical-step` | A proof, build, replay or poll is a program ([a proof is a program](plugins.md#versions)). A model is a `fix` asked to read a failed proof's log, never what runs it, so the flow sends no model-run check to a proof plugin | M6 slice 5c, tasks C3 and P ([m6-plugins.md](m6-plugins.md)) |
+| `no-model-in-mechanical-step` | A proof, build, replay or poll is a program ([a proof is a program](plugins.md#versions)). A model is a `fix` asked to read a failed proof's log, never what runs it, so the flow sends no model-run check to a proof plugin | The contract and its conformance test: [#295](https://github.com/FieldmouseWorks/Conary/issues/295) (landed in #330, continued by C1 in #377). The flow and the plugin: M6 slice 5c, tasks C3 ([#375](https://github.com/FieldmouseWorks/Conary/issues/375)) and P ([m6-plugins.md](m6-plugins.md)). wend's model-run check: [#315](https://github.com/FieldmouseWorks/Conary/issues/315) |
 | `degraded-counts-as-failed` | A degraded outcome (a fallback taken, a cache or evidence lookup that half-worked, an unreadable record read conservatively) is recorded as an op naming what degraded, and counts as its check's failure, never as a pass. The flow's status names it | [#312](https://github.com/FieldmouseWorks/Conary/issues/312) |
-| `spenders-off-by-default` | Every setting that starts paid work (a plugin, an admission like a drain, proof slots) defaults to off or zero, and a test holds every such default to that. M7's setup path turns each on explicitly | [#312](https://github.com/FieldmouseWorks/Conary/issues/312), [#378](https://github.com/FieldmouseWorks/Conary/issues/378), M7 |
-| `one-settings-source` | Conary's settings publish a self-describing schema: each setting's name, type, allowed values, default, description, and whether it's live. A settings source such as [burrow#655](https://github.com/FieldmouseWorks/burrow/issues/655) imports it rather than declaring it again; a machine's configuration is generated from that source or written by hand against the schema, and nothing reads a setting the schema doesn't declare | [#312](https://github.com/FieldmouseWorks/Conary/issues/312); the rendered configuration [#313](https://github.com/FieldmouseWorks/Conary/issues/313) consumes; M7 |
-| `live-settings` | Every setting is read at the next decision, as the flow's configuration is on each pass ([flow.md](flow.md)), so changing one needs no release, restart or deploy. A setting that does need one says so in the schema, and Conary's status shows it as that exception | [#312](https://github.com/FieldmouseWorks/Conary/issues/312), M7 |
+| `spenders-off-by-default` | Every setting that starts paid work (a plugin, an admission like a drain, proof slots) defaults to off or zero, and a test holds every such default to that. M7's setup path turns each on explicitly | [#312](https://github.com/FieldmouseWorks/Conary/issues/312), [#378](https://github.com/FieldmouseWorks/Conary/issues/378) (landed in #381), M7's setup path ([below](#m7s-setup-path)) |
+| `one-settings-source` | Conary's settings publish a self-describing schema: each setting's name, type, allowed values, default, description, and whether it's live. A settings source such as [burrow#655](https://github.com/FieldmouseWorks/burrow/issues/655) imports it rather than declaring it again; a machine's configuration is generated from that source or written by hand against the schema, and nothing reads a setting the schema doesn't declare | [#312](https://github.com/FieldmouseWorks/Conary/issues/312) for the schema; burrow for its import and the configuration it renders ([burrow#724](https://github.com/FieldmouseWorks/burrow/issues/724)), which [#313](https://github.com/FieldmouseWorks/Conary/issues/313) consumes; M7's setup path ([below](#m7s-setup-path)) |
+| `live-settings` | Every setting is read at the next decision, as the flow's configuration is on each pass ([flow.md](flow.md)), so changing one needs no release, restart or deploy. A setting that does need one says so in the schema, and Conary's status shows it as that exception | [#312](https://github.com/FieldmouseWorks/Conary/issues/312), M7's setup path ([below](#m7s-setup-path)) |
 | `off-switch-independent` | Conary's pause and hold take effect at the next decision through a write that needs none of what they stop: no pass, CI run, merge or deploy. Turning work off is always allowed and immediate | [#312](https://github.com/FieldmouseWorks/Conary/issues/312), [#313](https://github.com/FieldmouseWorks/Conary/issues/313) |
 | `pause-vacates` | A pause or a hold frees at once every slot, lane and proof its work holds, and keeps the branch, PR and flow state, so lifting it resumes without redoing anything | [#312](https://github.com/FieldmouseWorks/Conary/issues/312), [#313](https://github.com/FieldmouseWorks/Conary/issues/313) |
 | `switches-show-their-effect` | A pause, a hold or a per-repository switch shows in the flow's status and in `cn flow` output as in effect, with what it's holding | [#312](https://github.com/FieldmouseWorks/Conary/issues/312), [#313](https://github.com/FieldmouseWorks/Conary/issues/313) |
@@ -110,6 +110,45 @@ milestone's exit check in the [roadmap](#12-roadmap) includes it.
 | `scope-below-a-repo` | Not yet stated | [#313](https://github.com/FieldmouseWorks/Conary/issues/313) |
 | `publish-only-news` | Not yet stated | [#316](https://github.com/FieldmouseWorks/Conary/issues/316) |
 | `repair-ahead-of-red` | Not yet stated | M6 slice 7, [#318](https://github.com/FieldmouseWorks/Conary/issues/318) |
+
+#### Acceptance, lesson by lesson
+
+Every remaining M6 task names the entries it's held to, and the steward
+habits none may port ([m6.md](m6.md#lessons-each-task-is-held-to)). M7's
+setup path is held to those whose `applies` names `M7 standalone setup` or
+a component M7 ships ([below](#m7s-setup-path)). A task's PR moves each of
+its entries forward: a plan to `designed`, stated where this index links;
+an implementation to `built`, with the test that holds it in the entry's
+`where`. An entry that doesn't apply, or that the task leaves where it was,
+gets a sentence in the PR's body saying why. A finished slice owes nothing
+more.
+
+Each milestone's exit runs the executable check, `cn lessons exit M6` in
+[#321](https://github.com/FieldmouseWorks/Conary/issues/321)'s report and
+`cn lessons exit M7` in M7's exit check. It fails only on `open` entries,
+so #321's report also lists each entry still `designed` for a component M6
+ships, with the task that builds it.
+
+#### M7's setup path
+
+M7's setup path ([roadmap](#12-roadmap)) is where spenders are turned on
+and settings are first written, so it owes these:
+
+- **It enables each spender explicitly** (`spenders-off-by-default`). A
+  fresh ledger starts no paid work. The setup turns each plugin, admission
+  and proof slot on by name, and reports what it turned on.
+- **It consumes Conary's settings schema** (`one-settings-source`,
+  `live-settings`). The configuration it writes is checked against the
+  schema Conary publishes (#312's task delivers it), never a copy of it, and
+  every value is live unless the schema says otherwise.
+- **It names no engine of its own** (`no-pinned-engines`) and needs no
+  machine's own pieces (`reusable-modules`, finish-line item 7).
+
+burrow's side isn't M7's. burrow imports the schema into its settings
+source ([burrow#655](https://github.com/FieldmouseWorks/burrow/issues/655))
+and generates its machines' configuration from it
+([burrow#724](https://github.com/FieldmouseWorks/burrow/issues/724) for the
+flow's). M7 builds neither, and burrow keeps no definition of its own.
 
 ## 2. Gates, and what replaces them
 
@@ -923,6 +962,6 @@ it pointed at the finish line:
 | M3 | The train (section 4.7) on remi, with the evidence verifier it counts candidates by and the negative check for new tests | For a day of remi's PRs: fewer gate runs than PRs landed, every candidate's last landing on its evidence, and trunk's own CI green after every candidate landed | Live on remi. The first criterion isn't met: remi's PRs arrive too slowly to batch ([#48](https://github.com/FieldmouseWorks/Conary/issues/48)). Signed proof verdicts ([#218](https://github.com/FieldmouseWorks/Conary/issues/218)) let PSIV's queue ride a train |
 | M4 | `undo` by change, session and time, through the landing flow, and `at` | A deliberately bad session's changes in two repos are reverted by `undo --actor` and land with no person involved | Done ([#173](https://github.com/FieldmouseWorks/Conary/issues/173)) |
 | M5 | Class policy in Conary, from the paths and the kind of edit (section 4.4); the steward reads each change's class and the evidence it needs from conaryd | `oneWay` is gone from burrow's autoland config, and a docs-only change lands on green CI with no review round | Done ([#226](https://github.com/FieldmouseWorks/Conary/issues/226)): `cn class` records each revision's class, raised by its PR's labels and held to what the steward settled; a join rides alone by it. #236 landed docs-only on green CI with no review round, and `oneWay` is gone from burrow |
-| M6 | conaryd runs the landing flow. Its first slice is a simulated GitHub, in memory, that the train and the flow are tested against, with delays, errors, races and stale reads injected and recorded GitHub responses as its fixtures, so a change to either is proved without remi. Then the flow itself, R0 landing before review, a red trunk bisected to the change that broke it and undone, and batches (item 9): the work in flight grouped by what it touches, proposed, and gated once | `steward.py` is deleted; a week of PRs across every repo lands through conaryd, R0 ones with no wait on a reviewer, with fewer gate runs than PRs landed, the PRs' own runs counted; a deliberately broken landing is found and undone with no Claude job; and `cn lessons exit M6` passes: no open lesson applies to what M6 ships ([Properties](#properties)) | Slices 1 to 4 and 5b done; 5a's comparison runs in shadow on remi, acting on nothing. What's left, who delivers it and what it waits on: [M6 delivery plan](m6.md) |
-| M7 | Setup by an agent: one path from a clone to a working ledger, with the steward or without one, that an agent follows for someone; the box's specifics (Nix, systemd, remi) as configuration on top. The three ties to burrow above, cut: attested evidence and the negative check from a workflow any repository's CI can call, its signer configured rather than fixed, and a PR-event source of Conary's own | A fresh agent session, given this repository, a Linux machine with no Nix and no burrow, and a token, sets up a ledger, records a repo's PRs, lands one on that repo's own attested CI and answers `why` and `undo`, with no person stepping in; and `cn lessons exit M7` passes ([Properties](#properties)) | Event-source tie cut (#278); repository cutover and setup path remain |
+| M6 | conaryd runs the landing flow. Its first slice is a simulated GitHub, in memory, that the train and the flow are tested against, with delays, errors, races and stale reads injected and recorded GitHub responses as its fixtures, so a change to either is proved without remi. Then the flow itself, R0 landing before review, a red trunk bisected to the change that broke it and undone, and batches (item 9): the work in flight grouped by what it touches, proposed, and gated once | `steward.py` is deleted; a week of PRs across every repo lands through conaryd, R0 ones with no wait on a reviewer, with fewer gate runs than PRs landed, the PRs' own runs counted; a deliberately broken landing is found and undone with no Claude job; and `cn lessons exit M6` passes: no open lesson applies to what M6 ships ([Properties](#properties)) | Slices 1 to 4, 5a and 5b done, and 5c under way; 5a's comparison runs in shadow on remi, acting on nothing. What's left, who delivers it, what it waits on and the lessons each task is held to: [M6 delivery plan](m6.md) |
+| M7 | Setup by an agent: one path from a clone to a working ledger, with the steward or without one, that an agent follows for someone, turning each spender on explicitly and writing configuration against Conary's settings schema ([M7's setup path](#m7s-setup-path)); the box's specifics (Nix, systemd, remi) as configuration on top. The three ties to burrow above, cut: attested evidence and the negative check from a workflow any repository's CI can call, its signer configured rather than fixed, and a PR-event source of Conary's own | A fresh agent session, given this repository, a Linux machine with no Nix and no burrow, and a token, sets up a ledger, records a repo's PRs, lands one on that repo's own attested CI and answers `why` and `undo`, with no person stepping in; and `cn lessons exit M7` passes ([Properties](#properties)) | Event-source tie cut (#278); repository cutover and setup path remain |
 | M8 | A written decision on each parked idea, from ledger data | The decisions, and with them the finish line | |
