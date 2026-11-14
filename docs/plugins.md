@@ -271,6 +271,12 @@ is checked in review, fix, judge, proof, job order. A successful conformance run
 checks the wire behavior and fixtures; it cannot prove a plugin's real-world
 judgment quality, that a pushed head exists, or that a proof was executed.
 
+Each fixture runs on an independent handle with fresh context. Known session
+IDs remain excluded from judging across fixtures, while unavailable nonjudge
+IDs do not retire a later fixture's handle. The calling handle's own session
+history is unchanged. Version requirements, answer validation and fixture
+semantics apply to every call as usual.
+
 
 The example also recognizes `conary-test/flow-simulation` for the in-memory
 flow tests: a head ending in `3` gets one finding, and a fix reports the

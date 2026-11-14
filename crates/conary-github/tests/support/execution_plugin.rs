@@ -38,7 +38,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             meters: vec![],
         },
         _ => {
-            let run = request.execution.as_ref().expect("v3 work execution");
+            let legacy = Execution {
+                choice: None,
+                context: Context::Fresh,
+            };
+            let run = request.execution.as_ref().unwrap_or(&legacy);
             let judging = request.task.kind() == Some(Kind::Judge);
             session = match &run.context {
                 Context::Continue { session } | Context::Fork { session } => session.clone(),
@@ -98,6 +102,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
                 "no-session-nonjudge" if !judging => unidentified = true,
+                "optional-fix" if matches!(request.task, Task::Fix { .. }) => unidentified = true,
+                "optional-review" | "conformance-author"
+                    if matches!(request.task, Task::Review { .. }) =>
+                {
+                    unidentified = true
+                }
+                "no-session-judge" if judging => unidentified = true,
+                "conformance-review-shared" => {
+                    if matches!(request.task, Task::Fix { .. }) {
+                        unidentified = true;
+                    } else {
+                        session = "conformance-shared".into();
+                    }
+                }
+                "conformance-fix-shared" => {
+                    if matches!(request.task, Task::Review { .. }) {
+                        unidentified = true;
+                    } else {
+                        session = "conformance-shared".into();
+                    }
+                }
                 "blank-session-nonjudge" if !judging => session.clear(),
                 "fork-nonjudge" if !judging => {
                     execution.as_mut().unwrap().context = Context::Fork {
@@ -119,6 +144,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         why: "fixture judgment".into(),
                     },
                     Task::Review { .. } => Answer::Review { findings: vec![] },
+                    Task::Fix { .. } if mode == "conformance-wrong-fix" => Answer::Fix {
+                        result: FixResult::Pushed {
+                            head: "1".repeat(40),
+                        },
+                    },
                     Task::Fix { .. } => Answer::Fix {
                         result: FixResult::Unable {
                             why: "fixture never writes".into(),
@@ -133,10 +163,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     };
-    let engine = if mode == "other-engine" {
-        "other-engine"
-    } else {
-        "configured-engine"
+    let engine = match mode.as_str() {
+        "other-engine" => "other-engine",
+        "conformance-author" => "conary-conformance-author",
+        _ => "configured-engine",
     };
     serde_json::to_writer(
         std::io::stdout(),

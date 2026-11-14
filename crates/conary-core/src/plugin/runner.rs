@@ -331,12 +331,27 @@ impl Plugin {
     /// Exercise every advertised kind, including its fixture semantics.
     pub fn check(&self) -> Result<Vec<Kind>, Failure> {
         let mut checked = Vec::new();
+        let mut sessions = self.sessions.independent()?;
         for task in fixtures() {
             let kind = task.kind().expect("fixture has a kind");
             if !self.kinds.contains(&kind) {
                 continue;
             }
-            let response = self.call(task)?;
+            // Fixtures are separate work contexts. A valid nonjudge result
+            // without a session must not retire the next fixture's handle;
+            // known IDs still exclude a plugin that reuses them for judging.
+            let fixture = Self {
+                path: self.path.clone(),
+                limits: self.limits,
+                identity: self.identity.clone(),
+                kinds: self.kinds.clone(),
+                contract: self.contract,
+                offers: self.offers.clone(),
+                sessions,
+                calls: std::sync::Mutex::new(()),
+            };
+            let response = fixture.call(task)?;
+            sessions = fixture.sessions.independent()?;
             let conforms = match response.answer {
                 Answer::Review { findings } => findings.is_empty(),
                 Answer::Fix {

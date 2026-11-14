@@ -84,7 +84,7 @@ pub(super) struct Sessions(Mutex<History>);
 #[derive(Default)]
 struct History {
     judges: BTreeMap<String, String>,
-    nonjudge: BTreeSet<String>,
+    excluded: BTreeSet<String>,
     unidentified_nonjudge: bool,
 }
 
@@ -94,7 +94,7 @@ impl History {
             self.unidentified_nonjudge = true;
         } else {
             self.judges.remove(session);
-            self.nonjudge.insert(session.into());
+            self.excluded.insert(session.into());
         }
     }
 }
@@ -104,6 +104,21 @@ fn fail(why: &str) -> Failure {
 }
 
 impl Sessions {
+    /// A new independent handle keeps known exclusions, never continuation
+    /// eligibility or the unknown context of the preceding handle.
+    pub fn independent(&self) -> Result<Self, Failure> {
+        let history = self
+            .0
+            .lock()
+            .map_err(|_| fail("session history poisoned"))?;
+        let mut excluded = history.excluded.clone();
+        excluded.extend(history.judges.keys().cloned());
+        Ok(Self(Mutex::new(History {
+            excluded,
+            ..History::default()
+        })))
+    }
+
     /// Only this handle's validated judge result can establish a continuation.
     /// A matching session string supplied by a writer/reviewer is insufficient.
     pub fn prepare(&self, task: &Task, context: &Context) -> Result<(), Failure> {
@@ -194,8 +209,8 @@ impl Sessions {
             .0
             .lock()
             .map_err(|_| fail("session history poisoned"))?;
-        if history.nonjudge.contains(session) {
-            return Err(fail("judge reused an observed nonjudge session"));
+        if history.excluded.contains(session) {
+            return Err(fail("judge reused an observed session"));
         }
         match context {
             Context::Fresh if history.judges.contains_key(session) => {

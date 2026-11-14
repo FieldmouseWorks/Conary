@@ -247,6 +247,55 @@ fn execution_configuration_rejects_unknown_kinds() {
     );
 }
 
+#[test]
+fn conformance_separates_optional_nonjudge_sessions() {
+    use conary_core::plugin::Kind;
+    for mode in ["optional-fix", "optional-review", "no-session-nonjudge"] {
+        let (_dir, _path, plugin) = fixture(mode);
+        assert_eq!(
+            plugin.check().unwrap(),
+            vec![Kind::Review, Kind::Fix, Kind::Judge, Kind::Job],
+            "{mode}"
+        );
+    }
+}
+
+#[test]
+fn conformance_preserves_known_session_exclusions_across_handles() {
+    for mode in ["conformance-review-shared", "conformance-fix-shared"] {
+        let (_dir, _path, plugin) = fixture(mode);
+        let error = plugin.check().unwrap_err();
+        assert!(error.0.contains("observed"), "{mode}: {error}");
+    }
+}
+
+#[test]
+fn conformance_does_not_reactivate_the_callers_retired_handle() {
+    let (_dir, _path, plugin) = fixture("no-session-nonjudge");
+    plugin.call(nonjudges()[0].clone()).unwrap();
+    assert!(plugin.call(judge()).is_err());
+    assert!(plugin.check().is_ok());
+    assert!(plugin.call(judge()).is_err());
+}
+
+#[test]
+fn conformance_keeps_validation_and_fixture_semantics() {
+    for (mode, why) in [
+        ("legacy", "need conary-plugin v3"),
+        ("no-provenance", "did not report actual execution"),
+        ("no-session-judge", "judge needs a session"),
+        ("conformance-author", "author cannot grade"),
+        (
+            "conformance-wrong-fix",
+            "does not satisfy conformance fixture",
+        ),
+    ] {
+        let (_dir, _path, plugin) = fixture(mode);
+        let error = plugin.check().unwrap_err();
+        assert!(error.0.contains(why), "{mode}: {error}");
+    }
+}
+
 fn nonjudges() -> [Task; 3] {
     [
         Task::Fix {
