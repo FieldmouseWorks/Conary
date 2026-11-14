@@ -231,3 +231,30 @@ fn issuances_with_provenance_take_only_the_contracts_words() {
         assert!(Data::read(root.path(), &repo, 3).is_err());
     }
 }
+
+#[test]
+fn saved_judge_decisions_load_from_before_and_after_they_carried_reasons() {
+    let (root, repo, data) = fixture();
+    for (saved, step) in [
+        (json!("Judge"), Step::Judge(vec![])),
+        (json!({"Judge": []}), Step::Judge(vec![])),
+        (
+            json!({"Judge": ["no_ci", "round_limit"]}),
+            Step::Judge(vec![Trigger::NoCi, Trigger::RoundLimit]),
+        ),
+    ] {
+        let mut value: Value = serde_json::from_str(BASE_RECORD).unwrap();
+        value["decision"]["step"] = saved;
+        std::fs::write(data.path(3), value.to_string()).unwrap();
+        let mut expected = canonical_record();
+        expected["decision"]["step"] = serde_json::to_value(&step).unwrap();
+        for record in [
+            data.load(3).unwrap(),
+            Data::read(root.path(), &repo, 3).unwrap(),
+        ] {
+            assert_eq!(record.decision.as_ref().unwrap().step, step);
+            // Everything else survives: jobs, permissions, issuances, memory.
+            assert_eq!(serde_json::to_value(&record).unwrap(), expected);
+        }
+    }
+}

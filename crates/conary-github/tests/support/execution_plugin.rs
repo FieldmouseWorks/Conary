@@ -20,6 +20,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }],
             kinds: vec![Kind::Review, Kind::Fix, Kind::Judge],
             v2_kinds: vec![Kind::Job],
+            v4_kinds: vec![],
             models: ["fixture-model", "alternate-model"]
                 .into_iter()
                 .map(|id| Model {
@@ -148,11 +149,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         result: FixResult::Pushed {
                             head: "1".repeat(40),
                         },
+                        answers: answers(&request),
                     },
+                    // It never writes, so it answers each finding unchanged.
+                    Task::Fix { .. } if answers(&request).is_some_and(|a| !a.is_empty()) => {
+                        Answer::Fix {
+                            result: FixResult::Unchanged,
+                            answers: answers(&request),
+                        }
+                    }
                     Task::Fix { .. } => Answer::Fix {
                         result: FixResult::Unable {
                             why: "fixture never writes".into(),
                         },
+                        answers: answers(&request),
                     },
                     Task::Job { .. } => Answer::Job {
                         summary: "fixture job".into(),
@@ -181,4 +191,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
     )?;
     Ok(())
+}
+
+/// A v4 fix's answers: each finding, unchanged. None in an older contract.
+fn answers(request: &Request) -> Option<Vec<FindingAnswer>> {
+    let Task::Fix { problems, .. } = &request.task else {
+        return None;
+    };
+    (request.contract == CONTRACT).then(|| {
+        problems
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| matches!(p, Problem::Finding { .. }))
+            .map(|(problem, _)| FindingAnswer {
+                problem,
+                fixed: false,
+                reply: "fixture never writes".into(),
+            })
+            .collect()
+    })
 }

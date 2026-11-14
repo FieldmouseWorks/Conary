@@ -101,6 +101,7 @@ pub(crate) fn act<G: Write>(
                     Purpose::Fix(*kind),
                     Task::Fix {
                         repo,
+                        pr: f.number,
                         head: f.revision.head.clone(),
                         problems,
                     },
@@ -108,17 +109,23 @@ pub(crate) fn act<G: Write>(
                     data,
                 )?;
             }
-            Step::Judge => {
+            Step::Judge(decided) => {
                 let author = author(github, f, record)?;
+                let discussion = super::judging::discussion(record)?;
                 pass.start(
                     f,
                     Purpose::Judge,
                     Task::Judge {
                         repo,
+                        pr: f.number,
                         head: f.revision.head.clone(),
                         against: format!("{}\n{}", f.title, f.description),
                         author,
                         reviewers: reviewers(record)?,
+                        why: super::judging::why(record, &f.revision, decided)?,
+                        context: super::judging::judging_context(
+                            discussion.iter().map(|(f, a)| (f, a.as_ref())),
+                        ),
                     },
                     record,
                     data,
@@ -130,7 +137,12 @@ pub(crate) fn act<G: Write>(
                 pass.start(
                     f,
                     Purpose::Proof,
-                    Task::Proof { repo, tree, checks },
+                    Task::Proof {
+                        repo,
+                        head: f.revision.head.clone(),
+                        tree,
+                        checks,
+                    },
                     record,
                     data,
                 )?;
@@ -319,7 +331,7 @@ fn failure(step: &Step) -> Failure {
         Step::PostReview(_) => Failure::Post,
         Step::PostFix(_) => Failure::Answer,
         Step::Prove | Step::PostProof => Failure::Build,
-        Step::QueueReview(_) | Step::HandFix(_) | Step::Judge => Failure::Job,
+        Step::QueueReview(_) | Step::HandFix(_) | Step::Judge(_) => Failure::Job,
         Step::StopJob(_) => Failure::Stop,
         _ => Failure::Status,
     }
@@ -341,6 +353,7 @@ fn author<G: Read>(github: &G, f: &Facts, record: &Record) -> Result<plugin::Ide
         if let Some(Ok(response)) = jobs::completion(work, jobs::now())?.result
             && let plugin::Answer::Fix {
                 result: plugin::FixResult::Pushed { head },
+                ..
             } = &response.answer
             && head == &f.revision.head
         {

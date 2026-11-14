@@ -33,6 +33,8 @@ pub struct Plugin {
     pub identity: Identity,
     kinds: Vec<Kind>,
     contract: &'static str,
+    /// The negotiated contract's number, from 1.
+    version: u8,
     offers: Option<Offers>,
     sessions: execution::Sessions,
     // Session observations must precede any later call's eligibility check,
@@ -63,6 +65,7 @@ impl Plugin {
             versions,
             kinds,
             v2_kinds,
+            v4_kinds,
             models,
             capabilities,
             meters,
@@ -70,27 +73,34 @@ impl Plugin {
         else {
             return bad("expected describe response");
         };
-        let speaks = |c: &str| versions.iter().any(|v| v == c);
-        let contract = if speaks(CONTRACT) {
-            CONTRACT
-        } else if speaks(CONTRACT_V2) {
-            CONTRACT_V2
-        } else if speaks(CONTRACT_V1) {
-            CONTRACT_V1
-        } else {
+        // The highest contract both sides speak.
+        let Some(contract) = CONTRACTS
+            .into_iter()
+            .rev()
+            .find(|c| versions.iter().any(|v| v == c))
+        else {
             return bad("invalid advertised versions or kinds");
         };
+        let version = super::version(contract).expect("a known contract");
         let mut kinds = kinds;
         if kinds.contains(&Kind::Job) {
             return bad("the job kind belongs in v2_kinds, which a v1 runner doesn't read");
         }
-        if v2_kinds.iter().any(|k| *k != Kind::Job) {
+        if kinds.contains(&Kind::Prepare) || v2_kinds.contains(&Kind::Prepare) {
+            return bad("the prepare kind belongs in v4_kinds, which an older runner doesn't read");
+        }
+        if v2_kinds.iter().any(|k| *k != Kind::Job) || v4_kinds.iter().any(|k| *k != Kind::Prepare)
+        {
             return bad("invalid advertised versions or kinds");
         }
-        if contract == CONTRACT_V1 && !v2_kinds.is_empty() {
+        if version < 2 && !v2_kinds.is_empty() {
             return bad("the job kind needs conary-plugin v2");
         }
+        if version < 4 && !v4_kinds.is_empty() {
+            return bad("the prepare kind needs conary-plugin v4");
+        }
         kinds.extend(v2_kinds);
+        kinds.extend(v4_kinds);
         if kinds.is_empty()
             || kinds
                 .iter()
@@ -99,7 +109,7 @@ impl Plugin {
         {
             return bad("invalid advertised versions or kinds");
         }
-        let offers = if contract != CONTRACT_V1 {
+        let offers = if version >= 2 {
             let Some(capabilities) = capabilities else {
                 return bad("a v2 plugin must declare its capabilities");
             };
@@ -115,12 +125,16 @@ impl Plugin {
         } else {
             None
         };
+        if kinds.contains(&Kind::Prepare) && !kinds.contains(&Kind::Proof) {
+            return bad("prepare is for proof plugins: it needs the proof kind");
+        }
         Ok(Self {
             path: path.into(),
             limits,
             identity: response.by,
             kinds,
             contract,
+            version,
             offers,
             sessions: execution::Sessions::default(),
             calls: std::sync::Mutex::new(()),
@@ -174,13 +188,16 @@ impl Plugin {
                         .all(|p| !matches!(p,Problem::Conflict{base,..} if !sha(base)))
             }
             Task::Judge { head, .. } => sha(head),
-            Task::Proof { tree, .. } => sha(tree),
+            Task::Proof { head, tree, .. } | Task::Prepare { head, tree, .. } => {
+                sha(head) && sha(tree)
+            }
             Task::Job { .. } => true,
             Task::Describe => false,
         };
         if !full_objects {
             return bad("plugin requests require full Git object IDs");
         }
+        valid_request(&task)?;
         if !self.kinds.contains(&kind) {
             return bad("request kind was not described");
         }
@@ -205,7 +222,7 @@ impl Plugin {
             choice
         };
         let mut request = Request::work(self.contract, task.clone());
-        if self.contract == CONTRACT {
+        if self.version >= 3 {
             let execution = Execution { choice, context };
             execution.validate(
                 &self.identity.engine,
@@ -292,17 +309,36 @@ impl Plugin {
                     return bad("invalid finding");
                 }
             }
-            (Task::Fix { .. }, Answer::Fix { result }) => match result {
-                FixResult::Pushed { head } if !sha(head) => return bad("invalid pushed head"),
-                FixResult::Unable { why } if why.trim().is_empty() => {
-                    return bad("missing inability reason");
+            (Task::Fix { problems, .. }, Answer::Fix { result, answers }) => {
+                match result {
+                    FixResult::Pushed { head } if !sha(head) => {
+                        return bad("invalid pushed head");
+                    }
+                    FixResult::Unable { why } if why.trim().is_empty() => {
+                        return bad("missing inability reason");
+                    }
+                    FixResult::Unchanged if self.version < 4 => {
+                        return bad("an unchanged fix needs conary-plugin v4");
+                    }
+                    _ => {}
                 }
-                _ => {}
-            },
+                self.valid_answers(problems, result, answers.as_deref())?;
+            }
             (Task::Judge { .. }, Answer::Judge { why, .. }) if !why.trim().is_empty() => {}
             (Task::Job { .. }, Answer::Job { summary, next })
                 if !summary.trim().is_empty() && next.valid() => {}
-            (Task::Proof { checks, .. }, Answer::Proof { results }) => {
+            // v4 names exactly the requested head; older contracts name none.
+            (Task::Proof { head, .. }, Answer::Proof { head: answered, .. })
+                if answered.as_ref() != (self.version >= 4).then_some(head) =>
+            {
+                return bad(if self.version >= 4 {
+                    "a v4 proof answer must name the head it ran on"
+                } else {
+                    "a proof answer names its head only in conary-plugin v4"
+                });
+            }
+            (Task::Prepare { .. }, Answer::Prepare { why, .. }) if !why.trim().is_empty() => {}
+            (Task::Proof { checks, .. }, Answer::Proof { results, .. }) => {
                 if checks.len() != results.len()
                     || checks
                         .iter()
@@ -328,54 +364,102 @@ impl Plugin {
         Ok(response)
     }
 
+    /// A v4 fix answers each finding it was handed, once and in order; an
+    /// older one carries no answers. A fix it claims needs a pushed head.
+    fn valid_answers(
+        &self,
+        problems: &[Problem],
+        result: &FixResult,
+        answers: Option<&[FindingAnswer]>,
+    ) -> Result<(), Failure> {
+        let Some(answers) = answers else {
+            if self.version >= 4 {
+                return bad("a v4 fix must answer each finding");
+            }
+            return Ok(());
+        };
+        if self.version < 4 {
+            return bad("fix answers need conary-plugin v4");
+        }
+        let findings = problems
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| matches!(p, Problem::Finding { .. }))
+            .map(|(i, _)| i);
+        if !findings.eq(answers.iter().map(|a| a.problem))
+            || answers.iter().any(|a| a.reply.trim().is_empty())
+        {
+            return bad("a fix must answer each finding once, in order, with a reply");
+        }
+        if answers.iter().any(|a| a.fixed) && !matches!(result, FixResult::Pushed { .. }) {
+            return bad("a fixed answer needs a pushed head");
+        }
+        Ok(())
+    }
+
     /// Exercise every advertised kind, including its fixture semantics.
     pub fn check(&self) -> Result<Vec<Kind>, Failure> {
         let mut checked = Vec::new();
         let mut sessions = self.sessions.independent()?;
-        for task in fixtures() {
-            let kind = task.kind().expect("fixture has a kind");
-            if !self.kinds.contains(&kind) {
+        for fixture in fixtures() {
+            let kind = fixture.task.kind().expect("fixture has a kind");
+            let since = super::version(fixture.contract).expect("a known contract");
+            if !self.kinds.contains(&kind) || self.version < since {
                 continue;
             }
             // Fixtures are separate work contexts. A valid nonjudge result
             // without a session must not retire the next fixture's handle;
             // known IDs still exclude a plugin that reuses them for judging.
-            let fixture = Self {
+            let handle = Self {
                 path: self.path.clone(),
                 limits: self.limits,
                 identity: self.identity.clone(),
                 kinds: self.kinds.clone(),
                 contract: self.contract,
+                version: self.version,
                 offers: self.offers.clone(),
                 sessions,
                 calls: std::sync::Mutex::new(()),
             };
-            let response = fixture.call(task)?;
-            sessions = fixture.sessions.independent()?;
-            let conforms = match response.answer {
-                Answer::Review { findings } => findings.is_empty(),
-                Answer::Fix {
-                    result: FixResult::Unable { .. },
-                } => true,
-                Answer::Judge {
-                    verdict: Judgment::Pass,
-                    ..
-                } => true,
-                Answer::Proof { results } => results.iter().all(|r| {
-                    matches!(
-                        (&*r.check, &r.verdict),
-                        ("fixture-pass", Verdict::Pass) | ("fixture-fail", Verdict::Fail)
-                    )
-                }),
-                Answer::Job { next, .. } => next == Next::Done,
-                _ => false,
-            };
-            if !conforms {
+            let response = handle.call(fixture.task.clone())?;
+            sessions = handle.sessions.independent()?;
+            if !fixture.conforms(&response.answer) {
                 return bad("answer does not satisfy conformance fixture");
             }
-            checked.push(kind);
+            if !checked.contains(&kind) {
+                checked.push(kind);
+            }
         }
         Ok(checked)
+    }
+}
+
+/// What every request must say, whichever contract carries it. The v4
+/// fields are checked even when an older wire leaves them off, so the flow
+/// can't build a request a v4 plugin would get wrong.
+fn valid_request(task: &Task) -> Result<(), Failure> {
+    match task {
+        Task::Fix { pr, .. } if *pr == 0 => bad("a fix request needs its PR"),
+        Task::Judge {
+            pr, why, context, ..
+        } => {
+            if *pr == 0 {
+                return bad("a judge request needs its PR");
+            }
+            if why.is_empty() || why.iter().enumerate().any(|(i, w)| why[..i].contains(w)) {
+                return bad("a judge request needs a nonempty, unique why");
+            }
+            if !digest(context) {
+                return bad("a judge request needs its context digest");
+            }
+            Ok(())
+        }
+        Task::Prepare { checks, .. }
+            if !super::unique_nonblank(checks.iter().map(String::as_str)) =>
+        {
+            bad("prepare checks must be unique and nonblank")
+        }
+        _ => Ok(()),
     }
 }
 fn valid_identity(by: &Identity) -> Result<(), Failure> {
@@ -387,6 +471,10 @@ fn valid_identity(by: &Identity) -> Result<(), Failure> {
 }
 fn sha(s: &str) -> bool {
     matches!(s.len(), 40 | 64) && s.bytes().all(|b| b.is_ascii_hexdigit())
+}
+/// A sha256 digest in lowercase hex.
+fn digest(s: &str) -> bool {
+    s.len() == 64 && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 fn execute(
@@ -443,8 +531,29 @@ fn execute(
     if bytes.len() > limits.response_bytes {
         return bad("plugin response too large");
     }
-    let response: Response =
+    let value: serde_json::Value =
         serde_json::from_slice(&bytes).map_err(|e| Failure(format!("invalid plugin JSON: {e}")))?;
+    // A prepare answer is never a verdict: it carries nothing but readiness.
+    if matches!(request.task, Task::Prepare { .. })
+        && value.as_object().is_some_and(|o| {
+            o.keys().any(|k| {
+                ![
+                    "contract",
+                    "by",
+                    "execution",
+                    "kind",
+                    "ready",
+                    "slot",
+                    "why",
+                ]
+                .contains(&k.as_str())
+            })
+        })
+    {
+        return bad("a prepare answer is never a verdict: it carries only ready, slot and why");
+    }
+    let response: Response =
+        serde_json::from_value(value).map_err(|e| Failure(format!("invalid plugin JSON: {e}")))?;
     if response.contract != contract {
         return bad("wrong plugin contract version");
     }

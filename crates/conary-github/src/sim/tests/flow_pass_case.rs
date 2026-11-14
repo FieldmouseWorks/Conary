@@ -154,6 +154,7 @@ impl Case {
                         answer:
                             conary_core::plugin::Answer::Fix {
                                 result: conary_core::plugin::FixResult::Pushed { head },
+                                ..
                             },
                         ..
                     })),

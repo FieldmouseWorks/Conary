@@ -193,7 +193,7 @@ pub struct Job {
     pub repeated: bool,
 }
 
-pub use conary_core::plugin::Judgment;
+pub use conary_core::plugin::{Judgment, Trigger};
 
 /// Per revision: the highest authenticated judge generation, and its verdict
 /// with any provenance (`None` when that generation's words conflict).
@@ -544,7 +544,10 @@ pub enum Step {
     StopJob(String),
     Prove,
     PostProof,
-    Judge,
+    /// Ask a judge, for these reasons. Empty when a judge already started on
+    /// this head and base is all that holds (the request then carries that
+    /// judge's reasons), and in decisions saved before steps carried them.
+    Judge(Vec<Trigger>),
     UpdateBranch,
     Settle,
     Merge,
@@ -553,8 +556,13 @@ pub enum Step {
     DisableAutoMerge,
     CloseAlreadyLanded,
     ListOwner,
-    Retry { kind: Failure, at: u64 },
-    Wait { until: Option<u64> },
+    Retry {
+        kind: Failure,
+        at: u64,
+    },
+    Wait {
+        until: Option<u64>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -577,6 +585,7 @@ pub enum OwnerNotice {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Next {
     pub stage: Stage,
+    #[serde(deserialize_with = "super::persist::step::deserialize")]
     pub step: Step,
     pub description: String,
     /// Earliest explicit wait or owned worker deadline, in Unix seconds.

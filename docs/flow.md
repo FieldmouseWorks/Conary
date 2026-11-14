@@ -69,6 +69,14 @@ The paths name executables, without shell parsing. They use the negotiated
 [plugin contract](plugins.md), including bounded responses and session
 independence. Judges require v3 and every new flow invocation requests a
 fresh context. Known reviewer sessions accompany the judge request.
+Fix and judge requests name the PR, and a proof request the head whose tree
+it proves. A judge request carries the decision's reasons as `why`, in the
+contract's words. One asked again only because a judge already started on
+this head and base carries that judge's reasons, even if the description
+changed since, or `started` when that judge predates recorded reasons. Its `context` is
+`flow::judging_context` over the PR's discussion as a log in job order: each
+validated review's findings, then each v4 fix's findings as handed, with its
+answers. A plugin speaking an older contract gets none of these fields.
 Engine trailers across the PR history supply its author engine. Unreadable
 or mixed-engine histories wait rather than infer independence. Session
 trailers are untrusted: only a completed fix's validated producer establishes

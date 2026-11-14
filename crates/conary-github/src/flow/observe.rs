@@ -59,6 +59,7 @@ pub(crate) fn hydrate(f: &mut Facts, record: &Record, now: u64, dry_run: bool) -
                         answer:
                             plugin::Answer::Fix {
                                 result: plugin::FixResult::Pushed { head },
+                                ..
                             },
                         ..
                     })) => FixResult::Answer(FixAnswer {

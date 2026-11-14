@@ -136,7 +136,10 @@ fn judge_verdicts_are_read_from_sealed_comments() {
         ("land", Step::Merge),
         ("failed", Step::HandFix(Kind::JudgeFailure)),
         // An unknown word is no judgment: the flow asks the judge again.
-        ("approve", Step::Judge),
+        (
+            "approve",
+            Step::Judge(vec![Trigger::AuthorEngine, Trigger::Asked]),
+        ),
         ("misdescribed", Step::HandFix(Kind::Description)),
     ] {
         let (h, m) = setup();
@@ -206,7 +209,10 @@ fn wrong_author_or_missing_seal_never_counts_as_a_judgment() {
         h.flow_comment(REMI, 3, who, &body);
         let f = read_f(&h, s);
         assert_eq!(f.judgment, None);
-        assert_eq!(next(&f, &m, 4000).0.step, Step::Judge);
+        assert_eq!(
+            next(&f, &m, 4000).0.step,
+            Step::Judge(vec![Trigger::AuthorEngine])
+        );
     }
 }
 #[test]
@@ -256,7 +262,11 @@ fn a_seal_from_another_head_base_description_or_pr_is_not_reused() {
         h.flow_comment(REMI, 3, "owner", &body);
         let f = read_f(&h, s);
         assert_eq!(f.judgment, None);
-        assert_eq!(next(&f, &m, 4000).0.step, Step::Judge);
+        // A foreign seal may also read as an ask; the engine always holds.
+        assert!(matches!(
+            next(&f, &m, 4000).0.step,
+            Step::Judge(why) if why.contains(&Trigger::AuthorEngine)
+        ));
     }
 }
 #[test]

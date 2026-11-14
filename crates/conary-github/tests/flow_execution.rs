@@ -1,5 +1,5 @@
 //! Configuration -> durable invocation -> negotiated plugin -> verdict provenance.
-use conary_core::plugin::{Choice, Context, Identity, Limits, Plugin, Task};
+use conary_core::plugin::{Choice, Context, Identity, Limits, Plugin, Task, Trigger};
 use conary_github::flow::{Config, jobs};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -28,6 +28,7 @@ fn fixture(mode: &str) -> (tempfile::TempDir, PathBuf, Plugin) {
 fn judge() -> Task {
     Task::Judge {
         repo: "fixture/repo".into(),
+        pr: 1,
         head: "1".repeat(40),
         against: "criteria".into(),
         author: Identity {
@@ -38,6 +39,8 @@ fn judge() -> Task {
             engine: "another-engine".into(),
             session: Some("reviewer-session".into()),
         }],
+        why: vec![Trigger::Asked],
+        context: "a".repeat(64),
     }
 }
 
@@ -187,6 +190,7 @@ fn execution_choices_are_checked_for_review_and_fix_too() {
         },
         Task::Fix {
             repo: "fixture/repo".into(),
+            pr: 1,
             head: "1".repeat(40),
             problems: vec![],
         },
@@ -300,6 +304,7 @@ fn nonjudges() -> [Task; 3] {
     [
         Task::Fix {
             repo: "fixture/repo".into(),
+            pr: 1,
             head: "1".repeat(40),
             problems: vec![],
         },
@@ -452,4 +457,23 @@ fn concurrent_nonjudge_execution_cannot_leave_an_eligible_judge_continuation() {
             });
         }
     }
+}
+
+#[test]
+fn a_saved_judge_invocation_with_an_unknown_reason_never_runs() {
+    let (_dir, path, _) = fixture("normal");
+    let invocation = path.with_extension("request");
+    let mut saved = serde_json::to_value(jobs::Invocation {
+        executable: path.clone(),
+        choice: None,
+        task: judge(),
+        deadline: jobs::now() + 20,
+        response_bytes: 65_536,
+    })
+    .unwrap();
+    saved["task"]["why"] = serde_json::json!(["vibes"]);
+    std::fs::write(&invocation, saved.to_string()).unwrap();
+    let error = jobs::worker(&invocation).unwrap_err();
+    assert!(error.to_string().contains("unknown variant"), "{error}");
+    assert!(!invocation.with_extension("answer").exists());
 }

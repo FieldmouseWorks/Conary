@@ -70,7 +70,7 @@ fn a_judge_already_asked_for_still_decides_when_ci_appears_or_description_change
     let mut c = Case::new();
     c.no_ci();
     c.pass(0);
-    assert_eq!(c.pass(700).step, Step::Judge);
+    assert_eq!(c.pass(700).step, Step::Judge(vec![Trigger::NoCi]));
     c.jobs.insert(
         Kind::Judge,
         Job {
@@ -85,7 +85,8 @@ fn a_judge_already_asked_for_still_decides_when_ci_appears_or_description_change
     assert!(matches!(c.pass(800).step, Step::Wait { .. }));
     c.description("its new description", 850);
     c.review("reviewer", Verdict::Clean, 851);
-    assert_eq!(c.pass(900).step, Step::Judge);
+    // Only the judge already started holds now: the request carries its reasons.
+    assert_eq!(c.pass(900).step, Step::Judge(vec![]));
 }
 #[test]
 fn legacy_base_only_seals_owe_a_judge_but_are_not_verdicts_on_the_description() {
@@ -103,7 +104,7 @@ fn legacy_base_only_seals_owe_a_judge_but_are_not_verdicts_on_the_description() 
             "owner",
             &format!("<!-- autoland-judgment: {verdict} {} {tag} -->", scope.head),
         );
-        assert_eq!(c.view(900).step, Step::Judge);
+        assert_eq!(c.view(900).step, Step::Judge(vec![Trigger::Asked]));
     }
 }
 #[test]
@@ -176,7 +177,7 @@ fn a_cut_file_list_requires_judgment_and_cannot_keep_a_bots_ci_exemption() {
     let refs: Vec<_> = names.iter().map(String::as_str).collect();
     c.hub.touch(&c.scope().head, &refs);
     assert_eq!(c.facts().classified.class, conary_core::Class::R2);
-    assert_eq!(c.view(700).step, Step::Judge);
+    assert_eq!(c.view(700).step, Step::Judge(vec![Trigger::R2]));
 }
 #[test]
 fn build_recipe_wins_when_case_variants_name_the_same_check() {

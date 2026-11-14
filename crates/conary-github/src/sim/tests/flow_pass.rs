@@ -301,7 +301,7 @@ fn pass_collects_an_independent_judgment() {
     let now = flow::jobs::now();
     assert_eq!(
         c.pass(now, false)[0].next.as_ref().unwrap().step,
-        Step::Judge
+        Step::Judge(vec![Trigger::AuthorEngine])
     );
     c.run_worker();
     let report = c.pass(now + 1, false);
@@ -327,7 +327,9 @@ fn pass_proof_names_the_tree_and_canned_output_never_grants_permission() {
     let invocation: flow::jobs::Invocation =
         serde_json::from_slice(&std::fs::read(&record.jobs[0].path).unwrap()).unwrap();
     let tree = crate::branches::Branches::tree(&c.hub, REPO, &head(3)).unwrap();
-    assert!(matches!(invocation.task,conary_core::plugin::Task::Proof{tree: ref t,..} if t==&tree));
+    assert!(
+        matches!(invocation.task,conary_core::plugin::Task::Proof{tree: ref t, head: ref h, ..} if t==&tree && h==&head(3))
+    );
     c.run_worker();
     let report = c.pass(now + 1, false);
     assert_eq!(
