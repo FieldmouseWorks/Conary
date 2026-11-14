@@ -34,7 +34,10 @@ pub struct Plugin {
     kinds: Vec<Kind>,
     contract: &'static str,
     offers: Option<Offers>,
-    judges: execution::Judges,
+    sessions: execution::Sessions,
+    // Session observations must precede any later call's eligibility check,
+    // including while a nonjudge call is running and has not reported its ID.
+    calls: std::sync::Mutex<()>,
 }
 
 impl Plugin {
@@ -119,7 +122,8 @@ impl Plugin {
             kinds,
             contract,
             offers,
-            judges: execution::Judges::default(),
+            sessions: execution::Sessions::default(),
+            calls: std::sync::Mutex::new(()),
         })
     }
 
@@ -154,6 +158,10 @@ impl Plugin {
         context: Context,
         cancelled: Option<&Path>,
     ) -> Result<Response, Failure> {
+        let _call = self
+            .calls
+            .lock()
+            .map_err(|_| Failure("plugin call history poisoned".into()))?;
         let Some(kind) = task.kind() else {
             return bad("use describe to negotiate");
         };
@@ -203,7 +211,6 @@ impl Plugin {
                 &self.identity.engine,
                 self.offers.as_ref().expect("v3 offers"),
             )?;
-            self.judges.prepare(&task, &execution.context)?;
             request.execution = Some(execution);
         } else if configured_choice || context != Context::Fresh || kind == Kind::Judge {
             return bad("execution choices and independent judges need conary-plugin v3");
@@ -240,7 +247,23 @@ impl Plugin {
                 }
             }
         }
-        let response = execute(&self.path, self.limits, &request, self.contract, cancelled)?;
+        if let Some(execution) = &request.execution {
+            self.sessions.prepare(&task, &execution.context)?;
+        }
+        let response = match execute(&self.path, self.limits, &request, self.contract, cancelled) {
+            Ok(response) => {
+                if request.execution.is_some() {
+                    self.sessions.observe(&task, &response)?;
+                }
+                response
+            }
+            Err(error) => {
+                if request.execution.is_some() {
+                    self.sessions.failed(&task)?;
+                }
+                return Err(error);
+            }
+        };
         valid_identity(&response.by)?;
         if response.by.engine != self.identity.engine {
             return bad("plugin changed its engine identity");
@@ -299,7 +322,7 @@ impl Plugin {
             _ => return bad("response kind does not match request or required reason is empty"),
         }
         if let Some(execution) = &request.execution {
-            self.judges
+            self.sessions
                 .accept(&task, &execution.context, &response.by)?;
         }
         Ok(response)

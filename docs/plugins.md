@@ -201,6 +201,16 @@ including their own sessions. The answer must report the requested context
 and, on continuation, the same session. An initial call cannot reuse an
 earlier judge session on that handle.
 
+Judge eligibility requires exclusively judge context for that task. Nonjudge
+work cannot continue or fork a known judge session, and its requested and
+returned session IDs cannot later become fresh judges. Returned IDs are
+recorded before answer validation, so an invalid answer does not erase the
+context it used. If nonjudge work fails without a usable response or reports
+no session, that handle cannot judge again: a new handle must start fresh.
+Calls on one handle are serialized through execution and validation, so a
+concurrent judge cannot use eligibility before nonjudge work has reported its
+session or failure. Separate worker handles remain independent.
+
 Reviews retain the previous author check: equal known sessions are refused
 across engines; within the author's engine both sessions must be known and
 distinct. Judges establish independence through the explicit fresh context

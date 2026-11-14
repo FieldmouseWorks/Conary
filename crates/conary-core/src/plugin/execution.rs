@@ -1,7 +1,7 @@
 //! Machine choices and the judge's session boundary are separate facts.
-use super::{Failure, Identity, Offers, Task};
+use super::{Failure, Identity, Offers, Response, Task};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Mutex;
 
 /// Supplied by the caller's configuration, never selected by Conary.
@@ -79,30 +79,98 @@ impl Provenance {
 }
 
 #[derive(Default)]
-pub(super) struct Judges(Mutex<BTreeMap<String, String>>);
+pub(super) struct Sessions(Mutex<History>);
+
+#[derive(Default)]
+struct History {
+    judges: BTreeMap<String, String>,
+    nonjudge: BTreeSet<String>,
+    unidentified_nonjudge: bool,
+}
+
+impl History {
+    fn used_by_nonjudge(&mut self, session: &str) {
+        if session.trim().is_empty() {
+            self.unidentified_nonjudge = true;
+        } else {
+            self.judges.remove(session);
+            self.nonjudge.insert(session.into());
+        }
+    }
+}
 
 fn fail(why: &str) -> Failure {
     Failure(why.into())
 }
 
-impl Judges {
+impl Sessions {
     /// Only this handle's validated judge result can establish a continuation.
     /// A matching session string supplied by a writer/reviewer is insufficient.
     pub fn prepare(&self, task: &Task, context: &Context) -> Result<(), Failure> {
+        let mut history = self
+            .0
+            .lock()
+            .map_err(|_| fail("session history poisoned"))?;
         if !matches!(task, Task::Judge { .. }) {
+            if let Context::Continue { session } | Context::Fork { session } = context {
+                if history.judges.contains_key(session) {
+                    return Err(fail("nonjudge work cannot reuse a judge session"));
+                }
+                // Record before launch: failed work still used its input context.
+                history.used_by_nonjudge(session);
+            }
             return Ok(());
+        }
+        if history.unidentified_nonjudge {
+            return Err(fail(
+                "judge cannot use a handle after unidentified nonjudge work",
+            ));
         }
         match context {
             Context::Fresh => Ok(()),
             Context::Continue { session } => {
-                let judges = self.0.lock().map_err(|_| fail("judge sessions poisoned"))?;
-                if judges.get(session) != Some(&scope(task)?) {
+                if history.judges.get(session) != Some(&scope(task)?) {
                     return Err(fail("judge cannot continue a foreign session or scope"));
                 }
                 Ok(())
             }
             Context::Fork { .. } => Err(fail("judge cannot fork a session")),
         }
+    }
+
+    /// Observe before validating the answer. A rejected result does not undo
+    /// the work or make its reported context safe for later judging.
+    pub fn observe(&self, task: &Task, response: &Response) -> Result<(), Failure> {
+        if !matches!(task, Task::Judge { .. }) {
+            let mut history = self
+                .0
+                .lock()
+                .map_err(|_| fail("session history poisoned"))?;
+            if let Some(session) = &response.by.session {
+                history.used_by_nonjudge(session);
+            } else {
+                history.unidentified_nonjudge = true;
+            }
+            if let Some(execution) = &response.execution
+                && let Context::Continue { session } | Context::Fork { session } =
+                    &execution.context
+            {
+                history.used_by_nonjudge(session);
+            }
+        }
+        Ok(())
+    }
+
+    /// No usable response means the handle cannot identify the nonjudge
+    /// context. Fail closed for judging; a new handle must start fresh.
+    pub fn failed(&self, task: &Task) -> Result<(), Failure> {
+        if !matches!(task, Task::Judge { .. }) {
+            self.0
+                .lock()
+                .map_err(|_| fail("session history poisoned"))?
+                .unidentified_nonjudge = true;
+        }
+        Ok(())
     }
 
     pub fn accept(&self, task: &Task, context: &Context, by: &Identity) -> Result<(), Failure> {
@@ -122,9 +190,15 @@ impl Judges {
         {
             return Err(fail("judge reused a writer or reviewer session"));
         }
-        let mut judges = self.0.lock().map_err(|_| fail("judge sessions poisoned"))?;
+        let mut history = self
+            .0
+            .lock()
+            .map_err(|_| fail("session history poisoned"))?;
+        if history.nonjudge.contains(session) {
+            return Err(fail("judge reused an observed nonjudge session"));
+        }
         match context {
-            Context::Fresh if judges.contains_key(session) => {
+            Context::Fresh if history.judges.contains_key(session) => {
                 return Err(fail("initial judge reused an existing session"));
             }
             Context::Continue { session: own } if own != session => {
@@ -132,7 +206,7 @@ impl Judges {
             }
             _ => {}
         }
-        judges.insert(session.into(), scope(task)?);
+        history.judges.insert(session.into(), scope(task)?);
         Ok(())
     }
 }

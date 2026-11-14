@@ -641,10 +641,12 @@ valid choices, not machine policy. Conary owns no second settings authority.
 
 "The author never grades its own head" means independent sessions, on any
 engine. Every initial judge starts fresh with no resumed, forked or shared
-writer/reviewer context. Only a continuation established by that judge's own
-validated result, in the same task and job, may keep its session. Its verdict
-retains the actual engine and model, separately from the requested choices.
-The [plugin contract](plugins.md#independence-and-execution-failures) owns the
+writer/reviewer context. A judge may continue its own validated session for
+the same task and job while that session has exclusively judged that task.
+Intervening nonjudge context, including failed or concurrent work, cannot
+preserve judging eligibility. Its verdict retains the actual engine and
+model, separately from the requested choices. The
+[plugin contract](plugins.md#independence-and-execution-failures) owns the
 request boundary, including the trusted plugin's duty to honor fresh context;
 [producer receipts](flow.md#producer-evidence) bind execution provenance into
 authenticated judgments without treating plugin proposals as attestations.

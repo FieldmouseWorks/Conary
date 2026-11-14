@@ -11,7 +11,7 @@ where = ["docs/DESIGN.md#61-execution-choices-and-independent-judging", "docs/fl
 
 [[lessons]]
 id = "fresh-judge"
-lesson = "A grader is independent by session on any engine: start judges fresh, continue only their own task, and retain actual execution provenance."
+lesson = "A grader is independent by session on any engine: start judges fresh, continue only exclusively judge context for their own task, and retain actual execution provenance."
 from = ["https://github.com/FieldmouseWorks/burrow/issues/822", "https://github.com/FieldmouseWorks/burrow/issues/914"]
 applies = ["plugin runner", "judgment producers", "M6 slice 5c"]
 status = "built"

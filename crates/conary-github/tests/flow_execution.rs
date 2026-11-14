@@ -246,3 +246,161 @@ fn execution_configuration_rejects_unknown_kinds() {
         .is_err()
     );
 }
+
+fn nonjudges() -> [Task; 3] {
+    [
+        Task::Fix {
+            repo: "fixture/repo".into(),
+            head: "1".repeat(40),
+            problems: vec![],
+        },
+        Task::Review {
+            repo: "fixture/repo".into(),
+            pr: 1,
+            base: "2".repeat(40),
+            head: "1".repeat(40),
+            author: Identity {
+                engine: "source-engine".into(),
+                session: Some("source-session".into()),
+            },
+        },
+        Task::Job {
+            repo: "fixture/repo".into(),
+            workdir: ".".into(),
+            prompt: "fixture work".into(),
+            model: None,
+            effort: None,
+        },
+    ]
+}
+
+#[test]
+fn nonjudge_context_cannot_reuse_a_judge_session() {
+    for task in nonjudges() {
+        let (_dir, _path, plugin) = fixture("normal");
+        let response = plugin.call(judge()).unwrap();
+        let session = response.by.session.unwrap();
+        for context in [
+            Context::Continue {
+                session: session.clone(),
+            },
+            Context::Fork {
+                session: session.clone(),
+            },
+        ] {
+            assert!(
+                plugin
+                    .call_with(task.clone(), Some(choice()), context, None)
+                    .is_err(),
+                "nonjudge resumed the judge"
+            );
+        }
+        // Rejected before execution: its own continuation is still independent.
+        assert!(
+            plugin
+                .call_with(judge(), Some(choice()), Context::Continue { session }, None)
+                .is_ok()
+        );
+    }
+}
+
+#[test]
+fn fresh_judges_reject_prior_nonjudge_sessions_even_after_invalid_answers() {
+    for mode in ["shared", "invalid-nonjudge", "no-provenance-nonjudge"] {
+        for task in nonjudges() {
+            let (_dir, _path, plugin) = fixture(mode);
+            let result = plugin.call(task);
+            assert_eq!(result.is_ok(), mode == "shared");
+            assert!(
+                plugin.call(judge()).is_err(),
+                "{mode}: accepted a nonjudge session as fresh judge"
+            );
+        }
+    }
+}
+
+#[test]
+fn failed_unidentified_nonjudge_calls_invalidate_judging_on_the_handle() {
+    for mode in [
+        "exit-nonjudge",
+        "no-session-nonjudge",
+        "blank-session-nonjudge",
+    ] {
+        for task in nonjudges() {
+            for continued in [false, true] {
+                let (_dir, _path, plugin) = fixture(mode);
+                let context = if continued {
+                    Context::Continue {
+                        session: plugin.call(judge()).unwrap().by.session.unwrap(),
+                    }
+                } else {
+                    Context::Fresh
+                };
+                let result = plugin.call(task.clone());
+                assert_eq!(result.is_ok(), mode == "no-session-nonjudge");
+                assert!(
+                    plugin
+                        .call_with(judge(), Some(choice()), context, None)
+                        .is_err(),
+                    "{mode}: unidentified nonjudge work preserved judging eligibility"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn rejected_nonjudge_context_still_invalidates_its_observed_source_session() {
+    for task in nonjudges() {
+        let (_dir, _path, plugin) = fixture("fork-nonjudge");
+        let session = plugin.call(judge()).unwrap().by.session.unwrap();
+        assert!(plugin.call(task).is_err());
+        assert!(
+            plugin
+                .call_with(judge(), Some(choice()), Context::Continue { session }, None)
+                .is_err(),
+            "rejected nonjudge answer preserved its source judge session"
+        );
+    }
+}
+
+#[test]
+fn concurrent_nonjudge_execution_cannot_leave_an_eligible_judge_continuation() {
+    for mode in ["concurrent", "concurrent-failure"] {
+        for task in nonjudges() {
+            let (dir, _path, plugin) = fixture(mode);
+            let session = plugin.call(judge()).unwrap().by.session.unwrap();
+            let plugin = &plugin;
+            std::thread::scope(|scope| {
+                let nonjudge = scope.spawn(|| plugin.call(task));
+                let started = std::time::Instant::now();
+                while !dir.path().join("nonjudge-started").exists() {
+                    assert!(
+                        started.elapsed() < Duration::from_secs(5),
+                        "fixture never started"
+                    );
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+                let (send, receive) = std::sync::mpsc::channel();
+                scope.spawn(move || {
+                    send.send(plugin.call_with(
+                        judge(),
+                        Some(choice()),
+                        Context::Continue { session },
+                        None,
+                    ))
+                    .unwrap()
+                });
+                let early = receive.recv_timeout(Duration::from_millis(100)).ok();
+                std::fs::write(dir.path().join("release-nonjudge"), b"released").unwrap();
+                assert_eq!(nonjudge.join().unwrap().is_ok(), mode == "concurrent");
+                let result =
+                    early.unwrap_or_else(|| receive.recv_timeout(Duration::from_secs(10)).unwrap());
+                assert!(
+                    result.is_err(),
+                    "concurrent nonjudge work preserved judging eligibility"
+                );
+            });
+        }
+    }
+}

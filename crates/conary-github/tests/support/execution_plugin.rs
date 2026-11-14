@@ -9,6 +9,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .into_owned();
     let request: Request = serde_json::from_reader(std::io::stdin())?;
     let mut session = "judge-session".to_string();
+    let mut unidentified = false;
     let mut execution = None;
     let answer = match &request.task {
         Task::Describe => Answer::Describe {
@@ -18,7 +19,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 CONTRACT.into()
             }],
             kinds: vec![Kind::Review, Kind::Fix, Kind::Judge],
-            v2_kinds: vec![],
+            v2_kinds: vec![Kind::Job],
             models: ["fixture-model", "alternate-model"]
                 .into_iter()
                 .map(|id| Model {
@@ -38,6 +39,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
         _ => {
             let run = request.execution.as_ref().expect("v3 work execution");
+            let judging = request.task.kind() == Some(Kind::Judge);
+            session = match &run.context {
+                Context::Continue { session } | Context::Fork { session } => session.clone(),
+                Context::Fresh => match &request.task {
+                    Task::Fix { .. } => "writer-session",
+                    Task::Review { .. } => "reviewer-session",
+                    Task::Job { .. } => "job-session",
+                    _ => "judge-session",
+                }
+                .into(),
+            };
+            if !judging && mode.starts_with("concurrent") {
+                let executable = std::env::current_exe()?;
+                let directory = executable.parent().unwrap();
+                std::fs::write(directory.join("nonjudge-started"), b"started")?;
+                let started = std::time::Instant::now();
+                while !directory.join("release-nonjudge").exists() {
+                    if started.elapsed() > std::time::Duration::from_secs(5) {
+                        return Err("fixture was not released".into());
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(2));
+                }
+            }
+            if !judging && ["exit-nonjudge", "concurrent-failure"].contains(&mode.as_str()) {
+                std::process::exit(7);
+            }
             let choice = run.choice.as_ref();
             execution = Some(Executed {
                 model: Some(
@@ -64,20 +91,45 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
                 "no-provenance" => execution = None,
+                "shared" | "invalid-nonjudge" | "no-provenance-nonjudge" => {
+                    session = "shared-session".into();
+                    if !judging && mode == "no-provenance-nonjudge" {
+                        execution = None;
+                    }
+                }
+                "no-session-nonjudge" if !judging => unidentified = true,
+                "blank-session-nonjudge" if !judging => session.clear(),
+                "fork-nonjudge" if !judging => {
+                    execution.as_mut().unwrap().context = Context::Fork {
+                        session: "judge-session".into(),
+                    }
+                }
+                "concurrent" | "concurrent-failure" => session = "judge-session".into(),
                 _ => {}
             }
-            match request.task {
-                Task::Judge { .. } => Answer::Judge {
+            if !judging && mode == "invalid-nonjudge" {
+                Answer::Judge {
                     verdict: Judgment::Pass,
-                    why: "fixture judgment".into(),
-                },
-                Task::Review { .. } => Answer::Review { findings: vec![] },
-                Task::Fix { .. } => Answer::Fix {
-                    result: FixResult::Unable {
-                        why: "fixture never writes".into(),
+                    why: "wrong answer kind".into(),
+                }
+            } else {
+                match request.task {
+                    Task::Judge { .. } => Answer::Judge {
+                        verdict: Judgment::Pass,
+                        why: "fixture judgment".into(),
                     },
-                },
-                _ => return Err("unexpected fixture task".into()),
+                    Task::Review { .. } => Answer::Review { findings: vec![] },
+                    Task::Fix { .. } => Answer::Fix {
+                        result: FixResult::Unable {
+                            why: "fixture never writes".into(),
+                        },
+                    },
+                    Task::Job { .. } => Answer::Job {
+                        summary: "fixture job".into(),
+                        next: Next::Done,
+                    },
+                    _ => return Err("unexpected fixture task".into()),
+                }
             }
         }
     };
@@ -92,7 +144,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             contract: request.contract,
             by: Identity {
                 engine: engine.into(),
-                session: Some(session),
+                session: if unidentified { None } else { Some(session) },
             },
             execution,
             answer,
