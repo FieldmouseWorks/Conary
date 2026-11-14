@@ -202,7 +202,7 @@ pub(crate) fn act<G: Write>(
                 let message = crate::train::Message::new(
                     &f.title,
                     f.number,
-                    crate::train::messages(&commits)?,
+                    crate::train::messages(&commits)?.iter().map(String::as_str),
                 );
                 super::ledger::begin(f, record)?;
                 let status = status.expect("permission checked above");

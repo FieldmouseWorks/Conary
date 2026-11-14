@@ -113,11 +113,6 @@ pub(super) fn land_next(
         stepped.reseated.push(pr);
         return Ok(None);
     }
-    // The commits its merge squashes, read before the mark goes up: their
-    // trailers go in the landing commit's message, which the merge's head
-    // pins. One whose trailers can't all be read isn't landed without them.
-    let commits = source.compare_commits(&full, &at, head.as_str())?;
-    let messages = messages(&commits);
     let elsewhere = if c.trunk != trunk {
         Some(format!(
             "candidate {} was built on {}, not {trunk}",
@@ -126,55 +121,63 @@ pub(super) fn land_next(
     } else if pull.base.name != trunk {
         Some(format!("it targets {}, not {trunk}", pull.base.name))
     } else {
-        messages.as_ref().err().cloned()
+        None
     };
-    let (why, description) = if let Some(why) = elsewhere {
-        (why.clone(), why)
-    } else {
-        forge.mark(
-            &full,
-            head.as_str(),
-            Mark::Landing,
-            &landing_with(c.id),
-            None,
-        )?;
-        // Read again with the mark up, for a retarget or a label since the
-        // read above: GitHub's merge pins the head, not the base or the
-        // labels, so this is the last the train can look before the merge
-        // lands somewhere. One raised (`r2`, `review`) by a label it didn't
-        // join with, recorded or only on its PR yet, leaves as an unsettled
-        // one does, its landing mark gone first: the steward settled it
-        // without the label, and settles it again with it before it joins
-        // again.
-        let last = source.pull(&full, pr)?;
-        if raised_since_join(store, repo, next.change, &last) {
-            forge.mark(&full, head.as_str(), Mark::Waiting, RAISED, None)?;
-            store.record(Body::Leave {
-                change: next.change,
-                why: Left::Unready,
-            })?;
-            stepped.unready.push(pr);
-            return Ok(None);
-        }
-        let base = last.base.name;
-        if base != trunk {
-            let why = format!("it targets {base}, not {trunk}");
-            (why.clone(), why)
-        } else {
-            // Read whole, or it went elsewhere above.
-            let message = Message::new(&last.title, pr, messages.iter().flatten().copied());
-            match forge.land(&full, pr, head.as_str(), &message)? {
-                PrMerge::Merged => {
-                    stepped.landed.push(pr);
-                    ingest::pull(store, source, config, repo, pr)?;
-                    if moved(store) {
-                        return Ok(None);
+    // One that may land here: the commits its merge squashes, read before
+    // the mark goes up, as their trailers go in the landing commit's
+    // message, which the merge's head pins. One whose trailers can't all be
+    // read isn't landed without them.
+    let messages = match elsewhere {
+        Some(why) => Err(why),
+        None => messages(&source.compare_commits(&full, &at, head.as_str())?),
+    };
+    let (why, description) = match messages {
+        Err(why) => (why.clone(), why),
+        Ok(messages) => {
+            forge.mark(
+                &full,
+                head.as_str(),
+                Mark::Landing,
+                &landing_with(c.id),
+                None,
+            )?;
+            // Read again with the mark up, for a retarget or a label since the
+            // read above: GitHub's merge pins the head, not the base or the
+            // labels, so this is the last the train can look before the merge
+            // lands somewhere. One raised (`r2`, `review`) by a label it didn't
+            // join with, recorded or only on its PR yet, leaves as an unsettled
+            // one does, its landing mark gone first: the steward settled it
+            // without the label, and settles it again with it before it joins
+            // again.
+            let last = source.pull(&full, pr)?;
+            if raised_since_join(store, repo, next.change, &last) {
+                forge.mark(&full, head.as_str(), Mark::Waiting, RAISED, None)?;
+                store.record(Body::Leave {
+                    change: next.change,
+                    why: Left::Unready,
+                })?;
+                stepped.unready.push(pr);
+                return Ok(None);
+            }
+            let base = last.base.name;
+            if base != trunk {
+                let why = format!("it targets {base}, not {trunk}");
+                (why.clone(), why)
+            } else {
+                let message = Message::new(&last.title, pr, messages.iter().map(String::as_str));
+                match forge.land(&full, pr, head.as_str(), &message)? {
+                    PrMerge::Merged => {
+                        stepped.landed.push(pr);
+                        ingest::pull(store, source, config, repo, pr)?;
+                        if moved(store) {
+                            return Ok(None);
+                        }
+                        return Ok(Some(landing(store, c)));
                     }
-                    return Ok(Some(landing(store, c)));
-                }
-                PrMerge::Refused(why) => {
-                    let description = format!("GitHub refused its merge: {why}");
-                    (why, description)
+                    PrMerge::Refused(why) => {
+                        let description = format!("GitHub refused its merge: {why}");
+                        (why, description)
+                    }
                 }
             }
         }

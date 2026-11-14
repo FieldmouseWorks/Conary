@@ -203,6 +203,8 @@ fn a_pr_against_another_branch_never_lands_through_the_train() {
     let (id, _) = gating(&step_once(&mut store, &hub));
     hub.retarget(REMI, 3, "release");
     hub.ci(&commit_of(&store, id), &[("check / check", "success")]);
+    // Its commits, which only a landing's message needs, can't hold it up.
+    hub.fail(Call::CompareCommits);
     let stepped = step_once(&mut store, &hub);
     assert!(stepped.landed.is_empty() && hub.landed(REMI).is_empty());
     let why = "it targets release, not main".to_owned();
@@ -266,6 +268,9 @@ fn the_train_lands_only_onto_the_default_branch_as_github_says_it_is() {
     hub.set_default(REMI, "release");
     hub.retarget(REMI, 3, "release");
     hub.ci(&commit_of(&store, id), &[("check / check", "success")]);
+    // Its commits, which only a landing's message needs, can't hold it up:
+    // trunk's new history may have nothing in common with its head.
+    hub.fail(Call::CompareCommits);
     let stepped = step_once(&mut store, &hub);
     assert!(stepped.landed.is_empty() && hub.landed(REMI).is_empty());
     let why = format!("candidate {id} was built on main, not release");

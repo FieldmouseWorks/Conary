@@ -45,7 +45,7 @@ impl Message {
 /// or why there's no saying their trailers: a history GitHub cut short, or
 /// a commit it sent without a message. A landing commit that dropped a
 /// commit's co-author or session would lose who wrote it.
-pub fn messages(history: &crate::api::History) -> Result<Vec<&str>, String> {
+pub fn messages(history: &crate::api::History) -> Result<Vec<String>, String> {
     if !history.complete {
         return Err(format!(
             "GitHub listed only {} of its commits, so its landing can't say all their trailers",
@@ -58,7 +58,7 @@ pub fn messages(history: &crate::api::History) -> Result<Vec<&str>, String> {
         .map(|c| {
             c.commit
                 .as_ref()
-                .and_then(|d| d.message.as_deref())
+                .and_then(|d| d.message.clone())
                 .ok_or_else(|| format!("GitHub sent its commit {} without a message", c.sha))
         })
         .collect()
