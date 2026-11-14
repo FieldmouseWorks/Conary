@@ -360,9 +360,9 @@ fn run(cli: &Cli) -> Result<()> {
             // The ledger as it is before GitHub is read, then GitHub,
             // before the lock: a class the ledger holds needs no lock, and
             // other writers wait only for the recording.
-            let ledger = read(cli, None)?;
+            let mut ledger = reader::Reader::open(&cli.ledger, public_key(cli)?)?;
             let asked = class::ask(
-                &ledger,
+                &mut ledger,
                 &api,
                 &config,
                 &policy,
@@ -632,12 +632,19 @@ fn write_notes(api: &Api, a: &Anchored, github: &GithubArgs, repo: &Repo) -> Res
 /// kept beside it: as it is, or as it stood `at` a time. Reading takes no
 /// lock and never leaves the box.
 fn read(cli: &Cli, at: Option<i64>) -> Result<Ledger> {
-    let key = log::load_public_key(&log::public_path(&log::key_path(&cli.ledger)))
-        .map_err(|e| format!("{e} (has `cn init` set up {}?)", cli.ledger.display()))?;
+    let key = public_key(cli)?;
     Ok(match at {
         None => reader::read(&cli.ledger, &key)?,
         Some(t) => reader::read_at(&cli.ledger, &key, t)?,
     })
+}
+
+/// The key the ledger's log is checked with.
+fn public_key(cli: &Cli) -> Result<ed25519_dalek::VerifyingKey> {
+    Ok(
+        log::load_public_key(&log::public_path(&log::key_path(&cli.ledger)))
+            .map_err(|e| format!("{e} (has `cn init` set up {}?)", cli.ledger.display()))?,
+    )
 }
 
 /// A unit enum as the ledger spells it: `landed`, `ci`, `pass`.

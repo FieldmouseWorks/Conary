@@ -3,12 +3,14 @@
 //! touches, recorded in the ledger as a `classify` op.
 
 use std::path::Path;
+use std::sync::Arc;
 
 use conary_core::ledger::{Change, Classed, Ledger};
 use conary_core::op::{Body, Repo};
 use conary_core::policy::{Class, Classified, Paths, Policy, raises};
+use conary_core::reader::{ReadError, Reader};
 use conary_core::store::StoreError;
-use conary_core::{ChangeId, CommitId, RevisionId, Store};
+use conary_core::{ChangeId, CommitId, OpId, RevisionId, Store};
 
 use crate::api::{ApiError, PullRequest, Source};
 use crate::bases::MergeBases;
@@ -19,6 +21,7 @@ pub enum ClassError {
     Api(ApiError),
     Ingest(IngestError),
     Store(StoreError),
+    Read(ReadError),
     /// The PR's head isn't the one the caller asked about.
     Moved {
         pr: u64,
@@ -32,6 +35,7 @@ impl std::fmt::Display for ClassError {
             Self::Api(e) => e.fmt(f),
             Self::Ingest(e) => e.fmt(f),
             Self::Store(e) => e.fmt(f),
+            Self::Read(e) => e.fmt(f),
             Self::Moved { pr, head } => write!(f, "#{pr}'s head is {head} now"),
         }
     }
@@ -43,6 +47,7 @@ impl std::error::Error for ClassError {
             Self::Api(e) => Some(e),
             Self::Ingest(e) => Some(e),
             Self::Store(e) => Some(e),
+            Self::Read(e) => Some(e),
             Self::Moved { .. } => None,
         }
     }
@@ -63,6 +68,12 @@ impl From<IngestError> for ClassError {
 impl From<StoreError> for ClassError {
     fn from(e: StoreError) -> Self {
         Self::Store(e)
+    }
+}
+
+impl From<ReadError> for ClassError {
+    fn from(e: ReadError) -> Self {
+        Self::Read(e)
     }
 }
 
@@ -91,6 +102,24 @@ fn said(k: &Classed) -> Classified {
     }
 }
 
+/// The ledger as [`ask`] reads it, without the lock: as it was read before
+/// GitHub was, and as it is now.
+pub trait Unlocked {
+    fn before(&self) -> Arc<Ledger>;
+    fn now(&mut self) -> Result<Arc<Ledger>, ReadError>;
+}
+
+impl Unlocked for Reader {
+    fn before(&self) -> Arc<Ledger> {
+        self.ledger()
+    }
+
+    /// Read again only if the log moved since.
+    fn now(&mut self) -> Result<Arc<Ledger>, ReadError> {
+        self.refresh()
+    }
+}
+
 /// What [`ask`] found before the ledger's lock: the class itself, when the
 /// ledger already held it, or what [`class`] records under the lock.
 pub enum Asked {
@@ -98,8 +127,8 @@ pub enum Asked {
     Read(Box<Read>),
 }
 
-/// A PR as [`ask`] read it from GitHub, and its change as the ledger held
-/// it before that.
+/// A PR as [`ask`] read it from GitHub, and the last op the ledger held
+/// about its change before that.
 pub struct Read {
     config: Config,
     repo: Repo,
@@ -112,22 +141,25 @@ pub struct Read {
     /// base, unless the ledger already held its class under this policy.
     revision: RevisionId,
     paths: Option<Paths>,
-    held: Option<Change>,
+    /// `None` when the ledger held no change for the PR.
+    last: Option<OpId>,
 }
 
 /// Reads what [`class`] needs of a PR at `head` before the ledger's lock
 /// is taken, so other writers wait only for the recording: the PR, its
 /// merge base, its results and timeline, and the files its revision
-/// changes. `ledger` is the ledger as read without the lock before any of
-/// it, and when it already holds the PR at that head with its class under
-/// `policy`, raised by the PR's labels as they are now, that's the answer
-/// and there is nothing to record: the PR's other news since is left to a
-/// sync. The merge base comes from the cache beside the ledger in `dir`,
-/// read as it is; one it doesn't hold is asked of GitHub, and [`class`]
-/// keeps it there.
+/// changes. `ledger` is the ledger before any of it. When the ledger holds
+/// the PR at that head with its class under `policy`, raised by the PR's
+/// labels as they are now, that's the answer and there is nothing to
+/// record: the PR's other news since is left to a sync. That's asked of
+/// the ledger as it is after the reads: another writer may have recorded
+/// the PR meanwhile, a raise by a label taken off since too, and a raise
+/// stays once it's recorded. The merge base comes from the cache beside the
+/// ledger in `dir`, read as it is; one it doesn't hold is asked of GitHub,
+/// and [`class`] keeps it there.
 #[allow(clippy::too_many_arguments)]
 pub fn ask(
-    ledger: &Ledger,
+    ledger: &mut dyn Unlocked,
     source: &dyn Source,
     config: &Config,
     policy: &Policy,
@@ -138,7 +170,8 @@ pub fn ask(
 ) -> Result<Asked, ClassError> {
     config.check()?;
     let full = repo.to_string();
-    let held = ledger.by_pr(repo, pr).cloned();
+    let before = ledger.before();
+    let held = before.by_pr(repo, pr);
     let pr = source.pull(&full, pr)?;
     let mut bases = MergeBases::read(dir).map_err(IngestError::Cache)?;
     let base = ingest::commit(
@@ -148,13 +181,17 @@ pub fn ask(
     )?;
     let revision = RevisionId::new(&base, &ingest::commit(&pr.head.sha)?);
     let moved = pr.head.sha != head;
-    let classed = held
-        .as_ref()
-        .and_then(|c| answer(c, revision, policy, pr.raises()));
-    if let (Some(c), Some(classes), false) = (&held, &classed, moved)
-        && c.current == Some(revision)
-    {
-        return Ok(Asked::Held(classes.clone()));
+    let classed = held.and_then(|c| answer(c, revision, policy, pr.raises()));
+    let current = |c: &Change| c.current == Some(revision);
+    if !moved && classed.is_some() && held.is_some_and(current) {
+        let now = ledger.now()?;
+        if let Some(got) = now
+            .by_pr(repo, pr.number)
+            .filter(|c| current(c))
+            .and_then(|c| answer(c, revision, policy, pr.raises()))
+        {
+            return Ok(Asked::Held(got));
+        }
     }
     // A head that moved is refused once the PR is recorded, unclassed.
     let paths = if moved || classed.is_some() {
@@ -173,17 +210,18 @@ pub fn ask(
         bases,
         revision,
         paths,
-        held,
+        last: held.and_then(Change::last),
     })))
 }
 
 /// The class of a PR at `head`, once the ledger holds the PR as GitHub
 /// shows it now and that is its head ([`of`]), raised by the PR's labels as
-/// they are now, from what [`ask`] read. While the ledger holds the PR's
-/// change as it did before that read, no other writer can have recorded
-/// the PR as it was since, so what was read is recorded with no call to
-/// GitHub; otherwise the PR is read again here, under the lock, as
-/// [`ingest::pull`] does.
+/// they are now, from what [`ask`] read. While the last op the ledger
+/// holds about the PR's change is the one it held before that read, no
+/// other writer can have recorded the PR as it was since, so what was read
+/// is recorded with no call to GitHub; otherwise, even where what was
+/// recorded since set the change back as it was, the PR is read again
+/// here, under the lock, as [`ingest::pull`] does.
 pub fn class(
     store: &mut Store,
     source: &dyn Source,
@@ -200,13 +238,13 @@ pub fn class(
         bases: asked,
         revision,
         paths,
-        held,
+        last,
     } = read;
     let number = pr.number;
     MergeBases::load(store.lock())
         .and_then(|mut bases| bases.keep(asked))
         .map_err(IngestError::Cache)?;
-    let (got, pr) = if store.ledger().by_pr(&repo, number) == held.as_ref() {
+    let (got, pr) = if store.ledger().by_pr(&repo, number).and_then(Change::last) == last {
         let got = ingest::record(store, source, &config, &repo, &pr, base, read)?;
         (got, pr)
     } else {
@@ -250,9 +288,33 @@ pub(crate) fn at_once(
     head: &str,
 ) -> Result<Classes, ClassError> {
     let dir = store.lock().dir().to_owned();
-    match ask(store.ledger(), source, config, policy, repo, pr, head, &dir)? {
+    let ledger = Arc::new(store.ledger().clone());
+    let mut given = Given {
+        before: Arc::clone(&ledger),
+        now: ledger,
+    };
+    match ask(&mut given, source, config, policy, repo, pr, head, &dir)? {
         Asked::Held(got) => Ok(got),
         Asked::Read(read) => class(store, source, policy, *read),
+    }
+}
+
+/// The ledger as a test gives it to [`ask`]: as it was before the reads,
+/// and as it is after them.
+#[cfg(test)]
+pub(crate) struct Given {
+    pub before: Arc<Ledger>,
+    pub now: Arc<Ledger>,
+}
+
+#[cfg(test)]
+impl Unlocked for Given {
+    fn before(&self) -> Arc<Ledger> {
+        Arc::clone(&self.before)
+    }
+
+    fn now(&mut self) -> Result<Arc<Ledger>, ReadError> {
+        Ok(Arc::clone(&self.now))
     }
 }
 

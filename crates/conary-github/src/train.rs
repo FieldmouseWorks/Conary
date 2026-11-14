@@ -14,6 +14,7 @@ use serde::Serialize;
 
 use conary_core::ledger::{Candidate, Held, Invalid, State};
 use conary_core::op::{Body, Left, Member, Repo, Verdict};
+use conary_core::reader::ReadError;
 use conary_core::store::StoreError;
 use conary_core::{CandidateId, ChangeId, Class, CommitId, Policy, Store, TreeId};
 
@@ -98,6 +99,8 @@ pub enum TrainError {
     Api(ApiError),
     Store(StoreError),
     Ingest(IngestError),
+    /// The ledger couldn't be read without its lock.
+    Read(ReadError),
     /// GitHub's answer isn't what it says.
     Malformed(String),
     /// No randomness for a new candidate id.
@@ -127,6 +130,7 @@ impl std::fmt::Display for TrainError {
             Self::Api(e) => e.fmt(f),
             Self::Store(e) => e.fmt(f),
             Self::Ingest(e) => e.fmt(f),
+            Self::Read(e) => e.fmt(f),
             Self::Malformed(what) => write!(f, "GitHub sent {what}"),
             Self::Random(e) => write!(f, "no randomness for a candidate id: {e}"),
             Self::Unknown(pr) => write!(f, "#{pr} isn't in the ledger"),
@@ -149,6 +153,7 @@ impl std::error::Error for TrainError {
         match self {
             Self::Api(e) => Some(e),
             Self::Ingest(e) => Some(e),
+            Self::Read(e) => Some(e),
             _ => None,
         }
     }
@@ -178,6 +183,7 @@ impl From<ClassError> for TrainError {
             ClassError::Api(e) => Self::Api(e),
             ClassError::Ingest(e) => Self::Ingest(e),
             ClassError::Store(e) => Self::Store(e),
+            ClassError::Read(e) => Self::Read(e),
             ClassError::Moved { pr, head } => Self::Moved { pr, head },
         }
     }

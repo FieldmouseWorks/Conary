@@ -122,6 +122,9 @@ pub struct Change {
     pub reverted_by: Option<ChangeId>,
     #[serde(skip)]
     closed: bool,
+    /// The last op recorded about it: [`Change::last`].
+    #[serde(skip)]
+    last: Option<OpId>,
 }
 
 impl Change {
@@ -146,6 +149,14 @@ impl Change {
     /// What the class policy last said of a revision, if it's been asked.
     pub fn class_of(&self, revision: RevisionId) -> Option<&Classed> {
         self.classes.iter().rev().find(|c| c.revision == revision)
+    }
+
+    /// The last op recorded about it. Every op names its parent, so no two
+    /// are the same, and while a change's last op is the same no op about
+    /// it has been recorded since, even one that set it back as it was:
+    /// a title edited and then put back, say.
+    pub fn last(&self) -> Option<OpId> {
+        self.last
     }
 
     /// Every label that has raised the change, at any revision, sorted. A
@@ -506,8 +517,15 @@ impl Ledger {
 
     /// Applies an op [`Ledger::check`] has accepted.
     pub(crate) fn apply(&mut self, op: &Op) {
-        let at = op.op.at;
         self.head = Some(op.id);
+        self.apply_body(op);
+        if let Some(c) = op.op.body.change().and_then(|id| self.changes.get_mut(&id)) {
+            c.last = Some(op.id);
+        }
+    }
+
+    fn apply_body(&mut self, op: &Op) {
+        let at = op.op.at;
         if self.apply_train(&op.op.body, at) || self.apply_undo(&op.op.body, at) {
             return;
         }
@@ -554,6 +572,7 @@ impl Ledger {
                             undone_by: Vec::new(),
                             reverted_by: None,
                             closed: false,
+                            last: None,
                         },
                     );
                 }
