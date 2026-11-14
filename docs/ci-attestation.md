@@ -7,6 +7,29 @@ burrow's shared flake workflow is another producer of this same format.
 `cn attest` writes its subject and `predicate.json`, for a bundle, and with
 `--sign` the statement and the job's token as `conary-attestation`.
 
+## burrow's attestations come from `cn attest`
+
+burrow's `flake-check.yml` doesn't format a subject or a predicate or sign
+anything itself: it builds `cn` from the Conary commit it pins (never a
+candidate's copy, and never a revision a caller picks), before any
+candidate code runs, and hands it what its jobs found. Conary owns the
+subject, the predicate and the private-repo signing, with its retries when
+GitHub's token service says try later, so the bytes are the format's and no
+workflow's. Beside the flags above, `cn attest` takes:
+
+- `--leg-log FILE`, once per leg in order, for a gate split across legs
+  (instead of `--log`). The gate's output is each log under a `leg K of N:`
+  line, one after another; the predicate's digest names it, and
+  `combined.log` in `--out` keeps it for the job to upload (`cn attest`'s
+  JSON says where in `log`). The logs are read once; hashing and writing
+  use that snapshot even if a source changes during signing or retries.
+- `negative BASE HEAD --from negative.json`, for burrow's negative run
+  (instead of `--result`, `--tree` and the lists): the file's `result`,
+  `tree`, `tests`, `checks`, `skipped` and `unrun`, each present exactly
+  once, and nothing else. The input must be an object with a string result,
+  an explicit string-or-null tree, and arrays of strings for the lists.
+  Other shapes and a result and tree that don't fit are refused.
+
 ## Calling Conary's workflow
 
 Run your tests in ordinary GitHub-hosted jobs, then call the reusable workflow

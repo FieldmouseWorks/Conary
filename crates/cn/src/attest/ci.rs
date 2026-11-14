@@ -106,7 +106,7 @@ pub fn attest(cli: &Cli, args: &CiArgs) -> Result<()> {
             AttestCommand::Negative {
                 base: plan.base,
                 head: head.clone(),
-                result,
+                result: Some(result),
                 tree: plan.tree,
                 tests: plan.tests,
                 checks: if result == super::Negative::None {
@@ -120,6 +120,7 @@ pub fn attest(cli: &Cli, args: &CiArgs) -> Result<()> {
                 },
                 skipped: vec![],
                 unrun: vec![],
+                from: None,
                 out: copy_out(&args.out),
             }
         } else {
@@ -145,13 +146,22 @@ pub fn attest(cli: &Cli, args: &CiArgs) -> Result<()> {
             out: copy_out(&args.out),
         }
     };
-    std::fs::write(&args.out.log, format!("{summary}\n"))?;
+    let log = match (&args.out.log, args.out.leg_logs.is_empty()) {
+        (Some(log), true) => log,
+        _ => {
+            return Err(
+                "cn attest ci writes its one summary log: give --log, not --leg-log".into(),
+            );
+        }
+    };
+    std::fs::write(log, format!("{summary}\n"))?;
     super::run(cli, &command)
 }
 
 fn copy_out(out: &Out) -> Out {
     Out {
         log: out.log.clone(),
+        leg_logs: out.leg_logs.clone(),
         log_artifact: out.log_artifact.clone(),
         out: out.out.clone(),
         sign: out.sign,

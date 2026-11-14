@@ -23,7 +23,7 @@ pub enum Gate {
 
 /// What a negative run's new tests did on the old code
 /// (`docs/ci-attestation.md`, "Negative runs").
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Negative {
     /// A check failed on the negative tree: what rule 2 asks for.
