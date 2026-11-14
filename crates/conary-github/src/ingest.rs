@@ -238,6 +238,7 @@ impl Writer<'_> {
             change,
             reverts: marker.reverts.clone(),
             asked: marker.asked.clone(),
+            reason: Some(marker.reason.clone()),
         };
         let refused = |e: &IngestError| matches!(e, IngestError::Store(StoreError::Invalid(_)));
         match self.record(undo()) {
@@ -465,6 +466,19 @@ fn record_with_submission(
     let undo = own_head(pr, repo)
         .then(|| Undo::read(&pr.head.name, &body))
         .flatten();
+    // A legacy or blank marker must never turn an undo into an ordinary PR
+    // that could evade the undo landing rules. Recorded undos already hold
+    // their immutable record; a new one needs a reason before any ops.
+    if let Some(marker) = &undo
+        && !w
+            .store
+            .ledger()
+            .by_pr(repo, pr.number)
+            .is_some_and(|c| c.undo.is_some())
+    {
+        conary_core::op::undo_reason(&marker.reason)
+            .map_err(|_| StoreError::Invalid(Invalid::UndoReason))?;
+    }
     // Who wrote it and what for are the author's words, not the marker's.
     let said = if undo.is_some() {
         Undo::without(&body)

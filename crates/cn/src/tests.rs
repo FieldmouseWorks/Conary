@@ -3,6 +3,38 @@ use conary_github::IngestError;
 use conary_github::anchor::AnchorError;
 use conary_github::undo::UndoError;
 
+#[test]
+fn undo_requires_a_nonblank_reason_for_every_selection() {
+    for selection in [
+        vec!["o/r#1"],
+        vec!["--actor", "session"],
+        vec!["--since", "1", "--repo", "o/r"],
+    ] {
+        for reason in [None, Some(""), Some(" \t\n\u{2003}")] {
+            let mut args = vec!["cn", "undo", "--anchor-repo", "o/ledger"];
+            args.extend(&selection);
+            if let Some(reason) = reason {
+                args.extend(["--reason", reason]);
+            }
+            let error = Cli::try_parse_from(&args)
+                .err()
+                .expect("a reason is required");
+            if reason.is_none() {
+                assert!(error.to_string().contains("--reason"), "{error}");
+            } else {
+                assert!(error.to_string().contains("nonblank reason"), "{error}");
+            }
+        }
+        let reason =
+            "Red run https://github.com/o/r/actions/runs/1: check failed; error: missing value";
+        let mut args = vec!["cn", "undo", "--anchor-repo", "o/ledger"];
+        args.extend(&selection);
+        args.extend(["--reason", reason]);
+        let cli = Cli::try_parse_from(&args).unwrap();
+        assert!(matches!(cli.command, Command::Undo { reason: got, .. } if got == reason));
+    }
+}
+
 // Every query, and only a query, is asked at a time; asked so, it
 // reads the ledger as it stood then.
 #[test]

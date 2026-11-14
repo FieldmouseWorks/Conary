@@ -573,9 +573,9 @@ trunk.
 
 | Call | What it does |
 | --- | --- |
-| `undo <change>` | Opens a PR that reverts one landed change. |
-| `undo --actor <session>` | Reverts every change one agent session landed, newest first, one PR per repo. |
-| `undo --since <time> --repo <repo>` | Reverts everything that landed on one repo's trunk after that time. |
+| `undo <change> --reason <reason>` | Opens a PR that reverts one landed change. |
+| `undo --actor <session> --reason <reason>` | Reverts every change one agent session landed, newest first, one PR per repo. |
+| `undo --since <time> --repo <repo> --reason <reason>` | Reverts everything that landed on one repo's trunk after that time. |
 | `at <time> <query>` | Answers any read-only query as the ledger stood at that time: `log`, `why` and `train show` in `cn`, and every other call of conaryd's. |
 
 A revert that doesn't apply cleanly, because later work built on what it
@@ -628,7 +628,20 @@ ledger itself: the notes hold what's landed now.
 
 The ledger records each undo as an op on its revert change: the changes it
 reverts, all landed in its repo, and what asked for it (a change, a session
-or a time, which each of them has to match). Once the undo lands, what it
+or a time, which each of them has to match), with the reason it was requested.
+Every new request through the library or CLI requires a nonblank reason,
+checked before any ledger refresh or GitHub work. The PR body opens with
+that reason, verbatim; for a red run it names the run's URL, failing checks
+and first error line. Reasons are operational explanations, never secrets,
+personal data or prompt text: they enter permanent history. The marker
+keeps the reason too, so ingestion or recovery of an opened but unrecorded
+PR records its original reason, even if a retry supplies another. An
+existing undo's reason is immutable. Historical signed undo operations
+without a reason still replay unchanged; new operations require one.
+An already recorded undo still follows the undo landing rules when its
+historical PR marker lacks a reason. An unrecorded marker without a
+nonblank reason is refused, so it cannot be ingested as an ordinary PR.
+Once the undo lands, what it
 reverts is `reverted`; undone in turn, they're landed again. A change takes
 one undo at a time, and once one has landed it's the only one: the change
 goes back and forth by undoing that undo, and undoing that, so no undo can
@@ -720,7 +733,7 @@ change.get(id | repo#pr) / change.list(repo?, session?, status?, class?, since?)
 evidence.add / evidence.query(change | revision)
 train.join(change) / train.step(repo)   // M3: the train (section 4.7)
 land(change)                      // M6; until then the steward lands and reports
-undo(change | actor | since) / at(time, query)
+undo(change | actor | since, reason) / at(time, query)
 log.query(repo?, path?, symbol?, session?, intent~text?, since?, class?)
 why(repo, path, line | symbol)    // the change, its intent, session and evidence
 events.subscribe(land | outside | red | undo | owner)

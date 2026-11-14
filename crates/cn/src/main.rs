@@ -157,6 +157,10 @@ enum Command {
     /// undo of its own. Run again, it finds those PRs rather than open more.
     #[command(group(clap::ArgGroup::new("what").required(true).args(["change", "actor", "since"])))]
     Undo {
+        /// Why this undo is needed. Recorded permanently: no secrets or
+        /// prompt text. For a red run, include its URL, checks and first error.
+        #[arg(long, value_parser = conary_core::op::undo_reason)]
+        reason: String,
         /// The change: its id, or its PR as OWNER/NAME#N.
         change: Option<String>,
         /// Every change this agent session landed, in every repo.
@@ -463,6 +467,7 @@ fn run(cli: &Cli) -> Result<()> {
             AtQuery::Train { command } => train::query(cli, command, Some(*time))?,
         },
         Command::Undo {
+            reason,
             change,
             actor,
             since,
@@ -473,16 +478,16 @@ fn run(cli: &Cli) -> Result<()> {
             let got = match (change, actor, since.zip(repo.as_ref())) {
                 (Some(change), ..) => {
                     let id = named(a.store.ledger(), change)?;
-                    undo::undo(&mut a.store, &api, &api, &config, id).map(|u| Undid {
+                    undo::undo(&mut a.store, &api, &api, &config, id, reason).map(|u| Undid {
                         undos: vec![u],
                         gone: Vec::new(),
                     })
                 }
                 (_, Some(session), _) => {
-                    undo::undo_actor(&mut a.store, &api, &api, &config, session)
+                    undo::undo_actor(&mut a.store, &api, &api, &config, session, reason)
                 }
                 (_, _, Some((since, repo))) => {
-                    undo::undo_since(&mut a.store, &api, &api, &config, repo, since)
+                    undo::undo_since(&mut a.store, &api, &api, &config, repo, since, reason)
                 }
                 _ => unreachable!("clap asks for one of them"),
             };

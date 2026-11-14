@@ -92,6 +92,7 @@ impl Book {
         asked: Asked,
     ) -> Result<(), Invalid> {
         self.record(Body::Undo {
+            reason: Some("The landed change broke the health check".into()),
             change,
             reverts: reverts.to_vec(),
             asked,
@@ -340,6 +341,7 @@ fn an_undo_is_written_as_the_log_keeps_it() {
         ),
     ] {
         let body = Body::Undo {
+            reason: None,
             change,
             reverts: vec![x],
             asked,
@@ -350,4 +352,42 @@ fn an_undo_is_written_as_the_log_keeps_it() {
         assert_eq!(serde_json::to_value(&body).unwrap(), want);
         assert_eq!(serde_json::from_value::<Body>(want).unwrap(), body);
     }
+}
+
+#[test]
+fn new_undo_records_require_a_nonblank_reason() {
+    for reason in [None, Some(""), Some(" \t\n\u{2003}")] {
+        let mut b = Book::default();
+        let x = b.landed();
+        let u = b.change();
+        let mut json = serde_json::json!({
+            "op": "undo", "change": u, "reverts": [x], "asked": {"by": "change"},
+        });
+        if let Some(reason) = reason {
+            json["reason"] = reason.into();
+        }
+        let body: Body = serde_json::from_value(json).unwrap();
+        let head = b.ledger.head();
+        assert!(b.record(body).is_err(), "accepted reason {reason:?}");
+        assert_eq!(b.ledger.head(), head);
+        assert!(b.ledger.change(u).unwrap().undo.is_none());
+    }
+}
+
+#[test]
+fn an_undo_reason_cannot_be_replaced() {
+    let mut b = Book::default();
+    let x = b.landed();
+    let u = b.undo_of(x);
+    let before = b.ledger.change(u).unwrap().undo.clone();
+    assert_eq!(
+        b.record(Body::Undo {
+            change: u,
+            reverts: vec![x],
+            asked: Asked::Change,
+            reason: Some("A replacement reason".into()),
+        }),
+        Err(Invalid::AlreadyUndo)
+    );
+    assert_eq!(b.ledger.change(u).unwrap().undo, before);
 }

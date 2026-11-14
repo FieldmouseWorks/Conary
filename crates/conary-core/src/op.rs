@@ -199,6 +199,16 @@ pub enum Asked {
     Since { since: i64 },
 }
 
+/// A new undo's operational reason, preserved verbatim. Callers must keep
+/// secrets, personal data and prompt text out of this permanent record.
+pub fn undo_reason(reason: &str) -> Result<String, &'static str> {
+    if reason.trim().is_empty() {
+        Err("an undo requires a nonblank reason")
+    } else {
+        Ok(reason.to_owned())
+    }
+}
+
 /// The body of an operation: what happened.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
@@ -344,6 +354,10 @@ pub enum Body {
         change: ChangeId,
         reverts: Vec<ChangeId>,
         asked: Asked,
+        /// Why the undo was requested. Absent only in historical records:
+        /// omitting it keeps their signed bytes and ids unchanged.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
     },
 }
 

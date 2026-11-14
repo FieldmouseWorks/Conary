@@ -16,6 +16,8 @@ use crate::op::{Asked, Body};
 pub struct Undo {
     pub reverts: Vec<ChangeId>,
     pub asked: Asked,
+    /// Absent only on historical undo operations.
+    pub reason: Option<String>,
     pub at: i64,
 }
 
@@ -30,14 +32,21 @@ impl Ledger {
         change: ChangeId,
         reverts: &[ChangeId],
         asked: &Asked,
+        reason: Option<&str>,
     ) -> Result<(), Invalid> {
+        if let Some(reason) = reason {
+            crate::op::undo_reason(reason).map_err(|_| Invalid::UndoReason)?;
+        }
         let undo = self.existing(change)?;
         if let Some(was) = &undo.undo {
-            return Err(if (&was.reverts[..], &was.asked) == (reverts, asked) {
-                Invalid::Duplicate
-            } else {
-                Invalid::AlreadyUndo
-            });
+            return Err(
+                if (&was.reverts[..], &was.asked, was.reason.as_deref()) == (reverts, asked, reason)
+                {
+                    Invalid::Duplicate
+                } else {
+                    Invalid::AlreadyUndo
+                },
+            );
         }
         if reverts.is_empty() {
             return Err(Invalid::NothingToUndo);
@@ -130,6 +139,7 @@ impl Ledger {
             change,
             reverts,
             asked,
+            reason,
         } = body
         else {
             return false;
@@ -142,6 +152,7 @@ impl Ledger {
         undo.undo = Some(Undo {
             reverts: reverts.clone(),
             asked: asked.clone(),
+            reason: reason.clone(),
             at,
         });
         // Recorded after its PR landed, it's in effect already.

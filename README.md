@@ -143,10 +143,14 @@ finished.
 change's undo ([undo](docs/DESIGN.md#5-undo)); by session or time, one PR
 per repo reverts each change, newest first. A revert that conflicts with
 what came after it opens all the same, for its conflict to be resolved.
+Every request needs `--reason`: a nonblank operational explanation, kept
+on the undo operation and at the start of its PR body. For a red run, give
+the run's URL, failing checks and first error line. Reasons enter permanent
+history: never include secrets, personal data or prompt text.
 
-    cn undo FieldmouseWorks/remi#174
-    cn undo --actor https://claude.ai/code/session_01...
-    cn undo --since 1793750400000 --repo FieldmouseWorks/remi
+    cn undo FieldmouseWorks/remi#174 --reason 'Red run https://github.com/FieldmouseWorks/remi/actions/runs/123: check / check failed; error: build failed'
+    cn undo --actor https://claude.ai/code/session_01... --reason 'The session deployed the wrong configuration'
+    cn undo --since 1793750400000 --repo FieldmouseWorks/remi --reason 'Deployments since this time broke the health check'
 
 `cn attest` is a CI job's side of the same evidence: it writes a gate's or
 a negative run's attestation in [the format](docs/ci-attestation.md), and
