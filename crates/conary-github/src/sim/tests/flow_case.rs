@@ -42,7 +42,7 @@ impl Case {
         Self {
             hub,
             memory,
-            settings: Settings::default(),
+            settings: crate::sim::settings(),
             services: BTreeMap::new(),
             jobs: BTreeMap::new(),
             claims: Vec::new(),

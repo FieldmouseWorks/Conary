@@ -176,12 +176,12 @@ fn excluded_prs_keep_read_classification_and_can_act_on_exclusion() {
         if excluded == "untrusted" {
             assert_eq!(report[0].next.as_ref().unwrap().step, Step::ListOwner);
             assert!(
-                c.hub
-                    .pull(REPO, 3)
-                    .unwrap()
-                    .labels
-                    .iter()
-                    .any(|l| l.name == c.config.settings.owner_label)
+                c.hub.pull(REPO, 3).unwrap().labels.iter().any(|l| c
+                    .config
+                    .settings
+                    .owner_label
+                    .as_ref()
+                    == Some(&l.name))
             );
         }
     }

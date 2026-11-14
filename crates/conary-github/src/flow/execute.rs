@@ -306,7 +306,14 @@ pub(crate) fn act<G: Write>(
             }
             Step::DisableAutoMerge => github.disable_auto_merge(&repo, f.number)?,
             Step::CloseAlreadyLanded => github.close(&repo, f.number)?,
-            Step::ListOwner => github.owner(&repo, f.number, &f.settings.owner_label)?,
+            Step::ListOwner => {
+                let label = f
+                    .settings
+                    .owner_label
+                    .as_deref()
+                    .ok_or("no owner label is set")?;
+                github.owner(&repo, f.number, label)?
+            }
         }
         Ok(vec![kind, Failure::Status])
     };

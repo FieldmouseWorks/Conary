@@ -67,7 +67,7 @@ lesson = "Anything that starts paid work is off or zero until someone turns it o
 from = ["https://github.com/FieldmouseWorks/burrow/issues/647", "https://github.com/FieldmouseWorks/remi/issues/981"]
 applies = ["flow settings", "M6 slice 5d", "M7 standalone setup"]
 status = "designed"
-where = ["docs/DESIGN.md#properties", "https://github.com/FieldmouseWorks/Conary/issues/312", "https://github.com/FieldmouseWorks/Conary/issues/378"]
+where = ["docs/DESIGN.md#properties", "https://github.com/FieldmouseWorks/Conary/issues/312", "https://github.com/FieldmouseWorks/Conary/issues/378", "crates/conary-github/src/sim/tests/flow_defaults.rs"]
 
 [[lessons]]
 id = "one-settings-source"
@@ -131,7 +131,7 @@ lesson = "A pipeline piece is a reusable library any machine can use; a machine 
 from = ["https://github.com/FieldmouseWorks/burrow/issues/656", "https://github.com/FieldmouseWorks/remi/issues/981"]
 applies = ["conary-core", "conary-github", "M7 standalone setup"]
 status = "designed"
-where = ["docs/DESIGN.md#12-roadmap", "https://github.com/FieldmouseWorks/Conary/issues/378"]
+where = ["docs/DESIGN.md#12-roadmap", "https://github.com/FieldmouseWorks/Conary/issues/378", "crates/conary-github/src/sim/tests/flow_defaults.rs"]
 
 [[lessons]]
 id = "pause-vacates"

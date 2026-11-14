@@ -10,7 +10,7 @@ fn settings() -> Settings {
         judge_key: Some(SealKey::from_hex(&"a".repeat(64)).unwrap()),
         major_key: Some(SealKey::from_hex(&"b".repeat(64)).unwrap()),
         verdict_authors: ["owner".into()].into(),
-        ..Settings::default()
+        ..crate::sim::settings()
     }
 }
 fn setup() -> (Hub, Memory) {

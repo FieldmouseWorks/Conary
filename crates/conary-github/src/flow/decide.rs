@@ -9,6 +9,19 @@ pub(super) fn wait(stage: Stage, until: Option<u64>, why: &str) -> Decision {
     at(stage, Step::Wait { until }, why)
 }
 
+/// Hand the PR to its owner, or wait unlisted when no owner label is set.
+pub(super) fn owner(f: &Facts, why: &str) -> Decision {
+    if f.settings.owner_label.is_some() {
+        at(Stage::Owner, Step::ListOwner, why)
+    } else {
+        wait(
+            Stage::Owner,
+            None,
+            &format!("{why}; no owner label is set to list it"),
+        )
+    }
+}
+
 pub(super) fn decide(f: &Facts, m: &mut Memory, now: u64) -> Decision {
     if let Some(kind) = f.failed {
         return failed(m, kind, now, "The step failed; trying again later");
@@ -72,18 +85,10 @@ pub(super) fn decide(f: &Facts, m: &mut Memory, now: u64) -> Decision {
         );
     }
     if !f.trusted {
-        return at(
-            Stage::Owner,
-            Step::ListOwner,
-            "Outside contribution: the owner reviews and merges it",
-        );
+        return owner(f, "Outside contribution: the owner reviews and merges it");
     }
     if !f.complete {
-        return at(
-            Stage::Owner,
-            Step::ListOwner,
-            "Too much to read: the owner merges it",
-        );
+        return owner(f, "Too much to read: the owner merges it");
     }
     if f.base_held {
         return wait(Stage::Base, None, "Waiting for the default branch's CI");
@@ -98,12 +103,13 @@ pub(super) fn decide(f: &Facts, m: &mut Memory, now: u64) -> Decision {
             "Stacked on an open PR: waiting to be retargeted",
         );
     }
-    if f.labels.contains(&f.settings.owner_label) && !f.owner_approved {
-        return at(
-            Stage::Owner,
-            Step::ListOwner,
-            "The owner decides (the needs-peter label)",
-        );
+    if f.settings
+        .owner_label
+        .as_ref()
+        .is_some_and(|l| f.labels.contains(l))
+        && !f.owner_approved
+    {
+        return owner(f, "The owner decides (the owner label)");
     }
     if let Some((kind, job)) = f
         .jobs
@@ -132,11 +138,7 @@ pub(super) fn decide(f: &Facts, m: &mut Memory, now: u64) -> Decision {
             );
         }
         if f.major == Some(Major::Held) {
-            return at(
-                Stage::Owner,
-                Step::ListOwner,
-                "Major update held for the owner",
-            );
+            return owner(f, "Major update held for the owner");
         }
         if f.renovate
             && f.dependency.is_some()
@@ -179,11 +181,7 @@ pub(super) fn decide(f: &Facts, m: &mut Memory, now: u64) -> Decision {
             );
         }
         if f.major == Some(Major::Held) {
-            return at(
-                Stage::Owner,
-                Step::ListOwner,
-                "Major update held for the owner",
-            );
+            return owner(f, "Major update held for the owner");
         }
         if f.renovate && f.dependency == Some(Dependency::Major) && f.major.is_none() {
             return wait(
@@ -248,11 +246,7 @@ fn after_review(f: &Facts, m: &mut Memory, now: u64, ci: Ci, capped: bool) -> De
         return hand(f, m, now, Kind::JudgeFailure, false);
     }
     if verdict == Some(Judgment::Owner) && !f.owner_approved {
-        return at(
-            Stage::Owner,
-            Step::ListOwner,
-            "The judge sent it to the owner",
-        );
+        return owner(f, "The judge sent it to the owner");
     }
     let pending: Vec<_> = f.checks.iter().filter(|c| c.state == Ci::Pending).collect();
     let machine = f.settings.machine();
@@ -283,26 +277,16 @@ fn after_review(f: &Facts, m: &mut Memory, now: u64, ci: Ci, capped: bool) -> De
             );
         }
         Proof::Needed if ci != Ci::Pending || proof_only || early => {
-            let retry = super::proofs::retry(f, m, now);
-            let plan = super::proofs::next(f, now);
-            if let Some(decision) = retry {
-                if let Step::Retry {
-                    kind: Failure::Lost,
-                    at,
-                } = decision.1
-                    && let Some((Stage::ProofSlot, mut step, description, _)) = plan
-                {
-                    if matches!(step, Step::Wait { .. }) {
-                        step = Step::Wait { until: Some(at) };
-                    }
-                    return (Stage::ProofSlot, step, description);
-                }
-                return decision;
+            let decision = proof(f, m, now);
+            // Zero slots run no proof: nothing starts until a machine sets some.
+            if decision.1 == Step::Prove && f.settings.proof_slots == Some(0) {
+                return wait(
+                    Stage::ProofSlot,
+                    None,
+                    "No proof slots are set: no machine proof starts",
+                );
             }
-            if let Some((stage, step, description, _)) = plan {
-                return (stage, step, description);
-            }
-            return work(f, m, now, Kind::Proof);
+            return decision;
         }
         _ => {}
     }
@@ -346,11 +330,7 @@ fn after_review(f: &Facts, m: &mut Memory, now: u64, ci: Ci, capped: bool) -> De
         }
         // A judge's land verdict cannot replace the person's word for R2.
         if f.classified.class == Class::R2 && !f.owner_approved {
-            return at(
-                Stage::Owner,
-                Step::ListOwner,
-                "R2: a person must decide before it lands",
-            );
+            return owner(f, "R2: a person must decide before it lands");
         }
     }
     if !f.authorship_known {
@@ -493,6 +473,29 @@ pub(super) fn hand(f: &Facts, m: &mut Memory, now: u64, kind: Kind, delay: bool)
     work(f, m, now, kind)
 }
 
+fn proof(f: &Facts, m: &mut Memory, now: u64) -> Decision {
+    let retry = super::proofs::retry(f, m, now);
+    let plan = super::proofs::next(f, now);
+    if let Some(decision) = retry {
+        if let Step::Retry {
+            kind: Failure::Lost,
+            at,
+        } = decision.1
+            && let Some((Stage::ProofSlot, mut step, description, _)) = plan
+        {
+            if matches!(step, Step::Wait { .. }) {
+                step = Step::Wait { until: Some(at) };
+            }
+            return (Stage::ProofSlot, step, description);
+        }
+        return decision;
+    }
+    if let Some((stage, step, description, _)) = plan {
+        return (stage, step, description);
+    }
+    work(f, m, now, Kind::Proof)
+}
+
 pub(super) fn work(f: &Facts, m: &mut Memory, now: u64, kind: Kind) -> Decision {
     let stage = if kind.fixes_branch() {
         Stage::Fix
@@ -519,11 +522,7 @@ pub(super) fn work(f: &Facts, m: &mut Memory, now: u64, kind: Kind) -> Decision 
                 false
             };
             if second {
-                return at(
-                    Stage::Owner,
-                    Step::ListOwner,
-                    "Two jobs ended without their answer",
-                );
+                return owner(f, "Two jobs ended without their answer");
             }
             if j.state == JobState::Broken {
                 let due = if let Some(due) = m.broken_jobs.get(&j.id) {

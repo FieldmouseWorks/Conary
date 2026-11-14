@@ -108,7 +108,7 @@ fn cancelled_timeout_is_red_and_annotations_are_read_lazily() {
             &REMI.parse().unwrap(),
             3,
             &conary_core::Policy::parse(b"{}").unwrap(),
-            Settings::default(),
+            crate::sim::settings(),
             &["owner".into()]
         )
         .unwrap_err()
@@ -677,7 +677,7 @@ fn reader_rejects_a_retarget_or_redescription_between_endpoints() {
             &REMI.parse().unwrap(),
             3,
             &conary_core::Policy::parse(b"{}").unwrap(),
-            Settings::default(),
+            crate::sim::settings(),
             &["owner".into()],
         );
         assert!(result.unwrap_err().to_string().contains("moved"));
@@ -730,7 +730,7 @@ fn build_or_run_configuration_alone_still_requires_its_proof() {
     // common.machine / handle.py: machine checks are the union of all kinds.
     let s = Scenario::new();
     for build in [true, false] {
-        let mut settings = Settings::default();
+        let mut settings = crate::sim::settings();
         if build {
             settings
                 .proofs

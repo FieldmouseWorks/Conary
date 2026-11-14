@@ -49,7 +49,7 @@ fn engine_trailer_anywhere_in_compared_history_requires_judgment() {
         );
         hub.change(&head(3), &earlier, "later");
         assert_eq!(
-            decision(&hub, &m, Settings::default()).step,
+            decision(&hub, &m, crate::sim::settings()).step,
             if judge {
                 Step::Judge(vec![Trigger::AuthorEngine])
             } else {
@@ -82,7 +82,7 @@ fn history_past_the_pr_endpoints_commit_cap_is_read_whole() {
             Some("owner@example.org"),
             Some("owner@example.org"),
         );
-        let f = facts(&hub, Settings::default());
+        let f = facts(&hub, crate::sim::settings());
         assert!(f.authorship_known);
         assert_eq!(
             next(&f, &m, 4000).0.step,
@@ -101,16 +101,16 @@ fn unreadable_history_waits_then_a_later_read_can_land() {
     // codex_heads.py:58-82: failed reads are not cached as permission to land.
     let (hub, m) = ready();
     hub.fail(Call::CompareCommits);
-    let f = facts(&hub, Settings::default());
+    let f = facts(&hub, crate::sim::settings());
     assert!(!f.authorship_known);
     assert_eq!(next(&f, &m, 4000).0.stage, Stage::Review);
     hub.heal(Call::CompareCommits);
-    assert_eq!(decision(&hub, &m, Settings::default()).step, Step::Merge);
+    assert_eq!(decision(&hub, &m, crate::sim::settings()).step, Step::Merge);
     // This malformed GitHub answer is served as such, not turned into a
     // syntactically valid commit by the test fixture.
     let raw = json!({"commit":{"message":null,"author":{"email":"a"},"committer":{"email":"a"},"verification":null}});
     hub.commit_response(&head(3), raw);
-    assert!(!facts(&hub, Settings::default()).authorship_known);
+    assert!(!facts(&hub, crate::sim::settings()).authorship_known);
 }
 
 #[test]
@@ -144,7 +144,7 @@ fn bot_history_counts_every_author_committer_and_coauthor() {
             author,
             committer,
         );
-        let f = facts(&hub, Settings::default());
+        let f = facts(&hub, crate::sim::settings());
         assert_eq!(f.bot_edited, Some(edited));
         assert_eq!(
             next(&f, &m, 4000).0.step,
@@ -171,12 +171,12 @@ fn renovate_email_is_machine_configuration_not_the_branchs_claim() {
     );
     hub.remove_flow_reviews(REMI, 3);
     assert_eq!(
-        decision(&hub, &m, Settings::default()).step,
+        decision(&hub, &m, crate::sim::settings()).step,
         Step::QueueReview("reviewer".into())
     );
     let settings = Settings {
         renovate_email: Some("renovate@example.org".into()),
-        ..Settings::default()
+        ..crate::sim::settings()
     };
     assert_eq!(decision(&hub, &m, settings).step, Step::Settle);
 }
@@ -185,11 +185,11 @@ fn renovate_email_is_machine_configuration_not_the_branchs_claim() {
 fn merge_emptiness_uses_a_validated_test_merge_without_writing() {
     // landed.py: the merge's result tree, not head-vs-base equality, decides.
     let (hub, m) = ready();
-    assert_eq!(facts(&hub, Settings::default()).empty, Some(false));
+    assert_eq!(facts(&hub, crate::sim::settings()).empty, Some(false));
     let landed = hub.change(&head(50), TRUNK, &head(3));
     let unrelated = hub.add(&landed, "unrelated");
     hub.set_branch(REMI, "main", &unrelated);
-    let f = facts(&hub, Settings::default());
+    let f = facts(&hub, crate::sim::settings());
     assert_eq!(f.empty, Some(true));
     assert_eq!(next(&f, &m, 4000).0.step, Step::CloseAlreadyLanded);
     assert_eq!(hub.count(Call::Merge), 0);
@@ -203,7 +203,7 @@ fn stale_test_merge_cannot_prove_the_current_base_or_head() {
     let sha = hub.pull(REMI, 3).unwrap().merge_commit_sha.unwrap();
     // A known ordinary commit is not the test merge of these exact parents.
     hub.edit_pull(REMI, 3, |p| p["merge_commit_sha"] = json!(TRUNK));
-    let f = facts(&hub, Settings::default());
+    let f = facts(&hub, crate::sim::settings());
     assert_eq!(f.empty, None);
     assert!(matches!(
         next(&f, &m, 4000).0.step,
@@ -215,7 +215,7 @@ fn stale_test_merge_cannot_prove_the_current_base_or_head() {
     hub.edit_pull(REMI, 3, |p| p["merge_commit_sha"] = json!(sha));
     let newer = hub.add(TRUNK, "newer");
     hub.set_branch(REMI, "main", &newer);
-    assert_eq!(facts(&hub, Settings::default()).empty, None);
+    assert_eq!(facts(&hub, crate::sim::settings()).empty, None);
 }
 
 #[test]
@@ -225,7 +225,7 @@ fn threads_and_mergeability_are_read_from_the_sim() {
     let (hub, m) = ready();
     hub.edit_flow(REMI, 3, |s| s.open_threads = 1);
     assert_eq!(
-        decision(&hub, &m, Settings::default()).step,
+        decision(&hub, &m, crate::sim::settings()).step,
         Step::HandFix(Kind::Findings)
     );
     hub.edit_flow(REMI, 3, |s| {
@@ -233,14 +233,14 @@ fn threads_and_mergeability_are_read_from_the_sim() {
         s.merge_state = "DIRTY".into();
     });
     assert_eq!(
-        decision(&hub, &m, Settings::default()).step,
+        decision(&hub, &m, crate::sim::settings()).step,
         Step::HandFix(Kind::Conflict)
     );
     hub.edit_flow(REMI, 3, |s| {
         s.merge_state = "BEHIND".into();
     });
     assert_eq!(
-        decision(&hub, &m, Settings::default()).step,
+        decision(&hub, &m, crate::sim::settings()).step,
         Step::UpdateBranch
     );
 }
@@ -260,7 +260,7 @@ fn a_permanently_short_history_requires_a_judge_not_unread_authorship_retry() {
     hub.ci(&tip, &[("check", "success")]);
     hub.flow_review(REMI, 3, "reviewer", Verdict::Clean, 600);
     hub.short_history(TRUNK, &tip, 250);
-    let f = facts(&hub, Settings::default());
+    let f = facts(&hub, crate::sim::settings());
     assert!(f.authorship_known && f.needs_judge);
     assert_eq!(f.bot_edited, None);
     assert_eq!(
@@ -268,7 +268,7 @@ fn a_permanently_short_history_requires_a_judge_not_unread_authorship_retry() {
         Step::Judge(vec![Trigger::AuthorEngine])
     );
     assert_eq!(
-        decision(&hub, &m, Settings::default()).step,
+        decision(&hub, &m, crate::sim::settings()).step,
         Step::Judge(vec![Trigger::AuthorEngine])
     );
 }

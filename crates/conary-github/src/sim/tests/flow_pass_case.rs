@@ -84,6 +84,7 @@ impl Case {
         );
         let mut config = flow::Config {
             trusted_authors: vec!["owner".into()],
+            settings: crate::sim::settings(),
             ..Default::default()
         };
         config.settings.people.insert("maintainer".into());

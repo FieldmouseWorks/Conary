@@ -72,7 +72,7 @@ fn docs_waiver_rejects_gate_edits_renames_cut_files_and_another_app() {
             &REMI.parse().unwrap(),
             3,
             &conary_core::Policy::parse(b"{}").unwrap(),
-            Settings::default(),
+            crate::sim::settings(),
             &["owner".into()]
         )
         .is_err()
