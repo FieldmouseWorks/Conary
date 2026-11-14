@@ -111,7 +111,6 @@ pub(crate) fn act<G: Write>(
             }
             Step::Judge(decided) => {
                 let author = author(github, f, record)?;
-                let discussion = super::judging::discussion(record)?;
                 pass.start(
                     f,
                     Purpose::Judge,
@@ -123,9 +122,7 @@ pub(crate) fn act<G: Write>(
                         author,
                         reviewers: reviewers(record)?,
                         why: super::judging::why(record, &f.revision, decided)?,
-                        context: super::judging::judging_context(
-                            discussion.iter().map(|(f, a)| (f, a.as_ref())),
-                        ),
+                        context: f.context.clone().ok_or("judging context unknown")?,
                     },
                     record,
                     data,

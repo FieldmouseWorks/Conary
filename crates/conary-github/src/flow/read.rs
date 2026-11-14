@@ -95,6 +95,7 @@ pub fn read(
         reviewers: BTreeMap::new(),
         judgment: None,
         judgment_generation: None,
+        context: None,
         major_generation: None,
         jobs: BTreeMap::new(),
         claims: Vec::new(),

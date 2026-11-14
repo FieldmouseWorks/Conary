@@ -43,10 +43,10 @@ pub fn judging_context<'a>(
 /// was handed them, with its answers. Nothing is matched across jobs: which
 /// finding a thread or answer belongs to is the flow's thread identity, not
 /// this log's.
-pub(super) fn discussion(record: &Record) -> Result<Vec<(Finding, Option<FindingAnswer>)>> {
+fn discussion(record: &Record, now: u64) -> Result<Vec<(Finding, Option<FindingAnswer>)>> {
     let mut discussion = Vec::new();
     for work in &record.jobs {
-        let Some(Ok(Response { answer, .. })) = jobs::inspect(work, jobs::now())?.result else {
+        let Some(Ok(Response { answer, .. })) = jobs::inspect(work, now)?.result else {
             continue;
         };
         match (&work.purpose, answer) {
@@ -74,6 +74,14 @@ pub(super) fn discussion(record: &Record) -> Result<Vec<(Finding, Option<Finding
         }
     }
     Ok(discussion)
+}
+
+/// The PR's [`judging_context`] at `now`: what a judge asked now reads.
+pub(super) fn context(record: &Record, now: u64) -> Result<String> {
+    let discussion = discussion(record, now)?;
+    Ok(judging_context(
+        discussion.iter().map(|(f, a)| (f, a.as_ref())),
+    ))
 }
 
 /// The reasons a judge request carries: the decision's when it has any.

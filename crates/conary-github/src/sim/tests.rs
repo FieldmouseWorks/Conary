@@ -15,6 +15,45 @@ fn head(n: u64) -> String {
     format!("{n:0>40}")
 }
 
+/// A judge's provenance, as its producer reports it.
+fn judge_provenance() -> conary_core::plugin::Provenance {
+    use conary_core::plugin::{Context, Executed, Identity, Provenance};
+    Provenance {
+        by: Identity {
+            engine: "fixture-engine".into(),
+            session: Some("judge-session".into()),
+        },
+        execution: Executed {
+            model: Some("fixture-model".into()),
+            effort: Some("deliberate".into()),
+            context: Context::Fresh,
+        },
+    }
+}
+
+/// Every reason the flow can require a judgment for.
+fn every_reason() -> Vec<conary_core::plugin::Trigger> {
+    use conary_core::plugin::Trigger::*;
+    vec![
+        R2,
+        AuthorEngine,
+        HiddenFiles,
+        NoCi,
+        Asked,
+        RoundLimit,
+        MajorDependency,
+    ]
+}
+
+/// A judgment judged for every reason the flow can require, on a PR with
+/// no discussion yet.
+fn judged_for_everything() -> crate::flow::Basis {
+    crate::flow::Basis {
+        why: every_reason(),
+        context: crate::flow::judging_context([]),
+    }
+}
+
 fn hub() -> Hub {
     Hub::new(REMI, TRUNK)
 }
@@ -282,6 +321,8 @@ mod flow_ci;
 mod flow_reader;
 
 mod flow_markers;
+
+mod flow_judged;
 
 mod flow_gates;
 

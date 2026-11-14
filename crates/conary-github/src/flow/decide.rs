@@ -218,10 +218,18 @@ fn ci(f: &Facts, m: &mut Memory, now: u64) -> Ci {
     }
 }
 
-fn judgment(f: &Facts) -> Option<Judgment> {
+/// The judgment that speaks for this revision now. A fail or misdescribed
+/// verdict always does. A pass or owner verdict only while it covers every
+/// reason in `why` and the discussion now ([`Judged::covers`]); otherwise
+/// the flow asks again before granting anything, and the old issuance stays.
+fn judgment(f: &Facts, why: &[Trigger]) -> Option<Judgment> {
     f.judgment
         .as_ref()
         .filter(|j| j.revision == f.revision)
+        .filter(|j| {
+            !matches!(j.verdict, Judgment::Pass | Judgment::Owner)
+                || j.covers(why, f.context.as_deref())
+        })
         .map(|j| j.verdict)
 }
 
@@ -238,7 +246,8 @@ fn after_review(f: &Facts, m: &mut Memory, now: u64, ci: Ci, capped: bool) -> De
     if ci == Ci::Red || f.proof == Proof::Failed {
         return hand(f, m, now, Kind::Red, true);
     }
-    let verdict = judgment(f);
+    let why = judge_why(f, ci, capped);
+    let verdict = judgment(f, &why);
     if verdict == Some(Judgment::Misdescribed) {
         return hand(f, m, now, Kind::Description, false);
     }
@@ -306,7 +315,6 @@ fn after_review(f: &Facts, m: &mut Memory, now: u64, ci: Ci, capped: bool) -> De
             ),
         );
     }
-    let why = judge_why(f, ci, capped);
     let requires_judge = !why.is_empty()
         || f.jobs.get(&Kind::Judge).is_some_and(|j| {
             j.revision.head == f.revision.head && j.revision.base == f.revision.base

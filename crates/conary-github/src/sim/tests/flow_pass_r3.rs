@@ -119,7 +119,13 @@ fn admission_verifies_only_effective_checks_and_current_receipts() {
         10,
         "conary/judgment",
         "success",
-        Some(&judgment_receipt(&revision, 1, Some(Judgment::Pass))),
+        Some(&judgment_receipt_by(
+            &revision,
+            1,
+            Some(Judgment::Pass),
+            Some(&super::judge_provenance()),
+            Some(&super::judged_for_everything()),
+        )),
     );
     suite(&c, 2, "other");
     check(&c, 2, "irrelevant failure", "failure", None);
@@ -138,7 +144,13 @@ fn admission_verifies_only_effective_checks_and_current_receipts() {
         3,
         "conary/judgment",
         "success",
-        Some(&judgment_receipt(&revision, 2, Some(Judgment::Pass))),
+        Some(&judgment_receipt_by(
+            &revision,
+            2,
+            Some(Judgment::Pass),
+            Some(&super::judge_provenance()),
+            Some(&super::judged_for_everything()),
+        )),
     );
     let report = run(&c, None, false);
     assert_eq!(report[0].error, None, "{:?}", report[0]);
