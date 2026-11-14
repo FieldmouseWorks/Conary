@@ -419,8 +419,6 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
     )
 }
 
-/// A deleted/edited comment cannot roll an observed decision back. Conflicting
-/// words at the same generation stay blocked until a strictly newer issuance.
 /// Whether the finished judge job on this revision was answered, against
 /// every issuance the flow knows for it, GitHub's and remembered. A job is
 /// answered once an issuance seals what it asked on (any issuance, for a
@@ -456,6 +454,8 @@ fn judge_answered(f: &mut Facts, m: &mut Memory) {
     }
 }
 
+/// A deleted/edited comment cannot roll an observed decision back. Conflicting
+/// words at the same generation stay blocked until a strictly newer issuance.
 pub(super) fn issuance<T: Clone + Eq>(
     receipts: &mut std::collections::BTreeMap<Revision, (u64, Option<T>)>,
     revision: &Revision,
