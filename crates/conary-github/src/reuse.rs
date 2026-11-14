@@ -1,18 +1,9 @@
-//! Gate reuse (`docs/gate-reuse.md`): whether CI already attested a pass
-//! of a gate on exactly a tree, so a push of that tree under another commit
-//! needn't run the gate again ([DESIGN section 4.3], rule 3). It answers
-//! burrow's `burrow-gate-reuse/v1` contract (burrow's
-//! `crates/burrow-flake-check/README.md`, "Reusing an attested pass").
-//!
-//! A hit is only a CI attestation [`attested`] holds, as the train checks
-//! one, of a pass on the very tree asked about, by the signer the machine
-//! names, whose gate is the request's in everything but its workflow's
-//! commit, and whose skipped checks the request's gate skips too. Statuses,
-//! check runs without an attestation, services' statements and a push that
-//! reused a pass (it attests nothing) never make one. The lookup only
-//! reads: an answer is never recorded, so evidence stays where it was made.
-//!
-//! [DESIGN section 4.3]: ../../../docs/DESIGN.md#43-evidence
+//! Gate reuse: whether CI already attested a pass of a gate on exactly a
+//! tree, so a push of that tree under another commit needn't run the gate
+//! again (`docs/DESIGN.md` section 4.3, rule 3). `docs/gate-reuse.md` says
+//! what counts as a hit; it answers burrow's `burrow-gate-reuse/v1`
+//! contract (burrow's `crates/burrow-flake-check/README.md`, "Reusing an
+//! attested pass"). It only reads: an answer is never recorded.
 
 use std::collections::BTreeSet;
 
