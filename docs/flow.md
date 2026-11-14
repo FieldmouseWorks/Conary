@@ -81,8 +81,9 @@ changed since, or `started` when that judge predates recorded reasons. Its `cont
 `flow::judging_context` over the PR's discussion: its log in job order, each
 validated review's findings, then each v4 fix's findings as handed, with its
 answers; every review thread on GitHub with its comments as they read now; and
-every review body (`flow::review_bodies`), whoever wrote them and whether or not
-a worker did. Resolving a thread doesn't change it. An approval's body doesn't
+every review body (`flow::review_bodies`); and every PR comment carrying a
+finding's or an answer's marker (`flow::conversation`), whoever wrote them and
+whether or not a worker did. Resolving a thread doesn't change it. An approval's body doesn't
 count: it's a person's permission, and counting it would make the owner's
 release of an owner verdict ask for another judgment. A plugin speaking an older contract gets none of these fields.
 Engine trailers across the PR history supply its author engine. Unreadable
@@ -274,8 +275,14 @@ review marker's `problems`. So a second review on the same head, two
 findings on one line, or a carried review never share a marker. The review
 body and its receipt don't change. A lost or partial publication is
 reconciled before anything is sent again: the review by its exact body,
-each PR comment by its marker. Publication is complete only once every
-finding's target is read back, and nothing is handed on before that.
+each PR comment by its marker. Which findings get a line comment is
+planned once, before the review is first sent, and kept in the job's
+record with every write GitHub acknowledges, so a later attempt waits for
+an acknowledged write to show and never sends it again. Publication is
+complete only once the review and every finding's target are read back,
+and nothing is handed on before that. Waiting for GitHub to show a write
+spends no review attempt. A v2 review body sent twice counts as one
+round.
 
 Only the flow's review accounts' markers count. A finding thread is
 recognised by its first comment's marker, on whichever review it started,
@@ -296,8 +303,11 @@ finding's target with a `conary-answer:v1` marker that also names the fix
 invocation, as the flow's review account: a reply on the thread, which is
 then resolved, or a PR comment. A thread whose first comment no longer names
 that finding gets no reply. A lost write is reconciled by its exact body
-before it's posted again. Only the latest fix's answers go up: an earlier
-invocation's are dropped. An `unchanged` fix posts its replies and pushes
+before it's posted again, and an acknowledged one is waited for, never
+resent. Every thread of the finding is resolved, a duplicate's too. The fix
+is done only once every reply and resolution is read back; it then counts
+as answered, never as a job that ended without its answer. Only the latest
+fix's answers go up: an earlier invocation's are dropped. An `unchanged` fix posts its replies and pushes
 nothing, and the reviewers then look again; the round is counted as before
 ([review-loop.md](review-loop.md) owns what the answers mean).
 

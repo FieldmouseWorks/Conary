@@ -176,9 +176,10 @@ pub fn placed(hunks: &BTreeMap<String, Vec<(u64, u64)>>, finding: &Finding) -> b
 /// marker quoted by anyone else names nothing.
 #[derive(Debug, Default)]
 pub struct Targets {
-    /// The finding threads, by finding: the thread's id, and whether it's
-    /// resolved.
-    threads: BTreeMap<FindingMark, (String, bool)>,
+    /// The finding threads, by finding, in id order: each one's id, and
+    /// whether it's resolved. One finding has two only when a review was
+    /// sent twice; the first is its target.
+    threads: BTreeMap<FindingMark, Vec<(String, bool)>>,
     /// The thread ids that are a finding's.
     recognised: BTreeSet<String>,
     /// Findings with a marked PR comment.
@@ -203,13 +204,13 @@ impl Targets {
             }
             if let Some(mark) = read::<FindingMark>(FINDING, &first.body) {
                 // Every thread the flow started on a finding is that
-                // finding's, never someone's request. Should one finding
-                // have two, the first by id is its target on every read.
+                // finding's, never someone's request.
                 result.recognised.insert(id.clone());
                 result
                     .threads
                     .entry(mark)
-                    .or_insert_with(|| (id.clone(), thread.resolved));
+                    .or_default()
+                    .push((id.clone(), thread.resolved));
             }
         }
         for c in comments {
@@ -232,19 +233,23 @@ impl Targets {
     }
     /// A finding's target: its thread when it has one.
     pub fn target(&self, mark: &FindingMark) -> Option<Target> {
-        if let Some((id, _)) = self.threads.get(mark) {
+        if let Some((id, _)) = self.threads.get(mark).and_then(|t| t.first()) {
             Some(Target::Thread(id.clone()))
         } else {
             self.comments.contains(mark).then_some(Target::Comment)
         }
     }
-    /// A finding is answered once its thread is resolved, or, with no
+    /// A finding is answered once its threads are resolved, or, with no
     /// thread, once an answer to it is posted.
     pub fn answered(&self, mark: &FindingMark) -> bool {
         match self.threads.get(mark) {
-            Some((_, resolved)) => *resolved,
+            Some(threads) => threads.iter().all(|(_, resolved)| *resolved),
             None => self.answers.contains(mark),
         }
+    }
+    /// Every thread a finding has, and whether each is resolved.
+    pub fn threads(&self, mark: &FindingMark) -> &[(String, bool)] {
+        self.threads.get(mark).map_or(&[], Vec::as_slice)
     }
     /// Whether thread `id` is a finding's.
     pub fn recognises(&self, id: &str) -> bool {
@@ -254,7 +259,7 @@ impl Targets {
     pub fn open(&self) -> impl Iterator<Item = &FindingMark> {
         self.threads
             .iter()
-            .filter(|(_, (_, resolved))| !resolved)
+            .filter(|(_, threads)| threads.iter().any(|(_, resolved)| !resolved))
             .map(|(mark, _)| mark)
     }
     /// The finding a thread's first comment names, if it's one of ours.
@@ -266,6 +271,12 @@ impl Targets {
             .is_some_and(|l| settings.review_authors.contains(l))
             .then(|| read(FINDING, &first.body))?
     }
+}
+
+/// Whether a PR comment carries a finding's or an answer's marker, whoever
+/// wrote it: the conversation half of what a judge reads.
+pub fn discussed(body: &str) -> bool {
+    read::<FindingMark>(FINDING, body).is_some() || read::<AnswerMark>(ANSWER, body).is_some()
 }
 
 /// A review the flow published, read back: its role, head and issuance, and

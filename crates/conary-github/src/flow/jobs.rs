@@ -26,6 +26,31 @@ pub struct Work {
     /// answer goes to, or None for a problem that isn't a finding.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub handed: Vec<Option<Handed>>,
+    /// What publishing this job's answer has sent so far that GitHub
+    /// acknowledged, saved as it goes: a later attempt waits to read it
+    /// back, and never sends it again.
+    #[serde(default, skip_serializing_if = "Sent::is_empty")]
+    pub sent: Sent,
+}
+
+/// A publication's progress. For a review: its plan, which findings get a
+/// line comment, fixed before the review is first sent; whether the review
+/// was acknowledged; and which findings' PR comments were. For a fix: which
+/// answers' replies or PR comments were acknowledged, by answer index.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Sent {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inline: Option<Vec<bool>>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub review: bool,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
+    pub written: std::collections::BTreeSet<usize>,
+}
+impl Sent {
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
 }
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Invocation {

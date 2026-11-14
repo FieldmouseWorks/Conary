@@ -175,8 +175,9 @@ pub enum JobState {
     Running,
     Unknown,
     Done,
-    /// A judge's job, done, whose sealed issuance was read: its answer came,
-    /// whether or not it still speaks for the revision.
+    /// A judge's job, done, whose sealed issuance was read, or a fix's whose
+    /// answers went up: its answer came, whether or not it still speaks for
+    /// the revision.
     Answered,
     Broken,
 }
@@ -511,6 +512,8 @@ pub struct Facts {
     pub threads: BTreeMap<String, ReviewThread>,
     /// The review bodies a judge reads ([`super::review_bodies`]), by review id.
     pub review_bodies: BTreeMap<u64, ThreadComment>,
+    /// The PR comments a judge reads ([`super::conversation`]), in order.
+    pub conversation: Vec<ThreadComment>,
     /// What each finished judge job on this revision was asked to judge on,
     /// by job id: `None` for a request from before the flow said.
     pub judge_requests: BTreeMap<String, Option<Basis>>,

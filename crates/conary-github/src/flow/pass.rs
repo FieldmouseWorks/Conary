@@ -370,6 +370,7 @@ impl Pass<'_> {
             posted: false,
             recipes: recipes(facts),
             handed,
+            sent: Default::default(),
         });
         // Persist ownership before spawning. A crash in this window times out;
         // it never starts the same fix twice.

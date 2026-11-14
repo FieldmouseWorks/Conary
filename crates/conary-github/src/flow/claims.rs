@@ -94,6 +94,13 @@ pub(super) fn look(f: &Facts, m: &mut Memory, now: u64) -> Option<super::decide:
         }
         if claim.posted {
             m.answered_jobs.insert(job.id.clone());
+            // A confirmation that comes after the job was counted takes it
+            // out of the count.
+            m.lost_jobs.remove(&job.id);
+            for ended in m.unanswered.values_mut() {
+                ended.remove(&job.id);
+            }
+            m.unanswered.retain(|_, ended| !ended.is_empty());
             m.strikes.remove(&Failure::Answer);
             return Some(super::decide::wait(
                 Stage::Fix,

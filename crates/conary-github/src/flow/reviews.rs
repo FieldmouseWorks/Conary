@@ -47,6 +47,7 @@ pub(super) fn read(
         .expect("escaped pattern");
         let mut reviewer = Reviewer::default();
         let mut candidates = BTreeMap::<String, (Review, Option<u64>, bool)>::new();
+        let mut published = BTreeSet::new();
         for r in records.iter().filter(|r| {
             r.user
                 .as_ref()
@@ -71,7 +72,12 @@ pub(super) fn read(
                     None => continue,
                 },
             };
-            if count > 0 {
+            // A v2 body holds its completion time, so the same one twice
+            // is one review sent twice, its answer lost: one round. A
+            // legacy body repeats round after round.
+            let repeated =
+                version == "2" && !published.insert((r.commit_id.as_deref(), r.body.as_deref()));
+            if count > 0 && !repeated {
                 reviewer.rounds = reviewer.rounds.saturating_add(1);
             }
             // Legacy findings still count toward the historical cap. Their

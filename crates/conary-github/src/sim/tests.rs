@@ -54,6 +54,7 @@ fn judged_for_everything(hub: &Hub, repo: &str) -> crate::flow::Basis {
             [],
             &crate::flow::Read::snapshot(hub, repo, 3).unwrap().threads,
             &crate::flow::review_bodies(&hub.reviews(repo, 3).unwrap()),
+            &crate::flow::conversation(&hub.comments(repo, 3).unwrap()),
         ),
     }
 }

@@ -70,6 +70,12 @@ pub(crate) fn hydrate(f: &mut Facts, record: &Record, now: u64, dry_run: bool) -
                     Some(Err(_)) => FixResult::Invalid,
                     None => FixResult::Missing,
                 };
+                // A fix whose answers went up and were read back is
+                // answered, as a judge's is: never a job that ended without
+                // its answer, however many rounds follow on its revision.
+                if work.posted && job.state == JobState::Done {
+                    job.state = JobState::Answered;
+                }
                 f.jobs.insert(*kind, job.clone());
                 f.claims.push(FixClaim {
                     kind: *kind,

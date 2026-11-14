@@ -20,6 +20,7 @@ fn context_now<'a>(
         log,
         &flow::Read::snapshot(&c.hub, REPO, 3).unwrap().threads,
         &review_bodies(&c.hub.reviews(REPO, 3).unwrap()),
+        &conversation(&c.hub.comments(REPO, 3).unwrap()),
     )
 }
 

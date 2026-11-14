@@ -152,12 +152,14 @@ pub(crate) fn act<G: Write>(
                 )?;
             }
             Step::PostReview(role) => {
-                let work = record
+                let at = record
                     .jobs
-                    .iter_mut()
-                    .rev()
-                    .find(|w| matches!(&w.purpose, Purpose::Review(r) if r == role) && !w.posted)
+                    .iter()
+                    .rposition(|w| {
+                        matches!(&w.purpose, Purpose::Review(r) if r == role) && !w.posted
+                    })
                     .ok_or("review answer missing")?;
+                let work = &record.jobs[at];
                 let completion = jobs::completion(work, pass.now)?;
                 let Some(Ok(plugin::Response {
                     answer: plugin::Answer::Review { findings },
@@ -171,20 +173,20 @@ pub(crate) fn act<G: Write>(
                 }
                 let body =
                     super::write::review_body(role, &work.job.revision, completion.at, &findings);
-                super::publish::review(github, f, role, &work.job.revision.head, &body, &findings)?;
-                work.posted = true;
+                super::publish::review(github, f, role, record, data, at, &body, &findings)?;
+                record.jobs[at].posted = true;
             }
             Step::PostFix(id) => {
                 if super::claims::superseded(f, id) {
                     return Err("a later fix superseded this one's answers".into());
                 }
-                let work = record
+                let at = record
                     .jobs
-                    .iter_mut()
-                    .find(|w| &w.job.id == id && matches!(w.purpose, Purpose::Fix(_)))
+                    .iter()
+                    .position(|w| &w.job.id == id && matches!(w.purpose, Purpose::Fix(_)))
                     .ok_or("fix job missing")?;
-                super::publish::answers(github, f, work, pass.now)?;
-                work.posted = true;
+                super::publish::answers(github, f, record, data, at, pass.now)?;
+                record.jobs[at].posted = true;
             }
             Step::PostProof => {
                 return Err("proof output awaits independently attested GitHub evidence".into());

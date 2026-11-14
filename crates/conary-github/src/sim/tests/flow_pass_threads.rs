@@ -481,3 +481,159 @@ fn a_carried_reviews_findings_are_answered_on_its_own_threads() {
     assert!(after.values().all(|t| t.resolved && t.comments.len() == 2));
     assert_eq!(answers(&c).len(), 4);
 }
+
+#[test]
+fn an_acknowledged_write_waits_to_be_read_back_and_is_never_sent_again() {
+    let c = case(true);
+    let now = flow::jobs::now();
+    assert_eq!(step(&c, now), Step::QueueReview("reviewer".into()));
+    respond(
+        &c,
+        now,
+        Answer::Review {
+            findings: findings(),
+        },
+    );
+    // GitHub takes the review and the comments, but reading them lags.
+    c.hub.stale(Call::Reviews);
+    c.hub.stale(Call::Comments);
+    let mut t = 1;
+    for _ in 0..5 {
+        t += 60;
+        assert_ne!(step_or_error(&c, now + t), Step::HandFix(Kind::Findings));
+    }
+    c.hub.fresh(Call::Reviews);
+    for _ in 0..5 {
+        t += 60;
+        assert_ne!(step_or_error(&c, now + t), Step::HandFix(Kind::Findings));
+    }
+    c.hub.fresh(Call::Comments);
+    until(&c, now, &mut t, Step::HandFix(Kind::Findings));
+    assert_eq!(c.hub.count(Call::FlowReview), 1);
+    assert_eq!(c.hub.count(Call::FlowComment), 2);
+    // The fix's answers go up, but the threads and conversation lag: the
+    // fix isn't done, nothing is resent, and no other look or fix starts.
+    unchanged(&c, now + t, "answer");
+    c.hub.stale(Call::FlowSnapshot);
+    c.hub.stale(Call::Comments);
+    for _ in 0..5 {
+        t += 60;
+        let next = step_or_error(&c, now + t);
+        assert!(
+            !matches!(next, Step::QueueReview(_) | Step::HandFix(_)),
+            "{next:?}"
+        );
+    }
+    assert_eq!(c.hub.count(Call::FlowReply), 2);
+    assert_eq!(c.hub.count(Call::FlowComment), 4);
+    c.hub.fresh(Call::FlowSnapshot);
+    c.hub.fresh(Call::Comments);
+    until(&c, now, &mut t, Step::QueueReview("reviewer".into()));
+    assert_eq!(answers(&c).len(), 4);
+    assert!(threads(&c).values().all(|t| t.resolved));
+}
+
+#[test]
+fn a_reviews_plan_is_kept_when_a_diff_appears_after_it_was_sent() {
+    // No diff at first: every finding goes to the conversation. The review
+    // goes up, its answer is lost, and then GitHub gives the diff.
+    let c = case(false);
+    let now = flow::jobs::now();
+    assert_eq!(step(&c, now), Step::QueueReview("reviewer".into()));
+    respond(
+        &c,
+        now,
+        Answer::Review {
+            findings: findings(),
+        },
+    );
+    c.hub.lose(Call::FlowReview);
+    assert!(report(&c, now + 1).error.is_some());
+    c.hub.heal(Call::FlowReview);
+    let tip = c.hub.branch(REPO, "main").unwrap().unwrap();
+    c.hub.flow_diff(&tip, &head(3), DIFF);
+    let mut t = 1;
+    until(&c, now, &mut t, Step::HandFix(Kind::Findings));
+    assert_eq!(c.hub.count(Call::FlowReview), 1);
+    assert!(threads(&c).is_empty());
+    let p = publication(&c);
+    let read = targets(&c);
+    assert!((0..4).all(|i| read.target(&p.mark(i)) == Some(Target::Comment)));
+}
+
+#[test]
+fn repeated_unchanged_rounds_never_count_as_missing_answers() {
+    let c = case(true);
+    let now = flow::jobs::now();
+    let mut t = 0;
+    for round in 0..3 {
+        if round == 0 {
+            assert_eq!(step(&c, now), Step::QueueReview("reviewer".into()));
+        }
+        respond(
+            &c,
+            now + t,
+            Answer::Review {
+                findings: findings(),
+            },
+        );
+        until(&c, now, &mut t, Step::HandFix(Kind::Findings));
+        unchanged(&c, now + t, &format!("round {round}"));
+        until(&c, now, &mut t, Step::QueueReview("reviewer".into()));
+        assert!(c.record().memory.unanswered.is_empty(), "round {round}");
+    }
+    assert_eq!(answers(&c).len(), 12);
+}
+
+#[test]
+fn the_conversations_findings_and_answers_are_what_a_judge_reads() {
+    let c = case(false);
+    let now = flow::jobs::now();
+    reviewed(&c, now);
+    assert_eq!(step(&c, now + 2), Step::HandFix(Kind::Findings));
+    unchanged(&c, now + 2, "answer");
+    until(&c, now, &mut 2, Step::QueueReview("reviewer".into()));
+    // What the flow reads: the conversation, and the context it makes.
+    let facts = || {
+        let mut f = flow::read(
+            &c.hub,
+            &REPO.parse().unwrap(),
+            3,
+            &c.policy,
+            c.config.settings.clone(),
+            &c.config.trusted_authors,
+        )
+        .unwrap();
+        flow::observe::hydrate(&mut f, &c.record(), now + 1000, true).unwrap();
+        (f.conversation, f.context.unwrap())
+    };
+    let (before, context) = facts();
+    // Four findings and four answers; a sealed verdict or a person's word
+    // isn't the findings' discussion.
+    assert_eq!(before.len(), 8);
+    c.hub.flow_comment(REPO, 3, "someone", "just a comment");
+    assert_eq!(facts(), (before.clone(), context.clone()));
+    // An answer edited, its marker kept, is another discussion; so is one
+    // removed.
+    let comments = c.hub.comments(REPO, 3).unwrap();
+    let at = comments
+        .iter()
+        .position(|c| {
+            c.body
+                .as_deref()
+                .is_some_and(|b| b.contains("conary-answer:v1"))
+        })
+        .unwrap();
+    let edited = comments[at]
+        .body
+        .as_deref()
+        .unwrap()
+        .replacen("answer", "a different answer", 1);
+    c.hub.edit_flow_comment(REPO, 3, at, &edited);
+    let (after, edited_context) = facts();
+    assert_ne!(after, before);
+    assert_ne!(edited_context, context);
+    c.hub.edit_flow_comment(REPO, 3, at, "removed");
+    assert_ne!(facts().1, context);
+    assert_ne!(facts().1, edited_context);
+}
