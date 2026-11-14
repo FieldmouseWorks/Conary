@@ -367,24 +367,51 @@ fn open_at(pr: &PullRequest, timeline: &[Event], at: &str) -> bool {
     last.is_none_or(|(_, open)| open)
 }
 
-/// What ingest reads about a PR besides the PR itself, by its number and
-/// its head: right before it's recorded, or by a sync before it takes the
-/// ledger's lock ([`gather`]).
+/// What ingest reads about a PR besides the PR itself: its [`Results`],
+/// and its timeline, read after them so that every retarget before any of
+/// them is in it.
 struct Read {
     timeline: Vec<Event>,
+    results: Results,
+}
+
+/// A PR's check runs, statuses and reviews, read by its number and its
+/// head: right before it's recorded, or by a sync before it takes the
+/// ledger's lock ([`gather`]).
+struct Results {
     check_runs: Vec<CheckRun>,
     statuses: Vec<CommitStatus>,
     reviews: Vec<Review>,
 }
 
-impl Read {
+impl Results {
     fn of(source: &dyn Source, repo: &str, pr: &PullRequest) -> Result<Self, IngestError> {
         let head = commit(&pr.head.sha)?;
         Ok(Self {
-            timeline: source.timeline(repo, pr.number)?,
             check_runs: source.check_runs(repo, head.as_str())?,
             statuses: source.statuses(repo, head.as_str())?,
             reviews: source.reviews(repo, pr.number)?,
+        })
+    }
+}
+
+impl Read {
+    fn of(source: &dyn Source, repo: &str, pr: &PullRequest) -> Result<Self, IngestError> {
+        let results = Results::of(source, repo, pr)?;
+        Self::after(source, repo, pr, results)
+    }
+
+    /// `results` read earlier, with the PR's timeline as it is now: a
+    /// result from before a retarget made since is left out by it.
+    fn after(
+        source: &dyn Source,
+        repo: &str,
+        pr: &PullRequest,
+        results: Results,
+    ) -> Result<Self, IngestError> {
+        Ok(Self {
+            timeline: source.timeline(repo, pr.number)?,
+            results,
         })
     }
 }
@@ -414,9 +441,12 @@ fn record_with_submission(
 ) -> Result<Ingested, IngestError> {
     let Read {
         timeline,
-        check_runs,
-        statuses,
-        reviews,
+        results:
+            Results {
+                check_runs,
+                statuses,
+                reviews,
+            },
     } = read;
     let mut w = Writer {
         store,

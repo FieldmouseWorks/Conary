@@ -119,7 +119,8 @@ fn open() -> (tempfile::TempDir, Store) {
 
 /// A sync as `cn sync` runs one: gathered, then recorded.
 fn synced(store: &mut Store, f: &Hub) -> Result<Vec<Ingested>, IngestError> {
-    sync(store, f, gather(f, &config(), &repo())?)
+    let gathered = gather(f, &config(), &repo(), store.lock().dir())?;
+    sync(store, f, gathered)
 }
 
 fn sha(s: &str) -> CommitId {
@@ -579,7 +580,7 @@ fn ingest_refuses_to_run_without_the_steward_configured() {
             Err(IngestError::Config(_))
         ));
         assert!(matches!(
-            gather(&f, &config, &repo()),
+            gather(&f, &config, &repo(), store.lock().dir()),
             Err(IngestError::Config(_))
         ));
         assert!(matches!(

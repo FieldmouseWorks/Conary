@@ -328,7 +328,7 @@ fn run(cli: &Cli) -> Result<()> {
             let (a, got) = if matches!(cli.command, Command::Sync { .. }) {
                 // Read before the lock, so other writers wait only for
                 // the recording, not the minutes GitHub takes.
-                let gathered = ingest::gather(&api, &config, repo)?;
+                let gathered = ingest::gather(&api, &config, repo, &cli.ledger)?;
                 let mut a = open(cli, github, &api)?;
                 let got = ingest::sync(&mut a.store, &api, gathered);
                 (a, got)

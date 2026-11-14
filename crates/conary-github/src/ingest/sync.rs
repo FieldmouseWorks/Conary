@@ -1,16 +1,18 @@
 //! A sync: the ledger brought up to date with a repo, read in two parts so
 //! the ledger's writer lock is held only while it records. [`gather`] reads
-//! what takes minutes, each open PR's timeline, check runs, statuses and
-//! reviews, before the lock; [`sync`], under it, lists the PRs again and
-//! records from what was gathered, reading again only what changed since.
+//! what takes minutes, each open PR's check runs, statuses and reviews,
+//! before the lock; [`sync`], under it, lists the PRs again and records
+//! from what was gathered, with each PR's timeline read again, reading
+//! everything again only for a PR whose revision changed since.
 
 use std::collections::HashMap;
+use std::path::Path;
 
 use conary_core::ledger::{Change, Ledger, Status};
 use conary_core::op::Repo;
 use conary_core::{RevisionId, Store};
 
-use super::{Config, IngestError, Ingested, Read, commit, record};
+use super::{Config, IngestError, Ingested, Read, Results, commit, record};
 use crate::api::{PullRequest, Pulls, Source};
 use crate::bases::MergeBases;
 
@@ -18,14 +20,14 @@ use crate::bases::MergeBases;
 pub struct Gathered {
     config: Config,
     repo: Repo,
+    bases: MergeBases,
     open: HashMap<u64, Held>,
 }
 
-/// One open PR's reads, and the head and base branch they were made for.
+/// One open PR's results, and the revision it was at when they were read.
 struct Held {
-    head: String,
-    base: String,
-    read: Read,
+    revision: RevisionId,
+    results: Results,
 }
 
 /// Reads what a [`sync`] of `repo` records for its open PRs, without the
@@ -33,25 +35,46 @@ struct Held {
 /// the recording. A PR that can't be read now is read again under the lock,
 /// where a failure stops the sync once the PRs before it are recorded, as
 /// it would have with nothing gathered; so are the ones after it.
-pub fn gather(source: &dyn Source, config: &Config, repo: &Repo) -> Result<Gathered, IngestError> {
+///
+/// Each PR's merge base, what tells [`sync`] whether the results are still
+/// the revision's it records, comes from the cache beside the ledger in
+/// `dir`, read as it is; one it doesn't hold is asked of GitHub, and [`sync`]
+/// keeps it there.
+pub fn gather(
+    source: &dyn Source,
+    config: &Config,
+    repo: &Repo,
+    dir: &Path,
+) -> Result<Gathered, IngestError> {
     config.check()?;
     let full = repo.to_string();
+    let mut bases = MergeBases::read(dir).map_err(IngestError::Cache)?;
     let mut open = HashMap::new();
     for pr in source.pulls(&full, Pulls::Open)? {
-        let Ok(read) = Read::of(source, &full, &pr) else {
+        let Ok(held) = held(source, &mut bases, &full, &pr) else {
             break;
-        };
-        let held = Held {
-            head: pr.head.sha,
-            base: pr.base.name,
-            read,
         };
         open.insert(pr.number, held);
     }
     Ok(Gathered {
         config: config.clone(),
         repo: repo.clone(),
+        bases,
         open,
+    })
+}
+
+fn held(
+    source: &dyn Source,
+    bases: &mut MergeBases,
+    repo: &str,
+    pr: &PullRequest,
+) -> Result<Held, IngestError> {
+    let head = commit(&pr.head.sha)?;
+    let base = commit(&bases.get(source, repo, &pr.base.sha, head.as_str())?)?;
+    Ok(Held {
+        revision: RevisionId::new(&base, &head),
+        results: Results::of(source, repo, pr)?,
     })
 }
 
@@ -64,11 +87,13 @@ pub fn gather(source: &dyn Source, config: &Config, repo: &Repo) -> Result<Gathe
 ///
 /// The PRs are listed again here, under the lock: another writer may have
 /// recorded one as it was after it was gathered, and a PR is never
-/// recorded as it was before what the ledger holds. A PR's gathered reads
-/// are its own while it's open at the same head on the same base branch;
-/// its results are read by head and its retargets are what its timeline is
-/// read for. One opened, pushed to, retargeted or closed since is read
-/// again.
+/// recorded as it was before what the ledger holds. A PR's gathered
+/// results are its own while it's at the revision they were read at: they
+/// stay bound to that merge base and head, and one pushed to, or whose base
+/// moved or was rewritten so its merge base changed, is read again, as is
+/// one opened since. Each PR's timeline is read here, after its results,
+/// so a result from before its latest retarget is left out, however many
+/// there were since the gather and wherever they went.
 pub fn sync(
     store: &mut Store,
     source: &dyn Source,
@@ -77,16 +102,19 @@ pub fn sync(
     let Gathered {
         config,
         repo,
+        bases: asked,
         mut open,
     } = gathered;
     config.check()?;
     let full = repo.to_string();
     let mut bases = MergeBases::load(store.lock()).map_err(IngestError::Cache)?;
+    bases.keep(asked).map_err(IngestError::Cache)?;
     let mut got = Vec::new();
     for pr in source.pulls(&full, Pulls::Open)? {
         let base = commit(&bases.get(source, &full, &pr.base.sha, &pr.head.sha)?)?;
+        let revision = RevisionId::new(&base, &commit(&pr.head.sha)?);
         let read = match open.remove(&pr.number) {
-            Some(h) if h.head == pr.head.sha && h.base == pr.base.name => h.read,
+            Some(h) if h.revision == revision => Read::after(source, &full, &pr, h.results)?,
             _ => Read::of(source, &full, &pr)?,
         };
         got.push(record(store, source, &config, &repo, &pr, base, read)?);
