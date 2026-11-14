@@ -229,6 +229,7 @@ pub fn read(
         &pull,
         &records,
         &extra.resolved_reviews,
+        &super::Targets::read(&extra.threads, &comments, &facts.settings),
         &facts.settings,
         &carried,
     )?;

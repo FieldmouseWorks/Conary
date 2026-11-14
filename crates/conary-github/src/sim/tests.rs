@@ -393,6 +393,8 @@ mod flow_pass_r5;
 
 mod flow_pass_v4;
 
+mod flow_pass_threads;
+
 mod events;
 mod events_recovery;
 

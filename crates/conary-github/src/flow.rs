@@ -63,3 +63,10 @@ mod approval;
 pub use approval::owner_approval;
 
 mod handoff;
+
+mod publish;
+mod threads;
+pub use threads::{FindingMark, Handed, LineComment, Target, answer_body, finding_body, issuance};
+pub(crate) use threads::{Publication, Targets};
+#[cfg(test)]
+pub(crate) use threads::{hunks, placed};

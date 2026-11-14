@@ -167,6 +167,22 @@ fn github_findings_supply_the_current_fixer_problems_without_local_workers() {
             };
             c.hub.world.borrow_mut().repos.get_mut(REPO).unwrap().reviews.entry(3).or_default().push(json!({"id":id, "user":{"login":STEWARD,"type":"Bot"},
             "body":body,"commit_id":head(3),"submitted_at":"2099-01-01T00:00:00Z","state":"COMMENTED"}));
+            // Its finding's target, as the flow publishes one with no line
+            // in the diff.
+            let mark = FindingMark {
+                role: "reviewer".into(),
+                head: head(3),
+                issuance: issuance(&head(3), &body),
+                finding: 0,
+            };
+            let finding = Finding {
+                path: "src/lib.rs".into(),
+                line: 7,
+                severity: Severity::P1,
+                text: text.into(),
+            };
+            c.hub
+                .flow_comment(REPO, 3, STEWARD, &finding_body(&finding, &mark, true));
         }
         if mode == "carried" {
             let tip = c.hub.add(super::TRUNK, "trunk-only patch");

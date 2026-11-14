@@ -190,6 +190,17 @@ struct Annotation {
     message: String,
 }
 
+impl Api {
+    /// GitHub's GraphQL endpoint beside this REST root, Enterprise's too.
+    pub(super) fn graphql(&self) -> String {
+        if let Some(root) = self.base.strip_suffix("/api/v3") {
+            format!("{root}/api/graphql")
+        } else {
+            format!("{}/graphql", self.base)
+        }
+    }
+}
+
 impl Read for Api {
     fn pushes(&self, repo: &str, branch: &str) -> Result<BTreeMap<String, String>, ApiError> {
         #[derive(Deserialize)]
@@ -226,11 +237,7 @@ impl Read for Api {
         let (owner, name) = repo
             .split_once('/')
             .ok_or_else(|| ApiError::new("repository is not owner/name"))?;
-        let url = if let Some(root) = self.base.strip_suffix("/api/v3") {
-            format!("{root}/api/graphql")
-        } else {
-            format!("{}/graphql", self.base)
-        };
+        let url = self.graphql();
         let mut response=self.agent.post(&url)
             .header("Authorization",&format!("Bearer {}",self.tokens.of(repo)?))
             .send_json(serde_json::json!({"query":QUERY,"variables":{"owner":owner,"name":name,"number":number}}))

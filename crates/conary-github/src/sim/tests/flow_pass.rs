@@ -54,10 +54,16 @@ fn lifecycle(train: bool) {
     ));
     c.run_worker();
     assert_eq!(c.hub.pull(REPO, 3).unwrap().head.sha, head(4));
-    run(now + 4);
-    c.run_worker();
+    // The fix's answer goes up on its finding's target before another look.
+    assert_eq!(
+        run(now + 4)[0].next.as_ref().unwrap().step,
+        Step::PostFix("3-2".into())
+    );
     run(now + 5);
-    let result = run(now + 6);
+    run(now + 6);
+    c.run_worker();
+    run(now + 7);
+    let result = run(now + 8);
     assert_eq!(result[0].error, None);
     assert_eq!(
         result[0].next.as_ref().unwrap().step,

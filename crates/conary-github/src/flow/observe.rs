@@ -57,18 +57,15 @@ pub(crate) fn hydrate(f: &mut Facts, record: &Record, now: u64, dry_run: bool) -
             Purpose::Fix(kind) => {
                 let answer = match &completion.result {
                     Some(Ok(plugin::Response {
-                        answer:
-                            plugin::Answer::Fix {
-                                result: plugin::FixResult::Pushed { head },
-                                ..
-                            },
+                        answer: plugin::Answer::Fix { result, answers },
                         ..
-                    })) => FixResult::Answer(FixAnswer {
-                        pushed: Some(head.clone()),
-                        threads: Default::default(),
-                        description: None,
-                        comment: false,
-                    }),
+                    })) => match result {
+                        plugin::FixResult::Pushed { head } => {
+                            fixed(work, Some(head.clone()), answers.as_deref())
+                        }
+                        plugin::FixResult::Unchanged => fixed(work, None, answers.as_deref()),
+                        plugin::FixResult::Unable { .. } => FixResult::Missing,
+                    },
                     Some(Ok(_)) => FixResult::Missing,
                     Some(Err(_)) => FixResult::Invalid,
                     None => FixResult::Missing,
@@ -117,6 +114,28 @@ pub(crate) fn hydrate(f: &mut Facts, record: &Record, now: u64, dry_run: bool) -
     }
     Ok(())
 }
+/// A fix's answer, each of its answers on the target of the finding it was
+/// handed. An answer to anything it wasn't handed is invalid.
+fn fixed(
+    work: &jobs::Work,
+    pushed: Option<String>,
+    answers: Option<&[plugin::FindingAnswer]>,
+) -> FixResult {
+    let mut targets = Vec::new();
+    for answer in answers.unwrap_or_default() {
+        match work.handed.get(answer.problem) {
+            Some(Some(handed)) => targets.push((handed.target.clone(), answer.fixed)),
+            _ => return FixResult::Invalid,
+        }
+    }
+    FixResult::Answer(FixAnswer {
+        pushed,
+        answers: targets,
+        description: None,
+        comment: false,
+    })
+}
+
 pub(crate) fn train(f: &mut Facts, ledger: &conary_core::Ledger) {
     let Some(change) = ledger.by_pr(&f.repo, f.number) else {
         return;

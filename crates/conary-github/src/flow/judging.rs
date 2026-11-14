@@ -261,6 +261,7 @@ mod tests {
                 deadline: 0,
                 posted: false,
                 recipes: Default::default(),
+                handed: Vec::new(),
             }],
             ..Record::default()
         }

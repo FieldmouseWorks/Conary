@@ -22,6 +22,10 @@ pub struct Work {
     pub deadline: u64,
     pub posted: bool,
     pub recipes: std::collections::BTreeMap<String, Recipe>,
+    /// A fix's problems, by index: the finding each was and the target its
+    /// answer goes to, or None for a problem that isn't a finding.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub handed: Vec<Option<Handed>>,
 }
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Invocation {

@@ -317,6 +317,7 @@ impl Pass<'_> {
         facts: &Facts,
         purpose: Purpose,
         task: conary_core::plugin::Task,
+        handed: Vec<Option<Handed>>,
         record: &mut Record,
         data: &Data,
     ) -> Result<()> {
@@ -368,6 +369,7 @@ impl Pass<'_> {
             deadline,
             posted: false,
             recipes: recipes(facts),
+            handed,
         });
         // Persist ownership before spawning. A crash in this window times out;
         // it never starts the same fix twice.

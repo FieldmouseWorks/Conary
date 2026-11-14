@@ -32,6 +32,7 @@ pub(super) fn read(
     pull: &PullRequest,
     records: &[GithubReview],
     resolved: &BTreeSet<u64>,
+    targets: &super::Targets,
     settings: &Settings,
     carried: &BTreeSet<String>,
 ) -> Result<BTreeMap<String, Reviewer>, ApiError> {
@@ -123,7 +124,7 @@ pub(super) fn read(
                             at,
                         },
                         r.id,
-                        count > 0 && r.id.is_some_and(|id| resolved.contains(&id)),
+                        count > 0 && answered(r, name, resolved, targets, settings),
                     ),
                 );
             }
@@ -145,6 +146,23 @@ pub(super) fn read(
         result.insert(name.clone(), reviewer);
     }
     Ok(result)
+}
+
+/// Whether a review's findings are answered. The flow's own publication is
+/// answered finding by finding, each on its own target, and never by
+/// another publication's answers. A review without structured findings is
+/// answered once every thread it started is resolved.
+fn answered(
+    record: &GithubReview,
+    role: &str,
+    resolved: &BTreeSet<u64>,
+    targets: &super::Targets,
+    settings: &Settings,
+) -> bool {
+    match super::Publication::read(record, role, settings) {
+        Some(publication) => publication.answered(targets) == Some(true),
+        None => record.id.is_some_and(|id| resolved.contains(&id)),
+    }
 }
 
 /// The latest native review state per account, shared by reading and the
