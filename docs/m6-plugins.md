@@ -782,7 +782,7 @@ run alongside the plugins.
 - **The review-loop policy.** Its changes stay with their burrow issues,
   per [review-loop.md](review-loop.md). Porting the burrow#945 triggers,
   and the disputed-P2 switch, into the flow is
-  [L1](m6-properties.md#l1-flow-break-a-review-loop-that-wont-settle).
+  [FP12](m6-properties.md#fp12-flow-break-a-review-loop-that-wont-settle).
 - **A judge's verdict on a head whose change didn't move.** That's #293.
 - **Per-repository landing ownership and the switch.** That's #313 and
   #314, and #315 for the other repositories, including wend's `proofJobs`
