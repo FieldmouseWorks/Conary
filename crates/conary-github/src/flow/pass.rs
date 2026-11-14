@@ -22,6 +22,8 @@ pub struct Config {
     pub settings: Settings,
     pub trusted_authors: Vec<String>,
     pub plugins: Plugins,
+    /// Kind (review/fix/judge) -> machine-supplied execution choices.
+    pub execution: BTreeMap<conary_core::plugin::Kind, conary_core::plugin::Choice>,
     pub evidence: Option<Evidence>,
 }
 #[derive(Debug, Serialize)]
@@ -339,11 +341,16 @@ impl Pass<'_> {
             facts.settings.job_timeout
         };
         let deadline = self.now.saturating_add(timeout);
+        let choice = task
+            .kind()
+            .and_then(|kind| self.config.execution.get(&kind))
+            .cloned();
         persist::save(
             &path,
             &jobs::Invocation {
                 executable,
                 task,
+                choice,
                 deadline,
                 response_bytes: 1_048_576,
             },

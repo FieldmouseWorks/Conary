@@ -41,10 +41,34 @@ pending. Passes always read the ledger, even when evidence is unconfigured,
 so historical raises still apply. Dry runs use no writer and publish no anchor.
 
 Omitted settings use `flow::Settings` defaults; unknown keys are rejected.
+Execution choices are optional entries in the same machine-owned configuration:
+
+```json
+{"execution":{"judge":{"engine":"example","model":null,"effort":null}}}
+```
+
+Keys are plugin kinds (`review`, `fix`, `judge`, `proof`, `job`); the landing
+flow starts its four work kinds. Values select that configured executable's
+engine and an offered model/effort; they do not install or choose a different
+executable. Change `plugins` and `execution` together to switch engines.
+Choices are copied into each durable invocation and verified by the worker.
+Without an entry Conary supplies no execution policy: the plugin owns its
+runtime defaults, and v3 responses still report what actually ran.
+`settings.judge_engines` identifies *author* engines whose changes need a judge,
+not engines chosen to do the judging.
+
+Both the CLI and conaryd's `events::Runtime::pass` reread this file per pass;
+updates apply to subsequent requests without a release or restart. Existing
+invocations retain the choices they started with. On a burrow-managed host,
+generate this configuration from the
+[shared settings source](https://github.com/FieldmouseWorks/burrow/blob/main/docs/settings-reference.md).
+Conary does not create a second settings database; standalone installations
+can supply this JSON directly, without Nix or burrow.
 An omitted plugin makes its step wait, with the missing kind in its status.
-The paths name executables, without shell parsing. They use the unchanged
-[v1 plugin contract](plugins.md), including describe negotiation, bounded
-responses, and refusal of the head's author as its reviewer or judge.
+The paths name executables, without shell parsing. They use the negotiated
+[plugin contract](plugins.md), including bounded responses and session
+independence. Judges require v3 and every new flow invocation requests a
+fresh context. Known reviewer sessions accompany the judge request.
 Engine trailers across the PR history supply its author engine. Unreadable
 or mixed-engine histories wait rather than infer independence. Session
 trailers are untrusted: only a completed fix's validated producer establishes
@@ -108,7 +132,7 @@ and descendant resource limits as described in the contract.
 
 ## Producer evidence
 
-Plugin v1 answers are proposals, not producer attestations. No local review,
+Plugin answers are proposals, not producer attestations. No local review,
 judgment or proof result can grant landing permission. A missing evidence
 configuration or missing verification makes the decision wait with a reason,
 in dry runs as well as mutating passes.
@@ -142,8 +166,15 @@ commit predicate's or service statement's `log.sha256`. The check name is
 head, target branch, description scope and completion time. The exported
 `review_body` helper owns that marker's formatting.
 
-Judgments use `judgment_receipt(revision, generation, verdict)` under
-`conary/judgment`, and dependency decisions use `major_receipt` under
+New judging producers use `Response::provenance()` with `SealKey::judgment_by`
+and `judgment_receipt_by(revision, generation, verdict, provenance)` under
+`conary/judgment`. Actual engine, session, model, effort and context are inside
+both the sealed issuance and independently attested receipt. The worker also
+retains the complete response with its verdict in the durable completion.
+Provenance survives high-water memory; a same-generation provenance conflict
+is a tombstone just like conflicting verdict words. Legacy issuances retain
+their original receipt format and unknown provenance; no actual model is
+inferred from today's settings. Dependency decisions use `major_receipt` under
 `conary/major`. Their sealed GitHub issuances and independently attested
 logs must agree. Only the independent producer allocates issuance generations.
 A local invocation sequence has no judgment authority. Newer authenticated

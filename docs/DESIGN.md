@@ -635,6 +635,35 @@ The executable [plugin contract](plugins.md) owns the interface for work
 requested by a flow step. The [explicit pass runner](flow.md) connects reads, decisions, GitHub effects
 and asynchronous plugin work; deployment and event-driven passes remain later slices.
 
+### 6.1 Execution choices and independent judging
+
+Conary's execution policy comes from its caller's declared configuration.
+No review, fix, judge or job engine, model or effort is pinned in conaryd or
+the runner. A deployment can change these choices for subsequent requests
+without changing code. The [flow configuration](flow.md) is the interface;
+burrow-managed deployments generate it from their shared settings source,
+while standalone deployments supply it directly. Plugin offers constrain
+valid choices, not machine policy. Conary owns no second settings authority.
+
+"The author never grades its own head" means independent sessions, on any
+engine. Every initial judge starts fresh with no resumed, forked or shared
+writer/reviewer context. A judge may continue its own validated session for
+the same task and job while that session has exclusively judged that task.
+Intervening nonjudge context, including failed or concurrent work, cannot
+preserve judging eligibility. Its verdict retains the actual engine and
+model, separately from the requested choices. The
+[plugin contract](plugins.md#independence-and-execution-failures) owns the
+request boundary, including the trusted plugin's duty to honor fresh context;
+[producer receipts](flow.md#producer-evidence) bind execution provenance into
+authenticated judgments without treating plugin proposals as attestations.
+
+The corresponding [lesson entries](lessons.toml), `no-pinned-engines` and
+`fresh-judge`, are built for the configuration, runner and provenance
+interfaces and their tests. Deploying real engine plugins is still M6's
+[slice 5c](m6.md), not a claim made by these interface tests. The broader
+Properties index and register seed belong to
+[#305](https://github.com/FieldmouseWorks/Conary/issues/305).
+
 ## 7. Interfaces
 
 | Interface | Used by | Notes |

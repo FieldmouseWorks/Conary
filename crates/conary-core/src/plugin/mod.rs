@@ -1,13 +1,16 @@
 //! Executable plugins; the wire contract lives in `docs/plugins.md`.
+mod execution;
 mod runner;
+pub use execution::{Choice, Context, Executed, Execution, Provenance};
 pub use runner::{Failure, Limits, Plugin};
 
 use serde::{Deserialize, Serialize};
 
 /// The first contract: the landing flow's four kinds, no declared offers.
 pub const CONTRACT_V1: &str = "conary-plugin v1";
-/// The current contract: adds the `job` kind and what `describe` offers.
-pub const CONTRACT: &str = "conary-plugin v2";
+pub const CONTRACT_V2: &str = "conary-plugin v2";
+/// Adds execution choices, context boundaries and actual execution provenance.
+pub const CONTRACT: &str = "conary-plugin v3";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -16,20 +19,22 @@ pub struct Identity {
     pub session: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Kind {
     Review,
     Fix,
     Judge,
     Proof,
-    /// A general task (v2 only).
+    /// A general task (v2 and later).
     Job,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Request {
     pub contract: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution: Option<Execution>,
     #[serde(flatten)]
     pub task: Task,
 }
@@ -55,6 +60,8 @@ pub enum Task {
         head: String,
         against: String,
         author: Identity,
+        #[serde(default)]
+        reviewers: Vec<Identity>,
     },
     Proof {
         repo: String,
@@ -134,8 +141,19 @@ pub enum Severity {
 pub struct Response {
     pub contract: String,
     pub by: Identity,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution: Option<Executed>,
     #[serde(flatten)]
     pub answer: Answer,
+}
+
+impl Response {
+    pub fn provenance(&self) -> Option<Provenance> {
+        self.execution.clone().map(|execution| Provenance {
+            by: self.by.clone(),
+            execution,
+        })
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -269,7 +287,7 @@ impl Offers {
             && !(kinds.contains(&Kind::Proof) && !self.models.is_empty())
     }
 
-    /// Whether a job may ask for this model and effort.
+    /// Whether work may ask for this model and effort.
     pub fn allows(&self, model: Option<&str>, effort: Option<&str>) -> bool {
         match (model, effort) {
             (None, None) => true,
@@ -354,6 +372,7 @@ impl Request {
     pub fn describe() -> Self {
         Self {
             contract: CONTRACT_V1.into(),
+            execution: None,
             task: Task::Describe,
         }
     }
@@ -362,6 +381,7 @@ impl Request {
     pub fn work(contract: &str, task: Task) -> Self {
         Self {
             contract: contract.into(),
+            execution: None,
             task,
         }
     }
@@ -398,6 +418,7 @@ pub fn fixtures() -> Vec<Task> {
             head,
             against: "fixture: accept".into(),
             author,
+            reviewers: vec![],
         },
         Task::Proof {
             repo: repo.clone(),

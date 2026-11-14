@@ -200,9 +200,121 @@ fn needs_judge(c: &mut Case) {
         Some("owner@example.org"),
     );
 }
+
+#[test]
+fn pass_copies_live_choices_and_known_reviewers_into_a_fresh_judge_invocation() {
+    use conary_core::plugin::{Choice, Kind as PluginKind, Task};
+    let mut c = Case::new();
+    needs_judge(&mut c);
+    // The example's head 4 has no finding, so the pass can reach judgment
+    // after posting a real validated review without starting a fixer.
+    c.hub.push(REPO, 3, &head(4));
+    c.hub.refresh_flow(REPO, 3);
+    c.good_ci(&head(4));
+    c.hub.commit_details(
+        &head(4),
+        Some("change: fixture\n\nEngine: fixture-author\n"),
+        Some("owner@example.org"),
+        Some("owner@example.org"),
+    );
+    let now = crate::flow::jobs::now();
+    // Run and post the real configured reviewer, retaining its identity.
+    c.pass(now, false);
+    c.run_worker();
+    c.pass(now + 1, false);
+    let choice = Choice {
+        engine: "conary-example".into(),
+        model: None,
+        effort: None,
+    };
+    c.config.execution.insert(PluginKind::Judge, choice.clone());
+    let report = c.pass(now + 2, false);
+    assert_eq!(report[0].next.as_ref().unwrap().step, Step::Judge);
+    let record = c.record();
+    let work = record
+        .jobs
+        .iter()
+        .find(|w| matches!(w.purpose, crate::flow::jobs::Purpose::Judge))
+        .unwrap();
+    let invocation: crate::flow::jobs::Invocation =
+        serde_json::from_slice(&std::fs::read(&work.path).unwrap()).unwrap();
+    assert_eq!(invocation.choice, Some(choice));
+    let Task::Judge { reviewers, .. } = &invocation.task else {
+        panic!("not a judge");
+    };
+    assert!(
+        reviewers
+            .iter()
+            .any(|r| r.session.as_deref() == Some("example"))
+    );
+    crate::flow::jobs::worker(&work.path).unwrap();
+    let answer = crate::flow::jobs::completion(work, now + 4)
+        .unwrap()
+        .result
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        answer.execution.unwrap().context,
+        conary_core::plugin::Context::Fresh
+    );
+}
 fn local_judgment(c: &Case) {
     for path in c.deferred.0.borrow_mut().drain(..) {
         crate::flow::jobs::worker(&path).unwrap();
+    }
+}
+
+#[test]
+fn permission_binds_the_judging_model_to_independently_attested_evidence() {
+    use conary_core::plugin::{Context, Executed, Identity, Provenance};
+    for matches in [true, false] {
+        let mut c = Case::new();
+        c.clean_review();
+        needs_judge(&mut c);
+        let revision = Revision::from(&c.hub.pull(REPO, 3).unwrap());
+        let provenance = Provenance {
+            by: Identity {
+                engine: "fixture-engine".into(),
+                session: Some("independent-judge".into()),
+            },
+            execution: Executed {
+                model: Some("actual-model".into()),
+                effort: Some("deliberate".into()),
+                context: Context::Fresh,
+            },
+        };
+        let body = c
+            .config
+            .settings
+            .judge_key
+            .as_ref()
+            .unwrap()
+            .judgment_by(REPO, 3, Judgment::Pass, &revision, 1, provenance.clone())
+            .unwrap();
+        c.hub.flow_comment(REPO, 3, "producer", &body);
+        let mut attested = provenance;
+        if !matches {
+            attested.execution.model = Some("different-model".into());
+        }
+        c.sign_check(
+            &revision.head,
+            "conary/judgment",
+            Some(&judgment_receipt_by(
+                &revision,
+                1,
+                Some(Judgment::Pass),
+                Some(&attested),
+            )),
+        );
+        let report = c.pass(crate::flow::jobs::now(), false);
+        assert_eq!(report[0].error, None);
+        assert_eq!(c.hub.pull(REPO, 3).unwrap().is_merged(), matches);
+        if !matches {
+            assert!(matches!(
+                report[0].next.as_ref().unwrap().step,
+                Step::Wait { .. }
+            ));
+        }
     }
 }
 #[test]
@@ -250,8 +362,8 @@ fn github_generations_and_tombstones_survive_local_judge_answers() {
         assert_eq!(
             observed.1,
             match word {
-                "fail" => Some(Judgment::Fail),
-                "owner" => Some(Judgment::Owner),
+                "fail" => Some(JudgeResult::Legacy(Judgment::Fail)),
+                "owner" => Some(JudgeResult::Legacy(Judgment::Owner)),
                 _ => None,
             }
         );
@@ -452,6 +564,7 @@ fn the_runner_rejects_mutable_names_in_every_object_id_field() {
             head: "main".into(),
             against: "criteria".into(),
             author,
+            reviewers: vec![],
         },
         Task::Proof {
             repo: REPO.into(),

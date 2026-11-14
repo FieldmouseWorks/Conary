@@ -1,5 +1,5 @@
 //! Permission is based on independently attested producer records, never
-//! controller-posted assertions. Plugin v1 remains a work protocol.
+//! controller-posted assertions. Plugins remain a work protocol.
 use super::persist::Result;
 use super::*;
 use crate::attest::service::Producers;
@@ -60,6 +60,21 @@ pub fn judgment_receipt(
     serde_json::to_vec(&serde_json::json!({"kind":"judgment","revision":revision,
         "generation":generation,"verdict":verdict}))
     .expect("receipt")
+}
+pub fn judgment_receipt_by(
+    revision: &Revision,
+    generation: u64,
+    verdict: Option<Judgment>,
+    provenance: Option<&conary_core::plugin::Provenance>,
+) -> Vec<u8> {
+    match provenance {
+        None => judgment_receipt(revision, generation, verdict),
+        Some(provenance) => serde_json::to_vec(&serde_json::json!({
+            "kind":"judgment", "revision":revision, "generation":generation,
+            "verdict":verdict, "provenance":provenance,
+        }))
+        .expect("receipt"),
+    }
 }
 pub fn major_receipt(revision: &Revision, generation: u64, verdict: Option<Major>) -> Vec<u8> {
     serde_json::to_vec(&serde_json::json!({"kind":"major","revision":revision,
@@ -208,10 +223,11 @@ pub(crate) fn authorize<G: Write>(pass: &Pass<'_>, github: &G, f: &Facts) -> Res
             &trust,
             &f.revision.head,
             "conary/judgment",
-            Some(&judgment_receipt(
+            Some(&judgment_receipt_by(
                 &f.revision,
                 generation,
                 f.judgment.as_ref().map(|j| j.verdict),
+                f.judgment.as_ref().and_then(|j| j.provenance.as_ref()),
             )),
         )?;
     }

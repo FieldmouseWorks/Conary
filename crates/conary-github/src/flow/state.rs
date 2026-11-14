@@ -71,12 +71,9 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
         &mut m.judge_issuance,
         &raised.revision,
         raised.judgment_generation,
-        raised.judgment.as_ref().map(|j| j.verdict),
+        raised.judgment.as_ref().map(Judged::result),
     )
-    .map(|verdict| Judged {
-        revision: raised.revision.clone(),
-        verdict,
-    });
+    .map(|result| Judged::from_result(raised.revision.clone(), result));
     raised.major = issuance(
         &mut m.major_issuance,
         &raised.revision,

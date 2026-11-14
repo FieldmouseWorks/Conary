@@ -67,7 +67,36 @@ impl SealKey {
             generation,
             revision: revision.clone(),
             verdict: verdict.into(),
+            provenance: None,
         };
+        self.issue(repo, pr, name, issued)
+    }
+    /// A producer's new judgment retains actual execution, not requested policy.
+    pub fn judgment_by(
+        &self,
+        repo: &str,
+        pr: u64,
+        verdict: Judgment,
+        revision: &Revision,
+        generation: u64,
+        provenance: conary_core::plugin::Provenance,
+    ) -> Result<String, &'static str> {
+        if !provenance.valid() {
+            return Err("invalid judge provenance");
+        }
+        Ok(self.issue(
+            repo,
+            pr,
+            "autoland-judgment",
+            Issued {
+                generation,
+                revision: revision.clone(),
+                verdict: verdict.word().into(),
+                provenance: Some(provenance),
+            },
+        ))
+    }
+    fn issue(&self, repo: &str, pr: u64, name: &str, issued: Issued) -> String {
         let tag = self.issued_tag(repo, pr, name, &issued);
         let signed = Signed { issued, tag };
         format!(
@@ -101,6 +130,8 @@ struct Issued {
     generation: u64,
     revision: Revision,
     verdict: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    provenance: Option<conary_core::plugin::Provenance>,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -199,7 +230,11 @@ pub(super) fn read(
             };
             out.entry(issued.generation)
                 .or_default()
-                .insert(issued.verdict.clone());
+                .insert(if name == "major-verdict" {
+                    issued.verdict.clone()
+                } else {
+                    serde_json::to_string(issued).expect("issued JSON")
+                });
         }
     }
     // Duplicates are idempotent; conflicting authenticated words at one
@@ -217,10 +252,18 @@ pub(super) fn read(
         _ => None,
     });
     result.judgment = latest(judges)
-        .and_then(|v| legacy_word(&v).or_else(|| Judgment::from_word(&v)))
-        .map(|verdict| Judged {
-            revision: current,
-            verdict,
+        .and_then(|v| serde_json::from_str::<Issued>(&v).ok())
+        .and_then(|issued| {
+            if issued.provenance.as_ref().is_some_and(|p| !p.valid()) {
+                return None;
+            }
+            let verdict =
+                legacy_word(&issued.verdict).or_else(|| Judgment::from_word(&issued.verdict))?;
+            Some(Judged {
+                revision: current,
+                verdict,
+                provenance: issued.provenance,
+            })
         });
     result
 }

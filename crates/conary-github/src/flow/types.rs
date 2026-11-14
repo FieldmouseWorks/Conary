@@ -196,22 +196,60 @@ pub struct Job {
 pub use conary_core::plugin::Judgment;
 
 /// Per revision: the highest authenticated judge generation, and its verdict
-/// (`None` when that generation's words conflict).
-pub type JudgeIssuance = BTreeMap<Revision, (u64, Option<Judgment>)>;
+/// with any provenance (`None` when that generation's words conflict).
+pub type JudgeIssuance = BTreeMap<Revision, (u64, Option<JudgeResult>)>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Judged {
     pub revision: Revision,
     pub verdict: Judgment,
+    pub provenance: Option<conary_core::plugin::Provenance>,
 }
 
+/// Old saved issuances are plain verdicts. New ones retain their provenance.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum JudgeResult {
+    Recorded {
+        verdict: Judgment,
+        provenance: conary_core::plugin::Provenance,
+    },
+    Legacy(Judgment),
+}
 impl Judged {
+    pub(super) fn result(&self) -> JudgeResult {
+        match &self.provenance {
+            Some(provenance) => JudgeResult::Recorded {
+                verdict: self.verdict,
+                provenance: provenance.clone(),
+            },
+            None => JudgeResult::Legacy(self.verdict),
+        }
+    }
+    pub(super) fn from_result(revision: Revision, result: JudgeResult) -> Self {
+        match result {
+            JudgeResult::Recorded {
+                verdict,
+                provenance,
+            } => Self {
+                revision,
+                verdict,
+                provenance: Some(provenance),
+            },
+            JudgeResult::Legacy(verdict) => Self {
+                revision,
+                verdict,
+                provenance: None,
+            },
+        }
+    }
     /// A judge plugin's answer for `revision`; other answers are not judgments.
     pub fn from_answer(revision: Revision, answer: &conary_core::plugin::Answer) -> Option<Self> {
         match answer {
             conary_core::plugin::Answer::Judge { verdict, .. } => Some(Self {
                 revision,
                 verdict: *verdict,
+                provenance: None,
             }),
             _ => None,
         }

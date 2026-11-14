@@ -53,7 +53,7 @@ fn base_records_migrate_without_resetting_state() {
                 };
                 assert_eq!(
                     record.memory.judge_issuance[&revision],
-                    (100 + index as u64, Some(verdict))
+                    (100 + index as u64, Some(JudgeResult::Legacy(verdict)))
                 );
             }
         }
@@ -79,25 +79,21 @@ fn base_records_migrate_without_resetting_state() {
 fn migrated_issuances_keep_high_water_marks_and_conflict_tombstones() {
     let (_root, _repo, data) = fixture();
     let record = data.load(3).unwrap();
+    let pass = || Some(JudgeResult::Legacy(Judgment::Pass));
     for (revision, (generation, verdict)) in &record.memory.judge_issuance {
         let mut receipts = record.memory.judge_issuance.clone();
         let observe = super::super::state::issuance;
         assert_eq!(observe(&mut receipts, revision, None, None), *verdict);
         assert_eq!(
-            observe(
-                &mut receipts,
-                revision,
-                Some(generation - 1),
-                Some(Judgment::Pass)
-            ),
+            observe(&mut receipts, revision, Some(generation - 1), pass()),
             *verdict
         );
         // A conflicting same-generation word must become/stay a tombstone,
         // including on stale revisions. It must never restore permission.
-        let conflicting = if *verdict == Some(Judgment::Pass) {
-            Judgment::Fail
+        let conflicting = if *verdict == pass() {
+            JudgeResult::Legacy(Judgment::Fail)
         } else {
-            Judgment::Pass
+            JudgeResult::Legacy(Judgment::Pass)
         };
         assert_eq!(
             observe(
@@ -110,24 +106,14 @@ fn migrated_issuances_keep_high_water_marks_and_conflict_tombstones() {
         );
         assert_eq!(receipts[revision], (*generation, None));
         assert_eq!(
-            observe(
-                &mut receipts,
-                revision,
-                Some(*generation),
-                Some(Judgment::Pass)
-            ),
+            observe(&mut receipts, revision, Some(*generation), pass()),
             None
         );
         assert_eq!(
-            observe(
-                &mut receipts,
-                revision,
-                Some(generation + 1),
-                Some(Judgment::Pass)
-            ),
-            Some(Judgment::Pass)
+            observe(&mut receipts, revision, Some(generation + 1), pass()),
+            pass()
         );
-        assert_eq!(receipts[revision], (generation + 1, Some(Judgment::Pass)));
+        assert_eq!(receipts[revision], (generation + 1, pass()));
     }
 }
 
@@ -166,5 +152,82 @@ fn persisted_legacy_words_do_not_expand_the_plugin_contract() {
             .is_err()
         );
         assert_eq!(Judgment::from_word(legacy), None);
+    }
+}
+
+fn provenance() -> conary_core::plugin::Provenance {
+    use conary_core::plugin::{Context, Executed, Identity, Provenance};
+    Provenance {
+        by: Identity {
+            engine: "fixture-engine".into(),
+            session: Some("judge-session".into()),
+        },
+        execution: Executed {
+            model: Some("fixture-model".into()),
+            effort: Some("deliberate".into()),
+            context: Context::Fresh,
+        },
+    }
+}
+
+#[test]
+fn issuances_with_provenance_persist_in_the_contracts_words() {
+    let (root, repo, data) = fixture();
+    let mut record = data.load(3).unwrap();
+    let revision = Revision {
+        head: "provenanced-head".into(),
+        base: "base".into(),
+        description: "provenance".into(),
+    };
+    let recorded = JudgeResult::Recorded {
+        verdict: Judgment::Misdescribed,
+        provenance: provenance(),
+    };
+    record
+        .memory
+        .judge_issuance
+        .insert(revision.clone(), (7, Some(recorded.clone())));
+    data.save(4, &record).unwrap();
+    let saved: Value = serde_json::from_slice(&std::fs::read(data.path(4)).unwrap()).unwrap();
+    let entry = saved["memory"]["judge_issuance"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e[0]["head"] == "provenanced-head")
+        .unwrap();
+    assert_eq!(entry[1][1]["verdict"], "misdescribed");
+    assert_eq!(entry[1][1]["provenance"]["by"]["engine"], "fixture-engine");
+    for loaded in [
+        data.load(4).unwrap(),
+        Data::read(root.path(), &repo, 4).unwrap(),
+    ] {
+        assert_eq!(
+            loaded.memory.judge_issuance[&revision],
+            (7, Some(recorded.clone()))
+        );
+        assert_eq!(loaded.memory, record.memory);
+    }
+}
+
+#[test]
+fn issuances_with_provenance_take_only_the_contracts_words() {
+    let (root, repo, data) = fixture();
+    let mut value = canonical_record();
+    let entry = json!({"verdict": "pass", "provenance": provenance()});
+    value["memory"]["judge_issuance"][0][1][1] = entry.clone();
+    std::fs::write(data.path(3), serde_json::to_vec(&value).unwrap()).unwrap();
+    assert_eq!(serde_json::to_value(data.load(3).unwrap()).unwrap(), value);
+    // Pre-contract words were only ever saved bare; with provenance, as any
+    // unknown word or field, they reject the record rather than reset it.
+    for bad in [
+        json!({"verdict": "Land", "provenance": provenance()}),
+        json!({"verdict": "unknown", "provenance": provenance()}),
+        json!({"verdict": "pass", "provenance": provenance(), "extra": 1}),
+        json!({"verdict": "pass"}),
+    ] {
+        value["memory"]["judge_issuance"][0][1][1] = bad;
+        std::fs::write(data.path(3), serde_json::to_vec(&value).unwrap()).unwrap();
+        assert!(data.load(3).is_err());
+        assert!(Data::read(root.path(), &repo, 3).is_err());
     }
 }
