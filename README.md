@@ -59,8 +59,10 @@ Early. It runs on one machine, remi, over one owner's repositories, alongside
 the service that gets PRs reviewed and merges them there today. Conary takes the
 steward's jobs over one at a time. So far it records every PR in those
 repositories, runs their merge trains, decides each change's class (which
-ones need a review round, and which a person) and opens undos; the steward
-still asks for the reviews and says when a PR is settled.
+ones need a review round, and which a person) and opens undos. On remi it
+also works out its own landing decision for each PR after every steward pass
+and logs where the two disagree, acting on none of it; the steward still asks
+for the reviews and says when a PR is settled.
 
 Where it's going, what's done and what's next are in the
 [roadmap](docs/DESIGN.md#12-roadmap).
