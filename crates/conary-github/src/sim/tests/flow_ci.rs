@@ -722,7 +722,7 @@ fn train_enabled_release_branch_lands_outside_the_train() {
     f.settings.train = true;
     let (n, m) = next(&f, &s.memory, 4000);
     assert_eq!(n.stage, Stage::Ci);
-    assert_eq!(next(&f, &m, 4300).0.step, Step::Judge);
+    assert_eq!(next(&f, &m, 4300).0.step, Step::Judge(vec![Trigger::NoCi]));
 }
 
 #[test]

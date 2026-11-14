@@ -322,16 +322,11 @@ fn after_review(f: &Facts, m: &mut Memory, now: u64, ci: Ci, capped: bool) -> De
             ),
         );
     }
-    let requires_judge = f.classified.class == Class::R2
-        || f.needs_judge
-        || f.unseen
-        || ci == Ci::None
-        || f.judge_asked
+    let why = judge_why(f, ci, capped);
+    let requires_judge = !why.is_empty()
         || f.jobs.get(&Kind::Judge).is_some_and(|j| {
             j.revision.head == f.revision.head && j.revision.base == f.revision.base
-        })
-        || capped
-        || f.dependency == Some(Dependency::Major) && !f.renovate;
+        });
     if requires_judge {
         if !matches!(verdict, Some(Judgment::Pass))
             && !(verdict == Some(Judgment::Owner) && f.owner_approved)
@@ -343,7 +338,11 @@ fn after_review(f: &Facts, m: &mut Memory, now: u64, ci: Ci, capped: bool) -> De
                     "Behind its base: updated before judging",
                 );
             }
-            return work(f, m, now, Kind::Judge);
+            let mut decision = work(f, m, now, Kind::Judge);
+            if let Step::Judge(reasons) = &mut decision.1 {
+                *reasons = why;
+            }
+            return decision;
         }
         // A judge's land verdict cannot replace the person's word for R2.
         if f.classified.class == Class::R2 && !f.owner_approved {
@@ -362,6 +361,26 @@ fn after_review(f: &Facts, m: &mut Memory, now: u64, ci: Ci, capped: bool) -> De
         );
     }
     land(f, m, now)
+}
+
+/// Every reason the flow has to ask a judge now, in the plugin contract's
+/// words: the one place that list is made.
+pub(super) fn judge_why(f: &Facts, ci: Ci, capped: bool) -> Vec<Trigger> {
+    [
+        (f.classified.class == Class::R2, Trigger::R2),
+        (f.needs_judge, Trigger::AuthorEngine),
+        (f.unseen, Trigger::HiddenFiles),
+        (ci == Ci::None, Trigger::NoCi),
+        (f.judge_asked, Trigger::Asked),
+        (capped, Trigger::RoundLimit),
+        (
+            f.dependency == Some(Dependency::Major) && !f.renovate,
+            Trigger::MajorDependency,
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(holds, trigger)| holds.then_some(trigger))
+    .collect()
 }
 
 fn land(f: &Facts, m: &mut Memory, now: u64) -> Decision {
@@ -536,7 +555,7 @@ pub(super) fn work(f: &Facts, m: &mut Memory, now: u64, kind: Kind) -> Decision 
         }
     }
     let step = match kind {
-        Kind::Judge => Step::Judge,
+        Kind::Judge => Step::Judge(Vec::new()),
         Kind::Proof => Step::Prove,
         _ => Step::HandFix(kind),
     };

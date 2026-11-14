@@ -50,7 +50,11 @@ fn engine_trailer_anywhere_in_compared_history_requires_judgment() {
         hub.change(&head(3), &earlier, "later");
         assert_eq!(
             decision(&hub, &m, Settings::default()).step,
-            if judge { Step::Judge } else { Step::Merge },
+            if judge {
+                Step::Judge(vec![Trigger::AuthorEngine])
+            } else {
+                Step::Merge
+            },
             "{message}"
         );
     }
@@ -82,7 +86,11 @@ fn history_past_the_pr_endpoints_commit_cap_is_read_whole() {
         assert!(f.authorship_known);
         assert_eq!(
             next(&f, &m, 4000).0.step,
-            if judge { Step::Judge } else { Step::Merge }
+            if judge {
+                Step::Judge(vec![Trigger::AuthorEngine])
+            } else {
+                Step::Merge
+            }
         );
         assert_eq!(hub.count(Call::CompareCommits), 2); // initial setup plus this pass
     }
@@ -255,8 +263,14 @@ fn a_permanently_short_history_requires_a_judge_not_unread_authorship_retry() {
     let f = facts(&hub, Settings::default());
     assert!(f.authorship_known && f.needs_judge);
     assert_eq!(f.bot_edited, None);
-    assert_eq!(next(&f, &m, 700).0.step, Step::Judge);
-    assert_eq!(decision(&hub, &m, Settings::default()).step, Step::Judge);
+    assert_eq!(
+        next(&f, &m, 700).0.step,
+        Step::Judge(vec![Trigger::AuthorEngine])
+    );
+    assert_eq!(
+        decision(&hub, &m, Settings::default()).step,
+        Step::Judge(vec![Trigger::AuthorEngine])
+    );
 }
 
 #[test]

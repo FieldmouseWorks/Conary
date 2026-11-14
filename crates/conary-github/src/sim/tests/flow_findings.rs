@@ -291,9 +291,9 @@ fn issuance_metadata_is_authenticated_and_conflicting_generations_fail_closed() 
     c.hub.flow_comment(REMI, 3, "owner", &land);
     let owner = key.decision(REMI, 3, "autoland-judgment", "owner", &c.scope(), 9);
     c.hub.flow_comment(REMI, 3, "owner", &owner);
-    assert_eq!(c.pass(8000).step, Step::Judge);
+    assert_eq!(c.pass(8000).step, Step::Judge(vec![Trigger::Asked]));
     c.hub.edit_flow_comment(REMI, 3, 2, "");
-    assert_eq!(c.pass(8100).step, Step::Judge);
+    assert_eq!(c.pass(8100).step, Step::Judge(vec![Trigger::Asked]));
     let newer = key.decision(REMI, 3, "autoland-judgment", "land", &c.scope(), 10);
     c.hub.flow_comment(REMI, 3, "owner", &newer);
     assert_eq!(c.pass(8200).step, Step::Merge);
@@ -301,7 +301,7 @@ fn issuance_metadata_is_authenticated_and_conflicting_generations_fail_closed() 
     let unsupported = key.decision(REMI, 3, "autoland-judgment", "unsupported", &c.scope(), 11);
     c.hub.flow_comment(REMI, 3, "owner", &unsupported);
     assert!(c.facts().judgment.is_none());
-    assert_eq!(c.pass(8300).step, Step::Judge);
+    assert_eq!(c.pass(8300).step, Step::Judge(vec![Trigger::Asked]));
     let last = key.decision(REMI, 3, "autoland-judgment", "land", &c.scope(), 12);
     c.hub.flow_comment(REMI, 3, "owner", &last);
     assert_eq!(c.pass(8400).step, Step::Merge);
@@ -331,7 +331,7 @@ fn legacy_body_only_review_marks_and_seals_are_not_upgraded_to_full_scope() {
         "owner",
         &format!("<!-- autoland-judgment: land {} {tag} -->", scope.head),
     );
-    assert_eq!(c.view(8000).step, Step::Judge);
+    assert_eq!(c.view(8000).step, Step::Judge(vec![Trigger::Asked]));
 }
 #[test]
 fn carried_clean_provenance_cannot_cover_later_losses_or_refused_findings() {
@@ -449,7 +449,7 @@ fn judgments_bind_the_complete_claim_after_a_fresh_review_of_an_edit() {
         c.hub.refresh_flow(REMI, 3);
         c.review("reviewer", Verdict::Clean, 700);
         assert!(c.facts().judgment.is_none());
-        assert_eq!(c.view(8000).step, Step::Judge);
+        assert_eq!(c.view(8000).step, Step::Judge(vec![Trigger::Asked]));
         c.judge("pass");
         assert_eq!(c.view(8000).step, Step::Merge);
     }
@@ -466,7 +466,7 @@ fn legacy_findings_keep_the_round_cap_without_supplying_clean_coverage() {
     let f = c.facts();
     assert_eq!(f.reviewers["reviewer"].rounds, 5);
     assert!(f.reviewers["reviewer"].review.is_none());
-    assert_eq!(c.view(8000).step, Step::Judge);
+    assert_eq!(c.view(8000).step, Step::Judge(vec![Trigger::RoundLimit]));
     c.review("reviewer", Verdict::Clean, 600);
     assert_eq!(c.view(8000).step, Step::Merge);
 }

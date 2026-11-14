@@ -79,7 +79,10 @@ fn description_fix_has_a_distinct_intention_and_rejudges_without_push() {
     c.description("It changes the guard's undo snapshot.", 900);
     c.review("reviewer", Verdict::Clean, 901);
     assert_eq!(c.scope().head, head);
-    assert_eq!(c.pass(1202).step, Step::Judge);
+    assert_eq!(
+        c.pass(1202).step,
+        Step::Judge(vec![Trigger::R2, Trigger::Asked])
+    );
 }
 
 #[test]

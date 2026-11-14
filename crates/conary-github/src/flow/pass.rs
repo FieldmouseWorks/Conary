@@ -380,7 +380,7 @@ fn plugin_kind(step: &Step) -> Option<&'static str> {
     match step {
         Step::QueueReview(_) => Some("review"),
         Step::HandFix(_) => Some("fix"),
-        Step::Judge => Some("judge"),
+        Step::Judge(_) => Some("judge"),
         Step::Prove => Some("proof"),
         _ => None,
     }

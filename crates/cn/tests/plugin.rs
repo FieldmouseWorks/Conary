@@ -47,7 +47,7 @@ fn plugin_example_conforms() {
     let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(
         value["checked"],
-        serde_json::json!(["review", "fix", "judge", "proof", "job"])
+        serde_json::json!(["review", "fix", "judge", "proof", "job", "prepare"])
     );
 }
 #[test]

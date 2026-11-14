@@ -188,7 +188,7 @@ fn stale_judgment_is_not_a_verdict_for_this_head() {
     c.push(&head(4));
     c.secret();
     c.review("reviewer", Verdict::Clean, 1);
-    assert_eq!(c.view(4000).step, Step::Judge);
+    assert_eq!(c.view(4000).step, Step::Judge(vec![Trigger::R2]));
 }
 
 #[test]
@@ -370,7 +370,7 @@ fn missing_ci_waits_five_minutes_then_needs_a_judge() {
     let mut c = Case::new();
     c.no_ci();
     assert_eq!(c.pass(4000).step, Step::Wait { until: Some(4300) });
-    assert_eq!(c.view(4300).step, Step::Judge);
+    assert_eq!(c.view(4300).step, Step::Judge(vec![Trigger::NoCi]));
 }
 
 #[test]
@@ -458,7 +458,7 @@ fn broken_job_is_seen_twice_then_backed_off_once() {
     );
     c.pass(4070);
     assert_eq!(c.memory.strikes[&Failure::Lost], 1);
-    assert_eq!(c.view(4120).step, Step::Judge);
+    assert_eq!(c.view(4120).step, Step::Judge(vec![Trigger::R2]));
 }
 
 #[test]

@@ -167,7 +167,7 @@ fn pass_local_judgment_preserves_newer_and_conflicting_authenticated_issuances()
         let now = flow::jobs::now();
         assert_eq!(
             c.pass(now, false)[0].next.as_ref().unwrap().step,
-            Step::Judge
+            Step::Judge(vec![Trigger::AuthorEngine])
         );
         c.run_worker();
         let revision = Revision::from(&c.hub.pull(REPO, 3).unwrap());

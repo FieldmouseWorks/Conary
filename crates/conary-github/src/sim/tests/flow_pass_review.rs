@@ -229,7 +229,10 @@ fn pass_copies_live_choices_and_known_reviewers_into_a_fresh_judge_invocation() 
     };
     c.config.execution.insert(PluginKind::Judge, choice.clone());
     let report = c.pass(now + 2, false);
-    assert_eq!(report[0].next.as_ref().unwrap().step, Step::Judge);
+    assert_eq!(
+        report[0].next.as_ref().unwrap().step,
+        Step::Judge(vec![Trigger::AuthorEngine])
+    );
     let record = c.record();
     let work = record
         .jobs
@@ -538,7 +541,7 @@ fn a_train_departure_revokes_permission_even_if_its_label_write_fails() {
 }
 #[test]
 fn the_runner_rejects_mutable_names_in_every_object_id_field() {
-    use conary_core::plugin::{Identity, Limits, Plugin, Problem, Task};
+    use conary_core::plugin::{Identity, Limits, Plugin, Problem, Task, Trigger};
     let plugin = Plugin::describe(
         &example(),
         Limits {
@@ -561,18 +564,41 @@ fn the_runner_rejects_mutable_names_in_every_object_id_field() {
         },
         Task::Judge {
             repo: REPO.into(),
+            pr: 3,
             head: "main".into(),
             against: "criteria".into(),
             author,
             reviewers: vec![],
+            why: vec![Trigger::Asked],
+            context: "a".repeat(64),
         },
         Task::Proof {
             repo: REPO.into(),
+            head: head(3),
+            tree: "main".into(),
+            checks: vec!["check".into()],
+        },
+        Task::Proof {
+            repo: REPO.into(),
+            head: "main".into(),
+            tree: head(3),
+            checks: vec!["check".into()],
+        },
+        Task::Prepare {
+            repo: REPO.into(),
+            head: "main".into(),
+            tree: head(3),
+            checks: vec!["check".into()],
+        },
+        Task::Prepare {
+            repo: REPO.into(),
+            head: head(3),
             tree: "main".into(),
             checks: vec!["check".into()],
         },
         Task::Fix {
             repo: REPO.into(),
+            pr: 3,
             head: head(3),
             problems: vec![Problem::Conflict {
                 base: "main".into(),

@@ -1,5 +1,5 @@
 //! Build the shared example as a normal executable, not against guessed rlibs.
-use conary_core::plugin::{Limits, Plugin};
+use conary_core::plugin::{Kind, Limits, Plugin};
 use std::path::Path;
 use std::time::Duration;
 
@@ -13,5 +13,15 @@ fn the_flow_fixture_satisfies_the_published_contract() {
         },
     )
     .unwrap();
-    assert_eq!(plugin.check().unwrap().len(), 5);
+    assert_eq!(
+        plugin.check().unwrap(),
+        [
+            Kind::Review,
+            Kind::Fix,
+            Kind::Judge,
+            Kind::Proof,
+            Kind::Job,
+            Kind::Prepare
+        ]
+    );
 }

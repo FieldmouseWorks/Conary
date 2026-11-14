@@ -41,6 +41,9 @@ mod observe;
 mod pass;
 pub use pass::{Config, Pass, Plugins, Report};
 
+mod judging;
+pub use judging::judging_context;
+
 mod compare;
 pub use compare::{Beside, Decided, Said, Tally, beside};
 

@@ -1,6 +1,6 @@
 # Executable plugins
 
-This is the published **conary-plugin v3** contract (older work contracts are
+This is the published **conary-plugin v4** contract (older work contracts are
 accepted where they can enforce the request; see Versions). It is independent of
 language, harness and engine. The Rust types and runner are in
 `conary_core::plugin`. Flow integration and engine-specific implementations
@@ -29,7 +29,7 @@ Before work, the runner sends:
 A complete response is:
 
 ```json
-{"contract":"conary-plugin v1","by":{"engine":"example","session":null},"kind":"describe","versions":["conary-plugin v1","conary-plugin v2","conary-plugin v3"],"kinds":["review","fix","judge","proof"],"v2_kinds":["job"],"models":[],"capabilities":{"sandbox":"none","network":false,"devices":[],"mcp":false},"meters":[]}
+{"contract":"conary-plugin v1","by":{"engine":"example","session":null},"kind":"describe","versions":["conary-plugin v1","conary-plugin v2","conary-plugin v3","conary-plugin v4"],"kinds":["review","fix","judge","proof"],"v2_kinds":["job"],"v4_kinds":["prepare"],"models":[],"capabilities":{"sandbox":"none","network":false,"devices":[],"mcp":false},"meters":[]}
 ```
 
 `versions` must contain this contract string. `kinds` is a list of unique
@@ -37,8 +37,12 @@ supported kinds from the table below, a subset of the four v1 kinds: a v1
 runner decodes it into an enum without `job` and would reject the whole
 response otherwise. `v2_kinds` (default empty) lists the kinds beyond v1's,
 currently only `job`; a v2 runner serves `kinds` plus `v2_kinds`, and a v1
-runner ignores the field. Together they are nonempty, and `job` in `kinds`
-or `v2_kinds` on a plugin that doesn't speak v2 fails describe.
+runner ignores the field. `v4_kinds` (default empty) lists the kinds beyond
+v3's, currently only `prepare`: an older runner refuses an unknown kind in
+`v2_kinds`, so these have their own list, which it ignores. Together they are
+nonempty. `job` in `kinds`, or in `v2_kinds` on a plugin that doesn't speak
+v2, fails describe; so does `prepare` anywhere but `v4_kinds`, or on a plugin
+that doesn't speak v4.
 `by` is required on **every** response: `engine` is a nonblank stable name,
 and `session` is a nonblank session identifier when available, otherwise
 null or omitted. The engine must match describe; a work invocation may create
@@ -64,10 +68,16 @@ response has `contract`, `by`, `kind`, and the listed answer fields.
 | Kind | Request fields | Answer fields |
 | --- | --- | --- |
 | `review` | `repo`, `pr`, `base`, `head`, `author` | `findings`: array of findings, empty for none |
-| `fix` | `repo`, `head`, `problems` | `result`: a pushed head or an inability reason |
-| `judge` (v3) | `repo`, `head`, `against`, `author`, optional `reviewers` (identity array, default empty) | `verdict`: `pass`, `fail`, `owner` or `misdescribed`; `why`: nonblank explanation |
-| `proof` | `repo`, `tree`, `checks`: unique check names | `results`: exactly one result for every requested check |
+| `fix` | `repo`, `pr` (v4), `head`, `problems` | `result`: a pushed head, an inability reason, or (v4) unchanged; `answers` (v4): one for each finding |
+| `judge` (v3) | `repo`, `pr` (v4), `head`, `against`, `author`, optional `reviewers` (identity array, default empty), `why` (v4), `context` (v4) | `verdict`: `pass`, `fail`, `owner` or `misdescribed`; `why`: nonblank explanation |
+| `proof` | `repo`, `head` (v4), `tree`, `checks`: unique check names | `results`: exactly one result for every requested check; `head` (v4): the request's |
 | `job` (v2) | `repo`, `workdir`, `prompt`; optional `model`, `effort` | `summary`: nonblank; `next`: how the job ends |
+| `prepare` (v4) | `repo`, `head`, `tree`, `checks`: unique check names | `ready`, `slot`: booleans; `why`: nonblank |
+
+A field marked v4 is sent only in a v4 request (see Versions). `pr` names the
+PR the work is for: the fix pushes to its branch, and the judge seals its
+verdict to it. A proof's `head` is the commit whose tree is `tree`: the
+commit a proof producer signs and posts its check run on.
 
 `author` has the same shape as `by`: engine and optional session, supplied by
 Conary from the head's authorship. `against` is a string describing the
@@ -98,27 +108,91 @@ A fix's `result` is one of:
 ```json
 {"status":"pushed","head":"2222222222222222222222222222222222222222"}
 {"status":"unable","why":"A nonblank reason no fix was pushed"}
+{"status":"unchanged"}
 ```
+
+`unchanged` (v4) says nothing needed a push: every finding is answered
+without a change. A v4 fix answer also carries `answers`, required: exactly
+one entry for each `finding` problem, in request order, and none for any
+other problem. `problem` is that finding's zero-based index in `problems`,
+so a missing, extra or reordered answer can't pass for another:
+
+```json
+{"kind":"fix","result":{"status":"unchanged"},"answers":[{"problem":0,"fixed":false,"reply":"Why the code stands as it is"}]}
+```
+
+`reply` is nonblank: what the flow posts on the finding. A `fixed` answer
+needs a `pushed` result, so `unchanged` and `unable` carry none. An older
+contract's fix answer carries neither `answers` nor `unchanged`.
 
 The plugin owns its permitted checkout and push mechanism; this interface
 neither supplies credentials nor authorizes an otherwise forbidden action.
-A pushed result reports the actual head it pushed. An unable result is a
-valid answer, as are a judgment of fail or owner and a failed proof.
+A pushed result reports the actual head it pushed. An unable or unchanged
+result is a valid answer, as are a judgment of fail or owner and a failed
+proof.
+
+A v4 judge request says why the flow asks, and what the judgment is on:
+
+- `why` is a nonempty list of unique words, each one of `flow::decide`'s
+  conditions for a judge. The vocabulary is closed: an unknown word fails.
+
+  | Word | The flow asks because |
+  | --- | --- |
+  | `r2` | the change is classed R2 |
+  | `author_engine` | the head's history names an engine `settings.judge_engines` lists, or can't be read in full |
+  | `hidden_files` | the change touches files the policy hides from review |
+  | `no_ci` | no CI reported on the head |
+  | `asked` | someone asked for a judge |
+  | `round_limit` | the review loop reached its round limit with findings open |
+  | `major_dependency` | a major dependency update, not from the dependency bot |
+
+- `context` is the flow's digest of the review findings and their answers
+  that the judgment is on: 64 lowercase hex digits, computed by
+  `conary_github::flow::judging_context`, which a judge producer calls too.
+  It is the sha256 of the compact JSON array with one entry per finding, in
+  order, keys in the order shown:
+  `{"finding":{"path","line","severity","text"},"answer":{"fixed","reply"}}`,
+  where `answer` is null for a finding not answered.
+- `against` stays the description being judged, and the verdict words
+  don't change.
 
 Each proof result has `check` (the requested name), `verdict` (`pass` or
 `fail`) and a nonblank `why`. Results may be reordered, but none may be
 missing, duplicated or added. A proof must run on the requested tree; a
-plugin may not substitute another head or tree. A later evidence consumer
-must independently verify tree binding and producer attestation.
+plugin may not substitute another head or tree. A v4 proof answer names
+the `head` it ran on, which must be the request's; an older one names none.
+A later evidence consumer must independently verify tree binding and
+producer attestation.
+
+## The prepare kind
+
+`prepare` (v4) is for proof plugins only: it readies a proof's inputs, such
+as evaluating or building what the checks need, so that the proof itself
+holds a scarce proof slot for as little as it can. A plugin advertising it
+must also advertise `proof`, and, like `proof`, must declare no model.
+
+```json
+{"contract":"conary-plugin v4","kind":"prepare","repo":"owner/name","head":"2222222222222222222222222222222222222222","tree":"1111111111111111111111111111111111111111","checks":["gate"]}
+{"contract":"conary-plugin v4","by":{"engine":"example","session":null},"execution":{"model":null,"effort":null,"context":{"kind":"fresh"}},"kind":"prepare","ready":true,"slot":false,"why":"Nothing to build ahead"}
+```
+
+`ready` says whether the inputs are ready; `slot` whether proving them needs
+one of the scarce proof slots; `why` is nonblank. A prepare answer is never
+a verdict: it carries no results, and an answer with any field beyond
+these fails.
 
 ## Versions
 
 The runner reads `versions` from describe and speaks the highest it knows:
-`conary-plugin v3`, else v2, else v1. A v1 plugin cannot advertise `job`.
+`conary-plugin v4`, else v3, else v2, else v1. A v1 plugin cannot advertise
+`job`, and only a v4 plugin can advertise `prepare`. A request in an older
+contract leaves off the fields v4 added (a fix's and a judge's `pr`, a
+judge's `why` and `context`, a proof's `head`), so a v1 to v3 plugin keeps
+its wire. The runner checks those fields whichever contract it speaks.
 Judges require v3, even when no execution choice is supplied: older contracts
 cannot express the context boundary. Other legacy work retains its previous
 behavior when no execution choice or continuation is requested.
-A v2 or v3 plugin additionally declares what it
+A v2 or later plugin additionally declares what it
 offers in its describe answer:
 
 - `models`: array of `{"id","efforts":[...],"context_tokens","max_output_tokens"}`;
@@ -139,7 +213,7 @@ advertise `proof`, and describe fails if it does.
 
 ## Execution choices and provenance
 
-Every v3 work request has `execution`:
+Every v3 or later work request has `execution`:
 
 ```json
 {"choice":{"engine":"example","model":null,"effort":null},"context":{"kind":"fresh"}}
@@ -148,7 +222,7 @@ Every v3 work request has `execution`:
 `choice` is optional (null). When present its engine must match the configured
 plugin's describe identity, and its model/effort must be offered. Null model
 and effort delegate to that plugin's declared runtime defaults; Conary has no
-engine, model or effort fallback. Every v3 answer reports actual execution:
+engine, model or effort fallback. Every v3 or later answer reports actual execution:
 
 ```json
 {"model":null,"effort":null,"context":{"kind":"fresh"}}
@@ -256,18 +330,28 @@ A conforming plugin recognizes the reserved repository
 checks. These canned requests exercise every advertised kind:
 
 - Review: PR 1, base forty `1` digits, head forty `2` digits. Return no findings.
-- Fix: head forty `2` digits; one `red_check` named `fixture`, with text
-  `No writable repository is supplied`. Return unable with a nonblank reason.
-- Judge: head forty `2` digits, against `fixture: accept`. Return pass with a
-  nonblank reason.
-- Proof: tree forty `1` digits, checks `fixture-pass` and `fixture-fail`.
-  Return pass and fail respectively, each with a nonblank reason.
+- Fix: PR 1, head forty `2` digits; one `red_check` named `fixture`, with
+  text `No writable repository is supplied`. Return unable with a nonblank
+  reason (and, in v4, no answers).
+- Fix (v4): as above, but one `finding` problem on `src/lib.rs` line 1,
+  severity `p2`, text `fixture: answer without a change`. Return unchanged,
+  answering it not fixed, with a nonblank reply.
+- Judge: PR 1, head forty `2` digits, against `fixture: accept`, why
+  `["asked"]`, context sixty-four `3` digits. Return pass with a nonblank
+  reason.
+- Proof: head forty `2` digits, tree forty `1` digits, checks `fixture-pass`
+  and `fixture-fail`. Return pass and fail respectively, each with a
+  nonblank reason, and in v4 the head.
 - Job (v2): as above. Return `done`.
+- Prepare (v4): head, tree and checks as the proof's. Return ready, needing
+  no slot, with a nonblank reason.
 
 Review and judge name author engine `conary-conformance-author`, session
 `fixture-author`; the grader must be independent of that identity. The
-runner's public `fixtures()` builds these same requests. An advertised subset
-is checked in review, fix, judge, proof, job order. A successful conformance run
+runner's public `fixtures()` builds these same requests, each with the
+oldest contract it's sent in: a plugin gets the fixtures of its advertised
+kinds that its contract carries, in review, fix, judge, proof, job, prepare
+order. A successful conformance run
 checks the wire behavior and fixtures; it cannot prove a plugin's real-world
 judgment quality, that a pushed head exists, or that a proof was executed.
 
@@ -280,6 +364,6 @@ semantics apply to every call as usual.
 
 The example also recognizes `conary-test/flow-simulation` for the in-memory
 flow tests: a head ending in `3` gets one finding, and a fix reports the
-forty-digit head `4`. The simulation host applies that push to its Hub;
+forty-digit head `4`, answering each finding fixed. The simulation host applies that push to its Hub;
 the executable still performs no real writes. Its fixer and reviewer use
 distinct known sessions, so the example exercises independence after a fix.
