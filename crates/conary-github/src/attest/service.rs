@@ -269,6 +269,12 @@ pub(super) fn check(
             }
             result
         }
+        Subject::Gate { .. } => {
+            return Err(
+                "a gate's pass on a tree counts for another commit only by CI's own attestation"
+                    .into(),
+            );
+        }
     };
     Ok(Attested {
         attest: Attest::Service {

@@ -227,7 +227,7 @@ impl Actions for Hub {
                 .map(|(i, (name, _))| Artifact {
                     id: run * 10 + i as u64,
                     name: name.clone(),
-                    expired: false,
+                    expired: w.expired.contains(&(run / 10)),
                 })
                 .collect())
         })

@@ -164,7 +164,9 @@ included.
 
 `conaryd` serves the same ledger over a Unix socket, as JSON-RPC, for
 anything on the box ([conaryd](docs/conaryd.md)), and `conary-mcp` offers it
-to agents as MCP tools ([the MCP server](docs/mcp.md)).
+to agents as MCP tools ([the MCP server](docs/mcp.md)). It can also tell a
+gate whether CI already attested a pass on the same tree
+([gate reuse](docs/gate-reuse.md)).
 
 ## Building
 
