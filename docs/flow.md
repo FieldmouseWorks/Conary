@@ -78,9 +78,13 @@ it proves. A judge request carries the decision's reasons as `why`, in the
 contract's words. One asked again only because a judge already started on
 this head and base carries that judge's reasons, even if the description
 changed since, or `started` when that judge predates recorded reasons. Its `context` is
-`flow::judging_context` over the PR's discussion as a log in job order: each
+`flow::judging_context` over the PR's discussion: its log in job order, each
 validated review's findings, then each v4 fix's findings as handed, with its
-answers. A plugin speaking an older contract gets none of these fields.
+answers; every review thread on GitHub with its comments as they read now; and
+every review body (`flow::review_bodies`), whoever wrote them and whether or not
+a worker did. Resolving a thread doesn't change it. An approval's body doesn't
+count: it's a person's permission, and counting it would make the owner's
+release of an owner verdict ask for another judgment. A plugin speaking an older contract gets none of these fields.
 Engine trailers across the PR history supply its author engine. Unreadable
 or mixed-engine histories wait rather than infer independence. Session
 trailers are untrusted: only a completed fix's validated producer establishes
@@ -179,9 +183,30 @@ head, target branch, description scope and completion time. The exported
 `review_body` helper owns that marker's formatting.
 
 New judging producers use `Response::provenance()` with `SealKey::judgment_by`
-and `judgment_receipt_by(revision, generation, verdict, provenance)` under
-`conary/judgment`. Actual engine, session, model, effort and context are inside
-both the sealed issuance and independently attested receipt. The worker also
+and `judgment_receipt_by(revision, generation, verdict, provenance, basis)`
+under `conary/judgment`. Actual engine, session, model, effort and context are
+inside both the sealed issuance and independently attested receipt, and so is
+its `Basis`: the request's `why` and `context` it was judged under.
+`judgment_by` issues these as `autoland-judgment:v3`, whose seal covers its
+version, and refuses a basis a judge request couldn't carry. v2 issuances stay
+as they are, in one generation order with v3 ones; an authenticated v3
+issuance without its basis is a tombstone.
+
+A fail or misdescribed verdict is acted on as it stands. A pass or owner
+verdict counts only while its `why` holds every reason `flow::decide` requires
+now, except `asked`, which the judgment's own existence makes hold, and its
+`context` equals `flow::judging_context` over the discussion now. Otherwise the
+flow asks a judge again before granting anything; the old issuance stays. A
+judge's job is answered once an issuance of its revision, read on GitHub or
+remembered, seals what it was asked on (any issuance, for a request from before
+v4). Memory keeps it answered: a removed comment, a newer generation or a
+restart never makes it owed again, and an answer that comes late takes it out
+of the unanswered count. An answer that no
+longer counts was superseded, never lost: the flow asks again at once, and it
+doesn't count toward the two jobs that end without their answer before the
+owner is told. A judge job that ended without its answer is waited for and
+counted as before. A v2
+issuance says neither, so its pass or owner verdict never counts. The worker also
 retains the complete response with its verdict in the durable completion.
 Provenance survives high-water memory; a same-generation provenance conflict
 is a tombstone just like conflicting verdict words. Legacy issuances retain

@@ -5,6 +5,7 @@ use super::*;
 use conary_core::plugin;
 
 pub(crate) fn hydrate(f: &mut Facts, record: &Record, now: u64, dry_run: bool) -> Result<()> {
+    f.context = Some(super::judging::context(record, f, now)?);
     for work in &record.jobs {
         let completion: Completion = if dry_run {
             jobs::inspect(work, now)?
@@ -81,17 +82,19 @@ pub(crate) fn hydrate(f: &mut Facts, record: &Record, now: u64, dry_run: bool) -
                 });
             }
             Purpose::Judge => {
-                f.jobs.insert(Kind::Judge, job.clone());
                 // Plugin responses are proposals, not authenticated issuances.
                 // The producer publishes its sealed, independently attested
-                // judgment separately. Preserve every GitHub generation.
-                if job.revision == f.revision
-                    && completion.result.as_ref().is_some_and(|r| r.is_ok())
-                    && f.judgment_generation.is_none()
-                    && let Some(job) = f.jobs.get_mut(&Kind::Judge)
-                {
-                    job.state = JobState::Unknown;
+                // judgment separately. Until a generation is read the job is
+                // owed its answer; `state::next` then reads whether it came,
+                // against every generation it knows, by what this job asked.
+                if job.state == JobState::Done && job.revision == f.revision {
+                    f.judge_requests
+                        .insert(job.id.clone(), super::judging::asked(work)?);
+                    if f.judgment_generation.is_none() {
+                        job.state = JobState::Unknown;
+                    }
                 }
+                f.jobs.insert(Kind::Judge, job);
             }
             Purpose::Proof => {
                 if job.revision == f.revision

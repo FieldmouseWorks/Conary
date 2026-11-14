@@ -218,10 +218,18 @@ fn ci(f: &Facts, m: &mut Memory, now: u64) -> Ci {
     }
 }
 
-fn judgment(f: &Facts) -> Option<Judgment> {
+/// The judgment that speaks for this revision now. A fail or misdescribed
+/// verdict always does. A pass or owner verdict only while it covers every
+/// reason in `why` and the discussion now ([`Judged::covers`]); otherwise
+/// the flow asks again before granting anything, and the old issuance stays.
+fn judgment(f: &Facts, why: &[Trigger]) -> Option<Judgment> {
     f.judgment
         .as_ref()
         .filter(|j| j.revision == f.revision)
+        .filter(|j| {
+            !matches!(j.verdict, Judgment::Pass | Judgment::Owner)
+                || j.covers(why, f.context.as_deref())
+        })
         .map(|j| j.verdict)
 }
 
@@ -238,7 +246,8 @@ fn after_review(f: &Facts, m: &mut Memory, now: u64, ci: Ci, capped: bool) -> De
     if ci == Ci::Red || f.proof == Proof::Failed {
         return hand(f, m, now, Kind::Red, true);
     }
-    let verdict = judgment(f);
+    let why = judge_why(f, ci, capped);
+    let verdict = judgment(f, &why);
     if verdict == Some(Judgment::Misdescribed) {
         return hand(f, m, now, Kind::Description, false);
     }
@@ -306,7 +315,6 @@ fn after_review(f: &Facts, m: &mut Memory, now: u64, ci: Ci, capped: bool) -> De
             ),
         );
     }
-    let why = judge_why(f, ci, capped);
     let requires_judge = !why.is_empty()
         || f.jobs.get(&Kind::Judge).is_some_and(|j| {
             j.revision.head == f.revision.head && j.revision.base == f.revision.base
@@ -512,45 +520,49 @@ pub(super) fn work(f: &Facts, m: &mut Memory, now: u64, kind: Kind) -> Decision 
                 "A job is queued or running, or its state is unknown",
             );
         }
-        if !m.lost_jobs.insert(j.id.clone()) {
-            let second = if j.state == JobState::Done {
-                m.strikes.remove(&Failure::Lost);
-                let ended = m.unanswered.entry((kind, j.revision.clone())).or_default();
-                ended.insert(j.id.clone());
-                ended.len() >= 2 || j.repeated
-            } else {
-                false
-            };
-            if second {
-                return owner(f, "Two jobs ended without their answer");
-            }
-            if j.state == JobState::Broken {
-                let due = if let Some(due) = m.broken_jobs.get(&j.id) {
-                    *due
+        // A judge's answer that came and no longer speaks for the revision
+        // is superseded, never missing: ask again at once.
+        if j.state != JobState::Answered {
+            if !m.lost_jobs.insert(j.id.clone()) {
+                let second = if j.state == JobState::Done {
+                    m.strikes.remove(&Failure::Lost);
+                    let ended = m.unanswered.entry((kind, j.revision.clone())).or_default();
+                    ended.insert(j.id.clone());
+                    ended.len() >= 2 || j.repeated
                 } else {
-                    let n = m.strikes.entry(Failure::Lost).or_default();
-                    *n = n.saturating_add(1);
-                    let due = now.saturating_add((1u64 << (*n - 1).min(6)).min(60) * 60);
-                    m.broken_jobs.insert(j.id.clone(), due);
-                    due
+                    false
                 };
-                if now < due {
-                    return at(
-                        stage,
-                        Step::Retry {
-                            kind: Failure::Lost,
-                            at: due,
-                        },
-                        "The last job broke; trying again later",
-                    );
+                if second {
+                    return owner(f, "Two jobs ended without their answer");
                 }
+                if j.state == JobState::Broken {
+                    let due = if let Some(due) = m.broken_jobs.get(&j.id) {
+                        *due
+                    } else {
+                        let n = m.strikes.entry(Failure::Lost).or_default();
+                        *n = n.saturating_add(1);
+                        let due = now.saturating_add((1u64 << (*n - 1).min(6)).min(60) * 60);
+                        m.broken_jobs.insert(j.id.clone(), due);
+                        due
+                    };
+                    if now < due {
+                        return at(
+                            stage,
+                            Step::Retry {
+                                kind: Failure::Lost,
+                                at: due,
+                            },
+                            "The last job broke; trying again later",
+                        );
+                    }
+                }
+            } else {
+                return wait(
+                    stage,
+                    Some(now.saturating_add(60)),
+                    "The job just ended; read its answer once more",
+                );
             }
-        } else {
-            return wait(
-                stage,
-                Some(now.saturating_add(60)),
-                "The job just ended; read its answer once more",
-            );
         }
     }
     let step = match kind {

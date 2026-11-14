@@ -273,7 +273,9 @@ fn unrepresentable_blockers_wait_instead_of_launching_an_empty_fixer() {
             if blocker == "thread" {
                 let mut snapshot = crate::flow::Read::snapshot(&c.hub, REPO, 3).unwrap();
                 snapshot.open_threads = 1;
-                snapshot.threads.insert("blocking-thread".into(), false);
+                snapshot
+                    .threads
+                    .insert("blocking-thread".into(), Default::default());
                 c.hub.flow_snapshot(REPO, 3, snapshot);
             }
         }

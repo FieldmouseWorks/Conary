@@ -183,7 +183,7 @@ flow settings name it.
 | --- | --- | --- | --- |
 | Review | Nothing itself. The flow publishes the review (`flow::review_body`) as an account in `settings.review_authors`. The producer then signs that publication if it matches what the producer recorded | `conary/review/ROLE` on the review's head. The log is `review_receipt(head, body)` | `conary/review/ROLE` |
 | Fix | Its commits, pushed to the PR's branch | None. A fix is authorship, not evidence. The next review grades it. Its session becomes known from the validated plugin answer ([flow.md](flow.md#explicit-landing-passes)), so a later judge can't be that session | No key |
-| Judge | The sealed `autoland-judgment:v2` comment (`SealKey::judgment_by`), as an account in `settings.verdict_authors` | `conary/judgment` on the head. The log is `judgment_receipt_by(revision, generation, verdict, provenance)` | `conary/judgment` |
+| Judge | The sealed `autoland-judgment:v3` comment (`SealKey::judgment_by`), as an account in `settings.verdict_authors` | `conary/judgment` on the head. The log is `judgment_receipt_by(revision, generation, verdict, provenance, basis)` | `conary/judgment` |
 | Proof | A check run per proof, named as the proof is named in `settings.proofs` | That check run, with `definition` set to `recipe_digest(recipe)`. The log is the sha256 of the program's output | The exact names of the configured proofs |
 
 Check runs go out through the steward's existing GitHub App, from burrow's
@@ -662,10 +662,10 @@ copy.
 
 **Publication and signing.**
 1. The sealed comment: `SealKey::judgment_by(repo, pr, verdict, revision,
-   generation, provenance)`, with the `why` text, posted as a
-   `verdict_authors` account.
+   generation, provenance, basis)`, with the `why` text, posted as a
+   `verdict_authors` account. `basis` is the request's `why` and `context`.
 2. Then `conary/judgment` over
-   `judgment_receipt_by(revision, generation, verdict, provenance)`.
+   `judgment_receipt_by(revision, generation, verdict, provenance, basis)`.
 
 Every request is a new judgment under a new generation. The issuance
 carries the request's `why` and `context` ([C4](#c4-flow-bind-a-judgment-to-its-reasons-and-the-findings-it-read)).

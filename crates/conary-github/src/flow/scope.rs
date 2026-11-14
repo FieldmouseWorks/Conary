@@ -43,6 +43,7 @@ pub(crate) fn current<G: Write>(
         || fresh.owner_approved != f.owner_approved
         || fresh.judgment != f.judgment
         || fresh.judgment_generation != f.judgment_generation
+        || fresh.context != f.context
         || fresh.major != f.major
         || fresh.major_generation != f.major_generation
         || fresh.proof_data.records != f.proof_data.records

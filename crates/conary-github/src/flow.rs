@@ -42,7 +42,7 @@ mod pass;
 pub use pass::{Config, Pass, Plugins, Report};
 
 mod judging;
-pub use judging::judging_context;
+pub use judging::{judging_context, review_bodies};
 
 mod compare;
 pub use compare::{Beside, Decided, Said, Tally, beside};

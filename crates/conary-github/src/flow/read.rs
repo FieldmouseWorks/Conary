@@ -27,7 +27,7 @@ pub struct Snapshot {
     pub complete: bool,
     pub merge_state: String,
     pub open_threads: u32,
-    pub threads: BTreeMap<String, bool>,
+    pub threads: BTreeMap<String, ReviewThread>,
     pub resolved_reviews: BTreeSet<u64>,
     pub updated_at: u64,
     pub suites: BTreeMap<u64, Suite>,
@@ -95,12 +95,15 @@ pub fn read(
         reviewers: BTreeMap::new(),
         judgment: None,
         judgment_generation: None,
+        context: None,
         major_generation: None,
         jobs: BTreeMap::new(),
         claims: Vec::new(),
         stopped_jobs: BTreeSet::new(),
         pushes: BTreeMap::new(),
         threads: extra.threads.clone(),
+        review_bodies: BTreeMap::new(),
+        judge_requests: BTreeMap::new(),
         proof: Proof::NotNeeded,
         proof_data: ProofData::default(),
         base_tip: None,
@@ -205,6 +208,7 @@ pub fn read(
     let comments = source.comments(&repository, pr)?;
     let markers = super::markers::read(&repository, &pull, &comments, &facts.settings);
     facts.changes_requested = super::reviews::changes_requested(&records);
+    facts.review_bodies = super::judging::review_bodies(&records);
     facts.owner_approved =
         super::approval::from_reviews(repo, pr, &facts.revision, &records, &facts.settings.people);
     let mut carried = BTreeSet::new();

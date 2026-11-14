@@ -158,6 +158,19 @@ impl Hub {
             "body":body,"commit_id":head,"submitted_at":"2026-11-01T00:00:00Z"}),
         );
     }
+    /// Edit review `id`'s body, as its author can on GitHub.
+    pub(crate) fn edit_review_body(&self, repo: &str, pr: u64, id: u64, body: &str) {
+        let mut world = self.world.borrow_mut();
+        let reviews = world
+            .repos
+            .get_mut(repo)
+            .unwrap()
+            .reviews
+            .get_mut(&pr)
+            .unwrap();
+        let review = reviews.iter_mut().find(|r| r["id"] == id).unwrap();
+        review["body"] = json!(body);
+    }
     pub(crate) fn remove_flow_reviews(&self, repo: &str, pr: u64) {
         self.world
             .borrow_mut()
@@ -227,8 +240,27 @@ impl Hub {
     }
     pub(crate) fn flow_thread(&self, repo: &str, pr: u64, id: &str, resolved: bool) {
         self.edit_flow(repo, pr, |s| {
-            s.threads.insert(id.into(), resolved);
-            s.open_threads = s.threads.values().filter(|resolved| !**resolved).count() as u32;
+            s.threads.entry(id.into()).or_default().resolved = resolved;
+            s.open_threads = s.threads.values().filter(|t| !t.resolved).count() as u32;
+        });
+    }
+    /// The comments on review thread `id` as GitHub shows them now, as
+    /// `(author, body)`: a finding, its answers, or an edit to either.
+    pub(crate) fn flow_thread_comments(
+        &self,
+        repo: &str,
+        pr: u64,
+        id: &str,
+        comments: &[(&str, &str)],
+    ) {
+        self.edit_flow(repo, pr, |s| {
+            s.threads.entry(id.into()).or_default().comments = comments
+                .iter()
+                .map(|(author, body)| crate::flow::ThreadComment {
+                    author: Some((*author).into()),
+                    body: (*body).into(),
+                })
+                .collect();
         });
     }
 }

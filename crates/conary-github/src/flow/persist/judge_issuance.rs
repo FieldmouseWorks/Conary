@@ -1,5 +1,5 @@
 //! Compatibility belongs to saved flow state, never the plugin wire type.
-use super::{JudgeIssuance, JudgeResult, Judgment, Revision};
+use super::{Basis, JudgeIssuance, JudgeResult, Judgment, Revision};
 use conary_core::plugin::Provenance;
 use serde::{Deserialize, Deserializer, de::Error};
 
@@ -7,8 +7,9 @@ use serde::{Deserialize, Deserializer, de::Error};
 pub use super::pairs::serialize;
 
 /// A saved verdict: a bare word (older records, or no provenance), or a
-/// canonical word with the provenance of the judge that issued it. Only bare
-/// words predate the contract's vocabulary.
+/// canonical word with the provenance of the judge that issued it and, from
+/// v3 issuances, what it was judged on. Only bare words predate the
+/// contract's vocabulary.
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum Saved {
@@ -21,6 +22,8 @@ enum Saved {
 struct Recorded {
     verdict: Judgment,
     provenance: Provenance,
+    #[serde(default)]
+    basis: Option<Basis>,
 }
 
 pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<JudgeIssuance, D::Error> {
@@ -34,9 +37,11 @@ pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<JudgeIs
                     Saved::Recorded(Recorded {
                         verdict,
                         provenance,
+                        basis,
                     }) => Ok(JudgeResult::Recorded {
                         verdict,
                         provenance,
+                        basis,
                     }),
                 })
                 .transpose()?;

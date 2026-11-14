@@ -180,13 +180,23 @@ impl Case {
                         Some(&review_receipt(&work.job.revision.head, &body)),
                     );
                 }
+                // The producer seals what the judge was asked on, at the
+                // next generation.
                 (
-                    conary_core::plugin::Task::Judge { .. },
+                    conary_core::plugin::Task::Judge { why, context, .. },
                     Some(Ok(conary_core::plugin::Response {
                         answer: conary_core::plugin::Answer::Judge { .. },
                         ..
                     })),
-                ) => self.judgment(1, Judgment::Pass, true),
+                ) => self.judgment_on(
+                    self.hub.comments(REPO, 3).unwrap().len() as u64 + 1,
+                    Judgment::Pass,
+                    true,
+                    crate::flow::Basis {
+                        why: why.clone(),
+                        context: context.clone(),
+                    },
+                ),
                 _ => {}
             }
         }
@@ -263,23 +273,57 @@ impl Case {
         }
         self.negative(head, "none");
     }
-    pub(super) fn judgment(&self, generation: u64, verdict: Judgment, attest: bool) {
+    /// A producer's judgment, judged for every reason on what GitHub shows
+    /// now with no worker answers. Returns what it was judged on.
+    pub(super) fn judgment(
+        &self,
+        generation: u64,
+        verdict: Judgment,
+        attest: bool,
+    ) -> crate::flow::Basis {
+        let basis = super::judged_for_everything(&self.hub, REPO);
+        self.judgment_on(generation, verdict, attest, basis.clone());
+        basis
+    }
+    /// A producer's v3 judgment of the PR's current revision, judged on
+    /// `basis`, and its signed receipt when `attest`.
+    pub(super) fn judgment_on(
+        &self,
+        generation: u64,
+        verdict: Judgment,
+        attest: bool,
+        basis: crate::flow::Basis,
+    ) {
         let revision = Revision::from(&self.hub.pull(REPO, 3).unwrap());
-        let word = verdict.word();
-        let body = self.config.settings.judge_key.as_ref().unwrap().decision(
-            REPO,
-            3,
-            "autoland-judgment",
-            word,
-            &revision,
-            generation,
-        );
+        let provenance = super::judge_provenance();
+        let body = self
+            .config
+            .settings
+            .judge_key
+            .as_ref()
+            .unwrap()
+            .judgment_by(
+                REPO,
+                3,
+                verdict,
+                &revision,
+                generation,
+                provenance.clone(),
+                basis.clone(),
+            )
+            .unwrap();
         self.hub.flow_comment(REPO, 3, "producer", &body);
         if attest {
             self.sign_check(
                 &revision.head,
                 "conary/judgment",
-                Some(&judgment_receipt(&revision, generation, Some(verdict))),
+                Some(&judgment_receipt_by(
+                    &revision,
+                    generation,
+                    Some(verdict),
+                    Some(&provenance),
+                    Some(&basis),
+                )),
             );
         }
     }

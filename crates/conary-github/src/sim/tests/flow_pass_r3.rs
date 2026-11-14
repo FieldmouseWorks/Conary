@@ -74,7 +74,7 @@ fn check(c: &Case, suite: u64, name: &str, conclusion: &str, receipt: Option<&[u
 fn admission_verifies_only_effective_checks_and_current_receipts() {
     let c = Case::new();
     c.clean_review();
-    c.judgment(1, Judgment::Pass, true);
+    let first = c.judgment(1, Judgment::Pass, true);
     let old_body = c
         .hub
         .reviews(REPO, 3)
@@ -94,7 +94,7 @@ fn admission_verifies_only_effective_checks_and_current_receipts() {
         .body
         .clone()
         .unwrap();
-    c.judgment(2, Judgment::Pass, true);
+    let second = c.judgment(2, Judgment::Pass, true);
     let revision = Revision::from(&c.hub.pull(REPO, 3).unwrap());
     c.hub.remove_checks(&head(3));
     c.negative(&head(3), "none");
@@ -119,7 +119,13 @@ fn admission_verifies_only_effective_checks_and_current_receipts() {
         10,
         "conary/judgment",
         "success",
-        Some(&judgment_receipt(&revision, 1, Some(Judgment::Pass))),
+        Some(&judgment_receipt_by(
+            &revision,
+            1,
+            Some(Judgment::Pass),
+            Some(&super::judge_provenance()),
+            Some(&first),
+        )),
     );
     suite(&c, 2, "other");
     check(&c, 2, "irrelevant failure", "failure", None);
@@ -138,7 +144,13 @@ fn admission_verifies_only_effective_checks_and_current_receipts() {
         3,
         "conary/judgment",
         "success",
-        Some(&judgment_receipt(&revision, 2, Some(Judgment::Pass))),
+        Some(&judgment_receipt_by(
+            &revision,
+            2,
+            Some(Judgment::Pass),
+            Some(&super::judge_provenance()),
+            Some(&second),
+        )),
     );
     let report = run(&c, None, false);
     assert_eq!(report[0].error, None, "{:?}", report[0]);

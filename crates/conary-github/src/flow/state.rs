@@ -74,6 +74,7 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
         raised.judgment.as_ref().map(Judged::result),
     )
     .map(|result| Judged::from_result(raised.revision.clone(), result));
+    judge_answered(&mut raised, &mut m);
     raised.major = issuance(
         &mut m.major_issuance,
         &raised.revision,
@@ -420,6 +421,41 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
 
 /// A deleted/edited comment cannot roll an observed decision back. Conflicting
 /// words at the same generation stay blocked until a strictly newer issuance.
+/// Whether the finished judge job on this revision was answered, against
+/// every issuance the flow knows for it, GitHub's and remembered. A job is
+/// answered once an issuance seals what it asked on (any issuance, for a
+/// request from before the flow said), and stays answered: its answer is
+/// then superseded, never missing, so it leaves the unanswered count. A
+/// finished job is owed its producer's answer only while no issuance of its
+/// revision is known, not merely while GitHub shows none.
+fn judge_answered(f: &mut Facts, m: &mut Memory) {
+    let Some(job) = f.jobs.get_mut(&Kind::Judge) else {
+        return;
+    };
+    let Some(asked) = f.judge_requests.get(&job.id) else {
+        return;
+    };
+    if job.revision != f.revision || !matches!(job.state, JobState::Done | JobState::Unknown) {
+        return;
+    }
+    let seals = |asked: &Option<Basis>| {
+        f.judgment
+            .as_ref()
+            .is_some_and(|j| asked.is_none() || j.basis == *asked)
+    };
+    if m.answered_judges.contains(&job.id) || seals(asked) {
+        m.answered_judges.insert(job.id.clone());
+        m.lost_jobs.remove(&job.id);
+        for ended in m.unanswered.values_mut() {
+            ended.remove(&job.id);
+        }
+        m.unanswered.retain(|_, ended| !ended.is_empty());
+        job.state = JobState::Answered;
+    } else if m.judge_issuance.contains_key(&f.revision) {
+        job.state = JobState::Done;
+    }
+}
+
 pub(super) fn issuance<T: Clone + Eq>(
     receipts: &mut std::collections::BTreeMap<Revision, (u64, Option<T>)>,
     revision: &Revision,

@@ -182,6 +182,10 @@ fn issuances_with_provenance_persist_in_the_contracts_words() {
     let recorded = JudgeResult::Recorded {
         verdict: Judgment::Misdescribed,
         provenance: provenance(),
+        basis: Some(Basis {
+            why: vec![Trigger::RoundLimit],
+            context: "c".repeat(64),
+        }),
     };
     record
         .memory
@@ -197,6 +201,7 @@ fn issuances_with_provenance_persist_in_the_contracts_words() {
         .unwrap();
     assert_eq!(entry[1][1]["verdict"], "misdescribed");
     assert_eq!(entry[1][1]["provenance"]["by"]["engine"], "fixture-engine");
+    assert_eq!(entry[1][1]["basis"]["why"][0], "round_limit");
     for loaded in [
         data.load(4).unwrap(),
         Data::read(root.path(), &repo, 4).unwrap(),
