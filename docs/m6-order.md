@@ -108,11 +108,23 @@ body of the later task when it's filed.
    steward is deleted, so P is written once now and changed once then.
 10. **Two green PRs can make a red trunk.** On 2026-11-14 burrow's main went
     red on two PRs that each passed alone, and the repair waited for hours.
-    Lanes landing side by side make that likelier. So burrow lands through
-    its merge train
-    ([remi#1077](https://github.com/FieldmouseWorks/remi/issues/1077))
-    before two burrow lanes land in the same hours. Until then burrow lands
-    one PR at a time.
+    Lanes landing side by side make that likelier, and the merge train is
+    the fix. burrow can't ride one yet
+    ([remi#1077](https://github.com/FieldmouseWorks/remi/issues/1077)): its
+    train run skips the `agents` check, the train counts a skipped check
+    only under a signed machine proof of the same candidate
+    ([#218](https://github.com/FieldmouseWorks/Conary/issues/218)), and
+    nothing signs one until task P and its producer are live with their
+    key. burrow's own module also refuses a train beside `proofBuilds`. So
+    burrow joins its train as the first step of its part of S2, with that
+    refusal lifted in the same change, and no earlier. Until then three
+    things stand in for it. Fences 2 and 11 keep the PRs in flight few. A
+    burrow PR that reaches past its lane's own files (the lock file,
+    `flake.nix`, `checks/`, a test that reads the whole workspace) merges
+    main in before its last review round, so its checks ran on the trunk
+    it lands on. And main's own run is the backstop: if it goes red on two
+    PRs together a second time before S2, burrow drops to one PR out of
+    `hold` at a time until its train is on.
 11. **Runners are shared.** A burrow head starts about fifteen hosted jobs.
     At most two burrow PRs are in CI at once, with Conary's beside them. M6
     and proj carry `first`; the gate's lane yields.
@@ -146,7 +158,6 @@ body of the later task when it's filed.
    whatever their state: burrow#1104 (the gate's wait gets a deadline), the
    open PRs for proj's stage 0, and burrow#1053 (a job waiting on CI wakes
    only on its verdict).
-5. **burrow joins its train** (fence 10).
 
 ### Builds, by lane
 
@@ -175,7 +186,7 @@ it's two days of normal work with nothing traced to the switch.
 | | Switch | Owner | Opens when |
 | --- | --- | --- | --- |
 | S1 | remi lands through conaryd | [#314](https://github.com/FieldmouseWorks/Conary/issues/314) | Every 5c task is live on remi, #313 has landed, the producers' keys are provisioned, and the shadow has agreed for two days with every disagreement accounted for |
-| S2 | Every other repository, burrow among them, a group at a time | [#315](https://github.com/FieldmouseWorks/Conary/issues/315) and the tasks it files | S1 has settled |
+| S2 | Every other repository, burrow among them, a group at a time | [#315](https://github.com/FieldmouseWorks/Conary/issues/315) and the tasks it files | S1 has settled. burrow's part starts by turning its train on (fence 10) |
 | S3 | Hosted runs substitute from the build store, and the kept builds go | [burrow#989](https://github.com/FieldmouseWorks/burrow/issues/989) | burrow's part of S2 has settled, and the store's shadow has twenty good reports |
 | S4 | The steward's Python is deleted | The tasks #316 files | Every repository lands through conaryd |
 | S5 | One plan a run | [burrow#990](https://github.com/FieldmouseWorks/burrow/issues/990) | S3 has settled |
@@ -235,7 +246,7 @@ let a milestone ship past.
 | One oversized or refused read of GitHub failed a whole pass | burrow#1040, burrow#1103 | proj, by design: a refused read leaves the old facts and delays only what needs them. For the flow, lesson `read-sized-to-data`, owed by #312 |
 | A cancelled check GitHub won't rerun was retried anyway, and the status guessed at the cause | burrow#1062 | Lesson `recover-by-kind`, owed by #312. Not proj's or the gate's |
 | Hosted runners filled, and each burrow head joined the queue many times | burrow#798, burrow#937 | The gate, by design: legs by cost at S5, nothing rebuilt cold at S3. Gap: nothing recorded queue time; amended, the result file does. Until S3, fence 11 |
-| Two green PRs made a red trunk | remi#1078 | The train, by design. Fence 10 puts burrow on it first |
+| Two green PRs made a red trunk | remi#1078 | The train, by design. burrow can't ride it before its part of S2; fence 10 says why, and what stands in until then |
 | A pause couldn't be scoped below a repository, and a PR handed through it got no review | burrow#1070, step 1 above | proj's `Policy` wait. Gap: a rule named only a repo; amended with a focus. For the flow, lesson `scope-below-a-repo`, owed by #313 |
 | A fix that had merged wasn't live while the fault it fixed kept costing | burrow#957 | Fence 12. How a pin bump travels is its own redesign, not started and not this page's |
 | A list knew only "the step before it", not a fence | Fence 6, and S3 and S6 above | proj, by design at stage 7: a dependency is a wait on a record. Until then, whoever runs this plan keeps `later` on a fenced child |
