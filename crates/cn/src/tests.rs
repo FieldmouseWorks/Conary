@@ -98,18 +98,32 @@ fn help_never_shows_the_token_command() {
 fn the_fresh_runners_are_a_machine_setting() {
     use clap::CommandFactory;
     let cli = Cli::command();
-    let step = cli
-        .find_subcommand("train")
-        .and_then(|t| t.find_subcommand("step"))
-        .expect("cn train step");
-    let fresh = step
+    for (group, name) in [("train", "step"), ("attest", "job")] {
+        let command = cli
+            .find_subcommand(group)
+            .and_then(|t| t.find_subcommand(name))
+            .unwrap_or_else(|| panic!("cn {group} {name}"));
+        for (long, env) in [
+            ("fresh-runners", "CONARY_FRESH_RUNNERS"),
+            ("signer-workflow", "CONARY_SIGNER_WORKFLOW"),
+        ] {
+            let arg = command
+                .get_arguments()
+                .find(|a| a.get_long() == Some(long))
+                .unwrap_or_else(|| panic!("cn {group} {name} --{long}"));
+            assert_eq!(arg.get_env().and_then(|e| e.to_str()), Some(env));
+        }
+    }
+    // A door's token command is as secret as any.
+    let job = cli
+        .find_subcommand("attest")
+        .and_then(|t| t.find_subcommand("job"))
+        .unwrap();
+    let token_command = job
         .get_arguments()
-        .find(|a| a.get_long() == Some("fresh-runners"))
-        .expect("--fresh-runners");
-    assert_eq!(
-        fresh.get_env().and_then(|e| e.to_str()),
-        Some("CONARY_FRESH_RUNNERS")
-    );
+        .find(|a| a.get_id() == "token_command")
+        .expect("cn attest job --token-command");
+    assert!(token_command.is_hide_env_values_set());
 }
 
 #[test]
@@ -189,6 +203,10 @@ fn a_refusal_exits_apart_from_a_run_that_stopped() {
     );
     assert_eq!(
         boxed(Unnamed("o/r#5 isn't in the ledger".into()).into()),
+        (true, false)
+    );
+    assert_eq!(
+        boxed(attest::Refused("its token expired".into()).into()),
         (true, false)
     );
     assert_eq!(

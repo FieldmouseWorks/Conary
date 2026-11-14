@@ -233,9 +233,6 @@ pub fn attested(
     };
     let run_id = job.run_id;
     let runner = job.runner_name.as_deref();
-    let fresh_named = fresh
-        .filter(|f| !f.is_empty())
-        .is_some_and(|f| runner.is_some_and(|r| r.starts_with(f)));
     let kept: Vec<Artifact> = forge
         .artifacts(&full, run_id)?
         .into_iter()
@@ -250,25 +247,59 @@ pub fn attested(
         let checked = unzip(&forge.artifact(&full, a.id)?)
             .and_then(|file| check(&file, &keys, repo, subject, run, signer));
         match checked {
-            // A runner that took a job before this one, or takes one beside
-            // it as its user, could have asked for this token in its name
-            // (`docs/ci-attestation.md`, rule 5).
-            Ok(claimed) if !claimed.hosted && !fresh_named => why.push(format!(
-                "{}: it ran on {}, which wasn't started fresh for it",
-                a.name,
-                runner.unwrap_or("a runner GitHub doesn't name")
-            )),
-            Ok(claimed) if on_main(forge, source, &signer.repo, &claimed.workflow_sha)? => {
-                return Ok(Ok(claimed.attested));
+            Ok(claimed) => {
+                match placed(
+                    forge,
+                    source,
+                    signer,
+                    fresh,
+                    claimed.hosted,
+                    runner,
+                    &claimed.workflow_sha,
+                )? {
+                    None => return Ok(Ok(claimed.attested)),
+                    Some(not) => why.push(format!("{}: {not}", a.name)),
+                }
             }
-            Ok(claimed) => why.push(format!(
-                "{}: signed by {} at {}, which isn't on {}'s default branch",
-                a.name, signer.workflow, claimed.workflow_sha, signer.repo
-            )),
             Err(e) => why.push(format!("{}: {e}", a.name)),
         }
     }
     Ok(Err(why.join("; ")))
+}
+
+/// Why a token isn't counted for where it ran, or `None` when it is: its
+/// job on a runner GitHub says is its own (`hosted`) or on `runner`, named
+/// as `fresh` names the machine's fresh ones (`docs/ci-attestation.md`,
+/// rule 5), and the signer workflow at `workflow_sha`, a commit on its
+/// repo's default branch (rule 2). The rules a token can't say alone,
+/// which take asking GitHub.
+fn placed(
+    forge: &dyn Forge,
+    source: &dyn Source,
+    signer: &Signer,
+    fresh: Option<&str>,
+    hosted: bool,
+    runner: Option<&str>,
+    workflow_sha: &str,
+) -> Result<Option<String>, ApiError> {
+    let fresh_named = fresh
+        .filter(|f| !f.is_empty())
+        .is_some_and(|f| runner.is_some_and(|r| r.starts_with(f)));
+    // A runner that took a job before this one, or takes one beside it as
+    // its user, could have asked for this token in its name.
+    if !hosted && !fresh_named {
+        return Ok(Some(format!(
+            "it ran on {}, which wasn't started fresh for it",
+            runner.unwrap_or("a runner GitHub doesn't name")
+        )));
+    }
+    if on_main(forge, source, &signer.repo, workflow_sha)? {
+        return Ok(None);
+    }
+    Ok(Some(format!(
+        "signed by {} at {workflow_sha}, which isn't on {}'s default branch",
+        signer.workflow, signer.repo
+    )))
 }
 
 /// Whether an attestation the ledger kept for a check run is still what
@@ -297,6 +328,12 @@ fn kept_claims(token: &str) -> Option<Map<String, Value>> {
         .nth(1)
         .and_then(|c| unbase(c).ok())
         .and_then(|c| serde_json::from_slice(&c).ok())
+}
+
+/// Whether GitHub says a token's job ran on one of its own runners, a VM
+/// for each job: its word alone says so.
+fn hosted(claims: &Map<String, Value>) -> bool {
+    claims.get("runner_environment").and_then(Value::as_str) == Some("github-hosted")
 }
 
 /// The check run a token's `check_run_id` claim names.
@@ -407,6 +444,40 @@ struct Revision {
     head: String,
 }
 
+/// The signer workflow's commit a token's claims name, once they say what
+/// they can alone of `docs/ci-attestation.md`'s rules: GitHub's issuer
+/// (rule 1), `audience` and no other (rules 4 and 6), and `signer`'s
+/// workflow at a commit (rule 2, but for where that commit is).
+fn issued<'c>(
+    claims: &'c Map<String, Value>,
+    audience: &str,
+    signer: &Signer,
+) -> Result<&'c str, String> {
+    let said = |name: &str| claims.get(name).and_then(Value::as_str).unwrap_or_default();
+    if said("iss") != ISSUER {
+        return Err(format!("its token's issuer is {:?}", said("iss")));
+    }
+    let audiences = match claims.get("aud") {
+        Some(Value::String(a)) => vec![a.as_str()],
+        Some(Value::Array(a)) => a.iter().filter_map(Value::as_str).collect(),
+        _ => Vec::new(),
+    };
+    if audiences != [audience] {
+        return Err(format!("its token's audience isn't {audience}"));
+    }
+    let workflow = said("job_workflow_ref");
+    if !asked_by(workflow, signer) {
+        return Err(format!("its token was asked for by {workflow:?}"));
+    }
+    let workflow_sha = said("job_workflow_sha");
+    if !is_commit(workflow_sha) {
+        return Err(format!(
+            "its token names no signer commit ({workflow_sha:?})"
+        ));
+    }
+    Ok(workflow_sha)
+}
+
 /// Checks an attestation's file, the statement then its token, as one of
 /// `run` on `subject`, by `signer`: every rule of `docs/ci-attestation.md` but the
 /// signer's commit being on its default branch and a self-hosted runner's
@@ -428,30 +499,10 @@ fn check(
     let claims = verified(token, keys)?;
     let said = |name: &str| claims.get(name).and_then(Value::as_str).unwrap_or_default();
 
-    if said("iss") != ISSUER {
-        return Err(format!("its token's issuer is {:?}", said("iss")));
-    }
     let audience = format!("{AUDIENCE}{}", hex(&Sha256::digest(&statement)));
-    let audiences = match claims.get("aud") {
-        Some(Value::String(a)) => vec![a.as_str()],
-        Some(Value::Array(a)) => a.iter().filter_map(Value::as_str).collect(),
-        _ => Vec::new(),
-    };
-    if audiences != [audience.as_str()] {
-        return Err("its token's audience isn't its statement's digest".into());
-    }
+    let workflow_sha = issued(&claims, &audience, signer)?;
     if !said("repository").eq_ignore_ascii_case(&repo.to_string()) {
         return Err(format!("its token is {}'s", said("repository")));
-    }
-    let workflow = said("job_workflow_ref");
-    if !asked_by(workflow, signer) {
-        return Err(format!("its token was asked for by {workflow:?}"));
-    }
-    let workflow_sha = said("job_workflow_sha");
-    if !is_commit(workflow_sha) {
-        return Err(format!(
-            "its token names no signer commit ({workflow_sha:?})"
-        ));
     }
     let check_run = check_run_id(&claims);
     if check_run != Some(run.id) {
@@ -494,7 +545,7 @@ fn check(
             log,
         },
         workflow_sha: workflow_sha.to_owned(),
-        hosted: said("runner_environment") == "github-hosted",
+        hosted: hosted(&claims),
     })
 }
 
@@ -764,6 +815,7 @@ pub(crate) fn hex(bytes: &[u8]) -> String {
 }
 
 pub mod ci;
+pub mod job;
 pub mod make;
 pub mod service;
 
