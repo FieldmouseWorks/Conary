@@ -3,6 +3,7 @@
 //! wait for its retry, across restarts too.
 use crate::events::{Kick, Queue, Ran, Recovery};
 use crate::flow::{Next, Report, Stage, Step};
+use std::cell::Cell;
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
@@ -44,7 +45,7 @@ fn a_pass_failing_before_reports_books_recovery_instead_of_stopping() {
     let queue = Queue::open(dir.path()).unwrap();
     kick(&queue, "o/r");
     assert_eq!(
-        queue.run_one(10, unavailable).unwrap(),
+        queue.run_one(|| 10, unavailable).unwrap(),
         Ran::Failed {
             repo: "o/r".into(),
             recovery: Recovery {
@@ -54,8 +55,67 @@ fn a_pass_failing_before_reports_books_recovery_instead_of_stopping() {
         }
     );
     assert_eq!(queue.recovery("o/r").map(|r| r.at), Some(70));
-    assert_eq!(queue.run_one(69, unavailable).unwrap(), Ran::Idle);
+    assert_eq!(queue.run_one(|| 69, unavailable).unwrap(), Ran::Idle);
     assert_eq!(queue.take(70).unwrap().unwrap().repo, "o/r");
+}
+
+#[test]
+fn a_slow_failed_pass_backs_off_in_full_from_when_it_failed_across_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let queue = Queue::open(dir.path()).unwrap();
+    kick(&queue, "o/r");
+    let clock = Cell::new(1000);
+    // Each pass outlasts its backoff before it gives up: a token command or
+    // an HTTP timeout, say.
+    let slow = |took: u64| {
+        let clock = &clock;
+        move |_: &crate::events::Work| -> crate::flow::persist::Result<Vec<Report>> {
+            clock.set(clock.get() + took);
+            Err("GitHub unavailable".into())
+        }
+    };
+    let ran = queue.run_one(|| clock.get(), slow(90)).unwrap();
+    let first = Recovery {
+        at: 1090 + 60,
+        attempts: 1,
+    };
+    assert_eq!(
+        ran,
+        Ran::Failed {
+            repo: "o/r".into(),
+            recovery: first
+        }
+    );
+    clock.set(1149);
+    assert_eq!(
+        queue.run_one(|| clock.get(), slow(0)).unwrap(),
+        Ran::Idle,
+        "held its full backoff after it failed, not after it started"
+    );
+    drop(queue);
+    let queue = Queue::open(dir.path()).unwrap();
+    assert_eq!(queue.recovery("o/r"), Some(first), "kept across restart");
+    assert_eq!(queue.run_one(|| clock.get(), slow(0)).unwrap(), Ran::Idle);
+    clock.set(first.at);
+    let ran = queue.run_one(|| clock.get(), slow(200)).unwrap();
+    let second = Recovery {
+        at: first.at + 200 + 120,
+        attempts: 2,
+    };
+    assert_eq!(
+        ran,
+        Ran::Failed {
+            repo: "o/r".into(),
+            recovery: second
+        }
+    );
+    drop(queue);
+    let queue = Queue::open(dir.path()).unwrap();
+    assert_eq!(queue.recovery("o/r"), Some(second), "kept across restart");
+    clock.set(second.at - 1);
+    assert_eq!(queue.run_one(|| clock.get(), slow(0)).unwrap(), Ran::Idle);
+    clock.set(second.at);
+    assert_eq!(queue.take(clock.get()).unwrap().unwrap().repo, "o/r");
 }
 
 #[test]
@@ -95,10 +155,13 @@ fn kicks_during_a_failure_wait_for_its_recovery_and_make_one_pass() {
     let queue = Queue::open(dir.path()).unwrap();
     kick(&queue, "o/r");
     let ran = queue
-        .run_one(10, |_| {
-            kick(&queue, "o/r"); // during the pass that fails
-            Err("GitHub unavailable".into())
-        })
+        .run_one(
+            || 10,
+            |_| {
+                kick(&queue, "o/r"); // during the pass that fails
+                Err("GitHub unavailable".into())
+            },
+        )
         .unwrap();
     assert!(matches!(ran, Ran::Failed { .. }));
     for _ in 0..5 {

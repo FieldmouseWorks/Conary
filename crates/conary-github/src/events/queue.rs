@@ -188,7 +188,7 @@ impl Queue {
         })
     }
     /// Books a recovery for a repo whose whole pass failed, before any
-    /// report. Its PR bookings stay as the last finished pass left them, and
+    /// report, its backoff counted from `now`: the time the pass failed. Its PR bookings stay as the last finished pass left them, and
     /// kicks queued meanwhile stay queued; both wait for the recovery.
     pub fn fail(&self, work: &Work, now: u64) -> Result<Recovery> {
         self.change(|s| {
@@ -209,22 +209,26 @@ impl Queue {
     }
     /// Dispatch one mailbox entry through the supplied shared pass entry.
     /// A failed pass books its repo's recovery; only the mailbox's own
-    /// errors are returned.
+    /// errors are returned. `clock` is read before the pass, to take its
+    /// work and judge which of its bookings it already saw, and again after
+    /// a failed one, so its whole backoff starts once the pass has given up,
+    /// however long its requests took.
     pub fn run_one(
         &self,
-        now: u64,
+        clock: impl Fn() -> u64,
         pass: impl FnOnce(&Work) -> Result<Vec<Report>>,
     ) -> Result<Ran> {
-        let Some(work) = self.take(now)? else {
+        let started = clock();
+        let Some(work) = self.take(started)? else {
             return Ok(Ran::Idle);
         };
         match pass(&work) {
             Ok(reports) => {
-                self.finish(&work, &reports, now)?;
+                self.finish(&work, &reports, started)?;
                 Ok(Ran::Finished)
             }
             Err(_) => {
-                let recovery = self.fail(&work, now)?;
+                let recovery = self.fail(&work, clock())?;
                 Ok(Ran::Failed {
                     repo: work.repo,
                     recovery,
@@ -241,7 +245,7 @@ impl Queue {
         mut failed: impl FnMut(&str, Recovery),
     ) -> Result<std::convert::Infallible> {
         loop {
-            match self.run_one(crate::flow::jobs::now(), &mut pass)? {
+            match self.run_one(crate::flow::jobs::now, &mut pass)? {
                 Ran::Idle => self.wait(),
                 Ran::Finished => {}
                 Ran::Failed { repo, recovery } => failed(&repo, recovery),

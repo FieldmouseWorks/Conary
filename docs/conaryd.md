@@ -120,7 +120,8 @@ workers from owning the same mailbox. In-flight work is recovered on restart.
 
 A whole-repository pass that fails before its reports (GitHub unavailable, a
 token command failing) books a durable recovery for that repository instead of
-stopping the worker: 60 seconds after the first failure, doubling per failure
+stopping the worker: 60 seconds after the first failure, counted from when the
+pass gave up however long it ran, doubling per failure
 in a row up to 64 minutes, and cleared by the next pass that finishes. Until its
 recovery time the repository is held: kicks and status events arriving
 meanwhile stay queued, and its PR bookings stay unspent, and all of them run
