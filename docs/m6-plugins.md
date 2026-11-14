@@ -205,7 +205,7 @@ owner.
 | Each key delivered as a systemd credential, readable only by its producer's user | The unit wiring in R, J and P, off by default | The wiring is in R, J and P. Turning it on is #314, then #315 |
 | Public keys and check scopes in the machine's producers file (`evidence.producers`), as in the table above | Conary's verifier | #314 for remi, #315 for the rest |
 | The judge's seal key, shared by the flow's `settings.judge_key` and the judge producer, and by no authoring session | J | #314, from the steward's existing verdict key |
-| The flow configuration's `plugins` paths and `execution` choices, generated from the settings source and its role map | All four plugins | Each plugin task exports its executable. [#313](https://github.com/FieldmouseWorks/Conary/issues/313) consumes the configuration schema, and #314 sets the values |
+| The flow configuration's `plugins` paths and `execution` choices, generated from the settings source and its role map | All four plugins | Each plugin task exports its executable. [burrow#724](https://github.com/FieldmouseWorks/burrow/issues/724) renders the configuration, after B3, since both edit `modules/ledger.nix`. [#313](https://github.com/FieldmouseWorks/Conary/issues/313) consumes the configuration schema, and #314 sets the values |
 | A controller user that runs the flow's plugins, which no authoring session shares | Every producer's peer-credential check | [B3](#b3-ledger-run-the-flows-plugins-as-a-controller-user-no-authoring-session-shares) builds it, off by default. #314 turns it on |
 | The `first` label on every PR | All | Each task |
 
@@ -581,8 +581,9 @@ behind `burrow.autoland.plugins.review.enable`, off by default.
 
 ### F: fix plugin
 
-**Repo:** burrow. **Depends on:** C1, B1 and B2. C2 is needed before
-cutover, not before this PR.
+**Repo:** burrow. **Depends on:** C1, B1, B2 and
+[burrow#969](https://github.com/FieldmouseWorks/burrow/issues/969). C2 is
+needed before cutover, not before this PR.
 
 **Crate:** a new `crates/burrow-fix`, with the plugin binary and the
 broker service. The broker uses B2's connection-scoped work and record. It
@@ -595,6 +596,13 @@ has no signer and no key.
 - It starts the fix as a job through the existing job runner, on the
   fixing role from the role map. The runner keeps job slots, engines,
   sandboxes, the acting App and usage overflow.
+- It waits on that job and stops it through the job's record
+  (`proj why JOB --json`, the record whole), and books its own deadline
+  from the record's `overdue_at`. It never reads `proj lifecycle`'s lines
+  or the recent-job snapshot `proj state` prints, and starts no `--owned`
+  job: `lifecycle` and `--owned` go with the steward
+  ([proj's design](https://github.com/FieldmouseWorks/burrow/blob/main/docs/proj-design.md#conary)).
+  burrow#969 delivers that record.
 - The job gets the problems in order, with B1's fix brief. It writes one
   answer per finding problem, by index.
 - At most one live fix runs per PR.
@@ -763,15 +771,20 @@ C1 ──► C4 ──► J
 B3 ──────► #314
 B1 ──┐
 B2 ──┼──► R
-C1 ──┼──► F   (C2 before cutover)
+C1 ──┼──► F   (C2 before cutover; burrow#969 before F)
      ├──► J
      └──► P   (C3 before cutover; P doesn't need B1)
 R, F, J, P, C2, C3, C4, B3, and key provisioning ──► #313 ──► #314
 ```
 
-C1, B1, B2 and B3 start at once. R starts once B1 and B2 land. F, J and P
-start once C1 and B2 land, plus B1 for F and J, and C4 for J. C2 and C3
-run alongside the plugins.
+C1, B1, B2 and B3 can start at once. R starts once B1 and B2 land. F, J
+and P start once C1 and B2 land, plus B1 for F and J, C4 for J, and
+burrow#969 for F. C2 and C3 run alongside the plugins.
+
+This is the order these tasks need of each other.
+[m6-order.md](m6-order.md) puts them beside burrow's proj and gate
+redesigns, which share burrow's files with the seven burrow tasks, and
+says which may be open together.
 
 ## Covered elsewhere, not scheduled again
 
