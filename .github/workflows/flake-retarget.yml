@@ -14,7 +14,7 @@ permissions:
 jobs:
   check:
     if: github.event.changes.base
-    uses: FieldmouseWorks/burrow/.github/workflows/flake-check.yml@7c727f4928ff93d58dce40b9b602ba498ee27489 # main
+    uses: FieldmouseWorks/burrow/.github/workflows/flake-check.yml@1fe855902d49a23895680e7fd65990db709887c1 # main
     # What the shared workflow needs to attest its result.
     permissions:
       contents: read
