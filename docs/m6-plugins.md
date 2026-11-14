@@ -597,9 +597,10 @@ has no signer and no key.
   fixing role from the role map. The runner keeps job slots, engines,
   sandboxes, the acting App and usage overflow.
 - It waits on that job and stops it through the job's record
-  (`proj state --json`), which says when the job is overdue. It never
-  reads `proj lifecycle`'s lines and starts no `--owned` job: both go with
-  the steward
+  (`proj why JOB --json`, the record whole), and books its own deadline
+  from the record's `overdue_at`. It never reads `proj lifecycle`'s lines
+  or the recent-job snapshot `proj state` prints, and starts no `--owned`
+  job: `lifecycle` and `--owned` go with the steward
   ([proj's design](https://github.com/FieldmouseWorks/burrow/blob/main/docs/proj-design.md#conary)).
   burrow#969 delivers that record.
 - The job gets the problems in order, with B1's fix brief. It writes one
