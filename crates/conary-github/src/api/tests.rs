@@ -411,9 +411,11 @@ fn the_trains_branches_are_read_made_and_deleted_by_name() {
 
 #[test]
 fn a_prs_merge_is_at_its_head_the_way_the_repo_merges_or_refused() {
-    use crate::train::{Forge, PrMerge};
+    use crate::train::{Forge, Message, PrMerge};
     let squash_only =
         r#"{"allow_squash_merge":true,"allow_merge_commit":false,"allow_rebase_merge":false}"#;
+    let rebase_only =
+        r#"{"allow_squash_merge":false,"allow_merge_commit":false,"allow_rebase_merge":true}"#;
     let answers: Vec<&'static str> = vec![
         whole("200 OK", squash_only).leak(),
         whole("200 OK", r#"{"merged":true}"#).leak(),
@@ -423,35 +425,49 @@ fn a_prs_merge_is_at_its_head_the_way_the_repo_merges_or_refused() {
             r#"{"message":"Required status check \"conary/train\" is expected."}"#,
         )
         .leak(),
+        whole("200 OK", rebase_only).leak(),
+        whole("200 OK", r#"{"merged":true}"#).leak(),
         whole("200 OK", squash_only).leak(),
         whole("502 Bad Gateway", "{}").leak(),
     ];
     let (base, heads) = github(answers);
     let api = Api::new(&base, Tokens::given("t"));
-    assert_eq!(api.land("o/r", 7, "h").unwrap(), PrMerge::Merged);
+    let message = Message::new("area: a change", 7, ["area: x\n\nCo-authored-by: A <a@b>"]);
+    let sent = |heads: &std::sync::mpsc::Receiver<String>| {
+        let merge = heads.recv().unwrap();
+        assert!(
+            merge.starts_with("put /repos/o/r/pulls/7/merge "),
+            "{merge}"
+        );
+        serde_json::from_str::<serde_json::Value>(merge.split("\r\n\r\n").last().unwrap()).unwrap()
+    };
+    assert_eq!(api.land("o/r", 7, "h", &message).unwrap(), PrMerge::Merged);
     assert!(heads.recv().unwrap().starts_with("get /repos/o/r "));
-    let merge = heads.recv().unwrap();
-    assert!(
-        merge.starts_with("put /repos/o/r/pulls/7/merge "),
-        "{merge}"
-    );
-    let body: serde_json::Value =
-        serde_json::from_str(merge.split("\r\n\r\n").last().unwrap()).unwrap();
     assert_eq!(
-        body,
-        serde_json::json!({"sha": "h", "merge_method": "squash"})
+        sent(&heads),
+        serde_json::json!({"sha": "h", "merge_method": "squash",
+            "commit_title": "area: a change (#7)", "commit_message": "Co-authored-by: A <a@b>"})
     );
-    // A repo whose methods GitHub didn't say gets GitHub's default.
+    // A repo whose methods GitHub didn't say gets GitHub's default, a
+    // merge commit, which says the message too.
     assert_eq!(
-        api.land("o/r", 7, "h").unwrap(),
+        api.land("o/r", 7, "h", &message).unwrap(),
         PrMerge::Refused("Required status check \"conary/train\" is expected.".into())
     );
     heads.recv().unwrap();
-    let merge = heads.recv().unwrap();
-    let body: serde_json::Value =
-        serde_json::from_str(merge.split("\r\n\r\n").last().unwrap()).unwrap();
-    assert_eq!(body, serde_json::json!({"sha": "h"}));
-    assert!(api.land("o/r", 7, "h").unwrap_err().unavailable);
+    assert_eq!(
+        sent(&heads),
+        serde_json::json!({"sha": "h",
+            "commit_title": "area: a change (#7)", "commit_message": "Co-authored-by: A <a@b>"})
+    );
+    // A rebase makes no commit of its own to say it.
+    assert_eq!(api.land("o/r", 7, "h", &message).unwrap(), PrMerge::Merged);
+    heads.recv().unwrap();
+    assert_eq!(
+        sent(&heads),
+        serde_json::json!({"sha": "h", "merge_method": "rebase"})
+    );
+    assert!(api.land("o/r", 7, "h", &message).unwrap_err().unavailable);
 }
 
 #[test]

@@ -11,6 +11,11 @@ fn head(pr: u64) -> String {
     format!("{pr:0>40}")
 }
 
+/// A landing message, for a merge a test makes itself.
+fn message() -> Message {
+    Message::new("remi: a change", 3, ["remi: a change"])
+}
+
 fn repo() -> Repo {
     "FieldmouseWorks/remi".parse().unwrap()
 }
