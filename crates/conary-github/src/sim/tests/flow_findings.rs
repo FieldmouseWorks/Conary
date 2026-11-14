@@ -286,6 +286,7 @@ fn issuance_metadata_is_authenticated_and_conflicting_generations_fail_closed() 
     c.settings.verdict_authors.insert("owner".into());
     // A producer's v3 pass; v2 issuances share its generations.
     let scope = c.scope();
+    let basis = super::judged_for_everything(&c.hub, REMI);
     let pass = |generation| {
         key.judgment_by(
             REMI,
@@ -294,7 +295,7 @@ fn issuance_metadata_is_authenticated_and_conflicting_generations_fail_closed() 
             &scope,
             generation,
             super::judge_provenance(),
-            super::judged_for_everything(),
+            basis.clone(),
         )
         .unwrap()
     };

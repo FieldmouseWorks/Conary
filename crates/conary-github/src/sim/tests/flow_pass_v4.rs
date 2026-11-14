@@ -10,6 +10,19 @@ fn invocation(work: &flow::jobs::Work) -> flow::jobs::Invocation {
     serde_json::from_slice(&std::fs::read(&work.path).unwrap()).unwrap()
 }
 
+/// `flow::judging_context` over `log` and what GitHub shows now: its
+/// review threads and review bodies.
+fn context_now<'a>(
+    c: &Case,
+    log: impl IntoIterator<Item = (&'a conary_core::plugin::Finding, Option<&'a FindingAnswer>)>,
+) -> String {
+    judging_context(
+        log,
+        &flow::Read::snapshot(&c.hub, REPO, 3).unwrap().threads,
+        &review_bodies(&c.hub.reviews(REPO, 3).unwrap()),
+    )
+}
+
 /// The example finds one problem on head 3, its fix answers it and pushes
 /// head 4, and head 4's review is clean. The author's engine needs a judge,
 /// which the next pass asks for.
@@ -102,12 +115,7 @@ fn a_judge_after_a_fix_carries_its_pr_reasons_and_the_answered_finding() {
     assert_eq!(pr, 3);
     assert_eq!(why, [Trigger::AuthorEngine]);
     // The log: the review's finding, then the fix's answer to it as handed.
-    let log = |answer| {
-        judging_context(
-            [(&findings[0], None), (&handed[0], answer)],
-            &Default::default(),
-        )
-    };
+    let log = |answer| context_now(&c, [(&findings[0], None), (&handed[0], answer)]);
     assert_eq!(context, log(Some(&answered[0])));
     // Another answer, or none, is another discussion.
     assert_ne!(context, log(None));
@@ -170,10 +178,7 @@ fn a_judgment_counts_only_on_the_discussion_the_flow_reads_now() {
             true,
             Basis {
                 why: vec![Trigger::AuthorEngine],
-                context: judging_context(
-                    discussion.iter().map(|(f, a)| (f, a.as_ref())),
-                    &Default::default(),
-                ),
+                context: context_now(&c, discussion.iter().map(|(f, a)| (f, a.as_ref()))),
             },
         );
         let report = c.pass(now + 5, true);

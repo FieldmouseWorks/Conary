@@ -102,6 +102,8 @@ pub fn read(
         stopped_jobs: BTreeSet::new(),
         pushes: BTreeMap::new(),
         threads: extra.threads.clone(),
+        review_bodies: BTreeMap::new(),
+        judge_requests: BTreeMap::new(),
         proof: Proof::NotNeeded,
         proof_data: ProofData::default(),
         base_tip: None,
@@ -206,6 +208,7 @@ pub fn read(
     let comments = source.comments(&repository, pr)?;
     let markers = super::markers::read(&repository, &pull, &comments, &facts.settings);
     facts.changes_requested = super::reviews::changes_requested(&records);
+    facts.review_bodies = super::judging::review_bodies(&records);
     facts.owner_approved =
         super::approval::from_reviews(repo, pr, &facts.revision, &records, &facts.settings.people);
     let mut carried = BTreeSet::new();

@@ -218,7 +218,7 @@ fn pass_direct_and_delegated_r2_require_the_candidate_train_after_owner_release(
                 &revision,
                 1,
                 super::super::judge_provenance(),
-                super::super::judged_for_everything(),
+                super::super::judged_for_everything(&c.hub, REPO),
             )
             .unwrap();
         c.hub.flow_comment(REPO, 3, "owner", &body);

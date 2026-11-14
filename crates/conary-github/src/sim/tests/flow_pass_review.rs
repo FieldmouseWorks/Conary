@@ -301,12 +301,12 @@ fn permission_binds_the_judging_model_and_basis_to_independently_attested_eviden
                 &revision,
                 1,
                 provenance.clone(),
-                super::judged_for_everything(),
+                super::judged_for_everything(&c.hub, REPO),
             )
             .unwrap();
         c.hub.flow_comment(REPO, 3, "producer", &body);
         let mut attested = provenance;
-        let mut basis = super::judged_for_everything();
+        let mut basis = super::judged_for_everything(&c.hub, REPO);
         match differs {
             Some("model") => attested.execution.model = Some("different-model".into()),
             Some("why") => basis.why.retain(|t| *t != Trigger::AuthorEngine),
@@ -410,7 +410,7 @@ fn r2_owner_approval_does_not_enable_direct_or_delegated_landings() {
         )
         .unwrap();
         // No worker has answered: the discussion is empty.
-        facts.context = Some(judging_context([], &facts.threads));
+        facts.context = Some(judging_context([], &facts.threads, &facts.review_bodies));
         assert_eq!(
             next(&facts, &c.record().memory, crate::flow::jobs::now())
                 .0

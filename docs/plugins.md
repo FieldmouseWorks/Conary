@@ -150,7 +150,7 @@ A v4 judge request says why the flow asks, and what the judgment is on:
 - `context` is the flow's digest of the review findings and their answers
   that the judgment is on: 64 lowercase hex digits, computed by
   `conary_github::flow::judging_context`, which a judge producer calls too.
-  It is the sha256 of the compact JSON object `{"log","threads"}`, keys in
+  It is the sha256 of the compact JSON object `{"log","threads","reviews"}`, keys in
   the order shown throughout. `log` has one entry per finding in the flow's
   own log, in order:
   `{"finding":{"path","line","severity","text"},"answer":{"fixed","reply"}}`,
@@ -158,7 +158,10 @@ A v4 judge request says why the flow asks, and what the judgment is on:
   per review thread on GitHub, in order of its id:
   `{"id","comments":[{"author","body"}]}`, its comments in order, `author`
   the login (null for a deleted account) and `body` the text as it reads
-  now. Whether a thread is resolved doesn't count.
+  now. Whether a thread is resolved doesn't count. `reviews` has one entry
+  per submitted review with a nonblank body that isn't an approval, in
+  order of its id: `{"id","author","body"}`, as
+  `conary_github::flow::review_bodies` keeps them.
 - `against` stays the description being judged, and the verdict words
   don't change.
 

@@ -464,8 +464,8 @@ pub struct ReviewThread {
     pub comments: Vec<ThreadComment>,
 }
 
-/// One comment on a review thread: who wrote it (`None` for a deleted
-/// account) and what it says now, edits included.
+/// One comment on a review thread, or a review's body: who wrote it (`None`
+/// for a deleted account) and what it says now, edits included.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ThreadComment {
     pub author: Option<String>,
@@ -509,6 +509,11 @@ pub struct Facts {
     pub pushes: BTreeMap<String, String>,
     /// Every review thread on GitHub, by its id.
     pub threads: BTreeMap<String, ReviewThread>,
+    /// The review bodies a judge reads ([`super::review_bodies`]), by review id.
+    pub review_bodies: BTreeMap<u64, ThreadComment>,
+    /// What each finished judge job on this revision was asked to judge on,
+    /// by job id: `None` for a request from before the flow said.
+    pub judge_requests: BTreeMap<String, Option<Basis>>,
     pub proof: Proof,
     pub proof_data: ProofData,
     pub settings: Settings,
@@ -611,6 +616,11 @@ pub struct Memory {
     #[serde(with = "super::persist::pairs")]
     pub broken_jobs: BTreeMap<String, u64>,
     pub answered_jobs: BTreeSet<String>,
+    /// Judge jobs an authenticated issuance answered. Once answered, a job
+    /// stays answered whatever is read later: a removed comment, a newer
+    /// generation or a restart never makes it live or unanswered again.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub answered_judges: BTreeSet<String>,
     pub stopping: BTreeSet<String>,
     pub retired_jobs: BTreeSet<String>,
     #[serde(with = "super::persist::pairs")]

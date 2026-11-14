@@ -1,6 +1,6 @@
 //! What a judge is asked to judge on: the review findings and a fix's
-//! answers to them, and every review thread on GitHub, as one digest that
-//! the flow and the judge producer compute the same way.
+//! answers to them, and every review thread and review body on GitHub, as
+//! one digest that the flow and the judge producer compute the same way.
 use std::collections::BTreeMap;
 
 use super::jobs::{self, Purpose};
@@ -16,10 +16,12 @@ use conary_core::plugin::{Answer, Finding, FindingAnswer, Problem, Response, Tas
 /// discussion always has the same digest. A thread counts by its comments'
 /// authors and text, never by whether it's resolved: resolving a thread
 /// adds nothing a judge hasn't read, and a finding or answer added or edited
-/// on GitHub is another discussion.
+/// on GitHub is another discussion. So does each of `reviews`, the review
+/// bodies [`review_bodies`] keeps, by id, author and text.
 pub fn judging_context<'a>(
     discussion: impl IntoIterator<Item = (&'a Finding, Option<&'a FindingAnswer>)>,
     threads: &BTreeMap<String, ReviewThread>,
+    reviews: &BTreeMap<u64, ThreadComment>,
 ) -> String {
     // Structs, not maps: the key order is fixed by these declarations, never
     // by a JSON library's map feature.
@@ -27,6 +29,13 @@ pub fn judging_context<'a>(
     struct Context<'a> {
         log: Vec<Entry<'a>>,
         threads: Vec<Thread<'a>>,
+        reviews: Vec<Body<'a>>,
+    }
+    #[derive(serde::Serialize)]
+    struct Body<'a> {
+        id: u64,
+        author: Option<&'a str>,
+        body: &'a str,
     }
     #[derive(serde::Serialize)]
     struct Entry<'a> {
@@ -60,9 +69,46 @@ pub fn judging_context<'a>(
             comments: &t.comments,
         })
         .collect();
+    let reviews = reviews
+        .iter()
+        .map(|(id, r)| Body {
+            id: *id,
+            author: r.author.as_deref(),
+            body: &r.body,
+        })
+        .collect();
     super::evidence::receipt_digest(
-        &serde_json::to_vec(&Context { log, threads }).expect("a discussion is JSON"),
+        &serde_json::to_vec(&Context {
+            log,
+            threads,
+            reviews,
+        })
+        .expect("a discussion is JSON"),
     )
+}
+
+/// The review bodies a judge reads, by review id: every submitted review
+/// whose body says something, findings and answers included. An approval is
+/// a person's permission, not discussion: counting it would make the owner's
+/// own release of an owner verdict ask for another judgment. A pending
+/// review isn't published yet.
+pub fn review_bodies(records: &[crate::api::Review]) -> BTreeMap<u64, ThreadComment> {
+    records
+        .iter()
+        .filter(|r| {
+            !matches!(r.state.as_deref(), Some("APPROVED" | "PENDING"))
+                && r.body.as_deref().is_some_and(|b| !b.trim().is_empty())
+        })
+        .filter_map(|r| {
+            Some((
+                r.id?,
+                ThreadComment {
+                    author: r.user.as_ref().map(|u| u.login.clone()),
+                    body: r.body.clone()?,
+                },
+            ))
+        })
+        .collect()
 }
 
 /// The PR's discussion so far, as a log in the order its jobs ran: each
@@ -103,17 +149,14 @@ fn discussion(record: &Record, now: u64) -> Result<Vec<(Finding, Option<FindingA
     Ok(discussion)
 }
 
-/// The PR's [`judging_context`] at `now`, over its log and `threads`: what
-/// a judge asked now reads.
-pub(super) fn context(
-    record: &Record,
-    threads: &BTreeMap<String, ReviewThread>,
-    now: u64,
-) -> Result<String> {
+/// The PR's [`judging_context`] at `now`, over its log and what `f` read on
+/// GitHub: what a judge asked now reads.
+pub(super) fn context(record: &Record, f: &super::Facts, now: u64) -> Result<String> {
     let discussion = discussion(record, now)?;
     Ok(judging_context(
         discussion.iter().map(|(f, a)| (f, a.as_ref())),
-        threads,
+        &f.threads,
+        &f.review_bodies,
     ))
 }
 
@@ -252,21 +295,60 @@ mod tests {
                 ],
             },
         )]);
+        let reviews = BTreeMap::from([(
+            7,
+            ThreadComment {
+                author: Some("reviewer".into()),
+                body: "a finding".into(),
+            },
+        )]);
         let wire = concat!(
             r#"{"log":[{"finding":{"path":"src/lib.rs","line":1,"severity":"p2","text":"t"},"#,
             r#""answer":{"fixed":false,"reply":"r"}},"#,
             r#"{"finding":{"path":"src/lib.rs","line":1,"severity":"p2","text":"t"},"answer":null}],"#,
             r#""threads":[{"id":"T1","comments":[{"author":"someone","body":"b"},"#,
-            r#"{"author":null,"body":"c"}]}]}"#
+            r#"{"author":null,"body":"c"}]}],"#,
+            r#""reviews":[{"id":7,"author":"reviewer","body":"a finding"}]}"#
         );
         assert_eq!(
-            judging_context([(&finding, Some(&answer)), (&finding, None)], &threads),
+            judging_context(
+                [(&finding, Some(&answer)), (&finding, None)],
+                &threads,
+                &reviews,
+            ),
             super::super::evidence::receipt_digest(wire.as_bytes())
         );
         assert_eq!(
-            judging_context([], &BTreeMap::new()),
-            super::super::evidence::receipt_digest(br#"{"log":[],"threads":[]}"#)
+            judging_context([], &BTreeMap::new(), &BTreeMap::new()),
+            super::super::evidence::receipt_digest(br#"{"log":[],"threads":[],"reviews":[]}"#)
         );
+    }
+
+    #[test]
+    fn a_review_body_counts_unless_it_is_an_approval_pending_or_blank() {
+        let review = |id: u64, state: &str, body: &str| crate::api::Review {
+            id: Some(id),
+            state: Some(state.into()),
+            user: Some(crate::api::User {
+                login: "someone".into(),
+                kind: "User".into(),
+            }),
+            body: Some(body.into()),
+            commit_id: None,
+            html_url: None,
+            submitted_at: None,
+        };
+        let kept = review_bodies(&[
+            review(1, "COMMENTED", "a finding"),
+            review(2, "CHANGES_REQUESTED", "another"),
+            review(3, "DISMISSED", "withdrawn, still read"),
+            review(4, "APPROVED", "looks right"),
+            review(5, "PENDING", "a draft"),
+            review(6, "COMMENTED", "  \n"),
+        ]);
+        assert_eq!(kept.keys().copied().collect::<Vec<_>>(), [1, 2, 3]);
+        assert_eq!(kept[&1].author.as_deref(), Some("someone"));
+        assert_eq!(kept[&1].body, "a finding");
     }
 
     #[test]
@@ -278,7 +360,7 @@ mod tests {
         let threads = |resolved, comments: Vec<ThreadComment>| {
             BTreeMap::from([("T1".to_string(), ReviewThread { resolved, comments })])
         };
-        let context = |t| judging_context([], &t);
+        let context = |t| judging_context([], &t, &BTreeMap::new());
         let open = context(threads(false, vec![comment("a finding")]));
         // Resolving it adds nothing a judge hasn't read.
         assert_eq!(open, context(threads(true, vec![comment("a finding")])));

@@ -41,6 +41,8 @@ pub(super) struct Case {
         conary_core::plugin::Finding,
         Option<conary_core::plugin::FindingAnswer>,
     )>,
+    /// What each finished judge job was asked on, as its invocation says.
+    pub judge_requests: BTreeMap<String, Option<Basis>>,
 }
 impl Case {
     pub fn new() -> Self {
@@ -63,6 +65,7 @@ impl Case {
             train: TrainState::default(),
             unseen: false,
             discussion: Vec::new(),
+            judge_requests: BTreeMap::new(),
         }
     }
     pub fn roles(&mut self, names: &[&str]) {
@@ -106,19 +109,25 @@ impl Case {
     pub fn label(&self, labels: &[&str]) {
         self.hub.label(REMI, 3, labels);
     }
-    /// `flow::judging_context` over the discussion now: the workers' log
-    /// and GitHub's review threads.
+    /// `flow::judging_context` over the discussion now: the workers' log,
+    /// and GitHub's review threads and review bodies.
     pub fn context(&self) -> String {
         self.context_on(
             &crate::flow::Read::snapshot(&self.hub, REMI, 3)
                 .unwrap()
                 .threads,
+            &review_bodies(&self.hub.reviews(REMI, 3).unwrap()),
         )
     }
-    fn context_on(&self, threads: &BTreeMap<String, ReviewThread>) -> String {
+    fn context_on(
+        &self,
+        threads: &BTreeMap<String, ReviewThread>,
+        reviews: &BTreeMap<u64, ThreadComment>,
+    ) -> String {
         judging_context(
             self.discussion.iter().map(|(f, a)| (f, a.as_ref())),
             threads,
+            reviews,
         )
     }
     /// A judgment of the current revision. A contract word is a producer's
@@ -221,7 +230,8 @@ impl Case {
                 r.missing = s.missing;
             }
         }
-        f.context = Some(self.context_on(&f.threads));
+        f.context = Some(self.context_on(&f.threads, &f.review_bodies));
+        f.judge_requests = self.judge_requests.clone();
         f.jobs = self.jobs.clone();
         f.claims = self.claims.clone();
         f.stopped_jobs = self.stopped_jobs.clone();

@@ -28,7 +28,7 @@ fn read_f(h: &Hub, s: Settings) -> Facts {
     )
     .map(|mut f| {
         // No worker has answered here: the discussion is empty.
-        f.context = Some(judging_context([], &f.threads));
+        f.context = Some(judging_context([], &f.threads, &f.review_bodies));
         f
     })
     .unwrap()
@@ -55,7 +55,7 @@ fn sealed_judge_provenance_is_retained_in_memory_and_bound_to_the_receipt() {
             &revision,
             1,
             by.clone(),
-            super::judged_for_everything(),
+            super::judged_for_everything(&h, REMI),
         )
         .unwrap();
     h.flow_comment(REMI, 3, "owner", &body);
@@ -71,7 +71,7 @@ fn sealed_judge_provenance_is_retained_in_memory_and_bound_to_the_receipt() {
     let (_, retained_again) = next(&absent, &roundtrip, 4001);
     assert_eq!(retained_again.judge_issuance, roundtrip.judge_issuance);
 
-    let basis = super::judged_for_everything();
+    let basis = super::judged_for_everything(&h, REMI);
     let receipt = judgment_receipt_by(&revision, 1, Some(Judgment::Pass), Some(&by), Some(&basis));
     let evidence: serde_json::Value = serde_json::from_slice(&receipt).unwrap();
     assert_eq!(evidence["provenance"]["by"]["engine"], "fixture-engine");
@@ -134,7 +134,7 @@ fn marker(h: &Hub, s: &Settings, name: &str, verdict: &str) -> String {
                 &Revision::from(&p),
                 generation,
                 provenance(),
-                super::judged_for_everything(),
+                super::judged_for_everything(h, REMI),
             )
             .unwrap();
     }
@@ -404,7 +404,7 @@ fn an_edited_why_or_context_fails_the_seal_and_the_receipt() {
     let revision = Revision::from(&h.pull(REMI, 3).unwrap());
     let basis = Basis {
         why: vec![Trigger::NoCi, Trigger::RoundLimit],
-        context: judging_context([], &Default::default()),
+        context: judging_context([], &Default::default(), &Default::default()),
     };
     let body = key
         .judgment_by(

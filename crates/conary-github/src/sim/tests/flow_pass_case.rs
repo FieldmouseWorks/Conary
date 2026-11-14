@@ -273,9 +273,17 @@ impl Case {
         }
         self.negative(head, "none");
     }
-    /// A producer's judgment, judged for every reason on an empty discussion.
-    pub(super) fn judgment(&self, generation: u64, verdict: Judgment, attest: bool) {
-        self.judgment_on(generation, verdict, attest, super::judged_for_everything());
+    /// A producer's judgment, judged for every reason on what GitHub shows
+    /// now with no worker answers. Returns what it was judged on.
+    pub(super) fn judgment(
+        &self,
+        generation: u64,
+        verdict: Judgment,
+        attest: bool,
+    ) -> crate::flow::Basis {
+        let basis = super::judged_for_everything(&self.hub, REPO);
+        self.judgment_on(generation, verdict, attest, basis.clone());
+        basis
     }
     /// A producer's v3 judgment of the PR's current revision, judged on
     /// `basis`, and its signed receipt when `attest`.

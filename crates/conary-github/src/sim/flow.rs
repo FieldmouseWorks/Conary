@@ -158,6 +158,19 @@ impl Hub {
             "body":body,"commit_id":head,"submitted_at":"2026-11-01T00:00:00Z"}),
         );
     }
+    /// Edit review `id`'s body, as its author can on GitHub.
+    pub(crate) fn edit_review_body(&self, repo: &str, pr: u64, id: u64, body: &str) {
+        let mut world = self.world.borrow_mut();
+        let reviews = world
+            .repos
+            .get_mut(repo)
+            .unwrap()
+            .reviews
+            .get_mut(&pr)
+            .unwrap();
+        let review = reviews.iter_mut().find(|r| r["id"] == id).unwrap();
+        review["body"] = json!(body);
+    }
     pub(crate) fn remove_flow_reviews(&self, repo: &str, pr: u64) {
         self.world
             .borrow_mut()

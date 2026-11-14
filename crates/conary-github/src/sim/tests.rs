@@ -45,12 +45,16 @@ fn every_reason() -> Vec<conary_core::plugin::Trigger> {
     ]
 }
 
-/// A judgment judged for every reason the flow can require, on a PR with
-/// no discussion yet.
-fn judged_for_everything() -> crate::flow::Basis {
+/// A judgment judged for every reason the flow can require, on what PR 3 of
+/// `repo` shows on `hub` now, with no worker answers.
+fn judged_for_everything(hub: &Hub, repo: &str) -> crate::flow::Basis {
     crate::flow::Basis {
         why: every_reason(),
-        context: crate::flow::judging_context([], &Default::default()),
+        context: crate::flow::judging_context(
+            [],
+            &crate::flow::Read::snapshot(hub, repo, 3).unwrap().threads,
+            &crate::flow::review_bodies(&hub.reviews(repo, 3).unwrap()),
+        ),
     }
 }
 
