@@ -133,18 +133,13 @@ against GitHub before it works and again before it publishes:
 - the tree is that head's tree;
 - the description is the PR's current description.
 
-**Each piece of work is done once for its complete input.** A producer
-keys its record by everything the work read, not by a subset:
-- a review, by repo, PR, role, head, base, the description's fingerprint,
-  and a digest of the earlier findings and their answers that its brief
-  quotes;
-- a judgment, by revision, `why`, and a digest of the review threads and
-  answers it read;
-- a proof, by repo, head, check and recipe digest.
-
-A repeat of exactly that input returns the recorded answer. Any change in
-it is new work. The one exception is an attempt that ended without a
-result: it can run again.
+**Every request is new work.** A producer never answers a request from a
+recorded result. Each request runs a new look, judgment or proof, and its
+answer carries that work's own completion. Records exist only so that
+publication can be finished after a crash. They're never served as a fresh
+answer, so a cached result can't appear newer than work done after it.
+Re-asking is safe because only the flow can ask, and it asks only when its
+decision needs new work.
 
 A proof's record names the commit it ran on. Its statement is issued only
 for that commit, never re-signed for another commit with the same tree.
@@ -216,7 +211,7 @@ owner.
 
 ## The tasks
 
-There are ten tasks. Three are in Conary: C1, C2 and C3. Seven are in
+There are eleven tasks. Four are in Conary: C1, C2, C3 and C4. Seven are in
 burrow: B1, B2, B3, R, F, J and P. Each task is one PR, in one repository.
 
 ### C1: contract: conary-plugin v4 carries what the plugins need
@@ -244,6 +239,10 @@ version a plugin offers, so v1 to v3 plugins keep their current wire.
   of the flow's judge triggers, in a closed vocabulary that names
   `flow::decide`'s conditions: R2, author engine or gated paths, hidden
   files, no CI, asked, past the round limit, major dependency.
+  - It also adds `context`: the flow's digest of the review findings and
+    their answers that the judgment is on. C1 adds the exported helper
+    that computes it, `flow::judging_context`, so the flow and the judge
+    producer compute it the same way.
   - `against` stays the description being judged.
   - The verdict words don't change.
 - **`proof` request.** Adds `head`: the commit whose tree is `tree`.
@@ -279,23 +278,32 @@ thread replies and resolution), and `flow` (`write.rs`, `execute.rs`,
 Today `Api::review` submits only a body, so a flow-published finding has no
 thread to answer, and `Step::PostFix` fails. This task owns both halves.
 
-**Publishing a finding's thread (`PostReview`).** The review is submitted
-in one request with one comment per finding. Each comment carries a marker
-naming the role, the head and the finding's index in the review marker's
-`problems`. Where each finding goes is decided from the diff before
-submitting, because GitHub refuses the whole review if one comment can't
-be placed:
-- a line in the diff gets a line comment;
-- a file in the diff, at a line outside it, gets a file-level comment;
-- a file outside the diff gets no thread. Its answer is a PR comment with
-  the same marker, and it has nothing to resolve.
+**Identity.** Every finding target and every answer carries a marker
+that names the review issuance and the finding inside it. The issuance is
+named by the digest of its receipt, `receipt_digest(review_receipt(head,
+body))`, which is unique per publication because the body holds the
+findings and `reviewed_at`. The finding is named by its index in that
+review marker's `problems`, and the role and head are named too. An answer
+also names the fix invocation it came from. So a second review on the same
+head, a reordered list, two findings at one place, or a carried review
+never share a marker, and a retry keeps its own.
 
-Two findings at one place get one comment each, told apart by index. A
-lost submission is reconciled by its exact body and comment markers before
-it's sent again, as `PostReview` already is. The review body and its
-receipt don't change.
+**Publishing (`PostReview`).** This uses only supported GitHub operations:
+- The review is created in one request (`POST /pulls/{n}/reviews`), with a
+  line comment for each finding whose line is in the diff's hunks, placed
+  from the diff before submitting.
+- Every other finding gets a marked PR comment (`POST
+  /issues/{n}/comments`): a line outside the hunks, or a file with no
+  usable line position or outside the diff. Such a finding has no thread
+  to resolve.
 
-**Reading threads.** `flow::reviews` matches each finding to its thread by
+Publication is complete only once every finding's target has been
+observed. A lost or partial publication is reconciled by its markers
+before anything is sent again: the review by its exact body, and each
+fallback comment by its marker. Nothing is duplicated, and nothing counts
+as published early. The review body and its receipt don't change.
+
+**Reading threads.** `flow::reviews` matches each finding to its target by
 the marker, including on a review carried from an earlier head, where the
 thread stays on the original review. Handoff treats a recognised finding
 thread as that finding, not as an unstructured blocking thread. A fix
@@ -314,9 +322,12 @@ flow's review account, and resolves the thread if there is one.
 made in advance, each case failing before the change:
 - The whole path runs: `PostReview` makes the threads, a fix answers, and
   `PostFix` replies on and resolves exactly those threads.
-- Two findings on one line, a finding outside the diff, and a carried
-  review each reach their own target.
-- A retried submission makes no duplicate threads.
+- Two findings on one line, a line outside the hunks, a file outside the
+  diff, and a carried review each reach their own target.
+- A second review on the same head, after an `unchanged` fix, never
+  matches the first review's answers, including on fallback PR comments.
+- A retried or partial publication makes no duplicate targets, and isn't
+  complete until every target is observed.
 - A reply is never posted on a thread other than its finding's.
 - A reply for a head that moved isn't posted, and a repeated pass posts
   each reply once.
@@ -354,6 +365,42 @@ before the change:
 - A changed head cancels its `prepare`.
 - A `Job` recipe starts no proof worker.
 - Dry runs reserve virtual slots only for `proof`.
+
+Run the repository gate.
+
+### C4: flow: bind a judgment to its reasons and the findings it read
+
+**Repo:** Conary. **Depends on:** C1. Coordinates with
+[#293](https://github.com/FieldmouseWorks/Conary/issues/293), which carries
+a verdict across heads. This task is about one revision.
+
+**Crates:** `conary-github` `flow` (`markers.rs`, `evidence.rs`,
+`decide.rs`, `observe.rs`). `docs/flow.md`.
+
+**Work.** Today `flow::decide::after_review` accepts any pass for the same
+`Revision`. The sealed issuance and its receipt name neither why it was
+judged nor what it read. So findings answered without a push, or a newly
+applicable reason, can leave an old pass standing.
+- A new issuance seals, and `judgment_receipt_by` binds, the `why` and
+  `context` it was judged under. The issued format is versioned. Earlier
+  issuances stay as they are, and their ordering by generation is
+  unchanged.
+- A pass or owner verdict counts only when two things hold: its `why`
+  includes every reason the flow requires now, and its `context` equals
+  `flow::judging_context` on the threads and answers now. Otherwise the
+  flow asks for a new judgment before granting permission. The old
+  issuance is never removed.
+- An issuance without `why` and `context` counts as insufficient.
+
+**Negative verification**, against the simulated GitHub with an
+authenticated pass already present, each case failing before the change:
+- A finding answered without a push on the same revision makes the flow
+  ask for a new judgment.
+- A newly required reason, such as reaching the round limit, makes the flow
+  ask too.
+- A matching issuance still counts.
+- A forged or edited `why` or `context` fails the seal or the receipt.
+- Generations stay ordered.
 
 Run the repository gate.
 
@@ -414,8 +461,8 @@ None of these formats is copied.
     checked by `SO_PEERCRED`.
   - Connection-scoped work: a closed connection stops the work's process
     group or unit, and publishes nothing.
-  - Records keyed by the work's complete input, with the recorded answer
-    returned only on an exact repeat.
+  - Records kept for publication and recovery only, never returned as an
+    answer to a later request.
   - A durable record of results, written atomically, kept beside the work.
   - Reconciliation at startup.
 - **The signer.** It loads the key only from `$CREDENTIALS_DIRECTORY`. It
@@ -432,8 +479,8 @@ None of these formats is copied.
   (fake GitHub).
 - A key offered through the environment or arguments is refused.
 - A connection from any user but the controller is refused.
-- An exact repeat returns the recorded answer without running, and a
-  request differing in any part of its input runs again.
+- A repeated request runs new work, and its answer never carries a
+  recorded result or its completion time.
 - The crate's public API has no function that signs a caller-supplied
   statement, checked by an API-surface test.
 
@@ -524,8 +571,8 @@ Signing is idempotent per published review.
   added, a `findings` count of zero against recorded findings, another
   `base` or `scope`, a `reviewed_at` before the look ended, or a
   description edited since the look.
-- A request with a changed description or new answers runs a new look
-  rather than returning the recorded one.
+- Every request runs a new look. A request after a description changed
+  and changed back still runs a new look, with its own `reviewed_at`.
 - An old statement fails Conary's verifier against an edited body.
 - Each case fails before the change.
 
@@ -578,12 +625,12 @@ happened stands, and the next pass reads the head that moved.
 
 ### J: judge plugin and producer
 
-**Repo:** burrow. **Depends on:** C1, B1 and B2.
+**Repo:** burrow. **Depends on:** C1, C4, B1 and B2.
 
 **Crate:** a new `crates/burrow-judge`, with the plugin binary and the
 `autoland-judge` producer service.
 
-**Request.** `judge {repo, pr, head, against, author, reviewers, why}`,
+**Request.** `judge {repo, pr, head, against, author, reviewers, why, context}`,
 with `execution {choice, context: fresh}`.
 
 - The producer reads the PR. The head, base and description must match
@@ -612,10 +659,10 @@ copy.
 2. Then `conary/judgment` over
    `judgment_receipt_by(revision, generation, verdict, provenance)`.
 
-One issuance per complete input: the revision, `why`, and a digest of the
-threads and answers the judge read. A repeat of exactly that input returns
-it. A request differing in any of those is judged again, under a new
-generation.
+Every request is a new judgment under a new generation. The issuance
+carries the request's `why` and `context` ([C4](#c4-flow-bind-a-judgment-to-its-reasons-and-the-findings-it-read)).
+The producer recomputes `context` from GitHub, with Conary's own helper,
+and refuses to judge if it differs from the request's.
 
 **Restart and cancellation.**
 - A closed connection stops the engine session.
@@ -628,8 +675,10 @@ generation.
 - `cn plugin check` passes.
 - A judge session equal to the author's or a reviewer's is refused.
 - A stale head, base or description is refused.
-- A request with an added reason, or with threads answered since, isn't
-  served from the earlier issuance.
+- A request whose `context` differs from the producer's own reading of
+  the threads is refused.
+- The sealed issuance and its receipt carry the request's `why` and
+  `context`.
 - A brief built for a `why` without "no CI" still includes every thread and
   answer.
 - The sealed comment and its statement round-trip through Conary's public
@@ -710,18 +759,19 @@ the candidate commit (#338's P3).
 ```
 C1 ──► C2
 C1 ──► C3
+C1 ──► C4 ──► J
 B3 ──────► #314
 B1 ──┐
 B2 ──┼──► R
 C1 ──┼──► F   (C2 before cutover)
      ├──► J
      └──► P   (C3 before cutover; P doesn't need B1)
-R, F, J, P, C2, C3, B3, and key provisioning ──► #313 ──► #314
+R, F, J, P, C2, C3, C4, B3, and key provisioning ──► #313 ──► #314
 ```
 
 C1, B1, B2 and B3 start at once. R starts once B1 and B2 land. F, J and P
-start once C1 and B2 land, plus B1 for F and J. C2 and C3 run alongside
-the plugins.
+start once C1 and B2 land, plus B1 for F and J, and C4 for J. C2 and C3
+run alongside the plugins.
 
 ## Covered elsewhere, not scheduled again
 
