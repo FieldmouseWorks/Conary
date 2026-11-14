@@ -21,8 +21,8 @@ impl Message {
         let mut seen = std::collections::BTreeSet::new();
         let mut lines = Vec::new();
         for (key, value) in commits.into_iter().flat_map(trailers) {
-            if seen.insert((key.to_ascii_lowercase(), value)) {
-                lines.push(format!("{key}: {value}"));
+            if seen.insert((key.to_ascii_lowercase(), value.clone())) {
+                lines.push(format!("{key}: {value}").trim_end().to_owned());
             }
         }
         Self {
@@ -64,39 +64,136 @@ pub fn messages(history: &crate::api::History) -> Result<Vec<String>, String> {
         .collect()
 }
 
-/// A commit message's trailers, as (key, value): its final paragraph, when
-/// that isn't its subject and every line of it is `Key: value`.
-fn trailers(message: &str) -> Vec<(&str, &str)> {
-    let mut paragraphs = Vec::new();
-    let mut current: Vec<&str> = Vec::new();
-    for line in message.lines() {
-        if line.trim().is_empty() {
-            if !current.is_empty() {
-                paragraphs.push(std::mem::take(&mut current));
-            }
-        } else {
-            current.push(line);
-        }
-    }
-    if !current.is_empty() {
-        paragraphs.push(current);
-    }
-    if paragraphs.len() < 2 {
+/// A commit message's trailers, as (key, value), read as Git reads them
+/// (`git interpret-trailers --parse --no-divider`, `%(trailers)`): the
+/// last paragraph after the subject is the trailer block when every line
+/// of it is a trailer, or when it holds a Git-generated one
+/// (`Signed-off-by: `) and at least a quarter of its lines are trailers. A
+/// trailer is a key of letters, digits and dashes, optionally followed by
+/// spaces or tabs, then `:`; lines that start with whitespace continue the
+/// trailer before them, and its value is unfolded to one line. Lines
+/// starting with `#` are comments, and the block's prose lines aren't
+/// trailers.
+fn trailers(message: &str) -> Vec<(String, String)> {
+    let lines: Vec<&str> = message.lines().collect();
+    // Trailing blank and comment lines aren't part of the message.
+    let end = lines
+        .iter()
+        .rposition(|l| !blank(l) && !comment(l))
+        .map_or(0, |i| i + 1);
+    let lines = &lines[..end];
+    // The subject, the first paragraph, can't be trailers.
+    let title_end = lines
+        .iter()
+        .position(|l| !comment(l) && blank(l))
+        .unwrap_or(lines.len());
+    let Some(start) = block_start(lines, title_end) else {
         return Vec::new();
+    };
+    // Each trailer with its continuation lines.
+    let mut folded: Vec<String> = Vec::new();
+    let mut continues = false;
+    for line in &lines[start..] {
+        if continues
+            && line.starts_with(git_space)
+            && let Some(last) = folded.last_mut()
+        {
+            last.push('\n');
+            last.push_str(line);
+            continue;
+        }
+        folded.push((*line).to_owned());
+        continues = separator(line).is_some();
     }
-    let last = paragraphs.pop().unwrap_or_default();
-    last.iter()
-        .map(|line| trailer(line))
-        .collect::<Option<Vec<_>>>()
-        .unwrap_or_default()
+    folded
+        .iter()
+        .filter(|t| !comment(t))
+        .filter_map(|t| {
+            let at = separator(t)?;
+            let key = t[..at].trim_matches(git_space).to_owned();
+            Some((key, unfold(t[at + 1..].trim_matches(git_space))))
+        })
+        .collect()
 }
 
-/// `Key: value`, where the key is letters, digits and dashes.
-fn trailer(line: &str) -> Option<(&str, &str)> {
-    let (key, value) = line.split_once(": ")?;
-    let value = value.trim();
-    let token = !key.is_empty() && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '-');
-    (token && !value.is_empty()).then_some((key, value))
+/// Where the trailer block starts in `lines`, the subject ending at
+/// `title_end`: Git's `find_trailer_block_start`.
+fn block_start(lines: &[&str], title_end: usize) -> Option<usize> {
+    const GIT_GENERATED: [&str; 2] = ["Signed-off-by: ", "(cherry picked from commit "];
+    let (mut recognized, mut trailer_lines, mut prose, mut continuations) = (false, 0, 0, 0);
+    for i in (title_end..lines.len()).rev() {
+        let line = lines[i];
+        if comment(line) {
+            prose += continuations;
+            continuations = 0;
+        } else if blank(line) {
+            prose += continuations;
+            let all = trailer_lines > 0 && prose == 0;
+            let enough = recognized && trailer_lines * 3 >= prose;
+            return (all || enough).then_some(i + 1);
+        } else if GIT_GENERATED.iter().any(|p| line.starts_with(p)) {
+            trailer_lines += 1;
+            continuations = 0;
+            recognized = true;
+        } else if separator(line).is_some() {
+            trailer_lines += 1;
+            continuations = 0;
+        } else if line.starts_with(git_space) {
+            continuations += 1;
+        } else {
+            prose += 1 + continuations;
+            continuations = 0;
+        }
+    }
+    None
+}
+
+/// Where a trailer's `:` is: after a key of ASCII letters, digits and
+/// dashes, and any spaces or tabs after it. Git's `find_separator`.
+fn separator(line: &str) -> Option<usize> {
+    let mut spaced = false;
+    for (i, c) in line.bytes().enumerate() {
+        if c == b':' {
+            return (i >= 1).then_some(i);
+        }
+        if !spaced && (c.is_ascii_alphanumeric() || c == b'-') {
+            continue;
+        }
+        if i != 0 && (c == b' ' || c == b'\t') {
+            spaced = true;
+            continue;
+        }
+        return None;
+    }
+    None
+}
+
+/// A folded value on one line, each line break and the whitespace after
+/// it one space.
+fn unfold(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    let mut rest = value.split('\n');
+    if let Some(first) = rest.next() {
+        out.push_str(first);
+    }
+    for line in rest {
+        out.push(' ');
+        out.push_str(line.trim_start_matches(git_space));
+    }
+    out
+}
+
+/// Git's whitespace: space, tab, line feed, carriage return.
+fn git_space(c: char) -> bool {
+    matches!(c, ' ' | '\t' | '\n' | '\r')
+}
+
+fn blank(line: &str) -> bool {
+    line.chars().all(git_space)
+}
+
+fn comment(line: &str) -> bool {
+    line.starts_with('#')
 }
 
 #[cfg(test)]
@@ -175,14 +272,103 @@ mod tests {
             "train: two\n\nSee: this\n\nand that, which ends it.",
             // A final paragraph with prose in it isn't trailers.
             "train: three\n\nFixes: #1\nsome prose",
-            // Nor a URL, whose colon has no space after it.
-            "train: four\n\nhttps://example.com/x",
             // A key with a space isn't a key.
-            "train: five\n\nNot a key: value",
+            "train: four\n\nNot a key: value",
+            // Too few trailers among prose, even with a Git-generated one.
+            "train: five\n\none\ntwo\nthree\nfour\nSigned-off-by: S <s@x>",
+            // A line that starts with whitespace continues no trailer.
+            "train: six\n\n  leading: x\nKey: v",
+            // Trailing comments and blank lines leave only the subject.
+            "Key: v\n\n# a comment\n\n",
         ];
         let message = Message::new(" a title ", 7, commits);
         assert_eq!(message.title, "a title (#7)");
         assert_eq!(message.body, "");
         assert_eq!(message.whole(), "a title (#7)");
+    }
+
+    /// Each case's expected trailers are what `git interpret-trailers
+    /// --parse --no-divider` prints for its message.
+    fn read(message: &str) -> Vec<String> {
+        trailers(message)
+            .into_iter()
+            .map(|(k, v)| format!("{k}: {v}").trim_end().to_owned())
+            .collect()
+    }
+
+    #[test]
+    fn trailers_spelled_any_way_git_reads_them() {
+        assert_eq!(
+            read(
+                "a: b\n\nCo-authored-by:\tA <a@x>\nClaude-Session:https://s/1\nReviewed-by : R\nAcked-by\t:K\n"
+            ),
+            [
+                "Co-authored-by: A <a@x>",
+                "Claude-Session: https://s/1",
+                "Reviewed-by: R",
+                "Acked-by: K"
+            ]
+        );
+        assert_eq!(read("a: b\n\nEmpty:\nKey: v\n"), ["Empty:", "Key: v"]);
+        // Git reads a URL's scheme as a key.
+        assert_eq!(
+            read("a: b\n\nhttps://example.com/x\n"),
+            ["https: //example.com/x"]
+        );
+    }
+
+    #[test]
+    fn a_folded_trailer_is_one_line() {
+        assert_eq!(
+            read(
+                "a: b\n\nCo-authored-by: A Very Long\n  Name <a@x>\nClaude-Session: https://s/2\n"
+            ),
+            [
+                "Co-authored-by: A Very Long Name <a@x>",
+                "Claude-Session: https://s/2"
+            ]
+        );
+        // CRLF lines read as their LF spelling would (Git keeps the CR).
+        assert_eq!(
+            read("a: b\r\n\r\nCo-authored-by: A\r\n\tB <a@x>\r\n"),
+            ["Co-authored-by: A B <a@x>"]
+        );
+    }
+
+    #[test]
+    fn a_block_with_prose_keeps_its_trailers() {
+        assert_eq!(
+            read(
+                "a: b\n\nWhy it lands, in prose.\nSigned-off-by: S <s@x>\nCo-authored-by: A <a@x>\n"
+            ),
+            ["Signed-off-by: S <s@x>", "Co-authored-by: A <a@x>"]
+        );
+        assert_eq!(
+            read("a: b\n\nsome prose\n(cherry picked from commit abc)\nSigned-off-by: S <s@x>\n"),
+            ["Signed-off-by: S <s@x>"]
+        );
+        assert_eq!(
+            read(
+                "a: b\n\nCo-authored-by: A <a@x>\n# a comment\nClaude-Session: https://s/3\n\n# trailing\n"
+            ),
+            ["Co-authored-by: A <a@x>", "Claude-Session: https://s/3"]
+        );
+        assert_eq!(read("a: b\nstill subject\n\nKey: v\n"), ["Key: v"]);
+    }
+
+    #[test]
+    fn trailers_spelled_differently_are_one_line() {
+        let commits = [
+            format!("train: one\n\nCo-authored-by:{AUTHOR}\nClaude-Session: https://s/\n 1"),
+            format!("train: two\n\nWhy.\nSigned-off-by: {AUTHOR}\nco-authored-by :  {AUTHOR}"),
+            format!("train: three\n\nclaude-session:\thttps://s/ 1\nSigned-off-by:\t{AUTHOR}"),
+        ];
+        let message = Message::new("train: land it", 9, commits.iter().map(String::as_str));
+        assert_eq!(
+            message.body,
+            format!(
+                "Co-authored-by: {AUTHOR}\nClaude-Session: https://s/ 1\nSigned-off-by: {AUTHOR}"
+            )
+        );
     }
 }
