@@ -127,7 +127,7 @@ impl Scenario {
                     .iter()
                     .map(|p| ((*p).into(), Recipe::Job("run proof".into())))
                     .collect(),
-                ..Settings::default()
+                ..crate::sim::settings()
             },
         )
     }

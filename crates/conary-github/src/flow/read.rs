@@ -189,7 +189,7 @@ pub fn read(
         &pull.base.name,
         &paths,
         &extra.suites,
-        &machine,
+        &facts.settings,
     )?;
     if !extra.checks_complete {
         ci.checks = vec![Check {

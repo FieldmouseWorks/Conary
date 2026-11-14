@@ -39,7 +39,7 @@ pub(super) fn setup() -> (Hub, Facts, Memory) {
         3,
         &conary_core::Policy::parse(br#"{"r2":["^secrets/","CODEOWNERS"],"docs":["^docs/"]}"#)
             .unwrap(),
-        Settings::default(),
+        crate::sim::settings(),
         &["owner".into()],
     )
     .unwrap();
@@ -544,7 +544,7 @@ fn reader_refuses_a_push_between_endpoints() {
         &REMI.parse().unwrap(),
         3,
         &conary_core::Policy::parse(b"{}").unwrap(),
-        Settings::default(),
+        crate::sim::settings(),
         &["owner".into()],
     );
     assert!(result.unwrap_err().to_string().contains("moved"));
@@ -560,7 +560,7 @@ fn reader_failure_is_not_a_clean_snapshot() {
             &REMI.parse().unwrap(),
             3,
             &conary_core::Policy::parse(b"{}").unwrap(),
-            Settings::default(),
+            crate::sim::settings(),
             &["owner".into()]
         )
         .is_err()
@@ -577,7 +577,7 @@ fn reader_uses_latest_run_and_ignores_own_status() {
         &REMI.parse().unwrap(),
         3,
         &conary_core::Policy::parse(b"{}").unwrap(),
-        Settings::default(),
+        crate::sim::settings(),
         &["owner".into()],
     )
     .unwrap();
@@ -600,7 +600,7 @@ fn read_checks(hub: &Hub) -> Vec<Check> {
         &REMI.parse().unwrap(),
         3,
         &conary_core::Policy::parse(b"{}").unwrap(),
-        Settings::default(),
+        crate::sim::settings(),
         &["owner".into()],
     )
     .unwrap()

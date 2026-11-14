@@ -52,6 +52,18 @@ pub(crate) use faults::{Call, On};
 
 /// The steward's App, whose `review-settled` statuses settle a head.
 pub(crate) const STEWARD: &str = "fieldmouseworks-steward[bot]";
+/// The flow settings of the machine the tests stand in for: Conary's own
+/// defaults name none of these.
+pub(crate) fn settings() -> crate::flow::Settings {
+    crate::flow::Settings {
+        proof_slots: None,
+        judge_engines: ["codex".into()].into(),
+        review_authors: [STEWARD.into()].into(),
+        bot_emails: ["49699333+dependabot[bot]@users.noreply.github.com".into()].into(),
+        owner_label: Some("needs-peter".into()),
+        ..Default::default()
+    }
+}
 /// The repos the tests are about.
 pub(crate) const REMI: &str = "FieldmouseWorks/remi";
 /// What the runners a job gets to itself are named, then its job's id.

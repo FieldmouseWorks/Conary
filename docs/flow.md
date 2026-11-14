@@ -41,6 +41,10 @@ pending. Passes always read the ledger, even when evidence is unconfigured,
 so historical raises still apply. Dry runs use no writer and publish no anchor.
 
 Omitted settings use `flow::Settings` defaults; unknown keys are rejected.
+The defaults name no machine, account, label or engine, and start no paid
+work, so a machine supplies its own: with no `review_authors` no review is
+queued, with no `owner_label` what the owner decides waits unlisted, and
+`proof_slots` defaults to `0`, which starts no proof (`null` sets no limit).
 Execution choices are optional entries in the same machine-owned configuration:
 
 ```json

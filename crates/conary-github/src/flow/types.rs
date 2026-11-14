@@ -289,17 +289,24 @@ pub enum Recipe {
     Job(String),
 }
 
-/// Machine settings, never selected by the PR's author.
+/// Machine settings, never selected by the PR's author. The defaults name no
+/// machine, account, label or engine, and start no paid work: an unset one
+/// leaves its step waiting, as an omitted plugin does.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
     pub train: bool,
     pub job_login: Option<String>,
+    /// How many proofs may hold a slot at once. Zero, the default, runs
+    /// none; `None` (`null`) sets no limit.
     pub proof_slots: Option<u32>,
     pub proof_timeout: u64,
     pub job_timeout: u64,
     pub judge_engines: BTreeSet<String>,
     pub reviewers: BTreeSet<String>,
+    /// The accounts the flow posts as: its reviews, `review-settled` and
+    /// the train's status are read only from these. None set, no review is
+    /// queued.
     pub review_authors: BTreeSet<String>,
     pub verdict_authors: BTreeSet<String>,
     pub judge_key: Option<SealKey>,
@@ -310,7 +317,9 @@ pub struct Settings {
     pub batch_label: String,
     pub hold_label: String,
     pub first_label: String,
-    pub owner_label: String,
+    /// The label that hands a PR to its owner. None set, what the owner
+    /// decides waits unlisted.
+    pub owner_label: Option<String>,
     pub people: BTreeSet<String>,
     pub require_ci: bool,
     pub proofs: BTreeMap<String, Recipe>,
@@ -350,24 +359,22 @@ impl Default for Settings {
         Self {
             train: false,
             job_login: None,
-            proof_slots: None,
+            proof_slots: Some(0),
             proof_timeout: 10800,
             job_timeout: 3600,
-            judge_engines: BTreeSet::from(["codex".into()]),
+            judge_engines: BTreeSet::new(),
             reviewers: BTreeSet::from(["reviewer".into()]),
-            review_authors: BTreeSet::from(["fieldmouseworks-steward[bot]".into()]),
+            review_authors: BTreeSet::new(),
             verdict_authors: BTreeSet::new(),
             judge_key: None,
             major_key: None,
-            bot_emails: BTreeSet::from(
-                ["49699333+dependabot[bot]@users.noreply.github.com".into()],
-            ),
+            bot_emails: BTreeSet::new(),
             renovate_email: None,
             renovate_login: None,
             batch_label: "upstream batch".into(),
             hold_label: "hold".into(),
             first_label: "first".into(),
-            owner_label: "needs-peter".into(),
+            owner_label: None,
             people: BTreeSet::new(),
             require_ci: true,
             proofs: BTreeMap::new(),

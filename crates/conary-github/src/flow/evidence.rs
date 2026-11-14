@@ -333,7 +333,7 @@ fn observations<G: Write>(github: &G, f: &Facts, head: &str) -> Result<super::ci
         &f.revision.base,
         &paths,
         &snapshot.suites,
-        &f.settings.machine(),
+        &f.settings,
     )?;
     if head == f.revision.head {
         let checks: Vec<_> = observed

@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::api::{ApiError, CheckRun};
 use conary_core::policy::Paths;
 
-use super::{Check, Ci, Read};
+use super::{Check, Ci, Read, Settings};
 
 /// Workflow metadata from GitHub's suite/workflow-run reads. Missing metadata
 /// is not evidence that a cancelled run was replaced.
@@ -184,8 +184,9 @@ pub(super) fn checks(
     base: &str,
     paths: &Paths,
     suites: &BTreeMap<u64, Suite>,
-    proofs: &BTreeSet<String>,
+    settings: &Settings,
 ) -> std::result::Result<Result, ApiError> {
+    let proofs = &settings.machine();
     let mut grouped: BTreeMap<(u64, String), CheckRun> = BTreeMap::new();
     let mut runs = Vec::new();
     let raw_runs = source.check_runs(repo, head)?;
@@ -340,10 +341,12 @@ pub(super) fn checks(
         // Authenticate reserved train results before choosing the newest one.
         // A forged newer result must not hide the steward's blocking word.
         if train
-            && !status
-                .creator
-                .as_ref()
-                .is_some_and(|u| u.login.eq_ignore_ascii_case("fieldmouseworks-steward[bot]"))
+            && !status.creator.as_ref().is_some_and(|u| {
+                settings
+                    .review_authors
+                    .iter()
+                    .any(|s| u.login.eq_ignore_ascii_case(s))
+            })
         {
             continue;
         }
