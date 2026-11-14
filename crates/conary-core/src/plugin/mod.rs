@@ -67,6 +67,9 @@ pub enum Trigger {
     RoundLimit,
     /// A major dependency update not from the dependency bot.
     MajorDependency,
+    /// A judge already started on this head and base stays owed, and the
+    /// reasons it was asked for weren't recorded (it predates v4).
+    Started,
 }
 
 /// Serialized in its own contract: an older one never sees v4's fields.

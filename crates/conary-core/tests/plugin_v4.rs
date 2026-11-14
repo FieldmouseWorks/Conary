@@ -405,6 +405,7 @@ fn a_judge_request_needs_its_pr_why_and_context() {
         Trigger::Asked,
         Trigger::RoundLimit,
         Trigger::MajorDependency,
+        Trigger::Started,
     ];
     plugin.plugin().unwrap().call(judge(every)).unwrap();
     assert_eq!(
@@ -416,7 +417,8 @@ fn a_judge_request_needs_its_pr_why_and_context() {
             "no_ci",
             "asked",
             "round_limit",
-            "major_dependency"
+            "major_dependency",
+            "started"
         ])
     );
 }

@@ -112,3 +112,81 @@ fn a_judge_after_a_fix_carries_its_pr_reasons_and_the_answered_finding() {
     };
     assert_eq!(context, log(Some(&moved)));
 }
+
+/// A judge started because of the author engine. Then the engine trailer is
+/// gone, the description changes, and that judge ends without an answer. The
+/// flow keeps the judge owed on that head and base and asks again: the new
+/// request carries the first judge's reasons, or `started` when that judge
+/// predates recorded reasons.
+fn reasked(predates_reasons: bool) -> Vec<Trigger> {
+    let mut c = Case::new();
+    c.config.plugins.judge = Some(example());
+    c.config.settings.judge_engines = ["fixture-author".into()].into();
+    c.config.settings.job_timeout = 1;
+    c.clean_review();
+    let engine = |trailer: &str| {
+        c.hub.commit_details(
+            &head(3),
+            Some(&format!("change: fixture\n\n{trailer}")),
+            Some("owner@example.org"),
+            Some("owner@example.org"),
+        )
+    };
+    engine("Engine: fixture-author\n");
+    let now = flow::jobs::now();
+    assert_eq!(
+        c.pass(now, false)[0].next.as_ref().unwrap().step,
+        Step::Judge(vec![Trigger::AuthorEngine])
+    );
+    let judges = |c: &Case| {
+        c.record()
+            .jobs
+            .into_iter()
+            .filter(|w| matches!(w.purpose, flow::jobs::Purpose::Judge))
+            .collect::<Vec<_>>()
+    };
+    let first = judges(&c).remove(0);
+    if predates_reasons {
+        // What a judge invocation saved before v4 decodes to.
+        let mut saved: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&first.path).unwrap()).unwrap();
+        let task = saved["task"].as_object_mut().unwrap();
+        for field in ["pr", "why", "context"] {
+            task.remove(field);
+        }
+        std::fs::write(&first.path, saved.to_string()).unwrap();
+    }
+    engine("Session: none\n");
+    c.hub
+        .edit_pull(REPO, 3, |p| p["body"] = serde_json::json!("new reasons"));
+    c.hub.refresh_flow(REPO, 3);
+    c.clean_review();
+    // The first judge never answers; its deadline passes.
+    let mut step = None;
+    for t in 1..40 {
+        let report = c.pass(now + t * 120, false);
+        assert_eq!(report[0].error, None);
+        step = report[0].next.clone().map(|n| n.step);
+        if judges(&c).len() > 1 {
+            break;
+        }
+    }
+    let all = judges(&c);
+    assert_eq!(all.len(), 2, "never asked again: {step:?}");
+    assert_eq!(step, Some(Step::Judge(vec![])));
+    assert_ne!(all[0].job.revision, all[1].job.revision);
+    let Task::Judge { why, .. } = invocation(&all[1]).task else {
+        panic!("not a judge");
+    };
+    why
+}
+
+#[test]
+fn a_judge_owed_on_its_head_and_base_keeps_its_reasons_when_its_trigger_goes() {
+    assert_eq!(reasked(false), [Trigger::AuthorEngine]);
+}
+
+#[test]
+fn a_judge_owed_from_before_v4_is_asked_again_as_started() {
+    assert_eq!(reasked(true), [Trigger::Started]);
+}

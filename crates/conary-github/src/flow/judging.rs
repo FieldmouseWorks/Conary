@@ -76,8 +76,11 @@ pub(super) fn discussion(record: &Record) -> Result<Vec<(Finding, Option<Finding
     Ok(discussion)
 }
 
-/// The reasons a judge request carries: the decision's, or, when only a
-/// judge already started on this revision holds, that judge's own.
+/// The reasons a judge request carries: the decision's when it has any.
+/// Otherwise only a judge already started on this head and base holds, as
+/// `decide` keeps it owed, whatever the description now says: that judge's
+/// own reasons, or `started` when it predates them. Never another head's or
+/// base's.
 pub(super) fn why(
     record: &Record,
     revision: &Revision,
@@ -90,12 +93,16 @@ pub(super) fn why(
         .jobs
         .iter()
         .rev()
-        .find(|w| matches!(w.purpose, Purpose::Judge) && &w.job.revision == revision)
+        .find(|w| {
+            matches!(w.purpose, Purpose::Judge)
+                && w.job.revision.head == revision.head
+                && w.job.revision.base == revision.base
+        })
         .ok_or("a judge needs a reason")?;
-    let invocation = invocation(&earlier.path)?;
-    match invocation.task {
-        Task::Judge { why, .. } if !why.is_empty() => Ok(why),
-        _ => Err("the earlier judge carries no reason".into()),
+    match invocation(&earlier.path)?.task {
+        Task::Judge { why, .. } if why.is_empty() => Ok(vec![Trigger::Started]),
+        Task::Judge { why, .. } => Ok(why),
+        _ => Err("a judge job's invocation is not a judge".into()),
     }
 }
 
@@ -203,10 +210,25 @@ mod tests {
         );
         // Only the earlier judge holds: its reasons, never an empty list.
         assert_eq!(why(&record, &revision("h"), &[]).unwrap(), [Trigger::NoCi]);
-        // Another revision's judge is no reason here.
+        // A new description on the same head and base keeps them.
+        let described = Revision {
+            description: "another".into(),
+            ..revision("h")
+        };
+        assert_eq!(why(&record, &described, &[]).unwrap(), [Trigger::NoCi]);
+        // Another head's or base's judge is no reason here.
         assert!(why(&record, &revision("other"), &[]).is_err());
+        let rebased = Revision {
+            base: "other".into(),
+            ..revision("h")
+        };
+        assert!(why(&record, &rebased, &[]).is_err());
         assert!(why(&Record::default(), &revision("h"), &[]).is_err());
+        // A judge from before v4 recorded no reasons: it was started.
         let record = judged(dir.path(), "h", vec![]);
-        assert!(why(&record, &revision("h"), &[]).is_err());
+        assert_eq!(
+            why(&record, &revision("h"), &[]).unwrap(),
+            [Trigger::Started]
+        );
     }
 }

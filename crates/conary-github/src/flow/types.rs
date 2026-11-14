@@ -544,9 +544,9 @@ pub enum Step {
     StopJob(String),
     Prove,
     PostProof,
-    /// Ask a judge, for these reasons. Empty only when a judge already
-    /// started on this revision is all that holds: it asks again for that
-    /// judge's reasons.
+    /// Ask a judge, for these reasons. Empty when a judge already started on
+    /// this head and base is all that holds (the request then carries that
+    /// judge's reasons), and in decisions saved before steps carried them.
     Judge(Vec<Trigger>),
     UpdateBranch,
     Settle,
@@ -585,6 +585,7 @@ pub enum OwnerNotice {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Next {
     pub stage: Stage,
+    #[serde(deserialize_with = "super::persist::step::deserialize")]
     pub step: Step,
     pub description: String,
     /// Earliest explicit wait or owned worker deadline, in Unix seconds.
