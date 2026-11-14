@@ -83,9 +83,8 @@ delivers it. A property no other section holds is stated here; the rest link
 to their section.
 
 The register declares the components an entry may apply to and the
-milestones that ship each. The gate checks it (`cn lessons check`): fields
-present and well formed, IDs unique, sources linked, components declared. An
-open entry passes that check. It holds a milestone instead: `cn lessons exit
+milestones that ship each. The gate checks it against the rules in its
+header (`cn lessons check`), and an open entry passes that check. It holds a milestone instead: `cn lessons exit
 M6` fails while an open entry applies to a component M6 ships, and each
 milestone's exit check in the [roadmap](#12-roadmap) includes it.
 
