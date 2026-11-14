@@ -2,7 +2,7 @@
 mod queue;
 mod runtime;
 use crate::flow::persist::{self, Result};
-pub use queue::{Queue, Work};
+pub use queue::{Queue, Ran, Recovery, Work};
 use ring::hmac;
 pub use runtime::Runtime;
 use serde_json::Value;

@@ -15,6 +15,7 @@ serde_json = "1.0.154"
 
 [dev-dependencies]
 ed25519-dalek = "3.0.0"
+ring = "0.17.14"
 tempfile = "3.27.0"
 
 [lints]

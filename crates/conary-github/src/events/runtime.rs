@@ -91,10 +91,17 @@ impl Runtime {
         }
         reports
     }
-    pub fn run(&self, ledger: &std::path::Path, queue: &std::sync::Arc<Queue>) -> Result<()> {
-        loop {
-            let started = flow::jobs::now();
-            let ran = queue.run_one(started, |work| {
+    /// The worker: a failed pass books its repository's recovery and the
+    /// rest go on. Only the mailbox's own errors stop it. The log names the
+    /// repository and its retry, never an error's text, which no webhook
+    /// reaches but a token command's output might.
+    pub fn run(
+        &self,
+        ledger: &std::path::Path,
+        queue: &std::sync::Arc<Queue>,
+    ) -> Result<std::convert::Infallible> {
+        queue.work(
+            |work| {
                 if !self
                     .repos
                     .iter()
@@ -104,10 +111,13 @@ impl Runtime {
                     return Ok(vec![]);
                 }
                 self.pass(ledger, work, queue)
-            })?;
-            if !ran {
-                queue.wait();
-            }
-        }
+            },
+            |repo, recovery| {
+                eprintln!(
+                    "conaryd: a flow pass of {repo} failed ({} in a row); it runs again at {}, its kicks and bookings kept",
+                    recovery.attempts, recovery.at
+                );
+            },
+        )
     }
 }

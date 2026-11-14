@@ -53,8 +53,10 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         })?;
         let ledger = cli.ledger.clone();
         std::thread::Builder::new().spawn(move || {
+            // A failed pass books its repo's recovery; only a mailbox that
+            // can't be written stops the worker.
             if config.run(&ledger, &queue).is_err() {
-                eprintln!("conaryd: flow worker stopped; work remains booked");
+                eprintln!("conaryd: flow worker stopped: its mailbox can't be written");
                 std::process::exit(1);
             }
         })?;

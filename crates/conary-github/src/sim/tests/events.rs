@@ -217,27 +217,31 @@ fn signed_pull_event_runs_flow_against_hub() {
         202
     );
     let now = crate::flow::jobs::now();
-    assert!(
+    assert_eq!(
         queue
-            .run_one(now, |work| {
-                assert_eq!(work.repo, REPO);
-                let reports = c.pass(now, false);
-                assert_eq!(
-                    reports[0].next.as_ref().unwrap().step,
-                    Step::QueueReview("reviewer".into())
-                );
-                assert_eq!(
-                    reports[0].next.as_ref().unwrap().wait_until,
-                    Some(c.record().jobs[0].deadline)
-                );
-                assert_eq!(
-                    c.deferred.0.borrow().len(),
-                    1,
-                    "the pass executed its plugin launch"
-                );
-                Ok(reports)
-            })
-            .unwrap()
+            .run_one(
+                || now,
+                |work| {
+                    assert_eq!(work.repo, REPO);
+                    let reports = c.pass(now, false);
+                    assert_eq!(
+                        reports[0].next.as_ref().unwrap().step,
+                        Step::QueueReview("reviewer".into())
+                    );
+                    assert_eq!(
+                        reports[0].next.as_ref().unwrap().wait_until,
+                        Some(c.record().jobs[0].deadline)
+                    );
+                    assert_eq!(
+                        c.deferred.0.borrow().len(),
+                        1,
+                        "the pass executed its plugin launch"
+                    );
+                    Ok(reports)
+                }
+            )
+            .unwrap(),
+        Ran::Finished
     );
     assert!(queue.take(now).unwrap().is_none());
 }
