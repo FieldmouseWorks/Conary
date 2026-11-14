@@ -22,7 +22,11 @@ impl Message {
         let mut lines = Vec::new();
         for (key, value) in commits.into_iter().flat_map(trailers) {
             if seen.insert((key.to_ascii_lowercase(), value.clone())) {
-                lines.push(format!("{key}: {value}").trim_end().to_owned());
+                lines.push(if value.is_empty() {
+                    format!("{key}:")
+                } else {
+                    format!("{key}: {value}")
+                });
             }
         }
         Self {
@@ -73,10 +77,12 @@ pub fn messages(history: &crate::api::History) -> Result<Vec<String>, String> {
 /// spaces or tabs, then `:`; lines that start with whitespace continue the
 /// trailer before them, and its value is unfolded to one line. Lines
 /// starting with `#` are comments, and the block's prose lines aren't
-/// trailers.
+/// trailers. What Git leaves out of a message ([`message_end`]) has none.
+/// CRLF lines read as their LF spelling would.
 fn trailers(message: &str) -> Vec<(String, String)> {
     let lines: Vec<&str> = message.lines().collect();
-    // Trailing blank and comment lines aren't part of the message.
+    let lines = &lines[..message_end(&lines)];
+    // Trailing blank and comment lines can't be trailers either.
     let end = lines
         .iter()
         .rposition(|l| !blank(l) && !comment(l))
@@ -114,6 +120,41 @@ fn trailers(message: &str) -> Vec<(String, String)> {
             Some((key, unfold(t[at + 1..].trim_matches(git_space))))
         })
         .collect()
+}
+
+/// Where a message ends as Git reads it (`ignored_log_message_bytes`):
+/// before a scissors line and all below it, and before a trailing run of
+/// comments, empty lines and legacy `Conflicts:` sections, whose paths
+/// are tab-indented. Each line is read as ending in a newline, as a commit
+/// object's do.
+fn message_end(lines: &[&str]) -> usize {
+    const SCISSORS: &str = "# ------------------------ >8 ------------------------";
+    let cutoff = lines
+        .iter()
+        .position(|l| *l == SCISSORS)
+        .unwrap_or(lines.len());
+    // Where the trailing run starts; 0 is none, as in Git, where only the
+    // subject can start at 0.
+    let mut ignored = 0;
+    let mut conflicts = false;
+    for (i, line) in lines[..cutoff].iter().enumerate() {
+        if comment(line) || line.is_empty() {
+            if ignored == 0 {
+                ignored = i;
+            }
+        } else if *line == "Conflicts:" {
+            conflicts = true;
+            if ignored == 0 {
+                ignored = i;
+            }
+        } else if conflicts && line.starts_with('\t') {
+            // A path in the conflicts section.
+        } else if ignored != 0 {
+            ignored = 0;
+            conflicts = false;
+        }
+    }
+    if ignored != 0 { ignored } else { cutoff }
 }
 
 /// Where the trailer block starts in `lines`, the subject ending at
@@ -369,6 +410,66 @@ mod tests {
             format!(
                 "Co-authored-by: {AUTHOR}\nClaude-Session: https://s/ 1\nSigned-off-by: {AUTHOR}"
             )
+        );
+    }
+
+    #[test]
+    fn what_git_leaves_out_of_a_message_has_no_trailers() {
+        // A legacy Conflicts section, its paths, and comments and empty
+        // lines among them, leave the trailers before them.
+        let conflicts = "subject\n\nCo-authored-by: A <a@x>\n\nConflicts:\n\tfile.rs\n";
+        assert_eq!(read(conflicts), ["Co-authored-by: A <a@x>"]);
+        assert_eq!(
+            read(
+                "subject\n\nCo-authored-by: A <a@x>\n\nConflicts:\n\tfile.rs\n# c\n\n\tother.rs\n"
+            ),
+            ["Co-authored-by: A <a@x>"]
+        );
+        assert_eq!(read("subject\n\nA: a\nConflicts:"), ["A: a"]);
+        // Prose after the section ends it: the message is what's last.
+        assert!(
+            read("subject\n\nCo-authored-by: A\n\nConflicts:\n\tfile.rs\nmore prose\n").is_empty()
+        );
+        // A Conflicts trailer with a value is a trailer.
+        assert_eq!(
+            read("subject\n\nConflicts: real value\n"),
+            ["Conflicts: real value"]
+        );
+        // Nothing below a scissors line counts, CRLF or not.
+        let scissors = "# ------------------------ >8 ------------------------";
+        assert_eq!(
+            read(&format!(
+                "subject\n\nCo-authored-by: A <a@x>\n{scissors}\nKey: below\n"
+            )),
+            ["Co-authored-by: A <a@x>"]
+        );
+        assert_eq!(
+            read(&format!(
+                "subject\r\n\r\nCo-authored-by: A <a@x>\r\n{scissors}\r\nKey: below\r\n"
+            )),
+            ["Co-authored-by: A <a@x>"]
+        );
+        assert!(read(&format!("subject\n\nprose\n{scissors}\n\nKey: below\n")).is_empty());
+        assert!(read(&format!("{scissors}\nsubject\n\nA: a\n")).is_empty());
+        // A line that only starts like one isn't a scissors line.
+        assert_eq!(
+            read(&format!("subject\n\nA: a\n{scissors} extra\nKey: below\n")),
+            ["A: a", "Key: below"]
+        );
+        // Nor is a --- line a divider in a commit message.
+        assert_eq!(read("subject\n\nprose\n---\n\nKey: v\n"), ["Key: v"]);
+    }
+
+    #[test]
+    fn a_landing_says_each_value_as_git_read_it() {
+        let commits = [
+            "a: one\n\nKey: value\nEmpty:\nFolded: x\n  y",
+            "a: two\n\nKey: value\u{a0}\nVt: x\u{b}\nFf: y\u{c}\nKEY:\tvalue\nempty:\nfolded:x y",
+        ];
+        let message = Message::new("a title", 1, commits);
+        assert_eq!(
+            message.body,
+            "Key: value\nEmpty:\nFolded: x y\nKey: value\u{a0}\nVt: x\u{b}\nFf: y\u{c}"
         );
     }
 }
