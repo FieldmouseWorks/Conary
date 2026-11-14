@@ -73,6 +73,27 @@ pub(crate) fn statement(commit: &str, tree: &str, result: &str) -> String {
     format!("conary commit v1\n{commit}\n{predicate}\n")
 }
 
+/// The statement of a gate on `tree` naming `gate` and skipping
+/// `skipped`: a push's of `commit` with no `base`, or a PR revision's,
+/// `commit` on its merge base `base`.
+pub(crate) fn gate_statement(
+    base: Option<&str>,
+    commit: &str,
+    tree: &str,
+    gate: &Value,
+    skipped: &[&str],
+) -> String {
+    let revision = base.map(|b| json!({"base": b, "head": commit}));
+    let predicate = json!({"result": "pass", "revision": revision, "tree": tree,
+                           "skipped": skipped,
+                           "log": {"sha256": "0".repeat(64), "artifact": "flake-log-1"},
+                           "gate": gate});
+    match base {
+        None => format!("conary commit v1\n{commit}\n{predicate}\n"),
+        Some(b) => format!("conary revision v1\n{b}\n{commit}\n{predicate}\n"),
+    }
+}
+
 /// The statement of a PR's negative run on `head`, whose merge base is
 /// `base`.
 pub(crate) fn negative_statement(base: &str, head: &str, result: &str) -> String {

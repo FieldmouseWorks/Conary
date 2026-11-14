@@ -175,6 +175,12 @@ pub enum Subject<'a> {
     /// (`docs/ci-attestation.md`, "Negative runs"): `head` on its merge
     /// base `base`.
     Negative { base: &'a str, head: &'a str },
+    /// A gate passing on exactly `tree`, by a check run on `commit`, to be
+    /// counted for another commit of that tree ([`crate::reuse`]): a push
+    /// of `commit` (`conary commit v1`), or a PR revision whose head is
+    /// `commit` (`conary revision v1`), which ran on its merge's tree. Only
+    /// CI's own attestation says it, never a service's.
+    Gate { commit: &'a str, tree: &'a str },
 }
 
 /// An attestation that holds, as it was checked, and the result it attests.
@@ -375,6 +381,10 @@ struct Predicate {
     skipped: Vec<String>,
     #[serde(default)]
     log: Option<PredicateLog>,
+    /// Which gate ran, as its workflow says (burrow's `gate-reuse`):
+    /// [`crate::reuse`] matches a request's against it.
+    #[serde(default)]
+    gate: Option<Value>,
 }
 
 /// A predicate's log, by its hash.
@@ -460,6 +470,19 @@ fn check(
             pushed(&statement, commit, tree, run)?
         }
         Subject::Negative { base, head } => (negative(&statement, base, head, run)?, None),
+        Subject::Gate { commit, tree } => {
+            if statement.starts_with("conary commit v1\n") {
+                if said("sha") != commit {
+                    return Err(format!("its token is for {}, not {commit}", said("sha")));
+                }
+                pushed(&statement, commit, tree, run)?
+            } else {
+                // A PR's run checks GitHub's merge, which its token names
+                // and nothing checks: what counts is the tree it says it
+                // ran on, under the signer's signature.
+                revised(&statement, commit, tree, run)?
+            }
+        }
     };
     Ok(Claimed {
         attested: Attested {
@@ -495,6 +518,79 @@ fn pushed(
     }
     let result = pass_result(&predicate.result, run)?;
     Ok((result, predicate.log.and_then(|l| l.sha256)))
+}
+
+/// A PR revision's gate statement, as one whose head is `head`, that ran
+/// on `tree`, passing as its check run did, and the log hash it signed.
+fn revised(
+    statement: &str,
+    head: &str,
+    tree: &str,
+    run: &CheckRun,
+) -> Result<(Outcome, Option<String>), String> {
+    let mut lines = statement.lines();
+    let (Some("conary revision v1"), Some(base), Some(of), Some(predicate), None) = (
+        lines.next(),
+        lines.next(),
+        lines.next(),
+        lines.next(),
+        lines.next(),
+    ) else {
+        return Err("its statement isn't a push's or a revision's subject and a predicate".into());
+    };
+    if of != head || !is_commit(base) {
+        return Err(format!(
+            "its statement is about {of} on {base}, not a revision of {head}"
+        ));
+    }
+    let predicate: Predicate =
+        serde_json::from_str(predicate).map_err(|e| format!("its predicate doesn't read: {e}"))?;
+    if predicate.revision != Some(serde_json::json!({"base": base, "head": head})) {
+        return Err("its predicate's revision isn't its subject's".into());
+    }
+    if predicate.tree != tree {
+        return Err(format!("it ran on tree {}, not {tree}", predicate.tree));
+    }
+    let result = pass_result(&predicate.result, run)?;
+    Ok((result, predicate.log.and_then(|l| l.sha256)))
+}
+
+/// What a gate's attested pass says of the gate itself: its identity, the
+/// predicate's `gate` (`None` when its workflow named none), the checks it
+/// skipped, and the signer workflow's commit its token names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Gated {
+    pub gate: Option<Value>,
+    pub skipped: Vec<String>,
+    pub workflow_sha: String,
+}
+
+/// What `attest`, a CI attestation of a push's or a revision's gate that
+/// [`attested`] checked, says of its gate. A service's says nothing of one.
+pub fn gated(attest: &Attest) -> Result<Gated, String> {
+    let Attest::GithubToken { statement, token } = attest else {
+        return Err("a service's statement names no gate".into());
+    };
+    let predicate = match statement.lines().next() {
+        Some("conary commit v1") => commit_statement(statement)?.1,
+        Some("conary revision v1") => statement
+            .lines()
+            .nth(3)
+            .ok_or("its statement has no predicate")
+            .and_then(|p| serde_json::from_str(p).map_err(|_| "its predicate doesn't read"))?,
+        _ => return Err("its statement isn't a gate's".into()),
+    };
+    let workflow_sha = kept_claims(token)
+        .as_ref()
+        .and_then(|c| c.get("job_workflow_sha"))
+        .and_then(Value::as_str)
+        .ok_or("its token names no signer commit")?
+        .to_owned();
+    Ok(Gated {
+        gate: predicate.gate,
+        skipped: predicate.skipped,
+        workflow_sha,
+    })
 }
 
 /// A commit's statement, as its subject and its predicate.
@@ -616,7 +712,7 @@ struct Header {
 }
 
 /// A token's claims, once its signature verifies against one of `keys`.
-fn verified(token: &str, keys: &[Key]) -> Result<Map<String, Value>, String> {
+pub(crate) fn verified(token: &str, keys: &[Key]) -> Result<Map<String, Value>, String> {
     let mut parts = token.split('.');
     let (Some(header), Some(claims), Some(signature), None) =
         (parts.next(), parts.next(), parts.next(), parts.next())
@@ -659,11 +755,11 @@ fn unpadded(n: &[u8]) -> &[u8] {
     &n[zeros..]
 }
 
-fn is_commit(s: &str) -> bool {
+pub(crate) fn is_commit(s: &str) -> bool {
     s.len() == 40 && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
-fn hex(bytes: &[u8]) -> String {
+pub(crate) fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 

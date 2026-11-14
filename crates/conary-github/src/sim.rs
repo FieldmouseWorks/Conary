@@ -92,6 +92,8 @@ pub(crate) struct World {
     /// Each check run's job's artifacts, by the job's check run id: name
     /// and GitHub's zip of it.
     artifacts: HashMap<u64, Vec<(String, Vec<u8>)>>,
+    /// The jobs, by check run id, whose artifacts GitHub lists as expired.
+    expired: BTreeSet<u64>,
     /// The runner each job ran on, when it isn't a fresh one of its own.
     runners: HashMap<u64, String>,
     /// Pairs of patches that change the same lines.

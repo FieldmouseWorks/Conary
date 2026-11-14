@@ -156,6 +156,9 @@ Its type is `https://github.com/FieldmouseWorks/Conary/blob/main/docs/ci-attesta
   wherever the caller says they do run.
 - `log`: the SHA-256 of the gate's output, and the name of the run's
   artifact that keeps it, its own for each job.
+- `gate`: which gate ran, as burrow's workflow names it with `gate-reuse`
+  on, after the fields above; left out otherwise. Only the
+  [gate-reuse lookup](gate-reuse.md) reads it.
 
 ### Public repos: a Sigstore bundle
 
@@ -285,7 +288,9 @@ fails closed.
 A verifier takes an attestation as evidence only when all of these hold.
 Conary's train checks a private repo's token this way (`conary-github`'s
 `attest`): on its candidate's commit, and on a PR's negative run when it's
-asked to. Nothing checks a bundle, or a PR's revision's gate, yet.
+asked to. The [gate-reuse lookup](gate-reuse.md) checks a push's or a PR
+revision's gate the same way, to count it for another commit of the tree it
+ran on. Nothing checks a bundle yet.
 
 1. GitHub signed it: the bundle verifies against Sigstore's public trust
    root, or the token against GitHub's published keys

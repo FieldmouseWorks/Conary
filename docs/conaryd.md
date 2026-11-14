@@ -52,6 +52,15 @@ where the caller is: `cn why` blames in its own process, and the MCP server
 in its, asking conaryd only for the repository's `landings`, the
 [notes](notes.md) of its landed changes with nothing left out.
 
+## Gate reuse
+
+The optional `--gate-reuse-config PATH` (`CONARY_GATE_REUSE_CONFIG`) starts
+another HTTP listener, which answers whether CI already attested a pass of a
+gate on a tree ([gate reuse](gate-reuse.md) says what counts and how it's
+configured). It reads GitHub, as the train does, and the ledger, and
+records nothing. Its requests are bounded like the webhook's: a head of
+16 KiB, a body of 64 KiB, five seconds for the whole request, 16 at once.
+
 ## Verified flow events
 
 The optional `--events-config PATH` (`CONARY_EVENTS_CONFIG`) enables a separate
