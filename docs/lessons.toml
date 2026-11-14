@@ -1,5 +1,5 @@
-# The register owned by #305. This task seeds only its two execution properties;
-# the broader seed extends this same file and these stable IDs.
+# The register owned by #305. Its first two entries are the execution
+# properties; the broader seed extends this same file and these stable IDs.
 
 [[lessons]]
 id = "no-pinned-engines"
@@ -16,3 +16,62 @@ from = ["https://github.com/FieldmouseWorks/burrow/issues/822", "https://github.
 applies = ["plugin runner", "judgment producers", "M6 slice 5c"]
 status = "built"
 where = ["docs/DESIGN.md#61-execution-choices-and-independent-judging", "docs/plugins.md#independence-and-execution-failures", "crates/conary-core/src/plugin/execution.rs", "crates/conary-github/src/flow/markers.rs", "crates/conary-github/tests/flow_execution.rs", "crates/conary-github/src/sim/tests/flow_markers.rs"]
+
+# Seeded 2026-11-14 from the stalls of 2026-11-13 and 11-14, each still open.
+# docs/m6-order.md says which plan answers each one.
+
+[[lessons]]
+id = "repair-ahead-of-red"
+lesson = "A repair to a red trunk never waits on the red trunk's own runs, and goes ahead of everything else in line."
+from = ["https://github.com/FieldmouseWorks/burrow/issues/1102", "https://github.com/FieldmouseWorks/burrow/issues/1108"]
+applies = ["flow", "red-trunk recovery", "M6 slice 7"]
+status = "open"
+where = ["https://github.com/FieldmouseWorks/Conary/issues/318"]
+
+[[lessons]]
+id = "owner-only-for-doors"
+lesson = "The flow asks the owner only for a one-way door it names; every other call it makes, records and shows."
+from = ["https://github.com/FieldmouseWorks/remi/issues/1241", "https://github.com/FieldmouseWorks/burrow/issues/1108"]
+applies = ["flow", "person approval", "M6 slice 5d"]
+status = "open"
+where = ["https://github.com/FieldmouseWorks/Conary/issues/312"]
+
+[[lessons]]
+id = "waiting-costs-nothing"
+lesson = "Waiting on CI starts no model and ends only on the verdict; time queued for a runner is capacity, never a stall."
+from = ["https://github.com/FieldmouseWorks/remi/issues/1238", "https://github.com/FieldmouseWorks/burrow/issues/1043"]
+applies = ["flow", "waits and deadlines", "M6 slice 5d"]
+status = "open"
+where = ["https://github.com/FieldmouseWorks/Conary/issues/312"]
+
+[[lessons]]
+id = "publish-only-news"
+lesson = "A published list of what is stuck is edited in place and notifies only for a new item someone can act on."
+from = ["https://github.com/FieldmouseWorks/remi/issues/1238", "https://github.com/FieldmouseWorks/burrow/issues/1046"]
+applies = ["upkeep", "M6 slice 5d"]
+status = "open"
+where = ["https://github.com/FieldmouseWorks/Conary/issues/316"]
+
+[[lessons]]
+id = "read-sized-to-data"
+lesson = "A read of GitHub is sized to what it reads, and one that fails delays only that repository's pass, never another's."
+from = ["https://github.com/FieldmouseWorks/burrow/pull/1040", "https://github.com/FieldmouseWorks/burrow/issues/1103"]
+applies = ["ingest", "flow", "M6 slice 5d"]
+status = "open"
+where = ["https://github.com/FieldmouseWorks/Conary/issues/312"]
+
+[[lessons]]
+id = "recover-by-kind"
+lesson = "A failed or cancelled check is brought back by a way GitHub allows for its kind, and the status quotes the error GitHub gave."
+from = ["https://github.com/FieldmouseWorks/burrow/issues/1062"]
+applies = ["flow", "effects and retries", "M6 slice 5d"]
+status = "open"
+where = ["https://github.com/FieldmouseWorks/Conary/issues/312"]
+
+[[lessons]]
+id = "scope-below-a-repo"
+lesson = "A pause or a focus can name less than a repository, and a change admitted through one gets everything landing needs: its review, its proofs and its judgment."
+from = ["https://github.com/FieldmouseWorks/burrow/pull/1070"]
+applies = ["flow settings", "per-repository landing ownership", "M6 slice 5d"]
+status = "open"
+where = ["https://github.com/FieldmouseWorks/Conary/issues/313"]
