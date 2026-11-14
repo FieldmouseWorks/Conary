@@ -45,6 +45,9 @@ pub struct PullRequest {
     pub user: User,
     pub merged: Option<bool>,
     pub created_at: Option<String>,
+    /// When anything about the PR itself last changed: a push, a retarget,
+    /// a close or reopen, an edit, a comment. To the second.
+    pub updated_at: Option<String>,
     pub merged_at: Option<String>,
     pub merge_commit_sha: Option<String>,
     pub auto_merge: Option<serde_json::Value>,

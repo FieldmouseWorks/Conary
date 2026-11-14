@@ -1,19 +1,20 @@
 //! A sync: the ledger brought up to date with a repo, read in two parts so
 //! the ledger's writer lock is held only while it records. [`gather`] reads
-//! what takes minutes, each open PR's check runs, statuses and reviews,
-//! before the lock; [`sync`], under it, lists the PRs again and records
-//! from what was gathered, with each PR's timeline read again, reading
-//! everything again only for a PR whose revision changed since.
+//! what takes minutes, each open PR's check runs, statuses, reviews and
+//! timeline, before the lock; [`sync`], under it, lists the PRs again and
+//! records from what was gathered, reading a PR's timeline again when the
+//! PR changed since, and everything again when its revision did.
 
 use std::collections::HashMap;
 use std::path::Path;
+use std::time::{Duration, SystemTime};
 
 use conary_core::ledger::{Change, Ledger, Status};
 use conary_core::op::Repo;
 use conary_core::{RevisionId, Store};
 
 use super::{Config, IngestError, Ingested, Read, Results, commit, record};
-use crate::api::{PullRequest, Pulls, Source};
+use crate::api::{Event, PullRequest, Pulls, Source};
 use crate::bases::MergeBases;
 
 /// What a sync read of a repo's open PRs before it took the ledger's lock.
@@ -28,7 +29,23 @@ pub struct Gathered {
 struct Held {
     revision: RevisionId,
     results: Results,
+    timeline: Option<Timeline>,
 }
+
+/// A PR's timeline, read after its results, and the PR's `updated_at` as
+/// it was listed before either. A retarget changes `updated_at`, so while
+/// the PR lists with the same one no retarget can have come since the
+/// timeline was read, and it still says which results came after the last.
+struct Timeline {
+    updated_at: String,
+    events: Vec<Event>,
+}
+
+/// How long before its timeline is read a PR must have last changed for
+/// the timeline to be kept: GitHub gives `updated_at` to the second, so a
+/// retarget in the same second as the change before it wouldn't show, and
+/// this box's clock and GitHub's needn't agree to the second.
+const SETTLED_FOR: Duration = Duration::from_secs(60);
 
 /// Reads what a [`sync`] of `repo` records for its open PRs, without the
 /// ledger: run it before the lock is taken, so other writers wait only for
@@ -72,9 +89,27 @@ fn held(
 ) -> Result<Held, IngestError> {
     let head = commit(&pr.head.sha)?;
     let base = commit(&bases.get(source, repo, &pr.base.sha, head.as_str())?)?;
+    let results = Results::of(source, repo, pr)?;
+    let asked = SystemTime::now();
+    let events = source.timeline(repo, pr.number)?;
+    let timeline = pr
+        .updated_at
+        .clone()
+        .filter(|at| settled_by(at, asked))
+        .map(|updated_at| Timeline { updated_at, events });
     Ok(Held {
         revision: RevisionId::new(&base, &head),
-        results: Results::of(source, repo, pr)?,
+        results,
+        timeline,
+    })
+}
+
+/// Whether a PR last changed at `at` changed at least [`SETTLED_FOR`]
+/// before `asked`. A time that can't be read never did.
+fn settled_by(at: &str, asked: SystemTime) -> bool {
+    chrono::DateTime::parse_from_rfc3339(at).is_ok_and(|t| {
+        let t = SystemTime::from(t);
+        t.checked_add(SETTLED_FOR).is_some_and(|by| by <= asked)
     })
 }
 
@@ -91,9 +126,11 @@ fn held(
 /// results are its own while it's at the revision they were read at: they
 /// stay bound to that merge base and head, and one pushed to, or whose base
 /// moved or was rewritten so its merge base changed, is read again, as is
-/// one opened since. Each PR's timeline is read here, after its results,
-/// so a result from before its latest retarget is left out, however many
-/// there were since the gather and wherever they went.
+/// one opened since. A PR's timeline is read again here, after its
+/// results, unless it lists with the same `updated_at` it had when its
+/// timeline was gathered, so a result from before its latest retarget is
+/// left out, however many there were since the gather and wherever they
+/// went.
 pub fn sync(
     store: &mut Store,
     source: &dyn Source,
@@ -114,7 +151,13 @@ pub fn sync(
         let base = commit(&bases.get(source, &full, &pr.base.sha, &pr.head.sha)?)?;
         let revision = RevisionId::new(&base, &commit(&pr.head.sha)?);
         let read = match open.remove(&pr.number) {
-            Some(h) if h.revision == revision => Read::after(source, &full, &pr, h.results)?,
+            Some(h) if h.revision == revision => match h.timeline {
+                Some(t) if pr.updated_at.as_ref() == Some(&t.updated_at) => Read {
+                    timeline: t.events,
+                    results: h.results,
+                },
+                _ => Read::after(source, &full, &pr, h.results)?,
+            },
             _ => Read::of(source, &full, &pr)?,
         };
         got.push(record(store, source, &config, &repo, &pr, base, read)?);
