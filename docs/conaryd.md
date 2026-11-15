@@ -131,7 +131,11 @@ A flow worker's answer (a review's, fix's, judge's, preparation's or
 proof's) is read only by a pass, and most publish nothing GitHub sends an
 event for, so conaryd kicks the worker's repository as the worker exits, however it ended: answered, failed or cancelled. Starting, it
 kicks every listed repository once, so an answer saved while it was down is
-read by that first pass. A worker's deadline stays booked as the backstop for
+read by that first pass. A worker that outlives the daemon that launched it
+still wakes the next one: each worker holds a lock, taken before it starts,
+until it exits, and a starting daemon waits on the lock of each worker with
+no answer yet and kicks its repository once it's free, its own cancellation
+of that worker included. A worker's deadline stays booked as the backstop for
 one whose exit nobody saw.
 
 A whole-repository pass that fails before its reports (GitHub unavailable, a

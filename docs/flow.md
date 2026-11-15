@@ -141,7 +141,9 @@ and atomically saves its validated response or failure. The next pass reads
 that answer into the decision engine's review/job/proof observations. A
 preparation's answer is read as readiness only, never as a verdict: anything
 but a `prepare` answer is a preparation that failed.
-Workers have file-backed logs and no inherited standard input or output.
+Workers have file-backed logs and no inherited pipes. A worker's standard
+input, which it never reads, is its `.running` lock, taken before it starts and
+held until it exits, so a daemon that didn't launch it can wait for its exit.
 
 The invocation has an absolute deadline: job timeout for review/fix/judge,
 proof timeout for prepare and proof. Describe and work share that deadline. A later pass

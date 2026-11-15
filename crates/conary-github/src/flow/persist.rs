@@ -128,6 +128,11 @@ impl Drop for LocalLock {
         let _ = self.0.unlock();
     }
 }
+/// A repository's flow directory under `root`: its records, its lock and its
+/// workers' invocations and answers.
+pub fn dir(root: &Path, repo: &conary_core::op::Repo) -> PathBuf {
+    root.join("flow").join(repo.to_string().to_lowercase())
+}
 pub struct Data {
     dir: PathBuf,
     _lock: LocalLock,
@@ -139,7 +144,7 @@ impl Data {
     }
 
     pub fn open(root: &Path, repo: &conary_core::op::Repo) -> Result<Self> {
-        let dir = root.join("flow").join(repo.to_string().to_lowercase());
+        let dir = dir(root, repo);
         fs::create_dir_all(&dir)?;
         let lock = LocalLock::take(&dir.join("lock"))?;
         Ok(Self { dir, _lock: lock })

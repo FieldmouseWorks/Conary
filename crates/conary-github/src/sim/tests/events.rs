@@ -369,7 +369,7 @@ fn a_workers_exit_wakes_its_repositorys_pass_however_it_ended() {
 fn the_daemon_reads_every_repository_once_as_it_starts() {
     let dir = tempfile::tempdir().unwrap();
     let runtime = runtime(dir.path(), "/nonexistent");
-    let queue = Queue::open(dir.path()).unwrap();
+    let queue = std::sync::Arc::new(Queue::open(dir.path()).unwrap());
     assert!(queue.take(1).unwrap().is_none());
     runtime.restart(&queue).unwrap();
     let now = crate::flow::jobs::now();
@@ -379,4 +379,67 @@ fn the_daemon_reads_every_repository_once_as_it_starts() {
         queue.finish(&work, &[], now).unwrap();
     }
     assert_eq!(repos, ["o/r", "o/s"]);
+}
+
+/// A worker an earlier daemon launched, still running as the next one
+/// starts, wakes that daemon's pass as it exits: answered, failed, or
+/// cancelled by the new daemon. Only the earlier daemon reaped it, and it's
+/// gone.
+#[test]
+fn a_worker_that_outlives_its_daemon_wakes_the_next_ones_pass() {
+    use crate::flow::jobs::{Launch, Process};
+    use std::time::Duration;
+    for (name, body) in [
+        (
+            "answered",
+            r#"while [ ! -e "${2%.job}.go" ]; do sleep 0.05; done; echo '{"at":1,"result":null}' > "${2%.job}.answer""#,
+        ),
+        (
+            "failed",
+            r#"while [ ! -e "${2%.job}.go" ]; do sleep 0.05; done; exit 1"#,
+        ),
+        (
+            "cancelled",
+            r#"while [ ! -e "${2%.job}.cancel" ]; do sleep 0.05; done"#,
+        ),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let scripts = tempfile::tempdir().unwrap();
+        let worker = crate::tokens::tests::script(scripts.path(), body);
+        let runtime = runtime(dir.path(), &worker);
+        let flow = dir.path().join("flow").join("o").join("r");
+        std::fs::create_dir_all(&flow).unwrap();
+        let job = flow.join("3-1.job");
+        std::fs::write(&job, b"{}").unwrap();
+        // A finished worker's invocation, already answered, isn't watched.
+        std::fs::write(flow.join("2-1.job"), b"{}").unwrap();
+        std::fs::write(flow.join("2-1.answer"), b"{}").unwrap();
+        // The earlier daemon, whose reaper died with it.
+        Process {
+            worker: worker.clone().into(),
+            ended: None,
+        }
+        .launch(&job)
+        .unwrap();
+        let queue = std::sync::Arc::new(Queue::open(dir.path()).unwrap());
+        runtime.restart(&queue).unwrap();
+        let now = crate::flow::jobs::now();
+        while let Some(work) = queue.take(now).unwrap() {
+            queue.finish(&work, &[], now).unwrap();
+        }
+        let (woken, thread) = sleeper(&queue);
+        assert!(
+            woken.recv_timeout(Duration::from_millis(500)).is_err(),
+            "a running {name} worker woke the pass"
+        );
+        let release = if name == "cancelled" { "cancel" } else { "go" };
+        std::fs::write(job.with_extension(release), b"\n").unwrap();
+        let work = woken
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap_or_else(|_| panic!("a {name} worker that outlived its daemon woke nothing"));
+        assert_eq!(work.repo, "o/r");
+        thread.join().unwrap();
+        queue.finish(&work, &[], crate::flow::jobs::now()).unwrap();
+        assert!(queue.take(crate::flow::jobs::now()).unwrap().is_none());
+    }
 }

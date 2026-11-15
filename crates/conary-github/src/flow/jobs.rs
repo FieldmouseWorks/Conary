@@ -4,7 +4,7 @@ use super::*;
 use conary_core::plugin::{self, Limits, Plugin, Task};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -149,10 +149,15 @@ pub struct Process {
 impl Launch for Process {
     fn launch(&self, path: &Path) -> Result<()> {
         let log = std::fs::File::create(path.with_extension("log"))?;
+        // Locked before the worker exists, and held by it as its standard
+        // input, which it never reads, until it exits: so a daemon that
+        // didn't launch it still sees it end (`watch`).
+        let running = running(path)?;
+        running.try_lock()?;
         let mut child = Command::new(&self.worker)
             .arg("flow-worker")
             .arg(path)
-            .stdin(Stdio::null())
+            .stdin(running)
             .stdout(log.try_clone()?)
             .stderr(log)
             .spawn()?;
@@ -167,6 +172,45 @@ impl Launch for Process {
         });
         Ok(())
     }
+}
+/// The lock a launched worker holds from before it starts until it exits.
+fn running(path: &Path) -> Result<std::fs::File> {
+    Ok(std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(path.with_extension("running"))?)
+}
+/// Tells `ended` once the worker launched for `path` has exited, however it
+/// ended, from a process that didn't launch it: a daemon started while its
+/// predecessor's workers still run. A worker that already exited, or never
+/// started, holds nothing, so `ended` hears of it at once.
+pub fn watch(path: &Path, ended: Ended) -> Result<()> {
+    let running = running(path)?;
+    std::thread::Builder::new().spawn(move || {
+        let _ = running.lock();
+        let _ = running.unlock();
+        ended();
+    })?;
+    Ok(())
+}
+/// The invocations saved in a repository's flow directory that have no
+/// answer yet: those whose workers may still be running.
+pub fn outstanding(dir: &Path) -> Result<Vec<PathBuf>> {
+    let entries = match std::fs::read_dir(dir) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        entries => entries?,
+    };
+    let mut jobs = Vec::new();
+    for entry in entries {
+        let path = entry?.path();
+        if path.extension().is_some_and(|e| e == "job") && !path.with_extension("answer").exists() {
+            jobs.push(path);
+        }
+    }
+    jobs.sort();
+    Ok(jobs)
 }
 pub fn completion(work: &Work, now: u64) -> Result<Completion> {
     collect(work, now, true)
