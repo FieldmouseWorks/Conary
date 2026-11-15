@@ -27,7 +27,7 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
             .chain(f.claims.iter().map(|c| &c.job))
             .chain(f.proof_data.records.iter().map(|r| &r.job))
             .chain(f.proof_data.live.iter().map(|h| &h.job))
-            .chain(f.proof_data.inputs_job.iter().map(|h| &h.job))
+            .chain(f.proof_data.prepared.iter().map(|p| &p.job))
             .any(|j| j.id == *id && !j.state.live());
         if ended || f.stopped_jobs.contains(id) {
             m.retired_jobs.insert(id.clone());
@@ -45,6 +45,10 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
         .proof_data
         .live
         .retain(|h| !m.retired_jobs.contains(&h.job.id));
+    raised
+        .proof_data
+        .prepared
+        .retain(|p| !m.retired_jobs.contains(&p.job.id));
     if let Some(record) = raised
         .proof_data
         .records
@@ -52,14 +56,6 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
         .max_by_key(|r| r.job.started)
     {
         raised.jobs.insert(Kind::Proof, record.job.clone());
-    }
-    if raised
-        .proof_data
-        .inputs_job
-        .as_ref()
-        .is_some_and(|j| m.retired_jobs.contains(&j.job.id))
-    {
-        raised.proof_data.inputs_job = None;
     }
     if m.judge_issuance
         .keys()
@@ -399,8 +395,7 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
             on_usage: watched
                 && !m.strikes.values().any(|n| *n >= 3)
                 && f.jobs.iter().any(|(kind, j)| {
-                    matches!(j.state, JobState::Running | JobState::Queued)
-                        && (*kind != Kind::Proof || super::proofs::engine_job(f, &j.id))
+                    matches!(j.state, JobState::Running | JobState::Queued) && *kind != Kind::Proof
                 }),
             proof: if matches!(step, Step::PostProof) {
                 super::proofs::posting(f)
@@ -408,7 +403,7 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
                 None
             }
             .or_else(|| {
-                if matches!(step, Step::Prove | Step::PostProof) {
+                if matches!(step, Step::Prepare | Step::Prove | Step::PostProof) {
                     super::proofs::next(f, now).and_then(|(_, _, _, plan)| plan)
                 } else {
                     None

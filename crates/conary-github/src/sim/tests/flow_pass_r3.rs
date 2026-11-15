@@ -353,8 +353,11 @@ fn corrupt_proof_answers_are_one_unknown_holder_and_do_not_break_other_prs() {
     c.hub
         .post_status(&head(3), json!({"context":"machine","state":"pending"}));
     run(&c, Some(3), false);
+    c.prepared(true, Some(3));
+    run(&c, Some(3), false);
     let record = c.record();
-    let work = &record.jobs[0];
+    let work = &record.jobs[1];
+    assert!(matches!(work.purpose, jobs::Purpose::Proof));
     std::fs::write(work.path.with_extension("answer"), b"corrupt completion").unwrap();
     another(&c);
     for dry in [true, false] {
@@ -368,6 +371,8 @@ fn corrupt_proof_answers_are_one_unknown_holder_and_do_not_break_other_prs() {
     c.hub.flow_review(REPO, 5, "reviewer", Verdict::Clean, 0);
     c.hub
         .post_status(&head(5), json!({"context":"machine","state":"pending"}));
+    run(&c, Some(5), false);
+    c.prepared(true, Some(5));
     for slots in [1, 2] {
         c.config.settings.proof_slots = Some(slots);
         for only in [None, Some(5)] {

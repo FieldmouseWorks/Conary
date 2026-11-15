@@ -28,6 +28,9 @@ pub(super) struct Case {
     pub stopped_jobs: std::collections::BTreeSet<String>,
     pub proof: Option<Proof>,
     pub proof_data: ProofData,
+    /// What every head's preparation of its next proof already answered,
+    /// for cases about what follows it.
+    pub readiness: Option<Readiness>,
     pub failed: Option<Failure>,
     pub failed_review: Option<String>,
     pub review_unavailable: bool,
@@ -51,6 +54,7 @@ impl Case {
             stopped_jobs: Default::default(),
             proof: None,
             proof_data: ProofData::default(),
+            readiness: None,
             failed: None,
             failed_review: None,
             review_unavailable: false,
@@ -212,6 +216,20 @@ impl Case {
         f.claims = self.claims.clone();
         f.stopped_jobs = self.stopped_jobs.clone();
         f.proof_data = self.proof_data.clone();
+        if let Some(answer) = &self.readiness {
+            f.proof_data.prepared.push(Preparation {
+                job: Job {
+                    id: "prepared".into(),
+                    revision: f.revision.clone(),
+                    state: JobState::Done,
+                    started: 0,
+                    repeated: false,
+                },
+                recipes: crate::flow::selected(&f),
+                ended: Some(0),
+                answer: Some(answer.clone()),
+            });
+        }
         if let Some(p) = &self.proof {
             f.proof = p.clone();
         }
@@ -225,6 +243,64 @@ impl Case {
         f.train = self.train.clone();
         f.unseen |= self.unseen;
         f
+    }
+    /// A preparation of the programs the next proof runs on the head (its
+    /// builds, else its commands), started at 600: running while `ended` is
+    /// `None`, else ended then with `answer`, or broken without one.
+    pub fn prepared(&mut self, answer: Option<Readiness>, ended: Option<u64>) {
+        let programs = |build: bool| -> BTreeMap<String, Recipe> {
+            self.settings
+                .proofs
+                .iter()
+                .filter(|(_, r)| match r {
+                    Recipe::Build(_) => build,
+                    Recipe::Run(_) => !build,
+                    Recipe::Job(_) => false,
+                })
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect()
+        };
+        let recipes = Some(programs(true))
+            .filter(|b| !b.is_empty())
+            .unwrap_or_else(|| programs(false));
+        let id = format!("prepare-{}", self.proof_data.prepared.len() + 1);
+        self.proof_data.prepared.push(Preparation {
+            job: Job {
+                id,
+                revision: self.scope(),
+                state: match (ended, &answer) {
+                    (None, _) => JobState::Running,
+                    (Some(_), Some(_)) => JobState::Done,
+                    (Some(_), None) => JobState::Broken,
+                },
+                started: 600,
+                repeated: false,
+            },
+            recipes,
+            ended,
+            answer,
+        });
+    }
+    /// A finished preparation that says proving may start, and whether it
+    /// needs a proof slot.
+    pub fn ready(&mut self, slot: bool) {
+        self.prepared(
+            Some(Readiness {
+                ready: true,
+                slot,
+                why: "inputs built".into(),
+            }),
+            Some(650),
+        );
+    }
+    /// Every head's next proof prepared, needing a slot: proving starts as
+    /// it did before proofs were prepared.
+    pub fn programs(&mut self) {
+        self.readiness = Some(Readiness {
+            ready: true,
+            slot: true,
+            why: "inputs built".into(),
+        });
     }
     pub fn view(&self, now: u64) -> Next {
         next(&self.facts(), &self.memory, now).0

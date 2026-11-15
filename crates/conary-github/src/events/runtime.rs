@@ -75,7 +75,7 @@ impl Runtime {
         } else {
             None
         };
-        let process = flow::jobs::Process(self.worker.clone());
+        let process = self.launcher(&work.repo, queue);
         let pass = flow::Pass {
             config: &config,
             policy: &policy,
@@ -91,6 +91,42 @@ impl Runtime {
         }
         reports
     }
+    /// Launches this repository's workers, and kicks it again as each one
+    /// exits, so the next pass reads its answer, its failure or its
+    /// cancellation without waiting for GitHub or a deadline.
+    pub fn launcher(&self, repo: &str, queue: &std::sync::Arc<Queue>) -> flow::jobs::Process {
+        flow::jobs::Process {
+            worker: self.worker.clone(),
+            ended: Some(ended(repo, queue)),
+        }
+    }
+    /// Kicks every repository once, as the daemon starts, so a worker that
+    /// answered while no daemon ran, or before its exit was kicked, is read
+    /// by that first pass. Then it watches each worker with no answer yet,
+    /// one an earlier daemon launched that may still run, and kicks its
+    /// repository as it exits, however it ended, its cancellation by this
+    /// daemon included.
+    pub fn restart(&self, queue: &std::sync::Arc<Queue>) -> Result<()> {
+        for repo in &self.repos {
+            queue.kick(super::Kick {
+                repo: repo.to_string(),
+                pr: None,
+            })?;
+        }
+        for repo in &self.repos {
+            let watched =
+                flow::jobs::outstanding(&flow::persist::dir(&self.data, repo)).and_then(|jobs| {
+                    jobs.iter()
+                        .try_for_each(|job| flow::jobs::watch(job, ended(&repo.to_string(), queue)))
+                });
+            if watched.is_err() {
+                eprintln!(
+                    "conaryd: the flow workers {repo} had running can't all be watched; their deadlines are still booked"
+                );
+            }
+        }
+        Ok(())
+    }
     /// The worker: a failed pass books its repository's recovery and the
     /// rest go on. Only the mailbox's own errors stop it. The log names the
     /// repository and its retry, never an error's text, which no webhook
@@ -100,6 +136,7 @@ impl Runtime {
         ledger: &std::path::Path,
         queue: &std::sync::Arc<Queue>,
     ) -> Result<std::convert::Infallible> {
+        self.restart(queue)?;
         queue.work(
             |work| {
                 if !self
@@ -120,4 +157,22 @@ impl Runtime {
             },
         )
     }
+}
+/// Kicks `repo` once a worker of it has exited. The kick is the mailbox's,
+/// durable once made; a worker's deadline stays booked as the backstop for
+/// one whose exit nobody saw.
+fn ended(repo: &str, queue: &std::sync::Arc<Queue>) -> flow::jobs::Ended {
+    let queue = std::sync::Arc::clone(queue);
+    let repo = repo.to_owned();
+    std::sync::Arc::new(move || {
+        let kick = super::Kick {
+            repo: repo.clone(),
+            pr: None,
+        };
+        if queue.kick(kick).is_err() {
+            eprintln!(
+                "conaryd: a flow worker of {repo} ended, but its mailbox can't be written; its deadline is still booked"
+            );
+        }
+    })
 }

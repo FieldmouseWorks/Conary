@@ -134,8 +134,25 @@ pub(crate) fn act<G: Write>(
                     data,
                 )?;
             }
+            Step::Prepare => {
+                let checks = super::proofs::selected(f).into_keys().collect();
+                let tree = github.tree(&repo, &f.revision.head)?;
+                pass.start(
+                    f,
+                    Purpose::Prepare,
+                    Task::Prepare {
+                        repo,
+                        head: f.revision.head.clone(),
+                        tree,
+                        checks,
+                    },
+                    Vec::new(),
+                    record,
+                    data,
+                )?;
+            }
             Step::Prove => {
-                let checks = super::pass::recipes(f).into_keys().collect();
+                let checks = super::proofs::selected(f).into_keys().collect();
                 let tree = github.tree(&repo, &f.revision.head)?;
                 pass.start(
                     f,
@@ -345,7 +362,7 @@ fn failure(step: &Step) -> Failure {
         Step::CloseAlreadyLanded => Failure::Close,
         Step::PostReview(_) => Failure::Post,
         Step::PostFix(_) => Failure::Answer,
-        Step::Prove | Step::PostProof => Failure::Build,
+        Step::Prepare | Step::Prove | Step::PostProof => Failure::Build,
         Step::QueueReview(_) | Step::HandFix(_) | Step::Judge(_) => Failure::Job,
         Step::StopJob(_) => Failure::Stop,
         _ => Failure::Status,

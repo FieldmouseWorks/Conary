@@ -263,3 +263,74 @@ fn saved_judge_decisions_load_from_before_and_after_they_carried_reasons() {
         }
     }
 }
+
+#[test]
+fn saved_proof_plans_load_from_before_proofs_were_prepared() {
+    let (root, repo, data) = fixture();
+    let recipes = json!({"build": {"Build": ".#check"}, "test": {"Run": ["cargo", "test"]}});
+    let derivations = json!({"build": {"path": "/nix/store/a.drv", "outputs": ["/nix/store/a"]}});
+    // Every plan a pass before them could save. Each is a plan the flow no
+    // longer makes, and loads as none; nothing else in the record changes.
+    for legacy in [
+        json!({"Evaluate": recipes}),
+        json!({"Build": derivations}),
+        json!({"Run": recipes}),
+        json!({"Job": {"review": {"Job": "codex"}}}),
+        json!({"Prebuild": ["/nix/store/a"]}),
+        json!({"Stored": derivations}),
+    ] {
+        let mut value: Value = serde_json::from_str(BASE_RECORD).unwrap();
+        value["decision"]["step"] = json!("Prove");
+        value["decision"]["proof"] = legacy.clone();
+        std::fs::write(data.path(3), value.to_string()).unwrap();
+        let mut expected = canonical_record();
+        expected["decision"]["step"] = json!("Prove");
+        for record in [
+            data.load(3).unwrap(),
+            Data::read(root.path(), &repo, 3).unwrap(),
+        ] {
+            assert_eq!(record.decision.as_ref().unwrap().proof, None, "{legacy}");
+            assert_eq!(serde_json::to_value(&record).unwrap(), expected);
+        }
+    }
+    // Today's plans keep theirs, and a missing plan is none.
+    for plan in [
+        ProofPlan::Prepare(serde_json::from_value(recipes.clone()).unwrap()),
+        ProofPlan::Prove {
+            recipes: serde_json::from_value(recipes.clone()).unwrap(),
+            slot: false,
+        },
+        ProofPlan::Post {
+            job: "3-1".into(),
+            verdicts: Default::default(),
+            note: true,
+        },
+    ] {
+        let mut value = canonical_record();
+        value["decision"]["proof"] = serde_json::to_value(&plan).unwrap();
+        std::fs::write(data.path(3), value.to_string()).unwrap();
+        for record in [
+            data.load(3).unwrap(),
+            Data::read(root.path(), &repo, 3).unwrap(),
+        ] {
+            assert_eq!(record.decision.as_ref().unwrap().proof, Some(plan.clone()));
+            assert_eq!(serde_json::to_value(&record).unwrap(), value);
+        }
+    }
+    let mut value = canonical_record();
+    value["decision"].as_object_mut().unwrap().remove("proof");
+    std::fs::write(data.path(3), value.to_string()).unwrap();
+    assert_eq!(data.load(3).unwrap().decision.unwrap().proof, None);
+    // A plan that was never one still fails to load.
+    for bad in [
+        json!({"Unknown": {}}),
+        json!({"Build": {"build": "not a derivation"}}),
+        json!({"Prove": {"recipes": {}}}),
+    ] {
+        let mut value = canonical_record();
+        value["decision"]["proof"] = bad;
+        std::fs::write(data.path(3), value.to_string()).unwrap();
+        assert!(data.load(3).is_err());
+        assert!(Data::read(root.path(), &repo, 3).is_err());
+    }
+}

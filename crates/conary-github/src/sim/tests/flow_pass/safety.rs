@@ -126,7 +126,9 @@ fn pass_proof_slots_include_workers_started_in_this_pass_and_targeted_kicks() {
                 .post_status(&head(pr), json!({"context":"machine", "state":"pending"}));
         }
         let now = flow::jobs::now();
-        let reports = c.pass(now, dry);
+        c.pass(now, false);
+        c.prepared(true, None);
+        let reports = c.pass(now + 1, dry);
         assert_eq!(reports[0].next.as_ref().unwrap().step, Step::Prove);
         assert_eq!(reports[1].next.as_ref().unwrap().stage, Stage::ProofSlot);
         let reports = Pass {
@@ -134,7 +136,7 @@ fn pass_proof_slots_include_workers_started_in_this_pass_and_targeted_kicks() {
             policy: &c.policy,
             root: c.dir.path(),
             launcher: &c.deferred,
-            now: now + 1,
+            now: now + 2,
             dry_run: dry,
             ledger: None,
         }

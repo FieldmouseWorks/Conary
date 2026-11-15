@@ -61,7 +61,7 @@ fn docs_waiver_rejects_gate_edits_renames_cut_files_and_another_app() {
         }
         let f = s.read(&[r], &["proof"]);
         assert_eq!(f.proof, Proof::Needed, "case {case}");
-        assert_eq!(next(&f, &s.memory, 4000).0.step, Step::Prove, "case {case}");
+        assert!(at_proof(&next(&f, &s.memory, 4000).0), "case {case}");
     }
     let s = Scenario::new();
     s.hub.fail(Call::Files);
@@ -196,7 +196,7 @@ fn fresh_retarget_runs_replace_only_the_same_workflows_stale_base() {
         let s = on_base(base);
         let f = s.read(&runs, &["proof"]);
         assert_eq!(
-            next(&f, &s.memory, 4000).0.step == Step::Prove,
+            at_proof(&next(&f, &s.memory, 4000).0),
             ready,
             "{base} {f:?}"
         );
@@ -226,7 +226,7 @@ fn a_retargets_own_docs_or_whole_gate_decides_proofs_and_red() {
             &[Run::docs(1, TRUNK, old), Run::whole(2, "next", "success")],
             &["proof"],
         );
-        assert_eq!(next(&f, &s.memory, 4000).0.step, Step::Prove);
+        assert!(at_proof(&next(&f, &s.memory, 4000).0));
     }
     let s = on_base("next");
     let f = s.read(

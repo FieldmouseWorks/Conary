@@ -225,6 +225,7 @@ mod tests {
                 deadline: 0,
                 posted: false,
                 recipes: Default::default(),
+                slotless: false,
                 handed: Vec::new(),
                 sent: Default::default(),
             }],

@@ -643,6 +643,8 @@ pub enum Step {
     PostFix(String),
     HandFix(Kind),
     StopJob(String),
+    /// Ready a proof's inputs, holding no proof slot.
+    Prepare,
     Prove,
     PostProof,
     /// Ask a judge, for these reasons. Empty when a judge already started on
@@ -693,6 +695,7 @@ pub struct Next {
     #[serde(default)]
     pub wait_until: Option<u64>,
     pub overdue_at: Option<u64>,
+    #[serde(default, deserialize_with = "super::persist::proof_plan::deserialize")]
     pub proof: Option<ProofPlan>,
     pub wait_on: Option<WaitOn>,
     pub on_usage: bool,

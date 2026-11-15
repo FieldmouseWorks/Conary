@@ -127,6 +127,17 @@ a running pass make one additional pass. The existing repository file lock
 still guards execution. A separate data-directory lock prevents two event
 workers from owning the same mailbox. In-flight work is recovered on restart.
 
+A flow worker's answer (a review's, fix's, judge's, preparation's or
+proof's) is read only by a pass, and most publish nothing GitHub sends an
+event for, so conaryd kicks the worker's repository as the worker exits, however it ended: answered, failed or cancelled. Starting, it
+kicks every listed repository once, so an answer saved while it was down is
+read by that first pass. A worker that outlives the daemon that launched it
+still wakes the next one: each worker holds a lock, taken before it starts,
+until it exits, and a starting daemon waits on the lock of each worker with
+no answer yet and kicks its repository once it's free, its own cancellation
+of that worker included. A worker's deadline stays booked as the backstop for
+one whose exit nobody saw.
+
 A whole-repository pass that fails before its reports (GitHub unavailable, a
 token command failing) books a durable recovery for that repository instead of
 stopping the worker: 60 seconds after the first failure, counted from when the
@@ -152,8 +163,8 @@ These are failure-triggered bookings, not periodic repository scans. Explicit
 waits name the first second their predicate permits progress (the quiet handoff
 requires the second after its inclusive quiet period).
 
-The worker sleeps on a condition variable until an incoming kick or that
-booked time, consumes the booking once, and runs a pass. There is no periodic
+The worker sleeps on a condition variable until a kick (a webhook's, a flow
+worker's exit, or its own start) or that booked time, consumes the booking once, and runs a pass. There is no periodic
 scan or polling timer. Already elapsed deadlines are not rebooked by an
 unchanged report. The mailbox, status receipts, failure backoffs, repository recoveries and delivery cache are mutable JSON files in
 `data`, beside `flow/` memory, with atomic rename and file/directory sync;

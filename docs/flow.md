@@ -44,7 +44,8 @@ Omitted settings use `flow::Settings` defaults; unknown keys are rejected.
 The defaults name no machine, account, label or engine, and start no paid
 work, so a machine supplies its own: with no `review_authors` no review is
 queued, with no `owner_label` what the owner decides waits unlisted, and
-`proof_slots` defaults to `0`, which starts no proof (`null` sets no limit).
+`proof_slots` defaults to `0`, which starts no proof and no preparation
+(`null` sets no limit).
 Execution choices are optional entries in the same machine-owned configuration:
 
 ```json
@@ -73,8 +74,8 @@ The paths name executables, without shell parsing. They use the negotiated
 [plugin contract](plugins.md), including bounded responses and session
 independence. Judges require v3 and every new flow invocation requests a
 fresh context. Known reviewer sessions accompany the judge request.
-Fix and judge requests name the PR, and a proof request the head whose tree
-it proves. A judge request carries the decision's reasons as `why`, in the
+Fix and judge requests name the PR, and a proof or prepare request the head
+whose tree it proves. A judge request carries the decision's reasons as `why`, in the
 contract's words. One asked again only because a judge already started on
 this head and base carries that judge's reasons, even if the description
 changed since, or `started` when that judge predates recorded reasons. Its `context` is
@@ -137,11 +138,15 @@ Starting long work saves the invocation and ownership before spawning the
 hidden `cn flow-worker` entry. The pass returns without waiting for describe
 or the task. A worker locks its invocation, runs the core plugin runner,
 and atomically saves its validated response or failure. The next pass reads
-that answer into the decision engine's review/job/proof observations.
-Workers have file-backed logs and no inherited standard input or output.
+that answer into the decision engine's review/job/proof observations. A
+preparation's answer is read as readiness only, never as a verdict: anything
+but a `prepare` answer is a preparation that failed.
+Workers have file-backed logs and no inherited pipes. A worker's standard
+input, which it never reads, is its `.running` lock, taken before it starts and
+held until it exits, so a daemon that didn't launch it can wait for its exit.
 
 The invocation has an absolute deadline: job timeout for review/fix/judge,
-proof timeout for proof. Describe and work share that deadline. A later pass
+proof timeout for prepare and proof. Describe and work share that deadline. A later pass
 turns a lost worker into a failed job at its deadline; it never relaunches the
 same invocation. Cancellation creates a marker the runner checks before
 accepting a response. A crash between saving ownership and launching waits
@@ -253,10 +258,12 @@ checks, with `--anchor-repo` required for train-enabled passes. Direct and
 delegated R2 landings are refused even after owner approval: R2 must use the
 train's exact candidate-tree evidence and trunk binding.
 
-Proof slots count active workers across all open PRs, including workers outside
-a targeted kick and admissions earlier in this pass. Queued first-priority PRs
+Proof slots count active proof workers across all open PRs, including workers outside
+a targeted kick and admissions earlier in this pass. A preparation, and a
+proof its preparation said needs no slot, hold none. Queued first-priority PRs
 keep their order. Dry runs reserve hypothetical slots for the decisions they
-print, without starting workers. Cancellation does not release a slot before
+print, without starting workers, and only for a proof that needs one.
+Cancellation does not release a slot before
 the worker answers. An unreadable ownership record or proof answer reserves
 the configured capacity conservatively, once per pass. Its error remains on
 its own PR; unrelated reviews and fixes still proceed. Capacity is a numeric
@@ -347,11 +354,23 @@ judgment and dependency generations (including conflicts and tombstones),
 local worker results, checks and policy inputs both after publication and
 before using the permission.
 
-The v1 proof task runs the whole requested proof. Every full plugin worker
-therefore takes a repository proof slot, including Build's initial Evaluate
-plan and Run/Job recipes. A targeted kick reads the other open PRs' queue
-priority even before their first pass; dry runs reserve virtual slots within
-the pass using the same ordering.
+A proof is a program, and goes in two steps, both to the proof plugin
+(`flow::proofs`). The flow selects the pending checks whose recipe is a
+program, a `Build` before a `Run`, and asks once per head and selected
+recipe set:
+
+- **`prepare`** readies their inputs. It holds no proof slot and isn't
+  counted against `proof_slots`; its deadline is `proof_timeout`. One runs
+  at a time per head and recipe set, and it's stopped once the head or a
+  selected recipe changes. A preparation that failed, or answered that the
+  inputs aren't ready, is asked again after fifteen minutes.
+- **`proof`** then runs the checks. It takes a slot, in the queue order
+  above, unless its preparation answered `slot: false`.
+
+A `Job` recipe is a model-run check, not a proof, and is never sent to a
+proof plugin: its check waits, with that reason. A targeted kick reads the
+other open PRs' queue priority even before their first pass; dry runs
+reserve virtual slots within the pass using the same ordering.
 
 A refused write is saved as a failure observation for the next decision.
 Retry passes still revoke permission while leaving the failed substantive

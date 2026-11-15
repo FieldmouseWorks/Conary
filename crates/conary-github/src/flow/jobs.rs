@@ -4,7 +4,7 @@ use super::*;
 use conary_core::plugin::{self, Limits, Plugin, Task};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -13,6 +13,8 @@ pub enum Purpose {
     Fix(Kind),
     Judge,
     Proof,
+    /// A proof's preparation, which holds no proof slot.
+    Prepare,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Work {
@@ -22,6 +24,9 @@ pub struct Work {
     pub deadline: u64,
     pub posted: bool,
     pub recipes: std::collections::BTreeMap<String, Recipe>,
+    /// A proof its preparation said needs no proof slot, so holds none.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub slotless: bool,
     /// A fix's problems, by index: the finding each was and the target its
     /// answer goes to, or None for a problem that isn't a finding.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -130,25 +135,82 @@ pub fn worker(path: &Path) -> Result<()> {
 pub trait Launch {
     fn launch(&self, path: &Path) -> Result<()>;
 }
+/// Told when a worker exits, however it ended.
+pub type Ended = std::sync::Arc<dyn Fn() + Send + Sync>;
 /// The CLI's hidden worker entry, with file-backed output and no inherited pipes.
-pub struct Process(pub PathBuf);
+pub struct Process {
+    pub worker: PathBuf,
+    /// Told once each worker this launches has exited, answered or not: only
+    /// a pass reads its answer, and most workers publish nothing GitHub sends
+    /// an event for, so this is how a daemon reads it without waiting on a
+    /// deadline.
+    pub ended: Option<Ended>,
+}
 impl Launch for Process {
     fn launch(&self, path: &Path) -> Result<()> {
         let log = std::fs::File::create(path.with_extension("log"))?;
-        let mut child = Command::new(&self.0)
+        // Locked before the worker exists, and held by it as its standard
+        // input, which it never reads, until it exits: so a daemon that
+        // didn't launch it still sees it end (`watch`).
+        let running = running(path)?;
+        running.try_lock()?;
+        let mut child = Command::new(&self.worker)
             .arg("flow-worker")
             .arg(path)
-            .stdin(Stdio::null())
+            .stdin(running)
             .stdout(log.try_clone()?)
             .stderr(log)
             .spawn()?;
         // Reap fast workers while a large pass is still running. Rust does
         // not wait for detached threads when the invoking CLI exits.
+        let ended = self.ended.clone();
         std::thread::spawn(move || {
             let _ = child.wait();
+            if let Some(ended) = ended {
+                ended();
+            }
         });
         Ok(())
     }
+}
+/// The lock a launched worker holds from before it starts until it exits.
+fn running(path: &Path) -> Result<std::fs::File> {
+    Ok(std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(path.with_extension("running"))?)
+}
+/// Tells `ended` once the worker launched for `path` has exited, however it
+/// ended, from a process that didn't launch it: a daemon started while its
+/// predecessor's workers still run. A worker that already exited, or never
+/// started, holds nothing, so `ended` hears of it at once.
+pub fn watch(path: &Path, ended: Ended) -> Result<()> {
+    let running = running(path)?;
+    std::thread::Builder::new().spawn(move || {
+        let _ = running.lock();
+        let _ = running.unlock();
+        ended();
+    })?;
+    Ok(())
+}
+/// The invocations saved in a repository's flow directory that have no
+/// answer yet: those whose workers may still be running.
+pub fn outstanding(dir: &Path) -> Result<Vec<PathBuf>> {
+    let entries = match std::fs::read_dir(dir) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        entries => entries?,
+    };
+    let mut jobs = Vec::new();
+    for entry in entries {
+        let path = entry?.path();
+        if path.extension().is_some_and(|e| e == "job") && !path.with_extension("answer").exists() {
+            jobs.push(path);
+        }
+    }
+    jobs.sort();
+    Ok(jobs)
 }
 pub fn completion(work: &Work, now: u64) -> Result<Completion> {
     collect(work, now, true)
