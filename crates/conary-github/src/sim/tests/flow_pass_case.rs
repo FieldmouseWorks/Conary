@@ -201,6 +201,43 @@ impl Case {
             }
         }
     }
+    /// Answers each launched preparation, of PR `only` or of every PR, as
+    /// ready, needing a proof slot or not. Other launches stay launched.
+    pub(super) fn prepared(&self, slot: bool, only: Option<u64>) {
+        self.deferred.0.borrow_mut().retain(|path| {
+            let invocation: flow::jobs::Invocation =
+                serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+            let conary_core::plugin::Task::Prepare { .. } = invocation.task else {
+                return true;
+            };
+            let name = path.file_name().unwrap().to_string_lossy();
+            if only.is_some_and(|n| !name.starts_with(&format!("{n}-"))) {
+                return true;
+            }
+            let completion = flow::jobs::Completion {
+                at: flow::jobs::now(),
+                result: Some(Ok(conary_core::plugin::Response {
+                    contract: conary_core::plugin::CONTRACT.into(),
+                    by: conary_core::plugin::Identity {
+                        engine: "fixture".into(),
+                        session: None,
+                    },
+                    execution: None,
+                    answer: conary_core::plugin::Answer::Prepare {
+                        ready: true,
+                        slot,
+                        why: "inputs built".into(),
+                    },
+                })),
+            };
+            std::fs::write(
+                path.with_extension("answer"),
+                serde_json::to_vec(&completion).unwrap(),
+            )
+            .unwrap();
+            false
+        });
+    }
     pub(super) fn record(&self) -> flow::Record {
         Data::read(self.dir.path(), &REPO.parse().unwrap(), 3).unwrap()
     }

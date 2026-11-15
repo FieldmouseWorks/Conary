@@ -1,6 +1,7 @@
-//! Local proof observations. Recipe identity and head bind every verdict;
-//! store paths describe work shared between proofs, never evidence for a
-//! different derivation. Evaluation and execution remain caller effects.
+//! Local proof observations. Recipe identity and head bind every verdict.
+//! A proof is a program: the proof plugin first prepares its inputs, holding
+//! no proof slot, then proves, holding one unless its preparation said it
+//! needs none. A model-run check is never sent to the proof plugin.
 use super::*;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -8,33 +9,11 @@ use std::collections::{BTreeMap, BTreeSet};
 pub struct ProofData {
     /// Capacity without ownership. It must never enter job cancellation.
     pub reserved: u32,
-    pub evaluation: Option<Evaluation>,
     pub records: Vec<ProofRecord>,
     pub live: Vec<ProofHolder>,
     pub waiting: Vec<ProofWaiting>,
-    pub valid_paths: BTreeSet<String>,
-    pub inputs: BTreeSet<String>,
-    pub inputs_job: Option<InputBuild>,
-}
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct InputBuild {
-    pub job: Job,
-    pub recipes: BTreeMap<String, Recipe>,
-}
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Evaluation {
-    pub head: String,
-    pub recipes: BTreeMap<String, Recipe>,
-    pub at: u64,
-    /// None means evaluation failed, not that there is nothing to build.
-    pub outputs: Option<BTreeMap<String, Derivation>>,
-    pub derivations_present: bool,
-    pub merged: Option<(String, BTreeSet<String>)>,
-}
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct Derivation {
-    pub path: String,
-    pub outputs: BTreeSet<String>,
+    /// This PR's preparations, in the order they started.
+    pub prepared: Vec<Preparation>,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProofRecord {
@@ -44,30 +23,54 @@ pub struct ProofRecord {
     pub verdicts: Option<BTreeMap<String, Verdict>>,
     pub note_needed: bool,
 }
+/// A proof that holds one of the scarce proof slots.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProofHolder {
     pub number: u64,
     pub job: Job,
-    pub paths: Option<BTreeSet<String>>,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProofWaiting {
     pub number: u64,
 }
+/// One `prepare` invocation for a head and recipe set. It holds no proof
+/// slot, and its answer is never a verdict: only whether proving may start
+/// and whether it needs a slot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Preparation {
+    pub job: Job,
+    pub recipes: BTreeMap<String, Recipe>,
+    /// When it answered or failed; None while it runs.
+    pub ended: Option<u64>,
+    /// Its answer. None while it runs, and when it failed or answered
+    /// anything but readiness.
+    pub answer: Option<Readiness>,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Readiness {
+    pub ready: bool,
+    /// Whether proving needs one of the scarce proof slots.
+    pub slot: bool,
+    pub why: String,
+}
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ProofPlan {
-    Evaluate(BTreeMap<String, Recipe>),
-    Build(BTreeMap<String, Derivation>),
-    Run(BTreeMap<String, Recipe>),
-    Job(BTreeMap<String, Recipe>),
-    Prebuild(BTreeSet<String>),
-    Stored(BTreeMap<String, Derivation>),
+    /// Ready these recipes' inputs, holding no proof slot.
+    Prepare(BTreeMap<String, Recipe>),
+    /// Run these recipes, holding a proof slot when `slot` is set.
+    Prove {
+        recipes: BTreeMap<String, Recipe>,
+        slot: bool,
+    },
     Post {
         job: String,
         verdicts: BTreeMap<String, Verdict>,
         note: bool,
     },
 }
+
+/// A failed or unready preparation is asked again after this long.
+const PREPARE_AGAIN: u64 = 900;
 
 fn current(f: &Facts, r: &ProofRecord) -> bool {
     r.job.revision.head == f.revision.head
@@ -100,103 +103,56 @@ pub(super) fn posting(f: &Facts) -> Option<ProofPlan> {
             })
         })
 }
-fn selected(f: &Facts) -> BTreeMap<String, Recipe> {
-    let pending: BTreeMap<_, _> = f
-        .checks
+fn pending(f: &Facts) -> impl Iterator<Item = (&String, &Recipe)> {
+    f.checks
         .iter()
         .filter(|c| c.state == Ci::Pending)
-        .filter_map(|c| {
-            f.settings
-                .proof_recipe(&c.name)
-                .map(|(name, r)| (name.clone(), r.clone()))
-        })
-        .collect();
-    for rank in 0..3 {
-        let selected: BTreeMap<_, _> = pending
-            .iter()
-            .filter(|(_, recipe)| match recipe {
-                Recipe::Build(_) => rank == 0,
-                Recipe::Run(_) => rank == 1,
-                Recipe::Job(_) => rank == 2,
-            })
+        .filter_map(|c| f.settings.proof_recipe(&c.name))
+}
+/// The pending programs the next proof runs: builds before commands. A
+/// model-run check is never among them.
+pub(crate) fn selected(f: &Facts) -> BTreeMap<String, Recipe> {
+    for rank in [
+        (|r: &Recipe| matches!(r, Recipe::Build(_))) as fn(&Recipe) -> bool,
+        |r| matches!(r, Recipe::Run(_)),
+    ] {
+        let selected: BTreeMap<_, _> = pending(f)
+            .filter(|(_, recipe)| rank(recipe))
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
         if !selected.is_empty() {
             return selected;
         }
     }
-    pending
+    BTreeMap::new()
 }
-pub(super) fn engine_job(f: &Facts, id: &str) -> bool {
-    let recipes = f
-        .proof_data
-        .records
-        .iter()
-        .find(|r| r.job.id == id)
-        .map(|r| r.recipes.clone())
-        .unwrap_or_else(|| selected(f));
-    recipes.values().all(|r| matches!(r, Recipe::Job(_)))
+/// The pending checks a model would run, which no proof plugin is sent.
+fn model_run(f: &Facts) -> BTreeSet<&String> {
+    pending(f)
+        .filter(|(_, recipe)| matches!(recipe, Recipe::Job(_)))
+        .map(|(name, _)| name)
+        .collect()
 }
 
-fn evaluation<'a>(f: &'a Facts, recipes: &BTreeMap<String, Recipe>) -> Option<&'a Evaluation> {
-    f.proof_data
-        .evaluation
-        .as_ref()
-        .filter(|e| e.head == f.revision.head && &e.recipes == recipes)
+/// Whether this decision's proof holds a slot: every proof but one its
+/// preparation said needs none.
+pub(crate) fn slotted(next: &Next) -> bool {
+    next.step == Step::Prove && !matches!(next.proof, Some(ProofPlan::Prove { slot: false, .. }))
 }
 
-/// A running old proof may be building an unchanged check on the new head.
-pub(super) fn useful(f: &Facts, id: &str) -> bool {
-    let selected = selected(f);
-    if !selected.values().all(|r| matches!(r, Recipe::Build(_))) {
-        return false;
-    }
-    let Some(outputs) = evaluation(f, &selected).and_then(|e| e.outputs.as_ref()) else {
-        return false;
-    };
-    f.proof_data
-        .live
-        .iter()
-        .filter(|h| h.job.id == id)
-        .any(|h| {
-            h.paths.as_ref().is_some_and(|paths| {
-                outputs
-                    .values()
-                    .flat_map(|d| &d.outputs)
-                    .any(|p| !f.proof_data.valid_paths.contains(p) && paths.contains(p))
-            })
-        })
-}
-
-/// Number ahead, or zero when paths are already being built. Unknown paths
-/// hold a slot each. Only open PRs and earlier waiters in this pass count.
-pub(super) fn ahead(f: &Facts, outputs: Option<&BTreeSet<String>>) -> (u32, bool) {
+/// Number of slot holders and earlier waiters ahead. Only open PRs and
+/// earlier waiters in this pass count.
+pub(super) fn ahead(f: &Facts) -> u32 {
     let Some(slots) = f.settings.proof_slots else {
-        return (0, false);
+        return 0;
     };
-    let mut holders: Vec<_> = f
-        .proof_data
-        .live
-        .iter()
-        .filter(|h| f.open_prs.contains(&h.number) && h.job.state.live())
-        .collect();
-    holders.sort_by_key(|h| (h.job.started, &h.job.id));
-    let mut building = BTreeSet::new();
-    let mut count = f.proof_data.reserved;
-    for h in holders {
-        if let Some(paths) = &h.paths {
-            let rest: BTreeSet<_> = paths
-                .difference(&f.proof_data.valid_paths)
-                .cloned()
-                .collect();
-            if !rest.is_subset(&building) {
-                count = count.saturating_add(1);
-            }
-            building.extend(rest);
-        } else {
-            count = count.saturating_add(1);
-        }
-    }
+    let mut count = f.proof_data.reserved.saturating_add(
+        f.proof_data
+            .live
+            .iter()
+            .filter(|h| f.open_prs.contains(&h.number) && h.job.state.live())
+            .count() as u32,
+    );
     count = count.saturating_add(
         f.proof_data
             .waiting
@@ -208,17 +164,7 @@ pub(super) fn ahead(f: &Facts, outputs: Option<&BTreeSet<String>>) -> (u32, bool
             })
             .count() as u32,
     );
-    if count < slots {
-        return (0, false);
-    }
-    if outputs.is_some_and(|paths| {
-        paths
-            .difference(&f.proof_data.valid_paths)
-            .all(|p| building.contains(p))
-    }) {
-        return (0, true);
-    }
-    (count, false)
+    if count < slots { 0 } else { count }
 }
 
 pub(super) fn retry(f: &Facts, m: &mut Memory, now: u64) -> Option<super::decide::Decision> {
@@ -238,11 +184,7 @@ pub(super) fn retry(f: &Facts, m: &mut Memory, now: u64) -> Option<super::decide
             return None;
         }
         let mut job = record.job.clone();
-        if recipes
-            .values()
-            .any(|r| matches!(r, Recipe::Build(_) | Recipe::Run(_)))
-            && record.verdicts.is_none()
-        {
+        if record.verdicts.is_none() {
             job.state = JobState::Broken;
         }
         observed.jobs.insert(Kind::Proof, job);
@@ -291,195 +233,163 @@ pub(super) fn obsolete(f: &Facts) -> Option<&Job> {
                 .get(&Kind::Proof)
                 .filter(|j| j.state.live() && j.revision.head != f.revision.head),
         )
-        .filter(|job| !useful(f, &job.id))
         .min_by(|a, b| a.started.cmp(&b.started).then_with(|| a.id.cmp(&b.id)))
 }
 
-pub(super) fn obsolete_inputs(f: &Facts) -> Option<&Job> {
-    let inputs = f.proof_data.inputs_job.as_ref()?;
+/// A running preparation is cancelled once its head or a selected recipe
+/// changed: it prepares for nothing the flow will prove.
+pub(super) fn obsolete_preparation(f: &Facts) -> Option<&Job> {
     let wanted = selected(f);
-    (inputs.job.state.live()
-        && (inputs.job.revision.head != f.revision.head
-            || inputs.recipes != wanted
-            || !wanted.values().all(|r| matches!(r, Recipe::Build(_)))
-            || f.settings.proof_slots.is_none()))
-    .then_some(&inputs.job)
+    f.proof_data
+        .prepared
+        .iter()
+        .filter(|p| {
+            p.job.state.live() && (p.job.revision.head != f.revision.head || p.recipes != wanted)
+        })
+        .map(|p| &p.job)
+        .min_by(|a, b| a.started.cmp(&b.started).then_with(|| a.id.cmp(&b.id)))
+}
+
+/// The latest preparation for this head and recipe set. One runs at a time.
+fn preparation<'a>(f: &'a Facts, recipes: &BTreeMap<String, Recipe>) -> Option<&'a Preparation> {
+    f.proof_data
+        .prepared
+        .iter()
+        .rev()
+        .find(|p| p.job.revision.head == f.revision.head && &p.recipes == recipes)
+}
+/// Whether proving the selected recipes holds a proof slot: always, unless
+/// their preparation answered ready and said it needs none.
+pub(super) fn needs_slot(f: &Facts) -> bool {
+    !preparation(f, &selected(f))
+        .and_then(|p| p.answer.as_ref())
+        .is_some_and(|r| r.ready && !r.slot)
+}
+
+fn deadline(started: u64, timeout: u64, now: u64) -> u64 {
+    let deadline = started.saturating_add(timeout + 300);
+    if now < deadline {
+        deadline
+    } else {
+        now.saturating_add(900)
+    }
 }
 
 pub(super) fn next(f: &Facts, now: u64) -> Option<(Stage, Step, String, Option<ProofPlan>)> {
     let recipes = selected(f);
     if recipes.is_empty() {
-        return None;
-    }
-    let builds = recipes.values().all(|r| matches!(r, Recipe::Build(_)));
-    let run = recipes.values().all(|r| matches!(r, Recipe::Run(_)));
-    if !builds
-        && !run
-        && f.checks
-            .iter()
-            .any(|c| c.state == Ci::Pending && f.settings.recipe(&c.name).is_none())
-    {
-        return None;
+        let jobs = model_run(f);
+        return (!jobs.is_empty()).then(|| {
+            (
+                Stage::Proof,
+                Step::Wait { until: None },
+                format!(
+                    "Waiting: {} is a model-run check, not a proof, so no proof plugin runs it",
+                    jobs.into_iter().cloned().collect::<Vec<_>>().join(", ")
+                ),
+                None,
+            )
+        });
     }
     let selected_names: BTreeSet<_> = recipes.keys().collect();
     for r in &f.proof_data.records {
-        if !current(f, r) {
+        if !current(f, r) || !r.job.state.live() {
             continue;
         }
         let names: BTreeSet<_> = r.recipes.keys().collect();
         let fits = selected_names.is_subset(&names)
             && recipes.iter().all(|(k, v)| r.recipes.get(k) == Some(v));
-        if r.job.state.live() {
-            if !fits && useful(f, &r.job.id) {
-                continue;
-            }
-            return Some(if fits {
-                (
-                    Stage::Proof,
-                    Step::Wait {
-                        until: Some({
-                            let timeout = if builds || run {
-                                f.settings.proof_timeout
-                            } else {
-                                f.settings.job_timeout
-                            };
-                            let deadline = r.job.started.saturating_add(timeout + 300);
-                            if now < deadline {
-                                deadline
-                            } else {
-                                now.saturating_add(900)
-                            }
-                        }),
-                    },
-                    "Machine proof is still running".into(),
-                    None,
-                )
-            } else {
-                (
-                    Stage::Proof,
-                    Step::StopJob(r.job.id.clone()),
-                    "Proof recipe changed; stop the old proof".into(),
-                    None,
-                )
-            });
-        }
-    }
-    let eval = builds.then(|| evaluation(f, &recipes)).flatten();
-    let drvs = eval
-        .filter(|e| e.derivations_present)
-        .and_then(|e| e.outputs.as_ref());
-    if builds && drvs.is_none() {
-        if let Some(e) = eval.filter(|e| e.outputs.is_none() && now < e.at.saturating_add(900)) {
-            return Some((
+        return Some(if fits {
+            (
                 Stage::Proof,
                 Step::Wait {
-                    until: Some(e.at.saturating_add(900)),
+                    until: Some(deadline(r.job.started, f.settings.proof_timeout, now)),
                 },
-                "Proof evaluation failed; retry after fifteen minutes".into(),
+                "Machine proof is still running".into(),
                 None,
-            ));
-        }
+            )
+        } else {
+            (
+                Stage::Proof,
+                Step::StopJob(r.job.id.clone()),
+                "Proof recipe changed; stop the old proof".into(),
+                None,
+            )
+        });
+    }
+    let preparation = preparation(f, &recipes);
+    let prepare = || {
+        Some((
+            Stage::Proof,
+            Step::Prepare,
+            "Prepare the proof's inputs, outside the proof slots".into(),
+            Some(ProofPlan::Prepare(recipes.clone())),
+        ))
+    };
+    let Some(preparation) = preparation else {
+        return prepare();
+    };
+    if preparation.job.state.live() {
         return Some((
             Stage::Proof,
-            Step::Prove,
-            "Evaluate the proof's exact derivations".into(),
-            Some(ProofPlan::Evaluate(recipes)),
-        ));
-    }
-    let paths: Option<BTreeSet<String>> = drvs.map(|ds| {
-        ds.values()
-            .flat_map(|d| d.outputs.iter().cloned())
-            .collect()
-    });
-    if let (Some(ds), Some(paths)) = (drvs, &paths) {
-        if !paths.is_empty() && paths.is_subset(&f.proof_data.valid_paths) {
-            return Some((
-                Stage::Proof,
-                Step::PostProof,
-                "Exact proof derivations already passed in this machine's store".into(),
-                Some(ProofPlan::Stored(ds.clone())),
-            ));
-        }
-        if f.dependency.is_none()
-            && f.revision.base == f.default_branch
-            && eval
-                .and_then(|e| e.merged.as_ref())
-                .is_some_and(|(tip, paths)| {
-                    f.base_tip.as_ref() == Some(tip)
-                        && !paths.is_empty()
-                        && paths.is_subset(&f.proof_data.valid_paths)
-                })
-        {
-            return Some((
-                Stage::Proof,
-                Step::UpdateBranch,
-                "Bring the branch up to date; its merged proof is already built".into(),
-                None,
-            ));
-        }
-    }
-    let (ahead, free) = ahead(f, paths.as_ref());
-    if f.settings.proof_slots.is_some()
-        && builds
-        && !free
-        && !f.proof_data.inputs.is_subset(&f.proof_data.valid_paths)
-        && f.proof_data
-            .inputs_job
-            .as_ref()
-            .is_none_or(|j| j.job.state.live())
-    {
-        if f.proof_data
-            .inputs_job
-            .as_ref()
-            .is_some_and(|j| j.job.state.live())
-        {
-            return Some((
-                Stage::ProofSlot,
-                Step::Wait {
-                    until: f.proof_data.inputs_job.as_ref().map(|j| {
-                        let deadline = j.job.started.saturating_add(f.settings.proof_timeout + 300);
-                        if now < deadline {
-                            deadline
-                        } else {
-                            now.saturating_add(900)
-                        }
-                    }),
-                },
-                "Building the proof's inputs before its turn".into(),
-                None,
-            ));
-        }
-        return Some((
-            Stage::ProofSlot,
-            Step::Prove,
-            "Build the proof's inputs before its turn".into(),
-            Some(ProofPlan::Prebuild(f.proof_data.inputs.clone())),
-        ));
-    }
-    if ahead > 0 {
-        return Some((
-            Stage::ProofSlot,
-            Step::Wait { until: None },
-            format!("Waiting for a machine proof slot ({ahead} ahead)"),
+            Step::Wait {
+                until: Some(deadline(
+                    preparation.job.started,
+                    f.settings.proof_timeout,
+                    now,
+                )),
+            },
+            "Preparing the proof's inputs, outside the proof slots".into(),
             None,
         ));
     }
-    let plan = if let Some(ds) = drvs {
-        ProofPlan::Build(ds.clone())
-    } else if run {
-        ProofPlan::Run(recipes)
-    } else {
-        ProofPlan::Job(recipes)
+    let slot = match &preparation.answer {
+        Some(Readiness {
+            ready: true, slot, ..
+        }) => *slot,
+        answer => {
+            let again = preparation
+                .ended
+                .unwrap_or(preparation.job.started)
+                .saturating_add(PREPARE_AGAIN);
+            if now >= again {
+                return prepare();
+            }
+            let why = match answer {
+                Some(r) => format!("Proof inputs aren't ready: {}", r.why),
+                None => "Proof preparation failed".into(),
+            };
+            return Some((
+                Stage::Proof,
+                Step::Wait { until: Some(again) },
+                format!("{why}; prepare again after fifteen minutes")
+                    .chars()
+                    .take(140)
+                    .collect(),
+                None,
+            ));
+        }
     };
+    if slot {
+        let ahead = ahead(f);
+        if ahead > 0 {
+            return Some((
+                Stage::ProofSlot,
+                Step::Wait { until: None },
+                format!("Waiting for a machine proof slot ({ahead} ahead)"),
+                None,
+            ));
+        }
+    }
     Some((
         Stage::Proof,
         Step::Prove,
-        if free {
-            "Start proof; nothing new to build, so it skipped the line"
-        } else {
+        if slot {
             "Start the next machine proof"
+        } else {
+            "Start the proof; its preparation says it needs no proof slot"
         }
         .into(),
-        Some(plan),
+        Some(ProofPlan::Prove { recipes, slot }),
     ))
 }

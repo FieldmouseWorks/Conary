@@ -64,13 +64,14 @@ fn defaults_name_no_machine_and_start_no_paid_work() {
 #[test]
 fn zero_proof_slots_start_no_proof_of_any_recipe() {
     for recipe in [
-        Recipe::Job("exercise".into()),
         Recipe::Run(vec!["true".into()]),
         Recipe::Build("checks.proof".into()),
     ] {
         let mut c = Case::new();
         c.settings.proofs.insert("proof".into(), recipe.clone());
         c.settings.proof_slots = Some(1);
+        assert_eq!(c.view(800).step, Step::Prepare, "{recipe:?}");
+        c.programs();
         assert_eq!(c.view(800).step, Step::Prove, "{recipe:?}");
         c.settings.proof_slots = Settings::default().proof_slots;
         let next = c.view(800);

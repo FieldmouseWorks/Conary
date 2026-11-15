@@ -327,17 +327,25 @@ fn pass_proof_names_the_tree_and_canned_output_never_grants_permission() {
     c.hub
         .post_status(&head(3), json!({"context":"machine","state":"pending"}));
     let now = flow::jobs::now();
-    let report = c.pass(now, false);
-    assert_eq!(report[0].next.as_ref().unwrap().step, Step::Prove);
-    let record = c.record();
-    let invocation: flow::jobs::Invocation =
-        serde_json::from_slice(&std::fs::read(&record.jobs[0].path).unwrap()).unwrap();
     let tree = crate::branches::Branches::tree(&c.hub, REPO, &head(3)).unwrap();
+    let invocation = |at: usize| -> flow::jobs::Invocation {
+        serde_json::from_slice(&std::fs::read(&c.record().jobs[at].path).unwrap()).unwrap()
+    };
+    let report = c.pass(now, false);
+    assert_eq!(report[0].next.as_ref().unwrap().step, Step::Prepare);
     assert!(
-        matches!(invocation.task,conary_core::plugin::Task::Proof{tree: ref t, head: ref h, ..} if t==&tree && h==&head(3))
+        matches!(invocation(0).task,conary_core::plugin::Task::Prepare{tree: ref t, head: ref h, ref checks, ..} if t==&tree && h==&head(3) && checks==&["machine"])
     );
+    // The example's preparation says its proof needs no slot.
     c.run_worker();
     let report = c.pass(now + 1, false);
+    assert_eq!(report[0].next.as_ref().unwrap().step, Step::Prove);
+    assert!(
+        matches!(invocation(1).task,conary_core::plugin::Task::Proof{tree: ref t, head: ref h, ..} if t==&tree && h==&head(3))
+    );
+    assert!(c.record().jobs[1].slotless);
+    c.run_worker();
+    let report = c.pass(now + 2, false);
     assert_eq!(
         report[0].next.as_ref().unwrap().step,
         Step::Wait { until: None }

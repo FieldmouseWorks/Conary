@@ -13,6 +13,8 @@ pub enum Purpose {
     Fix(Kind),
     Judge,
     Proof,
+    /// A proof's preparation, which holds no proof slot.
+    Prepare,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Work {
@@ -22,6 +24,9 @@ pub struct Work {
     pub deadline: u64,
     pub posted: bool,
     pub recipes: std::collections::BTreeMap<String, Recipe>,
+    /// A proof its preparation said needs no proof slot, so holds none.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub slotless: bool,
     /// A fix's problems, by index: the finding each was and the target its
     /// answer goes to, or None for a problem that isn't a finding.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

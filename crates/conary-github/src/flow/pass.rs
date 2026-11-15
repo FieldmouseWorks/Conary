@@ -171,8 +171,8 @@ impl Pass<'_> {
                 let approved = facts.owner_approved;
                 let (mut next, memory) = next(&facts, &record.memory, self.now);
                 record.memory = memory;
-                if next.step == Step::Prove {
-                    let (ahead, _) = super::proofs::ahead(&facts, None);
+                if super::proofs::slotted(&next) {
+                    let ahead = super::proofs::ahead(&facts);
                     if ahead > 0 {
                         next.stage = Stage::ProofSlot;
                         next.step = Step::Wait { until: None };
@@ -325,7 +325,8 @@ impl Pass<'_> {
             Purpose::Review(_) => "review",
             Purpose::Fix(_) => "fix",
             Purpose::Judge => "judge",
-            Purpose::Proof => "proof",
+            // A proof's preparation is the proof plugin's to answer.
+            Purpose::Proof | Purpose::Prepare => "proof",
         };
         let executable = self
             .path(kind)
@@ -356,8 +357,11 @@ impl Pass<'_> {
                 response_bytes: 1_048_576,
             },
         )?;
+        // Only a proof its preparation said needs no slot holds none.
+        let slotless = matches!(purpose, Purpose::Proof) && !super::proofs::needs_slot(facts);
         record.jobs.push(jobs::Work {
             purpose,
+            slotless,
             job: Job {
                 id: format!("{}-{}", facts.number, record.sequence),
                 revision: facts.revision.clone(),
@@ -368,7 +372,7 @@ impl Pass<'_> {
             path: path.clone(),
             deadline,
             posted: false,
-            recipes: recipes(facts),
+            recipes: super::proofs::selected(facts),
             handed,
             sent: Default::default(),
         });
@@ -384,20 +388,9 @@ fn plugin_kind(step: &Step) -> Option<&'static str> {
         Step::QueueReview(_) => Some("review"),
         Step::HandFix(_) => Some("fix"),
         Step::Judge(_) => Some("judge"),
-        Step::Prove => Some("proof"),
+        Step::Prepare | Step::Prove => Some("proof"),
         _ => None,
     }
-}
-pub(crate) fn recipes(f: &Facts) -> BTreeMap<String, Recipe> {
-    f.checks
-        .iter()
-        .filter(|c| c.state == Ci::Pending)
-        .filter_map(|c| {
-            f.settings
-                .proof_recipe(&c.name)
-                .map(|(n, r)| (n.clone(), r.clone()))
-        })
-        .collect()
 }
 
 pub(crate) fn grants(next: &Next, f: &Facts) -> bool {

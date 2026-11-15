@@ -7,7 +7,8 @@ fn proof() -> Case {
     c.settings.proof_slots = Some(1);
     c.settings
         .proofs
-        .insert("proof".into(), Recipe::Job("exercise".into()));
+        .insert("proof".into(), Recipe::Run(vec!["exercise".into()]));
+    c.programs();
     c
 }
 fn holder(c: &Case, id: &str, number: u64, state: JobState) -> ProofHolder {
@@ -16,7 +17,6 @@ fn holder(c: &Case, id: &str, number: u64, state: JobState) -> ProofHolder {
     }
     ProofHolder {
         number,
-        paths: None,
         job: Job {
             id: id.into(),
             revision: c.scope(),
@@ -82,7 +82,7 @@ fn a_new_proof_kind_does_not_inherit_an_ended_builds_lost_answer() {
     // proving.py:440 / runs.py:182: only matching recipes belong to a retry.
     for recipe in [
         Recipe::Run(vec!["check".into()]),
-        Recipe::Job("check".into()),
+        Recipe::Run(vec!["another check".into()]),
     ] {
         let mut c = proof();
         c.settings.proofs.insert("proof".into(), recipe);

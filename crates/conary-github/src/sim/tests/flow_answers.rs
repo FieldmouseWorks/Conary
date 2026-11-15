@@ -139,7 +139,8 @@ fn repo_controller_holds_apply_before_reviews_proofs_or_landing() {
         c.base_held = true;
         c.settings
             .proofs
-            .insert("proof".into(), Recipe::Job("prove it".into()));
+            .insert("proof".into(), Recipe::Run(vec!["prove it".into()]));
+        c.programs();
         assert_eq!(c.view(700).stage, Stage::Base);
         assert!(matches!(c.view(700).step, Step::Wait { .. }));
         c.base_held = false;

@@ -191,7 +191,7 @@ fn build_recipe_wins_when_case_variants_name_the_same_check() {
         .insert("vm".into(), Recipe::Build("checks.vm".into()));
     assert_eq!(c.settings.machine().len(), 1);
     assert!(
-        matches!(c.view(700).proof,Some(ProofPlan::Evaluate(ref checks)) if checks.len()==1 && matches!(checks["vm"],Recipe::Build(_)))
+        matches!(c.view(700).proof,Some(ProofPlan::Prepare(ref checks)) if checks.len()==1 && matches!(checks["vm"],Recipe::Build(_)))
     );
 }
 
@@ -224,13 +224,13 @@ fn the_newest_sealed_judge_verdict_for_the_revision_wins() {
     assert_eq!(c.pass(900).step, Step::ListOwner);
 }
 #[test]
-fn missing_job_proof_statuses_still_run_even_without_other_ci_or_on_a_dependency() {
+fn missing_proof_statuses_still_run_even_without_other_ci_or_on_a_dependency() {
     // handle.py:789 / 917: absent is pending for configured machine checks, never a no-CI judge.
     for (ci, bot) in [(true, false), (false, false), (true, true)] {
         let mut c = Case::new();
         c.settings
             .proofs
-            .insert("proof".into(), Recipe::Job("run proof".into()));
+            .insert("proof".into(), Recipe::Run(vec!["run proof".into()]));
         if !ci {
             c.no_ci();
         }
@@ -239,8 +239,10 @@ fn missing_job_proof_statuses_still_run_even_without_other_ci_or_on_a_dependency
                 .edit_pull(REMI, 3, |p| p["head"]["ref"] = json!("dependabot/pkg-2"));
             c.hub.refresh_flow(REMI, 3);
         }
+        assert_eq!(c.view(900).step, Step::Prepare);
+        c.ready(true);
         assert_eq!(c.view(900).step, Step::Prove);
-        assert!(matches!(c.view(900).proof, Some(ProofPlan::Job(_))));
+        assert!(matches!(c.view(900).proof, Some(ProofPlan::Prove { .. })));
     }
 }
 #[test]
@@ -281,7 +283,8 @@ fn a_major_renovate_proof_waits_for_its_sweeps_verdict() {
     let mut c = Case::new();
     c.settings
         .proofs
-        .insert("proof".into(), Recipe::Job("run proof".into()));
+        .insert("proof".into(), Recipe::Run(vec!["run proof".into()]));
+    c.programs();
     c.hub.edit_pull(REMI, 3, |p| {
         p["head"]["ref"] = json!("renovate/pkg-2");
         p["title"] = json!("Update pkg from 1.4 to 2.0");

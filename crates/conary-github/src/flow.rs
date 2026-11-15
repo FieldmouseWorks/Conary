@@ -12,9 +12,10 @@ mod markers;
 mod proofs;
 mod read;
 mod state;
+#[cfg(test)]
+pub(crate) use proofs::selected;
 pub use proofs::{
-    Derivation, Evaluation, InputBuild, ProofData, ProofHolder, ProofPlan, ProofRecord,
-    ProofWaiting,
+    Preparation, ProofData, ProofHolder, ProofPlan, ProofRecord, ProofWaiting, Readiness,
 };
 mod review;
 pub(crate) mod reviews;

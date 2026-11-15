@@ -120,7 +120,8 @@ fn a_returned_head_gets_a_fresh_proof_not_a_stopped_jobs_lost_answer() {
     let mut c = Case::new();
     c.settings
         .proofs
-        .insert("proof".into(), Recipe::Job("run proof".into()));
+        .insert("proof".into(), Recipe::Run(vec!["run proof".into()]));
+    c.programs();
     let a = c.scope().head;
     let (kind, old) = job(&c, Kind::Proof, JobState::Running);
     let id = old.id.clone();

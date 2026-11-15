@@ -100,7 +100,7 @@ pub(crate) fn hydrate(f: &mut Facts, record: &Record, now: u64, dry_run: bool) -
             }
             Purpose::Proof => {
                 if job.revision == f.revision
-                    && work.recipes == super::pass::recipes(f)
+                    && work.recipes == super::proofs::selected(f)
                     && matches!(completion.result, Some(Ok(_)))
                 {
                     // Plugin identity is an assertion, not an evidence attestation.
@@ -115,6 +115,24 @@ pub(crate) fn hydrate(f: &mut Facts, record: &Record, now: u64, dry_run: bool) -
                     });
                 }
             }
+            // Readiness only: nothing a preparation answers is a verdict,
+            // and any other answer is a preparation that failed.
+            Purpose::Prepare => f.proof_data.prepared.push(Preparation {
+                answer: match &completion.result {
+                    Some(Ok(plugin::Response {
+                        answer: plugin::Answer::Prepare { ready, slot, why },
+                        ..
+                    })) => Some(Readiness {
+                        ready: *ready,
+                        slot: *slot,
+                        why: why.clone(),
+                    }),
+                    _ => None,
+                },
+                ended: completion.result.is_some().then_some(completion.at),
+                job,
+                recipes: work.recipes.clone(),
+            }),
         }
     }
     Ok(())

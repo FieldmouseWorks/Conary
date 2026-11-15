@@ -643,6 +643,8 @@ pub enum Step {
     PostFix(String),
     HandFix(Kind),
     StopJob(String),
+    /// Ready a proof's inputs, holding no proof slot.
+    Prepare,
     Prove,
     PostProof,
     /// Ask a judge, for these reasons. Empty when a judge already started on

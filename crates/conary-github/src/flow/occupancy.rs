@@ -60,7 +60,7 @@ impl Occupancy {
                     super::observe::train(&mut facts, ledger);
                 }
                 let decision = next(&facts, &memory, pass.now).0;
-                Ok(decision.step == Step::Prove || decision.stage == Stage::ProofSlot)
+                Ok(super::proofs::slotted(&decision) || decision.stage == Stage::ProofSlot)
             })();
             match result {
                 Ok(true) => {
@@ -83,7 +83,7 @@ impl Occupancy {
             let mut holding = self.virtual_live.iter().any(|h| h.number == *number);
             let start = f.proof_data.live.len();
             for work in &record.jobs {
-                if !matches!(work.purpose, Purpose::Proof) {
+                if !matches!(work.purpose, Purpose::Proof) || work.slotless {
                     continue;
                 }
                 match jobs::inspect(work, now) {
@@ -98,7 +98,6 @@ impl Occupancy {
                         f.proof_data.live.push(ProofHolder {
                             number: *number,
                             job: work.job.clone(),
-                            paths: None,
                         });
                     }
                     Ok(_) => {}
@@ -122,10 +121,9 @@ impl Occupancy {
         dry: bool,
     ) -> Result<()> {
         if dry {
-            if next.step == Step::Prove {
+            if super::proofs::slotted(next) {
                 self.virtual_live.push(ProofHolder {
                     number: f.number,
-                    paths: None,
                     job: Job {
                         id: format!("dry-{}", f.number),
                         revision: f.revision.clone(),

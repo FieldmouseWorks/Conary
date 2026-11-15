@@ -501,7 +501,7 @@ fn proofs_are_case_insensitive_and_not_run_again_after_success() {
         .post_status(&head(3), json!({"context":"agents","state":"pending"}));
     let f = s.read(&runs, &["agents"]);
     assert_eq!(f.proof, Proof::Needed);
-    assert_eq!(next(&f, &s.memory, 4000).0.step, Step::Prove);
+    assert!(super::flow_ci_case::at_proof(&next(&f, &s.memory, 4000).0));
     s.hub
         .post_status(&head(3), json!({"context":"Agents","state":"failure"}));
     let f = s.read(&runs, &["agents"]);
@@ -510,7 +510,7 @@ fn proofs_are_case_insensitive_and_not_run_again_after_success() {
 }
 
 #[test]
-fn job_proofs_wait_for_ci_but_machine_proofs_start_beside_it() {
+fn a_model_run_check_waits_for_ci_but_machine_proofs_are_prepared_beside_it() {
     // handle.py: "A check the steward builds itself ... while CI runs".
     let s = Scenario::new();
     let runs = [Run::whole(1, "main", "success").going()];
@@ -529,7 +529,7 @@ fn job_proofs_wait_for_ci_but_machine_proofs_start_beside_it() {
                 .proofs
                 .insert("agents".into(), Recipe::Run(vec!["just proof".into()]));
         }
-        assert_eq!(next(&f, &s.memory, 4000).0.step, Step::Prove);
+        assert_eq!(next(&f, &s.memory, 4000).0.step, Step::Prepare);
     }
 }
 
@@ -747,8 +747,8 @@ fn build_or_run_configuration_alone_still_requires_its_proof() {
                 .iter()
                 .any(|c| c.name == "vm" && c.state == Ci::Pending)
         );
-        assert_eq!(next(&f, &s.memory, 4000).0.step, Step::Prove);
+        assert_eq!(next(&f, &s.memory, 4000).0.step, Step::Prepare);
         let f = s.read_settings(&[Run::whole(1, "main", "success").going()], settings);
-        assert_eq!(next(&f, &s.memory, 4000).0.step, Step::Prove);
+        assert_eq!(next(&f, &s.memory, 4000).0.step, Step::Prepare);
     }
 }

@@ -386,6 +386,10 @@ fn ci_not_required_does_not_need_a_judge() {
 fn proof_slot_running_and_unposted_are_distinct() {
     // proving.py / waiting.py: these are local machine observations, not GitHub.
     let mut c = Case::new();
+    c.settings
+        .proofs
+        .insert("proof".into(), Recipe::Run(vec!["run proof".into()]));
+    c.programs();
     for (proof, stage, step) in [
         (
             Proof::InLine(2),

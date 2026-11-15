@@ -226,17 +226,17 @@ fn configured_proof_case_is_preserved_without_blocking_job_admission() {
         let mut c = Case::new();
         c.settings
             .proofs
-            .insert("VM".into(), Recipe::Job("exercise".into()));
+            .insert("VM".into(), Recipe::Run(vec!["exercise".into()]));
         if let Some(context) = context {
             c.hub.put_statuses(
                 &c.scope().head,
                 json!([{"context":context,"state":"pending"}]),
             );
         }
-        assert_eq!(c.view(8000).step, Step::Prove);
+        assert_eq!(c.view(8000).step, Step::Prepare);
         assert_eq!(
             c.view(8000).proof,
-            Some(ProofPlan::Job(c.settings.proofs.clone()))
+            Some(ProofPlan::Prepare(c.settings.proofs.clone()))
         );
     }
 }
@@ -412,7 +412,7 @@ fn carried_reviews_also_bind_title_and_body_to_the_original_claim() {
 #[test]
 fn mixed_proof_kinds_use_case_insensitive_membership_and_configured_plan_names() {
     use std::collections::BTreeMap;
-    for selected in ["Build", "Run", "VM"] {
+    for selected in ["Build", "Run"] {
         let mut c = Case::new();
         c.settings.proofs = BTreeMap::from([
             ("Build".into(), Recipe::Build("checks.build".into())),
@@ -428,21 +428,14 @@ fn mixed_proof_kinds_use_case_insensitive_membership_and_configured_plan_names()
             ]),
         );
         let n = c.view(8000);
-        assert_eq!(n.step, Step::Prove);
+        assert_eq!(n.step, Step::Prepare);
         let recipes = BTreeMap::from([(selected.into(), c.settings.proofs[selected].clone())]);
-        assert_eq!(
-            n.proof,
-            Some(match selected {
-                "Build" => ProofPlan::Evaluate(recipes),
-                "Run" => ProofPlan::Run(recipes),
-                _ => ProofPlan::Job(recipes),
-            })
-        );
+        assert_eq!(n.proof, Some(ProofPlan::Prepare(recipes)));
     }
     let mut c = Case::new();
     c.settings
         .proofs
-        .insert("VM".into(), Recipe::Job("exercise".into()));
+        .insert("VM".into(), Recipe::Run(vec!["exercise".into()]));
     c.hub.put_checks(
         &c.scope().head,
         json!([
@@ -450,7 +443,7 @@ fn mixed_proof_kinds_use_case_insensitive_membership_and_configured_plan_names()
             {"id":2,"name":"vM","status":"in_progress","conclusion":null}
         ]),
     );
-    assert_eq!(c.view(8000).step, Step::Prove);
+    assert_eq!(c.view(8000).step, Step::Prepare);
 }
 
 #[test]

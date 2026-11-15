@@ -43,11 +43,11 @@ pub(super) fn decide(f: &Facts, m: &mut Memory, now: u64) -> Decision {
             "Stop obsolete work before starting another job",
         );
     }
-    if let Some(job) = super::proofs::obsolete_inputs(f) {
+    if let Some(job) = super::proofs::obsolete_preparation(f) {
         return at(
-            Stage::ProofSlot,
+            Stage::Proof,
             Step::StopJob(job.id.clone()),
-            "Stop inputs for an obsolete proof",
+            "Stop preparing inputs for an obsolete proof",
         );
     }
     if let Some(job) = super::proofs::obsolete(f) {
@@ -60,10 +60,7 @@ pub(super) fn decide(f: &Facts, m: &mut Memory, now: u64) -> Decision {
     // Only proofs and judgments belong to a head. Fix jobs own the branch
     // across pushes, including their own push, and must be left running.
     if let Some((_, job)) = f.jobs.iter().find(|(kind, job)| {
-        !kind.fixes_branch()
-            && job.state.live()
-            && job.revision.head != f.revision.head
-            && !(**kind == Kind::Proof && super::proofs::useful(f, &job.id))
+        !kind.fixes_branch() && job.state.live() && job.revision.head != f.revision.head
     }) {
         return at(
             Stage::Fix,
@@ -286,8 +283,11 @@ fn after_review(f: &Facts, m: &mut Memory, now: u64, ci: Ci, capped: bool) -> De
         }
         Proof::Needed if ci != Ci::Pending || proof_only || early => {
             let decision = proof(f, m, now);
-            // Zero slots run no proof: nothing starts until a machine sets some.
-            if decision.1 == Step::Prove && f.settings.proof_slots == Some(0) {
+            // Zero slots run no proof: nothing starts, not even a
+            // preparation, until a machine sets some.
+            if matches!(decision.1, Step::Prove | Step::Prepare)
+                && f.settings.proof_slots == Some(0)
+            {
                 return wait(
                     Stage::ProofSlot,
                     None,
@@ -481,8 +481,14 @@ pub(super) fn hand(f: &Facts, m: &mut Memory, now: u64, kind: Kind, delay: bool)
 }
 
 fn proof(f: &Facts, m: &mut Memory, now: u64) -> Decision {
-    let retry = super::proofs::retry(f, m, now);
     let plan = super::proofs::next(f, now);
+    // With no program to run, only model-run checks are left: they wait,
+    // with their reason, and no earlier proof is retried for them.
+    let retry = if super::proofs::selected(f).is_empty() {
+        None
+    } else {
+        super::proofs::retry(f, m, now)
+    };
     if let Some(decision) = retry {
         if let Step::Retry {
             kind: Failure::Lost,
@@ -497,10 +503,10 @@ fn proof(f: &Facts, m: &mut Memory, now: u64) -> Decision {
         }
         return decision;
     }
-    if let Some((stage, step, description, _)) = plan {
-        return (stage, step, description);
+    match plan {
+        Some((stage, step, description, _)) => (stage, step, description),
+        None => wait(Stage::Proof, None, "No machine proof is pending"),
     }
-    work(f, m, now, Kind::Proof)
 }
 
 pub(super) fn work(f: &Facts, m: &mut Memory, now: u64, kind: Kind) -> Decision {
@@ -573,14 +579,8 @@ pub(super) fn work(f: &Facts, m: &mut Memory, now: u64, kind: Kind) -> Decision 
 }
 
 fn job_wake(f: &Facts, kind: Kind, job: &Job, now: u64) -> u64 {
-    let unit = kind == Kind::Proof
-        && f.checks.iter().filter(|c| c.state == Ci::Pending).any(|c| {
-            matches!(
-                f.settings.recipe(&c.name),
-                Some(Recipe::Build(_) | Recipe::Run(_))
-            )
-        });
-    let timeout = if unit {
+    // A proof is a program: a model-run check is never one.
+    let timeout = if kind == Kind::Proof {
         f.settings.proof_timeout
     } else {
         f.settings.job_timeout
