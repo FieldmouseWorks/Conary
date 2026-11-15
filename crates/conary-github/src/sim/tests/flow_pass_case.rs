@@ -31,18 +31,39 @@ impl flow::jobs::Launch for Deferred {
     }
 }
 pub(super) fn example() -> PathBuf {
-    let executable = std::env::current_exe()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join("conary-flow-test-plugin");
-    assert!(
-        executable.is_file(),
-        "Cargo must build the shared example fixture"
-    );
-    executable
+    static EXECUTABLE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    EXECUTABLE
+        .get_or_init(|| {
+            const FIXTURE: &str = "conary-flow-test-plugin";
+            // Cargo's intermediate layout is private. Its artifact messages
+            // locate the normal fixture build for any target directory/profile.
+            let output = std::process::Command::new(env!("CARGO"))
+                .current_dir(env!("CARGO_MANIFEST_DIR"))
+                .args([
+                    "build",
+                    "--locked",
+                    "--bin",
+                    FIXTURE,
+                    "--message-format=json",
+                ])
+                .output()
+                .expect("Cargo must build the shared example fixture");
+            assert!(
+                output.status.success(),
+                "fixture build failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            String::from_utf8(output.stdout)
+                .unwrap()
+                .lines()
+                .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+                .filter(|message| {
+                    message["reason"] == "compiler-artifact" && message["target"]["name"] == FIXTURE
+                })
+                .find_map(|message| message["executable"].as_str().map(PathBuf::from))
+                .expect("Cargo must report the shared example executable")
+        })
+        .clone()
 }
 
 pub(super) struct Case {
