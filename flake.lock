@@ -110,10 +110,10 @@
         ]
       },
       "locked": {
-        "lastModified": 1794646145,
-        "narHash": "sha256-rpqDyUM/d5fACYB8W+wKxxO57ICWjjalzb2X25oFFkY=",
+        "lastModified": 1794388042,
+        "narHash": "sha256-rsskkiDNmuZGK6Xk3JvWUxWENjuX4Jf0hOSFYujGC0s=",
         "ref": "refs/heads/master",
-        "rev": "5b87ee0513c29127a01ad06e9cb362ea5ce91e78",
+        "rev": "0070500a3d72ade21323092e7bdd7125c5268482",
         "shallow": true,
         "type": "git",
         "url": "https://github.com/oxalica/rust-overlay"
