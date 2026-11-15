@@ -37,12 +37,12 @@ mod write;
 pub use write::{SETTLED, Write, review_body};
 
 mod execute;
-mod observe;
+pub(crate) mod observe;
 mod pass;
 pub use pass::{Config, Pass, Plugins, Report};
 
 mod judging;
-pub use judging::{judging_context, review_bodies};
+pub use judging::{conversation, judging_context, review_bodies};
 
 mod compare;
 pub use compare::{Beside, Decided, Said, Tally, beside};
@@ -63,3 +63,10 @@ mod approval;
 pub use approval::owner_approval;
 
 mod handoff;
+
+pub(crate) mod publish;
+mod threads;
+pub use threads::{FindingMark, Handed, LineComment, Target, answer_body, finding_body, issuance};
+pub(crate) use threads::{Publication, Targets};
+#[cfg(test)]
+pub(crate) use threads::{hunks, placed};

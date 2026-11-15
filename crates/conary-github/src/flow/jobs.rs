@@ -22,6 +22,43 @@ pub struct Work {
     pub deadline: u64,
     pub posted: bool,
     pub recipes: std::collections::BTreeMap<String, Recipe>,
+    /// A fix's problems, by index: the finding each was and the target its
+    /// answer goes to, or None for a problem that isn't a finding.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub handed: Vec<Option<Handed>>,
+    /// What publishing this job's answer has sent so far that GitHub
+    /// acknowledged, saved as it goes: a later attempt waits to read it
+    /// back, and never sends it again.
+    #[serde(default, skip_serializing_if = "Sent::is_empty")]
+    pub sent: Sent,
+}
+
+/// A publication's progress. For a review: its plan, which findings get a
+/// line comment, fixed before the review is first sent. For a review or a
+/// fix: each of its writes, by what it is ("review", "finding 2",
+/// "answer 0"), saved before it's sent.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Sent {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inline: Option<Vec<bool>>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub writes: std::collections::BTreeMap<String, Attempt>,
+}
+
+/// One write's sending: when it was last sent, how many times, and whether
+/// GitHub acknowledged it. One not acknowledged may or may not have gone up.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Attempt {
+    pub at: u64,
+    pub tries: u32,
+    pub acknowledged: bool,
+}
+impl Sent {
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
 }
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Invocation {

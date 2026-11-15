@@ -1,7 +1,7 @@
 //! Fix answers are local observations, but their claimed push and thread
 //! membership must agree with the GitHub facts before anything is posted.
+//! Only the latest fix's answers are ever posted.
 use super::*;
-use std::collections::BTreeMap;
 
 #[derive(Debug, Clone)]
 pub struct FixClaim {
@@ -20,8 +20,11 @@ pub enum FixResult {
 }
 #[derive(Debug, Clone)]
 pub struct FixAnswer {
+    /// The head a fix pushed; None when it left the head unchanged.
     pub pushed: Option<String>,
-    pub threads: BTreeMap<String, bool>,
+    /// Each of its answers, in order: the target it goes to, and whether it
+    /// says the finding is fixed.
+    pub answers: Vec<(Target, bool)>,
     /// Fingerprint of the replacement description, never its prompt text.
     pub description: Option<String>,
     pub comment: bool,
@@ -34,10 +37,24 @@ pub enum Unposted {
     Moved,
 }
 
+/// Whether a later fix was started after fix job `id`: its answers are
+/// then superseded, and post nothing.
+pub(super) fn superseded(f: &Facts, id: &str) -> bool {
+    f.claims
+        .iter()
+        .skip_while(|c| c.job.id != id)
+        .nth(1)
+        .is_some()
+}
+
 pub(super) fn look(f: &Facts, m: &mut Memory, now: u64) -> Option<super::decide::Decision> {
     for claim in &f.claims {
         let job = &claim.job;
         if m.answered_jobs.contains(&job.id) {
+            continue;
+        }
+        if !job.state.live() && !claim.posted && superseded(f, &job.id) {
+            m.answered_jobs.insert(job.id.clone());
             continue;
         }
         let moved = job.revision.head != f.revision.head;
@@ -77,6 +94,13 @@ pub(super) fn look(f: &Facts, m: &mut Memory, now: u64) -> Option<super::decide:
         }
         if claim.posted {
             m.answered_jobs.insert(job.id.clone());
+            // A confirmation that comes after the job was counted takes it
+            // out of the count.
+            m.lost_jobs.remove(&job.id);
+            for ended in m.unanswered.values_mut() {
+                ended.remove(&job.id);
+            }
+            m.unanswered.retain(|_, ended| !ended.is_empty());
             m.strikes.remove(&Failure::Answer);
             return Some(super::decide::wait(
                 Stage::Fix,
@@ -100,7 +124,7 @@ pub(super) fn look(f: &Facts, m: &mut Memory, now: u64) -> Option<super::decide:
             FixResult::Answer(answer) => answer,
         };
         let expected = answer.pushed.as_ref().unwrap_or(&job.revision.head);
-        let fixed_without_push = answer.threads.values().any(|fixed| *fixed)
+        let fixed_without_push = answer.answers.iter().any(|(_, fixed)| *fixed)
             && answer
                 .pushed
                 .as_ref()
@@ -111,7 +135,10 @@ pub(super) fn look(f: &Facts, m: &mut Memory, now: u64) -> Option<super::decide:
                     .bytes()
                     .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
         });
-        let unrelated = answer.threads.keys().any(|id| !f.threads.contains_key(id));
+        let unrelated = answer
+            .answers
+            .iter()
+            .any(|(target, _)| matches!(target, Target::Thread(id) if !f.threads.contains_key(id)));
         let changed_description = answer.description.as_ref().is_some_and(|description| {
             f.revision.description != job.revision.description
                 && &f.revision.description != description
@@ -135,7 +162,7 @@ pub(super) fn look(f: &Facts, m: &mut Memory, now: u64) -> Option<super::decide:
             m.answered_jobs.insert(job.id.clone());
             continue;
         }
-        if answer.threads.is_empty() && answer.description.is_none() && !answer.comment {
+        if answer.answers.is_empty() && answer.description.is_none() && !answer.comment {
             m.answered_jobs.insert(job.id.clone());
             continue;
         }

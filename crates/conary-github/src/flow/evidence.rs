@@ -202,6 +202,7 @@ pub(crate) fn authorize<G: Write>(pass: &Pass<'_>, github: &G, f: &Facts) -> Res
             &pull,
             std::slice::from_ref(record),
             &Default::default(),
+            &Default::default(),
             &f.settings,
             &carried,
         )?;

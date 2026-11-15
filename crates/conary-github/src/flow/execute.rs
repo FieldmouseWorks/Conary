@@ -90,12 +90,16 @@ pub(crate) fn act<G: Write>(
                         head: f.revision.head.clone(),
                         author,
                     },
+                    Vec::new(),
                     record,
                     data,
                 )?;
             }
             Step::HandFix(kind) => {
-                let problems = super::handoff::problems(github, f, &record.memory, *kind)?;
+                let (problems, handed) =
+                    super::handoff::problems(github, f, &record.memory, *kind)?
+                        .into_iter()
+                        .unzip();
                 pass.start(
                     f,
                     Purpose::Fix(*kind),
@@ -105,6 +109,7 @@ pub(crate) fn act<G: Write>(
                         head: f.revision.head.clone(),
                         problems,
                     },
+                    handed,
                     record,
                     data,
                 )?;
@@ -124,6 +129,7 @@ pub(crate) fn act<G: Write>(
                         why: super::judging::why(record, &f.revision, decided)?,
                         context: f.context.clone().ok_or("judging context unknown")?,
                     },
+                    Vec::new(),
                     record,
                     data,
                 )?;
@@ -140,17 +146,20 @@ pub(crate) fn act<G: Write>(
                         tree,
                         checks,
                     },
+                    Vec::new(),
                     record,
                     data,
                 )?;
             }
             Step::PostReview(role) => {
-                let work = record
+                let at = record
                     .jobs
-                    .iter_mut()
-                    .rev()
-                    .find(|w| matches!(&w.purpose, Purpose::Review(r) if r == role) && !w.posted)
+                    .iter()
+                    .rposition(|w| {
+                        matches!(&w.purpose, Purpose::Review(r) if r == role) && !w.posted
+                    })
                     .ok_or("review answer missing")?;
+                let work = &record.jobs[at];
                 let completion = jobs::completion(work, pass.now)?;
                 let Some(Ok(plugin::Response {
                     answer: plugin::Answer::Review { findings },
@@ -164,21 +173,23 @@ pub(crate) fn act<G: Write>(
                 }
                 let body =
                     super::write::review_body(role, &work.job.revision, completion.at, &findings);
-                // A write can succeed even when its response is lost. Reconcile
-                // the exact authenticated marker before spending another round.
-                let already_posted = github.reviews(&repo, f.number)?.iter().any(|r| {
-                    r.commit_id.as_deref() == Some(work.job.revision.head.as_str())
-                        && r.body.as_deref() == Some(body.as_str())
-                        && r.user
-                            .as_ref()
-                            .is_some_and(|u| f.settings.review_authors.contains(&u.login))
-                });
-                if !already_posted {
-                    github.review(&repo, f.number, &work.job.revision.head, &body)?;
-                }
-                work.posted = true;
+                super::publish::review(
+                    github, f, role, record, data, at, pass.now, &body, &findings,
+                )?;
+                record.jobs[at].posted = true;
             }
-            Step::PostFix(_) => return Err("v1 fix results cannot carry thread replies".into()),
+            Step::PostFix(id) => {
+                if super::claims::superseded(f, id) {
+                    return Err("a later fix superseded this one's answers".into());
+                }
+                let at = record
+                    .jobs
+                    .iter()
+                    .position(|w| &w.job.id == id && matches!(w.purpose, Purpose::Fix(_)))
+                    .ok_or("fix job missing")?;
+                super::publish::answers(github, f, record, data, at, pass.now)?;
+                record.jobs[at].posted = true;
+            }
             Step::PostProof => {
                 return Err("proof output awaits independently attested GitHub evidence".into());
             }

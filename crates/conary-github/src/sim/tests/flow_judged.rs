@@ -137,7 +137,7 @@ fn generations_stay_ordered_across_issued_versions() {
     // A newer pass judged on another discussion revives no older one.
     let stale = Basis {
         why: vec![Trigger::RoundLimit],
-        context: judging_context([], &Default::default(), &Default::default()),
+        context: judging_context([], &Default::default(), &Default::default(), &[]),
     };
     c.judge_on(Judgment::Pass, stale);
     assert_eq!(c.view(4005).step, asked);
@@ -261,7 +261,7 @@ fn an_answered_judge_stays_answered_whatever_is_read_later() {
     // at once, never waiting on it or counting it as missing.
     let stale = Basis {
         why: vec![Trigger::RoundLimit],
-        context: judging_context([], &Default::default(), &Default::default()),
+        context: judging_context([], &Default::default(), &Default::default(), &[]),
     };
     c.judge_on(Judgment::Pass, stale);
     assert_eq!(c.pass(4200).step, again);

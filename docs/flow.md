@@ -81,8 +81,9 @@ changed since, or `started` when that judge predates recorded reasons. Its `cont
 `flow::judging_context` over the PR's discussion: its log in job order, each
 validated review's findings, then each v4 fix's findings as handed, with its
 answers; every review thread on GitHub with its comments as they read now; and
-every review body (`flow::review_bodies`), whoever wrote them and whether or not
-a worker did. Resolving a thread doesn't change it. An approval's body doesn't
+every review body (`flow::review_bodies`); and every PR comment carrying a
+finding's or an answer's marker (`flow::conversation`), whoever wrote them and
+whether or not a worker did. Resolving a thread doesn't change it. An approval's body doesn't
 count: it's a person's permission, and counting it would make the owner's
 release of an owner verdict ask for another judgment. A plugin speaking an older contract gets none of these fields.
 Engine trailers across the PR history supply its author engine. Unreadable
@@ -261,12 +262,58 @@ reservation, never an invented worker ID or a cancellation target. Old local
 records containing synthetic capacity cancellations are recovered without
 dropping cancellation state for real owned workers.
 
-Fixer requests use the selected current or carried GitHub review's structured
-findings, including its review ID and original head, rather than saved local
-review answers. Reviews published by flow include those structured findings.
-Unstructured reviews, blocking threads, native change requests, judgment and
-description failures wait explicitly: v1 cannot express their repair. Red
-checks and conflicts carry their observed check or exact base commit.
+Reviews published by flow include their structured findings, and each
+finding gets one target. The review goes up in one request
+(`POST /pulls/{n}/reviews`) with a line comment for each finding whose line
+is in one of the diff's hunks, placed from the PR's diff before it's sent.
+Every other finding (a line outside the hunks, a file outside the diff, or
+a diff GitHub won't give) gets a PR comment and has no thread to resolve.
+Each target ends in a `conary-finding:v1` marker naming the role, the
+reviewed head, the review's issuance (`flow::issuance`, the
+`receipt_digest` of its `review_receipt`) and the finding's index in the
+review marker's `problems`. So a second review on the same head, two
+findings on one line, or a carried review never share a marker. The review
+body and its receipt don't change. A lost or partial publication is
+reconciled before anything is sent again: the review by its exact body,
+each PR comment by its marker. Which findings get a line comment is
+planned once, before the review is first sent, and kept in the job's
+record. Every write is saved there before it's sent, and sent only while
+GitHub doesn't show it. One GitHub acknowledged is never sent again. One
+whose answer was lost, or that a crash left unanswered, may have gone up:
+it's waited for, and sent again only after GitHub has gone ten minutes
+without showing it, at most three times in all, after which the step fails
+instead. One GitHub refused went nowhere and may be sent again. Publication is
+complete only once the review and every finding's target are read back,
+and nothing is handed on before that. Waiting for GitHub to show a write
+spends no review attempt. A v2 review body sent twice counts as one
+round.
+
+Only the flow's review accounts' markers count. A finding thread is
+recognised by its first comment's marker, on whichever review it started,
+including one carried from an earlier head. A finding is answered when its
+thread is resolved, or, with no thread, when an answer to its own marker is
+posted; a review is answered when all its findings are. Fixer requests use
+the selected current or carried GitHub review's unanswered findings, and any
+finding thread still open, rather than saved local review answers. Each
+problem keeps its finding's marker and target in the fix job's record.
+Unstructured reviews, threads the flow didn't start, native change requests,
+judgment and description failures wait explicitly: v1 cannot express their
+repair. Red checks and conflicts carry their observed check or exact base
+commit.
+
+A v4 fix's answers are posted on the head it left, pushed or `unchanged`,
+and never on a head that moved past it. Each answer's `reply` goes on its
+finding's target with a `conary-answer:v1` marker that also names the fix
+invocation, as the flow's review account: a reply on the thread, which is
+then resolved, or a PR comment. A thread whose first comment no longer names
+that finding gets no reply. A lost write is reconciled by its exact body
+before it's posted again, and is sent under the same rules as a review's
+writes. Every thread of the finding is resolved, a duplicate's too. The fix
+is done only once every reply and resolution is read back; it then counts
+as answered, never as a job that ended without its answer. Only the latest
+fix's answers go up: an earlier invocation's are dropped. An `unchanged` fix posts its replies and pushes
+nothing, and the reviewers then look again; the round is counted as before
+([review-loop.md](review-loop.md) owns what the answers mean).
 
 Before submitting a direct merge, flow persists its intent and the authenticated
 permission it observed. The existing

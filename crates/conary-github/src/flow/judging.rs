@@ -1,6 +1,7 @@
 //! What a judge is asked to judge on: the review findings and a fix's
-//! answers to them, and every review thread and review body on GitHub, as
-//! one digest that the flow and the judge producer compute the same way.
+//! answers to them, and every review thread, review body and marked PR
+//! comment on GitHub, as one digest that the flow and the judge producer
+//! compute the same way.
 use std::collections::BTreeMap;
 
 use super::jobs::{self, Purpose};
@@ -17,11 +18,15 @@ use conary_core::plugin::{Answer, Finding, FindingAnswer, Problem, Response, Tas
 /// authors and text, never by whether it's resolved: resolving a thread
 /// adds nothing a judge hasn't read, and a finding or answer added or edited
 /// on GitHub is another discussion. So does each of `reviews`, the review
-/// bodies [`review_bodies`] keeps, by id, author and text.
+/// bodies [`review_bodies`] keeps, by id, author and text; and each of
+/// `conversation`, the PR comments [`conversation`] keeps, in order, by
+/// author and text: a finding with no line in the diff, or an answer to
+/// one, added, edited or removed.
 pub fn judging_context<'a>(
     discussion: impl IntoIterator<Item = (&'a Finding, Option<&'a FindingAnswer>)>,
     threads: &BTreeMap<String, ReviewThread>,
     reviews: &BTreeMap<u64, ThreadComment>,
+    conversation: &[ThreadComment],
 ) -> String {
     // Structs, not maps: the key order is fixed by these declarations, never
     // by a JSON library's map feature.
@@ -30,6 +35,7 @@ pub fn judging_context<'a>(
         log: Vec<Entry<'a>>,
         threads: Vec<Thread<'a>>,
         reviews: Vec<Body<'a>>,
+        conversation: &'a [ThreadComment],
     }
     #[derive(serde::Serialize)]
     struct Body<'a> {
@@ -82,6 +88,7 @@ pub fn judging_context<'a>(
             log,
             threads,
             reviews,
+            conversation,
         })
         .expect("a discussion is JSON"),
     )
@@ -107,6 +114,22 @@ pub fn review_bodies(records: &[crate::api::Review]) -> BTreeMap<u64, ThreadComm
                     body: r.body.clone()?,
                 },
             ))
+        })
+        .collect()
+}
+
+/// The PR comments a judge reads, in order: each that carries a finding's or
+/// an answer's marker, whoever wrote it. The rest of the conversation, a
+/// sealed verdict included, isn't the findings' discussion.
+pub fn conversation(comments: &[crate::api::Comment]) -> Vec<ThreadComment> {
+    comments
+        .iter()
+        .filter_map(|c| {
+            let body = c.body.as_deref()?;
+            super::threads::discussed(body).then(|| ThreadComment {
+                author: c.user.as_ref().map(|u| u.login.clone()),
+                body: body.into(),
+            })
         })
         .collect()
 }
@@ -157,6 +180,7 @@ pub(super) fn context(record: &Record, f: &super::Facts, now: u64) -> Result<Str
         discussion.iter().map(|(f, a)| (f, a.as_ref())),
         &f.threads,
         &f.review_bodies,
+        &f.conversation,
     ))
 }
 
@@ -261,6 +285,8 @@ mod tests {
                 deadline: 0,
                 posted: false,
                 recipes: Default::default(),
+                handed: Vec::new(),
+                sent: Default::default(),
             }],
             ..Record::default()
         }
@@ -308,19 +334,26 @@ mod tests {
             r#"{"finding":{"path":"src/lib.rs","line":1,"severity":"p2","text":"t"},"answer":null}],"#,
             r#""threads":[{"id":"T1","comments":[{"author":"someone","body":"b"},"#,
             r#"{"author":null,"body":"c"}]}],"#,
-            r#""reviews":[{"id":7,"author":"reviewer","body":"a finding"}]}"#
+            r#""reviews":[{"id":7,"author":"reviewer","body":"a finding"}],"#,
+            r#""conversation":[{"author":"reviewer","body":"elsewhere"}]}"#
         );
         assert_eq!(
             judging_context(
                 [(&finding, Some(&answer)), (&finding, None)],
                 &threads,
                 &reviews,
+                &[ThreadComment {
+                    author: Some("reviewer".into()),
+                    body: "elsewhere".into(),
+                }],
             ),
             super::super::evidence::receipt_digest(wire.as_bytes())
         );
         assert_eq!(
-            judging_context([], &BTreeMap::new(), &BTreeMap::new()),
-            super::super::evidence::receipt_digest(br#"{"log":[],"threads":[],"reviews":[]}"#)
+            judging_context([], &BTreeMap::new(), &BTreeMap::new(), &[]),
+            super::super::evidence::receipt_digest(
+                br#"{"log":[],"threads":[],"reviews":[],"conversation":[]}"#
+            )
         );
     }
 
@@ -360,7 +393,7 @@ mod tests {
         let threads = |resolved, comments: Vec<ThreadComment>| {
             BTreeMap::from([("T1".to_string(), ReviewThread { resolved, comments })])
         };
-        let context = |t| judging_context([], &t, &BTreeMap::new());
+        let context = |t| judging_context([], &t, &BTreeMap::new(), &[]);
         let open = context(threads(false, vec![comment("a finding")]));
         // Resolving it adds nothing a judge hasn't read.
         assert_eq!(open, context(threads(true, vec![comment("a finding")])));

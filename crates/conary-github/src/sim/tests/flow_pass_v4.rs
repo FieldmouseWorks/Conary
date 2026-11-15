@@ -20,6 +20,7 @@ fn context_now<'a>(
         log,
         &flow::Read::snapshot(&c.hub, REPO, 3).unwrap().threads,
         &review_bodies(&c.hub.reviews(REPO, 3).unwrap()),
+        &conversation(&c.hub.comments(REPO, 3).unwrap()),
     )
 }
 
@@ -47,6 +48,12 @@ fn fixed_then_reviewed(c: &mut Case, now: u64) {
         Some("owner@example.org"),
         Some("owner@example.org"),
     );
+    // Its answer goes up, the PR is read again, and head 4 is reviewed.
+    assert_eq!(
+        c.pass(now + 3, false)[0].next.as_ref().unwrap().step,
+        Step::PostFix("3-2".into())
+    );
+    c.pass(now + 3, false);
     c.pass(now + 3, false);
     c.run_worker();
     c.pass(now + 4, false);
