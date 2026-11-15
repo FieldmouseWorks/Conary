@@ -3,7 +3,7 @@
 
   # Pinned by commit, so Renovate moves it with the workflows' pins on burrow
   # (burrow's templates/project/flake.nix).
-  inputs.burrow.url = "git+https://github.com/FieldmouseWorks/burrow?ref=main&rev=9c6ad0248c58f0fe1d5fcc6bc6d97f72361502b9";
+  inputs.burrow.url = "git+https://github.com/FieldmouseWorks/burrow?ref=main&rev=40b4eccfdc225c9791c5c3309c9c749cd1142382";
 
   # `nix develop` for the toolchains, `nix flake check` for the gate:
   # rustfmt, clippy and the workspace's tests, on rust-toolchain.toml's
