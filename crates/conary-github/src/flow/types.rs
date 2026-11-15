@@ -695,6 +695,7 @@ pub struct Next {
     #[serde(default)]
     pub wait_until: Option<u64>,
     pub overdue_at: Option<u64>,
+    #[serde(default, deserialize_with = "super::persist::proof_plan::deserialize")]
     pub proof: Option<ProofPlan>,
     pub wait_on: Option<WaitOn>,
     pub on_usage: bool,

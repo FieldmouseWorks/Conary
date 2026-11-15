@@ -69,7 +69,11 @@ pub fn run(cli: &super::Cli, command: &FlowCommand) -> super::Result<()> {
     } else {
         None
     };
-    let process = jobs::Process(std::env::current_exe()?);
+    // One pass, then this CLI exits: whoever runs it runs the next one.
+    let process = jobs::Process {
+        worker: std::env::current_exe()?,
+        ended: None,
+    };
     let pass = Pass {
         config: &config,
         policy: &policy,

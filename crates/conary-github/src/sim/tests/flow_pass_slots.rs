@@ -87,6 +87,31 @@ fn full_and_dry_passes_enforce_repository_proof_slots() {
     assert_eq!(step(&real, 1), step(&dry, 1));
     assert_eq!(c.deferred.0.borrow().len(), 1);
 }
+/// Records a pass saved before proofs were prepared name plans the flow no
+/// longer makes. They still load, so neither PR's error reserves the slot.
+#[test]
+fn decisions_saved_before_preparation_still_load_and_hold_no_capacity() {
+    let c = two(1);
+    let now = crate::flow::jobs::now();
+    prepared(&c, now, true);
+    let repo = REPO.parse().unwrap();
+    let data = Data::open(c.dir.path(), &repo).unwrap();
+    for (pr, legacy) in [
+        (3, json!({"Run": {"machine": {"Run": ["check"]}}})),
+        (5, json!({"Evaluate": {"machine": {"Run": ["check"]}}})),
+    ] {
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(data.path(pr)).unwrap()).unwrap();
+        value["decision"]["proof"] = legacy;
+        std::fs::write(data.path(pr), value.to_string()).unwrap();
+    }
+    drop(data);
+    let real = c.pass(now + 1, false);
+    assert!(real.iter().all(|r| r.error.is_none()), "{real:?}");
+    assert_eq!(step(&real, 0).1, Step::Prove);
+    assert_eq!(step(&real, 1), WAITING);
+    assert_eq!(c.deferred.0.borrow().len(), 1);
+}
 #[test]
 fn targeted_kicks_count_workers_on_excluded_prs() {
     let c = two(1);

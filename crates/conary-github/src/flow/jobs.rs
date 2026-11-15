@@ -135,12 +135,21 @@ pub fn worker(path: &Path) -> Result<()> {
 pub trait Launch {
     fn launch(&self, path: &Path) -> Result<()>;
 }
+/// Told when a worker exits, however it ended.
+pub type Ended = std::sync::Arc<dyn Fn() + Send + Sync>;
 /// The CLI's hidden worker entry, with file-backed output and no inherited pipes.
-pub struct Process(pub PathBuf);
+pub struct Process {
+    pub worker: PathBuf,
+    /// Told once each worker this launches has exited, answered or not: only
+    /// a pass reads its answer, and most workers publish nothing GitHub sends
+    /// an event for, so this is how a daemon reads it without waiting on a
+    /// deadline.
+    pub ended: Option<Ended>,
+}
 impl Launch for Process {
     fn launch(&self, path: &Path) -> Result<()> {
         let log = std::fs::File::create(path.with_extension("log"))?;
-        let mut child = Command::new(&self.0)
+        let mut child = Command::new(&self.worker)
             .arg("flow-worker")
             .arg(path)
             .stdin(Stdio::null())
@@ -149,8 +158,12 @@ impl Launch for Process {
             .spawn()?;
         // Reap fast workers while a large pass is still running. Rust does
         // not wait for detached threads when the invoking CLI exits.
+        let ended = self.ended.clone();
         std::thread::spawn(move || {
             let _ = child.wait();
+            if let Some(ended) = ended {
+                ended();
+            }
         });
         Ok(())
     }

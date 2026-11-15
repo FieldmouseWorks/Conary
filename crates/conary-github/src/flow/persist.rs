@@ -6,6 +6,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 pub(super) mod judge_issuance;
+pub(super) mod proof_plan;
 pub(super) mod step;
 
 #[cfg(test)]

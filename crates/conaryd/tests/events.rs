@@ -1,5 +1,6 @@
-//! conaryd itself, its flow worker on, while GitHub is unavailable: the
-//! failed pass is booked for recovery and the ledger socket goes on answering.
+//! conaryd itself, its flow worker on, while GitHub is unavailable: the pass
+//! it starts with fails and is booked for recovery, a webhook's kick waits
+//! for that recovery, and the ledger socket goes on answering.
 
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
@@ -112,6 +113,31 @@ fn the_socket_answers_while_github_is_unavailable_and_the_pass_is_booked() {
         }
     };
 
+    // With no webhook yet, the pass conaryd starts with reads every repo,
+    // in case a worker answered while it was down. It fails on GitHub, and
+    // its repo's recovery is booked.
+    let started = Instant::now();
+    let mailbox = data.join("events.json");
+    let state = |daemon: &mut Daemon| {
+        alive(daemon);
+        std::fs::read(&mailbox)
+            .ok()
+            .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+            .unwrap_or_default()
+    };
+    let recovery = loop {
+        let state = state(&mut daemon);
+        if state["recovery"]["o/r"].is_object() {
+            break state["recovery"]["o/r"].clone();
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(30),
+            "no recovery booked: {state}"
+        );
+        thread::sleep(Duration::from_millis(50));
+    };
+    assert_eq!(recovery["attempts"], 1);
+
     let body = serde_json::to_vec(&json!({
         "repository": {"full_name": "o/r"},
         "pull_request": {"number": 1},
@@ -119,7 +145,6 @@ fn the_socket_answers_while_github_is_unavailable_and_the_pass_is_booked() {
     }))
     .unwrap();
     let signed = signature(&body);
-    let started = Instant::now();
     let mut stream = loop {
         match TcpStream::connect(listen) {
             Ok(stream) => break stream,
@@ -141,24 +166,10 @@ fn the_socket_answers_while_github_is_unavailable_and_the_pass_is_booked() {
     stream.read_to_string(&mut answer).unwrap();
     assert!(answer.starts_with("HTTP/1.1 202"), "{answer}");
 
-    // The pass fails on GitHub, and its repo's recovery is booked.
-    let mailbox = data.join("events.json");
-    let recovery = loop {
-        alive(&mut daemon);
-        let state: Value = std::fs::read(&mailbox)
-            .ok()
-            .and_then(|b| serde_json::from_slice(&b).ok())
-            .unwrap_or_default();
-        if state["recovery"]["o/r"].is_object() {
-            break state["recovery"]["o/r"].clone();
-        }
-        assert!(
-            started.elapsed() < Duration::from_secs(30),
-            "no recovery booked: {state}"
-        );
-        thread::sleep(Duration::from_millis(50));
-    };
-    assert_eq!(recovery["attempts"], 1);
+    // Its kick waits for the recovery, which stays as it was.
+    let held = state(&mut daemon);
+    assert_eq!(held["pending"], json!(["o/r"]), "{held}");
+    assert_eq!(held["recovery"]["o/r"], recovery);
 
     // The ledger's calls are still answered, from the same conaryd.
     let mut client = conaryd::Client::new(&socket);

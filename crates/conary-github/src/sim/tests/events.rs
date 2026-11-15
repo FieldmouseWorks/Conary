@@ -288,3 +288,95 @@ fn sleeper_wakes_at_a_booked_time_and_on_a_new_kick() {
     assert!(rx.recv_timeout(Duration::from_secs(3)).is_ok());
     worker.join().unwrap();
 }
+
+fn runtime(dir: &std::path::Path, worker: &str) -> Runtime {
+    serde_json::from_value(json!({
+        "listen": "127.0.0.1:0",
+        "secret_path": dir.join("secret"),
+        "repos": ["o/r", "o/s"],
+        "data": dir,
+        "flow_config": dir.join("flow.json"),
+        "policy": dir.join("policy.json"),
+        "token_command": "true",
+        "anchor_repo": null,
+        "worker": worker,
+    }))
+    .unwrap()
+}
+/// A thread asleep on the mailbox, as conaryd's worker is, that sends the
+/// first work it's woken for.
+fn sleeper(
+    queue: &std::sync::Arc<Queue>,
+) -> (std::sync::mpsc::Receiver<Work>, std::thread::JoinHandle<()>) {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let waiting = std::sync::Arc::clone(queue);
+    let thread = std::thread::spawn(move || {
+        loop {
+            if let Some(work) = waiting.take(crate::flow::jobs::now()).unwrap() {
+                tx.send(work).unwrap();
+                break;
+            }
+            waiting.wait();
+        }
+    });
+    (rx, thread)
+}
+
+/// Only a pass reads a worker's answer, and most publish nothing GitHub
+/// sends an event for, so its exit wakes its repository's pass: answered,
+/// failed, or stopped by its cancel marker.
+#[test]
+fn a_workers_exit_wakes_its_repositorys_pass_however_it_ended() {
+    use crate::flow::jobs::Launch;
+    use std::time::Duration;
+    for (name, body) in [
+        ("answered", "exit 0"),
+        ("failed", "exit 1"),
+        // Runs until it finds its cancel marker, as the plugin runner does.
+        (
+            "cancelled",
+            r#"while [ ! -e "${2%.job}.cancel" ]; do sleep 0.05; done"#,
+        ),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let scripts = tempfile::tempdir().unwrap();
+        let worker = crate::tokens::tests::script(scripts.path(), body);
+        let runtime = runtime(dir.path(), &worker);
+        let queue = std::sync::Arc::new(Queue::open(dir.path()).unwrap());
+        let (woken, thread) = sleeper(&queue);
+        let job = dir.path().join("3-1.job");
+        runtime.launcher("o/r", &queue).launch(&job).unwrap();
+        if name == "cancelled" {
+            assert!(
+                woken.recv_timeout(Duration::from_millis(500)).is_err(),
+                "a running worker woke the pass"
+            );
+            std::fs::write(job.with_extension("cancel"), b"obsolete\n").unwrap();
+        }
+        let work = woken
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap_or_else(|_| panic!("a {name} worker's exit woke nothing"));
+        assert_eq!(work.repo, "o/r");
+        thread.join().unwrap();
+        queue.finish(&work, &[], crate::flow::jobs::now()).unwrap();
+        // Its kick was the only one.
+        assert!(queue.take(crate::flow::jobs::now()).unwrap().is_none());
+    }
+}
+
+/// A worker that answered while conaryd was down is read as it starts again.
+#[test]
+fn the_daemon_reads_every_repository_once_as_it_starts() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = runtime(dir.path(), "/nonexistent");
+    let queue = Queue::open(dir.path()).unwrap();
+    assert!(queue.take(1).unwrap().is_none());
+    runtime.restart(&queue).unwrap();
+    let now = crate::flow::jobs::now();
+    let mut repos = Vec::new();
+    while let Some(work) = queue.take(now).unwrap() {
+        repos.push(work.repo.clone());
+        queue.finish(&work, &[], now).unwrap();
+    }
+    assert_eq!(repos, ["o/r", "o/s"]);
+}
