@@ -3,8 +3,8 @@
 use super::flow_case::Case;
 use crate::api::Source;
 use crate::flow::*;
-use crate::sim::REMI;
-use conary_core::plugin::{Finding, FindingAnswer, Severity};
+use crate::sim::{REMI, STEWARD};
+use conary_core::plugin::{Finding, Severity};
 
 fn finding() -> Finding {
     Finding {
@@ -15,16 +15,23 @@ fn finding() -> Finding {
     }
 }
 
-fn answer() -> FindingAnswer {
-    FindingAnswer {
-        problem: 0,
-        fixed: false,
-        reply: "not a bug: the caller checks it".into(),
+fn mark() -> FindingMark {
+    FindingMark {
+        role: "primary".into(),
+        head: "h".into(),
+        issuance: "i".into(),
+        finding: 0,
     }
 }
 
+/// A fix's answer to the finding, posted on GitHub as the flow posts one.
+fn answer(c: &Case, fix: &str) {
+    let body = answer_body("not a bug: the caller checks it", &mark(), fix);
+    c.hub.flow_comment(REMI, 3, STEWARD, &body);
+}
+
 /// Five rounds of findings, answered: past the round limit, with one
-/// finding in the discussion, the flow asks a judge.
+/// finding on GitHub with no line in the diff, the flow asks a judge.
 fn capped() -> Case {
     let mut c = Case::new();
     c.roles(&["primary", "secondary"]);
@@ -32,7 +39,8 @@ fn capped() -> Case {
         c.review("primary", Verdict::Findings, t);
     }
     c.answered("primary");
-    c.discussion = vec![(finding(), None)];
+    c.hub
+        .flow_comment(REMI, 3, STEWARD, &finding_body(&finding(), &mark(), true));
     assert_eq!(c.pass(4000).step, Step::Judge(vec![Trigger::RoundLimit]));
     c
 }
@@ -71,7 +79,7 @@ fn a_finding_answered_without_a_push_asks_for_a_new_judgment() {
         let judged = c.facts();
         assert_eq!(c.view(4001).step, counts);
         // A fix answers the finding and pushes nothing.
-        c.discussion.push((finding(), Some(answer())));
+        answer(&c, "fix-1");
         assert_eq!(c.scope(), judged.revision);
         assert_eq!(
             c.pass(4001).step,
@@ -137,7 +145,7 @@ fn generations_stay_ordered_across_issued_versions() {
     // A newer pass judged on another discussion revives no older one.
     let stale = Basis {
         why: vec![Trigger::RoundLimit],
-        context: judging_context([], &Default::default(), &Default::default(), &[]),
+        context: judging_context(&Default::default(), &Default::default(), &[]),
     };
     c.judge_on(Judgment::Pass, stale);
     assert_eq!(c.view(4005).step, asked);
@@ -156,7 +164,7 @@ fn a_finding_or_answer_on_github_asks_for_a_new_judgment() {
     c.judge_on(Judgment::Pass, basis);
     assert_eq!(c.view(4001).step, Step::Merge);
     // A person's finding and its answer, on GitHub alone, resolved without a
-    // push: no worker's log has them.
+    // push: no worker posted them.
     thread(&c, &[("person", "a finding"), ("owner", "an answer")]);
     assert_eq!(c.view(4002).step, asked);
     let basis = on(&c, &[Trigger::RoundLimit]);
@@ -190,7 +198,7 @@ fn a_superseded_judgment_never_spends_the_unanswered_budget() {
                 repeated: false,
             },
         );
-        c.discussion.push((finding(), Some(answer())));
+        answer(&c, &format!("fix-{round}"));
         assert_eq!(c.pass(5000 + round * 100).step, asked, "{round}");
         assert_eq!(c.pass(5060 + round * 100).step, asked, "{round}");
     }
@@ -261,7 +269,7 @@ fn an_answered_judge_stays_answered_whatever_is_read_later() {
     // at once, never waiting on it or counting it as missing.
     let stale = Basis {
         why: vec![Trigger::RoundLimit],
-        context: judging_context([], &Default::default(), &Default::default(), &[]),
+        context: judging_context(&Default::default(), &Default::default(), &[]),
     };
     c.judge_on(Judgment::Pass, stale);
     assert_eq!(c.pass(4200).step, again);

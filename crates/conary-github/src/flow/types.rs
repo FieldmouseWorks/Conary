@@ -299,13 +299,12 @@ impl Judged {
     /// every reason in `required` and on the discussion whose
     /// `flow::judging_context` is `context`. `asked` holds because a
     /// judgment already exists here, so no judgment must have been asked for
-    /// it. An issuance that doesn't say what it was judged on never covers,
-    /// and an unknown discussion is never matched.
-    pub fn covers(&self, required: &[Trigger], context: Option<&str>) -> bool {
+    /// it. An issuance that doesn't say what it was judged on never covers.
+    pub fn covers(&self, required: &[Trigger], context: &str) -> bool {
         let Some(basis) = &self.basis else {
             return false;
         };
-        context == Some(basis.context.as_str())
+        context == basis.context
             && required
                 .iter()
                 .filter(|t| **t != Trigger::Asked)
@@ -499,10 +498,6 @@ pub struct Facts {
     pub reviewers: BTreeMap<String, Reviewer>,
     pub judgment: Option<Judged>,
     pub judgment_generation: Option<u64>,
-    /// `flow::judging_context` over the PR's discussion now: what a judge
-    /// asked now reads, and what a pass or owner verdict must have read to
-    /// count. None until the worker records are read.
-    pub context: Option<String>,
     pub major_generation: Option<u64>,
     pub jobs: BTreeMap<Kind, Job>,
     pub claims: Vec<FixClaim>,
@@ -554,6 +549,14 @@ pub struct Facts {
     pub failed: Option<Failure>,
     pub failed_review: Option<FailedPost>,
     pub succeeded: BTreeSet<Failure>,
+}
+impl Facts {
+    /// [`super::judging_context`] over what this read saw on GitHub: what a
+    /// judge asked now reads, and what a pass or owner verdict must have
+    /// read to count. [`super::read_judging_context`] reads the same.
+    pub fn context(&self) -> String {
+        super::judging_context(&self.threads, &self.review_bodies, &self.conversation)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]

@@ -4,30 +4,22 @@ use super::flow_pass_case::{Case, REPO, example};
 use super::head;
 use crate::api::Source;
 use crate::flow::{self, *};
-use conary_core::plugin::{Answer, FindingAnswer, Problem, Task};
+use conary_core::plugin::{Answer, Problem, Task};
 
 fn invocation(work: &flow::jobs::Work) -> flow::jobs::Invocation {
     serde_json::from_slice(&std::fs::read(&work.path).unwrap()).unwrap()
 }
 
-/// `flow::judging_context` over `log` and what GitHub shows now: its
-/// review threads and review bodies.
-fn context_now<'a>(
-    c: &Case,
-    log: impl IntoIterator<Item = (&'a conary_core::plugin::Finding, Option<&'a FindingAnswer>)>,
-) -> String {
-    judging_context(
-        log,
-        &flow::Read::snapshot(&c.hub, REPO, 3).unwrap().threads,
-        &review_bodies(&c.hub.reviews(REPO, 3).unwrap()),
-        &conversation(&c.hub.comments(REPO, 3).unwrap()),
-    )
+/// `flow::judging_context` over a fresh read of GitHub alone.
+fn context_now(c: &Case) -> String {
+    read_judging_context(&c.hub, REPO, 3).unwrap()
 }
 
 /// The example finds one problem on head 3, its fix answers it and pushes
 /// head 4, and head 4's review is clean. The author's engine needs a judge,
-/// which the next pass asks for.
-fn fixed_then_reviewed(c: &mut Case, now: u64) {
+/// which the next pass asks for. Returns the context GitHub showed before the
+/// fix's answer went up.
+fn fixed_then_reviewed(c: &mut Case, now: u64) -> String {
     c.config.plugins.judge = Some(example());
     c.config.settings.judge_engines = ["fixture-author".into()].into();
     assert_eq!(
@@ -48,6 +40,7 @@ fn fixed_then_reviewed(c: &mut Case, now: u64) {
         Some("owner@example.org"),
         Some("owner@example.org"),
     );
+    let unanswered = context_now(c);
     // Its answer goes up, the PR is read again, and head 4 is reviewed.
     assert_eq!(
         c.pass(now + 3, false)[0].next.as_ref().unwrap().step,
@@ -57,6 +50,7 @@ fn fixed_then_reviewed(c: &mut Case, now: u64) {
     c.pass(now + 3, false);
     c.run_worker();
     c.pass(now + 4, false);
+    unanswered
 }
 
 #[test]
@@ -71,7 +65,6 @@ fn a_judge_after_a_fix_carries_its_pr_reasons_and_the_answered_finding() {
     let record = c.record();
     let mut findings = vec![];
     let mut answered = vec![];
-    let mut handed = vec![];
     for work in &record.jobs {
         let completion = flow::jobs::inspect(work, now + 6).unwrap();
         match (invocation(work).task, completion.result) {
@@ -101,7 +94,6 @@ fn a_judge_after_a_fix_carries_its_pr_reasons_and_the_answered_finding() {
                 };
                 // Handed with the review it came from named in its text.
                 assert!(finding.text.ends_with(&findings[0].text));
-                handed.push(finding.clone());
                 answered.extend(answers);
             }
             _ => {}
@@ -121,26 +113,26 @@ fn a_judge_after_a_fix_carries_its_pr_reasons_and_the_answered_finding() {
     };
     assert_eq!(pr, 3);
     assert_eq!(why, [Trigger::AuthorEngine]);
-    // The log: the review's finding, then the fix's answer to it as handed.
-    let log = |answer| context_now(&c, [(&findings[0], None), (&handed[0], answer)]);
-    assert_eq!(context, log(Some(&answered[0])));
-    // Another answer, or none, is another discussion.
-    assert_ne!(context, log(None));
-    let other = FindingAnswer {
-        reply: "another reply".into(),
-        ..answered[0].clone()
+    // What GitHub shows, read afresh: the review's finding and the fix's
+    // answer to it are both there.
+    assert_eq!(context, context_now(&c));
+    let comments = conversation(&c.hub.comments(REPO, 3).unwrap());
+    let shown = |text: &str| {
+        comments.iter().any(|c| c.body.contains(text))
+            || flow::Read::snapshot(&c.hub, REPO, 3)
+                .unwrap()
+                .threads
+                .values()
+                .flat_map(|t| &t.comments)
+                .any(|c| c.body.contains(text))
     };
-    assert_ne!(context, log(Some(&other)));
-    // Which problem index carried the answer doesn't change it.
-    let moved = FindingAnswer {
-        problem: answered[0].problem + 1,
-        ..answered[0].clone()
-    };
-    assert_eq!(context, log(Some(&moved)));
+    assert!(shown(&findings[0].text));
+    assert!(shown(&answered[0].reply));
 }
 
 /// A judgment counts only on the discussion a judge would be asked on now:
-/// with the fix's answer in it, not as it was before the fix answered.
+/// with the fix's answer on GitHub in it, not as GitHub showed it before the
+/// fix answered.
 #[test]
 fn a_judgment_counts_only_on_the_discussion_the_flow_reads_now() {
     for (read_the_answer, expected) in [
@@ -152,40 +144,19 @@ fn a_judgment_counts_only_on_the_discussion_the_flow_reads_now() {
     ] {
         let mut c = Case::new();
         let now = flow::jobs::now();
-        fixed_then_reviewed(&mut c, now);
-        let record = c.record();
-        let mut findings = vec![];
-        let mut answered = vec![];
-        for work in &record.jobs {
-            let Some(Ok(response)) = flow::jobs::inspect(work, now + 5).unwrap().result else {
-                continue;
-            };
-            match (invocation(work).task, response.answer) {
-                (_, Answer::Review { findings: found }) => {
-                    findings.extend(found.into_iter().map(|f| (f, None)))
-                }
-                (Task::Fix { problems, .. }, Answer::Fix { answers, .. }) => {
-                    for answer in answers.unwrap() {
-                        let Problem::Finding { finding } = &problems[answer.problem] else {
-                            panic!("an answer to a finding");
-                        };
-                        answered.push((finding.clone(), Some(answer)));
-                    }
-                }
-                _ => {}
-            }
-        }
-        let mut discussion = findings;
-        if read_the_answer {
-            discussion.extend(answered);
-        }
+        let unanswered = fixed_then_reviewed(&mut c, now);
+        assert_ne!(unanswered, context_now(&c));
         c.judgment_on(
             1,
             Judgment::Pass,
             true,
             Basis {
                 why: vec![Trigger::AuthorEngine],
-                context: context_now(&c, discussion.iter().map(|(f, a)| (f, a.as_ref()))),
+                context: if read_the_answer {
+                    context_now(&c)
+                } else {
+                    unanswered
+                },
             },
         );
         let report = c.pass(now + 5, true);

@@ -227,8 +227,7 @@ fn judgment(f: &Facts, why: &[Trigger]) -> Option<Judgment> {
         .as_ref()
         .filter(|j| j.revision == f.revision)
         .filter(|j| {
-            !matches!(j.verdict, Judgment::Pass | Judgment::Owner)
-                || j.covers(why, f.context.as_deref())
+            !matches!(j.verdict, Judgment::Pass | Judgment::Owner) || j.covers(why, &f.context())
         })
         .map(|j| j.verdict)
 }
