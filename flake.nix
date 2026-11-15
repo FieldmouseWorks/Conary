@@ -5,10 +5,16 @@
   # (burrow's templates/project/flake.nix).
   inputs.burrow.url = "git+https://github.com/FieldmouseWorks/burrow?ref=main&rev=40b4eccfdc225c9791c5c3309c9c749cd1142382";
 
+  # Conary's toolchain can be newer than burrow's. Own the overlay pin so
+  # lock maintenance keeps it current instead of restoring burrow's lock.
+  inputs.rust-overlay.url = "git+https://github.com/oxalica/rust-overlay?shallow=1";
+  inputs.rust-overlay.inputs.nixpkgs.follows = "burrow/nixpkgs";
+  inputs.burrow.inputs.rust-overlay.follows = "rust-overlay";
+
   # `nix develop` for the toolchains, `nix flake check` for the gate:
   # rustfmt, clippy and the workspace's tests, on rust-toolchain.toml's
   # toolchain (see burrow's lib/project.nix). The tests drive git.
-  outputs = { self, burrow }: burrow.lib.project {
+  outputs = { self, burrow, ... }: burrow.lib.project {
     inherit self;
     checks = pkgs: {
       package-git = import ./checks/package-git.nix {

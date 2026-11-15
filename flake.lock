@@ -6,7 +6,9 @@
         "microvm": "microvm",
         "nixpkgs": "nixpkgs",
         "nixpkgs-unstable": "nixpkgs-unstable",
-        "rust-overlay": "rust-overlay"
+        "rust-overlay": [
+          "rust-overlay"
+        ]
       },
       "locked": {
         "lastModified": 1794729994,
@@ -99,7 +101,8 @@
     },
     "root": {
       "inputs": {
-        "burrow": "burrow"
+        "burrow": "burrow",
+        "rust-overlay": "rust-overlay"
       }
     },
     "rust-overlay": {
@@ -110,10 +113,10 @@
         ]
       },
       "locked": {
-        "lastModified": 1794388042,
-        "narHash": "sha256-rsskkiDNmuZGK6Xk3JvWUxWENjuX4Jf0hOSFYujGC0s=",
+        "lastModified": 1794733384,
+        "narHash": "sha256-VaXNWDU+9dXckN4BlZbrcYTTd9pIscLeiknbhHX4+lk=",
         "ref": "refs/heads/master",
-        "rev": "0070500a3d72ade21323092e7bdd7125c5268482",
+        "rev": "67f1944c7c99d8dbb57fa3d83043bc0a92cbcc56",
         "shallow": true,
         "type": "git",
         "url": "https://github.com/oxalica/rust-overlay"
