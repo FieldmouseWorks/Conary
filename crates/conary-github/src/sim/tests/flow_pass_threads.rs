@@ -132,6 +132,17 @@ fn until(c: &Case, now: u64, t: &mut u64, want: Step) {
     panic!("never reached {want:?}");
 }
 
+/// As [`until`], through passes whose effects fail while GitHub catches up.
+fn until_waiting(c: &Case, now: u64, t: &mut u64, want: Step) {
+    for _ in 0..40 {
+        *t += 60;
+        if step_or_error(c, now + *t) == want {
+            return;
+        }
+    }
+    panic!("never reached {want:?}");
+}
+
 /// The latest review the flow published, read back.
 fn publication(c: &Case) -> Publication {
     let records = c.hub.reviews(REPO, 3).unwrap();
@@ -636,4 +647,101 @@ fn the_conversations_findings_and_answers_are_what_a_judge_reads() {
     c.hub.edit_flow_comment(REPO, 3, at, "removed");
     assert_ne!(facts().1, context);
     assert_ne!(facts().1, edited_context);
+}
+
+#[test]
+fn a_write_whose_answer_is_lost_is_not_sent_again_while_reads_lag() {
+    let c = case(true);
+    let now = flow::jobs::now();
+    assert_eq!(step(&c, now), Step::QueueReview("reviewer".into()));
+    respond(
+        &c,
+        now,
+        Answer::Review {
+            findings: findings(),
+        },
+    );
+    // Every write goes up and its answer is lost, and reads don't show it.
+    for call in [Call::FlowReview, Call::FlowComment, Call::FlowReply] {
+        c.hub.lose(call);
+    }
+    c.hub.stale(Call::Reviews);
+    c.hub.stale(Call::Comments);
+    let mut t = 1;
+    // Within the settling time, nothing is sent twice.
+    while t + 60 < flow::publish::SETTLE {
+        t += 60;
+        assert_ne!(step_or_error(&c, now + t), Step::HandFix(Kind::Findings));
+    }
+    assert_eq!(c.hub.count(Call::FlowReview), 1);
+    c.hub.fresh(Call::Reviews);
+    while t + 60 < 2 * flow::publish::SETTLE {
+        t += 60;
+        assert_ne!(step_or_error(&c, now + t), Step::HandFix(Kind::Findings));
+    }
+    assert_eq!(c.hub.count(Call::FlowComment), 2);
+    c.hub.fresh(Call::Comments);
+    until(&c, now, &mut t, Step::HandFix(Kind::Findings));
+    assert_eq!(c.hub.count(Call::FlowReview), 1);
+    assert_eq!(c.hub.count(Call::FlowComment), 2);
+    assert_eq!(c.hub.comments(REPO, 3).unwrap().len(), 2);
+    // The same for a fix's replies.
+    unchanged(&c, now + t, "answer");
+    c.hub.stale(Call::FlowSnapshot);
+    let from = t;
+    while t + 60 < from + flow::publish::SETTLE {
+        t += 60;
+        step_or_error(&c, now + t);
+    }
+    assert_eq!(c.hub.count(Call::FlowReply), 2);
+    c.hub.fresh(Call::FlowSnapshot);
+    for call in [Call::FlowReview, Call::FlowComment, Call::FlowReply] {
+        c.hub.heal(call);
+    }
+    until(&c, now, &mut t, Step::QueueReview("reviewer".into()));
+    assert_eq!(c.hub.count(Call::FlowReply), 2);
+    assert_eq!(answers(&c).len(), 4);
+}
+
+#[test]
+fn a_write_that_never_went_up_is_sent_again_after_settling_at_most_three_times() {
+    for recovers in [true, false] {
+        let c = case(false);
+        let now = flow::jobs::now();
+        assert_eq!(step(&c, now), Step::QueueReview("reviewer".into()));
+        respond(
+            &c,
+            now,
+            Answer::Review {
+                findings: findings(),
+            },
+        );
+        // With no diff, every finding is a PR comment. Their requests never
+        // reach GitHub: each is sent once, and not again within the
+        // settling time.
+        c.hub.fail(Call::FlowComment);
+        let mut t = 1;
+        while t + 60 < flow::publish::SETTLE {
+            t += 60;
+            step_or_error(&c, now + t);
+        }
+        assert_eq!(c.hub.count(Call::FlowComment), 4);
+        if recovers {
+            // Then they go through: each is sent once more, after settling.
+            c.hub.heal(Call::FlowComment);
+            until_waiting(&c, now, &mut t, Step::HandFix(Kind::Findings));
+            assert!(t >= flow::publish::SETTLE);
+            assert_eq!(c.hub.count(Call::FlowComment), 8);
+            assert_eq!(c.hub.comments(REPO, 3).unwrap().len(), 4);
+        } else {
+            while t < 6 * flow::publish::SETTLE {
+                t += 60;
+                step_or_error(&c, now + t);
+            }
+            assert_eq!(
+                c.hub.count(Call::FlowComment),
+                4 * flow::publish::TRIES as usize
+            );
+        }
+    }
 }

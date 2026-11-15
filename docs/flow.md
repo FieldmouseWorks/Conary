@@ -277,8 +277,12 @@ body and its receipt don't change. A lost or partial publication is
 reconciled before anything is sent again: the review by its exact body,
 each PR comment by its marker. Which findings get a line comment is
 planned once, before the review is first sent, and kept in the job's
-record with every write GitHub acknowledges, so a later attempt waits for
-an acknowledged write to show and never sends it again. Publication is
+record. Every write is saved there before it's sent, and sent only while
+GitHub doesn't show it. One GitHub acknowledged is never sent again. One
+whose answer was lost, or that a crash left unanswered, may have gone up:
+it's waited for, and sent again only after GitHub has gone ten minutes
+without showing it, at most three times in all, after which the step fails
+instead. One GitHub refused went nowhere and may be sent again. Publication is
 complete only once the review and every finding's target are read back,
 and nothing is handed on before that. Waiting for GitHub to show a write
 spends no review attempt. A v2 review body sent twice counts as one
@@ -303,8 +307,8 @@ finding's target with a `conary-answer:v1` marker that also names the fix
 invocation, as the flow's review account: a reply on the thread, which is
 then resolved, or a PR comment. A thread whose first comment no longer names
 that finding gets no reply. A lost write is reconciled by its exact body
-before it's posted again, and an acknowledged one is waited for, never
-resent. Every thread of the finding is resolved, a duplicate's too. The fix
+before it's posted again, and is sent under the same rules as a review's
+writes. Every thread of the finding is resolved, a duplicate's too. The fix
 is done only once every reply and resolution is read back; it then counts
 as answered, never as a job that ended without its answer. Only the latest
 fix's answers go up: an earlier invocation's are dropped. An `unchanged` fix posts its replies and pushes

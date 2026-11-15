@@ -34,18 +34,26 @@ pub struct Work {
 }
 
 /// A publication's progress. For a review: its plan, which findings get a
-/// line comment, fixed before the review is first sent; whether the review
-/// was acknowledged; and which findings' PR comments were. For a fix: which
-/// answers' replies or PR comments were acknowledged, by answer index.
+/// line comment, fixed before the review is first sent. For a review or a
+/// fix: each of its writes, by what it is ("review", "finding 2",
+/// "answer 0"), saved before it's sent.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Sent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inline: Option<Vec<bool>>,
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub review: bool,
-    #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
-    pub written: std::collections::BTreeSet<usize>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub writes: std::collections::BTreeMap<String, Attempt>,
+}
+
+/// One write's sending: when it was last sent, how many times, and whether
+/// GitHub acknowledged it. One not acknowledged may or may not have gone up.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Attempt {
+    pub at: u64,
+    pub tries: u32,
+    pub acknowledged: bool,
 }
 impl Sent {
     pub fn is_empty(&self) -> bool {

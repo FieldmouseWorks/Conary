@@ -173,7 +173,9 @@ pub(crate) fn act<G: Write>(
                 }
                 let body =
                     super::write::review_body(role, &work.job.revision, completion.at, &findings);
-                super::publish::review(github, f, role, record, data, at, &body, &findings)?;
+                super::publish::review(
+                    github, f, role, record, data, at, pass.now, &body, &findings,
+                )?;
                 record.jobs[at].posted = true;
             }
             Step::PostFix(id) => {

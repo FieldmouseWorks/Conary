@@ -64,7 +64,7 @@ pub use approval::owner_approval;
 
 mod handoff;
 
-mod publish;
+pub(crate) mod publish;
 mod threads;
 pub use threads::{FindingMark, Handed, LineComment, Target, answer_body, finding_body, issuance};
 pub(crate) use threads::{Publication, Targets};

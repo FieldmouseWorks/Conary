@@ -1,12 +1,15 @@
 //! Publishing a review's findings, each on its own target, and a fix's
 //! answers on the targets of the findings it was handed.
 //!
-//! Every write GitHub acknowledges is saved in the job's record before the
-//! next is sent ([`super::jobs::Sent`]), so a later attempt waits to read it
-//! back and never sends it again, however long GitHub takes to show it. A
-//! write whose answer was lost is reconciled against what GitHub shows
-//! before it's sent again. Nothing counts as done until it's read back;
-//! until then GitHub is lagging, and asking again later is the whole fix.
+//! Every write is saved in the job's record before it's sent
+//! ([`super::jobs::Sent`]), and is sent only while GitHub doesn't show it.
+//! One GitHub acknowledged is never sent again, however long GitHub takes
+//! to show it. One whose answer was lost, or that a crash left unanswered,
+//! may have gone up: it's waited for, and sent again only once GitHub has
+//! gone [`SETTLE`] seconds without showing it, at most [`TRIES`] times in
+//! all. One GitHub refused went nowhere and may be sent again at once.
+//! Nothing counts as done until it's read back; until then GitHub is
+//! lagging, and asking again later is the whole fix.
 use super::jobs;
 use super::persist::Result;
 use super::threads::{Targets, hunks, placed};
@@ -22,6 +25,67 @@ fn lagging(what: &str) -> Box<dyn std::error::Error + Send + Sync> {
     ApiError::unavailable(what).into()
 }
 
+/// How long a write that may have gone up is waited for before it's taken
+/// not to have: far longer than GitHub takes to show what it took.
+pub(crate) const SETTLE: u64 = 600;
+/// How many times one write is ever sent without an acknowledgement.
+pub(crate) const TRIES: u32 = 3;
+
+/// Send write `key` of job `at` with `send`, unless it was sent already and
+/// may still show: see the module's documentation. The caller sends it
+/// only while GitHub doesn't show it.
+fn write(
+    record: &mut Record,
+    data: &Data,
+    pr: u64,
+    at: usize,
+    key: &str,
+    now: u64,
+    send: impl FnOnce() -> std::result::Result<(), ApiError>,
+) -> Result<()> {
+    let previous = record.jobs[at].sent.writes.get(key).cloned();
+    if let Some(p) = &previous {
+        if p.acknowledged || now < p.at.saturating_add(SETTLE) {
+            return Ok(());
+        }
+        if p.tries >= TRIES {
+            return Err(format!(
+                "{key} may have gone up {TRIES} times and never showed; it isn't sent again"
+            )
+            .into());
+        }
+    }
+    let tries = previous.as_ref().map_or(0, |p| p.tries) + 1;
+    record.jobs[at].sent.writes.insert(
+        key.into(),
+        jobs::Attempt {
+            at: now,
+            tries,
+            acknowledged: false,
+        },
+    );
+    data.save(pr, record)?;
+    match send() {
+        Ok(()) => {
+            if let Some(a) = record.jobs[at].sent.writes.get_mut(key) {
+                a.acknowledged = true;
+            }
+            data.save(pr, record)?;
+            Ok(())
+        }
+        // GitHub refused it: nothing went up.
+        Err(e) if !e.unavailable => {
+            match previous {
+                Some(p) => record.jobs[at].sent.writes.insert(key.into(), p),
+                None => record.jobs[at].sent.writes.remove(key),
+            };
+            data.save(pr, record)?;
+            Err(e.into())
+        }
+        Err(e) => Err(e.into()),
+    }
+}
+
 /// Job `at`'s review, `body` on its head, with a line comment for each
 /// finding whose line is in the diff's hunks and a marked PR comment for
 /// every other finding. Which finding gets which is planned once, before the
@@ -35,6 +99,7 @@ pub(super) fn review<G: Write>(
     record: &mut Record,
     data: &Data,
     at: usize,
+    now: u64,
     body: &str,
     findings: &[Finding],
 ) -> Result<()> {
@@ -77,24 +142,21 @@ pub(super) fn review<G: Write>(
             inline
         }
     };
-    if !record.jobs[at].sent.review {
-        // A lost answer may hide a review that went up: send it only when
-        // GitHub doesn't show it. Its line comments come with it.
-        if !posted()? {
-            let comments: Vec<LineComment> = findings
-                .iter()
-                .enumerate()
-                .filter(|(i, _)| inline[*i])
-                .map(|(i, finding)| LineComment {
-                    path: finding.path.clone(),
-                    line: finding.line,
-                    body: finding_body(finding, &mark(i), false),
-                })
-                .collect();
-            github.review(&repo, f.number, &head, body, &comments)?;
-        }
-        record.jobs[at].sent.review = true;
-        data.save(f.number, record)?;
+    // Its line comments come with it.
+    if !posted()? {
+        let comments: Vec<LineComment> = findings
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| inline[*i])
+            .map(|(i, finding)| LineComment {
+                path: finding.path.clone(),
+                line: finding.line,
+                body: finding_body(finding, &mark(i), false),
+            })
+            .collect();
+        write(record, data, f.number, at, "review", now, || {
+            github.review(&repo, f.number, &head, body, &comments)
+        })?;
     }
     if !posted()? {
         return Err(lagging("the review isn't on GitHub yet"));
@@ -111,13 +173,17 @@ pub(super) fn review<G: Write>(
     };
     let before = targets()?;
     for (i, finding) in findings.iter().enumerate() {
-        if !inline[i]
-            && before.target(&mark(i)).is_none()
-            && !record.jobs[at].sent.written.contains(&i)
-        {
-            github.comment(&repo, f.number, &finding_body(finding, &mark(i), true))?;
-            record.jobs[at].sent.written.insert(i);
-            data.save(f.number, record)?;
+        if !inline[i] && before.target(&mark(i)).is_none() {
+            let text = finding_body(finding, &mark(i), true);
+            write(
+                record,
+                data,
+                f.number,
+                at,
+                &format!("finding {i}"),
+                now,
+                || github.comment(&repo, f.number, &text),
+            )?;
         }
     }
     let after = targets()?;
@@ -215,13 +281,19 @@ pub(super) fn answers<G: Write>(
     };
     let (shown, open) = read()?;
     for (n, (handed, body)) in planned.iter().enumerate() {
-        if !shown[n] && !record.jobs[at].sent.written.contains(&n) {
-            match &handed.target {
-                Target::Thread(thread) => github.reply(&repo, f.number, thread, body)?,
-                Target::Comment => github.comment(&repo, f.number, body)?,
-            }
-            record.jobs[at].sent.written.insert(n);
-            data.save(f.number, record)?;
+        if !shown[n] {
+            write(
+                record,
+                data,
+                f.number,
+                at,
+                &format!("answer {n}"),
+                now,
+                || match &handed.target {
+                    Target::Thread(thread) => github.reply(&repo, f.number, thread, body),
+                    Target::Comment => github.comment(&repo, f.number, body),
+                },
+            )?;
         }
         // Resolving is idempotent: every thread of the finding, a
         // duplicate's too, until GitHub shows it resolved.
