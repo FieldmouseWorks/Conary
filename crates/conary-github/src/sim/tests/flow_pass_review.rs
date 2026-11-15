@@ -400,7 +400,7 @@ fn r2_owner_approval_does_not_enable_direct_or_delegated_landings() {
         if bot {
             c.as_bot();
         }
-        let mut facts = read(
+        let facts = read(
             &c.hub,
             &REPO.parse().unwrap(),
             3,
@@ -409,13 +409,6 @@ fn r2_owner_approval_does_not_enable_direct_or_delegated_landings() {
             &c.config.trusted_authors,
         )
         .unwrap();
-        // No worker has answered: the discussion is empty.
-        facts.context = Some(judging_context(
-            [],
-            &facts.threads,
-            &facts.review_bodies,
-            &facts.conversation,
-        ));
         assert_eq!(
             next(&facts, &c.record().memory, crate::flow::jobs::now())
                 .0

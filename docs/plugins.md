@@ -149,13 +149,13 @@ A v4 judge request says why the flow asks, and what the judgment is on:
 
 - `context` is the flow's digest of the review findings and their answers
   that the judgment is on: 64 lowercase hex digits, computed by
-  `conary_github::flow::judging_context`, which a judge producer calls too.
+  `conary_github::flow::judging_context` from what GitHub shows alone.
+  Every finding the flow publishes and every answer a fix gives is on
+  GitHub under a marker, so a judge producer recomputes it with
+  `conary_github::flow::read_judging_context` over its own read of the PR.
   It is the sha256 of the compact JSON object
-  `{"log","threads","reviews","conversation"}`, keys in
-  the order shown throughout. `log` has one entry per finding in the flow's
-  own log, in order:
-  `{"finding":{"path","line","severity","text"},"answer":{"fixed","reply"}}`,
-  where `answer` is null for a finding not answered. `threads` has one entry
+  `{"threads","reviews","conversation"}`, keys in
+  the order shown throughout. `threads` has one entry
   per review thread on GitHub, in order of its id:
   `{"id","comments":[{"author","body"}]}`, its comments in order, `author`
   the login (null for a deleted account) and `body` the text as it reads

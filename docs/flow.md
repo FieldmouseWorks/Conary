@@ -78,12 +78,14 @@ it proves. A judge request carries the decision's reasons as `why`, in the
 contract's words. One asked again only because a judge already started on
 this head and base carries that judge's reasons, even if the description
 changed since, or `started` when that judge predates recorded reasons. Its `context` is
-`flow::judging_context` over the PR's discussion: its log in job order, each
-validated review's findings, then each v4 fix's findings as handed, with its
-answers; every review thread on GitHub with its comments as they read now; and
-every review body (`flow::review_bodies`); and every PR comment carrying a
-finding's or an answer's marker (`flow::conversation`), whoever wrote them and
-whether or not a worker did. Resolving a thread doesn't change it. An approval's body doesn't
+`flow::judging_context` over the PR's discussion as GitHub shows it, and
+nothing else: every review thread with its comments as they read now; every
+review body (`flow::review_bodies`); and every PR comment carrying a finding's
+or an answer's marker (`flow::conversation`), whoever wrote them and whether
+or not a worker did. Each finding the flow publishes and each answer a fix
+gives is one of these, so the flow's own job records never go in, and a judge
+producer gets the same digest from `flow::read_judging_context` over its own
+read of the PR. Resolving a thread doesn't change it. An approval's body doesn't
 count: it's a person's permission, and counting it would make the owner's
 release of an owner verdict ask for another judgment. A plugin speaking an older contract gets none of these fields.
 Engine trailers across the PR history supply its author engine. Unreadable

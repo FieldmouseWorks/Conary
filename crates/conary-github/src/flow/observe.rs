@@ -5,7 +5,6 @@ use super::*;
 use conary_core::plugin;
 
 pub(crate) fn hydrate(f: &mut Facts, record: &Record, now: u64, dry_run: bool) -> Result<()> {
-    f.context = Some(super::judging::context(record, f, now)?);
     for work in &record.jobs {
         let completion: Completion = if dry_run {
             jobs::inspect(work, now)?

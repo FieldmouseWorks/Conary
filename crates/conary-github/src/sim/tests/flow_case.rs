@@ -35,12 +35,6 @@ pub(super) struct Case {
     pub base_held: bool,
     pub train: TrainState,
     pub unseen: bool,
-    /// The discussion the workers' answers make: what `Facts::context`
-    /// digests. Empty until a test says otherwise.
-    pub discussion: Vec<(
-        conary_core::plugin::Finding,
-        Option<conary_core::plugin::FindingAnswer>,
-    )>,
     /// What each finished judge job was asked on, as its invocation says.
     pub judge_requests: BTreeMap<String, Option<Basis>>,
 }
@@ -64,7 +58,6 @@ impl Case {
             base_held: false,
             train: TrainState::default(),
             unseen: false,
-            discussion: Vec::new(),
             judge_requests: BTreeMap::new(),
         }
     }
@@ -109,29 +102,10 @@ impl Case {
     pub fn label(&self, labels: &[&str]) {
         self.hub.label(REMI, 3, labels);
     }
-    /// `flow::judging_context` over the discussion now: the workers' log,
-    /// and GitHub's review threads, review bodies and marked PR comments.
+    /// `flow::judging_context` over a fresh read of the discussion on
+    /// GitHub: its review threads, review bodies and marked PR comments.
     pub fn context(&self) -> String {
-        self.context_on(
-            &crate::flow::Read::snapshot(&self.hub, REMI, 3)
-                .unwrap()
-                .threads,
-            &review_bodies(&self.hub.reviews(REMI, 3).unwrap()),
-            &crate::flow::conversation(&self.hub.comments(REMI, 3).unwrap()),
-        )
-    }
-    fn context_on(
-        &self,
-        threads: &BTreeMap<String, ReviewThread>,
-        reviews: &BTreeMap<u64, ThreadComment>,
-        conversation: &[ThreadComment],
-    ) -> String {
-        judging_context(
-            self.discussion.iter().map(|(f, a)| (f, a.as_ref())),
-            threads,
-            reviews,
-            conversation,
-        )
+        read_judging_context(&self.hub, REMI, 3).unwrap()
     }
     /// A judgment of the current revision. A contract word is a producer's
     /// v3 judgment, judged for every reason on the discussion now; any other
@@ -233,7 +207,6 @@ impl Case {
                 r.missing = s.missing;
             }
         }
-        f.context = Some(self.context_on(&f.threads, &f.review_bodies, &f.conversation));
         f.judge_requests = self.judge_requests.clone();
         f.jobs = self.jobs.clone();
         f.claims = self.claims.clone();

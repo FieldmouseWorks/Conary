@@ -127,7 +127,7 @@ pub(crate) fn act<G: Write>(
                         author,
                         reviewers: reviewers(record)?,
                         why: super::judging::why(record, &f.revision, decided)?,
-                        context: f.context.clone().ok_or("judging context unknown")?,
+                        context: f.context(),
                     },
                     Vec::new(),
                     record,

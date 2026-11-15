@@ -37,7 +37,7 @@ fn finding(path: &str, line: u64, text: &str) -> Finding {
 
 /// Two findings on one line in the diff, a line outside its hunks, and a
 /// file outside it.
-fn findings() -> Vec<Finding> {
+pub(super) fn findings() -> Vec<Finding> {
     vec![
         finding("src/lib.rs", 2, "first on line two"),
         finding("src/lib.rs", 2, "second on line two"),
@@ -46,7 +46,7 @@ fn findings() -> Vec<Finding> {
     ]
 }
 
-fn case(diff: bool) -> Case {
+pub(super) fn case(diff: bool) -> Case {
     let c = Case::new();
     if diff {
         let tip = c.hub.branch(REPO, "main").unwrap().unwrap();
@@ -56,7 +56,7 @@ fn case(diff: bool) -> Case {
 }
 
 /// Answers every launched worker with `answer`, completed at `at`.
-fn respond(c: &Case, at: u64, answer: Answer) {
+pub(super) fn respond(c: &Case, at: u64, answer: Answer) {
     for path in c.deferred.0.borrow_mut().drain(..) {
         let completion = flow::jobs::Completion {
             at,
@@ -79,7 +79,7 @@ fn respond(c: &Case, at: u64, answer: Answer) {
 }
 
 /// A fix that changes nothing and answers each finding it was handed.
-fn unchanged(c: &Case, at: u64, reply: &str) {
+pub(super) fn unchanged(c: &Case, at: u64, reply: &str) {
     let path = c.deferred.0.borrow()[0].clone();
     let invocation: flow::jobs::Invocation =
         serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
@@ -110,7 +110,7 @@ fn report(c: &Case, now: u64) -> flow::Report {
     c.pass(now, false).remove(0)
 }
 
-fn step(c: &Case, now: u64) -> Step {
+pub(super) fn step(c: &Case, now: u64) -> Step {
     let r = report(c, now);
     assert_eq!(r.error, None);
     r.next.unwrap().step
@@ -122,7 +122,7 @@ fn step_or_error(c: &Case, now: u64) -> Step {
 }
 
 /// Passes a minute apart from `*t` until one decides `want`.
-fn until(c: &Case, now: u64, t: &mut u64, want: Step) {
+pub(super) fn until(c: &Case, now: u64, t: &mut u64, want: Step) {
     for _ in 0..20 {
         *t += 60;
         if step(c, now + *t) == want {
@@ -153,7 +153,7 @@ fn publication(c: &Case) -> Publication {
         .unwrap()
 }
 
-fn threads(c: &Case) -> std::collections::BTreeMap<String, ReviewThread> {
+pub(super) fn threads(c: &Case) -> std::collections::BTreeMap<String, ReviewThread> {
     flow::Read::snapshot(&c.hub, REPO, 3).unwrap().threads
 }
 
@@ -191,7 +191,7 @@ fn fix_work(c: &Case, id: &str) -> flow::jobs::Work {
 }
 
 /// Reviewed with [`findings`] at `now`, and published at `now + 1`.
-fn reviewed(c: &Case, now: u64) {
+pub(super) fn reviewed(c: &Case, now: u64) {
     assert_eq!(step(c, now), Step::QueueReview("reviewer".into()));
     respond(
         c,
@@ -594,59 +594,6 @@ fn repeated_unchanged_rounds_never_count_as_missing_answers() {
         assert!(c.record().memory.unanswered.is_empty(), "round {round}");
     }
     assert_eq!(answers(&c).len(), 12);
-}
-
-#[test]
-fn the_conversations_findings_and_answers_are_what_a_judge_reads() {
-    let c = case(false);
-    let now = flow::jobs::now();
-    reviewed(&c, now);
-    assert_eq!(step(&c, now + 2), Step::HandFix(Kind::Findings));
-    unchanged(&c, now + 2, "answer");
-    until(&c, now, &mut 2, Step::QueueReview("reviewer".into()));
-    // What the flow reads: the conversation, and the context it makes.
-    let facts = || {
-        let mut f = flow::read(
-            &c.hub,
-            &REPO.parse().unwrap(),
-            3,
-            &c.policy,
-            c.config.settings.clone(),
-            &c.config.trusted_authors,
-        )
-        .unwrap();
-        flow::observe::hydrate(&mut f, &c.record(), now + 1000, true).unwrap();
-        (f.conversation, f.context.unwrap())
-    };
-    let (before, context) = facts();
-    // Four findings and four answers; a sealed verdict or a person's word
-    // isn't the findings' discussion.
-    assert_eq!(before.len(), 8);
-    c.hub.flow_comment(REPO, 3, "someone", "just a comment");
-    assert_eq!(facts(), (before.clone(), context.clone()));
-    // An answer edited, its marker kept, is another discussion; so is one
-    // removed.
-    let comments = c.hub.comments(REPO, 3).unwrap();
-    let at = comments
-        .iter()
-        .position(|c| {
-            c.body
-                .as_deref()
-                .is_some_and(|b| b.contains("conary-answer:v1"))
-        })
-        .unwrap();
-    let edited = comments[at]
-        .body
-        .as_deref()
-        .unwrap()
-        .replacen("answer", "a different answer", 1);
-    c.hub.edit_flow_comment(REPO, 3, at, &edited);
-    let (after, edited_context) = facts();
-    assert_ne!(after, before);
-    assert_ne!(edited_context, context);
-    c.hub.edit_flow_comment(REPO, 3, at, "removed");
-    assert_ne!(facts().1, context);
-    assert_ne!(facts().1, edited_context);
 }
 
 #[test]

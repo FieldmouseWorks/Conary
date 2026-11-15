@@ -635,7 +635,9 @@ happened stands, and the next pass reads the head that moved.
 
 ### J: judge plugin and producer
 
-**Repo:** burrow. **Depends on:** C1, C4, B1 and B2.
+**Repo:** burrow. **Depends on:** C1, C4, B1, B2 and
+[#396](https://github.com/FieldmouseWorks/Conary/issues/396), which makes
+the digest GitHub's alone.
 
 **Crate:** a new `crates/burrow-judge`, with the plugin binary and the
 `autoland-judge` producer service.
@@ -671,8 +673,9 @@ copy.
 
 Every request is a new judgment under a new generation. The issuance
 carries the request's `why` and `context` ([C4](#c4-flow-bind-a-judgment-to-its-reasons-and-the-findings-it-read)).
-The producer recomputes `context` from GitHub, with Conary's own helper,
-and refuses to judge if it differs from the request's.
+The producer recomputes `context` from GitHub with Conary's own helper,
+`flow::read_judging_context`, and refuses to judge if it differs from the
+request's.
 
 **Restart and cancellation.**
 - A closed connection stops the engine session.
@@ -770,6 +773,7 @@ the candidate commit (#338's P3).
 C1 ──► C2
 C1 ──► C3
 C1 ──► C4 ──► J
+C2 ──► #396 ──► J
 B3 ──────► #314
 B1 ──┐
 B2 ──┼──► R
@@ -780,8 +784,8 @@ R, F, J, P, C2, C3, C4, B3, and key provisioning ──► #313 ──► #314
 ```
 
 C1, B1, B2 and B3 can start at once. R starts once B1 and B2 land. F, J
-and P start once C1 and B2 land, plus B1 for F and J, C4 for J, and
-burrow#969 for F. C2 and C3 run alongside the plugins.
+and P start once C1 and B2 land, plus B1 for F and J, C4 and #396 for J,
+and burrow#969 for F. C2 and C3 run alongside the plugins.
 
 This is the order these tasks need of each other.
 [m6-order.md](m6-order.md) puts them beside burrow's proj and gate

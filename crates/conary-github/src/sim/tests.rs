@@ -46,16 +46,11 @@ fn every_reason() -> Vec<conary_core::plugin::Trigger> {
 }
 
 /// A judgment judged for every reason the flow can require, on what PR 3 of
-/// `repo` shows on `hub` now, with no worker answers.
+/// `repo` shows on `hub` now.
 fn judged_for_everything(hub: &Hub, repo: &str) -> crate::flow::Basis {
     crate::flow::Basis {
         why: every_reason(),
-        context: crate::flow::judging_context(
-            [],
-            &crate::flow::Read::snapshot(hub, repo, 3).unwrap().threads,
-            &crate::flow::review_bodies(&hub.reviews(repo, 3).unwrap()),
-            &crate::flow::conversation(&hub.comments(repo, 3).unwrap()),
-        ),
+        context: crate::flow::read_judging_context(hub, repo, 3).unwrap(),
     }
 }
 
@@ -395,6 +390,8 @@ mod flow_pass_r5;
 mod flow_pass_v4;
 
 mod flow_pass_threads;
+
+mod flow_pass_context;
 
 mod events;
 mod events_recovery;
