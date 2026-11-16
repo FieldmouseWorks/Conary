@@ -812,7 +812,8 @@ says which may be open together.
 - **Dependency-sweep decisions (`conary/major`)** and the upkeep the
   steward does outside the landing flow belong to #316.
 - **The stuck role's job** is burrow#945 and burrow#961 on the steward,
-  then the flow's `job` kind.
+  then the flow's `job` kind, which
+  [SJ](m6-properties.md#sj-burrow-serve-the-stuck-role-through-the-job-kind) serves.
 
 ## Filing
 

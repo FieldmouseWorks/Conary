@@ -100,7 +100,7 @@ decision.
 | Issue | The flow takes | The flow doesn't take |
 | --- | --- | --- |
 | [burrow#748](https://github.com/FieldmouseWorks/burrow/issues/748), review limits and judge triggers from settings | The limits and triggers are flow `Settings` fields (`rounds`, `judge_engines`, the fix-growth share), declared in FP1's schema and read at each decision | A second settings reader in the steward: burrow renders the flow's file ([burrow#724](https://github.com/FieldmouseWorks/burrow/issues/724)) |
-| [burrow#945](https://github.com/FieldmouseWorks/burrow/issues/945), a looping review goes to the stuck role | Its three triggers and the stuck-role handoff, in [FP11](#fp11-flow-break-a-review-loop-that-wont-settle) | Nothing left out |
+| [burrow#945](https://github.com/FieldmouseWorks/burrow/issues/945), a looping review goes to the stuck role | Its three triggers and the stuck-role handoff, in [FP11](#fp11-flow-break-a-review-loop-that-wont-settle), with [SJ](#sj-burrow-serve-the-stuck-role-through-the-job-kind) serving the stuck role's job | Nothing left out |
 | [burrow#961](https://github.com/FieldmouseWorks/burrow/issues/961), looping expedited stages go to the stuck role before the owner | The order at an expired stage: mechanical recovery ([FP8](#fp8-flow-bring-back-a-stalled-stage-by-a-way-github-allows-and-quote-its-error)), then the stuck role (FP11), then the owner only for a door ([FP10](#fp10-flow-ask-the-owner-only-for-a-named-one-way-door-and-once-per-decision)). It holds for every PR | A separate expedite lane: priority is FP4's levels, not a second path |
 | [burrow#955](https://github.com/FieldmouseWorks/burrow/issues/955), an expedited PR fixes only blockers | One follow-up issue per PR for the findings a fix answers, shared with FP11's handoff | Which findings a fix fixes: that's the fix brief's ([review-loop.md](review-loop.md#the-decisions), task B1), the same for every PR |
 | [burrow#960](https://github.com/FieldmouseWorks/burrow/issues/960), a deadline for every stage, then branch or flake recovery | Every watched stage already books `overdue_at`; FP4 sizes it by priority level, FP7 leaves queue time out, and FP8 takes the branch update and the rerun a check's kind allows | A known-flake retry: Conary holds no flaky-test record. Flaky upkeep stays burrow's ([#256](https://github.com/FieldmouseWorks/Conary/issues/256)'s "what lives where") |
@@ -129,13 +129,15 @@ shouldn't have. So:
 
 FP11 isn't a #314 prerequisite because the steward it replaces on remi has
 no loop breaker either; FP6 and FP8 already stop a stage from repeating
-without end. FP12 isn't one because FP6 already stops a deadline from being
+without end, and no prerequisite waits on it: what FP8 and FP10 don't hand
+on stays overdue until FP11 lands. FP12 isn't one because FP6 already stops a deadline from being
 hit over and over; the configured `proof_timeout` stays the ceiling until
 FP12 lands.
 
 ## The tasks
 
-Each task is one PR in Conary. Each says what it adds, its regression
+Each task is one PR in Conary, except SJ, which is one PR in burrow. Each
+says what it adds, its regression
 scenario, what it waits on and what it leaves alone.
 
 ### FP1: flow: publish the configuration's schema and its live exceptions
@@ -355,9 +357,10 @@ while CI runs starts no worker and leaves the wait as it was.
   and never for a kind GitHub won't rerun.
 - A refused recovery isn't tried again in that stall. The PR's status
   quotes the error GitHub gave, as given, instead of a guessed cause.
-- After that the stall goes on to FP11's stuck role, then FP10's owner
-  listing only where a door applies. Repeated events, wakes and restarts
-  repeat no recovery.
+- After that the stall is overdue in the flow's status, and goes to
+  FP11's stuck role once FP11 has landed. The owner is listed only where a
+  door applies (FP10). Repeated events, wakes and restarts repeat no
+  recovery.
 
 **Regression scenario.** A cancelled workflow run with no replacement:
 main shows "cancelled, to be run again" and waits forever. The fixed flow
@@ -402,8 +405,8 @@ own time, and the first books its recovery.
   judge's reason) and the owner label set by a person. A decision with no
   door doesn't list the owner. The flow makes the call itself, records it
   and shows it: a read too large to finish is FP5's degraded wait, and two
-  jobs ending without their answer go to FP8's recovery and FP11's stuck
-  role. A major update the dependency sweep held (#316's sweep) is listed
+  jobs ending without their answer go to FP8's recovery, then stay overdue
+  in the flow's status until FP11's stuck role takes them. A major update the dependency sweep held (#316's sweep) is listed
   only with the door the sweep names.
 - A hold past `hold_stall_after` is a stall in the flow's status, never an
   owner listing (remi#1248's substance).
@@ -422,8 +425,10 @@ R2 PR listed for the owner gets two base-merge heads: main has a new
 the fixed flow keeps one request with one key whose marker moves to the
 current head.
 
-**Waits on:** FP5, FP8 and FP11 for the calls the owner no longer gets. Until
-FP11 lands, a loop past its round limit stays overdue rather than listed.
+**Waits on:** FP5 and FP8 for the calls the owner no longer gets. It doesn't
+wait on FP11: until FP11 lands, a loop past its round limit and a stall FP8
+couldn't recover stay overdue in the flow's status rather than listed, and
+FP11 then puts the stuck role ahead of that.
 **Leaves alone:** the owner issue the steward's upkeep keeps, which
 [#316](https://github.com/FieldmouseWorks/Conary/issues/316) moves to Rust
 and which joins on this key; burrow's question notices
@@ -457,10 +462,10 @@ hands the PR to the stuck role.
 
 **Waits on:** m6-plugins.md's
 [C2](m6-plugins.md#c2-flow-give-each-finding-a-thread-and-post-a-fixs-answers-on-it)
-(the answer history it reads) and FP8. **Leaves alone:** the owner's open
+(the answer history it reads), FP8, and [SJ](#sj-burrow-serve-the-stuck-role-through-the-job-kind) (the plugin
+that serves the stuck role's `job`). **Leaves alone:** the owner's open
 question on [burrow#939](https://github.com/FieldmouseWorks/burrow/issues/939),
-which the switch's default doesn't answer; the stuck role's brief, which is
-B1's.
+which the switch's default doesn't answer.
 
 ### FP12: flow: size a proof's deadline from its own history
 
@@ -485,6 +490,40 @@ configured value. On main every proof's deadline is the configured value.
 
 **Waits on:** FP6.
 
+### SJ: burrow: serve the stuck role through the `job` kind
+
+**Moves:** no entry of its own. It's the plugin behind FP11's handoff,
+which no task in [m6-plugins.md](m6-plugins.md) serves: F answers `fix`,
+and B1's briefs are review, fix and judge.
+
+**Repo:** burrow, in the burrow M6 lane after J. **Depends on:**
+[F](m6-plugins.md#f-fix-plugin) (its crate and broker), [B1](m6-plugins.md#b1-briefs-one-source-for-the-review-fix-and-judge-briefs)
+(the briefs' crate) and
+[burrow#969](https://github.com/FieldmouseWorks/burrow/issues/969) (the
+job's record). It adds no crate, so fence 2 doesn't apply.
+
+**Work.**
+- `burrow-fix`'s broker also advertises the `job` kind
+  ([plugins.md](plugins.md#the-job-kind)) and starts it as a job on the
+  stuck role from the role map, or the request's `execution` when it names
+  one. It waits on and stops the job through its record, as F does.
+- A stuck-role brief joins B1's in `burrow-brief`: given the PR and the
+  flow's reason (the round cap, fix growth, an answered finding raised
+  again, or a stall FP8 couldn't recover), the job settles the PR, pushing
+  a head or answering why it can't, and opens the one follow-up issue
+  FP11 links for the findings it answers.
+- At most one live stuck-role job per PR; a closed connection stops it.
+- The unit is behind `burrow.autoland.plugins.job.enable`, off by default,
+  and the flow's rendered configuration
+  ([burrow#724](https://github.com/FieldmouseWorks/burrow/issues/724))
+  names it for `job` only when that's on.
+
+**Negative verification.** `cn plugin check` passes with `job` advertised.
+A request for each of the four reasons, sent through the configured
+plugins table, starts one job on the stuck role with its brief; a second
+concurrent request for the same PR is refused; a cancelled request leaves
+no running job. Each fails before the change.
+
 ## Order
 
 These tasks are in the Conary flow lane
@@ -494,12 +533,12 @@ These tasks are in the Conary flow lane
 
 ```
 FP1 ──► FP2 ──► FP3 ──► FP4 ──► FP5 ──► FP6 ──► FP7 ──► FP8
-  ──► FP11 ──► FP10 ──► #313 ──► FP9 ──► FP12
+  ──► FP10 ──► #313 ──► FP9 ──► FP11 ──► FP12
 ```
 
-The cutover prerequisites come first. FP11 goes before FP10 so the owner
-listing loses its non-door calls in one change. FP9 and FP12 follow #313 in
-the lane, before #315 and #321.
+The cutover prerequisites come first, then #313. FP9, FP11 and FP12 follow
+it in the lane, before #315 and #321. FP11 also waits on SJ, which runs in
+the burrow M6 lane after J, beside these.
 
 ## Filing
 
@@ -512,5 +551,7 @@ of #256's list so the lane admits one at a time:
 - The body carries the fence that it runs after the task before it in the
   order above.
 - A cutover prerequisite's body says its PR carries the `first` label.
+- SJ is filed in Conary too, and its body says its PR is in burrow and
+  closes it by its full name ([fence 8](m6-order.md#fences)).
 
 An issue grants no authority beyond #256's.
