@@ -222,12 +222,19 @@ impl Plugin {
             choice
         };
         let mut request = Request::work(self.contract, task.clone());
+        let negotiated = self.offers.as_ref().map(|offers| Negotiated {
+            by: self.identity.clone(),
+            offers: offers.clone(),
+        });
+        if self.version >= 5 {
+            request.negotiated = negotiated.clone();
+        }
         if self.version >= 3 {
             let execution = Execution { choice, context };
-            execution.validate(
-                &self.identity.engine,
-                self.offers.as_ref().expect("v3 offers"),
-            )?;
+            negotiated
+                .as_ref()
+                .expect("v3 offers")
+                .validate(&execution)?;
             request.execution = Some(execution);
         } else if configured_choice || context != Context::Fresh || kind == Kind::Judge {
             return bad("execution choices and independent judges need conary-plugin v3");
@@ -289,7 +296,13 @@ impl Plugin {
             let Some(actual) = &response.execution else {
                 return bad("plugin did not report actual execution");
             };
-            execution.verify(actual, self.offers.as_ref().expect("v3 offers"))?;
+            negotiated.as_ref().expect("v3 offers").verify(
+                execution,
+                &Provenance {
+                    by: response.by.clone(),
+                    execution: actual.clone(),
+                },
+            )?;
         }
         if let Task::Review { author, .. } | Task::Judge { author, .. } = &task {
             valid_identity(author)?;
@@ -462,7 +475,7 @@ fn valid_request(task: &Task) -> Result<(), Failure> {
         _ => Ok(()),
     }
 }
-fn valid_identity(by: &Identity) -> Result<(), Failure> {
+pub(super) fn valid_identity(by: &Identity) -> Result<(), Failure> {
     if by.engine.trim().is_empty() || by.session.as_ref().is_some_and(|s| s.trim().is_empty()) {
         bad("empty plugin identity")
     } else {

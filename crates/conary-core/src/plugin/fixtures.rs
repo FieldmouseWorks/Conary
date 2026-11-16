@@ -48,7 +48,7 @@ pub fn fixtures() -> Vec<Fixture> {
             },
         ),
         fixture(
-            CONTRACT,
+            CONTRACT_V4,
             Task::Fix {
                 repo: repo.clone(),
                 pr: 1,
@@ -96,7 +96,7 @@ pub fn fixtures() -> Vec<Fixture> {
             },
         ),
         fixture(
-            CONTRACT,
+            CONTRACT_V4,
             Task::Prepare {
                 repo,
                 head,

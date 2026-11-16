@@ -1,6 +1,6 @@
 # Executable plugins
 
-This is the published **conary-plugin v4** contract (older work contracts are
+This is the published **conary-plugin v5** contract (older work contracts are
 accepted where they can enforce the request; see Versions). It is independent of
 language, harness and engine. The Rust types and runner are in
 `conary_core::plugin`. Flow integration and engine-specific implementations
@@ -14,7 +14,7 @@ The executable writes one UTF-8 JSON object to stdout and exits zero. Only
 JSON whitespace may surround the object; extra objects or log text fail.
 Stderr is the plugin's log, inherited by the runner, never parsed as an answer.
 Both directions carry the contract string. `describe` is always sent, and
-answered, with `"contract":"conary-plugin v1"`, so a plugin of either version
+answered, with `"contract":"conary-plugin v1"`, so a plugin of any supported version
 can answer it. Work requests and their answers carry the version negotiated
 by describe (see Versions).
 Each invocation is a fresh process; no shared process state is assumed.
@@ -29,7 +29,7 @@ Before work, the runner sends:
 A complete response is:
 
 ```json
-{"contract":"conary-plugin v1","by":{"engine":"example","session":null},"kind":"describe","versions":["conary-plugin v1","conary-plugin v2","conary-plugin v3","conary-plugin v4"],"kinds":["review","fix","judge","proof"],"v2_kinds":["job"],"v4_kinds":["prepare"],"models":[],"capabilities":{"sandbox":"none","network":false,"devices":[],"mcp":false},"meters":[]}
+{"contract":"conary-plugin v1","by":{"engine":"example","session":null},"kind":"describe","versions":["conary-plugin v1","conary-plugin v2","conary-plugin v3","conary-plugin v4","conary-plugin v5"],"kinds":["review","fix","judge","proof"],"v2_kinds":["job"],"v4_kinds":["prepare"],"models":[],"capabilities":{"sandbox":"none","network":false,"devices":[],"mcp":false},"meters":[]}
 ```
 
 `versions` must contain this contract string. `kinds` is a list of unique
@@ -62,7 +62,8 @@ is lexical, not a checkout symlink resolver. Lines are one-based.
 
 ## Work requests and answers
 
-Each request has `contract`, `kind`, and these kind-specific fields. Each
+Each request has `contract`, `kind`, the execution fields below, and these
+kind-specific fields. Each
 response has `contract`, `by`, `kind`, and the listed answer fields.
 
 | Kind | Request fields | Answer fields |
@@ -197,8 +198,10 @@ these fails.
 ## Versions
 
 The runner reads `versions` from describe and speaks the highest it knows:
-`conary-plugin v4`, else v3, else v2, else v1. A v1 plugin cannot advertise
-`job`, and only a v4 plugin can advertise `prepare`. A request in an older
+`conary-plugin v5`, else v4, else v3, else v2, else v1. A v1 plugin cannot advertise
+`job`, and only a v4 or later plugin can advertise `prepare`. V5 adds the
+required `negotiated` snapshot on work; older requests omit it. Describe
+keeps its v1 envelope and never carries the snapshot. A request in an older
 contract leaves off the fields v4 added (a fix's and a judge's `pr`, a
 judge's `why` and `context`, a proof's `head`), so a v1 to v3 plugin keeps
 its wire. The runner checks those fields whichever contract it speaks.
@@ -248,6 +251,37 @@ call. `by.engine` remains stable across negotiation and work; `by.session`
 names the session that actually did the work. `Response::provenance()` bundles
 these facts for an authenticated verdict. Identity and execution remain the
 configured plugin's assertions; a runner cannot inspect an engine's memory.
+
+## Negotiated identity and offers
+
+Every v5 work request also has `negotiated`, copied from the describe answer
+that the runner's handle accepted:
+
+```json
+{"by":{"engine":"example","session":null},"offers":{"models":[{"id":"fixture-model","efforts":["quick","deep"],"context_tokens":null,"max_output_tokens":null}],"capabilities":{"sandbox":"brings","network":true,"devices":[],"mcp":false},"meters":["session"]}}
+```
+
+`by` is describe's full identity, including its session when present.
+`offers` contains describe's `models`, `capabilities` and `meters`, with the
+same meanings and validation as above. These are the negotiated values,
+not settings read again by the work process. V5 work requires both this
+snapshot and `execution`; a missing or null one fails decoding. A choice
+must match the snapshot's engine and offers.
+
+The runner constructs this field from its handle and checks the answer
+against that same snapshot. A forwarding plugin passes it through to its
+producer, which holds the work to it before publishing or signing anything.
+Rust producers can use `Negotiated::verify(requested_execution, provenance)`
+for the same engine, choice, offers and context checks the runner uses.
+Session independence (`Sessions::accept`) and kind-specific validation
+remain separate checks. Describe's session need not match work's session.
+
+A choice-less or partial request delegates only within these offers. If
+runtime settings change, the producer must either execute a still-offered
+choice or refuse before publication. Fully specified choices remain bound
+to their exact model and effort as before. The snapshot is a trusted
+caller's assertion, not an attestation or a grant of authority; authenticate
+the forwarding connection independently.
 
 ## The job kind
 

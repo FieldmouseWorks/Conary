@@ -13,7 +13,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         _ => "example",
     };
     let contract = request.contract.clone();
-    let v4 = contract == CONTRACT;
+    let v4 = version(&contract).is_some_and(|v| v >= 4);
     let answer = match request.task {
         Task::Describe => Answer::Describe {
             versions: CONTRACTS.map(String::from).to_vec(),
@@ -98,22 +98,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .collect(),
         },
     };
-    serde_json::to_writer(
-        io::stdout(),
-        &Response {
-            contract,
-            execution: request.execution.map(|execution| Executed {
-                model: None,
-                effort: None,
-                context: execution.context,
-            }),
-            by: Identity {
-                engine: "conary-example".into(),
-                session: Some(session.into()),
-            },
-            answer,
+    let response = Response {
+        contract,
+        execution: request.execution.as_ref().map(|execution| Executed {
+            model: None,
+            effort: None,
+            context: execution.context.clone(),
+        }),
+        by: Identity {
+            engine: "conary-example".into(),
+            session: Some(session.into()),
         },
-    )?;
+        answer,
+    };
+    // A forwarding producer uses this same check before publishing or sealing
+    // its result. Never reread settings to reconstruct the negotiated offers.
+    if let Some(negotiated) = &request.negotiated {
+        negotiated.verify(
+            request.execution.as_ref().ok_or("missing execution")?,
+            &response.provenance().ok_or("missing provenance")?,
+        )?;
+    }
+    serde_json::to_writer(io::stdout(), &response)?;
     Ok(())
 }
 

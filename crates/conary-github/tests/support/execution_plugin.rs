@@ -198,7 +198,7 @@ fn answers(request: &Request) -> Option<Vec<FindingAnswer>> {
     let Task::Fix { problems, .. } = &request.task else {
         return None;
     };
-    (request.contract == CONTRACT).then(|| {
+    (version(&request.contract).is_some_and(|v| v >= 4)).then(|| {
         problems
             .iter()
             .enumerate()

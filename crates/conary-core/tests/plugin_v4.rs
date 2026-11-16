@@ -1,59 +1,10 @@
 //! conary-plugin v4: what the runner sends each contract, and what it refuses.
+use conary_core::plugin::CONTRACT_V4 as CONTRACT;
 use conary_core::plugin::*;
 use serde_json::{Value, json};
-use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::sync::OnceLock;
-use std::time::Duration;
-
-struct Scripted {
-    _dir: tempfile::TempDir,
-    path: PathBuf,
-}
-
-/// A plugin that describes itself as `describe` and gives `answers`, in order.
-fn scripted(describe: Value, answers: &[Value]) -> Scripted {
-    static COMPILED: OnceLock<tempfile::TempDir> = OnceLock::new();
-    let compiled = COMPILED.get_or_init(|| {
-        let dir = tempfile::tempdir().unwrap();
-        let status = Command::new("rustc")
-            .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/support/scripted_plugin.rs"))
-            .arg("-o")
-            .arg(dir.path().join("plugin"))
-            .status()
-            .unwrap();
-        assert!(status.success());
-        dir
-    });
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("plugin");
-    // A hard link: never a file open for writing while another test spawns.
-    std::fs::hard_link(compiled.path().join("plugin"), &path).unwrap();
-    std::fs::write(path.with_extension("describe"), describe.to_string()).unwrap();
-    let lines: Vec<_> = answers.iter().map(Value::to_string).collect();
-    std::fs::write(path.with_extension("answers"), lines.join("\n")).unwrap();
-    Scripted { _dir: dir, path }
-}
-
-impl Scripted {
-    fn plugin(&self) -> Result<Plugin, Failure> {
-        Plugin::describe(
-            &self.path,
-            Limits {
-                deadline: Duration::from_secs(10),
-                response_bytes: 65_536,
-            },
-        )
-    }
-    /// The work requests the plugin received, in order.
-    fn requests(&self) -> Vec<Value> {
-        std::fs::read_to_string(self.path.with_extension("requests"))
-            .unwrap_or_default()
-            .lines()
-            .map(|l| serde_json::from_str(l).unwrap())
-            .collect()
-    }
-}
+#[path = "support/scripted.rs"]
+mod scripted;
+use scripted::{Scripted, scripted};
 
 fn describe(versions: &[&str], kinds: &[&str], v4_kinds: &[&str], models: Value) -> Value {
     json!({
@@ -72,7 +23,7 @@ fn describe(versions: &[&str], kinds: &[&str], v4_kinds: &[&str], models: Value)
 /// A v4 program that speaks every contract and advertises every flow kind.
 fn v4_program() -> Value {
     describe(
-        &CONTRACTS,
+        &CONTRACTS[..4],
         &["review", "fix", "judge", "proof"],
         &["prepare"],
         json!([]),
@@ -474,15 +425,15 @@ fn prepare_is_for_proof_programs_that_speak_v4() {
     let model = json!([{"id": "m", "efforts": []}]);
     for (describe, diagnostic) in [
         (
-            describe(&CONTRACTS, &["review"], &["prepare"], model.clone()),
+            describe(&CONTRACTS[..4], &["review"], &["prepare"], model.clone()),
             "invalid declared models",
         ),
         (
-            describe(&CONTRACTS, &["review"], &["prepare"], json!([])),
+            describe(&CONTRACTS[..4], &["review"], &["prepare"], json!([])),
             "needs the proof kind",
         ),
         (
-            describe(&CONTRACTS, &["proof", "prepare"], &[], json!([])),
+            describe(&CONTRACTS[..4], &["proof", "prepare"], &[], json!([])),
             "belongs in v4_kinds",
         ),
         (

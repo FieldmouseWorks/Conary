@@ -255,6 +255,37 @@ fn scope(task: &Task) -> Result<String, Failure> {
     serde_json::to_string(task).map_err(|e| Failure(e.to_string()))
 }
 
+/// The describe snapshot carried by v5 work. Forwarding producers use it
+/// before publishing, without consulting engine settings a second time.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Negotiated {
+    pub by: Identity,
+    pub offers: Offers,
+}
+
+impl Negotiated {
+    pub(super) fn validate(&self, requested: &Execution) -> Result<(), Failure> {
+        super::runner::valid_identity(&self.by)?;
+        if !self.offers.valid(&[]) {
+            return Err(fail("invalid negotiated offers"));
+        }
+        requested.validate(&self.by.engine, &self.offers)
+    }
+
+    /// Check actual identity and execution against precisely the request's
+    /// describe snapshot and choice before publishing a result. Session
+    /// independence and kind-specific answer checks are separate checks.
+    pub fn verify(&self, requested: &Execution, actual: &Provenance) -> Result<(), Failure> {
+        self.validate(requested)?;
+        super::runner::valid_identity(&actual.by)?;
+        if actual.by.engine != self.by.engine {
+            return Err(fail("plugin changed its engine identity"));
+        }
+        requested.verify(&actual.execution, &self.offers)
+    }
+}
+
 impl Execution {
     pub(super) fn validate(&self, engine: &str, offers: &Offers) -> Result<(), Failure> {
         if let Some(choice) = &self.choice
