@@ -2,7 +2,7 @@
 mod execution;
 mod fixtures;
 mod runner;
-pub use execution::{Choice, Context, Executed, Execution, Provenance, Sessions};
+pub use execution::{Choice, Context, Executed, Execution, Negotiated, Provenance, Sessions};
 pub use fixtures::{Fixture, fixtures};
 pub use runner::{Failure, Limits, Plugin};
 
@@ -15,9 +15,11 @@ pub const CONTRACT_V2: &str = "conary-plugin v2";
 pub const CONTRACT_V3: &str = "conary-plugin v3";
 /// Adds what the flow's plugins need: the PR on fix and judge, a judge's
 /// reasons and context, a proof's commit, fix answers and `prepare`.
-pub const CONTRACT: &str = "conary-plugin v4";
+pub const CONTRACT_V4: &str = "conary-plugin v4";
+/// Carries the negotiated describe identity and offers on every work request.
+pub const CONTRACT: &str = "conary-plugin v5";
 /// Every contract, oldest first; a contract's version is its position plus one.
-pub const CONTRACTS: [&str; 4] = [CONTRACT_V1, CONTRACT_V2, CONTRACT_V3, CONTRACT];
+pub const CONTRACTS: [&str; 5] = [CONTRACT_V1, CONTRACT_V2, CONTRACT_V3, CONTRACT_V4, CONTRACT];
 
 /// The version number of a contract string, when it is one of [`CONTRACTS`].
 pub fn version(contract: &str) -> Option<u8> {
@@ -74,13 +76,14 @@ pub enum Trigger {
     Started,
 }
 
-/// Serialized in its own contract: an older one never sees v4's fields.
-#[derive(Clone, Debug, Deserialize)]
+/// Serialized in its own contract: older plugins never see newer fields.
+#[derive(Clone, Debug)]
 pub struct Request {
     pub contract: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub execution: Option<Execution>,
-    #[serde(flatten)]
+    /// v5: the identity and offers from the describe process, not a new read
+    /// of the plugin's settings. Required on v5 work, absent on describe.
+    pub negotiated: Option<Negotiated>,
     pub task: Task,
 }
 
@@ -353,7 +356,8 @@ fn unique_nonblank<'a>(items: impl IntoIterator<Item = &'a str>) -> bool {
 }
 
 /// What a v2 plugin declares. Checked once, at describe.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Offers {
     pub models: Vec<Model>,
     pub capabilities: Capabilities,
@@ -482,6 +486,39 @@ impl Task {
     }
 }
 
+impl<'de> Deserialize<'de> for Request {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct Wire {
+            contract: String,
+            execution: Option<Execution>,
+            negotiated: Option<Negotiated>,
+            #[serde(flatten)]
+            task: Task,
+        }
+        let wire = Wire::deserialize(deserializer)?;
+        if version(&wire.contract).is_some_and(|v| v >= 5) && wire.task.kind().is_some() {
+            let negotiated = wire
+                .negotiated
+                .as_ref()
+                .ok_or_else(|| serde::de::Error::missing_field("negotiated"))?;
+            let execution = wire
+                .execution
+                .as_ref()
+                .ok_or_else(|| serde::de::Error::missing_field("execution"))?;
+            negotiated
+                .validate(execution)
+                .map_err(serde::de::Error::custom)?;
+        }
+        Ok(Self {
+            contract: wire.contract,
+            execution: wire.execution,
+            negotiated: wire.negotiated,
+            task: wire.task,
+        })
+    }
+}
+
 impl Serialize for Request {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         #[derive(Serialize)]
@@ -489,12 +526,18 @@ impl Serialize for Request {
             contract: &'a str,
             #[serde(skip_serializing_if = "Option::is_none")]
             execution: Option<&'a Execution>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            negotiated: Option<&'a Negotiated>,
             #[serde(flatten)]
             task: &'a Task,
         }
         let mut wire = serde_json::to_value(Wire {
             contract: &self.contract,
             execution: self.execution.as_ref(),
+            negotiated: (version(&self.contract).is_some_and(|v| v >= 5)
+                && self.task.kind().is_some())
+            .then_some(self.negotiated.as_ref())
+            .flatten(),
             task: &self.task,
         })
         .map_err(serde::ser::Error::custom)?;
@@ -516,6 +559,7 @@ impl Request {
         Self {
             contract: CONTRACT_V1.into(),
             execution: None,
+            negotiated: None,
             task: Task::Describe,
         }
     }
@@ -525,6 +569,7 @@ impl Request {
         Self {
             contract: contract.into(),
             execution: None,
+            negotiated: None,
             task,
         }
     }
