@@ -441,3 +441,79 @@ fn configured_machine_proofs_cannot_be_replaced_by_neutral_or_skipped_runs() {
         assert!(crate::flow::evidence::authorize(&pass, &c.hub, &facts).is_err());
     }
 }
+
+/// What `authorize` says of PR 3 as GitHub shows it now.
+fn authorized(c: &Case) -> std::result::Result<(), String> {
+    let facts = read(
+        &c.hub,
+        &REPO.parse().unwrap(),
+        3,
+        &c.policy,
+        c.config.settings.clone(),
+        &c.config.trusted_authors,
+    )
+    .unwrap();
+    let pass = Pass {
+        config: &c.config,
+        policy: &c.policy,
+        root: c.dir.path(),
+        launcher: &c.deferred,
+        now: jobs::now(),
+        dry_run: true,
+        ledger: None,
+    };
+    crate::flow::evidence::authorize(&pass, &c.hub, &facts).map_err(|e| e.to_string())
+}
+
+/// A green check of a PR's own CI: its token names GitHub's merge commit,
+/// not the head, so nothing on it can attest the head's tree.
+fn unattested(c: &Case, name: &str) {
+    let id = c.hub.run_id();
+    c.hub.add_check(
+        &head(3),
+        json!({"id":id,"name":name,"status":"completed",
+        "conclusion":"success","started_at":"2026-11-01T00:00:00Z"}),
+    );
+}
+
+#[test]
+fn only_required_checks_and_proofs_need_a_producers_attestation() {
+    // Green checks the machine doesn't name as evidence count green alone:
+    // a PR job's run, and a status, which can't attest at all.
+    let c = Case::new();
+    c.clean_review();
+    unattested(&c, "check / commits");
+    c.hub
+        .post_status(&head(3), json!({"context":"house/rules","state":"success"}));
+    assert_eq!(authorized(&c), Ok(()));
+
+    // A required check still needs its attestation.
+    let mut c = Case::new();
+    c.clean_review();
+    unattested(&c, "check / commits");
+    c.config.evidence.as_mut().unwrap().require = vec!["check / commits".into()];
+    let why = authorized(&c).unwrap_err();
+    assert!(why.starts_with("check / commits: "), "{why}");
+
+    // So does a configured proof.
+    let mut c = Case::new();
+    c.clean_review();
+    unattested(&c, "machine");
+    c.config
+        .settings
+        .proofs
+        .insert("machine".into(), Recipe::Run(vec!["check".into()]));
+    let why = authorized(&c).unwrap_err();
+    assert!(why.starts_with("machine: "), "{why}");
+
+    // And none of it waives green: a red check the machine doesn't require
+    // still keeps permission back.
+    let c = Case::new();
+    c.clean_review();
+    c.hub
+        .post_status(&head(3), json!({"context":"house/rules","state":"failure"}));
+    assert_eq!(
+        authorized(&c),
+        Err("Blocking or changed CI observations before permission".into())
+    );
+}

@@ -32,7 +32,6 @@ pub(super) struct Result {
     pub has_ci: bool,
     /// Effective producer runs, selected by the same scope/replacement rules.
     pub runs: Vec<CheckRun>,
-    pub statuses: BTreeSet<String>,
 }
 
 const LANE: &str = "lane into ";
@@ -334,7 +333,6 @@ pub(super) fn checks(
         proofs.iter().map(|p| (p.to_lowercase(), p)).collect()
     };
     let mut seen = BTreeSet::new();
-    let mut successful_statuses = BTreeSet::new();
     for status in source.statuses(repo, head)? {
         let name = status.context.to_lowercase();
         let train = name == crate::train::CONTEXT.to_ascii_lowercase();
@@ -362,9 +360,6 @@ pub(super) fn checks(
             "pending" | "expected" => Ci::Pending,
             _ => Ci::Red,
         };
-        if state == Ci::Green {
-            successful_statuses.insert(status.context.clone());
-        }
         checks.push(Check {
             name: spelling.get(&name).map_or(status.context, |p| (*p).clone()),
             state,
@@ -383,6 +378,5 @@ pub(super) fn checks(
         docs,
         has_ci,
         runs: effective.into_values().collect(),
-        statuses: successful_statuses,
     })
 }

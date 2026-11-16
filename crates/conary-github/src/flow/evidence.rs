@@ -135,15 +135,13 @@ pub(crate) fn authorize<G: Write>(pass: &Pass<'_>, github: &G, f: &Facts) -> Res
         return Err("proof check name collides with producer receipt or negative evidence".into());
     }
     let trust = evidence.trust()?;
+    // Every check on the head must be green (`observations` holds that), but
+    // producer attestation is asked only of what the machine names as
+    // evidence: its required checks and, unless the PR is docs-only, its
+    // proofs. Any other green check is a PR job's, whose token names
+    // GitHub's merge commit rather than the head, and a status can't attest.
     let effective = observations(github, f, &f.revision.head)?;
     let mut required: std::collections::BTreeSet<_> = evidence.require.iter().cloned().collect();
-    required.extend(
-        effective
-            .runs
-            .iter()
-            .filter(|r| r.status == "completed" && r.conclusion.as_deref() == Some("success"))
-            .map(|r| r.name.clone()),
-    );
     if !effective.docs {
         for name in f.settings.proofs.keys() {
             required.insert(
@@ -155,8 +153,6 @@ pub(crate) fn authorize<G: Write>(pass: &Pass<'_>, github: &G, f: &Facts) -> Res
             );
         }
     }
-    required.extend(effective.statuses);
-    required.retain(|name| name != &evidence.negative && !receipts.contains(name));
     for name in required {
         check(github, f, &trust, &f.revision.head, &name, None)?;
     }
