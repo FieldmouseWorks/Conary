@@ -2,8 +2,8 @@
 //! repository's flow directory, written and removed by `cn flow pause` and
 //! `cn flow resume` with no pass, conaryd, GitHub, build or deploy, and read
 //! by every pass before each decision and again before each effect. A paused
-//! PR, like a held one, vacates: its live workers are stopped through the
-//! flow's stop path ([`super::decide`]), which frees their proof slots, and
+//! PR, like a held one, vacates: its live workers get cancellation markers
+//! independently of its next intention, which frees their proof slots, and
 //! nothing new starts. What they finished stays, so a resume redoes nothing.
 use super::persist::{self, Result};
 use conary_core::op::Repo;
@@ -105,6 +105,36 @@ pub(crate) fn vacates(step: &super::Step) -> bool {
             | Step::LeaveTrain
             | Step::DisableAutoMerge
     )
+}
+
+/// Cancel owned unfinished workers independently of the primary intention.
+/// Cleanup can replace StopJob with train departure, queued-merge removal or
+/// a pending-landing wait. Recovery also calls this for records absent from
+/// GitHub's open list, without needing to hydrate or reread their PRs.
+/// Finished answers are preserved; cancellation is not a deadline failure.
+pub(crate) fn cancel(
+    root: &Path,
+    repo: &Repo,
+    pr: u64,
+    record: &mut super::Record,
+    held: bool,
+) -> Result<bool> {
+    let why = if read(root, repo)?.is_some_and(|p| p.covers(pr)) {
+        Stop::Paused
+    } else if held {
+        Stop::Held
+    } else {
+        return Ok(false);
+    };
+    let mut changed = false;
+    for work in &record.jobs {
+        let answer: super::jobs::Completion = persist::load(&work.path.with_extension("answer"))?;
+        if answer.result.is_none() {
+            super::jobs::cancel(work, why)?;
+            changed |= record.memory.stopping.insert(work.job.id.clone());
+        }
+    }
+    Ok(changed)
 }
 
 /// Why a worker was asked to stop, as its cancellation marker records it.

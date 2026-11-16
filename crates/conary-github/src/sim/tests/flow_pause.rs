@@ -228,3 +228,353 @@ fn a_pause_written_after_the_decision_keeps_its_effect_off() {
     assert!(work(&c, 3, |_| true).is_empty());
     no_failure(&c, 3);
 }
+
+fn grant_races(mode: &str) {
+    use crate::api::Source;
+    use crate::sim::{Call, On};
+    use crate::train::Mark;
+    for on in [
+        On::from(Call::FlowStatus).mark(Mark::Waiting),
+        On::from(Call::FlowStage),
+        On::from(Call::FlowStatus).mark(Mark::Landing),
+    ] {
+        let mut c = Case::new();
+        c.clean_review();
+        match mode {
+            "delegated" => c.as_bot(),
+            "join" | "seated" => c.config.settings.train = true,
+            _ => {}
+        }
+        let now = crate::flow::jobs::now();
+        if mode == "seated" {
+            let reports = c.pass(now, false);
+            assert_eq!(reports[0].error, None, "{reports:?}");
+            assert_eq!(step(&reports, 0).1, Step::JoinTrain);
+        }
+        let granted_before = c
+            .hub
+            .statuses(REPO, &super::head(3))
+            .unwrap()
+            .iter()
+            .filter(|s| s.context == SETTLED && s.state == "success")
+            .count();
+        let root = c.dir.path().to_path_buf();
+        let write_pause = move |_: &crate::sim::Hub| {
+            crate::flow::pause::pause(
+                &root,
+                &repo(),
+                &Pause {
+                    scope: Scope::Repository,
+                    reason: "permission race".into(),
+                    at: 0,
+                },
+            )
+            .unwrap();
+        };
+        if mode == "seated" && on == On::from(Call::FlowStatus).mark(Mark::Waiting) {
+            // Recovery first withdraws the previous pass's permission.
+            // Pause on the executor's next write, after its new decision.
+            let again = on.clone();
+            c.hub
+                .race(on.clone(), move |hub| hub.race(again, write_pause));
+        } else {
+            c.hub.race(on.clone(), write_pause);
+        }
+        let reports = c.pass(now + 1, false);
+        let expected = match mode {
+            "delegated" => Step::Settle,
+            "join" => Step::JoinTrain,
+            "seated" => Step::Wait { until: None },
+            _ => Step::Merge,
+        };
+        assert_eq!(step(&reports, 0).1, expected, "{mode} {on:?}");
+        let statuses = c.hub.statuses(REPO, &super::head(3)).unwrap();
+        assert_eq!(
+            statuses
+                .iter()
+                .find(|s| s.context == SETTLED)
+                .unwrap()
+                .state,
+            "pending",
+            "{mode} {on:?}"
+        );
+        if on != On::from(Call::FlowStatus).mark(Mark::Landing) {
+            assert_eq!(
+                statuses
+                    .iter()
+                    .filter(|s| s.context == SETTLED && s.state == "success")
+                    .count(),
+                granted_before,
+                "permission published after pause: {mode} {on:?}"
+            );
+        }
+        assert!(record(&c, 3).live.is_empty(), "{mode} {on:?}");
+        assert_eq!(c.hub.count(Call::Land), 0, "{mode} {on:?}");
+        assert!(
+            reports[0]
+                .error
+                .as_deref()
+                .is_some_and(|e| e.contains("paused")),
+            "{mode} {on:?}: {reports:?}"
+        );
+        if mode != "seated" {
+            assert!(
+                c.store
+                    .borrow()
+                    .ledger()
+                    .train(&repo())
+                    .is_none_or(|t| t.joined().is_empty())
+            );
+        }
+        no_failure(&c, 3);
+    }
+}
+#[test]
+fn pause_blocks_direct_permission_races() {
+    grant_races("direct");
+}
+#[test]
+fn pause_blocks_delegated_permission_races() {
+    grant_races("delegated");
+}
+#[test]
+fn pause_blocks_train_admission_permission_races() {
+    grant_races("join");
+}
+#[test]
+fn pause_blocks_seated_permission_renewal_races() {
+    grant_races("seated");
+}
+
+/// Own real invocations of every kind, as overlapping workers on successive
+/// revisions can leave behind. Cancellation must not depend on which kind
+/// the decision would choose next.
+fn workers(c: &Case, now: u64) -> Vec<crate::flow::jobs::Work> {
+    use conary_core::plugin::{Identity, Task};
+    let facts = read(
+        &c.hub,
+        &repo(),
+        3,
+        &c.policy,
+        c.config.settings.clone(),
+        &c.config.trusted_authors,
+    )
+    .unwrap();
+    let data = Data::open(c.dir.path(), &repo()).unwrap();
+    let mut record = data.load(3).unwrap();
+    record.memory.head = facts.revision.head.clone();
+    let author = Identity {
+        engine: "fixture".into(),
+        session: None,
+    };
+    let tasks = [
+        (
+            Purpose::Review("reviewer".into()),
+            Task::Review {
+                repo: REPO.into(),
+                pr: 3,
+                base: super::TRUNK.into(),
+                head: facts.revision.head.clone(),
+                author: author.clone(),
+            },
+        ),
+        (
+            Purpose::Fix(Kind::Findings),
+            Task::Fix {
+                repo: REPO.into(),
+                pr: 3,
+                head: facts.revision.head.clone(),
+                problems: vec![],
+            },
+        ),
+        (
+            Purpose::Judge,
+            Task::Judge {
+                repo: REPO.into(),
+                pr: 3,
+                head: facts.revision.head.clone(),
+                against: "intent".into(),
+                author,
+                reviewers: vec![],
+                why: vec![],
+                context: String::new(),
+            },
+        ),
+        (
+            Purpose::Prepare,
+            Task::Prepare {
+                repo: REPO.into(),
+                head: facts.revision.head.clone(),
+                tree: super::TRUNK.into(),
+                checks: vec![],
+            },
+        ),
+        (
+            Purpose::Proof,
+            Task::Proof {
+                repo: REPO.into(),
+                head: facts.revision.head.clone(),
+                tree: super::TRUNK.into(),
+                checks: vec![],
+            },
+        ),
+    ];
+    let pass = Pass {
+        config: &c.config,
+        policy: &c.policy,
+        root: c.dir.path(),
+        launcher: &c.deferred,
+        now,
+        dry_run: false,
+        ledger: None,
+    };
+    for (purpose, task) in tasks {
+        pass.start(&facts, purpose, task, vec![], &mut record, &data)
+            .unwrap();
+    }
+    record.jobs
+}
+fn worker_case() -> Case {
+    let mut c = Case::new();
+    c.config.plugins.judge = c.config.plugins.review.clone();
+    c.config.plugins.proof = c.config.plugins.review.clone();
+    c.clean_review();
+    c
+}
+fn cancellation_with_cleanup(cleanup: &str) {
+    use crate::sim::Call;
+    use serde_json::json;
+    for held in [false, true] {
+        let mut c = worker_case();
+        let now = crate::flow::jobs::now();
+        match cleanup {
+            "train" => {
+                c.config.settings.train = true;
+                let reports = c.pass(now, false);
+                assert_eq!(reports[0].error, None, "{reports:?}");
+                assert_eq!(step(&reports, 0).1, Step::JoinTrain);
+            }
+            "queued" => c.hub.edit_pull(REPO, 3, |p| p["auto_merge"] = json!({})),
+            "pending" => {
+                // A submitted merge whose visibility has not caught up.
+                c.hub.race(Call::Land, move |hub| {
+                    if held {
+                        hub.label(REPO, 3, &["hold"]);
+                    }
+                    hub.stale(Call::Pull);
+                    hub.stale(Call::Pulls);
+                });
+                c.pass(now, false);
+                assert!(record(&c, 3).landing.as_ref().unwrap().accepted);
+            }
+            _ => unreachable!(),
+        }
+        let running = workers(&c, now + 1);
+        assert_eq!(running.len(), 5);
+        if held {
+            c.hub.label(REPO, 3, &["hold"]);
+        } else {
+            pause(&c, "cleanup must also stop workers");
+        }
+        let reports = c.pass(now + 2, false);
+        let expected = match cleanup {
+            "train" => Step::LeaveTrain,
+            "queued" => Step::DisableAutoMerge,
+            _ => Step::Wait { until: None },
+        };
+        assert_eq!(
+            step(&reports, 0).1,
+            expected,
+            "{held} {cleanup}: {reports:?}"
+        );
+        for work in &running {
+            assert_eq!(
+                marker(work),
+                if held {
+                    b"held\n".as_slice()
+                } else {
+                    b"paused\n"
+                },
+                "{held} {cleanup} {:?}",
+                work.purpose
+            );
+        }
+        no_failure(&c, 3);
+        c.run_worker();
+        c.pass(now + 3, false);
+        no_failure(&c, 3);
+        for work in &running {
+            assert!(record(&c, 3).memory.retired_jobs.contains(&work.job.id));
+        }
+    }
+}
+#[test]
+fn pause_and_hold_cancel_workers_while_removing_queued_merge() {
+    cancellation_with_cleanup("queued");
+}
+#[test]
+fn pause_and_hold_cancel_workers_while_leaving_train() {
+    cancellation_with_cleanup("train");
+}
+#[test]
+fn pause_and_hold_cancel_workers_while_waiting_for_pending_landing() {
+    cancellation_with_cleanup("pending");
+}
+
+#[test]
+fn repository_pause_cancels_workers_after_the_pr_leaves_open() {
+    use serde_json::json;
+    for merged in [false, true] {
+        let c = worker_case();
+        let now = crate::flow::jobs::now();
+        let running = workers(&c, now);
+        // One finished answer must survive byte for byte, with no marker.
+        let mut completed = running[0].clone();
+        completed.job.id = "3-0".into();
+        let data = Data::open(c.dir.path(), &repo()).unwrap();
+        completed.path = data.job_path(3, 0);
+        let mut saved = data.load(3).unwrap();
+        saved.jobs.push(completed.clone());
+        data.save(3, &saved).unwrap();
+        drop(data);
+        let answer = completed.path.with_extension("answer");
+        let bytes = serde_json::to_vec(&crate::flow::jobs::Completion {
+            at: now,
+            result: Some(Ok(conary_core::plugin::Response {
+                contract: conary_core::plugin::CONTRACT.into(),
+                by: conary_core::plugin::Identity {
+                    engine: "fixture".into(),
+                    session: None,
+                },
+                execution: None,
+                answer: conary_core::plugin::Answer::Review { findings: vec![] },
+            })),
+        })
+        .unwrap();
+        std::fs::write(&answer, &bytes).unwrap();
+        c.hub.edit_pull(REPO, 3, |p| {
+            p["state"] = json!("closed");
+            if merged {
+                p["merged_at"] = json!("2099-01-01T00:00:00Z");
+            }
+        });
+        pause(&c, "closed PR workers too");
+        c.pass(now + 1, false);
+        for work in &running {
+            assert_eq!(
+                marker(work),
+                b"paused\n",
+                "merged={merged} {:?}",
+                work.purpose
+            );
+        }
+        assert!(!completed.path.with_extension("cancel").exists());
+        assert_eq!(std::fs::read(&answer).unwrap(), bytes);
+        c.run_worker();
+        c.pass(now + 2, false);
+        no_failure(&c, 3);
+        for work in &running {
+            assert_eq!(marker(work), b"paused\n");
+        }
+    }
+}

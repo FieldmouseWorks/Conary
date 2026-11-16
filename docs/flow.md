@@ -300,12 +300,17 @@ start, a grant of landing permission, a merge or a train admission. An
 effect a pause keeps off is no failure and no strike. Only what takes work
 off goes ahead while paused: stopping a worker, leaving the train and
 taking GitHub's queued merge off. A pause that can't be read stops every
-decision with its error; it never reads as no pause.
+decision with its error; it never reads as no pause. Permission is checked
+immediately before publication and validated afterward, including delegated
+merges and renewals for PRs already seated in the train.
 
 A paused PR, and a PR with the hold label, vacates. Each of its workers
 that hasn't answered (review, fix, judge, preparation or proof) is asked to
 stop at once, through the same stop path as obsolete work, its marker
-saying `paused` or `held`. Its proof slot frees when its worker ends, as
+saying `paused` or `held`. Cancellation runs independently of queued-merge
+removal, train departure or a pending-landing wait. A repository pause also
+cancels owned workers whose PRs have closed or merged, without changing
+finished answers. Its proof slot frees when its worker ends, as
 any cancelled proof's does, and nothing new starts. A stopped worker is
 retired: never a failure, a strike or a lost job. Its PR keeps its Memory,
 receipts and branch. A paused PR then waits with its reason, outside every

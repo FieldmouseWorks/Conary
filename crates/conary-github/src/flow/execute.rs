@@ -16,6 +16,20 @@ pub(crate) fn act<G: Write>(
     mut store: Option<&mut Store>,
 ) -> Effect {
     let kind = failure(&next.step);
+    // Cleanup may have replaced StopJob, or the pause may have arrived
+    // during classification. Cancellation still precedes every effect.
+    if super::pause::cancel(
+        pass.root,
+        &f.repo,
+        f.number,
+        record,
+        f.labels.contains(&f.settings.hold_label),
+    )
+    .map_err(|e| (Failure::Stop, e))?
+    {
+        data.save(f.number, record)
+            .map_err(|e| (Failure::Stop, e))?;
+    }
     // A pause written since the decision keeps every effect but the ones
     // that vacate from starting, before any permission is granted.
     if !super::pause::vacates(&next.step) {
@@ -61,8 +75,9 @@ pub(crate) fn act<G: Write>(
             {
                 return Err("R2 requires exact candidate evidence through the train".into());
             }
-            super::evidence::authorize(pass, github, f)?;
-            super::scope::current(pass, github, f, record)?;
+            // Every grant, including a seated train's Wait, revalidates
+            // after preparatory calls and immediately before publication.
+            permission(pass, github, f, record)?;
             record.cleanup.insert(f.revision.head.clone());
             if next.step == Step::Settle {
                 record.landing = Some(super::ledger::intent(f, true)?);
@@ -229,17 +244,6 @@ pub(crate) fn act<G: Write>(
                     .find(|w| &w.job.id == id)
                     .ok_or("job missing")?;
                 jobs::cancel(work, why)?;
-                // A pause or a hold stops all its work at once, not one
-                // worker a pass: every other one it's stopping too.
-                if why != super::pause::Stop::Obsolete {
-                    for work in record
-                        .jobs
-                        .iter()
-                        .filter(|w| record.memory.stopping.contains(&w.job.id))
-                    {
-                        jobs::cancel(work, why)?;
-                    }
-                }
             }
             Step::UpdateBranch => github.update(&repo, f.number, &f.revision.head)?,
             Step::Merge => {
@@ -468,7 +472,10 @@ fn permission<G: Write>(pass: &Pass<'_>, github: &G, f: &Facts, record: &Record)
                 return Err("An authorized person's scoped approval was withdrawn".into());
             }
             Ok(())
-        });
+        })
+        // Read last: the scope, evidence and approval reads above can all
+        // race a pause. This also validates a status just published.
+        .and_then(|()| super::pause::effect(pass.root, &f.repo, f.number));
     if result.is_err() {
         github.status(
             &f.repo.to_string(),
