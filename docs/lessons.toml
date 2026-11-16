@@ -187,10 +187,10 @@ id = "spend-only-where-needed"
 lesson = "Work starts only when its result can decide something, by the cheapest path that's enough, and stops once it can't."
 from = ["https://github.com/FieldmouseWorks/remi/issues/1079", "https://github.com/FieldmouseWorks/burrow/issues/815", "https://github.com/FieldmouseWorks/burrow/issues/798", "https://github.com/FieldmouseWorks/burrow/issues/812"]
 applies = ["flow", "train", "M6 slice 5d", "M6 slice 8"]
-status = "open"
-where = ["https://github.com/FieldmouseWorks/Conary/issues/312", "https://github.com/FieldmouseWorks/Conary/issues/292", "https://github.com/FieldmouseWorks/Conary/issues/320", "https://github.com/FieldmouseWorks/Conary/issues/291"]
+status = "designed"
+where = ["docs/DESIGN.md#properties", "https://github.com/FieldmouseWorks/Conary/issues/291", "https://github.com/FieldmouseWorks/Conary/issues/292", "https://github.com/FieldmouseWorks/Conary/issues/320", "docs/m6-properties.md#fp2-flow-pause-and-hold-vacate-and-resume-without-the-pipeline"]
 
-# Seeded 2026-11-14 from the stalls of 2026-11-13 and 11-14, each still open.
+# Seeded 2026-11-14 from the stalls of 2026-11-13 and 11-14.
 # docs/m6-order.md says which plan answers each one.
 
 [[lessons]]
@@ -206,16 +206,16 @@ id = "owner-only-for-doors"
 lesson = "The flow asks the owner only for a one-way door it names; every other call it makes, records and shows."
 from = ["https://github.com/FieldmouseWorks/remi/issues/1241", "https://github.com/FieldmouseWorks/burrow/issues/1108"]
 applies = ["flow", "person approval", "M6 slice 5d", "M6 slice 7"]
-status = "open"
-where = ["https://github.com/FieldmouseWorks/Conary/issues/312", "https://github.com/FieldmouseWorks/Conary/issues/314", "https://github.com/FieldmouseWorks/Conary/issues/318"]
+status = "designed"
+where = ["docs/DESIGN.md#properties", "docs/m6-properties.md#fp10-flow-ask-the-owner-only-for-a-named-one-way-door-and-once-per-decision", "https://github.com/FieldmouseWorks/Conary/issues/314", "https://github.com/FieldmouseWorks/Conary/issues/318"]
 
 [[lessons]]
 id = "waiting-costs-nothing"
 lesson = "Waiting on CI starts no model and ends only on the verdict; time queued for a runner is capacity, never a stall."
 from = ["https://github.com/FieldmouseWorks/remi/issues/1238", "https://github.com/FieldmouseWorks/burrow/issues/1043"]
 applies = ["flow", "waits and deadlines", "M6 slice 5d", "M6 slice 6"]
-status = "open"
-where = ["https://github.com/FieldmouseWorks/Conary/issues/312", "https://github.com/FieldmouseWorks/Conary/issues/317"]
+status = "designed"
+where = ["docs/DESIGN.md#properties", "docs/m6-properties.md#fp7-flow-a-ci-wait-costs-nothing-and-its-queue-time-is-no-stall", "https://github.com/FieldmouseWorks/Conary/issues/317"]
 
 [[lessons]]
 id = "publish-only-news"
@@ -230,16 +230,16 @@ id = "read-sized-to-data"
 lesson = "A read of GitHub is sized to what it reads, and one that fails delays only that repository's pass, never another's."
 from = ["https://github.com/FieldmouseWorks/burrow/pull/1040", "https://github.com/FieldmouseWorks/burrow/issues/1103"]
 applies = ["ingest", "flow", "M6 slice 5d"]
-status = "open"
-where = ["https://github.com/FieldmouseWorks/Conary/issues/312"]
+status = "designed"
+where = ["docs/DESIGN.md#properties", "docs/m6-properties.md#fp9-conaryd-one-repositorys-slow-or-failing-read-delays-only-its-own-pass"]
 
 [[lessons]]
 id = "recover-by-kind"
 lesson = "A failed or cancelled check is brought back by a way GitHub allows for its kind, and the status quotes the error GitHub gave."
 from = ["https://github.com/FieldmouseWorks/burrow/issues/1062"]
 applies = ["flow", "effects and retries", "M6 slice 5d"]
-status = "open"
-where = ["https://github.com/FieldmouseWorks/Conary/issues/312"]
+status = "designed"
+where = ["docs/DESIGN.md#properties", "docs/m6-properties.md#fp8-flow-bring-back-a-stalled-stage-by-a-way-github-allows-and-quote-its-error"]
 
 [[lessons]]
 id = "scope-below-a-repo"

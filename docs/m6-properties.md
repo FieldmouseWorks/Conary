@@ -13,17 +13,20 @@ what it doesn't. It plans only this group, not the rest of M6
 
 This plan implements nothing, deploys nothing and grants no authority beyond
 [#256](https://github.com/FieldmouseWorks/Conary/issues/256)'s. It was written
-against Conary's main at `6f2a743` and #371's `f04efbe` on 2026-11-14. The
+against Conary's main at `6f2a743` on 2026-11-14, and brought up to date
+with main at `292aa71` on 2026-11-16, once
+[#307](https://github.com/FieldmouseWorks/Conary/issues/307) had landed. The
 issues linked here own the live state.
 
 The lessons register is [lessons.toml](lessons.toml). Its seed and DESIGN's
 Properties index are [#305](https://github.com/FieldmouseWorks/Conary/issues/305)'s,
 its check is [#306](https://github.com/FieldmouseWorks/Conary/issues/306)'s,
 and binding acceptance criteria to lesson IDs is
-[#307](https://github.com/FieldmouseWorks/Conary/issues/307)'s. The tables
-below name a lesson by its ID where the register has one, and by #294's
-wording where #305 hasn't seeded it yet. Each task's PR moves its entries to
-`built`, or says why one doesn't apply.
+#307's ([m6.md](m6.md#lessons-each-task-is-held-to)). The tables below
+name each property by its entry. This plan moves the entries it owns that
+were `open` to `designed`, stated in DESIGN's
+[Properties](DESIGN.md#properties) index. Each task names the entries it
+moves, and its PR moves them to `built` or says why one doesn't apply.
 
 ## Ground rules for every task
 
@@ -57,34 +60,34 @@ These apply to every task below. The tasks don't repeat them.
 
 ## Where each property stands
 
-Every property #294 asked for, the four it added, and the lessons seeded
-since, with its owner. Rows that point at another issue are not scheduled
-again here.
+Every entry in the register, by its ID, with its owner. Rows that point at
+another issue are not scheduled again here.
 
-| Property | Owner | State on main |
+| Entry | Owner | State on main |
 | --- | --- | --- |
-| No model in a mechanical step: a proof is a program | [#295](https://github.com/FieldmouseWorks/Conary/issues/295) (contract v2's proofs as programs, landed in #330), then [m6-plugins.md](m6-plugins.md)'s C3 and P | Contract built; plugin and slot split planned |
-| Degraded is reported and counts as failed | [FP6](#fp6-ledger-and-flow-record-a-degraded-outcome-and-count-it-failed) | Not built |
-| Same inputs, same verdict | DESIGN 4.3 rule 3 by tree ([#337](https://github.com/FieldmouseWorks/Conary/pull/337), landed), then [#291](https://github.com/FieldmouseWorks/Conary/issues/291) (#323, #324) for gate reuse and [#293](https://github.com/FieldmouseWorks/Conary/issues/293) for a judge's verdict | Wording built; reuse and carry open |
-| Heavy work waits for settled inputs | [#292](https://github.com/FieldmouseWorks/Conary/issues/292): [#296](https://github.com/FieldmouseWorks/Conary/issues/296) to [#302](https://github.com/FieldmouseWorks/Conary/issues/302) | Open (#296 in PR #333) |
-| Spenders off by default | [FP2](#fp2-flow-every-spender-defaults-off-and-no-default-names-a-machine) | Not held: `proof_slots` defaults to unlimited |
-| One settings source, read and never copied | [FP1](#fp1-flow-publish-the-configurations-schema-and-its-live-exceptions) for Conary's schema; [burrow#655](https://github.com/FieldmouseWorks/burrow/issues/655) and [burrow#724](https://github.com/FieldmouseWorks/burrow/issues/724) import and render it | Flow config is reread each pass; no schema |
-| Explicit priority | [FP5](#fp5-flow-order-admission-and-proof-slots-by-explicit-priority-then-age) | Not built: one binary `first_label` |
-| One question per decision | [FP11](#fp11-flow-ask-the-owner-only-for-a-named-one-way-door-and-once-per-decision) | Not built |
-| Switches report their effect | [FP4](#fp4-flow-report-every-switch-in-effect-and-what-it-holds) | Not built |
-| A limit work keeps hitting is a design bug | [FP7](#fp7-flow-a-second-deadline-on-the-same-tree-is-a-stall-not-a-retry) and [FP13](#fp13-flow-size-a-proofs-deadline-from-its-own-history); burrow's watchdog baselines are [burrow#651](https://github.com/FieldmouseWorks/burrow/issues/651) | Not built: a timed-out job is retried without end |
-| An off switch never depends on the pipeline it stops (remi#980) | [FP3](#fp3-flow-pause-and-hold-vacate-and-resume-without-the-pipeline) | Not built: Conary has no pause |
-| Every option is live; needing a deploy is a declared, visible exception | [FP1](#fp1-flow-publish-the-configurations-schema-and-its-live-exceptions) | Flow config live; conaryd's events config read only at start, undeclared |
-| Reusable modules or libraries, a machine holding only its values | Finish-line item 7 in [DESIGN](DESIGN.md#12-roadmap) | Designed |
-| Pausing means vacating, and an unpause resumes (burrow#647) | [FP3](#fp3-flow-pause-and-hold-vacate-and-resume-without-the-pipeline) | Not built: a held PR's proof keeps its slot |
 | `no-pinned-engines`, `fresh-judge` | Built (DESIGN 6.1) | Built |
-| `owner-only-for-doors` | [FP11](#fp11-flow-ask-the-owner-only-for-a-named-one-way-door-and-once-per-decision) | Not built: "Too much to read" and "Two jobs ended without their answer" list the owner |
-| `waiting-costs-nothing` | [FP8](#fp8-flow-a-ci-wait-costs-nothing-and-its-queue-time-is-no-stall) | Not built: a queued check's wait counts toward `stall_after` |
-| `read-sized-to-data` | [FP10](#fp10-conaryd-one-repositorys-slow-or-failing-read-delays-only-its-own-pass) | Partly: a failed pass books its own recovery (#351), but conaryd runs passes one at a time |
-| `recover-by-kind` | [FP9](#fp9-flow-bring-back-a-stalled-stage-by-a-way-github-allows-and-quote-its-error) | Not built: a cancelled check waits for someone else to rerun it |
+| `no-model-in-mechanical-step` | [#295](https://github.com/FieldmouseWorks/Conary/issues/295) (landed in #330), C3 (landed in #398), then [m6-plugins.md](m6-plugins.md)'s P | Contract and flow built; the proof plugin planned |
+| `degraded-counts-as-failed` | [FP5](#fp5-ledger-and-flow-record-a-degraded-outcome-and-count-it-failed); C2 (landed in #394) holds it for a partial publication | Not built in general |
+| `same-inputs-same-verdict` | DESIGN 4.3 rule 3 by tree ([#337](https://github.com/FieldmouseWorks/Conary/pull/337), landed), then [#291](https://github.com/FieldmouseWorks/Conary/issues/291) (#380 landed, #324 turns it on) for gate reuse and [#293](https://github.com/FieldmouseWorks/Conary/issues/293) for a judge's verdict | Wording and lookup built; reuse and carry open |
+| `heavy-work-waits-for-settled-inputs` | [#292](https://github.com/FieldmouseWorks/Conary/issues/292): [#296](https://github.com/FieldmouseWorks/Conary/issues/296) to [#302](https://github.com/FieldmouseWorks/Conary/issues/302) | Open (#296 in PR #333) |
+| `spenders-off-by-default` | [#378](https://github.com/FieldmouseWorks/Conary/issues/378) (landed in #381) for the defaults; [FP1](#fp1-flow-publish-the-configurations-schema-and-its-live-exceptions) holds every spender to it through the schema | Defaults built: zero proof slots, no machine's accounts; nothing marks which options spend |
+| `one-settings-source` | [FP1](#fp1-flow-publish-the-configurations-schema-and-its-live-exceptions) for Conary's schema; [burrow#655](https://github.com/FieldmouseWorks/burrow/issues/655) and [burrow#724](https://github.com/FieldmouseWorks/burrow/issues/724) import and render it | Flow config is reread each pass; no schema |
+| `live-settings` | [FP1](#fp1-flow-publish-the-configurations-schema-and-its-live-exceptions) | Flow config live; conaryd's events config read only at start, undeclared |
+| `explicit-priority` | [FP4](#fp4-flow-order-admission-and-proof-slots-by-explicit-priority-then-age) | Not built: one binary `first_label` |
+| `one-question-per-decision` | [FP10](#fp10-flow-ask-the-owner-only-for-a-named-one-way-door-and-once-per-decision) | Not built |
+| `switches-show-their-effect` | [FP3](#fp3-flow-report-every-switch-in-effect-and-what-it-holds) | Not built |
+| `limits-are-design-bugs` | [FP6](#fp6-flow-a-second-deadline-on-the-same-tree-is-a-stall-not-a-retry) and [FP12](#fp12-flow-size-a-proofs-deadline-from-its-own-history); burrow's watchdog baselines are [burrow#651](https://github.com/FieldmouseWorks/burrow/issues/651) | Not built: a timed-out job is retried without end |
+| `off-switch-independent` | [FP2](#fp2-flow-pause-and-hold-vacate-and-resume-without-the-pipeline), then [#313](https://github.com/FieldmouseWorks/Conary/issues/313) for the landing owner | Not built: Conary has no pause |
+| `reusable-modules` | Finish-line item 7 in [DESIGN](DESIGN.md#12-roadmap) | Designed |
+| `pause-vacates` | [FP2](#fp2-flow-pause-and-hold-vacate-and-resume-without-the-pipeline); the plugins answer its cancellation ([m6-plugins.md](m6-plugins.md#restart-and-cancellation)) | Not built: a held PR's proof keeps its slot |
+| `spend-only-where-needed` | [#291](https://github.com/FieldmouseWorks/Conary/issues/291) (the cheapest path: reuse), [#292](https://github.com/FieldmouseWorks/Conary/issues/292) (start only once review settles), [#320](https://github.com/FieldmouseWorks/Conary/issues/320) (one gate per batch), and [FP2](#fp2-flow-pause-and-hold-vacate-and-resume-without-the-pipeline) (stop when paused). No task of its own | Partly: the flow stops work answering for an earlier head before it starts more (`flow/decide.rs`) |
+| `owner-only-for-doors` | [FP10](#fp10-flow-ask-the-owner-only-for-a-named-one-way-door-and-once-per-decision), then [#314](https://github.com/FieldmouseWorks/Conary/issues/314) and [#318](https://github.com/FieldmouseWorks/Conary/issues/318) | Not built: "Too much to read" and "Two jobs ended without their answer" list the owner |
+| `waiting-costs-nothing` | [FP7](#fp7-flow-a-ci-wait-costs-nothing-and-its-queue-time-is-no-stall), then [#317](https://github.com/FieldmouseWorks/Conary/issues/317) | Not built: a queued check's wait counts toward `stall_after` |
+| `read-sized-to-data` | [FP9](#fp9-conaryd-one-repositorys-slow-or-failing-read-delays-only-its-own-pass) | Partly: a failed pass books its own recovery (#351), but conaryd runs passes one at a time |
+| `recover-by-kind` | [FP8](#fp8-flow-bring-back-a-stalled-stage-by-a-way-github-allows-and-quote-its-error) | Not built: a cancelled check waits for someone else to rerun it |
 | `repair-ahead-of-red` | [#318](https://github.com/FieldmouseWorks/Conary/issues/318) | Open |
 | `publish-only-news` | [#316](https://github.com/FieldmouseWorks/Conary/issues/316) | Open |
-| `scope-below-a-repo` | [#313](https://github.com/FieldmouseWorks/Conary/issues/313); FP3's pause leaves room for it | Open |
+| `scope-below-a-repo` | [#313](https://github.com/FieldmouseWorks/Conary/issues/313); FP2's pause leaves room for it | Open |
 
 ## Steward issues whose substance lands here
 
@@ -97,11 +100,11 @@ decision.
 | Issue | The flow takes | The flow doesn't take |
 | --- | --- | --- |
 | [burrow#748](https://github.com/FieldmouseWorks/burrow/issues/748), review limits and judge triggers from settings | The limits and triggers are flow `Settings` fields (`rounds`, `judge_engines`, the fix-growth share), declared in FP1's schema and read at each decision | A second settings reader in the steward: burrow renders the flow's file ([burrow#724](https://github.com/FieldmouseWorks/burrow/issues/724)) |
-| [burrow#945](https://github.com/FieldmouseWorks/burrow/issues/945), a looping review goes to the stuck role | Its three triggers and the stuck-role handoff, in [FP12](#fp12-flow-break-a-review-loop-that-wont-settle) | Nothing left out |
-| [burrow#961](https://github.com/FieldmouseWorks/burrow/issues/961), looping expedited stages go to the stuck role before the owner | The order at an expired stage: mechanical recovery ([FP9](#fp9-flow-bring-back-a-stalled-stage-by-a-way-github-allows-and-quote-its-error)), then the stuck role (FP12), then the owner only for a door ([FP11](#fp11-flow-ask-the-owner-only-for-a-named-one-way-door-and-once-per-decision)). It holds for every PR | A separate expedite lane: priority is FP5's levels, not a second path |
-| [burrow#955](https://github.com/FieldmouseWorks/burrow/issues/955), an expedited PR fixes only blockers | One follow-up issue per PR for the findings a fix answers, shared with FP12's handoff | Which findings a fix fixes: that's the fix brief's ([review-loop.md](review-loop.md#the-decisions), task B1), the same for every PR |
-| [burrow#960](https://github.com/FieldmouseWorks/burrow/issues/960), a deadline for every stage, then branch or flake recovery | Every watched stage already books `overdue_at`; FP5 sizes it by priority level, FP8 leaves queue time out, and FP9 takes the branch update and the rerun a check's kind allows | A known-flake retry: Conary holds no flaky-test record. Flaky upkeep stays burrow's ([#256](https://github.com/FieldmouseWorks/Conary/issues/256)'s "what lives where") |
-| [remi#1248](https://github.com/FieldmouseWorks/remi/issues/1248), the escalation policy for held PRs | A hold past `hold_stall_after` is a stall the flow reports, never an owner listing; the owner listing names a door (FP11) | Routing to remi's operator: that's the caller's, on the flow's status |
+| [burrow#945](https://github.com/FieldmouseWorks/burrow/issues/945), a looping review goes to the stuck role | Its three triggers and the stuck-role handoff, in [FP11](#fp11-flow-break-a-review-loop-that-wont-settle) | Nothing left out |
+| [burrow#961](https://github.com/FieldmouseWorks/burrow/issues/961), looping expedited stages go to the stuck role before the owner | The order at an expired stage: mechanical recovery ([FP8](#fp8-flow-bring-back-a-stalled-stage-by-a-way-github-allows-and-quote-its-error)), then the stuck role (FP11), then the owner only for a door ([FP10](#fp10-flow-ask-the-owner-only-for-a-named-one-way-door-and-once-per-decision)). It holds for every PR | A separate expedite lane: priority is FP4's levels, not a second path |
+| [burrow#955](https://github.com/FieldmouseWorks/burrow/issues/955), an expedited PR fixes only blockers | One follow-up issue per PR for the findings a fix answers, shared with FP11's handoff | Which findings a fix fixes: that's the fix brief's ([review-loop.md](review-loop.md#the-decisions), task B1), the same for every PR |
+| [burrow#960](https://github.com/FieldmouseWorks/burrow/issues/960), a deadline for every stage, then branch or flake recovery | Every watched stage already books `overdue_at`; FP4 sizes it by priority level, FP7 leaves queue time out, and FP8 takes the branch update and the rerun a check's kind allows | A known-flake retry: Conary holds no flaky-test record. Flaky upkeep stays burrow's ([#256](https://github.com/FieldmouseWorks/Conary/issues/256)'s "what lives where") |
+| [remi#1248](https://github.com/FieldmouseWorks/remi/issues/1248), the escalation policy for held PRs | A hold past `hold_stall_after` is a stall the flow reports, never an owner listing; the owner listing names a door (FP10) | Routing to remi's operator: that's the caller's, on the flow's status |
 
 ## Cutover prerequisites
 
@@ -111,25 +114,24 @@ shouldn't have. So:
 
 | Task | Before #313 (ownership switch) | Before #314 (remi) | Otherwise before |
 | --- | --- | --- | --- |
-| FP1 schema and live exceptions | Yes: #313 consumes the schema | Yes | |
-| FP2 safe defaults | | Yes | |
-| FP3 pause and hold vacate | | Yes: #314 verifies pause | |
-| FP4 switches report their effect | | Yes | |
-| FP5 explicit priority | | Yes: else the binary queue is ported | |
-| FP6 degraded counts failed | | Yes: else silent fallbacks are ported | |
-| FP7 repeated deadline stalls | | Yes | |
-| FP8 a CI wait costs nothing | | Yes | |
-| FP9 recovery by kind | | Yes: else a cancelled check waits forever | |
-| FP10 per-repository reads | | | #315: remi is one repository |
-| FP11 owner only for doors, once per decision | | Yes: at #314 an owner call is a marked review | |
-| FP12 review-loop breakers | | | #315 |
-| FP13 history-sized deadlines | | | #321's exit check |
+| FP1 schema, spender defaults and live exceptions | Yes: #313 consumes the schema | Yes | |
+| FP2 pause and hold vacate | | Yes: #314 verifies pause | |
+| FP3 switches report their effect | | Yes | |
+| FP4 explicit priority | | Yes: else the binary queue is ported | |
+| FP5 degraded counts failed | | Yes: else silent fallbacks are ported | |
+| FP6 repeated deadline stalls | | Yes | |
+| FP7 a CI wait costs nothing | | Yes | |
+| FP8 recovery by kind | | Yes: else a cancelled check waits forever | |
+| FP9 per-repository reads | | | #315: remi is one repository |
+| FP10 owner only for doors, once per decision | | Yes: at #314 an owner call is a marked review | |
+| FP11 review-loop breakers | | | #315 |
+| FP12 history-sized deadlines | | | #321's exit check |
 
-FP12 isn't a #314 prerequisite because the steward it replaces on remi has
-no loop breaker either; FP7 and FP9 already stop a stage from repeating
-without end. FP13 isn't one because FP7 already stops a deadline from being
+FP11 isn't a #314 prerequisite because the steward it replaces on remi has
+no loop breaker either; FP6 and FP8 already stop a stage from repeating
+without end. FP12 isn't one because FP6 already stops a deadline from being
 hit over and over; the configured `proof_timeout` stays the ceiling until
-FP13 lands.
+FP12 lands.
 
 ## The tasks
 
@@ -137,6 +139,8 @@ Each task is one PR in Conary. Each says what it adds, its regression
 scenario, what it waits on and what it leaves alone.
 
 ### FP1: flow: publish the configuration's schema and its live exceptions
+
+**Moves:** `one-settings-source`, `live-settings`, `spenders-off-by-default`.
 
 **Crates:** `conary-github` (`flow/types.rs`, `flow/pass.rs`,
 `events/runtime.rs`), `cn` (`flow.rs`), `conaryd`. `docs/flow.md`,
@@ -149,6 +153,9 @@ scenario, what it waits on and what it leaves alone.
   starts paid work (`spender`), and whether it's live. The schema is
   generated from the same types the loaders parse, so a field can't exist
   without its entry.
+- A test reads the schema and holds every option marked `spender` to a
+  default of off or zero. #381 set those defaults; this keeps a new spender
+  from joining without one.
 - Live is the default: an option takes effect at the next decision that
   reads it. Each option that can't (conaryd's `listen`, `secret_path`,
   `data`, and whatever else the task finds read only at start) is declared
@@ -162,37 +169,17 @@ scenario, what it waits on and what it leaves alone.
 **Regression scenario.** A test adds a field to `Settings` without a schema
 entry and fails; one changes an option the schema says is live between two
 passes and sees the second pass act on it; one shows a `live: false`
-option listed as an exception. On main there's no schema to check.
+option listed as an exception; one marks a new option `spender` with a
+non-zero default and fails. On main there's no schema to check.
 
 **Leaves alone:** burrow's import of the schema and its rendered file
 ([burrow#655](https://github.com/FieldmouseWorks/burrow/issues/655),
 [burrow#724](https://github.com/FieldmouseWorks/burrow/issues/724)). Conary
 adds no write door for configuration.
 
-### FP2: flow: every spender defaults off, and no default names a machine
+### FP2: flow: pause and hold vacate, and resume, without the pipeline
 
-**Crates:** `conary-github` (`flow/types.rs`, `flow/proofs.rs`). `docs/flow.md`.
-
-**Work.**
-- Every option FP1 marks as a spender defaults to off or zero: an omitted
-  `proof_slots` starts no proof, the train stays off, and so on. Unlimited
-  is something a machine writes down, never what an omission means.
-- Defaults that name one machine's accounts, labels or engines
-  (`review_authors`, `owner_label`, `judge_engines` and the like) become
-  empty or neutral, so a standalone install isn't configured for remi.
-  The machine's rendered configuration supplies those values.
-- A test reads the schema and holds every spender's default to off or zero.
-
-**Regression scenario.** A proof plugin and a proof recipe configured,
-`proof_slots` omitted, and three PRs needing that proof: main starts three
-proof workers, and the fixed flow starts none and says which setting turns
-them on.
-
-**Waits on:** FP1 (the `spender` mark). **Deployment:** remi's rendered flow
-configuration sets the values whose defaults change before it pins this,
-so the shadow's decisions don't move.
-
-### FP3: flow: pause and hold vacate, and resume, without the pipeline
+**Moves:** `off-switch-independent`, `pause-vacates`.
 
 **Crates:** `conary-github` (`flow/decide.rs`, `flow/proofs.rs`,
 `flow/occupancy.rs`, `flow/persist.rs`), `cn` (`flow.rs`). `docs/flow.md`.
@@ -227,7 +214,9 @@ burrow's pause door and scoped modes
 [burrow#655](https://github.com/FieldmouseWorks/burrow/issues/655)), which
 call `cn flow pause` rather than keep a copy of it.
 
-### FP4: flow: report every switch in effect and what it holds
+### FP3: flow: report every switch in effect and what it holds
+
+**Moves:** `switches-show-their-effect`.
 
 **Crates:** `conary-github` (`flow/types.rs`, `flow/state.rs`,
 `flow/compare.rs`), `cn` (`flow.rs`). `docs/flow.md`.
@@ -248,10 +237,12 @@ plugin: status names all three and each PR they stop. On main, a held PR's
 Next says only "On hold" and nothing reports the omitted plugin until a
 review would start.
 
-**Waits on:** FP3 (the pause it reports). **Leaves alone:** each
+**Waits on:** FP2 (the pause it reports). **Leaves alone:** each
 repository's effective landing owner, which #313 shows.
 
-### FP5: flow: order admission and proof slots by explicit priority, then age
+### FP4: flow: order admission and proof slots by explicit priority, then age
+
+**Moves:** `explicit-priority`.
 
 **Crates:** `conary-github` (`flow/types.rs`, `flow/proofs.rs`,
 `flow/pass.rs`, `flow/train.rs`, `flow/state.rs`). `docs/flow.md`.
@@ -278,7 +269,9 @@ label is ignored and the oldest goes first.
 
 **Deployment:** remi's configuration maps its labels before it pins this.
 
-### FP6: ledger and flow: record a degraded outcome and count it failed
+### FP5: ledger and flow: record a degraded outcome and count it failed
+
+**Moves:** `degraded-counts-as-failed`.
 
 **Crates:** `conary-core` (`op.rs`, `ledger`), `conary-github` (`flow/state.rs`,
 `flow/occupancy.rs`, `flow/read.rs`, `flow/evidence.rs`). `docs/DESIGN.md`
@@ -307,7 +300,9 @@ can't tell.
 **Waits on:** #305's statement of the property in DESIGN. This task states
 the op itself in DESIGN 4.6.
 
-### FP7: flow: a second deadline on the same tree is a stall, not a retry
+### FP6: flow: a second deadline on the same tree is a stall, not a retry
+
+**Moves:** `limits-are-design-bugs`, with FP12.
 
 **Crates:** `conary-github` (`flow/decide.rs`, `flow/state.rs`,
 `flow/jobs.rs`). `docs/flow.md`.
@@ -325,7 +320,9 @@ deadline the flow retries; after its second on the same tree main retries
 again, without end, with backoff. The fixed flow stops and reports the
 stall, and no third worker starts.
 
-### FP8: flow: a CI wait costs nothing, and its queue time is no stall
+### FP7: flow: a CI wait costs nothing, and its queue time is no stall
+
+**Moves:** `waiting-costs-nothing`.
 
 **Crates:** `conary-github` (`flow/ci.rs`, `flow/state.rs`, `flow/decide.rs`),
 `conaryd`'s booked waits. `docs/flow.md`.
@@ -343,7 +340,9 @@ two-hour `stall_after`: main marks the PR overdue, and the fixed flow
 doesn't until two hours after the run starts. An unrelated event on the PR
 while CI runs starts no worker and leaves the wait as it was.
 
-### FP9: flow: bring back a stalled stage by a way GitHub allows, and quote its error
+### FP8: flow: bring back a stalled stage by a way GitHub allows, and quote its error
+
+**Moves:** `recover-by-kind`.
 
 **Crates:** `conary-github` (`flow/ci.rs`, `flow/decide.rs`,
 `flow/execute.rs`, `api.rs`, the simulated GitHub). `docs/flow.md`.
@@ -356,7 +355,7 @@ while CI runs starts no worker and leaves the wait as it was.
   and never for a kind GitHub won't rerun.
 - A refused recovery isn't tried again in that stall. The PR's status
   quotes the error GitHub gave, as given, instead of a guessed cause.
-- After that the stall goes on to FP12's stuck role, then FP11's owner
+- After that the stall goes on to FP11's stuck role, then FP10's owner
   listing only where a door applies. Repeated events, wakes and restarts
   repeat no recovery.
 
@@ -368,7 +367,9 @@ the status carries GitHub's message and no second request is sent.
 **Leaves alone:** known-flake retries, which need a flaky-test record that
 Conary doesn't keep.
 
-### FP10: conaryd: one repository's slow or failing read delays only its own pass
+### FP9: conaryd: one repository's slow or failing read delays only its own pass
+
+**Moves:** `read-sized-to-data`.
 
 **Crates:** `conary-github` (`events/queue.rs`, `events/runtime.rs`,
 `api.rs`, `flow/read.rs`). `docs/conaryd.md`.
@@ -379,16 +380,18 @@ Conary doesn't keep.
 - A read that fails, is refused or runs past its deadline delays only its
   repository's pass. That pass books its recovery as today, and the other
   repositories' passes go on at once. A refused read leaves the last facts
-  in place for the PRs that need it, recorded through FP6's op.
+  in place for the PRs that need it, recorded through FP5's op.
 
 **Regression scenario.** Two repositories, the first one's API hanging: on
 main the second repository's kick waits behind it, since passes run one at
 a time. In the fixed daemon the second repository's pass finishes in its
 own time, and the first books its recovery.
 
-**Waits on:** FP6 (the op a refused read records).
+**Waits on:** FP5 (the op a refused read records).
 
-### FP11: flow: ask the owner only for a named one-way door, and once per decision
+### FP10: flow: ask the owner only for a named one-way door, and once per decision
+
+**Moves:** `owner-only-for-doors`, `one-question-per-decision`.
 
 **Crates:** `conary-github` (`flow/types.rs`, `flow/decide.rs`,
 `flow/state.rs`, `flow/approval.rs`, `flow/persist.rs`). `docs/flow.md`.
@@ -398,8 +401,8 @@ own time, and the first books its recovery.
   change, an outside contribution, a judge's `owner` verdict (with the
   judge's reason) and the owner label set by a person. A decision with no
   door doesn't list the owner. The flow makes the call itself, records it
-  and shows it: a read too large to finish is FP6's degraded wait, and two
-  jobs ending without their answer go to FP9's recovery and FP12's stuck
+  and shows it: a read too large to finish is FP5's degraded wait, and two
+  jobs ending without their answer go to FP8's recovery and FP11's stuck
   role. A major update the dependency sweep held (#316's sweep) is listed
   only with the door the sweep names.
 - A hold past `hold_stall_after` is a stall in the flow's status, never an
@@ -419,14 +422,16 @@ R2 PR listed for the owner gets two base-merge heads: main has a new
 the fixed flow keeps one request with one key whose marker moves to the
 current head.
 
-**Waits on:** FP6, FP9 and FP12 for the calls the owner no longer gets. Until
-FP12 lands, a loop past its round limit stays overdue rather than listed.
+**Waits on:** FP5, FP8 and FP11 for the calls the owner no longer gets. Until
+FP11 lands, a loop past its round limit stays overdue rather than listed.
 **Leaves alone:** the owner issue the steward's upkeep keeps, which
 [#316](https://github.com/FieldmouseWorks/Conary/issues/316) moves to Rust
 and which joins on this key; burrow's question notices
 ([burrow#649](https://github.com/FieldmouseWorks/burrow/issues/649)).
 
-### FP12: flow: break a review loop that won't settle
+### FP11: flow: break a review loop that won't settle
+
+**Moves:** no entry of its own. It builds burrow#945's behavior, which [review-loop.md](review-loop.md) owns.
 
 **Crates:** `conary-github` (`flow/review.rs`, `flow/reviews.rs`,
 `flow/decide.rs`, `flow/types.rs`). `docs/flow.md`, `docs/review-loop.md`.
@@ -437,7 +442,7 @@ and which joins on this key; burrow's question notices
   against the original diff, an answered finding raised again unchanged)
   hand the PR to the stuck role through the flow's `job` kind, with no
   further fix round, and findings on the stuck role's head go to the judge;
-- a stall FP9 couldn't recover goes to the stuck role the same way, once
+- a stall FP8 couldn't recover goes to the stuck role the same way, once
   per stall, before any owner listing (burrow#961's order);
 - the stuck role's answered findings link one follow-up issue per PR,
   shared with what burrow#955 asked for;
@@ -452,12 +457,14 @@ hands the PR to the stuck role.
 
 **Waits on:** m6-plugins.md's
 [C2](m6-plugins.md#c2-flow-give-each-finding-a-thread-and-post-a-fixs-answers-on-it)
-(the answer history it reads) and FP9. **Leaves alone:** the owner's open
+(the answer history it reads) and FP8. **Leaves alone:** the owner's open
 question on [burrow#939](https://github.com/FieldmouseWorks/burrow/issues/939),
 which the switch's default doesn't answer; the stuck role's brief, which is
 B1's.
 
-### FP13: flow: size a proof's deadline from its own history
+### FP12: flow: size a proof's deadline from its own history
+
+**Moves:** `limits-are-design-bugs`, with FP6.
 
 **Crates:** `conary-github` (`flow/proofs.rs`, `flow/jobs.rs`). `docs/flow.md`.
 
@@ -476,29 +483,28 @@ B1's.
 deadline, not after three hours. A recipe with no history uses the
 configured value. On main every proof's deadline is the configured value.
 
-**Waits on:** FP7.
+**Waits on:** FP6.
 
 ## Order
 
 These tasks are in the Conary flow lane
 ([m6-order.md](m6-order.md#lanes)): they all touch `flow/` or
-`docs/flow.md`, so they run after C1 to C4 and one at a time, in this
-order:
+`docs/flow.md`, so they run one at a time, after C1 to C4 (all landed by
+2026-11-16), in this order:
 
 ```
-C1, C4, C2, C3 ──► FP1 ──► FP2 ──► FP3 ──► FP4 ──► FP5 ──► FP6 ──► FP7
-  ──► FP8 ──► FP9 ──► FP12 ──► FP11 ──► #313 ──► FP10 ──► FP13
+FP1 ──► FP2 ──► FP3 ──► FP4 ──► FP5 ──► FP6 ──► FP7 ──► FP8
+  ──► FP11 ──► FP10 ──► #313 ──► FP9 ──► FP12
 ```
 
-The cutover prerequisites come first. FP12 goes before FP11 so the owner
-listing loses its non-door calls in one change. FP10 and FP13 follow #313 in
+The cutover prerequisites come first. FP11 goes before FP10 so the owner
+listing loses its non-door calls in one change. FP9 and FP12 follow #313 in
 the lane, before #315 and #321.
 
 ## Filing
 
-This plan lands after [#307](https://github.com/FieldmouseWorks/Conary/issues/307)
-([fence 6](m6-order.md#fences)). Once it has, each task is filed as an issue
-in Conary:
+Once this plan lands, each task is filed as an issue in Conary, as a child
+of #256's list so the lane admits one at a time:
 
 - The title starts with the task's ID.
 - The body links its section here, names the lesson IDs it moves, and says
