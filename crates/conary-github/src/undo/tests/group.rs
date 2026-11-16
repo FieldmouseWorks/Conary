@@ -8,7 +8,7 @@ const SESSION: &str = "https://claude.ai/code/session_01Bad";
 /// Changes landed one after another on trunk, in `repo`, each by the
 /// session given for it, as PRs from `first` up, each bringing a patch of
 /// its own (`#` and its number): their ids, oldest first.
-fn chain(
+pub(super) fn chain(
     store: &mut Store,
     hub: &Hub,
     repo: &Repo,
@@ -75,7 +75,14 @@ fn burrow() -> Repo {
 }
 
 fn actor(store: &mut Store, hub: &Hub) -> Result<Undid, Stopped> {
-    undo_actor(store, hub, hub, &config(), SESSION)
+    undo_actor(
+        store,
+        hub,
+        hub,
+        &config(),
+        SESSION,
+        "The session broke the health check",
+    )
 }
 
 #[test]
@@ -184,7 +191,16 @@ fn since_undoes_what_landed_on_the_repo_after_the_time() {
         .as_ref()
         .unwrap()
         .at;
-    let got = undo_since(&mut store, &hub, &hub, &config(), &repo(), since).unwrap();
+    let got = undo_since(
+        &mut store,
+        &hub,
+        &hub,
+        &config(),
+        &repo(),
+        since,
+        "Recent landings broke the health check",
+    )
+    .unwrap();
     assert_eq!(got.undos.len(), 1);
     assert_eq!(got.undos[0].reverts, [ids[2], ids[1]]);
     let u = store.ledger().change(got.undos[0].change).unwrap();
@@ -206,7 +222,16 @@ fn since_undoes_what_landed_on_the_repo_after_the_time() {
         .as_ref()
         .unwrap()
         .at;
-    let err = undo_since(&mut store, &hub, &hub, &config(), &repo(), last).unwrap_err();
+    let err = undo_since(
+        &mut store,
+        &hub,
+        &hub,
+        &config(),
+        &repo(),
+        last,
+        "Recent landings broke the health check",
+    )
+    .unwrap_err();
     assert!(matches!(*err.error, UndoError::NoneLanded(_)), "{err}");
     assert!(err.refused());
 }
@@ -272,7 +297,15 @@ fn a_pr_opened_and_not_recorded_is_told_and_recorded_when_asked_again() {
         hub.fail(Call::Pull.pr(next));
         let run = |store: &mut Store| {
             if by_change {
-                undo(store, &hub, &hub, &config(), ids[0]).map(|u| u.pr)
+                undo(
+                    store,
+                    &hub,
+                    &hub,
+                    &config(),
+                    ids[0],
+                    "The landed change broke the health check",
+                )
+                .map(|u| u.pr)
             } else {
                 actor(store, &hub).map(|u| u.undos[0].pr)
             }
@@ -308,7 +341,16 @@ fn a_time_s_undo_in_a_repo_the_ledger_keeps_nothing_of_is_refused() {
     chain(&mut store, &hub, &repo(), 10, &[None]);
     let stranger: Repo = "someone/else".parse().unwrap();
     // GitHub has no such repo: anything asked of it errs.
-    let err = undo_since(&mut store, &hub, &hub, &config(), &stranger, 0).unwrap_err();
+    let err = undo_since(
+        &mut store,
+        &hub,
+        &hub,
+        &config(),
+        &stranger,
+        0,
+        "Recent landings broke the health check",
+    )
+    .unwrap_err();
     assert!(
         matches!(&*err.error, UndoError::Unkept(r) if r == &stranger),
         "{err}"
@@ -368,6 +410,7 @@ fn a_stopped_run_s_pr_for_a_session_is_its_undo_read_from_its_marker() {
     let ids = chain(&mut store, &hub, &repo(), 10, &[s, s]);
     // A run opened the PR and stopped before recording it.
     let marker = Marker {
+        reason: "The original request found a broken health check".into(),
         reverts: vec![ids[1], ids[0]],
         asked: Asked::Actor {
             session: SESSION.into(),
@@ -417,6 +460,7 @@ fn a_stopped_run_s_pr_is_found_through_any_change_it_reverts() {
     // A run opened the PR on the newest's branch and stopped before
     // recording it; the older one is asked for alone.
     let marker = Marker {
+        reason: "The original request found a broken health check".into(),
         reverts: vec![ids[1], ids[0]],
         asked: Asked::Actor {
             session: SESSION.into(),
@@ -428,7 +472,15 @@ fn a_stopped_run_s_pr_is_found_through_any_change_it_reverts() {
     let pr = hub
         .open_pull(REMI, &undo_branch(ids[1], 1), "main", "t", &marker.line())
         .unwrap();
-    let got = undo(&mut store, &hub, &hub, &config(), ids[0]).unwrap();
+    let got = undo(
+        &mut store,
+        &hub,
+        &hub,
+        &config(),
+        ids[0],
+        "The landed change broke the health check",
+    )
+    .unwrap();
     assert_eq!((got.pr, got.how), (pr, How::Found));
     assert_eq!(got.reverts, [ids[1], ids[0]]);
     assert_eq!(store.ledger().undo_of(ids[1]), Some(got.change));
@@ -443,6 +495,7 @@ fn a_stopped_run_s_pr_merged_and_its_branch_gone_is_found_all_the_same() {
     let s = Some(SESSION);
     let ids = chain(&mut store, &hub, &repo(), 10, &[s, s]);
     let marker = Marker {
+        reason: "The original request found a broken health check".into(),
         reverts: vec![ids[1], ids[0]],
         asked: Asked::Actor {
             session: SESSION.into(),
@@ -459,9 +512,16 @@ fn a_stopped_run_s_pr_merged_and_its_branch_gone_is_found_all_the_same() {
     // same.
     hub.steward_lands(REMI, pr);
     assert!(hub.branches(REMI, "conary/").unwrap().is_empty());
-    let err = *undo(&mut store, &hub, &hub, &config(), ids[0])
-        .unwrap_err()
-        .error;
+    let err = *undo(
+        &mut store,
+        &hub,
+        &hub,
+        &config(),
+        ids[0],
+        "The landed change broke the health check",
+    )
+    .unwrap_err()
+    .error;
     let by = store.ledger().by_pr(&repo(), pr).unwrap().id;
     assert!(
         matches!(err, UndoError::Reverted { change, by: b } if change == ids[0] && b == by),
@@ -482,9 +542,16 @@ fn a_pr_from_the_branch_that_isn_t_an_undo_keeps_it() {
     let pr = hub
         .open_pull(REMI, &branch, "main", "t", "its marker taken out")
         .unwrap();
-    let err = *undo(&mut store, &hub, &hub, &config(), ids[0])
-        .unwrap_err()
-        .error;
+    let err = *undo(
+        &mut store,
+        &hub,
+        &hub,
+        &config(),
+        ids[0],
+        "The landed change broke the health check",
+    )
+    .unwrap_err()
+    .error;
     assert!(
         matches!(&err, UndoError::Taken { branch: b, pr: p } if b == &branch && *p == pr),
         "{err}"

@@ -238,6 +238,7 @@ impl Writer<'_> {
             change,
             reverts: marker.reverts.clone(),
             asked: marker.asked.clone(),
+            reason: Some(marker.reason.clone()),
         };
         let refused = |e: &IngestError| matches!(e, IngestError::Store(StoreError::Invalid(_)));
         match self.record(undo()) {
@@ -462,14 +463,42 @@ fn record_with_submission(
     let body = pr.body.clone().unwrap_or_default();
     // `cn undo` marks what its PR reverts, so the PR is read as an undo
     // whatever reads it first. A fork's branch is anyone's to name.
-    let undo = own_head(pr, repo)
+    let marked = own_head(pr, repo)
         .then(|| Undo::read(&pr.head.name, &body))
         .flatten();
-    // Who wrote it and what for are the author's words, not the marker's.
-    let said = if undo.is_some() {
-        Undo::without(&body)
-    } else {
-        body.clone()
+    // A legacy, blank or malformed marker must never turn an undo into an
+    // ordinary PR that could evade the undo landing rules. Recorded undos
+    // already hold their immutable record; a new one needs a marker that
+    // reads and a reason before any ops.
+    let held = w
+        .store
+        .ledger()
+        .by_pr(repo, pr.number)
+        .and_then(|c| c.undo.as_ref());
+    let recorded = held.is_some();
+    let held_reason = held.and_then(|u| u.reason.clone());
+    let undo = match &marked {
+        None => None,
+        Some(_) if recorded => None,
+        Some(Err(what)) => return Err(IngestError::Malformed(what.clone())),
+        Some(Ok(marker)) => {
+            conary_core::op::undo_reason(&marker.reason)
+                .map_err(|_| StoreError::Invalid(Invalid::UndoReason))?;
+            Some(marker.clone())
+        }
+    };
+    // Who wrote it and what for are the author's words, not the marker's
+    // nor its reason's.
+    let said = match &marked {
+        None => body.clone(),
+        Some(m) => {
+            let reasons: Vec<&str> = held_reason
+                .as_deref()
+                .into_iter()
+                .chain(m.as_ref().ok().map(|m| m.reason.as_str()))
+                .collect();
+            Undo::without(&body, &reasons)
+        }
     };
 
     let change = match w.store.ledger().by_pr(repo, pr.number) {

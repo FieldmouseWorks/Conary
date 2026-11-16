@@ -42,6 +42,8 @@ section 5](DESIGN.md#5-undo) says what it reads). An `at` reads the log on
 its own, holding up no other call. Their params, as JSON Schema, are in
 [`rpc.rs`](../crates/conary-core/src/rpc.rs) (`METHODS`), the one list every
 transport offers. A change that isn't in the ledger is `null`, not an error.
+`change.get` includes an undo's immutable `undo.reason`; it is `null` for
+historical undo operations recorded before reasons were required.
 Errors are JSON-RPC's own codes, and `-32000` for a call that was well formed
 and failed: the log didn't verify, say.
 

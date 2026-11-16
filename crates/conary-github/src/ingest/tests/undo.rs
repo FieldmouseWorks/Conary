@@ -14,6 +14,7 @@ fn with_undo(store: &mut Store, f: &Hub, undo: u64) -> (ChangeId, ChangeId) {
     let u = pull(store, f, &config(), &repo(), undo).unwrap().change;
     store
         .record(Body::Undo {
+            reason: Some("The landed change broke the health check".into()),
             change: u,
             reverts: vec![x],
             asked: conary_core::op::Asked::Change,
@@ -62,6 +63,7 @@ fn two_undos(store: &mut Store, f: &Hub) -> [ChangeId; 3] {
     let second = pull(store, f, &config(), &repo(), 11).unwrap().change;
     store
         .record(Body::Undo {
+            reason: Some("The landed change broke the health check".into()),
             change: second,
             reverts: vec![x],
             asked: conary_core::op::Asked::Change,
@@ -268,6 +270,7 @@ fn an_undo_lands_over_a_rival_that_merged_elsewhere_or_after_it() {
 /// The body `cn undo` gives `x`'s undo, its marker last.
 fn marked(x: ChangeId) -> String {
     let marker = crate::undo::Marker {
+        reason: "The landed change broke the health check".into(),
         reverts: vec![x],
         asked: conary_core::op::Asked::Change,
     };
