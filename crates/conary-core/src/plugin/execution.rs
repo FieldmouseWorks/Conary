@@ -78,8 +78,11 @@ impl Provenance {
     }
 }
 
+/// The sessions one handle has seen, for judging independence. The runner
+/// keeps one per plugin; a judge producer builds its own with `default()`
+/// and checks each judgment with [`Sessions::accept`] before publishing.
 #[derive(Default)]
-pub(super) struct Sessions(Mutex<History>);
+pub struct Sessions(Mutex<History>);
 
 #[derive(Default)]
 struct History {
@@ -89,6 +92,27 @@ struct History {
 }
 
 impl History {
+    /// Whether a judge may start in `context`: fresh, or continuing a
+    /// session this handle accepted for the same task; never a fork, and
+    /// never after nonjudge work it couldn't identify.
+    fn judge_may_use(&self, task: &Task, context: &Context) -> Result<(), Failure> {
+        if self.unidentified_nonjudge {
+            return Err(fail(
+                "judge cannot use a handle after unidentified nonjudge work",
+            ));
+        }
+        match context {
+            Context::Fresh => Ok(()),
+            Context::Continue { session } => {
+                if self.judges.get(session) != Some(&scope(task)?) {
+                    return Err(fail("judge cannot continue a foreign session or scope"));
+                }
+                Ok(())
+            }
+            Context::Fork { .. } => Err(fail("judge cannot fork a session")),
+        }
+    }
+
     fn used_by_nonjudge(&mut self, session: &str) {
         if session.trim().is_empty() {
             self.unidentified_nonjudge = true;
@@ -106,7 +130,7 @@ fn fail(why: &str) -> Failure {
 impl Sessions {
     /// A new independent handle keeps known exclusions, never continuation
     /// eligibility or the unknown context of the preceding handle.
-    pub fn independent(&self) -> Result<Self, Failure> {
+    pub(super) fn independent(&self) -> Result<Self, Failure> {
         let history = self
             .0
             .lock()
@@ -121,7 +145,7 @@ impl Sessions {
 
     /// Only this handle's validated judge result can establish a continuation.
     /// A matching session string supplied by a writer/reviewer is insufficient.
-    pub fn prepare(&self, task: &Task, context: &Context) -> Result<(), Failure> {
+    pub(super) fn prepare(&self, task: &Task, context: &Context) -> Result<(), Failure> {
         let mut history = self
             .0
             .lock()
@@ -136,26 +160,12 @@ impl Sessions {
             }
             return Ok(());
         }
-        if history.unidentified_nonjudge {
-            return Err(fail(
-                "judge cannot use a handle after unidentified nonjudge work",
-            ));
-        }
-        match context {
-            Context::Fresh => Ok(()),
-            Context::Continue { session } => {
-                if history.judges.get(session) != Some(&scope(task)?) {
-                    return Err(fail("judge cannot continue a foreign session or scope"));
-                }
-                Ok(())
-            }
-            Context::Fork { .. } => Err(fail("judge cannot fork a session")),
-        }
+        history.judge_may_use(task, context)
     }
 
     /// Observe before validating the answer. A rejected result does not undo
     /// the work or make its reported context safe for later judging.
-    pub fn observe(&self, task: &Task, response: &Response) -> Result<(), Failure> {
+    pub(super) fn observe(&self, task: &Task, response: &Response) -> Result<(), Failure> {
         if !matches!(task, Task::Judge { .. }) {
             let mut history = self
                 .0
@@ -178,7 +188,7 @@ impl Sessions {
 
     /// No usable response means the handle cannot identify the nonjudge
     /// context. Fail closed for judging; a new handle must start fresh.
-    pub fn failed(&self, task: &Task) -> Result<(), Failure> {
+    pub(super) fn failed(&self, task: &Task) -> Result<(), Failure> {
         if !matches!(task, Task::Judge { .. }) {
             self.0
                 .lock()
@@ -188,6 +198,12 @@ impl Sessions {
         Ok(())
     }
 
+    /// The flow's `fresh-judge` check on a judge's answer: it needs a
+    /// session that isn't the author's, a reviewer's, or one this handle
+    /// saw nonjudge work use; a fresh judge's session must be new, and a
+    /// continued one must be its own, accepted earlier for the same task.
+    /// A fork is refused. An accepted session is recorded as
+    /// this judge's, for this task. Any other task passes.
     pub fn accept(&self, task: &Task, context: &Context, by: &Identity) -> Result<(), Failure> {
         let Task::Judge {
             author, reviewers, ..
@@ -209,6 +225,9 @@ impl Sessions {
             .0
             .lock()
             .map_err(|_| fail("session history poisoned"))?;
+        // Checked again under the same lock that records the session, so a
+        // caller without `prepare` can't continue or fork into a judgment.
+        history.judge_may_use(task, context)?;
         if history.excluded.contains(session) {
             return Err(fail("judge reused an observed session"));
         }

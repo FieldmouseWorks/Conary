@@ -2,7 +2,7 @@
 mod execution;
 mod fixtures;
 mod runner;
-pub use execution::{Choice, Context, Executed, Execution, Provenance};
+pub use execution::{Choice, Context, Executed, Execution, Provenance, Sessions};
 pub use fixtures::{Fixture, fixtures};
 pub use runner::{Failure, Limits, Plugin};
 
