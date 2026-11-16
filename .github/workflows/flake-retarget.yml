@@ -20,3 +20,7 @@ jobs:
       contents: read
       id-token: write
       attestations: write
+    with:
+      # flake.yml's gate exactly, so a push can reuse this run's pass too.
+      gate-reuse: true
+      gate-reuse-lookup: https://remi.conary.io/conary/gate-reuse

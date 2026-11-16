@@ -19,3 +19,9 @@ jobs:
       contents: read
       id-token: write
       attestations: write
+    with:
+      # Names this gate in what it attests, so a later push of the same tree
+      # can be matched to it; only main's push asks remi's lookup
+      # (docs/gate-reuse.md) and, on a hit, builds nothing.
+      gate-reuse: true
+      gate-reuse-lookup: https://remi.conary.io/conary/gate-reuse
