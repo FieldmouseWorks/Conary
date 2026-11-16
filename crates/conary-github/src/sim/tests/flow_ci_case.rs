@@ -91,6 +91,12 @@ impl Run {
     }
 }
 
+/// A machine policy that names `docs/` and READMEs documentation: a PR's
+/// paths have to be, as well as its docs lane green, for proofs to be waived.
+pub(super) fn docs_policy() -> conary_core::Policy {
+    conary_core::Policy::parse(br#"{"docs": ["^docs/", "(^|/)README\\.md$"]}"#).unwrap()
+}
+
 pub(super) struct Scenario {
     pub(super) hub: Hub,
     pub(super) memory: Memory,
@@ -145,7 +151,7 @@ impl Scenario {
             &self.hub,
             &REMI.parse().unwrap(),
             3,
-            &conary_core::Policy::parse(b"{}").unwrap(),
+            &docs_policy(),
             settings,
             &["owner".into()],
         )

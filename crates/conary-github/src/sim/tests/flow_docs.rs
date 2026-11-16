@@ -71,7 +71,7 @@ fn docs_waiver_rejects_gate_edits_renames_cut_files_and_another_app() {
             &s.hub,
             &REMI.parse().unwrap(),
             3,
-            &conary_core::Policy::parse(b"{}").unwrap(),
+            &docs_policy(),
             crate::sim::settings(),
             &["owner".into()]
         )
@@ -217,11 +217,13 @@ fn a_retargets_own_docs_or_whole_gate_decides_proofs_and_red() {
         Run::whole(2, "next", "success").going(),
     ] {
         let s = on_base("next");
+        s.hub.touch(&head(3), &["docs/guide.md"]);
         let f = s.read(&[Run::docs(1, TRUNK, "success"), extra], &["proof"]);
         assert_eq!(next(&f, &s.memory, 4000).0.stage, Stage::Ci);
     }
     for old in ["success", "failure"] {
         let s = on_base("next");
+        s.hub.touch(&head(3), &["docs/guide.md"]);
         let f = s.read(
             &[Run::docs(1, TRUNK, old), Run::whole(2, "next", "success")],
             &["proof"],
@@ -229,6 +231,7 @@ fn a_retargets_own_docs_or_whole_gate_decides_proofs_and_red() {
         assert!(at_proof(&next(&f, &s.memory, 4000).0));
     }
     let s = on_base("next");
+    s.hub.touch(&head(3), &["docs/guide.md"]);
     let f = s.read(
         &[
             Run::docs(1, TRUNK, "success"),

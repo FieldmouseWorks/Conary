@@ -191,6 +191,7 @@ pub fn read(
         &pull.head.sha,
         &pull.base.name,
         &paths,
+        facts.classified.docs,
         &extra.suites,
         &facts.settings,
     )?;

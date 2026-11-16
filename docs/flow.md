@@ -166,10 +166,13 @@ The machine names its trusted signer, required checks and negative check in
 [service producer keys file](service-attestation.md#machine-configuration).
 Every check on the head must be green, but only the evidence the machine
 names must have a verified attestation for the head's exact tree: the checks
-in `evidence.require`, the configured proofs (unless the PR is docs-only) and
-the negative. Each needs a [CI attestation](ci-attestation.md) from that
+in `evidence.require`, every spelling of each configured proof among the
+head's checks, and the negative. Each needs a [CI attestation](ci-attestation.md) from that
 signer on its default branch, or a [service attestation](service-attestation.md)
-from a producer key trusted for that check. Any other green check counts as
+from a producer key trusted for that check. A docs-only PR needs no proofs,
+and is docs-only only when its docs lane is green and the machine's class
+policy names every path it touches documentation: anyone's job can carry the
+docs lane's name on a change to code. Any other green check counts as
 green alone, the way the train counts its candidate's checks beyond its
 `require`: a PR's own CI can't attest its head, since a `pull_request` job's
 token names GitHub's test merge and not the head, and a status can't attest
