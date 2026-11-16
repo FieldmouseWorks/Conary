@@ -413,3 +413,53 @@ body changed between the dry pass and that read is an error, never a
 comparison. It writes nothing, as a dry run.
 Run right after the steward's own pass, it shows where the two part before
 any repository switches over.
+
+### Where the shadow differs from the steward
+
+Each kind of disagreement remi's shadow showed (2026-11-13 to 11-16,
+[#410](https://github.com/FieldmouseWorks/Conary/issues/410)) was judged
+against what GitHub shows for the PR. A kind where the flow was wrong is
+fixed and isn't listed. These are the rest. A disagreement of one of these
+kinds is accounted for; any other is a finding.
+
+**The steward settles on work the flow doesn't count.** The flow counts a
+review only by its scoped marker (head, base branch, title and body, and the
+review's completion time), and grants nothing on it without the producer's
+attestation ([Producer evidence](#producer-evidence)); a judgment only as a
+sealed issuance with its basis; and a job only one it started. The steward's
+reviews are `codex-review:v1` markers, whose fingerprint covers the body
+alone and which carry no completion time; its judgments are
+`autoland-judgment:` markers with no basis; nothing attests either. So where
+the steward has settled a PR on them, the flow still wants a review or a
+judge: stage `review`, step `LeaveTrain` for a PR in the train. Example:
+remi#1355 at f97d267, where Codex found nothing, every thread was resolved,
+`review-settled` was green and the steward had it gating in the train, and
+the flow said `review`/`LeaveTrain`. The same holds in the steward's other
+stages (remi#1314: steward `ci`, flow `review`), for its judge (remi#1301:
+the steward's judge said land, the flow asks a judge), and while the
+steward's own fix job has the branch. A dry run has no memory of when it
+first saw a head, so it gives this as "Waiting for the head or answered
+findings to settle" where a live pass would queue the review. It ends at S1,
+when the flow's own reviewer and judge publish what it counts; a PR still
+open then gets one fresh review.
+
+**The steward counts a green check that no producer attested.** The flow
+counts every green check only with its attestation. burrow's CI attests
+`check / negative` but not `check / commits`, so the run's one attestation
+is the negative job's, and a PR the flow would grant permission waits at
+`proof` on "check / commits: …: its token is check run N's, not M's".
+Example: remi#1321 at 3e8ba4f, in the steward's train. burrow's CI attests
+that job before S1
+([burrow#1183](https://github.com/FieldmouseWorks/burrow/issues/1183)).
+
+**The steward is a pass behind.** Not a difference: the steward's next pass
+says what the flow said. Right after the steward posts a review with
+findings, its status can still say "Findings answered; review round N next"
+while the flow reads the new thread and says `fix` (remi#1311: the review at
+04:03:49Z, that status at 04:04:10Z, "1 open review thread" at 04:06:12Z).
+After a fix job's answers go up the steward says `fix`, "reading the PR
+again", while the flow already says `review` (remi#1311 at 04:18Z). It's
+harmless because the comparison acts on nothing and the steward acts on its
+own next read. The comparison can't mark it: each side reads GitHub once,
+and nothing there says the steward's word is a pass old. A lag is a
+disagreement that the next line about the PR doesn't repeat.
