@@ -55,6 +55,7 @@ impl Occupancy {
                 let mut memory = record.memory.clone();
                 super::ledger::raised(&mut facts, &mut memory, ledger);
                 super::observe::hydrate(&mut facts, record, pass.now, true)?;
+                facts.paused = super::pause::read(pass.root, repo)?.filter(|p| p.covers(*number));
                 super::observe::issuances(&mut facts, &memory);
                 if let Some(ledger) = ledger {
                     super::observe::train(&mut facts, ledger);

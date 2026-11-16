@@ -194,6 +194,9 @@ impl Pass<'_> {
                     super::ledger::classify(self, github, &mut facts, &mut record, store)?;
                 }
                 super::observe::hydrate(&mut facts, &record, self.now, self.dry_run)?;
+                // Read afresh before each PR's decision: a pause written
+                // during the pass stops the PRs after it.
+                facts.paused = super::pause::read(self.root, repo)?.filter(|p| p.covers(pr));
                 occupancy.apply(&mut facts, self.now)?;
                 if let Some(ledger) = store.as_deref().map(Store::ledger).or(self.ledger) {
                     super::observe::train(&mut facts, ledger);
@@ -280,6 +283,11 @@ impl Pass<'_> {
                         Ok(succeeded) => {
                             record.succeeded.extend(succeeded);
                         }
+                        // A pause the effect read is no failure: the next
+                        // decision reads it.
+                        Err((_, error)) if error.is::<super::pause::Paused>() => {
+                            report.error = Some(error.to_string());
+                        }
                         Err((kind, error)) => {
                             if let Step::PostReview(role) = &next.step
                                 && kind == Failure::Post
@@ -362,6 +370,8 @@ impl Pass<'_> {
             // A proof's preparation is the proof plugin's to answer.
             Purpose::Proof | Purpose::Prepare => "proof",
         };
+        // Paused since its decision: nothing is saved or launched.
+        super::pause::effect(self.root, &facts.repo, facts.number)?;
         let executable = self
             .path(kind)
             .ok_or("plugin is not configured")?

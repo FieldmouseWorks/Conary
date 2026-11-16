@@ -16,6 +16,11 @@ pub(crate) fn act<G: Write>(
     mut store: Option<&mut Store>,
 ) -> Effect {
     let kind = failure(&next.step);
+    // A pause written since the decision keeps every effect but the ones
+    // that vacate from starting, before any permission is granted.
+    if !super::pause::vacates(&next.step) {
+        super::pause::effect(pass.root, &f.repo, f.number).map_err(|e| (kind, e))?;
+    }
     let repo = f.repo.to_string();
     // Revocation is safety critical; cosmetic label failure must never
     // preserve an earlier success, including while a retry is booked.
@@ -211,12 +216,30 @@ pub(crate) fn act<G: Write>(
                 return Err("proof output awaits independently attested GitHub evidence".into());
             }
             Step::StopJob(id) => {
+                let why = if f.paused.is_some() {
+                    super::pause::Stop::Paused
+                } else if f.labels.contains(&f.settings.hold_label) {
+                    super::pause::Stop::Held
+                } else {
+                    super::pause::Stop::Obsolete
+                };
                 let work = record
                     .jobs
                     .iter()
                     .find(|w| &w.job.id == id)
                     .ok_or("job missing")?;
-                jobs::cancel(work)?;
+                jobs::cancel(work, why)?;
+                // A pause or a hold stops all its work at once, not one
+                // worker a pass: every other one it's stopping too.
+                if why != super::pause::Stop::Obsolete {
+                    for work in record
+                        .jobs
+                        .iter()
+                        .filter(|w| record.memory.stopping.contains(&w.job.id))
+                    {
+                        jobs::cancel(work, why)?;
+                    }
+                }
             }
             Step::UpdateBranch => github.update(&repo, f.number, &f.revision.head)?,
             Step::Merge => {
@@ -242,6 +265,8 @@ pub(crate) fn act<G: Write>(
                     f.number,
                     crate::train::messages(&commits)?.iter().map(String::as_str),
                 );
+                // The last look before the merge's intent is saved.
+                super::pause::effect(pass.root, &f.repo, f.number)?;
                 super::ledger::begin(f, record)?;
                 let status = status.expect("permission checked above");
                 record.landing.as_mut().expect("saved intent").permission =
@@ -291,6 +316,7 @@ pub(crate) fn act<G: Write>(
                     reviewers: f.settings.review_authors.iter().cloned().collect(),
                     own_contexts: vec![SETTLED.into(), crate::train::CONTEXT.into()],
                 };
+                super::pause::effect(pass.root, &f.repo, f.number)?;
                 let joined = crate::train::join(
                     store,
                     github,

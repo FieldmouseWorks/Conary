@@ -576,6 +576,12 @@ pub struct Facts {
     pub jobs: BTreeMap<Kind, Job>,
     pub claims: Vec<FixClaim>,
     pub stopped_jobs: BTreeSet<String>,
+    /// The ids of this PR's workers that haven't answered: the work a pause
+    /// or a hold stops.
+    pub working: BTreeSet<String>,
+    /// The repository's pause, when one covers this PR, read right before
+    /// this decision.
+    pub paused: Option<super::pause::Pause>,
     pub pushes: BTreeMap<String, String>,
     /// Every review thread on GitHub, by its id.
     pub threads: BTreeMap<String, ReviewThread>,

@@ -379,6 +379,8 @@ mod flow_pass_service;
 
 mod flow_pass_slots;
 
+mod flow_pause;
+
 mod flow_pass_landing;
 
 mod flow_pass_r3;

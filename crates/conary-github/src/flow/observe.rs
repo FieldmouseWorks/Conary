@@ -12,14 +12,15 @@ pub(crate) fn hydrate(f: &mut Facts, record: &Record, now: u64, dry_run: bool) -
             jobs::completion(work, now)?
         };
         let mut job = work.job.clone();
-        if std::fs::read(work.path.with_extension("cancel"))
-            .ok()
-            .as_deref()
-            == Some(b"obsolete\n")
-            && completion.result.is_some()
-        {
+        // Stopped work, obsolete, paused or held, is neither an answer nor
+        // a failure: it's retired, and its request starts again if it's
+        // still wanted.
+        if jobs::stopped(work).is_some() && completion.result.is_some() {
             f.stopped_jobs.insert(job.id.clone());
             continue;
+        }
+        if completion.result.is_none() {
+            f.working.insert(job.id.clone());
         }
         job.state = match &completion.result {
             None => JobState::Running,

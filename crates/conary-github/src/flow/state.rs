@@ -37,6 +37,7 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
     m.stopping.retain(|id| !m.retired_jobs.contains(id));
     m.answered_jobs.extend(m.retired_jobs.iter().cloned());
     raised.jobs.retain(|_, j| !m.retired_jobs.contains(&j.id));
+    raised.working.retain(|id| !m.retired_jobs.contains(id));
     raised
         .proof_data
         .records
@@ -236,6 +237,7 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
             && f.classified.class != Class::R2
             && !red;
     let owner_notice = if f.draft
+        || f.paused.is_some()
         || !f.open
         || f.labels.contains(&f.settings.hold_label)
         || f.stacked_on.is_some()
@@ -264,8 +266,10 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
     } else {
         None
     };
+    // A pause is the owner's switch, never a stall.
     let watched = owner_notice.is_none()
         && !(f.draft
+            || f.paused.is_some()
             || !f.open
             || (f.stacked_on.is_some() && stage == Stage::Base)
             || matches!(step, Step::ListOwner));
@@ -347,7 +351,7 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
     };
     (
         Next {
-            stage: if f.draft || f.labels.contains(&f.settings.hold_label) {
+            stage: if f.draft || f.paused.is_some() || f.labels.contains(&f.settings.hold_label) {
                 Stage::None
             } else {
                 stage

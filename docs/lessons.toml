@@ -164,7 +164,7 @@ lesson = "An off switch never depends on the pipeline it stops: it takes effect 
 from = ["https://github.com/FieldmouseWorks/remi/pull/980", "https://github.com/FieldmouseWorks/burrow/issues/647", "https://github.com/FieldmouseWorks/burrow/issues/655"]
 applies = ["flow settings", "per-repository landing ownership", "M6 slice 5d"]
 status = "designed"
-where = ["docs/DESIGN.md#properties", "https://github.com/FieldmouseWorks/Conary/issues/312", "https://github.com/FieldmouseWorks/Conary/issues/313", "docs/m6.md#what-m6-doesnt-port", "https://github.com/FieldmouseWorks/Conary/issues/314"]
+where = ["docs/DESIGN.md#properties", "https://github.com/FieldmouseWorks/Conary/issues/312", "https://github.com/FieldmouseWorks/Conary/issues/313", "docs/m6.md#what-m6-doesnt-port", "https://github.com/FieldmouseWorks/Conary/issues/314", "docs/flow.md#pause-and-hold", "crates/cn/tests/flow_pause.rs"]
 
 [[lessons]]
 id = "reusable-modules"
@@ -179,8 +179,8 @@ id = "pause-vacates"
 lesson = "Pausing frees every slot, lane and proof the paused work holds at once, and keeps its state so unpausing redoes nothing."
 from = ["https://github.com/FieldmouseWorks/burrow/issues/647"]
 applies = ["flow", "per-repository landing ownership", "M6 slice 5d", "M6 slice 5c"]
-status = "designed"
-where = ["docs/DESIGN.md#properties", "https://github.com/FieldmouseWorks/Conary/issues/312", "https://github.com/FieldmouseWorks/Conary/issues/313", "docs/m6.md#what-m6-doesnt-port", "docs/m6-plugins.md#restart-and-cancellation"]
+status = "built"
+where = ["docs/DESIGN.md#properties", "https://github.com/FieldmouseWorks/Conary/issues/312", "https://github.com/FieldmouseWorks/Conary/issues/313", "docs/m6.md#what-m6-doesnt-port", "docs/m6-plugins.md#restart-and-cancellation", "docs/flow.md#pause-and-hold", "crates/conary-github/src/sim/tests/flow_pause.rs"]
 
 [[lessons]]
 id = "spend-only-where-needed"

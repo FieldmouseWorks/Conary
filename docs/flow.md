@@ -283,6 +283,40 @@ The example's canned responses cannot authorize a real landing. The simulation
 tests supply independent signed producer records separately. No plugin
 response is inserted into the ledger as an attestation.
 
+## Pause and hold
+
+`cn flow pause OWNER/REPO --reason TEXT` pauses a repository and
+`cn flow resume OWNER/REPO` lifts it. They write and remove one file,
+`pause`, in the repository's directory under `--data`, and need no conaryd,
+GitHub, token, configuration, build or deploy. They take no lock, so a pass
+in progress doesn't keep them off; a second pause replaces the first, and
+resuming what isn't paused does nothing. The pause names its scope, the
+whole repository; a narrower scope is another kind of the same pause,
+never a second one.
+
+Every pass reads the pause before each PR's decision, so one written during
+a pass stops the PRs after it, and again before each effect: a plugin
+start, a grant of landing permission, a merge or a train admission. An
+effect a pause keeps off is no failure and no strike. Only what takes work
+off goes ahead while paused: stopping a worker, leaving the train and
+taking GitHub's queued merge off. A pause that can't be read stops every
+decision with its error; it never reads as no pause.
+
+A paused PR, and a PR with the hold label, vacates. Each of its workers
+that hasn't answered (review, fix, judge, preparation or proof) is asked to
+stop at once, through the same stop path as obsolete work, its marker
+saying `paused` or `held`. Its proof slot frees when its worker ends, as
+any cancelled proof's does, and nothing new starts. A stopped worker is
+retired: never a failure, a strike or a lost job. Its PR keeps its Memory,
+receipts and branch. A paused PR then waits with its reason, outside every
+stage and never overdue; a held one waits where it always has.
+
+Lifting either carries on from the saved state. What a worker finished
+stays, so no review, fix, preparation or proof answer is redone, and a
+stopped worker's request starts again if it's still wanted. The merge
+train's own stepping (`cn train step`) isn't a pass and doesn't read the
+pause; a paused PR leaves the train at its next decision.
+
 ## Effects and retries
 
 The executor revokes previous permission before cosmetic stage-label writes.

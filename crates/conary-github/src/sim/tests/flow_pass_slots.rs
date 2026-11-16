@@ -6,7 +6,7 @@ use crate::flow::jobs::Purpose;
 use crate::flow::*;
 use serde_json::json;
 
-fn two(slots: u32) -> Case {
+pub(super) fn two(slots: u32) -> Case {
     let mut c = Case::new();
     c.config.settings.proof_slots = Some(slots);
     c.config
@@ -52,7 +52,7 @@ fn kick(c: &Case, pr: u64, dry: bool, now: u64) -> Vec<Report> {
 }
 /// Both PRs' preparations launched by a real pass at `now`, and answered
 /// ready, needing a slot or not. Nothing else is left launched.
-fn prepared(c: &Case, now: u64, slot: bool) {
+pub(super) fn prepared(c: &Case, now: u64, slot: bool) {
     let reports = c.pass(now, false);
     for report in &reports {
         assert_eq!(report.next.as_ref().unwrap().step, Step::Prepare);
@@ -60,11 +60,15 @@ fn prepared(c: &Case, now: u64, slot: bool) {
     c.prepared(slot, None);
     assert!(c.deferred.0.borrow().is_empty());
 }
-fn step(reports: &[Report], at: usize) -> (Stage, Step) {
+pub(super) fn step(reports: &[Report], at: usize) -> (Stage, Step) {
     let next = reports[at].next.as_ref().unwrap();
     (next.stage, next.step.clone())
 }
-fn work(c: &Case, pr: u64, purpose: fn(&Purpose) -> bool) -> Vec<crate::flow::jobs::Work> {
+pub(super) fn work(
+    c: &Case,
+    pr: u64,
+    purpose: fn(&Purpose) -> bool,
+) -> Vec<crate::flow::jobs::Work> {
     Data::read(c.dir.path(), &REPO.parse().unwrap(), pr)
         .unwrap()
         .jobs
@@ -72,7 +76,7 @@ fn work(c: &Case, pr: u64, purpose: fn(&Purpose) -> bool) -> Vec<crate::flow::jo
         .filter(|w| purpose(&w.purpose))
         .collect()
 }
-const WAITING: (Stage, Step) = (Stage::ProofSlot, Step::Wait { until: None });
+pub(super) const WAITING: (Stage, Step) = (Stage::ProofSlot, Step::Wait { until: None });
 
 #[test]
 fn full_and_dry_passes_enforce_repository_proof_slots() {
