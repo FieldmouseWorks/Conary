@@ -32,7 +32,6 @@ pub(super) struct Result {
     pub has_ci: bool,
     /// Effective producer runs, selected by the same scope/replacement rules.
     pub runs: Vec<CheckRun>,
-    pub statuses: BTreeSet<String>,
 }
 
 const LANE: &str = "lane into ";
@@ -177,12 +176,17 @@ fn replacement(
 /// Evaluate one consistent set of check and suite reads. Annotation reads are
 /// lazy: a replacement run clears an old cancellation without asking why the
 /// old run stopped. API failure propagates, never guesses a timeout verdict.
+/// `documentation` is whether the machine's policy names every path of
+/// `paths` documentation: the docs lane's word alone, a job anyone's PR
+/// can name, never waives a proof.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn checks(
     source: &dyn Read,
     repo: &str,
     head: &str,
     base: &str,
     paths: &Paths,
+    documentation: bool,
     suites: &BTreeMap<u64, Suite>,
     settings: &Settings,
 ) -> std::result::Result<Result, ApiError> {
@@ -223,12 +227,14 @@ pub(super) fn checks(
         .filter(|(_, (b, f))| *b != base || f.is_some_and(|f| fork.as_deref() != Some(f)))
         .filter_map(|(r, _)| suite_id(r))
         .collect();
-    let docs = said.iter().any(|(r, (_, f))| {
-        f.is_some()
-            && !suite_id(r).is_some_and(|id| stale.contains(&id))
-            && r.status == "completed"
-            && r.conclusion.as_deref() == Some("success")
-    }) && !paths.cut
+    let docs = documentation
+        && said.iter().any(|(r, (_, f))| {
+            f.is_some()
+                && !suite_id(r).is_some_and(|id| stale.contains(&id))
+                && r.status == "completed"
+                && r.conclusion.as_deref() == Some("success")
+        })
+        && !paths.cut
         && !paths.files.iter().any(|p| {
             std::iter::once(p.path.as_str())
                 .chain(p.from.as_deref())
@@ -334,7 +340,6 @@ pub(super) fn checks(
         proofs.iter().map(|p| (p.to_lowercase(), p)).collect()
     };
     let mut seen = BTreeSet::new();
-    let mut successful_statuses = BTreeSet::new();
     for status in source.statuses(repo, head)? {
         let name = status.context.to_lowercase();
         let train = name == crate::train::CONTEXT.to_ascii_lowercase();
@@ -362,9 +367,6 @@ pub(super) fn checks(
             "pending" | "expected" => Ci::Pending,
             _ => Ci::Red,
         };
-        if state == Ci::Green {
-            successful_statuses.insert(status.context.clone());
-        }
         checks.push(Check {
             name: spelling.get(&name).map_or(status.context, |p| (*p).clone()),
             state,
@@ -383,6 +385,5 @@ pub(super) fn checks(
         docs,
         has_ci,
         runs: effective.into_values().collect(),
-        statuses: successful_statuses,
     })
 }

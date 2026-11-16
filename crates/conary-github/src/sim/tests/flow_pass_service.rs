@@ -256,10 +256,15 @@ fn proving(recipe: &Recipe) -> (Case, tempfile::TempDir) {
 /// The proof's pass on the head, as the service signed it, having run
 /// what `definition` defines.
 fn proved(c: &Case, definition: Option<String>) {
+    proved_as(c, PROOF, definition);
+}
+
+/// [`proved`], for the check spelled `name`.
+fn proved_as(c: &Case, name: &str, definition: Option<String>) {
     let tree = Branches::tree(&c.hub, REPO, &head(3)).unwrap();
-    let mut s = testing::service_statement(REPO, &head(3), &tree, PROOF, &"0".repeat(64));
+    let mut s = testing::service_statement(REPO, &head(3), &tree, name, &"0".repeat(64));
     s.definition = definition;
-    post(c, &head(3), PROOF, "success", &sign(&s, &producer_key()));
+    post(c, &head(3), name, "success", &sign(&s, &producer_key()));
 }
 
 #[test]
@@ -326,4 +331,46 @@ fn a_ci_attestation_cannot_prove_a_check_the_machine_defines() {
         next.description
     );
     pending(&c, "a CI pass of a defined proof");
+}
+
+#[test]
+fn every_spelling_of_a_proof_needs_the_services_statement() {
+    // GitHub's check names ignore case, so `Proof` and `proof` are both the
+    // proof's passes: the service's statement of one doesn't cover the other.
+    let recipe = Recipe::Build("checks.tests".into());
+    let definition = Some(recipe_digest(&recipe));
+    for both in [false, true] {
+        let file = producers_file(&[(
+            PRODUCER,
+            &producer_key(),
+            &["conary/review/*", "negative", PROOF, "Proof"],
+        )]);
+        let (mut c, _keys) = case(&file);
+        c.config
+            .settings
+            .proofs
+            .insert(PROOF.into(), recipe.clone());
+        review(&c, &producer_key(), |_| {}, |t| t);
+        negative(&c, "fail");
+        proved_as(&c, "Proof", definition.clone());
+        if both {
+            proved_as(&c, PROOF, definition.clone());
+        } else {
+            post(&c, &head(3), PROOF, "success", "");
+        }
+        let reports = c.pass(jobs::now(), false);
+        if both {
+            assert_eq!(reports[0].error, None);
+            assert!(landed(&c), "{:?}", reports[0].next);
+        } else {
+            let next = reports[0].next.as_ref().unwrap();
+            assert_eq!(next.step, Step::Wait { until: None });
+            assert!(
+                next.description.starts_with("proof: "),
+                "{}",
+                next.description
+            );
+            pending(&c, "an unattested spelling beside an attested one");
+        }
+    }
 }

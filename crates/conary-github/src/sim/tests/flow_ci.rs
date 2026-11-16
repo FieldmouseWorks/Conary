@@ -465,6 +465,11 @@ fn docs_lane_waives_only_proofs_for_a_complete_trusted_diff() {
     // docs.py: workflow edits, rename sources and incomplete paths never waive.
     let s = Scenario::new();
     let docs = Run::docs(1, TRUNK, "success");
+    // The lane's word alone waives nothing: a job of that name says so of a
+    // change to code too, and the machine's policy says it isn't docs.
+    let f = s.read(std::slice::from_ref(&docs), &["agents"]);
+    assert_eq!(f.proof, Proof::Needed);
+    s.hub.touch(&head(3), &["docs/guide.md"]);
     let f = s.read(std::slice::from_ref(&docs), &["agents"]);
     assert_eq!(f.proof, Proof::NotNeeded);
     assert_eq!(next(&f, &s.memory, 4000).0.step, Step::Merge);

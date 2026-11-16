@@ -194,10 +194,20 @@ in dry runs as well as mutating passes.
 The machine names its trusted signer, required checks and negative check in
 `evidence`, and can set `evidence.producers` to its
 [service producer keys file](service-attestation.md#machine-configuration).
-All counted green checks must have a verified attestation for the head's
-exact tree: a [CI attestation](ci-attestation.md) from that signer on its
-default branch, or a [service attestation](service-attestation.md) from a
-producer key trusted for that check. Verification uses the CI reader's effective workflow
+Every check on the head must be green, but only the evidence the machine
+names must have a verified attestation for the head's exact tree: the checks
+in `evidence.require`, every spelling of each configured proof among the
+head's checks, and the negative. Each needs a [CI attestation](ci-attestation.md) from that
+signer on its default branch, or a [service attestation](service-attestation.md)
+from a producer key trusted for that check. A docs-only PR needs no proofs,
+and is docs-only only when its docs lane is green and the machine's class
+policy names every path it touches documentation: anyone's job can carry the
+docs lane's name on a change to code. Any other green check counts as
+green alone, the way the train counts its candidate's checks beyond its
+`require`: a PR's own CI can't attest its head, since a `pull_request` job's
+token names GitHub's test merge and not the head, and a status can't attest
+at all. So `evidence.require` names only checks a producer can attest for a
+PR's head. Verification uses the CI reader's effective workflow
 and target selection: replaced cancellations, obsolete target suites and
 skipped jobs are not reintroduced as evidence requirements. Producer receipts
 verify the latest effective issuance, including across workflow changes,
@@ -472,15 +482,6 @@ first saw a head, so it gives this as "Waiting for the head or answered
 findings to settle" where a live pass would queue the review. It ends at S1,
 when the flow's own reviewer and judge publish what it counts; a PR still
 open then gets one fresh review.
-
-**The steward counts a green check that no producer attested.** The flow
-counts every green check only with its attestation. burrow's CI attests
-`check / negative` but not `check / commits`, so the run's one attestation
-is the negative job's, and a PR the flow would grant permission waits at
-`proof` on "check / commits: …: its token is check run N's, not M's".
-Example: remi#1321 at 3e8ba4f, in the steward's train. burrow's CI attests
-that job before S1
-([burrow#1183](https://github.com/FieldmouseWorks/burrow/issues/1183)).
 
 **The steward is a pass behind.** Not a difference: the steward's next pass
 says what the flow said. Right after the steward posts a review with
