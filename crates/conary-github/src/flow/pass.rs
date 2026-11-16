@@ -8,23 +8,57 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// The executables the flow starts its work with. An omitted one leaves its
+/// step waiting.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct Plugins {
+    /// The review plugin's executable.
+    #[schemars(extend("x-spender" = true))]
     pub review: Option<PathBuf>,
+    /// The fix plugin's executable.
+    #[schemars(extend("x-spender" = true))]
     pub fix: Option<PathBuf>,
+    /// The judge plugin's executable.
+    #[schemars(extend("x-spender" = true))]
     pub judge: Option<PathBuf>,
+    /// The proof plugin's executable.
+    #[schemars(extend("x-spender" = true))]
     pub proof: Option<PathBuf>,
 }
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// The flow's configuration file, reread at each pass.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
+    /// The machine's settings.
+    #[schemars(extend("x-spender" = false))]
     pub settings: Settings,
+    /// The authors whose PRs the flow works; anyone else's goes to the
+    /// owner as an outside contribution.
+    #[schemars(extend("x-spender" = false))]
     pub trusted_authors: Vec<String>,
+    /// The plugins the flow starts its work with.
+    #[schemars(extend("x-spender" = false))]
     pub plugins: Plugins,
-    /// Kind (review/fix/judge) -> machine-supplied execution choices.
+    /// The engine, model and effort each plugin kind is asked to run with.
+    #[schemars(extend("x-spender" = false), transform = kinds)]
     pub execution: BTreeMap<conary_core::plugin::Kind, conary_core::plugin::Choice>,
+    /// The verifier of producers' evidence. Unset, permission to land waits.
+    #[schemars(extend("x-spender" = false))]
     pub evidence: Option<Evidence>,
+}
+/// Keys of `execution` are plugin kinds, as the plugin contract names them.
+fn kinds(schema: &mut schemars::Schema) {
+    let mut kind = schemars::schema_for!(conary_core::plugin::Kind);
+    kind.remove("$schema");
+    kind.remove("title");
+    schema.insert("propertyNames".into(), kind.to_value());
+}
+impl Config {
+    /// The one loader of a flow configuration file, for every reader of it.
+    pub fn load(path: &Path) -> Result<Self> {
+        Ok(serde_json::from_slice(&std::fs::read(path)?)?)
+    }
 }
 #[derive(Debug, Serialize)]
 pub struct Report {

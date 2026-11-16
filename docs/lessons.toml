@@ -107,8 +107,8 @@ id = "spenders-off-by-default"
 lesson = "Anything that starts paid work is off or zero until someone turns it on."
 from = ["https://github.com/FieldmouseWorks/burrow/issues/647", "https://github.com/FieldmouseWorks/remi/issues/981"]
 applies = ["flow settings", "M6 slice 5d", "M7 standalone setup", "M6 slice 5c"]
-status = "designed"
-where = ["docs/DESIGN.md#properties", "https://github.com/FieldmouseWorks/Conary/issues/312", "https://github.com/FieldmouseWorks/Conary/issues/378", "crates/conary-github/src/sim/tests/flow_defaults.rs", "docs/DESIGN.md#m7s-setup-path", "docs/m6-plugins.md#ground-rules-for-every-task", "https://github.com/FieldmouseWorks/Conary/issues/314"]
+status = "built"
+where = ["docs/DESIGN.md#properties", "https://github.com/FieldmouseWorks/Conary/issues/312", "https://github.com/FieldmouseWorks/Conary/issues/378", "crates/conary-github/src/sim/tests/flow_defaults.rs", "docs/DESIGN.md#m7s-setup-path", "docs/m6-plugins.md#ground-rules-for-every-task", "https://github.com/FieldmouseWorks/Conary/issues/314", "crates/conary-github/src/flow/schema.rs", "crates/conary-github/tests/flow_settings.rs"]
 
 [[lessons]]
 id = "one-settings-source"
@@ -116,7 +116,7 @@ lesson = "Settings have one self-describing schema that a settings source import
 from = ["https://github.com/FieldmouseWorks/burrow/issues/655"]
 applies = ["flow settings", "M6 slice 5d", "M7 standalone setup"]
 status = "designed"
-where = ["docs/DESIGN.md#properties", "docs/DESIGN.md#61-execution-choices-and-independent-judging", "https://github.com/FieldmouseWorks/Conary/issues/312", "docs/DESIGN.md#m7s-setup-path", "https://github.com/FieldmouseWorks/Conary/issues/313"]
+where = ["docs/DESIGN.md#properties", "docs/DESIGN.md#61-execution-choices-and-independent-judging", "https://github.com/FieldmouseWorks/Conary/issues/312", "docs/DESIGN.md#m7s-setup-path", "https://github.com/FieldmouseWorks/Conary/issues/313", "docs/flow.md#the-settings-schema", "crates/conary-github/src/flow/schema.rs", "crates/conary-github/tests/flow_settings.rs", "https://github.com/FieldmouseWorks/Conary/issues/428"]
 
 [[lessons]]
 id = "live-settings"
@@ -124,7 +124,7 @@ lesson = "Every setting is live, read at the next decision; one that needs a dep
 from = ["https://github.com/FieldmouseWorks/burrow/issues/655"]
 applies = ["flow settings", "conaryd", "M6 slice 5d", "M7 standalone setup"]
 status = "designed"
-where = ["docs/DESIGN.md#properties", "docs/flow.md", "https://github.com/FieldmouseWorks/Conary/issues/312", "docs/DESIGN.md#m7s-setup-path", "docs/m6.md#what-m6-doesnt-port", "https://github.com/FieldmouseWorks/Conary/issues/313"]
+where = ["docs/DESIGN.md#properties", "docs/flow.md", "https://github.com/FieldmouseWorks/Conary/issues/312", "docs/DESIGN.md#m7s-setup-path", "docs/m6.md#what-m6-doesnt-port", "https://github.com/FieldmouseWorks/Conary/issues/313", "docs/conaryd.md#verified-flow-events", "crates/conary-github/src/events/runtime.rs", "crates/conary-github/tests/flow_settings.rs", "https://github.com/FieldmouseWorks/Conary/issues/428"]
 
 [[lessons]]
 id = "explicit-priority"

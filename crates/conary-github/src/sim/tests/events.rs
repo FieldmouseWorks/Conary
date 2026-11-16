@@ -49,7 +49,12 @@ fn report(at: u64) -> Report {
 fn signatures_reject_before_queueing() {
     let dir = tempfile::tempdir().unwrap();
     let queue = Queue::open(dir.path()).unwrap();
-    let mut receiver = Receiver::open(b"secret".to_vec(), ["o/r".into()], dir.path()).unwrap();
+    let mut receiver = Receiver::open(
+        b"secret".to_vec(),
+        Box::new(|| Ok(vec!["o/r".into()])),
+        dir.path(),
+    )
+    .unwrap();
     let body = payload();
     let good = signature(b"secret", &body);
     let wrong = signature(b"wrong", &body);
@@ -77,7 +82,12 @@ fn signatures_reject_before_queueing() {
 fn replay_survives_restart_and_size_and_allowlist_are_enforced() {
     let dir = tempfile::tempdir().unwrap();
     let queue = Queue::open(dir.path()).unwrap();
-    let mut receiver = Receiver::open(b"s".to_vec(), ["o/r".into()], dir.path()).unwrap();
+    let mut receiver = Receiver::open(
+        b"s".to_vec(),
+        Box::new(|| Ok(vec!["o/r".into()])),
+        dir.path(),
+    )
+    .unwrap();
     let body = payload();
     let sig = signature(b"s", &body);
     assert_eq!(
@@ -87,7 +97,12 @@ fn replay_survives_restart_and_size_and_allowlist_are_enforced() {
     let work = queue.take(1).unwrap().unwrap();
     queue.finish(&work, &[], 1).unwrap();
     drop(receiver);
-    let mut receiver = Receiver::open(b"s".to_vec(), ["o/r".into()], dir.path()).unwrap();
+    let mut receiver = Receiver::open(
+        b"s".to_vec(),
+        Box::new(|| Ok(vec!["o/r".into()])),
+        dir.path(),
+    )
+    .unwrap();
     assert_eq!(
         receiver.receive(Some(&sig), "id", "pull_request", &body, 2, &queue),
         202
@@ -201,7 +216,12 @@ fn signed_pull_event_runs_flow_against_hub() {
     let c = Case::new();
     let dir = tempfile::tempdir().unwrap();
     let queue = Queue::open(dir.path()).unwrap();
-    let mut receiver = Receiver::open(b"s".to_vec(), [REPO.into()], dir.path()).unwrap();
+    let mut receiver = Receiver::open(
+        b"s".to_vec(),
+        Box::new(|| Ok(vec![REPO.into()])),
+        dir.path(),
+    )
+    .unwrap();
     let body =
         serde_json::to_vec(&json!({"repository":{"full_name":REPO}, "pull_request":{"number":3}}))
             .unwrap();

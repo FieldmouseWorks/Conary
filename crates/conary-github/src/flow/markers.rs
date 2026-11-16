@@ -16,6 +16,17 @@ impl fmt::Debug for SealKey {
         f.write_str("SealKey([redacted])")
     }
 }
+impl schemars::JsonSchema for SealKey {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "SealKey".into()
+    }
+    fn inline_schema() -> bool {
+        true
+    }
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({"type": "string", "pattern": "^[0-9a-f]{64}$"})
+    }
+}
 impl TryFrom<String> for SealKey {
     type Error = &'static str;
     fn try_from(text: String) -> Result<Self, Self::Error> {

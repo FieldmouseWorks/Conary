@@ -84,6 +84,16 @@ The file is machine-owned JSON, with unknown fields rejected:
 }
 ```
 
+conaryd reads this file again at each delivery and each pass
+(`events::Live`), so a change to an option takes effect at the next one:
+adding a repository to `repos` takes its next event, and taking one off
+retires its mailbox without a pass. `listen`, `secret_path` and `data` are
+the exceptions: conaryd binds, reads and opens them once, as it starts, and
+keeps the values it started with until it restarts. A change to one of
+those is logged once, by its name, as waiting for a restart. The
+[settings schema](flow.md#the-settings-schema) declares them so, and
+`cn flow settings --events-config PATH` lists them apart.
+
 `flow_config` is the [pass configuration](flow.md). `worker` names the installed
 `cn` executable that runs owned plugin jobs. `api` optionally overrides the
 GitHub API root. The token command has the same contract as `cn`'s token command.

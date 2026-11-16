@@ -37,13 +37,19 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     let bound = conaryd::bind(&cli.socket)
         .map_err(|e| format!("listening at {}: {e}", cli.socket.display()))?;
     if let Some(path) = &cli.events_config {
-        let config: conary_github::events::Runtime = serde_json::from_slice(&std::fs::read(path)?)?;
+        // Read again at each delivery and pass, but for the options that
+        // take effect only at a restart, which are these.
+        let live = std::sync::Arc::new(
+            conary_github::events::Live::open(path).map_err(|e| e.to_string())?,
+        );
+        let config = live.started();
         let queue = std::sync::Arc::new(
             conary_github::events::Queue::open(&config.data).map_err(|e| e.to_string())?,
         );
+        let listed = std::sync::Arc::clone(&live);
         let receiver = conary_github::events::Receiver::open(
             std::fs::read(&config.secret_path)?,
-            config.repos.iter().map(ToString::to_string),
+            Box::new(move || listed.repos()),
             &config.data,
         )
         .map_err(|e| e.to_string())?;
@@ -59,7 +65,7 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         std::thread::Builder::new().spawn(move || {
             // A failed pass books its repo's recovery; only a mailbox that
             // can't be written stops the worker.
-            if config.run(&ledger, &queue).is_err() {
+            if live.run(&ledger, &queue).is_err() {
                 eprintln!("conaryd: flow worker stopped: its mailbox can't be written");
                 std::process::exit(1);
             }
