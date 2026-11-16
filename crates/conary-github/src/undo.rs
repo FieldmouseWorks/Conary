@@ -89,14 +89,24 @@ impl Marker {
         format!("{MARKER}{json} -->")
     }
 
-    /// The marker of a PR from `branch` with `body`, if it's an undo's.
-    pub(crate) fn read(branch: &str, body: &str) -> Option<Self> {
+    /// The marker of a PR from `branch` with `body`, if it's an undo's:
+    /// `None` when the branch isn't an undo's or the body has no marker,
+    /// and an error when it has one that can't be read (a reason that's
+    /// null, not a string or given twice, say), so a malformed marker is
+    /// never taken for an ordinary PR.
+    pub(crate) fn read(branch: &str, body: &str) -> Option<Result<Self, String>> {
         attempt_of(branch)?;
         let line = body
             .lines()
             .rev()
             .find_map(|l| l.trim().strip_prefix(MARKER))?;
-        serde_json::from_str(line.strip_suffix("-->")?.trim()).ok()
+        let Some(json) = line.strip_suffix("-->") else {
+            return Some(Err("an undo marker with no end".into()));
+        };
+        Some(
+            serde_json::from_str(json.trim())
+                .map_err(|e| format!("an undo marker that doesn't parse: {e}")),
+        )
     }
 
     /// The body without its marker: what the PR's author says, not what it

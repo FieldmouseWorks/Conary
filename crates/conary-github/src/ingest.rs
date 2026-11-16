@@ -463,24 +463,30 @@ fn record_with_submission(
     let body = pr.body.clone().unwrap_or_default();
     // `cn undo` marks what its PR reverts, so the PR is read as an undo
     // whatever reads it first. A fork's branch is anyone's to name.
-    let undo = own_head(pr, repo)
+    let marked = own_head(pr, repo)
         .then(|| Undo::read(&pr.head.name, &body))
         .flatten();
-    // A legacy or blank marker must never turn an undo into an ordinary PR
-    // that could evade the undo landing rules. Recorded undos already hold
-    // their immutable record; a new one needs a reason before any ops.
-    if let Some(marker) = &undo
-        && !w
-            .store
-            .ledger()
-            .by_pr(repo, pr.number)
-            .is_some_and(|c| c.undo.is_some())
-    {
-        conary_core::op::undo_reason(&marker.reason)
-            .map_err(|_| StoreError::Invalid(Invalid::UndoReason))?;
-    }
+    // A legacy, blank or malformed marker must never turn an undo into an
+    // ordinary PR that could evade the undo landing rules. Recorded undos
+    // already hold their immutable record; a new one needs a marker that
+    // reads and a reason before any ops.
+    let recorded = w
+        .store
+        .ledger()
+        .by_pr(repo, pr.number)
+        .is_some_and(|c| c.undo.is_some());
+    let undo = match &marked {
+        None => None,
+        Some(_) if recorded => None,
+        Some(Err(what)) => return Err(IngestError::Malformed(what.clone())),
+        Some(Ok(marker)) => {
+            conary_core::op::undo_reason(&marker.reason)
+                .map_err(|_| StoreError::Invalid(Invalid::UndoReason))?;
+            Some(marker.clone())
+        }
+    };
     // Who wrote it and what for are the author's words, not the marker's.
-    let said = if undo.is_some() {
+    let said = if marked.is_some() {
         Undo::without(&body)
     } else {
         body.clone()

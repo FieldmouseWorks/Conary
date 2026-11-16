@@ -65,7 +65,9 @@ fn a_request_keeps_the_red_run_reason_in_the_body_and_signed_operation() {
             .unwrap()
             .starts_with(&format!("{REASON}\n\n"))
     );
-    let marker = Marker::read(&undo_branch(x, 1), pull["body"].as_str().unwrap()).unwrap();
+    let marker = Marker::read(&undo_branch(x, 1), pull["body"].as_str().unwrap())
+        .unwrap()
+        .unwrap();
     assert_eq!(marker.reason, REASON);
     // Another request and an edited marker cannot replace the recorded reason.
     let retry = undo(&mut store, &hub, &hub, &config(), x, "A later retry").unwrap();
@@ -164,6 +166,7 @@ fn grouped_requests_keep_the_reason_in_every_repo_and_recovery() {
                     pull["body"].as_str().unwrap()
                 )
                 .unwrap()
+                .unwrap()
                 .reason,
                 *reason
             );
@@ -240,30 +243,73 @@ fn reasonless_markers_are_refused_before_recording_instead_of_becoming_ordinary_
     }
 }
 
+/// The marker of `x`'s undo with `reason`'s JSON field(s).
+fn marker_line(x: ChangeId, reason: &str) -> String {
+    format!(r#"<!-- conary-undo: {{"reverts":["{x}"],"asked":{{"by":"change"}}{reason}}} -->"#)
+}
+
+/// Reason fields that can't be read: null, not a string, or given twice.
+const MALFORMED: [&str; 4] = [
+    r#","reason":null"#,
+    r#","reason":42"#,
+    r#","reason":["The health check broke"]"#,
+    r#","reason":"The health check broke","reason":"Something else""#,
+];
+
 #[test]
-fn a_recorded_undo_keeps_its_rules_when_its_marker_lacks_a_reason() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut store = store(&dir);
-    let hub = github();
-    let x = landed(&mut store, None);
-    let got = undo(&mut store, &hub, &hub, &config(), x, REASON).unwrap();
-    let marker = serde_json::json!({"reverts": [x], "asked": {"by": "change"}});
-    hub.edit_pull(REMI, got.pr, |p| {
-        p["body"] = format!("<!-- conary-undo: {marker} -->").into()
-    });
-    hub.steward_lands(REMI, got.pr);
-    ingest::pull(&mut store, &hub, &config(), &repo(), got.pr).unwrap();
-    assert_eq!(store.ledger().change(x).unwrap().status(), Kept::Reverted);
-    assert_eq!(
-        store
-            .ledger()
-            .change(got.change)
-            .unwrap()
-            .undo
-            .as_ref()
-            .unwrap()
-            .reason
-            .as_deref(),
-        Some(REASON)
-    );
+fn malformed_reasons_are_refused_before_recording_instead_of_becoming_ordinary_prs() {
+    for how in ["pull", "sync", "backfill", "request"] {
+        for reason in MALFORMED {
+            let dir = tempfile::tempdir().unwrap();
+            let mut store = store(&dir);
+            let hub = github();
+            let x = landed(&mut store, None);
+            let pr = stopped(&hub, x);
+            let marker = marker_line(x, reason);
+            hub.edit_pull(REMI, pr, |p| p["body"] = marker.clone().into());
+            let head = store.head();
+            let malformed = |e: &IngestError| matches!(e, IngestError::Malformed(_));
+            let refused = match how {
+                "pull" => ingest::pull(&mut store, &hub, &config(), &repo(), pr)
+                    .is_err_and(|e| malformed(&e)),
+                "sync" => {
+                    ingest::sync(&mut store, &hub, &config(), &repo()).is_err_and(|e| malformed(&e))
+                }
+                "backfill" => ingest::backfill(&mut store, &hub, &config(), &repo())
+                    .is_err_and(|e| malformed(&e)),
+                // A new request takes up the stray it finds, and refuses it.
+                _ => undo(&mut store, &hub, &hub, &config(), x, REASON)
+                    .is_err_and(|s| matches!(&*s.error, UndoError::Ingest(e) if malformed(e))),
+            };
+            assert!(refused, "{how} {reason}");
+            assert!(
+                store.ledger().by_pr(&repo(), pr).is_none(),
+                "{how} {reason}"
+            );
+            assert_eq!(store.head(), head, "{how} {reason}");
+            assert_eq!(pulls(&hub), 1, "{how} {reason}");
+        }
+    }
+}
+
+#[test]
+fn a_recorded_undo_keeps_its_rules_when_its_marker_lacks_a_reason_or_is_malformed() {
+    for reason in [""].into_iter().chain(MALFORMED) {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = store(&dir);
+        let hub = github();
+        let x = landed(&mut store, None);
+        let got = undo(&mut store, &hub, &hub, &config(), x, REASON).unwrap();
+        let marker = marker_line(x, reason);
+        hub.edit_pull(REMI, got.pr, |p| p["body"] = marker.clone().into());
+        hub.steward_lands(REMI, got.pr);
+        ingest::pull(&mut store, &hub, &config(), &repo(), got.pr).unwrap();
+        assert_eq!(
+            store.ledger().change(x).unwrap().status(),
+            Kept::Reverted,
+            "{reason}"
+        );
+        let u = store.ledger().change(got.change).unwrap();
+        assert_eq!(u.undo.as_ref().unwrap().reason.as_deref(), Some(REASON));
+    }
 }
