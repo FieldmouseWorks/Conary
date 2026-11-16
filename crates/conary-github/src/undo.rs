@@ -114,15 +114,20 @@ impl Marker {
     /// actor's undo names its session in its marker, and its reason may
     /// name it too (or an issue), and neither makes that session the undo's
     /// author or that issue its task. `reasons` are the ones the body may
-    /// open with: its marker's and the one recorded, when they read.
+    /// open with: its marker's and the one recorded, when they read. Both
+    /// are read the same way, line endings normalized and the whitespace
+    /// around them dropped, so whitespace a reason opens with doesn't keep
+    /// it from matching the trimmed body.
     pub(crate) fn without(body: &str, reasons: &[&str]) -> String {
         let body = body.replace("\r\n", "\n");
         let body = body.trim_start();
         let rest = reasons
             .iter()
             .map(|r| r.replace("\r\n", "\n"))
-            .filter(|r| !r.trim().is_empty())
-            .find_map(|r| body.strip_prefix(r.as_str()))
+            .find_map(|r| {
+                let r = r.trim();
+                (!r.is_empty()).then(|| body.strip_prefix(r)).flatten()
+            })
             .unwrap_or(body);
         rest.lines()
             .filter(|l| !l.trim().starts_with(MARKER))
