@@ -1,0 +1,459 @@
+{
+  "live": [
+    "judge"
+  ],
+  "cleanup": [
+    "obsolete"
+  ],
+  "landing": {
+    "permission": {
+      "login": "controller",
+      "at": "2026-11-01T00:00:00Z",
+      "text": "permission receipt"
+    },
+    "head": "current-head",
+    "target": "target-tree",
+    "revision": {
+      "head": "current-head",
+      "base": "base",
+      "description": "current"
+    },
+    "base": "base",
+    "delegated": true,
+    "accepted": true,
+    "retry": true
+  },
+  "pending": [
+    {
+      "permission": {
+        "login": "controller",
+        "at": "2026-11-01T00:00:00Z",
+        "text": "permission receipt"
+      },
+      "head": "current-head",
+      "target": "target-tree",
+      "revision": {
+        "head": "current-head",
+        "base": "base",
+        "description": "current"
+      },
+      "base": "base",
+      "delegated": true,
+      "accepted": true,
+      "retry": true
+    }
+  ],
+  "memory": {
+    "head": "current-head",
+    "raised": [
+      "policy-path"
+    ],
+    "latest_reviews": [
+      [
+        "reviewer",
+        70
+      ]
+    ],
+    "judge_issuance": [
+      [
+        {
+          "head": "current-head",
+          "base": "base",
+          "description": "current"
+        },
+        [
+          500,
+          null
+        ]
+      ],
+      [
+        {
+          "head": "current-head",
+          "base": "base",
+          "description": "verdict-0"
+        },
+        [
+          100,
+          "Land"
+        ]
+      ],
+      [
+        {
+          "head": "current-head",
+          "base": "base",
+          "description": "verdict-1"
+        },
+        [
+          101,
+          "Failing"
+        ]
+      ],
+      [
+        {
+          "head": "current-head",
+          "base": "base",
+          "description": "verdict-2"
+        },
+        [
+          102,
+          "Owner"
+        ]
+      ],
+      [
+        {
+          "head": "current-head",
+          "base": "base",
+          "description": "verdict-3"
+        },
+        [
+          103,
+          "Misdescribed"
+        ]
+      ],
+      [
+        {
+          "head": "stale-head",
+          "base": "base",
+          "description": "current"
+        },
+        [
+          500,
+          null
+        ]
+      ],
+      [
+        {
+          "head": "stale-head",
+          "base": "base",
+          "description": "verdict-0"
+        },
+        [
+          100,
+          "Land"
+        ]
+      ],
+      [
+        {
+          "head": "stale-head",
+          "base": "base",
+          "description": "verdict-1"
+        },
+        [
+          101,
+          "Failing"
+        ]
+      ],
+      [
+        {
+          "head": "stale-head",
+          "base": "base",
+          "description": "verdict-2"
+        },
+        [
+          102,
+          "Owner"
+        ]
+      ],
+      [
+        {
+          "head": "stale-head",
+          "base": "base",
+          "description": "verdict-3"
+        },
+        [
+          103,
+          "Misdescribed"
+        ]
+      ]
+    ],
+    "major_issuance": [
+      [
+        {
+          "head": "current-head",
+          "base": "base",
+          "description": "current"
+        },
+        [
+          600,
+          "Held"
+        ]
+      ],
+      [
+        {
+          "head": "stale-head",
+          "base": "base",
+          "description": "current"
+        },
+        [
+          600,
+          "Held"
+        ]
+      ]
+    ],
+    "consumed_reviews": [
+      [
+        "reviewer",
+        {
+          "head": "current-head",
+          "base": "base",
+          "description": "current"
+        },
+        60
+      ],
+      [
+        "reviewer",
+        {
+          "head": "stale-head",
+          "base": "base",
+          "description": "current"
+        },
+        60
+      ]
+    ],
+    "review_posts": [
+      [
+        [
+          "reviewer",
+          {
+            "head": "current-head",
+            "base": "base",
+            "description": "current"
+          },
+          70
+        ],
+        2
+      ],
+      [
+        [
+          "reviewer",
+          {
+            "head": "stale-head",
+            "base": "base",
+            "description": "current"
+          },
+          70
+        ],
+        2
+      ]
+    ],
+    "review_failures": [
+      [
+        [
+          "reviewer",
+          {
+            "head": "current-head",
+            "base": "base",
+            "description": "current"
+          }
+        ],
+        [
+          3,
+          80
+        ]
+      ],
+      [
+        [
+          "reviewer",
+          {
+            "head": "stale-head",
+            "base": "base",
+            "description": "current"
+          }
+        ],
+        [
+          3,
+          80
+        ]
+      ]
+    ],
+    "missing_reviews": [
+      [
+        [
+          "reviewer",
+          {
+            "head": "current-head",
+            "base": "base",
+            "description": "current"
+          }
+        ],
+        [
+          90,
+          true
+        ]
+      ],
+      [
+        [
+          "reviewer",
+          {
+            "head": "stale-head",
+            "base": "base",
+            "description": "current"
+          }
+        ],
+        [
+          90,
+          true
+        ]
+      ]
+    ],
+    "seen": 10,
+    "no_checks_since": 11,
+    "update_requested": [
+      "current-head",
+      12
+    ],
+    "strikes": [
+      [
+        "Merge",
+        2
+      ]
+    ],
+    "retry": [
+      "Merge",
+      1000
+    ],
+    "lost_on": [
+      [
+        "reviewer",
+        {
+          "base": {
+            "Findings": {
+              "revision": {
+                "head": "stale-head",
+                "base": "base",
+                "description": "current"
+              },
+              "at": 13
+            }
+          }
+        }
+      ]
+    ],
+    "handed": [
+      [
+        "Judge",
+        {
+          "head": "stale-head",
+          "base": "base",
+          "description": "current"
+        }
+      ]
+    ],
+    "lost_jobs": [
+      "lost"
+    ],
+    "unanswered": [
+      [
+        [
+          "Findings",
+          {
+            "head": "current-head",
+            "base": "base",
+            "description": "current"
+          }
+        ],
+        [
+          "thread"
+        ]
+      ],
+      [
+        [
+          "Findings",
+          {
+            "head": "stale-head",
+            "base": "base",
+            "description": "current"
+          }
+        ],
+        [
+          "thread"
+        ]
+      ]
+    ],
+    "broken_jobs": [
+      [
+        "broken",
+        15
+      ]
+    ],
+    "answered_jobs": [
+      "answered"
+    ],
+    "stopping": [
+      "stopping"
+    ],
+    "retired_jobs": [
+      "retired"
+    ],
+    "unposted": [
+      [
+        "Description",
+        [
+          "unposted",
+          "Moved"
+        ]
+      ]
+    ],
+    "push_looks": [
+      [
+        [
+          "job",
+          "current-head"
+        ],
+        [
+          2,
+          16
+        ]
+      ]
+    ],
+    "wait": {
+      "head": "current-head",
+      "base": "base",
+      "stage": "owner",
+      "description": "wait",
+      "failure": "Merge",
+      "since": 17,
+      "due": 18
+    }
+  },
+  "decision": {
+    "stage": "owner",
+    "step": "ListOwner",
+    "description": "owner decision",
+    "wait_until": 1000,
+    "overdue_at": 2000,
+    "proof": null,
+    "wait_on": "Steward",
+    "on_usage": false,
+    "owner_notice": null
+  },
+  "jobs": [
+    {
+      "purpose": "Judge",
+      "job": {
+        "id": "judge-job",
+        "revision": {
+          "head": "stale-head",
+          "base": "base",
+          "description": "current"
+        },
+        "state": "Running",
+        "started": 19,
+        "repeated": false
+      },
+      "path": "judge.job",
+      "deadline": 3000,
+      "posted": false,
+      "recipes": {}
+    }
+  ],
+  "failed": "Merge",
+  "failed_review": {
+    "role": "reviewer",
+    "unavailable": true
+  },
+  "succeeded": [
+    "Post"
+  ],
+  "sequence": 42
+}

@@ -45,6 +45,9 @@ pub struct PullRequest {
     pub user: User,
     pub merged: Option<bool>,
     pub created_at: Option<String>,
+    /// When anything about the PR itself last changed: a push, a retarget,
+    /// a close or reopen, an edit, a comment. To the second.
+    pub updated_at: Option<String>,
     pub merged_at: Option<String>,
     pub merge_commit_sha: Option<String>,
     pub auto_merge: Option<serde_json::Value>,
@@ -91,6 +94,16 @@ pub struct CheckRun {
     /// The suite it ran in: one workflow run's, under GitHub Actions. A
     /// rerun is in the suite of the run it reruns.
     pub check_suite: Option<CheckSuite>,
+    /// What it reports: a service producer's signed statement rides in its
+    /// text (`docs/service-attestation.md`).
+    #[serde(default)]
+    pub output: Option<CheckOutput>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct CheckOutput {
+    #[serde(default)]
+    pub text: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

@@ -6,7 +6,21 @@ pub const SETTLED: &str = "review-settled";
 pub trait Write: Read + crate::train::Forge {
     fn status(&self, repo: &str, head: &str, settled: bool, text: &str) -> Result<(), ApiError>;
     fn stage(&self, repo: &str, pr: u64, stage: Stage) -> Result<(), ApiError>;
-    fn review(&self, repo: &str, pr: u64, head: &str, body: &str) -> Result<(), ApiError>;
+    /// Submit a review on `head` in one request, with its line comments.
+    fn review(
+        &self,
+        repo: &str,
+        pr: u64,
+        head: &str,
+        body: &str,
+        comments: &[LineComment],
+    ) -> Result<(), ApiError>;
+    /// Post a comment in the PR's conversation.
+    fn comment(&self, repo: &str, pr: u64, body: &str) -> Result<(), ApiError>;
+    /// Reply on review thread `thread`, by GitHub's id.
+    fn reply(&self, repo: &str, pr: u64, thread: &str, body: &str) -> Result<(), ApiError>;
+    /// Resolve review thread `thread`.
+    fn resolve(&self, repo: &str, pr: u64, thread: &str) -> Result<(), ApiError>;
     fn update(&self, repo: &str, pr: u64, head: &str) -> Result<(), ApiError>;
     fn close(&self, repo: &str, pr: u64) -> Result<(), ApiError>;
     fn owner(&self, repo: &str, pr: u64, label: &str) -> Result<(), ApiError>;

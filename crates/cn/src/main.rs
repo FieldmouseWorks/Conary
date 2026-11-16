@@ -22,6 +22,7 @@ use conary_github::{Api, ApiError, Config, Etags, Ingested, Tokens, ingest, note
 
 mod attest;
 mod flow;
+mod lessons;
 mod plugin;
 mod train;
 
@@ -29,7 +30,7 @@ mod train;
 #[command(
     name = "cn",
     about = "Conary: the ledger of every change and why it was made",
-    after_help = "Exits 75 when GitHub couldn't be asked just now (its rate limit, its own errors, the network): run it again later. Exits 65 when the ledger refused what was asked, so nothing was done: asked again, it refuses again until the ledger changes."
+    after_help = "Exits 75 when GitHub couldn't be asked just now (its rate limit, its own errors, the network): run it again later. Exits 65 when the ledger refused what was asked, so nothing was done: asked again, it refuses again until the ledger changes. `cn attest job` exits 65 when the token doesn't hold."
 )]
 struct Cli {
     /// The ledger's directory.
@@ -97,6 +98,12 @@ enum Command {
     },
     #[command(hide = true)]
     FlowWorker { path: PathBuf },
+    /// The lessons register, docs/lessons.toml: check it, or ask whether
+    /// a milestone's open lessons let it exit.
+    Lessons {
+        #[command(subcommand)]
+        command: lessons::LessonsCommand,
+    },
     /// Check an executable against the published plugin contract.
     Plugin {
         #[command(subcommand)]
@@ -284,7 +291,9 @@ fn main() -> ExitCode {
 
 /// Whether the ledger refused what was asked, before anything was done.
 fn refused(e: &(dyn std::error::Error + 'static)) -> bool {
-    e.downcast_ref::<Stopped>().is_some_and(Stopped::refused) || e.is::<Unnamed>()
+    e.downcast_ref::<Stopped>().is_some_and(Stopped::refused)
+        || e.is::<Unnamed>()
+        || e.is::<attest::Refused>()
 }
 
 /// A change named by something the ledger has no change for.
@@ -308,6 +317,7 @@ fn unavailable(e: &(dyn std::error::Error + 'static)) -> bool {
 fn run(cli: &Cli) -> Result<()> {
     match &cli.command {
         Command::Flow { command } => flow::run(cli, command)?,
+        Command::Lessons { command } => lessons::run(cli, command)?,
         Command::FlowWorker { path } => {
             conary_github::flow::jobs::worker(path).map_err(|e| e.to_string())?
         }
@@ -328,11 +338,18 @@ fn run(cli: &Cli) -> Result<()> {
             print_ingested(cli, repo, *pr, got?, a.store.ledger());
         }
         Command::Sync { repo, github } | Command::Backfill { repo, github } => {
-            let (mut a, api, config) = write(cli, github)?;
-            let got = if matches!(cli.command, Command::Sync { .. }) {
-                ingest::sync(&mut a.store, &api, &config, repo)
+            let (api, config) = writer(cli, github)?;
+            let (a, got) = if matches!(cli.command, Command::Sync { .. }) {
+                // Read before the lock, so other writers wait only for
+                // the recording, not the minutes GitHub takes.
+                let gathered = ingest::gather(&api, &config, repo, &cli.ledger)?;
+                let mut a = open(cli, github, &api)?;
+                let got = ingest::sync(&mut a.store, &api, gathered);
+                (a, got)
             } else {
-                ingest::backfill(&mut a.store, &api, &config, repo)
+                let mut a = open(cli, github, &api)?;
+                let got = ingest::backfill(&mut a.store, &api, &config, repo);
+                (a, got)
             };
             a.publish(&api)?;
             write_notes(&api, &a, github, repo)?;
@@ -353,11 +370,32 @@ fn run(cli: &Cli) -> Result<()> {
             github,
         } => {
             let policy = Policy::load(policy)?;
-            let (mut a, api, config) = write(cli, github)?;
-            let got = class::class(&mut a.store, &api, &config, &policy, repo, *pr, head);
-            a.publish(&api)?;
-            write_notes(&api, &a, github, repo)?;
-            let got = got?;
+            let (api, config) = writer(cli, github)?;
+            // The ledger as it is before GitHub is read, then GitHub,
+            // before the lock: a class the ledger holds needs no lock, and
+            // other writers wait only for the recording.
+            let mut ledger = reader::Reader::open(&cli.ledger, public_key(cli)?)?;
+            let asked = class::ask(
+                &mut ledger,
+                &api,
+                &config,
+                &policy,
+                repo,
+                *pr,
+                head,
+                &cli.ledger,
+            )?;
+            drop(ledger);
+            let got = match asked {
+                class::Asked::Held(got) => got,
+                class::Asked::Read(read) => {
+                    let mut a = open(cli, github, &api)?;
+                    let got = class::class(&mut a.store, &api, &policy, *read);
+                    a.publish(&api)?;
+                    write_notes(&api, &a, github, repo)?;
+                    got?
+                }
+            };
             let said = &got.said;
             if cli.human {
                 let because = said
@@ -565,15 +603,33 @@ fn choose_tokens(
 
 /// The ledger, open for writing once its log holds the anchor on GitHub.
 fn write(cli: &Cli, github: &GithubArgs) -> Result<(Anchored, Api, Config)> {
+    let (api, config) = writer(cli, github)?;
+    let anchored = open(cli, github, &api)?;
+    Ok((anchored, api, config))
+}
+
+/// GitHub as the ledger's writer reads it, and what ingest trusts: neither
+/// takes the ledger's lock.
+fn writer(cli: &Cli, github: &GithubArgs) -> Result<(Api, Config)> {
     let api =
         Api::new(&github.remote.api, tokens(&github.remote)?).with_etags(Etags::open(&cli.ledger)?);
-    let key = log::load_signing_key(&log::key_path(&cli.ledger))?;
-    let anchored = anchor::open(&cli.ledger, key, &api, &github.remote.anchor_repo)?;
     let config = Config {
         reviewers: github.reviewers.clone(),
         own_contexts: github.own_contexts.clone(),
     };
-    Ok((anchored, api, config))
+    Ok((api, config))
+}
+
+/// The ledger, open for writing: this takes its lock, held until it's
+/// dropped.
+fn open(cli: &Cli, github: &GithubArgs, api: &Api) -> Result<Anchored> {
+    let key = log::load_signing_key(&log::key_path(&cli.ledger))?;
+    Ok(anchor::open(
+        &cli.ledger,
+        key,
+        api,
+        &github.remote.anchor_repo,
+    )?)
 }
 
 /// Brings `repo`'s notes up to date with what the ledger now holds.
@@ -591,12 +647,19 @@ fn write_notes(api: &Api, a: &Anchored, github: &GithubArgs, repo: &Repo) -> Res
 /// kept beside it: as it is, or as it stood `at` a time. Reading takes no
 /// lock and never leaves the box.
 fn read(cli: &Cli, at: Option<i64>) -> Result<Ledger> {
-    let key = log::load_public_key(&log::public_path(&log::key_path(&cli.ledger)))
-        .map_err(|e| format!("{e} (has `cn init` set up {}?)", cli.ledger.display()))?;
+    let key = public_key(cli)?;
     Ok(match at {
         None => reader::read(&cli.ledger, &key)?,
         Some(t) => reader::read_at(&cli.ledger, &key, t)?,
     })
+}
+
+/// The key the ledger's log is checked with.
+fn public_key(cli: &Cli) -> Result<ed25519_dalek::VerifyingKey> {
+    Ok(
+        log::load_public_key(&log::public_path(&log::key_path(&cli.ledger)))
+            .map_err(|e| format!("{e} (has `cn init` set up {}?)", cli.ledger.display()))?,
+    )
 }
 
 /// A unit enum as the ledger spells it: `landed`, `ci`, `pass`.

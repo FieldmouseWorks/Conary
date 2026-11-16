@@ -79,7 +79,10 @@ fn description_fix_has_a_distinct_intention_and_rejudges_without_push() {
     c.description("It changes the guard's undo snapshot.", 900);
     c.review("reviewer", Verdict::Clean, 901);
     assert_eq!(c.scope().head, head);
-    assert_eq!(c.pass(1202).step, Step::Judge);
+    assert_eq!(
+        c.pass(1202).step,
+        Step::Judge(vec![Trigger::R2, Trigger::Asked])
+    );
 }
 
 #[test]
@@ -117,7 +120,8 @@ fn a_returned_head_gets_a_fresh_proof_not_a_stopped_jobs_lost_answer() {
     let mut c = Case::new();
     c.settings
         .proofs
-        .insert("proof".into(), Recipe::Job("run proof".into()));
+        .insert("proof".into(), Recipe::Run(vec!["run proof".into()]));
+    c.programs();
     let a = c.scope().head;
     let (kind, old) = job(&c, Kind::Proof, JobState::Running);
     let id = old.id.clone();

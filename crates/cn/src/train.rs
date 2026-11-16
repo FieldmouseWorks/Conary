@@ -11,10 +11,28 @@ use conary_core::op::{Left, Repo};
 use std::path::PathBuf;
 
 use conary_core::{CandidateId, ChangeId, Policy};
-use conary_github::attest::Signer;
+use conary_github::attest::service::Producers;
+use conary_github::attest::{Signer, Trust};
 use conary_github::train::{self, Joined, Leaving, Negatives, Now, Settings, Stepped};
 
 use crate::{Cli, GithubArgs, Result, read, word, write, write_notes};
+
+/// Whose attestations count, as the machine names them. A producer keys
+/// file that's named and doesn't read is an error, never no producers.
+fn trust(
+    signer: &Signer,
+    fresh: &Option<String>,
+    producers: Option<&std::path::Path>,
+) -> Result<Trust> {
+    Ok(Trust {
+        signer: signer.clone(),
+        fresh: fresh.clone(),
+        producers: match producers {
+            Some(path) => Producers::load(path)?,
+            None => Producers::default(),
+        },
+    })
+}
 
 /// Why a join held a PR out ([`Joined::Raised`]), as the steward shows it.
 const RAISED: &str =
@@ -67,6 +85,13 @@ pub enum TrainCommand {
         /// besides GitHub's own.
         #[arg(long = "fresh-runners", env = "CONARY_FRESH_RUNNERS", value_name = "PREFIX", value_parser = clap::builder::NonEmptyStringValueParser::new())]
         fresh: Option<String>,
+        /// As for a step: the services whose signed negatives count.
+        #[arg(
+            long = "producer-keys",
+            env = "CONARY_PRODUCER_KEYS",
+            value_name = "FILE"
+        )]
+        producers: Option<PathBuf>,
         #[command(flatten)]
         github: GithubArgs,
     },
@@ -124,6 +149,17 @@ pub enum TrainCommand {
         /// it for every `cn`.
         #[arg(long = "fresh-runners", env = "CONARY_FRESH_RUNNERS", value_name = "PREFIX", value_parser = clap::builder::NonEmptyStringValueParser::new())]
         fresh: Option<String>,
+        /// The machine's producer keys, a JSON file
+        /// (docs/service-attestation.md): the services on it (reviewers,
+        /// proof, judge and negative jobs) whose signed results count, each
+        /// for the checks it names. A machine setting, like the signer: with
+        /// none, no service's result counts.
+        #[arg(
+            long = "producer-keys",
+            env = "CONARY_PRODUCER_KEYS",
+            value_name = "FILE"
+        )]
+        producers: Option<PathBuf>,
         #[command(flatten)]
         github: GithubArgs,
     },
@@ -183,14 +219,14 @@ pub fn run(cli: &Cli, command: &TrainCommand) -> Result<()> {
             negative,
             signer,
             fresh,
+            producers,
             ..
         } => {
             let policy = Policy::load(policy)?;
             let negatives = match (negative, signer) {
                 (Some(check), Some(signer)) => Some(Negatives {
                     check: check.clone(),
-                    signer: signer.clone(),
-                    fresh: fresh.clone(),
+                    trust: trust(signer, fresh, producers.as_deref())?,
                 }),
                 (Some(_), None) => unreachable!("--negative requires --signer-workflow"),
                 (None, _) => None,
@@ -262,13 +298,13 @@ pub fn run(cli: &Cli, command: &TrainCommand) -> Result<()> {
             require,
             signer,
             fresh,
+            producers,
             ..
         } => {
             let settings = Settings {
                 size: usize::try_from(*size)?,
                 require: require.clone(),
-                signer: signer.clone(),
-                fresh: fresh.clone(),
+                trust: trust(signer, fresh, producers.as_deref())?,
             };
             train::step(store, &api, &api, &config, repo, &settings)
                 .map(|s| (stepped(&s), human_stepped(repo, &s)))

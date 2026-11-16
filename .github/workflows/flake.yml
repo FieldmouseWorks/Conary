@@ -13,9 +13,15 @@ permissions:
   contents: read
 jobs:
   check:
-    uses: FieldmouseWorks/burrow/.github/workflows/flake-check.yml@202d1c06990656145a30a290b8dd134f61006b4a # main
+    uses: FieldmouseWorks/burrow/.github/workflows/flake-check.yml@40b4eccfdc225c9791c5c3309c9c749cd1142382 # main
     # What the shared workflow needs to attest its result.
     permissions:
       contents: read
       id-token: write
       attestations: write
+    with:
+      # Names this gate in what it attests, so a later push of the same tree
+      # can be matched to it; only main's push asks remi's lookup
+      # (docs/gate-reuse.md) and, on a hit, builds nothing.
+      gate-reuse: true
+      gate-reuse-lookup: https://remi.conary.io/conary/gate-reuse

@@ -54,6 +54,15 @@ where the caller is: `cn why` blames in its own process, and the MCP server
 in its, asking conaryd only for the repository's `landings`, the
 [notes](notes.md) of its landed changes with nothing left out.
 
+## Gate reuse
+
+The optional `--gate-reuse-config PATH` (`CONARY_GATE_REUSE_CONFIG`) starts
+another HTTP listener, which answers whether CI already attested a pass of a
+gate on a tree ([gate reuse](gate-reuse.md) says what counts and how it's
+configured). It reads GitHub, as the train does, and the ledger, and
+records nothing. Its requests are bounded like the webhook's: a head of
+16 KiB, a body of 64 KiB, five seconds for the whole request, 16 at once.
+
 ## Verified flow events
 
 The optional `--events-config PATH` (`CONARY_EVENTS_CONFIG`) enables a separate
@@ -76,6 +85,16 @@ The file is machine-owned JSON, with unknown fields rejected:
   "worker": "/usr/local/bin/cn"
 }
 ```
+
+conaryd reads this file again at each delivery and each pass
+(`events::Live`), so a change to an option takes effect at the next one:
+adding a repository to `repos` takes its next event, and taking one off
+retires its mailbox without a pass. `listen`, `secret_path` and `data` are
+the exceptions: conaryd binds, reads and opens them once, as it starts, and
+keeps the values it started with until it restarts. A change to one of
+those is logged once, by its name, as waiting for a restart. The
+[settings schema](flow.md#the-settings-schema) declares them so, and
+`cn flow settings --events-config PATH` lists them apart.
 
 `flow_config` is the [pass configuration](flow.md). `worker` names the installed
 `cn` executable that runs owned plugin jobs. `api` optionally overrides the
@@ -119,8 +138,31 @@ and train state. A burst queued before a pass runs makes one pass; kicks during
 a running pass make one additional pass. The existing repository file lock
 still guards execution. A separate data-directory lock prevents two event
 workers from owning the same mailbox. In-flight work is recovered on restart.
-A fatal worker error stops the daemon with work still durable; the service
-manager can restart it. Errors never print webhook content.
+
+A flow worker's answer (a review's, fix's, judge's, preparation's or
+proof's) is read only by a pass, and most publish nothing GitHub sends an
+event for, so conaryd kicks the worker's repository as the worker exits, however it ended: answered, failed or cancelled. Starting, it
+kicks every listed repository once, so an answer saved while it was down is
+read by that first pass. A worker that outlives the daemon that launched it
+still wakes the next one: each worker holds a lock, taken before it starts,
+until it exits, and a starting daemon waits on the lock of each worker with
+no answer yet and kicks its repository once it's free, its own cancellation
+of that worker included. A worker's deadline stays booked as the backstop for
+one whose exit nobody saw.
+
+A whole-repository pass that fails before its reports (GitHub unavailable, a
+token command failing) books a durable recovery for that repository instead of
+stopping the worker: 60 seconds after the first failure, counted from when the
+pass gave up however long it ran, doubling per failure
+in a row up to 64 minutes, and cleared by the next pass that finishes. Until its
+recovery time the repository is held: kicks and status events arriving
+meanwhile stay queued, and its PR bookings stay unspent, and all of them run
+in that one retry. Other repositories go on advancing, and the ledger socket
+keeps answering. The recovery, the held kicks and the bookings survive restart.
+The log names the repository, its failures in a row and its retry time, never
+the error's text. Only a mailbox that can't be written stops the worker, and
+the daemon with it, so the service manager can restart it. Errors never print
+webhook content.
 
 Each report's `Next.wait_until` names its explicit wait or owned worker deadline;
 `overdue_at` names the stall deadline. The mailbox books the earliest future
@@ -133,9 +175,9 @@ These are failure-triggered bookings, not periodic repository scans. Explicit
 waits name the first second their predicate permits progress (the quiet handoff
 requires the second after its inclusive quiet period).
 
-The worker sleeps on a condition variable until an incoming kick or that
-booked time, consumes the booking once, and runs a pass. There is no periodic
+The worker sleeps on a condition variable until a kick (a webhook's, a flow
+worker's exit, or its own start) or that booked time, consumes the booking once, and runs a pass. There is no periodic
 scan or polling timer. Already elapsed deadlines are not rebooked by an
-unchanged report. The mailbox, status receipts, failure backoffs and delivery cache are mutable JSON files in
+unchanged report. The mailbox, status receipts, failure backoffs, repository recoveries and delivery cache are mutable JSON files in
 `data`, beside `flow/` memory, with atomic rename and file/directory sync;
 they are separate from the append-only ledger.

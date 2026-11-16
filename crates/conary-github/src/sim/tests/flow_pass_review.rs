@@ -200,9 +200,139 @@ fn needs_judge(c: &mut Case) {
         Some("owner@example.org"),
     );
 }
+
+#[test]
+fn pass_copies_live_choices_and_known_reviewers_into_a_fresh_judge_invocation() {
+    use conary_core::plugin::{Choice, Kind as PluginKind, Task};
+    let mut c = Case::new();
+    needs_judge(&mut c);
+    // The example's head 4 has no finding, so the pass can reach judgment
+    // after posting a real validated review without starting a fixer.
+    c.hub.push(REPO, 3, &head(4));
+    c.hub.refresh_flow(REPO, 3);
+    c.good_ci(&head(4));
+    c.hub.commit_details(
+        &head(4),
+        Some("change: fixture\n\nEngine: fixture-author\n"),
+        Some("owner@example.org"),
+        Some("owner@example.org"),
+    );
+    let now = crate::flow::jobs::now();
+    // Run and post the real configured reviewer, retaining its identity.
+    c.pass(now, false);
+    c.run_worker();
+    c.pass(now + 1, false);
+    let choice = Choice {
+        engine: "conary-example".into(),
+        model: None,
+        effort: None,
+    };
+    c.config.execution.insert(PluginKind::Judge, choice.clone());
+    let report = c.pass(now + 2, false);
+    assert_eq!(
+        report[0].next.as_ref().unwrap().step,
+        Step::Judge(vec![Trigger::AuthorEngine])
+    );
+    let record = c.record();
+    let work = record
+        .jobs
+        .iter()
+        .find(|w| matches!(w.purpose, crate::flow::jobs::Purpose::Judge))
+        .unwrap();
+    let invocation: crate::flow::jobs::Invocation =
+        serde_json::from_slice(&std::fs::read(&work.path).unwrap()).unwrap();
+    assert_eq!(invocation.choice, Some(choice));
+    let Task::Judge { reviewers, .. } = &invocation.task else {
+        panic!("not a judge");
+    };
+    assert!(
+        reviewers
+            .iter()
+            .any(|r| r.session.as_deref() == Some("example"))
+    );
+    crate::flow::jobs::worker(&work.path).unwrap();
+    let answer = crate::flow::jobs::completion(work, now + 4)
+        .unwrap()
+        .result
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        answer.execution.unwrap().context,
+        conary_core::plugin::Context::Fresh
+    );
+}
 fn local_judgment(c: &Case) {
     for path in c.deferred.0.borrow_mut().drain(..) {
         crate::flow::jobs::worker(&path).unwrap();
+    }
+}
+
+#[test]
+fn permission_binds_the_judging_model_and_basis_to_independently_attested_evidence() {
+    use conary_core::plugin::{Context, Executed, Identity, Provenance};
+    // What the signed receipt says differently from the sealed issuance.
+    for differs in [None, Some("model"), Some("why"), Some("context")] {
+        let matches = differs.is_none();
+        let mut c = Case::new();
+        c.clean_review();
+        needs_judge(&mut c);
+        let revision = Revision::from(&c.hub.pull(REPO, 3).unwrap());
+        let provenance = Provenance {
+            by: Identity {
+                engine: "fixture-engine".into(),
+                session: Some("independent-judge".into()),
+            },
+            execution: Executed {
+                model: Some("actual-model".into()),
+                effort: Some("deliberate".into()),
+                context: Context::Fresh,
+            },
+        };
+        let body = c
+            .config
+            .settings
+            .judge_key
+            .as_ref()
+            .unwrap()
+            .judgment_by(
+                REPO,
+                3,
+                Judgment::Pass,
+                &revision,
+                1,
+                provenance.clone(),
+                super::judged_for_everything(&c.hub, REPO),
+            )
+            .unwrap();
+        c.hub.flow_comment(REPO, 3, "producer", &body);
+        let mut attested = provenance;
+        let mut basis = super::judged_for_everything(&c.hub, REPO);
+        match differs {
+            Some("model") => attested.execution.model = Some("different-model".into()),
+            Some("why") => basis.why.retain(|t| *t != Trigger::AuthorEngine),
+            Some("context") => basis.context = "0".repeat(64),
+            _ => {}
+        }
+        c.sign_check(
+            &revision.head,
+            "conary/judgment",
+            Some(&judgment_receipt_by(
+                &revision,
+                1,
+                Some(Judgment::Pass),
+                Some(&attested),
+                Some(&basis),
+            )),
+        );
+        let report = c.pass(crate::flow::jobs::now(), false);
+        assert_eq!(report[0].error, None);
+        assert_eq!(c.hub.pull(REPO, 3).unwrap().is_merged(), matches);
+        if !matches {
+            assert!(matches!(
+                report[0].next.as_ref().unwrap().step,
+                Step::Wait { .. }
+            ));
+        }
     }
 }
 #[test]
@@ -223,21 +353,21 @@ fn a_local_judge_pass_is_not_an_authenticated_issuance() {
 }
 #[test]
 fn github_generations_and_tombstones_survive_local_judge_answers() {
-    for word in ["failed", "owner", "conflict", "unsupported"] {
+    for word in ["fail", "owner", "conflict", "unsupported"] {
         let mut c = Case::new();
         c.clean_review();
         needs_judge(&mut c);
         let now = crate::flow::jobs::now();
         c.pass(now, false);
         local_judgment(&c);
-        c.judgment(1, Judgment::Land, true);
+        c.judgment(1, Judgment::Pass, true);
         // Observe generation 1 without letting the PR land.
         c.hub.fail(Call::Land);
         c.pass(now + 1, false);
         c.hub.heal(Call::Land);
         let revision = Revision::from(&c.hub.pull(REPO, 3).unwrap());
         if word == "conflict" {
-            c.judgment(1, Judgment::Failing, true);
+            c.judgment(1, Judgment::Fail, true);
         } else {
             let key = c.config.settings.judge_key.as_ref().unwrap();
             let body = key.decision(REPO, 3, "autoland-judgment", word, &revision, 2);
@@ -250,8 +380,8 @@ fn github_generations_and_tombstones_survive_local_judge_answers() {
         assert_eq!(
             observed.1,
             match word {
-                "failed" => Some(Judgment::Failing),
-                "owner" => Some(Judgment::Owner),
+                "fail" => Some(JudgeResult::Legacy(Judgment::Fail)),
+                "owner" => Some(JudgeResult::Legacy(Judgment::Owner)),
                 _ => None,
             }
         );
@@ -264,7 +394,7 @@ fn r2_owner_approval_does_not_enable_direct_or_delegated_landings() {
         let mut c = Case::new();
         c.clean_review();
         c.policy = conary_core::Policy::parse(br#"{"r2":["^src/"]}"#).unwrap();
-        c.judgment(1, Judgment::Land, true);
+        c.judgment(1, Judgment::Pass, true);
         // Person approval still cannot replace exact candidate evidence.
         c.approve();
         if bot {
@@ -426,7 +556,7 @@ fn a_train_departure_revokes_permission_even_if_its_label_write_fails() {
 }
 #[test]
 fn the_runner_rejects_mutable_names_in_every_object_id_field() {
-    use conary_core::plugin::{Identity, Limits, Plugin, Problem, Task};
+    use conary_core::plugin::{Identity, Limits, Plugin, Problem, Task, Trigger};
     let plugin = Plugin::describe(
         &example(),
         Limits {
@@ -449,17 +579,41 @@ fn the_runner_rejects_mutable_names_in_every_object_id_field() {
         },
         Task::Judge {
             repo: REPO.into(),
+            pr: 3,
             head: "main".into(),
             against: "criteria".into(),
             author,
+            reviewers: vec![],
+            why: vec![Trigger::Asked],
+            context: "a".repeat(64),
         },
         Task::Proof {
             repo: REPO.into(),
+            head: head(3),
+            tree: "main".into(),
+            checks: vec!["check".into()],
+        },
+        Task::Proof {
+            repo: REPO.into(),
+            head: "main".into(),
+            tree: head(3),
+            checks: vec!["check".into()],
+        },
+        Task::Prepare {
+            repo: REPO.into(),
+            head: "main".into(),
+            tree: head(3),
+            checks: vec!["check".into()],
+        },
+        Task::Prepare {
+            repo: REPO.into(),
+            head: head(3),
             tree: "main".into(),
             checks: vec!["check".into()],
         },
         Task::Fix {
             repo: REPO.into(),
+            pr: 3,
             head: head(3),
             problems: vec![Problem::Conflict {
                 base: "main".into(),
@@ -532,5 +686,36 @@ fn a_native_request_for_changes_after_permission_is_published_blocks_the_merge()
             .contains("changes were requested")
     );
     assert_eq!(c.hub.count(Call::Land), 0);
+    pending(&c);
+}
+#[test]
+fn a_signed_check_that_skipped_some_cannot_grant_permission() {
+    let c = Case::new();
+    c.clean_review();
+    // The gate's job signs a pass that left a check unbuilt: the flow
+    // reads no evidence for what it skipped.
+    let tree = crate::branches::Branches::tree(&c.hub, REPO, &head(3)).unwrap();
+    for run in c
+        .hub
+        .checks_on(&head(3))
+        .iter()
+        .filter(|r| r.name == "check")
+    {
+        c.hub.forget_artifacts(Some(run.id));
+        let statement = crate::attest::testing::statement(&head(3), &tree, "pass")
+            .replace(r#""skipped":[]"#, r#""skipped":["agents"]"#);
+        let claims = crate::attest::testing::claims(REPO, &head(3), run.id, &statement);
+        c.hub.attest(
+            run.id,
+            &crate::attest::testing::file(&statement, &crate::attest::testing::token(&claims)),
+        );
+    }
+    let report = c.pass(crate::flow::jobs::now(), false);
+    let next = report[0].next.as_ref().unwrap();
+    assert!(
+        next.description.contains("check: it skipped agents"),
+        "{}",
+        next.description
+    );
     pending(&c);
 }

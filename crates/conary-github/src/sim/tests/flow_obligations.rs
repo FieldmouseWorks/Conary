@@ -3,7 +3,6 @@ use super::flow_case::Case;
 use crate::flow::*;
 use crate::sim::REMI;
 use serde_json::json;
-use std::collections::{BTreeMap, BTreeSet};
 fn landing(step: &Step) -> bool {
     matches!(step, Step::Merge | Step::JoinTrain | Step::Settle)
 }
@@ -120,22 +119,6 @@ fn rejected_sweep_generations_survive_security_labels_deletions_and_old_replays(
     }
 }
 
-fn evaluation(c: &mut Case, path: &str) {
-    c.proof_data.evaluation = Some(Evaluation {
-        head: c.scope().head,
-        recipes: c.settings.proofs.clone(),
-        at: 700,
-        outputs: Some(BTreeMap::from([(
-            "VM".into(),
-            Derivation {
-                path: format!("{path}.drv"),
-                outputs: BTreeSet::from([path.into()]),
-            },
-        )])),
-        derivations_present: true,
-        merged: None,
-    });
-}
 fn record(c: &Case, id: &str, started: u64) -> ProofRecord {
     ProofRecord {
         job: Job {
@@ -154,7 +137,6 @@ fn holder(record: &ProofRecord) -> ProofHolder {
     ProofHolder {
         number: 3,
         job: record.job.clone(),
-        paths: Some(BTreeSet::from(["/nix/store/X".into()])),
     }
 }
 #[test]
@@ -171,7 +153,6 @@ fn every_observed_live_proof_is_cancelled_after_newer_records_retire_or_finish()
             c.proof_data.records.push(a);
             c.push("proof-second-head");
             c.review("reviewer", Verdict::Clean, 500);
-            evaluation(&mut c, "/nix/store/X");
             let mut b = record(&c, "B", 200);
             c.proof_data.live.push(holder(&b));
             if completed {
@@ -179,7 +160,7 @@ fn every_observed_live_proof_is_cancelled_after_newer_records_retire_or_finish()
                 c.proof_data.live.last_mut().unwrap().job.state = JobState::Done;
             }
             c.proof_data.records.push(b);
-            assert!(!matches!(c.view(700).step, Step::StopJob(_))); // A's output is still useful
+            assert_eq!(c.view(700).step, Step::StopJob("A".into())); // A proves an earlier head
             if recipe_change {
                 c.settings
                     .proofs
@@ -188,7 +169,6 @@ fn every_observed_live_proof_is_cancelled_after_newer_records_retire_or_finish()
                 c.push("proof-third-head");
                 c.review("reviewer", Verdict::Clean, 800);
             }
-            evaluation(&mut c, "/nix/store/Y");
             assert_eq!(c.pass(1000).step, Step::StopJob("A".into()));
             assert_eq!(c.pass(1100).step, Step::StopJob("A".into())); // until confirmed stopped
             c.stopped_jobs.insert("A".into());
@@ -196,7 +176,7 @@ fn every_observed_live_proof_is_cancelled_after_newer_records_retire_or_finish()
                 assert_eq!(c.pass(1200).step, Step::StopJob("B".into()));
                 c.stopped_jobs.insert("B".into()); // retained Running records must be retired
             }
-            assert_eq!(c.pass(1300).step, Step::Prove);
+            assert_eq!(c.pass(1300).step, Step::Prepare);
         }
     }
 }
@@ -264,38 +244,12 @@ fn cancellation_includes_own_pool_observations_but_never_another_prs_job() {
         c.proof_data.live.push(h);
         c.push("new-pool-head");
         c.review("reviewer", Verdict::Clean, 800);
-        evaluation(&mut c, "/nix/store/Y");
         let n = c.pass(1000);
         if own {
             assert_eq!(n.step, Step::StopJob("pool".into()));
         } else {
-            assert_eq!(n.stage, Stage::ProofSlot);
-            assert!(!matches!(n.step, Step::StopJob(_)));
+            assert_eq!(n.step, Step::Prepare);
         }
-    }
-}
-#[test]
-fn useful_outputs_are_retained_across_pushes_and_same_head_recipe_changes() {
-    for push in [false, true] {
-        let mut c = Case::new();
-        c.settings
-            .proofs
-            .insert("VM".into(), Recipe::Build("checks.vm".into()));
-        c.settings.proof_slots = Some(1);
-        let r = record(&c, "useful", 100);
-        c.proof_data.live.push(holder(&r));
-        c.proof_data.records.push(r);
-        if push {
-            c.push("useful-proof-head");
-            c.review("reviewer", Verdict::Clean, 800);
-        } else {
-            c.settings
-                .proofs
-                .insert("VM".into(), Recipe::Build("checks.other".into()));
-        }
-        evaluation(&mut c, "/nix/store/X");
-        assert_eq!(c.pass(1000).step, Step::Prove);
-        assert!(c.memory.stopping.is_empty());
     }
 }
 

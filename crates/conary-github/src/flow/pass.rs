@@ -8,21 +8,57 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// The executables the flow starts its work with. An omitted one leaves its
+/// step waiting.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct Plugins {
+    /// The review plugin's executable.
+    #[schemars(extend("x-spender" = true))]
     pub review: Option<PathBuf>,
+    /// The fix plugin's executable.
+    #[schemars(extend("x-spender" = true))]
     pub fix: Option<PathBuf>,
+    /// The judge plugin's executable.
+    #[schemars(extend("x-spender" = true))]
     pub judge: Option<PathBuf>,
+    /// The proof plugin's executable.
+    #[schemars(extend("x-spender" = true))]
     pub proof: Option<PathBuf>,
 }
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// The flow's configuration file, reread at each pass.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
+    /// The machine's settings.
+    #[schemars(extend("x-spender" = false))]
     pub settings: Settings,
+    /// The authors whose PRs the flow works; anyone else's goes to the
+    /// owner as an outside contribution.
+    #[schemars(extend("x-spender" = false))]
     pub trusted_authors: Vec<String>,
+    /// The plugins the flow starts its work with.
+    #[schemars(extend("x-spender" = false))]
     pub plugins: Plugins,
+    /// The engine, model and effort each plugin kind is asked to run with.
+    #[schemars(extend("x-spender" = false), transform = kinds)]
+    pub execution: BTreeMap<conary_core::plugin::Kind, conary_core::plugin::Choice>,
+    /// The verifier of producers' evidence. Unset, permission to land waits.
+    #[schemars(extend("x-spender" = false))]
     pub evidence: Option<Evidence>,
+}
+/// Keys of `execution` are plugin kinds, as the plugin contract names them.
+fn kinds(schema: &mut schemars::Schema) {
+    let mut kind = schemars::schema_for!(conary_core::plugin::Kind);
+    kind.remove("$schema");
+    kind.remove("title");
+    schema.insert("propertyNames".into(), kind.to_value());
+}
+impl Config {
+    /// The one loader of a flow configuration file, for every reader of it.
+    pub fn load(path: &Path) -> Result<Self> {
+        Ok(super::schema::load(&std::fs::read(path)?)?.0)
+    }
 }
 #[derive(Debug, Serialize)]
 pub struct Report {
@@ -169,8 +205,8 @@ impl Pass<'_> {
                 let approved = facts.owner_approved;
                 let (mut next, memory) = next(&facts, &record.memory, self.now);
                 record.memory = memory;
-                if next.step == Step::Prove {
-                    let (ahead, _) = super::proofs::ahead(&facts, None);
+                if super::proofs::slotted(&next) {
+                    let ahead = super::proofs::ahead(&facts);
                     if ahead > 0 {
                         next.stage = Stage::ProofSlot;
                         next.step = Step::Wait { until: None };
@@ -315,6 +351,7 @@ impl Pass<'_> {
         facts: &Facts,
         purpose: Purpose,
         task: conary_core::plugin::Task,
+        handed: Vec<Option<Handed>>,
         record: &mut Record,
         data: &Data,
     ) -> Result<()> {
@@ -322,7 +359,8 @@ impl Pass<'_> {
             Purpose::Review(_) => "review",
             Purpose::Fix(_) => "fix",
             Purpose::Judge => "judge",
-            Purpose::Proof => "proof",
+            // A proof's preparation is the proof plugin's to answer.
+            Purpose::Proof | Purpose::Prepare => "proof",
         };
         let executable = self
             .path(kind)
@@ -339,17 +377,25 @@ impl Pass<'_> {
             facts.settings.job_timeout
         };
         let deadline = self.now.saturating_add(timeout);
+        let choice = task
+            .kind()
+            .and_then(|kind| self.config.execution.get(&kind))
+            .cloned();
         persist::save(
             &path,
             &jobs::Invocation {
                 executable,
                 task,
+                choice,
                 deadline,
                 response_bytes: 1_048_576,
             },
         )?;
+        // Only a proof its preparation said needs no slot holds none.
+        let slotless = matches!(purpose, Purpose::Proof) && !super::proofs::needs_slot(facts);
         record.jobs.push(jobs::Work {
             purpose,
+            slotless,
             job: Job {
                 id: format!("{}-{}", facts.number, record.sequence),
                 revision: facts.revision.clone(),
@@ -360,7 +406,9 @@ impl Pass<'_> {
             path: path.clone(),
             deadline,
             posted: false,
-            recipes: recipes(facts),
+            recipes: super::proofs::selected(facts),
+            handed,
+            sent: Default::default(),
         });
         // Persist ownership before spawning. A crash in this window times out;
         // it never starts the same fix twice.
@@ -373,21 +421,10 @@ fn plugin_kind(step: &Step) -> Option<&'static str> {
     match step {
         Step::QueueReview(_) => Some("review"),
         Step::HandFix(_) => Some("fix"),
-        Step::Judge => Some("judge"),
-        Step::Prove => Some("proof"),
+        Step::Judge(_) => Some("judge"),
+        Step::Prepare | Step::Prove => Some("proof"),
         _ => None,
     }
-}
-pub(crate) fn recipes(f: &Facts) -> BTreeMap<String, Recipe> {
-    f.checks
-        .iter()
-        .filter(|c| c.state == Ci::Pending)
-        .filter_map(|c| {
-            f.settings
-                .proof_recipe(&c.name)
-                .map(|(n, r)| (n.clone(), r.clone()))
-        })
-        .collect()
 }
 
 pub(crate) fn grants(next: &Next, f: &Facts) -> bool {

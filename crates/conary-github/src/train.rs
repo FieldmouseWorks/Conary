@@ -14,20 +14,23 @@ use serde::Serialize;
 
 use conary_core::ledger::{Candidate, Held, Invalid, State};
 use conary_core::op::{Body, Left, Member, Repo, Verdict};
+use conary_core::reader::ReadError;
 use conary_core::store::StoreError;
 use conary_core::{CandidateId, ChangeId, Class, CommitId, Policy, Store, TreeId};
 
 use crate::api::{ApiError, Source};
-use crate::attest::{Actions, Signer};
+use crate::attest::{Actions, Trust};
 use crate::branches::{BRANCHES, Branches, Merged};
 use crate::class::{self, ClassError};
 use crate::ingest::{self, Config, IngestError};
 
 mod gate;
 mod land;
+mod message;
 mod negative;
 use gate::{Gate, gate};
 use land::{land_next, open_landing, stopped_landing};
+pub use message::{Message, messages};
 pub use negative::{Negatives, verify as verify_negative};
 
 /// Where a candidate is built, one merge at a time.
@@ -84,8 +87,11 @@ pub trait Forge: Branches + Actions {
         description: &str,
         url: Option<&str>,
     ) -> Result<(), ApiError>;
-    /// Merges a PR at `head` the way the repo merges PRs, or not at all.
-    fn land(&self, repo: &str, pr: u64, head: &str) -> Result<PrMerge, ApiError>;
+    /// Merges a PR at `head` the way the repo merges PRs, or not at all. A
+    /// squash or merge commit says `message`; a rebase keeps the PR's own
+    /// commits.
+    fn land(&self, repo: &str, pr: u64, head: &str, message: &Message)
+    -> Result<PrMerge, ApiError>;
 }
 
 #[derive(Debug)]
@@ -93,6 +99,8 @@ pub enum TrainError {
     Api(ApiError),
     Store(StoreError),
     Ingest(IngestError),
+    /// The ledger couldn't be read without its lock.
+    Read(ReadError),
     /// GitHub's answer isn't what it says.
     Malformed(String),
     /// No randomness for a new candidate id.
@@ -122,6 +130,7 @@ impl std::fmt::Display for TrainError {
             Self::Api(e) => e.fmt(f),
             Self::Store(e) => e.fmt(f),
             Self::Ingest(e) => e.fmt(f),
+            Self::Read(e) => e.fmt(f),
             Self::Malformed(what) => write!(f, "GitHub sent {what}"),
             Self::Random(e) => write!(f, "no randomness for a candidate id: {e}"),
             Self::Unknown(pr) => write!(f, "#{pr} isn't in the ledger"),
@@ -144,6 +153,7 @@ impl std::error::Error for TrainError {
         match self {
             Self::Api(e) => Some(e),
             Self::Ingest(e) => Some(e),
+            Self::Read(e) => Some(e),
             _ => None,
         }
     }
@@ -173,6 +183,7 @@ impl From<ClassError> for TrainError {
             ClassError::Api(e) => Self::Api(e),
             ClassError::Ingest(e) => Self::Ingest(e),
             ClassError::Store(e) => Self::Store(e),
+            ClassError::Read(e) => Self::Read(e),
             ClassError::Moved { pr, head } => Self::Moved { pr, head },
         }
     }
@@ -483,14 +494,10 @@ pub struct Settings {
     /// whose passes count only with their producer's attestation: the
     /// repo's gate, as its shared CI runs it.
     pub require: Vec<String>,
-    /// The workflow whose jobs' attestations of those passes count, at a
-    /// commit on its repo's default branch: the shared CI the machine
-    /// trusts to sign.
-    pub signer: Signer,
-    /// What the name of each self-hosted runner started fresh for one job
-    /// starts with, which only the launcher of such runners gives one. A
-    /// required pass counts only from such a runner or one of GitHub's.
-    pub fresh: Option<String>,
+    /// Whose attestations of those passes count: the shared CI the machine
+    /// trusts to sign, at a commit on its repo's default branch, and the
+    /// runners it counts from; and the services' producer keys.
+    pub trust: Trust,
 }
 
 /// A change to land, at the head its candidate merged.

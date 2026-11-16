@@ -21,6 +21,10 @@ struct Cli {
     /// Enable verified flow ingress using this machine-owned JSON configuration.
     #[arg(long, env = "CONARY_EVENTS_CONFIG")]
     events_config: Option<PathBuf>,
+    /// Answer gate-reuse lookups over HTTP, using this machine-owned JSON
+    /// configuration (docs/gate-reuse.md).
+    #[arg(long, env = "CONARY_GATE_REUSE_CONFIG")]
+    gate_reuse_config: Option<PathBuf>,
     /// The socket to listen on.
     #[arg(long, env = "CONARY_SOCKET", default_value_os_t = conaryd::default_socket())]
     socket: PathBuf,
@@ -33,13 +37,19 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     let bound = conaryd::bind(&cli.socket)
         .map_err(|e| format!("listening at {}: {e}", cli.socket.display()))?;
     if let Some(path) = &cli.events_config {
-        let config: conary_github::events::Runtime = serde_json::from_slice(&std::fs::read(path)?)?;
+        // Read again at each delivery and pass, but for the options that
+        // take effect only at a restart, which are these.
+        let live = std::sync::Arc::new(
+            conary_github::events::Live::open(path).map_err(|e| e.to_string())?,
+        );
+        let config = live.started();
         let queue = std::sync::Arc::new(
             conary_github::events::Queue::open(&config.data).map_err(|e| e.to_string())?,
         );
+        let listed = std::sync::Arc::clone(&live);
         let receiver = conary_github::events::Receiver::open(
             std::fs::read(&config.secret_path)?,
-            config.repos.iter().map(ToString::to_string),
+            Box::new(move || listed.repos()),
             &config.data,
         )
         .map_err(|e| e.to_string())?;
@@ -53,11 +63,16 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         })?;
         let ledger = cli.ledger.clone();
         std::thread::Builder::new().spawn(move || {
-            if config.run(&ledger, &queue).is_err() {
-                eprintln!("conaryd: flow worker stopped; work remains booked");
+            // A failed pass books its repo's recovery; only a mailbox that
+            // can't be written stops the worker.
+            if live.run(&ledger, &queue).is_err() {
+                eprintln!("conaryd: flow worker stopped: its mailbox can't be written");
                 std::process::exit(1);
             }
         })?;
+    }
+    if let Some(path) = &cli.gate_reuse_config {
+        gate_reuse(path, Reader::open(&cli.ledger, key)?)?;
     }
     eprintln!(
         "conaryd: the ledger in {}, at {}",
@@ -65,6 +80,40 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         cli.socket.display()
     );
     conaryd::serve(&bound.listener, reader, Limits::default())
+}
+
+/// Starts the gate-reuse lookup's listener, reading the ledger with
+/// `reader`, its own.
+fn gate_reuse(path: &std::path::Path, reader: Reader) -> Result<(), Box<dyn std::error::Error>> {
+    use conary_github::reuse::{Settings, answer};
+    use std::sync::{Mutex, PoisonError};
+    let settings: Settings = serde_json::from_slice(&std::fs::read(path)?)?;
+    let config = settings.config()?;
+    let api = conary_github::Api::new(
+        &settings.api,
+        conary_github::Tokens::command(&settings.token_command)?,
+    );
+    let reader = Mutex::new(reader);
+    let listener = std::net::TcpListener::bind(settings.listen)?;
+    std::thread::Builder::new().spawn(move || {
+        let served = conaryd::reuse::serve(listener, move |authorization, body| {
+            let ledger = reader
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .refresh()
+                .map_err(|e| e.to_string());
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX));
+            let ledger = ledger.as_deref().map_err(Clone::clone);
+            answer(&api, &api, ledger, &config, now, authorization, body)
+        });
+        if served.is_err() {
+            eprintln!("conaryd: gate-reuse listener stopped");
+            std::process::exit(1);
+        }
+    })?;
+    Ok(())
 }
 
 fn main() -> ExitCode {

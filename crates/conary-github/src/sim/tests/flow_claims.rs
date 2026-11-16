@@ -1,7 +1,6 @@
 use super::flow_case::Case;
 use crate::flow::*;
 use crate::sim::REMI;
-use std::collections::BTreeMap;
 const PUSHED: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const THEIRS: &str = "cccccccccccccccccccccccccccccccccccccccc";
 fn claim() -> Case {
@@ -18,7 +17,7 @@ fn claim() -> Case {
         },
         answer: FixResult::Answer(FixAnswer {
             pushed: Some(PUSHED.into()),
-            threads: BTreeMap::from([("thread".into(), true)]),
+            answers: vec![(Target::Thread("thread".into()), true)],
             description: None,
             comment: false,
         }),
@@ -118,7 +117,7 @@ fn invalid_fix_claims_never_post_any_part_of_their_answers() {
                 0 => a.pushed = Some("not-a-commit".into()),
                 1 => {
                     a.pushed = None;
-                    a.threads = BTreeMap::from([("foreign-thread".into(), false)]);
+                    a.answers = vec![(Target::Thread("foreign-thread".into()), false)];
                 }
                 _ => a.pushed = None,
             }

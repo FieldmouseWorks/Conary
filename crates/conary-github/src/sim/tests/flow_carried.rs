@@ -64,7 +64,7 @@ fn hidden_paths_still_require_a_judge_when_their_looks_carry() {
     merge_base_into(&c, false);
     c.pass(0);
     assert!(c.facts().unseen);
-    assert_eq!(c.view(700).step, Step::Judge);
+    assert_eq!(c.view(700).step, Step::Judge(vec![Trigger::HiddenFiles]));
 }
 #[test]
 fn unreadable_carried_history_never_becomes_a_clean_review() {

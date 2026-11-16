@@ -31,18 +31,39 @@ impl flow::jobs::Launch for Deferred {
     }
 }
 pub(super) fn example() -> PathBuf {
-    let executable = std::env::current_exe()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join("conary-flow-test-plugin");
-    assert!(
-        executable.is_file(),
-        "Cargo must build the shared example fixture"
-    );
-    executable
+    static EXECUTABLE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    EXECUTABLE
+        .get_or_init(|| {
+            const FIXTURE: &str = "conary-flow-test-plugin";
+            // Cargo's intermediate layout is private. Its artifact messages
+            // locate the normal fixture build for any target directory/profile.
+            let output = std::process::Command::new(env!("CARGO"))
+                .current_dir(env!("CARGO_MANIFEST_DIR"))
+                .args([
+                    "build",
+                    "--locked",
+                    "--bin",
+                    FIXTURE,
+                    "--message-format=json",
+                ])
+                .output()
+                .expect("Cargo must build the shared example fixture");
+            assert!(
+                output.status.success(),
+                "fixture build failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            String::from_utf8(output.stdout)
+                .unwrap()
+                .lines()
+                .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+                .filter(|message| {
+                    message["reason"] == "compiler-artifact" && message["target"]["name"] == FIXTURE
+                })
+                .find_map(|message| message["executable"].as_str().map(PathBuf::from))
+                .expect("Cargo must report the shared example executable")
+        })
+        .clone()
 }
 
 pub(super) struct Case {
@@ -84,6 +105,7 @@ impl Case {
         );
         let mut config = flow::Config {
             trusted_authors: vec!["owner".into()],
+            settings: crate::sim::settings(),
             ..Default::default()
         };
         config.settings.people.insert("maintainer".into());
@@ -96,6 +118,7 @@ impl Case {
             fresh: Some(FRESH.into()),
             require: vec!["check".into()],
             negative: "negative".into(),
+            producers: None,
         });
         config.settings.judge_key = Some(SealKey::from_hex(&"a".repeat(64)).unwrap());
         config.settings.verdict_authors.insert("producer".into());
@@ -153,6 +176,7 @@ impl Case {
                         answer:
                             conary_core::plugin::Answer::Fix {
                                 result: conary_core::plugin::FixResult::Pushed { head },
+                                ..
                             },
                         ..
                     })),
@@ -177,16 +201,63 @@ impl Case {
                         Some(&review_receipt(&work.job.revision.head, &body)),
                     );
                 }
+                // The producer seals what the judge was asked on, at the
+                // next generation.
                 (
-                    conary_core::plugin::Task::Judge { .. },
+                    conary_core::plugin::Task::Judge { why, context, .. },
                     Some(Ok(conary_core::plugin::Response {
                         answer: conary_core::plugin::Answer::Judge { .. },
                         ..
                     })),
-                ) => self.judgment(1, Judgment::Land, true),
+                ) => self.judgment_on(
+                    self.hub.comments(REPO, 3).unwrap().len() as u64 + 1,
+                    Judgment::Pass,
+                    true,
+                    crate::flow::Basis {
+                        why: why.clone(),
+                        context: context.clone(),
+                    },
+                ),
                 _ => {}
             }
         }
+    }
+    /// Answers each launched preparation, of PR `only` or of every PR, as
+    /// ready, needing a proof slot or not. Other launches stay launched.
+    pub(super) fn prepared(&self, slot: bool, only: Option<u64>) {
+        self.deferred.0.borrow_mut().retain(|path| {
+            let invocation: flow::jobs::Invocation =
+                serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+            let conary_core::plugin::Task::Prepare { .. } = invocation.task else {
+                return true;
+            };
+            let name = path.file_name().unwrap().to_string_lossy();
+            if only.is_some_and(|n| !name.starts_with(&format!("{n}-"))) {
+                return true;
+            }
+            let completion = flow::jobs::Completion {
+                at: flow::jobs::now(),
+                result: Some(Ok(conary_core::plugin::Response {
+                    contract: conary_core::plugin::CONTRACT.into(),
+                    by: conary_core::plugin::Identity {
+                        engine: "fixture".into(),
+                        session: None,
+                    },
+                    execution: None,
+                    answer: conary_core::plugin::Answer::Prepare {
+                        ready: true,
+                        slot,
+                        why: "inputs built".into(),
+                    },
+                })),
+            };
+            std::fs::write(
+                path.with_extension("answer"),
+                serde_json::to_vec(&completion).unwrap(),
+            )
+            .unwrap();
+            false
+        });
     }
     pub(super) fn record(&self) -> flow::Record {
         Data::read(self.dir.path(), &REPO.parse().unwrap(), 3).unwrap()
@@ -260,28 +331,57 @@ impl Case {
         }
         self.negative(head, "none");
     }
-    pub(super) fn judgment(&self, generation: u64, verdict: Judgment, attest: bool) {
+    /// A producer's judgment, judged for every reason on what GitHub shows
+    /// now with no worker answers. Returns what it was judged on.
+    pub(super) fn judgment(
+        &self,
+        generation: u64,
+        verdict: Judgment,
+        attest: bool,
+    ) -> crate::flow::Basis {
+        let basis = super::judged_for_everything(&self.hub, REPO);
+        self.judgment_on(generation, verdict, attest, basis.clone());
+        basis
+    }
+    /// A producer's v3 judgment of the PR's current revision, judged on
+    /// `basis`, and its signed receipt when `attest`.
+    pub(super) fn judgment_on(
+        &self,
+        generation: u64,
+        verdict: Judgment,
+        attest: bool,
+        basis: crate::flow::Basis,
+    ) {
         let revision = Revision::from(&self.hub.pull(REPO, 3).unwrap());
-        let word = match verdict {
-            Judgment::Land => "land",
-            Judgment::Owner => "owner",
-            Judgment::Failing => "failed",
-            Judgment::Misdescribed => "misdescribed",
-        };
-        let body = self.config.settings.judge_key.as_ref().unwrap().decision(
-            REPO,
-            3,
-            "autoland-judgment",
-            word,
-            &revision,
-            generation,
-        );
+        let provenance = super::judge_provenance();
+        let body = self
+            .config
+            .settings
+            .judge_key
+            .as_ref()
+            .unwrap()
+            .judgment_by(
+                REPO,
+                3,
+                verdict,
+                &revision,
+                generation,
+                provenance.clone(),
+                basis.clone(),
+            )
+            .unwrap();
         self.hub.flow_comment(REPO, 3, "producer", &body);
         if attest {
             self.sign_check(
                 &revision.head,
                 "conary/judgment",
-                Some(&judgment_receipt(&revision, generation, Some(verdict))),
+                Some(&judgment_receipt_by(
+                    &revision,
+                    generation,
+                    Some(verdict),
+                    Some(&provenance),
+                    Some(&basis),
+                )),
             );
         }
     }

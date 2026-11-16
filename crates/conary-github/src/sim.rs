@@ -52,6 +52,18 @@ pub(crate) use faults::{Call, On};
 
 /// The steward's App, whose `review-settled` statuses settle a head.
 pub(crate) const STEWARD: &str = "fieldmouseworks-steward[bot]";
+/// The flow settings of the machine the tests stand in for: Conary's own
+/// defaults name none of these.
+pub(crate) fn settings() -> crate::flow::Settings {
+    crate::flow::Settings {
+        proof_slots: None,
+        judge_engines: ["codex".into()].into(),
+        review_authors: [STEWARD.into()].into(),
+        bot_emails: ["49699333+dependabot[bot]@users.noreply.github.com".into()].into(),
+        owner_label: Some("needs-peter".into()),
+        ..Default::default()
+    }
+}
 /// The repos the tests are about.
 pub(crate) const REMI: &str = "FieldmouseWorks/remi";
 /// What the runners a job gets to itself are named, then its job's id.
@@ -92,6 +104,8 @@ pub(crate) struct World {
     /// Each check run's job's artifacts, by the job's check run id: name
     /// and GitHub's zip of it.
     artifacts: HashMap<u64, Vec<(String, Vec<u8>)>>,
+    /// The jobs, by check run id, whose artifacts GitHub lists as expired.
+    expired: BTreeSet<u64>,
     /// The runner each job ran on, when it isn't a fresh one of its own.
     runners: HashMap<u64, String>,
     /// Pairs of patches that change the same lines.
@@ -637,11 +651,41 @@ impl Hub {
     }
 
     /// Lands PR `number` as the steward does outside the train: settled at
-    /// its head, then merged. Trunk's new tip.
+    /// its head, then merged with the message the train would give it.
+    /// Trunk's new tip.
     pub(crate) fn steward_lands(&self, repo: &str, number: u64) -> String {
         let head = self.head_of(repo, number);
         self.settle(&head);
-        match self.squash(repo, number, &head) {
+        let p = self.pull_json(repo, number);
+        let tip = self
+            .branch_at(repo, p["base"]["ref"].as_str().unwrap())
+            .unwrap();
+        let messages: Vec<String> = {
+            let w = self.world.borrow();
+            let excluded: BTreeSet<_> = w.ancestors(&tip).into_iter().collect();
+            let mut commits: Vec<String> = w
+                .ancestors(&head)
+                .into_iter()
+                .filter(|c| !excluded.contains(c))
+                .collect();
+            commits.reverse();
+            commits
+                .iter()
+                .map(|c| {
+                    w.commit_record(repo, c)
+                        .ok()
+                        .and_then(|c| c.commit)
+                        .and_then(|c| c.message)
+                        .unwrap_or_default()
+                })
+                .collect()
+        };
+        let message = crate::train::Message::new(
+            p["title"].as_str().unwrap(),
+            number,
+            messages.iter().map(String::as_str),
+        );
+        match self.squash(repo, number, &head, &message) {
             Ok(sha) => sha,
             Err(why) => panic!("#{number} won't land: {why}"),
         }
@@ -704,7 +748,15 @@ impl Hub {
     /// Squashes PR `number`'s head `head` onto its base branch, as its
     /// merge does: the new commit, linked to it, and the PR merged and
     /// closed, its branch deleted if it's the repo's own.
-    fn squash(&self, repo: &str, number: u64, head: &str) -> Result<String, String> {
+    /// Squashes PR `number` at `head` onto its base, as a commit saying
+    /// `message`, the way GitHub's merge does.
+    fn squash(
+        &self,
+        repo: &str,
+        number: u64,
+        head: &str,
+        message: &crate::train::Message,
+    ) -> Result<String, String> {
         let p = self.pull_json(repo, number);
         let base = p["base"]["ref"].as_str().unwrap().to_owned();
         let tip = self.branch_at(repo, &base).ok_or("no base branch")?;
@@ -716,6 +768,9 @@ impl Hub {
         let sha = self.next_sha();
         self.commit_as(&sha, &[tip], merged);
         self.by_github(&sha);
+        let mut record = fixtures::commit();
+        record["commit"]["message"] = json!(message.whole());
+        self.commit_response(&sha, record);
         self.set_branch(repo, &base, &sha);
         self.link(repo, &sha, &[number]);
         let at = self.now();

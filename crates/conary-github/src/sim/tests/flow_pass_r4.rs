@@ -23,7 +23,7 @@ fn owner_case(r2: bool) -> Case {
         c.config.settings.train = true;
         c.hub.label(REPO, 3, &["r2"]);
     }
-    c.judgment(1, if r2 { Judgment::Land } else { Judgment::Owner }, true);
+    c.judgment(1, if r2 { Judgment::Pass } else { Judgment::Owner }, true);
     c
 }
 #[test]

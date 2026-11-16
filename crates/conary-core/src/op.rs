@@ -153,14 +153,23 @@ pub enum Left {
 }
 
 /// A producer's own word that a result came from its run on what it ran
-/// on, kept as it was checked (`docs/ci-attestation.md`), so it can be
-/// checked again for as long as its signer's key is published.
+/// on, kept as it was checked (`docs/ci-attestation.md`,
+/// `docs/service-attestation.md`), so it can be checked again for as long
+/// as its signer's key is published or trusted.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Attest {
     /// A private repo's CI: the statement its job attested, and the job's
     /// GitHub OIDC token, whose audience names the statement's digest.
     GithubToken { statement: String, token: String },
+    /// A service on the machine (a reviewer, a proof, judge or negative
+    /// job): the statement it signed, the Ed25519 public key it signed
+    /// with and the signature over the statement's bytes, both base64url.
+    Service {
+        statement: String,
+        key: String,
+        signature: String,
+    },
 }
 
 /// How a candidate's gate ended (`docs/DESIGN.md` section 4.7).

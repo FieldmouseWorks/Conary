@@ -1,29 +1,59 @@
 //! Permission is based on independently attested producer records, never
-//! controller-posted assertions. Plugin v1 remains a work protocol.
+//! controller-posted assertions. Plugins remain a work protocol.
 use super::persist::Result;
 use super::*;
-use crate::attest::{Signer, Subject, attested};
-use conary_core::op::{Attest, Outcome};
+use crate::attest::service::Producers;
+use crate::attest::{Signer, Subject, Trust, attested, skipped};
+use conary_core::op::Outcome;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Whose attestations count as evidence, from the machine's configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Evidence {
+    /// The CI workflow whose attestations count, as `OWNER/REPO/PATH`.
+    #[schemars(extend("x-spender" = false))]
     pub signer: String,
+    /// The prefix of runners started for one job, whose results count beside
+    /// GitHub-hosted ones. `null` accepts GitHub-hosted jobs only.
+    #[schemars(extend("x-spender" = false))]
     pub fresh: Option<String>,
+    /// The checks whose attested results a landing needs.
+    #[schemars(extend("x-spender" = false))]
     pub require: Vec<String>,
+    /// The check whose attested negative run a new test needs.
+    #[schemars(extend("x-spender" = false))]
     pub negative: String,
+    /// The machine's producer keys file (`docs/service-attestation.md`):
+    /// the services whose signed results count. None trusts no service.
+    #[serde(default)]
+    #[schemars(extend("x-spender" = false))]
+    pub producers: Option<std::path::PathBuf>,
 }
 impl Evidence {
+    /// Whose attestations count, read from the machine's configuration.
+    /// A producer keys file that's named and doesn't read fails closed.
+    pub(crate) fn trust(&self) -> Result<Trust> {
+        Ok(Trust {
+            signer: self.signer.parse::<Signer>()?,
+            fresh: self.fresh.clone(),
+            producers: match &self.producers {
+                Some(path) => Producers::load(path)?,
+                None => Producers::default(),
+            },
+        })
+    }
     pub(crate) fn negatives(&self) -> Result<crate::train::Negatives> {
+        self.negatives_under(self.trust()?)
+    }
+    fn negatives_under(&self, trust: Trust) -> Result<crate::train::Negatives> {
         if self.negative.trim().is_empty() {
             return Err("negative check is not configured".into());
         }
         Ok(crate::train::Negatives {
             check: self.negative.clone(),
-            signer: self.signer.parse::<Signer>()?,
-            fresh: self.fresh.clone(),
+            trust,
         })
     }
 }
@@ -42,10 +72,37 @@ pub fn judgment_receipt(
         "generation":generation,"verdict":verdict}))
     .expect("receipt")
 }
+/// A judgment's receipt: the legacy one, plus the issuance's provenance when
+/// it has one and, for a v3 issuance, the `why` and `context` it was judged
+/// under, so its signed log binds exactly what the sealed issuance says.
+pub fn judgment_receipt_by(
+    revision: &Revision,
+    generation: u64,
+    verdict: Option<Judgment>,
+    provenance: Option<&conary_core::plugin::Provenance>,
+    basis: Option<&Basis>,
+) -> Vec<u8> {
+    let mut receipt = serde_json::json!({"kind":"judgment","revision":revision,
+        "generation":generation,"verdict":verdict});
+    let fields = receipt.as_object_mut().expect("a receipt is an object");
+    if let Some(provenance) = provenance {
+        fields.insert("provenance".into(), serde_json::json!(provenance));
+    }
+    if let Some(basis) = basis {
+        fields.insert("why".into(), serde_json::json!(basis.why));
+        fields.insert("context".into(), serde_json::json!(basis.context));
+    }
+    serde_json::to_vec(&receipt).expect("receipt")
+}
 pub fn major_receipt(revision: &Revision, generation: u64, verdict: Option<Major>) -> Vec<u8> {
     serde_json::to_vec(&serde_json::json!({"kind":"major","revision":revision,
         "generation":generation,"verdict":verdict}))
     .expect("receipt")
+}
+/// A proof's definition, as a service's statement names it
+/// (`docs/service-attestation.md`): the SHA-256 of its recipe's JSON.
+pub fn recipe_digest(recipe: &Recipe) -> String {
+    receipt_digest(&serde_json::to_vec(recipe).expect("a recipe is JSON"))
 }
 pub fn receipt_digest(bytes: &[u8]) -> String {
     Sha256::digest(bytes)
@@ -88,6 +145,7 @@ pub(crate) fn authorize<G: Write>(pass: &Pass<'_>, github: &G, f: &Facts) -> Res
     {
         return Err("proof check name collides with producer receipt or negative evidence".into());
     }
+    let trust = evidence.trust()?;
     let effective = observations(github, f, &f.revision.head)?;
     let mut required: std::collections::BTreeSet<_> = evidence.require.iter().cloned().collect();
     required.extend(
@@ -111,9 +169,9 @@ pub(crate) fn authorize<G: Write>(pass: &Pass<'_>, github: &G, f: &Facts) -> Res
     required.extend(effective.statuses);
     required.retain(|name| name != &evidence.negative && !receipts.contains(name));
     for name in required {
-        check(github, f, evidence, &f.revision.head, &name, None)?;
+        check(github, f, &trust, &f.revision.head, &name, None)?;
     }
-    let negatives = evidence.negatives()?;
+    let negatives = evidence.negatives_under(trust.clone())?;
     let base = github.merge_base(
         &repo,
         f.base_tip.as_deref().ok_or("negative base unknown")?,
@@ -155,6 +213,7 @@ pub(crate) fn authorize<G: Write>(pass: &Pass<'_>, github: &G, f: &Facts) -> Res
             &pull,
             std::slice::from_ref(record),
             &Default::default(),
+            &Default::default(),
             &f.settings,
             &carried,
         )?;
@@ -166,7 +225,7 @@ pub(crate) fn authorize<G: Write>(pass: &Pass<'_>, github: &G, f: &Facts) -> Res
         check(
             github,
             f,
-            evidence,
+            &trust,
             head,
             &format!("conary/review/{role}"),
             Some(&review_receipt(head, body)),
@@ -180,13 +239,15 @@ pub(crate) fn authorize<G: Write>(pass: &Pass<'_>, github: &G, f: &Facts) -> Res
         check(
             github,
             f,
-            evidence,
+            &trust,
             &f.revision.head,
             "conary/judgment",
-            Some(&judgment_receipt(
+            Some(&judgment_receipt_by(
                 &f.revision,
                 generation,
                 f.judgment.as_ref().map(|j| j.verdict),
+                f.judgment.as_ref().and_then(|j| j.provenance.as_ref()),
+                f.judgment.as_ref().and_then(|j| j.basis.as_ref()),
             )),
         )?;
     }
@@ -197,7 +258,7 @@ pub(crate) fn authorize<G: Write>(pass: &Pass<'_>, github: &G, f: &Facts) -> Res
         check(
             github,
             f,
-            evidence,
+            &trust,
             &f.revision.head,
             "conary/major",
             Some(&major_receipt(&f.revision, generation, f.major)),
@@ -208,7 +269,7 @@ pub(crate) fn authorize<G: Write>(pass: &Pass<'_>, github: &G, f: &Facts) -> Res
 fn check<G: Write>(
     github: &G,
     f: &Facts,
-    evidence: &Evidence,
+    trust: &Trust,
     head: &str,
     name: &str,
     receipt: Option<&[u8]>,
@@ -232,6 +293,8 @@ fn check<G: Write>(
         return Err(format!("{name}: no attested check run (statuses cannot attest)").into());
     }
     let tree = github.tree(&repo, head)?;
+    // A proof's pass counts only for the recipe the machine selects now.
+    let definition = f.settings.recipe(name).map(recipe_digest);
     for run in latest {
         if run.status != "completed" || run.conclusion.as_deref() != Some("success") {
             return Err(format!("{name}: producer check is not successful").into());
@@ -243,24 +306,30 @@ fn check<G: Write>(
             Subject::Commit {
                 commit: head,
                 tree: &tree,
+                definition: definition.as_deref(),
             },
             &run,
-            &evidence.signer.parse::<Signer>()?,
-            evidence.fresh.as_deref(),
+            trust,
         )?
         .map_err(|why| format!("{name}: {why}"))?;
+        // A result counts here only whole: nothing covers what it skipped.
+        let skipped = skipped(&verified.attest).map_err(|why| format!("{name}: {why}"))?;
+        if !skipped.is_empty() {
+            return Err(format!(
+                "{name}: it skipped {}, so it says nothing about them",
+                skipped.join(", ")
+            )
+            .into());
+        }
         if verified.result != Outcome::Pass {
             return Err(format!("{name}: producer did not pass").into());
         }
-        if let Some(receipt) = receipt {
-            let Attest::GithubToken { statement, .. } = verified.attest;
-            let predicate: serde_json::Value =
-                serde_json::from_str(statement.lines().nth(2).ok_or("missing signed predicate")?)?;
-            if predicate["log"]["sha256"].as_str() != Some(receipt_digest(receipt).as_str()) {
-                return Err(
-                    format!("{name}: signed producer log does not bind this exact result").into(),
-                );
-            }
+        if let Some(receipt) = receipt
+            && verified.log.as_deref() != Some(receipt_digest(receipt).as_str())
+        {
+            return Err(
+                format!("{name}: signed producer log does not bind this exact result").into(),
+            );
         }
     }
     Ok(())
@@ -284,7 +353,7 @@ fn observations<G: Write>(github: &G, f: &Facts, head: &str) -> Result<super::ci
         &f.revision.base,
         &paths,
         &snapshot.suites,
-        &f.settings.machine(),
+        &f.settings,
     )?;
     if head == f.revision.head {
         let checks: Vec<_> = observed

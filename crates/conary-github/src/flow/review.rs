@@ -246,6 +246,12 @@ pub(super) fn look(f: &Facts, m: &mut Memory, now: u64, request_review: bool) ->
             }
             return if r.queued || working(r) {
                 wait(Stage::Review, None, "Reviewing this commit")
+            } else if f.settings.review_authors.is_empty() {
+                wait(
+                    Stage::Reviewer,
+                    None,
+                    "No review author is set to post its review",
+                )
             } else {
                 at(
                     Stage::Review,

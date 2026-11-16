@@ -2,9 +2,9 @@
 mod queue;
 mod runtime;
 use crate::flow::persist::{self, Result};
-pub use queue::{Queue, Work};
+pub use queue::{Queue, Ran, Recovery, Work};
 use ring::hmac;
-pub use runtime::Runtime;
+pub use runtime::{Live, Runtime};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -119,18 +119,19 @@ pub fn verified(secret: &[u8], signature: Option<&str>, body: &[u8]) -> bool {
     hmac::verify(&hmac::Key::new(hmac::HMAC_SHA256, secret), body, &tag).is_ok()
 }
 
+/// Where a receiver reads the repositories it takes events for, at each
+/// delivery: conaryd's is [`Live::repos`], so a change to the list takes
+/// effect at the next one.
+pub type Listed = Box<dyn Fn() -> Result<Vec<String>> + Send>;
+
 pub struct Receiver {
     secret: Vec<u8>,
-    repos: BTreeSet<String>,
+    repos: Listed,
     deliveries: BTreeMap<String, u64>,
     path: PathBuf,
 }
 impl Receiver {
-    pub fn open(
-        secret: Vec<u8>,
-        repos: impl IntoIterator<Item = String>,
-        data: &Path,
-    ) -> Result<Self> {
+    pub fn open(secret: Vec<u8>, repos: Listed, data: &Path) -> Result<Self> {
         if secret.is_empty() {
             return Err("webhook secret is empty".into());
         }
@@ -138,7 +139,7 @@ impl Receiver {
         let path = data.join("deliveries.json");
         Ok(Self {
             secret,
-            repos: repos.into_iter().map(|r| r.to_lowercase()).collect(),
+            repos,
             deliveries: persist::load(&path)?,
             path,
         })
@@ -170,7 +171,11 @@ impl Receiver {
         let Ok(value) = serde_json::from_slice(body) else {
             return 400;
         };
-        for kick in kicks(event, &value, &self.repos) {
+        let Ok(repos) = (self.repos)() else {
+            return 503;
+        };
+        let repos = repos.into_iter().map(|r| r.to_lowercase()).collect();
+        for kick in kicks(event, &value, &repos) {
             let queued = if event == "status" && value["id"].as_u64().is_some() {
                 queue.status(&kick.repo, value["id"].as_u64().expect("checked above"))
             } else {

@@ -54,7 +54,7 @@ fn conflicts_are_fixed_before_any_review_ci_or_judge_landing() {
             }
             1 => {
                 c.secret();
-                c.judge("land");
+                c.judge("pass");
             }
             _ => {
                 c.hub.set_branch(REMI, "release", super::TRUNK);

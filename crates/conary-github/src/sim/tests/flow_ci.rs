@@ -108,7 +108,7 @@ fn cancelled_timeout_is_red_and_annotations_are_read_lazily() {
             &REMI.parse().unwrap(),
             3,
             &conary_core::Policy::parse(b"{}").unwrap(),
-            Settings::default(),
+            crate::sim::settings(),
             &["owner".into()]
         )
         .unwrap_err()
@@ -501,7 +501,7 @@ fn proofs_are_case_insensitive_and_not_run_again_after_success() {
         .post_status(&head(3), json!({"context":"agents","state":"pending"}));
     let f = s.read(&runs, &["agents"]);
     assert_eq!(f.proof, Proof::Needed);
-    assert_eq!(next(&f, &s.memory, 4000).0.step, Step::Prove);
+    assert!(super::flow_ci_case::at_proof(&next(&f, &s.memory, 4000).0));
     s.hub
         .post_status(&head(3), json!({"context":"Agents","state":"failure"}));
     let f = s.read(&runs, &["agents"]);
@@ -510,7 +510,7 @@ fn proofs_are_case_insensitive_and_not_run_again_after_success() {
 }
 
 #[test]
-fn job_proofs_wait_for_ci_but_machine_proofs_start_beside_it() {
+fn a_model_run_check_waits_for_ci_but_machine_proofs_are_prepared_beside_it() {
     // handle.py: "A check the steward builds itself ... while CI runs".
     let s = Scenario::new();
     let runs = [Run::whole(1, "main", "success").going()];
@@ -529,7 +529,7 @@ fn job_proofs_wait_for_ci_but_machine_proofs_start_beside_it() {
                 .proofs
                 .insert("agents".into(), Recipe::Run(vec!["just proof".into()]));
         }
-        assert_eq!(next(&f, &s.memory, 4000).0.step, Step::Prove);
+        assert_eq!(next(&f, &s.memory, 4000).0.step, Step::Prepare);
     }
 }
 
@@ -677,7 +677,7 @@ fn reader_rejects_a_retarget_or_redescription_between_endpoints() {
             &REMI.parse().unwrap(),
             3,
             &conary_core::Policy::parse(b"{}").unwrap(),
-            Settings::default(),
+            crate::sim::settings(),
             &["owner".into()],
         );
         assert!(result.unwrap_err().to_string().contains("moved"));
@@ -722,7 +722,7 @@ fn train_enabled_release_branch_lands_outside_the_train() {
     f.settings.train = true;
     let (n, m) = next(&f, &s.memory, 4000);
     assert_eq!(n.stage, Stage::Ci);
-    assert_eq!(next(&f, &m, 4300).0.step, Step::Judge);
+    assert_eq!(next(&f, &m, 4300).0.step, Step::Judge(vec![Trigger::NoCi]));
 }
 
 #[test]
@@ -730,7 +730,7 @@ fn build_or_run_configuration_alone_still_requires_its_proof() {
     // common.machine / handle.py: machine checks are the union of all kinds.
     let s = Scenario::new();
     for build in [true, false] {
-        let mut settings = Settings::default();
+        let mut settings = crate::sim::settings();
         if build {
             settings
                 .proofs
@@ -747,8 +747,8 @@ fn build_or_run_configuration_alone_still_requires_its_proof() {
                 .iter()
                 .any(|c| c.name == "vm" && c.state == Ci::Pending)
         );
-        assert_eq!(next(&f, &s.memory, 4000).0.step, Step::Prove);
+        assert_eq!(next(&f, &s.memory, 4000).0.step, Step::Prepare);
         let f = s.read_settings(&[Run::whole(1, "main", "success").going()], settings);
-        assert_eq!(next(&f, &s.memory, 4000).0.step, Step::Prove);
+        assert_eq!(next(&f, &s.memory, 4000).0.step, Step::Prepare);
     }
 }

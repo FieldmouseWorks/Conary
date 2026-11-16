@@ -39,7 +39,7 @@ pub(super) fn setup() -> (Hub, Facts, Memory) {
         3,
         &conary_core::Policy::parse(br#"{"r2":["^secrets/","CODEOWNERS"],"docs":["^docs/"]}"#)
             .unwrap(),
-        Settings::default(),
+        crate::sim::settings(),
         &["owner".into()],
     )
     .unwrap();
@@ -158,7 +158,7 @@ fn r2_requires_person_even_after_judge_land() {
     // gates.py: a judge's land verdict never replaces the R2 person's answer.
     let mut c = Case::new();
     c.secret();
-    c.judge("land");
+    c.judge("pass");
     assert_eq!(c.view(4000).step, Step::ListOwner);
 }
 
@@ -184,18 +184,18 @@ fn owner_approval_is_required_after_label_removal_and_is_revision_scoped() {
 fn stale_judgment_is_not_a_verdict_for_this_head() {
     // gates.py: a judgment at an old head cannot release the new one.
     let mut c = Case::new();
-    c.judge("land");
+    c.judge("pass");
     c.push(&head(4));
     c.secret();
     c.review("reviewer", Verdict::Clean, 1);
-    assert_eq!(c.view(4000).step, Step::Judge);
+    assert_eq!(c.view(4000).step, Step::Judge(vec![Trigger::R2]));
 }
 
 #[test]
 fn judge_failure_is_held_even_with_pending_ci() {
     // handle.py: a failing judgment holds it whatever CI is doing.
     let mut c = Case::new();
-    c.judge("failed");
+    c.judge("fail");
     c.hub.put_checks(&head(3),json!([{"id":1,"name":"check","status":"in_progress","conclusion":null,"check_suite":{"id":1}}]));
     assert_eq!(c.view(4000).step, Step::HandFix(Kind::JudgeFailure));
 }
@@ -370,7 +370,7 @@ fn missing_ci_waits_five_minutes_then_needs_a_judge() {
     let mut c = Case::new();
     c.no_ci();
     assert_eq!(c.pass(4000).step, Step::Wait { until: Some(4300) });
-    assert_eq!(c.view(4300).step, Step::Judge);
+    assert_eq!(c.view(4300).step, Step::Judge(vec![Trigger::NoCi]));
 }
 
 #[test]
@@ -386,6 +386,10 @@ fn ci_not_required_does_not_need_a_judge() {
 fn proof_slot_running_and_unposted_are_distinct() {
     // proving.py / waiting.py: these are local machine observations, not GitHub.
     let mut c = Case::new();
+    c.settings
+        .proofs
+        .insert("proof".into(), Recipe::Run(vec!["run proof".into()]));
+    c.programs();
     for (proof, stage, step) in [
         (
             Proof::InLine(2),
@@ -458,7 +462,7 @@ fn broken_job_is_seen_twice_then_backed_off_once() {
     );
     c.pass(4070);
     assert_eq!(c.memory.strikes[&Failure::Lost], 1);
-    assert_eq!(c.view(4120).step, Step::Judge);
+    assert_eq!(c.view(4120).step, Step::Judge(vec![Trigger::R2]));
 }
 
 #[test]
@@ -544,7 +548,7 @@ fn reader_refuses_a_push_between_endpoints() {
         &REMI.parse().unwrap(),
         3,
         &conary_core::Policy::parse(b"{}").unwrap(),
-        Settings::default(),
+        crate::sim::settings(),
         &["owner".into()],
     );
     assert!(result.unwrap_err().to_string().contains("moved"));
@@ -560,7 +564,7 @@ fn reader_failure_is_not_a_clean_snapshot() {
             &REMI.parse().unwrap(),
             3,
             &conary_core::Policy::parse(b"{}").unwrap(),
-            Settings::default(),
+            crate::sim::settings(),
             &["owner".into()]
         )
         .is_err()
@@ -577,7 +581,7 @@ fn reader_uses_latest_run_and_ignores_own_status() {
         &REMI.parse().unwrap(),
         3,
         &conary_core::Policy::parse(b"{}").unwrap(),
-        Settings::default(),
+        crate::sim::settings(),
         &["owner".into()],
     )
     .unwrap();
@@ -600,7 +604,7 @@ fn read_checks(hub: &Hub) -> Vec<Check> {
         &REMI.parse().unwrap(),
         3,
         &conary_core::Policy::parse(b"{}").unwrap(),
-        Settings::default(),
+        crate::sim::settings(),
         &["owner".into()],
     )
     .unwrap()
@@ -765,7 +769,7 @@ fn r2_land_is_released_by_the_owner_for_its_revision_only() {
     for change in 0..3 {
         let mut c = Case::new();
         c.secret();
-        c.judge("land");
+        c.judge("pass");
         assert_eq!(c.pass(4000).step, Step::ListOwner);
         assert!(!c.facts().owner_approved);
         assert_eq!(c.pass(4001).step, Step::ListOwner);
@@ -786,7 +790,7 @@ fn r2_land_is_released_by_the_owner_for_its_revision_only() {
         }
         c.secret();
         c.review("reviewer", Verdict::Clean, 4005);
-        c.judge("land");
+        c.judge("pass");
         assert_eq!(c.view(5000).step, Step::ListOwner);
     }
 }
@@ -800,7 +804,7 @@ fn label_without_an_owed_decision_is_not_approval() {
     c.pass(4000);
     assert!(!c.facts().owner_approved);
     c.hub.touch(&head(3), &["src/a.rs"]);
-    c.judge("land");
+    c.judge("pass");
     c.pass(4001);
     assert!(!c.facts().owner_approved);
 }

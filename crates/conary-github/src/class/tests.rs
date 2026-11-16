@@ -1,3 +1,6 @@
+use std::sync::Arc;
+
+use conary_core::ledger::Status;
 use ed25519_dalek::SigningKey;
 
 use super::*;
@@ -50,6 +53,65 @@ fn config() -> Config {
 fn store(dir: &tempfile::TempDir) -> Store {
     let lock = conary_core::log::Lock::take(dir.path()).unwrap();
     Store::open(lock, SigningKey::from_bytes(&[6; 32]), None).unwrap()
+}
+
+fn class(
+    store: &mut Store,
+    hub: &Hub,
+    config: &Config,
+    policy: &Policy,
+    repo: &Repo,
+    pr: u64,
+    head: &str,
+) -> Result<Classes, ClassError> {
+    at_once(store, hub, config, policy, repo, pr, head)
+}
+
+fn asked(
+    store: &Store,
+    hub: &Hub,
+    config: &Config,
+    policy: &Policy,
+    repo: &Repo,
+    pr: u64,
+    head: &str,
+) -> Result<Asked, ClassError> {
+    let dir = store.lock().dir().to_owned();
+    let ledger = Arc::new(store.ledger().clone());
+    let mut given = Given {
+        before: Arc::clone(&ledger),
+        now: ledger,
+    };
+    ask(&mut given, hub, config, policy, repo, pr, head, &dir)
+}
+
+/// [`ask`] about PR 7 at `head`, with the ledger as it was `before` GitHub
+/// was read, and as `store` holds it after.
+fn asked_since(
+    before: Arc<Ledger>,
+    store: &Store,
+    hub: &Hub,
+    policy: &Policy,
+    head: &str,
+) -> Result<Asked, ClassError> {
+    let dir = store.lock().dir().to_owned();
+    let mut given = Given {
+        before,
+        now: Arc::new(store.ledger().clone()),
+    };
+    ask(&mut given, hub, &config(), policy, &repo(), 7, head, &dir)
+}
+
+/// Every read of GitHub a class makes, by kind, in order.
+fn reads(hub: &Hub) -> Vec<Call> {
+    use Call::*;
+    let mut all = Vec::new();
+    for call in [
+        Pull, MergeBase, Files, CheckRuns, Statuses, Reviews, Timeline,
+    ] {
+        all.extend(std::iter::repeat_n(call, hub.count(call)));
+    }
+    all
 }
 
 fn policy(text: &str) -> Policy {
@@ -242,4 +304,183 @@ fn an_r2_label_on_an_r2_change_keeps_its_reason() {
         (got.class(), got.said.because.as_deref()),
         (Class::R2, Some("CODEOWNERS"))
     );
+}
+
+/// Everything a class reads of GitHub is read before the lock: under it,
+/// with the PR's change as the ledger held it then, it only records.
+#[test]
+fn under_the_lock_it_only_records() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = store(&dir);
+    let hub = github(&[(HEAD, &["CODEOWNERS"])]);
+    let p = policy(POLICY);
+    let Asked::Read(read) = asked(&store, &hub, &config(), &p, &repo(), 7, HEAD).unwrap() else {
+        panic!("the ledger held nothing")
+    };
+    let before = reads(&hub);
+    assert!(before.contains(&Call::Files), "{before:?}");
+    let got = super::class(&mut store, &hub, &p, *read).unwrap();
+    assert_eq!(reads(&hub), before, "read GitHub under the lock");
+    assert!(got.recorded);
+    assert_eq!(got.class(), Class::R2);
+    let c = store.ledger().change(got.change).unwrap();
+    assert_eq!(c.current, Some(got.revision));
+}
+
+/// A class the ledger holds for the PR at its head, under this policy and
+/// its labels, is the answer before the lock: one read of the PR, its merge
+/// base kept beside the ledger, and nothing recorded.
+#[test]
+fn a_class_the_ledger_holds_needs_no_lock() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = store(&dir);
+    let hub = github(&[(HEAD, &["docs/a.md"])]);
+    let p = policy(POLICY);
+    let first = class(&mut store, &hub, &config(), &p, &repo(), 7, HEAD).unwrap();
+    let ops = store.ledger().head();
+    let mut before = reads(&hub);
+    let Asked::Held(got) = asked(&store, &hub, &config(), &p, &repo(), 7, HEAD).unwrap() else {
+        panic!("the ledger holds it")
+    };
+    assert_eq!(got.said, first.said);
+    assert!(!got.recorded);
+    before.insert(0, Call::Pull);
+    assert_eq!(reads(&hub), before, "read more than the PR");
+    assert_eq!(store.ledger().head(), ops);
+}
+
+/// Another writer that recorded the PR after it was read, as GitHub showed
+/// it later, is never written back over: the PR is read again under the
+/// lock, and recorded as it is now.
+#[test]
+fn a_pr_recorded_since_it_was_read_is_read_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = store(&dir);
+    let hub = github(&[(HEAD, &["docs/a.md"])]);
+    let p = policy(POLICY);
+    let Asked::Read(read) = asked(&store, &hub, &config(), &p, &repo(), 7, HEAD).unwrap() else {
+        panic!("the ledger held nothing")
+    };
+    hub.edit_pull(REPO, 7, |pr| pr["title"] = "renamed".into());
+    crate::ingest::pull(&mut store, &hub, &config(), &repo(), 7).unwrap();
+    let pulls = hub.count(Call::Pull);
+    let got = super::class(&mut store, &hub, &p, *read).unwrap();
+    let c = store.ledger().change(got.change).unwrap();
+    assert_eq!(c.intent.as_ref().unwrap().summary, "renamed");
+    assert_eq!(hub.count(Call::Pull), pulls + 1, "not read again");
+    assert_eq!(compared(&hub).len(), 1, "its files read again");
+    assert_eq!(got.class(), Class::R0);
+}
+
+/// A class the ledger held before the reads is the answer only as the
+/// ledger holds it after them: another writer may have recorded a raise
+/// meanwhile, by a label taken off again before this call read the PR, and
+/// a raise stays once it's recorded.
+#[test]
+fn a_raise_recorded_while_it_reads_stays() {
+    for label in ["r2", "review"] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = store(&dir);
+        let hub = github(&[(HEAD, &["docs/a.md"])]);
+        let p = policy(POLICY);
+        let plain = class(&mut store, &hub, &config(), &p, &repo(), 7, HEAD).unwrap();
+        let before = Arc::new(store.ledger().clone());
+        hub.label(REPO, 7, &[label]);
+        let raised = class(&mut store, &hub, &config(), &p, &repo(), 7, HEAD).unwrap();
+        assert!(raised.recorded && raised.said != plain.said, "{label}");
+        hub.label(REPO, 7, &[]);
+        let Asked::Held(got) = asked_since(before, &store, &hub, &p, HEAD).unwrap() else {
+            panic!("the ledger holds it")
+        };
+        assert_eq!(got.said, raised.said, "{label}");
+    }
+}
+
+fn pull(store: &mut Store, hub: &Hub) {
+    crate::ingest::pull(store, hub, &config(), &repo(), 7).unwrap();
+}
+
+/// The PR recorded by another writer after it was read is read again under
+/// the lock, even where what was recorded set its change back as the ledger
+/// held it before the read: here, a title read as B, then recorded as C and
+/// as it was before.
+#[test]
+fn a_title_put_back_since_it_was_read_is_read_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = store(&dir);
+    let hub = github(&[(HEAD, &["docs/a.md"])]);
+    let p = policy(POLICY);
+    pull(&mut store, &hub);
+    let before = Arc::new(store.ledger().clone());
+    let title = before
+        .by_pr(&repo(), 7)
+        .unwrap()
+        .intent
+        .clone()
+        .unwrap()
+        .summary;
+    hub.edit_pull(REPO, 7, |pr| pr["title"] = "B".into());
+    let Asked::Read(read) = asked_since(before, &store, &hub, &p, HEAD).unwrap() else {
+        panic!("the ledger held no class")
+    };
+    hub.edit_pull(REPO, 7, |pr| pr["title"] = "C".into());
+    pull(&mut store, &hub);
+    hub.edit_pull(REPO, 7, |pr| pr["title"] = title.clone().into());
+    pull(&mut store, &hub);
+    let pulls = hub.count(Call::Pull);
+    let got = super::class(&mut store, &hub, &p, *read).unwrap();
+    let c = store.ledger().change(got.change).unwrap();
+    assert_eq!(c.intent.as_ref().unwrap().summary, title);
+    assert_eq!(hub.count(Call::Pull), pulls + 1, "not read again");
+}
+
+/// The same, for a PR read closed, then recorded closed and reopened.
+#[test]
+fn a_pr_closed_and_reopened_since_it_was_read_is_read_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = store(&dir);
+    let hub = github(&[(HEAD, &["docs/a.md"])]);
+    let p = policy(POLICY);
+    pull(&mut store, &hub);
+    let before = Arc::new(store.ledger().clone());
+    hub.close(REPO, 7);
+    let Asked::Read(read) = asked_since(before, &store, &hub, &p, HEAD).unwrap() else {
+        panic!("the ledger held no class")
+    };
+    pull(&mut store, &hub);
+    hub.reopen(REPO, 7);
+    pull(&mut store, &hub);
+    let got = super::class(&mut store, &hub, &p, *read).unwrap();
+    let c = store.ledger().change(got.change).unwrap();
+    assert_eq!(c.status(), Status::Open);
+}
+
+/// The same, for a PR read at HEAD2, then recorded there and back at HEAD,
+/// both of them heads the ledger held before: it's at HEAD, so the class
+/// asked for at HEAD2 is refused.
+#[test]
+fn a_pr_pushed_away_and_back_since_it_was_read_is_read_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = store(&dir);
+    let hub = github(&[(HEAD, &["docs/a.md"]), (HEAD2, &["docs/b.md"])]);
+    let p = policy(POLICY);
+    pull(&mut store, &hub);
+    hub.push(REPO, 7, HEAD2);
+    pull(&mut store, &hub);
+    hub.push(REPO, 7, HEAD);
+    pull(&mut store, &hub);
+    let before = Arc::new(store.ledger().clone());
+    hub.push(REPO, 7, HEAD2);
+    let Asked::Read(read) = asked_since(before, &store, &hub, &p, HEAD2).unwrap() else {
+        panic!("the ledger held no class")
+    };
+    pull(&mut store, &hub);
+    hub.push(REPO, 7, HEAD);
+    pull(&mut store, &hub);
+    match super::class(&mut store, &hub, &p, *read) {
+        Err(ClassError::Moved { head, .. }) => assert_eq!(head, HEAD),
+        other => panic!("{other:?}"),
+    }
+    let c = store.ledger().by_pr(&repo(), 7).unwrap();
+    assert_eq!(c.revision(c.current.unwrap()).unwrap().head.as_str(), HEAD);
 }

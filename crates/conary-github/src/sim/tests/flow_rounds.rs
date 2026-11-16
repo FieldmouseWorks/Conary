@@ -23,8 +23,8 @@ fn past_the_limit_fixes_findings_then_judges_answered_findings() {
             .contains("Past the review-round limit (5)")
     );
     c.answered("primary");
-    assert_eq!(c.pass(4001).step, Step::Judge);
-    c.judge("land");
+    assert_eq!(c.pass(4001).step, Step::Judge(vec![Trigger::RoundLimit]));
+    c.judge("pass");
     assert_eq!(c.view(4002).step, Step::Merge);
 }
 #[test]
@@ -33,8 +33,8 @@ fn a_push_past_the_limit_is_judged_not_reviewed_again() {
     let mut c = five();
     c.answered("primary");
     c.push(&head(4));
-    assert_eq!(c.pass(4000).step, Step::Judge);
-    c.judge("failed");
+    assert_eq!(c.pass(4000).step, Step::Judge(vec![Trigger::RoundLimit]));
+    c.judge("fail");
     assert_eq!(c.pass(4001).step, Step::HandFix(Kind::JudgeFailure));
     c.judge("owner");
     assert_eq!(c.view(4002).step, Step::ListOwner);
@@ -55,8 +55,8 @@ fn an_already_queued_look_is_owed_even_after_a_land_verdict() {
     c.answered("primary");
     c.service("secondary").queued = true;
     assert_eq!(c.pass(4000).stage, Stage::Review);
-    c.judge("land");
-    assert!(!matches!(c.pass(4001).step, Step::Merge | Step::Judge));
+    c.judge("pass");
+    assert!(!matches!(c.pass(4001).step, Step::Merge | Step::Judge(_)));
     c.service("secondary").queued = false;
     c.review("secondary", Verdict::Findings, 20);
     assert_eq!(c.view(4002).step, Step::HandFix(Kind::Findings));
@@ -71,7 +71,7 @@ fn lost_findings_are_owed_on_the_same_base_after_a_push() {
         .entry("primary".into())
         .or_default()
         .insert("main".into(), head(3).into());
-    c.judge("land");
+    c.judge("pass");
     assert_eq!(c.pass(4000).step, Step::QueueReview("primary".into()));
     c.push(&head(4));
     assert!(matches!(
@@ -80,7 +80,7 @@ fn lost_findings_are_owed_on_the_same_base_after_a_push() {
     ));
     assert_eq!(c.pass(4301).step, Step::QueueReview("primary".into()));
     c.review("primary", Verdict::Clean, 4400);
-    assert_eq!(c.pass(4500).step, Step::Judge);
+    assert_eq!(c.pass(4500).step, Step::Judge(vec![Trigger::RoundLimit]));
     assert!(c.memory.lost_on.is_empty());
 }
 #[test]
@@ -98,7 +98,7 @@ fn an_earlier_head_in_flight_is_posted_past_the_limit() {
             verdict: Verdict::Findings,
             at: 4001,
         });
-        c.judge("land");
+        c.judge("pass");
         assert_eq!(c.view(4002).step, Step::PostReview("primary".into()));
     }
 }
@@ -154,7 +154,7 @@ fn the_cap_survives_outages_including_every_reviewer_being_out() {
         if all {
             c.service("secondary").unavailable_until = Some(9000);
         }
-        assert_eq!(c.view(4000).step, Step::Judge);
+        assert_eq!(c.view(4000).step, Step::Judge(vec![Trigger::RoundLimit]));
     }
 }
 #[test]
@@ -185,7 +185,7 @@ fn unseen_snapshot_paths_still_need_a_judge_after_clean_reviews() {
     // review.py:178-189: hidden-path evidence survives a lost local snapshot.
     let mut c = Case::new();
     c.unseen = true;
-    assert_eq!(c.view(4000).step, Step::Judge);
+    assert_eq!(c.view(4000).step, Step::Judge(vec![Trigger::HiddenFiles]));
 }
 
 #[test]
@@ -193,13 +193,13 @@ fn an_authors_r2_raise_cannot_be_taken_back_with_the_label() {
     // gates.py / Conary's class: author raises persist across passes and heads.
     let mut c = Case::new();
     c.label(&["r2"]);
-    assert_eq!(c.pass(4000).step, Step::Judge);
+    assert_eq!(c.pass(4000).step, Step::Judge(vec![Trigger::R2]));
     c.label(&[]);
-    c.judge("land");
+    c.judge("pass");
     assert_eq!(c.pass(4001).step, Step::ListOwner);
     c.push(&head(4));
     c.review("reviewer", Verdict::Clean, 4002);
-    c.judge("land");
+    c.judge("pass");
     assert_eq!(c.view(5000).step, Step::ListOwner);
 }
 #[test]

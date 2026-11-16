@@ -40,7 +40,7 @@ fn old_judge_and_sweep_tokens_cannot_be_reissued_by_copying_or_editing_comments(
         if sweep {
             c.sweep("ok");
         } else {
-            c.judge("land");
+            c.judge("pass");
         }
         let old = c
             .hub
@@ -70,8 +70,8 @@ fn old_judge_and_sweep_tokens_cannot_be_reissued_by_copying_or_editing_comments(
             c.sweep("ok");
             assert_eq!(c.facts().major, Some(Major::Cleared));
         } else {
-            c.judge("land");
-            assert_eq!(c.facts().judgment.unwrap().verdict, Judgment::Land);
+            c.judge("pass");
+            assert_eq!(c.facts().judgment.unwrap().verdict, Judgment::Pass);
         }
     }
 }
@@ -80,7 +80,7 @@ fn a_title_edit_invalidates_reviews_and_judgments_without_rebinding_legacy_scope
     for judged in [false, true] {
         let mut c = Case::new();
         if judged {
-            c.judge("land");
+            c.judge("pass");
         }
         c.hub
             .edit_pull(REMI, 3, |p| p["title"] = json!("change: a different claim"));
@@ -113,7 +113,7 @@ fn dependency_landing_never_skips_existing_or_owed_reviewer_gates() {
                 c.secret();
             }
             c.sweep("ok");
-            c.judge("land");
+            c.judge("pass");
             c.roles(&["reviewer"]);
             assert_eq!(c.view(8000).step, Step::QueueReview("reviewer".into()));
             c.review("reviewer", Verdict::Findings, 600);
@@ -226,17 +226,17 @@ fn configured_proof_case_is_preserved_without_blocking_job_admission() {
         let mut c = Case::new();
         c.settings
             .proofs
-            .insert("VM".into(), Recipe::Job("exercise".into()));
+            .insert("VM".into(), Recipe::Run(vec!["exercise".into()]));
         if let Some(context) = context {
             c.hub.put_statuses(
                 &c.scope().head,
                 json!([{"context":context,"state":"pending"}]),
             );
         }
-        assert_eq!(c.view(8000).step, Step::Prove);
+        assert_eq!(c.view(8000).step, Step::Prepare);
         assert_eq!(
             c.view(8000).proof,
-            Some(ProofPlan::Job(c.settings.proofs.clone()))
+            Some(ProofPlan::Prepare(c.settings.proofs.clone()))
         );
     }
 }
@@ -254,7 +254,7 @@ fn observed_generations_survive_deleted_or_rewritten_decision_history() {
             c.review("reviewer", Verdict::Clean, 600);
             c.sweep("ok");
         } else {
-            c.judge("land");
+            c.judge("pass");
         }
         let old = c.hub.comments(REMI, 3).unwrap()[0].body.clone().unwrap();
         if sweep {
@@ -273,7 +273,7 @@ fn observed_generations_survive_deleted_or_rewritten_decision_history() {
         if sweep {
             c.sweep("ok");
         } else {
-            c.judge("land");
+            c.judge("pass");
         }
         assert_eq!(c.pass(8200).step, Step::Merge);
     }
@@ -284,25 +284,40 @@ fn issuance_metadata_is_authenticated_and_conflicting_generations_fail_closed() 
     let key = SealKey::from_hex(&"a".repeat(64)).unwrap();
     c.settings.judge_key = Some(key.clone());
     c.settings.verdict_authors.insert("owner".into());
-    let land = key.decision(REMI, 3, "autoland-judgment", "land", &c.scope(), 9);
+    // A producer's v3 pass; v2 issuances share its generations.
+    let scope = c.scope();
+    let basis = super::judged_for_everything(&c.hub, REMI);
+    let pass = |generation| {
+        key.judgment_by(
+            REMI,
+            3,
+            Judgment::Pass,
+            &scope,
+            generation,
+            super::judge_provenance(),
+            basis.clone(),
+        )
+        .unwrap()
+    };
+    let land = pass(9);
     let tampered = land.replace("\"generation\":9", "\"generation\":99");
     c.hub.flow_comment(REMI, 3, "owner", &tampered);
     assert!(c.facts().judgment.is_none());
     c.hub.flow_comment(REMI, 3, "owner", &land);
     let owner = key.decision(REMI, 3, "autoland-judgment", "owner", &c.scope(), 9);
     c.hub.flow_comment(REMI, 3, "owner", &owner);
-    assert_eq!(c.pass(8000).step, Step::Judge);
+    assert_eq!(c.pass(8000).step, Step::Judge(vec![Trigger::Asked]));
     c.hub.edit_flow_comment(REMI, 3, 2, "");
-    assert_eq!(c.pass(8100).step, Step::Judge);
-    let newer = key.decision(REMI, 3, "autoland-judgment", "land", &c.scope(), 10);
+    assert_eq!(c.pass(8100).step, Step::Judge(vec![Trigger::Asked]));
+    let newer = pass(10);
     c.hub.flow_comment(REMI, 3, "owner", &newer);
     assert_eq!(c.pass(8200).step, Step::Merge);
     // An authenticated but unsupported later word cannot revive an older Land.
     let unsupported = key.decision(REMI, 3, "autoland-judgment", "unsupported", &c.scope(), 11);
     c.hub.flow_comment(REMI, 3, "owner", &unsupported);
     assert!(c.facts().judgment.is_none());
-    assert_eq!(c.pass(8300).step, Step::Judge);
-    let last = key.decision(REMI, 3, "autoland-judgment", "land", &c.scope(), 12);
+    assert_eq!(c.pass(8300).step, Step::Judge(vec![Trigger::Asked]));
+    let last = pass(12);
     c.hub.flow_comment(REMI, 3, "owner", &last);
     assert_eq!(c.pass(8400).step, Step::Merge);
 }
@@ -331,7 +346,7 @@ fn legacy_body_only_review_marks_and_seals_are_not_upgraded_to_full_scope() {
         "owner",
         &format!("<!-- autoland-judgment: land {} {tag} -->", scope.head),
     );
-    assert_eq!(c.view(8000).step, Step::Judge);
+    assert_eq!(c.view(8000).step, Step::Judge(vec![Trigger::Asked]));
 }
 #[test]
 fn carried_clean_provenance_cannot_cover_later_losses_or_refused_findings() {
@@ -397,7 +412,7 @@ fn carried_reviews_also_bind_title_and_body_to_the_original_claim() {
 #[test]
 fn mixed_proof_kinds_use_case_insensitive_membership_and_configured_plan_names() {
     use std::collections::BTreeMap;
-    for selected in ["Build", "Run", "VM"] {
+    for selected in ["Build", "Run"] {
         let mut c = Case::new();
         c.settings.proofs = BTreeMap::from([
             ("Build".into(), Recipe::Build("checks.build".into())),
@@ -413,21 +428,14 @@ fn mixed_proof_kinds_use_case_insensitive_membership_and_configured_plan_names()
             ]),
         );
         let n = c.view(8000);
-        assert_eq!(n.step, Step::Prove);
+        assert_eq!(n.step, Step::Prepare);
         let recipes = BTreeMap::from([(selected.into(), c.settings.proofs[selected].clone())]);
-        assert_eq!(
-            n.proof,
-            Some(match selected {
-                "Build" => ProofPlan::Evaluate(recipes),
-                "Run" => ProofPlan::Run(recipes),
-                _ => ProofPlan::Job(recipes),
-            })
-        );
+        assert_eq!(n.proof, Some(ProofPlan::Prepare(recipes)));
     }
     let mut c = Case::new();
     c.settings
         .proofs
-        .insert("VM".into(), Recipe::Job("exercise".into()));
+        .insert("VM".into(), Recipe::Run(vec!["exercise".into()]));
     c.hub.put_checks(
         &c.scope().head,
         json!([
@@ -435,22 +443,22 @@ fn mixed_proof_kinds_use_case_insensitive_membership_and_configured_plan_names()
             {"id":2,"name":"vM","status":"in_progress","conclusion":null}
         ]),
     );
-    assert_eq!(c.view(8000).step, Step::Prove);
+    assert_eq!(c.view(8000).step, Step::Prepare);
 }
 
 #[test]
 fn judgments_bind_the_complete_claim_after_a_fresh_review_of_an_edit() {
     for title in [false, true] {
         let mut c = Case::new();
-        c.judge("land");
+        c.judge("pass");
         c.hub.edit_pull(REMI, 3, |p| {
             p[if title { "title" } else { "body" }] = json!("a new claim")
         });
         c.hub.refresh_flow(REMI, 3);
         c.review("reviewer", Verdict::Clean, 700);
         assert!(c.facts().judgment.is_none());
-        assert_eq!(c.view(8000).step, Step::Judge);
-        c.judge("land");
+        assert_eq!(c.view(8000).step, Step::Judge(vec![Trigger::Asked]));
+        c.judge("pass");
         assert_eq!(c.view(8000).step, Step::Merge);
     }
 }
@@ -466,7 +474,7 @@ fn legacy_findings_keep_the_round_cap_without_supplying_clean_coverage() {
     let f = c.facts();
     assert_eq!(f.reviewers["reviewer"].rounds, 5);
     assert!(f.reviewers["reviewer"].review.is_none());
-    assert_eq!(c.view(8000).step, Step::Judge);
+    assert_eq!(c.view(8000).step, Step::Judge(vec![Trigger::RoundLimit]));
     c.review("reviewer", Verdict::Clean, 600);
     assert_eq!(c.view(8000).step, Step::Merge);
 }

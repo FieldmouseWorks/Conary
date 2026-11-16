@@ -14,6 +14,7 @@ conary-core = { version = "0.0.0", path = "../conary-core" }
 ed25519-dalek = "3.0.0"
 regex = "1.13.1"
 ring = "0.17.14"
+schemars = "1.2.3"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 sha1 = { version = "0.11.0", default-features = false }
@@ -31,6 +32,13 @@ workspace = true
 [[bin]]
 name = "conary-flow-test-plugin"
 path = "../conary-core/examples/plugin.rs"
+test = false
+bench = false
+doc = false
+
+[[bin]]
+name = "conary-execution-test-plugin"
+path = "tests/support/execution_plugin.rs"
 test = false
 bench = false
 doc = false

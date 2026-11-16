@@ -104,7 +104,10 @@ fn dependency_edits_are_reviewed_for_both_author_and_committer_changes() {
 fn majors_threads_and_security_use_their_own_gates() {
     // deps.py:41,45,59,126,136,144,149,259,265,270,282.
     let c = bot(false, true);
-    assert_eq!(c.view(8000).step, Step::Judge);
+    assert_eq!(
+        c.view(8000).step,
+        Step::Judge(vec![Trigger::MajorDependency])
+    );
     let mut c = bot(true, true);
     c.settings.renovate_sweep = true;
     assert_eq!(c.view(8000).stage, Stage::Review);

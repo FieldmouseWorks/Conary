@@ -90,57 +90,93 @@ pub(crate) fn act<G: Write>(
                         head: f.revision.head.clone(),
                         author,
                     },
+                    Vec::new(),
                     record,
                     data,
                 )?;
             }
             Step::HandFix(kind) => {
-                let problems = super::handoff::problems(github, f, &record.memory, *kind)?;
+                let (problems, handed) =
+                    super::handoff::problems(github, f, &record.memory, *kind)?
+                        .into_iter()
+                        .unzip();
                 pass.start(
                     f,
                     Purpose::Fix(*kind),
                     Task::Fix {
                         repo,
+                        pr: f.number,
                         head: f.revision.head.clone(),
                         problems,
                     },
+                    handed,
                     record,
                     data,
                 )?;
             }
-            Step::Judge => {
+            Step::Judge(decided) => {
                 let author = author(github, f, record)?;
                 pass.start(
                     f,
                     Purpose::Judge,
                     Task::Judge {
                         repo,
+                        pr: f.number,
                         head: f.revision.head.clone(),
                         against: format!("{}\n{}", f.title, f.description),
                         author,
+                        reviewers: reviewers(record)?,
+                        why: super::judging::why(record, &f.revision, decided)?,
+                        context: f.context(),
                     },
+                    Vec::new(),
+                    record,
+                    data,
+                )?;
+            }
+            Step::Prepare => {
+                let checks = super::proofs::selected(f).into_keys().collect();
+                let tree = github.tree(&repo, &f.revision.head)?;
+                pass.start(
+                    f,
+                    Purpose::Prepare,
+                    Task::Prepare {
+                        repo,
+                        head: f.revision.head.clone(),
+                        tree,
+                        checks,
+                    },
+                    Vec::new(),
                     record,
                     data,
                 )?;
             }
             Step::Prove => {
-                let checks = super::pass::recipes(f).into_keys().collect();
+                let checks = super::proofs::selected(f).into_keys().collect();
                 let tree = github.tree(&repo, &f.revision.head)?;
                 pass.start(
                     f,
                     Purpose::Proof,
-                    Task::Proof { repo, tree, checks },
+                    Task::Proof {
+                        repo,
+                        head: f.revision.head.clone(),
+                        tree,
+                        checks,
+                    },
+                    Vec::new(),
                     record,
                     data,
                 )?;
             }
             Step::PostReview(role) => {
-                let work = record
+                let at = record
                     .jobs
-                    .iter_mut()
-                    .rev()
-                    .find(|w| matches!(&w.purpose, Purpose::Review(r) if r == role) && !w.posted)
+                    .iter()
+                    .rposition(|w| {
+                        matches!(&w.purpose, Purpose::Review(r) if r == role) && !w.posted
+                    })
                     .ok_or("review answer missing")?;
+                let work = &record.jobs[at];
                 let completion = jobs::completion(work, pass.now)?;
                 let Some(Ok(plugin::Response {
                     answer: plugin::Answer::Review { findings },
@@ -154,21 +190,23 @@ pub(crate) fn act<G: Write>(
                 }
                 let body =
                     super::write::review_body(role, &work.job.revision, completion.at, &findings);
-                // A write can succeed even when its response is lost. Reconcile
-                // the exact authenticated marker before spending another round.
-                let already_posted = github.reviews(&repo, f.number)?.iter().any(|r| {
-                    r.commit_id.as_deref() == Some(work.job.revision.head.as_str())
-                        && r.body.as_deref() == Some(body.as_str())
-                        && r.user
-                            .as_ref()
-                            .is_some_and(|u| f.settings.review_authors.contains(&u.login))
-                });
-                if !already_posted {
-                    github.review(&repo, f.number, &work.job.revision.head, &body)?;
-                }
-                work.posted = true;
+                super::publish::review(
+                    github, f, role, record, data, at, pass.now, &body, &findings,
+                )?;
+                record.jobs[at].posted = true;
             }
-            Step::PostFix(_) => return Err("v1 fix results cannot carry thread replies".into()),
+            Step::PostFix(id) => {
+                if super::claims::superseded(f, id) {
+                    return Err("a later fix superseded this one's answers".into());
+                }
+                let at = record
+                    .jobs
+                    .iter()
+                    .position(|w| &w.job.id == id && matches!(w.purpose, Purpose::Fix(_)))
+                    .ok_or("fix job missing")?;
+                super::publish::answers(github, f, record, data, at, pass.now)?;
+                record.jobs[at].posted = true;
+            }
             Step::PostProof => {
                 return Err("proof output awaits independently attested GitHub evidence".into());
             }
@@ -194,6 +232,16 @@ pub(crate) fn act<G: Write>(
                     return Err("review-settled permission was not observed".into());
                 }
                 permission(pass, github, f, record)?;
+                // The commits its merge squashes, whose trailers its landing
+                // commit says, read before the intent is saved. One whose
+                // trailers can't all be read isn't merged without them.
+                let base = f.base_tip.as_deref().unwrap_or(&f.revision.base);
+                let commits = github.compare_commits(&repo, base, &f.revision.head)?;
+                let message = crate::train::Message::new(
+                    &f.title,
+                    f.number,
+                    crate::train::messages(&commits)?.iter().map(String::as_str),
+                );
                 super::ledger::begin(f, record)?;
                 let status = status.expect("permission checked above");
                 record.landing.as_mut().expect("saved intent").permission =
@@ -211,7 +259,7 @@ pub(crate) fn act<G: Write>(
                         text: status.description.clone(),
                     });
                 data.save(f.number, record)?;
-                match github.land(&repo, f.number, &f.revision.head)? {
+                match github.land(&repo, f.number, &f.revision.head, &message)? {
                     crate::train::PrMerge::Merged => {
                         record.landing.as_mut().expect("saved intent").accepted = true;
                         data.save(f.number, record)?;
@@ -283,7 +331,14 @@ pub(crate) fn act<G: Write>(
             }
             Step::DisableAutoMerge => github.disable_auto_merge(&repo, f.number)?,
             Step::CloseAlreadyLanded => github.close(&repo, f.number)?,
-            Step::ListOwner => github.owner(&repo, f.number, &f.settings.owner_label)?,
+            Step::ListOwner => {
+                let label = f
+                    .settings
+                    .owner_label
+                    .as_deref()
+                    .ok_or("no owner label is set")?;
+                github.owner(&repo, f.number, label)?
+            }
         }
         Ok(vec![kind, Failure::Status])
     };
@@ -307,17 +362,30 @@ fn failure(step: &Step) -> Failure {
         Step::CloseAlreadyLanded => Failure::Close,
         Step::PostReview(_) => Failure::Post,
         Step::PostFix(_) => Failure::Answer,
-        Step::Prove | Step::PostProof => Failure::Build,
-        Step::QueueReview(_) | Step::HandFix(_) | Step::Judge => Failure::Job,
+        Step::Prepare | Step::Prove | Step::PostProof => Failure::Build,
+        Step::QueueReview(_) | Step::HandFix(_) | Step::Judge(_) => Failure::Job,
         Step::StopJob(_) => Failure::Stop,
         _ => Failure::Status,
     }
 }
+fn reviewers(record: &Record) -> Result<Vec<plugin::Identity>> {
+    let mut reviewers = Vec::new();
+    for work in &record.jobs {
+        if matches!(work.purpose, Purpose::Review(_))
+            && let Some(Ok(response)) = jobs::completion(work, jobs::now())?.result
+        {
+            reviewers.push(response.by);
+        }
+    }
+    Ok(reviewers)
+}
+
 fn author<G: Read>(github: &G, f: &Facts, record: &Record) -> Result<plugin::Identity> {
     for work in record.jobs.iter().rev() {
         if let Some(Ok(response)) = jobs::completion(work, jobs::now())?.result
             && let plugin::Answer::Fix {
                 result: plugin::FixResult::Pushed { head },
+                ..
             } = &response.answer
             && head == &f.revision.head
         {

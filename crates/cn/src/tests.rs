@@ -130,18 +130,32 @@ fn help_never_shows_the_token_command() {
 fn the_fresh_runners_are_a_machine_setting() {
     use clap::CommandFactory;
     let cli = Cli::command();
-    let step = cli
-        .find_subcommand("train")
-        .and_then(|t| t.find_subcommand("step"))
-        .expect("cn train step");
-    let fresh = step
+    for (group, name) in [("train", "step"), ("attest", "job")] {
+        let command = cli
+            .find_subcommand(group)
+            .and_then(|t| t.find_subcommand(name))
+            .unwrap_or_else(|| panic!("cn {group} {name}"));
+        for (long, env) in [
+            ("fresh-runners", "CONARY_FRESH_RUNNERS"),
+            ("signer-workflow", "CONARY_SIGNER_WORKFLOW"),
+        ] {
+            let arg = command
+                .get_arguments()
+                .find(|a| a.get_long() == Some(long))
+                .unwrap_or_else(|| panic!("cn {group} {name} --{long}"));
+            assert_eq!(arg.get_env().and_then(|e| e.to_str()), Some(env));
+        }
+    }
+    // A door's token command is as secret as any.
+    let job = cli
+        .find_subcommand("attest")
+        .and_then(|t| t.find_subcommand("job"))
+        .unwrap();
+    let token_command = job
         .get_arguments()
-        .find(|a| a.get_long() == Some("fresh-runners"))
-        .expect("--fresh-runners");
-    assert_eq!(
-        fresh.get_env().and_then(|e| e.to_str()),
-        Some("CONARY_FRESH_RUNNERS")
-    );
+        .find(|a| a.get_id() == "token_command")
+        .expect("cn attest job --token-command");
+    assert!(token_command.is_hide_env_values_set());
 }
 
 #[test]
@@ -224,6 +238,10 @@ fn a_refusal_exits_apart_from_a_run_that_stopped() {
         (true, false)
     );
     assert_eq!(
+        boxed(attest::Refused("its token expired".into()).into()),
+        (true, false)
+    );
+    assert_eq!(
         boxed(Stopped::from(UndoError::Api(ApiError::new("Server Error"))).into()),
         (false, false)
     );
@@ -258,4 +276,62 @@ fn github_unavailable_is_told_through_whatever_wraps_it() {
     assert!(!boxed(IngestError::Api(ApiError::new("refused")).into()));
     assert!(!boxed(AnchorError::Lost("gone".into()).into()));
     assert!(!boxed("no token".into()));
+}
+
+// `cn lessons check` passes a register with an open lesson; `cn lessons
+// exit` fails on it only for the milestone that ships its component, and
+// refuses a broken register either way.
+#[test]
+fn lessons_check_passes_an_open_lesson_that_exit_refuses() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("lessons.toml");
+    let entry = |status: &str| {
+        format!(
+            r#"milestones = ["M6", "M7"]
+[components]
+"flow" = ["M6"]
+"M7 standalone setup" = ["M7"]
+[[lessons]]
+id = "a"
+lesson = "One line."
+from = ["https://github.com/FieldmouseWorks/burrow/issues/1"]
+applies = ["flow"]
+status = "{status}"
+where = ["https://github.com/FieldmouseWorks/Conary/issues/312"]
+"#
+        )
+    };
+    let run = |args: &[&str]| {
+        let register = path.to_str().unwrap();
+        let cli =
+            Cli::try_parse_from([&["cn", "lessons"], args, &["--register", register]].concat())
+                .unwrap();
+        let Command::Lessons { command } = &cli.command else {
+            unreachable!()
+        };
+        lessons::run(&cli, command).map_err(|e| e.to_string())
+    };
+
+    std::fs::write(&path, entry("open")).unwrap();
+    run(&["check"]).unwrap();
+    let e = run(&["exit", "M6"]).unwrap_err();
+    assert!(
+        e.contains("M6 can't exit while 1 open lessons apply"),
+        "{e}"
+    );
+    run(&["exit", "M7"]).unwrap();
+    assert!(
+        run(&["exit", "M8"])
+            .unwrap_err()
+            .contains("no milestone M8")
+    );
+
+    std::fs::write(&path, entry("designed")).unwrap();
+    run(&["exit", "M6"]).unwrap();
+
+    std::fs::write(&path, entry("done")).unwrap();
+    for args in [&["check"][..], &["exit", "M7"]] {
+        let e = run(args).unwrap_err();
+        assert!(e.contains("doesn't parse"), "{args:?}: {e}");
+    }
 }

@@ -22,7 +22,7 @@ fn decision(diff: Option<&str>, path: &str) -> (Next, Facts) {
         &REMI.parse().unwrap(),
         3,
         &conary_core::Policy::parse(b"{}").unwrap(),
-        Settings::default(),
+        crate::sim::settings(),
         &["owner".into()],
     )
     .unwrap();

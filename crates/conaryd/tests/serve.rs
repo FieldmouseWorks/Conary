@@ -123,8 +123,12 @@ fn a_line_too_long_is_refused_and_the_connection_closed() {
     let socket = dir.path().join("conaryd.sock");
     let _store = daemon(&dir.path().join("ledger"), &socket);
     let mut client = Client::connect(&socket);
-    let long = "x".repeat(usize::try_from(conaryd::MAX_LINE).unwrap() + 1);
-    client.send(&long);
+    // Exactly what conaryd reads before it refuses, with no newline: it has
+    // to refuse without waiting for one, and it closes the connection once
+    // it has. Anything sent past these bytes could meet that close as a
+    // broken pipe, or be left unread for this end to see as a reset.
+    let long = vec![b'x'; usize::try_from(conaryd::MAX_LINE).unwrap() + 1];
+    client.out.write_all(&long).unwrap();
     assert_eq!(client.reply()["error"]["code"], -32700);
     let mut rest = Vec::new();
     client.lines.read_to_end(&mut rest).unwrap();
@@ -222,7 +226,12 @@ fn webhook_http_queues_before_a_pass_and_refuses_bad_requests() {
     use std::sync::Arc;
     let dir = tempfile::tempdir().unwrap();
     let queue = Arc::new(Queue::open(dir.path()).unwrap());
-    let receiver = Receiver::open(b"s".to_vec(), ["o/r".into()], dir.path()).unwrap();
+    let receiver = Receiver::open(
+        b"s".to_vec(),
+        Box::new(|| Ok(vec!["o/r".into()])),
+        dir.path(),
+    )
+    .unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
     let incoming = Arc::clone(&queue);

@@ -9,6 +9,19 @@ pub(super) fn wait(stage: Stage, until: Option<u64>, why: &str) -> Decision {
     at(stage, Step::Wait { until }, why)
 }
 
+/// Hand the PR to its owner, or wait unlisted when no owner label is set.
+pub(super) fn owner(f: &Facts, why: &str) -> Decision {
+    if f.settings.owner_label.is_some() {
+        at(Stage::Owner, Step::ListOwner, why)
+    } else {
+        wait(
+            Stage::Owner,
+            None,
+            &format!("{why}; no owner label is set to list it"),
+        )
+    }
+}
+
 pub(super) fn decide(f: &Facts, m: &mut Memory, now: u64) -> Decision {
     if let Some(kind) = f.failed {
         return failed(m, kind, now, "The step failed; trying again later");
@@ -30,11 +43,11 @@ pub(super) fn decide(f: &Facts, m: &mut Memory, now: u64) -> Decision {
             "Stop obsolete work before starting another job",
         );
     }
-    if let Some(job) = super::proofs::obsolete_inputs(f) {
+    if let Some(job) = super::proofs::obsolete_preparation(f) {
         return at(
-            Stage::ProofSlot,
+            Stage::Proof,
             Step::StopJob(job.id.clone()),
-            "Stop inputs for an obsolete proof",
+            "Stop preparing inputs for an obsolete proof",
         );
     }
     if let Some(job) = super::proofs::obsolete(f) {
@@ -47,10 +60,7 @@ pub(super) fn decide(f: &Facts, m: &mut Memory, now: u64) -> Decision {
     // Only proofs and judgments belong to a head. Fix jobs own the branch
     // across pushes, including their own push, and must be left running.
     if let Some((_, job)) = f.jobs.iter().find(|(kind, job)| {
-        !kind.fixes_branch()
-            && job.state.live()
-            && job.revision.head != f.revision.head
-            && !(**kind == Kind::Proof && super::proofs::useful(f, &job.id))
+        !kind.fixes_branch() && job.state.live() && job.revision.head != f.revision.head
     }) {
         return at(
             Stage::Fix,
@@ -72,18 +82,10 @@ pub(super) fn decide(f: &Facts, m: &mut Memory, now: u64) -> Decision {
         );
     }
     if !f.trusted {
-        return at(
-            Stage::Owner,
-            Step::ListOwner,
-            "Outside contribution: the owner reviews and merges it",
-        );
+        return owner(f, "Outside contribution: the owner reviews and merges it");
     }
     if !f.complete {
-        return at(
-            Stage::Owner,
-            Step::ListOwner,
-            "Too much to read: the owner merges it",
-        );
+        return owner(f, "Too much to read: the owner merges it");
     }
     if f.base_held {
         return wait(Stage::Base, None, "Waiting for the default branch's CI");
@@ -98,12 +100,13 @@ pub(super) fn decide(f: &Facts, m: &mut Memory, now: u64) -> Decision {
             "Stacked on an open PR: waiting to be retargeted",
         );
     }
-    if f.labels.contains(&f.settings.owner_label) && !f.owner_approved {
-        return at(
-            Stage::Owner,
-            Step::ListOwner,
-            "The owner decides (the needs-peter label)",
-        );
+    if f.settings
+        .owner_label
+        .as_ref()
+        .is_some_and(|l| f.labels.contains(l))
+        && !f.owner_approved
+    {
+        return owner(f, "The owner decides (the owner label)");
     }
     if let Some((kind, job)) = f
         .jobs
@@ -132,11 +135,7 @@ pub(super) fn decide(f: &Facts, m: &mut Memory, now: u64) -> Decision {
             );
         }
         if f.major == Some(Major::Held) {
-            return at(
-                Stage::Owner,
-                Step::ListOwner,
-                "Major update held for the owner",
-            );
+            return owner(f, "Major update held for the owner");
         }
         if f.renovate
             && f.dependency.is_some()
@@ -179,11 +178,7 @@ pub(super) fn decide(f: &Facts, m: &mut Memory, now: u64) -> Decision {
             );
         }
         if f.major == Some(Major::Held) {
-            return at(
-                Stage::Owner,
-                Step::ListOwner,
-                "Major update held for the owner",
-            );
+            return owner(f, "Major update held for the owner");
         }
         if f.renovate && f.dependency == Some(Dependency::Major) && f.major.is_none() {
             return wait(
@@ -220,10 +215,17 @@ fn ci(f: &Facts, m: &mut Memory, now: u64) -> Ci {
     }
 }
 
-fn judgment(f: &Facts) -> Option<Judgment> {
+/// The judgment that speaks for this revision now. A fail or misdescribed
+/// verdict always does. A pass or owner verdict only while it covers every
+/// reason in `why` and the discussion now ([`Judged::covers`]); otherwise
+/// the flow asks again before granting anything, and the old issuance stays.
+fn judgment(f: &Facts, why: &[Trigger]) -> Option<Judgment> {
     f.judgment
         .as_ref()
         .filter(|j| j.revision == f.revision)
+        .filter(|j| {
+            !matches!(j.verdict, Judgment::Pass | Judgment::Owner) || j.covers(why, &f.context())
+        })
         .map(|j| j.verdict)
 }
 
@@ -240,19 +242,16 @@ fn after_review(f: &Facts, m: &mut Memory, now: u64, ci: Ci, capped: bool) -> De
     if ci == Ci::Red || f.proof == Proof::Failed {
         return hand(f, m, now, Kind::Red, true);
     }
-    let verdict = judgment(f);
+    let why = judge_why(f, ci, capped);
+    let verdict = judgment(f, &why);
     if verdict == Some(Judgment::Misdescribed) {
         return hand(f, m, now, Kind::Description, false);
     }
-    if verdict == Some(Judgment::Failing) {
+    if verdict == Some(Judgment::Fail) {
         return hand(f, m, now, Kind::JudgeFailure, false);
     }
     if verdict == Some(Judgment::Owner) && !f.owner_approved {
-        return at(
-            Stage::Owner,
-            Step::ListOwner,
-            "The judge sent it to the owner",
-        );
+        return owner(f, "The judge sent it to the owner");
     }
     let pending: Vec<_> = f.checks.iter().filter(|c| c.state == Ci::Pending).collect();
     let machine = f.settings.machine();
@@ -283,26 +282,19 @@ fn after_review(f: &Facts, m: &mut Memory, now: u64, ci: Ci, capped: bool) -> De
             );
         }
         Proof::Needed if ci != Ci::Pending || proof_only || early => {
-            let retry = super::proofs::retry(f, m, now);
-            let plan = super::proofs::next(f, now);
-            if let Some(decision) = retry {
-                if let Step::Retry {
-                    kind: Failure::Lost,
-                    at,
-                } = decision.1
-                    && let Some((Stage::ProofSlot, mut step, description, _)) = plan
-                {
-                    if matches!(step, Step::Wait { .. }) {
-                        step = Step::Wait { until: Some(at) };
-                    }
-                    return (Stage::ProofSlot, step, description);
-                }
-                return decision;
+            let decision = proof(f, m, now);
+            // Zero slots run no proof: nothing starts, not even a
+            // preparation, until a machine sets some.
+            if matches!(decision.1, Step::Prove | Step::Prepare)
+                && f.settings.proof_slots == Some(0)
+            {
+                return wait(
+                    Stage::ProofSlot,
+                    None,
+                    "No proof slots are set: no machine proof starts",
+                );
             }
-            if let Some((stage, step, description, _)) = plan {
-                return (stage, step, description);
-            }
-            return work(f, m, now, Kind::Proof);
+            return decision;
         }
         _ => {}
     }
@@ -322,18 +314,12 @@ fn after_review(f: &Facts, m: &mut Memory, now: u64, ci: Ci, capped: bool) -> De
             ),
         );
     }
-    let requires_judge = f.classified.class == Class::R2
-        || f.needs_judge
-        || f.unseen
-        || ci == Ci::None
-        || f.judge_asked
+    let requires_judge = !why.is_empty()
         || f.jobs.get(&Kind::Judge).is_some_and(|j| {
             j.revision.head == f.revision.head && j.revision.base == f.revision.base
-        })
-        || capped
-        || f.dependency == Some(Dependency::Major) && !f.renovate;
+        });
     if requires_judge {
-        if !matches!(verdict, Some(Judgment::Land))
+        if !matches!(verdict, Some(Judgment::Pass))
             && !(verdict == Some(Judgment::Owner) && f.owner_approved)
         {
             if f.merging == Merge::Update {
@@ -343,15 +329,15 @@ fn after_review(f: &Facts, m: &mut Memory, now: u64, ci: Ci, capped: bool) -> De
                     "Behind its base: updated before judging",
                 );
             }
-            return work(f, m, now, Kind::Judge);
+            let mut decision = work(f, m, now, Kind::Judge);
+            if let Step::Judge(reasons) = &mut decision.1 {
+                *reasons = why;
+            }
+            return decision;
         }
         // A judge's land verdict cannot replace the person's word for R2.
         if f.classified.class == Class::R2 && !f.owner_approved {
-            return at(
-                Stage::Owner,
-                Step::ListOwner,
-                "R2: a person must decide before it lands",
-            );
+            return owner(f, "R2: a person must decide before it lands");
         }
     }
     if !f.authorship_known {
@@ -364,8 +350,33 @@ fn after_review(f: &Facts, m: &mut Memory, now: u64, ci: Ci, capped: bool) -> De
     land(f, m, now)
 }
 
+/// Every reason the flow has to ask a judge now, in the plugin contract's
+/// words: the one place that list is made.
+pub(super) fn judge_why(f: &Facts, ci: Ci, capped: bool) -> Vec<Trigger> {
+    [
+        (f.classified.class == Class::R2, Trigger::R2),
+        (f.needs_judge, Trigger::AuthorEngine),
+        (f.unseen, Trigger::HiddenFiles),
+        (ci == Ci::None, Trigger::NoCi),
+        (f.judge_asked, Trigger::Asked),
+        (capped, Trigger::RoundLimit),
+        (
+            f.dependency == Some(Dependency::Major) && !f.renovate,
+            Trigger::MajorDependency,
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(holds, trigger)| holds.then_some(trigger))
+    .collect()
+}
+
 fn land(f: &Facts, m: &mut Memory, now: u64) -> Decision {
     match f.empty {
+        // GitHub's test merge goes stale each time trunk moves, and a seat's
+        // candidate merges it again anyway: the train, not GitHub's preview,
+        // takes an empty merge out (`train::step`). So a seated head keeps
+        // its seat while GitHub catches up.
+        None if seated(f) => {}
         None => {
             return failed(
                 m,
@@ -474,6 +485,35 @@ pub(super) fn hand(f: &Facts, m: &mut Memory, now: u64, kind: Kind, delay: bool)
     work(f, m, now, kind)
 }
 
+fn proof(f: &Facts, m: &mut Memory, now: u64) -> Decision {
+    let plan = super::proofs::next(f, now);
+    // With no program to run, only model-run checks are left: they wait,
+    // with their reason, and no earlier proof is retried for them.
+    let retry = if super::proofs::selected(f).is_empty() {
+        None
+    } else {
+        super::proofs::retry(f, m, now)
+    };
+    if let Some(decision) = retry {
+        if let Step::Retry {
+            kind: Failure::Lost,
+            at,
+        } = decision.1
+            && let Some((Stage::ProofSlot, mut step, description, _)) = plan
+        {
+            if matches!(step, Step::Wait { .. }) {
+                step = Step::Wait { until: Some(at) };
+            }
+            return (Stage::ProofSlot, step, description);
+        }
+        return decision;
+    }
+    match plan {
+        Some((stage, step, description, _)) => (stage, step, description),
+        None => wait(Stage::Proof, None, "No machine proof is pending"),
+    }
+}
+
 pub(super) fn work(f: &Facts, m: &mut Memory, now: u64, kind: Kind) -> Decision {
     let stage = if kind.fixes_branch() {
         Stage::Fix
@@ -490,53 +530,53 @@ pub(super) fn work(f: &Facts, m: &mut Memory, now: u64, kind: Kind) -> Decision 
                 "A job is queued or running, or its state is unknown",
             );
         }
-        if !m.lost_jobs.insert(j.id.clone()) {
-            let second = if j.state == JobState::Done {
-                m.strikes.remove(&Failure::Lost);
-                let ended = m.unanswered.entry((kind, j.revision.clone())).or_default();
-                ended.insert(j.id.clone());
-                ended.len() >= 2 || j.repeated
+        // A judge's answer that came and no longer speaks for the revision
+        // is superseded, never missing: ask again at once.
+        if j.state != JobState::Answered {
+            if !m.lost_jobs.insert(j.id.clone()) {
+                let second = if j.state == JobState::Done {
+                    m.strikes.remove(&Failure::Lost);
+                    let ended = m.unanswered.entry((kind, j.revision.clone())).or_default();
+                    ended.insert(j.id.clone());
+                    ended.len() >= 2 || j.repeated
+                } else {
+                    false
+                };
+                if second {
+                    return owner(f, "Two jobs ended without their answer");
+                }
+                if j.state == JobState::Broken {
+                    let due = if let Some(due) = m.broken_jobs.get(&j.id) {
+                        *due
+                    } else {
+                        let n = m.strikes.entry(Failure::Lost).or_default();
+                        *n = n.saturating_add(1);
+                        let due = now.saturating_add((1u64 << (*n - 1).min(6)).min(60) * 60);
+                        m.broken_jobs.insert(j.id.clone(), due);
+                        due
+                    };
+                    if now < due {
+                        return at(
+                            stage,
+                            Step::Retry {
+                                kind: Failure::Lost,
+                                at: due,
+                            },
+                            "The last job broke; trying again later",
+                        );
+                    }
+                }
             } else {
-                false
-            };
-            if second {
-                return at(
-                    Stage::Owner,
-                    Step::ListOwner,
-                    "Two jobs ended without their answer",
+                return wait(
+                    stage,
+                    Some(now.saturating_add(60)),
+                    "The job just ended; read its answer once more",
                 );
             }
-            if j.state == JobState::Broken {
-                let due = if let Some(due) = m.broken_jobs.get(&j.id) {
-                    *due
-                } else {
-                    let n = m.strikes.entry(Failure::Lost).or_default();
-                    *n = n.saturating_add(1);
-                    let due = now.saturating_add((1u64 << (*n - 1).min(6)).min(60) * 60);
-                    m.broken_jobs.insert(j.id.clone(), due);
-                    due
-                };
-                if now < due {
-                    return at(
-                        stage,
-                        Step::Retry {
-                            kind: Failure::Lost,
-                            at: due,
-                        },
-                        "The last job broke; trying again later",
-                    );
-                }
-            }
-        } else {
-            return wait(
-                stage,
-                Some(now.saturating_add(60)),
-                "The job just ended; read its answer once more",
-            );
         }
     }
     let step = match kind {
-        Kind::Judge => Step::Judge,
+        Kind::Judge => Step::Judge(Vec::new()),
         Kind::Proof => Step::Prove,
         _ => Step::HandFix(kind),
     };
@@ -544,14 +584,8 @@ pub(super) fn work(f: &Facts, m: &mut Memory, now: u64, kind: Kind) -> Decision 
 }
 
 fn job_wake(f: &Facts, kind: Kind, job: &Job, now: u64) -> u64 {
-    let unit = kind == Kind::Proof
-        && f.checks.iter().filter(|c| c.state == Ci::Pending).any(|c| {
-            matches!(
-                f.settings.recipe(&c.name),
-                Some(Recipe::Build(_) | Recipe::Run(_))
-            )
-        });
-    let timeout = if unit {
+    // A proof is a program: a model-run check is never one.
+    let timeout = if kind == Kind::Proof {
         f.settings.proof_timeout
     } else {
         f.settings.job_timeout
@@ -583,4 +617,13 @@ fn failure_stage(kind: Failure) -> Stage {
 
 fn by_train(f: &Facts) -> bool {
     f.settings.train && f.revision.base == f.default_branch
+}
+
+/// In the train at this head.
+fn seated(f: &Facts) -> bool {
+    by_train(f)
+        && f.train
+            .seat
+            .as_ref()
+            .is_some_and(|s| s.head == f.revision.head)
 }

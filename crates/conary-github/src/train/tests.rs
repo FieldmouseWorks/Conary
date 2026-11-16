@@ -11,6 +11,11 @@ fn head(pr: u64) -> String {
     format!("{pr:0>40}")
 }
 
+/// A landing message, for a merge a test makes itself.
+fn message() -> Message {
+    Message::new("remi: a change", 3, ["remi: a change"])
+}
+
 fn repo() -> Repo {
     "FieldmouseWorks/remi".parse().unwrap()
 }
@@ -31,8 +36,11 @@ fn settings() -> Settings {
     Settings {
         size: 8,
         require: vec!["check / check".into()],
-        signer: testing::signer(),
-        fresh: Some(FRESH.into()),
+        trust: crate::attest::Trust {
+            signer: testing::signer(),
+            fresh: Some(FRESH.into()),
+            producers: Default::default(),
+        },
     }
 }
 
@@ -143,6 +151,8 @@ mod empty;
 mod gate;
 mod land;
 mod negative;
+mod service;
+mod skipped;
 
 #[test]
 fn a_ready_pr_joins_at_its_head_as_github_shows_it() {

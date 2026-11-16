@@ -2,8 +2,11 @@
 //! over a Unix socket, one JSON-RPC request per line, each connection on its
 //! own thread. Socket calls only read the ledger, refreshing it when it moves,
 //! and accept no executable paths. Optional machine-owned event configuration
-//! enables a separate verified webhook worker which executes flow passes.
+//! enables a separate verified webhook worker which executes flow passes,
+//! and optional gate-reuse configuration a lookup of CI's attested passes.
 
+pub mod http;
+pub mod reuse;
 pub mod webhook;
 
 use std::fs::{self, File, TryLockError};

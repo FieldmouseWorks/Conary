@@ -127,7 +127,7 @@ impl Scenario {
                     .iter()
                     .map(|p| ((*p).into(), Recipe::Job("run proof".into())))
                     .collect(),
-                ..Settings::default()
+                ..crate::sim::settings()
             },
         )
     }
@@ -183,4 +183,12 @@ impl Scenario {
             Ci::None => panic!("these scenarios all have CI"),
         }
     }
+}
+
+/// Past CI and at its proof. The checks `Scenario::read` configures are
+/// model-run, so they wait there, with their reason, and start nothing.
+pub(super) fn at_proof(n: &Next) -> bool {
+    n.stage == Stage::Proof
+        && n.step == Step::Wait { until: None }
+        && n.description.contains("model-run check, not a proof")
 }

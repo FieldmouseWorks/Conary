@@ -25,12 +25,13 @@ fn unanswered_jobs_are_counted_from_observations_not_a_callers_retry_flag() {
             Kind::Judge => c.secret(),
             Kind::Findings => c.threads(1),
             Kind::Red => c.ci("failure"),
-            Kind::JudgeFailure => c.judge("failed"),
+            Kind::JudgeFailure => c.judge("fail"),
             Kind::Description => c.judge("misdescribed"),
             _ => {
                 c.settings
                     .proofs
-                    .insert("proof".into(), Recipe::Job("run proof".into()));
+                    .insert("proof".into(), Recipe::Run(vec!["run proof".into()]));
+                c.programs();
             }
         }
         c.jobs.insert(kind, job(&c, "first", JobState::Done));
@@ -61,7 +62,8 @@ fn broken_jobs_form_one_stall_until_a_turn_finishes() {
     let mut c = Case::new();
     c.settings
         .proofs
-        .insert("proof".into(), Recipe::Job("run proof".into()));
+        .insert("proof".into(), Recipe::Run(vec!["run proof".into()]));
+    c.programs();
     let mut now = 700;
     let mut since = None;
     for i in 0..4 {
@@ -155,10 +157,13 @@ fn queued_running_and_unknown_jobs_hold_each_kind_without_starting_another() {
             } else {
                 c.settings
                     .proofs
-                    .insert("proof".into(), Recipe::Job("run proof".into()));
+                    .insert("proof".into(), Recipe::Run(vec!["run proof".into()]));
+                c.programs();
             }
             c.jobs.insert(kind, job(&c, "live", state));
-            assert_eq!(c.view(800).step, Step::Wait { until: Some(4600) });
+            // A judge has the job timeout; a proof, a program, the proof timeout.
+            let until = if kind == Kind::Judge { 4600 } else { 11800 };
+            assert_eq!(c.view(800).step, Step::Wait { until: Some(until) });
         }
     }
 }
@@ -169,7 +174,8 @@ fn a_broken_proof_is_counted_while_its_replacement_waits_for_a_slot() {
     let mut c = Case::new();
     c.settings
         .proofs
-        .insert("proof".into(), Recipe::Job("run proof".into()));
+        .insert("proof".into(), Recipe::Run(vec!["run proof".into()]));
+    c.programs();
     c.settings.proof_slots = Some(1);
     c.jobs
         .insert(Kind::Proof, job(&c, "broken-proof", JobState::Broken));
@@ -179,7 +185,6 @@ fn a_broken_proof_is_counted_while_its_replacement_waits_for_a_slot() {
     c.proof_data.live.push(ProofHolder {
         number: 4,
         job: other,
-        paths: None,
     });
     let n = c.pass(1100);
     assert_eq!(n.stage, Stage::ProofSlot);

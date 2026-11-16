@@ -294,10 +294,8 @@ fn an_attestation_kept_from_a_signer_the_machine_no_longer_names_counts_for_noth
     assert_eq!(waiting(&stepped), ["proof"]);
     // Kept in the candidate's evidence, by the signer named then. Named
     // another, the machine reads it again, and it's no pass of that one's.
-    let moved = Settings {
-        signer: "Acme/other/.github/workflows/gate.yml".parse().unwrap(),
-        ..required
-    };
+    let mut moved = required.clone();
+    moved.trust.signer = "Acme/other/.github/workflows/gate.yml".parse().unwrap();
     let stepped = step(&mut store, &hub, &hub, &config(), &repo(), &moved).unwrap();
     assert_eq!(
         waiting(&stepped),
@@ -401,10 +399,8 @@ fn a_pass_counts_only_from_a_runner_started_fresh_for_it() {
         let mut c = testing::claims("FieldmouseWorks/remi", &commit, run, &s);
         claims(&mut c);
         hub.attest(run, &testing::file(&s, &testing::token(&c)));
-        let settings = Settings {
-            fresh: fresh.map(Into::into),
-            ..settings()
-        };
+        let mut settings = settings();
+        settings.trust.fresh = fresh.map(Into::into);
         let stepped = step(&mut store, &hub, &hub, &config(), &repo(), &settings).unwrap();
         if stepped.verdicts == [(id, Verdict::Green)] {
             Ok(())
@@ -558,7 +554,10 @@ fn a_green_on_passes_nobody_attested_has_a_merge_it_made_recorded_and_makes_no_m
     let landing = format!("landing with candidate {old}");
     hub.mark(&full, &head(3), Mark::Landing, &landing, None)
         .unwrap();
-    assert_eq!(hub.land(&full, 3, &head(3)).unwrap(), PrMerge::Merged);
+    assert_eq!(
+        hub.land(&full, 3, &head(3), &message()).unwrap(),
+        PrMerge::Merged
+    );
     let stepped = step_once(&mut store, &hub);
     // Its merge is recorded through it, never made again, and the rest is
     // built again.

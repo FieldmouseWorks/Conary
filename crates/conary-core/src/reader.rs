@@ -107,6 +107,11 @@ impl Reader {
         (self.dir.clone(), self.key)
     }
 
+    /// The ledger as it was last read, without reading the log again.
+    pub fn ledger(&self) -> Arc<Ledger> {
+        Arc::clone(&self.ledger)
+    }
+
     /// The ledger as the log now holds it, read again only if the log or
     /// the anchor beside it changed since the last read. A read that fails
     /// keeps nothing of it: the next one tries again. What it returns is a

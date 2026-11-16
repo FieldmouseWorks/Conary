@@ -74,7 +74,7 @@ fn check(c: &Case, suite: u64, name: &str, conclusion: &str, receipt: Option<&[u
 fn admission_verifies_only_effective_checks_and_current_receipts() {
     let c = Case::new();
     c.clean_review();
-    c.judgment(1, Judgment::Land, true);
+    let first = c.judgment(1, Judgment::Pass, true);
     let old_body = c
         .hub
         .reviews(REPO, 3)
@@ -94,7 +94,7 @@ fn admission_verifies_only_effective_checks_and_current_receipts() {
         .body
         .clone()
         .unwrap();
-    c.judgment(2, Judgment::Land, true);
+    let second = c.judgment(2, Judgment::Pass, true);
     let revision = Revision::from(&c.hub.pull(REPO, 3).unwrap());
     c.hub.remove_checks(&head(3));
     c.negative(&head(3), "none");
@@ -119,7 +119,13 @@ fn admission_verifies_only_effective_checks_and_current_receipts() {
         10,
         "conary/judgment",
         "success",
-        Some(&judgment_receipt(&revision, 1, Some(Judgment::Land))),
+        Some(&judgment_receipt_by(
+            &revision,
+            1,
+            Some(Judgment::Pass),
+            Some(&super::judge_provenance()),
+            Some(&first),
+        )),
     );
     suite(&c, 2, "other");
     check(&c, 2, "irrelevant failure", "failure", None);
@@ -138,7 +144,13 @@ fn admission_verifies_only_effective_checks_and_current_receipts() {
         3,
         "conary/judgment",
         "success",
-        Some(&judgment_receipt(&revision, 2, Some(Judgment::Land))),
+        Some(&judgment_receipt_by(
+            &revision,
+            2,
+            Some(Judgment::Pass),
+            Some(&super::judge_provenance()),
+            Some(&second),
+        )),
     );
     let report = run(&c, None, false);
     assert_eq!(report[0].error, None, "{:?}", report[0]);
@@ -176,12 +188,12 @@ fn excluded_prs_keep_read_classification_and_can_act_on_exclusion() {
         if excluded == "untrusted" {
             assert_eq!(report[0].next.as_ref().unwrap().step, Step::ListOwner);
             assert!(
-                c.hub
-                    .pull(REPO, 3)
-                    .unwrap()
-                    .labels
-                    .iter()
-                    .any(|l| l.name == c.config.settings.owner_label)
+                c.hub.pull(REPO, 3).unwrap().labels.iter().any(|l| c
+                    .config
+                    .settings
+                    .owner_label
+                    .as_ref()
+                    == Some(&l.name))
             );
         }
     }
@@ -341,8 +353,11 @@ fn corrupt_proof_answers_are_one_unknown_holder_and_do_not_break_other_prs() {
     c.hub
         .post_status(&head(3), json!({"context":"machine","state":"pending"}));
     run(&c, Some(3), false);
+    c.prepared(true, Some(3));
+    run(&c, Some(3), false);
     let record = c.record();
-    let work = &record.jobs[0];
+    let work = &record.jobs[1];
+    assert!(matches!(work.purpose, jobs::Purpose::Proof));
     std::fs::write(work.path.with_extension("answer"), b"corrupt completion").unwrap();
     another(&c);
     for dry in [true, false] {
@@ -356,6 +371,8 @@ fn corrupt_proof_answers_are_one_unknown_holder_and_do_not_break_other_prs() {
     c.hub.flow_review(REPO, 5, "reviewer", Verdict::Clean, 0);
     c.hub
         .post_status(&head(5), json!({"context":"machine","state":"pending"}));
+    run(&c, Some(5), false);
+    c.prepared(true, Some(5));
     for slots in [1, 2] {
         c.config.settings.proof_slots = Some(slots);
         for only in [None, Some(5)] {

@@ -154,7 +154,7 @@ fn train_admission_keeps_class_raises_and_requires_a_person_for_r2() {
         let mut c = train();
         c.label(labels);
         if labels.contains(&"r2") {
-            c.judge("land");
+            c.judge("pass");
             assert_eq!(c.pass(800).step, Step::ListOwner);
             c.label(&["needs-peter", "r2"]);
             c.pass(810);
@@ -171,4 +171,30 @@ fn train_admission_keeps_class_raises_and_requires_a_person_for_r2() {
         }
         assert!(!c.memory.raised.is_empty());
     }
+}
+#[test]
+fn a_seated_head_keeps_its_seat_while_githubs_test_merge_is_stale() {
+    // remi#1323 (2026-11-15): trunk moved under a PR in the train, GitHub's
+    // test merge still had the old tip as its parent, and the flow read
+    // "what its merge would change is not known" as a reason to leave. The
+    // train merges the head again in its candidate and takes an empty one
+    // out itself, so the seat stays.
+    let mut c = train();
+    seated(&mut c);
+    c.hub.edit_pull(REMI, 3, |p| {
+        p["merge_commit_sha"] = serde_json::json!(super::TRUNK)
+    });
+    let n = c.view(800);
+    assert_eq!(n.step, Step::Wait { until: None });
+    assert_eq!(n.stage, Stage::Train);
+    assert!(n.description.starts_with("In the train"), "{n:?}");
+    // Not seated, joining still waits for GitHub to say.
+    c.train.seat = None;
+    assert!(matches!(
+        c.view(900).step,
+        Step::Retry {
+            kind: Failure::Empty,
+            ..
+        }
+    ));
 }

@@ -54,10 +54,16 @@ fn lifecycle(train: bool) {
     ));
     c.run_worker();
     assert_eq!(c.hub.pull(REPO, 3).unwrap().head.sha, head(4));
-    run(now + 4);
-    c.run_worker();
+    // The fix's answer goes up on its finding's target before another look.
+    assert_eq!(
+        run(now + 4)[0].next.as_ref().unwrap().step,
+        Step::PostFix("3-2".into())
+    );
     run(now + 5);
-    let result = run(now + 6);
+    run(now + 6);
+    c.run_worker();
+    run(now + 7);
+    let result = run(now + 8);
     assert_eq!(result[0].error, None);
     assert_eq!(
         result[0].next.as_ref().unwrap().step,
@@ -301,7 +307,7 @@ fn pass_collects_an_independent_judgment() {
     let now = flow::jobs::now();
     assert_eq!(
         c.pass(now, false)[0].next.as_ref().unwrap().step,
-        Step::Judge
+        Step::Judge(vec![Trigger::AuthorEngine])
     );
     c.run_worker();
     let report = c.pass(now + 1, false);
@@ -321,15 +327,25 @@ fn pass_proof_names_the_tree_and_canned_output_never_grants_permission() {
     c.hub
         .post_status(&head(3), json!({"context":"machine","state":"pending"}));
     let now = flow::jobs::now();
-    let report = c.pass(now, false);
-    assert_eq!(report[0].next.as_ref().unwrap().step, Step::Prove);
-    let record = c.record();
-    let invocation: flow::jobs::Invocation =
-        serde_json::from_slice(&std::fs::read(&record.jobs[0].path).unwrap()).unwrap();
     let tree = crate::branches::Branches::tree(&c.hub, REPO, &head(3)).unwrap();
-    assert!(matches!(invocation.task,conary_core::plugin::Task::Proof{tree: ref t,..} if t==&tree));
+    let invocation = |at: usize| -> flow::jobs::Invocation {
+        serde_json::from_slice(&std::fs::read(&c.record().jobs[at].path).unwrap()).unwrap()
+    };
+    let report = c.pass(now, false);
+    assert_eq!(report[0].next.as_ref().unwrap().step, Step::Prepare);
+    assert!(
+        matches!(invocation(0).task,conary_core::plugin::Task::Prepare{tree: ref t, head: ref h, ref checks, ..} if t==&tree && h==&head(3) && checks==&["machine"])
+    );
+    // The example's preparation says its proof needs no slot.
     c.run_worker();
     let report = c.pass(now + 1, false);
+    assert_eq!(report[0].next.as_ref().unwrap().step, Step::Prove);
+    assert!(
+        matches!(invocation(1).task,conary_core::plugin::Task::Proof{tree: ref t, head: ref h, ..} if t==&tree && h==&head(3))
+    );
+    assert!(c.record().jobs[1].slotless);
+    c.run_worker();
+    let report = c.pass(now + 2, false);
     assert_eq!(
         report[0].next.as_ref().unwrap().step,
         Step::Wait { until: None }
@@ -344,10 +360,10 @@ fn pass_memory_roundtrips_nonempty_composite_keys() {
     let data = Data::open(c.dir.path(), &repo).unwrap();
     let mut record = Record::default();
     let revision = Revision::from(&c.hub.pull(REPO, 3).unwrap());
-    record
-        .memory
-        .judge_issuance
-        .insert(revision.clone(), (10, Some(Judgment::Land)));
+    record.memory.judge_issuance.insert(
+        revision.clone(),
+        (10, Some(JudgeResult::Legacy(Judgment::Pass))),
+    );
     record
         .memory
         .review_posts

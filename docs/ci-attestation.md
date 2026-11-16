@@ -156,6 +156,9 @@ Its type is `https://github.com/FieldmouseWorks/Conary/blob/main/docs/ci-attesta
   wherever the caller says they do run.
 - `log`: the SHA-256 of the gate's output, and the name of the run's
   artifact that keeps it, its own for each job.
+- `gate`: which gate ran, as burrow's workflow names it with `gate-reuse`
+  on, after the fields above; left out otherwise. Only the
+  [gate-reuse lookup](gate-reuse.md) reads it.
 
 ### Public repos: a Sigstore bundle
 
@@ -285,7 +288,9 @@ fails closed.
 A verifier takes an attestation as evidence only when all of these hold.
 Conary's train checks a private repo's token this way (`conary-github`'s
 `attest`): on its candidate's commit, and on a PR's negative run when it's
-asked to. Nothing checks a bundle, or a PR's revision's gate, yet.
+asked to. The [gate-reuse lookup](gate-reuse.md) checks a push's or a PR
+revision's gate the same way, to count it for another commit of the tree it
+ran on. Nothing checks a bundle yet.
 
 1. GitHub signed it: the bundle verifies against Sigstore's public trust
    root, or the token against GitHub's published keys
@@ -360,11 +365,35 @@ would break rule 5's reason for counting it, and a machine names only a
 workflow that keeps to this.
 
 A token expires minutes after the job asks for it; that only stops it being
-used to sign in somewhere, and doesn't bear on checking it. GitHub can drop a
+used to sign in somewhere (such as [a door](#a-jobs-own-token)), and doesn't
+bear on checking it as evidence. GitHub can drop a
 key from its published set later, so the verifier checks a token when it
 records it, and the ledger keeps the token with the evidence.
 
 The caller's own workflow can change what it passes in (`build-skip` among
 them), and a PR's run takes that workflow from the PR. So the predicate says
 what was skipped, and the policy that counts the evidence decides whether a
-result with skipped checks is enough. The train's counts none.
+result with skipped checks is enough. The flow's counts none; the train's
+counts one only once each check it skipped is a required machine proof of
+the same candidate ([DESIGN section 4.7](DESIGN.md#47-the-train)).
+
+## A job's own token
+
+A door on the machine that takes something from CI, such as burrow's build
+store taking a job's builds, admits the job by the same rules, asked of
+Conary rather than copied: `cn attest job --audience AUDIENCE` reads the
+token on stdin (never an argument, where any process could read it) and
+holds it to rules 1, 2, 4 and 5 under the machine's signer workflow and
+fresh runners, as `cn train step` takes them. There's no statement: the
+audience names what the job hands over, by its digest, in the door's own
+form (burrow's builds are `burrow-builds:v1:sha256:HEX`), and the door
+checks what it's handed against that digest. An attestation's
+`conary-attestation:v1` audience is refused, since its token counts only with
+its statement. Unlike evidence, the token is used to sign in at the door, so
+it has to be live: an `exp` not yet past and no `nbf` still to come, give or
+take a minute. Rule 2's "the token's repo is the change's repo" becomes
+one of the repos the door lists (`--repo`, once for each): anyone's repo can
+call the signer workflow. `cn` prints the token's repository, its
+visibility, event, ref and commit, the signer's commit and a self-hosted
+job's runner, for the door's own rules (burrow's refuses a private repo's),
+and exits 65 when the token doesn't hold.

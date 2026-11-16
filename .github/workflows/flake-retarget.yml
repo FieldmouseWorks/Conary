@@ -14,9 +14,13 @@ permissions:
 jobs:
   check:
     if: github.event.changes.base
-    uses: FieldmouseWorks/burrow/.github/workflows/flake-check.yml@202d1c06990656145a30a290b8dd134f61006b4a # main
+    uses: FieldmouseWorks/burrow/.github/workflows/flake-check.yml@40b4eccfdc225c9791c5c3309c9c749cd1142382 # main
     # What the shared workflow needs to attest its result.
     permissions:
       contents: read
       id-token: write
       attestations: write
+    with:
+      # flake.yml's gate exactly, so a push can reuse this run's pass too.
+      gate-reuse: true
+      gate-reuse-lookup: https://remi.conary.io/conary/gate-reuse

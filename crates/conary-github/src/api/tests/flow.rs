@@ -15,7 +15,11 @@ fn snapshot() -> Value {
         "headRefOid":"h","baseRefName":"main","title":"t","body":"b","isDraft":false,"mergeStateStatus":"BEHIND","updatedAt":"2026-11-08T12:00:00Z",
         "timelineItems":{"pageInfo":{"hasPreviousPage":false},"nodes":[]},
         "labels":{"pageInfo":{"hasNextPage":false}},
-        "reviewThreads":{"pageInfo":{"hasNextPage":false},"nodes":[{"id":"open","isResolved":false},{"id":"resolved","isResolved":true}]},
+        "reviewThreads":{"pageInfo":{"hasNextPage":false},"nodes":[
+            {"id":"open","isResolved":false,"comments":{"pageInfo":{"hasNextPage":false},"nodes":[
+                {"author":{"login":"person"},"body":"a finding","pullRequestReview":{"databaseId":5}},
+                {"author":null,"body":"an answer","pullRequestReview":null}]}},
+            {"id":"resolved","isResolved":true,"comments":{"pageInfo":{"hasNextPage":false},"nodes":[]}}]},
         "reviews":{"totalCount":2},"comments":{"totalCount":3},
         "commits":{"nodes":[{"commit":{"oid":"h","checkSuites":{"pageInfo":{"hasNextPage":false},"nodes":[{
             "databaseId":11,"status":"IN_PROGRESS","conclusion":null,"app":{"slug":"github-actions"},
@@ -34,6 +38,23 @@ fn reads_mergeability_threads_and_suite_identity_without_writes() {
     assert_eq!(observed.head, "base-tip");
     assert_eq!(observed.ci, crate::flow::Ci::Red);
     assert_eq!(s.open_threads, 1);
+    // Every thread with its comments as they read now: what a judge reads.
+    let open = &s.threads["open"];
+    assert!(!open.resolved);
+    assert_eq!(
+        open.comments,
+        [
+            crate::flow::ThreadComment {
+                author: Some("person".into()),
+                body: "a finding".into(),
+            },
+            crate::flow::ThreadComment {
+                author: None,
+                body: "an answer".into(),
+            },
+        ]
+    );
+    assert!(s.threads["resolved"].resolved && s.threads["resolved"].comments.is_empty());
     assert!(s.complete && s.checks_complete);
     assert_eq!(s.suites[&11].status, "in_progress");
     assert_eq!(s.suites[&11].workflow.as_ref().unwrap().id, "w");
@@ -85,6 +106,17 @@ fn query_caps_labels_threads_and_comments_but_not_workflow_results() {
                 .complete
         );
     }
+    // A thread with more comments than one page is not read whole.
+    let mut v = snapshot();
+    v["data"]["repository"]["pullRequest"]["reviewThreads"]["nodes"][0]["comments"]["pageInfo"]["hasNextPage"] =
+        json!(true);
+    let (base, _) = github(vec![answer(v)]);
+    assert!(
+        !Api::new(&base, Tokens::given("t"))
+            .snapshot("o/r", 7)
+            .unwrap()
+            .complete
+    );
     let mut v = snapshot();
     v["data"]["repository"]["pullRequest"]["commits"]["nodes"][0]["commit"]["checkSuites"]["pageInfo"]
         ["hasNextPage"] = json!(true);
@@ -171,4 +203,58 @@ fn timeout_annotation_reader_reads_past_the_first_page() {
     assert!(notes[100].contains("maximum execution time"));
     assert!(requests.recv().unwrap().contains("page=1"));
     assert!(requests.recv().unwrap().contains("page=2"));
+}
+/// A finding's targets and answers go out as GitHub's own requests: the
+/// review with its line comments in one request, a PR comment, and a
+/// thread's reply and resolution as GraphQL mutations, whose errors refuse.
+#[test]
+fn publishes_findings_and_answers_in_githubs_own_requests() {
+    use crate::flow::{LineComment, Write};
+    let body = |request: &str| -> Value {
+        serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap()
+    };
+    let (base, requests) = github(vec![
+        answer(json!({"id":1})),
+        answer(json!({"id":2})),
+        answer(json!({"data":{}})),
+        answer(json!({"data":{}})),
+        answer(json!({"errors":[{"message":"not a thread"}]})),
+    ]);
+    let api = Api::new(&base, Tokens::given("t"));
+    let comments = [LineComment {
+        path: "src/lib.rs".into(),
+        line: 2,
+        body: "a finding".into(),
+    }];
+    api.review("o/r", 7, "h", "the review", &comments).unwrap();
+    let request = requests.recv().unwrap();
+    assert!(request.starts_with("post /repos/o/r/pulls/7/reviews "));
+    assert_eq!(
+        body(&request),
+        json!({"commit_id":"h","body":"the review","event":"COMMENT",
+            "comments":[{"path":"src/lib.rs","line":2,"side":"RIGHT","body":"a finding"}]})
+    );
+    api.comment("o/r", 7, "elsewhere").unwrap();
+    let request = requests.recv().unwrap();
+    assert!(request.starts_with("post /repos/o/r/issues/7/comments "));
+    assert_eq!(body(&request), json!({"body":"elsewhere"}));
+    api.reply("o/r", 7, "PRRT_1", "an answer").unwrap();
+    let request = body(&requests.recv().unwrap());
+    assert!(request["query"].as_str().unwrap().contains(
+        "addPullRequestReviewThreadReply(input:{pullRequestReviewThreadId:$thread,body:$body})"
+    ));
+    assert_eq!(
+        request["variables"],
+        json!({"thread":"PRRT_1","body":"an answer"})
+    );
+    api.resolve("o/r", 7, "PRRT_1").unwrap();
+    let request = body(&requests.recv().unwrap());
+    assert!(
+        request["query"]
+            .as_str()
+            .unwrap()
+            .contains("resolveReviewThread(input:{threadId:$thread})")
+    );
+    assert_eq!(request["variables"], json!({"thread":"PRRT_1"}));
+    assert!(api.resolve("o/r", 7, "PRRT_2").is_err());
 }

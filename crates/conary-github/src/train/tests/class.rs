@@ -209,7 +209,7 @@ fn a_pr_classed_r2_while_its_landing_is_open_is_reseated_once_its_not_merged() {
 /// and the raises it settles the PR with.
 fn classed(store: &mut Store, hub: &Hub, pr: u64) -> (Class, Vec<String>) {
     let got =
-        crate::class::class(store, hub, &config(), &policy(), &repo(), pr, &head(pr)).unwrap();
+        crate::class::at_once(store, hub, &config(), &policy(), &repo(), pr, &head(pr)).unwrap();
     (got.class(), got.said.raised)
 }
 

@@ -259,14 +259,27 @@ impl crate::train::Forge for Api {
         Ok(())
     }
 
-    fn land(&self, repo: &str, pr: u64, head: &str) -> Result<crate::train::PrMerge, ApiError> {
+    fn land(
+        &self,
+        repo: &str,
+        pr: u64,
+        head: &str,
+        message: &crate::train::Message,
+    ) -> Result<crate::train::PrMerge, ApiError> {
         use crate::train::PrMerge;
         let methods: MergeMethods = self.get(&format!("/repos/{repo}"))?;
         // The head that was checked, or nothing: a push since makes the sha
         // stale, and GitHub refuses it.
         let mut body = serde_json::json!({"sha": head});
-        if let Some(method) = methods.first() {
+        let method = methods.first();
+        if let Some(method) = method {
             body["merge_method"] = serde_json::json!(method);
+        }
+        // A squash or a merge commit (GitHub's default) says the message;
+        // a rebase has no commit of its own to say it.
+        if method != Some("rebase") {
+            body["commit_title"] = serde_json::json!(message.title);
+            body["commit_message"] = serde_json::json!(message.body);
         }
         let path = format!("/repos/{repo}/pulls/{pr}/merge");
         let url = format!("{}{path}", self.base);

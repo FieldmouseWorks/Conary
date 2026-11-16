@@ -56,21 +56,25 @@ pub(crate) fn hydrate(f: &mut Facts, record: &Record, now: u64, dry_run: bool) -
             Purpose::Fix(kind) => {
                 let answer = match &completion.result {
                     Some(Ok(plugin::Response {
-                        answer:
-                            plugin::Answer::Fix {
-                                result: plugin::FixResult::Pushed { head },
-                            },
+                        answer: plugin::Answer::Fix { result, answers },
                         ..
-                    })) => FixResult::Answer(FixAnswer {
-                        pushed: Some(head.clone()),
-                        threads: Default::default(),
-                        description: None,
-                        comment: false,
-                    }),
+                    })) => match result {
+                        plugin::FixResult::Pushed { head } => {
+                            fixed(work, Some(head.clone()), answers.as_deref())
+                        }
+                        plugin::FixResult::Unchanged => fixed(work, None, answers.as_deref()),
+                        plugin::FixResult::Unable { .. } => FixResult::Missing,
+                    },
                     Some(Ok(_)) => FixResult::Missing,
                     Some(Err(_)) => FixResult::Invalid,
                     None => FixResult::Missing,
                 };
+                // A fix whose answers went up and were read back is
+                // answered, as a judge's is: never a job that ended without
+                // its answer, however many rounds follow on its revision.
+                if work.posted && job.state == JobState::Done {
+                    job.state = JobState::Answered;
+                }
                 f.jobs.insert(*kind, job.clone());
                 f.claims.push(FixClaim {
                     kind: *kind,
@@ -80,24 +84,26 @@ pub(crate) fn hydrate(f: &mut Facts, record: &Record, now: u64, dry_run: bool) -
                 });
             }
             Purpose::Judge => {
-                f.jobs.insert(Kind::Judge, job.clone());
-                // v1 responses are proposals, not authenticated issuances.
+                // Plugin responses are proposals, not authenticated issuances.
                 // The producer publishes its sealed, independently attested
-                // judgment separately. Preserve every GitHub generation.
-                if job.revision == f.revision
-                    && completion.result.as_ref().is_some_and(|r| r.is_ok())
-                    && f.judgment_generation.is_none()
-                    && let Some(job) = f.jobs.get_mut(&Kind::Judge)
-                {
-                    job.state = JobState::Unknown;
+                // judgment separately. Until a generation is read the job is
+                // owed its answer; `state::next` then reads whether it came,
+                // against every generation it knows, by what this job asked.
+                if job.state == JobState::Done && job.revision == f.revision {
+                    f.judge_requests
+                        .insert(job.id.clone(), super::judging::asked(work)?);
+                    if f.judgment_generation.is_none() {
+                        job.state = JobState::Unknown;
+                    }
                 }
+                f.jobs.insert(Kind::Judge, job);
             }
             Purpose::Proof => {
                 if job.revision == f.revision
-                    && work.recipes == super::pass::recipes(f)
+                    && work.recipes == super::proofs::selected(f)
                     && matches!(completion.result, Some(Ok(_)))
                 {
-                    // v1 identity is an assertion, not an evidence attestation.
+                    // Plugin identity is an assertion, not an evidence attestation.
                     // The producer must publish its own attested check on GitHub.
                     f.proof = Proof::Running;
                 } else {
@@ -109,10 +115,50 @@ pub(crate) fn hydrate(f: &mut Facts, record: &Record, now: u64, dry_run: bool) -
                     });
                 }
             }
+            // Readiness only: nothing a preparation answers is a verdict,
+            // and any other answer is a preparation that failed.
+            Purpose::Prepare => f.proof_data.prepared.push(Preparation {
+                answer: match &completion.result {
+                    Some(Ok(plugin::Response {
+                        answer: plugin::Answer::Prepare { ready, slot, why },
+                        ..
+                    })) => Some(Readiness {
+                        ready: *ready,
+                        slot: *slot,
+                        why: why.clone(),
+                    }),
+                    _ => None,
+                },
+                ended: completion.result.is_some().then_some(completion.at),
+                job,
+                recipes: work.recipes.clone(),
+            }),
         }
     }
     Ok(())
 }
+/// A fix's answer, each of its answers on the target of the finding it was
+/// handed. An answer to anything it wasn't handed is invalid.
+fn fixed(
+    work: &jobs::Work,
+    pushed: Option<String>,
+    answers: Option<&[plugin::FindingAnswer]>,
+) -> FixResult {
+    let mut targets = Vec::new();
+    for answer in answers.unwrap_or_default() {
+        match work.handed.get(answer.problem) {
+            Some(Some(handed)) => targets.push((handed.target.clone(), answer.fixed)),
+            _ => return FixResult::Invalid,
+        }
+    }
+    FixResult::Answer(FixAnswer {
+        pushed,
+        answers: targets,
+        description: None,
+        comment: false,
+    })
+}
+
 pub(crate) fn train(f: &mut Facts, ledger: &conary_core::Ledger) {
     let Some(change) = ledger.by_pr(&f.repo, f.number) else {
         return;
@@ -164,12 +210,9 @@ pub(crate) fn issuances(f: &mut Facts, memory: &Memory) {
         &mut judges,
         &f.revision,
         f.judgment_generation,
-        f.judgment.as_ref().map(|j| j.verdict),
+        f.judgment.as_ref().map(Judged::result),
     )
-    .map(|verdict| Judged {
-        revision: f.revision.clone(),
-        verdict,
-    });
+    .map(|result| Judged::from_result(f.revision.clone(), result));
     f.judgment_generation = judges.get(&f.revision).map(|(generation, _)| *generation);
     let mut majors = memory.major_issuance.clone();
     f.major = super::state::issuance(&mut majors, &f.revision, f.major_generation, f.major);

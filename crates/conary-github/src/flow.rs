@@ -12,9 +12,10 @@ mod markers;
 mod proofs;
 mod read;
 mod state;
+#[cfg(test)]
+pub(crate) use proofs::selected;
 pub use proofs::{
-    Derivation, Evaluation, InputBuild, ProofData, ProofHolder, ProofPlan, ProofRecord,
-    ProofWaiting,
+    Preparation, ProofData, ProofHolder, ProofPlan, ProofRecord, ProofWaiting, Readiness,
 };
 mod review;
 pub(crate) mod reviews;
@@ -37,15 +38,22 @@ mod write;
 pub use write::{SETTLED, Write, review_body};
 
 mod execute;
-mod observe;
+pub(crate) mod observe;
 mod pass;
+pub mod schema;
 pub use pass::{Config, Pass, Plugins, Report};
+
+mod judging;
+pub use judging::{conversation, judging_context, read_judging_context, review_bodies};
 
 mod compare;
 pub use compare::{Beside, Decided, Said, Tally, beside};
 
 pub(crate) mod evidence;
-pub use evidence::{Evidence, judgment_receipt, major_receipt, receipt_digest, review_receipt};
+pub use evidence::{
+    Evidence, judgment_receipt, judgment_receipt_by, major_receipt, receipt_digest, recipe_digest,
+    review_receipt,
+};
 
 mod scope;
 
@@ -57,3 +65,10 @@ mod approval;
 pub use approval::owner_approval;
 
 mod handoff;
+
+pub(crate) mod publish;
+mod threads;
+pub use threads::{FindingMark, Handed, LineComment, Target, answer_body, finding_body, issuance};
+pub(crate) use threads::{Publication, Targets};
+#[cfg(test)]
+pub(crate) use threads::{hunks, placed};

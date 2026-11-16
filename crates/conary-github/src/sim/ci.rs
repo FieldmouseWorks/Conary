@@ -140,6 +140,28 @@ impl Hub {
         self.attest_passes(sha);
     }
 
+    /// One more completed check run on `sha`, its job in a run of its own,
+    /// reporting `text` if anything, and attested by nothing yet: its id.
+    pub(crate) fn check_run(
+        &self,
+        sha: &str,
+        name: &str,
+        conclusion: &str,
+        text: Option<&str>,
+    ) -> u64 {
+        let id = self.run_id();
+        self.add_check(
+            sha,
+            built(
+                fixtures::check_run(),
+                &json!({"id": id, "name": name, "status": "completed",
+                        "conclusion": conclusion, "check_suite": {"id": id},
+                        "output": {"text": text}}),
+            ),
+        );
+        id
+    }
+
     /// The check runs on `sha` are `runs`, as a test writes GitHub's
     /// answer.
     pub(crate) fn put_checks(&self, sha: &str, runs: Value) {
@@ -206,6 +228,12 @@ impl Hub {
             Some(run) => _ = w.artifacts.remove(&run).unwrap(),
             None => w.artifacts.clear(),
         }
+    }
+
+    /// Job `run`'s artifacts are past their retention: GitHub still lists
+    /// them, as expired, and serves none.
+    pub(crate) fn expire_artifacts(&self, run: u64) {
+        self.world.borrow_mut().expired.insert(run);
     }
 
     /// Job `run` ran on `runner`, not a fresh one of its own.

@@ -28,6 +28,9 @@ pub(super) struct Case {
     pub stopped_jobs: std::collections::BTreeSet<String>,
     pub proof: Option<Proof>,
     pub proof_data: ProofData,
+    /// What every head's preparation of its next proof already answered,
+    /// for cases about what follows it.
+    pub readiness: Option<Readiness>,
     pub failed: Option<Failure>,
     pub failed_review: Option<String>,
     pub review_unavailable: bool,
@@ -35,6 +38,8 @@ pub(super) struct Case {
     pub base_held: bool,
     pub train: TrainState,
     pub unseen: bool,
+    /// What each finished judge job was asked on, as its invocation says.
+    pub judge_requests: BTreeMap<String, Option<Basis>>,
 }
 impl Case {
     pub fn new() -> Self {
@@ -42,13 +47,14 @@ impl Case {
         Self {
             hub,
             memory,
-            settings: Settings::default(),
+            settings: crate::sim::settings(),
             services: BTreeMap::new(),
             jobs: BTreeMap::new(),
             claims: Vec::new(),
             stopped_jobs: Default::default(),
             proof: None,
             proof_data: ProofData::default(),
+            readiness: None,
             failed: None,
             failed_review: None,
             review_unavailable: false,
@@ -56,6 +62,7 @@ impl Case {
             base_held: false,
             train: TrainState::default(),
             unseen: false,
+            judge_requests: BTreeMap::new(),
         }
     }
     pub fn roles(&mut self, names: &[&str]) {
@@ -99,19 +106,55 @@ impl Case {
     pub fn label(&self, labels: &[&str]) {
         self.hub.label(REMI, 3, labels);
     }
+    /// `flow::judging_context` over a fresh read of the discussion on
+    /// GitHub: its review threads, review bodies and marked PR comments.
+    pub fn context(&self) -> String {
+        read_judging_context(&self.hub, REMI, 3).unwrap()
+    }
+    /// A judgment of the current revision. A contract word is a producer's
+    /// v3 judgment, judged for every reason on the discussion now; any other
+    /// word only an older issuance can carry.
     pub fn judge(&mut self, verdict: &str) {
+        match Judgment::from_word(verdict) {
+            Some(judgment) => {
+                let basis = Basis {
+                    why: super::every_reason(),
+                    context: self.context(),
+                };
+                self.judge_on(judgment, basis);
+            }
+            None => self.judge_v2(verdict),
+        }
+    }
+    /// A v2 judgment of the current revision: it says nothing of what it
+    /// was judged on.
+    pub fn judge_v2(&mut self, verdict: &str) {
+        self.issue(|key, scope, generation| {
+            key.decision(REMI, 3, "autoland-judgment", verdict, scope, generation)
+        });
+    }
+    /// A producer's v3 judgment of the current revision, judged on `basis`.
+    pub fn judge_on(&mut self, verdict: Judgment, basis: Basis) {
+        self.issue(|key, scope, generation| {
+            key.judgment_by(
+                REMI,
+                3,
+                verdict,
+                scope,
+                generation,
+                super::judge_provenance(),
+                basis,
+            )
+            .unwrap()
+        });
+    }
+    /// Post a sealed judgment at the next generation.
+    fn issue(&mut self, seal: impl FnOnce(&SealKey, &Revision, u64) -> String) {
         let key = SealKey::from_hex(&"a".repeat(64)).unwrap();
         self.settings.judge_key = Some(key.clone());
         self.settings.verdict_authors.insert("owner".into());
         let generation = self.hub.comments(REMI, 3).unwrap().len() as u64 + 1;
-        let marker = key.decision(
-            REMI,
-            3,
-            "autoland-judgment",
-            verdict,
-            &self.scope(),
-            generation,
-        );
+        let marker = seal(&key, &self.scope(), generation);
         self.hub.flow_comment(REMI, 3, "owner", &marker);
     }
     pub fn sweep(&mut self, verdict: &str) {
@@ -168,10 +211,25 @@ impl Case {
                 r.missing = s.missing;
             }
         }
+        f.judge_requests = self.judge_requests.clone();
         f.jobs = self.jobs.clone();
         f.claims = self.claims.clone();
         f.stopped_jobs = self.stopped_jobs.clone();
         f.proof_data = self.proof_data.clone();
+        if let Some(answer) = &self.readiness {
+            f.proof_data.prepared.push(Preparation {
+                job: Job {
+                    id: "prepared".into(),
+                    revision: f.revision.clone(),
+                    state: JobState::Done,
+                    started: 0,
+                    repeated: false,
+                },
+                recipes: crate::flow::selected(&f),
+                ended: Some(0),
+                answer: Some(answer.clone()),
+            });
+        }
         if let Some(p) = &self.proof {
             f.proof = p.clone();
         }
@@ -185,6 +243,64 @@ impl Case {
         f.train = self.train.clone();
         f.unseen |= self.unseen;
         f
+    }
+    /// A preparation of the programs the next proof runs on the head (its
+    /// builds, else its commands), started at 600: running while `ended` is
+    /// `None`, else ended then with `answer`, or broken without one.
+    pub fn prepared(&mut self, answer: Option<Readiness>, ended: Option<u64>) {
+        let programs = |build: bool| -> BTreeMap<String, Recipe> {
+            self.settings
+                .proofs
+                .iter()
+                .filter(|(_, r)| match r {
+                    Recipe::Build(_) => build,
+                    Recipe::Run(_) => !build,
+                    Recipe::Job(_) => false,
+                })
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect()
+        };
+        let recipes = Some(programs(true))
+            .filter(|b| !b.is_empty())
+            .unwrap_or_else(|| programs(false));
+        let id = format!("prepare-{}", self.proof_data.prepared.len() + 1);
+        self.proof_data.prepared.push(Preparation {
+            job: Job {
+                id,
+                revision: self.scope(),
+                state: match (ended, &answer) {
+                    (None, _) => JobState::Running,
+                    (Some(_), Some(_)) => JobState::Done,
+                    (Some(_), None) => JobState::Broken,
+                },
+                started: 600,
+                repeated: false,
+            },
+            recipes,
+            ended,
+            answer,
+        });
+    }
+    /// A finished preparation that says proving may start, and whether it
+    /// needs a proof slot.
+    pub fn ready(&mut self, slot: bool) {
+        self.prepared(
+            Some(Readiness {
+                ready: true,
+                slot,
+                why: "inputs built".into(),
+            }),
+            Some(650),
+        );
+    }
+    /// Every head's next proof prepared, needing a slot: proving starts as
+    /// it did before proofs were prepared.
+    pub fn programs(&mut self) {
+        self.readiness = Some(Readiness {
+            ready: true,
+            slot: true,
+            why: "inputs built".into(),
+        });
     }
     pub fn view(&self, now: u64) -> Next {
         next(&self.facts(), &self.memory, now).0

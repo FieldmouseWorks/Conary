@@ -27,7 +27,7 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
             .chain(f.claims.iter().map(|c| &c.job))
             .chain(f.proof_data.records.iter().map(|r| &r.job))
             .chain(f.proof_data.live.iter().map(|h| &h.job))
-            .chain(f.proof_data.inputs_job.iter().map(|h| &h.job))
+            .chain(f.proof_data.prepared.iter().map(|p| &p.job))
             .any(|j| j.id == *id && !j.state.live());
         if ended || f.stopped_jobs.contains(id) {
             m.retired_jobs.insert(id.clone());
@@ -45,6 +45,10 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
         .proof_data
         .live
         .retain(|h| !m.retired_jobs.contains(&h.job.id));
+    raised
+        .proof_data
+        .prepared
+        .retain(|p| !m.retired_jobs.contains(&p.job.id));
     if let Some(record) = raised
         .proof_data
         .records
@@ -52,14 +56,6 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
         .max_by_key(|r| r.job.started)
     {
         raised.jobs.insert(Kind::Proof, record.job.clone());
-    }
-    if raised
-        .proof_data
-        .inputs_job
-        .as_ref()
-        .is_some_and(|j| m.retired_jobs.contains(&j.job.id))
-    {
-        raised.proof_data.inputs_job = None;
     }
     if m.judge_issuance
         .keys()
@@ -71,12 +67,10 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
         &mut m.judge_issuance,
         &raised.revision,
         raised.judgment_generation,
-        raised.judgment.as_ref().map(|j| j.verdict),
+        raised.judgment.as_ref().map(Judged::result),
     )
-    .map(|verdict| Judged {
-        revision: raised.revision.clone(),
-        verdict,
-    });
+    .map(|result| Judged::from_result(raised.revision.clone(), result));
+    judge_answered(&mut raised, &mut m);
     raised.major = issuance(
         &mut m.major_issuance,
         &raised.revision,
@@ -401,8 +395,7 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
             on_usage: watched
                 && !m.strikes.values().any(|n| *n >= 3)
                 && f.jobs.iter().any(|(kind, j)| {
-                    matches!(j.state, JobState::Running | JobState::Queued)
-                        && (*kind != Kind::Proof || super::proofs::engine_job(f, &j.id))
+                    matches!(j.state, JobState::Running | JobState::Queued) && *kind != Kind::Proof
                 }),
             proof: if matches!(step, Step::PostProof) {
                 super::proofs::posting(f)
@@ -410,7 +403,7 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
                 None
             }
             .or_else(|| {
-                if matches!(step, Step::Prove | Step::PostProof) {
+                if matches!(step, Step::Prepare | Step::Prove | Step::PostProof) {
                     super::proofs::next(f, now).and_then(|(_, _, _, plan)| plan)
                 } else {
                     None
@@ -419,6 +412,41 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
         },
         m,
     )
+}
+
+/// Whether the finished judge job on this revision was answered, against
+/// every issuance the flow knows for it, GitHub's and remembered. A job is
+/// answered once an issuance seals what it asked on (any issuance, for a
+/// request from before the flow said), and stays answered: its answer is
+/// then superseded, never missing, so it leaves the unanswered count. A
+/// finished job is owed its producer's answer only while no issuance of its
+/// revision is known, not merely while GitHub shows none.
+fn judge_answered(f: &mut Facts, m: &mut Memory) {
+    let Some(job) = f.jobs.get_mut(&Kind::Judge) else {
+        return;
+    };
+    let Some(asked) = f.judge_requests.get(&job.id) else {
+        return;
+    };
+    if job.revision != f.revision || !matches!(job.state, JobState::Done | JobState::Unknown) {
+        return;
+    }
+    let seals = |asked: &Option<Basis>| {
+        f.judgment
+            .as_ref()
+            .is_some_and(|j| asked.is_none() || j.basis == *asked)
+    };
+    if m.answered_judges.contains(&job.id) || seals(asked) {
+        m.answered_judges.insert(job.id.clone());
+        m.lost_jobs.remove(&job.id);
+        for ended in m.unanswered.values_mut() {
+            ended.remove(&job.id);
+        }
+        m.unanswered.retain(|_, ended| !ended.is_empty());
+        job.state = JobState::Answered;
+    } else if m.judge_issuance.contains_key(&f.revision) {
+        job.state = JobState::Done;
+    }
 }
 
 /// A deleted/edited comment cannot roll an observed decision back. Conflicting

@@ -8,7 +8,7 @@ use serde_json::json;
 use crate::api::CheckRun;
 use crate::attest::make::*;
 use crate::attest::testing::{claims, key, signer, token as signed};
-use crate::attest::{Subject, check};
+use crate::attest::{Attested, Subject, check, skipped};
 
 const COMMIT: &str = "c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0";
 const TREE: &str = "7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e";
@@ -29,6 +29,7 @@ fn run(conclusion: &str) -> CheckRun {
         html_url: None,
         started_at: None,
         check_suite: None,
+        output: None,
     }
 }
 
@@ -39,6 +40,11 @@ fn log() -> Log {
 /// The file a job makes for `claim`, signed for as GitHub would sign its
 /// token, checked as the verifier checks one.
 fn made_and_checked(claim: &Claim, subject: Subject, conclusion: &str) -> Result<Outcome, String> {
+    made(claim, subject, conclusion).map(|a| a.result)
+}
+
+/// What the verifier reads of the file a job makes for `claim`.
+fn made(claim: &Claim, subject: Subject, conclusion: &str) -> Result<Attested, String> {
     let s = statement(claim)?.text();
     let mut c = claims("FieldmouseWorks/remi", COMMIT, RUN, &s);
     assert_eq!(c["aud"], json!(audience(&s)));
@@ -52,7 +58,7 @@ fn made_and_checked(claim: &Claim, subject: Subject, conclusion: &str) -> Result
         &run(conclusion),
         &signer(),
     )
-    .map(|claimed| claimed.attested.result)
+    .map(|claimed| claimed.attested)
 }
 
 #[test]
@@ -67,6 +73,7 @@ fn what_a_job_makes_is_what_the_verifier_reads() {
     let push = Subject::Commit {
         commit: COMMIT,
         tree: TREE,
+        definition: None,
     };
     assert_eq!(
         made_and_checked(&pushed, push, "success"),
@@ -76,6 +83,7 @@ fn what_a_job_makes_is_what_the_verifier_reads() {
     let elsewhere = Subject::Commit {
         commit: COMMIT,
         tree: BASE,
+        definition: None,
     };
     assert!(
         made_and_checked(&pushed, elsewhere, "success")
@@ -95,12 +103,10 @@ fn what_a_job_makes_is_what_the_verifier_reads() {
             .unwrap_err()
             .contains("says fail")
     );
-    let skipping = commit(Gate::Pass, &["vm"]);
-    assert!(
-        made_and_checked(&skipping, push, "success")
-            .unwrap_err()
-            .contains("skipped vm")
-    );
+    // A pass that skipped a check is one of those it ran, and names it.
+    let skipping = made(&commit(Gate::Pass, &["vm"]), push, "success").unwrap();
+    assert_eq!(skipping.result, Outcome::Pass);
+    assert_eq!(skipped(&skipping.attest).unwrap(), ["vm"]);
 
     let pr = Subject::Negative {
         base: BASE,
@@ -131,6 +137,7 @@ fn what_a_job_makes_is_what_the_verifier_reads() {
     let push = Subject::Commit {
         commit: HEAD,
         tree: TREE,
+        definition: None,
     };
     assert!(made_and_checked(&failed, push, "success").is_err());
 }
