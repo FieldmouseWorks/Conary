@@ -1,5 +1,6 @@
 //! Re-read all permission inputs, including producer generations and worker
 //! answers. Cosmetic controller labels are the only excluded PR metadata.
+//! Non-granting cleanup also allows the expected exit of cancelled workers.
 use super::persist::Result;
 use super::*;
 
@@ -9,6 +10,27 @@ pub(crate) fn current<G: Write>(
     f: &Facts,
     record: &Record,
 ) -> Result<()> {
+    validate(pass, github, f, record, false)
+}
+
+/// The same PR scope check, allowing only the completion of work that was
+/// pending at observation and is now marked cancelled. Remote inputs and
+/// workers that were not cancelled are still compared freshly.
+pub(crate) fn cleanup<G: Write>(
+    pass: &Pass<'_>,
+    github: &G,
+    f: &Facts,
+    record: &Record,
+) -> Result<()> {
+    validate(pass, github, f, record, true)
+}
+fn validate<G: Write>(
+    pass: &Pass<'_>,
+    github: &G,
+    f: &Facts,
+    record: &Record,
+    cleanup: bool,
+) -> Result<()> {
     let mut fresh = read(
         github,
         &f.repo,
@@ -17,7 +39,11 @@ pub(crate) fn current<G: Write>(
         pass.config.settings.clone(),
         &pass.config.trusted_authors,
     )?;
-    super::observe::hydrate(&mut fresh, record, pass.now, true)?;
+    if cleanup {
+        super::observe::hydrate_cleanup(&mut fresh, record, pass.now, &f.working)?;
+    } else {
+        super::observe::hydrate(&mut fresh, record, pass.now, true)?;
+    }
     super::observe::issuances(&mut fresh, &record.memory);
     let mut memory = record.memory.clone();
     super::ledger::raised(&mut fresh, &mut memory, pass.ledger);

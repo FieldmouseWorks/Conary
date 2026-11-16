@@ -350,6 +350,9 @@ fn pause_blocks_seated_permission_renewal_races() {
 /// revisions can leave behind. Cancellation must not depend on which kind
 /// the decision would choose next.
 fn workers(c: &Case, now: u64) -> Vec<crate::flow::jobs::Work> {
+    start_workers(c, now, 5)
+}
+fn start_workers(c: &Case, now: u64, count: usize) -> Vec<crate::flow::jobs::Work> {
     use conary_core::plugin::{Identity, Task};
     let facts = read(
         &c.hub,
@@ -428,7 +431,7 @@ fn workers(c: &Case, now: u64) -> Vec<crate::flow::jobs::Work> {
         dry_run: false,
         ledger: None,
     };
-    for (purpose, task) in tasks {
+    for (purpose, task) in tasks.into_iter().take(count) {
         pass.start(&facts, purpose, task, vec![], &mut record, &data)
             .unwrap();
     }
@@ -441,34 +444,39 @@ fn worker_case() -> Case {
     c.clean_review();
     c
 }
-fn cancellation_with_cleanup(cleanup: &str) {
+fn cleanup_case(cleanup: &str, held: bool, now: u64) -> Case {
     use crate::sim::Call;
     use serde_json::json;
-    for held in [false, true] {
-        let mut c = worker_case();
-        let now = crate::flow::jobs::now();
-        match cleanup {
-            "train" => {
-                c.config.settings.train = true;
-                let reports = c.pass(now, false);
-                assert_eq!(reports[0].error, None, "{reports:?}");
-                assert_eq!(step(&reports, 0).1, Step::JoinTrain);
-            }
-            "queued" => c.hub.edit_pull(REPO, 3, |p| p["auto_merge"] = json!({})),
-            "pending" => {
-                // A submitted merge whose visibility has not caught up.
-                c.hub.race(Call::Land, move |hub| {
-                    if held {
-                        hub.label(REPO, 3, &["hold"]);
-                    }
-                    hub.stale(Call::Pull);
-                    hub.stale(Call::Pulls);
-                });
-                c.pass(now, false);
-                assert!(record(&c, 3).landing.as_ref().unwrap().accepted);
-            }
-            _ => unreachable!(),
+    let mut c = worker_case();
+    match cleanup {
+        "train" => {
+            c.config.settings.train = true;
+            let reports = c.pass(now, false);
+            assert_eq!(reports[0].error, None, "{reports:?}");
+            assert_eq!(step(&reports, 0).1, Step::JoinTrain);
         }
+        "queued" => c.hub.edit_pull(REPO, 3, |p| p["auto_merge"] = json!({})),
+        "pending" => {
+            // A submitted merge whose visibility has not caught up.
+            c.hub.race(Call::Land, move |hub| {
+                if held {
+                    hub.label(REPO, 3, &["hold"]);
+                }
+                hub.stale(Call::Pull);
+                hub.stale(Call::Pulls);
+            });
+            c.pass(now, false);
+            assert!(record(&c, 3).landing.as_ref().unwrap().accepted);
+        }
+        "stop" => {}
+        _ => unreachable!(),
+    }
+    c
+}
+fn cancellation_with_cleanup(cleanup: &str) {
+    for held in [false, true] {
+        let now = crate::flow::jobs::now();
+        let c = cleanup_case(cleanup, held, now);
         let running = workers(&c, now + 1);
         assert_eq!(running.len(), 5);
         if held {
@@ -575,6 +583,169 @@ fn repository_pause_cancels_workers_after_the_pr_leaves_open() {
         no_failure(&c, 3);
         for work in &running {
             assert_eq!(marker(work), b"paused\n");
+        }
+    }
+}
+
+fn completion_during_cleanup(cleanup: &str) {
+    use crate::api::Source;
+    use crate::sim::{Call, On};
+    use crate::train::Mark;
+    for held in [false, true] {
+        for call in [Call::FlowStatus, Call::FlowStage] {
+            for kind in 0..5 {
+                let now = crate::flow::jobs::now();
+                let c = cleanup_case(cleanup, held, now);
+                let running = workers(&c, now + 1);
+                let exiting = running[kind].clone();
+                if held {
+                    c.hub.label(REPO, 3, &["hold"]);
+                } else {
+                    pause(&c, "workers can exit during cleanup");
+                }
+                let finish = move |_: &crate::sim::Hub| {
+                    assert!(exiting.path.with_extension("cancel").exists());
+                    crate::flow::jobs::worker(&exiting.path).unwrap();
+                    assert!(exiting.path.with_extension("answer").exists());
+                };
+                let on = if call == Call::FlowStatus {
+                    On::from(call).mark(Mark::Waiting)
+                } else {
+                    On::from(call)
+                };
+                if cleanup == "train" && call == Call::FlowStatus {
+                    let again = on.clone();
+                    c.hub.race(on, move |hub| hub.race(again, finish));
+                } else {
+                    c.hub.race(on, finish);
+                }
+                let reports = c.pass(now + 2, false);
+                assert_eq!(
+                    reports[0].error, None,
+                    "{cleanup} held={held} {call:?} {:?}: {reports:?}",
+                    running[kind].purpose
+                );
+                let expected = match cleanup {
+                    "stop" => Step::StopJob(running[0].job.id.clone()),
+                    "queued" => Step::DisableAutoMerge,
+                    "train" => Step::LeaveTrain,
+                    _ => Step::Wait { until: None },
+                };
+                assert_eq!(step(&reports, 0).1, expected);
+                if cleanup == "queued" {
+                    assert!(c.hub.pull(REPO, 3).unwrap().auto_merge.is_none());
+                }
+                if cleanup == "train" {
+                    assert!(
+                        c.store
+                            .borrow()
+                            .ledger()
+                            .train(&repo())
+                            .unwrap()
+                            .joined()
+                            .is_empty()
+                    );
+                }
+                no_failure(&c, 3);
+                c.run_worker();
+                c.pass(now + 3, false);
+                no_failure(&c, 3);
+                if cleanup == "pending" {
+                    // Let the accepted merge become visible before resuming.
+                    c.hub.fresh(Call::Pull);
+                    c.hub.fresh(Call::Pulls);
+                }
+                if held {
+                    c.hub.label(REPO, 3, &[]);
+                } else {
+                    crate::flow::pause::resume(c.dir.path(), &repo()).unwrap();
+                }
+                c.pass(now + 4, false);
+                no_failure(&c, 3);
+            }
+        }
+    }
+}
+#[test]
+fn cancelled_workers_can_exit_during_stop_validation() {
+    completion_during_cleanup("stop");
+}
+#[test]
+fn cancelled_workers_can_exit_during_queued_merge_cleanup_validation() {
+    completion_during_cleanup("queued");
+}
+#[test]
+fn cancelled_workers_can_exit_during_train_departure_validation() {
+    completion_during_cleanup("train");
+}
+#[test]
+fn cancelled_workers_can_exit_during_non_granting_wait_validation() {
+    completion_during_cleanup("pending");
+}
+
+#[test]
+fn permission_still_rechecks_exiting_cancelled_workers() {
+    use crate::api::Source;
+    use crate::sim::{Call, On};
+    use crate::train::Mark;
+    for mode in ["direct", "delegated", "join", "seated"] {
+        for call in [Call::FlowStatus, Call::FlowStage] {
+            let now = crate::flow::jobs::now();
+            let mut c = worker_case();
+            match mode {
+                "delegated" => c.as_bot(),
+                "join" | "seated" => c.config.settings.train = true,
+                _ => {}
+            }
+            if mode == "seated" {
+                let reports = c.pass(now, false);
+                assert_eq!(reports[0].error, None, "{reports:?}");
+                assert_eq!(step(&reports, 0).1, Step::JoinTrain);
+            }
+            // An independently attested clean review is already visible,
+            // while its owned invocation is still exiting after cancellation.
+            let work = start_workers(&c, now + 1, 1).pop().unwrap();
+            crate::flow::jobs::cancel(&work, crate::flow::pause::Stop::Obsolete).unwrap();
+            let finish = move |_: &crate::sim::Hub| {
+                crate::flow::jobs::worker(&work.path).unwrap();
+            };
+            let on = if call == Call::FlowStatus {
+                On::from(call).mark(Mark::Waiting)
+            } else {
+                On::from(call)
+            };
+            if mode == "seated" && call == Call::FlowStatus {
+                let again = on.clone();
+                c.hub.race(on, move |hub| hub.race(again, finish));
+            } else {
+                c.hub.race(on, finish);
+            }
+            let reports = c.pass(now + 2, false);
+            let expected = match mode {
+                "direct" => Step::Merge,
+                "delegated" => Step::Settle,
+                "join" => Step::JoinTrain,
+                _ => Step::Wait { until: None },
+            };
+            assert_eq!(step(&reports, 0).1, expected, "{mode}: {reports:?}");
+            assert!(
+                reports[0]
+                    .error
+                    .as_deref()
+                    .is_some_and(|e| e.contains("scope changed")),
+                "{mode}: {reports:?}"
+            );
+            assert_eq!(c.hub.count(Call::Land), 0);
+            assert_eq!(
+                c.hub
+                    .statuses(REPO, &super::head(3))
+                    .unwrap()
+                    .iter()
+                    .find(|s| s.context == SETTLED)
+                    .unwrap()
+                    .state,
+                "pending"
+            );
         }
     }
 }

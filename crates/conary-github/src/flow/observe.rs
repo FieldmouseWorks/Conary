@@ -5,8 +5,33 @@ use super::*;
 use conary_core::plugin;
 
 pub(crate) fn hydrate(f: &mut Facts, record: &Record, now: u64, dry_run: bool) -> Result<()> {
+    hydrate_with(f, record, now, dry_run, None)
+}
+
+/// Cleanup may race the expected exit of work it already cancelled. For
+/// comparison only, keep those workers in their observed pending state.
+/// Never use this projection to decide work or to validate a landing grant.
+pub(crate) fn hydrate_cleanup(
+    f: &mut Facts,
+    record: &Record,
+    now: u64,
+    working: &std::collections::BTreeSet<String>,
+) -> Result<()> {
+    hydrate_with(f, record, now, true, Some(working))
+}
+fn hydrate_with(
+    f: &mut Facts,
+    record: &Record,
+    now: u64,
+    dry_run: bool,
+    working: Option<&std::collections::BTreeSet<String>>,
+) -> Result<()> {
     for work in &record.jobs {
-        let completion: Completion = if dry_run {
+        let completion: Completion = if working.is_some_and(|ids| ids.contains(&work.job.id))
+            && jobs::stopped(work).is_some()
+        {
+            Completion::default()
+        } else if dry_run {
             jobs::inspect(work, now)?
         } else {
             jobs::completion(work, now)?

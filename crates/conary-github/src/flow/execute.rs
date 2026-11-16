@@ -65,10 +65,17 @@ pub(crate) fn act<G: Write>(
         return Ok(vec![]);
     }
     let mut prepare = || -> Result<()> {
-        super::scope::current(pass, github, f, record)?;
-        github.stage(&repo, f.number, next.stage)?;
-        super::scope::current(pass, github, f, record)?;
         let settled = super::pass::grants(next, f);
+        let scope = || {
+            if super::pause::vacates(&next.step) && !settled {
+                super::scope::cleanup(pass, github, f, record)
+            } else {
+                super::scope::current(pass, github, f, record)
+            }
+        };
+        scope()?;
+        github.stage(&repo, f.number, next.stage)?;
+        scope()?;
         if settled {
             if matches!(next.step, Step::Merge | Step::Settle)
                 && f.classified.class == conary_core::Class::R2

@@ -310,7 +310,9 @@ stop at once, through the same stop path as obsolete work, its marker
 saying `paused` or `held`. Cancellation runs independently of queued-merge
 removal, train departure or a pending-landing wait. A repository pause also
 cancels owned workers whose PRs have closed or merged, without changing
-finished answers. Its proof slot frees when its worker ends, as
+finished answers. A cancelled worker exiting during scope validation does
+not interrupt non-granting cleanup or count as a failure; permission grants
+still validate fresh worker state. Its proof slot frees when its worker ends, as
 any cancelled proof's does, and nothing new starts. A stopped worker is
 retired: never a failure, a strike or a lost job. Its PR keeps its Memory,
 receipts and branch. A paused PR then waits with its reason, outside every
