@@ -69,12 +69,15 @@ body of the later task when it's filed.
    steward, and gives callers the job's record instead. So
    [burrow#969](https://github.com/FieldmouseWorks/burrow/issues/969) (one
    record per job) lands before F is written, or F is built twice. The same
-   holds for J if its task runs the judge's engine as a job.
+   holds for J if its task runs the judge's engine as a job. F landed first
+   (burrow#1169, 2026-11-15), reading a job through `proj why --json`, so
+   #969 keeps that reader whole rather than F being written again.
 2. **One new crate at a time.** B1, B2, F, J and burrow#986 each add a
    member to burrow's workspace, so each edits `crates/Cargo.toml`,
    `Cargo.lock` and the flake's crate list. One such PR is open at a time,
    in this order: B2, B1, burrow#986, F, J. Renovate's lock-file PRs in
-   burrow stay held while that queue has an entry.
+   burrow stay held while that queue has an entry. By 2026-11-16 all but J
+   had landed.
 3. **`modules/ledger.nix` has two tasks.** B3 (the controller user) goes
    first. Then [burrow#724](https://github.com/FieldmouseWorks/burrow/issues/724)
    (the flow's configuration rendered from the settings source, PR
@@ -83,13 +86,16 @@ body of the later task when it's filed.
 4. **The review brief has two tasks.**
    [burrow#958](https://github.com/FieldmouseWorks/burrow/issues/958) edits
    `brief.rs` and B1 moves it. burrow#958 goes first, so the text moves once.
+   B1 landed first (burrow#1150, 2026-11-14), so burrow#958 edits
+   `burrow-brief` instead.
 5. **The flow's files have four tasks.** C1 to C4 all touch
    `flow/execute.rs` or `docs/flow.md`. They run one at a time: C1, C4 (J
    needs it), C2, C3. The tasks [#312](https://github.com/FieldmouseWorks/Conary/issues/312)
    files come after them, then #313.
 6. **#312 waits for #307.** #256's list admits #312 as soon as #311's PR has
    landed, but #312 is written against the lesson IDs that #305, #306 and
-   #307 deliver. It stays `later` until #307 lands.
+   #307 deliver. It stayed `later` until #307 landed; that came off on
+   2026-11-16.
 7. **The inbox's files have two tasks.** The fix for a list that stalls on a
    child landed elsewhere
    ([burrow#1110](https://github.com/FieldmouseWorks/burrow/issues/1110))
@@ -148,8 +154,11 @@ body of the later task when it's filed.
    `settings pause` puts it back. It opens in two moves. The first, done
    on 2026-11-14, held every burrow PR but this plan's own (burrow#1113),
    the tracks' PRs included, so the plan could be reviewed before anything
-   was built on it. The second, here, takes `hold` off the tracks' PRs and
-   `later` off their issues, a lane at a time and inside the fences. The
+   was built on it. burrow was then allowed, and B1 to B3, R, F and P
+   landed, before it was paused again. The second, done on 2026-11-16,
+   takes `hold` off the tracks' PRs and `later` off their issues, a lane at
+   a time and inside the fences: burrow#958 and burrow#969 came off `later`.
+   No held track PR was settled, so each stays held as step 4 says. The
    holds outlast the hold watchdog's usual patience, so remi#1290
    lengthened it; that change is reverted when the last hold comes off.
 2. **The stalled lists.** #294's list waits on its closed child #304, and
@@ -157,13 +166,16 @@ body of the later task when it's filed.
    whose work landed in burrow. Both are released through the author's door
    (`proj plan done`). Fence 7's fix stops it happening again.
 3. **The eleven 5c tasks are filed**, as [m6-plugins.md](m6-plugins.md#filing)
-   says, each with its fences from this page.
+   says, each with its fences from this page. Done: C1 to C4 are #373 to
+   #376, and the burrow tasks burrow#1116 to burrow#1122.
 4. **In-flight burrow PRs in a lane's files.** One that's settled (review
    clean, CI green) lands now. One that isn't is held until the stage that
-   rewrites its ground has landed, then rebased or closed. Four go first
-   whatever their state: burrow#1104 (the gate's wait gets a deadline), the
-   open PRs for proj's stage 0, and burrow#1053 (a job waiting on CI wakes
-   only on its verdict).
+   rewrites its ground has landed, then rebased or closed. burrow#1104 (the
+   gate's wait gets a deadline) and proj's stage 0 went first and have
+   landed. burrow#1053 (a job waiting on CI wakes only on its verdict) was
+   to go with them, but its review found it short of the amended wait, so
+   it stays held and folds into burrow#972 (the owner's ruling on the PR,
+   2026-11-14).
 
 ### Builds, by lane
 
@@ -178,7 +190,7 @@ and the dependencies in [m6-plugins.md](m6-plugins.md#order).
 | C3 | #307 | R | burrow#972 | burrow#994 (remi's values, shadow on) |
 | #312's tasks | #312 (the plan) | P | burrow#971 | |
 | #313 | | F (after burrow#969) | | |
-| #319 | | J | | |
+| #319 | | J (after [#406](https://github.com/FieldmouseWorks/Conary/issues/406)) | | |
 
 Everything in this table is a build. Every lane then stops at a switch.
 
