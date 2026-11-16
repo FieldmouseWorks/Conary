@@ -800,7 +800,8 @@ says which may be open together.
   changes them.
 - **The review-loop policy.** Its changes stay with their burrow issues,
   per [review-loop.md](review-loop.md). Porting the burrow#945 triggers,
-  and the disputed-P2 switch, into the flow is #312's to schedule.
+  and the disputed-P2 switch, into the flow is
+  [FP11](m6-properties.md#fp11-flow-break-a-review-loop-that-wont-settle).
 - **A judge's verdict on a head whose change didn't move.** That's #293.
 - **Per-repository landing ownership and the switch.** That's #313 and
   #314, and #315 for the other repositories, including wend's `proofJobs`
@@ -811,7 +812,8 @@ says which may be open together.
 - **Dependency-sweep decisions (`conary/major`)** and the upkeep the
   steward does outside the landing flow belong to #316.
 - **The stuck role's job** is burrow#945 and burrow#961 on the steward,
-  then the flow's `job` kind.
+  then the flow's `job` kind, which
+  [SJ](m6-properties.md#sj-burrow-serve-the-stuck-role-through-the-job-kind) serves.
 
 ## Filing
 

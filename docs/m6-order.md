@@ -91,7 +91,8 @@ body of the later task when it's filed.
 5. **The flow's files have four tasks.** C1 to C4 all touch
    `flow/execute.rs` or `docs/flow.md`. They run one at a time: C1, C4 (J
    needs it), C2, C3. The tasks [#312](https://github.com/FieldmouseWorks/Conary/issues/312)
-   files come after them, then #313.
+   files come after them, with #313 among them in
+   [their order](m6-properties.md#order).
 6. **#312 waits for #307.** #256's list admits #312 as soon as #311's PR has
    landed, but #312 is written against the lesson IDs that #305, #306 and
    #307 deliver. It stayed `later` until #307 landed; that came off on
@@ -191,6 +192,7 @@ and the dependencies in [m6-plugins.md](m6-plugins.md#order).
 | #312's tasks | #312 (the plan) | P | burrow#971 | |
 | #313 | | F (after burrow#969) | | |
 | #319 | | J (after [#406](https://github.com/FieldmouseWorks/Conary/issues/406)) | | |
+| | | SJ, #312's ([m6-properties.md](m6-properties.md#sj-burrow-serve-the-stuck-role-through-the-job-kind)) | | |
 
 Everything in this table is a build. Every lane then stops at a switch.
 
