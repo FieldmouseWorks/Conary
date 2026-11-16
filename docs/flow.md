@@ -112,14 +112,20 @@ more:
 - `x-live`: whether a change takes effect at the next decision that reads
   it. Every option of this file is live. One that isn't says in `x-needs`
   what a change needs, and why.
-- `x-secret`: the seal keys, whose values Conary never prints.
+- `x-secret`: the seal keys, and conaryd's token command, whose arguments
+  may carry a credential. Conary never prints their values.
+
+Every reader loads a file through `flow::schema::load`: typed, so a
+duplicate or unknown key is refused, and with each section written as an
+object, the one form the schema describes.
 
 `cn flow settings --config PATH` (`CONARY_FLOW_CONFIG`) prints each option
 of a configuration file with its effective value, as the loader reads it,
-and whether the file or the default set it. `--events-config PATH`
-(`CONARY_EVENTS_CONFIG`) does the same for conaryd's file, with the options
-that take effect only at a restart listed apart, under `not_live`. A file
-the loader refuses is refused here too. A settings source, such as
+and whether the file or the default set it. The options of each section,
+of a set `evidence` and of each `execution` entry are listed one by one.
+`--events-config PATH` (`CONARY_EVENTS_CONFIG`) does the same for conaryd's
+file, with the options that take effect only at a restart listed apart,
+under `not_live`. `--schema` reads neither file. A settings source, such as
 burrow's, imports this schema rather than declaring the options again.
 
 ## Person approval

@@ -57,7 +57,7 @@ fn kinds(schema: &mut schemars::Schema) {
 impl Config {
     /// The one loader of a flow configuration file, for every reader of it.
     pub fn load(path: &Path) -> Result<Self> {
-        Ok(serde_json::from_slice(&std::fs::read(path)?)?)
+        Ok(super::schema::load(&std::fs::read(path)?)?.0)
     }
 }
 #[derive(Debug, Serialize)]

@@ -22,8 +22,8 @@ pub enum FlowCommand {
 pub struct SettingsArgs {
     /// Print the schema of both configurations: each option's type, allowed
     /// values, default, description, whether it starts paid work and
-    /// whether it's live.
-    #[arg(long, conflicts_with_all = ["config", "events_config"])]
+    /// whether it's live. No configuration file is read.
+    #[arg(long)]
     schema: bool,
     /// The flow configuration whose options to print, each with its
     /// effective value and whether the file or the default set it.

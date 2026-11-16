@@ -174,14 +174,84 @@ pub struct Listing {
     pub not_live: Vec<Effective>,
 }
 
-/// Every option of the configuration `file` holds, read as `T`'s loader
-/// reads it: its effective value, and whether the file set it or it's the
-/// default. A secret's value is never shown, only that it's set. A file the
-/// loader refuses is refused here too.
+/// The one loader of a configuration file as `T`: typed from its bytes, so
+/// a duplicate or unknown key is refused, and with every struct in it
+/// written as an object, the one form the schema describes (serde would
+/// also take a struct as a positional array). Returns the file as JSON too.
+pub fn load<T: JsonSchema + DeserializeOwned>(file: &[u8]) -> Result<(T, Value)> {
+    let loaded: T = serde_json::from_slice(file)?;
+    let raw: Value = serde_json::from_slice(file)?;
+    let schema = of::<T>()?;
+    objects(&schema, &schema, &raw, "")?;
+    Ok((loaded, raw))
+}
+/// Whether each struct `raw` holds where `owner` says, at `path`, is an object.
+fn objects(schema: &Value, owner: &Value, raw: &Value, path: &str) -> Result<()> {
+    let Some(fields) = raw.as_object() else {
+        let at = if path.is_empty() { "the file" } else { path };
+        return Err(format!("{at} must be a JSON object, its options named").into());
+    };
+    for (name, value) in fields {
+        let Some(option) = owner["properties"].get(name) else {
+            continue;
+        };
+        let at = format!("{path}{name}");
+        match shape(schema, option) {
+            Shape::Struct(def) => objects(schema, def, value, &format!("{at}."))?,
+            Shape::Nullable(def) if !value.is_null() => {
+                objects(schema, def, value, &format!("{at}."))?;
+            }
+            Shape::Map(def) => {
+                for (key, entry) in value.as_object().into_iter().flatten() {
+                    objects(schema, def, entry, &format!("{at}.{key}."))?;
+                }
+            }
+            Shape::Nullable(_) | Shape::Leaf => {}
+        }
+    }
+    Ok(())
+}
+
+/// What an option holds: a struct of options of its own, one that may be
+/// `null`, a map of them, or a value.
+enum Shape<'a> {
+    Struct(&'a Value),
+    Nullable(&'a Value),
+    Map(&'a Value),
+    Leaf,
+}
+fn shape<'a>(schema: &'a Value, option: &'a Value) -> Shape<'a> {
+    let def = |reference: &Value| {
+        reference["$ref"]
+            .as_str()
+            .and_then(|r| r.strip_prefix("#/$defs/"))
+            .map(|name| &schema["$defs"][name])
+            .filter(|def| def["properties"].is_object())
+    };
+    if let Some(def) = def(option) {
+        return Shape::Struct(def);
+    }
+    if let Some(def) = option["anyOf"]
+        .as_array()
+        .filter(|any| any.iter().any(|a| a["type"] == "null"))
+        .and_then(|any| any.iter().find_map(def))
+    {
+        return Shape::Nullable(def);
+    }
+    if let Some(def) = def(&option["additionalProperties"]) {
+        return Shape::Map(def);
+    }
+    Shape::Leaf
+}
+
+/// Every option of the configuration `file` holds, read by [`load`]: its
+/// effective value, and whether the file set it or it's the default. The
+/// options of a section, of a set `null`able one and of each entry of a map
+/// of them are listed one by one. A secret's value is never shown, only that
+/// it's set.
 pub fn effective<T: JsonSchema + Serialize + DeserializeOwned>(file: &[u8]) -> Result<Listing> {
     let schema = of::<T>()?;
-    let raw: Value = serde_json::from_slice(file)?;
-    let loaded: T = serde_json::from_value(raw.clone())?;
+    let (loaded, raw) = load::<T>(file)?;
     let value = serde_json::to_value(loaded)?;
     let mut listing = Listing {
         options: Vec::new(),
@@ -202,15 +272,23 @@ fn walk(
         let path = format!("{prefix}{name}");
         let set = raw.and_then(|r| r.get(name));
         let current = value.get(name).cloned().unwrap_or(Value::Null);
-        // A section, a struct of its own options, lists each of them.
-        if let Some(section) = option["$ref"]
-            .as_str()
-            .and_then(|r| r.strip_prefix("#/$defs/"))
-            .map(|def| &schema["$defs"][def])
-            .filter(|def| def["properties"].is_object())
-        {
-            walk(schema, section, &format!("{path}."), set, &current, listing);
-            continue;
+        match shape(schema, option) {
+            Shape::Struct(def) => {
+                walk(schema, def, &format!("{path}."), set, &current, listing);
+                continue;
+            }
+            Shape::Nullable(def) if !current.is_null() => {
+                walk(schema, def, &format!("{path}."), set, &current, listing);
+                continue;
+            }
+            Shape::Map(def) if current.as_object().is_some_and(|m| !m.is_empty()) => {
+                for (key, entry) in current.as_object().into_iter().flatten() {
+                    let set = set.and_then(|s| s.get(key));
+                    walk(schema, def, &format!("{path}.{key}."), set, entry, listing);
+                }
+                continue;
+            }
+            _ => {}
         }
         let secret = option["x-secret"] == Value::Bool(true) && !current.is_null();
         let entry = Effective {

@@ -173,7 +173,7 @@ fn events(dir: &Path, change: impl FnOnce(&mut Value)) {
         "data": dir.join("data"),
         "flow_config": dir.join("flow.json"),
         "policy": dir.join("policy.json"),
-        "token_command": "true",
+        "token_command": "env TOKEN_KEY=hush true",
         "anchor_repo": null,
         "worker": "/nonexistent",
         "api": "http://127.0.0.1:1",
@@ -290,6 +290,17 @@ fn settings_list_each_value_its_source_and_the_exceptions_apart() {
             .unwrap()
             .starts_with("a restart of conaryd")
     }));
+    // A credential a token command carries is never shown; that it's set is.
+    let token = listing
+        .options
+        .iter()
+        .find(|o| o.name == "token_command")
+        .unwrap();
+    assert_eq!(
+        (token.value.clone(), token.from),
+        (json!("[redacted]"), From::File)
+    );
+    assert!(!serde_json::to_string(&listing).unwrap().contains("hush"));
     let api = listing.options.iter().find(|o| o.name == "api").unwrap();
     assert_eq!(
         (api.value.clone(), api.from),
@@ -320,4 +331,113 @@ fn settings_list_each_value_its_source_and_the_exceptions_apart() {
     assert!(!serde_json::to_string(&listing).unwrap().contains(&key));
     // The loader refuses what it doesn't know, and so does the listing.
     assert!(schema::effective::<Config>(br#"{"settings": {"drain": 1}}"#).is_err());
+}
+
+/// An optional section that's set, and each entry of a map of sections, list
+/// their options one by one, an explicit `null` apart from an omitted one.
+#[test]
+fn settings_list_the_options_of_set_optional_sections_and_map_entries() {
+    let flow = json!({
+        "execution": {"review": {"engine": "machine", "model": null}},
+        "evidence": {"signer": "o/ci/.github/workflows/gate.yml", "fresh": null, "require": ["check"], "negative": "attest / negative"},
+    });
+    let listing = schema::effective::<Config>(flow.to_string().as_bytes()).unwrap();
+    let get = |name: &str| {
+        let o = listing
+            .options
+            .iter()
+            .find(|o| o.name == name)
+            .unwrap_or_else(|| panic!("{name} isn't listed"));
+        (o.value.clone(), o.from)
+    };
+    assert_eq!(
+        get("execution.review.engine"),
+        (json!("machine"), From::File)
+    );
+    assert_eq!(get("execution.review.model"), (json!(null), From::File));
+    assert_eq!(get("execution.review.effort"), (json!(null), From::Default));
+    assert_eq!(get("evidence.fresh"), (json!(null), From::File));
+    assert_eq!(get("evidence.producers"), (json!(null), From::Default));
+    assert_eq!(get("evidence.require"), (json!(["check"]), From::File));
+    assert!(
+        listing
+            .options
+            .iter()
+            .all(|o| o.name != "evidence" && o.name != "execution")
+    );
+    // Unset, each is one option of its own.
+    let listing = schema::effective::<Config>(b"{}").unwrap();
+    for name in ["evidence", "execution"] {
+        assert!(listing.options.iter().any(|o| o.name == name), "{name}");
+    }
+}
+
+/// What the loader refuses, every reader refuses: a duplicate key, which
+/// a generic JSON value would read as its last, and a struct written as a
+/// positional array, which serde would take but the schema doesn't
+/// describe. The daemon refuses either as it starts and as it rereads.
+#[test]
+fn every_reader_refuses_a_duplicate_key_and_a_positional_struct() {
+    let dir = tempfile::tempdir().unwrap();
+    let flow = dir.path().join("flow.json");
+    for refused in [
+        r#"{"settings": {"train": true, "train": false}}"#,
+        r#"{"plugins": [null, null, null, null]}"#,
+        r#"{"execution": {"review": ["machine", null, null]}}"#,
+        r#"[{}, [], {}, {}, null]"#,
+    ] {
+        // serde alone takes all but the duplicate.
+        assert_eq!(
+            serde_json::from_str::<Config>(refused).is_ok(),
+            !refused.contains("train"),
+            "{refused}"
+        );
+        assert!(
+            schema::effective::<Config>(refused.as_bytes()).is_err(),
+            "{refused}"
+        );
+        std::fs::write(&flow, refused).unwrap();
+        assert!(Config::load(&flow).is_err(), "{refused}");
+    }
+
+    events(dir.path(), |_| {});
+    let path = dir.path().join("events.json");
+    let object = std::fs::read_to_string(&path).unwrap();
+    let duplicate = object.replacen(r#""data":"#, r#""data":"/elsewhere","data":"#, 1);
+    assert_ne!(duplicate, object);
+    let fields: Vec<Value> = [
+        "listen",
+        "secret_path",
+        "repos",
+        "data",
+        "flow_config",
+        "policy",
+        "token_command",
+        "anchor_repo",
+        "worker",
+        "api",
+    ]
+    .iter()
+    .map(|name| serde_json::from_str::<Value>(&object).unwrap()[*name].clone())
+    .collect();
+    let mut moved = fields.clone();
+    moved[3] = json!("/elsewhere");
+    let positional = Value::Array(moved).to_string();
+    serde_json::from_str::<Runtime>(&positional).expect("serde alone takes it");
+    for refused in [&duplicate, &positional] {
+        assert!(
+            schema::effective::<Runtime>(refused.as_bytes()).is_err(),
+            "{refused}"
+        );
+        std::fs::write(&path, refused).unwrap();
+        assert!(Live::open(&path).is_err(), "{refused}");
+    }
+    std::fs::write(&path, &object).unwrap();
+    let live = Live::open(&path).unwrap();
+    for refused in [&duplicate, &positional] {
+        std::fs::write(&path, refused).unwrap();
+        assert!(live.read().is_err(), "{refused}");
+    }
+    std::fs::write(&path, &object).unwrap();
+    assert_eq!(live.read().unwrap().data, live.started().data);
 }

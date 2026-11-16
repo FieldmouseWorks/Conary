@@ -46,8 +46,9 @@ pub struct Runtime {
     /// The classification policy file.
     #[schemars(extend("x-spender" = false))]
     pub policy: PathBuf,
-    /// The command that prints a GitHub token, run without a shell.
-    #[schemars(extend("x-spender" = false))]
+    /// The command that prints a GitHub token, run without a shell. Its
+    /// arguments may carry a credential, so its value is never printed.
+    #[schemars(extend("x-spender" = false, "x-secret" = true))]
     pub token_command: String,
     /// The repository the ledger is anchored in. `null` only when the flow
     /// needs no evidence or train.
@@ -85,6 +86,7 @@ fn repo_names<S: serde::Serializer>(
 /// a restart, and is logged once, by its name.
 pub struct Live {
     path: PathBuf,
+    /// The started configuration, as its loader writes it.
     started: serde_json::Value,
     runtime: Runtime,
     /// The options the schema declares `x-live: false`.
@@ -93,11 +95,11 @@ pub struct Live {
 }
 impl Live {
     pub fn open(path: &Path) -> Result<Self> {
-        let started: serde_json::Value = serde_json::from_slice(&std::fs::read(path)?)?;
+        let (runtime, _) = flow::schema::load::<Runtime>(&std::fs::read(path)?)?;
         Ok(Self {
             path: path.into(),
-            runtime: serde_json::from_value(started.clone())?,
-            started,
+            started: serde_json::to_value(&runtime)?,
+            runtime,
             restart: flow::schema::restart_only::<Runtime>(),
             waiting: Mutex::default(),
         })
@@ -109,7 +111,10 @@ impl Live {
     /// The configuration now: the file as it reads, but for the options
     /// that take effect only at a restart.
     pub fn read(&self) -> Result<Runtime> {
-        let mut now: serde_json::Value = serde_json::from_slice(&std::fs::read(&self.path)?)?;
+        // Both read by the one loader, and compared as it writes them, so
+        // neither a duplicate key nor another spelling of a value counts.
+        let (now, _) = flow::schema::load::<Runtime>(&std::fs::read(&self.path)?)?;
+        let mut now = serde_json::to_value(now)?;
         let mut waiting = Vec::new();
         if let Some(fields) = now.as_object_mut() {
             for name in &self.restart {
